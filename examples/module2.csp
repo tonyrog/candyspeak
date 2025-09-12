@@ -1,0 +1,26 @@
+
+#module add
+#variable a:16 in integer
+#variable b:16 in integer
+#variable ena:1 in unsigned = 1
+#variable c:16 out integer
+c = a + b ? ena
+#end
+
+#module sub
+#variable a:16 in integer
+#variable b:16 in integer
+#variable ena:1 in unsigned = 1
+#variable c out:16 integer
+c = a - b ? ena
+#end
+
+#variable A:16 integer
+#variable B:16 integer
+
+#add a1
+#add a2
+// #sub s1
+a1.a = a2.a ? A < B
+
+

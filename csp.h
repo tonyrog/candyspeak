@@ -1,0 +1,548 @@
+#ifndef __CSP_H__
+#define __CSP_H__
+
+#include <stdint.h>
+
+// features
+#define WANT_TRANSACTION   // use assert/undo
+#define WANT_REACTIVE      // enq/deq
+#define WANT_STATISTICS    // some accounting
+
+#define TAG_DECL  1
+#define TAG_INSTR 0
+
+#define WORD_BITS    16
+#define MOD_BITS     3     // (2^MOD_BITS-2) = 6 module instances
+#define INSTR_BITS   7
+#define INDEX_BITS   (MOD_BITS+(INSTR_BITS+1)) // max 512 elems
+#define ANY_MOD      ((1 << MOD_BITS)-1)  // pattern for "any" mod
+#define MAX_INDICES  (1 << INDEX_BITS)
+#define MAX_INSTRS   64  // (less than (1<<ELEM_BITS) keep power of 2!!
+#define MAX_DECLS    64  // (less than (1<<ELEM_BITS) keep power of 2!!
+#define MAX_INPUTS   32
+#define MAX_OUTPUTS  32
+#define MAX_TIMERS   16
+#define MAX_MODULES  16
+#define MAX_MODS     32
+#define MAX_QUEUE    (MAX_INSTRS)
+#define MAX_INDEX    (MAX_INSTRS+1)
+#define MAX_UNDO     (MAX_INSTRS)
+#define MAX_STACK_DEPTH 4
+#define STRING_BITS  9
+#define NAME_BITS    5
+#define MAX_STR_BUF  (1 << STRING_BITS) // total number of char in var names
+#define MAX_NAME_LEN 8     // max var name len
+#define MAX_ARGS     4     // max number of arguments to function
+
+#define BAD_INDEX   (MAX_INDICES-1)
+#define PARSE_ERROR BAD_INDEX
+
+#define IS_MOD_INDEX(n) ((n) >= (1 << (INSTR_BITS+1)))
+#define INDEX(n)  (((n)>>1) & ((1 << INSTR_BITS)-1))  // index in decl/instr
+#define MOD(n)    ((n) >> (INSTR_BITS+1))
+#define MAKE_INDEX(m,x,t) (((m)<<(INSTR_BITS+1)) | ((x)<<1) | (t))
+
+#define MAX_PARSE_STACK_DEPTH 10
+#define MAX_LINE_TOKENS 128
+
+typedef uint16_t index_t;  // sizeof type >= INDEX_BITS
+
+typedef enum {
+    V_INTEGER,
+    V_UNSIGNED,
+    V_FLOAT,
+    V_STRING
+} vtype_t;
+
+typedef enum {
+    E_UNDEFINED,
+    E_LITTLE,
+    E_BIG,
+} vendian_t;
+
+typedef int32_t  ivalue_t;
+typedef uint32_t uvalue_t;
+typedef float    fvalue_t;
+typedef int32_t  sindex_t;
+
+typedef union {
+    ivalue_t i;  // V_INTEGER
+    uvalue_t u;  // V_UNSIGNED
+    fvalue_t f;  // V_FLOAT
+    sindex_t s;  // V_STRING (index into string buf)
+} value_t;
+
+// require csp_rt_init!
+#define ZERO MAKE_INDEX(0,0,TAG_DECL)
+#define ONE  MAKE_INDEX(0,1,TAG_DECL)
+
+typedef uint32_t set_group_t;  // bit set element
+#define BITSET_GROUP_BITS (8*sizeof(set_group_t))
+#define BITSET_GROUPS(size) (((size)+BITSET_GROUP_BITS-1)/BITSET_GROUP_BITS)
+#define BITSET_GROUP(i) ((i)/BITSET_GROUP_BITS)
+#define BITSET_BIT(i)   (1 << ((i)%BITSET_GROUP_BITS))
+
+#define bitset_decl(name,size) set_group_t (name)[BITSET_GROUPS(size)]
+#define bitset_zero(name) memset(&(name), 0x00, sizeof(name))
+#define bitset_set(name,i) (name)[BITSET_GROUP((i))] |= BITSET_BIT((i))
+#define bitset_clr(name,i) (name)[BITSET_GROUP((i))] &= ~BITSET_BIT((i))
+#define bitset_tst(name,i) (((name)[BITSET_GROUP((i))] & BITSET_BIT((i)))!=0)
+
+typedef enum {
+    NONE = 0,  // empty
+    // leafs
+    MODULE,   // 'module'
+    END,      // 'end'
+    CONSTANT, // 'constant'
+    VARIABLE, // 'variable'
+    DIGITAL,  // 'digital'
+    ANALOG,   // 'analog'
+    TIMER,    // 'timer'
+    CAN,      // 'can'
+    UART,     // 'uart'
+    SOCKET,   // 'socket'
+    MOD,      // module instance
+    //
+    FIRST_NODE, // built-in + operators start
+    // node - unary
+    EXCLAMATION, // "!"  x=-y == x=0-y
+    TILDE,       // "~"  x=~y =  x=1^y        
+    MINUS1,      // "-"  x=-y == x=0-y
+    PLUS1,       // "+"  x=+y == x=0+y
+    // node - binary operator
+    PLUS,      // "+"
+    MINUS,     // "-"
+    ASTERISK,  // "*"
+    SLASH,     // "/"
+    PERCENT,   // "%"
+    LTLT,    // "<<"
+    GTGT,    // ">>"    
+    LT,      // "<"
+    LTEQ,    // "<="
+    GT,      // ">"
+    GTEQ,    // ">="
+    EQEQ,    // "=="
+    NEQ,     // "!="    
+    AMP,     // "&"
+    BAR,     // "|"
+    CIRC,    // "^"
+    AMPAMP,  // "&&"
+    BARBAR,  // "||"
+    EQ,      // "="
+    COMMA,   // ","
+    // query rule/operator
+    QUEST,   // "?"
+    // other
+    ENTER,
+    LEAVE,
+    NEW,
+    //  func
+    MIN,      // min/2
+    MAX,      // max/2  
+    ABS,      // abs/1
+    SIGN,     // sign/1
+    TIMEOUT,  // timeout(timer)/1
+    PRINT,    // print(v|c)
+    TICK,     // tick | tick()
+    CYCLE,    // cycle | cycle()    
+    // 
+    LAST_NODE, // built-in + operators stop
+    // keywords
+    PULLUP,   // 'pullup'
+    PULLDOWN, // 'pulldown'
+    RESOLUTION, // 'resolution'
+    IN,         // 'in'
+    OUT,        // 'out'
+    INOUT,      // 'inout'
+    PWM,        // 'pwm'
+    FLOAT,      // 'float'
+    INTEGER,    // 'integer'
+    UNSIGNED,   // 'unsigned'
+    STRING,     // 'string'
+    LITTLE,     // 'little'
+    BIG,        // 'big'
+    
+    // tokens
+    LP,      // "("
+    RP,      // ")"
+    COLON,   // ":"
+    HASH,    // "#"
+    DOT,     // "."
+    LB,      // "["
+    RB,      // "]"
+    INT,     // 123 | 0x9ab
+    FLT,     // 0.123
+    STR,     // "abc"
+    WORD,    // abc
+    NEWLINE, // \n \r \r\n
+    LAST,
+} tok_t;
+
+typedef enum {
+    OP_NOP = 0,  // nothing
+    OP_NOT,     // "!"  x=-y == x=0-y
+    OP_INV,     // "~"  x=~y =  x=1^y        
+    OP_NEG,     // "-"  x=-y == x=0-y
+    OP_POS,     // "+"  x=+y == x=0+y
+    // node - binary operator
+    OP_ADD,     // "+"
+    OP_SUB,     // "-"
+    OP_MUL,     // "*"
+    OP_DIV,     // "/"
+    OP_REM,     // "%"
+    OP_SLA,     // "<<"
+    OP_SRA,     // ">>"    
+    OP_LT,      // "<"
+    OP_LTE,     // "<="
+    OP_GT,      // ">"
+    OP_GTE,     // ">="
+    OP_EQEQ,    // "=="
+    OP_NEQ,     // "!="    
+    OP_AND,     // "&"
+    OP_OR,      // "|"
+    OP_XOR,     // "^"
+    OP_ANDAND,  // "&&"
+    OP_OROR,    // "||"
+    OP_EQ,      // "="
+    OP_COMMA,   // ","
+    OP_RULE,    // "?"
+
+    // generate ops from MODULE/END
+    OP_ENTER,   //
+    OP_LEAVE,   //
+    OP_NEW,     // #<module> <instance-name>
+    
+    //  func (fixme OP_CALL?)
+    OP_MIN,      // min/2
+    OP_MAX,      // max/2  
+    OP_ABS,      // abs/1
+    OP_SIGN,     // sign/1
+    OP_TIMEOUT,  // timeout(timer)/1
+    OP_PRINT,    // print(v|c)
+    OP_TICK,     // tick | tick()
+    OP_CYCLE,    // cycle | cycle()
+
+    OP_LAST,
+} opcode_t;
+
+typedef enum {
+    DECL_MODULE,   // 'module'
+    DECL_END,      // 'end'
+    DECL_CONSTANT, // 'constant'
+    DECL_VARIABLE, // 'variable'
+    DECL_DIGITAL,  // 'digital'
+    DECL_ANALOG,   // 'analog'
+    DECL_TIMER,    // 'timer'
+    DECL_CAN,      // 'can'
+    DECL_UART,     // 'uart'
+    DECL_SOCKET,   // 'socket'
+    DECL_MOD,      // module instance
+} decl_t;
+
+#define IS_DECL(i)  (((i) & 1) == TAG_DECL)
+#define IS_INSTR(i)  (((i) & 1) == TAG_INSTR)
+
+#define DECL_TYPE(s,i) ((s)->decl[(i)].type)
+#define IS_QVAR(s,i)   (DECL_TYPE((s),(i))==DECL_VARIABLE)
+#define IS_CONST(s,i)  (DECL_TYPE((s),(i))==DECL_CONSTANT)
+#define IS_MODULE(s,i) (DECL_TYPE((s),(i))==DECL_MODULE)
+#define IS_END(s,i)    (DECL_TYPE((s),(i))==DECL_END)
+#define IS_CAN(s,i)    (DECL_TYPE((s),(i))==DECL_CAN)
+
+
+#define OP(s,i) ((s)->instr[(i)].op)
+#define IS_ENTER(s,i) (OP((s),(i))==OP_ENTER)
+#define IS_LEAVE(s,i) (OP((s),(i))==OP_LEAVE)
+#define IS_COND(s,i)   ((s)->instr[(i)].cond)
+
+
+#define MAKE_RES(r) ((r)-1)
+#define GET_RES(rr) ((rr)+1)
+
+#define MAKE_CAN_LEN(len) ((len)-1)
+#define GET_CAN_LEN(len) ((len)+1)
+
+#define NOTIMEOUT 0xffffffff
+
+#define PACKED __attribute__((packed))
+
+typedef struct PACKED {
+    index_t n;          // number of nodes in module definition
+    index_t ent;        // entery point in instr
+} csp_module_t;
+
+typedef struct PACKED {
+    index_t  mx;         // module index
+    index_t  iq;         // index in mod table
+} csp_mod_t;
+
+typedef struct PACKED  { // 32
+    value_t init;    // init value
+} csp_variable_t;
+
+typedef struct PACKED  { // 32
+    value_t init;   // constant value
+} csp_constant_t;
+
+typedef struct PACKED  { // 18
+    unsigned pin:8;
+    unsigned port:8;
+    unsigned pullup:1;
+    unsigned pulldown:1;
+    // init?
+} csp_digital_t;
+
+typedef struct PACKED { // 17
+    unsigned pin:8;
+    unsigned port:8;
+    unsigned pwm:1;    // pwmoutput
+    // init?    
+} csp_analog_t;
+
+typedef struct PACKED {  // 27 = 10+10+5  (29=12+12+5)
+    unsigned id:INDEX_BITS; // variable | constant (unsigned) 11/29 bit
+    unsigned endian:2; // |little|big
+    unsigned bit:9;   // 0-511   // bit start pos
+    unsigned len:5;   // (1-32)  // data length -1
+} csp_can_t;
+
+typedef struct PACKED {     // 22 = 1+1+10+10 (25=1+12+12)
+    unsigned running:1;     // != 0 if timer is running
+    unsigned init:1;        // initial value if given
+    unsigned px:INDEX_BITS; // variable | constant (unsigned)
+    unsigned tx:INDEX_BITS; // start time tick (intern variable)
+} csp_timer_t;
+
+typedef struct PACKED { // 6+2+1+11+11 = 9+22 = 31
+    opcode_t op:6;          // OP_xxx
+    unsigned vt:2;          // value type (x)
+    unsigned cond:1;        // conditional instruction    
+    unsigned y:INDEX_BITS;  // src1  (instruction/decl)
+    unsigned z:INDEX_BITS;  // src2  (instruction/decl)
+} csp_instr_t;
+
+typedef struct PACKED {  // 57 = 6 + 51
+    decl_t type:6;                 // DECL_xxx
+    unsigned name:STRING_BITS;     // string index
+    unsigned vt:2;                 // value type
+    unsigned res:5;                // 1-32
+    unsigned in:1;                 // input leaf
+    unsigned out:1;                // output leaf
+    union PACKED {  // 32
+	csp_module_t   md;  // 16
+	csp_mod_t      mq;  // 24 = 12+12
+	csp_variable_t va;  // 32
+	csp_constant_t cn;  // 32
+	csp_digital_t  di;  // 18		
+	csp_analog_t   an;  // 17
+	csp_can_t      ca;  // 29 (25)
+	csp_timer_t    tm;  // 25 (22)
+    };
+} csp_decl_t;
+
+typedef struct
+{
+    csp_instr_t instr[MAX_INSTRS];  // instructions used
+    csp_decl_t decl[MAX_DECLS];    // declarations used    
+    value_t xval[MAX_INDEX];        // instruction xvalue
+    value_t dval[MAX_INDEX];        // declaration value
+    index_t input[MAX_INPUTS];   // list of inputs (digital/analog ...)
+    index_t output[MAX_OUTPUTS]; // list of outputs (digital/analog ...)
+    index_t module[MAX_MODULES]; // list of modules
+    index_t mod[MAX_MODS];       // list of mods    
+    index_t timer[MAX_TIMERS];   // list of timers
+    index_t mofs[MAX_MODS];      // offset in state given mod
+    char    str[MAX_STR_BUF];    // store variable names
+    int esp;  // eval stack pointer
+    struct { index_t ix; index_t so; } stack[MAX_STACK_DEPTH];
+    unsigned transaction:1;      // 1 if keeping a log
+    unsigned reactive:1;         // 1 if push backedges to queue
+    unsigned cond:1;             // 1 if mark node as conditional
+    uint32_t line;               // line number when parsing
+    uint32_t err;                // error code
+    index_t nn;                  // number of instructions
+    index_t nd;                  // number of decls
+    index_t nt;                  // number of timers
+    index_t ni;                  // number of input
+    index_t no;                  // number of output
+    index_t nm;                  // number of modules
+    index_t nq;                  // number of mods (instances of modules)
+    uint32_t strp;               // string position
+    index_t mdef;                // module being defined
+    index_t ent;                 // entry op of module
+    index_t so;                  // state offsets for mods
+    // during eval
+    uint32_t update;             // update counter
+    uint32_t wait_ms;            // sleep time or NOTIMEOUT
+#ifdef WANT_REACTIVE
+    bitset_decl(inq, MAX_INDEX); // mark nodes in queue during eval    
+    index_t queue[MAX_QUEUE];    // nodes in queue
+    int hd,tl;  // queue head and tail
+    // back references
+    index_t idg[MAX_INDEX];    // in degree per instr
+    index_t ofs [MAX_INDEX+1]; // output offset from each instr
+    index_t edg [MAX_INDEX+1]; // edg[ofs[n]+0...ideg[n]-1] back pointer
+#endif
+
+#ifdef WANT_TRANSACTION
+    int up;  // undo pointer
+    struct { index_t x; value_t v; } undo[MAX_UNDO];
+    bitset_decl(set, MAX_INDEX); // mark nodes updated during eval
+#endif
+    uint32_t cycle;
+#ifdef WANT_STATISTICS
+    uint32_t num_eval0;
+#endif
+} csp_rt_t;
+
+// n = |mod|index|t|
+static inline int st_index(csp_rt_t* st, index_t n)
+{
+    if (IS_MOD_INDEX(n)) {
+	int m = MOD(n); // extract module index
+	// fixme m == ANY_MOD
+	int mofs = st->mofs[m];    // fetch state offset for mod
+	return mofs + INDEX(n);    // and get value
+    }
+    return (n >> 1); // since mod=0 just shift tag bit
+}
+
+#ifdef WANT_REACTIVE
+// enq an node for recalculation
+static inline void csp_enq(csp_rt_t* st, index_t x)
+{
+    if (bitset_tst(st->inq,x))
+	return;
+    printf("enq: %d\n", x);
+    if ((st->tl - st->hd) != MAX_QUEUE) {
+	st->queue[st->tl % MAX_QUEUE] = x;
+	st->tl++;
+	bitset_set(st->inq, x);
+    }
+}
+
+// enq all nodes i nodes (back)edge list
+static inline void csp_enq_elist(csp_rt_t* st, index_t x)
+{
+    int i;
+    index_t ix = INDEX(x);
+    for (i = 0; i < st->idg[ix]; i++) {
+	index_t p = st->edg[st->ofs[ix]+i];  // parent node
+	if (MOD(p) == ANY_MOD)
+	    p = MAKE_INDEX(MOD(x),INDEX(p),0);
+	csp_enq(st, p);
+    }
+}
+
+static inline index_t csp_deq(csp_rt_t* st)
+{
+    index_t x;
+    if (st->tl == st->hd)
+	return BAD_INDEX;
+    x = st->queue[st->hd % MAX_QUEUE];
+    st->hd++;
+    bitset_clr(st->inq,x);  // keep? if eval once per cycle
+    printf("deq: %d\n", x);    
+    return x;
+}
+#endif
+
+static inline value_t csp_value(csp_rt_t* st, index_t n)
+{
+    int i = st_index(st, n);
+    if (IS_INSTR(n))
+	return st->xval[i];
+    else
+	return st->dval[i];
+}
+
+static inline ivalue_t csp_ivalue(csp_rt_t* st, index_t ix)
+{
+    value_t v = csp_value(st, ix);
+    return v.i;
+}
+
+static inline uvalue_t csp_uvalue(csp_rt_t* st, index_t ix)
+{
+    value_t v = csp_value(st, ix);
+    return v.u;    
+}
+
+static inline fvalue_t csp_fvalue(csp_rt_t* st, index_t ix)
+{
+    value_t v = csp_value(st, ix);
+    return v.f;        
+}
+
+static inline char* decl_name(csp_rt_t* st, index_t ix)
+{
+    return &st->str[st->decl[INDEX(ix)].name];
+}
+
+static inline void csp_set_value(csp_rt_t* st, index_t n, value_t v)
+{
+    int i = st_index(st, n);
+    value_t cv = IS_INSTR(n) ? st->xval[i] : st->dval[i];
+    if (v.u != cv.u) {
+#ifdef WANT_TRANSACTION
+	if (st->transaction) {
+	    if (!bitset_tst(st->set,i)) { // push to undo queue
+		st->undo[st->up].x = n;
+		st->undo[st->up].v = cv;
+		st->up++;
+	    }
+	}
+	bitset_set(st->set,i); // fixme!
+#endif
+#ifdef WANT_REACTIVE
+	if (st->reactive)
+	    csp_enq_elist(st,n);
+#endif
+	if (IS_INSTR(n))
+	    st->xval[i] = v;
+	else
+	    st->dval[i] = v;
+	st->update++;
+    }
+}
+
+static inline void csp_set_ivalue(csp_rt_t* st, index_t n, ivalue_t v)
+{
+    value_t vv;
+    vv.i = v;
+    csp_set_value(st, n, vv);
+}
+
+static inline void csp_set_fvalue(csp_rt_t* st, index_t n, fvalue_t v)
+{
+    value_t vv;
+    vv.f = v;
+    csp_set_value(st, n, vv);
+}
+
+extern void    csp_rt_init(csp_rt_t*);
+extern void    csp_rt_start(csp_rt_t*);
+extern int     csp_set_transaction(csp_rt_t*, int onoff);
+extern int     csp_set_reactive(csp_rt_t*, int onoff);
+extern int     csp_parse(csp_rt_t*, char* str);
+extern void    csp_csr(csp_rt_t* st);
+extern index_t csp_eval(csp_rt_t* st);
+extern int     csp_eval0(csp_rt_t* st, int);
+extern index_t csp_react(csp_rt_t* st);
+extern void    csp_undo(csp_rt_t* st);
+extern void    csp_commit(csp_rt_t* st);
+extern void    csp_dump(FILE*, csp_rt_t* st);
+extern void    csp_print_expr(FILE*, csp_rt_t* st, index_t x);
+extern void    csp_state_init(csp_rt_t* st);
+//
+extern index_t csp_new_decl(csp_rt_t* st, char* name, int name_len, decl_t op);
+extern index_t csp_lookup_decl(csp_rt_t* st, char* module, char* name);
+
+// backend port (linux/arduino/LPCopen/FreeRTOS
+extern uint32_t csp_time_ms(void);
+extern unsigned long csp_time_us(void);
+extern void csp_setup(csp_rt_t* st);
+extern void csp_input(csp_rt_t* st);
+extern void csp_output(csp_rt_t* st);
+
+#endif

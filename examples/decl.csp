@@ -1,0 +1,32 @@
+// test declarations
+#variable V1
+#variable V2:16
+#variable V3:32 unsigned = 100
+#variable V4:32 float = 3.14
+
+#constant C1:16 = 12
+#constant C2:32 unsigned = 101
+#constant C3:32 float = 3.15
+
+#digital D1 13
+#digital D2 1:13
+#digital D3 in 1:14
+#digital D4 out 1:15
+#digital D5 inout 1:15
+#digital D6 in pullup 1:16
+#digital D7 in pulldown 1:17
+
+#analog A1:12 in integer 2:1
+#analog A2:12 out unsigned pwm 2:2
+#analog A3:32 in float 2:3
+
+#timer T1 100
+#timer T2 200
+
+#can K1 0x123[4]
+#can K2 0x124[5]
+#can K3 0x125[9]
+#can K4:32 in float 0x126[0..31]
+#can K5:8 in unsigned 0x126[8..15]
+#can K6:8 out unsigned 0x127[0..7]
+

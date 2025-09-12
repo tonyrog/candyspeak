@@ -1,0 +1,20 @@
+#variable A:16 integer = 2
+#variable B:16 integer = 3
+#variable C:16 integer = 4
+
+print("*** module1 ***\n") ? 1
+
+#module add
+	#variable a:16 in integer
+	#variable b:16 in integer
+	#variable c:16 out integer
+	c = a + b ? 1
+#end
+
+#add a0
+#add a1
+
+a0.a = A ? 1
+a0.b = B ? 1
+a1.a = a0.c ? 1
+print (a1.c) ? 1

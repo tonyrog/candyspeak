@@ -1,0 +1,8 @@
+#module A
+#variable x:16 in integer = 2
+#end
+
+#A a0
+#A a1
+a0.x = 2 ? 1
+a1.x = 3 ? 1
