@@ -1,10 +1,13 @@
 // linux main
 
+#include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
 #include "csp.h"
+#include "csp_dump.h"
 
 #include <sys/time.h>
 
@@ -12,6 +15,7 @@
 
 typedef uint64_t tick_t;
 struct timeval boot_time;
+int debug = 0;
 
 static void time_init()
 {
@@ -37,6 +41,42 @@ unsigned long csp_time_us(void)
     return time_tick();
 }
 
+// platform print functions
+int csp_print_char(char c)
+{
+    return putchar(c);
+}
+
+int csp_print_str(const char* s)
+{
+    return printf("%s", s);
+}
+
+int csp_print_int(ivalue_t v)
+{
+    return printf("%d", v);
+}
+
+int csp_print_uint(uvalue_t v)
+{
+    return printf("%u", v);
+}
+
+int csp_print_float(fvalue_t v)
+{
+    return printf("%f", v);
+}
+
+int csp_print_hex(uvalue_t v)
+{
+    return printf("0x%x", v);
+}
+
+int csp_println(void)
+{
+    return putchar('\n');
+}
+
 void csp_setup(csp_rt_t* st)
 {
     time_init();
@@ -58,7 +98,7 @@ void csp_input(csp_rt_t* st)
     now_ms = csp_time_ms();
     for (i = 0; i< st->nt; i++) {
 	index_t ix = st->timer[i];
-	if (st->decl[ix].tm.running) {
+	if (st->decl[INDEX(ix)].tm.running) {
 	    uvalue_t t0 = csp_uvalue(st, st->decl[ix].tm.tx);
 	    ivalue_t period = csp_ivalue(st, st->decl[ix].tm.px);
 	    if ((now_ms - t0) >= period) {
@@ -77,7 +117,7 @@ void csp_output(csp_rt_t* st)
     uint32_t wait_ms = NOTIMEOUT;
     
     for (i = 0; i < st->no; ++i) {
-	index_t ix = st->input[i];
+	index_t ix = st->output[i];
 	switch(st->decl[ix].type) {
 	case DECL_DIGITAL: break;
 	case DECL_ANALOG: break;
@@ -120,34 +160,17 @@ int parse_file(csp_rt_t* st, FILE* fin)
     while(fgets(buf, MAX_LINE_SIZE, fin)) {
 	if (csp_parse(st, buf) < 0)
 	    return -1;
-    }
+      }
     csp_new_decl(st, NULL, 0, DECL_END);
     return 0;
 }
 
-int main(int argc, char** argv)
+void print_defines()
 {
-    csp_rt_t state;
-    int i,r;
-    index_t x;
-    FILE* fin = stdin;
-    uint32_t update0 = 0;
+    printf("WANT_TRANSACTION=%d\n", WANT_TRANSACTION);
+    printf("WANT_REACTIVE=%d\n", WANT_REACTIVE);
+    printf("WANT_STATISTICS=%d\n",WANT_STATISTICS);
 
-#ifdef WANT_TRANSACTION
-    printf("WANT_TRANSACTION=1\n");
-#else
-    printf("WANT_TRANSACTION=0\n");
-#endif
-#ifdef WANT_REACTIVE
-    printf("WANT_REACTIVE=1\n");
-#else
-    printf("WANT_REACTIVE=0\n");
-#endif
-#ifdef WANT_STATISTICS
-    printf("WANT_STATISTICS=1\n");
-#else
-    printf("WANT_STATISTICS=0\n");
-#endif
     printf("MAX_INDICES=%d\n", MAX_INDICES);    
     printf("MAX_INSTRS=%d\n", MAX_INSTRS);
     printf("MAX_DECLS=%d\n", MAX_DECLS);    
@@ -159,38 +182,84 @@ int main(int argc, char** argv)
     printf("sizeof(csp_instr_t) = %ld\n", sizeof(csp_instr_t));
     printf("sizeof(csp_decl_t) = %ld\n", sizeof(csp_decl_t));
     printf("sizeof(csp_rt_t) = %ld\n", sizeof(csp_rt_t));
-    
-    csp_rt_init(&state);
+}
 
-    for (i = 1; i < argc; i++) {
-	if (strcmp(argv[i], "-r") == 0)
+
+static struct option long_options[] = {
+    {"debug",        no_argument,   0,  'd'},
+    {"transaction",  no_argument,   0,  't'},
+    {"reactive",     no_argument,   0,  'r'},
+    {"verbose",      no_argument,   0,  'v'},
+    {"execute",      no_argument,   0,  'n'},
+    {0,              0,             0,  0 }
+};
+
+int main(int argc, char** argv)
+{
+    csp_rt_t state;
+    int r;
+    index_t x;
+    FILE* fin = stdin;
+    uint32_t update0 = 0;
+    int execute = 1;
+    int c;
+    
+    while (1) {
+	// int this_option_optind = optind ? optind : 1;
+	int option_index = 0;
+
+	c = getopt_long(argc, argv, "rtnd",
+			long_options, &option_index);
+	if (c == -1)
+	    break;
+	
+	switch (c) {
+	case 0:
+	    printf("option %s", long_options[option_index].name);
+	    if (optarg)
+		printf(" with arg %s", optarg);
+	    printf("\n");
+	    break;
+	    
+	case 'r':
 	    csp_set_reactive(&state, 1);
-	else if (strcmp(argv[i], "-t") == 0)
+	    break;		   
+	case 't':
 	    csp_set_transaction(&state, 1);
-	else {
-	    if ((fin = fopen(argv[i], "r")) == NULL) {
-		fprintf(stderr, "unable to open file '%s'\n", argv[i]);
-		exit(1);
-	    }
-	    if ((r = parse_file(&state, fin)) < 0) {
-		fprintf(stderr, "%s:%d syntax error\n",
-			argv[i], state.line);
-		exit(1);
-	    }
-	    fclose(fin);
-	    fin = NULL;
+	    break;
+	case 'n':
+	    execute = 0;
+	    break;
+	case 'd':
+	    debug = 1;
+	    print_defines();
+	    break;
+	default:
+	    printf("?? getopt returned character code 0%o ??\n", c);
+	    break;
 	}
     }
-    if (fin != NULL) {
-	if ((r = parse_file(&state, fin)) < 0) {
-	    fprintf(stderr, "%s:%d syntax error\n",
-		    "*stdin*", state.line);
+
+    csp_rt_init(&state);    
+
+    
+    while (optind < argc) {
+	if ((fin = fopen(argv[optind], "r")) == NULL) {
+	    fprintf(stderr, "unable to open file '%s'\n", argv[optind]);
 	    exit(1);
 	}
+	if ((r = parse_file(&state, fin)) < 0) {
+	    fprintf(stderr, "%s:%d syntax error\n",
+		    argv[optind], state.line);
+	    exit(1);
+	}
+	fclose(fin);
 	fin = NULL;
     }
+    
     printf("transaction = %d\n", state.transaction);
     printf("reactive = %d\n", state.reactive);
+    printf("execute = %d\n", execute);
     
     if (state.reactive)
 	csp_csr(&state); // build graph
@@ -198,7 +267,9 @@ int main(int argc, char** argv)
     csp_rt_start(&state);  // setup default value for variables / constants
 
     csp_dump(stdout, &state);
-    
+
+    if (!execute)
+	exit(0);
 loop:
     csp_input(&state);
 

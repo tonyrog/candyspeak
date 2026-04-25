@@ -1,2 +1,2 @@
-#variable j:32
-print("hej") ? 1
+
+print("hej\n") ? 1

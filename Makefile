@@ -1,7 +1,7 @@
 # build of csp - candy speak
 
 CFLAGS=-MMD -MP -MF .$<.d 
-OBJS = csp_linux.o csp_rt.o
+OBJS = csp_linux.o csp_rt.o csp_format.o csp_dump.o
 LIBS =
 
 # -O3 -std=c99

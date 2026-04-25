@@ -3,15 +3,21 @@
 
 #include <stdint.h>
 
-// features
-#define WANT_TRANSACTION   // use assert/undo
-#define WANT_REACTIVE      // enq/deq
-#define WANT_STATISTICS    // some accounting
+#include "csp_config.h"
 
+#ifndef EXTERN_C
+#define EXTERN_C_BEGIN  extern "C" {
+#define EXTERN_C_END    }
+#endif
+
+#ifdef __cplusplus
+EXTERN_C_BEGIN
+#endif
+    
 #define TAG_DECL  1
 #define TAG_INSTR 0
 
-#define WORD_BITS    16
+//#define WORD_BITS    16
 #define MOD_BITS     3     // (2^MOD_BITS-2) = 6 module instances
 #define INSTR_BITS   7
 #define INDEX_BITS   (MOD_BITS+(INSTR_BITS+1)) // max 512 elems
@@ -40,10 +46,14 @@
 #define IS_MOD_INDEX(n) ((n) >= (1 << (INSTR_BITS+1)))
 #define INDEX(n)  (((n)>>1) & ((1 << INSTR_BITS)-1))  // index in decl/instr
 #define MOD(n)    ((n) >> (INSTR_BITS+1))
+#define TAG(n)    ((n) & 1)
 #define MAKE_INDEX(m,x,t) (((m)<<(INSTR_BITS+1)) | ((x)<<1) | (t))
 
 #define MAX_PARSE_STACK_DEPTH 10
 #define MAX_LINE_TOKENS 128
+
+#define CSP_TRUE  -1  // all bits set, like openCL/Forth
+#define CSP_FALSE 0
 
 typedef uint16_t index_t;  // sizeof type >= INDEX_BITS
 
@@ -239,13 +249,14 @@ typedef enum {
     DECL_MOD,      // module instance
 } decl_t;
 
-#define IS_DECL(i)  (((i) & 1) == TAG_DECL)
-#define IS_INSTR(i)  (((i) & 1) == TAG_INSTR)
+#define IS_DECL(i)  (TAG((i)) == TAG_DECL)
+#define IS_INSTR(i)  (TAG((i)) == TAG_INSTR)
 
 #define DECL_TYPE(s,i) ((s)->decl[(i)].type)
 #define IS_QVAR(s,i)   (DECL_TYPE((s),(i))==DECL_VARIABLE)
 #define IS_CONST(s,i)  (DECL_TYPE((s),(i))==DECL_CONSTANT)
 #define IS_MODULE(s,i) (DECL_TYPE((s),(i))==DECL_MODULE)
+#define IS_MOD(s,i)    (DECL_TYPE((s),(i))==DECL_MOD)
 #define IS_END(s,i)    (DECL_TYPE((s),(i))==DECL_END)
 #define IS_CAN(s,i)    (DECL_TYPE((s),(i))==DECL_CAN)
 
@@ -268,7 +279,7 @@ typedef enum {
 
 typedef struct PACKED {
     index_t n;          // number of nodes in module definition
-    index_t ent;        // entery point in instr
+    index_t ent;        // entry point in instr
 } csp_module_t;
 
 typedef struct PACKED {
@@ -354,7 +365,8 @@ typedef struct
     index_t mofs[MAX_MODS];      // offset in state given mod
     char    str[MAX_STR_BUF];    // store variable names
     int esp;  // eval stack pointer
-    struct { index_t ix; index_t so; } stack[MAX_STACK_DEPTH];
+    struct PACKED { index_t ix; index_t so; unsigned iq:MOD_BITS; }
+	stack[MAX_STACK_DEPTH];
     unsigned transaction:1;      // 1 if keeping a log
     unsigned reactive:1;         // 1 if push backedges to queue
     unsigned cond:1;             // 1 if mark node as conditional
@@ -371,6 +383,7 @@ typedef struct
     index_t mdef;                // module being defined
     index_t ent;                 // entry op of module
     index_t so;                  // state offsets for mods
+    index_t iq;
     // during eval
     uint32_t update;             // update counter
     uint32_t wait_ms;            // sleep time or NOTIMEOUT
@@ -387,8 +400,12 @@ typedef struct
 #ifdef WANT_TRANSACTION
     int up;  // undo pointer
     struct { index_t x; value_t v; } undo[MAX_UNDO];
-    bitset_decl(set, MAX_INDEX); // mark nodes updated during eval
 #endif
+    bitset_decl(xset, MAX_INDEX); // mark instr updated during cycle
+    bitset_decl(dset, MAX_INDEX); // mark decl updated during cycle
+    // check if any node has been set: anyx|anyd == CSP_TRUE
+    int8_t  anyx;  // CSP_TRUE|CSP_FALSE
+    int8_t  anyd;  // CSP_TRUE|CSP_FALSE
     uint32_t cycle;
 #ifdef WANT_STATISTICS
     uint32_t num_eval0;
@@ -396,13 +413,31 @@ typedef struct
 } csp_rt_t;
 
 // n = |mod|index|t|
+// if (m == *) m = st->iq -- set current mod
+// if (m >= 1) {
+//   if (decl)
+//      i = INDEX(n) - decl[INDEX(n)].mq.mx
+//      i += st->mofs[m];
+// }
+// 
+
 static inline int st_index(csp_rt_t* st, index_t n)
 {
     if (IS_MOD_INDEX(n)) {
 	int m = MOD(n); // extract module index
-	// fixme m == ANY_MOD
-	int mofs = st->mofs[m];    // fetch state offset for mod
-	return mofs + INDEX(n);    // and get value
+	int i;
+	index_t md, mx;
+	if (m == ANY_MOD)
+	    m = st->iq;
+	md = st->mod[m];
+	mx = st->decl[INDEX(md)].mq.mx;
+	if (IS_DECL(n)) {
+	    i = INDEX(n) - INDEX(mx);
+	}
+	else {
+	    i = n - st->decl[INDEX(mx)].md.ent;
+	}
+	return i + st->mofs[m];
     }
     return (n >> 1); // since mod=0 just shift tag bit
 }
@@ -413,7 +448,9 @@ static inline void csp_enq(csp_rt_t* st, index_t x)
 {
     if (bitset_tst(st->inq,x))
 	return;
+#if defined(CSP_DEBUG) && !defined(CSP_EMBEDDED)
     printf("enq: %d\n", x);
+#endif
     if ((st->tl - st->hd) != MAX_QUEUE) {
 	st->queue[st->tl % MAX_QUEUE] = x;
 	st->tl++;
@@ -428,8 +465,9 @@ static inline void csp_enq_elist(csp_rt_t* st, index_t x)
     index_t ix = INDEX(x);
     for (i = 0; i < st->idg[ix]; i++) {
 	index_t p = st->edg[st->ofs[ix]+i];  // parent node
-	if (MOD(p) == ANY_MOD)
-	    p = MAKE_INDEX(MOD(x),INDEX(p),0);
+	if (MOD(p) == ANY_MOD) {
+	    p = MAKE_INDEX(st->iq,INDEX(p),TAG_INSTR);
+	}
 	csp_enq(st, p);
     }
 }
@@ -442,7 +480,9 @@ static inline index_t csp_deq(csp_rt_t* st)
     x = st->queue[st->hd % MAX_QUEUE];
     st->hd++;
     bitset_clr(st->inq,x);  // keep? if eval once per cycle
-    printf("deq: %d\n", x);    
+#if defined(CSP_DEBUG) && !defined(CSP_EMBEDDED)
+    printf("deq: %d\n", x);
+#endif
     return x;
 }
 #endif
@@ -479,31 +519,63 @@ static inline char* decl_name(csp_rt_t* st, index_t ix)
     return &st->str[st->decl[INDEX(ix)].name];
 }
 
-static inline void csp_set_value(csp_rt_t* st, index_t n, value_t v)
+static inline void csp_set_xvalue(csp_rt_t* st, index_t n, value_t v)
 {
     int i = st_index(st, n);
-    value_t cv = IS_INSTR(n) ? st->xval[i] : st->dval[i];
+    value_t cv = st->xval[i];
     if (v.u != cv.u) {
 #ifdef WANT_TRANSACTION
 	if (st->transaction) {
-	    if (!bitset_tst(st->set,i)) { // push to undo queue
+	    if (!bitset_tst(st->xset,i)) { // push to undo queue
 		st->undo[st->up].x = n;
 		st->undo[st->up].v = cv;
 		st->up++;
 	    }
 	}
-	bitset_set(st->set,i); // fixme!
 #endif
+	bitset_set(st->xset,i);
+	st->anyx = CSP_TRUE;
 #ifdef WANT_REACTIVE
 	if (st->reactive)
 	    csp_enq_elist(st,n);
 #endif
-	if (IS_INSTR(n))
-	    st->xval[i] = v;
-	else
-	    st->dval[i] = v;
+	st->xval[i] = v;
 	st->update++;
-    }
+    }    
+}
+
+// set value on declaration node (variable/digital/analog ...)
+static inline void csp_set_dvalue(csp_rt_t* st, index_t n, value_t v)
+{
+    int i = st_index(st, n);
+    value_t cv = st->dval[i];
+    if (v.u != cv.u) {
+#ifdef WANT_TRANSACTION
+	if (st->transaction) {
+	    if (!bitset_tst(st->dset,i)) { // push to undo queue
+		st->undo[st->up].x = n;
+		st->undo[st->up].v = cv;
+		st->up++;
+	    }
+	}
+#endif
+	bitset_set(st->dset, i);
+	st->anyd = CSP_TRUE;	
+#ifdef WANT_REACTIVE
+	if (st->reactive)
+	    csp_enq_elist(st,n);
+#endif
+	st->dval[i] = v;
+	st->update++;
+    }    
+}
+
+static inline void csp_set_value(csp_rt_t* st, index_t n, value_t v)
+{
+    if (IS_INSTR(n))
+	csp_set_xvalue(st, n, v);
+    else
+	csp_set_dvalue(st, n, v);
 }
 
 static inline void csp_set_ivalue(csp_rt_t* st, index_t n, ivalue_t v)
@@ -531,18 +603,34 @@ extern int     csp_eval0(csp_rt_t* st, int);
 extern index_t csp_react(csp_rt_t* st);
 extern void    csp_undo(csp_rt_t* st);
 extern void    csp_commit(csp_rt_t* st);
-extern void    csp_dump(FILE*, csp_rt_t* st);
-extern void    csp_print_expr(FILE*, csp_rt_t* st, index_t x);
+
 extern void    csp_state_init(csp_rt_t* st);
 //
 extern index_t csp_new_decl(csp_rt_t* st, char* name, int name_len, decl_t op);
 extern index_t csp_lookup_decl(csp_rt_t* st, char* module, char* name);
 
-// backend port (linux/arduino/LPCopen/FreeRTOS
+// backend port (linux/arduino/LPCopen/FreeRTOS)
 extern uint32_t csp_time_ms(void);
 extern unsigned long csp_time_us(void);
 extern void csp_setup(csp_rt_t* st);
 extern void csp_input(csp_rt_t* st);
 extern void csp_output(csp_rt_t* st);
+
+// platform print functions
+extern int csp_print_char(char c);
+extern int csp_print_str(const char* s);
+extern int csp_print_int(ivalue_t v);
+extern int csp_print_uint(uvalue_t v);
+extern int csp_print_float(fvalue_t v);
+extern int csp_print_hex(uvalue_t v);
+extern int csp_println(void);
+extern int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val);
+
+const char* csp_op_name(opcode_t op);
+extern tok_t csp_opcode_to_tok(opcode_t opcode);
+
+#ifdef __cplusplus
+EXTERN_C_END
+#endif
 
 #endif

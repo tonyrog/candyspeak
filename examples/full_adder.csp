@@ -1,0 +1,10 @@
+#module full_adder
+#variable A:1 in
+#variable B:1 in
+#variable Cin: in
+#variable S:1 out
+#variable Cout:1 out
+
+S = A ^ B ^ C
+Cout = (A & B) + (Cin & (A ^ B))
+#end
