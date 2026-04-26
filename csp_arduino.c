@@ -140,32 +140,34 @@ void csp_input(csp_rt_t* st)
     
     for (i = 0; i < st->ni; i++) {
 	index_t ix = st->input[i];
-	int j = INDEX(ix);
-	switch(st->decl[j].type) {
+	int di = INDEX(ix);
+	int vi = st_index(st, ix);
+	switch(st->decl[di].type) {
 	case DECL_DIGITAL:
-	    if (st->decl[j].in)
-		st->xval[ix].i = digitalRead(st->decl[j].di.pin);
+	    if (st->decl[di].in)
+		st->xval[vi].i = digitalRead(st->decl[di].di.pin);
 	    break;
 	case DECL_ANALOG:
-	    if (st->decl[j].in)
-		st->xval[ix].i = analogRead(st->decl[j].di.pin);	    
+	    if (st->decl[di].in)
+		st->xval[vi].i = analogRead(st->decl[di].di.pin);
 	    break;
 	default: break;
 	}
     }
     now_ms = csp_time_ms();
-    for (i = 0; i< st->nt; i++) {
+    for (i = 0; i < st->nt; i++) {
 	index_t ix = st->timer[i];
-	if (st->decl[INDEX(ix)].tm.running) {
-	    uvalue_t t0 = csp_uvalue(st, st->decl[ix].tm.tx);
-	    ivalue_t period = csp_ivalue(st, st->decl[ix].tm.px);
+	int di = INDEX(ix);
+	if (st->decl[di].tm.running) {
+	    uvalue_t t0 = csp_uvalue(st, st->decl[di].tm.tx);
+	    ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
 	    if ((now_ms - t0) >= period) {
-		st->decl[ix].tm.running = 0;
+		st->decl[di].tm.running = 0;
 		csp_set_ivalue(st, ix, 0);
 	    }
 	    break;
 	}
-    }    
+    }
 }
 
 void csp_output(csp_rt_t* st)
@@ -176,30 +178,31 @@ void csp_output(csp_rt_t* st)
     
     for (i = 0; i < st->no; ++i) {
 	index_t ix = st->output[i];
-	int j = INDEX(ix);
-	switch(st->decl[j].type) {
+	int di = INDEX(ix);
+	int vi = st_index(st, ix);
+	switch(st->decl[di].type) {
 	case DECL_DIGITAL:
-	    if (st->decl[j].out) {
-		if (st->decl[j].in) {
-		    pinMode(st->decl[j].di.pin, OUTPUT);
-		    digitalWrite(st->decl[j].di.pin, st->xval[ix].i);
+	    if (st->decl[di].out) {
+		if (st->decl[di].in) {
+		    pinMode(st->decl[di].di.pin, OUTPUT);
+		    digitalWrite(st->decl[di].di.pin, st->xval[vi].i);
 		    // prepare for next input
-		    if (st->decl[j].di.pullup)
-			pinMode(st->decl[j].di.pin, INPUT_PULLUP);
+		    if (st->decl[di].di.pullup)
+			pinMode(st->decl[di].di.pin, INPUT_PULLUP);
 		    else
-			pinMode(st->decl[j].di.pin, INPUT);
+			pinMode(st->decl[di].di.pin, INPUT);
 		}
 		else { // plain out
-		    digitalWrite(st->decl[j].di.pin, st->xval[ix].i);
+		    digitalWrite(st->decl[di].di.pin, st->xval[vi].i);
 		}
 	    }
 	    break;
 	case DECL_ANALOG:
-	    if ((st->decl[j].out) && (st->decl[j].an.pwm)) {
-		int val = map(st->xval[ix].i,
-			      0, (1<<st->decl[j].res)-1,
+	    if ((st->decl[di].out) && (st->decl[di].an.pwm)) {
+		int val = map(st->xval[vi].i,
+			      0, (1<<st->decl[di].res)-1,
 			      0, 255);
-		analogWrite(st->decl[j].an.pin, val);
+		analogWrite(st->decl[di].an.pin, val);
 	    }
 	    break;
 	default:
@@ -210,26 +213,27 @@ void csp_output(csp_rt_t* st)
     now_ms = csp_time_ms();
     for (i = 0; i < st->nt; ++i) {
 	index_t ix = st->timer[i];
-	int j = st_index(st, ix);	
-	if (st->decl[j].tm.running) {
-	    uvalue_t t0 = csp_uvalue(st, st->decl[j].tm.tx);
-	    ivalue_t period = csp_ivalue(st, st->decl[j].tm.px);
-	    int32_t dt = (now_ms-t0);
+	int di = INDEX(ix);
+	int vi = st_index(st, ix);
+	if (st->decl[di].tm.running) {
+	    uvalue_t t0 = csp_uvalue(st, st->decl[di].tm.tx);
+	    ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
+	    int32_t dt = (now_ms - t0);
 	    if (dt > period)
 		wait_ms = 0;
 	    else
 		wait_ms = period - dt;
 	}
 	else {
-	    if (st->dval[j].i) {
-		ivalue_t period = csp_ivalue(st, st->decl[j].tm.px);
+	    if (st->dval[vi].i) {
+		ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
 		uint32_t dt = period;
-		int k = st_index(st, st->decl[j].tm.tx);
-		st->decl[j].tm.running = 1;
+		int k = st_index(st, st->decl[di].tm.tx);
+		st->decl[di].tm.running = 1;
 		st->dval[k].u = now_ms;
-		st->dval[j].i = 0;  // not timeout
+		st->dval[vi].i = 0;  // not timeout
 		if (dt < wait_ms)
-		    wait_ms = dt;	    
+		    wait_ms = dt;
 	    }
 	}
     }

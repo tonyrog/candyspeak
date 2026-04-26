@@ -89,21 +89,22 @@ void csp_input(csp_rt_t* st)
     
     for (i = 0; i < st->ni; i++) {
 	index_t ix = st->input[i];
-	switch(st->decl[ix].type) {
+	switch(st->decl[INDEX(ix)].type) {
 	case DECL_DIGITAL: break;
 	case DECL_ANALOG: break;
 	default: break;
 	}
     }
     now_ms = csp_time_ms();
-    for (i = 0; i< st->nt; i++) {
+    for (i = 0; i < st->nt; i++) {
 	index_t ix = st->timer[i];
-	if (st->decl[INDEX(ix)].tm.running) {
-	    uvalue_t t0 = csp_uvalue(st, st->decl[ix].tm.tx);
-	    ivalue_t period = csp_ivalue(st, st->decl[ix].tm.px);
+	int di = st_index(st, ix);
+	if (st->decl[di].tm.running) {
+	    uvalue_t t0 = csp_uvalue(st, st->decl[di].tm.tx);
+	    ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
 	    if ((now_ms - t0) >= period) {
-		st->decl[ix].tm.running = 0;
-		csp_set_ivalue(st, ix, 0);
+		st->decl[di].tm.running = 0;
+		st->dval[di].i = 0;
 	    }
 	    break;
 	}
@@ -118,7 +119,7 @@ void csp_output(csp_rt_t* st)
     
     for (i = 0; i < st->no; ++i) {
 	index_t ix = st->output[i];
-	switch(st->decl[ix].type) {
+	switch(st->decl[INDEX(ix)].type) {
 	case DECL_DIGITAL: break;
 	case DECL_ANALOG: break;
 	default: break;
@@ -127,26 +128,26 @@ void csp_output(csp_rt_t* st)
     now_ms = csp_time_ms();
     for (i = 0; i < st->nt; ++i) {
 	index_t ix = st->timer[i];
-	int j = st_index(st, ix);	
-	if (st->decl[j].tm.running) {
-	    uvalue_t t0 = csp_uvalue(st, st->decl[j].tm.tx);
-	    ivalue_t period = csp_ivalue(st, st->decl[j].tm.px);
-	    int32_t dt = (now_ms-t0);
+	int di = st_index(st, ix);
+	if (st->decl[di].tm.running) {
+	    uvalue_t t0 = csp_uvalue(st, st->decl[di].tm.tx);
+	    ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
+	    int32_t dt = (now_ms - t0);
 	    if (dt > period)
 		wait_ms = 0;
 	    else
 		wait_ms = period - dt;
 	}
 	else {
-	    if (st->dval[j].i) {
-		ivalue_t period = csp_ivalue(st, st->decl[j].tm.px);
+	    if (st->dval[di].i) { // should be started
+		ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
 		uint32_t dt = period;
-		int k = st_index(st, st->decl[j].tm.tx);
-		st->decl[j].tm.running = 1;
+		int k = st_index(st, st->decl[di].tm.tx);
+		st->decl[di].tm.running = 1;
 		st->dval[k].u = now_ms;
-		st->dval[j].i = 0;  // not timeout
+		st->dval[di].i = 0;  // not timeout
 		if (dt < wait_ms)
-		    wait_ms = dt;	    
+		    wait_ms = dt;
 	    }
 	}
     }
@@ -186,13 +187,31 @@ void print_defines()
 
 
 static struct option long_options[] = {
-    {"debug",        no_argument,   0,  'd'},
-    {"transaction",  no_argument,   0,  't'},
-    {"reactive",     no_argument,   0,  'r'},
-    {"verbose",      no_argument,   0,  'v'},
-    {"execute",      no_argument,   0,  'n'},
-    {0,              0,             0,  0 }
+    {"debug",        no_argument,       0,  'd'},
+    {"help",         no_argument,       0,  'h'},
+    {"transaction",  no_argument,       0,  't'},
+    {"reactive",     no_argument,       0,  'r'},
+    {"verbose",      no_argument,       0,  'v'},
+    {"no-execute",   no_argument,       0,  'n'},
+    {"cycles",       required_argument, 0,  'c'},
+    {"timeout",      required_argument, 0,  'T'},
+    {0,              0,                 0,  0 }
 };
+
+void usage(const char* prog)
+{
+    fprintf(stderr, "Usage: %s [options] [file...]\n", prog);
+    fprintf(stderr, "Options:\n");
+    fprintf(stderr, "  -h, --help           Show this help\n");
+    fprintf(stderr, "  -d, --debug          Enable debug output\n");
+    fprintf(stderr, "  -t, --transaction    Enable transaction mode\n");
+    fprintf(stderr, "  -r, --reactive       Enable reactive mode\n");
+    fprintf(stderr, "  -n, --no-execute     Parse only, don't execute\n");
+    fprintf(stderr, "  -c, --cycles N       Max cycles (0=unlimited)\n");
+    fprintf(stderr, "  -T, --timeout MS     Max runtime in ms (0=unlimited)\n");
+    fprintf(stderr, "\n");
+    fprintf(stderr, "If no file is given, reads from stdin.\n");
+}
 
 int main(int argc, char** argv)
 {
@@ -200,30 +219,29 @@ int main(int argc, char** argv)
     int r;
     index_t x;
     FILE* fin = stdin;
-    uint32_t update0 = 0;
     int execute = 1;
+    uint32_t max_cycles = 0;
+    uint32_t max_time_ms = 0;
+    uint32_t start_time;
     int c;
-    
+
+    csp_rt_init(&state);
+
     while (1) {
-	// int this_option_optind = optind ? optind : 1;
 	int option_index = 0;
 
-	c = getopt_long(argc, argv, "rtnd",
+	c = getopt_long(argc, argv, "hrtnd c:T:",
 			long_options, &option_index);
 	if (c == -1)
 	    break;
-	
+
 	switch (c) {
-	case 0:
-	    printf("option %s", long_options[option_index].name);
-	    if (optarg)
-		printf(" with arg %s", optarg);
-	    printf("\n");
-	    break;
-	    
+	case 'h':
+	    usage(argv[0]);
+	    exit(0);
 	case 'r':
 	    csp_set_reactive(&state, 1);
-	    break;		   
+	    break;
 	case 't':
 	    csp_set_transaction(&state, 1);
 	    break;
@@ -234,27 +252,41 @@ int main(int argc, char** argv)
 	    debug = 1;
 	    print_defines();
 	    break;
-	default:
-	    printf("?? getopt returned character code 0%o ??\n", c);
+	case 'c':
+	    max_cycles = atoi(optarg);
 	    break;
+	case 'T':
+	    max_time_ms = atoi(optarg);
+	    break;
+	case '?':
+	default:
+	    usage(argv[0]);
+	    exit(1);
 	}
-    }
-
-    csp_rt_init(&state);    
+    }    
 
     
-    while (optind < argc) {
-	if ((fin = fopen(argv[optind], "r")) == NULL) {
-	    fprintf(stderr, "unable to open file '%s'\n", argv[optind]);
+    if (optind >= argc) {
+	// no files given, read from stdin
+	if ((r = parse_file(&state, stdin)) < 0) {
+	    fprintf(stderr, "*stdin*:%d syntax error\n", state.line);
 	    exit(1);
 	}
-	if ((r = parse_file(&state, fin)) < 0) {
-	    fprintf(stderr, "%s:%d syntax error\n",
-		    argv[optind], state.line);
-	    exit(1);
+    }
+    else {
+	while (optind < argc) {
+	    if ((fin = fopen(argv[optind], "r")) == NULL) {
+		fprintf(stderr, "unable to open file '%s'\n", argv[optind]);
+		exit(1);
+	    }
+	    if ((r = parse_file(&state, fin)) < 0) {
+		fprintf(stderr, "%s:%d syntax error\n",
+			argv[optind], state.line);
+		exit(1);
+	    }
+	    fclose(fin);
+	    optind++;
 	}
-	fclose(fin);
-	fin = NULL;
     }
     
     printf("transaction = %d\n", state.transaction);
@@ -270,7 +302,20 @@ int main(int argc, char** argv)
 
     if (!execute)
 	exit(0);
+
+    start_time = csp_time_ms();
+
 loop:
+    // check limits
+    if (max_cycles && state.cycle >= max_cycles) {
+	fprintf(stderr, "max cycles (%u) reached\n", max_cycles);
+	goto done;
+    }
+    if (max_time_ms && (csp_time_ms() - start_time) >= max_time_ms) {
+	fprintf(stderr, "timeout (%u ms) reached\n", max_time_ms);
+	goto done;
+    }
+
     csp_input(&state);
 
     if (state.reactive) {
@@ -281,15 +326,22 @@ loop:
     }
     csp_output(&state);
     
+    if (state.anyd) {
+	csp_commit(&state);
+	if (state.wait_ms != NOTIMEOUT) {
+	    if (debug) printf("wait for %d ms\n", state.wait_ms);
+	    usleep(1000*state.wait_ms);
+	}
+	goto loop;
+    }
+    
     if (state.wait_ms != NOTIMEOUT) {
-	printf("wait for %d ms\n", state.wait_ms);
+	if (debug) printf("wait for %d ms\n", state.wait_ms);
 	usleep(1000*state.wait_ms);
 	goto loop;
     }
-    if (state.update != update0) {
-	update0 = state.update;
-	goto loop;
-    }
+
+done:
     csp_dump(stdout, &state);
 
     fprintf(stdout, "cycle=%d\n", state.cycle);    

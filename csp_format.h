@@ -3,7 +3,7 @@
 
 #include "csp.h"
 
-#ifndef EXTERN_C
+#ifndef EXTERN_C_BEGIN
 #define EXTERN_C_BEGIN  extern "C" {
 #define EXTERN_C_END    }
 #endif

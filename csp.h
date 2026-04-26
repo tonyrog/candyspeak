@@ -5,7 +5,7 @@
 
 #include "csp_config.h"
 
-#ifndef EXTERN_C
+#ifndef EXTERN_C_BEGIN
 #define EXTERN_C_BEGIN  extern "C" {
 #define EXTERN_C_END    }
 #endif
@@ -39,6 +39,7 @@ EXTERN_C_BEGIN
 #define MAX_STR_BUF  (1 << STRING_BITS) // total number of char in var names
 #define MAX_NAME_LEN 8     // max var name len
 #define MAX_ARGS     4     // max number of arguments to function
+#define MAX_USER_FUNCS 16  // max user-defined functions
 
 #define BAD_INDEX   (MAX_INDICES-1)
 #define PARSE_ERROR BAD_INDEX
@@ -146,16 +147,7 @@ typedef enum {
     ENTER,
     LEAVE,
     NEW,
-    //  func
-    MIN,      // min/2
-    MAX,      // max/2  
-    ABS,      // abs/1
-    SIGN,     // sign/1
-    TIMEOUT,  // timeout(timer)/1
-    PRINT,    // print(v|c)
-    TICK,     // tick | tick()
-    CYCLE,    // cycle | cycle()    
-    // 
+    // functions are now handled via OP_CALL + function table
     LAST_NODE, // built-in + operators stop
     // keywords
     PULLUP,   // 'pullup'
@@ -221,19 +213,36 @@ typedef enum {
     OP_ENTER,   //
     OP_LEAVE,   //
     OP_NEW,     // #<module> <instance-name>
-    
-    //  func (fixme OP_CALL?)
-    OP_MIN,      // min/2
-    OP_MAX,      // max/2  
-    OP_ABS,      // abs/1
-    OP_SIGN,     // sign/1
-    OP_TIMEOUT,  // timeout(timer)/1
-    OP_PRINT,    // print(v|c)
-    OP_TICK,     // tick | tick()
-    OP_CYCLE,    // cycle | cycle()
+
+    // function call: y=func_index (low bit: 0=builtin, 1=user), z=arg or OP_COMMA
+    OP_CALL,
 
     OP_LAST,
 } opcode_t;
+
+// Function flags
+#define FUNC_IMMEDIATE  0x01  // can be called with > prefix
+#define FUNC_PURE       0x02  // no side effects
+#define FUNC_RAW_INDEX  0x04  // pass raw indices, not evaluated values
+
+// Forward declarations
+struct csp_rt;
+struct csp_instr;
+
+// Function pointer types
+// Normal: args are pre-evaluated into value_t array
+typedef ivalue_t (*csp_func_fn)(struct csp_rt* st, value_t* args, uint8_t nargs);
+// Raw: receives instruction pointer to access raw indices (for print, timeout)
+typedef ivalue_t (*csp_func_raw_fn)(struct csp_rt* st, struct csp_instr* ip);
+
+// Function table entry
+typedef struct {
+    const char* name;
+    uint8_t namelen;
+    uint8_t nargs;      // number of arguments (0-4)
+    uint8_t flags;      // FUNC_RAW_INDEX| FUNC_IMMEDIATE | FUNC_PURE
+    csp_func_fn fn;     // function to call
+} csp_func_t;
 
 typedef enum {
     DECL_MODULE,   // 'module'
@@ -324,10 +333,10 @@ typedef struct PACKED {     // 22 = 1+1+10+10 (25=1+12+12)
     unsigned tx:INDEX_BITS; // start time tick (intern variable)
 } csp_timer_t;
 
-typedef struct PACKED { // 6+2+1+11+11 = 9+22 = 31
+typedef struct PACKED csp_instr { // 6+2+1+11+11 = 9+22 = 31
     opcode_t op:6;          // OP_xxx
     unsigned vt:2;          // value type (x)
-    unsigned cond:1;        // conditional instruction    
+    unsigned cond:1;        // conditional instruction
     unsigned y:INDEX_BITS;  // src1  (instruction/decl)
     unsigned z:INDEX_BITS;  // src2  (instruction/decl)
 } csp_instr_t;
@@ -351,7 +360,7 @@ typedef struct PACKED {  // 57 = 6 + 51
     };
 } csp_decl_t;
 
-typedef struct
+typedef struct csp_rt
 {
     csp_instr_t instr[MAX_INSTRS];  // instructions used
     csp_decl_t decl[MAX_DECLS];    // declarations used    
@@ -410,7 +419,14 @@ typedef struct
 #ifdef WANT_STATISTICS
     uint32_t num_eval0;
 #endif
+    // user-defined functions (checked before builtin)
+    const csp_func_t* user_funcs;
+    uint8_t num_user_funcs;
 } csp_rt_t;
+
+// Built-in function table (defined in csp_rt.c)
+extern const csp_func_t csp_builtin_funcs[];
+extern const uint8_t csp_num_builtin_funcs;
 
 // n = |mod|index|t|
 // if (m == *) m = st->iq -- set current mod
@@ -594,6 +610,8 @@ static inline void csp_set_fvalue(csp_rt_t* st, index_t n, fvalue_t v)
 
 extern void    csp_rt_init(csp_rt_t*);
 extern void    csp_rt_start(csp_rt_t*);
+extern void    csp_set_user_funcs(csp_rt_t*, const csp_func_t*, uint8_t);
+extern int     csp_lookup_func(csp_rt_t*, const char*, uint8_t);
 extern int     csp_set_transaction(csp_rt_t*, int onoff);
 extern int     csp_set_reactive(csp_rt_t*, int onoff);
 extern int     csp_parse(csp_rt_t*, char* str);
