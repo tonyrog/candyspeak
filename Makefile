@@ -6,12 +6,15 @@ LIBS =
 
 # -O3 -std=c99
 CFLAGS+= -Wall -g -Wswitch  -Wenum-compare -Wenum-conversion  -Wswitch
-LFFLAGS = -g
+LDFLAGS = -g
 
 all:	csp
 
 csp:	$(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) $(LIBS) -o $@
+
+clean:
+	rm $(OBJS)
 
 %.o:	%.c
 	$(CC) $(CFLAGS) -c -fPIC $<

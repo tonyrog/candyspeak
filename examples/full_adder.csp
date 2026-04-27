@@ -1,10 +1,15 @@
-#module full_adder
+#module FullAdd
 #variable A:1 in
 #variable B:1 in
-#variable Cin: in
+#variable Cin:1 in
 #variable S:1 out
 #variable Cout:1 out
 
-S = A ^ B ^ C
-Cout = (A & B) + (Cin & (A ^ B))
+S = A ^ B ^ C ? 1
+Cout = (A & B) + (Cin & (A ^ B)) ? 1
 #end
+
+#FullAdd a
+#FullAdd b
+
+b.Cin = a.S ? 1

@@ -2,6 +2,7 @@
 #define __CSP_H__
 
 #include <stdint.h>
+#include <stdlib.h>
 
 #include "csp_config.h"
 
@@ -23,13 +24,13 @@ EXTERN_C_BEGIN
 #define INDEX_BITS   (MOD_BITS+(INSTR_BITS+1)) // max 512 elems
 #define ANY_MOD      ((1 << MOD_BITS)-1)  // pattern for "any" mod
 #define MAX_INDICES  (1 << INDEX_BITS)
-#define MAX_INSTRS   64  // (less than (1<<ELEM_BITS) keep power of 2!!
-#define MAX_DECLS    64  // (less than (1<<ELEM_BITS) keep power of 2!!
+#define MAX_INSTRS   64  // (less than MAX_INDICES keep power of 2!!
+#define MAX_DECLS    64  // (less than MAX_INDICES keep power of 2!!
 #define MAX_INPUTS   32
 #define MAX_OUTPUTS  32
 #define MAX_TIMERS   16
-#define MAX_MODULES  16
-#define MAX_MODS     32
+#define MAX_MODULES  (1 << MOD_BITS)
+#define MAX_MODS     (1 << MOD_BITS)
 #define MAX_QUEUE    (MAX_INSTRS)
 #define MAX_INDEX    (MAX_INSTRS+1)
 #define MAX_UNDO     (MAX_INSTRS)
@@ -181,6 +182,21 @@ typedef enum {
 } tok_t;
 
 typedef enum {
+    TOKT_DECL,
+    TOKT_INSTR,
+    TOKT_TOKEN
+} tok_type_t;
+
+typedef union
+{
+    struct {
+	char* str;
+	int len;
+    };
+    value_t val;
+} tokval_t;
+
+typedef enum {
     OP_NOP = 0,  // nothing
     OP_NOT,     // "!"  x=-y == x=0-y
     OP_INV,     // "~"  x=~y =  x=1^y        
@@ -219,6 +235,18 @@ typedef enum {
 
     OP_LAST,
 } opcode_t;
+
+typedef struct
+{
+    tok_t  tok;
+    tok_type_t ttype;
+    int8_t code;
+    const char* name;
+    uint8_t name_len;
+    int8_t arity;
+    int8_t prec;
+    int8_t assoc;
+} op_entry_t;
 
 // Function flags
 #define FUNC_IMMEDIATE  0x01  // can be called with > prefix
@@ -362,18 +390,20 @@ typedef struct PACKED {  // 57 = 6 + 51
 
 typedef struct csp_rt
 {
-    csp_instr_t instr[MAX_INSTRS];  // instructions used
+    csp_instr_t instr[MAX_INSTRS]; // instructions used
     csp_decl_t decl[MAX_DECLS];    // declarations used    
-    value_t xval[MAX_INDEX];        // instruction xvalue
-    value_t dval[MAX_INDEX];        // declaration value
-    index_t input[MAX_INPUTS];   // list of inputs (digital/analog ...)
-    index_t output[MAX_OUTPUTS]; // list of outputs (digital/analog ...)
-    index_t module[MAX_MODULES]; // list of modules
-    index_t mod[MAX_MODS];       // list of mods    
-    index_t timer[MAX_TIMERS];   // list of timers
-    index_t mofs[MAX_MODS];      // offset in state given mod
-    char    str[MAX_STR_BUF];    // store variable names
-    int esp;  // eval stack pointer
+    value_t xval[MAX_INDEX];       // instruction xvalue
+    value_t dval[MAX_INDEX];       // declaration value
+    index_t input[MAX_INPUTS];     // list of inputs (digital/analog ...)
+    index_t output[MAX_OUTPUTS];   // list of outputs (digital/analog ...)
+    index_t module[MAX_MODULES];   // list of modules
+    index_t mod[MAX_MODS];         // list of mods    
+    index_t timer[MAX_TIMERS];     // list of timers
+    index_t mofs[MAX_MODS];        // offset in state given mod (OLD?)
+    index_t doffs[MAX_MODS];       // offset to module declarations (NEW)
+    index_t xoffs[MAX_MODS];       // offset to module instructions (NEW)
+    char    str[MAX_STR_BUF];      // store variable names
+    int esp;                       // eval stack pointer
     struct PACKED { index_t ix; index_t so; unsigned iq:MOD_BITS; }
 	stack[MAX_STACK_DEPTH];
     unsigned transaction:1;      // 1 if keeping a log
@@ -456,6 +486,15 @@ static inline int st_index(csp_rt_t* st, index_t n)
 	return i + st->mofs[m];
     }
     return (n >> 1); // since mod=0 just shift tag bit
+}
+
+// general index decl / instr
+static inline int csp_index(csp_rt_t* st, index_t n)
+{
+    int m = MOD(n);
+    return IS_DECL(n) ?
+	(st->doffs[m] + INDEX(n)) :
+	(st->xoffs[m] + INDEX(n));
 }
 
 #ifdef WANT_REACTIVE
@@ -614,6 +653,8 @@ extern void    csp_set_user_funcs(csp_rt_t*, const csp_func_t*, uint8_t);
 extern int     csp_lookup_func(csp_rt_t*, const char*, uint8_t);
 extern int     csp_set_transaction(csp_rt_t*, int onoff);
 extern int     csp_set_reactive(csp_rt_t*, int onoff);
+extern int     csp_scan_line(char* str, tok_t* tok, tokval_t* val,
+			     size_t* num_toks);
 extern int     csp_parse(csp_rt_t*, char* str);
 extern void    csp_csr(csp_rt_t* st);
 extern index_t csp_eval(csp_rt_t* st);

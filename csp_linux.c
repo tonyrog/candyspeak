@@ -16,6 +16,9 @@
 typedef uint64_t tick_t;
 struct timeval boot_time;
 int debug = 0;
+int debug_scan = 0;
+int debug_parse = 0;
+int debug_trace = 0;
 
 static void time_init()
 {
@@ -159,9 +162,21 @@ int parse_file(csp_rt_t* st, FILE* fin)
     char buf[MAX_LINE_SIZE];
     st->line = 1;
     while(fgets(buf, MAX_LINE_SIZE, fin)) {
+	if (debug_scan) {
+	    tokval_t val[MAX_LINE_TOKENS];
+	    tok_t tok[MAX_LINE_TOKENS];
+	    size_t num = MAX_LINE_TOKENS;
+	    int n;
+	    if ((n = csp_scan_line(buf, tok, val, &num)) < 0)
+		return -1;
+	    csp_dump_tokens(stdout, tok, val, num);
+	}
 	if (csp_parse(st, buf) < 0)
 	    return -1;
-      }
+	if (debug_parse) {
+	    csp_dump(stdout, st);
+	}
+    }
     csp_new_decl(st, NULL, 0, DECL_END);
     return 0;
 }
@@ -178,6 +193,8 @@ void print_defines()
     printf("MAX_INPUTS=%d\n", MAX_INPUTS);
     printf("MAX_OUTPUTS=%d\n", MAX_OUTPUTS);
     printf("MAX_TIMERS=%d\n", MAX_TIMERS);
+    printf("MAX_MODULES=%d\n", MAX_MODULES);
+    printf("MAX_MODS=%d\n", MAX_MODS);
     printf("MAX_STR_BUF=%d\n", MAX_STR_BUF);    
     printf("sizeof(value_t) = %ld\n", sizeof(value_t));
     printf("sizeof(csp_instr_t) = %ld\n", sizeof(csp_instr_t));
@@ -188,6 +205,9 @@ void print_defines()
 
 static struct option long_options[] = {
     {"debug",        no_argument,       0,  'd'},
+    {"debug-parse",  no_argument,       0,  'P'},
+    {"debug-scan",  no_argument,        0,  'S'},
+    {"debug-trace",  no_argument,       0,  'Q'},        
     {"help",         no_argument,       0,  'h'},
     {"transaction",  no_argument,       0,  't'},
     {"reactive",     no_argument,       0,  'r'},
@@ -209,6 +229,9 @@ void usage(const char* prog)
     fprintf(stderr, "  -n, --no-execute     Parse only, don't execute\n");
     fprintf(stderr, "  -c, --cycles N       Max cycles (0=unlimited)\n");
     fprintf(stderr, "  -T, --timeout MS     Max runtime in ms (0=unlimited)\n");
+    fprintf(stderr, "  -P, --debug-parse    Enable parser debugging\n");
+    fprintf(stderr, "  -S, --debug-scan     Enable tokenizer debugging\n");
+    fprintf(stderr, "  -Q, --debug-trace    Enable variable tracing\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "If no file is given, reads from stdin.\n");
 }
@@ -230,7 +253,7 @@ int main(int argc, char** argv)
     while (1) {
 	int option_index = 0;
 
-	c = getopt_long(argc, argv, "hrtnd c:T:",
+	c = getopt_long(argc, argv, "hrtndPQSc:T:",
 			long_options, &option_index);
 	if (c == -1)
 	    break;
@@ -248,16 +271,26 @@ int main(int argc, char** argv)
 	case 'n':
 	    execute = 0;
 	    break;
-	case 'd':
-	    debug = 1;
-	    print_defines();
-	    break;
+
 	case 'c':
 	    max_cycles = atoi(optarg);
 	    break;
 	case 'T':
 	    max_time_ms = atoi(optarg);
 	    break;
+	case 'd':
+	    debug = 1;
+	    print_defines();
+	    break;
+	case 'P':
+	    debug_parse = 1;
+	    break;
+	case 'Q':
+	    debug_trace = 1;
+	    break;	    
+	case 'S':
+	    debug_scan = 1;
+	    break;	    
 	case '?':
 	default:
 	    usage(argv[0]);
@@ -305,6 +338,9 @@ int main(int argc, char** argv)
 
     start_time = csp_time_ms();
 
+    if (debug_trace)
+	csp_dump_variables(stdout, &state);
+
 loop:
     // check limits
     if (max_cycles && state.cycle >= max_cycles) {
@@ -324,7 +360,13 @@ loop:
     else {
 	x = csp_eval(&state);
     }
+    
+    if (debug_trace)
+	csp_dump_variables(stdout, &state);
+    
     csp_output(&state);
+
+
     
     if (state.anyd) {
 	csp_commit(&state);

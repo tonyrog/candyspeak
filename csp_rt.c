@@ -6,6 +6,7 @@
 
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <string.h>
 #include <ctype.h>
 
@@ -23,12 +24,6 @@
 #define NO    0
 // func
 
-typedef enum {
-    TOKT_DECL,
-    TOKT_INSTR,
-    TOKT_TOKEN
-} tok_type_t;
-
 #define TOK_ENT(o,c,n) \
     [(o)] = { .tok=(o),.ttype=TOKT_TOKEN,.code=(c),.name=(n),.name_len=strlen((n)),.arity=-1,.prec=-1,.assoc=NO }
 
@@ -38,16 +33,7 @@ typedef enum {
 #define DECL_ENT(o,c,n) \
     [(o)] = { .tok=(o),.ttype=TOKT_DECL,.code=(c),.name=(n),.name_len=strlen((n)),.arity=-1,.prec=-1,.assoc=NO }
 
-const struct {
-    tok_t  tok;
-    tok_type_t ttype;
-    int8_t code;
-    const char* name;
-    uint8_t name_len;
-    int8_t arity;
-    int8_t prec;
-    int8_t assoc;
-} op_table[] = {
+const op_entry_t op_table[] = {
     TOK_ENT(NONE,OP_NOP,"\0"),
     // leaf
     DECL_ENT(MODULE,DECL_MODULE,"module"),
@@ -195,6 +181,32 @@ static ivalue_t fn_cycle(csp_rt_t* st, value_t* args, uint8_t nargs) {
     return st->cycle;
 }
 
+static ivalue_t fn_pln(csp_rt_t* st, value_t* args, uint8_t nargs) {
+    (void)args; (void)nargs;
+    switch(nargs) {
+    case 0:
+	printf("PLN()\n");
+	break;
+    case 1:
+	printf("PLN(%d)\n", args[0].i);
+	break;
+    case 2:
+	printf("PLN(%d,%d)\n", args[0].i, args[1].i);
+	break;
+    case 3:
+	printf("PLN(%d,%d,%d)\n", args[0].i, args[1].i, args[2].i);
+	break;
+    case 4:
+	printf("PLN(%d,%d,%d,%d)\n", args[0].i, args[1].i,
+	       args[2].i, args[3].i);
+	break;
+    default:
+	return 0;
+    }
+    return 1;
+}
+
+
 // Built-in function table 
 const csp_func_t csp_builtin_funcs[] = {
     { "",        0, 0, 0,              NULL },
@@ -206,6 +218,12 @@ const csp_func_t csp_builtin_funcs[] = {
     { "print",   5, 1, FUNC_RAW_INDEX|FUNC_IMMEDIATE, (csp_func_fn)fn_print_raw },
     { "tick",    4, 0, FUNC_PURE,      fn_tick },
     { "cycle",   5, 0, FUNC_PURE,      fn_cycle },
+
+    { "pln0",     4, 0, FUNC_PURE,      fn_pln },
+    { "pln1",     4, 1, FUNC_PURE,      fn_pln },
+    { "pln2",     4, 2, FUNC_PURE,      fn_pln },
+    { "pln3",     4, 3, FUNC_PURE,      fn_pln },
+    { "pln4",     4, 4, FUNC_PURE,      fn_pln },    
 };
 
 const uint8_t csp_num_builtin_funcs = sizeof(csp_builtin_funcs)/sizeof(csp_builtin_funcs[0]);
@@ -293,8 +311,6 @@ static inline int assoc(tok_t op)
 #define MAKE_FUNC_MARKER(idx, is_user) (FUNC_MARKER_BASE + ((idx) << 1) + (is_user))
 #define FUNC_MARKER_INDEX(op) (((op) - FUNC_MARKER_BASE) >> 1)
 #define FUNC_MARKER_IS_USER(op) (((op) - FUNC_MARKER_BASE) & 1)
-
-
 
 #define op_ADD(y, z)  ((y)+(z))
 #define op_SUB(y, z)  ((y)-(z))
@@ -396,33 +412,61 @@ int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val)
     }
 }
 
+static int unpack_args(csp_rt_t* st, index_t arg, index_t* argv, int max_args)
+{
+    int i = 0;
+    while (IS_INSTR(arg) && (st->instr[INDEX(arg)].op == OP_COMMA)) {
+	if (i >= max_args)
+	    return -1;
+	argv[i++] = st->instr[INDEX(arg)].y;
+	arg = st->instr[INDEX(arg)].z;
+    }
+    argv[i++] = arg;
+    return i;
+}
+
+static int eval_args(csp_rt_t* st, index_t arg, value_t* argv, int max_args)
+{
+    int i = 0;
+    while (IS_INSTR(arg) && (st->instr[INDEX(arg)].op == OP_COMMA)) {
+	printf("COMMA\n");
+	if (i >= max_args)
+	    return -1;
+	argv[i++] = csp_value(st, st->instr[INDEX(arg)].y);
+	arg = st->instr[INDEX(arg)].z;
+    }
+    argv[i++] = csp_value(st, arg);
+    return i;
+}
+
+
 int csp_eval0(csp_rt_t* st, int n)
 {
-    ivalue_t v;
-    value_t vv;
     index_t nx = MAKE_INDEX(0, n, TAG_INSTR);
     opcode_t op = st->instr[n].op;
 
-#ifdef WANT_STATISTICS
+#if defined(WANT_STATISTICS) && (WANT_STATISTICS==1)
     st->num_eval0++;
 #endif
+    // fprintf(stdout, "csp_eval0: instr = %d\n", n);
+    
     switch(op) {
-    case OP_RULE:
-#ifdef WANT_REACTIVE
-	if (st->reactive) {
-	    if (csp_ivalue(st,st->instr[n].z))
-		csp_enq(st, st->instr[n].y);
-	    else
-		csp_enq(st, MAKE_INDEX(0,n+1,TAG_INSTR));
-	}
-	return n+1;
-#else
+    case OP_RULE: {
+	int n1;
 	if (csp_ivalue(st,st->instr[n].z))
-	    return n+1;
+	    n1 = n+1;
 	else
-	    return INDEX(st->instr[n].y)+1;
+	    n1 = INDEX(st->instr[n].y)+1;
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
+	if (st->reactive) {
+	    // fixme: mod?
+	    csp_enq(st, MAKE_INDEX(0,n1,TAG_INSTR));
+	    return n1;
+	}
 #endif
-	break;
+	// fprintf(stdout, "jump %d\n", n1);
+	return n1;
+    }
     case OP_ENTER: // skip y + 2 
 	return n + st->instr[n].y + 2;
     case OP_NEW:
@@ -450,18 +494,21 @@ int csp_eval0(csp_rt_t* st, int n)
 	    return n;
 	}
 	return n+1;
-    case OP_EQ: // plain assign
-	vv = csp_value(st,st->instr[n].z);
-	csp_set_value(st,st->instr[n].y,vv);
-	csp_set_value(st,n,vv);
-	break;
+    case OP_EQ: { // plain assign
+	value_t zv = csp_value(st, st->instr[n].z);
+	csp_set_value(st, st->instr[n].y, zv);
+	csp_set_value(st, nx, zv);
+	// fprintf(stdout, "%d = v%d = %d (%d)\n",
+	// zv.i, INDEX(st->instr[n].y), zv.i,
+	// csp_ivalue(st, nx));
+	return n+1;
+    }
     case OP_CALL: {
 	// y: function index (low bit: 0=builtin, 1=user), index >> 1
 	// z: argument (0/1 arg) or OP_COMMA instruction (2+ args)
 	index_t func_id = st->instr[n].y;
 	const csp_func_t* func;
 	value_t args[MAX_ARGS];
-	uint8_t nargs = 0;
 
 	// Get function pointer
 	if ((func_id & 1) == 0) {
@@ -480,54 +527,40 @@ int csp_eval0(csp_rt_t* st, int n)
 	}
 
 	if (func && func->fn) {
+	    ivalue_t ixv;	    
 	    if (func->flags & FUNC_RAW_INDEX) {
 		// RAW_INDEX: pass instruction pointer directly
 		csp_func_raw_fn raw_fn = (csp_func_raw_fn)func->fn;
-		v = raw_fn(st, &st->instr[n]);
+		ixv = raw_fn(st, &st->instr[n]);
 	    }
 	    else {
-		nargs = func->nargs;
-		// Extract and evaluate arguments
-		if (nargs == 0) {
-		    // No args
-		}
-		else if (nargs == 1) {
-		    // Single arg in z
-		    args[0] = csp_value(st, st->instr[n].z);
-		}
-		else {
-		    // 2+ args via OP_COMMA chain
-		    index_t ix = st->instr[n].z;
-		    int i = nargs - 1;
-		    while (i >= 0 && IS_INSTR(ix) && st->instr[INDEX(ix)].op == OP_COMMA) {
-			args[i--] = csp_value(st, st->instr[INDEX(ix)].z);
-			ix = st->instr[INDEX(ix)].y;
-		    }
-		    if (i >= 0)
-			args[i] = csp_value(st, ix);
-		}
-		v = func->fn(st, args, nargs);
+		// assert(func->nargs <= MAX_ARGS);
+		if (func->nargs > 0)
+		    eval_args(st, st->instr[n].z, args, func->nargs);
+		ixv = func->fn(st, args, func->nargs);
 	    }
-	    csp_set_ivalue(st, nx, v);
+	    csp_set_ivalue(st, nx, ixv);
 	}
-	break;
+	return n+1;	
     }
     default:
 	if ((op >= 0) && (op < OP_LAST)) {
-	    ivalue_t yv = csp_ivalue(st, st->instr[n].y);
-	    ivalue_t zv = csp_ivalue(st, st->instr[n].z);
-	    v = eval_tab[op](yv, zv);
-	    csp_set_ivalue(st,nx,v);
+	    ivalue_t iyv = csp_ivalue(st, st->instr[n].y);
+	    ivalue_t izv = csp_ivalue(st, st->instr[n].z);
+	    ivalue_t ixv = eval_tab[op](iyv, izv);
+	    csp_set_ivalue(st,nx,ixv);
+	    // fprintf(stdout, "%d = %d %s %d (%d)\n",
+	    // ixv, iyv, csp_op_name(op), izv,
+	    // csp_ivalue(st, nx));
 	}
-	break;
+	return n+1;	
     }
-    return n+1;
 }
 
 // undo all values
 void csp_undo(csp_rt_t* st)
 {
-#ifdef WANT_TRANSACTION
+#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)
     int i;
     if (st->transaction) {
 	for (i = st->up; i >= 0; i--) {
@@ -551,7 +584,7 @@ void csp_undo(csp_rt_t* st)
 
 void csp_commit(csp_rt_t* st)
 {
-#ifdef WANT_TRANSACTION
+#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)        
     if (st->transaction) {
 	st->up = 0; // reset
     }
@@ -567,14 +600,14 @@ void csp_commit(csp_rt_t* st)
 //        run  module code when mod is found
 //             return on end marker
 
-#include "csp_dump.h"
-
 index_t csp_eval(csp_rt_t* st)
 {
     index_t n = 0;
     index_t x = BAD_INDEX;
-    
+
     st->cycle++;
+    // fprintf(stdout, "csp_eval: cycle = %d\n", st->cycle);
+    
     while(n < st->nn) {
 	n = csp_eval0(st, n);
 	x = n;
@@ -586,7 +619,7 @@ index_t csp_eval(csp_rt_t* st)
 index_t csp_react(csp_rt_t* st)
 {
     st->cycle++;
-#ifdef WANT_REACTIVE
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)    
     index_t x0, x1 = BAD_INDEX;
     // fixme: eval node once! optional?
     if (st->reactive) {
@@ -730,48 +763,58 @@ index_t csp_new_decl(csp_rt_t* st, char* name, int name_len, decl_t type)
 index_t new_signed_const(csp_rt_t* st, ivalue_t v)
 {
     index_t ix;
+    int i;
     if ((ix = csp_new_decl(st,NULL,0,DECL_CONSTANT)) == BAD_INDEX)
 	return BAD_INDEX;
-    st->decl[INDEX(ix)].res = MAKE_RES(8*sizeof(ivalue_t));
-    st->decl[INDEX(ix)].vt = V_INTEGER;
-    st->decl[INDEX(ix)].cn.init.i = v;
+    i = INDEX(ix);
+    st->decl[i].res = MAKE_RES(8*sizeof(ivalue_t));
+    st->decl[i].vt = V_INTEGER;
+    st->decl[i].cn.init.i = v;
+    st->dval[i].i = v;
     return ix;
 }
 
 index_t new_float_const(csp_rt_t* st, fvalue_t v)
 {
     index_t ix;
+    int i;
     if ((ix = csp_new_decl(st,NULL,0,DECL_CONSTANT)) == BAD_INDEX)
 	return BAD_INDEX;
-    st->decl[INDEX(ix)].res = MAKE_RES(8*sizeof(fvalue_t));
-    st->decl[INDEX(ix)].vt = V_FLOAT;
-    st->decl[INDEX(ix)].cn.init.f = v;
+    i = INDEX(ix);
+    st->decl[i].res = MAKE_RES(8*sizeof(fvalue_t));
+    st->decl[i].vt = V_FLOAT;
+    st->decl[i].cn.init.f = v;
+    st->dval[i].f = v;
     return ix;
 }
 
 index_t new_string_const(csp_rt_t* st, char* str, int len)
 {
     index_t ix;
-    int pos;    
+    int pos, i; 
     if ((ix = csp_new_decl(st,NULL,0,DECL_CONSTANT)) == BAD_INDEX)
 	return BAD_INDEX;
     if ((pos = new_string(st, str, len)) < 0)
-	return BAD_INDEX;	
-    st->decl[INDEX(ix)].res = MAKE_RES(STRING_BITS);
-    st->decl[INDEX(ix)].vt = V_STRING;
-    st->decl[INDEX(ix)].cn.init.s = pos;
+	return BAD_INDEX;
+    i = INDEX(ix);
+    st->decl[i].res = MAKE_RES(STRING_BITS);
+    st->decl[i].vt = V_STRING;
+    st->decl[i].cn.init.s = pos;
+    st->dval[i].s = pos;    
     return ix;
 }
 
 index_t csp_new_node(csp_rt_t* st, opcode_t op, index_t y, index_t z)
 {
     index_t x;
+    int i;
     if ((x = next_instr_index(st)) == BAD_INDEX)
-	return BAD_INDEX;    
-    st->instr[INDEX(x)].op = op;
-    st->instr[INDEX(x)].cond = st->cond;
-    st->instr[INDEX(x)].y = y;
-    st->instr[INDEX(x)].z = z;
+	return BAD_INDEX;
+    i = INDEX(x);
+    st->instr[i].op = op;
+    st->instr[i].cond = st->cond;
+    st->instr[i].y = y;
+    st->instr[i].z = z;
     if (st->mdef != 0)
 	x = MAKE_INDEX(ANY_MOD, INDEX(x), TAG(x));
     return x;
@@ -779,6 +822,7 @@ index_t csp_new_node(csp_rt_t* st, opcode_t op, index_t y, index_t z)
 
 index_t new_expr2(csp_rt_t* st, opcode_t op, index_t y, index_t z)
 {
+    // relax this?!
     if ((op == OP_EQ) && IS_CONST(st,INDEX(y)))
 	return PARSE_ERROR;
     return csp_new_node(st, op, y, z);
@@ -794,19 +838,6 @@ index_t new_expr0(csp_rt_t* st, opcode_t op)
     return csp_new_node(st, op, ZERO, ZERO);
 }
 
-static int unpack_args(csp_rt_t* st, index_t arg, index_t* argv, int max_args)
-{
-    int i = 0;
-    
-    while (st->instr[arg].op == OP_COMMA) {
-	if (i >= max_args)
-	    return -1;
-	argv[i++] = st->instr[arg].y;
-	arg = st->instr[arg].z;
-    }
-    argv[i++] = arg;
-    return i;
-}
 
 // Create OP_CALL instruction
 // y = (func_index << 1) | is_user
@@ -822,6 +853,7 @@ index_t new_func_call(csp_rt_t* st, int func_idx, int is_user, uint8_t nargs, in
 
     // Validate argument count by unpacking
     n = unpack_args(st, args_ix, argv, MAX_ARGS);
+    printf("n = %d, args_ix=%d\n", n, args_ix);
     if ((n < 0) || (n != nargs))
 	return PARSE_ERROR;
 
@@ -858,7 +890,7 @@ static inline int depend_on_z(csp_rt_t* st, index_t i)
 		      (!IS_COND((st),(i)) && !IS_CONST((st),(y)))))
 void csp_csr(csp_rt_t* st)
 {
-#ifdef WANT_REACTIVE
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
     int i, x0, x1;
     int in_module = 0;
     index_t wr[MAX_INDEX];
@@ -908,15 +940,6 @@ void csp_csr(csp_rt_t* st)
     }
 #endif
 }
-
-typedef union
-{
-    struct {
-	char* str;
-	int len;
-    };
-    value_t val;
-} tokval_t;
 
 #define TOK(t) do { tok = (t); goto done; } while(0)
 #define SYM(t,p,l) do { tok = (t); tokv->str=(p); tokv->len=(l); goto done; } while(0)
@@ -1088,7 +1111,8 @@ next:
 	    char *name = str-1;
 	    int len = 1;
 	    int i;
-	    while((isalpha(*str)||isdigit(*str)) && (len < MAX_NAME_LEN)) {
+	    while((isalpha(*str)||isdigit(*str)) &&
+		  (len < MAX_NAME_LEN)) {
 		str++;
 		len++;
 	    }
@@ -1179,7 +1203,7 @@ next:
     case LT: goto operator;	
     case GTEQ:goto operator;
     case GTGT:goto operator;
-    case GT:goto operator;		
+    case GT:goto operator;
     case LP:
 	ostack[pp++] = LP; pop = LP; break;
     case RP:
@@ -1211,7 +1235,9 @@ next:
 	    tok_t marker = ostack[--pp];
 	    int func_idx = FUNC_MARKER_INDEX(marker);
 	    int is_user = FUNC_MARKER_IS_USER(marker);
+	    index_t args_ix;
 	    const csp_func_t* func = NULL;
+
 	    if (is_user) {
 		if (st->user_funcs && func_idx < st->num_user_funcs)
 		    func = &st->user_funcs[func_idx];
@@ -1222,7 +1248,7 @@ next:
 	    if (!func || !func->fn)
 		return PARSE_ERROR;
 	    // args are on xstack, combined with OP_COMMA if multiple
-	    index_t args_ix = (ep > 0) ? xstack[ep-1] : ZERO;
+	    args_ix = (ep > 0) ? xstack[ep-1] : ZERO;
 	    ix = new_func_call(st, func_idx, is_user, func->nargs, args_ix);
 	    if (ix == BAD_INDEX) return PARSE_ERROR;
 	    if (func->nargs > 0)
@@ -1394,17 +1420,30 @@ static int parse_value(vtype_t vt, tok_t tok, value_t val, value_t* dst)
     return 0;
 }
 
+static int expect(tok_t* tok, int i, ...)
+{
+    va_list ap;
+    tok_t t;
+    
+    va_start(ap, i);
+    do {
+	t = va_arg(ap, tok_t);
+	if ((t != LAST) && (t != tok[i]))
+	    return 0;
+	i++;
+    } while(t != LAST);
+    va_end(ap);
+    return 1;
+}
 
 // '#' 'module' <name>
 int csp_parse_module(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
 {
     index_t ix;
     index_t jx;
-    
-    if (tok[0] != HASH) return -1;
-    if (tok[1] != MODULE) return -1;
-    if (tok[2] != WORD) return -1;
-    
+
+    if (!expect(tok, 0, HASH, MODULE, WORD, LAST))
+	return -1;
     if ((ix = lookup_decl(st, val[2].str, val[2].len)) != BAD_INDEX)
 	return -1; // already defined
     ix = csp_new_decl(st, val[2].str, val[2].len, DECL_MODULE);
@@ -1422,10 +1461,9 @@ int csp_parse_module(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
 int csp_parse_end(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
 {
     index_t mx, ex, lx;
-    
-    if (tok[0] != HASH) return -1;
-    if (tok[1] != END) return -1;
 
+    if (!expect(tok, 0, HASH, END, LAST))
+	return -1;
     if ((mx = st->mdef)) { // stack?
 	if ((ex = csp_new_decl(st, NULL, 0, DECL_END)) == BAD_INDEX)
 	    return -1;
@@ -1459,9 +1497,8 @@ int csp_parse_variable(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
     index_t ix;    
     int i;
 
-    if (tok[0] != HASH) return -1;
-    if (tok[1] != VARIABLE) return -1;
-    if (tok[2] != WORD) return -1;
+    if (!expect(tok, 0, HASH, VARIABLE, WORD, LAST))
+	return -1;
     i=3;
     if ((tok[i] == COLON) && (tok[i+1] == INT)) {
 	res = MAKE_RES(val[i+1].val.i);
@@ -1489,11 +1526,12 @@ opts:
     if ((ix = lookup_decl(st, val[2].str, val[2].len)) == BAD_INDEX)
 	ix = csp_new_decl(st, val[2].str, val[2].len, DECL_VARIABLE);
     if (ix == BAD_INDEX) return -1;
-    st->decl[INDEX(ix)].vt = vt;
-    st->decl[INDEX(ix)].res = res;
-    st->decl[INDEX(ix)].in = in;
-    st->decl[INDEX(ix)].out = out;    
-    st->decl[INDEX(ix)].va.init = def;
+    i = INDEX(ix);
+    st->decl[i].vt = vt;
+    st->decl[i].res = res;
+    st->decl[i].in = in;
+    st->decl[i].out = out;    
+    st->decl[i].va.init = def;
     return 0;
 }
 
@@ -1511,9 +1549,8 @@ int csp_parse_constant(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
     cnst.i = 0;
     res = MAKE_RES(8*sizeof(ivalue_t));
 
-    if (tok[0] != HASH) return -1;
-    if (tok[1] != CONSTANT) return -1;    
-    if (tok[2] != WORD) return -1;
+    if (!expect(tok, 0, HASH, CONSTANT, WORD, LAST))
+	return -1;
     i=3;
     if ((tok[i] == COLON) && (tok[i+1] == INT)) {
 	res = MAKE_RES(val[i+1].val.i);
@@ -1532,10 +1569,11 @@ int csp_parse_constant(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
     i += 2;
     if ((ix = lookup_decl(st, val[2].str, val[2].len)) == BAD_INDEX)
 	ix = csp_new_decl(st, val[2].str, val[2].len, DECL_CONSTANT);
-    if (ix == BAD_INDEX) return -1;    
-    st->decl[INDEX(ix)].res = res;
-    st->decl[INDEX(ix)].vt = vt;
-    st->decl[INDEX(ix)].cn.init = cnst;
+    if (ix == BAD_INDEX) return -1;
+    i = INDEX(ix);
+    st->decl[i].res = res;
+    st->decl[i].vt = vt;
+    st->decl[i].cn.init = cnst;
     return 0;    
 }
 
@@ -1548,11 +1586,9 @@ int csp_parse_digital(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
     ivalue_t port=0, pin=0;
     index_t ix;
     int i;
-    
-    if (tok[0] != HASH) return -1;
-    if (tok[1] != DIGITAL) return -1;    
-    if (tok[2] != WORD) return -1;
 
+    if (!expect(tok, 0, HASH, DIGITAL, WORD, LAST))
+	return -1;
     i = 3;
 opts:
     if (i < n) {
@@ -1565,7 +1601,7 @@ opts:
 	default: break;
 	}
     }
-    if ((tok[i]==INT) && (tok[i+1] == COLON) && (tok[i+2]==INT)) {
+    if (expect(tok, i, INT, COLON, INT, LAST)) {
 	port = val[i].val.i;
 	pin  = val[i+2].val.i;
 	i += 3;
@@ -1588,13 +1624,14 @@ opts:
 	if (st->no >= MAX_OUTPUTS) return -1;		
 	st->output[st->no++] = ix;
     }
-    st->decl[INDEX(ix)].res = res;
-    st->decl[INDEX(ix)].di.pin = pin;
-    st->decl[INDEX(ix)].di.port = port;
-    st->decl[INDEX(ix)].in = in;
-    st->decl[INDEX(ix)].out = out;
-    st->decl[INDEX(ix)].di.pullup = pu;
-    st->decl[INDEX(ix)].di.pulldown = pd;
+    i = INDEX(ix);
+    st->decl[i].res = res;
+    st->decl[i].di.pin = pin;
+    st->decl[i].di.port = port;
+    st->decl[i].in = in;
+    st->decl[i].out = out;
+    st->decl[i].di.pullup = pu;
+    st->decl[i].di.pulldown = pd;
     return 0;
 }
 
@@ -1611,10 +1648,9 @@ int csp_parse_analog(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
 
     res = MAKE_RES(10);
     vt = V_INTEGER;    
-    
-    if (tok[0] != HASH) return -1;
-    if (tok[1] != ANALOG) return -1;    
-    if (tok[2] != WORD) return -1;
+
+    if (!expect(tok, 0, HASH, ANALOG, WORD, LAST))
+	return -1;
     i = 3;
     if ((tok[i]==COLON) && (tok[i+1]==INT)) {
 	res = MAKE_RES(val[i+1].val.i);
@@ -1633,7 +1669,7 @@ opts:
 	default: break;
 	}
     }
-    if ((tok[i] == INT) && (tok[i+1] == COLON) && (tok[i+2]==INT)) {
+    if (expect(tok, i, INT, COLON, INT, LAST)) {
 	port = val[i].val.i;
 	pin  = val[i+2].val.i;
 	i += 3;
@@ -1655,14 +1691,15 @@ opts:
     if (out) {
 	if (st->no >= MAX_OUTPUTS) return -1;		
 	st->output[st->no++] = ix;
-    }    
-    st->decl[INDEX(ix)].vt = vt;
-    st->decl[INDEX(ix)].res = res;
-    st->decl[INDEX(ix)].in = in;
-    st->decl[INDEX(ix)].out = out;    
-    st->decl[INDEX(ix)].an.pin = pin;
-    st->decl[INDEX(ix)].an.port = port;
-    st->decl[INDEX(ix)].an.pwm = pwm;
+    }
+    i = INDEX(ix);    
+    st->decl[i].vt = vt;
+    st->decl[i].res = res;
+    st->decl[i].in = in;
+    st->decl[i].out = out;    
+    st->decl[i].an.pin = pin;
+    st->decl[i].an.port = port;
+    st->decl[i].an.pwm = pwm;
     return 0;            
 }
 
@@ -1671,11 +1708,10 @@ int csp_parse_timer(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
 {
     ivalue_t init = 0;
     index_t ix, px, tx;
-    
-    if (tok[0] != HASH) return -1;
-    if (tok[1] != TIMER) return -1;    
-    if (tok[2] != WORD) return -1;
-    if (tok[3] != INT) return -1;  // allow veriable/constant name 
+    int i;
+
+    if (!expect(tok, 0, HASH, TIMER, WORD, INT, LAST))
+	return -1;
     if (st->nt >= MAX_TIMERS) return -1;
 
     if (tok[4] == EQ) {
@@ -1687,19 +1723,21 @@ int csp_parse_timer(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
 	px = new_signed_const(st,val[3].val.i);
 
     tx = csp_new_decl(st, NULL, 0, DECL_VARIABLE);
-    st->decl[INDEX(tx)].vt = V_UNSIGNED;
-    st->decl[INDEX(tx)].res = 31;
-    st->decl[INDEX(tx)].va.init.u = 0;
+    i = INDEX(tx);
+    st->decl[i].vt = V_UNSIGNED;
+    st->decl[i].res = MAKE_RES(32);
+    st->decl[i].va.init.u = 0;
     
     if ((ix = lookup_decl(st, val[2].str, val[2].len)) == BAD_INDEX) {
 	if ((ix = csp_new_decl(st, val[2].str, val[2].len, DECL_TIMER)) == BAD_INDEX)
 	    return -1;
     }
     st->timer[st->nt++] = ix;
-    st->decl[INDEX(ix)].tm.running = 0;
-    st->decl[INDEX(ix)].tm.init = init;
-    st->decl[INDEX(ix)].tm.px = px;
-    st->decl[INDEX(ix)].tm.tx = tx;
+    i = INDEX(ix);
+    st->decl[i].tm.running = 0;
+    st->decl[i].tm.init = init;
+    st->decl[i].tm.px = px;
+    st->decl[i].tm.tx = tx;
     return 0;
 }
 
@@ -1720,10 +1758,9 @@ int csp_parse_can(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
     index_t idx;
     int i;
     int bit0, bit1;
-    
-    if (tok[0] != HASH) return -1;
-    if (tok[1] != CAN) return -1;    
-    if (tok[2] != WORD) return -1;
+
+    if (!expect(tok, 0, HASH, CAN, WORD, LAST))
+	return -1;
     i=3;
     if ((tok[i] == COLON) && (tok[i+1] == INT)) {
 	res = MAKE_RES(val[i+1].val.i);
@@ -1773,26 +1810,26 @@ opts:
 	if (st->no >= MAX_OUTPUTS) return -1;		
 	st->output[st->no++] = ix;
     }
-    st->decl[INDEX(ix)].res = res;
-    st->decl[INDEX(ix)].vt = vt;
-    st->decl[INDEX(ix)].in = in;
-    st->decl[INDEX(ix)].out = out;
-    st->decl[INDEX(ix)].ca.id = idx;
-    st->decl[INDEX(ix)].ca.bit = bit0;
-    st->decl[INDEX(ix)].ca.len = (bit1-bit0);
-    st->decl[INDEX(ix)].ca.endian = endian;
-    return 0;    
+    i = INDEX(ix);
+    st->decl[i].res = res;
+    st->decl[i].vt = vt;
+    st->decl[i].in = in;
+    st->decl[i].out = out;
+    st->decl[i].ca.id = idx;
+    st->decl[i].ca.bit = bit0;
+    st->decl[i].ca.len = (bit1-bit0);
+    st->decl[i].ca.endian = endian;
+    return 0;
 }
 
 // '#' word <name>
 int csp_parse_mod(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
 {
     index_t mx, ix, jx;
-    
-    if (tok[0] != HASH) return -1;
-    if (tok[1] != WORD) return -1;
-    if (tok[2] != WORD) return -1;
+    int i;
 
+    if (!expect(tok, 0, HASH, WORD, WORD, LAST))
+	return -1;
     // lookup module
     if ((mx = lookup_decl(st, val[1].str, val[1].len)) == BAD_INDEX) {
 	// FIXME: set error reason
@@ -1806,8 +1843,9 @@ int csp_parse_mod(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
 	return -1;
     if ((jx = csp_new_node(st, OP_NEW, st->decl[INDEX(mx)].md.ent, ix)) == BAD_INDEX)
 	return -1;
-    st->decl[INDEX(ix)].mq.mx = mx;
-    st->decl[INDEX(ix)].mq.iq = st->nq;
+    i = INDEX(ix);
+    st->decl[i].mq.mx = mx;
+    st->decl[i].mq.iq = st->nq;
     if (st->nq >= MAX_MODS) return -1;
     st->mofs[st->nq] = st->so;
     st->so += st->decl[INDEX(mx)].md.n;
@@ -1884,15 +1922,17 @@ index_t make_can_range(csp_rt_t* st, char* str, int len,
 		       index_t idx, ivalue_t p0, ivalue_t p1)
 {
     index_t ix;
+    int i;
     ix = csp_new_decl(st, str, len, DECL_CAN);
     if (ix == BAD_INDEX) return BAD_INDEX;
-    st->decl[INDEX(ix)].res = MAKE_RES(1);
-    st->decl[INDEX(ix)].vt = V_UNSIGNED;
-    st->decl[INDEX(ix)].in = 1;
-    st->decl[INDEX(ix)].out = 0;
-    st->decl[INDEX(ix)].ca.id = idx;
-    st->decl[INDEX(ix)].ca.bit = p0;
-    st->decl[INDEX(ix)].ca.len = MAKE_CAN_LEN((p1-p0)+1);
+    i = INDEX(ix);
+    st->decl[i].res = MAKE_RES(1);
+    st->decl[i].vt = V_UNSIGNED;
+    st->decl[i].in = 1;
+    st->decl[i].out = 0;
+    st->decl[i].ca.id = idx;
+    st->decl[i].ca.bit = p0;
+    st->decl[i].ca.len = MAKE_CAN_LEN((p1-p0)+1);
     if (st->ni >= MAX_INPUTS) return BAD_INDEX;    
     st->input[st->ni++] = ix;
     return ix;
@@ -1937,17 +1977,14 @@ int csp_parse_legacy(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
     ivalue_t on_bits;
     ivalue_t off_bits;    
     int i;
-    
-    if (tok[0] != INT) return -1; 
-    if (tok[1] != INT) return -1;
-    pos = val[1].val.i;
-    if (tok[2] != INT) return -1;
-    mask = val[2].val.i;
-    if (tok[3] != INT) return -1;
-    on_bits = val[3].val.i;
-    if (tok[4] != INT) return -1;
-    off_bits = val[4].val.i;
 
+    if (!expect(tok, 0, INT, INT, INT, INT, INT, LAST))
+	return -1;
+    pos = val[1].val.i;
+    mask = val[2].val.i;
+    on_bits = val[3].val.i;
+    off_bits = val[4].val.i;
+    
     if ((out = lookup_decl(st, "OUT", 3)) == BAD_INDEX) {
 	// fixme: pin number etc for standard OUT
 	if ((out = csp_new_decl(st,"OUT",3,DECL_DIGITAL)) == BAD_INDEX)
@@ -1993,13 +2030,10 @@ int csp_parse(csp_rt_t* st, char* str)
         
     while((n = csp_scan_line(str, tok, val, &num)) > 0) {
 	int r = -1;
-	
 	str += n;
-
 	if (tok[0] == NEWLINE)
 	    r = 0;
-	else if ((tok[0] == INT) && (tok[1] == INT) &&
-		 (tok[2] == INT) && (tok[3] == INT) && (tok[4] == INT)) {
+	else if (expect(tok, 0, INT, INT, INT, INT, INT, LAST)) {
 	    r = csp_parse_legacy(st, tok, val, num);
 	}
 	else if (tok[0] == HASH) {
@@ -2076,10 +2110,10 @@ void csp_rt_start(csp_rt_t* st)
 {
     int i;
 
-#ifdef WANT_TRANSACTION
+#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)
     st->up = 0;
 #endif
-#ifdef WANT_REACTIVE
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)    
     st->tl = st->hd = 0;
 #endif    
     for (i = 0; i < st->nd; i++) {
@@ -2106,7 +2140,7 @@ void csp_rt_start(csp_rt_t* st)
 
 int csp_set_transaction(csp_rt_t* st, int onoff)
 {
-#ifdef WANT_TRANSACTION
+#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)    
     st->transaction = onoff;
     return 0;
 #endif
@@ -2115,7 +2149,7 @@ int csp_set_transaction(csp_rt_t* st, int onoff)
 
 int csp_set_reactive(csp_rt_t* st, int onoff)
 {
-#ifdef WANT_REACTIVE
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)    
     st->reactive = onoff;
     return 0;
 #endif

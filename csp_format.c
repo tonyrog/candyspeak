@@ -31,7 +31,7 @@ const char* csp_fmt_pindir(csp_decl_t* lp)
     else if (lp->out)
 	return " out";
     else
-	return "";
+	return "undefined";
 }
 
 const char* csp_fmt_pull(csp_rt_t* st, int ix)
@@ -41,7 +41,7 @@ const char* csp_fmt_pull(csp_rt_t* st, int ix)
     else if (st->decl[ix].di.pulldown)
 	return " pulldown";
     else
-	return "";
+	return "undefined";
 }
 
 const char* csp_fmt_pwm(csp_rt_t* st, int ix)
@@ -49,7 +49,7 @@ const char* csp_fmt_pwm(csp_rt_t* st, int ix)
     if (st->decl[ix].an.pwm)
 	return " pwm";
     else
-	return "";
+	return "undefined";
 }
 
 const char* csp_fmt_vtype(vtype_t vt)
@@ -59,7 +59,7 @@ const char* csp_fmt_vtype(vtype_t vt)
     case V_UNSIGNED: return "unsigned";
     case V_INTEGER: return "integer";
     case V_STRING: return "string";	
-    default: return "";
+    default: return "undefined";
     }
 }
 
@@ -68,6 +68,6 @@ const char* csp_fmt_endian(vendian_t et)
     switch(et) {
     case E_LITTLE: return "little";
     case E_BIG: return "big";
-    default: return "";
+    default: return "undefined";
     }
 }
