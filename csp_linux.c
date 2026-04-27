@@ -386,8 +386,8 @@ loop:
 done:
     csp_dump(stdout, &state);
 
-    fprintf(stdout, "cycle=%d\n", state.cycle);    
-#ifdef WANT_STATISTICS
+    fprintf(stdout, "cycle=%d\n", state.cycle);
+#if defined(WANT_STATISTICS) && (WANT_STATISTICS==1)    
     fprintf(stdout, "num_eval0=%d\n", state.num_eval0);
 #endif
     if (x == BAD_INDEX)

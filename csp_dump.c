@@ -60,7 +60,7 @@ void csp_fprint_value(FILE* f, csp_rt_t* st, vtype_t vt, value_t val)
 
 void dump_edge_list(FILE* f, csp_rt_t* st, int i)
 {
-#ifdef WANT_REACTIVE
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)    
     if (st->idg[i]) {
 	int j;
 	fprintf(f,",{edge_list,[");

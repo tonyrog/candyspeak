@@ -273,6 +273,7 @@ typedef struct {
 } csp_func_t;
 
 typedef enum {
+    DECL_NOP=0,    // emtpy declaration
     DECL_MODULE,   // 'module'
     DECL_END,      // 'end'
     DECL_CONSTANT, // 'constant'
@@ -297,12 +298,10 @@ typedef enum {
 #define IS_END(s,i)    (DECL_TYPE((s),(i))==DECL_END)
 #define IS_CAN(s,i)    (DECL_TYPE((s),(i))==DECL_CAN)
 
-
 #define OP(s,i) ((s)->instr[(i)].op)
 #define IS_ENTER(s,i) (OP((s),(i))==OP_ENTER)
 #define IS_LEAVE(s,i) (OP((s),(i))==OP_LEAVE)
 #define IS_COND(s,i)   ((s)->instr[(i)].cond)
-
 
 #define MAKE_RES(r) ((r)-1)
 #define GET_RES(rr) ((rr)+1)
@@ -426,7 +425,7 @@ typedef struct csp_rt
     // during eval
     uint32_t update;             // update counter
     uint32_t wait_ms;            // sleep time or NOTIMEOUT
-#ifdef WANT_REACTIVE
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)        
     bitset_decl(inq, MAX_INDEX); // mark nodes in queue during eval    
     index_t queue[MAX_QUEUE];    // nodes in queue
     int hd,tl;  // queue head and tail
@@ -436,7 +435,7 @@ typedef struct csp_rt
     index_t edg [MAX_INDEX+1]; // edg[ofs[n]+0...ideg[n]-1] back pointer
 #endif
 
-#ifdef WANT_TRANSACTION
+#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)
     int up;  // undo pointer
     struct { index_t x; value_t v; } undo[MAX_UNDO];
 #endif
@@ -446,7 +445,7 @@ typedef struct csp_rt
     int8_t  anyx;  // CSP_TRUE|CSP_FALSE
     int8_t  anyd;  // CSP_TRUE|CSP_FALSE
     uint32_t cycle;
-#ifdef WANT_STATISTICS
+#if defined(WANT_STATISTICS) && (WANT_STATISTICS==1)    
     uint32_t num_eval0;
 #endif
     // user-defined functions (checked before builtin)
@@ -497,7 +496,7 @@ static inline int csp_index(csp_rt_t* st, index_t n)
 	(st->xoffs[m] + INDEX(n));
 }
 
-#ifdef WANT_REACTIVE
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)    
 // enq an node for recalculation
 static inline void csp_enq(csp_rt_t* st, index_t x)
 {
@@ -579,7 +578,7 @@ static inline void csp_set_xvalue(csp_rt_t* st, index_t n, value_t v)
     int i = st_index(st, n);
     value_t cv = st->xval[i];
     if (v.u != cv.u) {
-#ifdef WANT_TRANSACTION
+#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)	
 	if (st->transaction) {
 	    if (!bitset_tst(st->xset,i)) { // push to undo queue
 		st->undo[st->up].x = n;
@@ -590,7 +589,7 @@ static inline void csp_set_xvalue(csp_rt_t* st, index_t n, value_t v)
 #endif
 	bitset_set(st->xset,i);
 	st->anyx = CSP_TRUE;
-#ifdef WANT_REACTIVE
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)	
 	if (st->reactive)
 	    csp_enq_elist(st,n);
 #endif
@@ -605,7 +604,7 @@ static inline void csp_set_dvalue(csp_rt_t* st, index_t n, value_t v)
     int i = st_index(st, n);
     value_t cv = st->dval[i];
     if (v.u != cv.u) {
-#ifdef WANT_TRANSACTION
+#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)	
 	if (st->transaction) {
 	    if (!bitset_tst(st->dset,i)) { // push to undo queue
 		st->undo[st->up].x = n;
@@ -615,8 +614,8 @@ static inline void csp_set_dvalue(csp_rt_t* st, index_t n, value_t v)
 	}
 #endif
 	bitset_set(st->dset, i);
-	st->anyd = CSP_TRUE;	
-#ifdef WANT_REACTIVE
+	st->anyd = CSP_TRUE;
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
 	if (st->reactive)
 	    csp_enq_elist(st,n);
 #endif
