@@ -506,6 +506,8 @@ void loop()
     if (state.wait_ms != NOTIMEOUT) {
         // use smaller delays to stay responsive to serial
         uint32_t remaining = state.wait_ms;
+	// FIXME: we must re-read current time and update,
+	// we do not know how long poll is taking!
         while (remaining > 0) {
             uint32_t chunk = min(remaining, (uint32_t)50);
             delay(chunk);
