@@ -144,12 +144,18 @@ void csp_input(csp_rt_t* st)
 	int vi = st_index(st, ix);
 	switch(st->decl[di].type) {
 	case DECL_DIGITAL:
-	    if (st->decl[di].in)
-		st->xval[vi].i = digitalRead(st->decl[di].di.pin);
+	    if (st->decl[di].in) {
+		// fixme: must use setvalue to get trigger etc
+		int value = digitalRead(st->decl[di].di.pin);
+		csp_set_ivalue(st, ix, value);
+	    }
 	    break;
 	case DECL_ANALOG:
-	    if (st->decl[di].in)
-		st->xval[vi].i = analogRead(st->decl[di].di.pin);
+	    if (st->decl[di].in) {
+		// fixme: must use setvalue to get trigger etc
+		int value = analogRead(st->decl[di].di.pin);
+		csp_set_ivalue(st, ix, value);		
+	    }
 	    break;
 	default: break;
 	}
@@ -185,7 +191,7 @@ void csp_output(csp_rt_t* st)
 	    if (st->decl[di].out) {
 		if (st->decl[di].in) {
 		    pinMode(st->decl[di].di.pin, OUTPUT);
-		    digitalWrite(st->decl[di].di.pin, st->xval[vi].i);
+		    digitalWrite(st->decl[di].di.pin, st->dout[vi].i);
 		    // prepare for next input
 		    if (st->decl[di].di.pullup)
 			pinMode(st->decl[di].di.pin, INPUT_PULLUP);
@@ -193,13 +199,13 @@ void csp_output(csp_rt_t* st)
 			pinMode(st->decl[di].di.pin, INPUT);
 		}
 		else { // plain out
-		    digitalWrite(st->decl[di].di.pin, st->xval[vi].i);
+		    digitalWrite(st->decl[di].di.pin, st->dout[vi].i);
 		}
 	    }
 	    break;
 	case DECL_ANALOG:
 	    if ((st->decl[di].out) && (st->decl[di].an.pwm)) {
-		int val = map(st->xval[vi].i,
+		int val = map(st->din[vi].i,
 			      0, (1<<st->decl[di].res)-1,
 			      0, 255);
 		analogWrite(st->decl[di].an.pin, val);
@@ -225,13 +231,13 @@ void csp_output(csp_rt_t* st)
 		wait_ms = period - dt;
 	}
 	else {
-	    if (st->dval[vi].i) {
+	    if (st->dout[vi].i) {
 		ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
 		uint32_t dt = period;
 		int k = st_index(st, st->decl[di].tm.tx);
 		st->decl[di].tm.running = 1;
-		st->dval[k].u = now_ms;
-		st->dval[vi].i = 0;  // not timeout
+		st->dout[k].u = now_ms;
+		st->dout[vi].i = 0;  // not timeout
 		if (dt < wait_ms)
 		    wait_ms = dt;
 	    }
@@ -403,11 +409,11 @@ void handle_immediate_command(csp_rt_t* st, char* cmd)
     }
     else if (strncmp(cmd, "clear", 5) == 0) {
         csp_storage_clear();
-        csp_rt_init(st);
+        csp_rt_init(st, 1, 0);
         serial_print_ok();
     }
     else if (strncmp(cmd, "reset", 5) == 0) {
-        csp_rt_init(st);
+        csp_rt_init(st, 1, 0);
         serial_print_ok();
     }
     else if (strncmp(cmd, "list", 4) == 0) {
@@ -474,7 +480,7 @@ void setup()
     Serial.begin(115200);
     while (!Serial) { ; }  // wait for USB serial
 
-    csp_rt_init(&state);
+    csp_rt_init(&state, 1, 0);
 
     // try to load from EEPROM
     int r = csp_storage_load(&state);

@@ -2,7 +2,7 @@
 #define __CSP_CONFIG_H__
 
 #ifndef WANT_TRANSACTION
-#define WANT_TRANSACTION 0  // use assert/undo
+#define WANT_TRANSACTION 1  // use commit/undo
 #endif
 
 #ifndef WANT_REACTIVE

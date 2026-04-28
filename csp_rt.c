@@ -169,10 +169,10 @@ static ivalue_t fn_print_raw(csp_rt_t* st, csp_instr_t* ip) {
     index_t ix = ip->z;
     int vi = st_index(st, ix);
     if (IS_DECL(ix)) {
-	return csp_print_value(st, st->decl[INDEX(ix)].vt, st->dval[vi]);
+	return csp_print_value(st, st->decl[INDEX(ix)].vt, st->din[vi]);
     }
     else {
-	return csp_print_value(st, st->instr[INDEX(ix)].vt, st->xval[vi]);
+	return csp_print_value(st, st->instr[INDEX(ix)].vt, st->xin[vi]);
     }
 }
 
@@ -298,50 +298,32 @@ static inline int assoc(tok_t op)
 static inline void csp_set_xvalue(csp_rt_t* st, index_t n, value_t v)
 {
     int i = st_index(st, n);
-    value_t cv = st->xval[i];
+    value_t cv = st->xout[i];
     if (v.u != cv.u) {
-#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)	
-	if (st->transaction) {
-	    if (!bitset_tst(st->xset,i)) { // push to undo queue
-		st->undo[st->up].x = n;
-		st->undo[st->up].v = cv;
-		st->up++;
-	    }
-	}
-#endif
 	bitset_set(st->xset,i);
 	st->anyx = CSP_TRUE;
-#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)	
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
 	if (st->reactive)
 	    csp_enq_elist(st,n);
 #endif
-	st->xval[i] = v;
+	st->xout[i] = v;
 	st->update++;
-    }    
+    }
 }
 
 // set value on declaration node (variable/digital/analog ...)
 static inline void csp_set_dvalue(csp_rt_t* st, index_t n, value_t v)
 {
     int i = st_index(st, n);
-    value_t cv = st->dval[i];
+    value_t cv = st->dout[i];
     if (v.u != cv.u) {
-#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)	
-	if (st->transaction) {
-	    if (!bitset_tst(st->dset,i)) { // push to undo queue
-		st->undo[st->up].x = n;
-		st->undo[st->up].v = cv;
-		st->up++;
-	    }
-	}
-#endif
 	bitset_set(st->dset, i);
 	st->anyd = CSP_TRUE;
 #if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
 	if (st->reactive)
 	    csp_enq_elist(st,n);
 #endif
-	st->dval[i] = v;
+	st->dout[i] = v;
 	st->update++;
     }    
 }
@@ -515,10 +497,13 @@ int csp_eval0(csp_rt_t* st, int n)
     switch(op) {
     case OP_RULE: {
 	int n1;
-	if (csp_ivalue(st,st->instr[n].z))
+	int ny = INDEX(st->instr[n].y)+1;
+	ivalue_t iz = csp_ivalue(st,st->instr[n].z);
+	if (iz)
 	    n1 = n+1;
 	else
-	    n1 = INDEX(st->instr[n].y)+1;
+	    n1 = ny;
+	// printf("V%d: V%d=%d ? jump %d\n",  n, INDEX(st->instr[n].z), iz, ny);
 #if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
 	if (st->reactive) {
 	    // fixme: mod?
@@ -558,6 +543,7 @@ int csp_eval0(csp_rt_t* st, int n)
     case OP_EQ: { // plain assign
 	value_t zv = csp_value(st, st->instr[n].z);
 	csp_set_value(st, st->instr[n].y, zv);
+	// printf("V%d = %d\n", INDEX(st->instr[n].y), zv.i);
 	csp_set_value(st, nx, zv);
 	return n+1;
     }
@@ -606,6 +592,10 @@ int csp_eval0(csp_rt_t* st, int n)
 	    ivalue_t iyv = csp_ivalue(st, st->instr[n].y);
 	    ivalue_t izv = csp_ivalue(st, st->instr[n].z);
 	    ivalue_t ixv = eval_tab[op](iyv, izv);
+	    
+	    /* printf("V%d=%d <- V%d=%d %s V%d=%d\n",
+	       n, ixv, INDEX(st->instr[n].y), iyv, csp_op_name(op),
+	       INDEX(st->instr[n].z), izv); */
 	    csp_set_ivalue(st,nx,ixv);
 	}
 	return n+1;	
@@ -615,33 +605,21 @@ int csp_eval0(csp_rt_t* st, int n)
 // undo all values
 void csp_undo(csp_rt_t* st)
 {
-#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)
-    int i;
-    if (st->transaction) {
-	for (i = st->up; i >= 0; i--) {
-	    index_t x = st->undo[i].x;
-	    int j = st_index(st, x);
-	    if (IS_INSTR(x)) {
-		bitset_clr(st->xset,x);
-		st->xval[j] = st->undo[i].v;
-	    }
-	    else {
-		bitset_clr(st->dset,x);
-		st->dval[j] = st->undo[i].v;
-	    }
-	}
-	st->anyx = CSP_FALSE;
-	st->anyd = CSP_FALSE;
-	st->up = 0;
-    }
-#endif
+    st->anyx = CSP_FALSE;
+    st->anyd = CSP_FALSE;
+    bitset_zero(st->dset);
+    bitset_zero(st->xset);   
 }
 
 void csp_commit(csp_rt_t* st)
 {
-#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)        
+#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)
+    // swap in / out
     if (st->transaction) {
-	st->up = 0; // reset
+	value_t* tmp;
+	// printf("swap transaction input/output\n");
+	tmp = st->xin; st->xin = st->xout; st->xout = tmp;
+	tmp = st->din; st->din = st->dout; st->dout = tmp;
     }
 #endif
     bitset_zero(st->dset);
@@ -651,9 +629,6 @@ void csp_commit(csp_rt_t* st)
 }
 
 // run eval0 on all nodes
-// FIXME: skip module defs
-//        run  module code when mod is found
-//             return on end marker
 
 index_t csp_eval(csp_rt_t* st)
 {
@@ -832,7 +807,7 @@ index_t new_signed_const(csp_rt_t* st, ivalue_t v)
     st->decl[i].res = MAKE_RES(8*sizeof(ivalue_t));
     st->decl[i].vt = V_INTEGER;
     st->decl[i].cn.init.i = v;
-    st->dval[i].i = v;
+    st->din[i].i = v;
     return ix;
 }
 
@@ -846,7 +821,7 @@ index_t new_float_const(csp_rt_t* st, fvalue_t v)
     st->decl[i].res = MAKE_RES(8*sizeof(fvalue_t));
     st->decl[i].vt = V_FLOAT;
     st->decl[i].cn.init.f = v;
-    st->dval[i].f = v;
+    st->din[i].f = v;
     return ix;
 }
 
@@ -862,7 +837,7 @@ index_t new_string_const(csp_rt_t* st, char* str, int len)
     st->decl[i].res = MAKE_RES(STRING_BITS);
     st->decl[i].vt = V_STRING;
     st->decl[i].cn.init.s = pos;
-    st->dval[i].s = pos;    
+    st->din[i].s = pos;    
     return ix;
 }
 
@@ -1864,7 +1839,6 @@ int csp_parse_mod(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
     return 0;
 }
 
-
 // <expr> '?' <cond>
 // expr = tok[0]...tok[i-1]
 // cond = tok[i+1]...tok[num-1]
@@ -2088,19 +2062,32 @@ int csp_parse(csp_rt_t* st, char* str)
 	}
 	if (r < 0)
 	    return -1;
-	st->line++;
+	st->ps.line++;
 	num = MAX_LINE_TOKENS;
     }
     return 0;
 }
 
-void csp_rt_init(csp_rt_t* st)
+void csp_rt_init(csp_rt_t* st, int transaction, int reactive)
 {
     memset(st, 0x00, sizeof(csp_rt_t));
+
+    st->xin = st->xout = st->xv0;
+    st->din = st->dout = st->dv0;    
+
+    st->reactive    = reactive;
+    if ((st->transaction = transaction) != 0) {
+#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)
+	// st->xout = st->xv1;
+	st->dout = st->dv1;    	
+#endif
+    }
+    
     st->ps.nn = 0;
     st->ps.nd = 0;
     st->ps.strp = MAX_STR_BUF;
     st->ps.err  = ERR_OK;
+    st->ps.line = 0;
 
     st->nt = 0;
     st->ni = 0;
@@ -2129,15 +2116,15 @@ void csp_rt_start(csp_rt_t* st)
 {
     int i;
 
-#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)
-    st->up = 0;
-#endif
 #if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)    
     st->tl = st->hd = 0;
 #endif
-    st->ni = 0;
-    st->no = 0;    
     st->nt = 0;
+    st->ni = 0;
+    st->no = 0;
+    st->nm = 0;
+    st->nq = 0;
+    
     for (i = 0; i < st->ps.nd; i++) {
 	index_t ix = MAKE_INDEX(0,i,TAG_DECL);
 	switch(st->decl[i].type) {
@@ -2150,16 +2137,17 @@ void csp_rt_start(csp_rt_t* st)
 		st->mod[st->nq++] = ix;
 	    break;	    
 	case DECL_CONSTANT:
-	    st->dval[i] = st->decl[i].cn.init;
+	    st->din[i] = st->dout[i] = st->decl[i].cn.init;
 	    break;
 	case DECL_VARIABLE:
-	    csp_set_ivalue(st, ix, st->decl[i].va.init.i);
+	    st->din[i] = st->decl[i].va.init;
+	    csp_set_value(st, ix, st->din[i]);
 	    break;
 	case DECL_TIMER:
 	    if (st->decl[i].tm.init == 1) {
 		int tj = st_index(st, st->decl[i].tm.tx);
 		st->decl[i].tm.running = 1;
-		st->dval[tj].u = csp_time_ms();
+		st->din[tj].u = st->dout[tj].u = csp_time_ms();
 		csp_set_ivalue(st, ix, 1);
 	    }
 	    st->timer[st->nt++] = ix;
@@ -2185,7 +2173,10 @@ void csp_rt_start(csp_rt_t* st)
 int csp_set_transaction(csp_rt_t* st, int onoff)
 {
 #if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)    
-    st->transaction = onoff;
+    if ((st->transaction = onoff) != 0) {
+	// st->xout = (st->xin == st->xv0) ? st->xv1 : st->xv0;
+	st->dout = (st->din == st->dv0) ? st->dv1 : st->dv0;
+    }
     return 0;
 #endif
     return -1;
@@ -2193,7 +2184,7 @@ int csp_set_transaction(csp_rt_t* st, int onoff)
 
 int csp_set_reactive(csp_rt_t* st, int onoff)
 {
-#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)    
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
     st->reactive = onoff;
     return 0;
 #endif

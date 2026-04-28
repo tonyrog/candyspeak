@@ -18,10 +18,10 @@ EXTERN_C_BEGIN
 #define TAG_DECL  1
 #define TAG_INSTR 0
 
-//#define WORD_BITS    16
-#define MOD_BITS     3     // (2^MOD_BITS-2) = 6 module instances
-#define INSTR_BITS   7
-#define INDEX_BITS   (MOD_BITS+(INSTR_BITS+1)) // max 512 elems
+//#define WORD_BITS  16
+#define MOD_BITS     3   // (2^MOD_BITS-2) = 6 module instances
+#define INSTR_BITS   7   // max 128 instruction
+#define INDEX_BITS   (MOD_BITS+INSTR_BITS+1) // max 512 elems
 #define ANY_MOD      ((1 << MOD_BITS)-1)  // pattern for "any" mod
 #define MAX_INDICES  (1 << INDEX_BITS)
 #define MAX_INSTRS   64  // (less than MAX_INDICES keep power of 2!!
@@ -33,7 +33,6 @@ EXTERN_C_BEGIN
 #define MAX_MODS     (1 << MOD_BITS)
 #define MAX_QUEUE    (MAX_INSTRS)
 #define MAX_INDEX    (MAX_INSTRS+1)
-#define MAX_UNDO     (MAX_INSTRS)
 #define MAX_STACK_DEPTH 4
 #define STRING_BITS  9
 #define NAME_BITS    5
@@ -320,7 +319,7 @@ typedef struct PACKED {
 
 typedef struct PACKED {
     index_t  mx;         // module index
-    index_t  iq;         // index in mod table
+    index_t  iq;         // index in mod table (not tagged)
 } csp_mod_t;
 
 typedef struct PACKED  { // 32
@@ -401,14 +400,31 @@ typedef struct PACKED {
     index_t nd;                  // number of decls
     uint32_t strp;               // string table position
     csp_err_t err;               // error code
+    uint32_t line;               // line number when parsing
 } csp_pstate_t;
 
 typedef struct _csp_rt_t
 {
     csp_instr_t instr[MAX_INSTRS]; // instructions used
     csp_decl_t decl[MAX_DECLS];    // declarations used
-    value_t xval[MAX_INDEX];       // instruction xvalue
-    value_t dval[MAX_INDEX];       // declaration value
+
+    value_t* xin;                  // xin point to xv0 or xv1
+    value_t* din;                  // din point to dv0 or dv1
+    value_t* xout;                 // xout point to xv0 or xv1
+    value_t* dout;                 // dout point to dv0 or dv1
+
+    value_t xv0[MAX_INDEX];       // instruction (node) value (x)
+    value_t dv0[MAX_INDEX];       // declaration (leaf) value (y,z)    
+#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)
+    // value_t xv1[MAX_INDEX];       // instruction (node) value (x)
+    value_t dv1[MAX_INDEX];       // declaration (leaf) value (y,z)    
+#endif
+    // check if any node has been set: anyx|anyd == CSP_TRUE
+    int8_t  anyx;  // CSP_TRUE|CSP_FALSE
+    int8_t  anyd;  // CSP_TRUE|CSP_FALSE
+    bitset_decl(xset, MAX_INDEX); // mark instr updated during cycle
+    bitset_decl(dset, MAX_INDEX); // mark decl updated during cycle
+    
     char    str[MAX_STR_BUF];      // store variable names    
     // 
     index_t mofs[MAX_MODS];        // offset in state given mod (OLD?)
@@ -421,7 +437,6 @@ typedef struct _csp_rt_t
     unsigned transaction:1;      // 1 if keeping a log
     unsigned reactive:1;         // 1 if push backedges to queue
     unsigned cond:1;             // 1 if mark node as conditional
-    uint32_t line;               // line number when parsing
 
     csp_pstate_t ps;             // parse state
 
@@ -441,7 +456,6 @@ typedef struct _csp_rt_t
     index_t module[MAX_MODULES];   // list of modules
     index_t mod[MAX_MODS];         // list of mods    
     index_t timer[MAX_TIMERS];     // list of timers
-
     // during eval
     uint32_t update;             // update counter
     uint32_t wait_ms;            // sleep time or NOTIMEOUT
@@ -454,16 +468,6 @@ typedef struct _csp_rt_t
     index_t ofs [MAX_INDEX+1]; // output offset from each instr
     index_t edg [MAX_INDEX+1]; // edg[ofs[n]+0...ideg[n]-1] back pointer
 #endif
-
-#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)
-    int up;  // undo pointer
-    struct { index_t x; value_t v; } undo[MAX_UNDO];
-#endif
-    bitset_decl(xset, MAX_INDEX); // mark instr updated during cycle
-    bitset_decl(dset, MAX_INDEX); // mark decl updated during cycle
-    // check if any node has been set: anyx|anyd == CSP_TRUE
-    int8_t  anyx;  // CSP_TRUE|CSP_FALSE
-    int8_t  anyd;  // CSP_TRUE|CSP_FALSE
     uint32_t cycle;
 #if defined(WANT_STATISTICS) && (WANT_STATISTICS==1)    
     uint32_t num_eval0;
@@ -507,7 +511,7 @@ static inline int st_index(csp_rt_t* st, index_t n)
     return (n >> 1); // since mod=0 just shift tag bit
 }
 
-// general index decl / instr
+// general index decl / instr FIXME: use this somehow
 static inline int csp_index(csp_rt_t* st, index_t n)
 {
     int m = MOD(n);
@@ -522,9 +526,6 @@ static inline void csp_enq(csp_rt_t* st, index_t x)
 {
     if (bitset_tst(st->inq,x))
 	return;
-#if defined(CSP_DEBUG) && !defined(CSP_EMBEDDED)
-    printf("enq: %d\n", x);
-#endif
     if ((st->tl - st->hd) != MAX_QUEUE) {
 	st->queue[st->tl % MAX_QUEUE] = x;
 	st->tl++;
@@ -554,9 +555,6 @@ static inline index_t csp_deq(csp_rt_t* st)
     x = st->queue[st->hd % MAX_QUEUE];
     st->hd++;
     bitset_clr(st->inq,x);  // keep? if eval once per cycle
-#if defined(CSP_DEBUG) && !defined(CSP_EMBEDDED)
-    printf("deq: %d\n", x);
-#endif
     return x;
 }
 #endif
@@ -565,9 +563,9 @@ static inline value_t csp_value(csp_rt_t* st, index_t n)
 {
     int i = st_index(st, n);
     if (IS_INSTR(n))
-	return st->xval[i];
+	return st->xin[i];
     else
-	return st->dval[i];
+	return st->din[i];
 }
 
 static inline ivalue_t csp_ivalue(csp_rt_t* st, index_t ix)
@@ -594,7 +592,7 @@ static inline char* decl_name(csp_rt_t* st, index_t ix)
 }
 
 
-extern void    csp_rt_init(csp_rt_t*);
+extern void    csp_rt_init(csp_rt_t*,  int transaction, int reactive);
 extern void    csp_rt_start(csp_rt_t*);
 extern void    csp_set_user_funcs(csp_rt_t*, const csp_func_t*, uint8_t);
 extern int     csp_lookup_func(csp_rt_t*, const char*, uint8_t);

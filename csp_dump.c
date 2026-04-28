@@ -114,7 +114,7 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i)
 		csp_op_name(st->instr[i].op),
 		cond ? "true" : "false");
 	fprintf(f, "{x,");
-	csp_fprint_value(f, st, vt, st->xval[i]);
+	csp_fprint_value(f, st, vt, st->xin[i]);
 	fprintf(f, "},{y,");
 	csp_fprint_tag(f, st, st->instr[i].y);
 	fprintf(f, "},{z,");
@@ -134,9 +134,12 @@ void csp_dump_variables(FILE* f, csp_rt_t* st)
     for (i = 0; i < st->ps.nd; i++) {
 	if (st->decl[i].type == DECL_VARIABLE) {
 	    index_t ix = MAKE_INDEX(0,i,TAG_DECL);
-	    if (n > 0) fputc(',', f);	    
-	    fprintf(f, "%s=", decl_name(st, ix));
-	    csp_fprint_value(f, st, st->decl[i].vt, st->dval[i]);
+	    if (n > 0) fputc(',', f);
+	    fprintf(f, "%-s=", decl_name(st, ix));
+	    csp_fprint_value(f, st, st->decl[i].vt, st->dout[i]);
+	    fputc('[', f);
+	    csp_fprint_value(f, st, st->decl[i].vt, st->din[i]);
+	    fputc(']', f);
 	    n++;
 	}
     }
@@ -179,7 +182,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i)
 		csp_fmt_vtype(vt));
 	csp_fprint_value(f, st, vt, st->decl[i].va.init);
 	fprintf(f, "},{value,");
-	csp_fprint_value(f, st, vt, st->dval[i]);
+	csp_fprint_value(f, st, vt, st->din[i]);
 	fprintf(f, "}]}.\n");
 	break;
     case DECL_CONSTANT:
@@ -191,7 +194,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i)
 		csp_fmt_vtype(vt));
 	csp_fprint_value(f, st, vt, st->decl[i].cn.init);
 	fprintf(f, "},{value,");
-	csp_fprint_value(f, st, vt, st->dval[i]);
+	csp_fprint_value(f, st, vt, st->din[i]);
 	fprintf(f, "}]}.\n");	
 	break;
     case DECL_DIGITAL:

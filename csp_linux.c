@@ -142,13 +142,13 @@ void csp_output(csp_rt_t* st)
 		wait_ms = period - dt;
 	}
 	else {
-	    if (st->dval[di].i) { // should be started
+	    if (st->din[di].i) { // should be started
 		ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
 		uint32_t dt = period;
 		int k = st_index(st, st->decl[di].tm.tx);
 		st->decl[di].tm.running = 1;
-		st->dval[k].u = now_ms;
-		st->dval[di].i = 0;  // not timeout
+		 st->dout[k].u = now_ms;
+		st->dout[di].i = 0;  // not timeout
 		if (dt < wait_ms)
 		    wait_ms = dt;
 	    }
@@ -160,7 +160,7 @@ void csp_output(csp_rt_t* st)
 int parse_file(csp_rt_t* st, FILE* fin)
 {
     char buf[MAX_LINE_SIZE];
-    st->line = 1;
+    st->ps.line = 1;
     while(fgets(buf, MAX_LINE_SIZE, fin)) {
 	if (debug_scan) {
 	    tokval_t val[MAX_LINE_TOKENS];
@@ -244,12 +244,11 @@ int main(int argc, char** argv)
     uint32_t max_time_ms = 0;
     uint32_t start_time;
     int c;
-
-    csp_rt_init(&state);
+    int transaction = 0;
+    int reactive = 0;
 
     while (1) {
 	int option_index = 0;
-
 	c = getopt_long(argc, argv, "hrtndPQSc:T:",
 			long_options, &option_index);
 	if (c == -1)
@@ -259,55 +258,44 @@ int main(int argc, char** argv)
 	case 'h':
 	    usage(argv[0]);
 	    exit(0);
-	case 'r':
-#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)	    
-	    csp_set_reactive(&state, 1);
-#else
-	    fprintf(stderr, "reactive mode not configured\n");
-	    exit(1);
-#endif
-	    break;
-	case 't':
-#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)	    
-	    csp_set_transaction(&state, 1);
-#else
-	    fprintf(stderr, "transaction mode not configured\n");
-	    exit(1);
-#endif
-	    break;
-	case 'n':
-	    execute = 0;
-	    break;
-	case 'c':
-	    max_cycles = atoi(optarg);
-	    break;
-	case 'T':
-	    max_time_ms = atoi(optarg);
-	    break;
-	case 'd':
-	    debug = 1;
-	    print_defines();
-	    break;
-	case 'P':
-	    debug_parse = 1;
-	    break;
-	case 'Q':
-	    debug_trace = 1;
-	    break;	    
-	case 'S':
-	    debug_scan = 1;
-	    break;	    
+	case 'r': reactive = 1; break;
+	case 't': transaction = 1; break;
+	case 'n': execute = 0; break;
+	case 'c': max_cycles = atoi(optarg); break;
+	case 'T': max_time_ms = atoi(optarg); break;
+	case 'd': debug = 1; break;
+	case 'P': debug_parse = 1; break;
+	case 'Q': debug_trace = 1; break;
+	case 'S': debug_scan = 1; break;	    
 	case '?':
 	default:
 	    usage(argv[0]);
 	    exit(1);
 	}
     }    
+
+    if (debug)
+	print_defines();
+#if !defined(WANT_TRANSACTION) || (WANT_TRANSACTION==0)
+    if (transaction) {
+	fprintf(stderr, "transaction mode not configured\n");
+	exit(1);
+    }
+#endif
     
+#if !defined(WANT_RECATIVE) || (WANT_RECATIVE==0)
+    if (reactive) {
+	fprintf(stderr, "reactive mode not configured\n");
+	exit(1);
+    }
+#endif
+
+    csp_rt_init(&state, transaction, reactive);
+
     if (optind >= argc) {
 	// no files given, read from stdin
 	if ((r = parse_file(&state, stdin)) < 0) {
-	    fprintf(stderr, "*stdin*:%d syntax error\n", state.line);
+	    fprintf(stderr, "*stdin*:%d syntax error\n", state.ps.line);
 	    exit(1);
 	}
     }
@@ -319,7 +307,7 @@ int main(int argc, char** argv)
 	    }
 	    if ((r = parse_file(&state, fin)) < 0) {
 		fprintf(stderr, "%s:%d syntax error\n",
-			argv[optind], state.line);
+			argv[optind], state.ps.line);
 		exit(1);
 	    }
 	    fclose(fin);
@@ -368,14 +356,11 @@ loop:
 	x = csp_eval(&state);
     }
     
-    if (debug_trace)
-	csp_dump_variables(stdout, &state);
-    
     csp_output(&state);
 
-
-    
-    if (state.anyd) {
+    if (state.anyd || state.anyx) {
+	if (debug_trace)
+	    csp_dump_variables(stdout, &state);	
 	csp_commit(&state);
 	if (state.wait_ms != NOTIMEOUT) {
 	    if (debug) printf("wait for %d ms\n", state.wait_ms);
@@ -383,13 +368,11 @@ loop:
 	}
 	goto loop;
     }
-    
     if (state.wait_ms != NOTIMEOUT) {
 	if (debug) printf("wait for %d ms\n", state.wait_ms);
 	usleep(1000*state.wait_ms);
 	goto loop;
     }
-
 done:
 
     fprintf(stdout, "cycle=%d\n", state.cycle);
