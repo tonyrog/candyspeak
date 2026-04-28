@@ -131,7 +131,7 @@ void csp_dump_variables(FILE* f, csp_rt_t* st)
     int i;
     int n = 0;
     fprintf(f, "%d:", st->cycle);
-    for (i = 0; i < st->nd; i++) {
+    for (i = 0; i < st->ps.nd; i++) {
 	if (st->decl[i].type == DECL_VARIABLE) {
 	    index_t ix = MAKE_INDEX(0,i,TAG_DECL);
 	    if (n > 0) fputc(',', f);	    
@@ -229,7 +229,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i)
 	break;
     case DECL_CAN:
 	vt = st->decl[i].vt;
-	fprintf(f, "{decl,%d,can,\"%s\",[{size,%d},{type,%s},{enddian,%s},{dir,%s}], 0x%x[%d:%d]}.\n",
+	fprintf(f, "{decl,%d,can,\"%s\",[{size,%d},{type,%s},{endian,%s},{dir,%s}], 0x%x[%d:%d]}.\n",
 		i,
 		decl_name(st, ix),
 		GET_RES(st->decl[i].res),
@@ -254,11 +254,19 @@ void csp_dump(FILE* f, csp_rt_t* st)
     int i;
 
     i = 0;
-    while(i < st->nd) 
+    while(i < st->ps.nd) 
 	i = csp_dump_decl(f, 1, st, i);
     i = 0;
-    while(i < st->nn)
+    while(i < st->ps.nn)
 	i = csp_dump_instr(f, 1, st, i);
+
+    fprintf(f, "{timer,[");
+    for (i = 0; i < st->nt; i++) {
+	if (i > 0) fputc(',', f);	
+	csp_fprint_tag(f, st, st->timer[i]);
+    }
+    fprintf(f, "]}.\n");
+    
     
     fprintf(f, "{input,[");
     for (i = 0; i < st->ni; i++) {

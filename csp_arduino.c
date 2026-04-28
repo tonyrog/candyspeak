@@ -412,11 +412,11 @@ void handle_immediate_command(csp_rt_t* st, char* cmd)
     }
     else if (strncmp(cmd, "list", 4) == 0) {
         Serial.print(F("nn="));
-        Serial.print(st->nn);
+        Serial.print(st->ps.nn);
         Serial.print(F(" nd="));
-        Serial.print(st->nd);
+        Serial.print(st->ps.nd);
         Serial.print(F(" strp="));
-        Serial.println(st->strp);
+        Serial.println(st->ps.strp);
         // TODO: csp_dump to serial
     }
     else if (strncmp(cmd, "run", 3) == 0) {
@@ -485,9 +485,12 @@ void setup()
         Serial.println(F("No saved state, starting fresh"));
     }
 
-    csp_setup(&state);
+    // setup all input/output/timers... lists
     csp_rt_start(&state);
-
+    
+    // initialize input/output/timers ...
+    csp_setup(&state);
+	
     Serial.println(F("CandySpeak ready"));
 }
 

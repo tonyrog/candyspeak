@@ -9,7 +9,16 @@ S = A ^ B ^ C ? 1
 Cout = (A & B) + (Cin & (A ^ B)) ? 1
 #end
 
-#FullAdd a
-#FullAdd b
+#FullAdd a0
+#FullAdd a1
+a1.Cin = a0.Cout ? 1
+#FullAdd a2
+a2.Cin = a1.Cout ? 1
 
-b.Cin = a.S ? 1
+a0.A = 1 ? 1
+a1.A = 0 ? 1
+a2.A = 1 ? 1
+
+a0.B = 1 ? 1
+a1.B = 0 ? 1
+a2.B = 0 ? 1

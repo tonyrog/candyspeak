@@ -107,7 +107,7 @@ void csp_input(csp_rt_t* st)
 	    ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
 	    if ((now_ms - t0) >= period) {
 		st->decl[di].tm.running = 0;
-		st->dval[di].i = 0;
+		csp_set_ivalue(st, ix, 0);
 	    }
 	    break;
 	}
@@ -173,9 +173,6 @@ int parse_file(csp_rt_t* st, FILE* fin)
 	}
 	if (csp_parse(st, buf) < 0)
 	    return -1;
-	if (debug_parse) {
-	    csp_dump(stdout, st);
-	}
     }
     csp_new_decl(st, NULL, 0, DECL_END);
     return 0;
@@ -263,15 +260,24 @@ int main(int argc, char** argv)
 	    usage(argv[0]);
 	    exit(0);
 	case 'r':
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)	    
 	    csp_set_reactive(&state, 1);
+#else
+	    fprintf(stderr, "reactive mode not configured\n");
+	    exit(1);
+#endif
 	    break;
 	case 't':
+#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)	    
 	    csp_set_transaction(&state, 1);
+#else
+	    fprintf(stderr, "transaction mode not configured\n");
+	    exit(1);
+#endif
 	    break;
 	case 'n':
 	    execute = 0;
 	    break;
-
 	case 'c':
 	    max_cycles = atoi(optarg);
 	    break;
@@ -297,7 +303,6 @@ int main(int argc, char** argv)
 	    exit(1);
 	}
     }    
-
     
     if (optind >= argc) {
 	// no files given, read from stdin
@@ -321,18 +326,20 @@ int main(int argc, char** argv)
 	    optind++;
 	}
     }
-    
-    printf("transaction = %d\n", state.transaction);
-    printf("reactive = %d\n", state.reactive);
-    printf("execute = %d\n", execute);
-    
+
     if (state.reactive)
 	csp_csr(&state); // build graph
 
-    csp_rt_start(&state);  // setup default value for variables / constants
+    // setup all input/output/timers..
+    csp_rt_start(&state);
+    
+    // initialize input/output/timers ... load default values
+    csp_setup(&state);
 
-    csp_dump(stdout, &state);
-
+    if (debug_parse) {
+	csp_dump(stdout, &state);
+    }    
+    
     if (!execute)
 	exit(0);
 
@@ -384,7 +391,6 @@ loop:
     }
 
 done:
-    csp_dump(stdout, &state);
 
     fprintf(stdout, "cycle=%d\n", state.cycle);
 #if defined(WANT_STATISTICS) && (WANT_STATISTICS==1)    
