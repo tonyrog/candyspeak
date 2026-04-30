@@ -191,7 +191,7 @@ void print_defines()
     printf("MAX_OUTPUTS=%d\n", MAX_OUTPUTS);
     printf("MAX_TIMERS=%d\n", MAX_TIMERS);
     printf("MAX_MODULES=%d\n", MAX_MODULES);
-    printf("MAX_MODS=%d\n", MAX_MODS);
+    printf("MAX_OBJECTS=%d\n", MAX_OBJECTS);
     printf("MAX_STR_BUF=%d\n", MAX_STR_BUF);    
     printf("sizeof(value_t) = %ld\n", sizeof(value_t));
     printf("sizeof(csp_instr_t) = %ld\n", sizeof(csp_instr_t));

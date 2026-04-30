@@ -19,18 +19,19 @@ EXTERN_C_BEGIN
 #define TAG_INSTR 0
 
 //#define WORD_BITS  16
-#define MOD_BITS     3   // (2^MOD_BITS-2) = 6 module instances
+#define OBJ_BITS     4   // (2^OBJ_BITS-2) = 6 module instances
 #define INSTR_BITS   7   // max 128 instruction
-#define INDEX_BITS   (MOD_BITS+INSTR_BITS+1) // max 512 elems
-#define ANY_MOD      ((1 << MOD_BITS)-1)  // pattern for "any" mod
+#define INDEX_BITS   (OBJ_BITS+INSTR_BITS+1) // max 512 elems
+#define GLOBAL       0                       // global level
+#define CURRENT      ((1 << OBJ_BITS)-1)     // current obj
 #define MAX_INDICES  (1 << INDEX_BITS)
-#define MAX_INSTRS   64  // (less than MAX_INDICES keep power of 2!!
-#define MAX_DECLS    64  // (less than MAX_INDICES keep power of 2!!
+#define MAX_INSTRS   128 // (less than MAX_INDICES keep power of 2!!
+#define MAX_DECLS    128 // (less than MAX_INDICES keep power of 2!!
 #define MAX_INPUTS   32  // <= then MAX_DECLS
 #define MAX_OUTPUTS  32  // <= then MAX_DECLS
 #define MAX_TIMERS   16  // <= then MAX_DECLS
-#define MAX_MODULES  (1 << MOD_BITS)
-#define MAX_MODS     (1 << MOD_BITS)
+#define MAX_MODULES  (1 << OBJ_BITS)
+#define MAX_OBJECTS  (1 << OBJ_BITS)
 #define MAX_QUEUE    (MAX_INSTRS)
 #define MAX_INDEX    (MAX_INSTRS+1)
 #define MAX_STACK_DEPTH 4
@@ -44,11 +45,11 @@ EXTERN_C_BEGIN
 #define BAD_INDEX   (MAX_INDICES-1)
 #define PARSE_ERROR BAD_INDEX
 
-#define IS_MOD_INDEX(n) ((n) >= (1 << (INSTR_BITS+1)))
+// #define IS_MOD_INDEX(n) ((n) >= (1 << (INSTR_BITS+1)))
 #define INDEX(n)  (((n)>>1) & ((1 << INSTR_BITS)-1))  // index in decl/instr
-#define MOD(n)    ((n) >> (INSTR_BITS+1))
+#define OBJ(n)    ((n) >> (INSTR_BITS+1))
 #define TAG(n)    ((n) & 1)
-#define MAKE_INDEX(m,x,t) (((m)<<(INSTR_BITS+1)) | ((x)<<1) | (t))
+#define MAKE_INDEX(obj,x,t) (((obj)<<(INSTR_BITS+1)) | ((x)<<1) | (t))
 
 #define MAX_PARSE_STACK_DEPTH 10
 #define MAX_LINE_TOKENS 128
@@ -283,7 +284,7 @@ typedef enum {
     DECL_CAN,      // 'can'
     DECL_UART,     // 'uart'
     DECL_SOCKET,   // 'socket'
-    DECL_MOD,      // module instance
+    DECL_OBJECT,   // module instance
 } decl_t;
 
 #define IS_DECL(i)  (TAG((i)) == TAG_DECL)
@@ -293,7 +294,7 @@ typedef enum {
 #define IS_QVAR(s,i)   (DECL_TYPE((s),(i))==DECL_VARIABLE)
 #define IS_CONST(s,i)  (DECL_TYPE((s),(i))==DECL_CONSTANT)
 #define IS_MODULE(s,i) (DECL_TYPE((s),(i))==DECL_MODULE)
-#define IS_MOD(s,i)    (DECL_TYPE((s),(i))==DECL_MOD)
+#define IS_OBJECT(s,i) (DECL_TYPE((s),(i))==DECL_OBJECT)
 #define IS_END(s,i)    (DECL_TYPE((s),(i))==DECL_END)
 #define IS_CAN(s,i)    (DECL_TYPE((s),(i))==DECL_CAN)
 
@@ -320,7 +321,7 @@ typedef struct PACKED {
 typedef struct PACKED {
     index_t  mx;         // module index
     index_t  iq;         // index in mod table (not tagged)
-} csp_mod_t;
+} csp_object_t;
 
 typedef struct PACKED  { // 32
     value_t init;    // init value
@@ -376,7 +377,7 @@ typedef struct PACKED {  // 57 = 6 + 51
     unsigned out:1;                // output leaf
     union PACKED {  // 32
 	csp_module_t   md;  // 16
-	csp_mod_t      mq;  // 24 = 12+12
+	csp_object_t   mq;  // 24 = 12+12
 	csp_variable_t va;  // 32
 	csp_constant_t cn;  // 32
 	csp_digital_t  di;  // 18		
@@ -388,9 +389,16 @@ typedef struct PACKED {  // 57 = 6 + 51
 
 typedef enum {
     ERR_OK = 0,
+    ERR_SYNTAX,
     ERR_STRING_SPACE_EXHUSTED,    
     ERR_TOO_MANY_DECLARATIONS,
     ERR_TOO_MANY_INSTRUCTIONS,
+    ERR_TOO_MANY_OBJECTS,
+    ERR_MODULE_NOT_DECLARED,
+    ERR_NOT_A_MODULE,
+    ERR_OBJECT_ALREADY_DEFINED,
+    ERR_OBJECT_NOT_DEFINED,
+    ERR_VARIABLE_NOT_DECLARED,    
 } csp_err_t;
 
 // parser state, save state before parse
@@ -398,6 +406,7 @@ typedef enum {
 typedef struct PACKED {
     index_t nn;                  // number of instructions
     index_t nd;                  // number of decls
+    index_t nq;                  // number of objects
     uint32_t strp;               // string table position
     csp_err_t err;               // error code
     uint32_t line;               // line number when parsing
@@ -426,13 +435,11 @@ typedef struct _csp_rt_t
     bitset_decl(dset, MAX_INDEX); // mark decl updated during cycle
     
     char    str[MAX_STR_BUF];      // store variable names    
-    // 
-    index_t mofs[MAX_MODS];        // offset in state given mod (OLD?)
-    index_t doffs[MAX_MODS];       // offset to module declarations (NEW)
-    index_t xoffs[MAX_MODS];       // offset to module instructions (NEW)
+    index_t doffs[MAX_OBJECTS];    // offset to object locals
+    index_t xoffs[MAX_OBJECTS];    // offset to object nodes
     // stack used during eval
     int esp;                       // eval stack pointer
-    struct PACKED { index_t ix; index_t so; unsigned iq:MOD_BITS; }
+    struct PACKED { index_t ix; unsigned cur:OBJ_BITS; }
 	stack[MAX_STACK_DEPTH];
     unsigned transaction:1;      // 1 if keeping a log
     unsigned reactive:1;         // 1 if push backedges to queue
@@ -442,19 +449,18 @@ typedef struct _csp_rt_t
 
     index_t mdef;                // module being defined
     index_t ent;                 // entry op of module
-    index_t so;                  // state offsets for mods
-    index_t iq;
+    // index_t so;               // state offsets for mods
+    unsigned cur:OBJ_BITS;       // current module index
 
     // calculated by csp_rt_start
     index_t nt;                  // number of timers
     index_t ni;                  // number of input
     index_t no;                  // number of output
     index_t nm;                  // number of modules
-    index_t nq;                  // number of mods (instances of modules)
     index_t input[MAX_INPUTS];     // list of inputs (digital/analog ...)
     index_t output[MAX_OUTPUTS];   // list of outputs (digital/analog ...)
     index_t module[MAX_MODULES];   // list of modules
-    index_t mod[MAX_MODS];         // list of mods    
+    index_t object[MAX_OBJECTS];   // list of objects
     index_t timer[MAX_TIMERS];     // list of timers
     // during eval
     uint32_t update;             // update counter
@@ -481,43 +487,12 @@ typedef struct _csp_rt_t
 extern const csp_func_t csp_builtin_funcs[];
 extern const uint8_t csp_num_builtin_funcs;
 
-// n = |mod|index|t|
-// if (m == *) m = st->iq -- set current mod
-// if (m >= 1) {
-//   if (decl)
-//      i = INDEX(n) - decl[INDEX(n)].mq.mx
-//      i += st->mofs[m];
-// }
-// 
-
 static inline int st_index(csp_rt_t* st, index_t n)
 {
-    if (IS_MOD_INDEX(n)) {
-	int m = MOD(n); // extract module index
-	int i;
-	index_t md, mx;
-	if (m == ANY_MOD)
-	    m = st->iq;
-	md = st->mod[m];
-	mx = st->decl[INDEX(md)].mq.mx;
-	if (IS_DECL(n)) {
-	    i = INDEX(n) - INDEX(mx);
-	}
-	else {
-	    i = n - st->decl[INDEX(mx)].md.ent;
-	}
-	return i + st->mofs[m];
-    }
-    return (n >> 1); // since mod=0 just shift tag bit
-}
-
-// general index decl / instr FIXME: use this somehow
-static inline int csp_index(csp_rt_t* st, index_t n)
-{
-    int m = MOD(n);
+    int obj = OBJ(n);
     return IS_DECL(n) ?
-	(st->doffs[m] + INDEX(n)) :
-	(st->xoffs[m] + INDEX(n));
+	(st->doffs[obj] + INDEX(n)) :
+	(st->xoffs[obj] + INDEX(n));
 }
 
 #if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)    
@@ -540,8 +515,8 @@ static inline void csp_enq_elist(csp_rt_t* st, index_t x)
     index_t ix = INDEX(x);
     for (i = 0; i < st->idg[ix]; i++) {
 	index_t p = st->edg[st->ofs[ix]+i];  // parent node
-	if (MOD(p) == ANY_MOD) {
-	    p = MAKE_INDEX(st->iq,INDEX(p),TAG_INSTR);
+	if (OBJ(p) == CURRENT) {
+	    p = MAKE_INDEX(st->cur,INDEX(p),TAG_INSTR);
 	}
 	csp_enq(st, p);
     }

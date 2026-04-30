@@ -1,24 +1,30 @@
-#module FullAdd
+#variable F:12 in = 100
+
+#module Add
 #variable A:1 in
 #variable B:1 in
 #variable Cin:1 in
 #variable S:1 out
 #variable Cout:1 out
 
-S = A ^ B ^ C ? 1
-Cout = (A & B) + (Cin & (A ^ B)) ? 1
+S = A ^ B ^ Cin ? 1
+Cout = (A & B) | (Cin & (A ^ B)) ? 1
 #end
 
-#FullAdd a0
-#FullAdd a1
-a1.Cin = a0.Cout ? 1
-#FullAdd a2
-a2.Cin = a1.Cout ? 1
+#variable G:16 in = 123
+
+#Add a0
+#Add a1
+#Add a2
 
 a0.A = 1 ? 1
-a1.A = 0 ? 1
-a2.A = 1 ? 1
-
 a0.B = 1 ? 1
-a1.B = 0 ? 1
+a0.Cin = 0 ? 1
+
+a1.A   = 1 ? 1
+a1.B   = 1 ? 1
+a1.Cin = a0.Cout ? 1
+
+a2.A = 0 ? 1
 a2.B = 0 ? 1
+a2.Cin = a1.Cout ? 1

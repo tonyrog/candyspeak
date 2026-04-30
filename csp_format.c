@@ -7,7 +7,7 @@ const char* csp_tag(csp_rt_t* st, index_t n)
 	return "i";
     else {
 	switch(st->decl[INDEX(n)].type) {
-	case DECL_MOD: return "q";
+	case DECL_OBJECT: return "q";
 	case DECL_MODULE: return "m";
 	case DECL_CONSTANT: return "c";
 	case DECL_VARIABLE: return "v";
