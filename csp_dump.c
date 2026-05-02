@@ -85,14 +85,57 @@ void dump_edge_list(FILE* f, csp_rt_t* st, int i)
 
 index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 {
-    int cond = st->instr[i].cond;
-    int vt = st->instr[i].vt;
+    const char* cond = st->instr[i].cond ? "t" : "f";
 
     fprintf(f, "%s", indent(lev));
     switch(st->instr[i].op) {
+    case OP_LD:
+	fprintf(f, "{instr,%d,ld,[r%d,",
+		i,
+		st->instr[i].m.x);
+	csp_fprint_tag(f, st, st->instr[i].m.mem);
+	fprintf(f, ",%s]}%s\n", cond, eot);
+	return i+1;
+    case OP_ST:
+	fprintf(f, "{instr,%d,st,[r%d,",
+		i,
+		st->instr[i].m.x);
+	csp_fprint_tag(f, st, st->instr[i].m.mem);
+	fprintf(f, ",%s]}}%sn", cond, eot);
+	return i+1;
+    case OP_LI:
+	fprintf(f, "{instr,%d,li,[r%d,%d,%s]}%s\n",
+		i,
+		st->instr[i].i.x,
+		st->instr[i].i.imm,
+		cond, eot);
+	return i+1;
+    case OP_ARG:
+	fprintf(f, "{instr,%d,arg,[r%d,%d,%s]}%s\n",
+		i,
+		st->instr[i].i.x,
+		st->instr[i].i.imm,
+		cond, eot);
+	return i+1;
+    case OP_CALL:
+	fprintf(f, "{instr,%d,call,[r%d,%s,%d,%s]}%s\n",
+		i,
+		st->instr[i].f.x,
+		(st->instr[i].f.usr ?
+		 st->user_funcs[st->instr[i].f.idx].name :
+		 csp_builtin_funcs[st->instr[i].f.idx].name),
+		st->instr[i].f.n,
+		cond, eot);
+	return i+1;
+    case OP_RULE:
+	fprintf(f, "{instr,%d,rule,[r%d,%d]}%s\n",
+		i,
+		st->instr[i].r.cnd, st->instr[i].r.nxt, eot);
+	return i+1;
     case OP_ENTER: {
-	index_t mx = st->instr[i].z;
-	int n = st->instr[i].y;
+	// FIXME: add new op arguments	
+	index_t mx = st->instr[i].e.mx;
+	int n = st->instr[i].e.num;
 	int j;
 	fprintf(f, "{instr,%d,enter,'%s',[{n,%d}],[\n",
 		i, decl_name(st, mx), n);
@@ -103,15 +146,16 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	return i;
     }
     case OP_LEAVE: {
-	index_t mx = st->instr[i].z;
-	int n = st->instr[i].y;
+	index_t mx = st->instr[i].v.mx;
+	int n = st->instr[i].v.num;
 	fprintf(f, "{instr,%d,leave,'%s',[{n,%d}]}%s\n",
 		i, decl_name(st,mx), n, eot);
 	break;
     }
     case OP_NEW: {
-	index_t ent = st->instr[i].y;
-	index_t mod = st->instr[i].z;
+	// FIXME: add new op arguments	
+	index_t ent = st->instr[i].n.ent;
+	index_t mod = st->instr[i].n.mx;
 	index_t mx  = st->decl[INDEX(mod)].mq.mx;
 	// int iq      = st->decl[INDEX(mod)].mq.iq;
 	// int ofs = st->mofs[iq];
@@ -121,26 +165,22 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	break;
     }
     default:
-	fprintf(f, "{instr,%d,'%s',[{cond,%s},",
+	fprintf(f, "{instr,%d,'%s',[r%d,r%d,r%d,%s]}.\n",
 		i,
-		csp_op_name(st->instr[i].op),
-		cond ? "true" : "false");
-	fprintf(f, "{x,");
-	csp_fprint_value(f, st, vt, st->xin[i]);
-	fprintf(f, "},{y,");
-	csp_fprint_tag(f, st, st->instr[i].y);
-	fprintf(f, "},{z,");
-	csp_fprint_tag(f, st, st->instr[i].z);
-	fprintf(f, "}");
-	dump_edge_list(f, st, i);
-	fprintf(f, "]}%s\n", eot);
+		csp_op_name(st->instr[i].op), 
+		st->instr[i].a.x,
+		st->instr[i].a.y,
+		st->instr[i].a.z,
+		cond);
+	// dump_edge_list(f, st, i);
+	// fprintf(f, "]}%s\n", eot);
     }
     return i+1;
 }
 
 void csp_dump_var(FILE* f, csp_rt_t* st, int m, int i)
 {
-    index_t ix = MAKE_INDEX(m,i,TAG_DECL);
+    index_t ix = MAKE_INDEX(m,i);
     int doffs = st->doffs[m];
     fprintf(f, " %-s=", decl_name(st, ix));
     csp_fprint_value(f, st, st->decl[i].vt, st->dout[doffs+i]);
@@ -181,15 +221,84 @@ void csp_dump_variables(FILE* f, csp_rt_t* st)
 		csp_dump_var(f, st, m, k);
 	    }
 	}
-	fprintf(f, "\n");	
+	fprintf(f, "\n");
     }
     fputc('\n', f);
+}
+
+void csp_dump_state_erl(FILE* f, csp_rt_t* st)
+{
+    int i, m, j, k;
+    int first = 1;
+    int first_var;
+
+    fprintf(f, "{state,%d,[", st->cycle);
+
+    // Global variables
+    i = 0;
+    while(i < st->ps.nd) {
+	if (st->decl[i].type == DECL_MODULE) {
+	    i += (st->decl[i].md.n+1);
+	} else {
+	    if (st->decl[i].type == DECL_VARIABLE) {
+		index_t ix = MAKE_INDEX(0,i);
+		if (!first) fprintf(f, ",");
+		first = 0;
+		fprintf(f, "{var,\"%s\",", decl_name(st, ix));
+		csp_fprint_value(f, st, st->decl[i].vt, st->dout[i]);
+		fprintf(f, "}");
+	    }
+	    i++;
+	}
+    }
+
+    // Objects
+    for (m = 1; m <= st->ps.nq; m++) {
+	index_t obj = st->object[m];
+	index_t mx  = st->decl[INDEX(obj)].mq.mx;
+	int n = st->decl[INDEX(mx)].md.n;
+	int doffs = st->doffs[m];
+
+	if (!first) fprintf(f, ",");
+	first = 0;
+	fprintf(f, "{object,\"%s\",'%s',[",
+		decl_name(st, obj), decl_name(st, mx));
+
+	first_var = 1;
+	for (j = 0; j < n; j++) {
+	    k = INDEX(mx)+1+j;
+	    if (st->decl[k].type == DECL_VARIABLE) {
+		index_t vx = MAKE_INDEX(0,k);
+		if (!first_var) fprintf(f, ",");
+		first_var = 0;
+		fprintf(f, "{var,\"%s\",", decl_name(st, vx));
+		csp_fprint_value(f, st, st->decl[k].vt, st->dout[doffs+k]);
+		fprintf(f, "}");
+	    }
+	}
+	fprintf(f, "]}");
+    }
+
+    fprintf(f, "]}.\n");
+}
+
+void csp_dump_result_erl(FILE* f, csp_rt_t* st, index_t x)
+{
+    fprintf(f, "{result,[{cycle,%d}", st->cycle);
+#if defined(WANT_STATISTICS) && (WANT_STATISTICS==1)
+    fprintf(f, ",{num_eval0,%d}", st->num_eval0);
+#endif
+    if (x == BAD_INDEX)
+	fprintf(f, ",{value,undefined}");
+    else
+	fprintf(f, ",{value,%d}", csp_ivalue(st, x));
+    fprintf(f, "]}.\n");
 }
 
 
 index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 {
-    index_t ix = MAKE_INDEX(0,i,TAG_DECL);
+    index_t ix = MAKE_INDEX(0,i);
     int vt = V_INTEGER;
     
     fprintf(f, "%s", indent(lev));
@@ -339,9 +448,9 @@ void csp_dump(FILE* f, csp_rt_t* st)
 	int m = i+1;
 	index_t ix = st->object[m];
 	if (i > 0) fputc(',', f);
-	fprintf(f, "{%s,%d,%d,",
+	fprintf(f, "{%s,%d,",
 		decl_name(st, st->decl[INDEX(ix)].mq.mx),
-		st->doffs[m], st->xoffs[m]);
+		st->doffs[m]);
 	csp_fprint_tag(f, st, ix);
 	fprintf(f, "}");
     }
@@ -361,9 +470,9 @@ void csp_print_expr(FILE* f, csp_rt_t* st, index_t ix)
     }
     else {
 	printf("(");
-	csp_print_expr(f, st, st->instr[INDEX(ix)].y);
+	csp_print_expr(f, st, st_instr_y(st, INDEX(ix)));
 	printf("%s", op_name(st->instr[INDEX(ix)].op));
-	csp_print_expr(f, st, st->instr[INDEX(ix)].z);
+	csp_print_expr(f, st, st_instr_z(st, INDEX(ix));
 	printf(")");
     }
 }

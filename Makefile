@@ -1,6 +1,7 @@
 # build of csp - candy speak
 
-CFLAGS=-MMD -MP -MF .$<.d 
+CC = gcc
+CFLAGS=-MMD -MP -MF .$<.d
 OBJS = csp_linux.o csp_rt.o csp_format.o csp_dump.o
 LIBS =
 
@@ -14,7 +15,15 @@ csp:	$(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) $(LIBS) -o $@
 
 clean:
-	rm $(OBJS)
+	rm -f $(OBJS)
+
+test:	csp
+	@chmod +x tests/run_tests.escript
+	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
+
+test-examples: csp
+	@chmod +x tests/run_tests.escript
+	@cd $(CURDIR) && escript tests/run_tests.escript examples
 
 %.o:	%.c
 	$(CC) $(CFLAGS) -c -fPIC $<
@@ -22,3 +31,5 @@ clean:
 .%.d:	;
 
 -include .*.d
+
+.PHONY: all clean test test-examples

@@ -7,7 +7,9 @@
 #include <unistd.h>
 
 #include "csp.h"
+#include "csp_format.h"
 #include "csp_dump.h"
+
 
 #include <sys/time.h>
 
@@ -184,18 +186,43 @@ void print_defines()
     printf("WANT_REACTIVE=%d\n", WANT_REACTIVE);
     printf("WANT_STATISTICS=%d\n",WANT_STATISTICS);
 
-    printf("MAX_INDICES=%d\n", MAX_INDICES);    
+    printf("OBJ_BITS=%d\n", OBJ_BITS);
+    printf("DECL_BITS=%d\n", DECL_BITS);
+    printf("INDEX_BITS=%d\n", INDEX_BITS);
+    printf("STRING_BITS=%d\n", STRING_BITS);
+    printf("MAX_INDICES=%d\n", MAX_INDICES);
     printf("MAX_INSTRS=%d\n", MAX_INSTRS);
-    printf("MAX_DECLS=%d\n", MAX_DECLS);    
+    printf("MAX_DECLS=%d\n", MAX_DECLS);
     printf("MAX_INPUTS=%d\n", MAX_INPUTS);
     printf("MAX_OUTPUTS=%d\n", MAX_OUTPUTS);
     printf("MAX_TIMERS=%d\n", MAX_TIMERS);
     printf("MAX_MODULES=%d\n", MAX_MODULES);
     printf("MAX_OBJECTS=%d\n", MAX_OBJECTS);
-    printf("MAX_STR_BUF=%d\n", MAX_STR_BUF);    
+    printf("MAX_STR_BUF=%d\n", MAX_STR_BUF);
+    printf("MAX_STACK_DEPTH=%d\n", MAX_STACK_DEPTH);
+
     printf("sizeof(value_t) = %ld\n", sizeof(value_t));
-    printf("sizeof(csp_instr_t) = %ld\n", sizeof(csp_instr_t));
+    
     printf("sizeof(csp_decl_t) = %ld\n", sizeof(csp_decl_t));
+    printf("sizeof(csp_module_t) = %ld\n", sizeof(csp_module_t));
+    printf("sizeof(csp_object_t) = %ld\n", sizeof(csp_object_t));
+    printf("sizeof(csp_variable_t) = %ld\n", sizeof(csp_variable_t));
+    printf("sizeof(csp_constant_t) = %ld\n", sizeof(csp_constant_t));
+    printf("sizeof(csp_digital_t) = %ld\n", sizeof(csp_digital_t));
+    printf("sizeof(csp_analog_t) = %ld\n", sizeof(csp_analog_t));
+    printf("sizeof(csp_timer_t) = %ld\n", sizeof(csp_timer_t));
+    printf("sizeof(csp_can_t) = %ld\n", sizeof(csp_can_t));
+
+    printf("sizeof(csp_instr_t) = %ld\n", sizeof(csp_instr_t));
+    printf("sizeof(csp_instr_alu_t) = %ld\n", sizeof(csp_instr_alu_t));    
+    printf("sizeof(csp_instr_mem_t) = %ld\n", sizeof(csp_instr_mem_t));
+    printf("sizeof(csp_instr_imm_t) = %ld\n", sizeof(csp_instr_imm_t));
+    printf("sizeof(csp_instr_call_t) = %ld\n", sizeof(csp_instr_call_t));
+    printf("sizeof(csp_instr_rule_t) = %ld\n", sizeof(csp_instr_rule_t));
+    printf("sizeof(csp_instr_enter_t) = %ld\n", sizeof(csp_instr_enter_t));
+    printf("sizeof(csp_instr_leave_t) = %ld\n", sizeof(csp_instr_leave_t));
+    printf("sizeof(csp_instr_new_t) = %ld\n", sizeof(csp_instr_new_t));        
+    
     printf("sizeof(csp_rt_t) = %ld\n", sizeof(csp_rt_t));
 }
 
@@ -204,7 +231,7 @@ static struct option long_options[] = {
     {"debug",        no_argument,       0,  'd'},
     {"debug-parse",  no_argument,       0,  'P'},
     {"debug-scan",  no_argument,        0,  'S'},
-    {"debug-trace",  no_argument,       0,  'Q'},        
+    {"debug-trace",  no_argument,       0,  'Q'},
     {"help",         no_argument,       0,  'h'},
     {"transaction",  no_argument,       0,  't'},
     {"reactive",     no_argument,       0,  'r'},
@@ -212,6 +239,9 @@ static struct option long_options[] = {
     {"no-execute",   no_argument,       0,  'n'},
     {"cycles",       required_argument, 0,  'c'},
     {"timeout",      required_argument, 0,  'T'},
+    {"state-file",   required_argument, 0,  's'},
+    {"parse-file",   required_argument, 0,  'p'},
+    {"result-file",  required_argument, 0,  'R'},
     {0,              0,                 0,  0 }
 };
 
@@ -229,6 +259,9 @@ void usage(const char* prog)
     fprintf(stderr, "  -P, --debug-parse    Enable parser debugging\n");
     fprintf(stderr, "  -S, --debug-scan     Enable tokenizer debugging\n");
     fprintf(stderr, "  -Q, --debug-trace    Enable variable tracing\n");
+    fprintf(stderr, "  -s, --state-file F   Write state to file (Erlang format)\n");
+    fprintf(stderr, "  -p, --parse-file F   Write parsed structure to file\n");
+    fprintf(stderr, "  -R, --result-file F  Write result to file (Erlang format)\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "If no file is given, reads from stdin.\n");
 }
@@ -239,6 +272,9 @@ int main(int argc, char** argv)
     int r;
     index_t x;
     FILE* fin = stdin;
+    FILE* state_file = NULL;
+    FILE* parse_out = NULL;
+    FILE* result_file = NULL;
     int execute = 1;
     uint32_t max_cycles = 0;
     uint32_t max_time_ms = 0;
@@ -249,7 +285,7 @@ int main(int argc, char** argv)
 
     while (1) {
 	int option_index = 0;
-	c = getopt_long(argc, argv, "hrtndPQSc:T:",
+	c = getopt_long(argc, argv, "hrtndPQSc:T:s:p:R:",
 			long_options, &option_index);
 	if (c == -1)
 	    break;
@@ -266,7 +302,25 @@ int main(int argc, char** argv)
 	case 'd': debug = 1; break;
 	case 'P': debug_parse = 1; break;
 	case 'Q': debug_trace = 1; break;
-	case 'S': debug_scan = 1; break;	    
+	case 'S': debug_scan = 1; break;
+	case 's':
+	    if ((state_file = fopen(optarg, "w")) == NULL) {
+		fprintf(stderr, "unable to open state file '%s'\n", optarg);
+		exit(1);
+	    }
+	    break;
+	case 'p':
+	    if ((parse_out = fopen(optarg, "w")) == NULL) {
+		fprintf(stderr, "unable to open parse file '%s'\n", optarg);
+		exit(1);
+	    }
+	    break;
+	case 'R':
+	    if ((result_file = fopen(optarg, "w")) == NULL) {
+		fprintf(stderr, "unable to open result file '%s'\n", optarg);
+		exit(1);
+	    }
+	    break;
 	case '?':
 	default:
 	    usage(argv[0]);
@@ -295,7 +349,8 @@ int main(int argc, char** argv)
     if (optind >= argc) {
 	// no files given, read from stdin
 	if ((r = parse_file(&state, stdin)) < 0) {
-	    fprintf(stderr, "*stdin*:%d syntax error\n", state.ps.line);
+	    fprintf(stderr, "*stdin*:%d %s\n",
+		    state.ps.line, csp_format_error(state.ps.err));
 	    exit(1);
 	}
     }
@@ -326,15 +381,24 @@ int main(int argc, char** argv)
 
     if (debug_parse) {
 	csp_dump(stdout, &state);
-    }    
-    
-    if (!execute)
+    }
+    if (parse_out) {
+	csp_dump(parse_out, &state);
+    }
+
+    if (!execute) {
+	if (parse_out) fclose(parse_out);
+	if (state_file) fclose(state_file);
+	if (result_file) fclose(result_file);
 	exit(0);
+    }
 
     start_time = csp_time_ms();
 
     if (debug_trace)
 	csp_dump_variables(stdout, &state);
+    if (state_file)
+	csp_dump_state_erl(state_file, &state);
 
 loop:
     // check limits
@@ -358,9 +422,11 @@ loop:
     
     csp_output(&state);
 
-    if (state.anyd || state.anyx) {
+    if (state.anyd) {
 	if (debug_trace)
-	    csp_dump_variables(stdout, &state);	
+	    csp_dump_variables(stdout, &state);
+	if (state_file)
+	    csp_dump_state_erl(state_file, &state);
 	csp_commit(&state);
 	if (state.wait_ms != NOTIMEOUT) {
 	    if (debug) printf("wait for %d ms\n", state.wait_ms);
@@ -376,12 +442,22 @@ loop:
 done:
 
     fprintf(stdout, "cycle=%d\n", state.cycle);
-#if defined(WANT_STATISTICS) && (WANT_STATISTICS==1)    
+#if defined(WANT_STATISTICS) && (WANT_STATISTICS==1)
     fprintf(stdout, "num_eval0=%d\n", state.num_eval0);
 #endif
     if (x == BAD_INDEX)
 	fprintf(stdout, "result=none\n");
     else
 	fprintf(stdout, "result=%d\n", csp_ivalue(&state, x));
+
+    if (result_file) {
+	csp_dump_result_erl(result_file, &state, x);
+	fclose(result_file);
+    }
+    if (state_file)
+	fclose(state_file);
+    if (parse_out)
+	fclose(parse_out);
+
     exit(0);
 }

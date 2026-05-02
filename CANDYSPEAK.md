@@ -116,8 +116,10 @@ the case for multiple bit selection.
 		
 	<value> :=
 		  '0' | '1'
-	    | <can-bit>
-		| <name>
+		  | <can-bit>
+		  | <name>
+
+        <const-value> := 'true' | 'false' | '0' | '1'
 		
 	<can-bit> :=
 		  <frame-id> '[' <bit-pos> ']'
@@ -355,14 +357,17 @@ timeout condition.
 
 ## example style
 
-	#<mod-name> mod0
-	#<mod-name> mod1
+	#<module-name> obj0 [inital-defaults]
+	#<module-name> obj1 [initial-defaults]
 
-	mod0.pin1 = 1 ? cond
-	mod0.pin2 = 0 ? cond
-	mod0.pin3 = <epxr>
+	obj0.pin1 = 1 ? cond
+	obj1.pin2 = 0 ? cond
+	obj0.pin3 = <epxr>
 
-	mod1.pin1 = mod0.pin0
+	obj1.pin1 = obj0.pin0
+
+  <initial-defaults> :=
+        [ <name> '=' <const-expr> ]*
 
 ## example PID controler
 

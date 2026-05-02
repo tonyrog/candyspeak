@@ -18,6 +18,7 @@ extern const char* csp_fmt_pull(csp_rt_t* st, int ix);
 extern const char* csp_fmt_pwm(csp_rt_t* st, int ix);
 extern const char* csp_fmt_vtype(vtype_t vt);
 extern const char* csp_fmt_endian(vendian_t et);
+extern const char* csp_format_error(csp_err_t err);
 
 #ifdef __cplusplus
 EXTERN_C_END

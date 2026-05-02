@@ -14,18 +14,27 @@
 #ifdef __cplusplus
 EXTERN_C_BEGIN
 #endif
-    
-#define TAG_DECL  1
-#define TAG_INSTR 0
 
-//#define WORD_BITS  16
-#define OBJ_BITS     4   // (2^OBJ_BITS-2) = 6 module instances
-#define INSTR_BITS   7   // max 128 instruction
-#define INDEX_BITS   (OBJ_BITS+INSTR_BITS+1) // max 512 elems
+// an index has the following structure
+// obj:4, index:12   // declaration object
+//
+// obj is current object 0 = global, cur = 2^OBJ_BITS-1 or the actual obj index
+// tag is TAG_DECL (doffs[m]+st->decl[index])
+// 
+
+typedef uint16_t index_t;  // sizeof type >= INDEX_BITS
+typedef uint8_t  reg_t;    // at most 256 registers
+
+#define OBJ_BITS     4    // (2^OBJ_BITS-2) (14)
+#define DECL_BITS    10
+#define INSTR_BITS   7
+#define INDEX_BITS   (OBJ_BITS+DECL_BITS)
+#define REG_BITS     4
 #define GLOBAL       0                       // global level
 #define CURRENT      ((1 << OBJ_BITS)-1)     // current obj
 #define MAX_INDICES  (1 << INDEX_BITS)
-#define MAX_INSTRS   128 // (less than MAX_INDICES keep power of 2!!
+#define MAX_REGS     (1 << REG_BITS)
+#define MAX_INSTRS   (1 << INSTR_BITS)
 #define MAX_DECLS    128 // (less than MAX_INDICES keep power of 2!!
 #define MAX_INPUTS   32  // <= then MAX_DECLS
 #define MAX_OUTPUTS  32  // <= then MAX_DECLS
@@ -43,21 +52,17 @@ EXTERN_C_BEGIN
 #define MAX_USER_FUNCS 16  // max user-defined functions
 
 #define BAD_INDEX   (MAX_INDICES-1)
-#define PARSE_ERROR BAD_INDEX
+#define PARSE_ERROR -1
 
-// #define IS_MOD_INDEX(n) ((n) >= (1 << (INSTR_BITS+1)))
-#define INDEX(n)  (((n)>>1) & ((1 << INSTR_BITS)-1))  // index in decl/instr
-#define OBJ(n)    ((n) >> (INSTR_BITS+1))
-#define TAG(n)    ((n) & 1)
-#define MAKE_INDEX(obj,x,t) (((obj)<<(INSTR_BITS+1)) | ((x)<<1) | (t))
+#define INDEX(n)  ((n) & ((1 << DECL_BITS)-1))
+#define OBJ(n)    ((n) >> DECL_BITS)
+#define MAKE_INDEX(obj,x) (((obj)<<DECL_BITS) | (x))
 
 #define MAX_PARSE_STACK_DEPTH 10
 #define MAX_LINE_TOKENS 128
 
 #define CSP_TRUE  -1  // all bits set, like openCL/Forth
 #define CSP_FALSE 0
-
-typedef uint16_t index_t;  // sizeof type >= INDEX_BITS
 
 typedef enum {
     V_INTEGER,
@@ -85,8 +90,8 @@ typedef union {
 } value_t;
 
 // require csp_rt_init!
-#define ZERO MAKE_INDEX(0,0,TAG_DECL)
-#define ONE  MAKE_INDEX(0,1,TAG_DECL)
+#define ZERO MAKE_INDEX(0,0)
+#define ONE  MAKE_INDEX(0,1)
 
 typedef uint32_t set_group_t;  // bit set element
 #define BITSET_GROUP_BITS (8*sizeof(set_group_t))
@@ -148,6 +153,11 @@ typedef enum {
     ENTER,
     LEAVE,
     NEW,
+    CALL,
+    LD,
+    ST,
+    LDI,
+    ARG,        
     // functions are now handled via OP_CALL + function table
     LAST_NODE, // built-in + operators stop
     // keywords
@@ -164,7 +174,7 @@ typedef enum {
     STRING,     // 'string'
     LITTLE,     // 'little'
     BIG,        // 'big'
-    
+
     // tokens
     LP,      // "("
     RP,      // ")"
@@ -223,14 +233,19 @@ typedef enum {
     OP_OROR,    // "||"
     OP_EQ,      // "="
     OP_COMMA,   // ","
+    // rule
     OP_RULE,    // "?"
-
     // generate ops from MODULE/END
     OP_ENTER,   //
     OP_LEAVE,   //
     OP_NEW,     // #<module> <instance-name>
 
-    // function call: y=func_index (low bit: 0=builtin, 1=user), z=arg or OP_COMMA
+    OP_LD,      // load register from memory
+    OP_ST,      // store register to memory
+    OP_LI,      // load signed 16-bit constant
+    OP_ARG,     // load argument from register
+    
+    // function call:
     OP_CALL,
 
     OP_LAST,
@@ -251,26 +266,12 @@ typedef struct
 // Function flags
 #define FUNC_IMMEDIATE  0x01  // can be called with > prefix
 #define FUNC_PURE       0x02  // no side effects
-#define FUNC_RAW_INDEX  0x04  // pass raw indices, not evaluated values
+#define FUNC_INDEX      0x04  // pass raw indices, not evaluated values
+#define FUNC_TYPE       0x08  // collect and pass type information 
 
 // Forward declarations
 struct _csp_rt_t;
 struct csp_instr;
-
-// Function pointer types
-// Normal: args are pre-evaluated into value_t array
-typedef ivalue_t (*csp_func_fn)(struct _csp_rt_t* st, value_t* args, uint8_t nargs);
-// Raw: receives instruction pointer to access raw indices (for print, timeout)
-typedef ivalue_t (*csp_func_raw_fn)(struct _csp_rt_t* st, struct csp_instr* ip);
-
-// Function table entry
-typedef struct {
-    const char* name;
-    uint8_t namelen;
-    uint8_t nargs;      // number of arguments (0-4)
-    uint8_t flags;      // FUNC_RAW_INDEX| FUNC_IMMEDIATE | FUNC_PURE
-    csp_func_fn fn;     // function to call
-} csp_func_t;
 
 typedef enum {
     DECL_NOP=0,    // emtpy declaration
@@ -287,21 +288,21 @@ typedef enum {
     DECL_OBJECT,   // module instance
 } decl_t;
 
-#define IS_DECL(i)  (TAG((i)) == TAG_DECL)
-#define IS_INSTR(i)  (TAG((i)) == TAG_INSTR)
+// #define IS_DECL(i)  (TAG((i)) == TAG_DECL)
+// #define IS_REG(i)   (TAG((i)) == TAG_REG)
 
 #define DECL_TYPE(s,i) ((s)->decl[(i)].type)
-#define IS_QVAR(s,i)   (DECL_TYPE((s),(i))==DECL_VARIABLE)
+//#define IS_QVAR(s,i)   (DECL_TYPE((s),(i))==DECL_VARIABLE)
 #define IS_CONST(s,i)  (DECL_TYPE((s),(i))==DECL_CONSTANT)
 #define IS_MODULE(s,i) (DECL_TYPE((s),(i))==DECL_MODULE)
 #define IS_OBJECT(s,i) (DECL_TYPE((s),(i))==DECL_OBJECT)
 #define IS_END(s,i)    (DECL_TYPE((s),(i))==DECL_END)
 #define IS_CAN(s,i)    (DECL_TYPE((s),(i))==DECL_CAN)
 
-#define OP(s,i) ((s)->instr[(i)].op)
-#define IS_ENTER(s,i) (OP((s),(i))==OP_ENTER)
-#define IS_LEAVE(s,i) (OP((s),(i))==OP_LEAVE)
-#define IS_COND(s,i)   ((s)->instr[(i)].cond)
+//#define OP(s,i) ((s)->instr[(i)].op)
+//#define IS_ENTER(s,i) (OP((s),(i))==OP_ENTER)
+//#define IS_LEAVE(s,i) (OP((s),(i))==OP_LEAVE)
+//#define IS_COND(s,i)   ((s)->instr[(i)].cond)
 
 #define MAKE_RES(r) ((r)-1)
 #define GET_RES(rr) ((rr)+1)
@@ -323,15 +324,15 @@ typedef struct PACKED {
     index_t  iq;         // index in mod table (not tagged)
 } csp_object_t;
 
-typedef struct PACKED  { // 32
+typedef struct PACKED  {
     value_t init;    // init value
 } csp_variable_t;
 
-typedef struct PACKED  { // 32
+typedef struct PACKED  {
     value_t init;   // constant value
 } csp_constant_t;
 
-typedef struct PACKED  { // 18
+typedef struct PACKED  {
     unsigned pin:8;
     unsigned port:8;
     unsigned pullup:1;
@@ -339,51 +340,111 @@ typedef struct PACKED  { // 18
     // init?
 } csp_digital_t;
 
-typedef struct PACKED { // 17
+typedef struct PACKED {
     unsigned pin:8;
     unsigned port:8;
     unsigned pwm:1;    // pwmoutput
     // init?    
 } csp_analog_t;
 
-typedef struct PACKED {  // 27 = 10+10+5  (29=12+12+5)
+typedef struct PACKED {
     unsigned id:INDEX_BITS; // variable | constant (unsigned) 11/29 bit
     unsigned endian:2; // |little|big
     unsigned bit:9;   // 0-511   // bit start pos
     unsigned len:5;   // (1-32)  // data length -1
 } csp_can_t;
 
-typedef struct PACKED {     // 22 = 1+1+10+10 (25=1+12+12)
+typedef struct PACKED {
     unsigned running:1;     // != 0 if timer is running
     unsigned init:1;        // initial value if given
     unsigned px:INDEX_BITS; // variable | constant (unsigned)
     unsigned tx:INDEX_BITS; // start time tick (intern variable)
 } csp_timer_t;
 
-typedef struct PACKED csp_instr { // 6+2+1+11+11 = 9+22 = 31
+typedef struct PACKED {
+    unsigned cnd:REG_BITS; // condition register
+    int16_t nxt;           // jump if !cnd
+} csp_instr_rule_t;
+
+// new instruction format
+// general operations OP_ADD ...
+typedef struct PACKED {
+    unsigned x:REG_BITS;
+    unsigned y:REG_BITS;
+    unsigned z:REG_BITS;
+} csp_instr_alu_t;
+
+// CALL instruction
+typedef struct PACKED {
+    unsigned x:REG_BITS;    // result register    
+    unsigned idx:REG_BITS;  // function index
+    unsigned usr:1;         // user function
+    unsigned n:7;           // number of arguments (needed?)
+} csp_instr_call_t;
+
+// op = ST | LD
+// load or store register from memory
+typedef struct PACKED {
+    unsigned x:REG_BITS;
+    unsigned mem:INDEX_BITS;  // declaration: variable/constant
+} csp_instr_mem_t;
+
+// op LDI / ARG
+// load immediate LDI load small 16 bit signed constant
+typedef struct PACKED {
+    unsigned x:REG_BITS;
+    signed imm:16;
+} csp_instr_imm_t;
+
+typedef struct PACKED {
+    unsigned num:INSTR_BITS;  // number of instructions
+    index_t  mx;     // module index
+} csp_instr_enter_t;
+
+typedef struct PACKED {
+    unsigned num:INSTR_BITS;  // number of instructions
+    index_t  mx;     // module index
+} csp_instr_leave_t;
+
+typedef struct PACKED {
+    unsigned ent:INSTR_BITS; // entry point index in instr[]
+    index_t  mx;             // module index    
+} csp_instr_new_t;
+
+typedef struct PACKED {
     opcode_t op:6;          // OP_xxx
-    unsigned vt:2;          // value type (x)
     unsigned cond:1;        // conditional instruction
-    unsigned y:INDEX_BITS;  // src1  (instruction/decl)
-    unsigned z:INDEX_BITS;  // src2  (instruction/decl)
+    union {
+	csp_instr_alu_t a;
+	csp_instr_mem_t m;
+	csp_instr_imm_t i;
+	csp_instr_call_t f;
+	csp_instr_rule_t r;
+	csp_instr_enter_t e;
+	csp_instr_leave_t v;
+	csp_instr_new_t n;
+    };
 } csp_instr_t;
 
-typedef struct PACKED {  // 57 = 6 + 51
+
+typedef struct PACKED {
     decl_t type:6;                 // DECL_xxx
     unsigned name:STRING_BITS;     // string index
     unsigned vt:2;                 // value type
     unsigned res:5;                // 1-32
     unsigned in:1;                 // input leaf
     unsigned out:1;                // output leaf
-    union PACKED {  // 32
-	csp_module_t   md;  // 16
-	csp_object_t   mq;  // 24 = 12+12
-	csp_variable_t va;  // 32
-	csp_constant_t cn;  // 32
-	csp_digital_t  di;  // 18		
-	csp_analog_t   an;  // 17
-	csp_can_t      ca;  // 29 (25)
-	csp_timer_t    tm;  // 25 (22)
+    unsigned is_mapped:1;          // 1 iff reg is valid value
+    unsigned reg:REG_BITS;         // var/constant loaded in register
+    union PACKED {
+	csp_module_t   md;
+	csp_object_t   mq;
+	csp_variable_t va;
+	csp_constant_t cn;
+	csp_digital_t  di;
+	csp_analog_t   an;
+	csp_can_t      ca;
+	csp_timer_t    tm;
     };
 } csp_decl_t;
 
@@ -412,31 +473,52 @@ typedef struct PACKED {
     uint32_t line;               // line number when parsing
 } csp_pstate_t;
 
+// Function pointer types
+// Normal: args are pre-evaluated into value_t array
+typedef ivalue_t (*csp_func_fn)(struct _csp_rt_t* st, value_t* args, uint8_t nargs);
+// Raw: receives instruction pointer to access raw indices (for print, timeout)
+typedef ivalue_t (*csp_func_raw_fn)(struct _csp_rt_t* st, csp_instr_t* ip);
+
+// Function table entry
+typedef struct {
+    const char* name;
+    uint8_t namelen;
+    uint8_t nargs;      // number of arguments (0-4)
+    uint8_t flags;      // FUNC_RAW_INDEX| FUNC_IMMEDIATE | FUNC_PURE
+    csp_func_fn fn;     // function to call
+} csp_func_t;
+
+
+typedef struct
+{
+    reg_t   free_regs[MAX_REGS];
+    index_t rmap[MAX_REGS];
+    int top;
+    int temp_top;
+    int pin_top;
+} reg_allocator_t;
+
+
 typedef struct _csp_rt_t
 {
     csp_instr_t instr[MAX_INSTRS]; // instructions used
     csp_decl_t decl[MAX_DECLS];    // declarations used
 
-    value_t* xin;                  // xin point to xv0 or xv1
     value_t* din;                  // din point to dv0 or dv1
-    value_t* xout;                 // xout point to xv0 or xv1
     value_t* dout;                 // dout point to dv0 or dv1
-
-    value_t xv0[MAX_INDEX];       // instruction (node) value (x)
+    value_t reg[MAX_REGS];         // register area
+    value_t arg[MAX_ARGS];         // loaded before call
+    
     value_t dv0[MAX_INDEX];       // declaration (leaf) value (y,z)    
 #if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)
-    // value_t xv1[MAX_INDEX];       // instruction (node) value (x)
     value_t dv1[MAX_INDEX];       // declaration (leaf) value (y,z)    
 #endif
     // check if any node has been set: anyx|anyd == CSP_TRUE
-    int8_t  anyx;  // CSP_TRUE|CSP_FALSE
     int8_t  anyd;  // CSP_TRUE|CSP_FALSE
-    bitset_decl(xset, MAX_INDEX); // mark instr updated during cycle
     bitset_decl(dset, MAX_INDEX); // mark decl updated during cycle
     
     char    str[MAX_STR_BUF];      // store variable names    
     index_t doffs[MAX_OBJECTS];    // offset to object locals
-    index_t xoffs[MAX_OBJECTS];    // offset to object nodes
     // stack used during eval
     int esp;                       // eval stack pointer
     struct PACKED { index_t ix; unsigned cur:OBJ_BITS; }
@@ -446,9 +528,10 @@ typedef struct _csp_rt_t
     unsigned cond:1;             // 1 if mark node as conditional
 
     csp_pstate_t ps;             // parse state
-
+    reg_allocator_t* ap;
+    
     index_t mdef;                // module being defined
-    index_t ent;                 // entry op of module
+    int     ent;                 // entry op of module in st->instr
     // index_t so;               // state offsets for mods
     unsigned cur:OBJ_BITS;       // current module index
 
@@ -489,22 +572,19 @@ extern const uint8_t csp_num_builtin_funcs;
 
 static inline int st_index(csp_rt_t* st, index_t n)
 {
-    int obj = OBJ(n);
-    return IS_DECL(n) ?
-	(st->doffs[obj] + INDEX(n)) :
-	(st->xoffs[obj] + INDEX(n));
+    return st->doffs[OBJ(n)] + INDEX(n);
 }
 
 #if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)    
 // enq an node for recalculation
-static inline void csp_enq(csp_rt_t* st, index_t x)
+static inline void csp_enq(csp_rt_t* st, uint16_t ip)
 {
-    if (bitset_tst(st->inq,x))
+    if (bitset_tst(st->inq,ip))
 	return;
     if ((st->tl - st->hd) != MAX_QUEUE) {
-	st->queue[st->tl % MAX_QUEUE] = x;
+	st->queue[st->tl % MAX_QUEUE] = ip;
 	st->tl++;
-	bitset_set(st->inq, x);
+	bitset_set(st->inq, ip);
     }
 }
 
@@ -515,9 +595,6 @@ static inline void csp_enq_elist(csp_rt_t* st, index_t x)
     index_t ix = INDEX(x);
     for (i = 0; i < st->idg[ix]; i++) {
 	index_t p = st->edg[st->ofs[ix]+i];  // parent node
-	if (OBJ(p) == CURRENT) {
-	    p = MAKE_INDEX(st->cur,INDEX(p),TAG_INSTR);
-	}
 	csp_enq(st, p);
     }
 }
@@ -534,13 +611,9 @@ static inline index_t csp_deq(csp_rt_t* st)
 }
 #endif
 
-static inline value_t csp_value(csp_rt_t* st, index_t n)
+static inline value_t csp_value(csp_rt_t* st, index_t x)
 {
-    int i = st_index(st, n);
-    if (IS_INSTR(n))
-	return st->xin[i];
-    else
-	return st->din[i];
+    return st->din[st_index(st, x)];
 }
 
 static inline ivalue_t csp_ivalue(csp_rt_t* st, index_t ix)
@@ -610,6 +683,9 @@ extern int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val);
 
 const char* csp_op_name(opcode_t op);
 extern tok_t csp_opcode_to_tok(opcode_t opcode);
+extern vtype_t csp_opcode_type(opcode_t opcode);
+extern void csp_set_error(csp_rt_t*, csp_err_t);
+extern void csp_clr_error(csp_rt_t*);
 
 #ifdef __cplusplus
 EXTERN_C_END

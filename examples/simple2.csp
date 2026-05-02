@@ -1,0 +1,6 @@
+#variable A:16 = 1
+#variable B:16 = 2
+#variable C:16
+
+A=7 ? 1
+

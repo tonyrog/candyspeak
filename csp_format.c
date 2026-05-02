@@ -1,24 +1,51 @@
 
 #include "csp_format.h"
 
+const char* csp_format_error(csp_err_t err)
+{
+    switch(err) {
+    case ERR_OK:
+	return "ok";
+    case ERR_SYNTAX:
+	return "syntax error";
+    case ERR_STRING_SPACE_EXHUSTED:
+	return "string space exhuasted";
+    case ERR_TOO_MANY_DECLARATIONS:
+	return "too many declarations";
+    case ERR_TOO_MANY_INSTRUCTIONS:
+	return "too many instructions";
+    case ERR_TOO_MANY_OBJECTS:
+	return "too many objects";
+    case ERR_MODULE_NOT_DECLARED:
+	return "module %s not declared";
+    case ERR_NOT_A_MODULE:
+	return "word %s not a module";
+    case ERR_OBJECT_ALREADY_DEFINED:
+	return "object %s is already defined";
+    case ERR_OBJECT_NOT_DEFINED:
+	return "object %s is not defined";
+    case ERR_VARIABLE_NOT_DECLARED:
+	return "variable %s is not declared";
+    default:
+	return "unknown error";
+    }
+}
+    
+
 const char* csp_tag(csp_rt_t* st, index_t n)
 {
-    if (IS_INSTR(n))
-	return "i";
-    else {
-	switch(st->decl[INDEX(n)].type) {
-	case DECL_OBJECT: return "q";
-	case DECL_MODULE: return "m";
-	case DECL_CONSTANT: return "c";
-	case DECL_VARIABLE: return "v";
-	case DECL_DIGITAL: return "d";
-	case DECL_ANALOG: return "a";
-	case DECL_TIMER: return "t";
-	case DECL_CAN: return "k";
-	case DECL_UART: return "u";
-	case DECL_SOCKET: return "s";
-	default: return "?";
-	}
+    switch(st->decl[INDEX(n)].type) {
+    case DECL_OBJECT: return "q";
+    case DECL_MODULE: return "m";
+    case DECL_CONSTANT: return "c";
+    case DECL_VARIABLE: return "v";
+    case DECL_DIGITAL: return "d";
+    case DECL_ANALOG: return "a";
+    case DECL_TIMER: return "t";
+    case DECL_CAN: return "k";
+    case DECL_UART: return "u";
+    case DECL_SOCKET: return "s";
+    default: return "?";
     }
 }
 
