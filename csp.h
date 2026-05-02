@@ -64,11 +64,15 @@ typedef uint8_t  reg_t;    // at most 256 registers
 #define CSP_TRUE  -1  // all bits set, like openCL/Forth
 #define CSP_FALSE 0
 
+#define TYPE_BITS 3  // supports up to 8 types
+
 typedef enum {
-    V_INTEGER,
-    V_UNSIGNED,
-    V_FLOAT,
-    V_STRING
+    V_INTEGER,   // 0 - signed integer
+    V_UNSIGNED,  // 1 - unsigned integer
+    V_FLOAT,     // 2 - floating point
+    V_STRING,    // 3 - string index
+    V_INDEX,     // 4 - declaration index (pass index, not value)
+    V_VOID,      // 5 - no value / don't care
 } vtype_t;
 
 typedef enum {
@@ -263,11 +267,6 @@ typedef struct
     int8_t assoc;
 } op_entry_t;
 
-// Function flags
-#define FUNC_IMMEDIATE  0x01  // can be called with > prefix
-#define FUNC_PURE       0x02  // no side effects
-#define FUNC_INDEX      0x04  // pass raw indices, not evaluated values
-#define FUNC_TYPE       0x08  // collect and pass type information 
 
 // Forward declarations
 struct _csp_rt_t;
@@ -430,7 +429,7 @@ typedef struct PACKED {
 typedef struct PACKED {
     decl_t type:6;                 // DECL_xxx
     unsigned name:STRING_BITS;     // string index
-    unsigned vt:2;                 // value type
+    unsigned vt:TYPE_BITS;         // value type (vtype_t)
     unsigned res:5;                // 1-32
     unsigned in:1;                 // input leaf
     unsigned out:1;                // output leaf
@@ -483,9 +482,10 @@ typedef ivalue_t (*csp_func_raw_fn)(struct _csp_rt_t* st, csp_instr_t* ip);
 typedef struct {
     const char* name;
     uint8_t namelen;
-    uint8_t nargs;      // number of arguments (0-4)
-    uint8_t flags;      // FUNC_RAW_INDEX| FUNC_IMMEDIATE | FUNC_PURE
-    csp_func_fn fn;     // function to call
+    uint8_t nargs;              // number of arguments (0-4)
+    vtype_t rtype;              // return type
+    vtype_t argtypes[MAX_ARGS]; // argument types (V_INTEGER, V_INDEX, etc)
+    csp_func_fn fn;             // function to call
 } csp_func_t;
 
 

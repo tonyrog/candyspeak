@@ -355,23 +355,24 @@ static ivalue_t fn_pln(csp_rt_t* st, value_t* args, uint8_t nargs) {
     return 1;
 }
 
-// Built-in function table 
+// Built-in function table
+// { name, namelen, nargs, rtype, {argtypes}, fn }
 const csp_func_t csp_builtin_funcs[] = {
-    { "",        0, 0, 0,              NULL },
-    { "min",     3, 2, FUNC_PURE,      fn_min },
-    { "max",     3, 2, FUNC_PURE,      fn_max },
-    { "abs",     3, 1, FUNC_PURE,      fn_abs },
-    { "sign",    4, 1, FUNC_PURE,      fn_sign },
-    { "timeout", 7, 1, FUNC_INDEX,     fn_timeout },
-    { "print",   5, 1, FUNC_TYPE|FUNC_IMMEDIATE, fn_print },
-    { "tick",    4, 0, FUNC_PURE,      fn_tick },
-    { "cycle",   5, 0, FUNC_PURE,      fn_cycle },
+    { "",        0, 0, V_VOID,    {0,0,0,0},                         NULL },
+    { "min",     3, 2, V_INTEGER, {V_INTEGER, V_INTEGER, 0, 0},      fn_min },
+    { "max",     3, 2, V_INTEGER, {V_INTEGER, V_INTEGER, 0, 0},      fn_max },
+    { "abs",     3, 1, V_INTEGER, {V_INTEGER, 0, 0, 0},              fn_abs },
+    { "sign",    4, 1, V_INTEGER, {V_INTEGER, 0, 0, 0},              fn_sign },
+    { "timeout", 7, 1, V_INTEGER, {V_INDEX, 0, 0, 0},                fn_timeout },
+    { "print",   5, 1, V_INTEGER, {V_STRING, 0, 0, 0},               fn_print },
+    { "tick",    4, 0, V_INTEGER, {0, 0, 0, 0},                      fn_tick },
+    { "cycle",   5, 0, V_INTEGER, {0, 0, 0, 0},                      fn_cycle },
 
-    { "pln0",     4, 0, FUNC_PURE,      fn_pln },
-    { "pln1",     4, 1, FUNC_PURE,      fn_pln },
-    { "pln2",     4, 2, FUNC_PURE,      fn_pln },
-    { "pln3",     4, 3, FUNC_PURE,      fn_pln },
-    { "pln4",     4, 4, FUNC_PURE,      fn_pln },    
+    { "pln0",    4, 0, V_INTEGER, {0, 0, 0, 0},                      fn_pln },
+    { "pln1",    4, 1, V_INTEGER, {V_INTEGER, 0, 0, 0},              fn_pln },
+    { "pln2",    4, 2, V_INTEGER, {V_INTEGER, V_INTEGER, 0, 0},      fn_pln },
+    { "pln3",    4, 3, V_INTEGER, {V_INTEGER, V_INTEGER, V_INTEGER, 0}, fn_pln },
+    { "pln4",    4, 4, V_INTEGER, {V_INTEGER, V_INTEGER, V_INTEGER, V_INTEGER}, fn_pln },
 };
 
 const uint8_t csp_num_builtin_funcs = sizeof(csp_builtin_funcs)/sizeof(csp_builtin_funcs[0]);
@@ -534,11 +535,6 @@ int csp_eval0(csp_rt_t* st, int n)
 	    return n;
 	}
 	return n+1;
-    case OP_EQ: { // plain assign y = z  (what about x) replace with ST!
-	value_t zv = st->reg[st->instr[n].a.z];
-	csp_set_value(st, st->instr[n].a.y, zv); // FIXME!!!
-	return n+1;
-    }
     case OP_CALL: {
 	// y: function index (low bit: 0=builtin, 1=user), index >> 1
 	// z: argument (0/1 arg) or OP_COMMA instruction (2+ args)
@@ -950,57 +946,69 @@ int new_expr0(csp_rt_t* st, opcode_t op)
     return csp_new_alu(st, op, ZERO, ZERO, ZERO);
 }
 
-#define DEP(st,i,y) ((IS_INSTR((y)) && !IS_COND((st),(y))) || \
-		     (IS_DECL((y)) && \
-		      (!IS_COND((st),(i)) && !IS_CONST((st),(y)))))
+// Build reactive dependency graph: declaration -> rules that depend on it
+// When a declaration changes, we enqueue all rules that read from it (via LD)
 void csp_csr(csp_rt_t* st)
 {
 #if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
-    int i, x0, x1;
-    int in_module = 0;
-    index_t wr[MAX_INDEX];
+    int i;
+    int current_rule = -1;
+    index_t wr[MAX_DECLS];
 
-    // setup idg for all nodes
-    // x : y op z   count y
-    // 
-    for (i = 0; i < st->ps.nn; i++) {
-	if (IS_INSTR(i)) {
-	    index_t y = INDEX(st_instr_y(st,i));
-	    index_t z = INDEX(st_instr_z(st,i));
-	    if (DEP(st,i,y))
-		st->idg[y]++;
-	    if (DEP(st,i,z))
-		st->idg[z]++;
-	}
-    }
+    // Clear in-degree counts
+    memset(st->idg, 0, st->ps.nd * sizeof(index_t));
 
-    // calculate leaf offsets
-    x0 = 0;
-    st->ofs[x0] = 0;
+    // Pass 1: Count how many rules depend on each declaration
+    // A rule depends on a declaration if it contains an LD from that declaration
     for (i = 0; i < st->ps.nn; i++) {
-	x1 = i+1;
-	st->ofs[x1] = st->ofs[x0] + st->idg[x0];
-	x0 = x1;
-    }
-    
-    memcpy(wr, st->ofs, MAX_INDEX*sizeof(index_t));
-    
-    // fill in parents in edg array (fixme maybe moved into loop above)
-    for (i = 0; i < st->ps.nn; i++) {
-	switch(st->instr[i].op) {
-	case OP_ENTER: in_module = 1; break;
-	case OP_LEAVE: in_module = 0; break;
-	case OP_NEW: break;
-	default: {
-	    index_t y = st_instr_y(st, i);
-	    index_t z = st_instr_z(st, i);
-	    index_t x = in_module ? MAKE_INDEX(CURRENT,i) : i;
-	    if (DEP(st,i,y))
-		st->edg[wr[INDEX(y)]++] = x;
-	    if (DEP(st,i,z))
-		st->edg[wr[INDEX(z)]++] = x;
+	switch (st->instr[i].op) {
+	case OP_RULE:
+	    current_rule = i;
+	    break;
+	case OP_LD:
+	    if (current_rule >= 0) {
+		index_t mem = INDEX(st->instr[i].m.mem);
+		if (mem < st->ps.nd)
+		    st->idg[mem]++;
+	    }
+	    break;
+	case OP_ENTER:
+	case OP_LEAVE:
+	    current_rule = -1;  // reset at module boundaries
+	    break;
+	default:
 	    break;
 	}
+    }
+
+    // Pass 2: Calculate offsets into edge array
+    st->ofs[0] = 0;
+    for (i = 0; i < st->ps.nd; i++) {
+	st->ofs[i+1] = st->ofs[i] + st->idg[i];
+    }
+
+    // Pass 3: Fill in rule indices for each declaration
+    memcpy(wr, st->ofs, st->ps.nd * sizeof(index_t));
+    current_rule = -1;
+
+    for (i = 0; i < st->ps.nn; i++) {
+	switch (st->instr[i].op) {
+	case OP_RULE:
+	    current_rule = i;
+	    break;
+	case OP_LD:
+	    if (current_rule >= 0) {
+		index_t mem = INDEX(st->instr[i].m.mem);
+		if (mem < st->ps.nd)
+		    st->edg[wr[mem]++] = current_rule;
+	    }
+	    break;
+	case OP_ENTER:
+	case OP_LEAVE:
+	    current_rule = -1;
+	    break;
+	default:
+	    break;
 	}
     }
 #endif
@@ -1268,9 +1276,15 @@ void free_reg(csp_rt_t* st, int r)
 // Map declaration (variable/constant/digital...)
 int map_reg(csp_rt_t* st, index_t ix)
 {
-    if (st->decl[INDEX(ix)].is_mapped)
-	return st->decl[INDEX(ix)].reg;  // already in register
-    else { //
+    // Check if already mapped AND mapping is still valid
+    if (st->decl[INDEX(ix)].is_mapped) {
+	reg_t r = st->decl[INDEX(ix)].reg;
+	if (st->ap->rmap[r] == ix)
+	    return r;  // mapping still valid
+	// Stale mapping - clear it
+	st->decl[INDEX(ix)].is_mapped = 0;
+    }
+    { //
 	reg_allocator_t* ap = st->ap;	
 	int dst = alloc_reg(st);
 	st->decl[INDEX(ix)].is_mapped = 1;
@@ -1299,18 +1313,54 @@ int map_reg(csp_rt_t* st, index_t ix)
     }
 }
 
+// Parser stack entry - tracks both register and declaration index
+typedef struct {
+    reg_t reg;       // register number (valid if loaded)
+    index_t ix;      // declaration index (valid for variables)
+    unsigned loaded:1;  // 1 if value is loaded in reg
+} rstack_entry_t;
+
+// Helper macros for rstack entries
+#define RSTACK_REG(r)     ((rstack_entry_t){.reg=(r), .ix=BAD_INDEX, .loaded=1})
+#define RSTACK_IX(i)      ((rstack_entry_t){.reg=0, .ix=(i), .loaded=0})
+#define RSTACK_BOTH(r,i)  ((rstack_entry_t){.reg=(r), .ix=(i), .loaded=1})
+
+// Process binary assignment operator: generates ST instruction
+// Returns new ep on success, -1 on error
+static int process_assign(csp_rt_t* st, rstack_entry_t* rstack, int ep)
+{
+    rstack_entry_t lhs = rstack[ep-2];
+    rstack_entry_t rhs = rstack[ep-1];
+
+    if (lhs.ix == BAD_INDEX) {
+	csp_set_error(st, ERR_SYNTAX);  // left side must be l-value
+	return -1;
+    }
+    // Ensure rhs is loaded
+    if (!rhs.loaded) {
+	csp_set_error(st, ERR_SYNTAX);  // rhs must have value
+	return -1;
+    }
+    // Generate store instruction
+    if (csp_new_st(st, rhs.reg, lhs.ix) < 0)
+	return -1;
+    // Result is the rhs (for chaining A=B=1)
+    rstack[ep-2] = rhs;
+    return ep - 1;
+}
+
 // num_toks is number of tokens and value on input
 // num_toks is number of tokens consumed on output
 int csp_parse_expr(csp_rt_t* st,tok_t* tok,tokval_t* val,size_t* num_toks)
 {
     tok_t op;
-    tokval_t tval;    
+    tokval_t tval;
     tok_t pop = NONE;   // previous operator/token
     int pp = 0;         // operator stack pointer
     int ep = 0;         // expression stack pointer
     tok_t ostack[MAX_PARSE_STACK_DEPTH];  // stack of operators
-    int   rstack[MAX_PARSE_STACK_DEPTH];  // stack of registers
-    int dst;
+    rstack_entry_t rstack[MAX_PARSE_STACK_DEPTH];  // stack of {reg, index}
+    reg_t dst;
     index_t ix;
     int i = 0;
     size_t n = *num_toks;
@@ -1359,22 +1409,33 @@ next:
 	    return PARSE_ERROR;
 	// Process operators until we hit LP or a function marker
 	while(pp && ((op = ostack[pp-1]) != LP) && !IS_FUNC_MARKER(op)) {
+	    // COMMA inside function call: just pop it, don't combine args
+	    if (op == COMMA) {
+		pp--;
+		continue;
+	    }
 	    switch(arity(op)) {
 	    case 2:
-		dst = alloc_reg(st);
-		if (new_expr2(st,op_table[op].code,
-			      dst,rstack[ep-2],rstack[ep-1]) < 0)
-		    return PARSE_ERROR;
-		free_reg(st, rstack[ep-2]);
-		rstack[ep-2] = dst;
-		ep--;
+		if (op == EQ) {
+		    if ((ep = process_assign(st, rstack, ep)) < 0)
+			return PARSE_ERROR;
+		}
+		else {
+		    dst = alloc_reg(st);
+		    if (new_expr2(st,op_table[op].code,
+				  dst,rstack[ep-2].reg,rstack[ep-1].reg) < 0)
+			return PARSE_ERROR;
+		    free_reg(st, rstack[ep-2].reg);
+		    rstack[ep-2] = RSTACK_REG(dst);
+		    ep--;
+		}
 		break;
 	    case 1:
 		dst = alloc_reg(st);
-		if (new_expr1(st,op_table[op].code,dst,rstack[ep-1]) < 0)
+		if (new_expr1(st,op_table[op].code,dst,rstack[ep-1].reg) < 0)
 		    return PARSE_ERROR;
-		free_reg(st, rstack[ep-1]);
-		rstack[ep-1] = dst;
+		free_reg(st, rstack[ep-1].reg);
+		rstack[ep-1] = RSTACK_REG(dst);
 		break;
 	    case 0:
 		return PARSE_ERROR;
@@ -1399,28 +1460,51 @@ next:
 	    }
 	    if (!func || !func->fn)
 		return PARSE_ERROR;
-	    // load arguments (reversed?)
-	    // f (A, B, C)  (n=3, ostack = 2)
+	    // load arguments based on argtypes
+	    // f (A, B, C)  (n=3)
 	    //  ep   ep-1 ep-2 ep-3
 	    // |   |  C | B  | A  |
-	    // 
+	    //
 	    n = func->nargs;
 	    for (j = 0; j < n; j++) {
-		reg_t r = rstack[ep-(n-j)];
-		if (csp_new_arg(st, r, j) < 0)
-		    return PARSE_ERROR;
-		free_reg(st, r);
+		rstack_entry_t* arg = &rstack[ep-(n-j)];
+		vtype_t argtype = func->argtypes[j];
+
+		if (argtype == V_INDEX) {
+		    // Pass index directly: load index value into arg[]
+		    if (arg->ix == BAD_INDEX) {
+			csp_set_error(st, ERR_SYNTAX);
+			return PARSE_ERROR;
+		    }
+		    reg_t r = alloc_reg(st);
+		    if (csp_new_li(st, r, arg->ix) < 0)
+			return PARSE_ERROR;
+		    if (csp_new_arg(st, r, j) < 0)
+			return PARSE_ERROR;
+		    free_reg(st, r);
+		    if (arg->loaded)
+			free_reg(st, arg->reg);
+		}
+		else {
+		    // Pass value: use loaded register
+		    if (!arg->loaded) {
+			csp_set_error(st, ERR_SYNTAX);
+			return PARSE_ERROR;
+		    }
+		    if (csp_new_arg(st, arg->reg, j) < 0)
+			return PARSE_ERROR;
+		    free_reg(st, arg->reg);
+		}
 	    }
 	    // pop rstack
 	    if (n > 0) {
 		ep -= n;
-		op -= (n-1);
 	    }
 	    
 	    dst = alloc_reg(st);
 	    if (csp_new_call(st, dst, func_idx, is_user, n) < 0)
 		return PARSE_ERROR;
-	    rstack[ep++] = dst;	    
+	    rstack[ep++] = RSTACK_REG(dst);
 	}
 	else if (pp && ostack[pp-1] == LP) {
 	    pp--;  // pop the LP for regular parentheses
@@ -1437,7 +1521,7 @@ next:
 	    ix = new_signed_const(st,tval.val.i);
 	if (ix == BAD_INDEX) return PARSE_ERROR;
 	dst = map_reg(st, ix);
-	rstack[ep++] = dst;
+	rstack[ep++] = RSTACK_BOTH(dst, ix);
 	pop = INT;
 	break;
     case FLT:
@@ -1445,7 +1529,7 @@ next:
 	    ix = new_float_const(st,tval.val.f);
 	if (ix == BAD_INDEX) return PARSE_ERROR;
 	dst = map_reg(st, ix);
-	rstack[ep++] = dst;
+	rstack[ep++] = RSTACK_BOTH(dst, ix);
 	pop = FLT;
 	break;
     case STR:
@@ -1453,7 +1537,7 @@ next:
 	    ix = new_string_const(st,tval.str,tval.len);
 	if (ix == BAD_INDEX) return PARSE_ERROR;
 	dst = map_reg(st, ix);
-	rstack[ep++] = dst;
+	rstack[ep++] = RSTACK_BOTH(dst, ix);
 	pop = STR;
 	break;
     case WORD: {
@@ -1472,15 +1556,12 @@ next:
 	    int r;
 	    // Not a function - regular variable/decl lookup
 	    if ((ix = lookup_decl(st,tval.str,tval.len)) == BAD_INDEX) {
-		
-		// if ((ix = csp_new_decl(st,tval.str,tval.len,DECL_VARIABLE)) == BAD_INDEX)
-		// return PARSE_ERROR;
-		// st->decl[INDEX(ix)].va.init.i = 0;
 		csp_set_error(st, ERR_VARIABLE_NOT_DECLARED);
 		return PARSE_ERROR;
 	    }
-	    else if ((st->decl[INDEX(ix)].type == DECL_OBJECT) &&
-		     (tok[i] == DOT) && (tok[i+1] == WORD)) {
+	    // Handle obj.field access
+	    if ((st->decl[INDEX(ix)].type == DECL_OBJECT) &&
+		(tok[i] == DOT) && (tok[i+1] == WORD)) {
 		index_t mx = st->decl[INDEX(ix)].mq.mx;  // module def
 		ivalue_t dn = st->decl[INDEX(mx)].md.n;  // number of elements
 		index_t jx;
@@ -1493,11 +1574,22 @@ next:
 		ix = MAKE_INDEX(st->decl[INDEX(ix)].mq.iq,INDEX(jx));
 		i += 2;
 	    }
-	    if (st->mdef != 0)
+	    // Apply module context
+	    if (st->mdef != 0 && OBJ(ix) == 0)
 		ix = MAKE_INDEX(CURRENT, INDEX(ix));
-	    r = map_reg(st, ix);
-	    rstack[ep++] = r;
-	    pop = WORD;
+
+	    // Check if this is an l-value (assignment target)
+	    if (tok[i] == EQ) {
+		// L-value: push index only, no load
+		rstack[ep++] = RSTACK_IX(ix);
+		pop = WORD;
+	    }
+	    else {
+		// R-value: load into register, keep index for V_INDEX args
+		r = map_reg(st, ix);
+		rstack[ep++] = RSTACK_BOTH(r, ix);
+		pop = WORD;
+	    }
 	}
 	break;
     }
@@ -1528,20 +1620,26 @@ operator:
 		 ((p2 == p1) && (assoc(op2) < 0))) {
 		switch(arity(op2)) {
 		case 2:
-		    dst = alloc_reg(st);
-		    if (new_expr2(st,op_table[op2].code,
-				  dst, rstack[ep-2], rstack[ep-1]) < 0)
-			return PARSE_ERROR;
-		    free_reg(st, rstack[ep-2]);
-		    rstack[ep-2] = dst;
-		    ep--;
+		    if (op2 == EQ) {
+			if ((ep = process_assign(st, rstack, ep)) < 0)
+			    return PARSE_ERROR;
+		    }
+		    else {
+			dst = alloc_reg(st);
+			if (new_expr2(st,op_table[op2].code,
+				      dst, rstack[ep-2].reg, rstack[ep-1].reg) < 0)
+			    return PARSE_ERROR;
+			free_reg(st, rstack[ep-2].reg);
+			rstack[ep-2] = RSTACK_REG(dst);
+			ep--;
+		    }
 		    break;
 		case 1:
 		    dst = alloc_reg(st);
-		    if (new_expr1(st,op_table[op2].code,dst,rstack[ep-1]) < 0)
+		    if (new_expr1(st,op_table[op2].code,dst,rstack[ep-1].reg) < 0)
 			return PARSE_ERROR;
-		    free_reg(st, rstack[ep-1]);
-		    rstack[ep-1] = dst;
+		    free_reg(st, rstack[ep-1].reg);
+		    rstack[ep-1] = RSTACK_REG(dst);
 		    break;
 		case 0:
 		    return PARSE_ERROR;
@@ -1560,21 +1658,27 @@ out: // expression is terminated with non-expression char
 	    return PARSE_ERROR;
 	switch(arity(op)) {
 	case 2:
-	    dst = alloc_reg(st);
-	    if (new_expr2(st,op_table[op].code,
-			  dst,rstack[ep-2],rstack[ep-1]) < 0)
-		return PARSE_ERROR;
-	    free_reg(st, rstack[ep-2]);
-	    rstack[ep-2] = dst;
-	    ep--;
+	    if (op == EQ) {
+		if ((ep = process_assign(st, rstack, ep)) < 0)
+		    return PARSE_ERROR;
+	    }
+	    else {
+		dst = alloc_reg(st);
+		if (new_expr2(st,op_table[op].code,
+			      dst,rstack[ep-2].reg,rstack[ep-1].reg) < 0)
+		    return PARSE_ERROR;
+		free_reg(st, rstack[ep-2].reg);
+		rstack[ep-2] = RSTACK_REG(dst);
+		ep--;
+	    }
 	    break;
 	case 1:
 	    dst = alloc_reg(st);
 	    if (new_expr1(st,op_table[op].code,
-			  dst,rstack[ep-1]) < 0)
+			  dst,rstack[ep-1].reg) < 0)
 		return PARSE_ERROR;
-	    free_reg(st, rstack[ep-1]);
-	    rstack[ep-1] = dst;
+	    free_reg(st, rstack[ep-1].reg);
+	    rstack[ep-1] = RSTACK_REG(dst);
 	    break;
 	case 0:
 	    return PARSE_ERROR;
@@ -1584,9 +1688,9 @@ out: // expression is terminated with non-expression char
 	return PARSE_ERROR;
     if (ep == 1) {
 	*num_toks = i;
-	return rstack[0];
+	return rstack[0].reg;
     }
-    return PARSE_ERROR;    
+    return PARSE_ERROR;
 }
 
 // parse constant (fixme eval constants?)

@@ -337,7 +337,7 @@ int main(int argc, char** argv)
     }
 #endif
     
-#if !defined(WANT_RECATIVE) || (WANT_RECATIVE==0)
+#if !defined(WANT_REACTIVE) || (WANT_REACTIVE==0)
     if (reactive) {
 	fprintf(stderr, "reactive mode not configured\n");
 	exit(1);
@@ -413,7 +413,11 @@ loop:
 
     csp_input(&state);
 
-    if (state.reactive) {
+    if (state.reactive && state.cycle == 0) {
+	// Initial cycle: run full eval to prime the system
+	x = csp_eval(&state);
+    }
+    else if (state.reactive) {
 	x = csp_react(&state);
     }
     else {

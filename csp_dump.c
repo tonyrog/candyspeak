@@ -101,7 +101,7 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		i,
 		st->instr[i].m.x);
 	csp_fprint_tag(f, st, st->instr[i].m.mem);
-	fprintf(f, ",%s]}}%sn", cond, eot);
+	fprintf(f, ",%s]}%s\n", cond, eot);
 	return i+1;
     case OP_LI:
 	fprintf(f, "{instr,%d,li,[r%d,%d,%s]}%s\n",
@@ -133,7 +133,6 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		st->instr[i].r.cnd, st->instr[i].r.nxt, eot);
 	return i+1;
     case OP_ENTER: {
-	// FIXME: add new op arguments	
 	index_t mx = st->instr[i].e.mx;
 	int n = st->instr[i].e.num;
 	int j;
@@ -141,8 +140,8 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		i, decl_name(st, mx), n);
 	i++;
 	for (j = 0; j <= n; j++) // <= include leave!
-	    i = csp_dump_instr(f, lev+1, st, i, (i>n) ? "" : ",");
-	fprintf(f, "]}%s\n", (j == n) ? "" : eot);
+	    i = csp_dump_instr(f, lev+1, st, i, (j == n) ? "" : ",");
+	fprintf(f, "]}%s\n", eot);
 	return i;
     }
     case OP_LEAVE: {
@@ -165,15 +164,13 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	break;
     }
     default:
-	fprintf(f, "{instr,%d,'%s',[r%d,r%d,r%d,%s]}.\n",
+	fprintf(f, "{instr,%d,'%s',[r%d,r%d,r%d,%s]}%s\n",
 		i,
-		csp_op_name(st->instr[i].op), 
+		csp_op_name(st->instr[i].op),
 		st->instr[i].a.x,
 		st->instr[i].a.y,
 		st->instr[i].a.z,
-		cond);
-	// dump_edge_list(f, st, i);
-	// fprintf(f, "]}%s\n", eot);
+		cond, eot);
     }
     return i+1;
 }
@@ -306,10 +303,10 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     case DECL_MODULE: {
 	index_t n = st->decl[i].md.n;
 	int j;
-	fprintf(f, "{decl,%d,module,%s,[\n", i, decl_name(st, ix));
+	fprintf(f, "{decl,%d,module,'%s',[\n", i, decl_name(st, ix));
 	i++;
 	for (j = 0; j <= n; j++) { // include 'end'
-	    i = csp_dump_decl(f, lev+1, st, i, (i > n) ? "" : ",");
+	    i = csp_dump_decl(f, lev+1, st, i, (j == n) ? "" : ",");
 	}
 	fprintf(f, "]}%s\n", eot);
 	return i;
@@ -377,13 +374,13 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		decl_name(st, ix),
 		csp_ivalue(st, st->decl[i].tm.px),
 		st->decl[i].tm.init);
-	printf("{t0,");
+	fprintf(f, "{t0,");
 	csp_fprint_tag(f, st, st->decl[i].tm.tx);
 	fprintf(f, "}]}%s\n", eot);	
 	break;
     case DECL_CAN:
 	vt = st->decl[i].vt;
-	fprintf(f, "{decl,%d,can,\"%s\",[{size,%d},{type,%s},{endian,%s},{dir,%s}], 0x%x[%d:%d]}%s\n",
+	fprintf(f, "{decl,%d,can,\"%s\",[{size,%d},{type,%s},{endian,%s},{dir,%s},{id,16#%x},{bit,%d},{len,%d}]}%s\n",
 		i,
 		decl_name(st, ix),
 		GET_RES(st->decl[i].res),
@@ -448,7 +445,7 @@ void csp_dump(FILE* f, csp_rt_t* st)
 	int m = i+1;
 	index_t ix = st->object[m];
 	if (i > 0) fputc(',', f);
-	fprintf(f, "{%s,%d,",
+	fprintf(f, "{'%s',%d,",
 		decl_name(st, st->decl[INDEX(ix)].mq.mx),
 		st->doffs[m]);
 	csp_fprint_tag(f, st, ix);
