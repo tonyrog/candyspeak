@@ -1,6 +1,7 @@
-// demo of three nesye
+// demo of loop
 #constant n:4  = 5
 #variable i:10 = 1
 
 i = i + 1 ? (i <= n)
-print("i="), print(i), print("\n") ? (i <= n)
+print("."), print("\n") ? (i <= n)
+

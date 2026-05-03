@@ -76,6 +76,8 @@ const op_entry_t op_table[] = {
     INSTR_ENT(COMMA,OP_COMMA,",",2,2,NO),
     INSTR_ENT(QUEST,OP_RULE,"?",-1,-1,NO),
 
+    INSTR_ENT(NEXT,OP_NEXT, "next",-1,-1,NO),    
+
     // OP_ENTER: y=<num-instr>, z=DECL:module-index
     INSTR_ENT(ENTER,OP_ENTER,"enter",-1,-1,NO),
     // OP_ENTER: y=<num-instr>, z=DECL:module-index
@@ -229,6 +231,7 @@ static eval_entry_t eval_tab[] = {
     [OP_COMMA] = {f_COMMA,COMMA,V_INTEGER,V_INTEGER,V_INTEGER},
     [OP_NOP]   = {NULL, NONE, V_INTEGER,V_INTEGER,V_INTEGER},
     [OP_RULE]  = {NULL, QUEST, V_INTEGER,V_INTEGER,V_INTEGER},
+    [OP_NEXT]  = {NULL, QUEST, V_INTEGER,V_INTEGER,V_INTEGER},    
     [OP_ENTER] = {NULL, ENTER, V_INTEGER,V_INTEGER,V_INTEGER},
     [OP_LEAVE] = {NULL, LEAVE, V_INTEGER,V_INTEGER,V_INTEGER},
     [OP_NEW]   = {NULL, NEW, V_INTEGER,V_INTEGER,V_INTEGER},
@@ -284,6 +287,13 @@ static inline ivalue_t isign(ivalue_t a)
     return (a < 0) ? -1 : (a ? 1 : 0);
 }
 
+static inline ivalue_t iclip(ivalue_t x, ivalue_t a, ivalue_t b)
+{
+    if (x < a) return a;
+    if (x > b) return b;
+    return x;
+}
+
 int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val)
 {
     switch(vt) {
@@ -297,19 +307,28 @@ int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val)
 
 
 // Built-in function implementations - args are pre-evaluated
-static ivalue_t fn_min(csp_rt_t* st, value_t* args, uint8_t nargs) {
+static ivalue_t fn_min(csp_rt_t* st, value_t* args, uint8_t nargs)
+{
     (void)st; (void)nargs;
     return imin(args[0].i, args[1].i);
 }
 
-static ivalue_t fn_max(csp_rt_t* st, value_t* args, uint8_t nargs) {
+static ivalue_t fn_max(csp_rt_t* st, value_t* args, uint8_t nargs)
+{
     (void)st; (void)nargs;
     return imax(args[0].i, args[1].i);
 }
 
-static ivalue_t fn_abs(csp_rt_t* st, value_t* args, uint8_t nargs) {
+static ivalue_t fn_abs(csp_rt_t* st, value_t* args, uint8_t nargs)
+{
     (void)st; (void)nargs;
     return iabs(args[0].i);
+}
+
+static ivalue_t fn_clip(csp_rt_t* st, value_t* args, uint8_t nargs)
+{
+    (void)st; (void)nargs;
+    return iclip(args[0].i, args[1].i, args[2].i);
 }
 
 static ivalue_t fn_sign(csp_rt_t* st, value_t* args, uint8_t nargs)
@@ -318,7 +337,6 @@ static ivalue_t fn_sign(csp_rt_t* st, value_t* args, uint8_t nargs)
     return isign(args[0].i);
 }
 
-// FIXME: mark argument as index?
 static ivalue_t fn_timeout(csp_rt_t* st, value_t* args, uint8_t nargs)
 {
     index_t ty = args[0].u;
@@ -359,14 +377,15 @@ static ivalue_t fn_pln(csp_rt_t* st, value_t* args, uint8_t nargs) {
 // { name, namelen, nargs, rtype, {argtypes}, fn }
 const csp_func_t csp_builtin_funcs[] = {
     { "",        0, 0, V_VOID,    {0,0,0,0},                         NULL },
-    { "min",     3, 2, V_INTEGER, {V_INTEGER, V_INTEGER, 0, 0},      fn_min },
-    { "max",     3, 2, V_INTEGER, {V_INTEGER, V_INTEGER, 0, 0},      fn_max },
-    { "abs",     3, 1, V_INTEGER, {V_INTEGER, 0, 0, 0},              fn_abs },
-    { "sign",    4, 1, V_INTEGER, {V_INTEGER, 0, 0, 0},              fn_sign },
-    { "timeout", 7, 1, V_INTEGER, {V_INDEX, 0, 0, 0},                fn_timeout },
-    { "print",   5, 1, V_INTEGER, {V_STRING, 0, 0, 0},               fn_print },
-    { "tick",    4, 0, V_INTEGER, {0, 0, 0, 0},                      fn_tick },
-    { "cycle",   5, 0, V_INTEGER, {0, 0, 0, 0},                      fn_cycle },
+    { "min",     3, 2, V_INTEGER, {V_INTEGER,V_INTEGER,0,0},      fn_min },
+    { "max",     3, 2, V_INTEGER, {V_INTEGER,V_INTEGER,0,0},      fn_max },
+    { "abs",     3, 1, V_INTEGER, {V_INTEGER,0,0,0},              fn_abs },
+    { "sign",    4, 1, V_INTEGER, {V_INTEGER,0,0,0},              fn_sign },
+    { "clip",    4, 3, V_INTEGER, {V_INTEGER,V_INTEGER,V_INTEGER,0}, fn_clip},
+    { "timeout", 7, 1, V_INTEGER, {V_INDEX,0,0,0},                fn_timeout },
+    { "print",   5, 1, V_INTEGER, {V_STRING,0,0,0},               fn_print },
+    { "tick",    4, 0, V_INTEGER, {0,0,0,0},                      fn_tick },
+    { "cycle",   5, 0, V_INTEGER, {0,0,0,0},                      fn_cycle },
 
     { "pln0",    4, 0, V_INTEGER, {0, 0, 0, 0},                      fn_pln },
     { "pln1",    4, 1, V_INTEGER, {V_INTEGER, 0, 0, 0},              fn_pln },
@@ -430,8 +449,24 @@ static inline int assoc(tok_t op)
     return op_table[op].assoc;
 }
 
+
+// enq all nodes i nodes (back)edge list
+static inline void csp_enq_elist(csp_rt_t* st, index_t x)
+{
+    int i;
+    index_t ix = INDEX(x);
+    index_t base = st->ofs[ix];
+    for (i = 0; i < st->idg[ix]; i++) {
+	index_t p = st->edg[base+i];  // parent node
+#ifdef DEBUG	
+	printf("enq: %d\n", p);
+#endif
+	csp_enq(st, p);
+    }
+}
+
 // set value on declaration node (variable/digital/analog ...)
-static inline void csp_set_dvalue(csp_rt_t* st, index_t n, value_t v)
+void csp_set_value(csp_rt_t* st, index_t n, value_t v)
 {
     int i = st_index(st, n);
     value_t cv = st->dout[i];
@@ -445,11 +480,6 @@ static inline void csp_set_dvalue(csp_rt_t* st, index_t n, value_t v)
 	st->dout[i] = v;
 	st->update++;
     }    
-}
-
-void csp_set_value(csp_rt_t* st, index_t n, value_t v)
-{
-    csp_set_dvalue(st, n, v);
 }
 
 void csp_set_ivalue(csp_rt_t* st, index_t n, ivalue_t v)
@@ -466,18 +496,26 @@ void csp_set_fvalue(csp_rt_t* st, index_t n, fvalue_t v)
     csp_set_value(st, n, vv);
 }
 
-
-int csp_eval0(csp_rt_t* st, int n)
+// eval until NEXT!
+int csp_eval_rule(csp_rt_t* st, int n)
 {
-    opcode_t op = st->instr[n].op;
-
+    opcode_t op;
 #if defined(WANT_STATISTICS) && (WANT_STATISTICS==1)
-    st->num_eval0++;
+    st->num_eval_rule++;
 #endif
 #ifdef DEBUG
-    csp_dump_instr(stdout, 0, st, n, ".");
+    printf("eval_rule: %d\n", n);
+    // csp_dump_instr(stdout, 0, st, n, ".");
 #endif
+
+again:
+#if defined(WANT_STATISTICS) && (WANT_STATISTICS==1)    
+    st->num_eval0++;
+#endif    
+    op = st->instr[n].op;
     switch(op) {
+    case OP_NOP:
+	break;
     case OP_LD:
 	st->reg[st->instr[n].m.x] = csp_value(st, st->instr[n].m.mem);
 	break;
@@ -490,23 +528,15 @@ int csp_eval0(csp_rt_t* st, int n)
     case OP_ARG:
 	st->arg[st->instr[n].i.imm] = st->reg[st->instr[n].i.x];
 	break;
-	
-    case OP_RULE: {
-	int n1;
+    case OP_RULE:
 	if (st->reg[st->instr[n].r.cnd].i)
-	    n1 = n+1;
+	    n = n+1;
 	else
-	    n1 = st->instr[n].r.nxt;
-#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
-	if (st->reactive) {
-	    // fixme: mod?
-	    csp_enq(st, n1);
-	    return n1;
-	}
-#endif
-	return n1;
-    }
-    case OP_ENTER: // skip y + 2 
+	    n = st->instr[n].r.nxt;
+	goto again;
+    case OP_NEXT: // rule is done executing
+	return n+1;
+    case OP_ENTER: // skip y + 2
 	return n + st->instr[n].e.num + 2;
     case OP_NEW:
 	if (!st->reactive) {
@@ -518,10 +548,10 @@ int csp_eval0(csp_rt_t* st, int n)
 	    st->esp++;
 	    // setup locals
 	    st->cur = st->decl[INDEX(mod)].mq.iq;  // set current module
-	    st->doffs[CURRENT] = st->doffs[st->cur];  // setyp locals
+	    st->offs[CURRENT] = st->offs[st->cur];  // setyp locals
 	    return INDEX(ent)+1; // first instruction
 	}
-	return n+1;
+	break;
     case OP_LEAVE:
 	if (!st->reactive) {
 	    // return in non-reactive-mode
@@ -531,16 +561,16 @@ int csp_eval0(csp_rt_t* st, int n)
 	    // restore locals
 	    st->cur = st->stack[st->esp].cur;
 	    n = st->stack[st->esp].ix;
-	    st->doffs[CURRENT] = st->doffs[st->cur];
+	    st->offs[CURRENT] = st->offs[st->cur];
 	    return n;
 	}
-	return n+1;
+	break;
     case OP_CALL: {
 	// y: function index (low bit: 0=builtin, 1=user), index >> 1
 	// z: argument (0/1 arg) or OP_COMMA instruction (2+ args)
 	index_t idx = st->instr[n].f.idx;
 	const csp_func_t* func = NULL;
-
+	
 	// Get function pointer
 	if (st->instr[n].f.usr) {
 	    if (st->user_funcs && (idx < st->num_user_funcs))
@@ -556,7 +586,6 @@ int csp_eval0(csp_rt_t* st, int n)
 	}
 	break;
     }
-	
     default: {
 	value_t yv = st->reg[st->instr[n].a.y];
 	value_t zv = st->reg[st->instr[n].a.z];
@@ -570,7 +599,8 @@ int csp_eval0(csp_rt_t* st, int n)
 	break;
     }
     }
-    return n+1;
+    n = n+1;
+    goto again;
 }
 
 // undo all values
@@ -595,7 +625,7 @@ void csp_commit(csp_rt_t* st)
     st->anyd = CSP_FALSE;   
 }
 
-// run eval0 on all nodes
+// run eval_rule on all nodes
 
 index_t csp_eval(csp_rt_t* st)
 {
@@ -603,7 +633,7 @@ index_t csp_eval(csp_rt_t* st)
     index_t x = BAD_INDEX;
     st->cycle++;
     while(n < st->ps.nn) {
-	n = csp_eval0(st, n);
+	n = csp_eval_rule(st, n);
 	x = n;
     }
     return x;
@@ -613,12 +643,12 @@ index_t csp_eval(csp_rt_t* st)
 index_t csp_react(csp_rt_t* st)
 {
     st->cycle++;
-#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)    
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
     index_t x0, x1 = BAD_INDEX;
-    // fixme: eval node once! optional?
     if (st->reactive) {
 	while((x0 = csp_deq(st)) != BAD_INDEX) {
-	    csp_eval0(st, x0);
+	    printf("react: rule %d\n", x0);
+	    csp_eval_rule(st, x0);
 	    x1 = x0;
 	}
     }
@@ -732,15 +762,6 @@ index_t next_decl_index(csp_rt_t* st)
     return ix;
 }
 
-int next_instr(csp_rt_t* st)
-{
-    if (st->ps.nn >= MAX_INSTRS) {
-	csp_set_error(st, ERR_TOO_MANY_INSTRUCTIONS);
-	return -1;
-    }
-    return st->ps.nn++;
-}
-
 // install a new decl
 
 index_t csp_new_decl(csp_rt_t* st, char* name, int name_len, decl_t type)
@@ -805,12 +826,33 @@ index_t new_string_const(csp_rt_t* st, char* str, int len)
     return ix;
 }
 
+int csp_new_instr(csp_rt_t* st, opcode_t op)
+{
+    int i;
+    if ((i = st->ps.nn) >= MAX_INSTRS) {
+	csp_set_error(st, ERR_TOO_MANY_INSTRUCTIONS);
+	return -1;
+    }
+    st->ps.nn++;
+    st->instr[i].op = op;
+    st->instr[i].cond = st->cond;    
+    return i;
+}
+
+int csp_new_nop(csp_rt_t* st)
+{
+    return csp_new_instr(st, OP_NOP);
+}
+
+int csp_new_next(csp_rt_t* st)
+{
+    return csp_new_instr(st, OP_NEXT);
+}
+
 int csp_new_mem(csp_rt_t* st, opcode_t op, reg_t x, index_t mem)
 {
     int i;
-    if ((i = next_instr(st)) >= 0) {
-	st->instr[i].op = op;
-	st->instr[i].cond = st->cond;
+    if ((i = csp_new_instr(st, op)) >= 0) {
 	st->instr[i].m.x = x;
 	st->instr[i].m.mem = mem;
     }
@@ -830,9 +872,7 @@ int csp_new_ld(csp_rt_t* st, reg_t x, index_t mem)
 int csp_new_imm(csp_rt_t* st, opcode_t op, reg_t x, int16_t imm)
 {
     int i;
-    if ((i = next_instr(st)) >= 0) {
-	st->instr[i].op = op;
-	st->instr[i].cond = st->cond;
+    if ((i = csp_new_instr(st, op)) >= 0) {
 	st->instr[i].i.x = x;
 	st->instr[i].i.imm = imm;
     }
@@ -852,10 +892,7 @@ int csp_new_arg(csp_rt_t* st, reg_t x, int16_t i)
 int csp_new_alu(csp_rt_t* st, opcode_t op,reg_t x, reg_t y, reg_t z)
 {
     int i;
-    
-    if ((i = next_instr(st)) >= 0) {
-	st->instr[i].op = op;
-	st->instr[i].cond = st->cond;
+    if ((i = csp_new_instr(st, op)) >= 0) {
 	st->instr[i].a.x = x;
 	st->instr[i].a.y = y;
 	st->instr[i].a.z = z;
@@ -866,9 +903,7 @@ int csp_new_alu(csp_rt_t* st, opcode_t op,reg_t x, reg_t y, reg_t z)
 int csp_new_rule(csp_rt_t* st, reg_t cnd, int nxt)
 {
     int i;
-    
-    if ((i = next_instr(st)) >= 0) {
-	st->instr[i].op = OP_RULE;
+    if ((i = csp_new_instr(st, OP_RULE)) >= 0) {
 	st->instr[i].cond = 0;
 	st->instr[i].r.cnd = cnd;
 	st->instr[i].r.nxt = nxt;
@@ -879,10 +914,7 @@ int csp_new_rule(csp_rt_t* st, reg_t cnd, int nxt)
 int csp_new_call(csp_rt_t* st, reg_t x, int func_idx, int is_user, int n)
 {
     int i;
-    
-    if ((i = next_instr(st)) >= 0) {
-	st->instr[i].op = OP_CALL;
-	st->instr[i].cond = st->cond;
+    if ((i = csp_new_instr(st, OP_CALL)) >= 0) {
 	st->instr[i].f.x   = x;
 	st->instr[i].f.idx = func_idx;
 	st->instr[i].f.usr = is_user;
@@ -894,10 +926,7 @@ int csp_new_call(csp_rt_t* st, reg_t x, int func_idx, int is_user, int n)
 int csp_new_enter(csp_rt_t* st, int n, index_t mx)
 {
     int i;
-    
-    if ((i = next_instr(st)) >= 0) {
-	st->instr[i].op = OP_ENTER;
-	st->instr[i].cond = st->cond;
+    if ((i = csp_new_instr(st, OP_ENTER)) >= 0) {
 	st->instr[i].e.num = n;
 	st->instr[i].e.mx = mx;
     }
@@ -907,10 +936,7 @@ int csp_new_enter(csp_rt_t* st, int n, index_t mx)
 int csp_new_leave(csp_rt_t* st, int n, index_t mx)
 {
     int i;
-    
-    if ((i = next_instr(st)) >= 0) {
-	st->instr[i].op = OP_LEAVE;
-	st->instr[i].cond = st->cond;
+    if ((i = csp_new_instr(st, OP_LEAVE)) >= 0) {
 	st->instr[i].v.num = n;
 	st->instr[i].v.mx = mx;
     }
@@ -921,15 +947,12 @@ int csp_new_new(csp_rt_t* st, unsigned ent, index_t mx)
 {
     int i;
     
-    if ((i = next_instr(st)) >= 0) {
-	st->instr[i].op = OP_NEW;
-	st->instr[i].cond = st->cond;
+    if ((i = csp_new_instr(st, OP_NEW)) >= 0) {
 	st->instr[i].n.ent = ent;
 	st->instr[i].n.mx = mx;
     }
     return i;
 }
-
 
 int new_expr2(csp_rt_t* st, opcode_t op, index_t x ,index_t y, index_t z)
 {
@@ -960,16 +983,24 @@ void csp_csr(csp_rt_t* st)
 
     // Pass 1: Count how many rules depend on each declaration
     // A rule depends on a declaration if it contains an LD from that declaration
+    current_rule = 0;    
     for (i = 0; i < st->ps.nn; i++) {
 	switch (st->instr[i].op) {
 	case OP_RULE:
-	    current_rule = i;
+	    current_rule = -1;
+	    break;
+	case OP_NEXT:
+	    current_rule = i+1;
 	    break;
 	case OP_LD:
+	    // printf("ld rule=%d\n", current_rule);
 	    if (current_rule >= 0) {
 		index_t mem = INDEX(st->instr[i].m.mem);
-		if (mem < st->ps.nd)
+		// printf("ld: mem=%d, nd=%d\n", mem, st->ps.nd);
+		if (mem < st->ps.nd) {
 		    st->idg[mem]++;
+		    // printf("csr: idg[%d] = %d\n", mem, st->idg[mem]);
+		}
 	    }
 	    break;
 	case OP_ENTER:
@@ -983,18 +1014,23 @@ void csp_csr(csp_rt_t* st)
 
     // Pass 2: Calculate offsets into edge array
     st->ofs[0] = 0;
+    // printf("offs %d = %d\n", 0, st->ofs[0]);    
     for (i = 0; i < st->ps.nd; i++) {
 	st->ofs[i+1] = st->ofs[i] + st->idg[i];
+	// printf("offs %d = %d\n", i+1, st->ofs[i+1]);
     }
 
     // Pass 3: Fill in rule indices for each declaration
     memcpy(wr, st->ofs, st->ps.nd * sizeof(index_t));
-    current_rule = -1;
 
+    current_rule = 0;
     for (i = 0; i < st->ps.nn; i++) {
 	switch (st->instr[i].op) {
 	case OP_RULE:
-	    current_rule = i;
+	    current_rule = -1;
+	    break;
+	case OP_NEXT:
+	    current_rule = i+1;
 	    break;
 	case OP_LD:
 	    if (current_rule >= 0) {
@@ -1003,8 +1039,8 @@ void csp_csr(csp_rt_t* st)
 		    st->edg[wr[mem]++] = current_rule;
 	    }
 	    break;
-	case OP_ENTER:
-	case OP_LEAVE:
+	case OP_ENTER:  // start of object
+	case OP_LEAVE:  // end of object
 	    current_rule = -1;
 	    break;
 	default:
@@ -1349,6 +1385,39 @@ static int process_assign(csp_rt_t* st, rstack_entry_t* rstack, int ep)
     return ep - 1;
 }
 
+static int process_op(csp_rt_t* st, tok_t op, rstack_entry_t* rstack, int ep)
+{
+    int dst;
+    switch(arity(op)) {
+    case 2:
+	if (op == EQ) {
+	    if ((ep = process_assign(st, rstack, ep)) < 0)
+		return PARSE_ERROR;
+	}
+	else {
+	    dst = alloc_reg(st);
+	    if (new_expr2(st,op_table[op].code,
+			  dst,rstack[ep-2].reg,rstack[ep-1].reg) < 0)
+		return PARSE_ERROR;
+	    free_reg(st, rstack[ep-2].reg);
+	    rstack[ep-2] = RSTACK_REG(dst);
+	    ep--;
+	}
+	break;
+    case 1:
+	dst = alloc_reg(st);
+	if (new_expr1(st,op_table[op].code,dst,rstack[ep-1].reg) < 0)
+	    return PARSE_ERROR;
+	free_reg(st, rstack[ep-1].reg);
+	rstack[ep-1] = RSTACK_REG(dst);
+	break;
+    case 0:
+	return PARSE_ERROR;
+    }
+    return ep;
+}
+
+
 // num_toks is number of tokens and value on input
 // num_toks is number of tokens consumed on output
 int csp_parse_expr(csp_rt_t* st,tok_t* tok,tokval_t* val,size_t* num_toks)
@@ -1414,32 +1483,8 @@ next:
 		pp--;
 		continue;
 	    }
-	    switch(arity(op)) {
-	    case 2:
-		if (op == EQ) {
-		    if ((ep = process_assign(st, rstack, ep)) < 0)
-			return PARSE_ERROR;
-		}
-		else {
-		    dst = alloc_reg(st);
-		    if (new_expr2(st,op_table[op].code,
-				  dst,rstack[ep-2].reg,rstack[ep-1].reg) < 0)
-			return PARSE_ERROR;
-		    free_reg(st, rstack[ep-2].reg);
-		    rstack[ep-2] = RSTACK_REG(dst);
-		    ep--;
-		}
-		break;
-	    case 1:
-		dst = alloc_reg(st);
-		if (new_expr1(st,op_table[op].code,dst,rstack[ep-1].reg) < 0)
-		    return PARSE_ERROR;
-		free_reg(st, rstack[ep-1].reg);
-		rstack[ep-1] = RSTACK_REG(dst);
-		break;
-	    case 0:
+	    if ((ep = process_op(st, op, rstack, ep)) < 0)
 		return PARSE_ERROR;
-	    }
 	    pp--;
 	}
 	if (pp && IS_FUNC_MARKER(ostack[pp-1])) {
@@ -1460,11 +1505,6 @@ next:
 	    }
 	    if (!func || !func->fn)
 		return PARSE_ERROR;
-	    // load arguments based on argtypes
-	    // f (A, B, C)  (n=3)
-	    //  ep   ep-1 ep-2 ep-3
-	    // |   |  C | B  | A  |
-	    //
 	    n = func->nargs;
 	    for (j = 0; j < n; j++) {
 		rstack_entry_t* arg = &rstack[ep-(n-j)];
@@ -1618,32 +1658,8 @@ operator:
 
 	    if ( ((p2 > p1) && (op2 != LP)) ||
 		 ((p2 == p1) && (assoc(op2) < 0))) {
-		switch(arity(op2)) {
-		case 2:
-		    if (op2 == EQ) {
-			if ((ep = process_assign(st, rstack, ep)) < 0)
-			    return PARSE_ERROR;
-		    }
-		    else {
-			dst = alloc_reg(st);
-			if (new_expr2(st,op_table[op2].code,
-				      dst, rstack[ep-2].reg, rstack[ep-1].reg) < 0)
-			    return PARSE_ERROR;
-			free_reg(st, rstack[ep-2].reg);
-			rstack[ep-2] = RSTACK_REG(dst);
-			ep--;
-		    }
-		    break;
-		case 1:
-		    dst = alloc_reg(st);
-		    if (new_expr1(st,op_table[op2].code,dst,rstack[ep-1].reg) < 0)
-			return PARSE_ERROR;
-		    free_reg(st, rstack[ep-1].reg);
-		    rstack[ep-1] = RSTACK_REG(dst);
-		    break;
-		case 0:
+		if ((ep = process_op(st, op2, rstack, ep)) < 0)
 		    return PARSE_ERROR;
-		}
 		pp--;
 	    }
 	    ostack[pp++] = op;
@@ -1656,33 +1672,9 @@ out: // expression is terminated with non-expression char
 	op = ostack[--pp];
 	if (op == LP)
 	    return PARSE_ERROR;
-	switch(arity(op)) {
-	case 2:
-	    if (op == EQ) {
-		if ((ep = process_assign(st, rstack, ep)) < 0)
-		    return PARSE_ERROR;
-	    }
-	    else {
-		dst = alloc_reg(st);
-		if (new_expr2(st,op_table[op].code,
-			      dst,rstack[ep-2].reg,rstack[ep-1].reg) < 0)
-		    return PARSE_ERROR;
-		free_reg(st, rstack[ep-2].reg);
-		rstack[ep-2] = RSTACK_REG(dst);
-		ep--;
-	    }
-	    break;
-	case 1:
-	    dst = alloc_reg(st);
-	    if (new_expr1(st,op_table[op].code,
-			  dst,rstack[ep-1].reg) < 0)
-		return PARSE_ERROR;
-	    free_reg(st, rstack[ep-1].reg);
-	    rstack[ep-1] = RSTACK_REG(dst);
-	    break;
-	case 0:
+
+	if ((ep = process_op(st, op, rstack, ep)) < 0)
 	    return PARSE_ERROR;
-	}
     }
     if (pp < 0)
 	return PARSE_ERROR;
@@ -2179,16 +2171,15 @@ static int tok_index(tok_t t, tok_t* tok, size_t n)
 }
 
 //
-// Rule nodes:
-//  Expr ? Cond
+// <rule> ==  <expr> ? <cond>
 //
-//  <Cond>
-//  if false goto Else
-//  <Expr>
-// Else:
-//
-// if no ? found then code as
-// Expr ? 1
+// generates code like
+// BEGIN:
+//    generate ( <cond> )
+//    RULE: if !<cond> goto END
+//    generate ( <expr> )
+//  END:
+//    next
 //
 int csp_parse_rule(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
 {
@@ -2215,8 +2206,10 @@ int csp_parse_rule(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
     st->cond = 1;
     if (csp_parse_expr(st,&tok[0],&val[0],&num) < 0)
 	return -1;
-    st->cond = 0;
     st->instr[j].r.nxt = st->ps.nn;
+    if (csp_new_next(st) < 0)
+	return -1;
+    st->cond = 0;
     return 0;
 }
 
@@ -2290,8 +2283,10 @@ int make_can_rule(csp_rt_t* st, index_t ox, int k, index_t idx,
     st->cond = 1;
     if (csp_new_st(st, kr, ox) < 0)
 	return -1;
+    st->instr[j].r.nxt = st->ps.nn;    
+    if (csp_new_next(st) < 0)
+	return -1;    
     st->cond = 0;
-    st->instr[j].r.nxt = st->ps.nn;
     return 0;
 }
 
@@ -2464,7 +2459,7 @@ void csp_set_user_funcs(csp_rt_t* st, const csp_func_t* funcs, uint8_t count)
 void csp_rt_start(csp_rt_t* st)
 {
     int i;
-    int doffs;
+    int offs;
     
 #if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)    
     st->tl = st->hd = 0;
@@ -2516,15 +2511,15 @@ void csp_rt_start(csp_rt_t* st)
 	}
     }
     // allocate object 1..nq storage
-    doffs = st->ps.nd;
+    offs = st->ps.nd;
     for (i = 0; i < st->ps.nq; i++) {
 	int m = i+1;
 	index_t ix = st->object[m];
 	index_t mx = st->decl[INDEX(ix)].mq.mx;  // module def
 	ivalue_t dn = st->decl[INDEX(mx)].md.n;  // number of decl elements
-	st->doffs[m] = doffs;
-	doffs += dn;
-	if (doffs > MAX_DECLS)
+	st->offs[m] = offs;
+	offs += dn;
+	if (offs > MAX_DECLS)
 	    printf("object declarations overflow\n"); 
     }
 }

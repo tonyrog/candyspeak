@@ -67,20 +67,42 @@ void csp_fprint_value(FILE* f, csp_rt_t* st, vtype_t vt, value_t val)
     }
 }
 
-void dump_edge_list(FILE* f, csp_rt_t* st, int i)
+void dump_edge_list(FILE* f, csp_rt_t* st, index_t ix)
 {
-#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)    
-    if (st->idg[i]) {
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
+    int n;
+    int i = INDEX(ix);
+    fprintf(f, "[");
+    if ((n = st->idg[i])) {
 	int j;
-	fprintf(f,",{edge_list,[");
-	for (j = 0; j < st->idg[i]; j++) {
-	    index_t p = st->edg[st->ofs[i]+j];  // parent node
+	int base = st->ofs[i];
+	for (j = 0; j < n; j++) {
+	    index_t rule = st->edg[base+j];  // parent node
 	    if (j > 0) fputc(',', f);
-	    csp_fprint_tag(f, st, p);
+	    fprintf(f, "%d", rule);
 	}
-	fprintf(f, "]}");
     }
+    fprintf(f, "]");
 #endif
+}
+
+index_t csp_dump_rule(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
+{
+    index_t ix = MAKE_INDEX(0,i);
+    switch(st->decl[i].type) {
+    case DECL_VARIABLE:
+    case DECL_DIGITAL:
+    case DECL_ANALOG:
+    case DECL_CAN:
+	fprintf(f, "%s", indent(lev));	
+	fprintf(f, "{rules,%d,'%s',", i, decl_name(st, ix));
+	dump_edge_list(f, st, ix);
+	fprintf(f, "}%s\n", eot);
+	break;
+    default:
+	break;
+    }
+    return i+1;
 }
 
 index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
@@ -89,34 +111,42 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 
     fprintf(f, "%s", indent(lev));
     switch(st->instr[i].op) {
+    case OP_NOP:
+	fprintf(f, "{instr,%d,nop}%s\n",
+		i, eot);
+	break;
+    case OP_NEXT:
+	fprintf(f, "{instr,%d,next}%s\n",
+		i, eot);
+	break;
     case OP_LD:
 	fprintf(f, "{instr,%d,ld,[r%d,",
 		i,
 		st->instr[i].m.x);
 	csp_fprint_tag(f, st, st->instr[i].m.mem);
 	fprintf(f, ",%s]}%s\n", cond, eot);
-	return i+1;
+	break;
     case OP_ST:
 	fprintf(f, "{instr,%d,st,[r%d,",
 		i,
 		st->instr[i].m.x);
 	csp_fprint_tag(f, st, st->instr[i].m.mem);
 	fprintf(f, ",%s]}%s\n", cond, eot);
-	return i+1;
+	break;
     case OP_LI:
 	fprintf(f, "{instr,%d,li,[r%d,%d,%s]}%s\n",
 		i,
 		st->instr[i].i.x,
 		st->instr[i].i.imm,
 		cond, eot);
-	return i+1;
+	break;
     case OP_ARG:
 	fprintf(f, "{instr,%d,arg,[r%d,%d,%s]}%s\n",
 		i,
 		st->instr[i].i.x,
 		st->instr[i].i.imm,
 		cond, eot);
-	return i+1;
+	break;
     case OP_CALL:
 	fprintf(f, "{instr,%d,call,[r%d,%s,%d,%s]}%s\n",
 		i,
@@ -126,12 +156,12 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		 csp_builtin_funcs[st->instr[i].f.idx].name),
 		st->instr[i].f.n,
 		cond, eot);
-	return i+1;
+	break;
     case OP_RULE:
 	fprintf(f, "{instr,%d,rule,[r%d,%d]}%s\n",
 		i,
 		st->instr[i].r.cnd, st->instr[i].r.nxt, eot);
-	return i+1;
+	break;
     case OP_ENTER: {
 	index_t mx = st->instr[i].e.mx;
 	int n = st->instr[i].e.num;
@@ -142,7 +172,7 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	for (j = 0; j <= n; j++) // <= include leave!
 	    i = csp_dump_instr(f, lev+1, st, i, (j == n) ? "" : ",");
 	fprintf(f, "]}%s\n", eot);
-	return i;
+	break;
     }
     case OP_LEAVE: {
 	index_t mx = st->instr[i].v.mx;
@@ -178,7 +208,7 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 void csp_dump_var(FILE* f, csp_rt_t* st, int m, int i)
 {
     index_t ix = MAKE_INDEX(m,i);
-    int doffs = st->doffs[m];
+    int doffs = st->offs[m];
     fprintf(f, " %-s=", decl_name(st, ix));
     csp_fprint_value(f, st, st->decl[i].vt, st->dout[doffs+i]);
     // print previous value 
@@ -254,7 +284,7 @@ void csp_dump_state_erl(FILE* f, csp_rt_t* st)
 	index_t obj = st->object[m];
 	index_t mx  = st->decl[INDEX(obj)].mq.mx;
 	int n = st->decl[INDEX(mx)].md.n;
-	int doffs = st->doffs[m];
+	int offs = st->offs[m];
 
 	if (!first) fprintf(f, ",");
 	first = 0;
@@ -269,7 +299,7 @@ void csp_dump_state_erl(FILE* f, csp_rt_t* st)
 		if (!first_var) fprintf(f, ",");
 		first_var = 0;
 		fprintf(f, "{var,\"%s\",", decl_name(st, vx));
-		csp_fprint_value(f, st, st->decl[k].vt, st->dout[doffs+k]);
+		csp_fprint_value(f, st, st->decl[k].vt, st->dout[offs+k]);
 		fprintf(f, "}");
 	    }
 	}
@@ -410,7 +440,13 @@ void csp_dump(FILE* f, csp_rt_t* st)
     i = 0;
     while(i < st->ps.nn)
 	i = csp_dump_instr(f, 0, st, i, ".");
-
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
+    if (st->reactive) {
+	i = 0;
+	while(i < st->ps.nd) 
+	    i = csp_dump_rule(f, 0, st, i, ".");
+    }
+#endif
     fprintf(f, "{timer,[");
     for (i = 0; i < st->nt; i++) {
 	if (i > 0) fputc(',', f);	
@@ -447,7 +483,7 @@ void csp_dump(FILE* f, csp_rt_t* st)
 	if (i > 0) fputc(',', f);
 	fprintf(f, "{'%s',%d,",
 		decl_name(st, st->decl[INDEX(ix)].mq.mx),
-		st->doffs[m]);
+		st->offs[m]);
 	csp_fprint_tag(f, st, ix);
 	fprintf(f, "}");
     }

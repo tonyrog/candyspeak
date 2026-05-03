@@ -6,7 +6,7 @@
 #endif
 
 #ifndef WANT_REACTIVE
-#define WANT_REACTIVE    0 // enq/deq
+#define WANT_REACTIVE    1 // enq/deq
 #endif
 
 #ifndef WANT_STATISTICS

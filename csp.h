@@ -19,7 +19,7 @@ EXTERN_C_BEGIN
 // obj:4, index:12   // declaration object
 //
 // obj is current object 0 = global, cur = 2^OBJ_BITS-1 or the actual obj index
-// tag is TAG_DECL (doffs[m]+st->decl[index])
+// tag is TAG_DECL (offs[m]+st->decl[index])
 // 
 
 typedef uint16_t index_t;  // sizeof type >= INDEX_BITS
@@ -154,6 +154,7 @@ typedef enum {
     // query rule/operator
     QUEST,   // "?"
     // other
+    NEXT,
     ENTER,
     LEAVE,
     NEW,
@@ -161,7 +162,7 @@ typedef enum {
     LD,
     ST,
     LDI,
-    ARG,        
+    ARG,
     // functions are now handled via OP_CALL + function table
     LAST_NODE, // built-in + operators stop
     // keywords
@@ -239,19 +240,16 @@ typedef enum {
     OP_COMMA,   // ","
     // rule
     OP_RULE,    // "?"
+    OP_NEXT,    // "next"
     // generate ops from MODULE/END
     OP_ENTER,   //
     OP_LEAVE,   //
     OP_NEW,     // #<module> <instance-name>
-
     OP_LD,      // load register from memory
     OP_ST,      // store register to memory
     OP_LI,      // load signed 16-bit constant
     OP_ARG,     // load argument from register
-    
-    // function call:
-    OP_CALL,
-
+    OP_CALL,    // function call:
     OP_LAST,
 } opcode_t;
 
@@ -360,10 +358,6 @@ typedef struct PACKED {
     unsigned tx:INDEX_BITS; // start time tick (intern variable)
 } csp_timer_t;
 
-typedef struct PACKED {
-    unsigned cnd:REG_BITS; // condition register
-    int16_t nxt;           // jump if !cnd
-} csp_instr_rule_t;
 
 // new instruction format
 // general operations OP_ADD ...
@@ -394,6 +388,11 @@ typedef struct PACKED {
     unsigned x:REG_BITS;
     signed imm:16;
 } csp_instr_imm_t;
+
+typedef struct PACKED {
+    unsigned cnd:REG_BITS; // condition register
+    int16_t nxt;           // jump if !cnd
+} csp_instr_rule_t;
 
 typedef struct PACKED {
     unsigned num:INSTR_BITS;  // number of instructions
@@ -518,7 +517,7 @@ typedef struct _csp_rt_t
     bitset_decl(dset, MAX_INDEX); // mark decl updated during cycle
     
     char    str[MAX_STR_BUF];      // store variable names    
-    index_t doffs[MAX_OBJECTS];    // offset to object locals
+    index_t offs[MAX_OBJECTS];     // offset to object locals
     // stack used during eval
     int esp;                       // eval stack pointer
     struct PACKED { index_t ix; unsigned cur:OBJ_BITS; }
@@ -532,7 +531,6 @@ typedef struct _csp_rt_t
     
     index_t mdef;                // module being defined
     int     ent;                 // entry op of module in st->instr
-    // index_t so;               // state offsets for mods
     unsigned cur:OBJ_BITS;       // current module index
 
     // calculated by csp_rt_start
@@ -549,7 +547,7 @@ typedef struct _csp_rt_t
     uint32_t update;             // update counter
     uint32_t wait_ms;            // sleep time or NOTIMEOUT
 #if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)        
-    bitset_decl(inq, MAX_INDEX); // mark nodes in queue during eval    
+    bitset_decl(inq, MAX_INDEX); // mark nodes in queue during eval
     index_t queue[MAX_QUEUE];    // nodes in queue
     int hd,tl;  // queue head and tail
     // back references
@@ -558,7 +556,8 @@ typedef struct _csp_rt_t
     index_t edg [MAX_INDEX+1]; // edg[ofs[n]+0...ideg[n]-1] back pointer
 #endif
     uint32_t cycle;
-#if defined(WANT_STATISTICS) && (WANT_STATISTICS==1)    
+#if defined(WANT_STATISTICS) && (WANT_STATISTICS==1)
+    uint32_t num_eval_rule;    
     uint32_t num_eval0;
 #endif
     // user-defined functions (checked before builtin)
@@ -572,7 +571,7 @@ extern const uint8_t csp_num_builtin_funcs;
 
 static inline int st_index(csp_rt_t* st, index_t n)
 {
-    return st->doffs[OBJ(n)] + INDEX(n);
+    return st->offs[OBJ(n)] + INDEX(n);
 }
 
 #if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)    
@@ -585,17 +584,6 @@ static inline void csp_enq(csp_rt_t* st, uint16_t ip)
 	st->queue[st->tl % MAX_QUEUE] = ip;
 	st->tl++;
 	bitset_set(st->inq, ip);
-    }
-}
-
-// enq all nodes i nodes (back)edge list
-static inline void csp_enq_elist(csp_rt_t* st, index_t x)
-{
-    int i;
-    index_t ix = INDEX(x);
-    for (i = 0; i < st->idg[ix]; i++) {
-	index_t p = st->edg[st->ofs[ix]+i];  // parent node
-	csp_enq(st, p);
     }
 }
 
@@ -639,7 +627,6 @@ static inline char* decl_name(csp_rt_t* st, index_t ix)
     return &st->str[st->decl[INDEX(ix)].name];
 }
 
-
 extern void    csp_rt_init(csp_rt_t*,  int transaction, int reactive);
 extern void    csp_rt_start(csp_rt_t*);
 extern void    csp_set_user_funcs(csp_rt_t*, const csp_func_t*, uint8_t);
@@ -651,7 +638,7 @@ extern int     csp_scan_line(char* str, tok_t* tok, tokval_t* val,
 extern int     csp_parse(csp_rt_t*, char* str);
 extern void    csp_csr(csp_rt_t* st);
 extern index_t csp_eval(csp_rt_t* st);
-extern int     csp_eval0(csp_rt_t* st, int);
+extern int     csp_eval_rule(csp_rt_t* st, int);
 extern index_t csp_react(csp_rt_t* st);
 extern void    csp_undo(csp_rt_t* st);
 extern void    csp_commit(csp_rt_t* st);

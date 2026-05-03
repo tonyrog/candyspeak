@@ -8,15 +8,16 @@
 #variable integral float = 0.0
 #variable err float
 #variable err0 float = 0.0
-#variable sp float = 0.0      // set point
-#variable tsp in float = 0    // taget set point
-#variable sp_time = 0
-#variable sp_dtsum = 0
+#variable sp float = 0.0        // set point
+#variable tsp in float = 0.0    // taget set point
+#variable sp_time float = 0.0
+#variable sp_dtsum float = 0.0
 #variable temp1 float = 0.0
 #variable temp2 float = 0.0
 #variable sd float
+#variable d1 float
 #analog feed:32 float in 7
-#analog output:32 float out 8
+#analog result:32 float out 8
 #constant dt float = 0.01
 
 sp_dtsum = sp_dtsum + dt ? (sp_time < sp_dtsum)
@@ -25,13 +26,12 @@ sp = max(sp + sd, target)
 
 err = sp - feed
 temp1 = integral + err*dt
-// temp2 = clip(temp1, i_min, i_max)
-// d1 = (err - err0) / dt
-// output = kp*err + ki*tmp2 + kd*d1,
-// integral = temp2
-// err0 = err
+temp2 = clip(temp1, i_min, i_max)
+d1 = (err - err0) / dt
+result = kp*err + ki*temp2 + kd*d1
+integral = temp2
+err0 = err
 #end
-	
 
 #pid p0
 
