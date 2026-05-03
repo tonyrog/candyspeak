@@ -94,6 +94,7 @@ index_t csp_dump_rule(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     case DECL_DIGITAL:
     case DECL_ANALOG:
     case DECL_CAN:
+    case DECL_TIMER:	
 	fprintf(f, "%s", indent(lev));	
 	fprintf(f, "{rules,%d,'%s',", i, decl_name(st, ix));
 	dump_edge_list(f, st, ix);
@@ -172,7 +173,7 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	for (j = 0; j <= n; j++) // <= include leave!
 	    i = csp_dump_instr(f, lev+1, st, i, (j == n) ? "" : ",");
 	fprintf(f, "]}%s\n", eot);
-	break;
+	return i; // do not update after module block
     }
     case OP_LEAVE: {
 	index_t mx = st->instr[i].v.mx;
@@ -184,13 +185,12 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     case OP_NEW: {
 	// FIXME: add new op arguments	
 	index_t ent = st->instr[i].n.ent;
-	index_t mod = st->instr[i].n.mx;
-	index_t mx  = st->decl[INDEX(mod)].mq.mx;
-	// int iq      = st->decl[INDEX(mod)].mq.iq;
-	// int ofs = st->mofs[iq];
-	fprintf(f, "{instr,%d,new,\"%s\",\"%s\",[{ent,%d}]}%s\n",
-		i, decl_name(st, mx), decl_name(st, mod), 
-		INDEX(ent), eot);
+	index_t obj = st->instr[i].n.obj;
+	index_t mx  = st->decl[INDEX(obj)].mq.mx;
+	unsigned m       = st->decl[INDEX(obj)].mq.m;
+	fprintf(f, "{instr,%d,new,\"%s\",\"%s\",[{ent,%d},{obj,%u}]}%s\n",
+		i, decl_name(st, mx), decl_name(st, obj), 
+		INDEX(ent), m, eot);
 	break;
     }
     default:
@@ -476,7 +476,7 @@ void csp_dump(FILE* f, csp_rt_t* st)
     }
     fprintf(f, "]}.\n");    
 
-    fprintf(f, "{object,[");
+    fprintf(f, "{object,[global,");
     for (i = 0; i < st->ps.nq; i++) {
 	int m = i+1;
 	index_t ix = st->object[m];
@@ -487,7 +487,7 @@ void csp_dump(FILE* f, csp_rt_t* st)
 	csp_fprint_tag(f, st, ix);
 	fprintf(f, "}");
     }
-    fprintf(f, "]}.\n");    
+    fprintf(f, "]}.\n");
 }
 
 #if 0
@@ -529,26 +529,26 @@ static int maybe_unquoted_atom(char* ptr, int len)
 }
 
 
-void csp_dump_tokens(FILE* f, tok_t* tok, tokval_t* val, int n)
+void csp_dump_tokens(FILE* f, token_t* tv, int n)
 {
     int i;
     fprintf(f, "[");
     for (i = 0; i < n; i++) {
-	switch(tok[i]) {
-	case INT: fprintf(f,"%d,", val[i].val.i); break;
-	case FLT: fprintf(f,"%f,", val[i].val.f); break;
-	case STR: fprintf(f,"\"%.*s\",", val[i].len, val[i].str); break;
+	switch(tv[i].t) {
+	case INT: fprintf(f,"%d,", tv[i].v.val.i); break;
+	case FLT: fprintf(f,"%f,", tv[i].v.val.f); break;
+	case STR: fprintf(f,"\"%.*s\",", tv[i].v.str.len, tv[i].v.str.ptr); break;
 	case WORD:
-	    if (maybe_unquoted_atom(val[i].str, val[i].len))
-		fprintf(f,"%.*s,", val[i].len, val[i].str);
+	    if (maybe_unquoted_atom(tv[i].v.str.ptr, tv[i].v.str.len))
+		fprintf(f,"%.*s,", tv[i].v.str.len, tv[i].v.str.ptr);
 	    else
-		fprintf(f,"'%.*s',", val[i].len, val[i].str);
+		fprintf(f,"'%.*s',", tv[i].v.str.len, tv[i].v.str.ptr);
 	    break;
 	default:
-	    if (maybe_unquoted_atom((char*)op_table[tok[i]].name, op_table[tok[i]].name_len))
-		fprintf(f,"%.*s,", op_table[tok[i]].name_len, op_table[tok[i]].name);
+	    if (maybe_unquoted_atom((char*)op_table[tv[i].t].name, op_table[tv[i].t].name_len))
+		fprintf(f,"%.*s,", op_table[tv[i].t].name_len, op_table[tv[i].t].name);
 	    else
-		fprintf(f,"'%.*s',", op_table[tok[i]].name_len, op_table[tok[i]].name);
+		fprintf(f,"'%.*s',", op_table[tv[i].t].name_len, op_table[tv[i].t].name);
 	    break;
 	}
     }

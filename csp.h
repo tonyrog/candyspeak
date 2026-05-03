@@ -205,11 +205,18 @@ typedef enum {
 typedef union
 {
     struct {
-	char* str;
+	char* ptr;
 	int len;
-    };
+    } str;
     value_t val;
 } tokval_t;
+
+// combined token and value
+typedef struct
+{
+    tok_t    t;
+    tokval_t v;
+} token_t;
 
 typedef enum {
     OP_NOP = 0,  // nothing
@@ -317,8 +324,8 @@ typedef struct PACKED {
 } csp_module_t;
 
 typedef struct PACKED {
-    index_t  mx;         // module index
-    index_t  iq;         // index in mod table (not tagged)
+    index_t  mx;           // module declaration index
+    unsigned m:OBJ_BITS;   // index in object table
 } csp_object_t;
 
 typedef struct PACKED  {
@@ -406,7 +413,7 @@ typedef struct PACKED {
 
 typedef struct PACKED {
     unsigned ent:INSTR_BITS; // entry point index in instr[]
-    index_t  mx;             // module index    
+    index_t  obj;            // object declaration index 
 } csp_instr_new_t;
 
 typedef struct PACKED {
@@ -594,7 +601,8 @@ static inline index_t csp_deq(csp_rt_t* st)
 	return BAD_INDEX;
     x = st->queue[st->hd % MAX_QUEUE];
     st->hd++;
-    bitset_clr(st->inq,x);  // keep? if eval once per cycle
+    // don't clear inq bit here - cleared at cycle start to prevent
+    // same rule being queued multiple times within a cycle
     return x;
 }
 #endif
@@ -627,14 +635,13 @@ static inline char* decl_name(csp_rt_t* st, index_t ix)
     return &st->str[st->decl[INDEX(ix)].name];
 }
 
-extern void    csp_rt_init(csp_rt_t*,  int transaction, int reactive);
-extern void    csp_rt_start(csp_rt_t*);
+extern int     csp_rt_init(csp_rt_t*,  int transaction, int reactive);
+extern int     csp_rt_start(csp_rt_t*);
 extern void    csp_set_user_funcs(csp_rt_t*, const csp_func_t*, uint8_t);
 extern int     csp_lookup_func(csp_rt_t*, const char*, uint8_t);
 extern int     csp_set_transaction(csp_rt_t*, int onoff);
 extern int     csp_set_reactive(csp_rt_t*, int onoff);
-extern int     csp_scan_line(char* str, tok_t* tok, tokval_t* val,
-			     size_t* num_toks);
+extern int     csp_scan_line(char* str, token_t* tv, size_t* num_toks);
 extern int     csp_parse(csp_rt_t*, char* str);
 extern void    csp_csr(csp_rt_t* st);
 extern index_t csp_eval(csp_rt_t* st);
@@ -673,6 +680,9 @@ extern tok_t csp_opcode_to_tok(opcode_t opcode);
 extern vtype_t csp_opcode_type(opcode_t opcode);
 extern void csp_set_error(csp_rt_t*, csp_err_t);
 extern void csp_clr_error(csp_rt_t*);
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
+extern void csp_enq_elist(csp_rt_t* st, index_t x);
+#endif
 
 #ifdef __cplusplus
 EXTERN_C_END

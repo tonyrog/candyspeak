@@ -1,8 +1,5 @@
 // parse and eval
 
-#ifndef CSP_EMBEDDED
-#include <stdio.h>
-#endif
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -11,8 +8,9 @@
 #include <ctype.h>
 
 #include "csp.h"
-// #define DEBUG
 #ifdef DEBUG
+#include <stdio.h>
+#define DEBUG_XYZ
 #include "csp_dump.h"
 #endif
 
@@ -449,10 +447,10 @@ static inline int assoc(tok_t op)
     return op_table[op].assoc;
 }
 
-
-// enq all nodes i nodes (back)edge list
-static inline void csp_enq_elist(csp_rt_t* st, index_t x)
+// enq all rules that depend on declaration x
+void csp_enq_elist(csp_rt_t* st, index_t x)
 {
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)    
     int i;
     index_t ix = INDEX(x);
     index_t base = st->ofs[ix];
@@ -463,6 +461,7 @@ static inline void csp_enq_elist(csp_rt_t* st, index_t x)
 #endif
 	csp_enq(st, p);
     }
+#endif
 }
 
 // set value on declaration node (variable/digital/analog ...)
@@ -518,9 +517,23 @@ again:
 	break;
     case OP_LD:
 	st->reg[st->instr[n].m.x] = csp_value(st, st->instr[n].m.mem);
+#ifdef DEBUG_XYZ	
+	printf("%d: ld r%d ", n, st->instr[n].m.x);
+	csp_fprint_tag(stdout, st, st->instr[n].m.mem);
+	printf("\n");
+	printf("%d: r%d=%d\n", n, st->instr[n].m.x,
+	       st->reg[st->instr[n].m.x].i);
+#endif
 	break;
-    case OP_ST:
+    case OP_ST:	
 	csp_set_value(st, st->instr[n].m.mem, st->reg[st->instr[n].m.x]);
+#ifdef DEBUG_XYZ
+	printf("%d: st r%d ", n, st->instr[n].m.x);
+	csp_fprint_tag(stdout, st, st->instr[n].m.mem);
+	printf("\n");
+	printf("%d: r%d=%d\n", n, st->instr[n].m.x,
+	       st->reg[st->instr[n].m.x].i);
+#endif
 	break;	
     case OP_LI:
 	st->reg[st->instr[n].i.x].i = st->instr[n].i.imm;
@@ -540,14 +553,14 @@ again:
 	return n + st->instr[n].e.num + 2;
     case OP_NEW:
 	if (!st->reactive) {
-	    index_t ent = st->instr[n].a.y;;
-	    index_t mod = st->instr[n].a.z;
+	    index_t ent = st->instr[n].n.ent;;
+	    index_t obj = st->instr[n].n.obj;
 	    // in non-reactive mode this is like a call
 	    st->stack[st->esp].ix = n+1;      // return address
 	    st->stack[st->esp].cur = st->cur;  // store current module
 	    st->esp++;
 	    // setup locals
-	    st->cur = st->decl[INDEX(mod)].mq.iq;  // set current module
+	    st->cur = st->decl[INDEX(obj)].mq.m;    // set current module
 	    st->offs[CURRENT] = st->offs[st->cur];  // setyp locals
 	    return INDEX(ent)+1; // first instruction
 	}
@@ -589,12 +602,18 @@ again:
     default: {
 	value_t yv = st->reg[st->instr[n].a.y];
 	value_t zv = st->reg[st->instr[n].a.z];
-	st->reg[st->instr[n].a.x] = eval_tab[op].f(yv, zv);
-#ifdef DEBUG	
+	value_t xv = eval_tab[op].f(yv, zv);
+	st->reg[st->instr[n].a.x] = xv;
+#ifdef DEBUG_XYZ
 	printf("%d: r%d = r%d %s r%d\n",
 	       n, st->instr[n].a.x, st->instr[n].a.y,
 	       csp_op_name(op), 
-	       st->instr[n].a.z);
+	       st->instr[n].a.z);	
+	printf("%d: r%d=%d, r%d=%d, r%d=%d\n",
+	       n,
+	       st->instr[n].a.x, xv.i,	       
+	       st->instr[n].a.y, yv.i,
+	       st->instr[n].a.z, zv.i);
 #endif
 	break;
     }
@@ -639,22 +658,23 @@ index_t csp_eval(csp_rt_t* st)
     return x;
 }
 
-// run queue until empty
+// run queue until cycle boundary
 index_t csp_react(csp_rt_t* st)
 {
     st->cycle++;
 #if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
     index_t x0, x1 = BAD_INDEX;
     if (st->reactive) {
-	while((x0 = csp_deq(st)) != BAD_INDEX) {
-	    printf("react: rule %d\n", x0);
+	int cycle_end = st->tl;  // items added during cycle go to next cycle
+	memset(st->inq, 0, sizeof(st->inq));  // allow rules to be queued again
+	while(st->hd < cycle_end) {
+	    x0 = csp_deq(st);
 	    csp_eval_rule(st, x0);
 	    x1 = x0;
 	}
     }
     return x1;
 #else
-    // fixme: probably need error log...
     return BAD_INDEX;
 #endif
 }
@@ -943,13 +963,13 @@ int csp_new_leave(csp_rt_t* st, int n, index_t mx)
     return i;
 }
 
-int csp_new_new(csp_rt_t* st, unsigned ent, index_t mx)
+int csp_new_new(csp_rt_t* st, unsigned ent, index_t obj)
 {
     int i;
     
     if ((i = csp_new_instr(st, OP_NEW)) >= 0) {
 	st->instr[i].n.ent = ent;
-	st->instr[i].n.mx = mx;
+	st->instr[i].n.obj = obj;
     }
     return i;
 }
@@ -1004,6 +1024,8 @@ void csp_csr(csp_rt_t* st)
 	    }
 	    break;
 	case OP_ENTER:
+	    current_rule = i+1;
+	    break;
 	case OP_LEAVE:
 	    current_rule = -1;  // reset at module boundaries
 	    break;
@@ -1040,6 +1062,8 @@ void csp_csr(csp_rt_t* st)
 	    }
 	    break;
 	case OP_ENTER:  // start of object
+	    current_rule = i+1;
+	    break;
 	case OP_LEAVE:  // end of object
 	    current_rule = -1;
 	    break;
@@ -1049,11 +1073,6 @@ void csp_csr(csp_rt_t* st)
     }
 #endif
 }
-
-#define TOK(t) do { tok = (t); goto done; } while(0)
-#define SYM(t,p,l) do { tok = (t); tokv->str=(p); tokv->len=(l); goto done; } while(0)
-#define TOK_INT(v) do { tok = INT; tokv->val.i = (v); goto done; } while(0)
-#define TOK_FLT(v) do { tok = FLT; tokv->val.f = (v); goto done; } while(0)
 
 static inline int dec(int c)
 {
@@ -1072,13 +1091,19 @@ static inline int hex(int c)
 	return (c - 'A')+10;
     return 0;
 }
-    
-int csp_next_token(char* str, tok_t* tokp, tokval_t* tokv)
+
+#define TOK(x) do { tok = (x); goto done; } while(0)
+#define SYM(x,p,l) do { tok = (x); val.str.ptr=(p); val.str.len=(l); goto done; } while(0)
+#define TOK_INT(y) do { tok = INT; val.val.i = (y); goto done; } while(0)
+#define TOK_FLT(y) do { tok = FLT; val.val.f = (y); goto done; } while(0)
+
+int csp_next_token(char* str, token_t* tp)
 {
     char* str0 = str;
     int c;
     int sign = 1;
     tok_t tok;
+    tokval_t val;
 next:
     c = *str++;
     switch(c) {
@@ -1187,12 +1212,8 @@ next:
 	SYM(STR, qstr, len);
     }
     case '-':
-	c = *str;
-	if (isdigit(c)) { str++; sign = -1; goto number; }
 	TOK(MINUS);
     case '+':
-	c = *str;
-	if (isdigit(c)) { str++; sign = 1; goto number; }
 	TOK(PLUS);
     default:
 	if (isdigit(c))
@@ -1243,12 +1264,12 @@ next:
 	return -1;
     }
 done:
-    *tokp = tok;
+    tp->t = tok; tp->v = val;
     return str - str0;
 }
 
 // scan one line of tokens
-int csp_scan_line(char* str, tok_t* tok, tokval_t* val, size_t* num_toks)
+int csp_scan_line(char* str, token_t* tv, size_t* num_toks)
 {
     char* str0 = str;
     size_t i;
@@ -1256,11 +1277,11 @@ int csp_scan_line(char* str, tok_t* tok, tokval_t* val, size_t* num_toks)
 
     i = 0;
     while(i < max_toks) {
-	int n = csp_next_token(str, &tok[i], &val[i]);
+	int n = csp_next_token(str, &tv[i]);
 	if (n < 0)
 	    return -1;
 	str += n;
-	if ((tok[i] == NEWLINE) || (tok[i] == NONE)) {
+	if ((tv[i].t == NEWLINE) || (tv[i].t == NONE)) {
 	    *num_toks = i;
 	    return str-str0;
 	}
@@ -1420,7 +1441,7 @@ static int process_op(csp_rt_t* st, tok_t op, rstack_entry_t* rstack, int ep)
 
 // num_toks is number of tokens and value on input
 // num_toks is number of tokens consumed on output
-int csp_parse_expr(csp_rt_t* st,tok_t* tok,tokval_t* val,size_t* num_toks)
+int csp_parse_expr(csp_rt_t* st,token_t* tv,size_t* num_toks)
 {
     tok_t op;
     tokval_t tval;
@@ -1434,10 +1455,10 @@ int csp_parse_expr(csp_rt_t* st,tok_t* tok,tokval_t* val,size_t* num_toks)
     int i = 0;
     size_t n = *num_toks;
 next:
-    if ((i >= n) || (tok[i]==NEWLINE) || (tok[i]==NONE))  // end-of-list
+    if ((i >= n) || (tv[i].t==NEWLINE) || (tv[i].t==NONE))  // end-of-list
 	goto out;
-    op   = tok[i];
-    tval = val[i];
+    op   = tv[i].t;
+    tval = tv[i].v;
     i++;
     switch(op) {
     case QUEST: i--; goto out;
@@ -1573,8 +1594,8 @@ next:
 	pop = FLT;
 	break;
     case STR:
-	if ((ix = lookup_string_const(st,tval.str,tval.len)) == BAD_INDEX)
-	    ix = new_string_const(st,tval.str,tval.len);
+	if ((ix = lookup_string_const(st,tval.str.ptr,tval.str.len)) == BAD_INDEX)
+	    ix = new_string_const(st,tval.str.ptr,tval.str.len);
 	if (ix == BAD_INDEX) return PARSE_ERROR;
 	dst = map_reg(st, ix);
 	rstack[ep++] = RSTACK_BOTH(dst, ix);
@@ -1582,8 +1603,8 @@ next:
 	break;
     case WORD: {
 	// First check if this is a function call (WORD followed by LP)
-	int func_res = csp_lookup_func(st, tval.str, tval.len);
-	if (func_res != 0 && tok[i] == LP) {
+	int func_res = csp_lookup_func(st, tval.str.ptr, tval.str.len);
+	if (func_res != 0 && (tv[i].t == LP)) {
 	    // It's a function call - push marker to ostack and skip LP
 	    // FIXME: check function after all arguments are parsed! ????
 	    int is_user = (func_res < 0) ? 1 : 0;
@@ -1595,23 +1616,23 @@ next:
 	else {
 	    int r;
 	    // Not a function - regular variable/decl lookup
-	    if ((ix = lookup_decl(st,tval.str,tval.len)) == BAD_INDEX) {
+	    if ((ix = lookup_decl(st,tval.str.ptr,tval.str.len)) == BAD_INDEX) {
 		csp_set_error(st, ERR_VARIABLE_NOT_DECLARED);
 		return PARSE_ERROR;
 	    }
 	    // Handle obj.field access
 	    if ((st->decl[INDEX(ix)].type == DECL_OBJECT) &&
-		(tok[i] == DOT) && (tok[i+1] == WORD)) {
+		(tv[i].t == DOT) && (tv[i+1].t == WORD)) {
 		index_t mx = st->decl[INDEX(ix)].mq.mx;  // module def
 		ivalue_t dn = st->decl[INDEX(mx)].md.n;  // number of elements
 		index_t jx;
-		tval = val[i+1];
-		if ((jx = lookup_decl_in(st,tval.str,tval.len,
+		tval = tv[i+1].v;
+		if ((jx = lookup_decl_in(st,tval.str.ptr,tval.str.len,
 					 INDEX(mx)+1,INDEX(mx)+1+dn)) == BAD_INDEX) {
 		    csp_set_error(st, ERR_OBJECT_NOT_DEFINED);
 		    return PARSE_ERROR;
 		}
-		ix = MAKE_INDEX(st->decl[INDEX(ix)].mq.iq,INDEX(jx));
+		ix = MAKE_INDEX(st->decl[INDEX(ix)].mq.m,INDEX(jx));
 		i += 2;
 	    }
 	    // Apply module context
@@ -1619,7 +1640,7 @@ next:
 		ix = MAKE_INDEX(CURRENT, INDEX(ix));
 
 	    // Check if this is an l-value (assignment target)
-	    if (tok[i] == EQ) {
+	    if (tv[i].t == EQ) {
 		// L-value: push index only, no load
 		rstack[ep++] = RSTACK_IX(ix);
 		pop = WORD;
@@ -1710,7 +1731,41 @@ static int parse_value(vtype_t vt, tok_t tok, value_t val, value_t* dst)
     return 0;
 }
 
-static int expect(tok_t* tok, int i, ...)
+// match a single INT token
+// or an simple expression like ['-' INT] or ['+' INT]
+// return new index on succes
+// and -1 on failure
+static int expect_integer(csp_rt_t* st, token_t* tv, int i,
+			  token_t* rp, int num)
+{
+    if ((tv[i].t == MINUS) && (tv[i+1].t == INT) && (num >= 2)) {
+	rp->t = INT;
+	rp->v.val.i = -tv[i+1].v.val.i;
+	return i+2;
+    }
+    else if ((tv[i].t == PLUS) && (tv[i+1].t == INT)) {
+	*rp = tv[i+1];
+	return i+2;
+    }
+    else if (tv[i].t == INT) {
+	*rp = tv[i];
+	return i+1;
+    }
+    else if (tv[i].t == WORD) {
+	index_t ix;
+	ix = lookup_decl(st, tv[i].v.str.ptr, tv[i].v.str.len);
+	if ((ix == BAD_INDEX) ||
+	    (st->decl[ix].type != DECL_CONSTANT) ||
+	    (st->decl[ix].vt != V_INTEGER)) // V_UNSIGNED?
+	    return -1;
+	rp->t = INT;
+	rp->v.val.i = st->decl[ix].cn.init.i;
+	return i+1;
+    }
+    return -1;
+}
+
+static int expect(token_t* tv, int i, ...)
 {
     va_list ap;
     tok_t t;
@@ -1718,7 +1773,7 @@ static int expect(tok_t* tok, int i, ...)
     va_start(ap, i);
     do {
 	t = va_arg(ap, tok_t);
-	if ((t != LAST) && (t != tok[i]))
+	if ((t != LAST) && (t != tv[i].t))
 	    return 0;
 	i++;
     } while(t != LAST);
@@ -1727,20 +1782,20 @@ static int expect(tok_t* tok, int i, ...)
 }
 
 // '#' 'module' <name>
-int csp_parse_module(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
+int csp_parse_module(csp_rt_t* st, token_t* tv, size_t n)
 {
     index_t ix;
     index_t jx;
 
-    if (!expect(tok, 0, HASH, MODULE, WORD, LAST)) {
+    if (!expect(tv, 0, HASH, MODULE, WORD, LAST)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    if ((ix = lookup_decl(st, val[2].str, val[2].len)) != BAD_INDEX) {
+    if ((ix = lookup_decl(st, tv[2].v.str.ptr, tv[2].v.str.len)) != BAD_INDEX) {
 	csp_set_error(st, ERR_OBJECT_ALREADY_DEFINED);
 	return -1;
     }
-    ix = csp_new_decl(st, val[2].str, val[2].len, DECL_MODULE);
+    ix = csp_new_decl(st, tv[2].v.str.ptr, tv[2].v.str.len, DECL_MODULE);
     if (ix == BAD_INDEX) return -1;
     st->mdef = ix;  // current module being defined
     if ((jx = csp_new_enter(st, 0, ix)) < 0)
@@ -1752,11 +1807,11 @@ int csp_parse_module(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
 }
 
 // '#' 'end' [....]
-int csp_parse_end(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
+int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
 {
     index_t mx, ex, lx;
 
-    if (!expect(tok, 0, HASH, END, LAST)) {
+    if (!expect(tv, 0, HASH, END, LAST)) {
 	csp_set_error(st, ERR_SYNTAX);	
 	return -1;
     }
@@ -1784,7 +1839,7 @@ int csp_parse_end(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
 // Note that in is used for input arguments in objects
 // and out is used for output argumets
 //
-int csp_parse_variable(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
+int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res = MAKE_RES(8*sizeof(ivalue_t));
     ivalue_t in=0, out=0;
@@ -1793,20 +1848,20 @@ int csp_parse_variable(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
     index_t ix;    
     int i;
 
-    if (!expect(tok, 0, HASH, VARIABLE, WORD, LAST)) {
+    if (!expect(tv, 0, HASH, VARIABLE, WORD, LAST)) {
 	csp_set_error(st, ERR_SYNTAX);	
 	return -1;
     }
     i=3;
-    if ((tok[i] == COLON) && (tok[i+1] == INT)) {
-	res = MAKE_RES(val[i+1].val.i);
+    if ((tv[i].t == COLON) && (tv[i+1].t == INT)) {
+	res = MAKE_RES(tv[i+1].v.val.i);
 	i += 2;
     }
     vt = V_INTEGER;
     def.i = 0;    
 opts:
     if (i < n) {
-	switch(tok[i]) {
+	switch(tv[i].t) {
 	case UNSIGNED: vt=V_UNSIGNED; def.u = 0; i++; goto opts;
 	case INTEGER: vt=V_INTEGER; def.i = 0; i++; goto opts;
 	case FLOAT: vt=V_FLOAT; def.f = 0.0; i++;  goto opts;
@@ -1816,15 +1871,15 @@ opts:
 	default: break;
 	}
     }
-    if (tok[i] == EQ) {
-	if (parse_value(vt, tok[i+1], val[i+1].val, &def) < 0) {
+    if (tv[i].t == EQ) {
+	if (parse_value(vt, tv[i+1].t, tv[i+1].v.val, &def) < 0) {
 	    csp_set_error(st, ERR_SYNTAX);  // number expected
 	    return -1;
 	}
 	i += 2;
     }
-    if ((ix = lookup_decl(st, val[2].str, val[2].len)) == BAD_INDEX)
-	ix = csp_new_decl(st, val[2].str, val[2].len, DECL_VARIABLE);
+    if ((ix = lookup_decl(st, tv[2].v.str.ptr, tv[2].v.str.len)) == BAD_INDEX)
+	ix = csp_new_decl(st, tv[2].v.str.ptr, tv[2].v.str.len, DECL_VARIABLE);
     if (ix == BAD_INDEX) return -1;
     i = INDEX(ix);
     st->decl[i].vt = vt;
@@ -1836,7 +1891,7 @@ opts:
 }
 
 // '#' 'constant' <name>[':' <size>] [<opt>+] '=' <num>
-int csp_parse_constant(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
+int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res;
     value_t cnst;
@@ -1849,32 +1904,32 @@ int csp_parse_constant(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
     cnst.i = 0;
     res = MAKE_RES(8*sizeof(ivalue_t));
 
-    if (!expect(tok, 0, HASH, CONSTANT, WORD, LAST)) {
+    if (!expect(tv, 0, HASH, CONSTANT, WORD, LAST)) {
 	csp_set_error(st, ERR_SYNTAX);	
 	return -1;
     }
     i=3;
-    if ((tok[i] == COLON) && (tok[i+1] == INT)) {
-	res = MAKE_RES(val[i+1].val.i);
+    if ((tv[i].t == COLON) && (tv[i+1].t == INT)) {
+	res = MAKE_RES(tv[i+1].v.val.i);
 	i += 2;
     }
-    switch(tok[i]) {
+    switch(tv[i].t) {
     case UNSIGNED: vt=V_UNSIGNED; cnst.u=0; i++; break;
     case INTEGER: vt=V_INTEGER; cnst.i=0; i++;  break;	    	    
     case FLOAT: vt=V_FLOAT; cnst.f=0.0; i++; break;
     default: break;
     }
-    if (tok[i] != EQ) {
+    if (tv[i].t != EQ) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    if (parse_value(vt, tok[i+1], val[i+1].val, &cnst) < 0) {
+    if (parse_value(vt, tv[i+1].t, tv[i+1].v.val, &cnst) < 0) {
 	csp_set_error(st, ERR_SYNTAX);	
 	return -1;
     }
     i += 2;
-    if ((ix = lookup_decl(st, val[2].str, val[2].len)) == BAD_INDEX)
-	ix = csp_new_decl(st, val[2].str, val[2].len, DECL_CONSTANT);
+    if ((ix = lookup_decl(st, tv[2].v.str.ptr, tv[2].v.str.len)) == BAD_INDEX)
+	ix = csp_new_decl(st, tv[2].v.str.ptr, tv[2].v.str.len, DECL_CONSTANT);
     if (ix == BAD_INDEX) return -1;
     i = INDEX(ix);
     st->decl[i].res = res;
@@ -1884,7 +1939,7 @@ int csp_parse_constant(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
 }
 
 // '#' 'digital' <name> [<iodir>|<pull>] [<port>':']<pin>
-int csp_parse_digital(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
+int csp_parse_digital(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res = MAKE_RES(1);
     ivalue_t in=0, out=0;
@@ -1893,14 +1948,14 @@ int csp_parse_digital(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
     index_t ix;
     int i;
 
-    if (!expect(tok, 0, HASH, DIGITAL, WORD, LAST)) {
+    if (!expect(tv, 0, HASH, DIGITAL, WORD, LAST)) {
 	csp_set_error(st, ERR_SYNTAX);	
 	return -1;
     }
     i = 3;
 opts:
     if (i < n) {
-	switch(tok[i]) {
+	switch(tv[i].t) {
 	case IN: in = 1; i++; goto opts;
 	case OUT: out = 1; i++; goto opts;
 	case INOUT: in=out=1; i++; goto opts;
@@ -1909,13 +1964,13 @@ opts:
 	default: break;
 	}
     }
-    if (expect(tok, i, INT, COLON, INT, LAST)) {
-	port = val[i].val.i;
-	pin  = val[i+2].val.i;
+    if (expect(tv, i, INT, COLON, INT, LAST)) {
+	port = tv[i].v.val.i;
+	pin  = tv[i+2].v.val.i;
 	i += 3;
     }
-    else if (tok[i]==INT) {
-	pin = val[i].val.i;
+    else if (tv[i].t==INT) {
+	pin = tv[i].v.val.i;
 	i++;
     }
     else {
@@ -1923,8 +1978,8 @@ opts:
 	return -1;
     }
     if (!in && !out) in=1;
-    if ((ix = lookup_decl(st, val[2].str, val[2].len)) == BAD_INDEX)
-	ix = csp_new_decl(st, val[2].str, val[2].len, DECL_DIGITAL);
+    if ((ix = lookup_decl(st, tv[2].v.str.ptr, tv[2].v.str.len)) == BAD_INDEX)
+	ix = csp_new_decl(st, tv[2].v.str.ptr, tv[2].v.str.len, DECL_DIGITAL);
     if (ix == BAD_INDEX) return -1;
     i = INDEX(ix);
     st->decl[i].res = res;
@@ -1939,7 +1994,7 @@ opts:
 
 //'#' 'analog' <name> [':'<size>] [<opt>*]  [<port>':'] <pin>
 //   <opt> := 'in' | 'out' | 'inout' | 'pwm' | 'float' | 'signed' | 'unsigned'
-int csp_parse_analog(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
+int csp_parse_analog(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res;
     ivalue_t in=0, out=0;
@@ -1951,18 +2006,18 @@ int csp_parse_analog(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
     res = MAKE_RES(10);
     vt = V_INTEGER;    
 
-    if (!expect(tok, 0, HASH, ANALOG, WORD, LAST)) {
-	csp_set_error(st, ERR_SYNTAX);	
+    if (!expect(tv, 0, HASH, ANALOG, WORD, LAST)) {
+	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
     i = 3;
-    if (expect(tok, i, COLON, INT, LAST)) {
-	res = MAKE_RES(val[i+1].val.i);
+    if (expect(tv, i, COLON, INT, LAST)) {
+	res = MAKE_RES(tv[i+1].v.val.i);
 	i += 2;
     }
 opts:
     if (i < n) {
-	switch(tok[i]) {
+	switch(tv[i].t) {
 	case UNSIGNED: vt=V_UNSIGNED; i++; goto opts;
 	case INTEGER: vt=V_INTEGER; i++; goto opts;
 	case FLOAT: vt=V_FLOAT; i++;  goto opts;
@@ -1973,13 +2028,13 @@ opts:
 	default: break;
 	}
     }
-    if (expect(tok, i, INT, COLON, INT, LAST)) {
-	port = val[i].val.i;
-	pin  = val[i+2].val.i;
+    if (expect(tv, i, INT, COLON, INT, LAST)) {
+	port = tv[i].v.val.i;
+	pin  = tv[i+2].v.val.i;
 	i += 3;
     }
-    else if (tok[i] == INT) {
-	pin = val[i].val.i;
+    else if (tv[i].t == INT) {
+	pin = tv[i].v.val.i;
 	i++;
     }
     else {
@@ -1987,8 +2042,8 @@ opts:
 	return -1;
     }
     if (!in && !out) in=1;
-    if ((ix = lookup_decl(st, val[2].str, val[2].len)) == BAD_INDEX)
-	ix = csp_new_decl(st, val[2].str, val[2].len, DECL_ANALOG);
+    if ((ix = lookup_decl(st, tv[2].v.str.ptr, tv[2].v.str.len)) == BAD_INDEX)
+	ix = csp_new_decl(st, tv[2].v.str.ptr, tv[2].v.str.len, DECL_ANALOG);
     if (ix == BAD_INDEX) return -1;
     i = INDEX(ix);    
     st->decl[i].vt = vt;
@@ -2002,33 +2057,33 @@ opts:
 }
 
 // '#' 'timer' <name> <milliseconds> ['=' '1'|'0']
-int csp_parse_timer(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
+int csp_parse_timer(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t init = 0;
     index_t ix, px, tx;
     int i;
 
-    if (!expect(tok, 0, HASH, TIMER, WORD, INT, LAST)) {
+    if (!expect(tv, 0, HASH, TIMER, WORD, INT, LAST)) {
 	csp_set_error(st, ERR_SYNTAX);	
 	return -1;
     }
-    if (tok[4] == EQ) {
-	if (tok[5] != INT) { // FIXME: eval constant!
+    if (tv[4].t == EQ) {
+	if (tv[5].t != INT) { // FIXME: eval constant!
 	    csp_set_error(st, ERR_SYNTAX);
 	    return -1;
 	}
-	init = val[5].val.i;
+	init = tv[5].v.val.i;
     }
-    if ((px = lookup_const(st, V_INTEGER, val[3].val)) == BAD_INDEX)
-	px = new_signed_const(st,val[3].val.i);
+    if ((px = lookup_const(st, V_INTEGER, tv[3].v.val)) == BAD_INDEX)
+	px = new_signed_const(st,tv[3].v.val.i);
     tx = csp_new_decl(st, NULL, 0, DECL_VARIABLE);
     i = INDEX(tx);
     st->decl[i].vt = V_UNSIGNED;
     st->decl[i].res = MAKE_RES(32);
     st->decl[i].va.init.u = 0;
     
-    if ((ix = lookup_decl(st, val[2].str, val[2].len)) == BAD_INDEX) {
-	if ((ix = csp_new_decl(st, val[2].str, val[2].len, DECL_TIMER)) == BAD_INDEX)
+    if ((ix = lookup_decl(st, tv[2].v.str.ptr, tv[2].v.str.len)) == BAD_INDEX) {
+	if ((ix = csp_new_decl(st, tv[2].v.str.ptr, tv[2].v.str.len, DECL_TIMER)) == BAD_INDEX)
 	    return -1;
     }
     i = INDEX(ix);
@@ -2046,7 +2101,7 @@ int csp_parse_timer(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
 //  <frame-id> '[' <bit-pos> ']'
 //  <frame-id> '[' <bit-pos> '..' <bit-pos> ']'
 //
-int csp_parse_can(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
+int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res = MAKE_RES(1);
     ivalue_t in=0, out=0;
@@ -2057,18 +2112,18 @@ int csp_parse_can(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
     int i;
     int bit0, bit1;
 
-    if (!expect(tok, 0, HASH, CAN, WORD, LAST)) {
+    if (!expect(tv, 0, HASH, CAN, WORD, LAST)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
     i=3;
-    if ((tok[i] == COLON) && (tok[i+1] == INT)) {
-	res = MAKE_RES(val[i+1].val.i);
+    if ((tv[i].t == COLON) && (tv[i+1].t == INT)) {
+	res = MAKE_RES(tv[i+1].v.val.i);
 	i += 2;
     }
 opts:
     if (i < n) {
-	switch(tok[i]) {
+	switch(tv[i].t) {
 	case UNSIGNED: vt=V_UNSIGNED; i++; goto opts;
 	case INTEGER: vt=V_INTEGER; i++; goto opts;
 	case FLOAT: vt=V_FLOAT; i++;  goto opts;
@@ -2083,13 +2138,13 @@ opts:
     if (!in && !out) in=1;
 
     // FrameID [bit]
-    if (expect(tok, i, INT, LB, INT, RB, LAST)) {
-	bit0 = bit1 = val[i+2].val.i;
+    if (expect(tv, i, INT, LB, INT, RB, LAST)) {
+	bit0 = bit1 = tv[i+2].v.val.i;
     }
     // FrameID [bit..bit]
-    else if (expect(tok, i, INT, LB, INT, DOT, DOT, INT, RB, LAST)) {
-	bit0 = val[i+2].val.i;
-	bit1 = val[i+5].val.i;
+    else if (expect(tv, i, INT, LB, INT, DOT, DOT, INT, RB, LAST)) {
+	bit0 = tv[i+2].v.val.i;
+	bit1 = tv[i+5].v.val.i;
     }
     else {
 	csp_set_error(st, ERR_SYNTAX);
@@ -2097,11 +2152,11 @@ opts:
     }
 
     // install fram id
-    if ((idx = lookup_const(st, V_INTEGER, val[i].val)) == BAD_INDEX)
-	idx = new_signed_const(st,val[i].val.i);
+    if ((idx = lookup_const(st, V_INTEGER, tv[i].v.val)) == BAD_INDEX)
+	idx = new_signed_const(st,tv[i].v.val.i);
     
-    if ((ix = lookup_decl(st, val[2].str, val[2].len)) == BAD_INDEX)
-	ix = csp_new_decl(st, val[2].str, val[2].len, DECL_CAN);
+    if ((ix = lookup_decl(st, tv[2].v.str.ptr, tv[2].v.str.len)) == BAD_INDEX)
+	ix = csp_new_decl(st, tv[2].v.str.ptr, tv[2].v.str.len, DECL_CAN);
     if (ix == BAD_INDEX) return -1;
     i = INDEX(ix);
     st->decl[i].res = res;
@@ -2116,17 +2171,17 @@ opts:
 }
 
 // '#' word <name>
-int csp_parse_object(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
+int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
 {
     index_t mx, ix, jx;
     int i, m;
 
-    if (!expect(tok, 0, HASH, WORD, WORD, LAST)) {
+    if (!expect(tv, 0, HASH, WORD, WORD, LAST)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
     // lookup module
-    if ((mx = lookup_decl(st, val[1].str, val[1].len)) == BAD_INDEX) {
+    if ((mx = lookup_decl(st, tv[1].v.str.ptr, tv[1].v.str.len)) == BAD_INDEX) {
 	csp_set_error(st, ERR_MODULE_NOT_DECLARED);
 	return -1;
     }
@@ -2140,14 +2195,14 @@ int csp_parse_object(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
 	return -1;
     }
     
-    if ((ix = csp_new_decl(st, val[2].str, val[2].len, DECL_OBJECT)) == BAD_INDEX)
+    if ((ix = csp_new_decl(st, tv[2].v.str.ptr, tv[2].v.str.len, DECL_OBJECT)) == BAD_INDEX)
 	return -1;
     if ((jx = csp_new_new(st, st->decl[INDEX(mx)].md.ent, ix)) == BAD_INDEX)
 	return -1;
     i = INDEX(ix);
     st->decl[i].mq.mx = mx;
     m = st->ps.nq + 1;
-    st->decl[i].mq.iq = m;
+    st->decl[i].mq.m = m;
     st->object[m] = ix;
     st->ps.nq++;
     return 0;
@@ -2160,11 +2215,11 @@ int csp_parse_object(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
 // then parse expression
 
 // find index of t among tok or -1 if not found
-static int tok_index(tok_t t, tok_t* tok, size_t n)
+static int tok_index(tok_t t, token_t* tv, size_t n)
 {
     int i;
     for (i = 0; i < n; i++) {
-	if (t == tok[i])
+	if (t == tv[i].t)
 	    return i;
     }
     return -1;
@@ -2181,16 +2236,16 @@ static int tok_index(tok_t t, tok_t* tok, size_t n)
 //  END:
 //    next
 //
-int csp_parse_rule(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
+int csp_parse_rule(csp_rt_t* st, token_t* tv, size_t n)
 {
     size_t num;
     int i, j;
     int cnd;
 
-    if ((i=tok_index(QUEST, tok, n)) >= 0) {
+    if ((i=tok_index(QUEST, tv, n)) >= 0) {
 	// parse condition
 	num = n - (i+1);
-	if ((cnd = csp_parse_expr(st,&tok[i+1],&val[i+1], &num)) < 0)
+	if ((cnd = csp_parse_expr(st,&tv[i+1], &num)) < 0)
 	    return -1;
 	// parse expression after query node and patch in ex	
 	num = i;
@@ -2204,7 +2259,7 @@ int csp_parse_rule(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
     if ((j = csp_new_rule(st, cnd, 0)) < 0)
 	return -1;
     st->cond = 1;
-    if (csp_parse_expr(st,&tok[0],&val[0],&num) < 0)
+    if (csp_parse_expr(st,&tv[0],&num) < 0)
 	return -1;
     st->instr[j].r.nxt = st->ps.nn;
     if (csp_new_next(st) < 0)
@@ -2291,7 +2346,7 @@ int make_can_rule(csp_rt_t* st, index_t ox, int k, index_t idx,
 }
 
 // FrameID BytePos Mask OnBits OffBits
-int csp_parse_legacy(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
+int csp_parse_legacy(csp_rt_t* st, token_t* tv, size_t n)
 {
     index_t out;
     index_t idx;        
@@ -2301,12 +2356,12 @@ int csp_parse_legacy(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
     ivalue_t off_bits;    
     int i;
 
-    if (!expect(tok, 0, INT, INT, INT, INT, INT, LAST))
+    if (!expect(tv, 0, INT, INT, INT, INT, INT, LAST))
 	return -1;
-    pos = val[1].val.i;
-    mask = val[2].val.i;
-    on_bits = val[3].val.i;
-    off_bits = val[4].val.i;
+    pos = tv[1].v.val.i;
+    mask = tv[2].v.val.i;
+    on_bits = tv[3].v.val.i;
+    off_bits = tv[4].v.val.i;
     
     if ((out = lookup_decl(st, "OUT", 3)) == BAD_INDEX) {
 	// fixme: pin number etc for standard OUT
@@ -2314,8 +2369,8 @@ int csp_parse_legacy(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
 	    return -1;
     }
 
-    if ((idx = lookup_const(st, V_INTEGER, val[0].val)) == BAD_INDEX)
-	idx = new_signed_const(st,val[0].val.i);    
+    if ((idx = lookup_const(st, V_INTEGER, tv[0].v.val)) == BAD_INDEX)
+	idx = new_signed_const(st,tv[0].v.val.i);    
     
 
     // OUT = 1
@@ -2339,69 +2394,68 @@ int csp_parse_legacy(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
 }
 
 // '>' command
-int csp_parse_immediate(csp_rt_t* st, tok_t* tok, tokval_t* val, size_t n)
+int csp_parse_immediate(csp_rt_t* st, token_t* tv, size_t n)
 {
     return 0;
 }
     
 int csp_parse(csp_rt_t* st, char* str)
 {
-    tokval_t val[MAX_LINE_TOKENS];
-    tok_t tok[MAX_LINE_TOKENS];
+    token_t tv[MAX_LINE_TOKENS];
     size_t num = MAX_LINE_TOKENS;
     reg_allocator_t alloc;
     int n;
     
     st->ap = &alloc;
         
-    while((n = csp_scan_line(str, tok, val, &num)) > 0) {
+    while((n = csp_scan_line(str, tv, &num)) > 0) {
 	int r = -1;
 	str += n;
 	alloc_init(st->ap);
     
-	if (tok[0] == NEWLINE)
+	if (tv[0].t == NEWLINE)
 	    r = 0;
-	else if (expect(tok, 0, INT, INT, INT, INT, INT, LAST)) {
-	    r = csp_parse_legacy(st, tok, val, num);
+	else if (expect(tv, 0, INT, INT, INT, INT, INT, LAST)) {
+	    r = csp_parse_legacy(st, tv, num);
 	}
-	else if (tok[0] == HASH) {
-	    switch(tok[1]) {
+	else if (tv[0].t == HASH) {
+	    switch(tv[1].t) {
 	    case MODULE:  // '#' 'module' WORD
-		r = csp_parse_module(st, tok, val, num);
+		r = csp_parse_module(st, tv, num);
 		break;
 	    case END:
-		r = csp_parse_end(st, tok, val, num);
+		r = csp_parse_end(st, tv, num);
 		break;
 	    case VARIABLE:
-		r = csp_parse_variable(st, tok, val, num);
+		r = csp_parse_variable(st, tv, num);
 		break;
 	    case CONSTANT:
-		r = csp_parse_constant(st, tok, val, num);
+		r = csp_parse_constant(st, tv, num);
 		break;
 	    case DIGITAL:
-		r = csp_parse_digital(st, tok, val, num);
+		r = csp_parse_digital(st, tv, num);
 		break;
 	    case ANALOG:
-		r = csp_parse_analog(st, tok, val, num);
+		r = csp_parse_analog(st, tv, num);
 		break;
 	    case TIMER:
-		r = csp_parse_timer(st, tok, val, num);
+		r = csp_parse_timer(st, tv, num);
 		break;
 	    case CAN:
-		r = csp_parse_can(st, tok, val, num);
+		r = csp_parse_can(st, tv, num);
 		break;
 	    case WORD: // module instantiation?
-		r = csp_parse_object(st, tok, val, num);
+		r = csp_parse_object(st, tv, num);
 		break;
 	    default:
 		return -1;
 	    }
 	}
-	else if (tok[0] == GT) {
-	    r = csp_parse_immediate(st, tok, val, num);
+	else if (tv[0].t == GT) {
+	    r = csp_parse_immediate(st, tv, num);
 	}
 	else {
-	    r = csp_parse_rule(st, tok, val, num);
+	    r = csp_parse_rule(st, tv, num);
 	}
 	if (r < 0)
 	    return -1;
@@ -2411,14 +2465,14 @@ int csp_parse(csp_rt_t* st, char* str)
     return 0;
 }
 
-void csp_rt_init(csp_rt_t* st, int transaction, int reactive)
+int csp_rt_init(csp_rt_t* st, int transaction, int reactive)
 {
     memset(st, 0x00, sizeof(csp_rt_t));
 
     // st->xin = st->xout = st->xv0;
     st->din = st->dout = st->dv0;    
 
-    st->reactive    = reactive;
+    st->reactive = reactive;
     if ((st->transaction = transaction) != 0) {
 #if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)
 	// st->xout = st->xv1;
@@ -2444,6 +2498,7 @@ void csp_rt_init(csp_rt_t* st, int transaction, int reactive)
     st->num_user_funcs = 0;
     new_signed_const(st, 0);
     new_signed_const(st, 1);
+    return 0;
 }
 
 // Set user function table (called before parsing)
@@ -2456,7 +2511,7 @@ void csp_set_user_funcs(csp_rt_t* st, const csp_func_t* funcs, uint8_t count)
 // copy constant and init values
 // setup input, output and timer lists
 //
-void csp_rt_start(csp_rt_t* st)
+int csp_rt_start(csp_rt_t* st)
 {
     int i;
     int offs;
@@ -2519,9 +2574,10 @@ void csp_rt_start(csp_rt_t* st)
 	ivalue_t dn = st->decl[INDEX(mx)].md.n;  // number of decl elements
 	st->offs[m] = offs;
 	offs += dn;
-	if (offs > MAX_DECLS)
-	    printf("object declarations overflow\n"); 
+	if (offs > MAX_DECLS) // set error
+	    return -1;
     }
+    return 0;
 }
 
 int csp_set_transaction(csp_rt_t* st, int onoff)

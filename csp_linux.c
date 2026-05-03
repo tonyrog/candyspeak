@@ -110,6 +110,11 @@ void csp_input(csp_rt_t* st)
 	    if ((now_ms - t0) >= period) {
 		st->decl[di].tm.running = 0;
 		csp_set_ivalue(st, ix, 0);
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
+		if (st->reactive) {
+		    csp_enq_elist(st, ix);
+		}
+#endif
 	    }
 	    break;
 	}
@@ -165,13 +170,12 @@ int parse_file(csp_rt_t* st, FILE* fin)
     st->ps.line = 1;
     while(fgets(buf, MAX_LINE_SIZE, fin)) {
 	if (debug_scan) {
-	    tokval_t val[MAX_LINE_TOKENS];
-	    tok_t tok[MAX_LINE_TOKENS];
+	    token_t tv[MAX_LINE_TOKENS];
 	    size_t num = MAX_LINE_TOKENS;
 	    int n;
-	    if ((n = csp_scan_line(buf, tok, val, &num)) < 0)
+	    if ((n = csp_scan_line(buf, tv, &num)) < 0)
 		return -1;
-	    csp_dump_tokens(stdout, tok, val, num);
+	    csp_dump_tokens(stdout, tv, num);
 	}
 	if (csp_parse(st, buf) < 0)
 	    return -1;
@@ -373,9 +377,12 @@ int main(int argc, char** argv)
     if (state.reactive)
 	csp_csr(&state); // build graph
 
+    // initialize time before starting timers
+    time_init();
+
     // setup all input/output/timers..
     csp_rt_start(&state);
-    
+
     // initialize input/output/timers ... load default values
     csp_setup(&state);
 
@@ -401,6 +408,13 @@ int main(int argc, char** argv)
 	csp_dump_state_erl(state_file, &state);
 
 loop:
+    if (state.cycle)
+	csp_commit(&state);  // always commit before next cycle
+    else if (state.reactive) {
+	// Initial cycle: run full eval to prime the system
+	x = csp_eval(&state);
+    }
+	
     // check limits
     if (max_cycles && state.cycle >= max_cycles) {
 	fprintf(stderr, "max cycles (%u) reached\n", max_cycles);
@@ -413,16 +427,10 @@ loop:
 
     csp_input(&state);
 
-    if (state.reactive && state.cycle == 0) {
-	// Initial cycle: run full eval to prime the system
-	x = csp_eval(&state);
-    }
-    else if (state.reactive) {
+    if (state.reactive)
 	x = csp_react(&state);
-    }
-    else {
+    else
 	x = csp_eval(&state);
-    }
     
     csp_output(&state);
 
@@ -431,7 +439,9 @@ loop:
 	    csp_dump_variables(stdout, &state);
 	if (state_file)
 	    csp_dump_state_erl(state_file, &state);
-	csp_commit(&state);
+    }
+
+    if (state.anyd) {
 	if (state.wait_ms != NOTIMEOUT) {
 	    if (debug) printf("wait for %d ms\n", state.wait_ms);
 	    usleep(1000*state.wait_ms);
@@ -443,10 +453,17 @@ loop:
 	usleep(1000*state.wait_ms);
 	goto loop;
     }
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
+    // in reactive mode, continue if queue has items (e.g. from timeout)
+    if (state.reactive && (state.hd != state.tl))
+	goto loop;
+#endif
+
 done:
 
     fprintf(stdout, "cycle=%d\n", state.cycle);
 #if defined(WANT_STATISTICS) && (WANT_STATISTICS==1)
+    fprintf(stdout, "num_eval_rule=%d\n", state.num_eval_rule);
     fprintf(stdout, "num_eval0=%d\n", state.num_eval0);
 #endif
     if (x == BAD_INDEX)

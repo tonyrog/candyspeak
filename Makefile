@@ -11,6 +11,9 @@ LDFLAGS = -g
 
 all:	csp
 
+debug: CFLAGS += -DDEBUG
+debug: all
+
 csp:	$(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) $(LIBS) -o $@
 

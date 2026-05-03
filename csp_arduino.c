@@ -170,6 +170,11 @@ void csp_input(csp_rt_t* st)
 	    if ((now_ms - t0) >= period) {
 		st->decl[di].tm.running = 0;
 		csp_set_ivalue(st, ix, 0);
+#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
+		if (st->reactive) {
+		    csp_enq_elist(st, ix);
+		}
+#endif		
 	    }
 	    break;
 	}
@@ -504,12 +509,22 @@ void loop()
 {
     index_t x;
 
+    if (state.cycle)
+	csp_commit(&state);  // always commit before next cycle
+    else if (state.reactive) { // cycle=0
+	// Initial cycle: run full eval to prime the system
+	x = csp_eval(&state);
+    }
+
     // check for serial commands
     serial_poll(&state);
 
     // run evaluation cycle
     csp_input(&state);
-    x = csp_eval(&state);
+    if (state.reactive)
+	x = csp_react(&state);
+    else
+	x = csp_eval(&state);
     csp_output(&state);
 
     if (state.wait_ms != NOTIMEOUT) {
