@@ -6,7 +6,7 @@ the next rule in the queue. An in sequential mode
 NEXT will be a NOP.
 
 // FIXME: in reactive mode execute until NEXT!
-FIXME: add timeout to dependency graph!
+// FIXME: add timeout to dependency graph!
 
 # Register allocation work
 

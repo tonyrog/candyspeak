@@ -82,6 +82,26 @@ int csp_println(void)
     return putchar('\n');
 }
 
+int csp_uconst(csp_rt_t* st, const char* name, int len, ivalue_t* ret)
+{
+    // handle constants D0..D9
+    if ((len == 2) && (name[0]=='D') &&
+	(name[1]>='0') && (name[1]<='9')) {
+	int d = name[1]-'0';
+	*ret = d;
+	return 1;
+    }
+    else if ((len == 3) && (name[0]=='D') &&
+	     (name[1]>='0') && (name[1]<='9') &&
+	     (name[2]>='0') && (name[2]<='9')) {
+	int d = (name[1]-'0')*10 + (name[2]-'0');
+	*ret = d;
+	return 1;
+    }
+    return 0;
+}
+
+
 void csp_setup(csp_rt_t* st)
 {
     time_init();
@@ -349,6 +369,7 @@ int main(int argc, char** argv)
 #endif
 
     csp_rt_init(&state, transaction, reactive);
+    csp_set_uconst(&state, csp_uconst);
 
     if (optind >= argc) {
 	// no files given, read from stdin

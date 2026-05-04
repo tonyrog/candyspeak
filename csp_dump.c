@@ -153,7 +153,7 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		i,
 		st->instr[i].f.x,
 		(st->instr[i].f.usr ?
-		 st->user_funcs[st->instr[i].f.idx].name :
+		 st->ufuncs[st->instr[i].f.idx].name :
 		 csp_builtin_funcs[st->instr[i].f.idx].name),
 		st->instr[i].f.n,
 		cond, eot);

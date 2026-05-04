@@ -82,10 +82,13 @@ const char* csp_fmt_pwm(csp_rt_t* st, int ix)
 const char* csp_fmt_vtype(vtype_t vt)
 {
     switch(vt) {
-    case V_FLOAT: return "float";
-    case V_UNSIGNED: return "unsigned";
+    case V_NONE: return "none";
     case V_INTEGER: return "integer";
-    case V_STRING: return "string";	
+    case V_UNSIGNED: return "unsigned";	
+    case V_FLOAT: return "float";
+    case V_STRING: return "string";
+    case V_INDEX: return "index";
+    case V_VOID: return "void";	
     default: return "undefined";
     }
 }

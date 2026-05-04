@@ -67,12 +67,13 @@ typedef uint8_t  reg_t;    // at most 256 registers
 #define TYPE_BITS 3  // supports up to 8 types
 
 typedef enum {
-    V_INTEGER,   // 0 - signed integer
-    V_UNSIGNED,  // 1 - unsigned integer
-    V_FLOAT,     // 2 - floating point
-    V_STRING,    // 3 - string index
-    V_INDEX,     // 4 - declaration index (pass index, not value)
-    V_VOID,      // 5 - no value / don't care
+    V_NONE,      // 0 - no type
+    V_INTEGER,   // 1 - signed integer
+    V_UNSIGNED,  // 2 - unsigned integer
+    V_FLOAT,     // 3 - floating point
+    V_STRING,    // 4 - string index
+    V_INDEX,     // 5 - declaration index (pass index, not value)
+    V_VOID,      // 6 -  value / don't care
 } vtype_t;
 
 typedef enum {
@@ -479,10 +480,9 @@ typedef struct PACKED {
 } csp_pstate_t;
 
 // Function pointer types
-// Normal: args are pre-evaluated into value_t array
 typedef ivalue_t (*csp_func_fn)(struct _csp_rt_t* st, value_t* args, uint8_t nargs);
-// Raw: receives instruction pointer to access raw indices (for print, timeout)
-typedef ivalue_t (*csp_func_raw_fn)(struct _csp_rt_t* st, csp_instr_t* ip);
+
+typedef int (*csp_const_fn)(struct _csp_rt_t* st, const char* name, int len, ivalue_t*);
 
 // Function table entry
 typedef struct {
@@ -568,8 +568,10 @@ typedef struct _csp_rt_t
     uint32_t num_eval0;
 #endif
     // user-defined functions (checked before builtin)
-    const csp_func_t* user_funcs;
-    uint8_t num_user_funcs;
+    const csp_func_t* ufuncs;
+    uint8_t num_ufuncs;
+    // user hook to lookup platform constants
+    csp_const_fn uconst;
 } csp_rt_t;
 
 // Built-in function table (defined in csp_rt.c)
@@ -637,7 +639,8 @@ static inline char* decl_name(csp_rt_t* st, index_t ix)
 
 extern int     csp_rt_init(csp_rt_t*,  int transaction, int reactive);
 extern int     csp_rt_start(csp_rt_t*);
-extern void    csp_set_user_funcs(csp_rt_t*, const csp_func_t*, uint8_t);
+extern void    csp_set_ufuncs(csp_rt_t*, const csp_func_t*, uint8_t);
+extern void    csp_set_uconst(csp_rt_t*, csp_const_fn uconst);
 extern int     csp_lookup_func(csp_rt_t*, const char*, uint8_t);
 extern int     csp_set_transaction(csp_rt_t*, int onoff);
 extern int     csp_set_reactive(csp_rt_t*, int onoff);

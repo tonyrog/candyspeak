@@ -400,10 +400,10 @@ int csp_lookup_func(csp_rt_t* st, const char* name, uint8_t namelen)
 {
     int i;
     // Check user functions first
-    if (st->user_funcs) {
-	for (i = 0; i < st->num_user_funcs; i++) {
-	    if (st->user_funcs[i].namelen == namelen &&
-		memcmp(st->user_funcs[i].name, name, namelen) == 0) {
+    if (st->ufuncs) {
+	for (i = 0; i < st->num_ufuncs; i++) {
+	    if (st->ufuncs[i].namelen == namelen &&
+		memcmp(st->ufuncs[i].name, name, namelen) == 0) {
 		return -(i + 1);  // negative = user function
 	    }
 	}
@@ -586,8 +586,8 @@ again:
 	
 	// Get function pointer
 	if (st->instr[n].f.usr) {
-	    if (st->user_funcs && (idx < st->num_user_funcs))
-		func = &st->user_funcs[idx];
+	    if (st->ufuncs && (idx < st->num_ufuncs))
+		func = &st->ufuncs[idx];
 	}
 	else {
 	    if (idx < csp_num_builtin_funcs)
@@ -1374,13 +1374,20 @@ int map_reg(csp_rt_t* st, index_t ix)
 typedef struct {
     reg_t reg;       // register number (valid if loaded)
     index_t ix;      // declaration index (valid for variables)
+    value_t val;     // if constant then the actual value is loaded here
     unsigned loaded:1;  // 1 if value is loaded in reg
+    unsigned immediate:1; // 1 if val is set or calcualted
+    unsigned vt:TYPE_BITS;  // value type (vtype_t)
 } rstack_entry_t;
 
 // Helper macros for rstack entries
-#define RSTACK_REG(r)     ((rstack_entry_t){.reg=(r), .ix=BAD_INDEX, .loaded=1})
-#define RSTACK_IX(i)      ((rstack_entry_t){.reg=0, .ix=(i), .loaded=0})
-#define RSTACK_BOTH(r,i)  ((rstack_entry_t){.reg=(r), .ix=(i), .loaded=1})
+#define RSTACK_R(r)  ((rstack_entry_t){.reg=(r), .ix=BAD_INDEX, .loaded=1, .immediate=0, .vt=V_NONE})
+#define RSTACK_I(i)  ((rstack_entry_t){.reg=0, .ix=(i), .loaded=0, .immediate=0, .vt=V_NONE})
+#define RSTACK_V(v)  ((rstack_entry_t){.reg=0, .ix=BAD_INDEX, .val=(v), .loaded=0, .immediate=1, .vt=V_NONE})
+#define RSTACK_RV(r,v)  ((rstack_entry_t){.reg=(r), .ix=BAD_INDEX, .val=(v), .loaded=1, .immediate=1, .vt=V_NONE})
+#define RSTACK_RI(r,i) ((rstack_entry_t){.reg=(r), .ix=(i), .loaded=1, .immediate=0, .vt=V_NONE})
+#define RSTACK_RVT(r,v,t) ((rstack_entry_t){.reg=(r), .ix=BAD_INDEX, .val=(v), .immediate=1, .loaded=1, .vt=(t)})
+#define RSTACK_RIVT(r,i,v,t) ((rstack_entry_t){.reg=(r), .ix=(i), .val=(v), .immediate=1, .loaded=1, .vt=(t)})
 
 // Process binary assignment operator: generates ST instruction
 // Returns new ep on success, -1 on error
@@ -1406,31 +1413,36 @@ static int process_assign(csp_rt_t* st, rstack_entry_t* rstack, int ep)
     return ep - 1;
 }
 
-static int process_op(csp_rt_t* st, tok_t op, rstack_entry_t* rstack, int ep)
+// FIXME: type check, evaluate constants when possible
+//  convert constants / registers to correct type when
+// needed.
+//          
+static int process_op(csp_rt_t* st, tok_t tok, rstack_entry_t* rstack, int ep)
 {
     int dst;
-    switch(arity(op)) {
+    switch(arity(tok)) {
     case 2:
-	if (op == EQ) {
+	if (tok == EQ) {
 	    if ((ep = process_assign(st, rstack, ep)) < 0)
 		return PARSE_ERROR;
 	}
 	else {
+	    // match and check argument types and return type
 	    dst = alloc_reg(st);
-	    if (new_expr2(st,op_table[op].code,
+	    if (new_expr2(st,op_table[tok].code,
 			  dst,rstack[ep-2].reg,rstack[ep-1].reg) < 0)
 		return PARSE_ERROR;
 	    free_reg(st, rstack[ep-2].reg);
-	    rstack[ep-2] = RSTACK_REG(dst);
+	    rstack[ep-2] = RSTACK_R(dst);
 	    ep--;
 	}
 	break;
     case 1:
 	dst = alloc_reg(st);
-	if (new_expr1(st,op_table[op].code,dst,rstack[ep-1].reg) < 0)
+	if (new_expr1(st,op_table[tok].code,dst,rstack[ep-1].reg) < 0)
 	    return PARSE_ERROR;
 	free_reg(st, rstack[ep-1].reg);
-	rstack[ep-1] = RSTACK_REG(dst);
+	rstack[ep-1] = RSTACK_R(dst);
 	break;
     case 0:
 	return PARSE_ERROR;
@@ -1518,8 +1530,8 @@ next:
 	    const csp_func_t* func = NULL;
 	    
 	    if (is_user) {
-		if (st->user_funcs && (func_idx < st->num_user_funcs))
-		    func = &st->user_funcs[func_idx];
+		if (st->ufuncs && (func_idx < st->num_ufuncs))
+		    func = &st->ufuncs[func_idx];
 	    } else {
 		if (func_idx < csp_num_builtin_funcs)
 		    func = &csp_builtin_funcs[func_idx];
@@ -1565,7 +1577,7 @@ next:
 	    dst = alloc_reg(st);
 	    if (csp_new_call(st, dst, func_idx, is_user, n) < 0)
 		return PARSE_ERROR;
-	    rstack[ep++] = RSTACK_REG(dst);
+	    rstack[ep++] = RSTACK_R(dst);
 	}
 	else if (pp && ostack[pp-1] == LP) {
 	    pp--;  // pop the LP for regular parentheses
@@ -1577,12 +1589,19 @@ next:
 	pop = INT;
 	break;
     case INT:
-	// FIXME: load small constants with LI
-	if ((ix = lookup_const(st, V_INTEGER, tval.val)) == BAD_INDEX)
-	    ix = new_signed_const(st,tval.val.i);
-	if (ix == BAD_INDEX) return PARSE_ERROR;
-	dst = map_reg(st, ix);
-	rstack[ep++] = RSTACK_BOTH(dst, ix);
+	if ((tval.val.i >= -32768) && (tval.val.i <= 32767)) {
+	    int dst = alloc_reg(st);
+	    if (csp_new_li(st,dst,tval.val.i) < 0)		
+		return PARSE_ERROR;
+	    rstack[ep++] = RSTACK_RVT(dst,tval.val,V_INTEGER);
+	}
+	else {
+	    if ((ix = lookup_const(st, V_INTEGER, tval.val)) == BAD_INDEX) 
+		ix = new_signed_const(st,tval.val.i);
+	    if (ix == BAD_INDEX) return PARSE_ERROR;
+	    dst = map_reg(st, ix);
+	    rstack[ep++] = RSTACK_RI(dst, ix);
+	}
 	pop = INT;
 	break;
     case FLT:
@@ -1590,7 +1609,7 @@ next:
 	    ix = new_float_const(st,tval.val.f);
 	if (ix == BAD_INDEX) return PARSE_ERROR;
 	dst = map_reg(st, ix);
-	rstack[ep++] = RSTACK_BOTH(dst, ix);
+	rstack[ep++] = RSTACK_RIVT(dst, ix, tval.val, V_FLOAT);
 	pop = FLT;
 	break;
     case STR:
@@ -1598,7 +1617,7 @@ next:
 	    ix = new_string_const(st,tval.str.ptr,tval.str.len);
 	if (ix == BAD_INDEX) return PARSE_ERROR;
 	dst = map_reg(st, ix);
-	rstack[ep++] = RSTACK_BOTH(dst, ix);
+	rstack[ep++] = RSTACK_RIVT(dst, ix, tval.val, V_STRING);
 	pop = STR;
 	break;
     case WORD: {
@@ -1642,13 +1661,13 @@ next:
 	    // Check if this is an l-value (assignment target)
 	    if (tv[i].t == EQ) {
 		// L-value: push index only, no load
-		rstack[ep++] = RSTACK_IX(ix);
+		rstack[ep++] = RSTACK_I(ix);
 		pop = WORD;
 	    }
 	    else {
 		// R-value: load into register, keep index for V_INDEX args
 		r = map_reg(st, ix);
-		rstack[ep++] = RSTACK_BOTH(r, ix);
+		rstack[ep++] = RSTACK_RI(r, ix);
 		pop = WORD;
 	    }
 	}
@@ -1731,38 +1750,64 @@ static int parse_value(vtype_t vt, tok_t tok, value_t val, value_t* dst)
     return 0;
 }
 
-// match a single INT token
-// or an simple expression like ['-' INT] or ['+' INT]
-// return new index on succes
-// and -1 on failure
-static int expect_integer(csp_rt_t* st, token_t* tv, int i,
-			  token_t* rp, int num)
+// parse constant
+// from a constant declaration
+// from a user constant
+// or integer value
+//
+static int expect_const(csp_rt_t* st, token_t* tv, int i,
+			token_t* rp, int num)
 {
-    if ((tv[i].t == MINUS) && (tv[i+1].t == INT) && (num >= 2)) {
-	rp->t = INT;
-	rp->v.val.i = -tv[i+1].v.val.i;
-	return i+2;
-    }
-    else if ((tv[i].t == PLUS) && (tv[i+1].t == INT)) {
-	*rp = tv[i+1];
-	return i+2;
-    }
-    else if (tv[i].t == INT) {
+    if (num < 1)
+	return -1;
+    if (tv[i].t == INT) {
 	*rp = tv[i];
 	return i+1;
     }
     else if (tv[i].t == WORD) {
 	index_t ix;
-	ix = lookup_decl(st, tv[i].v.str.ptr, tv[i].v.str.len);
-	if ((ix == BAD_INDEX) ||
-	    (st->decl[ix].type != DECL_CONSTANT) ||
-	    (st->decl[ix].vt != V_INTEGER)) // V_UNSIGNED?
+	char* name = tv[i].v.str.ptr;
+	int name_len = tv[i].v.str.len;
+	
+	if ((ix = lookup_decl(st,name,name_len)) != BAD_INDEX) {
+	    if ((st->decl[ix].type != DECL_CONSTANT) &&
+		(st->decl[ix].vt != V_INTEGER))
+		return -1;
+	    rp->t = INT;
+	    rp->v.val.i = st->decl[ix].cn.init.i;
+	    return i+1;
+	}
+	if (st->uconst == NULL)
 	    return -1;
-	rp->t = INT;
-	rp->v.val.i = st->decl[ix].cn.init.i;
-	return i+1;
+	if (st->uconst(st,tv[i].v.str.ptr,tv[i].v.str.len,&rp->v.val.i)) {
+	    rp->t = INT;
+	    return i+1;
+	}
+	return -1;
     }
     return -1;
+}
+
+// match a single INT token
+// or an simple expression like ['-' INT] or ['+' INT]
+// return next index (i+1) on succes
+// and -1 on failure
+
+static int expect_integer(csp_rt_t* st, token_t* tv, int i,
+			  token_t* rp, int num)
+{
+    if ((tv[i].t == MINUS) && (num >= 2)) {
+	if ((i = expect_const(st, tv, i+1, rp, num-1)) < 0)
+	    return -1;
+	rp->v.val.i = -rp->v.val.i; // negate
+	return i;
+    }
+    else if ((tv[i].t == PLUS) && (num >= 2)) {
+	if ((i = expect_const(st, tv, i+1, rp, num-1)) < 0)
+	    return -1;
+	return i;
+    }
+    return expect_const(st, tv, i, rp, num);
 }
 
 static int expect(token_t* tv, int i, ...)
@@ -2494,18 +2539,24 @@ int csp_rt_init(csp_rt_t* st, int transaction, int reactive)
     st->cur = 0;     // current module = global
 
     st->str[0] = 0;  // reserved 0 and nil
-    st->user_funcs = NULL;
-    st->num_user_funcs = 0;
+    st->ufuncs = NULL;
+    st->num_ufuncs = 0;
+    st->uconst = NULL;    
     new_signed_const(st, 0);
     new_signed_const(st, 1);
     return 0;
 }
 
 // Set user function table (called before parsing)
-void csp_set_user_funcs(csp_rt_t* st, const csp_func_t* funcs, uint8_t count)
+void csp_set_ufuncs(csp_rt_t* st, const csp_func_t* funcs, uint8_t count)
 {
-    st->user_funcs = funcs;
-    st->num_user_funcs = count;
+    st->ufuncs = funcs;
+    st->num_ufuncs = count;
+}
+
+void csp_set_uconst(csp_rt_t* st, csp_const_fn uconst)
+{
+    st->uconst = uconst;
 }
 
 // copy constant and init values
