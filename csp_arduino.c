@@ -14,6 +14,7 @@
 #define SERIAL_BUF_SIZE 128
 static char serial_buf[SERIAL_BUF_SIZE];
 static uint8_t serial_pos = 0;
+static uint8_t line_ready = 0;
 
 #ifdef CSP_HAS_EEPROM
 // EEPROM layout
@@ -33,6 +34,14 @@ typedef struct {
 #endif
 
 csp_rt_t state;
+
+extern char __StackTop;
+
+int stack_used(void)
+{
+    char local;
+    return &__StackTop - &local;
+}
 
 uint32_t csp_time_ms(void)
 {
@@ -414,11 +423,11 @@ void handle_immediate_command(csp_rt_t* st, char* cmd)
     }
     else if (strncmp(cmd, "clear", 5) == 0) {
         csp_storage_clear();
-        csp_rt_init(st, 1, 0);
+        csp_rt_init(st, TRANSACTION_DEFAULT, REACTIVE_DEFAULT);
         serial_print_ok();
     }
     else if (strncmp(cmd, "reset", 5) == 0) {
-        csp_rt_init(st, 1, 0);
+        csp_rt_init(st, TRANSACTION_DEFAULT, REACTIVE_DEFAULT);
         serial_print_ok();
     }
     else if (strncmp(cmd, "list", 4) == 0) {
@@ -435,6 +444,13 @@ void handle_immediate_command(csp_rt_t* st, char* cmd)
         serial_print_ok();
     }
     else {
+	// here we should parse expression
+	// like D1 = 1
+	// push pstate
+	// add this as a "faked" rule D1=1 ? 1
+	// execute only this rule print the result value
+	// pop pstate
+	// 
         serial_print_error("unknown command");
     }
 }
@@ -463,15 +479,28 @@ void serial_poll(csp_rt_t* st)
     while (Serial.available()) {
         char c = Serial.read();
 
-        if (c == '\n' || c == '\r') {
+        if ((c == '\n') || (c == '\r')) {
             if (serial_pos > 0) {
+                serial_buf[serial_pos++] = '\n';
                 serial_buf[serial_pos] = '\0';
-                process_serial_line(st, serial_buf);
-                serial_pos = 0;
+		line_ready = 1;
+		csp_print_char('\r');
+		csp_print_char('\n');
             }
         }
+	else if (c == '\b') {
+	     if (serial_pos == 0)
+		 csp_print_char('\a');
+	     else {
+	     	serial_pos--;
+		csp_print_char('\b');
+		csp_print_char(' ');
+		csp_print_char('\b');
+	     }
+	}
         else if (serial_pos < SERIAL_BUF_SIZE - 1) {
             serial_buf[serial_pos++] = c;
+	    csp_print_char(c); // ECHO
         }
     }
 }
@@ -485,7 +514,7 @@ void setup()
     Serial.begin(115200);
     while (!Serial) { ; }  // wait for USB serial
 
-    csp_rt_init(&state, 1, 0);
+    csp_rt_init(&state, TRANSACTION_DEFAULT, REACTIVE_DEFAULT);
 
     // try to load from EEPROM
     int r = csp_storage_load(&state);
@@ -519,6 +548,12 @@ void loop()
     // check for serial commands
     serial_poll(&state);
 
+    if (line_ready) {
+	process_serial_line(&state, serial_buf);
+	line_ready = 0;
+	serial_pos = 0;
+    }
+
     // run evaluation cycle
     csp_input(&state);
     if (state.reactive)
@@ -532,7 +567,7 @@ void loop()
         uint32_t remaining = state.wait_ms;
 	// FIXME: we must re-read current time and update,
 	// we do not know how long poll is taking!
-        while (remaining > 0) {
+        while ((remaining > 0) && !line_ready) {
             uint32_t chunk = min(remaining, (uint32_t)50);
             delay(chunk);
             remaining -= chunk;

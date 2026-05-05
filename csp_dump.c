@@ -476,11 +476,11 @@ void csp_dump(FILE* f, csp_rt_t* st)
     }
     fprintf(f, "]}.\n");    
 
-    fprintf(f, "{object,[global,");
+    fprintf(f, "{object,[global");
     for (i = 0; i < st->ps.nq; i++) {
 	int m = i+1;
 	index_t ix = st->object[m];
-	if (i > 0) fputc(',', f);
+	fputc(',', f);
 	fprintf(f, "{'%s',%d,",
 		decl_name(st, st->decl[INDEX(ix)].mq.mx),
 		st->offs[m]);

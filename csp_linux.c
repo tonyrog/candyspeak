@@ -22,6 +22,42 @@ int debug_scan = 0;
 int debug_parse = 0;
 int debug_trace = 0;
 
+static void *stack_top(void)
+{
+    static void* StackTop = NULL;
+    if (StackTop == NULL) {
+	FILE *f;
+	unsigned long lo, hi;
+	char perms[8];
+	char line[256];
+	void *result = NULL;	
+
+	f = fopen("/proc/self/maps", "r");
+	if (!f)
+	    return NULL;
+	while (fgets(line, sizeof(line), f)) {
+	    if (sscanf(line, "%lx-%lx %4s", &lo, &hi, perms) == 3) {
+		if (strstr(line, "[stack]")) {
+		    result = (void *)hi;
+		    break;
+		}
+	    }
+	}
+	fclose(f);
+	StackTop = result;
+    }
+    return StackTop;
+}
+
+int stack_used(void)
+{
+    char local;
+    void *top = stack_top();
+    if (!top)
+        return -1;
+    return (char *)top - &local;
+}
+
 static void time_init()
 {
     gettimeofday(&boot_time, 0);
@@ -130,7 +166,7 @@ void csp_input(csp_rt_t* st)
 	    if ((now_ms - t0) >= period) {
 		st->decl[di].tm.running = 0;
 		csp_set_ivalue(st, ix, 0);
-#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 		if (st->reactive) {
 		    csp_enq_elist(st, ix);
 		}
@@ -206,9 +242,12 @@ int parse_file(csp_rt_t* st, FILE* fin)
 
 void print_defines()
 {
-    printf("WANT_TRANSACTION=%d\n", WANT_TRANSACTION);
-    printf("WANT_REACTIVE=%d\n", WANT_REACTIVE);
-    printf("WANT_STATISTICS=%d\n",WANT_STATISTICS);
+    printf("SUPPORT_TRANSACTION=%d\n", SUPPORT_TRANSACTION);
+    printf("SUPPORT_REACTIVE=%d\n", SUPPORT_REACTIVE);
+    printf("SUPPORT_STATISTICS=%d\n",SUPPORT_STATISTICS);
+
+    printf("TRANSACTION_DEFAULT=%d\n", TRANSACTION_DEFAULT);
+    printf("REACTIVE_DeFAULT=%d\n", REACTIVE_DEFAULT);    
 
     printf("OBJ_BITS=%d\n", OBJ_BITS);
     printf("DECL_BITS=%d\n", DECL_BITS);
@@ -257,8 +296,8 @@ static struct option long_options[] = {
     {"debug-scan",  no_argument,        0,  'S'},
     {"debug-trace",  no_argument,       0,  'Q'},
     {"help",         no_argument,       0,  'h'},
-    {"transaction",  no_argument,       0,  't'},
-    {"reactive",     no_argument,       0,  'r'},
+    {"transaction",  optional_argument, 0,  't'},
+    {"reactive",     optional_argument, 0,  'r'},
     {"verbose",      no_argument,       0,  'v'},
     {"no-execute",   no_argument,       0,  'n'},
     {"cycles",       required_argument, 0,  'c'},
@@ -275,17 +314,17 @@ void usage(const char* prog)
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "  -h, --help           Show this help\n");
     fprintf(stderr, "  -d, --debug          Enable debug output\n");
-    fprintf(stderr, "  -t, --transaction    Enable transaction mode\n");
-    fprintf(stderr, "  -r, --reactive       Enable reactive mode\n");
+    fprintf(stderr, "  -t, --transaction[=B] Enable transaction mode\n");
+    fprintf(stderr, "  -r, --reactive[=B]   Enable reactive mode\n");
     fprintf(stderr, "  -n, --no-execute     Parse only, don't execute\n");
-    fprintf(stderr, "  -c, --cycles N       Max cycles (0=unlimited)\n");
-    fprintf(stderr, "  -T, --timeout MS     Max runtime in ms (0=unlimited)\n");
+    fprintf(stderr, "  -c, --cycles=N       Max cycles (0=unlimited)\n");
+    fprintf(stderr, "  -T, --timeout=MS     Max runtime in ms (0=unlimited)\n");
     fprintf(stderr, "  -P, --debug-parse    Enable parser debugging\n");
     fprintf(stderr, "  -S, --debug-scan     Enable tokenizer debugging\n");
     fprintf(stderr, "  -Q, --debug-trace    Enable variable tracing\n");
-    fprintf(stderr, "  -s, --state-file F   Write state to file (Erlang format)\n");
-    fprintf(stderr, "  -p, --parse-file F   Write parsed structure to file\n");
-    fprintf(stderr, "  -R, --result-file F  Write result to file (Erlang format)\n");
+    fprintf(stderr, "  -s, --state-file=F   Write state to file (Erlang format)\n");
+    fprintf(stderr, "  -p, --parse-file=F   Write parsed structure to file\n");
+    fprintf(stderr, "  -R, --result-file=F  Write result to file (Erlang format)\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "If no file is given, reads from stdin.\n");
 }
@@ -304,12 +343,12 @@ int main(int argc, char** argv)
     uint32_t max_time_ms = 0;
     uint32_t start_time;
     int c;
-    int transaction = 0;
-    int reactive = 0;
+    int transaction = TRANSACTION_DEFAULT;
+    int reactive = REACTIVE_DEFAULT;
 
     while (1) {
 	int option_index = 0;
-	c = getopt_long(argc, argv, "hrtndPQSc:T:s:p:R:",
+	c = getopt_long(argc, argv, "hndPQSc:T:s:p:R:r:t:",
 			long_options, &option_index);
 	if (c == -1)
 	    break;
@@ -318,8 +357,8 @@ int main(int argc, char** argv)
 	case 'h':
 	    usage(argv[0]);
 	    exit(0);
-	case 'r': reactive = 1; break;
-	case 't': transaction = 1; break;
+	case 'r': reactive =  atoi(optarg); break;
+	case 't': transaction = atoi(optarg); break;
 	case 'n': execute = 0; break;
 	case 'c': max_cycles = atoi(optarg); break;
 	case 'T': max_time_ms = atoi(optarg); break;
@@ -352,16 +391,20 @@ int main(int argc, char** argv)
 	}
     }    
 
-    if (debug)
+    if (debug) {
 	print_defines();
-#if !defined(WANT_TRANSACTION) || (WANT_TRANSACTION==0)
+	printf("transaction=%d\n", transaction);
+	printf("reactive=%d\n", reactive);
+	printf("execute=%d\n", execute);	
+    }
+#if !defined(SUPPORT_TRANSACTION) || (SUPPORT_TRANSACTION==0)
     if (transaction) {
 	fprintf(stderr, "transaction mode not configured\n");
 	exit(1);
     }
 #endif
     
-#if !defined(WANT_REACTIVE) || (WANT_REACTIVE==0)
+#if !defined(SUPPORT_REACTIVE) || (SUPPORT_REACTIVE==0)
     if (reactive) {
 	fprintf(stderr, "reactive mode not configured\n");
 	exit(1);
@@ -474,7 +517,7 @@ loop:
 	usleep(1000*state.wait_ms);
 	goto loop;
     }
-#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     // in reactive mode, continue if queue has items (e.g. from timeout)
     if (state.reactive && (state.hd != state.tl))
 	goto loop;
@@ -483,7 +526,7 @@ loop:
 done:
 
     fprintf(stdout, "cycle=%d\n", state.cycle);
-#if defined(WANT_STATISTICS) && (WANT_STATISTICS==1)
+#if defined(SUPPORT_STATISTICS) && (SUPPORT_STATISTICS==1)
     fprintf(stdout, "num_eval_rule=%d\n", state.num_eval_rule);
     fprintf(stdout, "num_eval0=%d\n", state.num_eval0);
 #endif

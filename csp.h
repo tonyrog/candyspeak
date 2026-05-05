@@ -27,7 +27,7 @@ typedef uint8_t  reg_t;    // at most 256 registers
 
 #define OBJ_BITS     4    // (2^OBJ_BITS-2) (14)
 #define DECL_BITS    10
-#define INSTR_BITS   7
+#define INSTR_BITS   8    // Max 256 instructions
 #define INDEX_BITS   (OBJ_BITS+DECL_BITS)
 #define REG_BITS     4
 #define GLOBAL       0                       // global level
@@ -59,7 +59,7 @@ typedef uint8_t  reg_t;    // at most 256 registers
 #define MAKE_INDEX(obj,x) (((obj)<<DECL_BITS) | (x))
 
 #define MAX_PARSE_STACK_DEPTH 10
-#define MAX_LINE_TOKENS 128
+#define MAX_LINE_TOKENS 64 // 128
 
 #define CSP_TRUE  -1  // all bits set, like openCL/Forth
 #define CSP_FALSE 0
@@ -164,6 +164,8 @@ typedef enum {
     ST,
     LDI,
     ARG,
+    CVTIF,
+    CVTFI,    
     // functions are now handled via OP_CALL + function table
     LAST_NODE, // built-in + operators stop
     // keywords
@@ -225,6 +227,8 @@ typedef enum {
     OP_INV,     // "~"  x=~y =  x=1^y        
     OP_NEG,     // "-"  x=-y == x=0-y
     OP_POS,     // "+"  x=+y == x=0+y
+    OP_CVTIF,   // trunc float => integer
+    OP_CVTFI,   // cast int to float
     // node - binary operator
     OP_ADD,     // "+"
     OP_SUB,     // "-"
@@ -244,6 +248,13 @@ typedef enum {
     OP_XOR,     // "^"
     OP_ANDAND,  // "&&"
     OP_OROR,    // "||"
+
+    OP_FNEG,     // "-"  x=-y == x=0-y    
+    OP_FADD,     // "+"
+    OP_FSUB,     // "-"
+    OP_FMUL,     // "*"
+    OP_FDIV,     // "/"
+    
     OP_EQ,      // "="
     OP_COMMA,   // ","
     // rule
@@ -516,7 +527,7 @@ typedef struct _csp_rt_t
     value_t arg[MAX_ARGS];         // loaded before call
     
     value_t dv0[MAX_INDEX];       // declaration (leaf) value (y,z)    
-#if defined(WANT_TRANSACTION) && (WANT_TRANSACTION==1)
+#if defined(SUPPORT_TRANSACTION) && (SUPPORT_TRANSACTION==1)
     value_t dv1[MAX_INDEX];       // declaration (leaf) value (y,z)    
 #endif
     // check if any node has been set: anyx|anyd == CSP_TRUE
@@ -553,7 +564,7 @@ typedef struct _csp_rt_t
     // during eval
     uint32_t update;             // update counter
     uint32_t wait_ms;            // sleep time or NOTIMEOUT
-#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)        
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)        
     bitset_decl(inq, MAX_INDEX); // mark nodes in queue during eval
     index_t queue[MAX_QUEUE];    // nodes in queue
     int hd,tl;  // queue head and tail
@@ -563,7 +574,7 @@ typedef struct _csp_rt_t
     index_t edg [MAX_INDEX+1]; // edg[ofs[n]+0...ideg[n]-1] back pointer
 #endif
     uint32_t cycle;
-#if defined(WANT_STATISTICS) && (WANT_STATISTICS==1)
+#if defined(SUPPORT_STATISTICS) && (SUPPORT_STATISTICS==1)
     uint32_t num_eval_rule;    
     uint32_t num_eval0;
 #endif
@@ -583,7 +594,7 @@ static inline int st_index(csp_rt_t* st, index_t n)
     return st->offs[OBJ(n)] + INDEX(n);
 }
 
-#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)    
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)    
 // enq an node for recalculation
 static inline void csp_enq(csp_rt_t* st, uint16_t ip)
 {
@@ -668,6 +679,9 @@ extern void csp_setup(csp_rt_t* st);
 extern void csp_input(csp_rt_t* st);
 extern void csp_output(csp_rt_t* st);
 
+// stack check/debug
+extern int stack_used();
+
 // platform print functions
 extern int csp_print_char(char c);
 extern int csp_print_str(const char* s);
@@ -683,7 +697,7 @@ extern tok_t csp_opcode_to_tok(opcode_t opcode);
 extern vtype_t csp_opcode_type(opcode_t opcode);
 extern void csp_set_error(csp_rt_t*, csp_err_t);
 extern void csp_clr_error(csp_rt_t*);
-#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 extern void csp_enq_elist(csp_rt_t* st, index_t x);
 #endif
 
