@@ -59,7 +59,11 @@ typedef uint8_t  reg_t;    // at most 256 registers
 #define MAKE_INDEX(obj,x) (((obj)<<DECL_BITS) | (x))
 
 #define MAX_PARSE_STACK_DEPTH 10
-#define MAX_LINE_TOKENS 64 // 128
+#ifdef CSP_EMBEDDED
+#define MAX_LINE_TOKENS 24
+#else
+#define MAX_LINE_TOKENS 64
+#endif
 
 #define CSP_TRUE  -1  // all bits set, like openCL/Forth
 #define CSP_FALSE 0

@@ -1,0 +1,26 @@
+// generate and execute all arithmetic operators
+
+#variable X integer
+#variable Y integer = 7
+#variable Z integer = 5
+#variable S integer = 0
+
+// binary operators supported
+X = Y + Z,  S=1  ? S==0
+X = Y - Z,  S=2  ? S==1
+X = (Y * Z),  S=3  ? S==2
+X = (Y / Z),  S=4  ? S==3
+X = (Y % Z),  S=5  ? S==4
+X = (Y << Z), S=6  ? S==5
+X = (Y >> Z), S=7  ? S==6
+X = (Y < Z),  S=8  ? S==7
+X = (Y <= Z), S=9  ? S==8
+X = (Y > Z),  S=10 ? S==9
+X = (Y >= Z), S=11 ? S==10
+X = (Y == Z), S=12 ? S==11
+X = (Y != Z), S=13 ? S==12
+X = (Y & Z),  S=14 ? S==13
+X = (Y | Z),  S=15 ? S==14
+X = (Y ^ Z),  S=16 ? S==15
+X = (Y && Z), S=17 ? S==16
+X = (Y || Z), S=18 ? S==17

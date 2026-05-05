@@ -1,7 +1,6 @@
 // CandySpeak runtime
 #include <stdlib.h>
 #include <stdint.h>
-#include <stdarg.h>
 #include <string.h>
 #include <ctype.h>
 
@@ -355,9 +354,7 @@ tok_t csp_opcode_to_tok(opcode_t op)
 
 const char* csp_op_name(opcode_t op)
 {
-    tok_t tok;
-    if ((tok = csp_opcode_to_tok(op)) < 0)
-	return "?";
+    tok_t tok = csp_opcode_to_tok(op);
     return op_table[tok].name;
 }
 
@@ -797,20 +794,22 @@ static index_t lookup_decl_in(csp_rt_t* st, char* name, int name_len,
 			      int start, int stop)
 {
     int i = start;
-    
+
     while(i < stop) {
 	int pos = st->decl[i].name;
-	int len = st->str[pos-1];
-	index_t ix = MAKE_INDEX(0,i);
-	if ((len == name_len) &&
-	    (memcmp(decl_name(st, ix),name, name_len)==0)) {
-	    return ix;
+	if (pos > 0) {
+	    int len = st->str[pos-1];
+	    index_t ix = MAKE_INDEX(0,i);
+	    if ((len == name_len) &&
+		(memcmp(decl_name(st, ix),name, name_len)==0)) {
+		return ix;
+	    }
 	}
 	if (st->decl[i].type == DECL_MODULE) // skip module def
 	    i += (st->decl[i].md.n+1); // skip elements and END
 	i++;
     }
-    return BAD_INDEX;    
+    return BAD_INDEX;
 }
 
 static index_t lookup_decl(csp_rt_t* st, char* name, int name_len)
@@ -2150,6 +2149,7 @@ static int expect_const(csp_rt_t* st, token_t* tv, int i,
 	if (st->uconst == NULL)
 	    return -1;
 	if (st->uconst(st,tv[i].v.str.ptr,tv[i].v.str.len,&rp->v.val.i)) {
+	    // only integer constants for now
 	    rp->t = INT;
 	    return i+1;
 	}
@@ -2180,29 +2180,30 @@ static int expect_integer(csp_rt_t* st, token_t* tv, int i,
     return expect_const(st, tv, i, rp, num);
 }
 
-static int expect(token_t* tv, int i, ...)
+static int expect(token_t* tv, int i, tok_t* te)
 {
-    va_list ap;
-    tok_t t;
-    
-    va_start(ap, i);
+    int j = 0;
+    int t;
+
     do {
-	t = va_arg(ap, tok_t);
-	if ((t != LAST) && (t != tv[i].t))
+	t = te[j];
+	if ((t != LAST) && (t != (int)tv[i].t))
 	    return 0;
+	j++;
 	i++;
     } while(t != LAST);
-    va_end(ap);
     return 1;
 }
+
 
 // '#' 'module' <name>
 int csp_parse_module(csp_rt_t* st, token_t* tv, size_t n)
 {
     index_t ix;
     index_t jx;
+    tok_t te[] = {HASH, MODULE, WORD, LAST};
 
-    if (!expect(tv, 0, HASH, MODULE, WORD, LAST)) {
+    if (!expect(tv, 0, te)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -2225,8 +2226,9 @@ int csp_parse_module(csp_rt_t* st, token_t* tv, size_t n)
 int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
 {
     index_t mx, ex, lx;
+    tok_t te[] = {HASH, END, LAST};    
 
-    if (!expect(tv, 0, HASH, END, LAST)) {
+    if (!expect(tv, 0, te)) {
 	csp_set_error(st, ERR_SYNTAX);	
 	return -1;
     }
@@ -2262,13 +2264,15 @@ int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n)
     value_t def;
     index_t ix;    
     int i;
+    tok_t teres[] = {COLON, INT, LAST};    
+    tok_t te[] = {HASH, VARIABLE, WORD, LAST};
 
-    if (!expect(tv, 0, HASH, VARIABLE, WORD, LAST)) {
+    if (!expect(tv, 0, te)) {
 	csp_set_error(st, ERR_SYNTAX);	
 	return -1;
     }
     i=3;
-    if ((tv[i].t == COLON) && (tv[i+1].t == INT)) {
+    if (expect(tv, i, teres)) {
 	res = MAKE_RES(tv[i+1].v.val.i);
 	i += 2;
     }
@@ -2314,18 +2318,20 @@ int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
     vtype_t vt;
     index_t ix;  
     int i;
-
+    tok_t teres[] = {COLON, INT, LAST};    
+    tok_t te[] = {HASH, CONSTANT, WORD, LAST};
+    
     // defaults
     vt = V_INTEGER;
     cnst.i = 0;
     res = MAKE_RES(8*sizeof(ivalue_t));
 
-    if (!expect(tv, 0, HASH, CONSTANT, WORD, LAST)) {
+    if (!expect(tv, 0, te)) {
 	csp_set_error(st, ERR_SYNTAX);	
 	return -1;
     }
     i=3;
-    if ((tv[i].t == COLON) && (tv[i+1].t == INT)) {
+    if (expect(tv, i, teres)) {	
 	res = MAKE_RES(tv[i+1].v.val.i);
 	i += 2;
     }
@@ -2363,8 +2369,10 @@ int csp_parse_digital(csp_rt_t* st, token_t* tv, size_t n)
     ivalue_t port=0, pin=0;
     index_t ix;
     int i;
+    tok_t te[] = {HASH, DIGITAL, WORD, LAST};
+    tok_t teport[] = {INT, COLON, INT, LAST};        
 
-    if (!expect(tv, 0, HASH, DIGITAL, WORD, LAST)) {
+    if (!expect(tv, 0, te)) {
 	csp_set_error(st, ERR_SYNTAX);	
 	return -1;
     }
@@ -2380,7 +2388,7 @@ opts:
 	default: break;
 	}
     }
-    if (expect(tv, i, INT, COLON, INT, LAST)) {
+    if (expect(tv, i, teport)) {
 	port = tv[i].v.val.i;
 	pin  = tv[i+2].v.val.i;
 	i += 3;
@@ -2418,16 +2426,19 @@ int csp_parse_analog(csp_rt_t* st, token_t* tv, size_t n)
     vtype_t vt;
     index_t ix;
     int i;
+    tok_t te[] = {HASH, ANALOG, WORD, LAST};
+    tok_t teres[] = {COLON, INT, LAST};
+    tok_t teport[] = {INT, COLON, INT, LAST};
 
     res = MAKE_RES(10);
     vt = V_INTEGER;    
 
-    if (!expect(tv, 0, HASH, ANALOG, WORD, LAST)) {
+    if (!expect(tv, 0, te)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
     i = 3;
-    if (expect(tv, i, COLON, INT, LAST)) {
+    if (expect(tv, i, teres)) {
 	res = MAKE_RES(tv[i+1].v.val.i);
 	i += 2;
     }
@@ -2444,7 +2455,7 @@ opts:
 	default: break;
 	}
     }
-    if (expect(tv, i, INT, COLON, INT, LAST)) {
+    if (expect(tv, i, teport)) {
 	port = tv[i].v.val.i;
 	pin  = tv[i+2].v.val.i;
 	i += 3;
@@ -2478,8 +2489,9 @@ int csp_parse_timer(csp_rt_t* st, token_t* tv, size_t n)
     ivalue_t init = 0;
     index_t ix, px, tx;
     int i;
-
-    if (!expect(tv, 0, HASH, TIMER, WORD, INT, LAST)) {
+    tok_t te[] = {HASH, TIMER, WORD, INT, LAST};
+    
+    if (!expect(tv, 0, te)) {
 	csp_set_error(st, ERR_SYNTAX);	
 	return -1;
     }
@@ -2527,13 +2539,18 @@ int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
     index_t idx;
     int i;
     int bit0, bit1;
+    tok_t te[] = {HASH, CAN, WORD, LAST};
+    tok_t teres[] = {COLON, INT, LAST};
+    tok_t tebit[] = {INT, LB, INT, RB, LAST};
+    tok_t tebitrange[] = {INT, LB, INT, DOT, DOT, INT, RB, LAST};        
+    
 
-    if (!expect(tv, 0, HASH, CAN, WORD, LAST)) {
+    if (!expect(tv, 0, te)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
     i=3;
-    if ((tv[i].t == COLON) && (tv[i+1].t == INT)) {
+    if (expect(tv, i, teres)) {
 	res = MAKE_RES(tv[i+1].v.val.i);
 	i += 2;
     }
@@ -2554,11 +2571,11 @@ opts:
     if (!in && !out) in=1;
 
     // FrameID [bit]
-    if (expect(tv, i, INT, LB, INT, RB, LAST)) {
+    if (expect(tv, i, tebit)) {
 	bit0 = bit1 = tv[i+2].v.val.i;
     }
     // FrameID [bit..bit]
-    else if (expect(tv, i, INT, LB, INT, DOT, DOT, INT, RB, LAST)) {
+    else if (expect(tv, i, tebitrange)) {
 	bit0 = tv[i+2].v.val.i;
 	bit1 = tv[i+5].v.val.i;
     }
@@ -2591,8 +2608,9 @@ int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
 {
     index_t mx, ix, jx;
     int i, m;
+    tok_t te[] = {HASH, WORD, WORD, LAST};        
 
-    if (!expect(tv, 0, HASH, WORD, WORD, LAST)) {
+    if (!expect(tv, 0, te)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -2771,8 +2789,9 @@ int csp_parse_legacy(csp_rt_t* st, token_t* tv, size_t n)
     ivalue_t on_bits;
     ivalue_t off_bits;    
     int i;
+    tok_t te[] = {INT, INT, INT, INT, INT, LAST};
 
-    if (!expect(tv, 0, INT, INT, INT, INT, INT, LAST))
+    if (!expect(tv, 0, te))
 	return -1;
     pos = tv[1].v.val.i;
     mask = tv[2].v.val.i;
@@ -2821,7 +2840,8 @@ int csp_parse(csp_rt_t* st, char* str)
     size_t num = MAX_LINE_TOKENS;
     reg_allocator_t alloc;
     int n;
-
+    tok_t te[] = {INT, INT, INT, INT, INT, LAST};
+    
     st->ap = &alloc;
         
     while((n = csp_scan_line(str, tv, &num)) > 0) {
@@ -2831,7 +2851,7 @@ int csp_parse(csp_rt_t* st, char* str)
     
 	if (tv[0].t == NEWLINE)
 	    r = 0;
-	else if (expect(tv, 0, INT, INT, INT, INT, INT, LAST)) {
+	else if (expect(tv, 0, te)) {
 	    r = csp_parse_legacy(st, tv, num);
 	}
 	else if (tv[0].t == HASH) {
