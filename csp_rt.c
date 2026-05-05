@@ -155,6 +155,12 @@ const op_entry_t op_table[] = {
 #define op_FSUB(y, z)  ((y)-(z))
 #define op_FMUL(y, z)  ((y)*(z))
 #define op_FDIV(y, z)  ((y)/(z))
+#define op_FLT(y, z)   (-((y)<(z)))
+#define op_FLTE(y, z)  (-((y)<=(z)))
+#define op_FGT(y, z)   (-((y)>(z)))
+#define op_FGTE(y, z)  (-((y)>=(z)))
+#define op_FEQEQ(y, z) (-((y)==(z)))
+#define op_FNEQ(y, z)  (-((y)!=(z)))
 
 #define op_NOT(y)  (~BOOL((y)))
 #define op_NEG(y)  (-(y))
@@ -171,6 +177,14 @@ const op_entry_t op_table[] = {
     {								\
         value_t x;						\
 	x.i = CAT2(op_,name)(y.i, z.i);				\
+	return x;						\
+    }
+
+#define MAKE_IFF(name)						\
+    static value_t CAT2(f_,name)(value_t y, value_t z)		\
+    {								\
+        value_t x;						\
+	x.i = CAT2(op_,name)(y.f, z.f);				\
 	return x;						\
     }
 
@@ -214,6 +228,8 @@ const op_entry_t op_table[] = {
 	return x;						\
     }
 
+MAKE_FF(FNEG);
+
 MAKE_III(ADD);
 MAKE_III(SUB);
 MAKE_III(MUL);
@@ -246,10 +262,16 @@ MAKE_FFF(FSUB);
 MAKE_FFF(FMUL);
 MAKE_FFF(FDIV);
 
-MAKE_FF(FNEG);
+MAKE_IFF(FLT);
+MAKE_IFF(FLTE);
+MAKE_IFF(FGT);
+MAKE_IFF(FGTE);
+MAKE_IFF(FEQEQ);
+MAKE_IFF(FNEQ);
+
 
 typedef struct {
-    tok_t   tok;
+    char*   name;
     int     arity;
     vtype_t  rtype;
     vtype_t  type[4];
@@ -257,42 +279,48 @@ typedef struct {
 
 // opcode => opcode type info
 static op_info_t info_tab[] = {
-    [OP_ADD] = {PLUS,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_SUB] = {MINUS,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_MUL] = {ASTERISK,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_DIV] = {SLASH,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_REM] = {PERCENT,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_SLA] = {LTLT,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_SRA] = {GTGT,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_AND] = {AMP,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_OR] = {BAR,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_XOR] = {CIRC,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_ANDAND] = {AMPAMP,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_OROR] = {BARBAR,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_EQ] = {EQ,2,V_INTEGER,{V_INDEX,V_INTEGER}},
-    [OP_LT] = {LT,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_LTE] = {LTEQ,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_GT] = {GT,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_GTE] = {GTEQ,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_EQEQ] = {EQEQ,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_NEQ] = {NEQ,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_ADD] = {"add",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_SUB] = {"sub",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_MUL] = {"mul",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_DIV] = {"div",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_REM] = {"rem",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_SLA] = {"sla",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_SRA] = {"sra",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_AND] = {"band",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_OR] = {"bor",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_XOR] = {"bxor",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_ANDAND] = {"and",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_OROR] = {"or",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_EQ] = {"assign",2,V_INTEGER,{V_INDEX,V_INTEGER}},
+    [OP_LT] = {"lt",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_LTE] = {"lte",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_GT] = {"gt",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_GTE] = {"gte",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_EQEQ] = {"eq",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_NEQ] = {"neq",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
     // unary versions (treated as binary with z ignored)
-    [OP_INV] = {TILDE,1,V_INTEGER,{V_INTEGER}},
-    [OP_NEG] = {MINUS1,1,V_INTEGER,{V_INTEGER}},
-    [OP_POS] = {PLUS1,1,V_INTEGER,{V_INTEGER}},
-    [OP_NOT] = {EXCLAMATION,1,V_INTEGER,{V_INTEGER}},
-    [OP_CVTIF] = {CVTIF,1,V_FLOAT,{V_INTEGER}},   // int→float
-    [OP_CVTFI] = {CVTFI,1,V_INTEGER,{V_FLOAT}},  // float→int
+    [OP_INV] = {"bnot",1,V_INTEGER,{V_INTEGER}},
+    [OP_NEG] = {"neg",1,V_INTEGER,{V_INTEGER}},
+    [OP_POS] = {"pos",1,V_INTEGER,{V_INTEGER}},
+    [OP_NOT] = {"not",1,V_INTEGER,{V_INTEGER}},
+    [OP_CVTIF] = {"cvtif",1,V_FLOAT,{V_INTEGER}},   // int→float
+    [OP_CVTFI] = {"cvtfi",1,V_INTEGER,{V_FLOAT}},  // float→int
 
-    [OP_FADD] = {PLUS,2,V_FLOAT,{V_FLOAT,V_FLOAT}},
-    [OP_FSUB] = {MINUS,2,V_FLOAT,{V_FLOAT,V_FLOAT}},
-    [OP_FMUL] = {ASTERISK,2,V_FLOAT,{V_FLOAT,V_FLOAT}},
-    [OP_FDIV] = {SLASH,2,V_FLOAT,{V_FLOAT,V_FLOAT}},
+    [OP_FNEG] = {"fneg",1,V_FLOAT,{V_FLOAT}},    
+    [OP_FADD] = {"fadd",2,V_FLOAT,{V_FLOAT,V_FLOAT}},
+    [OP_FSUB] = {"fsub",2,V_FLOAT,{V_FLOAT,V_FLOAT}},
+    [OP_FMUL] = {"fmul",2,V_FLOAT,{V_FLOAT,V_FLOAT}},
+    [OP_FDIV] = {"fdiv",2,V_FLOAT,{V_FLOAT,V_FLOAT}},
 
-    [OP_FNEG] = {MINUS1,1,V_FLOAT,{V_FLOAT}},
+    [OP_FLT] = {"flt",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
+    [OP_FLTE] = {"flte",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
+    [OP_FGT] = {"fgt",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
+    [OP_FGTE] = {"fgte",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
+    [OP_FEQEQ] = {"feq",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
+    [OP_FNEQ] = {"fneq",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
     
     // comman may not be needed?
-    [OP_COMMA] = {COMMA,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_COMMA] = {"comma",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
 };
 typedef value_t (*eval0_fn)();
 typedef value_t (*eval1_fn)(value_t y);
@@ -338,6 +366,13 @@ const eval2_fn eval_tab2[] =
     [OP_FSUB] = f_FSUB,
     [OP_FMUL] = f_FMUL,
     [OP_FDIV] = f_FDIV,
+
+    [OP_FLT] = f_FLT,
+    [OP_FLTE] = f_FLTE,
+    [OP_FGT] = f_FGT,
+    [OP_FGTE] = f_FGTE,
+    [OP_FEQEQ] = f_FEQEQ,
+    [OP_FNEQ] = f_FNEQ,    
     
     [OP_COMMA] = f_COMMA,
 };
@@ -347,15 +382,9 @@ vtype_t csp_opcode_type(opcode_t op)
     return info_tab[op].rtype;
 }
 
-tok_t csp_opcode_to_tok(opcode_t op)
-{
-    return info_tab[op].tok;
-}
-
 const char* csp_op_name(opcode_t op)
 {
-    tok_t tok = csp_opcode_to_tok(op);
-    return op_table[tok].name;
+    return info_tab[op].name;
 }
 
 void csp_set_error(csp_rt_t* st, csp_err_t err)
@@ -964,7 +993,7 @@ int csp_new_instr(csp_rt_t* st, opcode_t op)
     }
     st->ps.nn++;
     st->instr[i].op = op;
-    st->instr[i].cond = st->cond;    
+    //st->instr[i].cond = st->cond;    
     return i;
 }
 
@@ -1033,7 +1062,7 @@ int csp_new_rule(csp_rt_t* st, reg_t cnd, int nxt)
 {
     int i;
     if ((i = csp_new_instr(st, OP_RULE)) >= 0) {
-	st->instr[i].cond = 0;
+	// st->instr[i].cond = 0;
 	st->instr[i].r.cnd = cnd;
 	st->instr[i].r.nxt = nxt;
     }
@@ -1678,7 +1707,13 @@ static opcode_t float_op(opcode_t op)
     case OP_MUL: return OP_FMUL;
     case OP_DIV: return OP_FDIV;
     case OP_NEG: return OP_FNEG;
-    default: return op;  // comparisons etc return int
+    case OP_LT: return OP_FLT;
+    case OP_LTE: return OP_FLTE;
+    case OP_GT: return OP_FGT;
+    case OP_GTE: return OP_FGTE;
+    case OP_EQEQ: return OP_FEQEQ;
+    case OP_NEQ: return OP_FNEQ;
+    default: return op;
     }
 }
 
@@ -1703,6 +1738,7 @@ static int coerce_to_float(csp_rt_t* st, rstack_entry_t* e)
 }
 
 // Convert operand to int (float→int via cvtfi)
+#if 0
 static int coerce_to_int(csp_rt_t* st, rstack_entry_t* e)
 {
     if (e->vt == V_INTEGER) return 0;  // already int
@@ -1721,6 +1757,7 @@ static int coerce_to_int(csp_rt_t* st, rstack_entry_t* e)
     e->vt = V_INTEGER;
     return 0;
 }
+#endif
 
 static int process_op(csp_rt_t* st, tok_t tok, rstack_entry_t* rstack, int ep)
 {
@@ -2692,13 +2729,13 @@ int csp_parse_rule(csp_rt_t* st, token_t* tv, size_t n)
     }
     if ((j = csp_new_rule(st, cnd, 0)) < 0)
 	return -1;
-    st->cond = 1;
+    //st->cond = 1;
     if (csp_parse_expr(st,&tv[0],&num) < 0)
 	return -1;
     st->instr[j].r.nxt = st->ps.nn;
     if (csp_new_next(st) < 0)
 	return -1;
-    st->cond = 0;
+    //st->cond = 0;
     return 0;
 }
 
@@ -2769,13 +2806,13 @@ int make_can_rule(csp_rt_t* st, index_t ox, int k, index_t idx,
 
     if ((j = csp_new_rule(st, cnd, 0)) < 0)
 	return -1;
-    st->cond = 1;
+    //st->cond = 1;
     if (csp_new_st(st, kr, ox) < 0)
 	return -1;
     st->instr[j].r.nxt = st->ps.nn;    
     if (csp_new_next(st) < 0)
 	return -1;    
-    st->cond = 0;
+    //st->cond = 0;
     return 0;
 }
 

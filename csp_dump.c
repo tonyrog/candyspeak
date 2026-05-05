@@ -108,8 +108,6 @@ index_t csp_dump_rule(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 
 index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 {
-    const char* cond = st->instr[i].cond ? "t" : "f";
-
     fprintf(f, "%s", indent(lev));
     switch(st->instr[i].op) {
     case OP_NOP:
@@ -125,38 +123,38 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		i,
 		st->instr[i].m.x);
 	csp_fprint_tag(f, st, st->instr[i].m.mem);
-	fprintf(f, ",%s]}%s\n", cond, eot);
+	fprintf(f, "]}%s\n", eot);
 	break;
     case OP_ST:
 	fprintf(f, "{instr,%d,st,[r%d,",
 		i,
 		st->instr[i].m.x);
 	csp_fprint_tag(f, st, st->instr[i].m.mem);
-	fprintf(f, ",%s]}%s\n", cond, eot);
+	fprintf(f, "]}%s\n", eot);
 	break;
     case OP_LI:
-	fprintf(f, "{instr,%d,li,[r%d,%d,%s]}%s\n",
+	fprintf(f, "{instr,%d,li,[r%d,%d]}%s\n",
 		i,
 		st->instr[i].i.x,
 		st->instr[i].i.imm,
-		cond, eot);
+		eot);
 	break;
     case OP_ARG:
-	fprintf(f, "{instr,%d,arg,[r%d,%d,%s]}%s\n",
+	fprintf(f, "{instr,%d,arg,[r%d,%d]}%s\n",
 		i,
 		st->instr[i].i.x,
 		st->instr[i].i.imm,
-		cond, eot);
+		eot);
 	break;
     case OP_CALL:
-	fprintf(f, "{instr,%d,call,[r%d,%s,%d,%s]}%s\n",
+	fprintf(f, "{instr,%d,call,[r%d,%s,%d]}%s\n",
 		i,
 		st->instr[i].f.x,
 		(st->instr[i].f.usr ?
 		 st->ufuncs[st->instr[i].f.idx].name :
 		 csp_builtin_funcs[st->instr[i].f.idx].name),
 		st->instr[i].f.n,
-		cond, eot);
+		eot);
 	break;
     case OP_RULE:
 	fprintf(f, "{instr,%d,rule,[r%d,%d]}%s\n",
@@ -194,13 +192,13 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	break;
     }
     default:
-	fprintf(f, "{instr,%d,'%s',[r%d,r%d,r%d,%s]}%s\n",
+	fprintf(f, "{instr,%d,'%s',[r%d,r%d,r%d]}%s\n",
 		i,
 		csp_op_name(st->instr[i].op),
 		st->instr[i].a.x,
 		st->instr[i].a.y,
 		st->instr[i].a.z,
-		cond, eot);
+		eot);
     }
     return i+1;
 }

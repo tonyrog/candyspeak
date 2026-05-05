@@ -246,7 +246,7 @@ typedef enum {
     OP_GT,      // ">"
     OP_GTE,     // ">="
     OP_EQEQ,    // "=="
-    OP_NEQ,     // "!="    
+    OP_NEQ,     // "!="
     OP_AND,     // "&"
     OP_OR,      // "|"
     OP_XOR,     // "^"
@@ -258,6 +258,13 @@ typedef enum {
     OP_FSUB,     // "-"
     OP_FMUL,     // "*"
     OP_FDIV,     // "/"
+
+    OP_FLT,      // "<"
+    OP_FLTE,     // "<="
+    OP_FGT,      // ">"
+    OP_FGTE,     // ">="
+    OP_FEQEQ,    // "=="
+    OP_FNEQ,     // "!="    
     
     OP_EQ,      // "="
     OP_COMMA,   // ","
@@ -318,11 +325,6 @@ typedef enum {
 #define IS_OBJECT(s,i) (DECL_TYPE((s),(i))==DECL_OBJECT)
 #define IS_END(s,i)    (DECL_TYPE((s),(i))==DECL_END)
 #define IS_CAN(s,i)    (DECL_TYPE((s),(i))==DECL_CAN)
-
-//#define OP(s,i) ((s)->instr[(i)].op)
-//#define IS_ENTER(s,i) (OP((s),(i))==OP_ENTER)
-//#define IS_LEAVE(s,i) (OP((s),(i))==OP_LEAVE)
-//#define IS_COND(s,i)   ((s)->instr[(i)].cond)
 
 #define MAKE_RES(r) ((r)-1)
 #define GET_RES(rr) ((rr)+1)
@@ -434,7 +436,7 @@ typedef struct PACKED {
 
 typedef struct PACKED {
     opcode_t op:6;          // OP_xxx
-    unsigned cond:1;        // conditional instruction
+    // unsigned cond:1;        // conditional instruction
     union {
 	csp_instr_alu_t a;
 	csp_instr_mem_t m;
