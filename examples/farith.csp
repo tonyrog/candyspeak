@@ -1,0 +1,19 @@
+// generate and execute all float arithmetic operators
+
+#variable X float
+#variable Y float = 7.0
+#variable Z float = 5.0
+#variable S integer = 0
+
+// binary operators supported
+X = Y + Z,  S=1  ? S==0
+X = Y - Z,  S=2  ? S==1
+X = Y * Z,  S=3  ? S==2
+X = Y / Z,  S=4  ? S==3
+X = Y < Z,  S=5  ? S==4
+X = Y <= Z, S=6  ? S==5
+X = Y > Z,  S=7 ? S==6
+X = Y >= Z, S=8 ? S==7
+X = Y == Z, S=9 ? S==8
+X = Y != Z, S=10 ? S==9
+
