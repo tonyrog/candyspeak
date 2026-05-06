@@ -14,6 +14,7 @@ EXTERN_C_BEGIN
 #endif
 
 extern void    csp_dump(FILE*, csp_rt_t* st);
+extern void    csp_dump_code(FILE* f, csp_rt_t* st);
 extern void    csp_dump_tokens(FILE* f,token_t* tv, int n);
 extern void    csp_dump_variables(FILE* f, csp_rt_t* st);
 extern void    csp_dump_state_erl(FILE* f, csp_rt_t* st);

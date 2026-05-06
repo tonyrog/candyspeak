@@ -45,7 +45,7 @@ const op_entry_t op_table[] = {
     DECL_ENT(CAN,DECL_CAN,"can"),
     // node - unary
     INSTR_ENT(EXCLAMATION,OP_NOT,"!",1,105,RIGHT),
-    INSTR_ENT(TILDE,OP_INV,"~",1,105,RIGHT),
+    INSTR_ENT(TILDE,OP_BNOT,"~",1,105,RIGHT),
     INSTR_ENT(MINUS1,OP_NEG,"-",1,105,RIGHT),
     INSTR_ENT(PLUS1,OP_POS,"+",1,105,RIGHT),
     // node - binary
@@ -62,11 +62,11 @@ const op_entry_t op_table[] = {
     INSTR_ENT(GTEQ,OP_GTE,">=",2,70,LEFT),
     INSTR_ENT(EQEQ,OP_EQEQ,"==",2,60,LEFT),
     INSTR_ENT(NEQ,OP_NEQ,"!=",2,60,LEFT),
-    INSTR_ENT(AMP,OP_AND,"&",2,50,LEFT),
-    INSTR_ENT(CIRC,OP_XOR,"^",2,40,LEFT),
-    INSTR_ENT(BAR,OP_OR,"|",2,30,LEFT),
-    INSTR_ENT(AMPAMP,OP_ANDAND,"&&",2,20,LEFT),
-    INSTR_ENT(BARBAR,OP_OROR,"||",2,10,LEFT),
+    INSTR_ENT(AMP,OP_BAND,"&",2,50,LEFT),
+    INSTR_ENT(CIRC,OP_BXOR,"^",2,40,LEFT),
+    INSTR_ENT(BAR,OP_BOR,"|",2,30,LEFT),
+    INSTR_ENT(AMPAMP,OP_AND,"&&",2,20,LEFT),
+    INSTR_ENT(BARBAR,OP_OR,"||",2,10,LEFT),
     INSTR_ENT(EQ,OP_EQ,"=",2,5,RIGHT),
     INSTR_ENT(COMMA,OP_COMMA,",",2,2,RIGHT),
     INSTR_ENT(QUEST,OP_RULE,"?",-1,-1,NO),
@@ -135,12 +135,12 @@ const op_entry_t op_table[] = {
 #define op_MUL(y, z)  ((y)*(z))
 #define op_DIV(y, z)  ((y)/(z))
 #define op_REM(y, z)  ((y)%(z))
-#define op_AND(y, z)  ((y)&(z))
-#define op_OR(y, z)   ((y)|(z))
-#define op_XOR(y, z)  ((y)^(z))
+#define op_BAND(y, z)  ((y)&(z))
+#define op_BOR(y, z)   ((y)|(z))
+#define op_BXOR(y, z)  ((y)^(z))
 // logical 1 == -1 (all bits set)
-#define op_ANDAND(y, z) (-((y)&&(z)))
-#define op_OROR(y, z) (-((y)||(z)))
+#define op_AND(y, z)  (-((y)&&(z)))
+#define op_OR(y, z)   (-((y)||(z)))
 #define op_LT(y, z)   (-((y)<(z)))
 #define op_LTE(y, z)  (-((y)<=(z)))
 #define op_GT(y, z)   (-((y)>(z)))
@@ -165,7 +165,7 @@ const op_entry_t op_table[] = {
 #define op_NOT(y)  (~BOOL((y)))
 #define op_NEG(y)  (-(y))
 #define op_POS(y)  (y)
-#define op_INV(y)  (~(y))
+#define op_BNOT(y)  (~(y))
 #define op_CVTIF(y) ((fvalue_t) (y))
 #define op_CVTFI(y) ((ivalue_t) (y))
 
@@ -235,11 +235,11 @@ MAKE_III(SUB);
 MAKE_III(MUL);
 MAKE_III(DIV);
 MAKE_III(REM);
+MAKE_III(BAND);
+MAKE_III(BOR);
+MAKE_III(BXOR);
 MAKE_III(AND);
 MAKE_III(OR);
-MAKE_III(XOR);
-MAKE_III(ANDAND);
-MAKE_III(OROR);
 MAKE_III(LT);
 MAKE_III(LTE);
 MAKE_III(GT);
@@ -250,7 +250,7 @@ MAKE_III(SLA);
 MAKE_III(SRA);
 MAKE_III(COMMA);
 
-MAKE_II(INV);
+MAKE_II(BNOT);
 MAKE_II(NEG);
 MAKE_II(POS);
 MAKE_II(NOT);
@@ -279,48 +279,62 @@ typedef struct {
 
 // opcode => opcode type info
 static op_info_t info_tab[] = {
-    [OP_ADD] = {"add",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_SUB] = {"sub",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_MUL] = {"mul",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_DIV] = {"div",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_REM] = {"rem",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_SLA] = {"sla",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_SRA] = {"sra",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_AND] = {"band",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_OR] = {"bor",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_XOR] = {"bxor",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_ANDAND] = {"and",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_OROR] = {"or",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_EQ] = {"assign",2,V_INTEGER,{V_INDEX,V_INTEGER}},
-    [OP_LT] = {"lt",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_LTE] = {"lte",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_GT] = {"gt",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_GTE] = {"gte",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_EQEQ] = {"eq",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_NEQ] = {"neq",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_ADD] = {"ADD",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_SUB] = {"SUB",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_MUL] = {"MUL",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_DIV] = {"DIV",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_REM] = {"REM",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_SLA] = {"SLA",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_SRA] = {"SRA",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_BAND] = {"BAND",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_BOR] = {"BOR",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_BXOR] = {"BXOR",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_AND] = {"AND",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_OR] = {"OR",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_EQ] = {"ASSIGN",2,V_INTEGER,{V_INDEX,V_INTEGER}},
+    [OP_LT] = {"LT",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_LTE] = {"LTE",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_GT] = {"GT",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_GTE] = {"GTE",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_EQEQ] = {"EQ",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_NEQ] = {"NEQ",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
     // unary versions (treated as binary with z ignored)
-    [OP_INV] = {"bnot",1,V_INTEGER,{V_INTEGER}},
-    [OP_NEG] = {"neg",1,V_INTEGER,{V_INTEGER}},
-    [OP_POS] = {"pos",1,V_INTEGER,{V_INTEGER}},
-    [OP_NOT] = {"not",1,V_INTEGER,{V_INTEGER}},
-    [OP_CVTIF] = {"cvtif",1,V_FLOAT,{V_INTEGER}},   // int→float
-    [OP_CVTFI] = {"cvtfi",1,V_INTEGER,{V_FLOAT}},  // float→int
+    [OP_BNOT] = {"BNOT",1,V_INTEGER,{V_INTEGER}},
+    [OP_NEG] = {"NEG",1,V_INTEGER,{V_INTEGER}},
+    [OP_POS] = {"POS",1,V_INTEGER,{V_INTEGER}},
+    [OP_NOT] = {"NOT",1,V_INTEGER,{V_INTEGER}},
+    [OP_CVTIF] = {"CVTIF",1,V_FLOAT,{V_INTEGER}},   // int→float
+    [OP_CVTFI] = {"CVTFI",1,V_INTEGER,{V_FLOAT}},  // float→int
 
-    [OP_FNEG] = {"fneg",1,V_FLOAT,{V_FLOAT}},    
-    [OP_FADD] = {"fadd",2,V_FLOAT,{V_FLOAT,V_FLOAT}},
-    [OP_FSUB] = {"fsub",2,V_FLOAT,{V_FLOAT,V_FLOAT}},
-    [OP_FMUL] = {"fmul",2,V_FLOAT,{V_FLOAT,V_FLOAT}},
-    [OP_FDIV] = {"fdiv",2,V_FLOAT,{V_FLOAT,V_FLOAT}},
+    [OP_FNEG] = {"FNEG",1,V_FLOAT,{V_FLOAT}},    
+    [OP_FADD] = {"FADD",2,V_FLOAT,{V_FLOAT,V_FLOAT}},
+    [OP_FSUB] = {"FSUB",2,V_FLOAT,{V_FLOAT,V_FLOAT}},
+    [OP_FMUL] = {"FMUL",2,V_FLOAT,{V_FLOAT,V_FLOAT}},
+    [OP_FDIV] = {"FDIV",2,V_FLOAT,{V_FLOAT,V_FLOAT}},
 
-    [OP_FLT] = {"flt",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
-    [OP_FLTE] = {"flte",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
-    [OP_FGT] = {"fgt",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
-    [OP_FGTE] = {"fgte",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
-    [OP_FEQEQ] = {"feq",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
-    [OP_FNEQ] = {"fneq",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
+    [OP_FLT] = {"FLT",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
+    [OP_FLTE] = {"FLTE",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
+    [OP_FGT] = {"FGT",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
+    [OP_FGTE] = {"FGTE",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
+    [OP_FEQEQ] = {"FEQ",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
+    [OP_FNEQ] = {"FNEQ",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
     
     // comman may not be needed?
-    [OP_COMMA] = {"comma",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_COMMA] = {"COMMA",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+
+    // other operations for name
+    [OP_ENTER] = {"ENTER",0,V_VOID,{}},
+    [OP_LEAVE] = {"LEAVE",0,V_VOID,{}},
+    [OP_NEW]   = {"NEW",0,V_VOID,{}},
+    [OP_LI]    = {"LI",0,V_VOID,{}},
+    [OP_ARG]   = {"ARG",0,V_VOID,{}},    
+    [OP_ST]    = {"ST",0,V_VOID,{}},
+    [OP_LD]    = {"LD",0,V_VOID,{}},
+    [OP_CALL]  = {"CALL",0,V_VOID,{}},
+    [OP_RULE]  = {"RULE",0,V_VOID,{}},
+    [OP_NEXT]  = {"NEXT",0,V_VOID,{}},
+    [OP_NOP] = {"NOP",0,V_VOID,{}},    
+    
 };
 typedef value_t (*eval0_fn)();
 typedef value_t (*eval1_fn)(value_t y);
@@ -332,7 +346,7 @@ const eval0_fn eval_tab0[] =
 
 const eval1_fn eval_tab1[] =
 {
-    [OP_INV]   = f_INV,
+    [OP_BNOT]  = f_BNOT,
     [OP_NEG]   = f_NEG,
     [OP_POS]   = f_POS,
     [OP_NOT]   = f_NOT,
@@ -350,11 +364,11 @@ const eval2_fn eval_tab2[] =
     [OP_REM] = f_REM,
     [OP_SLA] = f_SLA,
     [OP_SRA] = f_SRA,
+    [OP_BAND] = f_BAND,
+    [OP_BOR] = f_BOR,
+    [OP_BXOR] = f_BXOR,
     [OP_AND] = f_AND,
     [OP_OR] = f_OR,
-    [OP_XOR] = f_XOR,
-    [OP_ANDAND] = f_ANDAND,
-    [OP_OROR] = f_OROR,
     [OP_LT] = f_LT,
     [OP_LTE] = f_LTE,
     [OP_GT] = f_GT,
@@ -437,58 +451,87 @@ int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val)
 }
 
 // Built-in function implementations - args are pre-evaluated
-static ivalue_t fn_min(csp_rt_t* st, value_t* args, uint8_t nargs)
+static value_t fn_min(csp_rt_t* st,uint16_t type,value_t* args,uint8_t nargs)
 {
+    value_t ret;
     (void)st; (void)nargs;
-    return imin(args[0].i, args[1].i);
+    ret.i = imin(args[0].i, args[1].i);
+    return ret;
 }
 
-static ivalue_t fn_max(csp_rt_t* st, value_t* args, uint8_t nargs)
+static value_t fn_max(csp_rt_t* st,uint16_t type,value_t* args,uint8_t nargs)
 {
+    value_t ret;    
     (void)st; (void)nargs;
-    return imax(args[0].i, args[1].i);
+    ret.i = imax(args[0].i, args[1].i); 
+    return ret;
 }
 
-static ivalue_t fn_abs(csp_rt_t* st, value_t* args, uint8_t nargs)
+static value_t fn_abs(csp_rt_t* st,uint16_t type,value_t* args,uint8_t nargs)
 {
+    value_t ret;    
     (void)st; (void)nargs;
-    return iabs(args[0].i);
+    ret.i = iabs(args[0].i);
+    return ret;
 }
 
-static ivalue_t fn_clip(csp_rt_t* st, value_t* args, uint8_t nargs)
+static value_t fn_fabs(csp_rt_t* st,uint16_t type,value_t* args,uint8_t nargs)
 {
+    value_t ret;
+    float arg = args[0].f;
     (void)st; (void)nargs;
-    return iclip(args[0].i, args[1].i, args[2].i);
+    ret.f = (arg < 0) ? -arg : arg;
+    return ret;
 }
 
-static ivalue_t fn_sign(csp_rt_t* st, value_t* args, uint8_t nargs)
+static value_t fn_clip(csp_rt_t* st,uint16_t type,value_t* args, uint8_t nargs)
 {
+    value_t ret;    
     (void)st; (void)nargs;
-    return isign(args[0].i);
+    ret.i = iclip(args[0].i, args[1].i, args[2].i);
+    return ret;
 }
 
-static ivalue_t fn_timeout(csp_rt_t* st, value_t* args, uint8_t nargs)
+static value_t fn_sign(csp_rt_t* st,uint16_t type, value_t* args, uint8_t nargs)
 {
+    value_t ret;
+    (void)st; (void)nargs;
+    ret.i = isign(args[0].i);
+    return ret;
+}
+
+static value_t fn_timeout(csp_rt_t* st,uint16_t type,
+			  value_t* args, uint8_t nargs)
+{
+    value_t ret;
     index_t ty = args[0].u;
-    ivalue_t tmo = BOOL(!st->decl[INDEX(ty)].tm.running);
-    return tmo;
+    ret.i = BOOL(!st->decl[INDEX(ty)].tm.running);
+    return ret;
 }
 
 // FIXME: mark the type info is needed?
-static ivalue_t fn_print(csp_rt_t* st, value_t* args, uint8_t nargs)
+static value_t fn_print(csp_rt_t* st, uint16_t type,
+			 value_t* args,uint8_t nargs)
 {
-    return csp_print_value(st, V_STRING, args[0]);
+    value_t ret;
+    ret.i = csp_print_value(st, type & 0xf, args[0]);
+    return ret;
 }
 
-static ivalue_t fn_tick(csp_rt_t* st, value_t* args, uint8_t nargs)
+static value_t fn_tick(csp_rt_t* st,uint16_t type,value_t* args,uint8_t nargs)
 {
+    value_t ret;
     (void)st; (void)args; (void)nargs;
-    return csp_time_ms();
+    ret.i = csp_time_ms();
+    return ret;
 }
 
-static ivalue_t fn_cycle(csp_rt_t* st, value_t* args, uint8_t nargs) {
+static value_t fn_cycle(csp_rt_t* st,uint16_t type,value_t* args, uint8_t nargs)
+{
+    value_t ret;    
     (void)args; (void)nargs;
-    return st->cycle;
+    ret.i = st->cycle;
+    return ret;
 }
 
 // Built-in function table
@@ -498,10 +541,11 @@ const csp_func_t csp_builtin_funcs[] = {
     { "min",     3, 2, V_INTEGER, {V_INTEGER,V_INTEGER,0,0},      fn_min },
     { "max",     3, 2, V_INTEGER, {V_INTEGER,V_INTEGER,0,0},      fn_max },
     { "abs",     3, 1, V_INTEGER, {V_INTEGER,0,0,0},              fn_abs },
+    { "fabs",    4, 1, V_FLOAT,   {V_FLOAT,0,0,0},                fn_fabs },
     { "sign",    4, 1, V_INTEGER, {V_INTEGER,0,0,0},              fn_sign },
     { "clip",    4, 3, V_INTEGER, {V_INTEGER,V_INTEGER,V_INTEGER,0}, fn_clip},
     { "timeout", 7, 1, V_INTEGER, {V_INDEX,0,0,0},                fn_timeout },
-    { "print",   5, 1, V_INTEGER, {V_STRING,0,0,0},               fn_print },
+    { "print",   5, 1, V_INTEGER, {V_ANY,0,0,0},                  fn_print },
     { "tick",    4, 0, V_INTEGER, {0,0,0,0},                      fn_tick },
     { "cycle",   5, 0, V_INTEGER, {0,0,0,0},                      fn_cycle },
 };
@@ -708,8 +752,9 @@ again:
 		func = &csp_builtin_funcs[idx];
 	}
 	if (func && func->fn) {
-	    ivalue_t val = func->fn(st, st->arg, func->nargs);
-	    st->reg[st->instr[n].f.x].i = val;
+	    value_t val = func->fn(st, st->instr[n].f.avt,
+				    st->arg, func->nargs);
+	    st->reg[st->instr[n].f.x] = val;
 	}
 	break;
     }
@@ -896,12 +941,13 @@ index_t lookup_string_const(csp_rt_t* st, char* str, int len)
 // position return is pos efter length byte
 int new_string(csp_rt_t* st, char* name, int len)
 {
-    sindex_t pos = st->ps.strp - (len+2);
-    if (pos <= 0) {
+    sindex_t pos = st->ps.strp;
+    sindex_t next = pos + (len+2);
+    if (next >= MAX_STR_BUF) {
 	csp_set_error(st, ERR_STRING_SPACE_EXHUSTED);
 	return -1;
     }
-    st->ps.strp = pos;  // allocate
+    st->ps.strp = next;  // allocate
     st->str[pos] = len;
     memcpy(&st->str[pos+1],name,len);
     st->str[pos+1+len] = '\0';
@@ -993,7 +1039,6 @@ int csp_new_instr(csp_rt_t* st, opcode_t op)
     }
     st->ps.nn++;
     st->instr[i].op = op;
-    //st->instr[i].cond = st->cond;    
     return i;
 }
 
@@ -1062,14 +1107,14 @@ int csp_new_rule(csp_rt_t* st, reg_t cnd, int nxt)
 {
     int i;
     if ((i = csp_new_instr(st, OP_RULE)) >= 0) {
-	// st->instr[i].cond = 0;
 	st->instr[i].r.cnd = cnd;
 	st->instr[i].r.nxt = nxt;
     }
     return i;
 }
 
-int csp_new_call(csp_rt_t* st, reg_t x, int func_idx, int is_user, int n)
+int csp_new_call(csp_rt_t* st, reg_t x, int func_idx, int is_user,
+		 int n, uint16_t argcode)
 {
     int i;
     if ((i = csp_new_instr(st, OP_CALL)) >= 0) {
@@ -1077,6 +1122,7 @@ int csp_new_call(csp_rt_t* st, reg_t x, int func_idx, int is_user, int n)
 	st->instr[i].f.idx = func_idx;
 	st->instr[i].f.usr = is_user;
 	st->instr[i].f.n   = n;
+	st->instr[i].f.avt = argcode;
     }
     return i;    
 }
@@ -1738,12 +1784,11 @@ static int coerce_to_float(csp_rt_t* st, rstack_entry_t* e)
 }
 
 // Convert operand to int (float→int via cvtfi)
-#if 0
 static int coerce_to_int(csp_rt_t* st, rstack_entry_t* e)
 {
     if (e->vt == V_INTEGER) return 0;  // already int
     if (e->vt != V_FLOAT) return -1;  // can only convert float
-
+    
     if (e->immediate) {
 	e->val.i = (ivalue_t)e->val.f;
     }
@@ -1757,7 +1802,7 @@ static int coerce_to_int(csp_rt_t* st, rstack_entry_t* e)
     e->vt = V_INTEGER;
     return 0;
 }
-#endif
+
 
 static int process_op(csp_rt_t* st, tok_t tok, rstack_entry_t* rstack, int ep)
 {
@@ -1948,6 +1993,7 @@ next:
 	    int is_user = FUNC_MARKER_IS_USER(marker);
 	    int n, j;
 	    const csp_func_t* func = NULL;
+	    uint16_t argcode = 0;
 	    
 	    if (is_user) {
 		if (st->ufuncs && (func_idx < st->num_ufuncs))
@@ -1961,15 +2007,45 @@ next:
 	    n = func->nargs;
 	    for (j = 0; j < n; j++) {
 		rstack_entry_t* arg = &rstack[ep-(n-j)];
+		vtype_t argvt = arg->vt;
 		vtype_t argtype = func->argtypes[j];
 
+		argcode |= (argvt << 4*j);
+
+		// check arguments & coerce
+		switch(argtype) {
+		case V_ANY:
+		    break;  // OK
+		case V_NUMBER:
+		    if ((argvt != V_INTEGER) && (argvt != V_FLOAT))
+			return PARSE_ERROR;
+		    break;
+		case V_INTEGER:
+		    if (coerce_to_int(st, arg) < 0)
+			return PARSE_ERROR;
+		    break;
+		case V_FLOAT:
+		    if (coerce_to_float(st, arg) < 0)
+			return PARSE_ERROR;
+		    break;
+		case V_STRING:
+		    if (arg->vt != V_STRING)
+			return PARSE_ERROR;
+		    break;
+		default:
+		    if (argtype != argvt)
+			return PARSE_ERROR;
+		    break;
+		}
+
 		if (argtype == V_INDEX) {
+		    reg_t r;		    
 		    // Pass index directly: load index value into arg[]
 		    if (arg->ix == BAD_INDEX) {
 			csp_set_error(st, ERR_SYNTAX);
 			return PARSE_ERROR;
 		    }
-		    reg_t r = alloc_reg(st);
+		    r = alloc_reg(st);
 		    if (csp_new_li(st, r, arg->ix) < 0)
 			return PARSE_ERROR;
 		    if (csp_new_arg(st, r, j) < 0)
@@ -1995,7 +2071,7 @@ next:
 	    }
 	    
 	    dst = alloc_reg(st);
-	    if (csp_new_call(st, dst, func_idx, is_user, n) < 0)
+	    if (csp_new_call(st, dst, func_idx, is_user, n, argcode) < 0)
 		return PARSE_ERROR;
 	    push_reg(rstack, &ep, dst, func->rtype);
 	}
@@ -2729,13 +2805,11 @@ int csp_parse_rule(csp_rt_t* st, token_t* tv, size_t n)
     }
     if ((j = csp_new_rule(st, cnd, 0)) < 0)
 	return -1;
-    //st->cond = 1;
     if (csp_parse_expr(st,&tv[0],&num) < 0)
 	return -1;
     st->instr[j].r.nxt = st->ps.nn;
     if (csp_new_next(st) < 0)
 	return -1;
-    //st->cond = 0;
     return 0;
 }
 
@@ -2806,13 +2880,11 @@ int make_can_rule(csp_rt_t* st, index_t ox, int k, index_t idx,
 
     if ((j = csp_new_rule(st, cnd, 0)) < 0)
 	return -1;
-    //st->cond = 1;
     if (csp_new_st(st, kr, ox) < 0)
 	return -1;
     st->instr[j].r.nxt = st->ps.nn;    
     if (csp_new_next(st) < 0)
 	return -1;    
-    //st->cond = 0;
     return 0;
 }
 
@@ -2956,7 +3028,7 @@ int csp_rt_init(csp_rt_t* st, int transaction, int reactive)
     st->ps.nn = 0;
     st->ps.nd = 0;
     st->ps.nq = 0;
-    st->ps.strp = MAX_STR_BUF;
+    st->ps.strp = 1;
     st->ps.err  = ERR_OK;
     st->ps.line = 0;
 
@@ -2969,7 +3041,7 @@ int csp_rt_init(csp_rt_t* st, int transaction, int reactive)
     st->str[0] = 0;  // reserved 0 and nil
     st->ufuncs = NULL;
     st->num_ufuncs = 0;
-    st->uconst = NULL;    
+    st->uconst = NULL;
     new_signed_const(st, 0);
     new_signed_const(st, 1);
     return 0;

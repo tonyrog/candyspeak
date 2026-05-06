@@ -293,7 +293,7 @@ void print_defines()
 static struct option long_options[] = {
     {"debug",        no_argument,       0,  'd'},
     {"debug-parse",  no_argument,       0,  'P'},
-    {"debug-scan",  no_argument,        0,  'S'},
+    {"debug-scan",   no_argument,       0,  'S'},
     {"debug-trace",  no_argument,       0,  'Q'},
     {"help",         no_argument,       0,  'h'},
     {"transaction",  optional_argument, 0,  't'},
@@ -305,6 +305,8 @@ static struct option long_options[] = {
     {"state-file",   required_argument, 0,  's'},
     {"parse-file",   required_argument, 0,  'p'},
     {"result-file",  required_argument, 0,  'R'},
+    {"compile",      no_argument,       0,  'C'},
+    {"object-file",  required_argument, 0,  'O'},
     {0,              0,                 0,  0 }
 };
 
@@ -317,6 +319,7 @@ void usage(const char* prog)
     fprintf(stderr, "  -t, --transaction[=B] Enable transaction mode\n");
     fprintf(stderr, "  -r, --reactive[=B]   Enable reactive mode\n");
     fprintf(stderr, "  -n, --no-execute     Parse only, don't execute\n");
+    fprintf(stderr, "  -C, --compile        Compile to object code\n");
     fprintf(stderr, "  -c, --cycles=N       Max cycles (0=unlimited)\n");
     fprintf(stderr, "  -T, --timeout=MS     Max runtime in ms (0=unlimited)\n");
     fprintf(stderr, "  -P, --debug-parse    Enable parser debugging\n");
@@ -325,6 +328,9 @@ void usage(const char* prog)
     fprintf(stderr, "  -s, --state-file=F   Write state to file (Erlang format)\n");
     fprintf(stderr, "  -p, --parse-file=F   Write parsed structure to file\n");
     fprintf(stderr, "  -R, --result-file=F  Write result to file (Erlang format)\n");
+    fprintf(stderr, "  -O, --object-file=F  Write compiled result to file (C code format)\n");
+    
+    
     fprintf(stderr, "\n");
     fprintf(stderr, "If no file is given, reads from stdin.\n");
 }
@@ -338,6 +344,7 @@ int main(int argc, char** argv)
     FILE* state_file = NULL;
     FILE* parse_out = NULL;
     FILE* result_file = NULL;
+    FILE* object_file = NULL;    
     int execute = 1;
     uint32_t max_cycles = 0;
     uint32_t max_time_ms = 0;
@@ -345,10 +352,11 @@ int main(int argc, char** argv)
     int c;
     int transaction = TRANSACTION_DEFAULT;
     int reactive = REACTIVE_DEFAULT;
+    int compile = 0;
 
     while (1) {
 	int option_index = 0;
-	c = getopt_long(argc, argv, "hndPQSc:T:s:p:R:r:t:",
+	c = getopt_long(argc, argv, "hndPQSCc:T:s:p:R:r:t:O:",
 			long_options, &option_index);
 	if (c == -1)
 	    break;
@@ -360,6 +368,7 @@ int main(int argc, char** argv)
 	case 'r': reactive =  atoi(optarg); break;
 	case 't': transaction = atoi(optarg); break;
 	case 'n': execute = 0; break;
+	case 'C': compile = 1; break;
 	case 'c': max_cycles = atoi(optarg); break;
 	case 'T': max_time_ms = atoi(optarg); break;
 	case 'd': debug = 1; break;
@@ -384,6 +393,12 @@ int main(int argc, char** argv)
 		exit(1);
 	    }
 	    break;
+	case 'O':
+	    if ((object_file = fopen(optarg, "w")) == NULL) {
+		fprintf(stderr, "unable to open object file '%s'\n", optarg);
+		exit(1);
+	    }
+	    break;	    
 	case '?':
 	default:
 	    usage(argv[0]);
@@ -456,11 +471,16 @@ int main(int argc, char** argv)
     if (parse_out) {
 	csp_dump(parse_out, &state);
     }
+    if (compile) {
+	FILE* objf = object_file == NULL ? stdout : object_file;
+	csp_dump_code(objf, &state);
+    }    
 
     if (!execute) {
 	if (parse_out) fclose(parse_out);
 	if (state_file) fclose(state_file);
 	if (result_file) fclose(result_file);
+	if (object_file) fclose(object_file);	
 	exit(0);
     }
 

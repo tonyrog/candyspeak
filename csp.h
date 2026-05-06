@@ -71,13 +71,15 @@ typedef uint8_t  reg_t;    // at most 256 registers
 #define TYPE_BITS 3  // supports up to 8 types
 
 typedef enum {
-    V_NONE,      // 0 - no type
-    V_INTEGER,   // 1 - signed integer
-    V_UNSIGNED,  // 2 - unsigned integer
-    V_FLOAT,     // 3 - floating point
-    V_STRING,    // 4 - string index
-    V_INDEX,     // 5 - declaration index (pass index, not value)
-    V_VOID,      // 6 -  value / don't care
+    V_VOID     = 0,  // value / don't care
+    V_INTEGER  = 1,  // signed integer
+    V_UNSIGNED = 2,  // unsigned integer
+    V_FLOAT    = 3,  // floating point
+    V_STRING   = 4,  // string index
+    V_INDEX    = 5,  // declaration index (pass index, not value)
+    // match types (not passed in type code)
+    V_NUMBER   = 6,  // V_INTEGER | V_FLOAT
+    V_ANY      = 7,  // 7 - V_INTEGER | V_FLOAT | V_STRING | V_INDEX    
 } vtype_t;
 
 typedef enum {
@@ -228,7 +230,7 @@ typedef struct
 typedef enum {
     OP_NOP = 0,  // nothing
     OP_NOT,     // "!"  x=-y == x=0-y
-    OP_INV,     // "~"  x=~y =  x=1^y        
+    OP_BNOT,    // "~"  x=~y =  x=1^y        
     OP_NEG,     // "-"  x=-y == x=0-y
     OP_POS,     // "+"  x=+y == x=0+y
     OP_CVTIF,   // trunc float => integer
@@ -247,11 +249,11 @@ typedef enum {
     OP_GTE,     // ">="
     OP_EQEQ,    // "=="
     OP_NEQ,     // "!="
-    OP_AND,     // "&"
-    OP_OR,      // "|"
-    OP_XOR,     // "^"
-    OP_ANDAND,  // "&&"
-    OP_OROR,    // "||"
+    OP_BAND,    // "&"
+    OP_BOR,     // "|"
+    OP_BXOR,    // "^"
+    OP_AND,     // "&&"
+    OP_OR,      // "||"
 
     OP_FNEG,     // "-"  x=-y == x=0-y    
     OP_FADD,     // "+"
@@ -304,6 +306,7 @@ typedef enum {
     DECL_NOP=0,    // emtpy declaration
     DECL_MODULE,   // 'module'
     DECL_END,      // 'end'
+    DECL_OBJECT,   // module instance
     DECL_CONSTANT, // 'constant'
     DECL_VARIABLE, // 'variable'
     DECL_DIGITAL,  // 'digital'
@@ -312,7 +315,6 @@ typedef enum {
     DECL_CAN,      // 'can'
     DECL_UART,     // 'uart'
     DECL_SOCKET,   // 'socket'
-    DECL_OBJECT,   // module instance
 } decl_t;
 
 // #define IS_DECL(i)  (TAG((i)) == TAG_DECL)
@@ -398,6 +400,7 @@ typedef struct PACKED {
     unsigned idx:REG_BITS;  // function index
     unsigned usr:1;         // user function
     unsigned n:7;           // number of arguments (needed?)
+    unsigned avt:16;        // argument value types 4 bit per argument
 } csp_instr_call_t;
 
 // op = ST | LD
@@ -436,16 +439,15 @@ typedef struct PACKED {
 
 typedef struct PACKED {
     opcode_t op:6;          // OP_xxx
-    // unsigned cond:1;        // conditional instruction
     union {
-	csp_instr_alu_t a;
-	csp_instr_mem_t m;
-	csp_instr_imm_t i;
-	csp_instr_call_t f;
-	csp_instr_rule_t r;
 	csp_instr_enter_t e;
 	csp_instr_leave_t v;
 	csp_instr_new_t n;
+	csp_instr_imm_t i;
+	csp_instr_mem_t m;
+	csp_instr_call_t f;
+	csp_instr_rule_t r;
+	csp_instr_alu_t a;
     };
 } csp_instr_t;
 
@@ -497,7 +499,8 @@ typedef struct PACKED {
 } csp_pstate_t;
 
 // Function pointer types
-typedef ivalue_t (*csp_func_fn)(struct _csp_rt_t* st, value_t* args, uint8_t nargs);
+typedef value_t (*csp_func_fn)(struct _csp_rt_t* st, uint16_t type,
+			       value_t* args, uint8_t nargs);
 
 typedef int (*csp_const_fn)(struct _csp_rt_t* st, const char* name, int len, ivalue_t*);
 
@@ -548,7 +551,6 @@ typedef struct _csp_rt_t
 	stack[MAX_STACK_DEPTH];
     unsigned transaction:1;      // 1 if keeping a log
     unsigned reactive:1;         // 1 if push backedges to queue
-    unsigned cond:1;             // 1 if mark node as conditional
 
     csp_pstate_t ps;             // parse state
     reg_allocator_t* ap;

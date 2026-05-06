@@ -1,4 +1,6 @@
-
+// Dump functions for debugging and inspection
+// but also generate C code for builtin eeprom code
+//
 #include <stdio.h>
 #include <ctype.h>
 #include "csp_dump.h"
@@ -111,53 +113,54 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     fprintf(f, "%s", indent(lev));
     switch(st->instr[i].op) {
     case OP_NOP:
-	fprintf(f, "{instr,%d,nop}%s\n",
+	fprintf(f, "{instr,%d,'NOP'}%s\n",
 		i, eot);
 	break;
     case OP_NEXT:
-	fprintf(f, "{instr,%d,next}%s\n",
+	fprintf(f, "{instr,%d,'NEXT'}%s\n",
 		i, eot);
 	break;
     case OP_LD:
-	fprintf(f, "{instr,%d,ld,[r%d,",
+	fprintf(f, "{instr,%d,'LD',[r%d,",
 		i,
 		st->instr[i].m.x);
 	csp_fprint_tag(f, st, st->instr[i].m.mem);
 	fprintf(f, "]}%s\n", eot);
 	break;
     case OP_ST:
-	fprintf(f, "{instr,%d,st,[r%d,",
+	fprintf(f, "{instr,%d,'ST',[r%d,",
 		i,
 		st->instr[i].m.x);
 	csp_fprint_tag(f, st, st->instr[i].m.mem);
 	fprintf(f, "]}%s\n", eot);
 	break;
     case OP_LI:
-	fprintf(f, "{instr,%d,li,[r%d,%d]}%s\n",
+	fprintf(f, "{instr,%d,'LI',[r%d,%d]}%s\n",
 		i,
 		st->instr[i].i.x,
 		st->instr[i].i.imm,
 		eot);
 	break;
     case OP_ARG:
-	fprintf(f, "{instr,%d,arg,[r%d,%d]}%s\n",
+	fprintf(f, "{instr,%d,'ARG',[r%d,%d]}%s\n",
 		i,
 		st->instr[i].i.x,
 		st->instr[i].i.imm,
 		eot);
 	break;
     case OP_CALL:
-	fprintf(f, "{instr,%d,call,[r%d,%s,%d]}%s\n",
+	fprintf(f, "{instr,%d,'CALL',[r%d,%s,%d,16#%04x]}%s\n",
 		i,
 		st->instr[i].f.x,
 		(st->instr[i].f.usr ?
 		 st->ufuncs[st->instr[i].f.idx].name :
 		 csp_builtin_funcs[st->instr[i].f.idx].name),
 		st->instr[i].f.n,
+		st->instr[i].f.avt,		
 		eot);
 	break;
     case OP_RULE:
-	fprintf(f, "{instr,%d,rule,[r%d,%d]}%s\n",
+	fprintf(f, "{instr,%d,'RULE',[r%d,%d]}%s\n",
 		i,
 		st->instr[i].r.cnd, st->instr[i].r.nxt, eot);
 	break;
@@ -165,7 +168,7 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	index_t mx = st->instr[i].e.mx;
 	int n = st->instr[i].e.num;
 	int j;
-	fprintf(f, "{instr,%d,enter,'%s',[{n,%d}],[\n",
+	fprintf(f, "{instr,%d,'ENTER','%s',[{n,%d}],[\n",
 		i, decl_name(st, mx), n);
 	i++;
 	for (j = 0; j <= n; j++) // <= include leave!
@@ -176,17 +179,16 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     case OP_LEAVE: {
 	index_t mx = st->instr[i].v.mx;
 	int n = st->instr[i].v.num;
-	fprintf(f, "{instr,%d,leave,'%s',[{n,%d}]}%s\n",
+	fprintf(f, "{instr,%d,'LEAVE','%s',[{n,%d}]}%s\n",
 		i, decl_name(st,mx), n, eot);
 	break;
     }
     case OP_NEW: {
-	// FIXME: add new op arguments	
 	index_t ent = st->instr[i].n.ent;
 	index_t obj = st->instr[i].n.obj;
 	index_t mx  = st->decl[INDEX(obj)].mq.mx;
 	unsigned m       = st->decl[INDEX(obj)].mq.m;
-	fprintf(f, "{instr,%d,new,\"%s\",\"%s\",[{ent,%d},{obj,%u}]}%s\n",
+	fprintf(f, "{instr,%d,'NEW',\"%s\",\"%s\",[{ent,%d},{obj,%u}]}%s\n",
 		i, decl_name(st, mx), decl_name(st, obj), 
 		INDEX(ent), m, eot);
 	break;
@@ -526,7 +528,7 @@ static int maybe_unquoted_atom(char* ptr, int len)
     return 0;
 }
 
-
+// print tokens in erlang term format
 void csp_dump_tokens(FILE* f, token_t* tv, int n)
 {
     int i;
@@ -551,4 +553,169 @@ void csp_dump_tokens(FILE* f, token_t* tv, int n)
 	}
     }
     fprintf(f, "eol].\n");
+}
+
+// Dump str, decl and inst tables
+
+const char* csp_cfmt_vtype(vtype_t vt)
+{
+    switch(vt) {
+    case V_VOID: return "V_VOID";	
+    case V_INTEGER: return "V_INTEGER";
+    case V_UNSIGNED: return "V_UNSIGNED";	
+    case V_FLOAT: return "V_FLOAT";
+    case V_STRING: return "V_STRING";
+    case V_INDEX: return "V_INDEX";
+    case V_NUMBER: return "V_NUMBER";
+    case V_ANY: return "V_ANY";
+    default: return "UNDEFINED";
+    }
+}
+
+const char* csp_cfmt_dtype(decl_t dt)
+{
+    switch(dt) {
+    case DECL_MODULE: return "DECL_MODULE";
+    case DECL_END: return "DECL_END";	
+    case DECL_OBJECT: return "DECL_OBJECT";
+    case DECL_CONSTANT: return "DECL_CONSTANT";
+    case DECL_VARIABLE: return "DECL_VARIABLE";
+    case DECL_DIGITAL: return "DECL_DIGITAL";
+    case DECL_ANALOG: return "DECL_ANALOG";
+    case DECL_TIMER: return "DECL_TIMER";
+    case DECL_CAN: return "DECL_CAN";
+    case DECL_UART: return "DECL_UART";
+    case DECL_SOCKET: return "DECL_SOCKET";
+    default: return "?";
+    }
+}
+
+const char* csp_cfmt_endian(vendian_t et)
+{
+    switch(et) {
+    case E_LITTLE: return "E_LITTLE";
+    case E_BIG: return "E_BIG";
+    default: return "E_UNDEFINED";
+    }
+}
+
+// dump C code 
+// FIXME: struct version to check match when compile
+void csp_dump_code(FILE* f, csp_rt_t* st)
+{
+    int i;
+
+    fprintf(f, "#include \"csp.h\"\n");
+    // first dump string table
+    fprintf(f, "const char rom_str[] = {\n");
+    i = 0;
+    while (i < st->ps.strp) {
+	uint8_t n = st->str[i]; // length of next string
+	int j = 1;
+	fprintf(f, "%d,", n);   // emit length
+	i++;
+	while(j <= n) {
+	    int c = st->str[i];
+	    if (isprint(c))
+		fprintf(f, "'%c',", c);
+	    else if (c == 0)
+		fprintf(f, "0,");
+	    else
+		fprintf(f, "0x%02x,", (uint8_t) c);
+	    j++;
+	    i++;
+	    if ((i & 0xf) == 0)
+		fprintf(f, "\n");
+	}
+    }
+    fprintf(f, "};\n");
+
+    // now dump declatrations
+    fprintf(f, "const csp_decl_t rom_decl[] = {\n");
+    for (i = 0; i < st->ps.nd; i++) {
+	// fixme: output .type as DECL_abc
+	csp_decl_t* dp = &st->decl[i];
+	fprintf(f, "  {.type=%s,.name=%u,.vt=%s,.res=%u,.in=%u,.out=%d,",
+		csp_cfmt_dtype(dp->type), dp->name, csp_cfmt_vtype(dp->vt),
+		dp->res, dp->in, dp->out);
+	switch(dp->type) {
+	case DECL_MODULE:
+	    fprintf(f, ".md={.nn=%u,.ent=%u}", dp->md.n, dp->md.ent);
+	    break;
+	case DECL_END:
+	    break;
+	case DECL_OBJECT:
+	    fprintf(f, ".mq={.mx=%u,.m=%u}", dp->mq.mx, dp->mq.m);
+	    break;
+	case DECL_VARIABLE:
+	    fprintf(f, ".va={%u}", dp->va.init.u);
+	    break;
+	case DECL_CONSTANT:
+	    fprintf(f, ".cn={%u}", dp->va.init.u);
+	    break; 
+	case DECL_DIGITAL:
+	    fprintf(f, ".di={.pin=%u,.port=%u,.pullup=%u,.pulldown=%u}",
+		    dp->di.pin, dp->di.port, dp->di.pullup, dp->di.pulldown);
+	    break;
+	case DECL_ANALOG:
+	    fprintf(f, ".an={.pin=%u,.port=%u,.pwm=%u}",
+		    dp->an.pin, dp->an.port, dp->an.pwm);
+	    break;
+	case DECL_CAN:
+	    fprintf(f, ".an={.id=%u,.endian=%u,.bit=%u,.len=%u}",
+		    dp->ca.id, dp->ca.endian, dp->ca.bit, dp->ca.len);
+	    break;
+	case DECL_TIMER:
+	    fprintf(f, ".tm={0,.init=%u,.px=%u,.tx=%u}",
+		    // dp->tm.running (is runtime) set = 0
+		    dp->tm.init, dp->tm.px, dp->tm.tx);
+	    break;
+	case DECL_NOP:    // not used
+	case DECL_UART:   // not defined yet
+	case DECL_SOCKET: // not defined yet
+	}
+	fprintf(f, "},\n");
+    }
+    fprintf(f, "};\n");
+
+    // and then dump instructions
+    fprintf(f, "const csp_instr_t rom_instr[] = {\n");
+    for (i = 0; i < st->ps.nn; i++) {
+	csp_instr_t* ip = &st->instr[i];
+	fprintf(f, "  {.op=OP_%s,", csp_op_name(ip->op));
+	switch(ip->op) {
+	    // FIXME: OP_ENTER/OP_LEAVE could share format?
+	case OP_ENTER:
+	    fprintf(f, ".e={.num=%u,.mx=%u}", ip->e.num, ip->e.mx);
+	    break;	    
+	case OP_LEAVE:
+	    fprintf(f, ".v={.num=%u,.mx=%u}", ip->v.num, ip->v.mx);
+	    break;	    
+	case OP_NEW:
+	    fprintf(f, ".n={.ent=%u,.obj=%u}", ip->n.ent, ip->n.obj);
+	    break;
+	case OP_LI:
+	case OP_ARG:	
+	    fprintf(f, ".i={.x=%u,.imm=%d}", ip->i.x, ip->i.imm);
+	    break;
+	case OP_ST:
+	case OP_LD:
+	    fprintf(f, ".m={.x=%u,.mem=%u}", ip->m.x, ip->m.mem);
+	    break;
+	case OP_CALL:
+	    fprintf(f, ".f={.x=%u,.idx=%u,.usr=%u,n=%u,avt=0x%04x}",
+		    ip->f.x, ip->f.idx, ip->f.usr, ip->f.n, ip->f.avt);
+	    break;
+	case OP_RULE:
+	    fprintf(f, ".r={.cnd=%u,.nxt=%u}", ip->r.cnd, ip->r.nxt);
+	    break;
+	default: // three-address-instruction
+	    fprintf(f, ".a={.x=%u,.y=%u,.z=%u}",
+		    ip->a.x, ip->a.y, ip->a.z);
+	    break;
+	}
+	fprintf(f, "},\n");
+    }
+    fprintf(f, "};\n");    
+
 }
