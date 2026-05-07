@@ -387,26 +387,19 @@ typedef struct PACKED {
     unsigned tx:INDEX_BITS; // start time tick (intern variable)
 } csp_timer_t;
 
-
 // new instruction format
 // general operations OP_ADD ...
 typedef struct PACKED {
+    opcode_t op:6;    
     unsigned x:REG_BITS;
     unsigned y:REG_BITS;
     unsigned z:REG_BITS;
 } csp_instr_alu_t;
 
-// CALL instruction
-typedef struct PACKED {     // 4+4+1+16 = 25
-    unsigned x:REG_BITS;    // result register    
-    unsigned idx:REG_BITS;  // function index
-    unsigned usr:1;         // user function
-    unsigned avt:16;        // argument value types 4 bit per argument
-} csp_instr_call_t;
-
 // op = ST | LD
 // load or store register from memory
 typedef struct PACKED {
+    opcode_t op:6;    
     unsigned x:REG_BITS;
     unsigned mem:INDEX_BITS;  // declaration: variable/constant
 } csp_instr_mem_t;
@@ -414,42 +407,54 @@ typedef struct PACKED {
 // op LDI / ARG
 // load immediate LDI load small 16 bit signed constant
 typedef struct PACKED {
+    opcode_t op:6;    
     unsigned x:REG_BITS;
     signed imm:16;
 } csp_instr_imm_t;
 
 typedef struct PACKED {
+    opcode_t op:6;    
     unsigned cnd:REG_BITS; // condition register
     int16_t nxt;           // jump if !cnd
 } csp_instr_rule_t;
 
 typedef struct PACKED {
+    opcode_t op:6;
     unsigned num:INSTR_BITS;  // number of instructions
     index_t  mx;     // module index
 } csp_instr_enter_t;
 
 typedef struct PACKED {
+    opcode_t op:6;    
     unsigned num:INSTR_BITS;  // number of instructions
     index_t  mx;     // module index
 } csp_instr_leave_t;
 
 typedef struct PACKED {
+    opcode_t op:6;    
     unsigned ent:INSTR_BITS; // entry point index in instr[]
     index_t  obj;            // object declaration index 
 } csp_instr_new_t;
 
-typedef struct PACKED {
-    opcode_t op:6;          // OP_xxx
-    union {
-	csp_instr_enter_t e;
-	csp_instr_leave_t v;
-	csp_instr_new_t n;
-	csp_instr_imm_t i;
-	csp_instr_mem_t m;
-	csp_instr_call_t f;
-	csp_instr_rule_t r;
-	csp_instr_alu_t a;
-    };
+typedef struct PACKED {     // 4+4+1+16 = 25
+    opcode_t op:6;    
+    unsigned x:REG_BITS;    // result register    
+    unsigned idx:REG_BITS;  // function index
+    unsigned usr:1;         // user function
+    unsigned avt:16;        // argument value types 4 bit per argument
+} csp_instr_call_t;
+
+typedef union {
+    // uint32 need on arduino uno (unsigned is 16 bit?)
+    struct PACKED { opcode_t op:6; uint32_t rest:26; };
+    csp_instr_enter_t e;
+    csp_instr_leave_t v;
+    csp_instr_new_t n;
+    csp_instr_imm_t i;
+    csp_instr_mem_t m;
+    csp_instr_call_t f;
+    csp_instr_rule_t r;
+    csp_instr_alu_t a;
 } csp_instr_t;
 
 
