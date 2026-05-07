@@ -118,20 +118,31 @@ int csp_println(void)
     return putchar('\n');
 }
 
-int csp_uconst(csp_rt_t* st, const char* name, int len, ivalue_t* ret)
+int csp_uconst(csp_rt_t* st, const char* name, int len,
+	       value_t* ret, vtype_t* vt)
 {
+    printf("uconst lookup: %*s\n", len, name);
     // handle constants D0..D9
     if ((len == 2) && (name[0]=='D') &&
 	(name[1]>='0') && (name[1]<='9')) {
 	int d = name[1]-'0';
-	*ret = d;
+	ret->i = d;
+	*vt = V_INTEGER;
 	return 1;
     }
     else if ((len == 3) && (name[0]=='D') &&
 	     (name[1]>='0') && (name[1]<='9') &&
 	     (name[2]>='0') && (name[2]<='9')) {
 	int d = (name[1]-'0')*10 + (name[2]-'0');
-	*ret = d;
+	ret->i = d;
+	*vt = V_INTEGER;
+	return 1;
+    }
+    else if ((len == 2) && (name[0]=='A') &&
+	     (name[1]>='0') && (name[1]<='9')) {
+	int a = name[1]-'0';
+	ret->i = a;
+	*vt = V_INTEGER;
 	return 1;
     }
     return 0;

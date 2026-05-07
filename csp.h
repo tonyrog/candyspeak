@@ -502,7 +502,8 @@ typedef struct PACKED {
 typedef value_t (*csp_func_fn)(struct _csp_rt_t* st, uint16_t type,
 			       value_t* args, uint8_t nargs);
 
-typedef int (*csp_const_fn)(struct _csp_rt_t* st, const char* name, int len, ivalue_t*);
+typedef int (*csp_const_fn)(struct _csp_rt_t* st, const char* name, int len,
+			    value_t*, vtype_t*);
 
 // Function table entry
 typedef struct {
