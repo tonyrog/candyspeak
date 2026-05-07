@@ -163,14 +163,13 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		eot);
 	break;
     case OP_CALL:
-	fprintf(f, "{instr,%d,'CALL',[r%d,%s,%d,16#%04x]}%s\n",
+	fprintf(f, "{instr,%d,'CALL',[r%d,%s,16#%04x]}%s\n",
 		i,
 		st->instr[i].f.x,
 		(st->instr[i].f.usr ?
 		 st->ufuncs[st->instr[i].f.idx].name :
 		 csp_builtin_funcs[st->instr[i].f.idx].name),
-		st->instr[i].f.n,
-		st->instr[i].f.avt,		
+		st->instr[i].f.avt,	
 		eot);
 	break;
     case OP_RULE:
@@ -719,8 +718,8 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 	    fprintf(f, ".m={.x=%u,.mem=%u}", ip->m.x, ip->m.mem);
 	    break;
 	case OP_CALL:
-	    fprintf(f, ".f={.x=%u,.idx=%u,.usr=%u,n=%u,avt=0x%04x}",
-		    ip->f.x, ip->f.idx, ip->f.usr, ip->f.n, ip->f.avt);
+	    fprintf(f, ".f={.x=%u,.idx=%u,.usr=%u,avt=0x%04x}",
+		    ip->f.x, ip->f.idx, ip->f.usr, ip->f.avt);
 	    break;
 	case OP_RULE:
 	    fprintf(f, ".r={.cnd=%u,.nxt=%u}", ip->r.cnd, ip->r.nxt);
@@ -733,5 +732,98 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 	fprintf(f, "},\n");
     }
     fprintf(f, "};\n");    
+}
 
+// list declarations
+
+index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
+{
+    index_t ix = MAKE_INDEX(0,i);
+    int vt = V_INTEGER;
+    
+    switch(st->decl[i].type) {
+    case DECL_MODULE:
+	fprintf(f, "#module %s\n", decl_name(st, ix));
+	break;
+    case DECL_END:
+	fprintf(f, "#end\n");
+	break;
+    case DECL_OBJECT:
+	fprintf(f, "#%s %s\n",
+		decl_name(st, st->decl[i].mq.mx),
+		decl_name(st, ix));
+	break;
+    case DECL_VARIABLE:
+	vt = st->decl[i].vt;
+	fprintf(f, "#variable %s:%d %s %s = ", // show init value
+		decl_name(st, ix),
+		GET_RES(st->decl[i].res),
+		csp_fmt_pindir(&st->decl[i]),
+		csp_fmt_vtype(vt));
+	csp_fprint_value(f, st, vt, st->decl[i].va.init);
+	fprintf(f, "\n");
+	break;
+    case DECL_CONSTANT:
+	vt = st->decl[i].vt;	    
+	fprintf(f, "#constant %s:%d %s = ",
+		decl_name(st, ix),
+		GET_RES(st->decl[i].res),
+		csp_fmt_vtype(vt));
+	csp_fprint_value(f, st, vt, st->decl[i].cn.init);
+	fprintf(f, "\n");	
+	break;
+    case DECL_DIGITAL:
+	vt = st->decl[i].vt; // should be unsigned
+	fprintf(f, "#digital %s %s %s %d:%d\n",
+		decl_name(st, ix),
+		csp_fmt_pindir(&st->decl[i]),
+		csp_fmt_pull(st, i),
+		st->decl[i].di.port,st->decl[i].di.pin);
+	break;
+    case DECL_ANALOG:
+	vt = st->decl[i].vt;
+	fprintf(f,"#analog %s:%d %s %s %s %d:%d\n",
+		decl_name(st, ix),
+		GET_RES(st->decl[i].res),
+		csp_fmt_vtype(vt),
+		csp_fmt_pindir(&st->decl[i]),
+		csp_fmt_pwm(st, i),
+		st->decl[i].an.port, st->decl[i].an.pin);
+	break;
+    case DECL_TIMER:
+	vt = st->decl[i].vt;
+	fprintf(f, "#timer %s %d = %d\n",
+		decl_name(st, ix),
+		csp_ivalue(st, st->decl[i].tm.px),
+		st->decl[i].tm.init);
+	break;
+    case DECL_CAN:
+	vt = st->decl[i].vt;
+	fprintf(f, "#can %s:%d %s %s %s 0x%x[%d:%d]\n",
+		decl_name(st, ix),
+		GET_RES(st->decl[i].res),
+		csp_fmt_vtype(vt),
+		csp_fmt_endian(st->decl[i].ca.endian),
+		csp_fmt_pindir(&st->decl[i]),
+		csp_ivalue(st, st->decl[i].ca.id),
+		st->decl[i].ca.bit,
+		st->decl[i].ca.bit + GET_CAN_LEN(st->decl[i].ca.len));
+	break;
+    default:
+	break;
+    }
+    return i+1;
+}
+
+
+void csp_list_declarations(FILE* f, csp_rt_t* st)
+{
+    int i = 0;
+    while(i < st->ps.nd)
+	i = csp_list_decl(f, st, i);
+}
+
+void csp_list_rules(FILE* f, csp_rt_t* st)
+{
+    // hmm
 }

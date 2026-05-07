@@ -1178,14 +1178,13 @@ int csp_new_rule(csp_rt_t* st, reg_t cnd, int nxt)
 }
 
 int csp_new_call(csp_rt_t* st, reg_t x, int func_idx, int is_user,
-		 int n, uint16_t argcode)
+		 uint16_t argcode)
 {
     int i;
     if ((i = csp_new_instr(st, OP_CALL)) >= 0) {
 	st->instr[i].f.x   = x;
 	st->instr[i].f.idx = func_idx;
 	st->instr[i].f.usr = is_user;
-	st->instr[i].f.n   = n;
 	st->instr[i].f.avt = argcode;
     }
     return i;    
@@ -1605,20 +1604,21 @@ int map_reg(csp_rt_t* st, index_t ix)
 	if (st->decl[INDEX(ix)].type == DECL_CONSTANT) {
 	    value_t val = st->decl[INDEX(ix)].cn.init;
 	    vtype_t vt = st->decl[INDEX(ix)].vt;
-	    if (vt == V_INTEGER) {
+	    switch(vt) {
+	    case V_INTEGER:
 		if (csp_load_int(st, dst, val.i) < 0)
 		    return -1;
 		return dst;
-	    }
-	    if (vt == V_UNSIGNED) {
+	    case V_UNSIGNED:
 		if (csp_load_uint(st, dst, val.u) < 0)
 		    return -1;
 		return dst;
-	    }
-	    if (vt == V_FLOAT) {
+	    case V_FLOAT:
 		if (csp_load_float(st, dst, val.f) < 0)
 		    return -1;
 		return dst;
+	    default:
+		break;
 	    }
 	}
 	// generate LD instruction for variables
@@ -1629,15 +1629,6 @@ int map_reg(csp_rt_t* st, index_t ix)
     return 0;
 }
 
-// Parser stack entry - tracks both register and declaration index
-typedef struct {
-    reg_t reg;       // register number (valid if loaded)
-    index_t ix;      // declaration index (valid for variables)
-    value_t val;     // if constant then the actual value is loaded here
-    unsigned loaded:1;  // 1 if value is loaded in reg
-    unsigned immediate:1; // 1 if val is set or calculated
-    unsigned vt:TYPE_BITS;  // value type (vtype_t)
-} rstack_entry_t;
 
 // Push immediate value (integer, float, or string constant)
 static int push_imm(csp_rt_t* st, rstack_entry_t* rstack, int* ep,
@@ -1706,6 +1697,13 @@ static int push_var(csp_rt_t* st, rstack_entry_t* rstack, int* ep,
     if (!st->ap && st->decl[INDEX(ix)].type == DECL_CONSTANT) {
 	rstack[(*ep)++] = (rstack_entry_t){
 	    .reg = 0, .ix = ix, .val = st->decl[INDEX(ix)].cn.init,
+	    .loaded = 0, .immediate = 1, .vt = st->decl[INDEX(ix)].vt
+	};
+	return 0;
+    }
+    else if (!st->ap && st->decl[INDEX(ix)].type == DECL_VARIABLE) {
+	rstack[(*ep)++] = (rstack_entry_t){
+	    .reg = 0, .ix = ix, .val = csp_value(st, ix),
 	    .loaded = 0, .immediate = 1, .vt = st->decl[INDEX(ix)].vt
 	};
 	return 0;
@@ -1798,29 +1796,33 @@ static int process_assign(csp_rt_t* st, rstack_entry_t* rstack, int ep)
 
     // If rhs is a folded constant, load it into a register
     if (!rhs.loaded && rhs.immediate) {
-	if (rhs.vt == V_FLOAT) {
-	    // Create float constant and load it
-	    index_t ix = lookup_const(st, V_FLOAT, rhs.val);
-	    if (ix == BAD_INDEX)
-		ix = new_float_const(st, rhs.val.f);
-	    if (ix == BAD_INDEX) return -1;
-	    rhs.reg = map_reg(st, ix);
-	    if (rhs.reg < 0) return -1;
-	} else {
-	    reg_t r = alloc_reg(st);
-	    if (csp_new_li(st, r, rhs.val.i) < 0)
-		return -1;
+	if (st->ap) {
+	    reg_t r = alloc_reg(st);	
+	    if (rhs.vt == V_FLOAT) {
+		if (csp_load_float(st, r, rhs.val.f) < 0)
+		    return -1;
+	    }
+	    else {
+		if (csp_load_int(st, r, rhs.val.i) < 0)
+		    return -1;
+	    }
 	    rhs.reg = r;
+	    rhs.loaded = 1;
 	}
-	rhs.loaded = 1;
     }
-    if (!rhs.loaded) {
+    if (!rhs.loaded && st->ap) {
 	csp_set_error(st, ERR_SYNTAX);  // rhs must have value
 	return -1;
     }
-    // Generate store instruction
-    if (csp_new_st(st, rhs.reg, lhs.ix) < 0)
-	return -1;
+    
+    if (st->ap == NULL) {
+	if (rhs.immediate)
+	    csp_set_value(st, lhs.ix, rhs.val);
+    }
+    else { // Generate store instruction	
+	if (csp_new_st(st, rhs.reg, lhs.ix) < 0)
+	    return -1;
+    }
     // Result is the rhs (for chaining A=B=1)
     rstack[ep-2] = rhs;
     return ep - 1;
@@ -1936,12 +1938,15 @@ static int process_op(csp_rt_t* st, tok_t tok, rstack_entry_t* rstack, int ep)
 	    } else {
 		// generate code
 		dst = alloc_reg(st);
-		if (new_expr2(st, op, dst, a->reg, b->reg) < 0)
-		    return PARSE_ERROR;
-		free_reg(st, a->reg);
+		if (st->ap != NULL) {	    		    
+		    if (new_expr2(st, op, dst, a->reg, b->reg) < 0)
+			return PARSE_ERROR;
+		    free_reg(st, a->reg);
+		}
 		*a = (rstack_entry_t){
 		    .reg = dst, .ix = BAD_INDEX,
-		    .loaded = 1, .immediate = 0, .vt = rt
+		    .loaded = (st->ap != NULL), .immediate = 0,
+		    .vt = rt
 		};
 	    }
 	    ep--;
@@ -1972,12 +1977,15 @@ static int process_op(csp_rt_t* st, tok_t tok, rstack_entry_t* rstack, int ep)
 	} else {
 	    // generate code
 	    dst = alloc_reg(st);
-	    if (new_expr1(st, op, dst, a->reg) < 0)
-		return PARSE_ERROR;
-	    free_reg(st, a->reg);
+	    if (st->ap != NULL) {
+		if (new_expr1(st, op, dst, a->reg) < 0)
+		    return PARSE_ERROR;
+		free_reg(st, a->reg);		
+	    }
 	    *a = (rstack_entry_t){
 		.reg = dst, .ix = BAD_INDEX,
-		.loaded = 1, .immediate = 0, .vt = rt
+		.loaded = (st->ap != NULL), .immediate = 0,
+		.vt = rt
 	    };
 	}
 	break;
@@ -2123,7 +2131,7 @@ next:
 		}
 
 		if (argtype == V_INDEX) {
-		    reg_t r;		    
+		    reg_t r;
 		    // Pass index directly: load index value into arg[]
 		    if (arg->ix == BAD_INDEX) {
 			csp_set_error(st, ERR_SYNTAX);
@@ -2155,7 +2163,7 @@ next:
 	    }
 	    
 	    dst = alloc_reg(st);
-	    if (csp_new_call(st, dst, func_idx, is_user, n, argcode) < 0)
+	    if (csp_new_call(st, dst, func_idx, is_user, argcode) < 0)
 		return 0;
 	    push_reg(rstack, &ep, dst, func->rtype);
 	}
@@ -2483,7 +2491,7 @@ int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
     int i = 0;
     token_t teres[] = {{COLON}, {INT}, {LAST}};
     token_t te[] = {{HASH}, {CONSTANT}, {WORD}, {LAST}};
-    token_t teeq[3];
+    token_t teeq[3] = {{EQ}, {INT}, {LAST}};
 
     // defaults
     vt = V_INTEGER;
@@ -2502,9 +2510,7 @@ int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
     case FLOAT: vt=V_FLOAT; cnst.f=0.0; i++; break;
     default: break;
     }
-    teeq[0] = (token_t){EQ};
-    teeq[1] = (token_t){(vt == V_FLOAT) ? FLT : INT};
-    teeq[2] = (token_t){LAST};
+    teeq[1].t = (vt == V_FLOAT) ? FLT : INT;
     if (!expect(st, tv, &i, n, teeq)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
@@ -2747,7 +2753,7 @@ opts:
     st->decl[i].out = out;
     st->decl[i].ca.id = idx;
     st->decl[i].ca.bit = bit0;
-    st->decl[i].ca.len = (bit1-bit0);
+    st->decl[i].ca.len = MAKE_CAN_LEN((bit1-bit0)+1);
     st->decl[i].ca.endian = endian;
     return 0;
 }
@@ -2895,11 +2901,11 @@ int make_can_rule(csp_rt_t* st, index_t ox, int k, index_t idx,
 
     // load constant C into cr
     cr = alloc_reg(st);
-    if (csp_new_li(st, cr, c) < 0)
+    if (csp_load_int(st, cr, c) < 0)
 	return -1;    
     // load constant k into kr
     kr = alloc_reg(st);
-    if (csp_new_li(st, kr, k) < 0)
+    if (csp_load_int(st, kr, k) < 0)
 	return -1;
 
     // first build condition (can bit test)

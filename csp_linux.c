@@ -249,6 +249,7 @@ static int handle_command(csp_rt_t* st, const char* cmd)
 	printf("  /save          Save to %s\n", eeprom_file);
 	printf("  /load          Load from %s\n", eeprom_file);
 	printf("  /reset         Reset to initial values\n");
+	printf("  /commit        Commit new values\n");	
 	printf("  /quit, /exit   Exit interactive mode\n");
 	printf("\n");
 	printf("Declarations:\n");
@@ -267,7 +268,7 @@ static int handle_command(csp_rt_t* st, const char* cmd)
 	return 0;
     }
     else if (strcmp(cmd, "list") == 0) {
-	csp_dump(stdout, st);
+	csp_list_declarations(stdout, st);
 	return 0;
     }
     else if (strcmp(cmd, "state") == 0) {
@@ -299,6 +300,10 @@ static int handle_command(csp_rt_t* st, const char* cmd)
 	printf("Reset to initial values\n");
 	return 0;
     }
+    else if (strcmp(cmd, "commit") == 0) {
+	csp_commit(st);
+	return 0;
+    }    
     else if (strcmp(cmd, "quit") == 0 || strcmp(cmd, "exit") == 0) {
 	return 1;  // signal exit
     }
@@ -318,7 +323,9 @@ static int handle_immediate(csp_rt_t* st, char* line)
 {
     token_t tv[MAX_LINE_TOKENS];
     size_t num = MAX_LINE_TOKENS;
-
+    reg_allocator_t* saved_ap;
+    rstack_entry_t result;
+    
     if (csp_scan_line(line, tv, &num) < 0) {
 	printf("Scan error\n");
 	return -1;
@@ -327,9 +334,23 @@ static int handle_immediate(csp_rt_t* st, char* line)
     if (num == 0 || tv[0].t == NEWLINE)
 	return 0;
 
-    // For now, just show what was parsed
-    // TODO: implement proper immediate evaluation
-    printf("Immediate eval not yet implemented: %s\n", line);
+    saved_ap = st->ap;
+    st->ap = NULL;  // no codegen (YET)
+    if (!csp_parse_expr(st, tv, &num, &result)) {
+	st->ap = saved_ap;
+	printf("Parse error: %s\n", csp_format_error(st->ps.err));
+	return -1;	
+    }
+    st->ap = saved_ap;
+
+    if (result.immediate)
+	csp_print_value(st, result.vt, result.val);
+    else if (result.ix != BAD_INDEX)
+	csp_print_value(st, result.vt, csp_value(st, result.ix));
+    else
+	csp_print_str("NONE");
+	
+    csp_println();
     return 0;
 }
 
@@ -756,16 +777,6 @@ int main(int argc, char** argv)
     // initialize input/output/timers ... load default values
     csp_setup(&state);
 
-    // Interactive mode
-    if (interactive) {
-	if (isatty(STDIN_FILENO)) {
-	    enable_raw_mode();
-	}
-	interactive_loop(&state);
-	disable_raw_mode();
-	exit(0);
-    }
-
     if (debug_parse) {
 	csp_dump(stdout, &state);
     }
@@ -775,13 +786,23 @@ int main(int argc, char** argv)
     if (compile) {
 	FILE* objf = object_file == NULL ? stdout : object_file;
 	csp_dump_code(objf, &state);
-    }    
+    }
 
     if (!execute) {
 	if (parse_out) fclose(parse_out);
 	if (state_file) fclose(state_file);
 	if (result_file) fclose(result_file);
 	if (object_file) fclose(object_file);	
+	exit(0);
+    }
+
+    // Interactive mode
+    if (interactive) {
+	if (isatty(STDIN_FILENO)) {
+	    enable_raw_mode();
+	}
+	interactive_loop(&state);
+	disable_raw_mode();
 	exit(0);
     }
 
@@ -798,8 +819,7 @@ loop:
     else if (state.reactive) {
 	// Initial cycle: run full eval to prime the system
 	x = csp_eval(&state);
-    }
-	
+    }	
     // check limits
     if (max_cycles && state.cycle >= max_cycles) {
 	fprintf(stderr, "max cycles (%u) reached\n", max_cycles);

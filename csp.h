@@ -397,11 +397,10 @@ typedef struct PACKED {
 } csp_instr_alu_t;
 
 // CALL instruction
-typedef struct PACKED {
+typedef struct PACKED {     // 4+4+1+16 = 25
     unsigned x:REG_BITS;    // result register    
     unsigned idx:REG_BITS;  // function index
     unsigned usr:1;         // user function
-    unsigned n:7;           // number of arguments (needed?)
     unsigned avt:16;        // argument value types 4 bit per argument
 } csp_instr_call_t;
 
@@ -596,6 +595,17 @@ typedef struct _csp_rt_t
     csp_const_fn uconst;
 } csp_rt_t;
 
+// Parser stack entry - tracks both register and declaration index
+typedef struct {
+    reg_t reg;       // register number (valid if loaded)
+    index_t ix;      // declaration index (valid for variables)
+    value_t val;     // if constant then the actual value is loaded here
+    unsigned loaded:1;  // 1 if value is loaded in reg
+    unsigned immediate:1; // 1 if val is set or calculated
+    unsigned vt:TYPE_BITS;  // value type (vtype_t)
+} rstack_entry_t;
+
+
 // Built-in function table (defined in csp_rt.c)
 extern const csp_func_t csp_builtin_funcs[];
 extern const uint8_t csp_num_builtin_funcs;
@@ -679,6 +689,8 @@ extern void csp_set_value(csp_rt_t* st, index_t n, value_t v);
 extern void csp_set_ivalue(csp_rt_t* st, index_t n, ivalue_t v);
 extern void csp_set_fvalue(csp_rt_t* st, index_t n, fvalue_t v);
 
+extern int csp_parse_expr(csp_rt_t* st, token_t* tv, size_t* num_toks,
+			  rstack_entry_t* result);
 //
 extern index_t csp_new_decl(csp_rt_t* st, char* name, int name_len, decl_t op);
 extern index_t csp_lookup_decl(csp_rt_t* st, char* module, char* name);

@@ -27,6 +27,9 @@ extern index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot);
 extern void csp_fprint_tag(FILE* f, csp_rt_t* st, index_t n);
 extern void csp_print_tag(csp_rt_t* st, index_t n);
 
+extern void csp_list_declarations(FILE* f, csp_rt_t* st);
+extern void csp_list_rules(FILE* f, csp_rt_t* st);
+
 #ifdef __cplusplus
 EXTERN_C_END
 #endif
