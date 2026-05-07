@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <stdlib.h>
+#include <string.h>
 
 // EEPROM support - not all boards have it
 #if defined(__AVR__) || defined(ESP32) || defined(ESP8266)
@@ -296,17 +297,16 @@ static uint16_t calc_checksum(csp_rt_t* st)
     size_t i;
 
     p = (uint8_t*)st->instr;
-    for (i = 0; i < st->nn * sizeof(csp_instr_t); i++)
+    for (i = 0; i < st->ps.nn * sizeof(csp_instr_t); i++)
         sum += p[i];
 
     p = (uint8_t*)st->decl;
-    for (i = 0; i < st->nd * sizeof(csp_decl_t); i++)
+    for (i = 0; i < st->ps.nd * sizeof(csp_decl_t); i++)
         sum += p[i];
 
-    p = (uint8_t*)&st->str[st->strp];
-    for (i = st->strp; i < MAX_STR_BUF; i++)
-        sum += p[i - st->strp];
-
+    p = (uint8_t*)&st->str[st->ps.strp];
+    for (i = 0; i < st->ps.strp; i++) 
+        sum += p[i];
     return sum;
 }
 
@@ -320,9 +320,9 @@ int csp_storage_save(csp_rt_t* st)
     hdr.magic = EEPROM_MAGIC;
     hdr.version = EEPROM_VERSION;
     hdr.flags = 0;
-    hdr.nn = st->nn;
-    hdr.nd = st->nd;
-    hdr.strp = st->strp;
+    hdr.nn = st->ps.nn;
+    hdr.nd = st->ps.nd;
+    hdr.strp = st->ps.strp;
     hdr.checksum = calc_checksum(st);
 
     // write header
@@ -332,16 +332,16 @@ int csp_storage_save(csp_rt_t* st)
 
     // write instructions
     p = (uint8_t*)st->instr;
-    for (i = 0; i < st->nn * sizeof(csp_instr_t); i++)
+    for (i = 0; i < st->ps.nn * sizeof(csp_instr_t); i++)
         EEPROM.update(addr++, p[i]);
 
     // write declarations
     p = (uint8_t*)st->decl;
-    for (i = 0; i < st->nd * sizeof(csp_decl_t); i++)
+    for (i = 0; i < st->ps.nd * sizeof(csp_decl_t); i++)
         EEPROM.update(addr++, p[i]);
 
     // write strings (from strp to end)
-    for (i = st->strp; i < MAX_STR_BUF; i++)
+    for (i = st->ps.strp; i < MAX_STR_BUF; i++)
         EEPROM.update(addr++, st->str[i]);
 
     return 0;
@@ -366,20 +366,20 @@ int csp_storage_load(csp_rt_t* st)
         return -2;  // version mismatch
 
     // read instructions
-    st->nn = hdr.nn;
+    st->ps.nn = hdr.nn;
     p = (uint8_t*)st->instr;
-    for (i = 0; i < st->nn * sizeof(csp_instr_t); i++)
+    for (i = 0; i < st->ps.nn * sizeof(csp_instr_t); i++)
         p[i] = EEPROM.read(addr++);
 
     // read declarations
-    st->nd = hdr.nd;
+    st->ps.nd = hdr.nd;
     p = (uint8_t*)st->decl;
-    for (i = 0; i < st->nd * sizeof(csp_decl_t); i++)
+    for (i = 0; i < st->ps.nd * sizeof(csp_decl_t); i++)
         p[i] = EEPROM.read(addr++);
 
     // read strings
-    st->strp = hdr.strp;
-    for (i = st->strp; i < MAX_STR_BUF; i++)
+    st->ps.strp = hdr.strp;
+    for (i = 0; i < st->ps.strp; i++)
         st->str[i] = EEPROM.read(addr++);
 
     // verify checksum

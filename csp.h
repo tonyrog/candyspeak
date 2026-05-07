@@ -280,6 +280,8 @@ typedef enum {
     OP_LD,      // load register from memory
     OP_ST,      // store register to memory
     OP_LI,      // load signed 16-bit constant
+    OP_LIU,     // load unsigned 16-bit constant (zero extend)
+    OP_LIH,     // load high 16-bit (OR into high bits)
     OP_ARG,     // load argument from register
     OP_CALL,    // function call:
     OP_LAST,
@@ -687,6 +689,11 @@ extern unsigned long csp_time_us(void);
 extern void csp_setup(csp_rt_t* st);
 extern void csp_input(csp_rt_t* st);
 extern void csp_output(csp_rt_t* st);
+
+// eeprom save/load (csp_eeprom.c)
+extern int csp_eeprom_save(csp_rt_t* st);
+extern int csp_eeprom_load(csp_rt_t* st);
+extern int csp_eeprom_size(csp_rt_t* st);
 
 // stack check/debug
 extern int stack_used();

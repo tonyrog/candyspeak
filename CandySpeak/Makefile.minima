@@ -1,0 +1,13 @@
+# Simply use arduino-cli
+#
+FQBN=arduino:renesas_uno:minima
+
+DEV=/dev/ttyACM0
+OPTS=--build-property "compiler.c.extra_flags=-O2" \
+     --build-property "compiler.cpp.extra_flags=-O2"
+     
+compile:
+	arduino-cli compile -e --fqbn $(FQBN) $(OPTS)
+
+upload:
+	arduino-cli upload -p $(DEV) --fqbn $(FQBN)

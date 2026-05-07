@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <termios.h>
+#include <ctype.h>
 
 #include "csp.h"
 #include "csp_format.h"
@@ -12,6 +14,11 @@
 
 
 #include <sys/time.h>
+
+// Interactive mode globals
+static struct termios orig_termios;
+static int raw_mode = 0;
+static const char* eeprom_file = "eeprom.db";
 
 #define MAX_LINE_SIZE 128
 
@@ -116,6 +123,271 @@ int csp_print_hex(uvalue_t v)
 int csp_println(void)
 {
     return putchar('\n');
+}
+
+// Terminal raw mode handling
+static void disable_raw_mode(void)
+{
+    if (raw_mode) {
+	tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+	raw_mode = 0;
+    }
+}
+
+static int enable_raw_mode(void)
+{
+    if (!isatty(STDIN_FILENO))
+	return -1;
+
+    if (tcgetattr(STDIN_FILENO, &orig_termios) < 0)
+	return -1;
+
+    atexit(disable_raw_mode);
+
+    struct termios raw = orig_termios;
+    raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+    raw.c_oflag |= (OPOST);  // keep output processing
+    raw.c_cflag |= (CS8);
+    raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0)
+	return -1;
+
+    raw_mode = 1;
+    return 0;
+}
+
+// Simple line editor - returns length, -1 on EOF
+static int read_line(char* buf, int maxlen, const char* prompt)
+{
+    int pos = 0;
+    int c;
+
+    printf("%s", prompt);
+    fflush(stdout);
+
+    while (1) {
+	c = getchar();
+	if (c == EOF || c == 4) {  // EOF or Ctrl-D
+	    if (pos == 0) return -1;
+	    break;
+	}
+	else if (c == '\r' || c == '\n') {
+	    printf("\n");
+	    break;
+	}
+	else if (c == 127 || c == 8) {  // Backspace or DEL
+	    if (pos > 0) {
+		pos--;
+		printf("\b \b");
+		fflush(stdout);
+	    }
+	}
+	else if (c == 21) {  // Ctrl-U: clear line
+	    while (pos > 0) {
+		pos--;
+		printf("\b \b");
+	    }
+	    fflush(stdout);
+	}
+	else if (c >= 32 && c < 127 && pos < maxlen - 1) {
+	    buf[pos++] = c;
+	    putchar(c);
+	    fflush(stdout);
+	}
+    }
+    buf[pos] = '\0';
+    return pos;
+}
+
+// Platform stub functions for csp_eeprom.c
+static FILE* eeprom_fp = NULL;
+
+int csp_eeprom_open_read(void)
+{
+    eeprom_fp = fopen(eeprom_file, "rb");
+    return eeprom_fp ? 0 : -1;
+}
+
+int csp_eeprom_open_write(void)
+{
+    eeprom_fp = fopen(eeprom_file, "wb");
+    return eeprom_fp ? 0 : -1;
+}
+
+void csp_eeprom_close(void)
+{
+    if (eeprom_fp) {
+	fclose(eeprom_fp);
+	eeprom_fp = NULL;
+    }
+}
+
+int csp_eeprom_read(void* buf, size_t len)
+{
+    if (!eeprom_fp) return -1;
+    return (fread(buf, 1, len, eeprom_fp) == len) ? 0 : -1;
+}
+
+int csp_eeprom_write(const void* buf, size_t len)
+{
+    if (!eeprom_fp) return -1;
+    return (fwrite(buf, 1, len, eeprom_fp) == len) ? 0 : -1;
+}
+
+// Interactive command handling
+static int handle_command(csp_rt_t* st, const char* cmd)
+{
+    if (strcmp(cmd, "help") == 0 || strcmp(cmd, "?") == 0) {
+	printf("Commands:\n");
+	printf("  /help, /?      Show this help\n");
+	printf("  /list          List declarations\n");
+	printf("  /rules         List rules\n");
+	printf("  /state         Show current state\n");
+	printf("  /save          Save to %s\n", eeprom_file);
+	printf("  /load          Load from %s\n", eeprom_file);
+	printf("  /reset         Reset to initial values\n");
+	printf("  /quit, /exit   Exit interactive mode\n");
+	printf("\n");
+	printf("Declarations:\n");
+	printf("  #variable X integer [= value]\n");
+	printf("  #constant PI float = 3.14159\n");
+	printf("  #digital LED out 13\n");
+	printf("\n");
+	printf("Rules:\n");
+	printf("  #X = Y + 1          (always)\n");
+	printf("  #X = Y + 1 ? cond   (conditional)\n");
+	printf("\n");
+	printf("Immediate:\n");
+	printf("  X                   Print value of X\n");
+	printf("  X + 1               Evaluate and print\n");
+	printf("  X = 5               Assign value to X\n");
+	return 0;
+    }
+    else if (strcmp(cmd, "list") == 0) {
+	csp_dump(stdout, st);
+	return 0;
+    }
+    else if (strcmp(cmd, "state") == 0) {
+	csp_dump_state_erl(stdout, st);
+	return 0;
+    }
+    else if (strcmp(cmd, "save") == 0) {
+	if (csp_eeprom_save(st) < 0) {
+	    printf("Error: cannot save to %s\n", eeprom_file);
+	    return -1;
+	}
+	printf("Saved to %s (%d decls, %d instrs, %d bytes)\n",
+	       eeprom_file, st->ps.nd, st->ps.nn, csp_eeprom_size(st));
+	return 0;
+    }
+    else if (strcmp(cmd, "load") == 0) {
+	if (csp_eeprom_load(st) < 0) {
+	    printf("Error: cannot load from %s\n", eeprom_file);
+	    return -1;
+	}
+	csp_setup(st);
+	printf("Loaded from %s (%d decls, %d instrs)\n",
+	       eeprom_file, st->ps.nd, st->ps.nn);
+	return 0;
+    }
+    else if (strcmp(cmd, "reset") == 0) {
+	csp_rt_start(st);
+	csp_setup(st);
+	printf("Reset to initial values\n");
+	return 0;
+    }
+    else if (strcmp(cmd, "quit") == 0 || strcmp(cmd, "exit") == 0) {
+	return 1;  // signal exit
+    }
+    else if (strcmp(cmd, "rules") == 0) {
+	// Just show instruction count for now
+	printf("Instructions: %d\n", st->ps.nn);
+	return 0;
+    }
+    else {
+	printf("Unknown command: /%s (try /help)\n", cmd);
+	return 0;
+    }
+}
+
+// Parse and execute immediate expression
+static int handle_immediate(csp_rt_t* st, char* line)
+{
+    token_t tv[MAX_LINE_TOKENS];
+    size_t num = MAX_LINE_TOKENS;
+
+    if (csp_scan_line(line, tv, &num) < 0) {
+	printf("Scan error\n");
+	return -1;
+    }
+
+    if (num == 0 || tv[0].t == NEWLINE)
+	return 0;
+
+    // For now, just show what was parsed
+    // TODO: implement proper immediate evaluation
+    printf("Immediate eval not yet implemented: %s\n", line);
+    return 0;
+}
+
+// Parse persistent definition (declaration or rule)
+static int handle_persistent(csp_rt_t* st, char* line)
+{
+    // Line starts with # - parse as declaration or rule
+    if (csp_parse(st, line) < 0) {
+	printf("Parse error: %s\n", csp_format_error(st->ps.err));
+	return -1;
+    }
+    // Re-initialize to apply new declarations and set values
+    csp_rt_start(st);
+    csp_setup(st);
+    printf("OK\n");
+    return 0;
+}
+
+// Main interactive loop
+static int interactive_loop(csp_rt_t* st)
+{
+    char buf[MAX_LINE_SIZE];
+    int len;
+
+    printf("CandySpeak Interactive Mode\n");
+    printf("Type /help for commands, /quit to exit\n\n");
+
+    while (1) {
+	len = read_line(buf, sizeof(buf), "> ");
+	if (len < 0) {
+	    printf("\n");
+	    break;
+	}
+	if (len == 0)
+	    continue;
+
+	// Skip leading whitespace
+	char* p = buf;
+	while (*p && isspace(*p)) p++;
+	if (*p == '\0')
+	    continue;
+
+	if (*p == '/') {
+	    // Command
+	    int r = handle_command(st, p + 1);
+	    if (r == 1) break;  // quit
+	}
+	else if (*p == '#') {
+	    // Persistent definition
+	    handle_persistent(st, p);
+	}
+	else {
+	    // Immediate expression
+	    handle_immediate(st, p);
+	}
+    }
+
+    return 0;
 }
 
 int csp_uconst(csp_rt_t* st, const char* name, int len,
@@ -307,6 +579,7 @@ static struct option long_options[] = {
     {"debug-scan",   no_argument,       0,  'S'},
     {"debug-trace",  no_argument,       0,  'Q'},
     {"help",         no_argument,       0,  'h'},
+    {"interactive",  no_argument,       0,  'i'},
     {"transaction",  optional_argument, 0,  't'},
     {"reactive",     optional_argument, 0,  'r'},
     {"verbose",      no_argument,       0,  'v'},
@@ -318,6 +591,7 @@ static struct option long_options[] = {
     {"result-file",  required_argument, 0,  'R'},
     {"compile",      no_argument,       0,  'C'},
     {"object-file",  required_argument, 0,  'O'},
+    {"eeprom",       required_argument, 0,  'e'},
     {0,              0,                 0,  0 }
 };
 
@@ -326,6 +600,7 @@ void usage(const char* prog)
     fprintf(stderr, "Usage: %s [options] [file...]\n", prog);
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "  -h, --help           Show this help\n");
+    fprintf(stderr, "  -i, --interactive    Interactive mode\n");
     fprintf(stderr, "  -d, --debug          Enable debug output\n");
     fprintf(stderr, "  -t, --transaction[=B] Enable transaction mode\n");
     fprintf(stderr, "  -r, --reactive[=B]   Enable reactive mode\n");
@@ -340,10 +615,11 @@ void usage(const char* prog)
     fprintf(stderr, "  -p, --parse-file=F   Write parsed structure to file\n");
     fprintf(stderr, "  -R, --result-file=F  Write result to file (Erlang format)\n");
     fprintf(stderr, "  -O, --object-file=F  Write compiled result to file (C code format)\n");
-    
-    
+    fprintf(stderr, "  -e, --eeprom=F       EEPROM file for save/load (default: eeprom.db)\n");
+
     fprintf(stderr, "\n");
     fprintf(stderr, "If no file is given, reads from stdin.\n");
+    fprintf(stderr, "In interactive mode (-i), type /help for commands.\n");
 }
 
 int main(int argc, char** argv)
@@ -355,8 +631,9 @@ int main(int argc, char** argv)
     FILE* state_file = NULL;
     FILE* parse_out = NULL;
     FILE* result_file = NULL;
-    FILE* object_file = NULL;    
+    FILE* object_file = NULL;
     int execute = 1;
+    int interactive = 0;
     uint32_t max_cycles = 0;
     uint32_t max_time_ms = 0;
     uint32_t start_time;
@@ -367,7 +644,7 @@ int main(int argc, char** argv)
 
     while (1) {
 	int option_index = 0;
-	c = getopt_long(argc, argv, "hndPQSCc:T:s:p:R:r:t:O:",
+	c = getopt_long(argc, argv, "hindPQSCc:T:s:p:R:r:t:O:e:",
 			long_options, &option_index);
 	if (c == -1)
 	    break;
@@ -376,6 +653,8 @@ int main(int argc, char** argv)
 	case 'h':
 	    usage(argv[0]);
 	    exit(0);
+	case 'i': interactive = 1; break;
+	case 'e': eeprom_file = optarg; break;
 	case 'r': reactive =  atoi(optarg); break;
 	case 't': transaction = atoi(optarg); break;
 	case 'n': execute = 0; break;
@@ -440,15 +719,8 @@ int main(int argc, char** argv)
     csp_rt_init(&state, transaction, reactive);
     csp_set_uconst(&state, csp_uconst);
 
-    if (optind >= argc) {
-	// no files given, read from stdin
-	if ((r = parse_file(&state, stdin)) < 0) {
-	    fprintf(stderr, "*stdin*:%d %s\n",
-		    state.ps.line, csp_format_error(state.ps.err));
-	    exit(1);
-	}
-    }
-    else {
+    // Parse input files (if any)
+    if (optind < argc) {
 	while (optind < argc) {
 	    if ((fin = fopen(argv[optind], "r")) == NULL) {
 		fprintf(stderr, "unable to open file '%s'\n", argv[optind]);
@@ -463,6 +735,14 @@ int main(int argc, char** argv)
 	    optind++;
 	}
     }
+    else if (!interactive) {
+	// no files given, read from stdin (unless interactive)
+	if ((r = parse_file(&state, stdin)) < 0) {
+	    fprintf(stderr, "*stdin*:%d %s\n",
+		    state.ps.line, csp_format_error(state.ps.err));
+	    exit(1);
+	}
+    }
 
     if (state.reactive)
 	csp_csr(&state); // build graph
@@ -475,6 +755,16 @@ int main(int argc, char** argv)
 
     // initialize input/output/timers ... load default values
     csp_setup(&state);
+
+    // Interactive mode
+    if (interactive) {
+	if (isatty(STDIN_FILENO)) {
+	    enable_raw_mode();
+	}
+	interactive_loop(&state);
+	disable_raw_mode();
+	exit(0);
+    }
 
     if (debug_parse) {
 	csp_dump(stdout, &state);

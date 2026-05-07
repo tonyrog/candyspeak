@@ -2,7 +2,7 @@
 
 CC = gcc
 CFLAGS=-MMD -MP -MF .$<.d
-OBJS = csp_linux.o csp_rt.o csp_format.o csp_dump.o
+OBJS = csp_linux.o csp_rt.o csp_format.o csp_dump.o csp_eeprom.o
 LIBS =
 
 # -O3 -std=c99

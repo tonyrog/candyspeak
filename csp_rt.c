@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
-#include <ctype.h>
 
 #include "csp.h"
 #ifdef DEBUG
@@ -17,20 +16,39 @@
 // convert integer to -1 if y != 0  0 otherwise
 #define BOOL(y) (-((y)!=0))
 
+// CTYPE
+/*
+#include <ctype.h>
+#define ISDIGIT(c)  isdigit((c))
+#define ISXDIGIT(c) isxdigit((c))
+#define ISALPHA(c)  isalpha((c))
+*/
+
+#define ISDIGIT(c) (((c) >= '0') && ((c) <= '9'))
+#define ISUPPER(c) (((c) >= 'A') && ((c) <= 'Z'))
+#define ISLOWER(c) (((c) >= 'a') && ((c) <= 'z'))
+#define ISXUPPER(c) (((c) >= 'A') && ((c) <= 'F'))
+#define ISXLOWER(c) (((c) >= 'a') && ((c) <= 'f'))
+#define ISXDIGIT(c) (ISDIGIT((c)) || ISXUPPER((c)) || ISXLOWER((c)))
+#define ISALPHA(c) (ISUPPER((c)) || ISLOWER((c)))
+
 // assoc
 #define LEFT -1
 #define RIGHT 1
 #define NO    0
 // func
 
+// string length for constant strings "foo" => 3
+#define CSTRLEN(str) (sizeof((str))-1)
+
 #define TOK_ENT(o,c,n) \
-    [(o)] = { .tok=(o),.ttype=TOKT_TOKEN,.code=(c),.name=(n),.name_len=strlen((n)),.arity=-1,.prec=-1,.assoc=NO }
+    [(o)] = { .tok=(o),.ttype=TOKT_TOKEN,.code=(c),.name=(n),.name_len=CSTRLEN((n)),.arity=-1,.prec=-1,.assoc=NO }
 
 #define INSTR_ENT(o,c,n,a,p,s) \
-    [(o)] = { .tok=(o),.ttype=TOKT_INSTR,.code=(c),.name=(n),.name_len=strlen((n)),.arity=(a),.prec=(p),.assoc=(s) }
+    [(o)] = { .tok=(o),.ttype=TOKT_INSTR,.code=(c),.name=(n),.name_len=CSTRLEN((n)),.arity=(a),.prec=(p),.assoc=(s) }
 
 #define DECL_ENT(o,c,n) \
-    [(o)] = { .tok=(o),.ttype=TOKT_DECL,.code=(c),.name=(n),.name_len=strlen((n)),.arity=-1,.prec=-1,.assoc=NO }
+    [(o)] = { .tok=(o),.ttype=TOKT_DECL,.code=(c),.name=(n),.name_len=CSTRLEN((n)),.arity=-1,.prec=-1,.assoc=NO }
 
 const op_entry_t op_table[] = {
     TOK_ENT(NONE,OP_NOP,"\0"),
@@ -327,6 +345,8 @@ static op_info_t info_tab[] = {
     [OP_LEAVE] = {"LEAVE",0,V_VOID,{}},
     [OP_NEW]   = {"NEW",0,V_VOID,{}},
     [OP_LI]    = {"LI",0,V_VOID,{}},
+    [OP_LIU]   = {"LIU",0,V_VOID,{}},
+    [OP_LIH]   = {"LIH",0,V_VOID,{}},
     [OP_ARG]   = {"ARG",0,V_VOID,{}},    
     [OP_ST]    = {"ST",0,V_VOID,{}},
     [OP_LD]    = {"LD",0,V_VOID,{}},
@@ -694,7 +714,13 @@ again:
 #endif
 	break;	
     case OP_LI:
-	st->reg[st->instr[n].i.x].i = st->instr[n].i.imm;
+	st->reg[st->instr[n].i.x].i = st->instr[n].i.imm;  // sign extend
+	break;
+    case OP_LIU:
+	st->reg[st->instr[n].i.x].u = (uint16_t)st->instr[n].i.imm;  // zero extend
+	break;
+    case OP_LIH:
+	st->reg[st->instr[n].i.x].u |= ((uint32_t)(uint16_t)st->instr[n].i.imm) << 16;
 	break;
     case OP_ARG:
 	st->arg[st->instr[n].i.imm] = st->reg[st->instr[n].i.x];
@@ -891,23 +917,6 @@ static index_t lookup_decl(csp_rt_t* st, char* name, int name_len)
     return lookup_decl_in(st, name, name_len, INDEX(st->mdef)+1, st->ps.nd);
 }
 
-// lookup names like Mod.var
-index_t csp_lookup_decl(csp_rt_t* st, char* module, char* name)
-{
-    if (module == NULL) {
-	return lookup_decl(st, name, strlen(name));
-    }
-    else {
-	index_t mx = lookup_decl(st, module, strlen(module));
-	ivalue_t dn;
-	if (mx == BAD_INDEX)
-	    return BAD_INDEX;
-	dn = st->decl[mx].md.n;  // number of elements
-	return lookup_decl_in(st,name,strlen(name),
-			      INDEX(mx)+1,INDEX(mx)+1+dn);
-    }
-}
-
 index_t lookup_const(csp_rt_t* st, vtype_t vt, value_t v)
 {
     index_t i;
@@ -1085,6 +1094,61 @@ int csp_new_imm(csp_rt_t* st, opcode_t op, reg_t x, int16_t imm)
 int csp_new_li(csp_rt_t* st, reg_t x, int16_t imm)
 {
     return csp_new_imm(st, OP_LI, x, imm);
+}
+
+int csp_new_liu(csp_rt_t* st, reg_t x, uint16_t imm)
+{
+    return csp_new_imm(st, OP_LIU, x, (int16_t)imm);
+}
+
+int csp_new_lih(csp_rt_t* st, reg_t x, uint16_t imm)
+{
+    return csp_new_imm(st, OP_LIH, x, (int16_t)imm);
+}
+
+// Smart load: choose LI, LIU, or LIU+LIH based on value
+int csp_load_int(csp_rt_t* st, reg_t x, ivalue_t val)
+{
+    if (val >= -32768 && val <= 32767) {
+	return csp_new_li(st, x, (int16_t)val);
+    }
+    else {
+	uint32_t uval = (uint32_t)val;
+	if (csp_new_liu(st, x, (uint16_t)(uval & 0xFFFF)) < 0)
+	    return -1;
+	if (uval > 0xFFFF) {
+	    if (csp_new_lih(st, x, (uint16_t)(uval >> 16)) < 0)
+		return -1;
+	}
+	return 0;
+    }
+}
+
+int csp_load_uint(csp_rt_t* st, reg_t x, uvalue_t val)
+{
+    if (val <= 32767) {
+	return csp_new_li(st, x, (int16_t)val);
+    }
+    else if (val <= 0xFFFF) {
+	return csp_new_liu(st, x, (uint16_t)val);
+    }
+    else {
+	if (csp_new_liu(st, x, (uint16_t)(val & 0xFFFF)) < 0)
+	    return -1;
+	return csp_new_lih(st, x, (uint16_t)(val >> 16));
+    }
+}
+
+int csp_load_float(csp_rt_t* st, reg_t x, float val)
+{
+    union { float f; uint32_t u; } v;
+    v.f = val;
+    if (v.u == 0) {
+	return csp_new_li(st, x, 0);  // 0.0
+    }
+    if (csp_new_liu(st, x, (uint16_t)(v.u & 0xFFFF)) < 0)
+	return -1;
+    return csp_new_lih(st, x, (uint16_t)(v.u >> 16));
 }
 
 int csp_new_arg(csp_rt_t* st, reg_t x, int16_t i)
@@ -1400,13 +1464,13 @@ next:
     case '+':
 	TOK(PLUS);
     default:
-	if (isdigit(c))
+	if (ISDIGIT(c))
 	    goto number;
-	else if (isalpha(c)) {
+	else if (ISALPHA(c)) {
 	    char *name = str-1;
 	    int len = 1;
 	    int i;
-	    while ( isalpha(*str) || isdigit(*str) || (*str == '_') ) {
+	    while (ISALPHA(*str) || ISDIGIT(*str) || (*str == '_') ) {
 		str++;
 		len++;
 	    }
@@ -1421,22 +1485,22 @@ next:
 	if ((c == '0') && (*str == 'x')) {
 	    ivalue_t v = 0;
 	    str++;
-	    while(isxdigit(*str)) {
+	    while(ISXDIGIT(*str)) {
 		v = v*16 + hex(*str++);
 	    }
 	    TOK_INT(v*sign);
 	}
-	if (isdigit(c)) {
+	if (ISDIGIT(c)) {
 	    ivalue_t v = dec(c);
-	    while(isdigit(*str)) {
+	    while(ISDIGIT(*str)) {
 		v = v*10 + dec(*str++);
 	    }
             // parse simple fraction for now	    
-	    if ((str[0] == '.') && isdigit(str[1])) {
+	    if ((str[0] == '.') && ISDIGIT(str[1])) {
 		float b = 0.1;
 		float f = 0.0;
 		str++;
-		while(isdigit(*str)) {
+		while(ISDIGIT(*str)) {
 		    f = f + (b*dec(*str++));
 		    b /= 10.0;
 		}
@@ -1539,22 +1603,25 @@ int map_reg(csp_rt_t* st, index_t ix)
 	st->decl[INDEX(ix)].reg = dst;
 	ap->rmap[dst] = ix;
 	if (st->decl[INDEX(ix)].type == DECL_CONSTANT) {
-	    if (st->decl[INDEX(ix)].vt == V_INTEGER) {
-		value_t val = st->decl[INDEX(ix)].cn.init;
-		if ((val.i >= -32768) && (val.i <= 32767))
-		    if (csp_new_li(st,dst,val.i) < 0)
-			return -1;
+	    value_t val = st->decl[INDEX(ix)].cn.init;
+	    vtype_t vt = st->decl[INDEX(ix)].vt;
+	    if (vt == V_INTEGER) {
+		if (csp_load_int(st, dst, val.i) < 0)
+		    return -1;
 		return dst;
 	    }
-	    if (st->decl[INDEX(ix)].vt == V_UNSIGNED) {
-		value_t val = st->decl[INDEX(ix)].cn.init;
-		if (val.u <= 32767)
-		    if (csp_new_li(st,dst,val.u) < 0)
-			return -1;
+	    if (vt == V_UNSIGNED) {
+		if (csp_load_uint(st, dst, val.u) < 0)
+		    return -1;
+		return dst;
+	    }
+	    if (vt == V_FLOAT) {
+		if (csp_load_float(st, dst, val.f) < 0)
+		    return -1;
 		return dst;
 	    }
 	}
-	// generate LD instruction
+	// generate LD instruction for variables
 	if (csp_new_ld(st,dst,ix) < 0)
 	    return -1;
 	return dst;
@@ -1580,16 +1647,22 @@ static int push_imm(csp_rt_t* st, rstack_entry_t* rstack, int* ep,
     index_t ix = BAD_INDEX;
 
     if (st->ap) {
-	if (vt == V_INTEGER && val.i >= -32768 && val.i <= 32767) {
-	    r = alloc_reg(st);
-	    if (csp_new_li(st, r, val.i) < 0) return -1;
+	r = alloc_reg(st);
+	if (vt == V_INTEGER) {
+	    if (csp_load_int(st, r, val.i) < 0) return -1;
+	} else if (vt == V_UNSIGNED) {
+	    if (csp_load_uint(st, r, val.u) < 0) return -1;
+	} else if (vt == V_FLOAT) {
+	    if (csp_load_float(st, r, val.f) < 0) return -1;
 	} else {
+	    // string or other - use constant pool
 	    ix = lookup_const(st, vt, val);
 	    if (ix == BAD_INDEX) {
 		if (vt == V_FLOAT) ix = new_float_const(st, val.f);
 		else ix = new_signed_const(st, val.i);
 	    }
 	    if (ix == BAD_INDEX) return -1;
+	    free_reg(st, r);
 	    r = map_reg(st, ix);
 	    if (r < 0) return -1;
 	}
@@ -1628,6 +1701,15 @@ static int push_var(csp_rt_t* st, rstack_entry_t* rstack, int* ep,
 		    index_t ix, vtype_t vt)
 {
     reg_t r = 0;
+
+    // For constants with no codegen, treat as immediate
+    if (!st->ap && st->decl[INDEX(ix)].type == DECL_CONSTANT) {
+	rstack[(*ep)++] = (rstack_entry_t){
+	    .reg = 0, .ix = ix, .val = st->decl[INDEX(ix)].cn.init,
+	    .loaded = 0, .immediate = 1, .vt = st->decl[INDEX(ix)].vt
+	};
+	return 0;
+    }
 
     if (st->ap) {
 	r = map_reg(st, ix);
@@ -2211,107 +2293,68 @@ out: // expression is terminated with non-expression char
     return 0;
 }
 
-static int lookup_val(csp_rt_t* st, vtype_t vt,
-		      char* name, int len, value_t* rp)
+// expect tokens from tv[] matching pattern in te[].t
+// on match, copies token values to te[].v and updates *pi
+// returns: 1=match, 0=no match
+static int expect(csp_rt_t* st, token_t* tv, int* pi, size_t n, token_t* te)
 {
-    index_t ix;
-    vtype_t vt1;
-    if ((ix = lookup_decl(st,name,len)) != BAD_INDEX) {
-	if (st->decl[INDEX(ix)].type != DECL_CONSTANT)
-	    return 0;  // only constants, not variables
-	if (st->decl[INDEX(ix)].vt != vt)
-	    return 0;  // type mismatch
-	*rp = st->decl[INDEX(ix)].cn.init;
-	return 1;
-    }
-    if (st->uconst == NULL)
-	return 0;
-    if (st->uconst(st,name,len,rp,&vt1)) {
-	switch(vt) {
-	case V_INTEGER:
-	    if (vt1 == V_FLOAT)
-		rp->f = (int) rp->i;
-	    else if (vt1 != V_INTEGER)
-		return 0;
-	    return 1;
-	case V_FLOAT:
-	    if (vt1 == V_INTEGER)
-		rp->f = (float) rp->i;
-	    else if (vt1 != V_FLOAT)
-		return 0;
-	    return 1;
-	default:
-	    break;
-	}
-    }
-    return 0;
-}
-
-// parse constant (fixme eval constants?)
-static int parse_value(csp_rt_t* st,vtype_t vt,token_t* tv,int i,value_t* dst)
-{
-    value_t r;
-
-    switch(vt) {
-    case V_INTEGER:
-	switch(tv[i].t) {
-	case FLT: r.i = (ivalue_t)tv[i].v.val.f; break;
-	case INT: r.i = tv[i].v.val.i; break;
-	case WORD:
-	    if (!lookup_val(st,V_INTEGER,tv[i].v.str.ptr,tv[i].v.str.len,&r))
-		return -1;
-	    break;
-	default:
-	    return -1;
-	}
-	break;
-    case V_FLOAT:
-	switch(tv[i].t) {
-	case FLT: r.f = tv[i].v.val.f; break;
-	case INT: r.f = (float) tv[i].v.val.i; break;
-	case WORD:
-	    if (!lookup_val(st,V_FLOAT,tv[i].v.str.ptr,tv[i].v.str.len,&r))
-		return -1;
-	    break;
-	default: return -1;
-	}
-	break;
-    default:
-	return -1;
-    }
-    *dst = r;
-    return 0;
-}
-
-static int expect(csp_rt_t* st, token_t* tv, int i, tok_t* te)
-{
+    int i = *pi;
     int j = 0;
-    int t, s;
+    tok_t t, s;
+    reg_allocator_t* saved_ap;
 
     do {
-	t = te[j];
+	t = te[j].t;
+	if (t == LAST)
+	    break;
+	if (i >= (int)n) return 0;  // bounds check
 	s = tv[i].t;
-	if ((t == INT) && (s == WORD)) {
-	    value_t r;
-	    if (!lookup_val(st,V_INTEGER,tv[i].v.str.ptr,tv[i].v.str.len,&r))
+
+	if ((t == INT) || (t == FLT)) {
+	    // try to parse constant expression
+	    rstack_entry_t result;
+	    size_t num = 1;  // start with 1 token, parse_expr will consume more if needed
+
+	    // find how many tokens until end of line or next expected token
+	    // stop at EQ since it typically starts init value, not part of size expr
+	    int k = i;
+	    tok_t next = te[j+1].t;
+	    while (k < (int)n && tv[k].t != NEWLINE && tv[k].t != NONE &&
+		   tv[k].t != EQ && (next == LAST || tv[k].t != next))
+		k++;
+	    num = k - i;
+	    if (num == 0) num = 1;
+
+	    saved_ap = st->ap;
+	    st->ap = NULL;  // no codegen
+	    if (!csp_parse_expr(st, &tv[i], &num, &result)) {
+		st->ap = saved_ap;
 		return 0;
-	    tv[i].t = INT;
-	    tv[i].v.val = r;
-	    s = INT;  // update s after successful lookup
-	}
-	else if ((t == FLT) && (s == WORD)) {
-	    value_t r;
-	    if (!lookup_val(st,V_FLOAT,tv[i].v.str.ptr,tv[i].v.str.len,&r))
+	    }
+	    st->ap = saved_ap;
+
+	    if (!result.immediate)
+		return 0;  // not a constant
+
+	    // check type
+	    if (t == INT && result.vt != V_INTEGER && result.vt != V_UNSIGNED)
 		return 0;
-	    tv[i].t = FLT;
-	    tv[i].v.val = r;
-	    s = FLT;  // update s after successful lookup
+	    if (t == FLT && result.vt != V_FLOAT)
+		return 0;
+
+	    te[j].v.val = result.val;
+	    i += num;  // skip consumed tokens
 	}
-	if ((t != LAST) && (t != s))
-	    return 0;
+	else {
+	    // simple token match
+	    if (t != s)
+		return 0;
+	    te[j].v = tv[i].v;  // copy value
+	    i++;
+	}
 	j++;
-	i++;
-    } while(t != LAST);
+    } while(1);
+    *pi = i;  // update position
     return 1;
 }
 
@@ -2321,17 +2364,18 @@ int csp_parse_module(csp_rt_t* st, token_t* tv, size_t n)
 {
     index_t ix;
     index_t jx;
-    tok_t te[] = {HASH, MODULE, WORD, LAST};
+    int i = 0;
+    token_t te[] = {{HASH}, {MODULE}, {WORD}, {LAST}};
 
-    if (!expect(st, tv, 0, te)) {
+    if (!expect(st, tv, &i, n, te)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    if ((ix = lookup_decl(st, tv[2].v.str.ptr, tv[2].v.str.len)) != BAD_INDEX) {
+    if ((ix = lookup_decl(st, te[2].v.str.ptr, te[2].v.str.len)) != BAD_INDEX) {
 	csp_set_error(st, ERR_OBJECT_ALREADY_DEFINED);
 	return -1;
     }
-    ix = csp_new_decl(st, tv[2].v.str.ptr, tv[2].v.str.len, DECL_MODULE);
+    ix = csp_new_decl(st, te[2].v.str.ptr, te[2].v.str.len, DECL_MODULE);
     if (ix == BAD_INDEX) return -1;
     st->mdef = ix;  // current module being defined
     if ((jx = csp_new_enter(st, 0, ix)) < 0)
@@ -2346,10 +2390,11 @@ int csp_parse_module(csp_rt_t* st, token_t* tv, size_t n)
 int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
 {
     index_t mx, ex, lx;
-    tok_t te[] = {HASH, END, LAST};    
+    int i = 0;
+    token_t te[] = {{HASH}, {END}, {LAST}};
 
-    if (!expect(st, tv, 0, te)) {
-	csp_set_error(st, ERR_SYNTAX);	
+    if (!expect(st, tv, &i, n, te)) {
+	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
     if ((mx = st->mdef)) { // stack?
@@ -2382,25 +2427,22 @@ int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n)
     ivalue_t in=0, out=0;
     vtype_t vt = V_INTEGER;
     value_t def;
-    index_t ix;    
-    int i;
-    tok_t teres[] = {COLON, INT, LAST};    
-    tok_t te[] = {HASH, VARIABLE, WORD, LAST};
+    index_t ix;
+    int i = 0;
+    token_t teres[] = {{COLON}, {INT}, {LAST}};
+    token_t te[] = {{HASH}, {VARIABLE}, {WORD}, {LAST}};
 
-    if (!expect(st, tv, 0, te)) {
-	csp_set_error(st, ERR_SYNTAX);	
+    if (!expect(st, tv, &i, n, te)) {
+	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    i=3;
-    if (expect(st, tv, i, teres)) {
-	res = MAKE_RES(tv[i+1].v.val.i);
-	i += 2;
-    }
+    if (expect(st, tv, &i, n, teres))
+	res = MAKE_RES(teres[1].v.val.i);
     vt = V_INTEGER;
     def.i = 0;
-    
+
 opts:
-    if (i < n) {
+    if (i < (int)n) {
 	switch(tv[i].t) {
 	case UNSIGNED: vt=V_UNSIGNED; def.u = 0; i++; goto opts;
 	case INTEGER: vt=V_INTEGER; def.i = 0; i++; goto opts;
@@ -2411,15 +2453,16 @@ opts:
 	default: break;
 	}
     }
-    if (tv[i].t == EQ) {
-	if (parse_value(st, vt, tv, i+1, &def) < 0) {
-	    csp_set_error(st, ERR_SYNTAX);  // number expected
+    if (i < (int)n && tv[i].t == EQ) {
+	token_t teeq[] = {{EQ}, {(vt == V_FLOAT) ? FLT : INT}, {LAST}};
+	if (!expect(st, tv, &i, n, teeq)) {
+	    csp_set_error(st, ERR_SYNTAX);
 	    return -1;
 	}
-	i += 2;
+	def = teeq[1].v.val;
     }
-    if ((ix = lookup_decl(st, tv[2].v.str.ptr, tv[2].v.str.len)) == BAD_INDEX)
-	ix = csp_new_decl(st, tv[2].v.str.ptr, tv[2].v.str.len, DECL_VARIABLE);
+    if ((ix = lookup_decl(st, te[2].v.str.ptr, te[2].v.str.len)) == BAD_INDEX)
+	ix = csp_new_decl(st, te[2].v.str.ptr, te[2].v.str.len, DECL_VARIABLE);
     if (ix == BAD_INDEX) return -1;
     i = INDEX(ix);
     st->decl[i].vt = vt;
@@ -2436,42 +2479,39 @@ int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
     ivalue_t res;
     value_t cnst;
     vtype_t vt;
-    index_t ix;  
-    int i;
-    tok_t teres[] = {COLON, INT, LAST};    
-    tok_t te[] = {HASH, CONSTANT, WORD, LAST};
-    
+    index_t ix;
+    int i = 0;
+    token_t teres[] = {{COLON}, {INT}, {LAST}};
+    token_t te[] = {{HASH}, {CONSTANT}, {WORD}, {LAST}};
+    token_t teeq[3];
+
     // defaults
     vt = V_INTEGER;
     cnst.i = 0;
     res = MAKE_RES(8*sizeof(ivalue_t));
 
-    if (!expect(st, tv, 0, te)) {
-	csp_set_error(st, ERR_SYNTAX);	
-	return -1;
-    }
-    i=3;
-    if (expect(st, tv, i, teres)) {	
-	res = MAKE_RES(tv[i+1].v.val.i);
-	i += 2;
-    }
-    switch(tv[i].t) {
-    case UNSIGNED: vt=V_UNSIGNED; cnst.u=0; i++; break;
-    case INTEGER: vt=V_INTEGER; cnst.i=0; i++;  break;	    	    
-    case FLOAT: vt=V_FLOAT; cnst.f=0.0; i++; break;
-    default: break;
-    }
-    if (tv[i].t != EQ) {
+    if (!expect(st, tv, &i, n, te)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    if (parse_value(st, vt, tv, i+1, &cnst) < 0) {
-	csp_set_error(st, ERR_SYNTAX);	
+    if (expect(st, tv, &i, n, teres))
+	res = MAKE_RES(teres[1].v.val.i);
+    switch(tv[i].t) {
+    case UNSIGNED: vt=V_UNSIGNED; cnst.u=0; i++; break;
+    case INTEGER: vt=V_INTEGER; cnst.i=0; i++;  break;
+    case FLOAT: vt=V_FLOAT; cnst.f=0.0; i++; break;
+    default: break;
+    }
+    teeq[0] = (token_t){EQ};
+    teeq[1] = (token_t){(vt == V_FLOAT) ? FLT : INT};
+    teeq[2] = (token_t){LAST};
+    if (!expect(st, tv, &i, n, teeq)) {
+	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    i += 2;
-    if ((ix = lookup_decl(st, tv[2].v.str.ptr, tv[2].v.str.len)) == BAD_INDEX)
-	ix = csp_new_decl(st, tv[2].v.str.ptr, tv[2].v.str.len, DECL_CONSTANT);
+    cnst = teeq[1].v.val;
+    if ((ix = lookup_decl(st, te[2].v.str.ptr, te[2].v.str.len)) == BAD_INDEX)
+	ix = csp_new_decl(st, te[2].v.str.ptr, te[2].v.str.len, DECL_CONSTANT);
     if (ix == BAD_INDEX) return -1;
     i = INDEX(ix);
     st->decl[i].res = res;
@@ -2488,18 +2528,17 @@ int csp_parse_digital(csp_rt_t* st, token_t* tv, size_t n)
     ivalue_t pu=0, pd=0;
     ivalue_t port=0, pin=0;
     index_t ix;
-    int i;
-    tok_t te[] = {HASH, DIGITAL, WORD, LAST};
-    tok_t tepin[] = {INT, LAST};    
-    tok_t teport[] = {INT, COLON, INT, LAST};
+    int i = 0;
+    token_t te[] = {{HASH}, {DIGITAL}, {WORD}, {LAST}};
+    token_t tepin[] = {{INT}, {LAST}};
+    token_t teport[] = {{INT}, {COLON}, {INT}, {LAST}};
 
-    if (!expect(st, tv, 0, te)) {
-	csp_set_error(st, ERR_SYNTAX);	
+    if (!expect(st, tv, &i, n, te)) {
+	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    i = 3;
 opts:
-    if (i < n) {
+    if (i < (int)n) {
 	switch(tv[i].t) {
 	case IN: in = 1; i++; goto opts;
 	case OUT: out = 1; i++; goto opts;
@@ -2509,22 +2548,20 @@ opts:
 	default: break;
 	}
     }
-    if (expect(st, tv, i, teport)) {
-	port = tv[i].v.val.i;
-	pin  = tv[i+2].v.val.i;
-	i += 3;
+    if (expect(st, tv, &i, n, teport)) {
+	port = teport[0].v.val.i;
+	pin  = teport[2].v.val.i;
     }
-    else if (expect(st, tv, i, tepin)) {
-	pin = tv[i].v.val.i;
-	i++;
+    else if (expect(st, tv, &i, n, tepin)) {
+	pin = tepin[0].v.val.i;
     }
     else {
-	csp_set_error(st, ERR_SYNTAX);	
+	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
     if (!in && !out) in=1;
-    if ((ix = lookup_decl(st, tv[2].v.str.ptr, tv[2].v.str.len)) == BAD_INDEX)
-	ix = csp_new_decl(st, tv[2].v.str.ptr, tv[2].v.str.len, DECL_DIGITAL);
+    if ((ix = lookup_decl(st, te[2].v.str.ptr, te[2].v.str.len)) == BAD_INDEX)
+	ix = csp_new_decl(st, te[2].v.str.ptr, te[2].v.str.len, DECL_DIGITAL);
     if (ix == BAD_INDEX) return -1;
     i = INDEX(ix);
     st->decl[i].res = res;
@@ -2546,26 +2583,23 @@ int csp_parse_analog(csp_rt_t* st, token_t* tv, size_t n)
     ivalue_t port=0, pin=0, pwm=0;
     vtype_t vt;
     index_t ix;
-    int i;
-    tok_t te[] = {HASH, ANALOG, WORD, LAST};
-    tok_t teres[] = {COLON, INT, LAST};
-    tok_t tepin[] = {INT, LAST};
-    tok_t teport[] = {INT, COLON, INT, LAST};
+    int i = 0;
+    token_t te[] = {{HASH}, {ANALOG}, {WORD}, {LAST}};
+    token_t teres[] = {{COLON}, {INT}, {LAST}};
+    token_t tepin[] = {{INT}, {LAST}};
+    token_t teport[] = {{INT}, {COLON}, {INT}, {LAST}};
 
     res = MAKE_RES(10);
-    vt = V_INTEGER;    
+    vt = V_INTEGER;
 
-    if (!expect(st, tv, 0, te)) {
+    if (!expect(st, tv, &i, n, te)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    i = 3;
-    if (expect(st, tv, i, teres)) {
-	res = MAKE_RES(tv[i+1].v.val.i);
-	i += 2;
-    }
+    if (expect(st, tv, &i, n, teres))
+	res = MAKE_RES(teres[1].v.val.i);
 opts:
-    if (i < n) {
+    if (i < (int)n) {
 	switch(tv[i].t) {
 	case UNSIGNED: vt=V_UNSIGNED; i++; goto opts;
 	case INTEGER: vt=V_INTEGER; i++; goto opts;
@@ -2577,22 +2611,20 @@ opts:
 	default: break;
 	}
     }
-    if (expect(st, tv, i, teport)) {
-	port = tv[i].v.val.i;
-	pin  = tv[i+2].v.val.i;
-	i += 3;
+    if (expect(st, tv, &i, n, teport)) {
+	port = teport[0].v.val.i;
+	pin  = teport[2].v.val.i;
     }
-    else if (expect(st, tv, i, tepin)) {
-	pin = tv[i].v.val.i;
-	i++;
+    else if (expect(st, tv, &i, n, tepin)) {
+	pin = tepin[0].v.val.i;
     }
     else {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
     if (!in && !out) in=1;
-    if ((ix = lookup_decl(st, tv[2].v.str.ptr, tv[2].v.str.len)) == BAD_INDEX)
-	ix = csp_new_decl(st, tv[2].v.str.ptr, tv[2].v.str.len, DECL_ANALOG);
+    if ((ix = lookup_decl(st, te[2].v.str.ptr, te[2].v.str.len)) == BAD_INDEX)
+	ix = csp_new_decl(st, te[2].v.str.ptr, te[2].v.str.len, DECL_ANALOG);
     if (ix == BAD_INDEX) return -1;
     i = INDEX(ix);
     st->decl[i].vt = vt;
@@ -2610,30 +2642,26 @@ int csp_parse_timer(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t init = 0;
     index_t ix, px, tx;
-    int i;
-    tok_t te[] = {HASH, TIMER, WORD, INT, LAST};
-    
-    if (!expect(st, tv, 0, te)) {
-	csp_set_error(st, ERR_SYNTAX);	
+    int i = 0;
+    token_t te[] = {{HASH}, {TIMER}, {WORD}, {INT}, {LAST}};
+    token_t teeq[] = {{EQ}, {INT}, {LAST}};
+
+    if (!expect(st, tv, &i, n, te)) {
+	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    if (tv[4].t == EQ) {
-	if (tv[5].t != INT) { // FIXME: eval constant!
-	    csp_set_error(st, ERR_SYNTAX);
-	    return -1;
-	}
-	init = tv[5].v.val.i;
-    }
-    if ((px = lookup_const(st, V_INTEGER, tv[3].v.val)) == BAD_INDEX)
-	px = new_signed_const(st,tv[3].v.val.i);
+    if (expect(st, tv, &i, n, teeq))
+	init = teeq[1].v.val.i;
+    if ((px = lookup_const(st, V_INTEGER, te[3].v.val)) == BAD_INDEX)
+	px = new_signed_const(st, te[3].v.val.i);
     tx = csp_new_decl(st, NULL, 0, DECL_VARIABLE);
     i = INDEX(tx);
     st->decl[i].vt = V_UNSIGNED;
     st->decl[i].res = MAKE_RES(32);
     st->decl[i].va.init.u = 0;
-    
-    if ((ix = lookup_decl(st, tv[2].v.str.ptr, tv[2].v.str.len)) == BAD_INDEX) {
-	if ((ix = csp_new_decl(st, tv[2].v.str.ptr, tv[2].v.str.len, DECL_TIMER)) == BAD_INDEX)
+
+    if ((ix = lookup_decl(st, te[2].v.str.ptr, te[2].v.str.len)) == BAD_INDEX) {
+	if ((ix = csp_new_decl(st, te[2].v.str.ptr, te[2].v.str.len, DECL_TIMER)) == BAD_INDEX)
 	    return -1;
     }
     i = INDEX(ix);
@@ -2659,25 +2687,22 @@ int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
     vendian_t endian = E_UNDEFINED;
     index_t ix;
     index_t idx;
-    int i;
+    int i = 0;
     int bit0, bit1;
-    tok_t te[] = {HASH, CAN, WORD, LAST};
-    tok_t teres[] = {COLON, INT, LAST};
-    tok_t tebit[] = {INT, LB, INT, RB, LAST};
-    tok_t tebitrange[] = {INT, LB, INT, DOT, DOT, INT, RB, LAST};        
-    
+    token_t te[] = {{HASH}, {CAN}, {WORD}, {LAST}};
+    token_t teres[] = {{COLON}, {INT}, {LAST}};
+    token_t tebit[] = {{INT}, {LB}, {INT}, {RB}, {LAST}};
+    token_t tebitrange[] = {{INT}, {LB}, {INT}, {DOT}, {DOT}, {INT}, {RB}, {LAST}};
 
-    if (!expect(st, tv, 0, te)) {
+
+    if (!expect(st, tv, &i, n, te)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    i=3;
-    if (expect(st, tv, i, teres)) {
-	res = MAKE_RES(tv[i+1].v.val.i);
-	i += 2;
-    }
+    if (expect(st, tv, &i, n, teres))
+	res = MAKE_RES(teres[1].v.val.i);
 opts:
-    if (i < n) {
+    if (i < (int)n) {
 	switch(tv[i].t) {
 	case UNSIGNED: vt=V_UNSIGNED; i++; goto opts;
 	case INTEGER: vt=V_INTEGER; i++; goto opts;
@@ -2686,32 +2711,34 @@ opts:
 	case OUT: out = 1; i++; goto opts;
 	case INOUT: in=out=1; i++; goto opts;
 	case LITTLE: endian=E_LITTLE; i++; goto opts;
-	case BIG: endian=E_BIG; i++; goto opts;	    	    
+	case BIG: endian=E_BIG; i++; goto opts;
 	default: break;
 	}
     }
     if (!in && !out) in=1;
 
     // FrameID [bit]
-    if (expect(st, tv, i, tebit)) {
-	bit0 = bit1 = tv[i+2].v.val.i;
+    if (expect(st, tv, &i, n, tebit)) {
+	idx = lookup_const(st, V_INTEGER, tebit[0].v.val);
+	if (idx == BAD_INDEX)
+	    idx = new_signed_const(st, tebit[0].v.val.i);
+	bit0 = bit1 = tebit[2].v.val.i;
     }
     // FrameID [bit..bit]
-    else if (expect(st, tv, i, tebitrange)) {
-	bit0 = tv[i+2].v.val.i;
-	bit1 = tv[i+5].v.val.i;
+    else if (expect(st, tv, &i, n, tebitrange)) {
+	idx = lookup_const(st, V_INTEGER, tebitrange[0].v.val);
+	if (idx == BAD_INDEX)
+	    idx = new_signed_const(st, tebitrange[0].v.val.i);
+	bit0 = tebitrange[2].v.val.i;
+	bit1 = tebitrange[5].v.val.i;
     }
     else {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
 
-    // install fram id
-    if ((idx = lookup_const(st, V_INTEGER, tv[i].v.val)) == BAD_INDEX)
-	idx = new_signed_const(st,tv[i].v.val.i);
-    
-    if ((ix = lookup_decl(st, tv[2].v.str.ptr, tv[2].v.str.len)) == BAD_INDEX)
-	ix = csp_new_decl(st, tv[2].v.str.ptr, tv[2].v.str.len, DECL_CAN);
+    if ((ix = lookup_decl(st, te[2].v.str.ptr, te[2].v.str.len)) == BAD_INDEX)
+	ix = csp_new_decl(st, te[2].v.str.ptr, te[2].v.str.len, DECL_CAN);
     if (ix == BAD_INDEX) return -1;
     i = INDEX(ix);
     st->decl[i].res = res;
@@ -2729,15 +2756,15 @@ opts:
 int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
 {
     index_t mx, ix, jx;
-    int i, m;
-    tok_t te[] = {HASH, WORD, WORD, LAST};
+    int i = 0, m;
+    token_t te[] = {{HASH}, {WORD}, {WORD}, {LAST}};
 
-    if (!expect(st, tv, 0, te)) {
+    if (!expect(st, tv, &i, n, te)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
     // lookup module
-    if ((mx = lookup_decl(st, tv[1].v.str.ptr, tv[1].v.str.len)) == BAD_INDEX) {
+    if ((mx = lookup_decl(st, te[1].v.str.ptr, te[1].v.str.len)) == BAD_INDEX) {
 	csp_set_error(st, ERR_MODULE_NOT_DECLARED);
 	return -1;
     }
@@ -2750,8 +2777,8 @@ int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
 	csp_set_error(st, ERR_TOO_MANY_OBJECTS);
 	return -1;
     }
-    
-    if ((ix = csp_new_decl(st, tv[2].v.str.ptr, tv[2].v.str.len, DECL_OBJECT)) == BAD_INDEX)
+
+    if ((ix = csp_new_decl(st, te[2].v.str.ptr, te[2].v.str.len, DECL_OBJECT)) == BAD_INDEX)
 	return -1;
     if ((jx = csp_new_new(st, st->decl[INDEX(mx)].md.ent, ix)) == BAD_INDEX)
 	return -1;
@@ -2903,29 +2930,29 @@ int make_can_rule(csp_rt_t* st, index_t ox, int k, index_t idx,
 int csp_parse_legacy(csp_rt_t* st, token_t* tv, size_t n)
 {
     index_t out;
-    index_t idx;        
-    ivalue_t pos;    
+    index_t idx;
+    ivalue_t pos;
     ivalue_t mask;
     ivalue_t on_bits;
-    ivalue_t off_bits;    
-    int i;
-    tok_t te[] = {INT, INT, INT, INT, INT, LAST};
+    ivalue_t off_bits;
+    int i = 0;
+    token_t te[] = {{INT}, {INT}, {INT}, {INT}, {INT}, {LAST}};
 
-    if (!expect(st, tv, 0, te))
+    if (!expect(st, tv, &i, n, te))
 	return -1;
-    pos = tv[1].v.val.i;
-    mask = tv[2].v.val.i;
-    on_bits = tv[3].v.val.i;
-    off_bits = tv[4].v.val.i;
-    
+    pos = te[1].v.val.i;
+    mask = te[2].v.val.i;
+    on_bits = te[3].v.val.i;
+    off_bits = te[4].v.val.i;
+
     if ((out = lookup_decl(st, "OUT", 3)) == BAD_INDEX) {
 	// fixme: pin number etc for standard OUT
 	if ((out = csp_new_decl(st,"OUT",3,DECL_DIGITAL)) == BAD_INDEX)
 	    return -1;
     }
 
-    if ((idx = lookup_const(st, V_INTEGER, tv[0].v.val)) == BAD_INDEX)
-	idx = new_signed_const(st,tv[0].v.val.i);    
+    if ((idx = lookup_const(st, V_INTEGER, te[0].v.val)) == BAD_INDEX)
+	idx = new_signed_const(st, te[0].v.val.i);    
     
 
     // OUT = 1
@@ -2960,18 +2987,19 @@ int csp_parse(csp_rt_t* st, char* str)
     size_t num = MAX_LINE_TOKENS;
     reg_allocator_t alloc;
     int n;
-    tok_t te[] = {INT, INT, INT, INT, INT, LAST};
-    
+    token_t te[] = {{INT}, {INT}, {INT}, {INT}, {INT}, {LAST}};
+
     st->ap = &alloc;
-        
+
     while((n = csp_scan_line(str, tv, &num)) > 0) {
 	int r = -1;
+	int i = 0;  // for expect peek
 	str += n;
 	alloc_init(st->ap);
-    
+
 	if (tv[0].t == NEWLINE)
 	    r = 0;
-	else if (expect(st, tv, 0, te)) {
+	else if (tv[0].t == INT && expect(st, tv, &i, num, te)) {
 	    r = csp_parse_legacy(st, tv, num);
 	}
 	else if (tv[0].t == HASH) {

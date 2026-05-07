@@ -141,6 +141,20 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		st->instr[i].i.imm,
 		eot);
 	break;
+    case OP_LIU:
+	fprintf(f, "{instr,%d,'LIU',[r%d,%u]}%s\n",
+		i,
+		st->instr[i].i.x,
+		(uint16_t)st->instr[i].i.imm,
+		eot);
+	break;
+    case OP_LIH:
+	fprintf(f, "{instr,%d,'LIH',[r%d,16#%04x]}%s\n",
+		i,
+		st->instr[i].i.x,
+		(uint16_t)st->instr[i].i.imm,
+		eot);
+	break;
     case OP_ARG:
 	fprintf(f, "{instr,%d,'ARG',[r%d,%d]}%s\n",
 		i,
@@ -695,7 +709,9 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 	    fprintf(f, ".n={.ent=%u,.obj=%u}", ip->n.ent, ip->n.obj);
 	    break;
 	case OP_LI:
-	case OP_ARG:	
+	case OP_LIU:
+	case OP_LIH:
+	case OP_ARG:
 	    fprintf(f, ".i={.x=%u,.imm=%d}", ip->i.x, ip->i.imm);
 	    break;
 	case OP_ST:
