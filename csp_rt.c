@@ -6,8 +6,6 @@
 #include "csp.h"
 #ifdef DEBUG
 #include <stdio.h>
-#define DEBUG_XYZ
-#include "csp_dump.h"
 #endif
 
 #define CAT_HELPER2(x,y) x ## y
@@ -296,7 +294,7 @@ typedef struct {
 } op_info_t;
 
 // opcode => opcode type info
-static op_info_t info_tab[] = {
+static const op_info_t info_tab[] = {
     [OP_ADD] = {"ADD",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
     [OP_SUB] = {"SUB",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
     [OP_MUL] = {"MUL",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
@@ -452,6 +450,11 @@ static inline ivalue_t isign(ivalue_t a)
     return (a < 0) ? -1 : (a ? 1 : 0);
 }
 
+static inline ivalue_t fsign(fvalue_t a)
+{
+    return (a < 0.0) ? -1 : (a ? 1 : 0);
+}
+
 static inline ivalue_t iclip(ivalue_t x, ivalue_t a, ivalue_t b)
 {
     if (x < a) return a;
@@ -516,7 +519,10 @@ static value_t fn_sign(csp_rt_t* st,uint16_t type, value_t* args, uint8_t nargs)
 {
     value_t ret;
     (void)st; (void)nargs;
-    ret.i = isign(args[0].i);
+    switch(type & 0xf) {
+    case V_INTEGER: ret.i = isign(args[0].i); break;
+    case V_FLOAT:   ret.i = fsign(args[0].f); break;
+    }
     return ret;
 }
 
@@ -562,7 +568,7 @@ const csp_func_t csp_builtin_funcs[] = {
     { "max",     3, 2, V_INTEGER, {V_INTEGER,V_INTEGER,0,0},      fn_max },
     { "abs",     3, 1, V_INTEGER, {V_INTEGER,0,0,0},              fn_abs },
     { "fabs",    4, 1, V_FLOAT,   {V_FLOAT,0,0,0},                fn_fabs },
-    { "sign",    4, 1, V_INTEGER, {V_INTEGER,0,0,0},              fn_sign },
+    { "sign",    4, 1, V_INTEGER, {V_NUMBER,0,0,0},               fn_sign },
     { "clip",    4, 3, V_INTEGER, {V_INTEGER,V_INTEGER,V_INTEGER,0}, fn_clip},
     { "timeout", 7, 1, V_INTEGER, {V_INDEX,0,0,0},                fn_timeout },
     { "print",   5, 1, V_INTEGER, {V_ANY,0,0,0},                  fn_print },
@@ -634,9 +640,6 @@ void csp_enq_elist(csp_rt_t* st, index_t x)
     index_t base = st->ofs[ix];
     for (i = 0; i < st->idg[ix]; i++) {
 	index_t p = st->edg[base+i];  // parent node
-#ifdef DEBUG	
-	printf("enq: %d\n", p);
-#endif
 	csp_enq(st, p);
     }
 #endif
@@ -680,10 +683,6 @@ int csp_eval_rule(csp_rt_t* st, int n)
 #if defined(SUPPORT_STATISTICS) && (SUPPORT_STATISTICS==1)
     st->num_eval_rule++;
 #endif
-#ifdef DEBUG
-    printf("eval_rule: %d\n", n);
-    // csp_dump_instr(stdout, 0, st, n, ".");
-#endif
 
 again:
 #if defined(SUPPORT_STATISTICS) && (SUPPORT_STATISTICS==1)    
@@ -695,23 +694,9 @@ again:
 	break;
     case OP_LD:
 	st->reg[st->instr[n].m.x] = csp_value(st, st->instr[n].m.mem);
-#ifdef DEBUG_XYZ	
-	printf("%d: ld r%d ", n, st->instr[n].m.x);
-	csp_fprint_tag(stdout, st, st->instr[n].m.mem);
-	printf("\n");
-	printf("%d: r%d=%d\n", n, st->instr[n].m.x,
-	       st->reg[st->instr[n].m.x].i);
-#endif
 	break;
     case OP_ST:	
 	csp_set_value(st, st->instr[n].m.mem, st->reg[st->instr[n].m.x]);
-#ifdef DEBUG_XYZ
-	printf("%d: st r%d ", n, st->instr[n].m.x);
-	csp_fprint_tag(stdout, st, st->instr[n].m.mem);
-	printf("\n");
-	printf("%d: r%d=%d\n", n, st->instr[n].m.x,
-	       st->reg[st->instr[n].m.x].i);
-#endif
 	break;	
     case OP_LI:
 	st->reg[st->instr[n].i.x].i = st->instr[n].i.imm;  // sign extend
@@ -794,31 +779,11 @@ again:
 	case 1:
 	    yv = st->reg[st->instr[n].a.y];
 	    xv = eval_tab1[op](yv);
-#ifdef DEBUG_XYZ
-	    printf("%d: r%d = %s r%d\n",
-		   n, st->instr[n].a.x, csp_op_name(op),
-		   st->instr[n].a.y);
-	    printf("%d: r%d=%d, r%d=%d\n",
-		   n,
-		   st->instr[n].a.x, xv.i,
-		   st->instr[n].a.y, yv.i);
-#endif
 	    break;
 	case 2:
 	    yv = st->reg[st->instr[n].a.y];
 	    zv = st->reg[st->instr[n].a.z];
 	    xv = eval_tab2[op](yv,zv);
-#ifdef DEBUG_XYZ
-	    printf("%d: r%d = r%d %s r%d\n",
-		   n, st->instr[n].a.x, st->instr[n].a.y,
-		   csp_op_name(op), 
-		   st->instr[n].a.z);	
-	    printf("%d: r%d=%d, r%d=%d, r%d=%d\n",
-		   n,
-		   st->instr[n].a.x, xv.i,	       
-		   st->instr[n].a.y, yv.i,
-		   st->instr[n].a.z, zv.i);
-#endif
 	    break;	    
 	}
 	st->reg[st->instr[n].a.x] = xv;
@@ -842,8 +807,6 @@ void csp_commit(csp_rt_t* st)
     // swap in / out
     if (st->transaction) {
 	value_t* tmp;
-	// printf("swap transaction input/output\n");
-	// tmp = st->xin; st->xin = st->xout; st->xout = tmp;
 	tmp = st->din; st->din = st->dout; st->dout = tmp;
     }
 #endif
@@ -1260,13 +1223,10 @@ void csp_csr(csp_rt_t* st)
 	    current_rule = i+1;
 	    break;
 	case OP_LD:
-	    // printf("ld rule=%d\n", current_rule);
 	    if (current_rule >= 0) {
 		index_t mem = INDEX(st->instr[i].m.mem);
-		// printf("ld: mem=%d, nd=%d\n", mem, st->ps.nd);
 		if (mem < st->ps.nd) {
 		    st->idg[mem]++;
-		    // printf("csr: idg[%d] = %d\n", mem, st->idg[mem]);
 		}
 	    }
 	    break;
@@ -1283,10 +1243,8 @@ void csp_csr(csp_rt_t* st)
 
     // Pass 2: Calculate offsets into edge array
     st->ofs[0] = 0;
-    // printf("offs %d = %d\n", 0, st->ofs[0]);    
     for (i = 0; i < st->ps.nd; i++) {
 	st->ofs[i+1] = st->ofs[i] + st->idg[i];
-	// printf("offs %d = %d\n", i+1, st->ofs[i+1]);
     }
 
     // Pass 3: Fill in rule indices for each declaration
@@ -1631,12 +1589,13 @@ int map_reg(csp_rt_t* st, index_t ix)
 
 
 // Push immediate value (integer, float, or string constant)
-static int push_imm(csp_rt_t* st, rstack_entry_t* rstack, int* ep,
+static int push_imm(csp_rt_t* st, rentry_t* rstack, int ep,
 		    vtype_t vt, value_t val)
 {
     reg_t r = 0;
     index_t ix = BAD_INDEX;
-
+    uint8_t vtf = vt;
+    
     if (st->ap) {
 	r = alloc_reg(st);
 	if (vt == V_INTEGER) {
@@ -1657,20 +1616,21 @@ static int push_imm(csp_rt_t* st, rstack_entry_t* rstack, int* ep,
 	    r = map_reg(st, ix);
 	    if (r < 0) return -1;
 	}
+	vtf |= R_VTF_LOADED;
     }
-    rstack[(*ep)++] = (rstack_entry_t){
-	.reg = r, .ix = ix, .val = val,
-	.loaded = (st->ap != NULL), .immediate = 1, .vt = vt
+    rstack[ep] = (rentry_t){
+	.reg = r, .ix = ix, .val = val, .vtf = vtf|R_VTF_IMMEDIATE,
     };
-    return 0;
+    return ep+1;
 }
 
 // Push string constant
-static int push_str(csp_rt_t* st, rstack_entry_t* rstack, int* ep,
+static int push_str(csp_rt_t* st, rentry_t* rstack, int ep,
 		    char* ptr, int len)
 {
     reg_t r = 0;
     index_t ix;
+    uint8_t vtf = V_STRING;
 
     ix = lookup_string_const(st, ptr, len);
     if (ix == BAD_INDEX) ix = new_string_const(st, ptr, len);
@@ -1679,80 +1639,75 @@ static int push_str(csp_rt_t* st, rstack_entry_t* rstack, int* ep,
     if (st->ap) {
 	r = map_reg(st, ix);
 	if (r < 0) return -1;
+	vtf |= R_VTF_LOADED;
     }
-    rstack[(*ep)++] = (rstack_entry_t){
-	.reg = r, .ix = ix,
-	.loaded = (st->ap != NULL), .immediate = 0, .vt = V_STRING
-    };
-    return 0;
+    rstack[ep] = (rentry_t){ .reg = r, .ix = ix, .vtf = vtf };
+    return ep+1;
 }
 
 // Push variable/declaration reference
-static int push_var(csp_rt_t* st, rstack_entry_t* rstack, int* ep,
+static int push_var(csp_rt_t* st, rentry_t* rstack, int ep,
 		    index_t ix, vtype_t vt)
 {
     reg_t r = 0;
-
+    uint8_t vtf = vt;
+    
     // For constants with no codegen, treat as immediate
     if (!st->ap && st->decl[INDEX(ix)].type == DECL_CONSTANT) {
-	rstack[(*ep)++] = (rstack_entry_t){
+	vtf = st->decl[INDEX(ix)].vt | R_VTF_IMMEDIATE;
+	rstack[ep] = (rentry_t){
 	    .reg = 0, .ix = ix, .val = st->decl[INDEX(ix)].cn.init,
-	    .loaded = 0, .immediate = 1, .vt = st->decl[INDEX(ix)].vt
+	    .vtf = vtf
 	};
-	return 0;
+	return ep+1;
     }
     else if (!st->ap && st->decl[INDEX(ix)].type == DECL_VARIABLE) {
-	rstack[(*ep)++] = (rstack_entry_t){
-	    .reg = 0, .ix = ix, .val = csp_value(st, ix),
-	    .loaded = 0, .immediate = 1, .vt = st->decl[INDEX(ix)].vt
+	vtf = st->decl[INDEX(ix)].vt | R_VTF_IMMEDIATE;
+	rstack[ep] = (rentry_t){
+	    .reg = 0, .ix = ix, .val = csp_value(st, ix), .vtf = vtf
 	};
-	return 0;
+	return ep+1;
     }
 
     if (st->ap) {
 	r = map_reg(st, ix);
 	if (r < 0) return -1;
+	vtf |= R_VTF_LOADED;
     }
-    rstack[(*ep)++] = (rstack_entry_t){
-	.reg = r, .ix = ix,
-	.loaded = (st->ap != NULL), .immediate = 0, .vt = vt
-    };
-    return 0;
+    
+    rstack[ep] = (rentry_t) { .reg = r, .ix = ix, .vtf = vtf };
+    return ep+1;
 }
 
 // Push L-value (assignment target, index only, no load)
-static inline void push_lval(rstack_entry_t* rstack, int* ep, index_t ix, vtype_t vt)
+static int push_lval(rentry_t* rstack, int ep, index_t ix, vtype_t vt)
 {
-    rstack[(*ep)++] = (rstack_entry_t){
-	.reg = 0, .ix = ix,
-	.loaded = 0, .immediate = 0, .vt = vt
-    };
+    rstack[ep] = (rentry_t){ .ix = ix, .vtf = vt };
+    return ep+1;
 }
 
 // Push register result (from operation)
-static inline void push_reg(rstack_entry_t* rstack, int* ep, reg_t r, vtype_t vt)
+static int push_reg(rentry_t* rstack, int ep, reg_t r, vtype_t vt)
 {
-    rstack[(*ep)++] = (rstack_entry_t){
-	.reg = r, .ix = BAD_INDEX,
-	.loaded = 1, .immediate = 0, .vt = vt
-    };
+    rstack[ep] = (rentry_t){.reg=r,.ix=BAD_INDEX, .vtf=vt|R_VTF_LOADED };
+    return ep+1;
 }
 
 // Push folded constant result (no register)
-static inline void push_folded(rstack_entry_t* rstack, int* ep, value_t val, vtype_t vt)
+#if 0
+static int push_folded(rentry_t* rstack, int ep, value_t val, vtype_t vt)
 {
-    rstack[(*ep)++] = (rstack_entry_t){
-	.reg = 0, .ix = BAD_INDEX, .val = val,
-	.loaded = 0, .immediate = 1, .vt = vt
-    };
+    rstack[ep] = (rentry_t){ .ix=BAD_INDEX,.val=val,.vtf=vt|R_VTF_IMMEDIATE };
+    return ep+1;
 }
+#endif
 
 // Process binary assignment operator: generates ST instruction
 // Returns new ep on success, -1 on error
-static int process_assign(csp_rt_t* st, rstack_entry_t* rstack, int ep)
+static int process_assign(csp_rt_t* st, rentry_t* rstack, int ep)
 {
-    rstack_entry_t lhs = rstack[ep-2];
-    rstack_entry_t rhs = rstack[ep-1];
+    rentry_t lhs = rstack[ep-2];
+    rentry_t rhs = rstack[ep-1];
     vtype_t ltype;
 
     if (lhs.ix == BAD_INDEX) {
@@ -1764,41 +1719,41 @@ static int process_assign(csp_rt_t* st, rstack_entry_t* rstack, int ep)
     ltype = st->decl[INDEX(lhs.ix)].vt;
 
     // Type conversion if needed
-    if (ltype == V_INTEGER && rhs.vt == V_FLOAT) {
+    if (ltype == V_INTEGER && (R_VT(rhs) == V_FLOAT)) {
 	// float→int
-	if (rhs.immediate) {
+	if (R_IMMEDIATE(rhs)) {
 	    rhs.val.i = (ivalue_t)rhs.val.f;
-	    rhs.vt = V_INTEGER;
+	    rhs.vtf = V_INTEGER|R_VTF_IMMEDIATE|R_LOADED(rhs);
 	}
-	if (rhs.loaded && st->ap) {
+	if (R_LOADED(rhs) && st->ap) {
 	    reg_t r = alloc_reg(st);
 	    if (new_expr1(st, OP_CVTFI, r, rhs.reg) < 0)
 		return -1;
 	    free_reg(st, rhs.reg);
 	    rhs.reg = r;
-	    rhs.vt = V_INTEGER;
+	    rhs.vtf = V_INTEGER|R_VTF_LOADED|R_IMMEDIATE(rhs);
 	}
-    } else if (ltype == V_FLOAT && rhs.vt == V_INTEGER) {
+    } else if (ltype == V_FLOAT && (R_VT(rhs) == V_INTEGER)) {
 	// int→float
-	if (rhs.immediate) {
+	if (R_IMMEDIATE(rhs)) {
 	    rhs.val.f = (fvalue_t)rhs.val.i;
-	    rhs.vt = V_FLOAT;
+	    rhs.vtf = V_FLOAT|R_VTF_IMMEDIATE|R_LOADED(rhs);
 	}
-	if (rhs.loaded && st->ap) {
+	if (R_LOADED(rhs) && st->ap) {
 	    reg_t r = alloc_reg(st);
 	    if (new_expr1(st, OP_CVTIF, r, rhs.reg) < 0)
 		return -1;
 	    free_reg(st, rhs.reg);
 	    rhs.reg = r;
-	    rhs.vt = V_FLOAT;
+	    rhs.vtf = V_FLOAT|R_VTF_LOADED|R_IMMEDIATE(rhs);
 	}
     }
 
     // If rhs is a folded constant, load it into a register
-    if (!rhs.loaded && rhs.immediate) {
+    if (!R_LOADED(rhs) && R_IMMEDIATE(rhs)) {
 	if (st->ap) {
 	    reg_t r = alloc_reg(st);	
-	    if (rhs.vt == V_FLOAT) {
+	    if (R_VT(rhs) == V_FLOAT) {
 		if (csp_load_float(st, r, rhs.val.f) < 0)
 		    return -1;
 	    }
@@ -1807,16 +1762,16 @@ static int process_assign(csp_rt_t* st, rstack_entry_t* rstack, int ep)
 		    return -1;
 	    }
 	    rhs.reg = r;
-	    rhs.loaded = 1;
+	    rhs.vtf |= R_VTF_LOADED;
 	}
     }
-    if (!rhs.loaded && st->ap) {
+    if (!R_LOADED(rhs) && st->ap) {
 	csp_set_error(st, ERR_SYNTAX);  // rhs must have value
 	return -1;
     }
     
     if (st->ap == NULL) {
-	if (rhs.immediate)
+	if (R_IMMEDIATE(rhs))
 	    csp_set_value(st, lhs.ix, rhs.val);
     }
     else { // Generate store instruction	
@@ -1848,47 +1803,59 @@ static opcode_t float_op(opcode_t op)
 }
 
 // Convert operand to float (int→float via cvtif)
-static int coerce_to_float(csp_rt_t* st, rstack_entry_t* e)
+static int coerce_to_float(csp_rt_t* st, rentry_t* e)
 {
-    if (e->vt == V_FLOAT) return 0;  // already float
-    if (e->vt != V_INTEGER) return -1;  // can only convert int
+    rentry_t ent = *e;
+    uint8_t vtf = V_FLOAT;
+    
+    if (R_VT(ent) == V_FLOAT) return 0;  // already float
+    if (R_VT(ent) != V_INTEGER) return -1;  // can only convert int
 
-    if (e->immediate) {
-	e->val.f = (float)e->val.i;
+    if (R_IMMEDIATE(ent)) {
+	ent.val.f = (float)ent.val.i;
+	vtf |=  R_VTF_IMMEDIATE;
     }
-    if (e->loaded && st->ap) {
+    if (R_LOADED(ent) && st->ap) {
 	reg_t r = alloc_reg(st);
-	if (new_expr1(st, OP_CVTIF, r, e->reg) < 0)
+	if (new_expr1(st, OP_CVTIF, r, ent.reg) < 0)
 	    return -1;
-	free_reg(st, e->reg);
-	e->reg = r;
+	free_reg(st, ent.reg);
+	ent.reg = r;
+	vtf |= R_VTF_LOADED;
     }
-    e->vt = V_FLOAT;
+    ent.vtf = vtf;
+    *e = ent;
     return 0;
 }
 
 // Convert operand to int (float→int via cvtfi)
-static int coerce_to_int(csp_rt_t* st, rstack_entry_t* e)
+static int coerce_to_int(csp_rt_t* st, rentry_t* e)
 {
-    if (e->vt == V_INTEGER) return 0;  // already int
-    if (e->vt != V_FLOAT) return -1;  // can only convert float
+    rentry_t ent = *e;
+    uint8_t vtf = V_INTEGER;
+
+    if (R_VT(ent) == V_INTEGER) return 0;  // already int
+    if (R_VT(ent) != V_FLOAT) return -1;  // can only convert float
     
-    if (e->immediate) {
+    if (R_IMMEDIATE(ent)) {
 	e->val.i = (ivalue_t)e->val.f;
+	vtf |=  R_VTF_IMMEDIATE;	
     }
-    if (e->loaded && st->ap) {
+    if (R_LOADED(ent) && st->ap) {
 	reg_t r = alloc_reg(st);
 	if (new_expr1(st, OP_CVTFI, r, e->reg) < 0)
 	    return -1;
 	free_reg(st, e->reg);
-	e->reg = r;
+	ent.reg = r;
+	vtf |= R_VTF_LOADED;
     }
-    e->vt = V_INTEGER;
+    ent.vtf = vtf;
+    *e = ent;    
     return 0;
 }
 
 
-static int process_op(csp_rt_t* st, tok_t tok, rstack_entry_t* rstack, int ep)
+static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep)
 {
     int dst;
     opcode_t op;
@@ -1896,8 +1863,8 @@ static int process_op(csp_rt_t* st, tok_t tok, rstack_entry_t* rstack, int ep)
 
     switch(arity(tok)) {
     case 2: {
-	rstack_entry_t* a = &rstack[ep-2];
-	rstack_entry_t* b = &rstack[ep-1];
+	rentry_t* a = &rstack[ep-2];
+	rentry_t* b = &rstack[ep-1];
 
 	switch(tok) {
 	case EQ:
@@ -1911,14 +1878,14 @@ static int process_op(csp_rt_t* st, tok_t tok, rstack_entry_t* rstack, int ep)
 	    ep--;
 	    break;
 	default: {
-	    vtype_t at = a->vt;
-	    vtype_t bt = b->vt;
+	    vtype_t at = R_VT(*a);
+	    vtype_t bt = R_VT(*b);
 
 	    // Type coercion: promote to float if either operand is float
 	    if (at == V_FLOAT || bt == V_FLOAT) {
-		if (at == V_INTEGER && coerce_to_float(st, a) < 0)
+		if ((at == V_INTEGER) && (coerce_to_float(st, a) < 0))
 		    return PARSE_ERROR;
-		if (bt == V_INTEGER && coerce_to_float(st, b) < 0)
+		if ((bt == V_INTEGER) && (coerce_to_float(st, b) < 0))
 		    return PARSE_ERROR;
 		op = float_op(op_table[tok].code);
 	    } else {
@@ -1926,28 +1893,25 @@ static int process_op(csp_rt_t* st, tok_t tok, rstack_entry_t* rstack, int ep)
 	    }
 	    rt = info_tab[op].rtype;
 
-	    if (a->immediate && b->immediate && eval_tab2[op]) {
+	    if (R_IMMEDIATE(*a) && R_IMMEDIATE(*b) && eval_tab2[op]) {
 		// constant fold
 		value_t result = eval_tab2[op](a->val, b->val);
 		free_reg(st, a->reg);
 		free_reg(st, b->reg);
-		*a = (rstack_entry_t){
-		    .val = result, .ix = BAD_INDEX,
-		    .loaded = 0, .immediate = 1, .vt = rt
+		*a = (rentry_t) { .val = result, .ix = BAD_INDEX,
+				  .vtf = rt|R_VTF_IMMEDIATE
 		};
 	    } else {
+		uint8_t vtf = rt;
 		// generate code
 		dst = alloc_reg(st);
 		if (st->ap != NULL) {	    		    
 		    if (new_expr2(st, op, dst, a->reg, b->reg) < 0)
 			return PARSE_ERROR;
 		    free_reg(st, a->reg);
+		    vtf |= R_VTF_LOADED;
 		}
-		*a = (rstack_entry_t){
-		    .reg = dst, .ix = BAD_INDEX,
-		    .loaded = (st->ap != NULL), .immediate = 0,
-		    .vt = rt
-		};
+		*a = (rentry_t){ .reg = dst, .ix = BAD_INDEX, .vtf = vtf };
 	    }
 	    ep--;
 	}
@@ -1955,8 +1919,8 @@ static int process_op(csp_rt_t* st, tok_t tok, rstack_entry_t* rstack, int ep)
 	break;
     }
     case 1: {
-	rstack_entry_t* a = &rstack[ep-1];
-	vtype_t at = a->vt;
+	rentry_t* a = &rstack[ep-1];
+	vtype_t at = R_VT(*a);	
 
 	// Select float op if operand is float
 	if (at == V_FLOAT) {
@@ -1966,27 +1930,23 @@ static int process_op(csp_rt_t* st, tok_t tok, rstack_entry_t* rstack, int ep)
 	}
 	rt = info_tab[op].rtype;
 
-	if (a->immediate && eval_tab1[op]) {
+	if (R_IMMEDIATE(*a) && eval_tab1[op]) {
 	    // constant fold
 	    value_t result = eval_tab1[op](a->val);
 	    free_reg(st, a->reg);
-	    *a = (rstack_entry_t){
-		.val = result, .ix = BAD_INDEX,
-		.loaded = 0, .immediate = 1, .vt = rt
-	    };
+	    *a = (rentry_t){ .val = result, .ix = BAD_INDEX,
+			     .vtf = rt|R_VTF_IMMEDIATE};
 	} else {
 	    // generate code
+	    uint8_t vtf = rt;	    
 	    dst = alloc_reg(st);
 	    if (st->ap != NULL) {
 		if (new_expr1(st, op, dst, a->reg) < 0)
 		    return PARSE_ERROR;
-		free_reg(st, a->reg);		
+		free_reg(st, a->reg);
+		vtf |= R_VTF_LOADED;		
 	    }
-	    *a = (rstack_entry_t){
-		.reg = dst, .ix = BAD_INDEX,
-		.loaded = (st->ap != NULL), .immediate = 0,
-		.vt = rt
-	    };
+	    *a = (rentry_t){ .reg = dst, .ix = BAD_INDEX, .vtf = vtf };
 	}
 	break;
     }
@@ -2009,15 +1969,15 @@ void print_stack_used()
 // result receives the expression result (reg, immediate flag, value, type)
 // returns: 1=ok, 0=error
 int csp_parse_expr(csp_rt_t* st, token_t* tv, size_t* num_toks,
-		   rstack_entry_t* result)
+		   rentry_t* result)
 {
-    tok_t op;
+    tok_t tok;
     tokval_t tval;
-    tok_t pop = NONE;   // previous operator/token
+    tok_t ptok = NONE;   // previous operator/token
     int pp = 0;         // operator stack pointer
     int ep = 0;         // expression stack pointer
     tok_t ostack[MAX_PARSE_STACK_DEPTH];  // stack of operators
-    rstack_entry_t rstack[MAX_PARSE_STACK_DEPTH];  // stack of {reg, index}
+    rentry_t rstack[MAX_PARSE_STACK_DEPTH];  // stack of {reg, index}
     reg_t dst;
     index_t ix;
     int i = 0;
@@ -2026,54 +1986,34 @@ int csp_parse_expr(csp_rt_t* st, token_t* tv, size_t* num_toks,
 next:
     if ((i >= n) || (tv[i].t==NEWLINE) || (tv[i].t==NONE))  // end-of-list
 	goto out;
-    op   = tv[i].t;
+    tok  = tv[i].t;
     tval = tv[i].v;
     i++;
-    switch(op) {
+    switch(tok) {
     case QUEST: i--; goto out;
-    case ASTERISK:  goto operator;
-    case SLASH: goto operator;
-    case PERCENT: goto operator;
-    case AMPAMP: goto operator;
-    case AMP:   goto operator;	
-    case BARBAR:  goto operator;
-    case BAR:    goto operator;
-    case CIRC:   goto operator;
-    case TILDE:  goto operator;
     case PLUS:
-	if ((pop == NONE) || (pop == RP) ||
-	    ((pop != INT) && (pop != WORD) && (pop != FLT)))
-	    op = PLUS1;
+	if ((ptok == NONE) || (ptok == RP) ||
+	    ((ptok != INT) && (ptok != WORD) && (ptok != FLT)))
+	    tok = PLUS1;
 	goto operator;
     case MINUS:
-	if ((pop == NONE) || (pop == RP) ||
-	    ((pop != INT) && (pop != WORD) && (pop != FLT)))
-	    op = MINUS1;
+	if ((ptok == NONE) || (ptok == RP) ||
+	    ((ptok != INT) && (ptok != WORD) && (ptok != FLT)))
+	    tok = MINUS1;
 	goto operator;
-    case NEQ: goto operator;
-    case EXCLAMATION: goto operator;
-    case EQEQ: goto operator;
-    case EQ: goto operator;
-    case LTEQ: goto operator;
-    case LTLT: goto operator;
-    case LT: goto operator;
-    case GTEQ:goto operator;
-    case GTGT:goto operator;
-    case GT:goto operator;
-    case COMMA: goto operator;
     case LP:
-	ostack[pp++] = LP; pop = LP; break;
+	ostack[pp++] = LP; ptok = LP; break;
     case RP:
 	if (pp == 0)
 	    return 0;
 	// Process operators until we hit LP or a function marker
-	while(pp && ((op = ostack[pp-1]) != LP) && !IS_FUNC_MARKER(op)) {
+	while(pp && ((tok = ostack[pp-1]) != LP) && !IS_FUNC_MARKER(tok)) {
 	    // COMMA inside function call: just pop it, don't combine args
-	    if (op == COMMA) {
+	    if (tok == COMMA) {
 		pp--;
 		continue;
 	    }
-	    if ((ep = process_op(st, op, rstack, ep)) < 0)
+	    if ((ep = process_op(st, tok, rstack, ep)) < 0)
 		return 0;
 	    pp--;
 	}
@@ -2098,8 +2038,8 @@ next:
 		return 0;
 	    n = func->nargs;
 	    for (j = 0; j < n; j++) {
-		rstack_entry_t* arg = &rstack[ep-(n-j)];
-		vtype_t argvt = arg->vt;
+		rentry_t* arg = &rstack[ep-(n-j)];
+		vtype_t argvt = R_VT(*arg);
 		vtype_t argtype = func->argtypes[j];
 
 		argcode |= (argvt << 4*j);
@@ -2109,7 +2049,7 @@ next:
 		case V_ANY:
 		    break;  // OK
 		case V_NUMBER:
-		    if ((argvt != V_INTEGER) && (argvt != V_FLOAT))
+		    if (!((argvt == V_INTEGER) || (argvt == V_FLOAT)))
 			return 0;
 		    break;
 		case V_INTEGER:
@@ -2121,7 +2061,7 @@ next:
 			return 0;
 		    break;
 		case V_STRING:
-		    if (arg->vt != V_STRING)
+		    if (argvt != V_STRING)
 			return 0;
 		    break;
 		default:
@@ -2143,12 +2083,12 @@ next:
 		    if (csp_new_arg(st, r, j) < 0)
 			return 0;
 		    free_reg(st, r);
-		    if (arg->loaded)
+		    if (R_LOADED(*arg))
 			free_reg(st, arg->reg);
 		}
 		else {
 		    // Pass value: use loaded register
-		    if (!arg->loaded) {
+		    if (!R_LOADED(*arg)) {
 			csp_set_error(st, ERR_SYNTAX);
 			return 0;
 		    }
@@ -2165,31 +2105,31 @@ next:
 	    dst = alloc_reg(st);
 	    if (csp_new_call(st, dst, func_idx, is_user, argcode) < 0)
 		return 0;
-	    push_reg(rstack, &ep, dst, func->rtype);
+	    ep = push_reg(rstack, ep, dst, func->rtype);
 	}
-	else if (pp && ostack[pp-1] == LP) {
+	else if (pp && (ostack[pp-1] == LP)) {
 	    pp--;  // pop the LP for regular parentheses
 	}
 	else {
 	    return 0;  // mismatched )
 	}
-	op = RP;
-	pop = INT;
+	tok = RP;
+	ptok = INT;
 	break;
     case INT:
-	if (push_imm(st, rstack, &ep, V_INTEGER, tval.val) < 0)
+	if ((ep = push_imm(st, rstack, ep, V_INTEGER, tval.val)) < 0)
 	    return 0;
-	pop = INT;
+	ptok = INT;
 	break;
     case FLT:
-	if (push_imm(st, rstack, &ep, V_FLOAT, tval.val) < 0)
+	if ((ep = push_imm(st, rstack, ep, V_FLOAT, tval.val)) < 0)
 	    return 0;
-	pop = FLT;
+	ptok = FLT;
 	break;
     case STR:
-	if (push_str(st, rstack, &ep, tval.str.ptr, tval.str.len) < 0)
+	if ((ep = push_str(st, rstack, ep, tval.str.ptr, tval.str.len)) < 0)
 	    return 0;
-	pop = STR;
+	ptok = STR;
 	break;
     case WORD: {
 	// First check if this is a function call (WORD followed by LP)
@@ -2201,7 +2141,7 @@ next:
 	    int func_idx = is_user ? (-func_res - 1) : func_res;
 	    ostack[pp++] = MAKE_FUNC_MARKER(func_idx, is_user);
 	    i++;  // skip the LP token
-	    pop = LP;
+	    ptok = LP;
 	}
 	else {
 	    // Not a function - regular variable/decl lookup
@@ -2232,62 +2172,86 @@ next:
 	    vtype_t vt = st->decl[INDEX(ix)].vt;
 	    if ((i < n) && (tv[i].t == EQ)) {
 		// L-value: push index only, no load
-		push_lval(rstack, &ep, ix, vt);
+		ep = push_lval(rstack, ep, ix, vt);
 	    }
 	    else {
 		// R-value: load into register
-		if (push_var(st, rstack, &ep, ix, vt) < 0)
+		if ((ep = push_var(st, rstack, ep, ix, vt)) < 0)
 		    return 0;
 	    }
-	    pop = WORD;
+	    ptok = WORD;
 	}
 	break;
     }
+	/*
+    case ASTERISK:  goto operator;
+    case SLASH: goto operator;
+    case PERCENT: goto operator;
+    case AMPAMP: goto operator;
+    case AMP:   goto operator;	
+    case BARBAR:  goto operator;
+    case BAR:    goto operator;
+    case CIRC:   goto operator;
+    case TILDE:  goto operator;
+    case NEQ: goto operator;
+    case EXCLAMATION: goto operator;
+    case EQEQ: goto operator;
+    case EQ: goto operator;
+    case LTEQ: goto operator;
+    case LTLT: goto operator;
+    case LT: goto operator;
+    case GTEQ:goto operator;
+    case GTGT:goto operator;
+    case GT:goto operator;
+    case COMMA: goto operator;
+	*/
     default:
+	if (op_table[tok].arity > 0)
+	    goto operator;
 	return 0;
     }
     goto next;
 operator:
     {
 	int p1;
-	if ((p1 = prec(op)) == -1)
+	if ((p1 = prec(tok)) == -1)
 	    return 0;
 	if (pp == 0) {
-	    ostack[pp++] = op;
+	    ostack[pp++] = tok;
 	}
 	else {
-	    tok_t op2 = ostack[pp-1];
+	    tok_t tok2 = ostack[pp-1];
 	    int p2;
 	    // FUNC_MARKER acts like LP - don't process operators past it
-	    if (IS_FUNC_MARKER(op2) || op2 == LP) {
-		ostack[pp++] = op;
-		pop = op;
+	    if (IS_FUNC_MARKER(tok2) || tok2 == LP) {
+		ostack[pp++] = tok;
+		ptok = tok;
 		goto next;
 	    }
-	    p2 = prec(op2);
+	    p2 = prec(tok2);
 
-	    while ( ((p2 > p1) && (op2 != LP)) ||
-		    ((p2 == p1) && (assoc(op2) < 0))) {
-		if ((ep = process_op(st, op2, rstack, ep)) < 0)
+	    while ( ((p2 > p1) && (tok2 != LP)) ||
+		    ((p2 == p1) && (assoc(tok2) < 0))) {
+		if ((ep = process_op(st, tok2, rstack, ep)) < 0)
 		    return 0;
 		pp--;
 		if (pp == 0) break;
-		op2 = ostack[pp-1];
-		if (IS_FUNC_MARKER(op2) || op2 == LP) break;
-		p2 = prec(op2);
+		tok2 = ostack[pp-1];
+		if (IS_FUNC_MARKER(tok2) || (tok2 == LP)) break;
+		p2 = prec(tok2);
 	    }
-	    ostack[pp++] = op;
+	    ostack[pp++] = tok;
 	}
-	pop = op;
+	ptok = tok;
     }
     goto next;
 out: // expression is terminated with non-expression char
     while(pp > 0) {
-	op = ostack[--pp];
-	if (op == LP)
+	tok = ostack[--pp];
+	if (tok == LP)
 	    return 0;
 
-	if ((ep = process_op(st, op, rstack, ep)) < 0)
+	if ((ep = process_op(st, tok, rstack, ep)) < 0)
 	    return 0;
     }
     if (pp < 0)
@@ -2320,7 +2284,7 @@ static int expect(csp_rt_t* st, token_t* tv, int* pi, size_t n, token_t* te)
 
 	if ((t == INT) || (t == FLT)) {
 	    // try to parse constant expression
-	    rstack_entry_t result;
+	    rentry_t result;
 	    size_t num = 1;  // start with 1 token, parse_expr will consume more if needed
 
 	    // find how many tokens until end of line or next expected token
@@ -2341,13 +2305,14 @@ static int expect(csp_rt_t* st, token_t* tv, int* pi, size_t n, token_t* te)
 	    }
 	    st->ap = saved_ap;
 
-	    if (!result.immediate)
+	    if (!R_IMMEDIATE(result))
 		return 0;  // not a constant
 
 	    // check type
-	    if (t == INT && result.vt != V_INTEGER && result.vt != V_UNSIGNED)
+	    if ((t == INT) &&
+		(R_VT(result) != V_INTEGER) && (R_VT(result) != V_UNSIGNED))
 		return 0;
-	    if (t == FLT && result.vt != V_FLOAT)
+	    if ((t == FLT) && (R_VT(result) != V_FLOAT))
 		return 0;
 
 	    te[j].v.val = result.val;
@@ -2365,7 +2330,6 @@ static int expect(csp_rt_t* st, token_t* tv, int* pi, size_t n, token_t* te)
     *pi = i;  // update position
     return 1;
 }
-
 
 // '#' 'module' <name>
 int csp_parse_module(csp_rt_t* st, token_t* tv, size_t n)
@@ -2476,7 +2440,7 @@ opts:
     st->decl[i].vt = vt;
     st->decl[i].res = res;
     st->decl[i].in = in;
-    st->decl[i].out = out;    
+    st->decl[i].out = out;
     st->decl[i].va.init = def;
     return 0;
 }
@@ -2636,11 +2600,11 @@ opts:
     st->decl[i].vt = vt;
     st->decl[i].res = res;
     st->decl[i].in = in;
-    st->decl[i].out = out;    
+    st->decl[i].out = out; 
     st->decl[i].an.pin = pin;
     st->decl[i].an.port = port;
     st->decl[i].an.pwm = pwm;
-    return 0;            
+    return 0;
 }
 
 // '#' 'timer' <name> <milliseconds> ['=' '1'|'0']
@@ -2830,7 +2794,7 @@ int csp_parse_rule(csp_rt_t* st, token_t* tv, size_t n)
     size_t num;
     int i, j;
     int cnd;
-    rstack_entry_t result;
+    rentry_t result;
 
     if ((i=tok_index(QUEST, tv, n)) >= 0) {
 	// parse condition

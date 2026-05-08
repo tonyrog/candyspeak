@@ -324,7 +324,7 @@ static int handle_immediate(csp_rt_t* st, char* line)
     token_t tv[MAX_LINE_TOKENS];
     size_t num = MAX_LINE_TOKENS;
     reg_allocator_t* saved_ap;
-    rstack_entry_t result;
+    rentry_t result;
     
     if (csp_scan_line(line, tv, &num) < 0) {
 	printf("Scan error\n");
@@ -343,10 +343,10 @@ static int handle_immediate(csp_rt_t* st, char* line)
     }
     st->ap = saved_ap;
 
-    if (result.immediate)
-	csp_print_value(st, result.vt, result.val);
+    if (R_IMMEDIATE(result))
+	csp_print_value(st, R_VT(result), result.val);
     else if (result.ix != BAD_INDEX)
-	csp_print_value(st, result.vt, csp_value(st, result.ix));
+	csp_print_value(st, R_VT(result), csp_value(st, result.ix));
     else
 	csp_print_str("NONE");
 	
