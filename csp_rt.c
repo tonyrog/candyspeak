@@ -8,6 +8,13 @@
 #include <stdio.h>
 #endif
 
+// Prevent inlining of large parse functions to reduce code size
+#ifdef __GNUC__
+#define NOINLINE __attribute__((noinline))
+#else
+#define NOINLINE
+#endif
+
 #define CAT_HELPER2(x,y) x ## y
 #define CAT2(x,y) CAT_HELPER2(x,y)
 
@@ -167,6 +174,23 @@ const op_entry_t op_table[] = {
 #define op_SRA(y, z)  ((y) >> (z))
 #define op_COMMA(y,z) z
 
+// Float/fixpoint operations - conditional on FVALUE_IS_FIXPOINT
+#if FVALUE_IS_FIXPOINT
+#define op_FADD(y, z)  FIX_ADD((y), (z))
+#define op_FSUB(y, z)  FIX_SUB((y), (z))
+#define op_FMUL(y, z)  FIX_MUL((y), (z))
+#define op_FDIV(y, z)  FIX_DIV((y), (z))
+#define op_FLT(y, z)   (-FIX_LT((y), (z)))
+#define op_FLTE(y, z)  (-FIX_LTE((y), (z)))
+#define op_FGT(y, z)   (-FIX_GT((y), (z)))
+#define op_FGTE(y, z)  (-FIX_GTE((y), (z)))
+#define op_FEQEQ(y, z) (-FIX_EQ((y), (z)))
+#define op_FNEQ(y, z)  (-FIX_NEQ((y), (z)))
+#define op_FNEG(y)     FIX_NEG(y)
+#define op_FPOS(y)     (y)
+#define op_CVTIF(y)    FIX_FROM_INT(y)
+#define op_CVTFI(y)    FIX_TO_INT(y)
+#else
 #define op_FADD(y, z)  ((y)+(z))
 #define op_FSUB(y, z)  ((y)-(z))
 #define op_FMUL(y, z)  ((y)*(z))
@@ -177,16 +201,16 @@ const op_entry_t op_table[] = {
 #define op_FGTE(y, z)  (-((y)>=(z)))
 #define op_FEQEQ(y, z) (-((y)==(z)))
 #define op_FNEQ(y, z)  (-((y)!=(z)))
+#define op_FNEG(y)     (-(y))
+#define op_FPOS(y)     (y)
+#define op_CVTIF(y)    ((fvalue_t)(y))
+#define op_CVTFI(y)    ((ivalue_t)(y))
+#endif
 
 #define op_NOT(y)  (~BOOL((y)))
 #define op_NEG(y)  (-(y))
 #define op_POS(y)  (y)
 #define op_BNOT(y)  (~(y))
-#define op_CVTIF(y) ((fvalue_t) (y))
-#define op_CVTFI(y) ((ivalue_t) (y))
-
-#define op_FNEG(y)  (-(y))
-#define op_FPOS(y)  (y)
 
 #define MAKE_III(name)						\
     static value_t CAT2(f_,name)(value_t y, value_t z)		\
@@ -501,9 +525,9 @@ static value_t fn_abs(csp_rt_t* st,uint16_t type,value_t* args,uint8_t nargs)
 static value_t fn_fabs(csp_rt_t* st,uint16_t type,value_t* args,uint8_t nargs)
 {
     value_t ret;
-    float arg = args[0].f;
+    fvalue_t arg = args[0].f;
     (void)st; (void)nargs;
-    ret.f = (arg < 0) ? -arg : arg;
+    ret.f = (arg < 0) ? op_FNEG(arg) : arg;
     return ret;
 }
 
@@ -680,12 +704,12 @@ void csp_set_fvalue(csp_rt_t* st, index_t n, fvalue_t v)
 int csp_eval_rule(csp_rt_t* st, int n)
 {
     opcode_t op;
-#if defined(SUPPORT_STATISTICS) && (SUPPORT_STATISTICS==1)
+#if defined(USE_STATISTICS) && (USE_STATISTICS==1)
     st->num_eval_rule++;
 #endif
 
 again:
-#if defined(SUPPORT_STATISTICS) && (SUPPORT_STATISTICS==1)    
+#if defined(USE_STATISTICS) && (USE_STATISTICS==1)    
     st->num_eval0++;
 #endif    
     op = st->instr[n].op;
@@ -940,7 +964,7 @@ index_t next_decl_index(csp_rt_t* st)
 
 // install a new decl
 
-index_t csp_new_decl(csp_rt_t* st, char* name, int name_len, decl_t type)
+NOINLINE index_t csp_new_decl(csp_rt_t* st, char* name, int name_len, decl_t type)
 {
     index_t i;
     int pos;
@@ -958,7 +982,7 @@ index_t csp_new_decl(csp_rt_t* st, char* name, int name_len, decl_t type)
     return i;
 }
 
-index_t new_signed_const(csp_rt_t* st, ivalue_t v)
+NOINLINE index_t new_signed_const(csp_rt_t* st, ivalue_t v)
 {
     index_t ix;
     int i;
@@ -972,7 +996,7 @@ index_t new_signed_const(csp_rt_t* st, ivalue_t v)
     return ix;
 }
 
-index_t new_float_const(csp_rt_t* st, fvalue_t v)
+NOINLINE index_t new_float_const(csp_rt_t* st, fvalue_t v)
 {
     index_t ix;
     int i;
@@ -986,7 +1010,7 @@ index_t new_float_const(csp_rt_t* st, fvalue_t v)
     return ix;
 }
 
-index_t new_string_const(csp_rt_t* st, char* str, int len)
+NOINLINE index_t new_string_const(csp_rt_t* st, char* str, int len)
 {
     index_t ix;
     int pos, i;
@@ -1072,7 +1096,7 @@ int csp_new_lih(csp_rt_t* st, reg_t x, uint16_t imm)
 // Smart load: choose LI, LIU, or LIU+LIH based on value
 int csp_load_int(csp_rt_t* st, reg_t x, ivalue_t val)
 {
-    if (val >= -32768 && val <= 32767) {
+    if ((val >= -32768) && (val <= 32767)) {
 	return csp_new_li(st, x, (int16_t)val);
     }
     else {
@@ -1102,8 +1126,12 @@ int csp_load_uint(csp_rt_t* st, reg_t x, uvalue_t val)
     }
 }
 
-int csp_load_float(csp_rt_t* st, reg_t x, float val)
+int csp_load_float(csp_rt_t* st, reg_t x, fvalue_t val)
 {
+#if FVALUE_IS_FIXPOINT
+    // Fixpoint is just an int32_t, load as signed
+    return csp_load_int(st, x, (ivalue_t)val);
+#else
     union { float f; uint32_t u; } v;
     v.f = val;
     if (v.u == 0) {
@@ -1112,6 +1140,7 @@ int csp_load_float(csp_rt_t* st, reg_t x, float val)
     if (csp_new_liu(st, x, (uint16_t)(v.u & 0xFFFF)) < 0)
 	return -1;
     return csp_new_lih(st, x, (uint16_t)(v.u >> 16));
+#endif
 }
 
 int csp_new_arg(csp_rt_t* st, reg_t x, int16_t i)
@@ -1191,12 +1220,12 @@ int new_expr2(csp_rt_t* st, opcode_t op, index_t x ,index_t y, index_t z)
 
 int new_expr1(csp_rt_t* st, opcode_t op, index_t x, index_t y)
 {
-    return csp_new_alu(st, op, x, y, ZERO);
+    return csp_new_alu(st, op, x, y, 0);
 }
 
 int new_expr0(csp_rt_t* st, opcode_t op)
 {
-    return csp_new_alu(st, op, ZERO, ZERO, ZERO);
+    return csp_new_alu(st, op, 0, 0, 0);
 }
 
 // Build reactive dependency graph: declaration -> rules that depend on it
@@ -1302,7 +1331,7 @@ static inline int hex(int c)
 #define TOK_INT(y) do { tok = INT; val.val.i = (y); goto done; } while(0)
 #define TOK_FLT(y) do { tok = FLT; val.val.f = (y); goto done; } while(0)
 
-int csp_next_token(char* str, token_t* tp)
+NOINLINE static int csp_next_token(char* str, token_t* tp)
 {
     char* str0 = str;
     int c;
@@ -1452,8 +1481,20 @@ next:
 	    while(ISDIGIT(*str)) {
 		v = v*10 + dec(*str++);
 	    }
-            // parse simple fraction for now	    
+            // parse simple fraction for now
 	    if ((str[0] == '.') && ISDIGIT(str[1])) {
+#if FVALUE_IS_FIXPOINT
+		// Parse as Q16.16 fixpoint
+		fvalue_t frac = 0;
+		fvalue_t scale = FIX_SCALE / 10;
+		str++;
+		while(ISDIGIT(*str)) {
+		    frac += scale * dec(*str++);
+		    scale /= 10;
+		}
+		fvalue_t result = FIX_FROM_INT(v) + frac;
+		TOK_FLT(sign >= 0 ? result : -result);
+#else
 		float b = 0.1;
 		float f = 0.0;
 		str++;
@@ -1463,6 +1504,7 @@ next:
 		}
 		f += v;
 		TOK_FLT(f*sign);
+#endif
 	    }
 	    TOK_INT(v*sign);
 	}
@@ -1474,7 +1516,7 @@ done:
 }
 
 // scan one line of tokens
-int csp_scan_line(char* str, token_t* tv, size_t* num_toks)
+NOINLINE int csp_scan_line(char* str, token_t* tv, size_t* num_toks)
 {
     char* str0 = str;
     size_t i;
@@ -1541,7 +1583,7 @@ void free_reg(csp_rt_t* st, int r)
 }
 
 // Map declaration (variable/constant/digital...)
-int map_reg(csp_rt_t* st, index_t ix)
+NOINLINE int map_reg(csp_rt_t* st, index_t ix)
 {
     reg_allocator_t* ap;
     int dst;
@@ -1589,7 +1631,7 @@ int map_reg(csp_rt_t* st, index_t ix)
 
 
 // Push immediate value (integer, float, or string constant)
-static int push_imm(csp_rt_t* st, rentry_t* rstack, int ep,
+NOINLINE static int push_imm(csp_rt_t* st, rentry_t* rstack, int ep,
 		    vtype_t vt, value_t val)
 {
     reg_t r = 0;
@@ -1625,7 +1667,7 @@ static int push_imm(csp_rt_t* st, rentry_t* rstack, int ep,
 }
 
 // Push string constant
-static int push_str(csp_rt_t* st, rentry_t* rstack, int ep,
+NOINLINE static int push_str(csp_rt_t* st, rentry_t* rstack, int ep,
 		    char* ptr, int len)
 {
     reg_t r = 0;
@@ -1646,7 +1688,7 @@ static int push_str(csp_rt_t* st, rentry_t* rstack, int ep,
 }
 
 // Push variable/declaration reference
-static int push_var(csp_rt_t* st, rentry_t* rstack, int ep,
+NOINLINE static int push_var(csp_rt_t* st, rentry_t* rstack, int ep,
 		    index_t ix, vtype_t vt)
 {
     reg_t r = 0;
@@ -1680,27 +1722,18 @@ static int push_var(csp_rt_t* st, rentry_t* rstack, int ep,
 }
 
 // Push L-value (assignment target, index only, no load)
-static int push_lval(rentry_t* rstack, int ep, index_t ix, vtype_t vt)
+NOINLINE static int push_lval(rentry_t* rstack, int ep, index_t ix, vtype_t vt)
 {
     rstack[ep] = (rentry_t){ .ix = ix, .vtf = vt };
     return ep+1;
 }
 
 // Push register result (from operation)
-static int push_reg(rentry_t* rstack, int ep, reg_t r, vtype_t vt)
+NOINLINE static int push_reg(rentry_t* rstack, int ep, reg_t r, vtype_t vt)
 {
     rstack[ep] = (rentry_t){.reg=r,.ix=BAD_INDEX, .vtf=vt|R_VTF_LOADED };
     return ep+1;
 }
-
-// Push folded constant result (no register)
-#if 0
-static int push_folded(rentry_t* rstack, int ep, value_t val, vtype_t vt)
-{
-    rstack[ep] = (rentry_t){ .ix=BAD_INDEX,.val=val,.vtf=vt|R_VTF_IMMEDIATE };
-    return ep+1;
-}
-#endif
 
 // Process binary assignment operator: generates ST instruction
 // Returns new ep on success, -1 on error
@@ -1812,7 +1845,7 @@ static int coerce_to_float(csp_rt_t* st, rentry_t* e)
     if (R_VT(ent) != V_INTEGER) return -1;  // can only convert int
 
     if (R_IMMEDIATE(ent)) {
-	ent.val.f = (float)ent.val.i;
+	ent.val.f = op_CVTFI(ent.val.i);
 	vtf |=  R_VTF_IMMEDIATE;
     }
     if (R_LOADED(ent) && st->ap) {
@@ -1968,7 +2001,7 @@ void print_stack_used()
 // num_toks is number of tokens on input, consumed on output
 // result receives the expression result (reg, immediate flag, value, type)
 // returns: 1=ok, 0=error
-int csp_parse_expr(csp_rt_t* st, token_t* tv, size_t* num_toks,
+NOINLINE int csp_parse_expr(csp_rt_t* st, token_t* tv, size_t* num_toks,
 		   rentry_t* result)
 {
     tok_t tok;
@@ -2183,28 +2216,6 @@ next:
 	}
 	break;
     }
-	/*
-    case ASTERISK:  goto operator;
-    case SLASH: goto operator;
-    case PERCENT: goto operator;
-    case AMPAMP: goto operator;
-    case AMP:   goto operator;	
-    case BARBAR:  goto operator;
-    case BAR:    goto operator;
-    case CIRC:   goto operator;
-    case TILDE:  goto operator;
-    case NEQ: goto operator;
-    case EXCLAMATION: goto operator;
-    case EQEQ: goto operator;
-    case EQ: goto operator;
-    case LTEQ: goto operator;
-    case LTLT: goto operator;
-    case LT: goto operator;
-    case GTEQ:goto operator;
-    case GTGT:goto operator;
-    case GT:goto operator;
-    case COMMA: goto operator;
-	*/
     default:
 	if (op_table[tok].arity > 0)
 	    goto operator;
@@ -2268,7 +2279,7 @@ out: // expression is terminated with non-expression char
 // expect tokens from tv[] matching pattern in te[].t
 // on match, copies token values to te[].v and updates *pi
 // returns: 1=match, 0=no match
-static int expect(csp_rt_t* st, token_t* tv, int* pi, size_t n, token_t* te)
+NOINLINE static int expect(csp_rt_t* st, token_t* tv, int* pi, size_t n, token_t* te)
 {
     int i = *pi;
     int j = 0;
@@ -2332,7 +2343,7 @@ static int expect(csp_rt_t* st, token_t* tv, int* pi, size_t n, token_t* te)
 }
 
 // '#' 'module' <name>
-int csp_parse_module(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, size_t n)
 {
     index_t ix;
     index_t jx;
@@ -2359,7 +2370,7 @@ int csp_parse_module(csp_rt_t* st, token_t* tv, size_t n)
 }
 
 // '#' 'end' [....]
-int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
 {
     index_t mx, ex, lx;
     int i = 0;
@@ -2393,16 +2404,16 @@ int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
 // Note that in is used for input arguments in objects
 // and out is used for output argumets
 //
-int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res = MAKE_RES(8*sizeof(ivalue_t));
-    ivalue_t in=0, out=0;
     vtype_t vt = V_INTEGER;
     value_t def;
     index_t ix;
     int i = 0;
     token_t teres[] = {{COLON}, {INT}, {LAST}};
     token_t te[] = {{HASH}, {VARIABLE}, {WORD}, {LAST}};
+    pindir_t dir = 0;
 
     if (!expect(st, tv, &i, n, te)) {
 	csp_set_error(st, ERR_SYNTAX);
@@ -2419,9 +2430,9 @@ opts:
 	case UNSIGNED: vt=V_UNSIGNED; def.u = 0; i++; goto opts;
 	case INTEGER: vt=V_INTEGER; def.i = 0; i++; goto opts;
 	case FLOAT: vt=V_FLOAT; def.f = 0.0; i++;  goto opts;
-	case IN: in = 1; i++; goto opts;
-	case OUT: out = 1; i++; goto opts;
-	case INOUT: in=out=1; i++; goto opts;
+	case IN: dir |= DIR_IN; i++; goto opts;
+	case OUT: dir |= DIR_OUT; i++; goto opts;
+	case INOUT: dir |= DIR_INOUT; i++; goto opts;
 	default: break;
 	}
     }
@@ -2439,14 +2450,13 @@ opts:
     i = INDEX(ix);
     st->decl[i].vt = vt;
     st->decl[i].res = res;
-    st->decl[i].in = in;
-    st->decl[i].out = out;
+    st->decl[i].dir = dir;
     st->decl[i].va.init = def;
     return 0;
 }
 
 // '#' 'constant' <name>[':' <size>] [<opt>+] '=' <num>
-int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res;
     value_t cnst;
@@ -2491,10 +2501,9 @@ int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
 }
 
 // '#' 'digital' <name> [<iodir>|<pull>] [<port>':']<pin>
-int csp_parse_digital(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res = MAKE_RES(1);
-    ivalue_t in=0, out=0;
     ivalue_t pu=0, pd=0;
     ivalue_t port=0, pin=0;
     index_t ix;
@@ -2502,6 +2511,7 @@ int csp_parse_digital(csp_rt_t* st, token_t* tv, size_t n)
     token_t te[] = {{HASH}, {DIGITAL}, {WORD}, {LAST}};
     token_t tepin[] = {{INT}, {LAST}};
     token_t teport[] = {{INT}, {COLON}, {INT}, {LAST}};
+    pindir_t dir = 0;
 
     if (!expect(st, tv, &i, n, te)) {
 	csp_set_error(st, ERR_SYNTAX);
@@ -2510,9 +2520,9 @@ int csp_parse_digital(csp_rt_t* st, token_t* tv, size_t n)
 opts:
     if (i < (int)n) {
 	switch(tv[i].t) {
-	case IN: in = 1; i++; goto opts;
-	case OUT: out = 1; i++; goto opts;
-	case INOUT: in=out=1; i++; goto opts;
+	case IN: dir |= DIR_IN; i++; goto opts;
+	case OUT: dir |= DIR_OUT; i++; goto opts;
+	case INOUT: dir |= DIR_INOUT; i++; goto opts;
 	case PULLUP: pd=0; pu=1; i++; goto opts;
 	case PULLDOWN: pu=0; pd=1; i++; goto opts;
 	default: break;
@@ -2529,7 +2539,7 @@ opts:
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    if (!in && !out) in=1;
+    if (dir ==0) dir = DIR_IN;
     if ((ix = lookup_decl(st, te[2].v.str.ptr, te[2].v.str.len)) == BAD_INDEX)
 	ix = csp_new_decl(st, te[2].v.str.ptr, te[2].v.str.len, DECL_DIGITAL);
     if (ix == BAD_INDEX) return -1;
@@ -2537,8 +2547,7 @@ opts:
     st->decl[i].res = res;
     st->decl[i].di.pin = pin;
     st->decl[i].di.port = port;
-    st->decl[i].in = in;
-    st->decl[i].out = out;
+    st->decl[i].dir = dir;
     st->decl[i].di.pullup = pu;
     st->decl[i].di.pulldown = pd;
     return 0;
@@ -2546,10 +2555,9 @@ opts:
 
 //'#' 'analog' <name> [':'<size>] [<opt>*]  [<port>':'] <pin>
 //   <opt> := 'in' | 'out' | 'inout' | 'pwm' | 'float' | 'signed' | 'unsigned'
-int csp_parse_analog(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res;
-    ivalue_t in=0, out=0;
     ivalue_t port=0, pin=0, pwm=0;
     vtype_t vt;
     index_t ix;
@@ -2558,7 +2566,8 @@ int csp_parse_analog(csp_rt_t* st, token_t* tv, size_t n)
     token_t teres[] = {{COLON}, {INT}, {LAST}};
     token_t tepin[] = {{INT}, {LAST}};
     token_t teport[] = {{INT}, {COLON}, {INT}, {LAST}};
-
+    pindir_t dir = 0;
+    
     res = MAKE_RES(10);
     vt = V_INTEGER;
 
@@ -2575,9 +2584,9 @@ opts:
 	case INTEGER: vt=V_INTEGER; i++; goto opts;
 	case FLOAT: vt=V_FLOAT; i++;  goto opts;
 	case PWM:   pwm = 1; i++; goto opts;
-	case IN:    in = 1; i++; goto opts;
-	case OUT:   out = 1; i++; goto opts;
-	case INOUT: in=out=1; i++; goto opts;
+	case IN:    dir |= DIR_IN; i++; goto opts;
+	case OUT:   dir |= DIR_OUT; i++; goto opts;
+	case INOUT: dir |= DIR_INOUT; i++; goto opts;
 	default: break;
 	}
     }
@@ -2592,15 +2601,14 @@ opts:
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    if (!in && !out) in=1;
+    if (dir == 0) dir = DIR_IN;
     if ((ix = lookup_decl(st, te[2].v.str.ptr, te[2].v.str.len)) == BAD_INDEX)
 	ix = csp_new_decl(st, te[2].v.str.ptr, te[2].v.str.len, DECL_ANALOG);
     if (ix == BAD_INDEX) return -1;
     i = INDEX(ix);
     st->decl[i].vt = vt;
     st->decl[i].res = res;
-    st->decl[i].in = in;
-    st->decl[i].out = out; 
+    st->decl[i].dir = dir;
     st->decl[i].an.pin = pin;
     st->decl[i].an.port = port;
     st->decl[i].an.pwm = pwm;
@@ -2608,7 +2616,7 @@ opts:
 }
 
 // '#' 'timer' <name> <milliseconds> ['=' '1'|'0']
-int csp_parse_timer(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t init = 0;
     index_t ix, px, tx;
@@ -2649,10 +2657,9 @@ int csp_parse_timer(csp_rt_t* st, token_t* tv, size_t n)
 //  <frame-id> '[' <bit-pos> ']'
 //  <frame-id> '[' <bit-pos> '..' <bit-pos> ']'
 //
-int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res = MAKE_RES(1);
-    ivalue_t in=0, out=0;
     vtype_t vt = V_INTEGER;
     vendian_t endian = E_UNDEFINED;
     index_t ix;
@@ -2663,7 +2670,7 @@ int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
     token_t teres[] = {{COLON}, {INT}, {LAST}};
     token_t tebit[] = {{INT}, {LB}, {INT}, {RB}, {LAST}};
     token_t tebitrange[] = {{INT}, {LB}, {INT}, {DOT}, {DOT}, {INT}, {RB}, {LAST}};
-
+    pindir_t dir = 0;
 
     if (!expect(st, tv, &i, n, te)) {
 	csp_set_error(st, ERR_SYNTAX);
@@ -2677,15 +2684,15 @@ opts:
 	case UNSIGNED: vt=V_UNSIGNED; i++; goto opts;
 	case INTEGER: vt=V_INTEGER; i++; goto opts;
 	case FLOAT: vt=V_FLOAT; i++;  goto opts;
-	case IN: in = 1; i++; goto opts;
-	case OUT: out = 1; i++; goto opts;
-	case INOUT: in=out=1; i++; goto opts;
+	case IN: dir |= DIR_IN; i++; goto opts;
+	case OUT: dir |= DIR_OUT; i++; goto opts;
+	case INOUT: dir |= DIR_INOUT; i++; goto opts;
 	case LITTLE: endian=E_LITTLE; i++; goto opts;
 	case BIG: endian=E_BIG; i++; goto opts;
 	default: break;
 	}
     }
-    if (!in && !out) in=1;
+    if (dir == 0) dir = DIR_IN;
 
     // FrameID [bit]
     if (expect(st, tv, &i, n, tebit)) {
@@ -2713,8 +2720,7 @@ opts:
     i = INDEX(ix);
     st->decl[i].res = res;
     st->decl[i].vt = vt;
-    st->decl[i].in = in;
-    st->decl[i].out = out;
+    st->decl[i].dir = dir;
     st->decl[i].ca.id = idx;
     st->decl[i].ca.bit = bit0;
     st->decl[i].ca.len = MAKE_CAN_LEN((bit1-bit0)+1);
@@ -2723,7 +2729,7 @@ opts:
 }
 
 // '#' word <name>
-int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
 {
     index_t mx, ix, jx;
     int i = 0, m;
@@ -2768,7 +2774,7 @@ int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
 // then parse expression
 
 // find index of t among tok or -1 if not found
-static int tok_index(tok_t t, token_t* tv, size_t n)
+NOINLINE static int tok_index(tok_t t, token_t* tv, size_t n)
 {
     int i;
     for (i = 0; i < n; i++) {
@@ -2789,7 +2795,7 @@ static int tok_index(tok_t t, token_t* tv, size_t n)
 //  END:
 //    next
 //
-int csp_parse_rule(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_rule(csp_rt_t* st, token_t* tv, size_t n)
 {
     size_t num;
     int i, j;
@@ -2844,8 +2850,7 @@ index_t make_can_range(csp_rt_t* st, char* str, int len,
     i = INDEX(ix);
     st->decl[i].res = MAKE_RES(1);
     st->decl[i].vt = V_UNSIGNED;
-    st->decl[i].in = 1;
-    st->decl[i].out = 0;
+    st->decl[i].dir = DIR_IN;
     st->decl[i].ca.id = idx;
     st->decl[i].ca.bit = p0;
     st->decl[i].ca.len = MAKE_CAN_LEN((p1-p0)+1);
@@ -2897,7 +2902,7 @@ int make_can_rule(csp_rt_t* st, index_t ox, int k, index_t idx,
 }
 
 // FrameID BytePos Mask OnBits OffBits
-int csp_parse_legacy(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_legacy(csp_rt_t* st, token_t* tv, size_t n)
 {
     index_t out;
     index_t idx;
@@ -2946,12 +2951,12 @@ int csp_parse_legacy(csp_rt_t* st, token_t* tv, size_t n)
 }
 
 // '>' command
-int csp_parse_immediate(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_immediate(csp_rt_t* st, token_t* tv, size_t n)
 {
     return 0;
 }
     
-int csp_parse(csp_rt_t* st, char* str)
+NOINLINE int csp_parse(csp_rt_t* st, char* str)
 {
     token_t tv[MAX_LINE_TOKENS];
     size_t num = MAX_LINE_TOKENS;
@@ -3112,11 +3117,11 @@ int csp_rt_start(csp_rt_t* st)
 	case DECL_DIGITAL:
 	case DECL_ANALOG:
 	case DECL_CAN:
-	    if (st->decl[i].in) {
+	    if (st->decl[i].dir & DIR_IN) {
 		if (st->ni < MAX_INPUTS) // warning?
 		    st->input[st->ni++] = ix;
 	    }
-	    if (st->decl[i].out) {
+	    if (st->decl[i].dir & DIR_OUT) {
 		if (st->no < MAX_OUTPUTS) // warning
 		    st->output[st->no++] = ix;
 	    }	    

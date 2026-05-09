@@ -77,6 +77,7 @@ int csp_print_uint(uvalue_t v)
 
 int csp_print_float(fvalue_t v)
 {
+    // FIXME add csp_print_fix  in rt
     return Serial.print(v);
 }
 
@@ -123,7 +124,7 @@ void csp_setup(csp_rt_t* st)
 	int j = INDEX(ix);
 	switch(st->decl[j].type) {
 	case DECL_DIGITAL:
-            if (st->decl[j].in) {
+            if (st->decl[j].dir & DIR_IN) {
 		if (st->decl[j].di.pullup)
 		    pinMode(st->decl[j].di.pin, INPUT_PULLUP);
 		else
@@ -131,7 +132,7 @@ void csp_setup(csp_rt_t* st)
 	    }
 	    break;
 	case DECL_ANALOG:
-	    if (st->decl[j].in && st->decl[j].res)
+	    if ((st->decl[j].dir & DIR_IN) && st->decl[j].res)
 		res = max(res, st->decl[j].res);
 	    break;
 	default:
@@ -147,14 +148,14 @@ void csp_setup(csp_rt_t* st)
     for (i = 0; i < st->no; i++) {
 	index_t ix = st->output[i];
 	int j = INDEX(ix);
-	if (st->decl[j].in) continue;
+	if (st->decl[j].dir & DIR_IN) continue;
 	switch(st->decl[j].type) {
 	case DECL_DIGITAL:
-	    if (st->decl[j].out)
+	    if (st->decl[j].dir & DIR_OUT)
 		pinMode(st->decl[j].di.pin, OUTPUT);
 	    break;
 	case DECL_ANALOG:
-	    if (st->decl[j].out && st->decl[j].an.pwm)
+	    if ((st->decl[j].dir & DIR_OUT) && st->decl[j].an.pwm)
 		pinMode(st->decl[j].an.pin, OUTPUT);
 	    break;
 	default:
@@ -175,14 +176,14 @@ void csp_input(csp_rt_t* st)
 	int vi = st_index(st, ix);
 	switch(st->decl[di].type) {
 	case DECL_DIGITAL:
-	    if (st->decl[di].in) {
+	    if (st->decl[di].dir & DIR_IN) {
 		// fixme: must use setvalue to get trigger etc
 		int value = digitalRead(st->decl[di].di.pin);
 		csp_set_ivalue(st, ix, value);
 	    }
 	    break;
 	case DECL_ANALOG:
-	    if (st->decl[di].in) {
+	    if (st->decl[di].dir & DIR_IN) {
 		// fixme: must use setvalue to get trigger etc
 		int value = analogRead(st->decl[di].di.pin);
 		csp_set_ivalue(st, ix, value);		
@@ -224,8 +225,8 @@ void csp_output(csp_rt_t* st)
 	int vi = st_index(st, ix);
 	switch(st->decl[di].type) {
 	case DECL_DIGITAL:
-	    if (st->decl[di].out) {
-		if (st->decl[di].in) {
+	    if (st->decl[di].dir & DIR_OUT) {
+		if (st->decl[di].dir & DIR_IN) {
 		    pinMode(st->decl[di].di.pin, OUTPUT);
 		    digitalWrite(st->decl[di].di.pin, st->dout[vi].i);
 		    // prepare for next input
@@ -240,7 +241,7 @@ void csp_output(csp_rt_t* st)
 	    }
 	    break;
 	case DECL_ANALOG:
-	    if ((st->decl[di].out) && (st->decl[di].an.pwm)) {
+	    if ((st->decl[di].dir & DIR_OUT) && (st->decl[di].an.pwm)) {
 		// handle type! accept float as well
 		int val = map(st->din[vi].i,
 			      0, (1<<st->decl[di].res)-1,

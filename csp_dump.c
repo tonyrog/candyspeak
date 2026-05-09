@@ -6,6 +6,23 @@
 #include "csp_dump.h"
 #include "csp_format.h"
 
+// Helper to print fvalue_t (works for both float and fixpoint)
+static void fprint_fvalue(FILE* f, fvalue_t v)
+{
+#if FVALUE_IS_FIXPOINT
+    int32_t intpart = FIX_TO_INT(v);
+    uint32_t fracpart = (v >= 0 ? v : -v) & FIX_MASK;
+    // Use 64-bit to avoid overflow: fracpart * 1000000 can exceed 32 bits
+    fracpart = (uint32_t)(((uint64_t)fracpart * 1000000) >> FIX_SHIFT);
+    if (v < 0 && intpart == 0)
+	fprintf(f, "-0.%06u", fracpart);
+    else
+	fprintf(f, "%d.%06u", intpart, fracpart);
+#else
+    fprintf(f, "%f", v);
+#endif
+}
+
 static const char spaces[] = "                ";
 
 static const char* indent(int lev)
@@ -61,7 +78,7 @@ void csp_fprint_value(FILE* f, csp_rt_t* st, vtype_t vt, value_t val)
     switch(vt) {
     case V_INTEGER: fprintf(f, "%d", val.i); break;
     case V_UNSIGNED: fprintf(f, "16#%x", val.u); break;
-    case V_FLOAT: fprintf(f, "%f", val.f); break;
+    case V_FLOAT: fprint_fvalue(f, val.f); break;
     case V_STRING:
 	csp_fprint_escaped_string(f, &st->str[val.s], st->str[val.s-1]);
 	break;
@@ -549,7 +566,7 @@ void csp_dump_tokens(FILE* f, token_t* tv, int n)
     for (i = 0; i < n; i++) {
 	switch(tv[i].t) {
 	case INT: fprintf(f,"%d,", tv[i].v.val.i); break;
-	case FLT: fprintf(f,"%f,", tv[i].v.val.f); break;
+	case FLT: fprint_fvalue(f, tv[i].v.val.f); fprintf(f,","); break;
 	case STR: fprintf(f,"\"%.*s\",", tv[i].v.str.len, tv[i].v.str.ptr); break;
 	case WORD:
 	    if (maybe_unquoted_atom(tv[i].v.str.ptr, tv[i].v.str.len))
@@ -648,9 +665,9 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
     for (i = 0; i < st->ps.nd; i++) {
 	// fixme: output .type as DECL_abc
 	csp_decl_t* dp = &st->decl[i];
-	fprintf(f, "  {.type=%s,.name=%u,.vt=%s,.res=%u,.in=%u,.out=%d,",
+	fprintf(f, "  {.type=%s,.name=%u,.vt=%s,.res=%u,.dir=%u,",
 		csp_cfmt_dtype(dp->type), dp->name, csp_cfmt_vtype(dp->vt),
-		dp->res, dp->in, dp->out);
+		dp->res, dp->dir);
 	switch(dp->type) {
 	case DECL_MODULE:
 	    fprintf(f, ".md={.nn=%u,.ent=%u}", dp->md.n, dp->md.ent);

@@ -110,9 +110,40 @@ int csp_print_uint(uvalue_t v)
     return printf("%u", v);
 }
 
+int csp_print_uintw(uvalue_t v, int nw)
+{
+    int n;
+    while (v < nw) {
+	csp_print_char('0');
+	nw /= 10;
+	n++;
+    }
+    return n+csp_print_uint(v);
+}
+
+
 int csp_print_float(fvalue_t v)
 {
+#if FVALUE_IS_FIXPOINT
+    // Print Q16.16 as decimal
+    int n;
+    int32_t intpart = FIX_TO_INT(v);
+    uint32_t fracpart = (v >= 0 ? v : -v) & FIX_MASK;
+    // Use 64-bit to avoid overflow: fracpart * 1000000 can exceed 32 bits
+    fracpart = (uint32_t)(((uint64_t)fracpart * 1000000) >> FIX_SHIFT);
+    if (v < 0 && intpart == 0) {
+	csp_print_char('-');
+	csp_print_char('0');
+	n = 2;
+    }
+    else {
+	n = csp_print_int(intpart);
+    }
+    csp_print_char('.'); n++;
+    return n+csp_print_uintw(fracpart, 10000);
+#else
     return printf("%f", v);
+#endif
 }
 
 int csp_print_hex(uvalue_t v)
@@ -548,7 +579,7 @@ void print_defines()
 {
     printf("SUPPORT_TRANSACTION=%d\n", SUPPORT_TRANSACTION);
     printf("SUPPORT_REACTIVE=%d\n", SUPPORT_REACTIVE);
-    printf("SUPPORT_STATISTICS=%d\n",SUPPORT_STATISTICS);
+    printf("USE_STATISTICS=%d\n",USE_STATISTICS);
 
     printf("TRANSACTION_DEFAULT=%d\n", TRANSACTION_DEFAULT);
     printf("REACTIVE_DeFAULT=%d\n", REACTIVE_DEFAULT);    
@@ -565,6 +596,7 @@ void print_defines()
     printf("MAX_TIMERS=%d\n", MAX_TIMERS);
     printf("MAX_MODULES=%d\n", MAX_MODULES);
     printf("MAX_OBJECTS=%d\n", MAX_OBJECTS);
+    printf("MAX_INDEX=%d\n", MAX_INDEX);    
     printf("MAX_STR_BUF=%d\n", MAX_STR_BUF);
     printf("MAX_STACK_DEPTH=%d\n", MAX_STACK_DEPTH);
 
@@ -867,7 +899,7 @@ loop:
 done:
 
     fprintf(stdout, "cycle=%d\n", state.cycle);
-#if defined(SUPPORT_STATISTICS) && (SUPPORT_STATISTICS==1)
+#if defined(USE_STATISTICS) && (USE_STATISTICS==1)
     fprintf(stdout, "num_eval_rule=%d\n", state.num_eval_rule);
     fprintf(stdout, "num_eval0=%d\n", state.num_eval0);
 #endif

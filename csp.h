@@ -27,7 +27,13 @@ typedef uint8_t  reg_t;    // at most 256 registers
 
 #define OBJ_BITS     4    // (2^OBJ_BITS-2) (14)
 #define DECL_BITS    10
+#if defined(__AVR__)
+#define INSTR_BITS   5    // 23 instructions
+#define MAX_DECLS    32
+#else
 #define INSTR_BITS   8    // Max 256 instructions
+#define MAX_DECLS    128 // (less than MAX_INDICES keep power of 2!!
+#endif
 #define INDEX_BITS   (OBJ_BITS+DECL_BITS)
 #define REG_BITS     4
 #define GLOBAL       0                       // global level
@@ -35,7 +41,6 @@ typedef uint8_t  reg_t;    // at most 256 registers
 #define MAX_INDICES  (1 << INDEX_BITS)
 #define MAX_REGS     (1 << REG_BITS)
 #define MAX_INSTRS   (1 << INSTR_BITS)
-#define MAX_DECLS    128 // (less than MAX_INDICES keep power of 2!!
 #define MAX_INPUTS   32  // <= then MAX_DECLS
 #define MAX_OUTPUTS  32  // <= then MAX_DECLS
 #define MAX_TIMERS   16  // <= then MAX_DECLS
@@ -90,8 +95,16 @@ typedef enum {
 
 typedef int32_t  ivalue_t;
 typedef uint32_t uvalue_t;
-typedef float    fvalue_t;
 typedef int32_t  sindex_t;
+
+#if defined(USE_FIXPOINT) && (USE_FIXPOINT == 1)
+#include "csp_fixpoint.h"
+typedef fixpoint_t fvalue_t;
+#define FVALUE_IS_FIXPOINT 1
+#else
+typedef float fvalue_t;
+#define FVALUE_IS_FIXPOINT 0
+#endif
 
 typedef union {
     ivalue_t i;  // V_INTEGER
@@ -101,8 +114,8 @@ typedef union {
 } value_t;
 
 // require csp_rt_init!
-#define ZERO MAKE_INDEX(0,0)
-#define ONE  MAKE_INDEX(0,1)
+//#define ZERO MAKE_INDEX(0,0)
+//#define ONE  MAKE_INDEX(0,1)
 
 typedef uint32_t set_group_t;  // bit set element
 #define BITSET_GROUP_BITS (8*sizeof(set_group_t))
@@ -457,15 +470,21 @@ typedef union {
     csp_instr_alu_t a;
 } csp_instr_t;
 
+typedef enum {
+    DIR_NONE = 0x00,
+    DIR_IN  = 0x01,
+    DIR_OUT = 0x02,
+    DIR_INOUT = 0x03
+} pindir_t;
+    
 
 typedef struct PACKED {
     decl_t type:6;                 // DECL_xxx
+    pindir_t dir:2;                // IN/OUT    
     unsigned name:STRING_BITS;     // string index
     unsigned vt:TYPE_BITS;         // value type (vtype_t)
-    unsigned res:5;                // 1-32
-    unsigned in:1;                 // input leaf
-    unsigned out:1;                // output leaf
-    unsigned is_mapped:1;          // 1 iff reg is valid value
+    unsigned res:5;                // 1-32  (use MAKE_RES)
+    unsigned is_mapped:1;          // compiletime: 1 iff reg is valid value
     unsigned reg:REG_BITS;         // var/constant loaded in register
     union PACKED {
 	csp_module_t   md;
@@ -589,7 +608,7 @@ typedef struct _csp_rt_t
     index_t edg [MAX_INDEX+1]; // edg[ofs[n]+0...ideg[n]-1] back pointer
 #endif
     uint32_t cycle;
-#if defined(SUPPORT_STATISTICS) && (SUPPORT_STATISTICS==1)
+#if defined(USE_STATISTICS) && (USE_STATISTICS==1)
     uint32_t num_eval_rule;    
     uint32_t num_eval0;
 #endif

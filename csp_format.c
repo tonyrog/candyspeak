@@ -51,14 +51,12 @@ const char* csp_tag(csp_rt_t* st, index_t n)
 
 const char* csp_fmt_pindir(csp_decl_t* lp)
 {
-    if (lp->in && lp->out)
-	return " inout";
-    else if (lp->in)
-	return " in";
-    else if (lp->out)
-	return " out";
-    else
-	return "undefined";
+    switch(lp->dir) {
+    case DIR_INOUT: return " inout";
+    case DIR_IN:    return " in";
+    case DIR_OUT:   return " out";
+    default:        return "undefined";
+    }
 }
 
 const char* csp_fmt_pull(csp_rt_t* st, int ix)
