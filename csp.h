@@ -28,10 +28,10 @@ typedef uint8_t  reg_t;    // at most 256 registers
 #define OBJ_BITS     4    // (2^OBJ_BITS-2) (14)
 #define DECL_BITS    10
 #if defined(__AVR__)
-#define INSTR_BITS   5    // 23 instructions
+#define INSTR_BITS   5
 #define MAX_DECLS    32
 #else
-#define INSTR_BITS   8    // Max 256 instructions
+#define INSTR_BITS   9
 #define MAX_DECLS    128 // (less than MAX_INDICES keep power of 2!!
 #endif
 #define INDEX_BITS   (OBJ_BITS+DECL_BITS)
@@ -624,20 +624,16 @@ typedef struct PACKED {
     value_t val;     // if constant then the actual value is loaded here
     index_t ix;      // declaration index (valid for variables)    
     reg_t reg;       // register number (valid if loaded)
-    uint8_t vtf;     // vt + flags(soon)
+    union {
+	// uint8_t vtf;     // vt + flags(soon)
+	struct {
+	    unsigned vt:TYPE_BITS;
+	    unsigned L:1;    // == 1 when reg is valid (loaded)
+	    unsigned I:1;    // == 1 when val is immediate value
+	    unsigned X:1;    // == 1 when ix is decl index
+	};
+    };
 } rentry_t;
-
-#define R_VAL(r)       ((r).val)
-#define R_IX(r)        ((r).ix)
-#define R_REG(r)       ((r).reg)
-
-#define R_VTF_IMMEDIATE 0x10
-#define R_VTF_LOADED    0x20
-#define R_VTF_TYPE(t)  ((t) & 0xf)
-
-#define R_IMMEDIATE(r) ((r).vtf & R_VTF_IMMEDIATE)
-#define R_LOADED(r)    ((r).vtf & R_VTF_LOADED)
-#define R_VT(r)        ((r).vtf & 0xf)
 
 // Built-in function table (defined in csp_rt.c)
 extern const csp_func_t csp_builtin_funcs[];

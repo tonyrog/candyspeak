@@ -6,6 +6,7 @@
 #include "csp.h"
 #ifdef DEBUG
 #include <stdio.h>
+#include "csp_format.h"
 #endif
 
 // Prevent inlining of large parse functions to reduce code size
@@ -496,6 +497,23 @@ int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val)
     default: return csp_print_str("???");
     }
 }
+
+#ifdef DEBUG
+void print_rentry(csp_rt_t* st, char* name, rentry_t* rp)
+{
+    printf("%s={", name);
+    if (rp->X) printf("name=%s,", decl_name(st, rp->ix));
+    printf("flags=");
+    if (rp->I) printf("im ");
+    if (rp->L) printf("ld ");
+    if (rp->X) printf("ix ");
+    printf(",vt=%s", csp_fmt_vtype(rp->vt));
+    if (rp->L) printf(",reg=%d", rp->reg);
+    if (rp->X) printf(",ix=0x%04x", rp->ix);
+    if (rp->I) { printf(",val="); csp_print_value(st, rp->vt, rp->val); }
+    printf("}");
+}
+#endif
 
 // Built-in function implementations - args are pre-evaluated
 static value_t fn_min(csp_rt_t* st,uint16_t type,value_t* args,uint8_t nargs)
@@ -1143,6 +1161,7 @@ int csp_load_float(csp_rt_t* st, reg_t x, fvalue_t val)
 #endif
 }
 
+	    
 int csp_new_arg(csp_rt_t* st, reg_t x, int16_t i)
 {
     return csp_new_imm(st, OP_ARG, x, i);
@@ -1582,6 +1601,23 @@ void free_reg(csp_rt_t* st, int r)
     }
 }
 
+// load immedate value.
+NOINLINE int csp_load_value(csp_rt_t* st, reg_t x, vtype_t vt, value_t val)
+{
+    switch(vt) {
+    case V_INDEX:
+	return csp_new_li(st, x, val.i);
+    case V_INTEGER:
+	return csp_load_int(st, x, val.i);
+    case V_UNSIGNED:
+	return csp_load_uint(st, x, val.u);
+    case V_FLOAT:
+	return csp_load_float(st, x, val.f);
+    default:
+	return -1;
+    }
+}
+
 // Map declaration (variable/constant/digital...)
 NOINLINE int map_reg(csp_rt_t* st, index_t ix)
 {
@@ -1602,24 +1638,13 @@ NOINLINE int map_reg(csp_rt_t* st, index_t ix)
 	st->decl[INDEX(ix)].reg = dst;
 	ap->rmap[dst] = ix;
 	if (st->decl[INDEX(ix)].type == DECL_CONSTANT) {
+	    // we should probably think this over!
+	    // what if we want to change constant and not program?
 	    value_t val = st->decl[INDEX(ix)].cn.init;
 	    vtype_t vt = st->decl[INDEX(ix)].vt;
-	    switch(vt) {
-	    case V_INTEGER:
-		if (csp_load_int(st, dst, val.i) < 0)
-		    return -1;
-		return dst;
-	    case V_UNSIGNED:
-		if (csp_load_uint(st, dst, val.u) < 0)
-		    return -1;
-		return dst;
-	    case V_FLOAT:
-		if (csp_load_float(st, dst, val.f) < 0)
-		    return -1;
-		return dst;
-	    default:
-		break;
-	    }
+	    if (csp_load_value(st, dst, vt, val) < 0)
+		return -1;
+	    return dst;
 	}
 	// generate LD instruction for variables
 	if (csp_new_ld(st,dst,ix) < 0)
@@ -1630,39 +1655,34 @@ NOINLINE int map_reg(csp_rt_t* st, index_t ix)
 }
 
 
+// generate LD/LI.. load value into a register if not already
+NOINLINE int csp_load(csp_rt_t* st, rentry_t* rp)
+{
+    if (!rp->L && st->ap) { // not loaded and generte code
+	int r;
+	
+	if (rp->X) {  // load variable
+	    if ((r = map_reg(st, rp->ix)) < 0)
+		return -1;
+	}
+	else if (rp->I) {
+	    r = alloc_reg(st);
+	    if (csp_load_value(st, r, rp->vt, rp->val) < 0)
+		return -1;
+	}
+	rp->reg = r;
+	rp->L = 1;
+    }
+    return rp->reg;
+}
+
+
 // Push immediate value (integer, float, or string constant)
 NOINLINE static int push_imm(csp_rt_t* st, rentry_t* rstack, int ep,
 		    vtype_t vt, value_t val)
 {
-    reg_t r = 0;
-    index_t ix = BAD_INDEX;
-    uint8_t vtf = vt;
-    
-    if (st->ap) {
-	r = alloc_reg(st);
-	if (vt == V_INTEGER) {
-	    if (csp_load_int(st, r, val.i) < 0) return -1;
-	} else if (vt == V_UNSIGNED) {
-	    if (csp_load_uint(st, r, val.u) < 0) return -1;
-	} else if (vt == V_FLOAT) {
-	    if (csp_load_float(st, r, val.f) < 0) return -1;
-	} else {
-	    // string or other - use constant pool
-	    ix = lookup_const(st, vt, val);
-	    if (ix == BAD_INDEX) {
-		if (vt == V_FLOAT) ix = new_float_const(st, val.f);
-		else ix = new_signed_const(st, val.i);
-	    }
-	    if (ix == BAD_INDEX) return -1;
-	    free_reg(st, r);
-	    r = map_reg(st, ix);
-	    if (r < 0) return -1;
-	}
-	vtf |= R_VTF_LOADED;
-    }
-    rstack[ep] = (rentry_t){
-	.reg = r, .ix = ix, .val = val, .vtf = vtf|R_VTF_IMMEDIATE,
-    };
+    rstack[ep] = (rentry_t){ .reg = 0, .val = val, .vt  = vt,
+			     .L=0, .I=1, .X=0 };
     return ep+1;
 }
 
@@ -1670,70 +1690,103 @@ NOINLINE static int push_imm(csp_rt_t* st, rentry_t* rstack, int ep,
 NOINLINE static int push_str(csp_rt_t* st, rentry_t* rstack, int ep,
 		    char* ptr, int len)
 {
-    reg_t r = 0;
     index_t ix;
-    uint8_t vtf = V_STRING;
 
     ix = lookup_string_const(st, ptr, len);
     if (ix == BAD_INDEX) ix = new_string_const(st, ptr, len);
     if (ix == BAD_INDEX) return -1;
-
-    if (st->ap) {
-	r = map_reg(st, ix);
-	if (r < 0) return -1;
-	vtf |= R_VTF_LOADED;
-    }
-    rstack[ep] = (rentry_t){ .reg = r, .ix = ix, .vtf = vtf };
+    rstack[ep] = (rentry_t){ .L=0, .X=1, .reg=0, .ix=ix, .vt=V_STRING };
     return ep+1;
 }
 
 // Push variable/declaration reference
 NOINLINE static int push_var(csp_rt_t* st, rentry_t* rstack, int ep,
-		    index_t ix, vtype_t vt)
+			     index_t ix, vtype_t vt)
 {
-    reg_t r = 0;
-    uint8_t vtf = vt;
-    
-    // For constants with no codegen, treat as immediate
-    if (!st->ap && st->decl[INDEX(ix)].type == DECL_CONSTANT) {
-	vtf = st->decl[INDEX(ix)].vt | R_VTF_IMMEDIATE;
-	rstack[ep] = (rentry_t){
-	    .reg = 0, .ix = ix, .val = st->decl[INDEX(ix)].cn.init,
-	    .vtf = vtf
-	};
-	return ep+1;
-    }
-    else if (!st->ap && st->decl[INDEX(ix)].type == DECL_VARIABLE) {
-	vtf = st->decl[INDEX(ix)].vt | R_VTF_IMMEDIATE;
-	rstack[ep] = (rentry_t){
-	    .reg = 0, .ix = ix, .val = csp_value(st, ix), .vtf = vtf
-	};
-	return ep+1;
-    }
+    value_t val;
+    int I = 0;
 
-    if (st->ap) {
-	r = map_reg(st, ix);
-	if (r < 0) return -1;
-	vtf |= R_VTF_LOADED;
+    if (st->decl[INDEX(ix)].type == DECL_CONSTANT) {
+	I= 1;
+	val = st->decl[INDEX(ix)].cn.init;
     }
-    
-    rstack[ep] = (rentry_t) { .reg = r, .ix = ix, .vtf = vtf };
+    else if (st->decl[INDEX(ix)].type == DECL_VARIABLE) {
+	I= 1;
+	val = csp_value(st, ix);
+    }
+    else {
+	val = rstack[ep].val;
+    }
+    rstack[ep] = (rentry_t) { .ix=ix, .val=val, .L=0, .I=I, .X=1, .vt = vt };
     return ep+1;
 }
 
 // Push L-value (assignment target, index only, no load)
 NOINLINE static int push_lval(rentry_t* rstack, int ep, index_t ix, vtype_t vt)
 {
-    rstack[ep] = (rentry_t){ .ix = ix, .vtf = vt };
+    rstack[ep] = (rentry_t) { .ix=ix,.X=1,.L=0,.I=0,.vt=vt };
     return ep+1;
 }
 
 // Push register result (from operation)
 NOINLINE static int push_reg(rentry_t* rstack, int ep, reg_t r, vtype_t vt)
 {
-    rstack[ep] = (rentry_t){.reg=r,.ix=BAD_INDEX, .vtf=vt|R_VTF_LOADED };
+    rstack[ep] = (rentry_t){.reg=r,.X=0,.I=0,.L=1,.vt=vt };
     return ep+1;
 }
+
+// Convert operand to float (int→float via cvtif)
+static int coerce_to_float(csp_rt_t* st, rentry_t* e)
+{
+    rentry_t ent = *e;
+    
+    if (ent.vt == V_FLOAT) return 0;  // already float
+    if (ent.vt != V_INTEGER) return -1;  // can only convert int
+
+    if (ent.I) {
+	ent.val.f = op_CVTFI(ent.val.i);
+	ent.I = 1;
+	ent.L = 0;
+    }
+    if (ent.L && st->ap) {
+	reg_t r = alloc_reg(st);
+	if (new_expr1(st, OP_CVTIF, r, ent.reg) < 0)
+	    return -1;
+	free_reg(st, ent.reg);
+	ent.reg = r;
+	ent.I = 1;
+    }
+    ent.vt = V_FLOAT;
+    *e = ent;
+    return 0;
+}
+
+// Convert operand to int (float→int via cvtfi)
+static int coerce_to_int(csp_rt_t* st, rentry_t* e)
+{
+    rentry_t ent = *e;
+
+    if (ent.vt == V_INTEGER) return 0;  // already int
+    if (ent.vt != V_FLOAT) return -1;  // can only convert float
+    
+    if (ent.I) {
+	ent.val.i = (ivalue_t)ent.val.f;
+	ent.I = 1;
+	ent.L = 0;
+    }
+    if (ent.L && st->ap) {
+	reg_t r = alloc_reg(st);
+	if (new_expr1(st, OP_CVTFI, r, e->reg) < 0)
+	    return -1;
+	free_reg(st, e->reg);
+	ent.reg = r;
+	ent.L = 1;
+    }
+    ent.vt = V_INTEGER;
+    *e = ent;
+    return 0;
+}
+
 
 // Process binary assignment operator: generates ST instruction
 // Returns new ep on success, -1 on error
@@ -1742,6 +1795,13 @@ static int process_assign(csp_rt_t* st, rentry_t* rstack, int ep)
     rentry_t lhs = rstack[ep-2];
     rentry_t rhs = rstack[ep-1];
     vtype_t ltype;
+
+#ifdef DEBUG
+    printf("ASSIGN ");
+    print_rentry(st, "lhs", &lhs);
+    print_rentry(st, "rhs", &rhs);    
+    printf("\n");
+#endif
 
     if (lhs.ix == BAD_INDEX) {
 	csp_set_error(st, ERR_SYNTAX);  // left side must be l-value
@@ -1752,59 +1812,23 @@ static int process_assign(csp_rt_t* st, rentry_t* rstack, int ep)
     ltype = st->decl[INDEX(lhs.ix)].vt;
 
     // Type conversion if needed
-    if (ltype == V_INTEGER && (R_VT(rhs) == V_FLOAT)) {
-	// float→int
-	if (R_IMMEDIATE(rhs)) {
-	    rhs.val.i = (ivalue_t)rhs.val.f;
-	    rhs.vtf = V_INTEGER|R_VTF_IMMEDIATE|R_LOADED(rhs);
-	}
-	if (R_LOADED(rhs) && st->ap) {
-	    reg_t r = alloc_reg(st);
-	    if (new_expr1(st, OP_CVTFI, r, rhs.reg) < 0)
-		return -1;
-	    free_reg(st, rhs.reg);
-	    rhs.reg = r;
-	    rhs.vtf = V_INTEGER|R_VTF_LOADED|R_IMMEDIATE(rhs);
-	}
-    } else if (ltype == V_FLOAT && (R_VT(rhs) == V_INTEGER)) {
-	// int→float
-	if (R_IMMEDIATE(rhs)) {
-	    rhs.val.f = (fvalue_t)rhs.val.i;
-	    rhs.vtf = V_FLOAT|R_VTF_IMMEDIATE|R_LOADED(rhs);
-	}
-	if (R_LOADED(rhs) && st->ap) {
-	    reg_t r = alloc_reg(st);
-	    if (new_expr1(st, OP_CVTIF, r, rhs.reg) < 0)
-		return -1;
-	    free_reg(st, rhs.reg);
-	    rhs.reg = r;
-	    rhs.vtf = V_FLOAT|R_VTF_LOADED|R_IMMEDIATE(rhs);
-	}
+    if (ltype == V_INTEGER && (rhs.vt == V_FLOAT)) {
+	if (coerce_to_int(st, &rhs) < 0)
+	    return -1;
+    } else if (ltype == V_FLOAT && (rhs.vt == V_INTEGER)) {
+	if (coerce_to_float(st, &rhs) < 0)
+	    return -1;
     }
-
-    // If rhs is a folded constant, load it into a register
-    if (!R_LOADED(rhs) && R_IMMEDIATE(rhs)) {
-	if (st->ap) {
-	    reg_t r = alloc_reg(st);	
-	    if (R_VT(rhs) == V_FLOAT) {
-		if (csp_load_float(st, r, rhs.val.f) < 0)
-		    return -1;
-	    }
-	    else {
-		if (csp_load_int(st, r, rhs.val.i) < 0)
-		    return -1;
-	    }
-	    rhs.reg = r;
-	    rhs.vtf |= R_VTF_LOADED;
-	}
-    }
-    if (!R_LOADED(rhs) && st->ap) {
+    if (csp_load(st, &rhs) < 0)
+	return -1;
+    
+    if (!rhs.L && st->ap) {
 	csp_set_error(st, ERR_SYNTAX);  // rhs must have value
 	return -1;
     }
     
-    if (st->ap == NULL) {
-	if (R_IMMEDIATE(rhs))
+    if (!st->ap) {
+	if (rhs.I)
 	    csp_set_value(st, lhs.ix, rhs.val);
     }
     else { // Generate store instruction	
@@ -1835,59 +1859,7 @@ static opcode_t float_op(opcode_t op)
     }
 }
 
-// Convert operand to float (int→float via cvtif)
-static int coerce_to_float(csp_rt_t* st, rentry_t* e)
-{
-    rentry_t ent = *e;
-    uint8_t vtf = V_FLOAT;
     
-    if (R_VT(ent) == V_FLOAT) return 0;  // already float
-    if (R_VT(ent) != V_INTEGER) return -1;  // can only convert int
-
-    if (R_IMMEDIATE(ent)) {
-	ent.val.f = op_CVTFI(ent.val.i);
-	vtf |=  R_VTF_IMMEDIATE;
-    }
-    if (R_LOADED(ent) && st->ap) {
-	reg_t r = alloc_reg(st);
-	if (new_expr1(st, OP_CVTIF, r, ent.reg) < 0)
-	    return -1;
-	free_reg(st, ent.reg);
-	ent.reg = r;
-	vtf |= R_VTF_LOADED;
-    }
-    ent.vtf = vtf;
-    *e = ent;
-    return 0;
-}
-
-// Convert operand to int (float→int via cvtfi)
-static int coerce_to_int(csp_rt_t* st, rentry_t* e)
-{
-    rentry_t ent = *e;
-    uint8_t vtf = V_INTEGER;
-
-    if (R_VT(ent) == V_INTEGER) return 0;  // already int
-    if (R_VT(ent) != V_FLOAT) return -1;  // can only convert float
-    
-    if (R_IMMEDIATE(ent)) {
-	e->val.i = (ivalue_t)e->val.f;
-	vtf |=  R_VTF_IMMEDIATE;	
-    }
-    if (R_LOADED(ent) && st->ap) {
-	reg_t r = alloc_reg(st);
-	if (new_expr1(st, OP_CVTFI, r, e->reg) < 0)
-	    return -1;
-	free_reg(st, e->reg);
-	ent.reg = r;
-	vtf |= R_VTF_LOADED;
-    }
-    ent.vtf = vtf;
-    *e = ent;    
-    return 0;
-}
-
-
 static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep)
 {
     int dst;
@@ -1911,8 +1883,8 @@ static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep)
 	    ep--;
 	    break;
 	default: {
-	    vtype_t at = R_VT(*a);
-	    vtype_t bt = R_VT(*b);
+	    vtype_t at = a->vt;
+	    vtype_t bt = b->vt;
 
 	    // Type coercion: promote to float if either operand is float
 	    if (at == V_FLOAT || bt == V_FLOAT) {
@@ -1925,26 +1897,38 @@ static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep)
 		op = op_table[tok].code;
 	    }
 	    rt = info_tab[op].rtype;
-
-	    if (R_IMMEDIATE(*a) && R_IMMEDIATE(*b) && eval_tab2[op]) {
+#ifdef DEBUG
+	    printf("op=%s\n", info_tab[op].name);
+	    print_rentry(st, "L", a);
+	    print_rentry(st, "R", b);
+	    printf("\n");
+#endif
+	    //
+	    if ((!st->ap || ( !a->X && !b->X ))
+		 && a->I && b->I && eval_tab2[op]) {
 		// constant fold
 		value_t result = eval_tab2[op](a->val, b->val);
-		free_reg(st, a->reg);
-		free_reg(st, b->reg);
-		*a = (rentry_t) { .val = result, .ix = BAD_INDEX,
-				  .vtf = rt|R_VTF_IMMEDIATE
-		};
-	    } else {
-		uint8_t vtf = rt;
-		// generate code
-		dst = alloc_reg(st);
-		if (st->ap != NULL) {	    		    
-		    if (new_expr2(st, op, dst, a->reg, b->reg) < 0)
-			return PARSE_ERROR;
-		    free_reg(st, a->reg);
-		    vtf |= R_VTF_LOADED;
+		if (a->L) free_reg(st, a->reg);
+		if (b->L) free_reg(st, b->reg);
+		a->X = a->L = 0;
+		a->val = result;
+	    }
+	    else {
+		if (csp_load(st, a) < 0) return -1;
+		if (csp_load(st, b) < 0) return -1;
+		if (a->L && b->L) {
+		    dst = alloc_reg(st);
+		    if (st->ap != NULL) {	    		    
+			if (new_expr2(st, op, dst, a->reg, b->reg) < 0)
+			    return PARSE_ERROR;
+			free_reg(st, a->reg);
+		    }
+		    a->reg = dst;
+		    a->I = 0;
+		    a->vt = rt;
 		}
-		*a = (rentry_t){ .reg = dst, .ix = BAD_INDEX, .vtf = vtf };
+		else
+		    return -1;
 	    }
 	    ep--;
 	}
@@ -1953,7 +1937,7 @@ static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep)
     }
     case 1: {
 	rentry_t* a = &rstack[ep-1];
-	vtype_t at = R_VT(*a);	
+	vtype_t at = a->vt;
 
 	// Select float op if operand is float
 	if (at == V_FLOAT) {
@@ -1963,30 +1947,116 @@ static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep)
 	}
 	rt = info_tab[op].rtype;
 
-	if (R_IMMEDIATE(*a) && eval_tab1[op]) {
-	    // constant fold
+#ifdef DEBUG
+	printf("op=%s\n", info_tab[op].name);
+	print_rentry(st, "A", a);
+	printf("\n");
+#endif	
+	if (!a->X && a->I && eval_tab1[op]) { // constant fold
 	    value_t result = eval_tab1[op](a->val);
-	    free_reg(st, a->reg);
-	    *a = (rentry_t){ .val = result, .ix = BAD_INDEX,
-			     .vtf = rt|R_VTF_IMMEDIATE};
-	} else {
-	    // generate code
-	    uint8_t vtf = rt;	    
-	    dst = alloc_reg(st);
-	    if (st->ap != NULL) {
-		if (new_expr1(st, op, dst, a->reg) < 0)
-		    return PARSE_ERROR;
-		free_reg(st, a->reg);
-		vtf |= R_VTF_LOADED;		
-	    }
-	    *a = (rentry_t){ .reg = dst, .ix = BAD_INDEX, .vtf = vtf };
+	    if (a->L) free_reg(st, a->reg);
+	    a->val = result;
+	    a->X = a->L = 0;
 	}
+	else {
+	    if (csp_load(st, a) < 0) return -1;
+	    if (a->L) { // generate code
+		dst = alloc_reg(st);
+		if (st->ap != NULL) {
+		    if (new_expr1(st, op, dst, a->reg) < 0)
+			return PARSE_ERROR;
+		    free_reg(st, a->reg);
+		}
+		a->reg = dst;
+		a->I = 0;
+		a->vt = rt;
+	    }
+	    else
+		return -1;
+	}
+	a->vt = rt;	    
 	break;
     }
     case 0:
 	return PARSE_ERROR;
     }
     return ep;
+}
+
+static int process_fcall(csp_rt_t* st, int func_idx, int is_user,
+			 rentry_t* rstack, int ep)
+{
+    int dst, n, j;
+    const csp_func_t* func = NULL;
+    uint16_t argcode = 0;
+	    
+    if (is_user) {
+	if (st->ufuncs && (func_idx < st->num_ufuncs))
+	    func = &st->ufuncs[func_idx];
+    } else {
+	if (func_idx < csp_num_builtin_funcs)
+	    func = &csp_builtin_funcs[func_idx];
+    }
+    if (!func || !func->fn)
+	return -1;
+    n = func->nargs;
+    for (j = 0; j < n; j++) {
+	rentry_t arg = rstack[ep-(n-j)];
+	vtype_t argvt = arg.vt;
+	vtype_t argtype = func->argtypes[j];
+	
+	argcode |= (argvt << 4*j);
+
+	// check arguments & coerce
+	switch(argtype) {
+	case V_ANY:
+	    break;  // OK
+	case V_NUMBER:
+	    if (!((argvt == V_INTEGER) || (argvt == V_FLOAT)))
+		return 0;
+	    break;
+	case V_INTEGER:
+	    if (coerce_to_int(st, &arg) < 0)
+		return 0;
+	    break;
+	case V_FLOAT:
+	    if (coerce_to_float(st, &arg) < 0)
+		return 0;
+	    break;
+	case V_STRING:
+	    if (argvt != V_STRING)
+		return 0;
+	    break;
+	default:
+	    if (argtype != argvt)
+		return 0;
+	    break;
+	}
+	if (argtype == V_INDEX) { // load index as immediate
+	    if (!arg.X) {
+		csp_set_error(st, ERR_SYNTAX);
+		return -1;
+	    }
+	    arg.X = 0;
+	    arg.I = 1;
+	    arg.val.u = arg.ix;
+	}
+	if (csp_load(st, &arg) < 0) {
+	    csp_set_error(st, ERR_SYNTAX);	    
+	    return -1;
+	}
+	if (csp_new_arg(st, arg.reg, j) < 0)
+	    return -1;
+	if (arg.L) free_reg(st, arg.reg);
+    }
+    // pop rstack
+    if (n > 0) {
+	ep -= n;
+    }
+    dst = alloc_reg(st);
+    if (csp_new_call(st, dst, func_idx, is_user, argcode) < 0)
+	return 0;
+    return push_reg(rstack, ep, dst, func->rtype);
 }
 
 void print_stack_used()
@@ -1996,7 +2066,6 @@ void print_stack_used()
     csp_print_int(stack_used());
     csp_println();
 }
-
 
 // num_toks is number of tokens on input, consumed on output
 // result receives the expression result (reg, immediate flag, value, type)
@@ -2011,7 +2080,6 @@ NOINLINE int csp_parse_expr(csp_rt_t* st, token_t* tv, size_t* num_toks,
     int ep = 0;         // expression stack pointer
     tok_t ostack[MAX_PARSE_STACK_DEPTH];  // stack of operators
     rentry_t rstack[MAX_PARSE_STACK_DEPTH];  // stack of {reg, index}
-    reg_t dst;
     index_t ix;
     int i = 0;
     size_t n = *num_toks;
@@ -2056,89 +2124,11 @@ next:
 	    tok_t marker = ostack[--pp];
 	    int func_idx = FUNC_MARKER_INDEX(marker);
 	    int is_user = FUNC_MARKER_IS_USER(marker);
-	    int n, j;
-	    const csp_func_t* func = NULL;
-	    uint16_t argcode = 0;
-	    
-	    if (is_user) {
-		if (st->ufuncs && (func_idx < st->num_ufuncs))
-		    func = &st->ufuncs[func_idx];
-	    } else {
-		if (func_idx < csp_num_builtin_funcs)
-		    func = &csp_builtin_funcs[func_idx];
-	    }
-	    if (!func || !func->fn)
+
+	    if ((ep = process_fcall(st, func_idx, is_user, rstack, ep)) < 0) {
+		csp_set_error(st, ERR_SYNTAX);
 		return 0;
-	    n = func->nargs;
-	    for (j = 0; j < n; j++) {
-		rentry_t* arg = &rstack[ep-(n-j)];
-		vtype_t argvt = R_VT(*arg);
-		vtype_t argtype = func->argtypes[j];
-
-		argcode |= (argvt << 4*j);
-
-		// check arguments & coerce
-		switch(argtype) {
-		case V_ANY:
-		    break;  // OK
-		case V_NUMBER:
-		    if (!((argvt == V_INTEGER) || (argvt == V_FLOAT)))
-			return 0;
-		    break;
-		case V_INTEGER:
-		    if (coerce_to_int(st, arg) < 0)
-			return 0;
-		    break;
-		case V_FLOAT:
-		    if (coerce_to_float(st, arg) < 0)
-			return 0;
-		    break;
-		case V_STRING:
-		    if (argvt != V_STRING)
-			return 0;
-		    break;
-		default:
-		    if (argtype != argvt)
-			return 0;
-		    break;
-		}
-
-		if (argtype == V_INDEX) {
-		    reg_t r;
-		    // Pass index directly: load index value into arg[]
-		    if (arg->ix == BAD_INDEX) {
-			csp_set_error(st, ERR_SYNTAX);
-			return 0;
-		    }
-		    r = alloc_reg(st);
-		    if (csp_new_li(st, r, arg->ix) < 0)
-			return 0;
-		    if (csp_new_arg(st, r, j) < 0)
-			return 0;
-		    free_reg(st, r);
-		    if (R_LOADED(*arg))
-			free_reg(st, arg->reg);
-		}
-		else {
-		    // Pass value: use loaded register
-		    if (!R_LOADED(*arg)) {
-			csp_set_error(st, ERR_SYNTAX);
-			return 0;
-		    }
-		    if (csp_new_arg(st, arg->reg, j) < 0)
-			return 0;
-		    free_reg(st, arg->reg);
-		}
 	    }
-	    // pop rstack
-	    if (n > 0) {
-		ep -= n;
-	    }
-	    
-	    dst = alloc_reg(st);
-	    if (csp_new_call(st, dst, func_idx, is_user, argcode) < 0)
-		return 0;
-	    ep = push_reg(rstack, ep, dst, func->rtype);
 	}
 	else if (pp && (ostack[pp-1] == LP)) {
 	    pp--;  // pop the LP for regular parentheses
@@ -2208,7 +2198,6 @@ next:
 		ep = push_lval(rstack, ep, ix, vt);
 	    }
 	    else {
-		// R-value: load into register
 		if ((ep = push_var(st, rstack, ep, ix, vt)) < 0)
 		    return 0;
 	    }
@@ -2261,7 +2250,6 @@ out: // expression is terminated with non-expression char
 	tok = ostack[--pp];
 	if (tok == LP)
 	    return 0;
-
 	if ((ep = process_op(st, tok, rstack, ep)) < 0)
 	    return 0;
     }
@@ -2316,14 +2304,14 @@ NOINLINE static int expect(csp_rt_t* st, token_t* tv, int* pi, size_t n, token_t
 	    }
 	    st->ap = saved_ap;
 
-	    if (!R_IMMEDIATE(result))
+	    if (!result.I)
 		return 0;  // not a constant
 
 	    // check type
 	    if ((t == INT) &&
-		(R_VT(result) != V_INTEGER) && (R_VT(result) != V_UNSIGNED))
+		(result.vt != V_INTEGER) && (result.vt != V_UNSIGNED))
 		return 0;
-	    if ((t == FLT) && (R_VT(result) != V_FLOAT))
+	    if ((t == FLT) && (result.vt != V_FLOAT))
 		return 0;
 
 	    te[j].v.val = result.val;
@@ -2807,6 +2795,8 @@ NOINLINE int csp_parse_rule(csp_rt_t* st, token_t* tv, size_t n)
 	num = n - (i+1);
 	if (!csp_parse_expr(st, &tv[i+1], &num, &result))
 	    return -1;
+	if (!result.L)
+	    csp_load(st, &result);
 	cnd = result.reg;
 	// parse expression after query node and patch in ex
 	num = i;

@@ -374,10 +374,10 @@ static int handle_immediate(csp_rt_t* st, char* line)
     }
     st->ap = saved_ap;
 
-    if (R_IMMEDIATE(result))
-	csp_print_value(st, R_VT(result), result.val);
+    if (result.I)
+	csp_print_value(st, result.vt, result.val);
     else if (result.ix != BAD_INDEX)
-	csp_print_value(st, R_VT(result), csp_value(st, result.ix));
+	csp_print_value(st, result.vt, csp_value(st, result.ix));
     else
 	csp_print_str("NONE");
 	
@@ -601,6 +601,7 @@ void print_defines()
     printf("MAX_STACK_DEPTH=%d\n", MAX_STACK_DEPTH);
 
     printf("sizeof(value_t) = %ld\n", sizeof(value_t));
+    printf("sizeof(rentry_t) = %ld\n", sizeof(rentry_t));
     
     printf("sizeof(csp_decl_t) = %ld\n", sizeof(csp_decl_t));
     printf("sizeof(csp_module_t) = %ld\n", sizeof(csp_module_t));
