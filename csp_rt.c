@@ -577,7 +577,6 @@ static value_t fn_timeout(csp_rt_t* st,uint16_t type,
     return ret;
 }
 
-// FIXME: mark the type info is needed?
 static value_t fn_print(csp_rt_t* st, uint16_t type,
 			 value_t* args,uint8_t nargs)
 {
@@ -901,9 +900,6 @@ index_t csp_react(csp_rt_t* st)
 }
 
 // look for symbol among nodes in range [start, stop)
-// fixme: skip DECL_MODULE when scanning for names?
-//  otherwise we may endup using module local variables
-//
 static index_t lookup_decl_in(csp_rt_t* st, char* name, int name_len,
 			      int start, int stop)
 {
@@ -928,7 +924,8 @@ static index_t lookup_decl_in(csp_rt_t* st, char* name, int name_len,
 
 static index_t lookup_decl(csp_rt_t* st, char* name, int name_len)
 {
-    return lookup_decl_in(st, name, name_len, INDEX(st->mdef)+1, st->ps.nd);
+    int start = (st->mdef != BAD_INDEX) ? INDEX(st->mdef)+1 : 0;
+    return lookup_decl_in(st, name, name_len, start, st->ps.nd);
 }
 
 index_t lookup_const(csp_rt_t* st, vtype_t vt, value_t v)
@@ -2220,7 +2217,7 @@ next:
 		i += 2;
 	    }
 	    // Apply module context
-	    if ((st->mdef != 0) && (OBJ(ix) == 0))
+	    if ((st->mdef != BAD_INDEX) && (OBJ(ix) == 0))
 		ix = MAKE_INDEX(CURRENT, INDEX(ix));
 
 	    // Check if this is an l-value (assignment target)
@@ -2400,7 +2397,7 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    if ((mx = st->mdef)) { // stack?
+    if ((mx = st->mdef) != BAD_INDEX) { // stack?
 	if ((ex = csp_new_decl(st, NULL, 0, DECL_END)) == BAD_INDEX)
 	    return -1;
 	st->decl[INDEX(mx)].md.n = (INDEX(ex) - INDEX(mx)) - 1;
@@ -2411,7 +2408,7 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
 	st->instr[lx].v.num = st->instr[st->ent].e.num;
 	st->instr[lx].v.mx  = st->instr[st->ent].e.mx;
 	// stack?
-	st->mdef = 0;
+	st->mdef = BAD_INDEX;
 	st->ent = 0;
 	return 0;
     }
@@ -3072,14 +3069,15 @@ int csp_rt_init(csp_rt_t* st, int transaction, int reactive)
     st->ni = 0;
     st->no = 0;
     st->nm = 0;
-    st->cur = 0;     // current module = global
+    st->cur = 0;      // current module = global
+    st->mdef = BAD_INDEX;  // no module being defined
 
     st->str[0] = 0;  // reserved 0 and nil
     st->ufuncs = NULL;
     st->num_ufuncs = 0;
     st->uconst = NULL;
-    new_signed_const(st, 0);
-    new_signed_const(st, 1);
+    // new_signed_const(st, 0);
+    // new_signed_const(st, 1);
     return 0;
 }
 

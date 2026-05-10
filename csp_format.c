@@ -66,7 +66,7 @@ const char* csp_fmt_pull(csp_rt_t* st, int ix)
     else if (st->decl[ix].di.pulldown)
 	return " pulldown";
     else
-	return "undefined";
+	return "";  // floating
 }
 
 const char* csp_fmt_pwm(csp_rt_t* st, int ix)
