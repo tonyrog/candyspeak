@@ -77,8 +77,29 @@ int csp_print_uint(uvalue_t v)
 
 int csp_print_float(fvalue_t v)
 {
-    // FIXME add csp_print_fix  in rt
+#if FVALUE_IS_FIXPOINT
+    int n;
+    int neg = (v < 0);
+    uint32_t absv = neg ? -v : v;
+    uint32_t intpart = absv >> FIX_SHIFT;
+    uint32_t fracpart = absv & FIX_MASK;
+    fracpart = (uint32_t)(((uint64_t)fracpart * 1000000) >> FIX_SHIFT);
+    if (neg) {
+	Serial.print('-');
+	n = 1 + Serial.print(intpart);
+    } else {
+	n = Serial.print(intpart);
+    }
+    Serial.print('.');
+    n++;
+    // Print with leading zeros (6 digits)
+    for (uint32_t d = 100000; d > 1; d /= 10) {
+	if (fracpart < d) { Serial.print('0'); n++; }
+    }
+    return n + Serial.print(fracpart);
+#else
     return Serial.print(v);
+#endif
 }
 
 int csp_print_hex(uvalue_t v)

@@ -1,0 +1,8 @@
+// Functions with expression arguments
+println(abs(-5))
+println(abs(3 - 10))
+println(min(5, 3))
+println(min(2 + 3, 4))
+println(max(5, 3))
+println(max(2, 1 + 3))
+println(abs(-2 * 3))

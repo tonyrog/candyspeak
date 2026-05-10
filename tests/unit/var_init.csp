@@ -1,0 +1,5 @@
+#variable A = 10
+#variable B = 20
+#variable C = 0
+
+C = A + B ? 1

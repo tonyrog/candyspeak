@@ -1,0 +1,4 @@
+// Bug: free_reg on COMMA without checking a->L
+// Comma operator with immediate left side
+println((1, 2))
+println((1 + 2, 3 + 4))

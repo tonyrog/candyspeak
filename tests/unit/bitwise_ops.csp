@@ -1,0 +1,9 @@
+#variable A:8 = 0x0F
+#variable B:8 = 0xF0
+#variable And = 0
+#variable Or = 0
+#variable Xor = 0
+
+And = A & B ? 1
+Or = A | B ? 1
+Xor = A ^ B ? 1

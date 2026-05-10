@@ -1,0 +1,5 @@
+// Nested function calls
+println(abs(abs(-5)))
+println(min(max(1, 2), 3))
+println(max(min(5, 3), min(4, 2)))
+println(abs(min(-5, -3)))

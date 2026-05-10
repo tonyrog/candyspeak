@@ -1,0 +1,7 @@
+// Basic print tests - integers
+println(0)
+println(1)
+println(42)
+println(100)
+println(-1)
+println(-100)

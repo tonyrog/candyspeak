@@ -1,0 +1,7 @@
+// Print with unary operators
+println(-42)
+println(--42)
+println(-(-42))
+println(!0)
+println(!1)
+println(~0)

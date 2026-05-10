@@ -1,0 +1,9 @@
+#variable A = 5
+#variable B = 10
+#variable AbsA = 0
+#variable MinAB = 0
+#variable MaxAB = 0
+
+AbsA = abs(A) ? 1
+MinAB = min(A, B) ? 1
+MaxAB = max(A, B) ? 1

@@ -1,0 +1,8 @@
+// Bug: process_fcall copies arg, coerce changes not reflected
+// Function with coerced arguments
+#variable x = 10
+#variable y = 5
+
+// These coerce int to float internally
+println(x + 0.5)
+println(y * 1.5)

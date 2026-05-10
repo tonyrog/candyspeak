@@ -127,20 +127,21 @@ int csp_print_float(fvalue_t v)
 #if FVALUE_IS_FIXPOINT
     // Print Q16.16 as decimal
     int n;
-    int32_t intpart = FIX_TO_INT(v);
-    uint32_t fracpart = (v >= 0 ? v : -v) & FIX_MASK;
+    int neg = (v < 0);
+    uint32_t absv = neg ? -v : v;
+    int32_t intpart = absv >> FIX_SHIFT;
+    uint32_t fracpart = absv & FIX_MASK;
     // Use 64-bit to avoid overflow: fracpart * 1000000 can exceed 32 bits
     fracpart = (uint32_t)(((uint64_t)fracpart * 1000000) >> FIX_SHIFT);
-    if (v < 0 && intpart == 0) {
+    if (neg) {
 	csp_print_char('-');
-	csp_print_char('0');
-	n = 2;
+	n = 1 + csp_print_uint(intpart);
     }
     else {
-	n = csp_print_int(intpart);
+	n = csp_print_uint(intpart);
     }
     csp_print_char('.'); n++;
-    return n+csp_print_uintw(fracpart, 10000);
+    return n+csp_print_uintw(fracpart, 100000);
 #else
     return printf("%f", v);
 #endif

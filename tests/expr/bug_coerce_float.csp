@@ -1,0 +1,7 @@
+// Bug: coerce_to_float sets I=1 instead of L=1 after codegen
+// Variable coerced to float should generate CVTIF, not use immediate
+#variable x = 5
+
+println(x * 2.0)
+println(2.0 * x)
+println(x + 0.5)

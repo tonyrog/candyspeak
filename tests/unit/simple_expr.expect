@@ -1,0 +1,6 @@
+{cycles, 10}.
+{checks, [
+  {final_var, "Sum", 8},
+  {final_var, "Diff", 2},
+  {final_var, "Prod", 15}
+]}.

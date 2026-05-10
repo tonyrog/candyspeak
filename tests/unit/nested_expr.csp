@@ -1,0 +1,6 @@
+#variable A = 2
+#variable B = 3
+#variable C = 4
+#variable R = 0
+
+R = (A + B) * C ? 1

@@ -1,0 +1,14 @@
+#module HalfAdd
+#variable A:1 in = 0
+#variable B:1 in = 0
+#variable S:1 out = 0
+#variable C:1 out = 0
+
+S = A ^ B ? 1
+C = A & B ? 1
+#end
+
+#HalfAdd h1
+
+h1.A = 1 ? 1
+h1.B = 1 ? 1

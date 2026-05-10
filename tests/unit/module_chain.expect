@@ -1,0 +1,6 @@
+{cycles, 10}.
+{checks, [
+  {final_object_var, "add1", "Sum", 7},
+  {final_object_var, "add2", "A", 7},
+  {final_object_var, "add2", "Sum", 17}
+]}.

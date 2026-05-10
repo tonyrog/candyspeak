@@ -1,0 +1,6 @@
+#variable A:16 = 1
+#variable Shl = 0
+#variable Shr = 0
+
+Shl = A << 4 ? 1
+Shr = 256 >> 4 ? 1

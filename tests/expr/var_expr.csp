@@ -1,0 +1,8 @@
+// Variables in expressions - direct use, no assignment
+#variable x = 10
+#variable y = 5
+
+println(x + y)
+println(x - y)
+println(x * y)
+println(x / y)

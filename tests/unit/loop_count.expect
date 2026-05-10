@@ -1,0 +1,9 @@
+{cycles, 20}.
+{checks, [
+  {var, 0, "N", 0},
+  {var, 1, "N", 1},
+  {var, 2, "N", 2},
+  {var, 3, "N", 3},
+  {var, 4, "N", 4},
+  {final_var, "N", 5}
+]}.

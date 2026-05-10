@@ -1,0 +1,6 @@
+// Bug: a->I not set after constant fold
+// After folding 2+3=5, result should have I=1
+// Then using it in another op should work
+println((2 + 3) * 4)
+println(4 * (2 + 3))
+println((1 + 2) + (3 + 4))

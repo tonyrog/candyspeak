@@ -1,0 +1,9 @@
+#variable A = 5
+#variable B = 3
+#variable Sum = 0
+#variable Diff = 0
+#variable Prod = 0
+
+Sum = A + B ? 1
+Diff = A - B ? 1
+Prod = A * B ? 1

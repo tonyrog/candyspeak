@@ -1,0 +1,12 @@
+#module Doubler
+#variable In:8 in = 0
+#variable Out:8 out = 0
+
+Out = In * 2 ? 1
+#end
+
+#Doubler d1
+#Doubler d2
+
+d1.In = 5 ? 1
+d2.In = 10 ? 1

@@ -1,0 +1,11 @@
+// Bug: b->reg never freed in binary ops
+// Multiple binary ops should not exhaust registers
+#variable a = 1
+#variable b = 2
+#variable c = 3
+#variable d = 4
+
+println(a + b)
+println(a + b + c)
+println(a + b + c + d)
+println((a + b) * (c + d))

@@ -1,0 +1,6 @@
+{cycles, 10}.
+{checks, [
+  {final_var, "AbsA", 5},
+  {final_var, "MinAB", 5},
+  {final_var, "MaxAB", 10}
+]}.

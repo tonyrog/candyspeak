@@ -1,0 +1,11 @@
+#variable A = 10
+#variable B = 20
+#variable Lt = 0
+#variable Gt = 0
+#variable Eq = 0
+#variable Neq = 0
+
+Lt = 1 ? A < B
+Gt = 1 ? A > B
+Eq = 1 ? A == A
+Neq = 1 ? A != B

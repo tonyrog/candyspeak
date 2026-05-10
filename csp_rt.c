@@ -586,6 +586,14 @@ static value_t fn_print(csp_rt_t* st, uint16_t type,
     return ret;
 }
 
+static value_t fn_println(csp_rt_t* st, uint16_t type,
+			  value_t* args,uint8_t nargs)
+{
+    value_t ret = fn_print(st, type, args, nargs);
+    ret.i += csp_println();
+    return ret;
+}
+
 static value_t fn_tick(csp_rt_t* st,uint16_t type,value_t* args,uint8_t nargs)
 {
     value_t ret;
@@ -614,6 +622,7 @@ const csp_func_t csp_builtin_funcs[] = {
     { "clip",    4, 3, V_INTEGER, {V_INTEGER,V_INTEGER,V_INTEGER,0}, fn_clip},
     { "timeout", 7, 1, V_INTEGER, {V_INDEX,0,0,0},                fn_timeout },
     { "print",   5, 1, V_INTEGER, {V_ANY,0,0,0},                  fn_print },
+    { "println", 7, 1, V_INTEGER, {V_ANY,0,0,0},                  fn_println },
     { "tick",    4, 0, V_INTEGER, {0,0,0,0},                      fn_tick },
     { "cycle",   5, 0, V_INTEGER, {0,0,0,0},                      fn_cycle },
 };
@@ -1739,22 +1748,29 @@ NOINLINE static int push_reg(rentry_t* rstack, int ep, reg_t r, vtype_t vt)
 static int coerce_to_float(csp_rt_t* st, rentry_t* e)
 {
     rentry_t ent = *e;
-    
+
     if (ent.vt == V_FLOAT) return 0;  // already float
     if (ent.vt != V_INTEGER) return -1;  // can only convert int
 
-    if (ent.I) {
-	ent.val.f = op_CVTFI(ent.val.i);
+    // For variables (X=1), load first then convert
+    if (ent.X && st->ap) {
+	if (csp_load(st, &ent) < 0)
+	    return -1;
+    }
+
+    if (ent.I && !ent.X) {  // pure immediate, not variable
+	ent.val.f = op_CVTIF(ent.val.i);
 	ent.I = 1;
 	ent.L = 0;
     }
-    if (ent.L && st->ap) {
+    else if (ent.L && st->ap) {
 	reg_t r = alloc_reg(st);
 	if (new_expr1(st, OP_CVTIF, r, ent.reg) < 0)
 	    return -1;
 	free_reg(st, ent.reg);
 	ent.reg = r;
-	ent.I = 1;
+	ent.L = 1;
+	ent.I = 0;
     }
     ent.vt = V_FLOAT;
     *e = ent;
@@ -1768,19 +1784,26 @@ static int coerce_to_int(csp_rt_t* st, rentry_t* e)
 
     if (ent.vt == V_INTEGER) return 0;  // already int
     if (ent.vt != V_FLOAT) return -1;  // can only convert float
-    
-    if (ent.I) {
-	ent.val.i = (ivalue_t)ent.val.f;
+
+    // For variables (X=1), load first then convert
+    if (ent.X && st->ap) {
+	if (csp_load(st, &ent) < 0)
+	    return -1;
+    }
+
+    if (ent.I && !ent.X) {  // pure immediate, not variable
+	ent.val.i = op_CVTFI(ent.val.f);
 	ent.I = 1;
 	ent.L = 0;
     }
-    if (ent.L && st->ap) {
+    else if (ent.L && st->ap) {
 	reg_t r = alloc_reg(st);
-	if (new_expr1(st, OP_CVTFI, r, e->reg) < 0)
+	if (new_expr1(st, OP_CVTFI, r, ent.reg) < 0)
 	    return -1;
-	free_reg(st, e->reg);
+	free_reg(st, ent.reg);
 	ent.reg = r;
 	ent.L = 1;
+	ent.I = 0;
     }
     ent.vt = V_INTEGER;
     *e = ent;
@@ -1878,7 +1901,7 @@ static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep)
 	    break;
 	case COMMA:
 	    // comma: side effects already done via ST, just keep right operand
-	    free_reg(st, a->reg);
+	    if (a->L) free_reg(st, a->reg);
 	    *a = *b;
 	    ep--;
 	    break;
@@ -1911,6 +1934,7 @@ static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep)
 		if (a->L) free_reg(st, a->reg);
 		if (b->L) free_reg(st, b->reg);
 		a->X = a->L = 0;
+		a->I = 1;
 		a->val = result;
 	    }
 	    else {
@@ -1918,10 +1942,11 @@ static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep)
 		if (csp_load(st, b) < 0) return -1;
 		if (a->L && b->L) {
 		    dst = alloc_reg(st);
-		    if (st->ap != NULL) {	    		    
+		    if (st->ap != NULL) {
 			if (new_expr2(st, op, dst, a->reg, b->reg) < 0)
 			    return PARSE_ERROR;
 			free_reg(st, a->reg);
+			free_reg(st, b->reg);
 		    }
 		    a->reg = dst;
 		    a->I = 0;
@@ -1957,6 +1982,7 @@ static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep)
 	    if (a->L) free_reg(st, a->reg);
 	    a->val = result;
 	    a->X = a->L = 0;
+	    a->I = 1;
 	}
 	else {
 	    if (csp_load(st, a) < 0) return -1;
@@ -2108,9 +2134,15 @@ next:
 	if (pp == 0)
 	    return 0;
 	// Process operators until we hit LP or a function marker
+	// Check if we're inside a function call
+	int in_func = 0;
+	for (int k = pp-1; k >= 0; k--) {
+	    if (IS_FUNC_MARKER(ostack[k])) { in_func = 1; break; }
+	    if (ostack[k] == LP) break;
+	}
 	while(pp && ((tok = ostack[pp-1]) != LP) && !IS_FUNC_MARKER(tok)) {
 	    // COMMA inside function call: just pop it, don't combine args
-	    if (tok == COMMA) {
+	    if (tok == COMMA && in_func) {
 		pp--;
 		continue;
 	    }

@@ -1,0 +1,16 @@
+#module Adder
+#variable A:8 in = 0
+#variable B:8 in = 0
+#variable Sum:8 out = 0
+
+Sum = A + B ? 1
+#end
+
+#Adder add1
+#Adder add2
+
+add1.A = 3 ? 1
+add1.B = 4 ? 1
+
+add2.A = add1.Sum ? 1
+add2.B = 10 ? 1

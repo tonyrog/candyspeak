@@ -1,0 +1,5 @@
+#constant C1 = 42
+#constant C2 = 100
+#variable X = 0
+
+X = C1 ? 1

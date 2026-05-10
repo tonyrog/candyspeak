@@ -1,0 +1,10 @@
+#module Counter
+#variable V:8 in = 0
+#variable Out:8 out = 0
+
+Out = V ? 1
+#end
+
+#Counter c1
+
+c1.V = 42 ? 1

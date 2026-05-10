@@ -1,0 +1,5 @@
+{cycles, 10}.
+{checks, [
+  {final_var, "Shl", 16},
+  {final_var, "Shr", 16}
+]}.
