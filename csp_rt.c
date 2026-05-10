@@ -48,100 +48,163 @@
 #define CSTRLEN(str) (sizeof((str))-1)
 
 #define TOK_ENT(o,c,n) \
-    [(o)] = { .tok=(o),.ttype=TOKT_TOKEN,.code=(c),.name=(n),.name_len=CSTRLEN((n)),.arity=-1,.prec=-1,.assoc=NO }
+    [(o)] = { .tok=(o),.code=(c),.name=(n),.namelen=CSTRLEN((n)),.arity=-1,.prec=-1,.assoc=NO }
 
 #define INSTR_ENT(o,c,n,a,p,s) \
-    [(o)] = { .tok=(o),.ttype=TOKT_INSTR,.code=(c),.name=(n),.name_len=CSTRLEN((n)),.arity=(a),.prec=(p),.assoc=(s) }
+    [(o)] = { .tok=(o),.code=(c),.name=(n),.namelen=CSTRLEN((n)),.arity=(a),.prec=(p),.assoc=(s) }
 
 #define DECL_ENT(o,c,n) \
-    [(o)] = { .tok=(o),.ttype=TOKT_DECL,.code=(c),.name=(n),.name_len=CSTRLEN((n)),.arity=-1,.prec=-1,.assoc=NO }
+    [(o)] = { .tok=(o),.code=(c),.name=(n),.namelen=CSTRLEN((n)),.arity=-1,.prec=-1,.assoc=NO }
 
-const op_entry_t op_table[] = {
-    TOK_ENT(NONE,OP_NOP,"\0"),
+static const char s_null[] RODATA = "";
+static const char s_module[] RODATA = "module";
+static const char s_end[] RODATA = "end";
+static const char s_constant[] RODATA = "constant";
+static const char s_variable[] RODATA = "variable";
+static const char s_digital[] RODATA = "digital";
+static const char s_analog[] RODATA = "analog";
+static const char s_timer[] RODATA = "timer";
+static const char s_can[] RODATA = "can";
+static const char s_EXCLAMATION[] RODATA = "!";
+static const char s_TILDE[] RODATA = "~";
+static const char s_MINUS[] RODATA = "-";
+static const char s_PLUS[] RODATA = "+";
+static const char s_ASTERISK[] RODATA = "*";
+static const char s_SLASH[] RODATA = "/";
+static const char s_PERCENT[] RODATA = "%";
+static const char s_LTLT[] RODATA = "<<";
+static const char s_GTGT[] RODATA = ">>";
+static const char s_LT[] RODATA = "<";
+static const char s_LTEQ[] RODATA = "<=";
+static const char s_GT[] RODATA = ">";
+static const char s_GTEQ[] RODATA = ">=";
+static const char s_EQEQ[] RODATA = "==";
+static const char s_NEQ[] RODATA = "!=";
+static const char s_AMP[] RODATA = "&";
+static const char s_CIRC[] RODATA = "^";
+static const char s_BAR[] RODATA = "|";
+static const char s_AMPAMP[] RODATA = "&&";
+static const char s_BARBAR[] RODATA = "||";
+static const char s_EQ[] RODATA = "=";
+static const char s_COMMA[] RODATA = ",";
+static const char s_QUEST[] RODATA = "?";
+static const char s_next[] RODATA = "next";
+static const char s_enter[] RODATA = "enter";
+static const char s_leave[] RODATA = "leave";
+static const char s_new[] RODATA = "new";
+static const char s_call[] RODATA = "call";
+static const char s_ld[] RODATA = "ld";
+static const char s_st[] RODATA = "st";
+static const char s_li[] RODATA = "li";
+static const char s_arg[] RODATA = "arg";
+static const char s_cvtif[] RODATA = "cvtif";
+static const char s_cvtfi[] RODATA = "cvtfi";
+static const char s_pullup[] RODATA = "pullup";
+static const char s_pulldown[] RODATA = "pulldown";
+static const char s_resolution[] RODATA = "resolution";
+static const char s_in[] RODATA = "in";
+static const char s_out[] RODATA = "out";
+static const char s_inout[] RODATA = "inout";
+static const char s_pwm[] RODATA = "pwm";
+static const char s_float[] RODATA = "float";
+static const char s_integer[] RODATA = "integer";
+static const char s_unsigned[] RODATA = "unsigned";
+static const char s_string[] RODATA = "string";
+static const char s_little[] RODATA = "little";
+static const char s_big[] RODATA = "big";
+static const char s_LP[] RODATA = "(";
+static const char s_RP[] RODATA = ")";
+static const char s_HASH[] RODATA = "#";
+static const char s_DOT[] RODATA = ".";
+static const char s_COLON[] RODATA = ":";
+static const char s_LB[] RODATA = "[";
+static const char s_RB[] RODATA = "]";
+
+const op_entry_t op_table[] RODATA = {
+    TOK_ENT(NONE,OP_NOP,s_null),
     // leaf
-    DECL_ENT(MODULE,DECL_MODULE,"module"),
-    DECL_ENT(END,DECL_END, "end"),
-    DECL_ENT(CONSTANT,DECL_CONSTANT,"constant"),
-    DECL_ENT(VARIABLE,DECL_VARIABLE,"variable"),
-    DECL_ENT(DIGITAL,DECL_DIGITAL,"digital"),
-    DECL_ENT(ANALOG,DECL_ANALOG,"analog"),
-    DECL_ENT(TIMER,DECL_TIMER,"timer"),
-    DECL_ENT(CAN,DECL_CAN,"can"),
+    DECL_ENT(MODULE,DECL_MODULE,s_module),
+    DECL_ENT(END,DECL_END, s_end),
+    DECL_ENT(CONSTANT,DECL_CONSTANT,s_constant),
+    DECL_ENT(VARIABLE,DECL_VARIABLE,s_variable),
+    DECL_ENT(DIGITAL,DECL_DIGITAL,s_digital),
+    DECL_ENT(ANALOG,DECL_ANALOG,s_analog),
+    DECL_ENT(TIMER,DECL_TIMER,s_timer),
+    DECL_ENT(CAN,DECL_CAN,s_can),
     // node - unary
-    INSTR_ENT(EXCLAMATION,OP_NOT,"!",1,105,RIGHT),
-    INSTR_ENT(TILDE,OP_BNOT,"~",1,105,RIGHT),
-    INSTR_ENT(MINUS1,OP_NEG,"-",1,105,RIGHT),
-    INSTR_ENT(PLUS1,OP_POS,"+",1,105,RIGHT),
+    INSTR_ENT(EXCLAMATION,OP_NOT,s_EXCLAMATION,1,105,RIGHT),
+    INSTR_ENT(TILDE,OP_BNOT,s_TILDE,1,105,RIGHT),
+    INSTR_ENT(MINUS1,OP_NEG,s_MINUS,1,105,RIGHT),
+    INSTR_ENT(PLUS1,OP_POS,s_PLUS,1,105,RIGHT),
     // node - binary
-    INSTR_ENT(PLUS,OP_ADD,"+",2,90,LEFT),
-    INSTR_ENT(MINUS,OP_SUB,"-",2,90,LEFT),
-    INSTR_ENT(ASTERISK,OP_MUL,"*",2,100,LEFT),
-    INSTR_ENT(SLASH,OP_DIV,"/",2,100,LEFT),
-    INSTR_ENT(PERCENT,OP_REM,"%",2,100,LEFT),
-    INSTR_ENT(LTLT,OP_SLA,"<<",2,80,LEFT),
-    INSTR_ENT(GTGT,OP_SRA,">>",2,80,LEFT),
-    INSTR_ENT(LT,OP_LT,"<",2,70,LEFT),
-    INSTR_ENT(LTEQ,OP_LTE,"<=",2,70,LEFT),
-    INSTR_ENT(GT,OP_GT,">",2,70,LEFT),
-    INSTR_ENT(GTEQ,OP_GTE,">=",2,70,LEFT),
-    INSTR_ENT(EQEQ,OP_EQEQ,"==",2,60,LEFT),
-    INSTR_ENT(NEQ,OP_NEQ,"!=",2,60,LEFT),
-    INSTR_ENT(AMP,OP_BAND,"&",2,50,LEFT),
-    INSTR_ENT(CIRC,OP_BXOR,"^",2,40,LEFT),
-    INSTR_ENT(BAR,OP_BOR,"|",2,30,LEFT),
-    INSTR_ENT(AMPAMP,OP_AND,"&&",2,20,LEFT),
-    INSTR_ENT(BARBAR,OP_OR,"||",2,10,LEFT),
-    INSTR_ENT(EQ,OP_EQ,"=",2,5,RIGHT),
-    INSTR_ENT(COMMA,OP_COMMA,",",2,2,RIGHT),
-    INSTR_ENT(QUEST,OP_RULE,"?",-1,-1,NO),
+    INSTR_ENT(PLUS,OP_ADD,s_PLUS,2,90,LEFT),
+    INSTR_ENT(MINUS,OP_SUB,s_MINUS,2,90,LEFT),
+    INSTR_ENT(ASTERISK,OP_MUL,s_ASTERISK,2,100,LEFT),
+    INSTR_ENT(SLASH,OP_DIV,s_SLASH,2,100,LEFT),
+    INSTR_ENT(PERCENT,OP_REM,s_PERCENT,2,100,LEFT),
+    INSTR_ENT(LTLT,OP_SLA,s_LTLT,2,80,LEFT),
+    INSTR_ENT(GTGT,OP_SRA,s_GTGT,2,80,LEFT),
+    INSTR_ENT(LT,OP_LT,s_LT,2,70,LEFT),
+    INSTR_ENT(LTEQ,OP_LTE,s_LTEQ,2,70,LEFT),
+    INSTR_ENT(GT,OP_GT,s_GT,2,70,LEFT),
+    INSTR_ENT(GTEQ,OP_GTE,s_GTEQ,2,70,LEFT),
+    INSTR_ENT(EQEQ,OP_EQEQ,s_EQEQ,2,60,LEFT),
+    INSTR_ENT(NEQ,OP_NEQ,s_NEQ,2,60,LEFT),
+    INSTR_ENT(AMP,OP_BAND,s_AMP,2,50,LEFT),
+    INSTR_ENT(CIRC,OP_BXOR,s_CIRC,2,40,LEFT),
+    INSTR_ENT(BAR,OP_BOR,s_BAR,2,30,LEFT),
+    INSTR_ENT(AMPAMP,OP_AND,s_AMPAMP,2,20,LEFT),
+    INSTR_ENT(BARBAR,OP_OR,s_BARBAR,2,10,LEFT),
+    INSTR_ENT(EQ,OP_EQ,s_EQ,2,5,RIGHT),
+    INSTR_ENT(COMMA,OP_COMMA,s_COMMA,2,2,RIGHT),
+    INSTR_ENT(QUEST,OP_RULE,s_QUEST,-1,-1,NO),
 
-    INSTR_ENT(NEXT,OP_NEXT, "next",-1,-1,NO),    
+    INSTR_ENT(NEXT,OP_NEXT,s_next,-1,-1,NO),    
 
     // OP_ENTER: y=<num-instr>, z=DECL:module-index
-    INSTR_ENT(ENTER,OP_ENTER,"enter",-1,-1,NO),
+    INSTR_ENT(ENTER,OP_ENTER,s_enter,-1,-1,NO),
     // OP_ENTER: y=<num-instr>, z=DECL:module-index
-    INSTR_ENT(LEAVE,OP_LEAVE,"leave",-1,-1,NO),
+    INSTR_ENT(LEAVE,OP_LEAVE,s_leave,-1,-1,NO),
     // OP_NEW: y=INSTR:enter-index, z=DECL:mod-index
-    INSTR_ENT(NEW,OP_NEW,"new",-1,-1,NO),
+    INSTR_ENT(NEW,OP_NEW,s_new,-1,-1,NO),
     // functions are now looked up via csp_lookup_func() + csp_builtin_funcs[]
-    INSTR_ENT(CALL,OP_CALL,"call",-1,-1,NO),
-    INSTR_ENT(LD,OP_LD,"ld",-1,-1,NO),
-    INSTR_ENT(ST,OP_ST,"st",-1,-1,NO),
-    INSTR_ENT(LDI,OP_LI,"li",-1,-1,NO),
-    INSTR_ENT(ARG,OP_ARG,"arg",-1,-1,NO),
-    INSTR_ENT(CVTIF,OP_CVTIF,"cvtif",-1,-1,NO),
-    INSTR_ENT(CVTIF,OP_CVTFI,"cvtfi",-1,-1,NO),    
+    INSTR_ENT(CALL,OP_CALL,s_call,-1,-1,NO),
+    INSTR_ENT(LD,OP_LD,s_ld,-1,-1,NO),
+    INSTR_ENT(ST,OP_ST,s_st,-1,-1,NO),
+    INSTR_ENT(LDI,OP_LI,s_li,-1,-1,NO),
+    INSTR_ENT(ARG,OP_ARG,s_arg,-1,-1,NO),
+    INSTR_ENT(CVTIF,OP_CVTIF,s_cvtif,-1,-1,NO),
+    INSTR_ENT(CVTIF,OP_CVTFI,s_cvtfi,-1,-1,NO),    
     
-
     // keywords
-    TOK_ENT(PULLUP,OP_NOP,"pullup"),
-    TOK_ENT(PULLDOWN,OP_NOP,"pulldown"),
-    TOK_ENT(RESOLUTION,OP_NOP,"resolution"),
-    TOK_ENT(IN,OP_NOP,"in"),
-    TOK_ENT(OUT,OP_NOP,"out"),
-    TOK_ENT(INOUT,OP_NOP,"inout"),
-    TOK_ENT(PWM,OP_NOP,"pwm"),
-    TOK_ENT(FLOAT,OP_NOP,"float"),
-    TOK_ENT(INTEGER,OP_NOP,"integer"),
-    TOK_ENT(UNSIGNED,OP_NOP,"unsigned"),
-    TOK_ENT(STRING,OP_NOP,"string"),
-    TOK_ENT(LITTLE,OP_NOP,"little"),
-    TOK_ENT(BIG,OP_NOP,"big"),    
+    TOK_ENT(PULLUP,OP_NOP,s_pullup),
+    TOK_ENT(PULLDOWN,OP_NOP,s_pulldown),
+    TOK_ENT(RESOLUTION,OP_NOP,s_resolution),
+    TOK_ENT(IN,OP_NOP,s_in),
+    TOK_ENT(OUT,OP_NOP,s_out),
+    TOK_ENT(INOUT,OP_NOP,s_inout),
+    TOK_ENT(PWM,OP_NOP,s_pwm),
+    TOK_ENT(FLOAT,OP_NOP,s_float),
+    TOK_ENT(INTEGER,OP_NOP,s_integer),
+    TOK_ENT(UNSIGNED,OP_NOP,s_unsigned),
+    TOK_ENT(STRING,OP_NOP,s_string),
+    TOK_ENT(LITTLE,OP_NOP,s_little),
+    TOK_ENT(BIG,OP_NOP,s_big),
     
     // tokens
-    TOK_ENT(LP,OP_NOP,"("),
-    TOK_ENT(RP,OP_NOP,")"),
-    TOK_ENT(HASH,OP_NOP,"#"),
-    TOK_ENT(DOT,OP_NOP,"."),
-    TOK_ENT(COLON,OP_NOP,":"),
-    TOK_ENT(LB,OP_NOP,"["),
-    TOK_ENT(RB,OP_NOP,"]"),
-    TOK_ENT(INT,OP_NOP,""),
-    TOK_ENT(FLT,OP_NOP,""),
-    TOK_ENT(WORD,OP_NOP,""),
-    TOK_ENT(NEWLINE,OP_NOP,"\n"),
+    TOK_ENT(LP,OP_NOP,s_LP),
+    TOK_ENT(RP,OP_NOP,s_RP),
+    TOK_ENT(HASH,OP_NOP,s_HASH),
+    TOK_ENT(DOT,OP_NOP,s_DOT),
+    TOK_ENT(COLON,OP_NOP,s_COLON),
+    TOK_ENT(LB,OP_NOP,s_LB),
+    TOK_ENT(RB,OP_NOP,s_RB),
+    TOK_ENT(INT,OP_NOP,s_null),
+    TOK_ENT(FLT,OP_NOP,s_null),
+    TOK_ENT(WORD,OP_NOP,s_null),
+    TOK_ENT(NEWLINE,OP_NOP,s_null),
     // eot
-    TOK_ENT(LAST,OP_NOP,"<last>")
+    TOK_ENT(LAST,OP_NOP,s_null)
 };
 
 
@@ -311,15 +374,8 @@ MAKE_IFF(FEQEQ);
 MAKE_IFF(FNEQ);
 
 
-typedef struct {
-    char*   name;
-    int     arity;
-    vtype_t  rtype;
-    vtype_t  type[4];
-} op_info_t;
-
 // opcode => opcode type info
-static const op_info_t info_tab[] = {
+static const op_info_t info_tab[] RODATA = {
     [OP_ADD] = {"ADD",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
     [OP_SUB] = {"SUB",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
     [OP_MUL] = {"MUL",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
@@ -379,64 +435,95 @@ static const op_info_t info_tab[] = {
     [OP_NOP] = {"NOP",0,V_VOID,{}},    
     
 };
-typedef value_t (*eval0_fn)();
-typedef value_t (*eval1_fn)(value_t y);
-typedef value_t (*eval2_fn)(value_t y, value_t z);
 
-const eval0_fn eval_tab0[] =
+static NOINLINE value_t eval0(opcode_t op)
 {
-};
+    switch(op) {
+    default: {
+	value_t x = {.i = 0 };
+	// emit error signal somehow ?
+	return x;
+    }
+    }
+}
 
-const eval1_fn eval_tab1[] =
+static NOINLINE value_t eval1(opcode_t op, value_t y)
 {
-    [OP_BNOT]  = f_BNOT,
-    [OP_NEG]   = f_NEG,
-    [OP_POS]   = f_POS,
-    [OP_NOT]   = f_NOT,
-    [OP_CVTIF] = f_CVTIF,
-    [OP_CVTFI] = f_CVTFI,
-    [OP_FNEG]   = f_FNEG,    
-};
+    switch(op) {
+    case OP_BNOT: return f_BNOT(y);
+    case OP_NEG:  return f_NEG(y);
+    case OP_POS:  return f_POS(y);
+    case OP_NOT:  return f_NOT(y);
+    case OP_CVTIF: return f_CVTIF(y);
+    case OP_CVTFI: return f_CVTFI(y);
+    case OP_FNEG:  return f_FNEG(y);
+    default: {
+	value_t x = {.i = 0 };
+	// emit error signal somehow ?
+	return x;
+    }
+    }
+}
 
-const eval2_fn eval_tab2[] =
+static NOINLINE value_t eval2(opcode_t op, value_t y, value_t z)
 {
-    [OP_ADD] = f_ADD,
-    [OP_SUB] = f_SUB,
-    [OP_MUL] = f_MUL,
-    [OP_DIV] = f_DIV,
-    [OP_REM] = f_REM,
-    [OP_SLA] = f_SLA,
-    [OP_SRA] = f_SRA,
-    [OP_BAND] = f_BAND,
-    [OP_BOR] = f_BOR,
-    [OP_BXOR] = f_BXOR,
-    [OP_AND] = f_AND,
-    [OP_OR] = f_OR,
-    [OP_LT] = f_LT,
-    [OP_LTE] = f_LTE,
-    [OP_GT] = f_GT,
-    [OP_GTE] = f_GTE,
-    [OP_EQEQ] = f_EQEQ,
-    [OP_NEQ] = f_NEQ,
+    switch(op) {
+    case OP_ADD: return f_ADD(y, z);
+    case OP_SUB: return f_SUB(y, z);
+    case OP_MUL: return f_MUL(y, z);
+    case OP_DIV: return f_DIV(y, z);
+    case OP_REM: return f_REM(y, z);
+    case OP_SLA: return f_SLA(y, z);
+    case OP_SRA: return f_SRA(y, z);
+    case OP_BAND: return f_BAND(y, z);
+    case OP_BOR: return f_BOR(y, z);
+    case OP_BXOR: return f_BXOR(y, z);
+    case OP_AND: return f_AND(y, z);
+    case OP_OR: return f_OR(y, z);
+    case OP_LT: return f_LT(y, z);
+    case OP_LTE: return f_LTE(y, z);
+    case OP_GT: return f_GT(y, z);
+    case OP_GTE: return f_GTE(y, z);
+    case OP_EQEQ: return f_EQEQ(y, z);
+    case OP_NEQ: return f_NEQ(y, z);
 
-    [OP_FADD] = f_FADD,
-    [OP_FSUB] = f_FSUB,
-    [OP_FMUL] = f_FMUL,
-    [OP_FDIV] = f_FDIV,
+    case OP_FADD: return f_FADD(y, z);
+    case OP_FSUB: return f_FSUB(y, z);
+    case OP_FMUL: return f_FMUL(y, z);
+    case OP_FDIV: return f_FDIV(y, z);
 
-    [OP_FLT] = f_FLT,
-    [OP_FLTE] = f_FLTE,
-    [OP_FGT] = f_FGT,
-    [OP_FGTE] = f_FGTE,
-    [OP_FEQEQ] = f_FEQEQ,
-    [OP_FNEQ] = f_FNEQ,    
+    case OP_FLT: return f_FLT(y, z);
+    case OP_FLTE: return f_FLTE(y, z);
+    case OP_FGT: return f_FGT(y, z);
+    case OP_FGTE: return f_FGTE(y, z);
+    case OP_FEQEQ: return f_FEQEQ(y, z);
+    case OP_FNEQ: return f_FNEQ(y, z);    
     
-    [OP_COMMA] = f_COMMA,
-};
+    case OP_COMMA: return f_COMMA(y, z);
+    default: {
+	value_t x = {.i = 0 };
+	// emit error signal somehow ?
+	return x;
+    }
+    }
+}
 
-vtype_t csp_opcode_type(opcode_t op)
+uint8_t csp_opcode_rtype(opcode_t op)
 {
+#if defined(__AVR__)
+    return pgm_read_byte(&info_tab[op].rtype);
+#else
     return info_tab[op].rtype;
+#endif
+}
+
+uint8_t csp_opcode_arity(opcode_t op)
+{
+#if defined(__AVR__)    
+    return pgm_read_byte(&info_tab[op].arity);
+#else
+    return info_tab[op].arity;
+#endif    
 }
 
 const char* csp_op_name(opcode_t op)
@@ -609,24 +696,55 @@ static value_t fn_cycle(csp_rt_t* st,uint16_t type,value_t* args, uint8_t nargs)
     return ret;
 }
 
+static const char s_min[] RODATA = "min";
+static const char s_max[] RODATA = "max";
+static const char s_abs[] RODATA = "abs";
+static const char s_fabs[] RODATA = "fabs";
+static const char s_sign[] RODATA = "sign";
+static const char s_clip[] RODATA = "clip";
+static const char s_timeout[] RODATA = "timeout";
+static const char s_print[] RODATA = "print";
+static const char s_println[] RODATA = "println";
+static const char s_tick[] RODATA = "tick";
+static const char s_cycle[] RODATA = "cycle";
+
+#define CSP_FUNC_ENT(str, a, rt, at1,at2,at3,at4, f)	\
+    {.name=(str),.namelen=sizeof((str))-1,.arity=(a),	\
+	 .rtype=(rt),.argtypes={at1,at2,at3,at4},.fn=(f)}
+
 // Built-in function table
 // { name, namelen, nargs, rtype, {argtypes}, fn }
-const csp_func_t csp_builtin_funcs[] = {
-    { "",        0, 0, V_VOID,    {0,0,0,0},                         NULL },
-    { "min",     3, 2, V_INTEGER, {V_INTEGER,V_INTEGER,0,0},      fn_min },
-    { "max",     3, 2, V_INTEGER, {V_INTEGER,V_INTEGER,0,0},      fn_max },
-    { "abs",     3, 1, V_INTEGER, {V_INTEGER,0,0,0},              fn_abs },
-    { "fabs",    4, 1, V_FLOAT,   {V_FLOAT,0,0,0},                fn_fabs },
-    { "sign",    4, 1, V_INTEGER, {V_NUMBER,0,0,0},               fn_sign },
-    { "clip",    4, 3, V_INTEGER, {V_INTEGER,V_INTEGER,V_INTEGER,0}, fn_clip},
-    { "timeout", 7, 1, V_INTEGER, {V_INDEX,0,0,0},                fn_timeout },
-    { "print",   5, 1, V_INTEGER, {V_ANY,0,0,0},                  fn_print },
-    { "println", 7, 1, V_INTEGER, {V_ANY,0,0,0},                  fn_println },
-    { "tick",    4, 0, V_INTEGER, {0,0,0,0},                      fn_tick },
-    { "cycle",   5, 0, V_INTEGER, {0,0,0,0},                      fn_cycle },
+const csp_func_t csp_builtin_funcs[] RODATA = {
+    CSP_FUNC_ENT("",        0, V_VOID,    0,0,0,0, NULL ),
+    CSP_FUNC_ENT(s_min,     2, V_INTEGER, V_INTEGER,V_INTEGER,0,0,  fn_min ),
+    CSP_FUNC_ENT(s_max,     2, V_INTEGER, V_INTEGER,V_INTEGER,0,0,  fn_max ),
+    CSP_FUNC_ENT(s_abs,     1, V_INTEGER, V_INTEGER,0,0,0,     fn_abs ),
+    CSP_FUNC_ENT(s_fabs,    1, V_FLOAT,   V_FLOAT,0,0,0,       fn_fabs ),
+    CSP_FUNC_ENT(s_sign,    1, V_INTEGER, V_NUMBER,0,0,0,      fn_sign ),
+    CSP_FUNC_ENT(s_clip,    3, V_INTEGER, V_INTEGER,V_INTEGER,V_INTEGER,0, fn_clip),
+    CSP_FUNC_ENT(s_timeout, 1, V_INTEGER, V_INDEX,0,0,0,       fn_timeout),
+    CSP_FUNC_ENT(s_print,   1, V_INTEGER, V_ANY,0,0,0,         fn_print),
+    CSP_FUNC_ENT(s_println, 1, V_INTEGER, V_ANY,0,0,0,         fn_println),
+    CSP_FUNC_ENT(s_tick,    0, V_INTEGER, 0,0,0,0,             fn_tick),
+    CSP_FUNC_ENT(s_cycle,   0, V_INTEGER, 0,0,0,0,             fn_cycle),
 };
 
 const uint8_t csp_num_builtin_funcs = sizeof(csp_builtin_funcs)/sizeof(csp_builtin_funcs[0]);
+
+static uint8_t func_arity(int i)
+{
+    return RD_BYTE(&csp_builtin_funcs[i].arity);
+}
+
+static uint8_t func_namelen(int i)
+{
+    return RD_BYTE(&csp_builtin_funcs[i].namelen);
+}
+
+static csp_func_fn func_fn(int i)
+{
+    return (csp_func_fn) RD_PTR(&csp_builtin_funcs[i].fn);
+}
 
 // Lookup function by name - returns builtin index (positive) or user index (negative-1)
 // Returns 0 if not found
@@ -644,41 +762,51 @@ int csp_lookup_func(csp_rt_t* st, const char* name, uint8_t namelen)
     }
     // Check builtin functions
     for (i = 1; i < csp_num_builtin_funcs; i++) {
-	if (csp_builtin_funcs[i].namelen == namelen &&
-	    memcmp(csp_builtin_funcs[i].name, name, namelen) == 0) {
-	    return i;  // positive = builtin function
+	uint8_t ronamelen = func_namelen(i);
+	if (ronamelen == namelen) {
+	    const char* roname = RD_PTR(&csp_builtin_funcs[i].name); 
+	    if (MEMCMP_RD(name, roname, namelen) == 0)
+		return i;  // positive = builtin function
 	}
     }
     return 0;  // not found
 }
 
 
-
-int find_op_entry(char* name, int name_len)
+int find_op_entry(const char* name, int namelen)
 {
     int i = 0;
-    while(op_table[i].tok != LAST) {
-	if ((op_table[i].name_len == name_len) &&
-	    (memcmp(op_table[i].name, name, name_len) == 0))
-	    return i;
-	i++;
+    uint8_t n = sizeof(op_table)/sizeof(op_table[0])-1;
+    for (i = 0; i < n; i++) {
+	uint8_t ronamelen = RD_BYTE(&op_table[i].namelen);
+	if (ronamelen == namelen) {
+	    const char* roname = RD_PTR(&op_table[i].name);
+	    if (MEMCMP_RD(name, roname, ronamelen) == 0)
+		return i;
+	}
     }
     return -1;
 }
 
-static inline int arity(tok_t t)
+static inline int8_t op_table_tok(tok_t t)
 {
-    return op_table[t].arity;
+    return RD_BYTE(&op_table[t].tok);
 }
 
-static inline int prec(tok_t t)
+
+static inline int8_t arity(tok_t t)
 {
-    return op_table[t].prec;
+    return RD_BYTE(&op_table[t].arity);
 }
 
-static inline int assoc(tok_t t)
+static inline int8_t prec(tok_t t)
 {
-    return op_table[t].assoc;
+    return RD_BYTE(&op_table[t].prec);
+}
+
+static inline int8_t assoc(tok_t t)
+{
+    return RD_BYTE(&op_table[t].assoc);
 }
 
 // enq all rules that depend on declaration x
@@ -802,19 +930,26 @@ again:
 	// z: argument (0/1 arg) or OP_COMMA instruction (2+ args)
 	index_t idx = st->instr[n].f.idx;
 	const csp_func_t* func = NULL;
+	uint8_t arity;
+	csp_func_fn fn;
 	
 	// Get function pointer
 	if (st->instr[n].f.usr) {
-	    if (st->ufuncs && (idx < st->num_ufuncs))
+	    if (st->ufuncs && (idx < st->num_ufuncs)) {
 		func = &st->ufuncs[idx];
+		arity = func->arity;
+		fn = func->fn;
+	    }
 	}
 	else {
-	    if (idx < csp_num_builtin_funcs)
+	    if (idx < csp_num_builtin_funcs) {
 		func = &csp_builtin_funcs[idx];
+		arity = func_arity(idx);
+		fn = func_fn(idx);
+	    }
 	}
-	if (func && func->fn) {
-	    value_t val = func->fn(st, st->instr[n].f.avt,
-				    st->arg, func->nargs);
+	if (func && fn) {
+	    value_t val = fn(st, st->instr[n].f.avt, st->arg, arity);
 	    st->reg[st->instr[n].f.x] = val;
 	}
 	break;
@@ -822,18 +957,18 @@ again:
     default: {
 	value_t xv, yv, zv;
 	
-	switch(info_tab[op].arity) {
+	switch(csp_opcode_arity(op)) {
 	case 0:
-	    xv = eval_tab0[op]();
+	    xv = eval0(op);
 	    break;
 	case 1:
 	    yv = st->reg[st->instr[n].a.y];
-	    xv = eval_tab1[op](yv);
+	    xv = eval1(op, yv);
 	    break;
 	case 2:
 	    yv = st->reg[st->instr[n].a.y];
 	    zv = st->reg[st->instr[n].a.z];
-	    xv = eval_tab2[op](yv,zv);
+	    xv = eval2(op, yv, zv); //eval_tab2[op](yv,zv);
 	    break;	    
 	}
 	st->reg[st->instr[n].a.x] = xv;
@@ -1742,7 +1877,7 @@ NOINLINE static int push_reg(rentry_t* rstack, int ep, reg_t r, vtype_t vt)
 }
 
 // Convert operand to float (int→float via cvtif)
-static int coerce_to_float(csp_rt_t* st, rentry_t* e)
+NOINLINE static int coerce_to_float(csp_rt_t* st, rentry_t* e)
 {
     rentry_t ent = *e;
 
@@ -1775,7 +1910,7 @@ static int coerce_to_float(csp_rt_t* st, rentry_t* e)
 }
 
 // Convert operand to int (float→int via cvtfi)
-static int coerce_to_int(csp_rt_t* st, rentry_t* e)
+NOINLINE static int coerce_to_int(csp_rt_t* st, rentry_t* e)
 {
     rentry_t ent = *e;
 
@@ -1810,7 +1945,7 @@ static int coerce_to_int(csp_rt_t* st, rentry_t* e)
 
 // Process binary assignment operator: generates ST instruction
 // Returns new ep on success, -1 on error
-static int process_assign(csp_rt_t* st, rentry_t* rstack, int ep)
+NOINLINE static int process_assign(csp_rt_t* st, rentry_t* rstack, int ep)
 {
     rentry_t lhs = rstack[ep-2];
     rentry_t rhs = rstack[ep-1];
@@ -1861,7 +1996,7 @@ static int process_assign(csp_rt_t* st, rentry_t* rstack, int ep)
 }
 
 // Get float version of arithmetic opcode (or same if no float version)
-static opcode_t float_op(opcode_t op)
+NOINLINE static opcode_t float_op(opcode_t op)
 {
     switch(op) {
     case OP_ADD: return OP_FADD;
@@ -1880,7 +2015,7 @@ static opcode_t float_op(opcode_t op)
 }
 
     
-static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep)
+NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep)
 {
     int dst;
     opcode_t op;
@@ -1916,7 +2051,7 @@ static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep)
 	    } else {
 		op = op_table[tok].code;
 	    }
-	    rt = info_tab[op].rtype;
+	    rt = csp_opcode_rtype(op);
 #ifdef DEBUG
 	    printf("op=%s\n", info_tab[op].name);
 	    print_rentry(st, "L", a);
@@ -1925,9 +2060,9 @@ static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep)
 #endif
 	    //
 	    if ((!st->ap || ( !a->X && !b->X ))
-		 && a->I && b->I && eval_tab2[op]) {
+		&& a->I && b->I && (csp_opcode_arity(op) == 2)) {
 		// constant fold
-		value_t result = eval_tab2[op](a->val, b->val);
+		value_t result = eval2(op, a->val, b->val);
 		if (a->L) free_reg(st, a->reg);
 		if (b->L) free_reg(st, b->reg);
 		a->X = a->L = 0;
@@ -1967,15 +2102,15 @@ static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep)
 	} else {
 	    op = op_table[tok].code;
 	}
-	rt = info_tab[op].rtype;
+	rt = csp_opcode_rtype(op);
 
 #ifdef DEBUG
 	printf("op=%s\n", info_tab[op].name);
 	print_rentry(st, "A", a);
 	printf("\n");
 #endif	
-	if (!a->X && a->I && eval_tab1[op]) { // constant fold
-	    value_t result = eval_tab1[op](a->val);
+	if (!a->X && a->I && (csp_opcode_arity(op) == 1)) { // constant fold
+	    value_t result = eval1(op, a->val);
 	    if (a->L) free_reg(st, a->reg);
 	    a->val = result;
 	    a->X = a->L = 0;
@@ -2006,8 +2141,8 @@ static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep)
     return ep;
 }
 
-static int process_fcall(csp_rt_t* st, int func_idx, int is_user,
-			 rentry_t* rstack, int ep)
+NOINLINE static int process_fcall(csp_rt_t* st, int func_idx, int is_user,
+				  rentry_t* rstack, int ep)
 {
     int dst, n, j;
     const csp_func_t* func = NULL;
@@ -2022,7 +2157,7 @@ static int process_fcall(csp_rt_t* st, int func_idx, int is_user,
     }
     if (!func || !func->fn)
 	return -1;
-    n = func->nargs;
+    n = func->arity;
     for (j = 0; j < n; j++) {
 	rentry_t arg = rstack[ep-(n-j)];
 	vtype_t argvt = arg.vt;

@@ -575,10 +575,10 @@ void csp_dump_tokens(FILE* f, token_t* tv, int n)
 		fprintf(f,"'%.*s',", tv[i].v.str.len, tv[i].v.str.ptr);
 	    break;
 	default:
-	    if (maybe_unquoted_atom((char*)op_table[tv[i].t].name, op_table[tv[i].t].name_len))
-		fprintf(f,"%.*s,", op_table[tv[i].t].name_len, op_table[tv[i].t].name);
+	    if (maybe_unquoted_atom((char*)op_table[tv[i].t].name, op_table[tv[i].t].namelen))
+		fprintf(f,"%.*s,", op_table[tv[i].t].namelen, op_table[tv[i].t].name);
 	    else
-		fprintf(f,"'%.*s',", op_table[tv[i].t].name_len, op_table[tv[i].t].name);
+		fprintf(f,"'%.*s',", op_table[tv[i].t].namelen, op_table[tv[i].t].name);
 	    break;
 	}
     }

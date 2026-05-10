@@ -603,6 +603,9 @@ void print_defines()
 
     printf("sizeof(value_t) = %ld\n", sizeof(value_t));
     printf("sizeof(rentry_t) = %ld\n", sizeof(rentry_t));
+    printf("sizeof(op_entry_t) = %ld\n", sizeof(op_entry_t));
+    printf("sizeof(op_info_t) = %ld\n", sizeof(op_info_t));
+    printf("sizeof(csp_func_t) = %ld\n", sizeof(csp_func_t));    
     
     printf("sizeof(csp_decl_t) = %ld\n", sizeof(csp_decl_t));
     printf("sizeof(csp_module_t) = %ld\n", sizeof(csp_module_t));

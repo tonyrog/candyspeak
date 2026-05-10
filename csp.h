@@ -25,14 +25,28 @@ EXTERN_C_BEGIN
 typedef uint16_t index_t;  // sizeof type >= INDEX_BITS
 typedef uint8_t  reg_t;    // at most 256 registers
 
-#define OBJ_BITS     4    // (2^OBJ_BITS-2) (14)
-#define DECL_BITS    10
+
 #if defined(__AVR__)
+#include <avr/pgmspace.h>
+#define RODATA          PROGMEM
+#define RD_BYTE(p)      pgm_read_byte(p)
+#define RD_PTR(p)       (void *)pgm_read_word(p)
+#define MEMCMP_RD(a,b,n) memcmp_P(a, b, n)
+#define STR_RD(d,s)     strcpy_P(d, s)
+#define DECL_BITS    5
 #define INSTR_BITS   5
-#define MAX_DECLS    32
+#define OBJ_BITS     3
+#define STRING_BITS  7
 #else
+#define RODATA
+#define RD_BYTE(p)      (*(p))
+#define RD_PTR(p)       (*(p))
+#define MEMCMP_RD(a,b,n) memcmp(a, b, n)
+#define STR_RD(d,s)     strcpy(d, s)
+#define DECL_BITS    10
 #define INSTR_BITS   9
-#define MAX_DECLS    128 // (less than MAX_INDICES keep power of 2!!
+#define OBJ_BITS     4
+#define STRING_BITS  9
 #endif
 #define INDEX_BITS   (OBJ_BITS+DECL_BITS)
 #define REG_BITS     4
@@ -41,6 +55,7 @@ typedef uint8_t  reg_t;    // at most 256 registers
 #define MAX_INDICES  (1 << INDEX_BITS)
 #define MAX_REGS     (1 << REG_BITS)
 #define MAX_INSTRS   (1 << INSTR_BITS)
+#define MAX_DECLS    (1 << DECL_BITS)
 #define MAX_INPUTS   32  // <= then MAX_DECLS
 #define MAX_OUTPUTS  32  // <= then MAX_DECLS
 #define MAX_TIMERS   16  // <= then MAX_DECLS
@@ -49,7 +64,6 @@ typedef uint8_t  reg_t;    // at most 256 registers
 #define MAX_QUEUE    (MAX_INSTRS)
 #define MAX_INDEX    (MAX_INSTRS+1)
 #define MAX_STACK_DEPTH 4
-#define STRING_BITS  9
 #define NAME_BITS    5
 #define MAX_STR_BUF  (1 << STRING_BITS) // total number of char in var names
 #define MAX_NAME_LEN 8     // max var name len
@@ -218,12 +232,6 @@ typedef enum {
     LAST,
 } tok_t;
 
-typedef enum {
-    TOKT_DECL,
-    TOKT_INSTR,
-    TOKT_TOKEN
-} tok_type_t;
-
 typedef union
 {
     struct {
@@ -300,18 +308,6 @@ typedef enum {
     OP_LAST,
 } opcode_t;
 
-typedef struct
-{
-    tok_t  tok;
-    tok_type_t ttype;
-    int8_t code;
-    const char* name;
-    uint8_t name_len;
-    int8_t arity;
-    int8_t prec;
-    int8_t assoc;
-} op_entry_t;
-
 
 // Forward declarations
 struct _csp_rt_t;
@@ -338,9 +334,9 @@ typedef enum {
 #define DECL_TYPE(s,i) ((s)->decl[(i)].type)
 //#define IS_QVAR(s,i)   (DECL_TYPE((s),(i))==DECL_VARIABLE)
 #define IS_CONST(s,i)  (DECL_TYPE((s),(i))==DECL_CONSTANT)
-#define IS_MODULE(s,i) (DECL_TYPE((s),(i))==DECL_MODULE)
-#define IS_OBJECT(s,i) (DECL_TYPE((s),(i))==DECL_OBJECT)
-#define IS_END(s,i)    (DECL_TYPE((s),(i))==DECL_END)
+//#define IS_MODULE(s,i) (DECL_TYPE((s),(i))==DECL_MODULE)
+//#define IS_OBJECT(s,i) (DECL_TYPE((s),(i))==DECL_OBJECT)
+//#define IS_END(s,i)    (DECL_TYPE((s),(i))==DECL_END)
 #define IS_CAN(s,i)    (DECL_TYPE((s),(i))==DECL_CAN)
 
 #define MAKE_RES(r) ((r)-1)
@@ -352,6 +348,24 @@ typedef enum {
 #define NOTIMEOUT 0xffffffff
 
 #define PACKED __attribute__((packed))
+
+typedef struct PACKED {
+    const char* name;  // token name
+    uint8_t namelen;
+    uint8_t  tok;
+    int8_t   code;
+    int8_t   arity;
+    int8_t   prec;
+    int8_t   assoc;
+} op_entry_t;
+
+typedef struct PACKED {
+    const char* name;  // opcode name
+    uint8_t arity;     // number of args
+    uint8_t rtype;     // return type
+    uint8_t type[4];
+} op_info_t;
+
 
 typedef struct PACKED {
     index_t n;          // number of nodes in module definition
@@ -531,12 +545,12 @@ typedef int (*csp_const_fn)(struct _csp_rt_t* st, const char* name, int len,
 			    value_t*, vtype_t*);
 
 // Function table entry
-typedef struct {
+typedef struct PACKED {
     const char* name;
     uint8_t namelen;
-    uint8_t nargs;              // number of arguments (0-4)
-    vtype_t rtype;              // return type
-    vtype_t argtypes[MAX_ARGS]; // argument types (V_INTEGER, V_INDEX, etc)
+    uint8_t arity;              // number of arguments (0-4)
+    uint8_t rtype;              // return type
+    uint8_t argtypes[MAX_ARGS]; // argument types (V_INTEGER, V_INDEX, etc)
     csp_func_fn fn;             // function to call
 } csp_func_t;
 
@@ -569,7 +583,7 @@ typedef struct _csp_rt_t
     int8_t  anyd;  // CSP_TRUE|CSP_FALSE
     bitset_decl(dset, MAX_INDEX); // mark decl updated during cycle
     
-    char    str[MAX_STR_BUF];      // store variable names    
+    char    str[MAX_STR_BUF];      // store variable names
     index_t offs[MAX_OBJECTS];     // offset to object locals
     // stack used during eval
     int esp;                       // eval stack pointer
@@ -751,7 +765,7 @@ extern int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val);
 
 const char* csp_op_name(opcode_t op);
 extern tok_t csp_opcode_to_tok(opcode_t opcode);
-extern vtype_t csp_opcode_type(opcode_t opcode);
+extern uint8_t csp_opcode_rtype(opcode_t opcode);
 extern void csp_set_error(csp_rt_t*, csp_err_t);
 extern void csp_clr_error(csp_rt_t*);
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
