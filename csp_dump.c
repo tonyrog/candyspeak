@@ -226,7 +226,7 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     default:
 	fprintf(f, "{instr,%d,'%s',[r%d,r%d,r%d]}%s\n",
 		i,
-		csp_op_name(st->instr[i].op),
+		csp_opcode_name(st->instr[i].op),
 		st->instr[i].a.x,
 		st->instr[i].a.y,
 		st->instr[i].a.z,
@@ -712,7 +712,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
     fprintf(f, "const csp_instr_t rom_instr[] = {\n");
     for (i = 0; i < st->ps.nn; i++) {
 	csp_instr_t* ip = &st->instr[i];
-	fprintf(f, "  {.op=OP_%s,", csp_op_name(ip->op));
+	fprintf(f, "  {.op=OP_%s,", csp_opcode_name(ip->op));
 	switch(ip->op) {
 	    // FIXME: OP_ENTER/OP_LEAVE could share format?
 	case OP_ENTER:

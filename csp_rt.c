@@ -373,66 +373,120 @@ MAKE_IFF(FGTE);
 MAKE_IFF(FEQEQ);
 MAKE_IFF(FNEQ);
 
+static const char s_ADD[] RODATA = "ADD";
+static const char s_SUB[] RODATA = "SUB";
+static const char s_MUL[] RODATA = "MUL";
+static const char s_DIV[] RODATA = "DIV";
+static const char s_REM[] RODATA = "REM";
+static const char s_SLA[] RODATA = "SLA";
+static const char s_SRA[] RODATA = "SRA";
+static const char s_BAND[] RODATA = "BAND";
+static const char s_BOR[] RODATA = "BOR";
+static const char s_BXOR[] RODATA = "BXOR";
+static const char s_AND[] RODATA = "AND";
+static const char s_OR[] RODATA = "OR";
+static const char s_ASSIGN[] RODATA = "ASSIGN";
+static const char ss_LT[] RODATA = "LT";
+static const char ss_LTE[] RODATA = "LTE";
+static const char ss_GT[] RODATA = "GT";
+static const char ss_GTE[] RODATA = "GTE";
+static const char ss_EQ[] RODATA = "EQ";
+static const char ss_NEQ[] RODATA = "NEQ";
+static const char s_BNOT[] RODATA = "BNOT";
+static const char s_NEG[] RODATA = "NEG";
+static const char s_POS[] RODATA = "POS";
+static const char s_NOT[] RODATA = "NOT";
+static const char s_CVTIF[] RODATA = "CVTIF";
+static const char s_CVTFI[] RODATA = "CVTFI";
+
+static const char s_FADD[] RODATA = "FADD";
+static const char s_FSUB[] RODATA = "FSUB";
+static const char s_FMUL[] RODATA = "FMUL";
+static const char s_FDIV[] RODATA = "FDIV";
+static const char s_FNEG[] RODATA = "FNEG";
+
+static const char s_FLT[] RODATA = "FLT";
+static const char s_FLTE[] RODATA = "FLTE";
+static const char s_FGT[] RODATA = "FGT";
+static const char s_FGTE[] RODATA = "FGTE";
+static const char s_FEQ[] RODATA = "FEQ";
+static const char s_FNEQ[] RODATA = "FNEQ";
+
+static const char ss_COMMA[] RODATA = "COMMA";
+
+static const char s_ENTER[] RODATA = "ENTER";
+static const char s_LEAVE[] RODATA = "LEAVE";
+static const char s_NEW[] RODATA = "NEW";
+static const char s_LI[] RODATA = "LI";
+static const char s_LIU[] RODATA = "LIU";
+static const char s_LIH[] RODATA = "LIH";
+static const char s_ARG[] RODATA = "ARG";
+static const char s_ST[] RODATA = "ST";
+static const char s_LD[] RODATA = "LD";
+static const char s_CALL[] RODATA = "CALL";
+static const char s_RULE[] RODATA = "RULE";
+static const char s_NEXT[] RODATA = "NEXT";
+static const char s_NOP[] RODATA = "NOP";
 
 // opcode => opcode type info
 static const op_info_t info_tab[] RODATA = {
-    [OP_ADD] = {"ADD",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_SUB] = {"SUB",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_MUL] = {"MUL",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_DIV] = {"DIV",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_REM] = {"REM",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_SLA] = {"SLA",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_SRA] = {"SRA",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_BAND] = {"BAND",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_BOR] = {"BOR",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_BXOR] = {"BXOR",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_AND] = {"AND",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_OR] = {"OR",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_EQ] = {"ASSIGN",2,V_INTEGER,{V_INDEX,V_INTEGER}},
-    [OP_LT] = {"LT",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_LTE] = {"LTE",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_GT] = {"GT",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_GTE] = {"GTE",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_EQEQ] = {"EQ",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_NEQ] = {"NEQ",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_ADD] = {s_ADD,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_SUB] = {s_SUB,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_MUL] = {s_MUL,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_DIV] = {s_DIV,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_REM] = {s_REM,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_SLA] = {s_SLA,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_SRA] = {s_SRA,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_BAND] = {s_BAND,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_BOR] = {s_BOR,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_BXOR] = {s_BXOR,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_AND] = {s_AND,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_OR] = {s_OR,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_EQ] = {s_ASSIGN,2,V_INTEGER,{V_INDEX,V_INTEGER}},
+    [OP_LT] = {ss_LT,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_LTE] = {ss_LTE,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_GT] = {ss_GT,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_GTE] = {ss_GTE,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_EQEQ] = {ss_EQ,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_NEQ] = {ss_NEQ,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
     // unary versions (treated as binary with z ignored)
-    [OP_BNOT] = {"BNOT",1,V_INTEGER,{V_INTEGER}},
-    [OP_NEG] = {"NEG",1,V_INTEGER,{V_INTEGER}},
-    [OP_POS] = {"POS",1,V_INTEGER,{V_INTEGER}},
-    [OP_NOT] = {"NOT",1,V_INTEGER,{V_INTEGER}},
-    [OP_CVTIF] = {"CVTIF",1,V_FLOAT,{V_INTEGER}},   // int→float
-    [OP_CVTFI] = {"CVTFI",1,V_INTEGER,{V_FLOAT}},  // float→int
+    [OP_BNOT] = {s_BNOT,1,V_INTEGER,{V_INTEGER}},
+    [OP_NEG] = {s_NEG,1,V_INTEGER,{V_INTEGER}},
+    [OP_POS] = {s_POS,1,V_INTEGER,{V_INTEGER}},
+    [OP_NOT] = {s_NOT,1,V_INTEGER,{V_INTEGER}},
+    [OP_CVTIF] = {s_CVTIF,1,V_FLOAT,{V_INTEGER}},   // int→float
+    [OP_CVTFI] = {s_CVTFI,1,V_INTEGER,{V_FLOAT}},  // float→int
 
-    [OP_FNEG] = {"FNEG",1,V_FLOAT,{V_FLOAT}},    
-    [OP_FADD] = {"FADD",2,V_FLOAT,{V_FLOAT,V_FLOAT}},
-    [OP_FSUB] = {"FSUB",2,V_FLOAT,{V_FLOAT,V_FLOAT}},
-    [OP_FMUL] = {"FMUL",2,V_FLOAT,{V_FLOAT,V_FLOAT}},
-    [OP_FDIV] = {"FDIV",2,V_FLOAT,{V_FLOAT,V_FLOAT}},
+    [OP_FNEG] = {s_FNEG,1,V_FLOAT,{V_FLOAT}},    
+    [OP_FADD] = {s_FADD,2,V_FLOAT,{V_FLOAT,V_FLOAT}},
+    [OP_FSUB] = {s_FSUB,2,V_FLOAT,{V_FLOAT,V_FLOAT}},
+    [OP_FMUL] = {s_FMUL,2,V_FLOAT,{V_FLOAT,V_FLOAT}},
+    [OP_FDIV] = {s_FDIV,2,V_FLOAT,{V_FLOAT,V_FLOAT}},
 
-    [OP_FLT] = {"FLT",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
-    [OP_FLTE] = {"FLTE",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
-    [OP_FGT] = {"FGT",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
-    [OP_FGTE] = {"FGTE",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
-    [OP_FEQEQ] = {"FEQ",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
-    [OP_FNEQ] = {"FNEQ",2,V_INTEGER,{V_FLOAT,V_FLOAT}},
+    [OP_FLT] = {s_FLT,2,V_INTEGER,{V_FLOAT,V_FLOAT}},
+    [OP_FLTE] = {s_FLTE,2,V_INTEGER,{V_FLOAT,V_FLOAT}},
+    [OP_FGT] = {s_FGT,2,V_INTEGER,{V_FLOAT,V_FLOAT}},
+    [OP_FGTE] = {s_FGTE,2,V_INTEGER,{V_FLOAT,V_FLOAT}},
+    [OP_FEQEQ] = {s_FEQ,2,V_INTEGER,{V_FLOAT,V_FLOAT}},
+    [OP_FNEQ] = {s_FNEQ,2,V_INTEGER,{V_FLOAT,V_FLOAT}},
     
     // comman may not be needed?
-    [OP_COMMA] = {"COMMA",2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_COMMA] = {ss_COMMA,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
 
     // other operations for name
-    [OP_ENTER] = {"ENTER",0,V_VOID,{}},
-    [OP_LEAVE] = {"LEAVE",0,V_VOID,{}},
-    [OP_NEW]   = {"NEW",0,V_VOID,{}},
-    [OP_LI]    = {"LI",0,V_VOID,{}},
-    [OP_LIU]   = {"LIU",0,V_VOID,{}},
-    [OP_LIH]   = {"LIH",0,V_VOID,{}},
-    [OP_ARG]   = {"ARG",0,V_VOID,{}},    
-    [OP_ST]    = {"ST",0,V_VOID,{}},
-    [OP_LD]    = {"LD",0,V_VOID,{}},
-    [OP_CALL]  = {"CALL",0,V_VOID,{}},
-    [OP_RULE]  = {"RULE",0,V_VOID,{}},
-    [OP_NEXT]  = {"NEXT",0,V_VOID,{}},
-    [OP_NOP] = {"NOP",0,V_VOID,{}},    
+    [OP_ENTER] = {s_ENTER,0,V_VOID,{}},
+    [OP_LEAVE] = {s_LEAVE,0,V_VOID,{}},
+    [OP_NEW]   = {s_NEW,0,V_VOID,{}},
+    [OP_LI]    = {s_LI,0,V_VOID,{}},
+    [OP_LIU]   = {s_LIU,0,V_VOID,{}},
+    [OP_LIH]   = {s_LIH,0,V_VOID,{}},
+    [OP_ARG]   = {s_ARG,0,V_VOID,{}},    
+    [OP_ST]    = {s_ST,0,V_VOID,{}},
+    [OP_LD]    = {s_LD,0,V_VOID,{}},
+    [OP_CALL]  = {s_CALL,0,V_VOID,{}},
+    [OP_RULE]  = {s_RULE,0,V_VOID,{}},
+    [OP_NEXT]  = {s_NEXT,0,V_VOID,{}},
+    [OP_NOP] = {s_NOP,0,V_VOID,{}},    
     
 };
 
@@ -526,9 +580,9 @@ uint8_t csp_opcode_arity(opcode_t op)
 #endif    
 }
 
-const char* csp_op_name(opcode_t op)
+const char* csp_opcode_name(opcode_t op)
 {
-    return info_tab[op].name;
+    return (const char*) RD_PTR(&info_tab[op].name);
 }
 
 void csp_set_error(csp_rt_t* st, csp_err_t err)
@@ -788,26 +842,31 @@ int find_op_entry(const char* name, int namelen)
     return -1;
 }
 
-static inline int8_t op_table_tok(tok_t t)
+static inline int8_t op_table_tok(int i)
 {
-    return RD_BYTE(&op_table[t].tok);
+    return RD_BYTE(&op_table[i].tok);
 }
 
-
-static inline int8_t arity(tok_t t)
+static inline int8_t op_table_arity(int i)
 {
-    return RD_BYTE(&op_table[t].arity);
+    return RD_BYTE(&op_table[i].arity);
 }
 
-static inline int8_t prec(tok_t t)
+static inline int8_t op_table_code(int i)
 {
-    return RD_BYTE(&op_table[t].prec);
+    return RD_BYTE(&op_table[i].code);
 }
 
-static inline int8_t assoc(tok_t t)
+static inline int8_t op_table_prec(int i)
 {
-    return RD_BYTE(&op_table[t].assoc);
+    return RD_BYTE(&op_table[i].prec);
 }
+
+static inline int8_t op_table_assoc(int i)
+{
+    return RD_BYTE(&op_table[i].assoc);
+}
+
 
 // enq all rules that depend on declaration x
 void csp_enq_elist(csp_rt_t* st, index_t x)
@@ -1623,7 +1682,7 @@ next:
 	    if (len > MAX_NAME_LEN)
 		return -1; // fixme set error code
 	    if ((i = find_op_entry(name,len)) >= 0)
-		TOK(op_table[i].tok);
+		TOK(op_table_tok(i));
 	    SYM(WORD, name, len);
 	}
 	return -1;
@@ -2021,7 +2080,7 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
     opcode_t op;
     vtype_t rt;
 
-    switch(arity(tok)) {
+    switch(op_table_arity(tok)) {
     case 2: {
 	rentry_t* a = &rstack[ep-2];
 	rentry_t* b = &rstack[ep-1];
@@ -2047,13 +2106,13 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 		    return PARSE_ERROR;
 		if ((bt == V_INTEGER) && (coerce_to_float(st, b) < 0))
 		    return PARSE_ERROR;
-		op = float_op(op_table[tok].code);
+		op = float_op(op_table_code(tok));
 	    } else {
-		op = op_table[tok].code;
+		op = op_table_code(tok);
 	    }
 	    rt = csp_opcode_rtype(op);
 #ifdef DEBUG
-	    printf("op=%s\n", info_tab[op].name);
+	    printf("op=%s\n", csp_opcode_name(op));
 	    print_rentry(st, "L", a);
 	    print_rentry(st, "R", b);
 	    printf("\n");
@@ -2098,14 +2157,14 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 
 	// Select float op if operand is float
 	if (at == V_FLOAT) {
-	    op = float_op(op_table[tok].code);
+	    op = float_op(op_table_code(tok));
 	} else {
-	    op = op_table[tok].code;
+	    op = op_table_code(tok);
 	}
 	rt = csp_opcode_rtype(op);
 
 #ifdef DEBUG
-	printf("op=%s\n", info_tab[op].name);
+	printf("op=%s\n", csp_opcode_name(op));
 	print_rentry(st, "A", a);
 	printf("\n");
 #endif	
@@ -2370,7 +2429,7 @@ next:
 	break;
     }
     default:
-	if (op_table[tok].arity > 0)
+	if (op_table_arity(tok) > 0)
 	    goto operator;
 	return 0;
     }
@@ -2378,7 +2437,7 @@ next:
 operator:
     {
 	int p1;
-	if ((p1 = prec(tok)) == -1)
+	if ((p1 = op_table_prec(tok)) == -1)
 	    return 0;
 	if (pp == 0) {
 	    ostack[pp++] = tok;
@@ -2392,17 +2451,17 @@ operator:
 		ptok = tok;
 		goto next;
 	    }
-	    p2 = prec(tok2);
+	    p2 = op_table_prec(tok2);
 
 	    while ( ((p2 > p1) && (tok2 != LP)) ||
-		    ((p2 == p1) && (assoc(tok2) < 0))) {
+		    ((p2 == p1) && (op_table_assoc(tok2) < 0))) {
 		if ((ep = process_op(st, tok2, rstack, ep)) < 0)
 		    return 0;
 		pp--;
 		if (pp == 0) break;
 		tok2 = ostack[pp-1];
 		if (IS_FUNC_MARKER(tok2) || (tok2 == LP)) break;
-		p2 = prec(tok2);
+		p2 = op_table_prec(tok2);
 	    }
 	    ostack[pp++] = tok;
 	}

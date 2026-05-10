@@ -763,7 +763,7 @@ extern int csp_print_hex(uvalue_t v);
 extern int csp_println(void);
 extern int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val);
 
-const char* csp_op_name(opcode_t op);
+const char* csp_opcode_name(opcode_t op);
 extern tok_t csp_opcode_to_tok(opcode_t opcode);
 extern uint8_t csp_opcode_rtype(opcode_t opcode);
 extern void csp_set_error(csp_rt_t*, csp_err_t);
