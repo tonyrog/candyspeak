@@ -2431,7 +2431,8 @@ next:
     default:
 	if (op_table_arity(tok) > 0)
 	    goto operator;
-	return 0;
+	goto out; // let tok terminate exprssion
+	// return 0;
     }
     goto next;
 operator:
@@ -2518,6 +2519,7 @@ NOINLINE static int expect(csp_rt_t* st, token_t* tv, int* pi, size_t n, token_t
 		k++;
 	    num = k - i;
 	    if (num == 0) num = 1;
+	    // printf("expr: expr k=%d, num=%ld\n", k, num);
 
 	    saved_ap = st->ap;
 	    st->ap = NULL;  // no codegen
@@ -2551,6 +2553,48 @@ NOINLINE static int expect(csp_rt_t* st, token_t* tv, int* pi, size_t n, token_t
     } while(1);
     *pi = i;  // update position
     return 1;
+}
+
+typedef struct PACKED {
+    union {
+	unsigned bits:16;
+	struct {
+	    unsigned dir:DIR_BITS;
+	    unsigned endian:ENDIAN_BITS;
+	    unsigned vt:TYPE_BITS;
+	    unsigned pwm:1;
+	    unsigned pullup:1;
+	    unsigned pulldown:1;
+	};
+    };
+} decl_opts_t;
+
+NOINLINE static decl_opts_t parse_opts(csp_rt_t* st, token_t* tv,
+					int* ip, size_t n)
+{
+    int i = *ip;
+    decl_opts_t opts;
+
+    opts.bits = 0;
+opts:
+    if (i < (int)n) {
+	switch(tv[i].t) {
+	case UNSIGNED: opts.vt=V_UNSIGNED; i++; goto opts;
+	case INTEGER:  opts.vt=V_INTEGER; i++; goto opts;
+	case FLOAT:    opts.vt=V_FLOAT; i++;  goto opts;
+	case PWM:      opts.pwm = 1; i++; goto opts;	    
+	case IN:       opts.dir |= DIR_IN; i++; goto opts;
+	case OUT:      opts.dir |= DIR_OUT; i++; goto opts;
+	case INOUT:    opts.dir |= DIR_INOUT; i++; goto opts;
+	case LITTLE:   opts.endian=E_LITTLE; i++; goto opts;
+	case BIG:      opts.endian=E_BIG; i++; goto opts;
+	case PULLUP:   opts.pullup=1; i++; goto opts;
+	case PULLDOWN: opts.pulldown=1; i++; goto opts;
+	default: break;
+	}
+    }
+    *ip= i;
+    return opts;
 }
 
 // '#' 'module' <name>
@@ -2618,13 +2662,14 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
 NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res = MAKE_RES(8*sizeof(ivalue_t));
-    vtype_t vt = V_INTEGER;
+    // vtype_t vt = V_INTEGER;
     value_t def;
     index_t ix;
     int i = 0;
-    token_t teres[] = {{COLON}, {INT}, {LAST}};
     token_t te[] = {{HASH}, {VARIABLE}, {WORD}, {LAST}};
-    pindir_t dir = 0;
+    token_t teres[] = {{COLON}, {INT}, {LAST}};
+    // pindir_t dir = 0;
+    decl_opts_t opts;
 
     if (!expect(st, tv, &i, n, te)) {
 	csp_set_error(st, ERR_SYNTAX);
@@ -2632,9 +2677,14 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n)
     }
     if (expect(st, tv, &i, n, teres))
 	res = MAKE_RES(teres[1].v.val.i);
-    vt = V_INTEGER;
-    def.i = 0;
 
+    // vt = V_INTEGER;
+    def.u = 0;
+
+    opts = parse_opts(st, tv, &i, n);
+    if (opts.vt == 0) opts.vt = V_INTEGER;
+    
+    /*
 opts:
     if (i < (int)n) {
 	switch(tv[i].t) {
@@ -2647,8 +2697,9 @@ opts:
 	default: break;
 	}
     }
+    */
     if (i < (int)n && tv[i].t == EQ) {
-	token_t teeq[] = {{EQ}, {(vt == V_FLOAT) ? FLT : INT}, {LAST}};
+	token_t teeq[] = {{EQ}, {(opts.vt == V_FLOAT) ? FLT : INT}, {LAST}};
 	if (!expect(st, tv, &i, n, teeq)) {
 	    csp_set_error(st, ERR_SYNTAX);
 	    return -1;
@@ -2659,9 +2710,9 @@ opts:
 	ix = csp_new_decl(st, te[2].v.str.ptr, te[2].v.str.len, DECL_VARIABLE);
     if (ix == BAD_INDEX) return -1;
     i = INDEX(ix);
-    st->decl[i].vt = vt;
+    st->decl[i].vt = opts.vt;
     st->decl[i].res = res;
-    st->decl[i].dir = dir;
+    st->decl[i].dir = opts.dir;
     st->decl[i].va.init = def;
     return 0;
 }
@@ -2671,31 +2722,39 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res;
     value_t cnst;
-    vtype_t vt;
+    // vtype_t vt;
     index_t ix;
     int i = 0;
     token_t teres[] = {{COLON}, {INT}, {LAST}};
     token_t te[] = {{HASH}, {CONSTANT}, {WORD}, {LAST}};
     token_t teeq[3] = {{EQ}, {INT}, {LAST}};
-
+    decl_opts_t opts;
+    
     // defaults
-    vt = V_INTEGER;
-    cnst.i = 0;
+    // vt = V_INTEGER;
+    cnst.u = 0;
     res = MAKE_RES(8*sizeof(ivalue_t));
-
+    
     if (!expect(st, tv, &i, n, te)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
     if (expect(st, tv, &i, n, teres))
 	res = MAKE_RES(teres[1].v.val.i);
+
+    opts = parse_opts(st, tv, &i, n);
+    if (opts.vt == 0) opts.vt = V_INTEGER;    
+
+    /*
     switch(tv[i].t) {
     case UNSIGNED: vt=V_UNSIGNED; cnst.u=0; i++; break;
     case INTEGER: vt=V_INTEGER; cnst.i=0; i++;  break;
     case FLOAT: vt=V_FLOAT; cnst.f=0.0; i++; break;
     default: break;
     }
-    teeq[1].t = (vt == V_FLOAT) ? FLT : INT;
+    */
+    
+    teeq[1].t = (opts.vt == V_FLOAT) ? FLT : INT;
     if (!expect(st, tv, &i, n, teeq)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
@@ -2706,7 +2765,7 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
     if (ix == BAD_INDEX) return -1;
     i = INDEX(ix);
     st->decl[i].res = res;
-    st->decl[i].vt = vt;
+    st->decl[i].vt = opts.vt;
     st->decl[i].cn.init = cnst;
     return 0;    
 }
@@ -2715,19 +2774,25 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
 NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res = MAKE_RES(1);
-    ivalue_t pu=0, pd=0;
+    // ivalue_t pu=0, pd=0;
     ivalue_t port=0, pin=0;
     index_t ix;
     int i = 0;
     token_t te[] = {{HASH}, {DIGITAL}, {WORD}, {LAST}};
     token_t tepin[] = {{INT}, {LAST}};
     token_t teport[] = {{INT}, {COLON}, {INT}, {LAST}};
-    pindir_t dir = 0;
-
+    // pindir_t dir = 0;
+    decl_opts_t opts;
+    
     if (!expect(st, tv, &i, n, te)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
+
+    opts = parse_opts(st, tv, &i, n);
+    if (opts.dir == 0) opts.dir = DIR_IN;
+
+    /*
 opts:
     if (i < (int)n) {
 	switch(tv[i].t) {
@@ -2739,6 +2804,8 @@ opts:
 	default: break;
 	}
     }
+    */
+    
     if (expect(st, tv, &i, n, teport)) {
 	port = teport[0].v.val.i;
 	pin  = teport[2].v.val.i;
@@ -2750,7 +2817,6 @@ opts:
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    if (dir ==0) dir = DIR_IN;
     if ((ix = lookup_decl(st, te[2].v.str.ptr, te[2].v.str.len)) == BAD_INDEX)
 	ix = csp_new_decl(st, te[2].v.str.ptr, te[2].v.str.len, DECL_DIGITAL);
     if (ix == BAD_INDEX) return -1;
@@ -2758,9 +2824,9 @@ opts:
     st->decl[i].res = res;
     st->decl[i].di.pin = pin;
     st->decl[i].di.port = port;
-    st->decl[i].dir = dir;
-    st->decl[i].di.pullup = pu;
-    st->decl[i].di.pulldown = pd;
+    st->decl[i].dir = opts.dir;
+    st->decl[i].di.pullup = opts.pullup;
+    st->decl[i].di.pulldown = opts.pulldown;
     return 0;
 }
 
@@ -2769,18 +2835,20 @@ opts:
 NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res;
-    ivalue_t port=0, pin=0, pwm=0;
-    vtype_t vt;
+    ivalue_t port=0, pin=0;
+    // ivalue_t pwm=0;
+    // vtype_t vt;
     index_t ix;
     int i = 0;
     token_t te[] = {{HASH}, {ANALOG}, {WORD}, {LAST}};
     token_t teres[] = {{COLON}, {INT}, {LAST}};
     token_t tepin[] = {{INT}, {LAST}};
     token_t teport[] = {{INT}, {COLON}, {INT}, {LAST}};
-    pindir_t dir = 0;
+    // pindir_t dir = 0;
+    decl_opts_t opts;
     
     res = MAKE_RES(10);
-    vt = V_INTEGER;
+    // vt = V_INTEGER;
 
     if (!expect(st, tv, &i, n, te)) {
 	csp_set_error(st, ERR_SYNTAX);
@@ -2788,6 +2856,12 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, size_t n)
     }
     if (expect(st, tv, &i, n, teres))
 	res = MAKE_RES(teres[1].v.val.i);
+
+    opts = parse_opts(st, tv, &i, n);
+    if (opts.vt == 0) opts.vt = V_INTEGER;
+    if (opts.dir == 0) opts.dir = DIR_IN;
+    
+    /*
 opts:
     if (i < (int)n) {
 	switch(tv[i].t) {
@@ -2801,6 +2875,8 @@ opts:
 	default: break;
 	}
     }
+    */
+    
     if (expect(st, tv, &i, n, teport)) {
 	port = teport[0].v.val.i;
 	pin  = teport[2].v.val.i;
@@ -2812,17 +2888,17 @@ opts:
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    if (dir == 0) dir = DIR_IN;
+    
     if ((ix = lookup_decl(st, te[2].v.str.ptr, te[2].v.str.len)) == BAD_INDEX)
 	ix = csp_new_decl(st, te[2].v.str.ptr, te[2].v.str.len, DECL_ANALOG);
     if (ix == BAD_INDEX) return -1;
     i = INDEX(ix);
-    st->decl[i].vt = vt;
+    st->decl[i].vt = opts.vt;
     st->decl[i].res = res;
-    st->decl[i].dir = dir;
+    st->decl[i].dir = opts.dir;
     st->decl[i].an.pin = pin;
     st->decl[i].an.port = port;
-    st->decl[i].an.pwm = pwm;
+    st->decl[i].an.pwm = opts.pwm;
     return 0;
 }
 
@@ -2871,8 +2947,8 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, size_t n)
 NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res = MAKE_RES(1);
-    vtype_t vt = V_INTEGER;
-    vendian_t endian = E_UNDEFINED;
+    // vtype_t vt = V_INTEGER;
+    // vendian_t endian = E_UNDEFINED;
     index_t ix;
     index_t idx;
     int i = 0;
@@ -2881,7 +2957,8 @@ NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
     token_t teres[] = {{COLON}, {INT}, {LAST}};
     token_t tebit[] = {{INT}, {LB}, {INT}, {RB}, {LAST}};
     token_t tebitrange[] = {{INT}, {LB}, {INT}, {DOT}, {DOT}, {INT}, {RB}, {LAST}};
-    pindir_t dir = 0;
+    // pindir_t dir = 0;
+    decl_opts_t opts;    
 
     if (!expect(st, tv, &i, n, te)) {
 	csp_set_error(st, ERR_SYNTAX);
@@ -2889,6 +2966,12 @@ NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
     }
     if (expect(st, tv, &i, n, teres))
 	res = MAKE_RES(teres[1].v.val.i);
+
+    opts = parse_opts(st, tv, &i, n);
+    if (opts.vt == 0) opts.vt = V_INTEGER;
+    if (opts.dir == 0) opts.dir = DIR_IN;
+	
+    /*
 opts:
     if (i < (int)n) {
 	switch(tv[i].t) {
@@ -2903,7 +2986,7 @@ opts:
 	default: break;
 	}
     }
-    if (dir == 0) dir = DIR_IN;
+    */
 
     // FrameID [bit]
     if (expect(st, tv, &i, n, tebit)) {
@@ -2930,12 +3013,12 @@ opts:
     if (ix == BAD_INDEX) return -1;
     i = INDEX(ix);
     st->decl[i].res = res;
-    st->decl[i].vt = vt;
-    st->decl[i].dir = dir;
+    st->decl[i].vt = opts.vt;
+    st->decl[i].dir = opts.dir;
     st->decl[i].ca.id = idx;
     st->decl[i].ca.bit = bit0;
     st->decl[i].ca.len = MAKE_CAN_LEN((bit1-bit0)+1);
-    st->decl[i].ca.endian = endian;
+    st->decl[i].ca.endian = opts.endian;
     return 0;
 }
 

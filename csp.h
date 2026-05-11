@@ -101,10 +101,11 @@ typedef enum {
     V_ANY      = 7,  // 7 - V_INTEGER | V_FLOAT | V_STRING | V_INDEX    
 } vtype_t;
 
+#define ENDIAN_BITS 2
 typedef enum {
-    E_UNDEFINED,
-    E_LITTLE,
-    E_BIG,
+    E_UNDEFINED = 0x00,
+    E_LITTLE    = 0x01,
+    E_BIG       = 0x02,
 } vendian_t;
 
 typedef int32_t  ivalue_t;
@@ -484,13 +485,13 @@ typedef union {
     csp_instr_alu_t a;
 } csp_instr_t;
 
+#define DIR_BITS 2
 typedef enum {
-    DIR_NONE = 0x00,
-    DIR_IN  = 0x01,
-    DIR_OUT = 0x02,
+    DIR_NONE  = 0x00,
+    DIR_IN    = 0x01,
+    DIR_OUT   = 0x02,
     DIR_INOUT = 0x03
-} pindir_t;
-    
+} pindir_t;    
 
 typedef struct PACKED {
     decl_t type:6;                 // DECL_xxx
