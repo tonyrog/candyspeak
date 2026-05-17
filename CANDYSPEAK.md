@@ -91,6 +91,7 @@ the case for multiple bit selection.
 		
 	<rule> :=
 		  <name> '=' <bit> [ '?' <condition> ]
+		| <name> '<-' <bit>
 		  
 	<immediate> :=
 	        | '>' <name> '=' <bit>    // set value
@@ -113,6 +114,7 @@ the case for multiple bit selection.
 		| <condition> '&&' <condition>
 		| <condition> '||' <condition>
 		! '!' <condition>
+		| changed(<value>)
 		
 	<value> :=
 		  '0' | '1'
@@ -194,6 +196,7 @@ FIXME: add integer/unsigned/float [little/big]
 	<a-rule> :=
 	      <rule>
 		| <name> '=' <a-expr> '?' <a-condition>
+		| <name> '<-' <a-expr>
 	
 	<a-immediate> := 
 		'>' <name> = <a-expr>
@@ -207,8 +210,8 @@ FIXME: add integer/unsigned/float [little/big]
 		| '#' 'can' <name>[':'<size>] [<iodir>]
 		|                [<a-type>] [<a-endian>]<can-range>
 
-	<a-condition> := 
-        <a-expr>
+	<a-condition> :=
+	<a-expr>
 	  | '(' <a-condition> ')'
 	  | <a-condition> '&&' <a-condition>
 	  | <a-condition> '||' <a-condition>
@@ -222,6 +225,8 @@ FIXME: add integer/unsigned/float [little/big]
 
     <a-expr> :=
 	     <a-value>
+	  | 'changed' '('<a-value>')'
+	  | <name> '(' <a-expr>* ')'
 	  | '(' <a-expr> ')'
 	  | '-' <a-expr>
 	  | <a-expr> '+' <a-expr>
@@ -305,6 +310,7 @@ not be checked.
 		<a-rule>
 		| <name> '=' 1 '?' <t-condition>    // start timer if
 		| <name> '=' 0 '?' <t-condition>    // stop timer if
+		
           // dynamic set timeout interval
 		| <name>.timeout = <t-expr> ? <t-condition>
 
@@ -324,24 +330,22 @@ not be checked.
 Timer <name> is true when timer (has been) running and is has a 
 timeout condition.
 	
-    #timer    debounce_timer 200
+	#timer    debounce_timer 200
 	#digital  button in  13
 	#digital  led    out 2
-	#variable led_state = 0
 	
-	// start timer when button is pressed	
-	debounce-timer = 1 ? button
+	// start timer when button is pressed
+	debounce_timer = 1 ? button
 	// led=on when timeout and button is still pressed
-	led-state = (led_state+1) % 2 ? timeout(debounce_timer) && button
-	led = led-state
+	led=1 ? timeout(debounce_timer) && button
+	led=0 ? !button
 
 # Tick program
 
 	#variable A:10 = 1      // declare a 10 bit variable A
-	#timer T1 1000          // declare a 1000ms (1s) timer 
+	#timer T1 1000 = 1      // declare a 1000ms (1s) timer 
 	A = A + 1 ? timeout(T1) // set A = A + 1 when timer T1 times out
 	T1=1 ? timeout(T1)      // restart T1 when T1 times out
-	>T1 = 1                 // start the timer T1
 
 # loop from 1 to 10
 
@@ -369,42 +373,28 @@ timeout condition.
   <initial-defaults> :=
         [ <name> '=' <const-expr> ]*
 
-## example PID controler
+## example Adder
 
-        #module pid
-	#constant kp float = 0.75
-	#constant ki float = 0.25
-	#constant kd float = 0.2
-	#constant i_min float = -1.0
-	#constant i_max float = 1.0
-	#variable integral float = 0.0
-	#variable prev_error float = 0.0
-	#variable set_point float = 0.0
-	#variable target_set_point in float = 0
-	#variable set_point_time = 0
-	#variable set_point_dt_sum = 0
+#module Add
+#variable A:1 in
+#variable B:1 in
+#variable Cin:1 in
+#variable S:1 out
+#variable Cout:1 out
 
-	#variable sd
-	#analog feed:32 float in
-	#analog output:32 float out
+S = A ^ B ^ Cin ? 1
+Cout = (A & B) | (Cin & (A ^ B)) ? 1
+#end
 
-	set_point_dt_sum = set_point_dt_sum + dt ? (set_point_time < set_point_dt_sum)
-	sd = (target_set_point - set_point)/dt
-	set_point = max(set_point + sd, target)
+#analog A:3 integer A0
+#variable B:3 integer = 0x4
 
-	error = set_point - feed
-	temp1 = integral + error*dt
-	temp2 = clip(temp1, i_min, i_max)
-	d1 = (error - prev_error) / dt
-	output = kp*error + ki*tmp2 + kd*d1,
-	integral = temp2
-	prev_error = error
-	#end
-	
+// fixme init expressions!
+#Add a0 a0.Cin=0 a0.A <- (A&1) a0.B <- (B&1)
+#Add a1 a1.Cin <- a0.Cout a1.A <- ((A >> 1)&1) a1.B <- ((B>>1)&1)
+#Add a2 a2.Cin <- a1.Cout a2.A <- ((A >> 2)&1) a2.B <- ((B>>2)&1)
 
-	#pid p0
-	p0.
-	#pid p1
-	#pid p2
-	#pid p3
-	
+// reflect sum in LEDs
+LED0 = a0.S
+LED1 = a1.S
+LED2 = a2.S

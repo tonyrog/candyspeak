@@ -76,6 +76,7 @@ static const char s_LTLT[] RODATA = "<<";
 static const char s_GTGT[] RODATA = ">>";
 static const char s_LT[] RODATA = "<";
 static const char s_LTEQ[] RODATA = "<=";
+static const char s_RIMP[] RODATA = "<-";
 static const char s_GT[] RODATA = ">";
 static const char s_GTEQ[] RODATA = ">=";
 static const char s_EQEQ[] RODATA = "==";
@@ -156,6 +157,7 @@ const op_entry_t op_table[] RODATA = {
     INSTR_ENT(AMPAMP,OP_AND,s_AMPAMP,2,20,LEFT),
     INSTR_ENT(BARBAR,OP_OR,s_BARBAR,2,10,LEFT),
     INSTR_ENT(EQ,OP_EQ,s_EQ,2,5,RIGHT),
+    INSTR_ENT(RIMP,OP_RIMP,s_RIMP,2,4,RIGHT), 
     INSTR_ENT(COMMA,OP_COMMA,s_COMMA,2,2,RIGHT),
     INSTR_ENT(QUEST,OP_RULE,s_QUEST,-1,-1,NO),
 
@@ -211,6 +213,8 @@ const op_entry_t op_table[] RODATA = {
 // Function calls are stored in ostack as (LAST + 1 + func_index)
 // func_index encodes: (index << 1) | is_user
 // Note: must use LAST (not LAST_NODE) to avoid overlap with LP, RP, etc.
+// Fixme: (fname-token-index:8,ostack-deepth:8,last:8)
+// make ostack uint32_t
 #define FUNC_MARKER_BASE (LAST + 1)
 #define IS_FUNC_MARKER(op) ((op) >= FUNC_MARKER_BASE)
 #define MAKE_FUNC_MARKER(idx, is_user) (FUNC_MARKER_BASE + ((idx) << 1) + (is_user))
@@ -714,7 +718,18 @@ static value_t fn_timeout(csp_rt_t* st,uint16_t type,
 {
     value_t ret;
     index_t ty = args[0].u;
+    // int i = st_index(st, ty); fixme. fix object timers!!!
     ret.i = BOOL(!st->decl[INDEX(ty)].tm.running);
+    return ret;
+}
+
+static value_t fn_changed(csp_rt_t* st,uint16_t type,
+			  value_t* args, uint8_t nargs)
+{
+    value_t ret;
+    index_t ty = args[0].u;
+    int i = st_index(st, ty);
+    ret.i = bitset_tst(st->dset, i);
     return ret;
 }
 
@@ -757,6 +772,7 @@ static const char s_fabs[] RODATA = "fabs";
 static const char s_sign[] RODATA = "sign";
 static const char s_clip[] RODATA = "clip";
 static const char s_timeout[] RODATA = "timeout";
+static const char s_changed[] RODATA = "changed";
 static const char s_print[] RODATA = "print";
 static const char s_println[] RODATA = "println";
 static const char s_tick[] RODATA = "tick";
@@ -777,6 +793,7 @@ const csp_func_t csp_builtin_funcs[] RODATA = {
     CSP_FUNC_ENT(s_sign,    1, V_INTEGER, V_NUMBER,0,0,0,      fn_sign ),
     CSP_FUNC_ENT(s_clip,    3, V_INTEGER, V_INTEGER,V_INTEGER,V_INTEGER,0, fn_clip),
     CSP_FUNC_ENT(s_timeout, 1, V_INTEGER, V_INDEX,0,0,0,       fn_timeout),
+    CSP_FUNC_ENT(s_changed, 1, V_INTEGER, V_INDEX,0,0,0,       fn_changed),    
     CSP_FUNC_ENT(s_print,   1, V_INTEGER, V_ANY,0,0,0,         fn_print),
     CSP_FUNC_ENT(s_println, 1, V_INTEGER, V_ANY,0,0,0,         fn_println),
     CSP_FUNC_ENT(s_tick,    0, V_INTEGER, 0,0,0,0,             fn_tick),
@@ -825,7 +842,6 @@ int csp_lookup_func(csp_rt_t* st, const char* name, uint8_t namelen)
     }
     return 0;  // not found
 }
-
 
 int find_op_entry(const char* name, int namelen)
 {
@@ -1626,6 +1642,7 @@ next:
 	switch(*str) {
 	case '=': str++; TOK(LTEQ);
 	case '<': str++; TOK(LTLT);
+	case '-': str++; TOK(RIMP);
 	default: TOK(LT);
 	}
 	break;
@@ -2379,10 +2396,11 @@ next:
 	break;
     case WORD: {
 	// First check if this is a function call (WORD followed by LP)
+	// fixme push token index to WORD and check function when
+	// arity is known?
 	int func_res = csp_lookup_func(st, tval.str.ptr, tval.str.len);
 	if ((func_res != 0) && (tv[i].t == LP)) {
 	    // It's a function call - push marker to ostack and skip LP
-	    // FIXME: check function after all arguments are parsed! ????
 	    int is_user = (func_res < 0) ? 1 : 0;
 	    int func_idx = is_user ? (-func_res - 1) : func_res;
 	    ostack[pp++] = MAKE_FUNC_MARKER(func_idx, is_user);
@@ -2431,6 +2449,7 @@ next:
     default:
 	if (op_table_arity(tok) > 0)
 	    goto operator;
+	i--;      // return failed token
 	goto out; // let tok terminate exprssion
 	// return 0;
     }
@@ -2662,7 +2681,6 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
 NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res = MAKE_RES(8*sizeof(ivalue_t));
-    // vtype_t vt = V_INTEGER;
     value_t def;
     index_t ix;
     int i = 0;
@@ -2677,27 +2695,11 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n)
     }
     if (expect(st, tv, &i, n, teres))
 	res = MAKE_RES(teres[1].v.val.i);
-
-    // vt = V_INTEGER;
     def.u = 0;
 
     opts = parse_opts(st, tv, &i, n);
     if (opts.vt == 0) opts.vt = V_INTEGER;
     
-    /*
-opts:
-    if (i < (int)n) {
-	switch(tv[i].t) {
-	case UNSIGNED: vt=V_UNSIGNED; def.u = 0; i++; goto opts;
-	case INTEGER: vt=V_INTEGER; def.i = 0; i++; goto opts;
-	case FLOAT: vt=V_FLOAT; def.f = 0.0; i++;  goto opts;
-	case IN: dir |= DIR_IN; i++; goto opts;
-	case OUT: dir |= DIR_OUT; i++; goto opts;
-	case INOUT: dir |= DIR_INOUT; i++; goto opts;
-	default: break;
-	}
-    }
-    */
     if (i < (int)n && tv[i].t == EQ) {
 	token_t teeq[] = {{EQ}, {(opts.vt == V_FLOAT) ? FLT : INT}, {LAST}};
 	if (!expect(st, tv, &i, n, teeq)) {
@@ -2722,7 +2724,6 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res;
     value_t cnst;
-    // vtype_t vt;
     index_t ix;
     int i = 0;
     token_t teres[] = {{COLON}, {INT}, {LAST}};
@@ -2730,8 +2731,6 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
     token_t teeq[3] = {{EQ}, {INT}, {LAST}};
     decl_opts_t opts;
     
-    // defaults
-    // vt = V_INTEGER;
     cnst.u = 0;
     res = MAKE_RES(8*sizeof(ivalue_t));
     
@@ -2745,15 +2744,6 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
     opts = parse_opts(st, tv, &i, n);
     if (opts.vt == 0) opts.vt = V_INTEGER;    
 
-    /*
-    switch(tv[i].t) {
-    case UNSIGNED: vt=V_UNSIGNED; cnst.u=0; i++; break;
-    case INTEGER: vt=V_INTEGER; cnst.i=0; i++;  break;
-    case FLOAT: vt=V_FLOAT; cnst.f=0.0; i++; break;
-    default: break;
-    }
-    */
-    
     teeq[1].t = (opts.vt == V_FLOAT) ? FLT : INT;
     if (!expect(st, tv, &i, n, teeq)) {
 	csp_set_error(st, ERR_SYNTAX);
@@ -2774,14 +2764,12 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
 NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res = MAKE_RES(1);
-    // ivalue_t pu=0, pd=0;
     ivalue_t port=0, pin=0;
     index_t ix;
     int i = 0;
     token_t te[] = {{HASH}, {DIGITAL}, {WORD}, {LAST}};
     token_t tepin[] = {{INT}, {LAST}};
     token_t teport[] = {{INT}, {COLON}, {INT}, {LAST}};
-    // pindir_t dir = 0;
     decl_opts_t opts;
     
     if (!expect(st, tv, &i, n, te)) {
@@ -2792,20 +2780,6 @@ NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, size_t n)
     opts = parse_opts(st, tv, &i, n);
     if (opts.dir == 0) opts.dir = DIR_IN;
 
-    /*
-opts:
-    if (i < (int)n) {
-	switch(tv[i].t) {
-	case IN: dir |= DIR_IN; i++; goto opts;
-	case OUT: dir |= DIR_OUT; i++; goto opts;
-	case INOUT: dir |= DIR_INOUT; i++; goto opts;
-	case PULLUP: pd=0; pu=1; i++; goto opts;
-	case PULLDOWN: pu=0; pd=1; i++; goto opts;
-	default: break;
-	}
-    }
-    */
-    
     if (expect(st, tv, &i, n, teport)) {
 	port = teport[0].v.val.i;
 	pin  = teport[2].v.val.i;
@@ -2836,46 +2810,25 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res;
     ivalue_t port=0, pin=0;
-    // ivalue_t pwm=0;
-    // vtype_t vt;
     index_t ix;
     int i = 0;
     token_t te[] = {{HASH}, {ANALOG}, {WORD}, {LAST}};
     token_t teres[] = {{COLON}, {INT}, {LAST}};
     token_t tepin[] = {{INT}, {LAST}};
     token_t teport[] = {{INT}, {COLON}, {INT}, {LAST}};
-    // pindir_t dir = 0;
     decl_opts_t opts;
     
-    res = MAKE_RES(10);
-    // vt = V_INTEGER;
-
     if (!expect(st, tv, &i, n, te)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
+    res = MAKE_RES(10);
     if (expect(st, tv, &i, n, teres))
 	res = MAKE_RES(teres[1].v.val.i);
 
     opts = parse_opts(st, tv, &i, n);
     if (opts.vt == 0) opts.vt = V_INTEGER;
     if (opts.dir == 0) opts.dir = DIR_IN;
-    
-    /*
-opts:
-    if (i < (int)n) {
-	switch(tv[i].t) {
-	case UNSIGNED: vt=V_UNSIGNED; i++; goto opts;
-	case INTEGER: vt=V_INTEGER; i++; goto opts;
-	case FLOAT: vt=V_FLOAT; i++;  goto opts;
-	case PWM:   pwm = 1; i++; goto opts;
-	case IN:    dir |= DIR_IN; i++; goto opts;
-	case OUT:   dir |= DIR_OUT; i++; goto opts;
-	case INOUT: dir |= DIR_INOUT; i++; goto opts;
-	default: break;
-	}
-    }
-    */
     
     if (expect(st, tv, &i, n, teport)) {
 	port = teport[0].v.val.i;
@@ -2947,8 +2900,6 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, size_t n)
 NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
 {
     ivalue_t res = MAKE_RES(1);
-    // vtype_t vt = V_INTEGER;
-    // vendian_t endian = E_UNDEFINED;
     index_t ix;
     index_t idx;
     int i = 0;
@@ -2956,8 +2907,7 @@ NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
     token_t te[] = {{HASH}, {CAN}, {WORD}, {LAST}};
     token_t teres[] = {{COLON}, {INT}, {LAST}};
     token_t tebit[] = {{INT}, {LB}, {INT}, {RB}, {LAST}};
-    token_t tebitrange[] = {{INT}, {LB}, {INT}, {DOT}, {DOT}, {INT}, {RB}, {LAST}};
-    // pindir_t dir = 0;
+    token_t tebitrange[] = {{INT},{LB},{INT},{DOT},{DOT},{INT},{RB},{LAST}};
     decl_opts_t opts;    
 
     if (!expect(st, tv, &i, n, te)) {
@@ -2971,23 +2921,6 @@ NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
     if (opts.vt == 0) opts.vt = V_INTEGER;
     if (opts.dir == 0) opts.dir = DIR_IN;
 	
-    /*
-opts:
-    if (i < (int)n) {
-	switch(tv[i].t) {
-	case UNSIGNED: vt=V_UNSIGNED; i++; goto opts;
-	case INTEGER: vt=V_INTEGER; i++; goto opts;
-	case FLOAT: vt=V_FLOAT; i++;  goto opts;
-	case IN: dir |= DIR_IN; i++; goto opts;
-	case OUT: dir |= DIR_OUT; i++; goto opts;
-	case INOUT: dir |= DIR_INOUT; i++; goto opts;
-	case LITTLE: endian=E_LITTLE; i++; goto opts;
-	case BIG: endian=E_BIG; i++; goto opts;
-	default: break;
-	}
-    }
-    */
-
     // FrameID [bit]
     if (expect(st, tv, &i, n, tebit)) {
 	idx = lookup_const(st, V_INTEGER, tebit[0].v.val);
@@ -3079,7 +3012,13 @@ NOINLINE static int tok_index(tok_t t, token_t* tv, size_t n)
 }
 
 //
-// <rule> ==  <expr> ? <cond>
+// <rule> == 
+//        <expr1> '<-' <expr2> [ '?' <cond> ]
+//
+//     ==> <expr1> = <expr2> ? changed(vars-in-expr2) || <cond>
+//
+// <rule> ==
+//         <expr1> ? <cond>
 //
 // generates code like
 // BEGIN:

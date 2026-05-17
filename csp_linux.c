@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <termios.h>
 #include <ctype.h>
+#include <poll.h>
 
 #include "csp.h"
 #include "csp_format.h"
@@ -401,14 +402,77 @@ static int handle_persistent(csp_rt_t* st, char* line)
     return 0;
 }
 
+#define SERIAL_BUF_SIZE 128
+static char serial_buf[SERIAL_BUF_SIZE];
+static uint8_t serial_pos = 0;
+static uint8_t line_ready = 0;
+
+void line_input(csp_rt_t* st, char c)
+{
+    if ((c == '\n') || (c == '\r')) {
+	if (serial_pos > 0) {
+	    serial_buf[serial_pos++] = '\n';
+	    serial_buf[serial_pos] = '\0';
+	    line_ready = 1;
+	    serial_pos = 0;  // reset immediately to ignore trailing \n after \r
+	}
+	csp_print_char('\r');
+	csp_print_char('\n');
+    }
+    else if (c == '\b') {
+	if (serial_pos == 0)
+	    csp_print_char('\a');
+	else {
+	    serial_pos--;
+	    csp_print_char('\b');
+	    csp_print_char(' ');
+	    csp_print_char('\b');
+	}
+    }
+    else if (serial_pos < SERIAL_BUF_SIZE - 1) {
+	serial_buf[serial_pos++] = c;
+	csp_print_char(c); // ECHO
+    }
+}
+
+void serial_poll(csp_rt_t* st, struct pollfd* fds, nfds_t nfds)
+{
+    if (nfds > 0) {
+	if (fds[0].revents & POLLIN) {
+	    char c;
+	    if (read(STDIN_FILENO, &c, 1) == 1)
+		line_input(st, c);
+	}
+    }
+}
+
+void process_serial_line(csp_rt_t* st, char* line)
+{
+    // Skip leading whitespace
+    char* p = line;
+    while (*p && isspace(*p)) p++;
+    if (*p == '\0')
+	return;
+    if (*p == '/') {
+	// Command
+	int r = handle_command(st, p + 1);
+	if (r == 1) return;  // quit
+    }
+    else if (*p == '#') {
+	// Persistent definition
+	handle_persistent(st, p);
+    }
+    else {
+	// Immediate expression
+	handle_immediate(st, p);
+    }
+}
+
 // Main interactive loop
 static int interactive_loop(csp_rt_t* st)
 {
     char buf[MAX_LINE_SIZE];
     int len;
-
-    printf("CandySpeak Interactive Mode\n");
-    printf("Type /help for commands, /quit to exit\n\n");
 
     while (1) {
 	len = read_line(buf, sizeof(buf), "> ");
@@ -419,25 +483,7 @@ static int interactive_loop(csp_rt_t* st)
 	if (len == 0)
 	    continue;
 
-	// Skip leading whitespace
-	char* p = buf;
-	while (*p && isspace(*p)) p++;
-	if (*p == '\0')
-	    continue;
 
-	if (*p == '/') {
-	    // Command
-	    int r = handle_command(st, p + 1);
-	    if (r == 1) break;  // quit
-	}
-	else if (*p == '#') {
-	    // Persistent definition
-	    handle_persistent(st, p);
-	}
-	else {
-	    // Immediate expression
-	    handle_immediate(st, p);
-	}
     }
 
     return 0;
@@ -583,7 +629,8 @@ void print_defines()
     printf("USE_STATISTICS=%d\n",USE_STATISTICS);
 
     printf("TRANSACTION_DEFAULT=%d\n", TRANSACTION_DEFAULT);
-    printf("REACTIVE_DeFAULT=%d\n", REACTIVE_DEFAULT);    
+    printf("REACTIVE_DeFAULT=%d\n", REACTIVE_DEFAULT);
+    printf("OP_LAST=%d\n", OP_LAST);
 
     printf("OBJ_BITS=%d\n", OBJ_BITS);
     printf("DECL_BITS=%d\n", DECL_BITS);
@@ -699,6 +746,9 @@ int main(int argc, char** argv)
     int transaction = TRANSACTION_DEFAULT;
     int reactive = REACTIVE_DEFAULT;
     int compile = 0;
+    struct pollfd pfd[1];
+    nfds_t nfds = 0;
+    
 
     while (1) {
 	int option_index = 0;
@@ -838,9 +888,12 @@ int main(int argc, char** argv)
 	if (isatty(STDIN_FILENO)) {
 	    enable_raw_mode();
 	}
-	interactive_loop(&state);
-	disable_raw_mode();
-	exit(0);
+	pfd[0].fd = STDIN_FILENO;
+	pfd[0].events = POLLIN;
+	nfds = 1;
+
+	printf("CandySpeak Interactive Mode\n");
+	printf("Type /help for commands, /quit to exit\n\n");		
     }
 
     start_time = csp_time_ms();
@@ -849,6 +902,10 @@ int main(int argc, char** argv)
 	csp_dump_variables(stdout, &state);
     if (state_file)
 	csp_dump_state_erl(state_file, &state);
+
+    // inital poll
+    if (nfds > 0)
+	poll(pfd, nfds, 0);
 
 loop:
     if (state.cycle)
@@ -867,6 +924,14 @@ loop:
 	goto done;
     }
 
+    serial_poll(&state, pfd, nfds);
+
+    if (line_ready) {
+	process_serial_line(&state, serial_buf);
+	line_ready = 0;
+	serial_pos = 0;
+    }
+
     csp_input(&state);
 
     if (state.reactive)
@@ -883,18 +948,21 @@ loop:
 	    csp_dump_state_erl(state_file, &state);
     }
 
-    if (state.anyd) {
-	if (state.wait_ms != NOTIMEOUT) {
-	    if (debug) printf("wait for %d ms\n", state.wait_ms);
-	    usleep(1000*state.wait_ms);
-	}
-	goto loop;
-    }
     if (state.wait_ms != NOTIMEOUT) {
-	if (debug) printf("wait for %d ms\n", state.wait_ms);
-	usleep(1000*state.wait_ms);
-	goto loop;
+        // use smaller delays to stay responsive to serial
+        tick_t remaining = 1000*state.wait_ms;
+	tick_t t0 = time_tick();
+        while ((remaining > 0) && !line_ready) {
+	    tick_t t1;
+	    int r = poll(pfd, nfds, state.wait_ms);
+	    if (r > 0) goto loop;
+	    t1 = time_tick();
+	    remaining = (t1-t0);
+	}
     }
+    if (state.anyd)
+	goto loop;
+
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     // in reactive mode, continue if queue has items (e.g. from timeout)
     if (state.reactive && (state.hd != state.tl))
@@ -922,5 +990,7 @@ done:
     if (parse_out)
 	fclose(parse_out);
 
+    if (interactive)
+	disable_raw_mode();
     exit(0);
 }

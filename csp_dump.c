@@ -386,7 +386,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		i,
 		decl_name(st, ix),
 		GET_RES(st->decl[i].res),
-		csp_fmt_pindir(&st->decl[i]),
+		csp_fmt_pindir(st->decl[i].dir),
 		csp_fmt_vtype(vt));
 	csp_fprint_value(f, st, vt, st->decl[i].va.init);
 	fprintf(f, "},{value,");
@@ -409,8 +409,8 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	vt = st->decl[i].vt; // should be unsigned
 	fprintf(f, "{decl,%d,digital,\"%s\",[{dir,%s},{pull,%s},{port,%d},{pin,%d}]}%s\n",
 		i,
-		decl_name(st, ix),		
-		csp_fmt_pindir(&st->decl[i]),
+		decl_name(st, ix),
+		csp_fmt_pindir(st->decl[i].dir),
 		csp_fmt_pull(st, i),
 		st->decl[i].di.port,st->decl[i].di.pin,
 		eot);
@@ -422,7 +422,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		decl_name(st, ix),
 		GET_RES(st->decl[i].res),
 		csp_fmt_vtype(vt),
-		csp_fmt_pindir(&st->decl[i]),
+		csp_fmt_pindir(st->decl[i].dir),
 		csp_fmt_pwm(st, i),
 		st->decl[i].an.port, st->decl[i].an.pin,
 		eot);
@@ -446,7 +446,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		GET_RES(st->decl[i].res),
 		csp_fmt_vtype(vt),
 		csp_fmt_endian(st->decl[i].ca.endian),
-		csp_fmt_pindir(&st->decl[i]),
+		csp_fmt_pindir(st->decl[i].dir),
 		csp_ivalue(st, st->decl[i].ca.id),
 		st->decl[i].ca.bit,
 		GET_CAN_LEN(st->decl[i].ca.len), eot);
@@ -775,7 +775,7 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 	fprintf(f, "#variable %s:%d %s %s = ", // show init value
 		decl_name(st, ix),
 		GET_RES(st->decl[i].res),
-		csp_fmt_pindir(&st->decl[i]),
+		csp_fmt_pindir(st->decl[i].dir),
 		csp_fmt_vtype(vt));
 	csp_fprint_value(f, st, vt, st->decl[i].va.init);
 	fprintf(f, "\n");
@@ -793,7 +793,7 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 	vt = st->decl[i].vt; // should be unsigned
 	fprintf(f, "#digital %s %s %s %d:%d\n",
 		decl_name(st, ix),
-		csp_fmt_pindir(&st->decl[i]),
+		csp_fmt_pindir(st->decl[i].dir),
 		csp_fmt_pull(st, i),
 		st->decl[i].di.port,st->decl[i].di.pin);
 	break;
@@ -803,7 +803,7 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 		decl_name(st, ix),
 		GET_RES(st->decl[i].res),
 		csp_fmt_vtype(vt),
-		csp_fmt_pindir(&st->decl[i]),
+		csp_fmt_pindir(st->decl[i].dir),
 		csp_fmt_pwm(st, i),
 		st->decl[i].an.port, st->decl[i].an.pin);
 	break;
@@ -821,7 +821,7 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 		GET_RES(st->decl[i].res),
 		csp_fmt_vtype(vt),
 		csp_fmt_endian(st->decl[i].ca.endian),
-		csp_fmt_pindir(&st->decl[i]),
+		csp_fmt_pindir(st->decl[i].dir),
 		csp_ivalue(st, st->decl[i].ca.id),
 		st->decl[i].ca.bit,
 		st->decl[i].ca.bit + GET_CAN_LEN(st->decl[i].ca.len));

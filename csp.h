@@ -185,6 +185,7 @@ typedef enum {
     AMPAMP,  // "&&"
     BARBAR,  // "||"
     EQ,      // "="
+    RIMP,    // "<-"    
     COMMA,   // ","
     // query rule/operator
     QUEST,   // "?"
@@ -291,6 +292,7 @@ typedef enum {
     OP_FNEQ,     // "!="    
     
     OP_EQ,      // "="
+    OP_RIMP,    // "<-"    
     OP_COMMA,   // ","
     // rule
     OP_RULE,    // "?"
@@ -329,15 +331,8 @@ typedef enum {
     DECL_SOCKET,   // 'socket'
 } decl_t;
 
-// #define IS_DECL(i)  (TAG((i)) == TAG_DECL)
-// #define IS_REG(i)   (TAG((i)) == TAG_REG)
-
 #define DECL_TYPE(s,i) ((s)->decl[(i)].type)
-//#define IS_QVAR(s,i)   (DECL_TYPE((s),(i))==DECL_VARIABLE)
 #define IS_CONST(s,i)  (DECL_TYPE((s),(i))==DECL_CONSTANT)
-//#define IS_MODULE(s,i) (DECL_TYPE((s),(i))==DECL_MODULE)
-//#define IS_OBJECT(s,i) (DECL_TYPE((s),(i))==DECL_OBJECT)
-//#define IS_END(s,i)    (DECL_TYPE((s),(i))==DECL_END)
 #define IS_CAN(s,i)    (DECL_TYPE((s),(i))==DECL_CAN)
 
 #define MAKE_RES(r) ((r)-1)
@@ -491,11 +486,11 @@ typedef enum {
     DIR_IN    = 0x01,
     DIR_OUT   = 0x02,
     DIR_INOUT = 0x03
-} pindir_t;    
+} pindir_t;
 
 typedef struct PACKED {
     decl_t type:6;                 // DECL_xxx
-    pindir_t dir:2;                // IN/OUT    
+    pindir_t dir:DIR_BITS;         // IN/OUT    
     unsigned name:STRING_BITS;     // string index
     unsigned vt:TYPE_BITS;         // value type (vtype_t)
     unsigned res:5;                // 1-32  (use MAKE_RES)

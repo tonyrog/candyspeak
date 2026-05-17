@@ -49,12 +49,12 @@ const char* csp_tag(csp_rt_t* st, index_t n)
     }
 }
 
-const char* csp_fmt_pindir(csp_decl_t* lp)
+const char* csp_fmt_pindir(uint8_t dir)
 {
-    switch(lp->dir) {
-    case DIR_INOUT: return " inout";
-    case DIR_IN:    return " in";
-    case DIR_OUT:   return " out";
+    switch(dir) {
+    case DIR_INOUT: return "inout";
+    case DIR_IN:    return "in";
+    case DIR_OUT:   return "out";
     default:        return "undefined";
     }
 }

@@ -53,3 +53,36 @@ a "small" change in csp_rt is need to be able to point
 to ram or rom code. this must be done before csp_rt_start.
 this could be used to store a "default/fallback" program.
 ram could still be used for programs loaded from flash or eeprom.
+
+## Compilation of <- rule
+
+The rule rimp rule
+
+  X <- A+B+C
+
+is compiled to
+
+  X = A+B+C ? changed(A)||changed(B)||changed(C)
+
+changed(A) is checks if A has been updated this cycle or not
+it is also part of the reactive patern but in the rimp rule
+it will use the value expression of the assignment as a condition part.
+If a condition part is given as wll then is is used in a conjunction
+with the expression changed part
+
+  X <- A+B+C ? D
+
+is compiled lik
+
+  X = A+B+C ? (changed(A)||changed(B)||changed(C)) && D
+
+changed is compiled using LDO
+
+  OP_LDO ri, xi       load xi from memory and or into register ri
+  
+  A+B+C
+  OP_LD r1, ai
+  OP_LDO r1, bi
+  OP_LDO r1, ci
+  
+
