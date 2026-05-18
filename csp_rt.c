@@ -213,13 +213,14 @@ const op_entry_t op_table[] RODATA = {
 // Function calls are stored in ostack as (LAST + 1 + func_index)
 // func_index encodes: (index << 1) | is_user
 // Note: must use LAST (not LAST_NODE) to avoid overlap with LP, RP, etc.
-// Fixme: (fname-token-index:8,ostack-deepth:8,last:8)
+// Fixme: (fname-token-index:8,ostack-depth:8,last:8)
 // make ostack uint32_t
 #define FUNC_MARKER_BASE (LAST + 1)
 #define IS_FUNC_MARKER(op) ((op) >= FUNC_MARKER_BASE)
-#define MAKE_FUNC_MARKER(idx, is_user) (FUNC_MARKER_BASE + ((idx) << 1) + (is_user))
-#define FUNC_MARKER_INDEX(op) (((op) - FUNC_MARKER_BASE) >> 1)
-#define FUNC_MARKER_IS_USER(op) (((op) - FUNC_MARKER_BASE) & 1)
+#define MAKE_FUNC_MARKER(tix, pp0) ((FUNC_MARKER_BASE) +  \
+				    ((tix)<<16) + ((pp0)<< 8))
+#define FUNC_MARKER_TIX(op)  (((op) >> 16) & 0xff)
+#define FUNC_MARKER_EP(op)   (((op) >> 8) & 0x0ff)
 
 #define op_ADD(y, z)  ((y)+(z))
 #define op_SUB(y, z)  ((y)-(z))
@@ -729,7 +730,7 @@ static value_t fn_changed(csp_rt_t* st,uint16_t type,
     value_t ret;
     index_t ty = args[0].u;
     int i = st_index(st, ty);
-    ret.i = bitset_tst(st->dset, i);
+    ret.i = BOOL(bitset_tst(st->dset, i));
     return ret;
 }
 
@@ -778,70 +779,137 @@ static const char s_println[] RODATA = "println";
 static const char s_tick[] RODATA = "tick";
 static const char s_cycle[] RODATA = "cycle";
 
-#define CSP_FUNC_ENT(str, a, rt, at1,at2,at3,at4, f)	\
-    {.name=(str),.namelen=sizeof((str))-1,.arity=(a),	\
+#define CSP_FUNC_ENT(str, a, p, rt, at1,at2,at3,at4, f)	\
+    {.name=(str),.namelen=sizeof((str))-1,.arity=(a),.pure=(p),	\
 	 .rtype=(rt),.argtypes={at1,at2,at3,at4},.fn=(f)}
 
 // Built-in function table
 // { name, namelen, nargs, rtype, {argtypes}, fn }
 const csp_func_t csp_builtin_funcs[] RODATA = {
-    CSP_FUNC_ENT("",        0, V_VOID,    0,0,0,0, NULL ),
-    CSP_FUNC_ENT(s_min,     2, V_INTEGER, V_INTEGER,V_INTEGER,0,0,  fn_min ),
-    CSP_FUNC_ENT(s_max,     2, V_INTEGER, V_INTEGER,V_INTEGER,0,0,  fn_max ),
-    CSP_FUNC_ENT(s_abs,     1, V_INTEGER, V_INTEGER,0,0,0,     fn_abs ),
-    CSP_FUNC_ENT(s_fabs,    1, V_FLOAT,   V_FLOAT,0,0,0,       fn_fabs ),
-    CSP_FUNC_ENT(s_sign,    1, V_INTEGER, V_NUMBER,0,0,0,      fn_sign ),
-    CSP_FUNC_ENT(s_clip,    3, V_INTEGER, V_INTEGER,V_INTEGER,V_INTEGER,0, fn_clip),
-    CSP_FUNC_ENT(s_timeout, 1, V_INTEGER, V_INDEX,0,0,0,       fn_timeout),
-    CSP_FUNC_ENT(s_changed, 1, V_INTEGER, V_INDEX,0,0,0,       fn_changed),    
-    CSP_FUNC_ENT(s_print,   1, V_INTEGER, V_ANY,0,0,0,         fn_print),
-    CSP_FUNC_ENT(s_println, 1, V_INTEGER, V_ANY,0,0,0,         fn_println),
-    CSP_FUNC_ENT(s_tick,    0, V_INTEGER, 0,0,0,0,             fn_tick),
-    CSP_FUNC_ENT(s_cycle,   0, V_INTEGER, 0,0,0,0,             fn_cycle),
+    CSP_FUNC_ENT(s_min,     2, 1, V_INTEGER, V_INTEGER,V_INTEGER,0,0,  fn_min ),
+    CSP_FUNC_ENT(s_max,     2, 1, V_INTEGER, V_INTEGER,V_INTEGER,0,0,  fn_max ),
+    CSP_FUNC_ENT(s_abs,     1, 1, V_INTEGER, V_INTEGER,0,0,0,     fn_abs ),
+    CSP_FUNC_ENT(s_fabs,    1, 1, V_FLOAT,   V_FLOAT,0,0,0,       fn_fabs ),
+    CSP_FUNC_ENT(s_sign,    1, 1, V_INTEGER, V_NUMBER,0,0,0,      fn_sign ),
+    CSP_FUNC_ENT(s_clip,    3, 1, V_INTEGER, V_INTEGER,V_INTEGER,V_INTEGER,0, fn_clip),
+    CSP_FUNC_ENT(s_timeout, 1, 0, V_INTEGER, V_INDEX,0,0,0,       fn_timeout),
+    CSP_FUNC_ENT(s_changed, 1, 0, V_INTEGER, V_INDEX,0,0,0,       fn_changed),    
+    CSP_FUNC_ENT(s_print,   1, 0, V_INTEGER, V_ANY,0,0,0,         fn_print),
+    CSP_FUNC_ENT(s_println, 1, 0, V_INTEGER, V_ANY,0,0,0,         fn_println),
+    CSP_FUNC_ENT(s_tick,    0, 0, V_INTEGER, 0,0,0,0,             fn_tick),
+    CSP_FUNC_ENT(s_cycle,   0, 0, V_INTEGER, 0,0,0,0,             fn_cycle),
 };
 
 const uint8_t csp_num_builtin_funcs = sizeof(csp_builtin_funcs)/sizeof(csp_builtin_funcs[0]);
 
-static uint8_t func_arity(int i)
+static uint8_t func_arity(const csp_func_t* fn, int i)
 {
-    return RD_BYTE(&csp_builtin_funcs[i].arity);
+    return RD_BYTE(&fn[i].arity);
 }
 
-static uint8_t func_namelen(int i)
+// is function "pure" 
+static uint8_t func_pure(const csp_func_t* fn, int i)
 {
-    return RD_BYTE(&csp_builtin_funcs[i].namelen);
+    return RD_BYTE(&fn[i].pure);
 }
 
-static csp_func_fn func_fn(int i)
+static uint8_t func_namelen(const csp_func_t* fn,int i)
 {
-    return (csp_func_fn) RD_PTR(&csp_builtin_funcs[i].fn);
+    return RD_BYTE(&fn[i].namelen);
 }
 
-// Lookup function by name - returns builtin index (positive) or user index (negative-1)
-// Returns 0 if not found
-int csp_lookup_func(csp_rt_t* st, const char* name, uint8_t namelen)
+static csp_func_fn func_fn(const csp_func_t* fn, int i)
+{
+    return (csp_func_fn) RD_PTR(&fn[i].fn);
+}
+
+static uint8_t fn_type(const csp_func_t* fn, int j)
+{
+    return RD_BYTE(&fn->argtypes[j]);
+}
+
+// match function template this code assumes type coerce int->flt
+// flt->int. the goal is to match BEST? function to use
+
+int csp_match_args(const csp_func_t* fn, int arity, rentry_t* rarg)
+{
+    int j;
+    for (j = 0; j < arity; j++) {
+	rentry_t arg = rarg[j];
+	vtype_t argvt = arg.vt;
+	uint8_t ftype = fn_type(fn, j);
+	switch(ftype) {
+	case V_ANY:
+	    break;
+	case V_NUMBER:
+	    if (argvt == V_INTEGER) break;
+	    if (argvt == V_FLOAT) break;
+	    return 0;
+	case V_INTEGER:
+	    if (argvt == V_INTEGER) break;
+	    if (argvt == V_FLOAT) break;    // coerce!
+	    return 0;
+	case V_FLOAT:
+	    if (argvt == V_FLOAT) break;
+	    if (argvt == V_INTEGER) break;  // coerce!
+	    return 0;
+	case V_STRING:
+	    if (argvt == V_STRING) break;
+	    return 0;
+	case V_INDEX:
+	    if (arg.X) break;
+	    return 0;
+	default:
+	    return 0;
+	}
+    }
+    return 1;
+}
+
+static int csp_match_fn(const csp_func_t* fn, int num,
+			const char* name, uint8_t namelen,
+			uint8_t arity, rentry_t* rarg)
 {
     int i;
-    // Check user functions first
-    if (st->ufuncs) {
-	for (i = 0; i < st->num_ufuncs; i++) {
-	    if (st->ufuncs[i].namelen == namelen &&
-		memcmp(st->ufuncs[i].name, name, namelen) == 0) {
-		return -(i + 1);  // negative = user function
+
+    for (i = 0; i < num; i++) {
+	uint8_t roarity = func_arity(fn, i);
+	uint8_t ronamelen = func_namelen(fn, i);
+	if ((roarity == arity) && (ronamelen == namelen)) {
+	    const char* roname = RD_PTR(&fn[i].name); 
+	    if (MEMCMP_RD(name, roname, namelen) == 0) {
+		if (csp_match_args(&fn[i], arity, rarg))
+		    return i;
 	    }
 	}
     }
-    // Check builtin functions
-    for (i = 1; i < csp_num_builtin_funcs; i++) {
-	uint8_t ronamelen = func_namelen(i);
-	if (ronamelen == namelen) {
-	    const char* roname = RD_PTR(&csp_builtin_funcs[i].name); 
-	    if (MEMCMP_RD(name, roname, namelen) == 0)
-		return i;  // positive = builtin function
+    return -1;
+}
+
+const csp_func_t* csp_match_func(csp_rt_t* st,
+				 const char* name, uint8_t namelen,
+				 uint8_t arity, rentry_t* rarg,
+				 int* is_user, int* func_idx)
+{
+    int idx;
+
+    if (st->ufuncs) {
+	if ((idx = csp_match_fn(st->ufuncs, st->num_ufuncs,
+				name, namelen, arity, rarg)) >= 0) {
+	    *is_user = 1;
+	    *func_idx = idx;
+	    return &st->ufuncs[idx];
 	}
     }
-    return 0;  // not found
+    if ((idx = csp_match_fn(csp_builtin_funcs, csp_num_builtin_funcs,
+			    name, namelen, arity, rarg)) >= 0) {
+	*is_user = 0;
+	*func_idx = idx;
+	return &csp_builtin_funcs[idx];
+    }
+    return NULL;
 }
+
 
 int find_op_entry(const char* name, int namelen)
 {
@@ -1004,26 +1072,23 @@ again:
 	// y: function index (low bit: 0=builtin, 1=user), index >> 1
 	// z: argument (0/1 arg) or OP_COMMA instruction (2+ args)
 	index_t idx = st->instr[n].f.idx;
-	const csp_func_t* func = NULL;
 	uint8_t arity;
-	csp_func_fn fn;
+	csp_func_fn fn = NULL;
 	
 	// Get function pointer
 	if (st->instr[n].f.usr) {
 	    if (st->ufuncs && (idx < st->num_ufuncs)) {
-		func = &st->ufuncs[idx];
-		arity = func->arity;
-		fn = func->fn;
+		arity = func_arity(st->ufuncs, idx);
+		fn    = func_fn(st->ufuncs, idx);
 	    }
 	}
 	else {
 	    if (idx < csp_num_builtin_funcs) {
-		func = &csp_builtin_funcs[idx];
-		arity = func_arity(idx);
-		fn = func_fn(idx);
+		arity = func_arity(csp_builtin_funcs, idx);
+		fn    = func_fn(csp_builtin_funcs, idx);
 	    }
 	}
-	if (func && fn) {
+	if (fn) {
 	    value_t val = fn(st, st->instr[n].f.avt, st->arg, arity);
 	    st->reg[st->instr[n].f.x] = val;
 	}
@@ -1875,7 +1940,7 @@ NOINLINE int map_reg(csp_rt_t* st, index_t ix)
 // generate LD/LI.. load value into a register if not already
 NOINLINE int csp_load(csp_rt_t* st, rentry_t* rp)
 {
-    if (!rp->L && st->ap) { // not loaded and generte code
+    if (!rp->L && st->ap) { // not loaded and generate code
 	int r;
 	
 	if (rp->X) {  // load variable
@@ -1924,11 +1989,11 @@ NOINLINE static int push_var(csp_rt_t* st, rentry_t* rstack, int ep,
     int I = 0;
 
     if (st->decl[INDEX(ix)].type == DECL_CONSTANT) {
-	I= 1;
+	I = 1;
 	val = st->decl[INDEX(ix)].cn.init;
     }
     else if (st->decl[INDEX(ix)].type == DECL_VARIABLE) {
-	I= 1;
+	I = 1;
 	val = csp_value(st, ix);
     }
     else {
@@ -1946,9 +2011,10 @@ NOINLINE static int push_lval(rentry_t* rstack, int ep, index_t ix, vtype_t vt)
 }
 
 // Push register result (from operation)
-NOINLINE static int push_reg(rentry_t* rstack, int ep, reg_t r, vtype_t vt)
+NOINLINE static int push_reg(rentry_t* rstack, int ep, reg_t r, vtype_t vt,
+			     value_t val, int imm)
 {
-    rstack[ep] = (rentry_t){.reg=r,.X=0,.I=0,.L=1,.vt=vt };
+    rstack[ep] = (rentry_t){.val=val,.reg=r,.X=0,.I=imm,.L=1,.vt=vt };
     return ep+1;
 }
 
@@ -2217,29 +2283,38 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
     return ep;
 }
 
-NOINLINE static int process_fcall(csp_rt_t* st, int func_idx, int is_user,
+//       rstack
+//  0    arg0   ep-(4-0)
+//  1    arg1   ep-(4-1)
+//  2    arg2   ep-(4-2)
+//  3    arg3   ep-(4-3)
+//  ep
+//
+NOINLINE static int process_fcall(csp_rt_t* st, token_t* word, uint8_t arity,
 				  rentry_t* rstack, int ep)
 {
     int dst, n, j;
     const csp_func_t* func = NULL;
     uint16_t argcode = 0;
-	    
-    if (is_user) {
-	if (st->ufuncs && (func_idx < st->num_ufuncs))
-	    func = &st->ufuncs[func_idx];
-    } else {
-	if (func_idx < csp_num_builtin_funcs)
-	    func = &csp_builtin_funcs[func_idx];
-    }
-    if (!func || !func->fn)
+    uint8_t argimm = 0;
+    // int func_res;
+    int is_user;
+    int func_idx;
+    rentry_t* rarg = &rstack[ep-arity]; // first arg
+    value_t dval;
+    int imm = 0;
+
+    if ((func = csp_match_func(st, word->v.str.ptr, word->v.str.len,
+			       arity, rarg, &is_user, &func_idx)) == NULL)
 	return -1;
-    n = func->arity;
+    n = arity;
     for (j = 0; j < n; j++) {
-	rentry_t arg = rstack[ep-(n-j)];
+	rentry_t arg = rarg[j];
 	vtype_t argvt = arg.vt;
 	vtype_t argtype = func->argtypes[j];
 	
 	argcode |= (argvt << 4*j);
+	argimm  |= (arg.I << j);
 
 	// check arguments & coerce
 	switch(argtype) {
@@ -2261,28 +2336,43 @@ NOINLINE static int process_fcall(csp_rt_t* st, int func_idx, int is_user,
 	    if (argvt != V_STRING)
 		return 0;
 	    break;
-	default:
-	    if (argtype != argvt)
-		return 0;
-	    break;
-	}
-	if (argtype == V_INDEX) { // load index as immediate
-	    if (!arg.X) {
+	case V_INDEX:
+	    if (!arg.X) { // must be a "variable"
 		csp_set_error(st, ERR_SYNTAX);
 		return -1;
 	    }
 	    arg.X = 0;
 	    arg.I = 1;
 	    arg.val.u = arg.ix;
+	    break;
+	default:
+	    if (argtype != argvt)
+		return 0;
+	    break;
 	}
 	if (csp_load(st, &arg) < 0) {
-	    csp_set_error(st, ERR_SYNTAX);	    
+	    csp_set_error(st, ERR_SYNTAX);
 	    return -1;
 	}
 	if (csp_new_arg(st, arg.reg, j) < 0)
 	    return -1;
 	if (arg.L) free_reg(st, arg.reg);
     }
+    // check if we can evaluate a pure function
+    imm = (argimm == ((1 << arity)-1));
+    if (func_pure(func,0) && imm) {
+	value_t arg[MAX_ARGS];
+	csp_func_fn fn = NULL;
+
+	if (is_user)
+	    fn = func_fn(st->ufuncs, func_idx);
+	else
+	    fn = func_fn(csp_builtin_funcs, func_idx);
+	for (j = 0; j < arity; j++)
+	    arg[j] = rarg[j].val;
+	dval = fn(st, argcode, arg, arity);
+    }
+    
     // pop rstack
     if (n > 0) {
 	ep -= n;
@@ -2290,7 +2380,7 @@ NOINLINE static int process_fcall(csp_rt_t* st, int func_idx, int is_user,
     dst = alloc_reg(st);
     if (csp_new_call(st, dst, func_idx, is_user, argcode) < 0)
 	return 0;
-    return push_reg(rstack, ep, dst, func->rtype);
+    return push_reg(rstack, ep, dst, func->rtype, dval, imm);
 }
 
 void print_stack_used()
@@ -2312,12 +2402,13 @@ NOINLINE int csp_parse_expr(csp_rt_t* st, token_t* tv, size_t* num_toks,
     tok_t ptok = NONE;   // previous operator/token
     int pp = 0;         // operator stack pointer
     int ep = 0;         // expression stack pointer
-    tok_t ostack[MAX_PARSE_STACK_DEPTH];  // stack of operators
+    uint32_t ostack[MAX_PARSE_STACK_DEPTH];  // stack of operators
     rentry_t rstack[MAX_PARSE_STACK_DEPTH];  // stack of {reg, index}
     index_t ix;
     int i = 0;
     size_t n = *num_toks;
-
+    int in_func = 0;
+    
 next:
     if ((i >= n) || (tv[i].t==NEWLINE) || (tv[i].t==NONE))  // end-of-list
 	goto out;
@@ -2343,7 +2434,7 @@ next:
 	    return 0;
 	// Process operators until we hit LP or a function marker
 	// Check if we're inside a function call
-	int in_func = 0;
+	
 	for (int k = pp-1; k >= 0; k--) {
 	    if (IS_FUNC_MARKER(ostack[k])) { in_func = 1; break; }
 	    if (ostack[k] == LP) break;
@@ -2359,13 +2450,12 @@ next:
 	    pp--;
 	}
 	if (pp && IS_FUNC_MARKER(ostack[pp-1])) {
-	    // Function call - get func info and generate OP_CALL
-	    // Note: LP was skipped in WORD case, so no LP to pop
-	    tok_t marker = ostack[--pp];
-	    int func_idx = FUNC_MARKER_INDEX(marker);
-	    int is_user = FUNC_MARKER_IS_USER(marker);
+	    uint32_t marker = ostack[--pp];
+	    int j = FUNC_MARKER_TIX(marker);
+	    int ep0 = FUNC_MARKER_EP(marker);
+	    uint8_t arity = ep - ep0;
 
-	    if ((ep = process_fcall(st, func_idx, is_user, rstack, ep)) < 0) {
+	    if ((ep = process_fcall(st, &tv[j], arity, rstack, ep)) < 0) {
 		csp_set_error(st, ERR_SYNTAX);
 		return 0;
 	    }
@@ -2395,15 +2485,10 @@ next:
 	ptok = STR;
 	break;
     case WORD: {
-	// First check if this is a function call (WORD followed by LP)
-	// fixme push token index to WORD and check function when
-	// arity is known?
-	int func_res = csp_lookup_func(st, tval.str.ptr, tval.str.len);
-	if ((func_res != 0) && (tv[i].t == LP)) {
+	if (tv[i].t == LP) {
 	    // It's a function call - push marker to ostack and skip LP
-	    int is_user = (func_res < 0) ? 1 : 0;
-	    int func_idx = is_user ? (-func_res - 1) : func_res;
-	    ostack[pp++] = MAKE_FUNC_MARKER(func_idx, is_user);
+	    ostack[pp] = MAKE_FUNC_MARKER(i-1, ep);
+	    pp++;
 	    i++;  // skip the LP token
 	    ptok = LP;
 	}
@@ -2534,12 +2619,10 @@ NOINLINE static int expect(csp_rt_t* st, token_t* tv, int* pi, size_t n, token_t
 	    int k = i;
 	    tok_t next = te[j+1].t;
 	    while (k < (int)n && tv[k].t != NEWLINE && tv[k].t != NONE &&
-		   tv[k].t != EQ && (next == LAST || tv[k].t != next))
+		   (tv[k].t != EQ) && (next == LAST || tv[k].t != next))
 		k++;
 	    num = k - i;
 	    if (num == 0) num = 1;
-	    // printf("expr: expr k=%d, num=%ld\n", k, num);
-
 	    saved_ap = st->ap;
 	    st->ap = NULL;  // no codegen
 	    if (!csp_parse_expr(st, &tv[i], &num, &result)) {

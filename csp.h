@@ -545,6 +545,7 @@ typedef struct PACKED {
     const char* name;
     uint8_t namelen;
     uint8_t arity;              // number of arguments (0-4)
+    uint8_t pure;               // function is pure! side-effect free
     uint8_t rtype;              // return type
     uint8_t argtypes[MAX_ARGS]; // argument types (V_INTEGER, V_INDEX, etc)
     csp_func_fn fn;             // function to call
@@ -712,7 +713,10 @@ extern int     csp_rt_init(csp_rt_t*,  int transaction, int reactive);
 extern int     csp_rt_start(csp_rt_t*);
 extern void    csp_set_ufuncs(csp_rt_t*, const csp_func_t*, uint8_t);
 extern void    csp_set_uconst(csp_rt_t*, csp_const_fn uconst);
-extern int     csp_lookup_func(csp_rt_t*, const char*, uint8_t);
+extern const csp_func_t* csp_match_func(csp_rt_t*,
+					const char* name, uint8_t namelen,
+					uint8_t arity, rentry_t* rarg,
+					int* is_user, int* func_idx);
 extern int     csp_set_transaction(csp_rt_t*, int onoff);
 extern int     csp_set_reactive(csp_rt_t*, int onoff);
 extern int     csp_scan_line(char* str, token_t* tv, size_t* num_toks);

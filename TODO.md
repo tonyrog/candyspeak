@@ -84,5 +84,3 @@ changed is compiled using LDO
   OP_LD r1, ai
   OP_LDO r1, bi
   OP_LDO r1, ci
-  
-
