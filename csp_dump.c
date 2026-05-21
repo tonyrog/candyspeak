@@ -3,8 +3,23 @@
 //
 #include <stdio.h>
 #include <ctype.h>
+#include "csp.h"
 #include "csp_dump.h"
 #include "csp_format.h"
+
+extern const op_entry_t op_table[];
+
+int csp_opcode_to_tok(opcode_t opcode)
+{
+    int t = 0;
+    while(op_table[t].tok != LAST) {
+	if ((op_table[t].arity >= 0) &&
+	    (op_table[t].code == opcode))
+	    return op_table[t].tok;
+	t++;
+    }
+    return -1;
+}
 
 // Helper to print fvalue_t (works for both float and fixpoint)
 static void fprint_fvalue(FILE* f, fvalue_t v)
@@ -832,7 +847,6 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
     return i+1;
 }
 
-
 void csp_list_declarations(FILE* f, csp_rt_t* st)
 {
     int i = 0;
@@ -840,7 +854,350 @@ void csp_list_declarations(FILE* f, csp_rt_t* st)
 	i = csp_list_decl(f, st, i);
 }
 
+#define MAX_STRPTRS 64
+#define PRINT_STACK 16
+#define STRREF(i)  (0x80|(i))
+#define IS_REF(x)  ((x) & 0x80)
+#define REF_IDX(x) ((x) & 0x7f)
+
+typedef struct {
+    uint8_t pos;
+    uint8_t buf[MAX_STR_BUF];
+    uint8_t nstrptrs;
+    uint8_t* strptrs[MAX_STRPTRS];
+    uint8_t strlens[MAX_STRPTRS];   // length of strptrs[i]
+    bitset_decl(strflags, MAX_STRPTRS);   // RODATA or not
+    //
+    uint8_t prio[MAX_REGS];
+    uint8_t reg[MAX_REGS];    // INDEX!
+    uint8_t arg[MAX_ARGS];    // INDEX
+} csp_exprbuf_t;
+
+void exprbuf_init(csp_exprbuf_t* bp)
+{
+    bp->pos = 0;
+    bp->nstrptrs = 0;
+}
+
+// return current pointer
+static uint8_t* exprbuf_ptr(csp_exprbuf_t* bp)
+{
+    return bp->buf + bp->pos;
+}
+
+// return length given start pointer
+static uint8_t exprbuf_len(csp_exprbuf_t* bp, uint8_t* ptr0)
+{
+    return (bp->buf + bp->pos) - ptr0;
+}
+
+#if 0
+// pre-allocate len bytes
+static uint8_t* exprbuf_alloc(csp_exprbuf_t* bp, int len)
+{
+    uint8_t* ptr = bp->buf + bp->pos;
+    bp->pos += len;
+    return ptr;
+}
+#endif
+
+// print expresssion r must be a index or tagged index
+void exprbuf_print(FILE* f, csp_exprbuf_t* bp, unsigned idx)
+{
+    typedef struct { unsigned char *p; unsigned char *end; } frame_t;
+    frame_t stack[PRINT_STACK];
+    int top = 0;
+
+    stack[top].p = bp->strptrs[REF_IDX(idx)];
+    stack[top].end = stack[top].p + bp->strlens[REF_IDX(idx)];
+    top++;
+
+    while (top > 0) {
+        frame_t *sp = &stack[--top];
+        while (sp->p < sp->end) {
+            unsigned char b = *sp->p++;
+            if (IS_REF(b)) {
+                if (sp->p < sp->end)
+                    stack[top++] = *sp;  // spara fortsättning
+                stack[top].p   = bp->strptrs[REF_IDX(b)];
+                stack[top].end = stack[top].p + bp->strlens[REF_IDX(b)];
+                top++;
+                goto next_frame;
+            }
+#ifdef __AVR__
+            // pgm_read_byte om romflag satt — hanteras i strentry
+#endif
+            fputc(b, f);
+        }
+        continue;
+next_frame:;
+    }
+}
+
+// return strptrs index
+static uint8_t exprbuf_intern(csp_exprbuf_t* bp, uint8_t* ptr, uint8_t len)
+{
+    int i;
+    int n = bp->nstrptrs;
+    for (i = 0; i < n; i++) {
+	// fixme check same memspace (AVR)
+	if ((bp->strptrs[i] == ptr) && (bp->strlens[i] == len))
+	    return i;
+	// optimise string extension?
+    }
+    bp->strptrs[n] = ptr;
+    bp->strlens[n] = len;
+    bp->nstrptrs++;
+    return n;
+}
+
+static void exprbuf_char(csp_exprbuf_t* bp, char c)
+{
+    bp->buf[bp->pos++] = c;
+}
+
+static void exprbuf_strref(csp_exprbuf_t* bp, uint8_t ix)
+{
+    bp->buf[bp->pos++] = STRREF(ix);
+}
+
+static void exprbuf_str(csp_exprbuf_t* bp, const char *s)
+{
+    char c;
+    while ((c = *s++)) exprbuf_char(bp, c);
+}
+
+
+static void exprbuf_wrap(csp_exprbuf_t* bp, unsigned r, int outer)
+{
+    if (bp->prio[r] < outer) {
+        exprbuf_char(bp, '(');
+        exprbuf_strref(bp, bp->reg[r]);
+	exprbuf_char(bp, ')');
+    }
+    else {
+        exprbuf_strref(bp, bp->reg[r]);
+    }
+}
+
+static void exprbuf_uint(csp_exprbuf_t* bp, unsigned v)
+{
+    char tmp[12];
+    int  i = 12;
+    tmp[--i] = '\0';
+    if (v == 0) tmp[--i] = '0';
+    while (v) { tmp[--i] = '0' + v % 10; v /= 10; }
+    exprbuf_str(bp, tmp + i);
+}
+
+static void exprbuf_alu(csp_exprbuf_t* bp,
+			csp_instr_t* ip,
+			const char *op,
+			int arity, int prio)
+{
+    uint8_t* start = exprbuf_ptr(bp);
+    if (arity == 1) {
+	exprbuf_str(bp, op);
+	exprbuf_wrap(bp, ip->a.y, prio);	
+    }
+    else { // assume 2
+	exprbuf_wrap(bp, ip->a.y, prio);
+	exprbuf_str(bp, op);
+	exprbuf_wrap(bp, ip->a.z, prio);
+    }
+    bp->reg[ip->a.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
+    bp->prio[ip->a.x] = prio;
+}
+
+static void exprbuf_fcall(csp_rt_t* st,
+			  csp_exprbuf_t* bp,
+			  csp_instr_t* ip)
+{
+    int i;
+    uint8_t* start = exprbuf_ptr(bp);
+    const char* fname;
+    int fnamelen;
+    uint8_t fn;
+    
+    if (ip->f.usr) {
+	// maybe RODATA on AVR! fixme
+	fname = st->ufuncs[ip->f.idx].name;
+	fnamelen = st->ufuncs[ip->f.idx].namelen;	
+    }
+    else {
+	// always RODATA on AVR!
+	fname = csp_builtin_funcs[ip->f.idx].name;
+	fnamelen = csp_builtin_funcs[ip->f.idx].namelen;
+    }
+    fn = exprbuf_intern(bp, (uint8_t*)fname, fnamelen);
+
+    exprbuf_strref(bp, fn);
+    exprbuf_char(bp, '(');
+    for (i = 0; i < MAX_ARGS; i++) {
+	int a = (ip->f.avt >> i*4) & 0xf;
+	if (a == 0) break;
+	if (i > 0) exprbuf_char(bp, ',');
+	exprbuf_strref(bp, bp->arg[i]);
+    }
+    exprbuf_char(bp, ')');
+    bp->reg[ip->f.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
+    // printf("FCALL: R%d = '%s'\n", ip->f.x, bp->reg[ip->f.x]);
+    bp->prio[ip->f.x] = 110;
+}
+
+static void exprbuf_st(csp_rt_t* st,
+		       csp_exprbuf_t* bp,
+		       csp_instr_t* ip)
+{
+    uint8_t* start = exprbuf_ptr(bp);
+    uint8_t* varname =  (uint8_t*) decl_name(st, ip->m.mem);
+    uint8_t  varnamelen = varname[-1];
+    uint8_t  var = exprbuf_intern(bp, varname, varnamelen);
+				 
+    exprbuf_strref(bp, var);
+    exprbuf_char(bp, '=');
+    exprbuf_strref(bp, bp->reg[ip->m.x]);
+
+    bp->reg[ip->m.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
+//    printf("ST: R%d = '%s'\n", ip->m.x, bp->reg[ip->m.x]);
+    bp->prio[ip->m.x] = 5;
+}
+
+static void exprbuf_ld(csp_rt_t* st,
+		       csp_exprbuf_t* bp,
+		       csp_instr_t* ip)
+{
+    uint8_t* varname =  (uint8_t*) decl_name(st, ip->m.mem);
+    uint8_t  varnamelen = varname[-1];
+    uint8_t  var = exprbuf_intern(bp, varname, varnamelen);
+
+    bp->reg[ip->m.x] = var;
+//    printf("LD: R%d = '%s'\n", ip->m.x, bp->reg[ip->m.x]);
+    bp->prio[ip->m.x] = 110;
+}
+
+// exprbuf contains rule condition
+void exprbuf_rule(FILE* f, csp_rt_t* st, csp_exprbuf_t* bp, csp_instr_t* ip)
+{
+    exprbuf_print(f, bp, bp->reg[ip->r.cnd]);
+}
+
+// exprbuf contains rule body (r0 ?)
+void exprbuf_body(FILE* f, csp_rt_t* st, csp_exprbuf_t* bp, csp_instr_t* ip)
+{
+    if (bp->pos > 0)
+	exprbuf_print(f, bp, bp->reg[0]);
+}
+
+
+// map float ops into tokens (to acces op_table!)
+static tok_t fopcode_to_tok(opcode_t op)
+{
+    switch(op) {
+    case OP_FADD: return PLUS;
+    case OP_FSUB: return MINUS;
+    case OP_FMUL: return ASTERISK;
+    case OP_FDIV: return SLASH;
+    case OP_FNEG: return MINUS1;
+    case OP_FLT:  return LT;
+    case OP_FLTE: return LTEQ;
+    case OP_FGT:  return GT;
+    case OP_FGTE: return GTEQ;
+    case OP_FEQEQ: return EQEQ;
+    case OP_FNEQ:  return NEQ;
+    default: csp_opcode_to_tok(op);
+    }
+}
+
+//
+// trace instructions util
+// 1. OP_RULE  then we have a condition expression
+// 2. OP_NEXT  then we have a body expression
+//
+static int exprbuf_expr(FILE* f, csp_rt_t*  st,
+			csp_exprbuf_t* bp,
+			int i)
+{
+    exprbuf_init(bp);
+    while(i < st->ps.nn) {
+	tok_t t;
+	csp_instr_t* ip = &st->instr[i];
+	switch(ip->op) {
+	case OP_RULE:
+	    exprbuf_rule(f, st, bp, ip);
+	    return i+1;
+	case OP_NEXT:
+	    exprbuf_body(f, st, bp, ip);
+	    return i+1;
+        case OP_ST:  // must be in body part?
+	    exprbuf_st(st, bp, ip);
+	    exprbuf_print(f, bp, bp->reg[ip->m.x]);
+	    // bp->pos = 0; // restart ???
+	    break;
+	case OP_ARG: {
+	    bp->arg[ip->i.imm] = bp->reg[ip->i.x];
+	    break;
+	}
+	case OP_CALL:
+	    exprbuf_fcall(st, bp, ip);
+	    break;
+        case OP_LD:
+	    exprbuf_ld(st, bp, ip);
+	    break;
+        case OP_LI: { // fixme: float/fix 32-bit integer hi/lo
+            uint8_t *start = exprbuf_ptr(bp);
+            exprbuf_uint(bp, ip->i.imm);
+	    bp->reg[ip->i.x] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
+//	    printf("LI: R%d = '%s'\n", ip->i.x, bp->reg[ip->i.x]);
+            bp->prio[ip->i.x] = 110;
+            break;
+	}
+	default:
+	    t = fopcode_to_tok(ip->op);
+	    if (op_table[t].arity >= 0) {
+		exprbuf_alu(bp, ip, op_table[t].name,
+			    op_table[t].arity, op_table[t].prec);
+	    }
+	    break;
+	}
+	i++;
+    }
+    return i;
+}
+
+// ci:
+//    Condition
+// ri: OP_RULE: if !ri then NEXT
+//
+// ni: OP_NEXT:
+//
+int csp_list_rule(FILE* f, csp_rt_t* st, int i)
+{
+    int Lc = i;
+
+    while(i < st->ps.nn) {
+	if (st->instr[i].op == OP_RULE) {
+	    csp_exprbuf_t buf;
+	    // int ri = st->instr[i].r.cnd;  // condition register
+	    // int Ln = st->instr[i].r.nxt;  // label to OP_NEXT
+	    fprintf(f, "RULE-%d\n", Lc);
+	    exprbuf_expr(f, st, &buf, i+1);   // print body
+	    fprintf(f, "%s", " ? ");
+	    exprbuf_expr(f, st, &buf, Lc);   // print expression
+	    fprintf(f, "\n");	    
+	    return i+1;
+	}
+	i++;
+    }
+    return i;
+}
+
+// rules are generate as code
+// here we try to reverse engineer the rules, is there a better way?
+//
 void csp_list_rules(FILE* f, csp_rt_t* st)
 {
-    // hmm
+    int i = 0;
+    while(i < st->ps.nn)
+	i = csp_list_rule(f, st, i);
 }

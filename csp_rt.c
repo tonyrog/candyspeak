@@ -1183,7 +1183,7 @@ static index_t lookup_decl_in(csp_rt_t* st, char* name, int name_len,
     while(i < stop) {
 	int pos = st->decl[i].name;
 	if (pos > 0) {
-	    int len = st->str[pos-1];
+	    int len = st->str[pos-1];  // FIXME: RODATA
 	    index_t ix = MAKE_INDEX(0,i);
 	    if ((len == name_len) &&
 		(memcmp(decl_name(st, ix),name, name_len)==0)) {
@@ -1215,16 +1215,16 @@ index_t lookup_const(csp_rt_t* st, vtype_t vt, value_t v)
     return BAD_INDEX;
 }
 
-index_t lookup_string_const(csp_rt_t* st, char* str, int len)
+index_t lookup_string_const(csp_rt_t* st, char* str, int slen)
 {
     index_t i;
     for (i = 0; i < st->ps.nd; i++) {
 	if (IS_CONST(st, i) && (st->decl[i].vt == V_STRING)) {
 	    sindex_t si = st->decl[i].cn.init.s;
-	    int sn = st->str[si-1];  // length is in byte before spos
-	    if ((sn == len) &&
-		(strcmp(str, &st->str[st->decl[i].cn.init.s]) == 0))
-		return MAKE_INDEX(0,i);		
+	    int len = st->str[si-1];  // length is in byte before spos
+	    if ((len == slen) &&
+		(memcmp(str, &st->str[st->decl[i].cn.init.s], slen) == 0))
+		return MAKE_INDEX(0,i);
 	}
     }
     return BAD_INDEX;
@@ -1786,13 +1786,15 @@ next:
 	    if ((str[0] == '.') && ISDIGIT(str[1])) {
 #if FVALUE_IS_FIXPOINT
 		// Parse as Q16.16 fixpoint
-		fvalue_t frac = 0;
-		fvalue_t scale = FIX_SCALE / 10;
+		fvalue_t frac;
+		uint32_t denom = 1;
+		uint32_t numer = 0;
 		str++;
 		while(ISDIGIT(*str)) {
-		    frac += scale * dec(*str++);
-		    scale /= 10;
+		    numer = numer*10 + dec(*str++);
+		    denom *= 10;
 		}
+		frac = (int32_t)(((uint64_t)numer<<FIX_SHIFT) / denom);
 		fvalue_t result = FIX_FROM_INT(v) + frac;
 		TOK_FLT(sign >= 0 ? result : -result);
 #else

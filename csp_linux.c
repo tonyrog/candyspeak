@@ -302,6 +302,7 @@ static int handle_command(csp_rt_t* st, const char* cmd)
     }
     else if (strcmp(cmd, "list") == 0) {
 	csp_list_declarations(stdout, st);
+	csp_list_rules(stdout, st);
 	return 0;
     }
     else if (strcmp(cmd, "state") == 0) {
@@ -866,6 +867,7 @@ int main(int argc, char** argv)
 
     if (debug_parse) {
 	csp_dump(stdout, &state);
+	csp_list_rules(stdout, &state);	
     }
     if (parse_out) {
 	csp_dump(parse_out, &state);

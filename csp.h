@@ -459,7 +459,7 @@ typedef struct PACKED {
     index_t  obj;            // object declaration index 
 } csp_instr_new_t;
 
-typedef struct PACKED {     // 4+4+1+16 = 25
+typedef struct PACKED {
     opcode_t op:6;    
     unsigned x:REG_BITS;    // result register    
     unsigned idx:REG_BITS;  // function index
@@ -764,7 +764,7 @@ extern int csp_println(void);
 extern int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val);
 
 const char* csp_opcode_name(opcode_t op);
-extern tok_t csp_opcode_to_tok(opcode_t opcode);
+extern int csp_opcode_to_tok(opcode_t opcode);
 extern uint8_t csp_opcode_rtype(opcode_t opcode);
 extern void csp_set_error(csp_rt_t*, csp_err_t);
 extern void csp_clr_error(csp_rt_t*);
