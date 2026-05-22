@@ -2,7 +2,7 @@
 // # Add NEXT instruction 
 
 When in reactive mode NEXT will execute
-the next rule in the queue. An in sequential mode
+the next rule in the queue. In sequential mode
 NEXT will be a NOP.
 
 // FIXME: in reactive mode execute until NEXT!
@@ -13,7 +13,7 @@ NEXT will be a NOP.
 Update register allocator to use pinned variables
 by allocating load of variables to variables allocated
 from top register to bottom. When registers area is exhausted
-then pinned variables are evcited (reloads when need)
+then pinned variables are evicted (reloads when need)
 
 ## constant folding
 

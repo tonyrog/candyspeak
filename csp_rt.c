@@ -1342,9 +1342,13 @@ int csp_new_nop(csp_rt_t* st)
     return csp_new_instr(st, OP_NOP);
 }
 
-int csp_new_next(csp_rt_t* st)
+int csp_new_next(csp_rt_t* st, int r)
 {
-    return csp_new_instr(st, OP_NEXT);
+    int i;
+    if ((i = csp_new_instr(st, OP_NEXT)) >= 0) {
+	st->instr[i].x.x = r;
+    }
+    return i;
 }
 
 int csp_new_mem(csp_rt_t* st, opcode_t op, reg_t x, index_t mem)
@@ -3143,7 +3147,7 @@ NOINLINE int csp_parse_rule(csp_rt_t* st, token_t* tv, size_t n)
     if (!csp_parse_expr(st, &tv[0], &num, &result))
 	return -1;
     st->instr[j].r.nxt = st->ps.nn - j;
-    if (csp_new_next(st) < 0)
+    if (csp_new_next(st, result.reg) < 0)
 	return -1;
     return 0;
 }
@@ -3211,14 +3215,14 @@ int make_can_rule(csp_rt_t* st, index_t ox, int k, index_t idx,
     cnd = alloc_reg(st);
     if (new_expr2(st, OP_EQEQ, cnd, zr, cr) < 0)
 	return -1;
-
     if ((j = csp_new_rule(st, cnd, 0)) < 0)
 	return -1;
     if (csp_new_st(st, kr, ox) < 0)
 	return -1;
     st->instr[j].r.nxt = st->ps.nn - j;    
-    if (csp_new_next(st) < 0)
-	return -1;    
+    if (csp_new_next(st, kr) < 0)
+	return -1;
+    // free reg?
     return 0;
 }
 

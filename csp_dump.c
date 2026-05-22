@@ -164,8 +164,8 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		i, eot);
 	break;
     case OP_NEXT:
-	fprintf(f, "{instr,%d,'NEXT'}%s\n",
-		i, eot);
+	fprintf(f, "{instr,%d,'NEXT',[r%d]}%s\n",
+		i, st->instr[i].x.x, eot);
 	break;
     case OP_LD:
 	fprintf(f, "{instr,%d,'LD',[r%d,",
@@ -747,13 +747,23 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 	    fprintf(f, ".f={.x=%u,.idx=%u,.usr=%u,avt=0x%04x}",
 		    ip->f.x, ip->f.idx, ip->f.usr, ip->f.avt);
 	    break;
+	case OP_NEXT:
+	    fprintf(f, ".x={.x=%u}",
+		    ip->a.x);
+	    break;
 	case OP_RULE:
 	    fprintf(f, ".r={.cnd=%u,.nxt=%u}", ip->r.cnd, ip->r.nxt);
 	    break;
-	default: // three-address-instruction
-	    fprintf(f, ".a={.x=%u,.y=%u,.z=%u}",
-		    ip->a.x, ip->a.y, ip->a.z);
+	default: { // two/three-address-instruction
+	    int t = csp_opcode_to_tok(ip->op);
+	    if (op_table[t].arity == 1)
+		fprintf(f, ".a={.x=%u,.y=%u}",
+			ip->a.x, ip->a.y);
+	    else
+		fprintf(f, ".a={.x=%u,.y=%u,.z=%u}",
+			ip->a.x, ip->a.y, ip->a.z);
 	    break;
+	}
 	}
 	fprintf(f, "},\n");
     }
@@ -1093,7 +1103,7 @@ static void exprbuf_st(csp_rt_t* st,
     uint8_t  var = exprbuf_intern(bp, varname, varnamelen);
     
     if (bp->stcnt)
-	exprbuf_char(bp, ',');    
+	exprbuf_char(bp, ',');
     exprbuf_strref(bp, var);
     exprbuf_char(bp, '=');
     exprbuf_strref(bp, bp->reg[ip->m.x]);
@@ -1123,11 +1133,12 @@ void exprbuf_rule(FILE* f, csp_rt_t* st, csp_exprbuf_t* bp, csp_instr_t* ip)
     exprbuf_print(f, bp, bp->reg[ip->r.cnd]);
 }
 
-// exprbuf contains rule body (r0 ?)
+// exprbuf contains rule body
 void exprbuf_body(FILE* f, csp_rt_t* st, csp_exprbuf_t* bp, csp_instr_t* ip)
 {
-    if (bp->pos > 0)
-	exprbuf_print(f, bp, bp->reg[0]);
+    if (bp->stcnt)
+	exprbuf_char(bp, ',');    
+    exprbuf_print(f, bp, bp->reg[ip->x.x]);
 }
 
 //
@@ -1155,17 +1166,15 @@ static int exprbuf_expr(FILE* f, csp_rt_t*  st,
 	    exprbuf_print(f, bp, bp->reg[ip->m.x]);
 	    exprbuf_init(bp); //restart?
 	    break;
-	case OP_ARG: {
+	case OP_ARG:
 	    bp->arg[ip->i.imm] = bp->reg[ip->i.x];
 	    break;
-	}
 	case OP_CALL:
 	    exprbuf_fcall(st, bp, ip);
 	    break;
         case OP_LD:
 	    exprbuf_ld(st, bp, ip);
 	    break;
-
         case OP_LIU: {
             uint8_t *start = exprbuf_ptr(bp);
             exprbuf_xuint16(bp, (uint16_t)ip->i.imm);
@@ -1231,7 +1240,7 @@ int csp_list_rule(FILE* f, csp_rt_t* st, int i)
 	    buf.stcnt = 0;
 	    exprbuf_expr(f, st, &buf, Lc);   // print expression
 	    fprintf(f, "\n");
-	    return st->instr[i].r.nxt+1;
+	    return i+st->instr[i].r.nxt+1;
 	}
 	i++;
     }

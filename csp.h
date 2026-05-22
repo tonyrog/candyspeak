@@ -442,6 +442,11 @@ typedef struct PACKED {
 } csp_instr_rule_t;
 
 typedef struct PACKED {
+    opcode_t op:6;    
+    unsigned x:REG_BITS;   // body result
+} csp_instr_next_t;
+
+typedef struct PACKED {
     opcode_t op:6;
     unsigned num:INSTR_BITS;  // number of instructions
     index_t  mx;     // module index
@@ -477,6 +482,7 @@ typedef union {
     csp_instr_mem_t m;
     csp_instr_call_t f;
     csp_instr_rule_t r;
+    csp_instr_next_t x;    
     csp_instr_alu_t a;
 } csp_instr_t;
 
