@@ -1035,7 +1035,7 @@ again:
 	if (st->reg[st->instr[n].r.cnd].i)
 	    n = n+1;
 	else
-	    n = st->instr[n].r.nxt;
+	    n = n+st->instr[n].r.nxt;  // relative jump
 	goto again;
     case OP_NEXT: // rule is done executing
 	return n+1;
@@ -2208,7 +2208,7 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 		// constant fold
 		value_t result = eval2(op, a->val, b->val);
 		if (a->L) free_reg(st, a->reg);
-		if (b->L) free_reg(st, b->reg);
+		if (b->L && (a->reg != b->reg)) free_reg(st, b->reg);
 		a->X = a->L = 0;
 		a->I = 1;
 		a->val = result;
@@ -2222,7 +2222,8 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 			if (new_expr2(st, op, dst, a->reg, b->reg) < 0)
 			    return PARSE_ERROR;
 			free_reg(st, a->reg);
-			free_reg(st, b->reg);
+			if (a->reg != b->reg)
+			    free_reg(st, b->reg);
 		    }
 		    a->reg = dst;
 		    a->I = 0;
@@ -3141,7 +3142,7 @@ NOINLINE int csp_parse_rule(csp_rt_t* st, token_t* tv, size_t n)
 	return -1;
     if (!csp_parse_expr(st, &tv[0], &num, &result))
 	return -1;
-    st->instr[j].r.nxt = st->ps.nn;
+    st->instr[j].r.nxt = st->ps.nn - j;
     if (csp_new_next(st) < 0)
 	return -1;
     return 0;
@@ -3215,7 +3216,7 @@ int make_can_rule(csp_rt_t* st, index_t ox, int k, index_t idx,
 	return -1;
     if (csp_new_st(st, kr, ox) < 0)
 	return -1;
-    st->instr[j].r.nxt = st->ps.nn;    
+    st->instr[j].r.nxt = st->ps.nn - j;    
     if (csp_new_next(st) < 0)
 	return -1;    
     return 0;

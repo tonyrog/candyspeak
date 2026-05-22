@@ -29,10 +29,10 @@ typedef uint8_t  reg_t;    // at most 256 registers
 #if defined(__AVR__)
 #include <avr/pgmspace.h>
 #define RODATA          PROGMEM
-#define RD_BYTE(p)      pgm_read_byte(p)
-#define RD_PTR(p)       (void *)pgm_read_word(p)
-#define MEMCMP_RD(a,b,n) memcmp_P(a, b, n)
-#define STR_RD(d,s)     strcpy_P(d, s)
+#define RD_BYTE(p)      pgm_read_byte((p))
+#define RD_PTR(p)       (void *)pgm_read_word((p))
+#define MEMCMP_RD(a,b,n) memcmp_P((a), (b), (n))
+#define STR_RD(d,s)     strcpy_P((d), (s))
 #define DECL_BITS    5
 #define INSTR_BITS   5
 #define OBJ_BITS     3
@@ -41,8 +41,8 @@ typedef uint8_t  reg_t;    // at most 256 registers
 #define RODATA
 #define RD_BYTE(p)      (*(p))
 #define RD_PTR(p)       (*(p))
-#define MEMCMP_RD(a,b,n) memcmp(a, b, n)
-#define STR_RD(d,s)     strcpy(d, s)
+#define MEMCMP_RD(a,b,n) memcmp((a), (b), (n))
+#define STR_RD(d,s)     strcpy((d), (s))
 #define DECL_BITS    10
 #define INSTR_BITS   9
 #define OBJ_BITS     4
@@ -438,7 +438,7 @@ typedef struct PACKED {
 typedef struct PACKED {
     opcode_t op:6;    
     unsigned cnd:REG_BITS; // condition register
-    int16_t nxt;           // jump if !cnd
+    int16_t nxt;           // relative jump if !cnd
 } csp_instr_rule_t;
 
 typedef struct PACKED {

@@ -181,11 +181,9 @@ Is coded as
     DEF_OUT = 0 ? (0x218[24] == 0)
 	
 Then the first Off will take precedence but the desired effect
-it probably to have all Off clauses after ALL On clauses.
+is probably to have all Off clauses after ALL On clauses.
 	
 # Extension to Analog
-
-FIXME: add integer/unsigned/float [little/big]
 
     <a-statement> := 
 		  <statement>
