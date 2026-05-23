@@ -30,6 +30,7 @@ typedef uint8_t  reg_t;    // at most 256 registers
 #include <avr/pgmspace.h>
 #define RODATA          PROGMEM
 #define RD_BYTE(p)      pgm_read_byte((p))
+#define RD_WORD(p)      pgm_read_word((p))
 #define RD_PTR(p)       (void *)pgm_read_word((p))
 #define MEMCMP_RD(a,b,n) memcmp_P((a), (b), (n))
 #define STR_RD(d,s)     strcpy_P((d), (s))
@@ -40,6 +41,7 @@ typedef uint8_t  reg_t;    // at most 256 registers
 #else
 #define RODATA
 #define RD_BYTE(p)      (*(p))
+#define RD_WORD(p)      (*(p))
 #define RD_PTR(p)       (*(p))
 #define MEMCMP_RD(a,b,n) memcmp((a), (b), (n))
 #define STR_RD(d,s)     strcpy((d), (s))
@@ -100,6 +102,13 @@ typedef enum {
     V_NUMBER   = 6,  // V_INTEGER | V_FLOAT
     V_ANY      = 7,  // 7 - V_INTEGER | V_FLOAT | V_STRING | V_INDEX    
 } vtype_t;
+
+// create argument type bitmask
+#define MAKE_TYPE0()            0
+#define MAKE_TYPE1(T1)          (T1)
+#define MAKE_TYPE2(T1,T2)       ((T1)|((T2)<<4))
+#define MAKE_TYPE3(T1,T2,T3)    ((T1)|((T2)<<4)|((T3)<<8))
+#define MAKE_TYPE4(T1,T2,T3,T4) ((T1)|((T2)<<4)|((T3)<<8)|((T4)<<12))
 
 #define ENDIAN_BITS 2
 typedef enum {
@@ -303,6 +312,8 @@ typedef enum {
     OP_NEW,     // #<module> <instance-name>
     OP_LD,      // load register from memory
     OP_ST,      // store register to memory
+    OP_STIMP,   // store for <- (reactive assign), same as ST but marks rimp
+    OP_CHG,     // r |= dset[ix], check if variable changed
     OP_LI,      // load signed 16-bit constant
     OP_LIU,     // load unsigned 16-bit constant (zero extend)
     OP_LIH,     // load high 16-bit (OR into high bits)
@@ -553,7 +564,7 @@ typedef struct PACKED {
     uint8_t arity;              // number of arguments (0-4)
     uint8_t pure;               // function is pure! side-effect free
     uint8_t rtype;              // return type
-    uint8_t argtypes[MAX_ARGS]; // argument types (V_INTEGER, V_INDEX, etc)
+    uint16_t argtypes;          // argument types MAKE_TYPEx
     csp_func_fn fn;             // function to call
 } csp_func_t;
 
@@ -612,6 +623,9 @@ typedef struct _csp_rt_t
     index_t module[MAX_MODULES];   // list of modules
     index_t object[MAX_OBJECTS];   // list of objects
     index_t timer[MAX_TIMERS];     // list of timers
+    // temp var list during <- parsing (reuses timer[], set by csp_rt_init)
+    index_t* var;
+    index_t nvar;
     // during eval
     uint32_t update;             // update counter
     uint32_t wait_ms;            // sleep time or NOTIMEOUT

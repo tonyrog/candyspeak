@@ -223,7 +223,7 @@ void csp_input(csp_rt_t* st)
 	    if ((now_ms - t0) >= period) {
 		st->decl[di].tm.running = 0;
 		csp_set_ivalue(st, ix, 0);
-#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 		if (st->reactive) {
 		    csp_enq_elist(st, ix);
 		}

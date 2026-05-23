@@ -25,6 +25,10 @@ int csp_opcode_to_tok(opcode_t opcode)
     case OP_FGTE: return GTEQ;
     case OP_FEQEQ: return EQEQ;
     case OP_FNEQ:  return NEQ;
+    case OP_NEXT: return  NEXT;	
+    case OP_ENTER: return ENTER;
+    case OP_LEAVE: return LEAVE;
+    case OP_NEW: return NEW;
     default: break;
     }
     while(op_table[t].tok != LAST) {
@@ -118,7 +122,7 @@ void csp_fprint_value(FILE* f, csp_rt_t* st, vtype_t vt, value_t val)
 
 void dump_edge_list(FILE* f, csp_rt_t* st, index_t ix)
 {
-#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     int n;
     int i = INDEX(ix);
     fprintf(f, "[");
@@ -176,8 +180,19 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	break;
     case OP_ST:
 	fprintf(f, "{instr,%d,'ST',[r%d,",
-		i,
-		st->instr[i].m.x);
+		i, st->instr[i].m.x);
+	csp_fprint_tag(f, st, st->instr[i].m.mem);
+	fprintf(f, "]}%s\n", eot);
+	break;
+    case OP_STIMP:
+	fprintf(f, "{instr,%d,'STIMP',[r%d,",
+		i, st->instr[i].m.x);
+	csp_fprint_tag(f, st, st->instr[i].m.mem);
+	fprintf(f, "]}%s\n", eot);
+	break;
+    case OP_CHG:
+	fprintf(f, "{instr,%d,'CHG',[r%d,",
+		i, st->instr[i].m.x);
 	csp_fprint_tag(f, st, st->instr[i].m.mem);
 	fprintf(f, "]}%s\n", eot);
 	break;
@@ -372,7 +387,7 @@ void csp_dump_state_erl(FILE* f, csp_rt_t* st)
 void csp_dump_result_erl(FILE* f, csp_rt_t* st, index_t x)
 {
     fprintf(f, "{result,[{cycle,%d}", st->cycle);
-#if defined(WANT_STATISTICS) && (WANT_STATISTICS==1)
+#if defined(USE_STATISTICS) && (USE_STATISTICS==1)
     fprintf(f, ",{num_eval0,%d}", st->num_eval0);
 #endif
     if (x == BAD_INDEX)
@@ -500,7 +515,7 @@ void csp_dump(FILE* f, csp_rt_t* st)
     i = 0;
     while(i < st->ps.nn)
 	i = csp_dump_instr(f, 0, st, i, ".");
-#if defined(WANT_REACTIVE) && (WANT_REACTIVE==1)
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     if (st->reactive) {
 	i = 0;
 	while(i < st->ps.nd) 
@@ -740,6 +755,8 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 	    fprintf(f, ".i={.x=%u,.imm=%d}", ip->i.x, ip->i.imm);
 	    break;
 	case OP_ST:
+	case OP_STIMP:
+	case OP_CHG:
 	case OP_LD:
 	    fprintf(f, ".m={.x=%u,.mem=%u}", ip->m.x, ip->m.mem);
 	    break;
@@ -859,6 +876,7 @@ void csp_list_declarations(FILE* f, csp_rt_t* st)
 }
 
 #define MAX_STRPTRS 64
+#define MAX_BODY 16
 #define PRINT_STACK 16
 #define STRREF(i)  (0x80|(i))
 #define IS_REF(x)  ((x) & 0x80)
@@ -866,8 +884,6 @@ void csp_list_declarations(FILE* f, csp_rt_t* st)
 
 typedef struct {
     uint8_t pos;
-    uint8_t stcnt;    
-    
     uint8_t buf[MAX_STR_BUF];
     uint8_t nstrptrs;
     uint8_t* strptrs[MAX_STRPTRS];
@@ -877,12 +893,16 @@ typedef struct {
     uint8_t prio[MAX_REGS];
     uint8_t reg[MAX_REGS];    // INDEX!
     uint8_t arg[MAX_ARGS];    // INDEX
+    // body side-effects list
+    uint8_t nbody;
+    uint8_t body[MAX_BODY];   // strptrs indices
 } csp_exprbuf_t;
 
 void exprbuf_init(csp_exprbuf_t* bp)
 {
     bp->pos = 0;
     bp->nstrptrs = 0;
+    bp->nbody = 0;
 }
 
 // return current pointer
@@ -973,6 +993,12 @@ static void exprbuf_str(csp_exprbuf_t* bp, const char *s)
     while ((c = *s++)) exprbuf_char(bp, c);
 }
 
+static uint8_t exprbuf_var(csp_rt_t* st, csp_exprbuf_t* bp, uint16_t ix)
+{
+    uint8_t* varname =  (uint8_t*) decl_name(st, ix);
+    uint8_t  varnamelen = varname[-1];
+    return exprbuf_intern(bp, varname, varnamelen);
+}
 
 static void exprbuf_wrap(csp_exprbuf_t* bp, unsigned r, int outer)
 {
@@ -1004,6 +1030,17 @@ static void exprbuf_int16(csp_exprbuf_t* bp, int16_t v)
     else {
 	exprbuf_uint16(bp, v);
     }
+}
+
+// convert string(ref) to integer
+static int exprbuf_reftoi(csp_exprbuf_t* bp, uint8_t ref)
+{
+    uint8_t* ptr = bp->strptrs[REF_IDX(ref)];
+    int len = bp->strlens[REF_IDX(ref)];
+    int val = 0;
+    while(len--)
+	val = val*10 + (*ptr++ - '0');
+    return val;
 }
 
 char hex(uint8_t v)
@@ -1049,6 +1086,24 @@ static void exprbuf_alu(csp_exprbuf_t* bp,
 	exprbuf_wrap(bp, ip->a.y, prio);
     }
     else { // assume 2
+	// Skip empty operands (from CHG in <- rules)
+	int y_empty = (bp->strlens[bp->reg[ip->a.y]] == 0);
+	int z_empty = (bp->strlens[bp->reg[ip->a.z]] == 0);
+	if (y_empty && z_empty) {
+	    bp->reg[ip->a.x] = bp->reg[ip->a.y];  // both empty
+	    bp->prio[ip->a.x] = prio;
+	    return;
+	}
+	if (y_empty) {
+	    bp->reg[ip->a.x] = bp->reg[ip->a.z];
+	    bp->prio[ip->a.x] = bp->prio[ip->a.z];
+	    return;
+	}
+	if (z_empty) {
+	    bp->reg[ip->a.x] = bp->reg[ip->a.y];
+	    bp->prio[ip->a.x] = bp->prio[ip->a.y];
+	    return;
+	}
 	exprbuf_wrap(bp, ip->a.y, prio);
 	exprbuf_str(bp, op);
 	exprbuf_wrap(bp, ip->a.z, prio);
@@ -1066,16 +1121,19 @@ static void exprbuf_fcall(csp_rt_t* st,
     const char* fname;
     int fnamelen;
     uint8_t fn;
+    uint16_t argtypes;
     
     if (ip->f.usr) {
 	// maybe RODATA on AVR! fixme
 	fname = st->ufuncs[ip->f.idx].name;
-	fnamelen = st->ufuncs[ip->f.idx].namelen;	
+	fnamelen = st->ufuncs[ip->f.idx].namelen;
+	argtypes = st->ufuncs[ip->f.idx].argtypes;
     }
     else {
 	// always RODATA on AVR!
 	fname = csp_builtin_funcs[ip->f.idx].name;
 	fnamelen = csp_builtin_funcs[ip->f.idx].namelen;
+	argtypes = csp_builtin_funcs[ip->f.idx].argtypes;	
     }
     fn = exprbuf_intern(bp, (uint8_t*)fname, fnamelen);
 
@@ -1085,7 +1143,15 @@ static void exprbuf_fcall(csp_rt_t* st,
 	int a = (ip->f.avt >> i*4) & 0xf;
 	if (a == 0) break;
 	if (i > 0) exprbuf_char(bp, ',');
-	exprbuf_strref(bp, bp->arg[i]);
+	if ((argtypes >> i*4) == V_INDEX) {
+	    // convert argument assumed index integer
+	    uint16_t imm = exprbuf_reftoi(bp, bp->arg[i]);
+	    uint8_t var = exprbuf_var(st, bp, imm);
+	    exprbuf_strref(bp, var);	    
+	}
+	else {
+	    exprbuf_strref(bp, bp->arg[i]);
+	}
     }
     exprbuf_char(bp, ')');
     bp->reg[ip->f.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
@@ -1093,35 +1159,29 @@ static void exprbuf_fcall(csp_rt_t* st,
     bp->prio[ip->f.x] = 110;
 }
 
-static void exprbuf_st(csp_rt_t* st,
-		       csp_exprbuf_t* bp,
-		       csp_instr_t* ip)
+static void exprbuf_store(csp_rt_t* st,
+			  csp_exprbuf_t* bp,
+			  csp_instr_t* ip, int rimp)
 {
     uint8_t* start = exprbuf_ptr(bp);
-    uint8_t* varname =  (uint8_t*) decl_name(st, ip->m.mem);
-    uint8_t  varnamelen = varname[-1];
-    uint8_t  var = exprbuf_intern(bp, varname, varnamelen);
-    
-    if (bp->stcnt)
-	exprbuf_char(bp, ',');
+    uint8_t  var = exprbuf_var(st, bp, ip->m.mem);
+
     exprbuf_strref(bp, var);
-    exprbuf_char(bp, '=');
+    if (rimp) { exprbuf_char(bp, '<'); exprbuf_char(bp, '-'); }
+    else exprbuf_char(bp, '=');
     exprbuf_strref(bp, bp->reg[ip->m.x]);
 
     bp->reg[ip->m.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
-//    printf("ST: R%d = '%s'\n", ip->m.x, bp->reg[ip->m.x]);
     bp->prio[ip->m.x] = 5;
-    bp->stcnt++;
+    if (bp->nbody < MAX_BODY)
+	bp->body[bp->nbody++] = bp->reg[ip->m.x];
 }
 
 static void exprbuf_ld(csp_rt_t* st,
 		       csp_exprbuf_t* bp,
 		       csp_instr_t* ip)
 {
-    uint8_t* varname =  (uint8_t*) decl_name(st, ip->m.mem);
-    uint8_t  varnamelen = varname[-1];
-    uint8_t  var = exprbuf_intern(bp, varname, varnamelen);
-
+    uint8_t  var = exprbuf_var(st, bp, ip->m.mem);
     bp->reg[ip->m.x] = var;
 //    printf("LD: R%d = '%s'\n", ip->m.x, bp->reg[ip->m.x]);
     bp->prio[ip->m.x] = 110;
@@ -1130,15 +1190,23 @@ static void exprbuf_ld(csp_rt_t* st,
 // exprbuf contains rule condition
 void exprbuf_rule(FILE* f, csp_rt_t* st, csp_exprbuf_t* bp, csp_instr_t* ip)
 {
-    exprbuf_print(f, bp, bp->reg[ip->r.cnd]);
+    if (f != NULL)
+	exprbuf_print(f, bp, bp->reg[ip->r.cnd]);
 }
 
-// exprbuf contains rule body
+// exprbuf contains rule body - print side-effects then final expression
 void exprbuf_body(FILE* f, csp_rt_t* st, csp_exprbuf_t* bp, csp_instr_t* ip)
 {
-    if (bp->stcnt)
-	exprbuf_char(bp, ',');    
-    exprbuf_print(f, bp, bp->reg[ip->x.x]);
+    int i;
+    for (i = 0; i < bp->nbody; i++) {
+	if (i > 0) fputc(',', f);
+	exprbuf_print(f, bp, bp->body[i]);
+    }
+    // add final expression if different from last body element
+    if (bp->nbody == 0 || bp->body[bp->nbody-1] != bp->reg[ip->x.x]) {
+	if (bp->nbody > 0) fputc(',', f);
+	exprbuf_print(f, bp, bp->reg[ip->x.x]);
+    }
 }
 
 //
@@ -1150,7 +1218,6 @@ static int exprbuf_expr(FILE* f, csp_rt_t*  st,
 			csp_exprbuf_t* bp,
 			int i)
 {
-    exprbuf_init(bp);
     while(i < st->ps.nn) {
 	tok_t t;
 	csp_instr_t* ip = &st->instr[i];
@@ -1161,16 +1228,31 @@ static int exprbuf_expr(FILE* f, csp_rt_t*  st,
 	case OP_NEXT:
 	    exprbuf_body(f, st, bp, ip);
 	    return i+1;
-        case OP_ST:  // must be in body part?
-	    exprbuf_st(st, bp, ip);
-	    exprbuf_print(f, bp, bp->reg[ip->m.x]);
-	    exprbuf_init(bp); //restart?
+        case OP_ST:  // assignment in body
+	    exprbuf_store(st, bp, ip, 0);
+	    break;
+	case OP_STIMP:  // reactive assignment (<-)
+	    exprbuf_store(st, bp, ip, 1);
+	    break;
+	case OP_CHG:
+	    // Mark register as "reactive condition" - empty string for AND to skip
+	    bp->reg[ip->m.x] = exprbuf_intern(bp, (uint8_t*)"", 0);
+	    bp->prio[ip->m.x] = 110;
 	    break;
 	case OP_ARG:
 	    bp->arg[ip->i.imm] = bp->reg[ip->i.x];
 	    break;
 	case OP_CALL:
 	    exprbuf_fcall(st, bp, ip);
+	    // Add side-effect calls (void funcs like print) to body list
+	    if (bp->nbody > 0 ||
+		(i+1 < st->ps.nn &&
+		 (st->instr[i+1].op == OP_RULE || st->instr[i+1].op == OP_NEXT ||
+		  st->instr[i+1].op == OP_ST || st->instr[i+1].op == OP_STIMP ||
+		  st->instr[i+1].op == OP_CALL))) {
+		if (bp->nbody < MAX_BODY)
+		    bp->body[bp->nbody++] = bp->reg[ip->f.x];
+	    }
 	    break;
         case OP_LD:
 	    exprbuf_ld(st, bp, ip);
@@ -1229,16 +1311,26 @@ int csp_list_rule(FILE* f, csp_rt_t* st, int i)
     int Lc = i;
     csp_exprbuf_t buf;
 
-    exprbuf_init(&buf);
-    buf.stcnt = 0;
-    
     while(i < st->ps.nn) {
 	if (st->instr[i].op == OP_RULE) {
+	    csp_instr_t* ip = &st->instr[i];
 	    fprintf(f, "RULE-%d\n", Lc);
+	    exprbuf_init(&buf);
 	    exprbuf_expr(f, st, &buf, i+1);   // print body
-	    fprintf(f, "%s", " ? ");
-	    buf.stcnt = 0;
-	    exprbuf_expr(f, st, &buf, Lc);   // print expression
+	    // Build condition in buffer, check if non-empty
+	    exprbuf_init(&buf);
+	    exprbuf_expr(NULL, st, &buf, Lc); // build but don't print
+	    switch(buf.strlens[buf.reg[ip->r.cnd]]) {
+	    case 0:
+		break;
+	    case 2:
+		if ((buf.buf[buf.reg[ip->r.cnd]] == '-') &&
+		    (buf.buf[buf.reg[ip->r.cnd]+1] == '1'))
+		    break;		
+	    default:
+		fprintf(f, " ? ");
+		exprbuf_print(f, &buf, buf.reg[ip->r.cnd]);
+	    }
 	    fprintf(f, "\n");
 	    return i+st->instr[i].r.nxt+1;
 	}

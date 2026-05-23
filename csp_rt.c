@@ -176,7 +176,7 @@ const op_entry_t op_table[] RODATA = {
     INSTR_ENT(LDI,OP_LI,s_li,-1,-1,NO),
     INSTR_ENT(ARG,OP_ARG,s_arg,-1,-1,NO),
     INSTR_ENT(CVTIF,OP_CVTIF,s_cvtif,-1,-1,NO),
-    INSTR_ENT(CVTIF,OP_CVTFI,s_cvtfi,-1,-1,NO),    
+    INSTR_ENT(CVTIF,OP_CVTFI,s_cvtfi,-1,-1,NO),
     
     // keywords
     TOK_ENT(PULLUP,OP_NOP,s_pullup),
@@ -779,25 +779,25 @@ static const char s_println[] RODATA = "println";
 static const char s_tick[] RODATA = "tick";
 static const char s_cycle[] RODATA = "cycle";
 
-#define CSP_FUNC_ENT(str, a, p, rt, at1,at2,at3,at4, f)	\
+#define CSP_FUNC_ENT(str, a, p, rt, args, f)	\
     {.name=(str),.namelen=sizeof((str))-1,.arity=(a),.pure=(p),	\
-	 .rtype=(rt),.argtypes={at1,at2,at3,at4},.fn=(f)}
+	    .rtype=(rt),.argtypes=(args),.fn=(f)}
 
 // Built-in function table
 // { name, namelen, nargs, rtype, {argtypes}, fn }
 const csp_func_t csp_builtin_funcs[] RODATA = {
-    CSP_FUNC_ENT(s_min,     2, 1, V_INTEGER, V_INTEGER,V_INTEGER,0,0,  fn_min ),
-    CSP_FUNC_ENT(s_max,     2, 1, V_INTEGER, V_INTEGER,V_INTEGER,0,0,  fn_max ),
-    CSP_FUNC_ENT(s_abs,     1, 1, V_INTEGER, V_INTEGER,0,0,0,     fn_abs ),
-    CSP_FUNC_ENT(s_fabs,    1, 1, V_FLOAT,   V_FLOAT,0,0,0,       fn_fabs ),
-    CSP_FUNC_ENT(s_sign,    1, 1, V_INTEGER, V_NUMBER,0,0,0,      fn_sign ),
-    CSP_FUNC_ENT(s_clip,    3, 1, V_INTEGER, V_INTEGER,V_INTEGER,V_INTEGER,0, fn_clip),
-    CSP_FUNC_ENT(s_timeout, 1, 0, V_INTEGER, V_INDEX,0,0,0,       fn_timeout),
-    CSP_FUNC_ENT(s_changed, 1, 0, V_INTEGER, V_INDEX,0,0,0,       fn_changed),    
-    CSP_FUNC_ENT(s_print,   1, 0, V_INTEGER, V_ANY,0,0,0,         fn_print),
-    CSP_FUNC_ENT(s_println, 1, 0, V_INTEGER, V_ANY,0,0,0,         fn_println),
-    CSP_FUNC_ENT(s_tick,    0, 0, V_INTEGER, 0,0,0,0,             fn_tick),
-    CSP_FUNC_ENT(s_cycle,   0, 0, V_INTEGER, 0,0,0,0,             fn_cycle),
+    CSP_FUNC_ENT(s_min,     2, 1, V_INTEGER, MAKE_TYPE2(V_INTEGER,V_INTEGER), fn_min ),
+    CSP_FUNC_ENT(s_max,     2, 1, V_INTEGER, MAKE_TYPE2(V_INTEGER,V_INTEGER), fn_max ),
+    CSP_FUNC_ENT(s_abs,     1, 1, V_INTEGER, MAKE_TYPE1(V_INTEGER), fn_abs ),
+    CSP_FUNC_ENT(s_fabs,    1, 1, V_FLOAT,   MAKE_TYPE1(V_FLOAT),   fn_fabs ),
+    CSP_FUNC_ENT(s_sign,    1, 1, V_INTEGER, MAKE_TYPE1(V_NUMBER),  fn_sign ),
+    CSP_FUNC_ENT(s_clip,    3, 1, V_INTEGER, MAKE_TYPE3(V_INTEGER,V_INTEGER,V_INTEGER), fn_clip),
+    CSP_FUNC_ENT(s_timeout, 1, 0, V_INTEGER, MAKE_TYPE1(V_INDEX), fn_timeout),
+    CSP_FUNC_ENT(s_changed, 1, 0, V_INTEGER, MAKE_TYPE1(V_INDEX), fn_changed),    
+    CSP_FUNC_ENT(s_print,   1, 0, V_INTEGER, MAKE_TYPE1(V_ANY),  fn_print),
+    CSP_FUNC_ENT(s_println, 1, 0, V_INTEGER, MAKE_TYPE1(V_ANY),  fn_println),
+    CSP_FUNC_ENT(s_tick,    0, 0, V_INTEGER, MAKE_TYPE0(),       fn_tick),
+    CSP_FUNC_ENT(s_cycle,   0, 0, V_INTEGER, MAKE_TYPE0(),       fn_cycle),
 };
 
 const uint8_t csp_num_builtin_funcs = sizeof(csp_builtin_funcs)/sizeof(csp_builtin_funcs[0]);
@@ -825,7 +825,8 @@ static csp_func_fn func_fn(const csp_func_t* fn, int i)
 
 static uint8_t fn_type(const csp_func_t* fn, int j)
 {
-    return RD_BYTE(&fn->argtypes[j]);
+    uint8_t argtypes = RD_WORD(&fn->argtypes);
+    return (argtypes >> 4*j) & 0xf;
 }
 
 // match function template this code assumes type coerce int->flt
@@ -1016,9 +1017,15 @@ again:
     case OP_LD:
 	st->reg[st->instr[n].m.x] = csp_value(st, st->instr[n].m.mem);
 	break;
-    case OP_ST:	
+    case OP_STIMP:  // same as ST, but marks reactive assignment
+    case OP_ST:
 	csp_set_value(st, st->instr[n].m.mem, st->reg[st->instr[n].m.x]);
-	break;	
+	break;
+    case OP_CHG: {  // r |= dset[ix]
+	int i = st_index(st, st->instr[n].m.mem);
+	st->reg[st->instr[n].m.x].i |= bitset_tst(st->dset, i) ? 1 : 0;
+	break;
+    }
     case OP_LI:
 	st->reg[st->instr[n].i.x].i = st->instr[n].i.imm;  // sign extend
 	break;
@@ -1051,7 +1058,7 @@ again:
 	    st->esp++;
 	    // setup locals
 	    st->cur = st->decl[INDEX(obj)].mq.m;    // set current module
-	    st->offs[CURRENT] = st->offs[st->cur];  // setyp locals
+	    st->offs[CURRENT] = st->offs[st->cur];  // setup locals
 	    return INDEX(ent)+1; // first instruction
 	}
 	break;
@@ -1556,6 +1563,7 @@ void csp_csr(csp_rt_t* st)
 	    current_rule = i+1;
 	    break;
 	case OP_LD:
+	case OP_CHG:
 	    if (current_rule >= 0) {
 		index_t mem = INDEX(st->instr[i].m.mem);
 		if (mem < st->ps.nd) {
@@ -1593,9 +1601,11 @@ void csp_csr(csp_rt_t* st)
 	    current_rule = i+1;
 	    break;
 	case OP_LD:
+	case OP_CHG:
 	    if (current_rule >= 0) {
 		index_t mem = INDEX(st->instr[i].m.mem);
-		if (mem < st->ps.nd)
+		if (mem < st->ps.nd &&
+		    (wr[mem] == st->ofs[mem] || st->edg[wr[mem]-1] != current_rule))
 		    st->edg[wr[mem]++] = current_rule;
 	    }
 	    break;
@@ -1609,6 +1619,9 @@ void csp_csr(csp_rt_t* st)
 	    break;
 	}
     }
+    // Update idg to reflect actual (deduplicated) counts
+    for (i = 0; i < st->ps.nd; i++)
+	st->idg[i] = wr[i] - st->ofs[i];
 #endif
 }
 
@@ -1906,12 +1919,22 @@ NOINLINE int csp_load_value(csp_rt_t* st, reg_t x, vtype_t vt, value_t val)
     }
 }
 
+// Add unique variable to var list (for <- parsing)
+static void add_var(csp_rt_t* st, index_t ix)
+{
+    int i;
+    for (i = 0; i < st->nvar; i++)
+	if (st->var[i] == ix) return;  // already in list
+    if (st->nvar < MAX_TIMERS)
+	st->var[st->nvar++] = ix;
+}
+
 // Map declaration (variable/constant/digital...)
 NOINLINE int map_reg(csp_rt_t* st, index_t ix)
 {
     reg_allocator_t* ap;
     int dst;
-    
+
     if ((ap = st->ap) != NULL) {
 	// Check if already mapped AND mapping is still valid
 	if (st->decl[INDEX(ix)].is_mapped) {
@@ -1926,15 +1949,14 @@ NOINLINE int map_reg(csp_rt_t* st, index_t ix)
 	st->decl[INDEX(ix)].reg = dst;
 	ap->rmap[dst] = ix;
 	if (st->decl[INDEX(ix)].type == DECL_CONSTANT) {
-	    // we should probably think this over!
-	    // what if we want to change constant and not program?
 	    value_t val = st->decl[INDEX(ix)].cn.init;
 	    vtype_t vt = st->decl[INDEX(ix)].vt;
 	    if (csp_load_value(st, dst, vt, val) < 0)
 		return -1;
 	    return dst;
 	}
-	// generate LD instruction for variables
+	// generate LD instruction for variables, track for <- rules
+	add_var(st, ix);
 	if (csp_new_ld(st,dst,ix) < 0)
 	    return -1;
 	return dst;
@@ -2318,7 +2340,7 @@ NOINLINE static int process_fcall(csp_rt_t* st, token_t* word, uint8_t arity,
     for (j = 0; j < n; j++) {
 	rentry_t arg = rarg[j];
 	vtype_t argvt = arg.vt;
-	vtype_t argtype = func->argtypes[j];
+	vtype_t argtype = (func->argtypes >> 4*j);
 	
 	argcode |= (argvt << 4*j);
 	argimm  |= (arg.I << j);
@@ -3102,7 +3124,7 @@ NOINLINE static int tok_index(tok_t t, token_t* tv, size_t n)
 }
 
 //
-// <rule> == 
+// <rule> ==
 //        <expr1> '<-' <expr2> [ '?' <cond> ]
 //
 //     ==> <expr1> = <expr2> ? changed(vars-in-expr2) || <cond>
@@ -3118,13 +3140,110 @@ NOINLINE static int tok_index(tok_t t, token_t* tv, size_t n)
 //  END:
 //    next
 //
+
 NOINLINE int csp_parse_rule(csp_rt_t* st, token_t* tv, size_t n)
 {
     size_t num;
-    int i, j;
+    int i, j, ri;
     int cnd;
     rentry_t result;
 
+    // Check for reactive assignment (<-)
+    ri = tok_index(RIMP, tv, n);
+
+    if (ri >= 0) {
+	// Reactive assignment: expr1 <- expr2 [? cond]
+	// Compiles to: x = body ? cond && (chg(v1)||chg(v2)||...)
+	int qi = tok_index(QUEST, tv, n);
+	int nn0, body_len, extra_len = 0, cond_len, k;
+	rentry_t rhs, extra;
+	csp_instr_t temp_extra[16];
+
+	cnd = alloc_reg(st);
+	st->nvar = 0;
+	nn0 = st->ps.nn;
+
+	// Parse rhs body and collect variables in st->var[]
+	num = (qi >= 0 && qi > ri) ? (qi - ri - 1) : (n - ri - 1);
+	if (!csp_parse_expr(st, &tv[ri+1], &num, &rhs))
+	    return -1;
+	body_len = st->ps.nn - nn0;
+
+	if (qi >= 0 && qi > ri) {
+	    // Extra condition present: x <- body ? cond
+	    int extra_start = st->ps.nn;
+	    num = n - (qi + 1);
+	    if (!csp_parse_expr(st, &tv[qi+1], &num, &extra))
+		return -1;
+	    if (!extra.L) csp_load(st, &extra);
+	    extra_len = st->ps.nn - extra_start;
+	    if (extra_len > 16) return -1;
+
+	    // Save extra to temp, will insert after CHGs
+	    memcpy(temp_extra, &st->instr[extra_start],
+		   extra_len * sizeof(csp_instr_t));
+
+	    // Layout: LI + CHG*nvar + extra + AND + RULE + body
+	    cond_len = 1 + st->nvar + extra_len + 1 + 1;
+	    memmove(&st->instr[nn0 + cond_len], &st->instr[nn0],
+		    body_len * sizeof(csp_instr_t));
+	    memcpy(&st->instr[nn0 + 1 + st->nvar], temp_extra,
+		   extra_len * sizeof(csp_instr_t));
+
+	    // Generate LI + CHGs
+	    st->ps.nn = nn0;
+	    if (csp_new_li(st, cnd, st->nvar ? 0 : -1) < 0) return -1;
+	    for (k = 0; k < st->nvar; k++) {
+		if (csp_new_mem(st, OP_CHG, cnd, st->var[k]) < 0) return -1;
+	    }
+
+	    // Skip past extra (already copied), generate AND
+	    st->ps.nn += extra_len;
+	    int dst = alloc_reg(st);
+	    if (new_expr2(st, OP_AND, dst, extra.reg, cnd) < 0) return -1;
+	    free_reg(st, cnd);
+	    free_reg(st, extra.reg);
+	    cnd = dst;
+
+	    // Generate RULE, then skip body
+	    if ((j = csp_new_rule(st, cnd, 0)) < 0) return -1;
+	    free_reg(st, cnd);
+	    st->ps.nn += body_len;
+	} else {
+	    // Simple case: x <- body (no extra condition)
+	    cond_len = 1 + st->nvar + 1;
+	    memmove(&st->instr[nn0 + cond_len], &st->instr[nn0],
+		    body_len * sizeof(csp_instr_t));
+	    st->ps.nn = nn0;
+
+	    if (csp_new_li(st, cnd, st->nvar ? 0 : -1) < 0) return -1;
+	    for (k = 0; k < st->nvar; k++) {
+		if (csp_new_mem(st, OP_CHG, cnd, st->var[k]) < 0) return -1;
+	    }
+	    if ((j = csp_new_rule(st, cnd, 0)) < 0) return -1;
+	    free_reg(st, cnd);
+	    st->ps.nn += body_len;
+	}
+
+	// Parse lhs and generate store
+	num = ri;
+	if (!csp_parse_expr(st, &tv[0], &num, &result))
+	    return -1;
+	if (!rhs.L) csp_load(st, &rhs);
+	if (result.ix != BAD_INDEX) {
+	    if (csp_new_mem(st, OP_STIMP, rhs.reg, result.ix) < 0)
+		return -1;
+	}
+
+	st->instr[j].r.nxt = st->ps.nn - j;
+	if (csp_new_next(st, rhs.reg) < 0)
+	    return -1;
+	free_reg(st, rhs.reg);
+	if (result.L) free_reg(st, result.reg);
+	return 0;
+    }
+
+    // Standard rule: expr ? cond
     if ((i=tok_index(QUEST, tv, n)) >= 0) {
 	// parse condition
 	num = n - (i+1);
@@ -3144,11 +3263,13 @@ NOINLINE int csp_parse_rule(csp_rt_t* st, token_t* tv, size_t n)
     }
     if ((j = csp_new_rule(st, cnd, 0)) < 0)
 	return -1;
+    free_reg(st, cnd);
     if (!csp_parse_expr(st, &tv[0], &num, &result))
 	return -1;
     st->instr[j].r.nxt = st->ps.nn - j;
     if (csp_new_next(st, result.reg) < 0)
 	return -1;
+    free_reg(st, result.reg);
     return 0;
 }
 
@@ -3219,10 +3340,13 @@ int make_can_rule(csp_rt_t* st, index_t ox, int k, index_t idx,
 	return -1;
     if (csp_new_st(st, kr, ox) < 0)
 	return -1;
-    st->instr[j].r.nxt = st->ps.nn - j;    
+    st->instr[j].r.nxt = st->ps.nn - j;
     if (csp_new_next(st, kr) < 0)
 	return -1;
-    // free reg?
+    free_reg(st, cr);
+    free_reg(st, kr);
+    free_reg(st, zr);
+    free_reg(st, cnd);
     return 0;
 }
 
@@ -3377,6 +3501,8 @@ int csp_rt_init(csp_rt_t* st, int transaction, int reactive)
     st->nm = 0;
     st->cur = 0;      // current module = global
     st->mdef = BAD_INDEX;  // no module being defined
+    st->var = st->timer;  // reuse timer[] for var list during <- parse
+    st->nvar = 0;
 
     st->str[0] = 0;  // reserved 0 and nil
     st->ufuncs = NULL;

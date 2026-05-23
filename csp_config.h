@@ -8,7 +8,7 @@
 
 #define REACTIVE_DEFAULT 0
 #ifndef SUPPORT_REACTIVE
-#define SUPPORT_REACTIVE    0 // enq/deq
+#define SUPPORT_REACTIVE    1 // enq/deq
 #endif
 
 #ifndef USE_STATISTICS

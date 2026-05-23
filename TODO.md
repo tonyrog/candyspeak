@@ -8,12 +8,50 @@ NEXT will be a NOP.
 // FIXME: in reactive mode execute until NEXT!
 // FIXME: add timeout to dependency graph!
 
+# Test framework
+
+## Structured language tests
+
+Comprehensive test categories for the language:
+- Lexer/parser (syntax, tokens, error handling)
+- Expressions (operators, precedence, associativity)
+- Types (coercion int/float, overflow, fixpoint precision)
+- Functions (args, return values, builtin vs user-defined)
+- Rules (conditions, side-effects, timing)
+- Edge cases (limits, boundary conditions)
+
+## Regression tests
+
+Test-driven bugfixing workflow:
+- Write test that fails (reproduces bug)
+- Fix the bug
+- Verify test passes
+- Test becomes permanent regression guard
+
+Directory: tests/regression/
+
+## Test improvements
+
+// Epsilon comparison for float tests (eps=0.0001)
+// Print list formatting: x=1,print(y),z=3 ? cond
+
 # Register allocation work
 
+## Pinned registers
+
 Update register allocator to use pinned variables
-by allocating load of variables to variables allocated
-from top register to bottom. When registers area is exhausted
-then pinned variables are evicted (reloads when need)
+by allocating load of variables from top register (r7)
+down to bottom (r0). Temporary expressions use low registers.
+When register area is exhausted, pinned variables are
+evicted using LRU and reloaded when needed.
+
+Benefits:
+- Reduces LD instructions when same variable used multiple times
+- Example: x + x * 2 needs only one LD instead of two
+
+// ## free_reg fixes
+// Fixed missing free_reg in csp_parse_rule (cnd, result.reg)
+// Fixed missing free_reg in make_can_rule (cr, kr, zr, cnd)
 
 ## constant folding
 
@@ -54,9 +92,9 @@ to ram or rom code. this must be done before csp_rt_start.
 this could be used to store a "default/fallback" program.
 ram could still be used for programs loaded from flash or eeprom.
 
-## Compilation of <- rule
+// ## Compilation of <- rule (DONE)
 
-The rule rimp rule
+The reactive assignment rule:
 
   X <- A+B+C
 
@@ -64,23 +102,30 @@ is compiled to
 
   X = A+B+C ? changed(A)||changed(B)||changed(C)
 
-changed(A) is checks if A has been updated this cycle or not
-it is also part of the reactive patern but in the rimp rule
-it will use the value expression of the assignment as a condition part.
-If a condition part is given as wll then is is used in a conjunction
-with the expression changed part
+With extra condition:
 
   X <- A+B+C ? D
 
-is compiled lik
+is compiled to
 
   X = A+B+C ? (changed(A)||changed(B)||changed(C)) && D
 
-changed is compiled using LDO
+Implementation: csp_parse_rule scans LD instructions after parsing
+the rhs expression and generates changed() calls for each variable.
 
-  OP_LDO ri, xi       load xi from memory and or into register ri
-  
-  A+B+C
-  OP_LD r1, ai
-  OP_LDO r1, bi
-  OP_LDO r1, ci
+Future optimization: use OP_LDO to inline changed check:
+
+  OP_LDO ri, xi       load dset[xi] and OR into register ri
+
+## Object instantiation with <- and =
+
+Extend csp_parse_object to handle init expressions:
+
+  #Add a0 Cin=0 A <- (X&1) B <- (Y&1)
+  #Add a1 Cin <- a0.Cout A <- ((X>>1)&1) B <- ((Y>>1)&1)
+
+Syntax: #Module name ( target (= | <-) expr )*
+
+Where:
+- target=expr: static initialization (evaluated once)
+- target <- expr: reactive coupling (generates rule)

@@ -17,14 +17,15 @@ Cout = (A & B) | (Cin & (A ^ B)) ? 1
 #Add a1
 #Add a2
 
-a0.A = 1 ? 1
-a0.B = 1 ? 1
-a0.Cin = 0 ? 1
+a0.A = 1
+a0.B = 1
+a0.Cin = 0
 
-a1.A   = 1 ? 1
-a1.B   = 1 ? 1
-a1.Cin = a0.Cout ? 1
+a1.A   = 1
+a1.B   = 1
+a1.Cin = a0.Cout
 
-a2.A = 0 ? 1
-a2.B = 0 ? 1
-a2.Cin = a1.Cout ? 1
+a2.A = 0
+a2.B = 0
+a2.Cin = a1.Cout
+
