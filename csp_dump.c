@@ -269,13 +269,25 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	break;
     }
     default:
-	fprintf(f, "{instr,%d,'%s',[r%d,r%d,r%d]}%s\n",
-		i,
-		csp_opcode_name(st->instr[i].op),
-		st->instr[i].a.x,
-		st->instr[i].a.y,
-		st->instr[i].a.z,
-		eot);
+	switch(csp_opcode_arity(st->instr[i].op)) {
+	case 1:
+	    fprintf(f, "{instr,%d,'%s',[r%d,r%d]}%s\n",
+		    i,
+		    csp_opcode_name(st->instr[i].op),
+		    st->instr[i].a.x,
+		    st->instr[i].a.y,
+		    eot);
+	    break;	    
+	case 2:
+	    fprintf(f, "{instr,%d,'%s',[r%d,r%d,r%d]}%s\n",
+		    i,
+		    csp_opcode_name(st->instr[i].op),
+		    st->instr[i].a.x,
+		    st->instr[i].a.y,
+		    st->instr[i].a.z,
+		    eot);
+	    break;
+	}
     }
     return i+1;
 }

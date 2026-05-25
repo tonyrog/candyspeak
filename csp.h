@@ -6,6 +6,13 @@
 
 #include "csp_config.h"
 
+// Prevent inlining of large parse functions to reduce code size
+#ifdef __GNUC__
+#define NOINLINE __attribute__((noinline))
+#else
+#define NOINLINE
+#endif
+
 #ifndef EXTERN_C_BEGIN
 #define EXTERN_C_BEGIN  extern "C" {
 #define EXTERN_C_END    }
@@ -61,6 +68,7 @@ typedef uint8_t  reg_t;    // at most 256 registers
 #define MAX_INPUTS   32  // <= then MAX_DECLS
 #define MAX_OUTPUTS  32  // <= then MAX_DECLS
 #define MAX_TIMERS   16  // <= then MAX_DECLS
+#define MAX_VARREFS  MAX_TIMERS
 #define MAX_MODULES  (1 << OBJ_BITS)
 #define MAX_OBJECTS  (1 << OBJ_BITS)
 #define MAX_QUEUE    (MAX_INSTRS)
@@ -105,10 +113,10 @@ typedef enum {
 
 // create argument type bitmask
 #define MAKE_TYPE0()            0
-#define MAKE_TYPE1(T1)          (T1)
-#define MAKE_TYPE2(T1,T2)       ((T1)|((T2)<<4))
-#define MAKE_TYPE3(T1,T2,T3)    ((T1)|((T2)<<4)|((T3)<<8))
-#define MAKE_TYPE4(T1,T2,T3,T4) ((T1)|((T2)<<4)|((T3)<<8)|((T4)<<12))
+#define MAKE_TYPE1(t0)          (t0)
+#define MAKE_TYPE2(t0,t1)       ((t0)|((t1)<<4))
+#define MAKE_TYPE3(t0,t1,t2)    ((t0)|((t1)<<4)|((t2)<<8))
+#define MAKE_TYPE4(t0,t1,t2,t3) ((t0)|((t1)<<4)|((t2)<<8)|((t3)<<12))
 
 #define ENDIAN_BITS 2
 typedef enum {
@@ -129,6 +137,65 @@ typedef fixpoint_t fvalue_t;
 typedef float fvalue_t;
 #define FVALUE_IS_FIXPOINT 0
 #endif
+
+#define op_ADD(y, z)  ((y)+(z))
+#define op_SUB(y, z)  ((y)-(z))
+#define op_MUL(y, z)  ((y)*(z))
+#define op_DIV(y, z)  ((y)/(z))
+#define op_REM(y, z)  ((y)%(z))
+#define op_BAND(y, z)  ((y)&(z))
+#define op_BOR(y, z)   ((y)|(z))
+#define op_BXOR(y, z)  ((y)^(z))
+// logical 1 == -1 (all bits set)
+#define op_AND(y, z)  (-((y)&&(z)))
+#define op_OR(y, z)   (-((y)||(z)))
+#define op_LT(y, z)   (-((y)<(z)))
+#define op_LTE(y, z)  (-((y)<=(z)))
+#define op_GT(y, z)   (-((y)>(z)))
+#define op_GTE(y, z)  (-((y)>=(z)))
+#define op_EQEQ(y, z) (-((y)==(z)))
+#define op_NEQ(y, z)  (-((y)!=(z)))
+#define op_SLA(y, z)  ((y) << (z))
+#define op_SRA(y, z)  ((y) >> (z))
+#define op_COMMA(y,z) z
+
+// Float/fixpoint operations - conditional on FVALUE_IS_FIXPOINT
+#if FVALUE_IS_FIXPOINT
+#define op_FADD(y, z)  FIX_ADD((y), (z))
+#define op_FSUB(y, z)  FIX_SUB((y), (z))
+#define op_FMUL(y, z)  FIX_MUL((y), (z))
+#define op_FDIV(y, z)  FIX_DIV((y), (z))
+#define op_FLT(y, z)   (-FIX_LT((y), (z)))
+#define op_FLTE(y, z)  (-FIX_LTE((y), (z)))
+#define op_FGT(y, z)   (-FIX_GT((y), (z)))
+#define op_FGTE(y, z)  (-FIX_GTE((y), (z)))
+#define op_FEQEQ(y, z) (-FIX_EQ((y), (z)))
+#define op_FNEQ(y, z)  (-FIX_NEQ((y), (z)))
+#define op_FNEG(y)     FIX_NEG(y)
+#define op_FMOV(y)     (y)
+#define op_CVTIF(y)    FIX_FROM_INT(y)
+#define op_CVTFI(y)    FIX_TO_INT(y)
+#else
+#define op_FADD(y, z)  ((y)+(z))
+#define op_FSUB(y, z)  ((y)-(z))
+#define op_FMUL(y, z)  ((y)*(z))
+#define op_FDIV(y, z)  ((y)/(z))
+#define op_FLT(y, z)   (-((y)<(z)))
+#define op_FLTE(y, z)  (-((y)<=(z)))
+#define op_FGT(y, z)   (-((y)>(z)))
+#define op_FGTE(y, z)  (-((y)>=(z)))
+#define op_FEQEQ(y, z) (-((y)==(z)))
+#define op_FNEQ(y, z)  (-((y)!=(z)))
+#define op_FNEG(y)     (-(y))
+#define op_FMOV(y)     (y)
+#define op_CVTIF(y)    ((fvalue_t)(y))
+#define op_CVTFI(y)    ((ivalue_t)(y))
+#endif
+
+#define op_NOT(y)  (~BOOL((y)))
+#define op_NEG(y)  (-(y))
+#define op_MOV(y)  (y)
+#define op_BNOT(y)  (~(y))
 
 typedef union {
     ivalue_t i;  // V_INTEGER
@@ -206,10 +273,12 @@ typedef enum {
     CALL,
     LD,
     ST,
+    MOV,
+    STIMP,    
     LDI,
     ARG,
     CVTIF,
-    CVTFI,    
+    CVTFI,
     // functions are now handled via OP_CALL + function table
     LAST_NODE, // built-in + operators stop
     // keywords
@@ -264,7 +333,7 @@ typedef enum {
     OP_NOT,     // "!"  x=-y == x=0-y
     OP_BNOT,    // "~"  x=~y =  x=1^y        
     OP_NEG,     // "-"  x=-y == x=0-y
-    OP_POS,     // "+"  x=+y == x=0+y
+    OP_MOV,     // "mov" x=y == x=y
     OP_CVTIF,   // trunc float => integer
     OP_CVTFI,   // cast int to float
     // node - binary operator
@@ -287,7 +356,8 @@ typedef enum {
     OP_AND,     // "&&"
     OP_OR,      // "||"
 
-    OP_FNEG,     // "-"  x=-y == x=0-y    
+    OP_FNEG,     // "-"  x=-y == x=0-y
+    OP_FMOV,     // "mov"  x=y
     OP_FADD,     // "+"
     OP_FSUB,     // "-"
     OP_FMUL,     // "*"
@@ -365,6 +435,8 @@ typedef struct PACKED {
     int8_t   prec;
     int8_t   assoc;
 } op_entry_t;
+
+extern const op_entry_t op_table[] RODATA;
 
 typedef struct PACKED {
     const char* name;  // opcode name
@@ -626,6 +698,7 @@ typedef struct _csp_rt_t
     // temp var list during <- parsing (reuses timer[], set by csp_rt_init)
     index_t* var;
     index_t nvar;
+    int     rimp;                // 1 if parse_expr is in RHS in <- 
     // during eval
     uint32_t update;             // update counter
     uint32_t wait_ms;            // sleep time or NOTIMEOUT
@@ -754,6 +827,8 @@ extern void csp_set_fvalue(csp_rt_t* st, index_t n, fvalue_t v);
 
 extern int csp_parse_expr(csp_rt_t* st, token_t* tv, size_t* num_toks,
 			  rentry_t* result);
+extern int csp_parse_const_expr(csp_rt_t* st, token_t* tv, size_t* num_toks,
+				rentry_t* result);
 //
 extern index_t csp_new_decl(csp_rt_t* st, char* name, int name_len, decl_t op);
 extern index_t csp_lookup_decl(csp_rt_t* st, char* module, char* name);
@@ -783,7 +858,10 @@ extern int csp_print_hex(uvalue_t v);
 extern int csp_println(void);
 extern int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val);
 
-const char* csp_opcode_name(opcode_t op);
+extern const char* csp_opcode_name(opcode_t op);
+extern uint8_t csp_opcode_rtype(opcode_t op);
+extern uint8_t csp_opcode_arity(opcode_t op);
+
 extern int csp_opcode_to_tok(opcode_t opcode);
 extern uint8_t csp_opcode_rtype(opcode_t opcode);
 extern void csp_set_error(csp_rt_t*, csp_err_t);
