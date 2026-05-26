@@ -273,9 +273,12 @@ typedef enum {
     CALL,
     LD,
     ST,
-    MOV,
-    STIMP,    
-    LDI,
+    MOV,    
+    STIMP,
+    CHG,
+    LI,
+    LIU,
+    LIH,
     ARG,
     CVTIF,
     CVTFI,
@@ -510,8 +513,8 @@ typedef struct PACKED {
     unsigned mem:INDEX_BITS;  // declaration: variable/constant
 } csp_instr_mem_t;
 
-// op LDI / ARG
-// load immediate LDI load small 16 bit signed constant
+// op LI / ARG
+// load immediate LI load small 16 bit signed constant
 typedef struct PACKED {
     opcode_t op:6;    
     unsigned x:REG_BITS;
@@ -608,7 +611,8 @@ typedef enum {
     ERR_NOT_A_MODULE,
     ERR_OBJECT_ALREADY_DEFINED,
     ERR_OBJECT_NOT_DEFINED,
-    ERR_VARIABLE_NOT_DECLARED,    
+    ERR_VARIABLE_NOT_DECLARED,
+    ERR_FIELD_NOT_FOUND,
 } csp_err_t;
 
 // parser state, save state before parse

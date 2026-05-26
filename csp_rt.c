@@ -85,6 +85,7 @@ static const char s_ld[] RODATA = "ld";
 static const char s_st[] RODATA = "st";
 static const char s_stimp[] RODATA = "stimp";
 static const char s_li[] RODATA = "li";
+static const char s_chg[] RODATA = "chg";
 static const char s_arg[] RODATA = "arg";
 static const char s_cvtif[] RODATA = "cvtif";
 static const char s_cvtfi[] RODATA = "cvtfi";
@@ -162,8 +163,9 @@ const op_entry_t op_table[] RODATA = {
     INSTR_ENT(CALL,OP_CALL,s_call,-1,-1,NO),
     INSTR_ENT(LD,OP_LD,s_ld,-1,-1,NO),
     INSTR_ENT(ST,OP_ST,s_st,-1,-1,NO),
-    INSTR_ENT(STIMP,OP_STIMP,s_stimp,-1,-1,NO),    
-    INSTR_ENT(LDI,OP_LI,s_li,-1,-1,NO),
+    INSTR_ENT(STIMP,OP_STIMP,s_stimp,-1,-1,NO),
+    INSTR_ENT(CHG,OP_CHG,s_chg,-1,-1,NO),    
+    INSTR_ENT(LI,OP_LI,s_li,-1,-1,NO),
     INSTR_ENT(ARG,OP_ARG,s_arg,-1,-1,NO),
     INSTR_ENT(CVTIF,OP_CVTIF,s_cvtif,-1,-1,NO),
     INSTR_ENT(CVTIF,OP_CVTFI,s_cvtfi,-1,-1,NO),
@@ -362,6 +364,7 @@ static const char s_LIH[] RODATA = "LIH";
 static const char s_ARG[] RODATA = "ARG";
 static const char s_ST[] RODATA = "ST";
 static const char s_STIMP[] RODATA = "STIMP";
+static const char s_CHG[] RODATA = "CHG";
 static const char s_LD[] RODATA = "LD";
 static const char s_CALL[] RODATA = "CALL";
 static const char s_RULE[] RODATA = "RULE";
@@ -424,6 +427,7 @@ static const op_info_t info_tab[] RODATA = {
     [OP_ARG]   = {s_ARG,0,V_VOID,{}},    
     [OP_ST]    = {s_ST,0,V_VOID,{}},
     [OP_STIMP] = {s_STIMP,0,V_VOID,{}},
+    [OP_CHG]   = {s_CHG,0,V_VOID,{}},    
     [OP_LD]    = {s_LD,0,V_VOID,{}},
     [OP_CALL]  = {s_CALL,0,V_VOID,{}},
     [OP_RULE]  = {s_RULE,0,V_VOID,{}},
@@ -3006,15 +3010,16 @@ static const uint8_t object_pat[] = {
 
 NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
 {
-    object_param_t d;        
-    index_t mx, ix, jx;
-    int i, m;
-    
-    if (pmatch(st, tv, 0, n, object_pat, &d) < 0) {
+    object_param_t d;
+    index_t mx, ix;
+    int i, m, ti;
+    ivalue_t mod_n;
+
+    if ((ti = pmatch(st, tv, 0, n, object_pat, &d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    
+
     // lookup module
     if ((mx = lookup_decl(st, d.mod_name.ptr, d.mod_name.len)) == BAD_INDEX) {
 	csp_set_error(st, ERR_MODULE_NOT_DECLARED);
@@ -3031,15 +3036,140 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
     if ((ix = csp_new_decl(st, d.obj_name.ptr, d.obj_name.len, DECL_OBJECT))
 	== BAD_INDEX)
 	return -1;
-    if ((jx = csp_new_new(st, st->decl[INDEX(mx)].md.ent, ix)) == BAD_INDEX)
-	return -1;
+    // Set up object slot BEFORE parsing init list (so field refs work)
     i = INDEX(ix);
     st->decl[i].mq.mx = mx;
     m = st->ps.nq + 1;
     st->decl[i].mq.m = m;
     st->object[m] = ix;
     st->ps.nq++;
-    return 0;    
+
+    // Parse init list BEFORE NEW (so values are set when module rules run)
+    mod_n = st->decl[INDEX(mx)].md.n;  // number of fields in module
+
+    while (ti < (int)n && tv[ti].t == WORD) {
+	// Look up field in module
+	index_t fx = lookup_decl_in(st, tv[ti].v.str.ptr, tv[ti].v.str.len,
+				    INDEX(mx)+1, INDEX(mx)+1+mod_n);
+	if (fx == BAD_INDEX) {
+	    csp_set_error(st, ERR_FIELD_NOT_FOUND);
+	    return -1;
+	}
+	ti++;
+
+	if (ti >= (int)n) {
+	    csp_set_error(st, ERR_SYNTAX);
+	    return -1;
+	}
+
+	// Make target index (object m, field fx)
+	index_t target = MAKE_INDEX(m, INDEX(fx));
+
+	if (tv[ti].t == EQ) {
+	    // Static init: field = expr
+	    ti++;
+	    // Find end of expression (NEWLINE or WORD followed by = or <-)
+	    int k = ti;
+	    while (k < (int)n && tv[k].t != NEWLINE) {
+		if (tv[k].t == WORD && k+1 < (int)n &&
+		    (tv[k+1].t == EQ || tv[k+1].t == RIMP))
+		    break;  // next field init
+		k++;
+	    }
+	    size_t num = k - ti;
+	    if (num == 0) {
+		csp_set_error(st, ERR_SYNTAX);
+		return -1;
+	    }
+	    rentry_t rval;
+	    if (!csp_parse_expr(st, &tv[ti], &num, &rval))
+		return -1;
+	    if (!rval.L) csp_load(st, &rval);
+	    if (csp_new_mem(st, OP_ST, rval.reg, target) < 0)
+		return -1;
+	    free_reg(st, rval.reg);
+	    ti += num;
+	}
+	else if (tv[ti].t == RIMP) {
+	    // Reactive init: field <- expr
+	    ti++;
+	    // Find end of expression (NEWLINE or WORD followed by = or <-)
+	    int k = ti;
+	    while (k < (int)n && tv[k].t != NEWLINE) {
+		if (tv[k].t == WORD && k+1 < (int)n &&
+		    (tv[k+1].t == EQ || tv[k+1].t == RIMP))
+		    break;  // next field init
+		k++;
+	    }
+	    size_t num = k - ti;
+	    if (num == 0) {
+		csp_set_error(st, ERR_SYNTAX);
+		return -1;
+	    }
+	    // Generate reactive rule: target <- expr
+	    // Similar to csp_parse_rule but with known target
+	    rentry_t rval;
+	    int cnd, j;
+	    size_t num_save = num;
+	    reg_allocator_t* ap_save = st->ap;
+
+	    // Dry-run: collect variables without generating code
+	    st->nvar = 0;
+	    st->rimp = 1;
+	    st->ap = NULL;
+	    csp_parse_const_expr(st, &tv[ti], &num, &rval);
+	    st->ap = ap_save;
+	    st->rimp = 0;
+	    num = num_save;
+
+	    // Generate CHG condition if we have variables
+	    cnd = alloc_reg(st);
+	    if (st->nvar > 0) {
+		int kk;
+		if (csp_new_li(st, cnd, 0) < 0) return -1;
+		for (kk = 0; kk < st->nvar; kk++) {
+		    if (csp_new_mem(st, OP_CHG, cnd, st->var[kk]) < 0)
+			return -1;
+		}
+	    } else {
+		if (csp_new_li(st, cnd, -1) < 0) return -1;
+	    }
+
+	    // Generate RULE
+	    if ((j = csp_new_rule(st, cnd, 0)) < 0) return -1;
+	    free_reg(st, cnd);
+
+	    // Now parse expression for real to generate code
+	    st->rimp = 1;
+	    if (!csp_parse_expr(st, &tv[ti], &num, &rval)) {
+		st->rimp = 0;
+		return -1;
+	    }
+	    st->rimp = 0;
+
+	    // Store to target
+	    if (!rval.L) csp_load(st, &rval);
+	    if (csp_new_mem(st, OP_STIMP, rval.reg, target) < 0)
+		return -1;
+
+	    // Patch RULE and generate NEXT
+	    st->instr[j].r.nxt = st->ps.nn - j;
+	    if (csp_new_next(st, rval.reg) < 0) return -1;
+	    free_reg(st, rval.reg);
+
+	    ti += num;
+	}
+	else {
+	    csp_set_error(st, ERR_SYNTAX);
+	    return -1;
+	}
+    }
+
+    // Generate NEW after init list (module rules run with correct values)
+    if (csp_new_new(st, st->decl[INDEX(mx)].md.ent, ix) == BAD_INDEX)
+	return -1;
+
+    return 0;
 }
 
 // <expr> '?' <cond>
