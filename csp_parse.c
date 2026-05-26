@@ -14,6 +14,15 @@
 // Callback table
 static pmatch_cb_t callbacks[8];
 
+typedef struct {
+    csp_rt_t* st;
+    void* data;
+    int tb;       // base token index to get absolute index
+    uint8_t ez;   // element size (set by P_ARRAY) (max element size=255!)
+    int ix;       // one-level repetition arrary index
+    int eo;       // element offset
+} pmatch_st_t;
+
 
 // how to do this be made with pattern?
 NOINLINE decl_opts_t parse_opts(csp_rt_t* st, token_t* tv,
@@ -51,45 +60,46 @@ void pmatch_set_cb(int id, pmatch_cb_t cb)
 }
 
 // Store value at offset in data struct
-static inline void store_val(void* data, uint8_t off, value_t val)
+static inline void store_val(void* data, int off, value_t val)
 {
     *((value_t*)((uint8_t*)data + off)) = val;
 }
 
 // Store integer value at offset in data struct
-static inline void store_int(void* data, uint8_t off, ivalue_t val)
+static inline void store_int(void* data, int off, ivalue_t val)
 {
     *((ivalue_t*)((uint8_t*)data + off)) = val;
 }
 
-static inline void store_str(void* data, uint8_t off, pstr_t str)
+static inline void store_str(void* data, int off, tstr_t str)
 {
-    *((pstr_t*)((uint8_t*)data + off)) = str;
+    *((tstr_t*)((uint8_t*)data + off)) = str;
 }
 
-static inline void store_expr(void* data, uint8_t off, pexpr_t expr)
+static inline void store_expr(void* data, int off, pexpr_t expr)
 {
     *((pexpr_t*)((uint8_t*)data + off)) = expr;
 }
 
-static inline void store_opts(void* data, uint8_t off, decl_opts_t opts)
+static inline void store_opts(void* data, int off, decl_opts_t opts)
 {
     *((decl_opts_t*)((uint8_t*)data + off)) = opts;
 }
 
-// Store integer value at offset in data struct
-static inline ivalue_t fetch_int(void* data, uint8_t off)
+// fetch integer value at offset in data struct
+static inline ivalue_t fetch_int(void* data, int off)
 {
     return *((ivalue_t*)((uint8_t*)data + off));
 }
 
-static inline decl_opts_t fetch_opts(void* data, uint8_t off)
+static inline decl_opts_t fetch_opts(void* data, int off)
 {
     return *((decl_opts_t*)((uint8_t*)data + off));
 }
 
+#ifdef __not_used__
 // find next P_TOK in pattern (after i) return NEWLINE if not found?
-int next_ptok(const uint8_t* pat, int pi)
+NOINLINE static int next_ptok(const uint8_t* pat, int pi)
 {
     while(pat[pi] != P_END) {
 	switch(pat[pi]) {
@@ -101,6 +111,7 @@ int next_ptok(const uint8_t* pat, int pi)
 	case P_EXPR: pi += 2; break;
 	case P_OPTS: pi += 2; break;
 	case P_CALL: pi += 2; break;
+	case P_ARRAY: pi += 2; break;	    
 	case P_OPT: // how to handle ?
 	case P_ALT: // how to handle ?
 	    break;
@@ -108,9 +119,11 @@ int next_ptok(const uint8_t* pat, int pi)
     }
     return NEWLINE;
 }
+#endif
 
-int pmatch_expr(csp_rt_t* st, token_t* tv, int tb, int ti, size_t n,
-		uint8_t off, void* data)
+
+NOINLINE static int pmatch_expr(pmatch_st_t* pst, token_t* tv, int ti,
+				size_t n, uint8_t off)
 {
     int k = ti;
     size_t num;
@@ -123,17 +136,17 @@ int pmatch_expr(csp_rt_t* st, token_t* tv, int tb, int ti, size_t n,
 	k++;
     num = (k > ti) ? k - ti : 1;
     DBG("expr: ti=%d, num=%ld\n", ti, num);
-    if (!csp_parse_const_expr(st, &tv[ti], &num, &result))
+    if (!csp_parse_const_expr(pst->st, &tv[ti], &num, &result))
 	return -1;
-    range.pos = tb+ti;
+    range.pos = pst->tb+ti;
     range.len = num;
-    store_expr(data, off, range);
+    store_expr(pst->data, pst->eo+off, range);
     return ti + num;
 }
 
 // match type vt constant
-int pmatch_const(csp_rt_t* st, token_t* tv, int ti, size_t n,
-		 uint8_t vt, uint8_t off, void* data)
+static int pmatch_const(pmatch_st_t* pst, token_t* tv, int ti, size_t n,
+			uint8_t vt, uint8_t off)
 {
     int k = ti;
     size_t num;
@@ -150,7 +163,7 @@ int pmatch_const(csp_rt_t* st, token_t* tv, int ti, size_t n,
 	k++;
     num = (k > ti) ? k - ti : 1;
 
-    if (!csp_parse_const_expr(st, &tv[ti], &num, &result))
+    if (!csp_parse_const_expr(pst->st, &tv[ti], &num, &result))
 	return -1;
     if (!result.I)
 	return -1;  // not constant
@@ -159,7 +172,7 @@ int pmatch_const(csp_rt_t* st, token_t* tv, int ti, size_t n,
 	if (result.vt == V_INTEGER) break;
 	if (result.vt == V_UNSIGNED) break;
 	if (result.vt == V_FLOAT) {
-	    result.val.i = op_CVTFI(result.val.f);	    
+	    result.val.i = op_CVTFI(result.val.f);
 	    break;
 	}
 	return -1;
@@ -173,52 +186,51 @@ int pmatch_const(csp_rt_t* st, token_t* tv, int ti, size_t n,
     default:
 	return -1;
     }
-    store_val(data, off, result.val);
+    store_val(pst->data, pst->eo+off, result.val);
     return ti + num;
 }
 
+
 // Match pattern, return tokens consumed or -1
-int pmatch(csp_rt_t* st, token_t* tv, int tb, size_t n,
-	   const uint8_t* pat, void* data)
+int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
 {
     int ti = 0;  // token index
     int pi = 0;  // pattern index
 
     while (pat[pi] != P_END) {
         uint8_t cmd = pat[pi++];
-
         switch (cmd) {
         case P_TOK: {
             // Match specific token
             uint8_t tok = pat[pi++];
-
 	    DBG("P_TOK: tok='%s'\n", op_table[tok].name);
-	    
             if ((ti >= (int)n) || (tv[ti].t != tok))
                 return -1;
             ti++;
             break;
         }
-
+	case P_ARRAY: {  // normally used inside P_REP
+	    pst->ez = pat[pi++];
+	    break;
+	}
         case P_NUMBER: {
 	    uint8_t opts_off = pat[pi++];
 	    uint8_t val_off = pat[pi++];
-	    decl_opts_t opts = fetch_opts(data, opts_off);
+	    decl_opts_t opts = fetch_opts(pst->data, pst->eo+opts_off);
 
 	    DBG("P_NUMBER: opts_off=%d, val_off=%d, vt=%d\n",
 		opts_off, val_off, opts.vt);
 		   
-	    if ((ti = pmatch_const(st,tv,ti,n,opts.vt,val_off,data)) < 0)
+	    if ((ti = pmatch_const(pst,tv,ti,n,opts.vt,val_off)) < 0)
 		return -1;
 	    break;
 	}
-
         case P_INTEGER: {
 	    uint8_t val_off = pat[pi++];
 	    
 	    DBG("P_INTEGER: val_off=%d\n", val_off);
 	    
-	    if ((ti = pmatch_const(st,tv,ti,n,V_INTEGER,val_off,data)) < 0)
+	    if ((ti = pmatch_const(pst,tv,ti,n,V_INTEGER,val_off)) < 0)
 		return -1;
 	    break;
 	}
@@ -227,55 +239,50 @@ int pmatch(csp_rt_t* st, token_t* tv, int tb, size_t n,
 
 	    DBG("P_FLOAT: val_off=%d\n", val_off);	    
 	    
-	    if ((ti = pmatch_const(st,tv,ti,n,V_FLOAT,val_off,data)) < 0)
+	    if ((ti = pmatch_const(pst,tv,ti,n,V_FLOAT,val_off)) < 0)
 		return -1;
 	    break;
 	}
-
         case P_STR: {
             // Capture WORD as string
             uint8_t val_off = pat[pi++];
 	    DBG("P_STR: val_off=%d\n", val_off);
             if ((ti >= (int)n) || (tv[ti].t != WORD))
                 return -1;
-            store_str(data, val_off, *(pstr_t*)&tv[ti].v.str);
+            store_str(pst->data, pst->eo+val_off,
+		      *(tstr_t*)&tv[ti].v.str);
             ti++;
             break;
         }
-
         case P_EXPR: {
             // Capture EXPR as start/stop index
             uint8_t val_off = pat[pi++];
 	    DBG("P_EXPR: val_off=%d\n", val_off);
-	    if ((ti = pmatch_expr(st, tv, tb, ti, n, val_off, data)) < 0)
+	    if ((ti = pmatch_expr(pst, tv, ti, n, val_off)) < 0)
 		return -1;
             break;
         }	    
-
         case P_OPTS: {
             // Parse options, store at offset
             uint8_t val_off = pat[pi++];
-	    decl_opts_t opts = fetch_opts(data, val_off);
+	    decl_opts_t opts = fetch_opts(pst->data, pst->eo+val_off);
 	    DBG("P_OPTS: val_off=%d\n", val_off);
-	    opts = parse_opts(st, tv, &ti, n, opts);
-	    store_opts(data, val_off, opts);
+	    opts = parse_opts(pst->st, tv, &ti, n, opts);
+	    store_opts(pst->data, pst->eo+val_off, opts);
             break;
         }
-
         case P_OPT: {
             // Optional: try to match, ok if fails
             uint8_t len = pat[pi++];
             int r;
-
 	    DBG("P_OPT: len=%d\n", len);
-
-	    if ((r = pmatch(st, &tv[ti], ti, n - ti, &pat[pi], data)) >= 0)
+	    pst->tb = ti;
+	    if ((r = pmatch_(pst, &tv[ti], n-ti, &pat[pi])) >= 0)
                 ti += r;
             // else: no match, that's ok for optional
             pi += len;
             break;
         }
-
         case P_ALT: {
             // Alternatives: try each until one matches
             // Save data before each alt, restore if it fails
@@ -293,8 +300,9 @@ int pmatch(csp_rt_t* st, token_t* tv, int tb, size_t n,
 		
 		DBG("ALT %d: len=%d\n", a, num_alts);
 		
-                memcpy(saved, data, sizeof(saved));
-                if ((r = pmatch(st, &tv[ti], ti, n - ti, &pat[pi], data)) >= 0) {
+                memcpy(saved, pst->data, sizeof(saved));
+		pst->tb = ti;
+                if ((r = pmatch_(pst, &tv[ti], n-ti, &pat[pi])) >= 0) {
                     ti += r;
                     matched = 1;
                     // Skip remaining alts
@@ -304,7 +312,7 @@ int pmatch(csp_rt_t* st, token_t* tv, int tb, size_t n,
                         pi += skip;
                     }
                 } else {
-                    memcpy(data, saved, sizeof(saved));  // restore
+                    memcpy(pst->data, saved, sizeof(saved));  // restore
                     pi += len;
                 }
             }
@@ -312,41 +320,56 @@ int pmatch(csp_rt_t* st, token_t* tv, int tb, size_t n,
 		return -1;
             break;
         }
-
         case P_REP: {
             // Repeat: match zero or more times
             uint8_t len = pat[pi++];
 	    int ix = 0;
-	    
+	    pst->eo = 0;
 	    DBG("P_REP: len=%d\n", len);
             while (ti < (int)n) {
 		DBG("ITER %d:\n", ix);
 		// fixme pass ix to pmatch to allow data to store
 		// array elements
-                int r = pmatch(st, &tv[ti], ti, n - ti, &pat[pi], data);
+		pst->tb = ti;
+		pst->ix = ix;
+                int r = pmatch_(pst, &tv[ti], n-ti, &pat[pi]);
                 if (r <= 0) break;  // no match or empty match
                 ti += r;
 		ix++;
+		pst->eo += pst->ez;
             }
             pi += len;
+	    pst->ez = 0; // reset array
             break;
         }
-
         case P_CALL: {
             // Call registered callback
             uint8_t id = pat[pi++];
 	    DBG("P_CALL: id=%d\n", id);
             if (id < 8 && callbacks[id]) {
-                if (!callbacks[id](st, tv, ti, data))
+                if (!callbacks[id](pst->st, tv, ti, pst->data))
                     return -1;
             }
             break;
         }
-
         default:
             return -1;  // unknown command
         }
     }
 
     return ti;  // tokens consumed
+}
+
+int pmatch(csp_rt_t* st, token_t* tv, size_t n,
+	   const uint8_t* pat, void* data)
+{
+    pmatch_st_t pst;
+
+    pst.st = st;
+    pst.data = data;
+    pst.ez   = 0;     // element size (P_ARRAY)
+    pst.tb   = 0;
+    pst.ix   = 0;
+    pst.eo   = 0;     // current element offset (P_REP)
+    return pmatch_(&pst, tv, n, pat);
 }

@@ -315,12 +315,14 @@ typedef enum {
     LAST,
 } tok_t;
 
+typedef struct {
+    char* ptr;
+    int len;
+} tstr_t;
+
 typedef union
 {
-    struct {
-	char* ptr;
-	int len;
-    } str;
+    tstr_t str;
     value_t val;
 } tokval_t;
 
@@ -613,6 +615,8 @@ typedef enum {
     ERR_OBJECT_NOT_DEFINED,
     ERR_VARIABLE_NOT_DECLARED,
     ERR_FIELD_NOT_FOUND,
+    ERR_FUNCTION_DO_NOT_EXIST,
+    ERR_MODULE_ALREADY_DEFINED,    
 } csp_err_t;
 
 // parser state, save state before parse
@@ -621,8 +625,10 @@ typedef struct PACKED {
     index_t nn;                  // number of instructions
     index_t nd;                  // number of decls
     index_t nq;                  // number of objects
-    uint32_t strp;               // string table position
+    uint32_t strp;               // string table position (grows up)
+    uint32_t err_strp;           // error string position (grows down from MAX_STR_BUF)
     csp_err_t err;               // error code
+    uintptr_t err_args[3];       // error arguments for printf
     uint32_t line;               // line number when parsing
 } csp_pstate_t;
 
@@ -869,6 +875,8 @@ extern uint8_t csp_opcode_arity(opcode_t op);
 extern int csp_opcode_to_tok(opcode_t opcode);
 extern uint8_t csp_opcode_rtype(opcode_t opcode);
 extern void csp_set_error(csp_rt_t*, csp_err_t);
+extern void csp_set_error_tstr(csp_rt_t*, csp_err_t, const tstr_t* str);
+extern void csp_set_error_ix(csp_rt_t*, csp_err_t, index_t ix);
 extern void csp_clr_error(csp_rt_t*);
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 extern void csp_enq_elist(csp_rt_t* st, index_t x);

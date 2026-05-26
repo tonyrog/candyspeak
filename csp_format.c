@@ -22,10 +22,16 @@ const char* csp_format_error(csp_err_t err)
 	return "word %s not a module";
     case ERR_OBJECT_ALREADY_DEFINED:
 	return "object %s is already defined";
+    case ERR_MODULE_ALREADY_DEFINED:
+	return "module %s is already defined";	
     case ERR_OBJECT_NOT_DEFINED:
 	return "object %s is not defined";
     case ERR_VARIABLE_NOT_DECLARED:
 	return "variable %s is not declared";
+    case ERR_FIELD_NOT_FOUND:
+	return "field %s not found";
+    case ERR_FUNCTION_DO_NOT_EXIST:
+	return "function %s/%d does not exist";	
     default:
 	return "unknown error";
     }

@@ -10,7 +10,6 @@
 #include "csp_format.h"
 #endif
 
-
 #define CAT_HELPER2(x,y) x ## y
 #define CAT2(x,y) CAT_HELPER2(x,y)
 
@@ -534,12 +533,38 @@ const char* csp_opcode_name(opcode_t op)
 
 void csp_set_error(csp_rt_t* st, csp_err_t err)
 {
+    // Don't overwrite a more specific error with generic SYNTAX
+    if ((err == ERR_SYNTAX) && (st->ps.err != ERR_OK))
+	return;
     st->ps.err = err;
+}
+
+void csp_set_err_arg_int(csp_rt_t* st, int i, int ival)
+{
+    st->ps.err_args[i] = ival;
+}
+
+// Token string to temp area (grows down), set error with it
+void csp_set_err_arg_tstr(csp_rt_t* st, int i, const tstr_t* str)
+{
+    if (st->ps.err_strp >= st->ps.strp + (uint32_t)str->len + 1) {
+	st->ps.err_strp -= str->len + 1;
+	memcpy(&st->str[st->ps.err_strp], str->ptr, str->len);
+	st->str[st->ps.err_strp + str->len] = '\0';
+	st->ps.err_args[i] = (uintptr_t)&st->str[st->ps.err_strp];
+    }
+}
+
+// Decl name (already null-terminated in str[])
+void csp_set_err_arg_ix(csp_rt_t* st, int i, index_t ix)
+{
+    st->ps.err_args[i] = (uintptr_t)decl_name(st, ix);
 }
 
 void csp_clr_error(csp_rt_t* st)
 {
     st->ps.err = ERR_OK;
+    st->ps.err_strp = MAX_STR_BUF;  // reset temp strings
 }
 
 // Helper functions for builtin ops
@@ -2078,7 +2103,9 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
 #endif
 
     if (lhs.ix == BAD_INDEX) {
-	csp_set_error(st, ERR_SYNTAX);  // left side must be l-value
+	// FIXME: error "left and side is not an lvalue"
+	// can we print left hand side? maybe not worth it!
+	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
 
@@ -2097,6 +2124,7 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
 	return -1;
     
     if (!rhs.L && st->ap) {
+	// is this an internal error?
 	csp_set_error(st, ERR_SYNTAX);  // rhs must have value
 	return -1;
     }
@@ -2288,8 +2316,14 @@ NOINLINE static int process_fcall(csp_rt_t* st, token_t* word, uint8_t arity,
     int imm = 0;
 
     if ((func = csp_match_func(st, word->v.str.ptr, word->v.str.len,
-			       arity, rarg, &is_user, &func_idx)) == NULL)
+			       arity, rarg, &is_user, &func_idx)) == NULL) {
+	csp_set_err_arg_tstr(st, 0, &word->v.str);
+	csp_set_err_arg_int(st, 1, arity);
+	csp_set_error(st, ERR_FUNCTION_DO_NOT_EXIST);
+	// set error
 	return -1;
+    }
+    // FIXME: handle changed(x) and timeout(t) with ops!
     n = arity;
     for (j = 0; j < n; j++) {
 	rentry_t arg = rarg[j];
@@ -2321,6 +2355,7 @@ NOINLINE static int process_fcall(csp_rt_t* st, token_t* word, uint8_t arity,
 	    break;
 	case V_INDEX:
 	    if (!arg.X) { // must be a "variable"
+		// is this an internal error?
 		csp_set_error(st, ERR_SYNTAX);
 		return -1;
 	    }
@@ -2334,6 +2369,7 @@ NOINLINE static int process_fcall(csp_rt_t* st, token_t* word, uint8_t arity,
 	    break;
 	}
 	if (csp_load(st, &arg) < 0) {
+	    // is this an internal error? memory exhausted?
 	    csp_set_error(st, ERR_SYNTAX);
 	    return -1;
 	}
@@ -2342,6 +2378,10 @@ NOINLINE static int process_fcall(csp_rt_t* st, token_t* word, uint8_t arity,
 	if (arg.L) free_reg(st, arg.reg);
     }
     // check if we can evaluate a pure function
+    // note that we may have generated arguments anyway, may be
+    // optimise to remove extra instructions in the future
+    // we may have to do a "dryrun" to check if function is pure
+    // or we have special functions
     imm = (argimm == ((1 << arity)-1));
     if (func_pure(func,0) && imm) {
 	value_t arg[MAX_ARGS];
@@ -2478,6 +2518,7 @@ next:
 	else {
 	    // Not a function - regular variable/decl lookup
 	    if ((ix = lookup_decl(st,tval.str.ptr,tval.str.len)) == BAD_INDEX) {
+		csp_set_err_arg_tstr(st, 0, &tval.str);
 		csp_set_error(st, ERR_VARIABLE_NOT_DECLARED);
 		return 0;
 	    }
@@ -2591,7 +2632,7 @@ NOINLINE int csp_parse_const_expr(csp_rt_t* st, token_t* tv, size_t* num_toks,
 }
 
 typedef struct {
-    pstr_t name;
+    tstr_t name;
 } module_param_t;
 
 // '#' 'module' <name>
@@ -2608,13 +2649,14 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, size_t n)
     index_t ix, jx;
     int i;
     
-    if (pmatch(st, tv, 0, n, module_pat, &d) < 0) {
+    if (pmatch(st, tv, n, module_pat, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
 
     if ((ix = lookup_decl(st, d.name.ptr, d.name.len)) != BAD_INDEX) {
-	csp_set_error(st, ERR_OBJECT_ALREADY_DEFINED);
+	csp_set_err_arg_ix(st, 0, ix);
+	csp_set_error(st, ERR_MODULE_ALREADY_DEFINED);
 	return -1;
     }
     ix = csp_new_decl(st, d.name.ptr, d.name.len, DECL_MODULE);
@@ -2644,7 +2686,7 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
     end_param_t d;
     index_t mx, ex, lx;
 
-    if (pmatch(st, tv, 0, n, end_pat, &d) < 0) {
+    if (pmatch(st, tv, n, end_pat, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -2673,7 +2715,7 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
 // and out is used for output argumets
 
 typedef struct {
-    pstr_t name;
+    tstr_t name;
     ivalue_t res;
     decl_opts_t opts;
     value_t init;
@@ -2702,7 +2744,7 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n)
     d.res = 8*sizeof(ivalue_t);
     d.opts.vt = V_INTEGER;
 
-    if (pmatch(st, tv, 0, n, variable_pat, &d) < 0) {
+    if (pmatch(st, tv, n, variable_pat, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -2720,7 +2762,7 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n)
 
 // '#' 'constant' <name>[':' <size>] [<opt>+] '=' <num>
 typedef struct {
-    pstr_t name;
+    tstr_t name;
     ivalue_t res;
     decl_opts_t opts;
     value_t init;
@@ -2748,7 +2790,7 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
     d.res = 8*sizeof(ivalue_t);
     d.opts.vt = V_INTEGER;
 
-    if (pmatch(st, tv, 0, n, constant_pat, &d) < 0) {
+    if (pmatch(st, tv, n, constant_pat, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -2765,7 +2807,7 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
 
 // '#' 'digital' <name> [<iodir>|<pull>] [<port>':']<pin>
 typedef struct {
-    pstr_t name;
+    tstr_t name;
     ivalue_t port;
     ivalue_t pin;
     decl_opts_t opts;
@@ -2794,7 +2836,7 @@ NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, size_t n)
     index_t ix;
     int i;
 
-    if (pmatch(st, tv, 0, n, digital_pat, &d) < 0) {
+    if (pmatch(st, tv, n, digital_pat, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -2816,7 +2858,7 @@ NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, size_t n)
 }
 
 typedef struct {
-    pstr_t name;
+    tstr_t name;
     ivalue_t res;
     ivalue_t port;
     ivalue_t pin;
@@ -2851,7 +2893,7 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, size_t n)
 
     d.res = 10;
     d.opts.vt = V_INTEGER;
-    if (pmatch(st, tv, 0, n, analog_pat, &d) < 0) {
+    if (pmatch(st, tv, n, analog_pat, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -2872,7 +2914,7 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, size_t n)
 }
 
 typedef struct {
-    pstr_t name;
+    tstr_t name;
     ivalue_t timeout;
     ivalue_t init;
 } timer_param_t;
@@ -2894,7 +2936,7 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, size_t n)
     int i;
     
     d.init = 0;
-    if (pmatch(st, tv, 0, n, timer_pat, &d) < 0) {
+    if (pmatch(st, tv, n, timer_pat, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -2930,7 +2972,7 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, size_t n)
 //  <frame-id> '[' <bit-pos> '..' <bit-pos> ']'
 //
 typedef struct {
-    pstr_t name;
+    tstr_t name;
     ivalue_t res;    
     ivalue_t frameid;
     ivalue_t bit0;
@@ -2963,7 +3005,7 @@ NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
     int i, len;
 
     d.res = d.bit0 = d.bit1 = d.frameid = -1;
-    if (pmatch(st, tv, 0, n, can_pat, &d) < 0) {
+    if (pmatch(st, tv, n, can_pat, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -2996,8 +3038,8 @@ NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
 }
 
 typedef struct {
-    pstr_t mod_name;
-    pstr_t obj_name;
+    tstr_t mod_name;
+    tstr_t obj_name;
 } object_param_t;
 
 // '#' 'module' <name>
@@ -3015,17 +3057,19 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
     int i, m, ti;
     ivalue_t mod_n;
 
-    if ((ti = pmatch(st, tv, 0, n, object_pat, &d)) < 0) {
+    if ((ti = pmatch(st, tv, n, object_pat, &d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
 
     // lookup module
     if ((mx = lookup_decl(st, d.mod_name.ptr, d.mod_name.len)) == BAD_INDEX) {
+	csp_set_err_arg_tstr(st, 0, &d.mod_name);
 	csp_set_error(st, ERR_MODULE_NOT_DECLARED);
 	return -1;
     }
     if (st->decl[INDEX(mx)].type != DECL_MODULE) {
+	csp_set_err_arg_tstr(st, 0, &d.mod_name);
 	csp_set_error(st, ERR_NOT_A_MODULE);
 	return -1;
     }
@@ -3052,6 +3096,7 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
 	index_t fx = lookup_decl_in(st, tv[ti].v.str.ptr, tv[ti].v.str.len,
 				    INDEX(mx)+1, INDEX(mx)+1+mod_n);
 	if (fx == BAD_INDEX) {
+	    csp_set_err_arg_tstr(st, 0, &tv[ti].v.str);
 	    csp_set_error(st, ERR_FIELD_NOT_FOUND);
 	    return -1;
 	}
@@ -3247,7 +3292,7 @@ NOINLINE int csp_parse_rule(csp_rt_t* st, token_t* tv, size_t n)
     
     d.cond.len = 0;
     d.cond.pos = 0;
-    if (pmatch(st, tv, 0, n, rule_pat, &d) < 0) {
+    if (pmatch(st, tv, n, rule_pat, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3518,7 +3563,9 @@ int csp_rt_init(csp_rt_t* st, int transaction, int reactive)
     st->ps.nd = 0;
     st->ps.nq = 0;
     st->ps.strp = 1;
+    st->ps.err_strp = MAX_STR_BUF;
     st->ps.err  = ERR_OK;
+    st->ps.err_args[0] = st->ps.err_args[1] = st->ps.err_args[2] = 0;
     st->ps.line = 0;
 
     st->nt = 0;

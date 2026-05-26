@@ -372,8 +372,11 @@ static int handle_immediate(csp_rt_t* st, char* line)
     st->ap = NULL;  // no codegen (YET)
     if (!csp_parse_expr(st, tv, &num, &result)) {
 	st->ap = saved_ap;
-	printf("Parse error: %s\n", csp_format_error(st->ps.err));
-	return -1;	
+	printf("Parse error: ");
+	printf(csp_format_error(st->ps.err),
+	       st->ps.err_args[0], st->ps.err_args[1], st->ps.err_args[2]);
+	printf("\n");
+	return -1;
     }
     st->ap = saved_ap;
 
@@ -393,7 +396,10 @@ static int handle_persistent(csp_rt_t* st, char* line)
 {
     // Line starts with # - parse as declaration or rule
     if (csp_parse(st, line) < 0) {
-	printf("Parse error: %s\n", csp_format_error(st->ps.err));
+	printf("Parse error: ");
+	printf(csp_format_error(st->ps.err),
+	       st->ps.err_args[0], st->ps.err_args[1], st->ps.err_args[2]);
+	printf("\n");
 	return -1;
     }
     // Re-initialize to apply new declarations and set values
@@ -836,8 +842,10 @@ int main(int argc, char** argv)
 		exit(1);
 	    }
 	    if ((r = parse_file(&state, fin)) < 0) {
-		fprintf(stderr, "%s:%d syntax error\n",
-			argv[optind], state.ps.line);
+		fprintf(stderr, "%s:%d ", argv[optind], state.ps.line);
+		fprintf(stderr, csp_format_error(state.ps.err),
+			state.ps.err_args[0], state.ps.err_args[1], state.ps.err_args[2]);
+		fprintf(stderr, "\n");
 		exit(1);
 	    }
 	    fclose(fin);
@@ -847,8 +855,10 @@ int main(int argc, char** argv)
     else if (!interactive) {
 	// no files given, read from stdin (unless interactive)
 	if ((r = parse_file(&state, stdin)) < 0) {
-	    fprintf(stderr, "*stdin*:%d %s\n",
-		    state.ps.line, csp_format_error(state.ps.err));
+	    fprintf(stderr, "*stdin*:%d ", state.ps.line);
+	    fprintf(stderr, csp_format_error(state.ps.err),
+		    state.ps.err_args[0], state.ps.err_args[1], state.ps.err_args[2]);
+	    fprintf(stderr, "\n");
 	    exit(1);
 	}
     }

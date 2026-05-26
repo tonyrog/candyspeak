@@ -23,12 +23,6 @@ typedef union {
 decl_opts_t parse_opts(csp_rt_t* st, token_t* tv, int* ip, size_t n,
 		       decl_opts_t iopts);
 
-// String reference (matches tokval_t.str)
-typedef struct {
-    char* ptr;
-    int len;
-} pstr_t;
-
 // Expression reference start pos and length (in tokens)
 typedef struct {
     uint8_t pos;
@@ -39,15 +33,16 @@ typedef struct {
 enum {
     P_END = 0,    // end of pattern
     P_TOK,        // match token: P_TOK, <tok>
-    P_INTEGER,    // parse int expr, store: P_INT, <offset>
-    P_FLOAT,      // parse int expr, store: P_INT, <offset>    
-    P_NUMBER,     // parse num expr, store: P_NUM, <opt-offset>, <offset>
+    P_INTEGER,    // parse int expr, store: P_INTEGER, <offset>
+    P_FLOAT,      // parse int expr, store: P_FLOAT, <offset>    
+    P_NUMBER,     // parse num expr, store: P_NUMBER, <opt-offset>, <offset>
     P_STR,        // capture string from WORD: P_STR, <offset>
     P_EXPR,       // capture epxr from sequence: P_EXPR, <offset>    
     P_OPTS,       // parse options: P_OPTS, <offset>
     P_OPT,        // optional: P_OPT, <len>, ...pattern...
     P_ALT,        // alternatives: P_ALT, <n>, <len1>, ...alt1..., <len2>, ...alt2...
     P_REP,        // repeat: P_REP, <len>, ...pattern...
+    P_ARRAY,      // setup array (normally inside P_REP P_ARRAY sizeof(type)
     P_CALL,       // callback: P_CALL, <func_id>
 };
 
@@ -57,7 +52,7 @@ typedef int (*pmatch_cb_t)(csp_rt_t* st, token_t* tv, int ti, void* data);
 
 // Match pattern against tokens
 // Returns: number of tokens consumed, or -1 on mismatch
-int pmatch(csp_rt_t* st, token_t* tv, int tb, size_t n, const uint8_t* pat, void* data);
+int pmatch(csp_rt_t* st, token_t* tv, size_t n, const uint8_t* pat, void* data);
 
 // Register callback (up to 8)
 void pmatch_set_cb(int id, pmatch_cb_t cb);
