@@ -875,8 +875,8 @@ extern uint8_t csp_opcode_arity(opcode_t op);
 extern int csp_opcode_to_tok(opcode_t opcode);
 extern uint8_t csp_opcode_rtype(opcode_t opcode);
 extern void csp_set_error(csp_rt_t*, csp_err_t);
-extern void csp_set_error_tstr(csp_rt_t*, csp_err_t, const tstr_t* str);
-extern void csp_set_error_ix(csp_rt_t*, csp_err_t, index_t ix);
+extern void csp_set_err_arg_tstr(csp_rt_t*, int i, const tstr_t* str);
+extern void csp_set_err_arg_ix(csp_rt_t*, int i, index_t ix);
 extern void csp_clr_error(csp_rt_t*);
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 extern void csp_enq_elist(csp_rt_t* st, index_t x);

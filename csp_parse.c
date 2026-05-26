@@ -209,10 +209,6 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
             ti++;
             break;
         }
-	case P_ARRAY: {  // normally used inside P_REP
-	    pst->ez = pat[pi++];
-	    break;
-	}
         case P_NUMBER: {
 	    uint8_t opts_off = pat[pi++];
 	    uint8_t val_off = pat[pi++];
@@ -320,12 +316,21 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
 		return -1;
             break;
         }
+	case P_ARRAY: {  // normally used inside P_REP
+	    pst->ez = pat[pi++];
+	    break;
+	}	    
         case P_REP: {
             // Repeat: match zero or more times
             uint8_t len = pat[pi++];
 	    int ix = 0;
 	    pst->eo = 0;
-	    DBG("P_REP: len=%d\n", len);
+	    pst->ez = 0;
+	    if (pat[pi] == P_ARRAY) {
+		pi++;
+		pst->ez = pat[pi++];
+	    }
+	    DBG("P_REP: len=%d, ez=%d\n", len, pst->ez);
             while (ti < (int)n) {
 		DBG("ITER %d:\n", ix);
 		// fixme pass ix to pmatch to allow data to store

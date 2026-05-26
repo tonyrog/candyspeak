@@ -561,6 +561,18 @@ void csp_set_err_arg_ix(csp_rt_t* st, int i, index_t ix)
     st->ps.err_args[i] = (uintptr_t)decl_name(st, ix);
 }
 
+void csp_set_error_tstr(csp_rt_t* st, csp_err_t err, const tstr_t* str)
+{
+    csp_set_error(st, err);
+    csp_set_err_arg_tstr(st, 0, str);
+}
+
+void csp_set_error_ix(csp_rt_t* st, csp_err_t err, index_t ix)
+{
+    csp_set_error(st, err);
+    csp_set_err_arg_ix(st, 0, ix);
+}
+
 void csp_clr_error(csp_rt_t* st)
 {
     st->ps.err = ERR_OK;
@@ -3037,32 +3049,139 @@ NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
     return 0;
 }
 
+#define MAX_INITS 8
+
+typedef struct {
+    tstr_t field;      // field name
+    pexpr_t expr;      // expression (token pos + len)
+    uint8_t reactive;  // 1 if <-, 0 if =
+} init_entry_t;
+
 typedef struct {
     tstr_t mod_name;
     tstr_t obj_name;
+    init_entry_t inits[MAX_INITS];
+    uint8_t ninits;
 } object_param_t;
 
-// '#' 'module' <name>
+#define CB_STATIC_INIT   0
+#define CB_REACTIVE_INIT 1
+
+// Callback: save init entry (no codegen)
+static int cb_init_entry(csp_rt_t* st, token_t* tv, int ti, void* data, int reactive)
+{
+    object_param_t* d = (object_param_t*)data;
+    if (d->ninits >= MAX_INITS) return 0;
+    init_entry_t* e = &d->inits[d->ninits];
+    e->field = d->inits[0].field;  // field was stored at index 0 by P_STR
+    e->reactive = reactive;
+    e->expr.pos = ti;
+    // Find end of expression
+    int k = ti;
+    while (k < MAX_LINE_TOKENS && tv[k].t != NEWLINE) {
+	if (tv[k].t == WORD && k+1 < MAX_LINE_TOKENS &&
+	    (tv[k+1].t == EQ || tv[k+1].t == RIMP))
+	    break;
+	k++;
+    }
+    e->expr.len = k - ti;
+    if (e->expr.len == 0) { csp_set_error(st, ERR_SYNTAX); return 0; }
+    d->ninits++;
+    return 1;
+}
+
+static int cb_static_init(csp_rt_t* st, token_t* tv, int ti, void* data)
+{ return cb_init_entry(st, tv, ti, data, 0); }
+
+static int cb_reactive_init(csp_rt_t* st, token_t* tv, int ti, void* data)
+{ return cb_init_entry(st, tv, ti, data, 1); }
+
+// Generate code for static init: target = expr
+static int gen_static_init(csp_rt_t* st, token_t* tv, init_entry_t* e, index_t target)
+{
+    size_t num = e->expr.len;
+    rentry_t rval;
+    if (!csp_parse_expr(st, &tv[e->expr.pos], &num, &rval)) return 0;
+    if (!rval.L) csp_load(st, &rval);
+    if (csp_new_mem(st, OP_ST, rval.reg, target) < 0) return 0;
+    free_reg(st, rval.reg);
+    return 1;
+}
+
+// Generate code for reactive init: target <- expr (with CHG/RULE)
+static int gen_reactive_init(csp_rt_t* st, token_t* tv, init_entry_t* e, index_t target)
+{
+    size_t num = e->expr.len;
+    rentry_t rval;
+    reg_allocator_t* ap_save = st->ap;
+
+    // Dry-run: collect variables
+    st->nvar = 0;
+    st->rimp = 1;
+    st->ap = NULL;
+    csp_parse_const_expr(st, &tv[e->expr.pos], &num, &rval);
+    st->ap = ap_save;
+    st->rimp = 0;
+    num = e->expr.len;
+
+    // Generate CHG/RULE
+    int cnd = alloc_reg(st);
+    if (st->nvar > 0) {
+	if (csp_new_li(st, cnd, 0) < 0) return 0;
+	for (int k = 0; k < st->nvar; k++)
+	    if (csp_new_mem(st, OP_CHG, cnd, st->var[k]) < 0) return 0;
+    } else {
+	if (csp_new_li(st, cnd, -1) < 0) return 0;
+    }
+    int j;
+    if ((j = csp_new_rule(st, cnd, 0)) < 0) return 0;
+    free_reg(st, cnd);
+
+    // Parse expression for real
+    st->rimp = 1;
+    if (!csp_parse_expr(st, &tv[e->expr.pos], &num, &rval)) { st->rimp = 0; return 0; }
+    st->rimp = 0;
+
+    if (!rval.L) csp_load(st, &rval);
+    if (csp_new_mem(st, OP_STIMP, rval.reg, target) < 0) return 0;
+    st->instr[j].r.nxt = st->ps.nn - j;
+    if (csp_new_next(st, rval.reg) < 0) return 0;
+    free_reg(st, rval.reg);
+    return 1;
+}
+
+// '#' ModName ObjName (Field (=|<-) Expr)*
 static const uint8_t object_pat[] = {
     P_TOK, HASH,
     P_STR, csp_offsetof(object_param_t, mod_name),
     P_STR, csp_offsetof(object_param_t, obj_name),
+    P_REP, 18,
+        P_ARRAY, sizeof(init_entry_t),
+        P_STR, csp_offsetof(init_entry_t, field),
+        P_ALT, 2,
+            5, P_TOK, EQ, P_CALL, CB_STATIC_INIT, P_END,
+            5, P_TOK, RIMP, P_CALL, CB_REACTIVE_INIT, P_END,
     P_END
 };
 
 NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
 {
-    object_param_t d;
+    object_param_t d = {0};
     index_t mx, ix;
-    int i, m, ti;
-    ivalue_t mod_n;
+    int i, m;
 
-    if ((ti = pmatch(st, tv, n, object_pat, &d)) < 0) {
-	csp_set_error(st, ERR_SYNTAX);
+    // Register callbacks
+    pmatch_set_cb(CB_STATIC_INIT, cb_static_init);
+    pmatch_set_cb(CB_REACTIVE_INIT, cb_reactive_init);
+
+    // Parse: # ModName ObjName (Field (=|<-) Expr)*
+    if (pmatch(st, tv, n, object_pat, &d) < 0) {
+	if (st->ps.err == ERR_OK)
+	    csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
 
-    // lookup module
+    // Lookup module
     if ((mx = lookup_decl(st, d.mod_name.ptr, d.mod_name.len)) == BAD_INDEX) {
 	csp_set_err_arg_tstr(st, 0, &d.mod_name);
 	csp_set_error(st, ERR_MODULE_NOT_DECLARED);
@@ -3080,7 +3199,8 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
     if ((ix = csp_new_decl(st, d.obj_name.ptr, d.obj_name.len, DECL_OBJECT))
 	== BAD_INDEX)
 	return -1;
-    // Set up object slot BEFORE parsing init list (so field refs work)
+
+    // Set up object slot
     i = INDEX(ix);
     st->decl[i].mq.mx = mx;
     m = st->ps.nq + 1;
@@ -3088,125 +3208,22 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
     st->object[m] = ix;
     st->ps.nq++;
 
-    // Parse init list BEFORE NEW (so values are set when module rules run)
-    mod_n = st->decl[INDEX(mx)].md.n;  // number of fields in module
-
-    while (ti < (int)n && tv[ti].t == WORD) {
-	// Look up field in module
-	index_t fx = lookup_decl_in(st, tv[ti].v.str.ptr, tv[ti].v.str.len,
+    // Generate code for init list
+    ivalue_t mod_n = st->decl[INDEX(mx)].md.n;
+    for (int k = 0; k < d.ninits; k++) {
+	init_entry_t* e = &d.inits[k];
+	index_t fx = lookup_decl_in(st, e->field.ptr, e->field.len,
 				    INDEX(mx)+1, INDEX(mx)+1+mod_n);
 	if (fx == BAD_INDEX) {
-	    csp_set_err_arg_tstr(st, 0, &tv[ti].v.str);
+	    csp_set_err_arg_tstr(st, 0, &e->field);
 	    csp_set_error(st, ERR_FIELD_NOT_FOUND);
 	    return -1;
 	}
-	ti++;
-
-	if (ti >= (int)n) {
-	    csp_set_error(st, ERR_SYNTAX);
-	    return -1;
-	}
-
-	// Make target index (object m, field fx)
 	index_t target = MAKE_INDEX(m, INDEX(fx));
-
-	if (tv[ti].t == EQ) {
-	    // Static init: field = expr
-	    ti++;
-	    // Find end of expression (NEWLINE or WORD followed by = or <-)
-	    int k = ti;
-	    while (k < (int)n && tv[k].t != NEWLINE) {
-		if (tv[k].t == WORD && k+1 < (int)n &&
-		    (tv[k+1].t == EQ || tv[k+1].t == RIMP))
-		    break;  // next field init
-		k++;
-	    }
-	    size_t num = k - ti;
-	    if (num == 0) {
-		csp_set_error(st, ERR_SYNTAX);
-		return -1;
-	    }
-	    rentry_t rval;
-	    if (!csp_parse_expr(st, &tv[ti], &num, &rval))
-		return -1;
-	    if (!rval.L) csp_load(st, &rval);
-	    if (csp_new_mem(st, OP_ST, rval.reg, target) < 0)
-		return -1;
-	    free_reg(st, rval.reg);
-	    ti += num;
-	}
-	else if (tv[ti].t == RIMP) {
-	    // Reactive init: field <- expr
-	    ti++;
-	    // Find end of expression (NEWLINE or WORD followed by = or <-)
-	    int k = ti;
-	    while (k < (int)n && tv[k].t != NEWLINE) {
-		if (tv[k].t == WORD && k+1 < (int)n &&
-		    (tv[k+1].t == EQ || tv[k+1].t == RIMP))
-		    break;  // next field init
-		k++;
-	    }
-	    size_t num = k - ti;
-	    if (num == 0) {
-		csp_set_error(st, ERR_SYNTAX);
-		return -1;
-	    }
-	    // Generate reactive rule: target <- expr
-	    // Similar to csp_parse_rule but with known target
-	    rentry_t rval;
-	    int cnd, j;
-	    size_t num_save = num;
-	    reg_allocator_t* ap_save = st->ap;
-
-	    // Dry-run: collect variables without generating code
-	    st->nvar = 0;
-	    st->rimp = 1;
-	    st->ap = NULL;
-	    csp_parse_const_expr(st, &tv[ti], &num, &rval);
-	    st->ap = ap_save;
-	    st->rimp = 0;
-	    num = num_save;
-
-	    // Generate CHG condition if we have variables
-	    cnd = alloc_reg(st);
-	    if (st->nvar > 0) {
-		int kk;
-		if (csp_new_li(st, cnd, 0) < 0) return -1;
-		for (kk = 0; kk < st->nvar; kk++) {
-		    if (csp_new_mem(st, OP_CHG, cnd, st->var[kk]) < 0)
-			return -1;
-		}
-	    } else {
-		if (csp_new_li(st, cnd, -1) < 0) return -1;
-	    }
-
-	    // Generate RULE
-	    if ((j = csp_new_rule(st, cnd, 0)) < 0) return -1;
-	    free_reg(st, cnd);
-
-	    // Now parse expression for real to generate code
-	    st->rimp = 1;
-	    if (!csp_parse_expr(st, &tv[ti], &num, &rval)) {
-		st->rimp = 0;
-		return -1;
-	    }
-	    st->rimp = 0;
-
-	    // Store to target
-	    if (!rval.L) csp_load(st, &rval);
-	    if (csp_new_mem(st, OP_STIMP, rval.reg, target) < 0)
-		return -1;
-
-	    // Patch RULE and generate NEXT
-	    st->instr[j].r.nxt = st->ps.nn - j;
-	    if (csp_new_next(st, rval.reg) < 0) return -1;
-	    free_reg(st, rval.reg);
-
-	    ti += num;
-	}
-	else {
-	    csp_set_error(st, ERR_SYNTAX);
-	    return -1;
+	if (e->reactive) {
+	    if (!gen_reactive_init(st, tv, e, target)) return -1;
+	} else {
+	    if (!gen_static_init(st, tv, e, target)) return -1;
 	}
     }
 
