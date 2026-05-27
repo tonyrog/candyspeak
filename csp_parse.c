@@ -317,9 +317,10 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
             break;
         }
 	case P_ARRAY: {  // normally used inside P_REP
-	    pst->ez = pat[pi++];
+	    pst->eo = pat[pi++];  // base offset
+	    pst->ez = pat[pi++];  // element size
 	    break;
-	}	    
+	}
         case P_REP: {
             // Repeat: match zero or more times
             uint8_t len = pat[pi++];
@@ -328,7 +329,8 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
 	    pst->ez = 0;
 	    if (pat[pi] == P_ARRAY) {
 		pi++;
-		pst->ez = pat[pi++];
+		pst->eo = pat[pi++];  // base offset
+		pst->ez = pat[pi++];  // element size
 	    }
 	    DBG("P_REP: len=%d, ez=%d\n", len, pst->ez);
             while (ti < (int)n) {

@@ -3091,10 +3091,14 @@ static int cb_init_entry(csp_rt_t* st, token_t* tv, int ti, void* data, int reac
 }
 
 static int cb_static_init(csp_rt_t* st, token_t* tv, int ti, void* data)
-{ return cb_init_entry(st, tv, ti, data, 0); }
+{
+    return cb_init_entry(st, tv, ti, data, 0);
+}
 
 static int cb_reactive_init(csp_rt_t* st, token_t* tv, int ti, void* data)
-{ return cb_init_entry(st, tv, ti, data, 1); }
+{
+    return cb_init_entry(st, tv, ti, data, 1);
+}
 
 // Generate code for static init: target = expr
 static int gen_static_init(csp_rt_t* st, token_t* tv, init_entry_t* e, index_t target)
@@ -3155,8 +3159,8 @@ static const uint8_t object_pat[] = {
     P_TOK, HASH,
     P_STR, csp_offsetof(object_param_t, mod_name),
     P_STR, csp_offsetof(object_param_t, obj_name),
-    P_REP, 18,
-        P_ARRAY, sizeof(init_entry_t),
+    P_REP, 19,
+        P_ARRAY, csp_offsetof(object_param_t, inits), sizeof(init_entry_t),
         P_STR, csp_offsetof(init_entry_t, field),
         P_ALT, 2,
             5, P_TOK, EQ, P_CALL, CB_STATIC_INIT, P_END,
@@ -3169,7 +3173,8 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
     object_param_t d = {0};
     index_t mx, ix;
     int i, m;
-
+    ivalue_t mod_n;
+    
     // Register callbacks
     pmatch_set_cb(CB_STATIC_INIT, cb_static_init);
     pmatch_set_cb(CB_REACTIVE_INIT, cb_reactive_init);
@@ -3209,7 +3214,7 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
     st->ps.nq++;
 
     // Generate code for init list
-    ivalue_t mod_n = st->decl[INDEX(mx)].md.n;
+    mod_n = st->decl[INDEX(mx)].md.n;
     for (int k = 0; k < d.ninits; k++) {
 	init_entry_t* e = &d.inits[k];
 	index_t fx = lookup_decl_in(st, e->field.ptr, e->field.len,
