@@ -117,7 +117,7 @@ Future optimization: use OP_LDO to inline changed check:
 
   OP_LDO ri, xi       load dset[xi] and OR into register ri
 
-## Object instantiation with <- and =
+## Object instantiation with <- and = (DONE)
 
 Extend csp_parse_object to handle init expressions:
 
@@ -129,3 +129,43 @@ Syntax: #Module name ( target (= | <-) expr )*
 Where:
 - target=expr: static initialization (evaluated once)
 - target <- expr: reactive coupling (generates rule)
+
+# Timer in modules
+
+Support timer declarations inside modules:
+
+```
+#module Blinker
+#timer T 500
+#variable Out:1 out
+Out <- ~Out ? T
+T <- 1 ? T
+#end
+
+#Blinker led1
+#Blinker led2   // each instance gets own timer
+```
+
+Implementation:
+- Timer in module creates timer decl marked as module-local
+- At instantiation, copy timer slot (px, tx) per object
+- Runtime handles timer per object-slot
+
+# Digital/Analog in modules
+
+Support pin binding at instantiation time:
+
+```
+#module Button
+#digital In in pullup   // pin unspecified
+#end
+
+#Button b1 In=pin(13)   // bind to pin 13
+#Button b2 In=pin(14)   // bind to pin 14
+```
+
+Implementation:
+- Digital/analog in module has pin=UNBOUND
+- Init expression `field=pin(N)` binds to physical pin
+- Conflict detection if same pin used twice
+- Alternative: keep digital/analog global, use variables as bridge

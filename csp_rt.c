@@ -7,7 +7,6 @@
 #include "csp_parse.h"
 #ifdef DEBUG
 #include <stdio.h>
-#include "csp_format.h"
 #endif
 
 #define CAT_HELPER2(x,y) x ## y
@@ -91,14 +90,20 @@ static const char s_cvtfi[] RODATA = "cvtfi";
 static const char s_pullup[] RODATA = "pullup";
 static const char s_pulldown[] RODATA = "pulldown";
 static const char s_resolution[] RODATA = "resolution";
+static const char s_undefined[] RODATA = "undefined";
+static const char s_none[] RODATA = "none";
 static const char s_in[] RODATA = "in";
 static const char s_out[] RODATA = "out";
 static const char s_inout[] RODATA = "inout";
 static const char s_pwm[] RODATA = "pwm";
+static const char s_void[] RODATA = "void";
 static const char s_float[] RODATA = "float";
 static const char s_integer[] RODATA = "integer";
 static const char s_unsigned[] RODATA = "unsigned";
+static const char s_index[] RODATA = "index";
+static const char s_number[] RODATA = "number";
 static const char s_string[] RODATA = "string";
+static const char s_any[] RODATA = "any";
 static const char s_little[] RODATA = "little";
 static const char s_big[] RODATA = "big";
 static const char s_LP[] RODATA = "(";
@@ -434,6 +439,119 @@ static const op_info_t info_tab[] RODATA = {
     [OP_NOP] = {s_NOP,0,V_VOID,{}},    
     
 };
+
+static const char tag_tab[] RODATA = {
+    [DECL_OBJECT] = 'q',
+    [DECL_MODULE] = 'm',
+    [DECL_CONSTANT] = 'c',
+    [DECL_VARIABLE] = 'v',
+    [DECL_DIGITAL] = 'd',
+    [DECL_ANALOG] = 'a',
+    [DECL_TIMER] = 't',
+    [DECL_CAN] = 'k',
+    [DECL_UART] = 'u',
+    [DECL_SOCKET] = 's'
+};
+    
+const char csp_tag(csp_rt_t* st, index_t n)
+{
+    return tag_tab[st->decl[INDEX(n)].type];
+}
+
+static const char* const pindir_tab[] RODATA = {
+    [DIR_NONE] = s_none,    
+    [DIR_IN]   = s_in,
+    [DIR_OUT]  = s_out,
+    [DIR_INOUT]  = s_inout
+};
+
+const char* csp_fmt_pindir(uint8_t dir)
+{
+    return pindir_tab[dir&0x3];
+}
+
+const char* csp_fmt_pull(csp_rt_t* st, int ix)
+{
+    if (st->decl[ix].di.pullup)
+	return s_pullup;
+    else if (st->decl[ix].di.pulldown)
+	return s_pulldown;
+    else
+	return s_undefined;  // floating
+}
+
+const char* csp_fmt_pwm(csp_rt_t* st, int ix)
+{
+    if (st->decl[ix].an.pwm)
+	return s_pwm;
+    else
+	return s_undefined;
+}
+
+static const char* const vtype_tab[] RODATA = {
+    [V_VOID] = s_void,
+    [V_INTEGER] = s_integer,
+    [V_UNSIGNED] = s_unsigned,
+    [V_FLOAT] = s_float,
+    [V_STRING] = s_string,
+    [V_INDEX] = s_index,
+    [V_NUMBER] = s_number,
+    [V_ANY] = s_any
+};
+
+
+const char* csp_fmt_vtype(vtype_t vt)
+{
+    return vtype_tab[vt & 0x7];
+}
+
+static const char* const endian_tab[] RODATA = {
+    [E_UNDEFINED] = s_undefined,
+    [E_LITTLE] = s_little,
+    [E_BIG] = s_big,
+    [0x3] = s_undefined
+};
+
+const char* csp_fmt_endian(vendian_t et)
+{
+    return endian_tab[et&0x3];
+}
+
+const char* csp_format_error(csp_err_t err)
+{
+    switch(err) {
+    case ERR_OK:
+	return "ok";
+    case ERR_SYNTAX:
+	return "syntax error";
+    case ERR_STRING_SPACE_EXHUSTED:
+	return "string space exhuasted";
+    case ERR_TOO_MANY_DECLARATIONS:
+	return "too many declarations";
+    case ERR_TOO_MANY_INSTRUCTIONS:
+	return "too many instructions";
+    case ERR_TOO_MANY_OBJECTS:
+	return "too many objects";
+    case ERR_MODULE_NOT_DECLARED:
+	return "module %s not declared";
+    case ERR_NOT_A_MODULE:
+	return "word %s not a module";
+    case ERR_OBJECT_ALREADY_DEFINED:
+	return "object %s is already defined";
+    case ERR_MODULE_ALREADY_DEFINED:
+	return "module %s is already defined";	
+    case ERR_OBJECT_NOT_DEFINED:
+	return "object %s is not defined";
+    case ERR_VARIABLE_NOT_DECLARED:
+	return "variable %s is not declared";
+    case ERR_FIELD_NOT_FOUND:
+	return "field %s not found";
+    case ERR_FUNCTION_DO_NOT_EXIST:
+	return "function %s/%d does not exist";	
+    default:
+	return "unknown error";
+    }
+}
 
 static NOINLINE value_t eval0(opcode_t op)
 {
@@ -3710,5 +3828,326 @@ int csp_set_reactive(csp_rt_t* st, int onoff)
     st->reactive = onoff;
     return 0;
 #endif
-    return -1;    
+    return -1;
+}
+
+// ============================================================
+// Interactive command handling
+// ============================================================
+
+static int cmd_help(csp_rt_t* st, const char* args);
+static int cmd_list(csp_rt_t* st, const char* args);
+static int cmd_state(csp_rt_t* st, const char* args);
+static int cmd_reset(csp_rt_t* st, const char* args);
+static int cmd_commit(csp_rt_t* st, const char* args);
+static int cmd_quit(csp_rt_t* st, const char* args);
+static int cmd_latch(csp_rt_t* st, const char* args);
+
+static const csp_cmd_t builtin_cmds[] = {
+    { "help",   "Show this help",          cmd_help },
+    { "?",      NULL,                      cmd_help },
+    { "list",   "List declarations",       cmd_list },
+    { "state",  "Show current values",     cmd_state },
+    { "reset",  "Reset to initial values", cmd_reset },
+    { "latch",  "on or off, device output", cmd_latch },
+    { "commit", "Commit pending values",   cmd_commit },
+    { "save",   "Save state to storage",   csp_cmd_save },
+    { "load",   "Load state from storage", csp_cmd_load },
+    { "quit",   "Exit interactive mode",   cmd_quit },
+    { "exit",   NULL,                      cmd_quit },
+    { NULL, NULL, NULL }
+};
+
+static int cmd_help(csp_rt_t* st, const char* args)
+{
+    (void)st; (void)args;
+    csp_print_str("Commands:\n");
+    for (const csp_cmd_t* c = builtin_cmds; c->name; c++) {
+        if (c->help) {
+            csp_print_str("  /");
+            csp_print_str(c->name);
+            int len = strlen(c->name);
+            while (len++ < 10) csp_print_char(' ');
+            csp_print_str(c->help);
+            csp_print_char('\n');
+        }
+    }
+    csp_print_str("\nSyntax:\n");
+    csp_print_str("  #variable X integer    Declare variable\n");
+    csp_print_str("  X = Y + 1              Rule (always)\n");
+    csp_print_str("  X = Y + 1 ? cond       Rule (conditional)\n");
+    csp_print_str("  > X + 1                Evaluate expression\n");
+    csp_print_str("  > X = 5                Assign value\n");
+    return CSP_CMD_OK;
+}
+
+static int cmd_list(csp_rt_t* st, const char* args)
+{
+    (void)args;
+    for (int i = 0; i < st->ps.nd; i++) {
+        if (st->decl[i].type == DECL_END) break;
+        if (st->decl[i].type == DECL_MODULE) continue;
+        const char* name = decl_name(st, MAKE_INDEX(0, i));
+        if (!name || !*name) continue;
+
+        csp_print_str(name);
+        csp_print_str(" : ");
+        switch (st->decl[i].type) {
+        case DECL_VARIABLE:
+            csp_print_str(csp_fmt_vtype(st->decl[i].vt));
+            csp_print_str(" = ");
+            csp_print_value(st, st->decl[i].vt,
+                           csp_value(st, MAKE_INDEX(0, i)));
+            break;
+        case DECL_CONSTANT:
+            csp_print_str("const ");
+            csp_print_str(csp_fmt_vtype(st->decl[i].vt));
+            csp_print_str(" = ");
+            csp_print_value(st, st->decl[i].vt, st->decl[i].cn.init);
+            break;
+        case DECL_TIMER:
+            csp_print_str("timer");
+            break;
+        case DECL_DIGITAL:
+            csp_print_str("digital ");
+            csp_print_str(csp_fmt_pindir(st->decl[i].dir));
+            break;
+        case DECL_ANALOG:
+            csp_print_str("analog ");
+            csp_print_str(csp_fmt_pindir(st->decl[i].dir));
+            break;
+        default:
+            break;
+        }
+        csp_print_char('\n');
+    }
+    return CSP_CMD_OK;
+}
+
+static int cmd_state(csp_rt_t* st, const char* args)
+{
+    (void)args;
+    csp_print_str("latch = ");
+    csp_print_str(st->latch ? "on" : "off");
+    csp_print_char('\n');
+    
+    for (int i = 0; i < st->ps.nd; i++) {
+        if (st->decl[i].type == DECL_END) break;
+        if (st->decl[i].type != DECL_VARIABLE) continue;
+        const char* name = decl_name(st, MAKE_INDEX(0, i));
+        if (!name || !*name) continue;
+
+        csp_print_str(name);
+        csp_print_str(" = ");
+        csp_print_value(st, st->decl[i].vt,
+                       csp_value(st, MAKE_INDEX(0, i)));
+        csp_print_char('\n');
+    }
+    return CSP_CMD_OK;
+}
+
+static int cmd_reset(csp_rt_t* st, const char* args)
+{
+    (void)args;
+    csp_rt_start(st);
+    csp_setup(st);
+    csp_print_str("Reset\n");
+    return CSP_CMD_OK;
+}
+
+static int cmd_commit(csp_rt_t* st, const char* args)
+{
+    (void)args;
+    csp_commit(st);
+    csp_print_str("Committed\n");
+    return CSP_CMD_OK;
+}
+
+static int cmd_quit(csp_rt_t* st, const char* args)
+{
+    (void)st; (void)args;
+    return CSP_CMD_QUIT;
+}
+
+void csp_cmd_help(void)
+{
+    cmd_help(NULL, NULL);
+}
+
+static int cmd_latch(csp_rt_t* st, const char* args)
+{
+    if (strcmp(args, "on") == 0)
+	st->latch = 1;
+    else if (strcmp(args, "off") == 0)
+	st->latch = 0;
+    return 0;
+}
+
+int csp_cmd_dispatch(csp_rt_t* st, const char* cmd)
+{
+    const char* args = cmd;
+    const csp_cmd_t* c;
+    
+    // Skip command name to find args
+    while (*args && *args != ' ' && *args != '\t') args++;
+    int namelen = args - cmd;
+    while (*args == ' ' || *args == '\t') args++;
+
+    for (c = builtin_cmds; c->name; c++) {
+        if (strncmp(cmd, c->name, namelen) == 0 &&
+            c->name[namelen] == '\0') {
+            return c->fn(st, args);
+        }
+    }
+    return CSP_CMD_NOTFOUND;
+}
+
+// Process immediate expression (> expr or > var = expr)
+static int csp_process_immediate(csp_rt_t* st, char* line)
+{
+    token_t tv[MAX_LINE_TOKENS];
+    size_t num = MAX_LINE_TOKENS;
+    reg_allocator_t* saved_ap;
+    rentry_t result;
+
+    if (csp_scan_line(line, tv, &num) < 0) {
+        csp_print_str("Scan error\n");
+        return -1;
+    }
+    if (num == 0 || tv[0].t == NEWLINE)
+        return 0;
+
+    saved_ap = st->ap;
+    st->ap = NULL;
+    if (!csp_parse_expr(st, tv, &num, &result)) {
+        st->ap = saved_ap;
+        csp_print_str("Error: ");
+        csp_print_str(csp_format_error(st->ps.err));
+        csp_print_char('\n');
+        csp_clr_error(st);
+        return -1;
+    }
+    st->ap = saved_ap;
+
+    if (result.I)
+        csp_print_value(st, result.vt, result.val);
+    else if (result.ix != BAD_INDEX)
+        csp_print_value(st, result.vt, csp_value(st, result.ix));
+    else
+        csp_print_str("NONE");
+    csp_println();
+    return 0;
+}
+
+// Process persistent definition (# declaration or rule)
+static int csp_process_persistent(csp_rt_t* st, char* line)
+{
+    if (csp_parse(st, line) < 0) {
+        csp_print_str("Error: ");
+        csp_print_str(csp_format_error(st->ps.err));
+        csp_print_char('\n');
+        csp_clr_error(st);
+        return -1;
+    }
+    csp_rt_start(st);
+    csp_setup(st);
+    csp_print_str("OK\n");
+    return 0;
+}
+
+int csp_process_line(csp_rt_t* st, char* line)
+{
+    // Skip leading whitespace
+    while (*line && (*line == ' ' || *line == '\t')) line++;
+    if (*line == '\0' || *line == '\n')
+        return CSP_CMD_OK;
+
+    // Remove trailing newline
+    int len = strlen(line);
+    if (len > 0 && line[len-1] == '\n') line[len-1] = '\0';
+
+    if (*line == '/') {
+        // Command
+        int r = csp_cmd_dispatch(st, line + 1);
+        if (r == CSP_CMD_NOTFOUND) {
+            csp_print_str("Unknown command: ");
+            csp_print_str(line);
+            csp_print_str(" (try /help)\n");
+        }
+        return r;
+    }
+    else if (*line == '#') {
+        // Persistent definition
+        csp_process_persistent(st, line);
+        return CSP_CMD_OK;
+    }
+    else if (*line == '>') {
+        // Immediate expression
+        csp_process_immediate(st, line + 1);
+        return CSP_CMD_OK;
+    }
+    else {
+        // Try as immediate expression (backwards compat)
+        csp_process_immediate(st, line);
+        return CSP_CMD_OK;
+    }
+}
+
+// ============================================================
+// Line input handling (shared between platforms)
+// ============================================================
+
+char csp_line_buf[CSP_LINE_BUF_SIZE];
+uint8_t csp_line_pos = 0;
+uint8_t csp_line_ready = 0;
+static uint8_t need_prompt = 1;
+
+void csp_line_init(void)
+{
+    csp_line_pos = 0;
+    csp_line_ready = 0;
+    need_prompt = 1;
+}
+
+void csp_line_prompt(void)
+{
+    if (need_prompt) {
+        csp_print_str("> ");
+        csp_flush();
+        need_prompt = 0;
+    }
+}
+
+void csp_line_input(char c)
+{
+    if (c == '\n' || c == '\r') {
+        if (csp_line_pos > 0) {
+            csp_line_buf[csp_line_pos] = '\0';
+            csp_line_ready = 1;
+        }
+        csp_print_str("\r\n");
+        csp_flush();
+        need_prompt = 1;
+    }
+    else if (c == '\b' || c == 127) {
+        if (csp_line_pos == 0) {
+            csp_print_char('\a');
+        } else {
+            csp_line_pos--;
+            csp_print_str("\b \b");
+        }
+        csp_flush();
+    }
+    else if (c == 21) { // Ctrl-U: clear line
+        while (csp_line_pos > 0) {
+            csp_line_pos--;
+            csp_print_str("\b \b");
+        }
+        csp_flush();
+    }
+    else if (c >= 32 && c < 127 && csp_line_pos < CSP_LINE_BUF_SIZE - 1) {
+        csp_line_buf[csp_line_pos++] = c;
+        csp_print_char(c);
+        csp_flush();
+    }
 }

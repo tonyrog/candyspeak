@@ -158,6 +158,11 @@ int csp_println(void)
     return putchar('\n');
 }
 
+void csp_flush(void)
+{
+    fflush(stdout);
+}
+
 // Terminal raw mode handling
 static void disable_raw_mode(void)
 {
@@ -190,49 +195,6 @@ static int enable_raw_mode(void)
 
     raw_mode = 1;
     return 0;
-}
-
-// Simple line editor - returns length, -1 on EOF
-static int read_line(char* buf, int maxlen, const char* prompt)
-{
-    int pos = 0;
-    int c;
-
-    printf("%s", prompt);
-    fflush(stdout);
-
-    while (1) {
-	c = getchar();
-	if (c == EOF || c == 4) {  // EOF or Ctrl-D
-	    if (pos == 0) return -1;
-	    break;
-	}
-	else if (c == '\r' || c == '\n') {
-	    printf("\n");
-	    break;
-	}
-	else if (c == 127 || c == 8) {  // Backspace or DEL
-	    if (pos > 0) {
-		pos--;
-		printf("\b \b");
-		fflush(stdout);
-	    }
-	}
-	else if (c == 21) {  // Ctrl-U: clear line
-	    while (pos > 0) {
-		pos--;
-		printf("\b \b");
-	    }
-	    fflush(stdout);
-	}
-	else if (c >= 32 && c < 127 && pos < maxlen - 1) {
-	    buf[pos++] = c;
-	    putchar(c);
-	    fflush(stdout);
-	}
-    }
-    buf[pos] = '\0';
-    return pos;
 }
 
 // Platform stub functions for csp_eeprom.c
@@ -270,230 +232,54 @@ int csp_eeprom_write(const void* buf, size_t len)
     return (fwrite(buf, 1, len, eeprom_fp) == len) ? 0 : -1;
 }
 
-// Interactive command handling
-static int handle_command(csp_rt_t* st, const char* cmd)
+// Platform-specific command implementations
+int csp_cmd_save(csp_rt_t* st, const char* args)
 {
-    if (strcmp(cmd, "help") == 0 || strcmp(cmd, "?") == 0) {
-	printf("Commands:\n");
-	printf("  /help, /?      Show this help\n");
-	printf("  /list          List declarations\n");
-	printf("  /rules         List rules\n");
-	printf("  /state         Show current state\n");
-	printf("  /save          Save to %s\n", eeprom_file);
-	printf("  /load          Load from %s\n", eeprom_file);
-	printf("  /reset         Reset to initial values\n");
-	printf("  /commit        Commit new values\n");	
-	printf("  /quit, /exit   Exit interactive mode\n");
-	printf("\n");
-	printf("Declarations:\n");
-	printf("  #variable X integer [= value]\n");
-	printf("  #constant PI float = 3.14159\n");
-	printf("  #digital LED out 13\n");
-	printf("\n");
-	printf("Rules:\n");
-	printf("  #X = Y + 1          (always)\n");
-	printf("  #X = Y + 1 ? cond   (conditional)\n");
-	printf("\n");
-	printf("Immediate:\n");
-	printf("  X                   Print value of X\n");
-	printf("  X + 1               Evaluate and print\n");
-	printf("  X = 5               Assign value to X\n");
-	return 0;
+    (void)args;
+    if (csp_eeprom_save(st) < 0) {
+	printf("Error: cannot save to %s\n", eeprom_file);
+	return CSP_CMD_ERROR;
     }
-    else if (strcmp(cmd, "list") == 0) {
-	csp_list_declarations(stdout, st);
-	csp_list_rules(stdout, st);
-	return 0;
-    }
-    else if (strcmp(cmd, "state") == 0) {
-	csp_dump_state_erl(stdout, st);
-	return 0;
-    }
-    else if (strcmp(cmd, "save") == 0) {
-	if (csp_eeprom_save(st) < 0) {
-	    printf("Error: cannot save to %s\n", eeprom_file);
-	    return -1;
-	}
-	printf("Saved to %s (%d decls, %d instrs, %d bytes)\n",
-	       eeprom_file, st->ps.nd, st->ps.nn, csp_eeprom_size(st));
-	return 0;
-    }
-    else if (strcmp(cmd, "load") == 0) {
-	if (csp_eeprom_load(st) < 0) {
-	    printf("Error: cannot load from %s\n", eeprom_file);
-	    return -1;
-	}
-	csp_setup(st);
-	printf("Loaded from %s (%d decls, %d instrs)\n",
-	       eeprom_file, st->ps.nd, st->ps.nn);
-	return 0;
-    }
-    else if (strcmp(cmd, "reset") == 0) {
-	csp_rt_start(st);
-	csp_setup(st);
-	printf("Reset to initial values\n");
-	return 0;
-    }
-    else if (strcmp(cmd, "commit") == 0) {
-	csp_commit(st);
-	return 0;
-    }    
-    else if (strcmp(cmd, "quit") == 0 || strcmp(cmd, "exit") == 0) {
-	return 1;  // signal exit
-    }
-    else if (strcmp(cmd, "rules") == 0) {
-	// Just show instruction count for now
-	printf("Instructions: %d\n", st->ps.nn);
-	return 0;
-    }
-    else {
-	printf("Unknown command: /%s (try /help)\n", cmd);
-	return 0;
-    }
+    printf("Saved to %s (%d decls, %d instrs, %d bytes)\n",
+	   eeprom_file, st->ps.nd, st->ps.nn, csp_eeprom_size(st));
+    return CSP_CMD_OK;
 }
 
-// Parse and execute immediate expression
-static int handle_immediate(csp_rt_t* st, char* line)
+int csp_cmd_load(csp_rt_t* st, const char* args)
 {
-    token_t tv[MAX_LINE_TOKENS];
-    size_t num = MAX_LINE_TOKENS;
-    reg_allocator_t* saved_ap;
-    rentry_t result;
-    
-    if (csp_scan_line(line, tv, &num) < 0) {
-	printf("Scan error\n");
-	return -1;
+    (void)args;
+    if (csp_eeprom_load(st) < 0) {
+	printf("Error: cannot load from %s\n", eeprom_file);
+	return CSP_CMD_ERROR;
     }
-
-    if (num == 0 || tv[0].t == NEWLINE)
-	return 0;
-
-    saved_ap = st->ap;
-    st->ap = NULL;  // no codegen (YET)
-    if (!csp_parse_expr(st, tv, &num, &result)) {
-	st->ap = saved_ap;
-	printf("Parse error: ");
-	printf(csp_format_error(st->ps.err),
-	       st->ps.err_args[0], st->ps.err_args[1], st->ps.err_args[2]);
-	printf("\n");
-	return -1;
-    }
-    st->ap = saved_ap;
-
-    if (result.I)
-	csp_print_value(st, result.vt, result.val);
-    else if (result.ix != BAD_INDEX)
-	csp_print_value(st, result.vt, csp_value(st, result.ix));
-    else
-	csp_print_str("NONE");
-	
-    csp_println();
-    return 0;
-}
-
-// Parse persistent definition (declaration or rule)
-static int handle_persistent(csp_rt_t* st, char* line)
-{
-    // Line starts with # - parse as declaration or rule
-    if (csp_parse(st, line) < 0) {
-	printf("Parse error: ");
-	printf(csp_format_error(st->ps.err),
-	       st->ps.err_args[0], st->ps.err_args[1], st->ps.err_args[2]);
-	printf("\n");
-	return -1;
-    }
-    // Re-initialize to apply new declarations and set values
-    csp_rt_start(st);
     csp_setup(st);
-    printf("OK\n");
-    return 0;
+    printf("Loaded from %s (%d decls, %d instrs)\n",
+	   eeprom_file, st->ps.nd, st->ps.nn);
+    return CSP_CMD_OK;
 }
 
-#define SERIAL_BUF_SIZE 128
-static char serial_buf[SERIAL_BUF_SIZE];
-static uint8_t serial_pos = 0;
-static uint8_t line_ready = 0;
+// Platform-specific input polling
+static int quit_flag = 0;
 
-void line_input(csp_rt_t* st, char c)
+static void serial_poll(struct pollfd* fds, nfds_t nfds)
 {
-    if ((c == '\n') || (c == '\r')) {
-	if (serial_pos > 0) {
-	    serial_buf[serial_pos++] = '\n';
-	    serial_buf[serial_pos] = '\0';
-	    line_ready = 1;
-	    serial_pos = 0;  // reset immediately to ignore trailing \n after \r
-	}
-	csp_print_char('\r');
-	csp_print_char('\n');
-    }
-    else if (c == '\b') {
-	if (serial_pos == 0)
-	    csp_print_char('\a');
-	else {
-	    serial_pos--;
-	    csp_print_char('\b');
-	    csp_print_char(' ');
-	    csp_print_char('\b');
-	}
-    }
-    else if (serial_pos < SERIAL_BUF_SIZE - 1) {
-	serial_buf[serial_pos++] = c;
-	csp_print_char(c); // ECHO
-    }
-}
-
-void serial_poll(csp_rt_t* st, struct pollfd* fds, nfds_t nfds)
-{
-    if (nfds > 0) {
-	if (fds[0].revents & POLLIN) {
-	    char c;
-	    if (read(STDIN_FILENO, &c, 1) == 1)
-		line_input(st, c);
+    if (nfds > 0 && (fds[0].revents & POLLIN)) {
+	char c;
+	while (!csp_line_ready && read(STDIN_FILENO, &c, 1) == 1) {
+	    if (c == 4) { // Ctrl-D
+		quit_flag = 1;
+		return;
+	    }
+	    csp_line_input(c);
 	}
     }
 }
 
 void process_serial_line(csp_rt_t* st, char* line)
 {
-    // Skip leading whitespace
-    char* p = line;
-    while (*p && isspace(*p)) p++;
-    if (*p == '\0')
-	return;
-    if (*p == '/') {
-	// Command
-	int r = handle_command(st, p + 1);
-	if (r == 1) return;  // quit
-    }
-    else if (*p == '#') {
-	// Persistent definition
-	handle_persistent(st, p);
-    }
-    else {
-	// Immediate expression
-	handle_immediate(st, p);
-    }
-}
-
-// Main interactive loop
-static int interactive_loop(csp_rt_t* st)
-{
-    char buf[MAX_LINE_SIZE];
-    int len;
-
-    while (1) {
-	len = read_line(buf, sizeof(buf), "> ");
-	if (len < 0) {
-	    printf("\n");
-	    break;
-	}
-	if (len == 0)
-	    continue;
-
-
-    }
-
-    return 0;
+    int r = csp_process_line(st, line);
+    if (r == CSP_CMD_QUIT)
+	quit_flag = 1;
 }
 
 int csp_uconst(csp_rt_t* st, const char* name, int len,
@@ -571,15 +357,18 @@ void csp_output(csp_rt_t* st)
     int i;
     uint32_t now_ms;
     uint32_t wait_ms = NOTIMEOUT;
-    
-    for (i = 0; i < st->no; ++i) {
-	index_t ix = st->output[i];
-	switch(st->decl[INDEX(ix)].type) {
-	case DECL_DIGITAL: break;
-	case DECL_ANALOG: break;
-	default: break;
+
+    if (!st->latch) {  // allow output    
+	for (i = 0; i < st->no; ++i) {
+	    index_t ix = st->output[i];
+	    switch(st->decl[INDEX(ix)].type) {
+	    case DECL_DIGITAL: break;
+	    case DECL_ANALOG: break;
+	    default: break;
+	    }
 	}
     }
+    
     now_ms = csp_time_ms();
     for (i = 0; i < st->nt; ++i) {
 	index_t ix = st->timer[i];
@@ -920,13 +709,15 @@ int main(int argc, char** argv)
 	poll(pfd, nfds, 0);
 
 loop:
+    if (quit_flag)
+	goto done;
+
     if (state.cycle)
-	csp_commit(&state);  // always commit before next cycle
+	csp_commit(&state);
     else if (state.reactive) {
-	// Initial cycle: run full eval to prime the system
 	x = csp_eval(&state);
-    }	
-    // check limits
+    }
+
     if (max_cycles && state.cycle >= max_cycles) {
 	fprintf(stderr, "max cycles (%u) reached\n", max_cycles);
 	goto done;
@@ -936,12 +727,22 @@ loop:
 	goto done;
     }
 
-    serial_poll(&state, pfd, nfds);
+    // Handle interactive input - poll and process complete lines
+    if (nfds > 0) {
+	if (interactive)
+	    csp_line_prompt();
+	int timeout_ms = interactive ? 100 : 0;
+	if (state.wait_ms != NOTIMEOUT && state.wait_ms < (uint32_t)timeout_ms)
+	    timeout_ms = state.wait_ms;
+	poll(pfd, nfds, timeout_ms);
+	serial_poll(pfd, nfds);
 
-    if (line_ready) {
-	process_serial_line(&state, serial_buf);
-	line_ready = 0;
-	serial_pos = 0;
+	if (csp_line_ready) {
+	    process_serial_line(&state, csp_line_buf);
+	    csp_line_ready = 0;
+	    csp_line_pos = 0;
+	    if (quit_flag) goto done;
+	}
     }
 
     csp_input(&state);
@@ -950,7 +751,7 @@ loop:
 	x = csp_react(&state);
     else
 	x = csp_eval(&state);
-    
+
     csp_output(&state);
 
     if (state.anyd) {
@@ -960,23 +761,14 @@ loop:
 	    csp_dump_state_erl(state_file, &state);
     }
 
-    if (state.wait_ms != NOTIMEOUT) {
-        // use smaller delays to stay responsive to serial
-        tick_t remaining = 1000*state.wait_ms;
-	tick_t t0 = time_tick();
-        while ((remaining > 0) && !line_ready) {
-	    tick_t t1;
-	    int r = poll(pfd, nfds, state.wait_ms);
-	    if (r > 0) goto loop;
-	    t1 = time_tick();
-	    remaining = (t1-t0);
-	}
-    }
+    // Continue loop if: interactive mode, pending changes, timers, or reactive queue
+    if (interactive)
+	goto loop;
     if (state.anyd)
 	goto loop;
-
+    if (state.wait_ms != NOTIMEOUT)
+	goto loop;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-    // in reactive mode, continue if queue has items (e.g. from timeout)
     if (state.reactive && (state.hd != state.tl))
 	goto loop;
 #endif

@@ -113,6 +113,10 @@ int csp_println(void)
     return Serial.println();
 }
 
+void csp_flush(void)
+{
+}
+
 
 int csp_uconst(csp_rt_t* st, const char* name, int len, ivalue_t* ret)
 {
@@ -239,39 +243,41 @@ void csp_output(csp_rt_t* st)
     int i;
     uint32_t now_ms;
     uint32_t wait_ms = NOTIMEOUT;    
-    
-    for (i = 0; i < st->no; ++i) {
-	index_t ix = st->output[i];
-	int di = INDEX(ix);
-	int vi = st_index(st, ix);
-	switch(st->decl[di].type) {
-	case DECL_DIGITAL:
-	    if (st->decl[di].dir & DIR_OUT) {
-		if (st->decl[di].dir & DIR_IN) {
-		    pinMode(st->decl[di].di.pin, OUTPUT);
-		    digitalWrite(st->decl[di].di.pin, st->dout[vi].i);
-		    // prepare for next input
-		    if (st->decl[di].di.pullup)
-			pinMode(st->decl[di].di.pin, INPUT_PULLUP);
-		    else
-			pinMode(st->decl[di].di.pin, INPUT);
+
+    if (!st->latch) {  // allow output
+	for (i = 0; i < st->no; ++i) {
+	    index_t ix = st->output[i];
+	    int di = INDEX(ix);
+	    int vi = st_index(st, ix);
+	    switch(st->decl[di].type) {
+	    case DECL_DIGITAL:
+		if (st->decl[di].dir & DIR_OUT) {
+		    if (st->decl[di].dir & DIR_IN) {
+			pinMode(st->decl[di].di.pin, OUTPUT);
+			digitalWrite(st->decl[di].di.pin, st->dout[vi].i);
+			// prepare for next input
+			if (st->decl[di].di.pullup)
+			    pinMode(st->decl[di].di.pin, INPUT_PULLUP);
+			else
+			    pinMode(st->decl[di].di.pin, INPUT);
+		    }
+		    else { // plain out
+			digitalWrite(st->decl[di].di.pin, st->dout[vi].i);
+		    }
 		}
-		else { // plain out
-		    digitalWrite(st->decl[di].di.pin, st->dout[vi].i);
+		break;
+	    case DECL_ANALOG:
+		if ((st->decl[di].dir & DIR_OUT) && (st->decl[di].an.pwm)) {
+		    // handle type! accept float as well
+		    int val = map(st->din[vi].i,
+				  0, (1<<st->decl[di].res)-1,
+				  0, 255);
+		    analogWrite(st->decl[di].an.pin, val);
 		}
+		break;
+	    default:
+		break;
 	    }
-	    break;
-	case DECL_ANALOG:
-	    if ((st->decl[di].dir & DIR_OUT) && (st->decl[di].an.pwm)) {
-		// handle type! accept float as well
-		int val = map(st->din[vi].i,
-			      0, (1<<st->decl[di].res)-1,
-			      0, 255);
-		analogWrite(st->decl[di].an.pin, val);
-	    }
-	    break;
-	default:
-	    break;
 	}
     }
 
@@ -312,118 +318,83 @@ void csp_output(csp_rt_t* st)
 
 #ifdef CSP_HAS_EEPROM
 
-static uint16_t calc_checksum(csp_rt_t* st)
+int eeprom_addr = -1;
+
+int csp_eeprom_open_read(void)
 {
-    uint16_t sum = 0;
-    uint8_t* p;
-    size_t i;
-
-    p = (uint8_t*)st->instr;
-    for (i = 0; i < st->ps.nn * sizeof(csp_instr_t); i++)
-        sum += p[i];
-
-    p = (uint8_t*)st->decl;
-    for (i = 0; i < st->ps.nd * sizeof(csp_decl_t); i++)
-        sum += p[i];
-
-    p = (uint8_t*)&st->str[st->ps.strp];
-    for (i = 0; i < st->ps.strp; i++) 
-        sum += p[i];
-    return sum;
-}
-
-int csp_storage_save(csp_rt_t* st)
-{
-    eeprom_header_t hdr;
-    uint16_t addr = EEPROM_ADDR_START;
-    size_t i;
-    uint8_t* p;
-
-    hdr.magic = EEPROM_MAGIC;
-    hdr.version = EEPROM_VERSION;
-    hdr.flags = 0;
-    hdr.nn = st->ps.nn;
-    hdr.nd = st->ps.nd;
-    hdr.strp = st->ps.strp;
-    hdr.checksum = calc_checksum(st);
-
-    // write header
-    p = (uint8_t*)&hdr;
-    for (i = 0; i < sizeof(hdr); i++)
-        EEPROM.update(addr++, p[i]);
-
-    // write instructions
-    p = (uint8_t*)st->instr;
-    for (i = 0; i < st->ps.nn * sizeof(csp_instr_t); i++)
-        EEPROM.update(addr++, p[i]);
-
-    // write declarations
-    p = (uint8_t*)st->decl;
-    for (i = 0; i < st->ps.nd * sizeof(csp_decl_t); i++)
-        EEPROM.update(addr++, p[i]);
-
-    // write strings (from strp to end)
-    for (i = st->ps.strp; i < MAX_STR_BUF; i++)
-        EEPROM.update(addr++, st->str[i]);
-
+    eeprom_addr = 0;    
     return 0;
 }
 
-int csp_storage_load(csp_rt_t* st)
+int csp_eeprom_open_write(void)
 {
-    eeprom_header_t hdr;
-    uint16_t addr = EEPROM_ADDR_START;
-    size_t i;
-    uint8_t* p;
-
-    // read header
-    p = (uint8_t*)&hdr;
-    for (i = 0; i < sizeof(hdr); i++)
-        p[i] = EEPROM.read(addr++);
-
-    // validate
-    if (hdr.magic != EEPROM_MAGIC)
-        return -1;  // no valid data
-    if (hdr.version != EEPROM_VERSION)
-        return -2;  // version mismatch
-
-    // read instructions
-    st->ps.nn = hdr.nn;
-    p = (uint8_t*)st->instr;
-    for (i = 0; i < st->ps.nn * sizeof(csp_instr_t); i++)
-        p[i] = EEPROM.read(addr++);
-
-    // read declarations
-    st->ps.nd = hdr.nd;
-    p = (uint8_t*)st->decl;
-    for (i = 0; i < st->ps.nd * sizeof(csp_decl_t); i++)
-        p[i] = EEPROM.read(addr++);
-
-    // read strings
-    st->ps.strp = hdr.strp;
-    for (i = 0; i < st->ps.strp; i++)
-        st->str[i] = EEPROM.read(addr++);
-
-    // verify checksum
-    if (calc_checksum(st) != hdr.checksum)
-        return -3;  // checksum error
-
+    eeprom_addr = 0;
     return 0;
 }
 
-int csp_storage_clear(void)
+void csp_eeprom_close(void)
 {
-    EEPROM.update(EEPROM_ADDR_START, 0xFF);  // invalidate magic
-    EEPROM.update(EEPROM_ADDR_START + 1, 0xFF);
+    eeprom_addr = -1;
+}
+
+int csp_eeprom_read(void* buf, size_t len)
+{
+    uint8_t* ptr = (uint8_t*) buf;
+    if (eeprom_addr < 0)
+	return -1;
+    while(len--) {
+	*ptr++ = EEPROM.read(eeprom_addr);
+	eeprom_addr++;
+    }
+    return 0;
+}
+
+int csp_eeprom_write(const void* buf, size_t len)
+{
+    uint8_t* ptr = (uint8_t*) buf;
+    if (eeprom_addr < 0)
+	return -1;
+    while(len--) {
+	EEPROM.update(eeprom_addr, *ptr++);
+	eeprom_addr++;
+    }
     return 0;
 }
 
 #else
-// No storage available - stub functions
-int csp_storage_save(csp_rt_t* st) { (void)st; return -1; }
-int csp_storage_load(csp_rt_t* st) { (void)st; return -1; }
-int csp_storage_clear(void) { return -1; }
+
+int eeprom_addr = -1;
+
+int csp_eeprom_open_read(void)
+{
+    eeprom_addr = 0;    
+    return 0;
+}
+
+int csp_eeprom_open_write(void)
+{
+    eeprom_addr = 0;
+    return 0;
+}
+
+void csp_eeprom_close(void)
+{
+    eeprom_addr = -1;
+}
+
+int csp_eeprom_read(void* buf, size_t len)
+{
+    return 0;
+}
+
+int csp_eeprom_write(const void* buf, size_t len)
+{
+    return 0;
+}
+
 #endif
+
+
 
 // ============================================================
 // Serial command interface
@@ -436,118 +407,32 @@ void serial_print_ok(void)
 
 void serial_print_error(const char* msg)
 {
-    Serial.print(F("ERROR: "));
+    Serial.print("ERROR: ");
     Serial.println(msg);
 }
 
-void handle_immediate_command(csp_rt_t* st, char* cmd)
+// Platform-specific command implementations
+int csp_cmd_save(csp_rt_t* st, const char* args)
 {
-    // skip '>' prefix
-    cmd++;
-    while (*cmd == ' ') cmd++;
-
-    if (strncmp(cmd, "save", 4) == 0) {
-        if (csp_storage_save(st) == 0)
-            serial_print_ok();
-        else
-            serial_print_error("save failed");
+    (void)args;
+    if (csp_eeprom_save(st) < 0) {
+	serial_print_error("cannot save eeprom");
+	return CSP_CMD_ERROR;
     }
-    else if (strncmp(cmd, "load", 4) == 0) {
-        int r = csp_storage_load(st);
-        if (r == 0) {
-            csp_rt_start(st);
-            serial_print_ok();
-        }
-        else if (r == -1)
-            serial_print_error("no data");
-        else if (r == -2)
-            serial_print_error("version");
-        else
-            serial_print_error("checksum");
-    }
-    else if (strncmp(cmd, "clear", 5) == 0) {
-        csp_storage_clear();
-        csp_rt_init(st, TRANSACTION_DEFAULT, REACTIVE_DEFAULT);
-        serial_print_ok();
-    }
-    else if (strncmp(cmd, "reset", 5) == 0) {
-        csp_rt_init(st, TRANSACTION_DEFAULT, REACTIVE_DEFAULT);
-        serial_print_ok();
-    }
-    else if (strncmp(cmd, "list", 4) == 0) {
-        Serial.print(F("nn="));
-        Serial.print(st->ps.nn);
-        Serial.print(F(" nd="));
-        Serial.print(st->ps.nd);
-        Serial.print(F(" strp="));
-        Serial.println(st->ps.strp);
-        // TODO: csp_dump to serial
-    }
-    else if (strncmp(cmd, "run", 3) == 0) {
-        csp_rt_start(st);
-        serial_print_ok();
-    }
-    else {
-	// here we should parse expression
-	// like D1 = 1
-	// push pstate
-	// add this as a "faked" rule D1=1 ? 1
-	// execute only this rule print the result value
-	// pop pstate
-	// 
-        serial_print_error("unknown command");
-    }
+    serial_print_ok();
+    return CSP_CMD_OK;
 }
 
-void process_serial_line(csp_rt_t* st, char* line)
+int csp_cmd_load(csp_rt_t* st, const char* args)
 {
-    if (line[0] == '\0')
-        return;
-
-    if (line[0] == '>') {
-        handle_immediate_command(st, line);
+    (void)args;
+    if (csp_eeprom_load(st) < 0) {
+	serial_print_error("cannot load from eeprom");
+	return CSP_CMD_ERROR;
     }
-    else {
-        // parse as rule/declaration
-        if (csp_parse(st, line) < 0) {
-            serial_print_error("syntax");
-        }
-        else {
-            serial_print_ok();
-        }
-    }
-}
-
-void serial_poll(csp_rt_t* st)
-{
-    while (Serial.available()) {
-        char c = Serial.read();
-
-        if ((c == '\n') || (c == '\r')) {
-            if (serial_pos > 0) {
-                serial_buf[serial_pos++] = '\n';
-                serial_buf[serial_pos] = '\0';
-		line_ready = 1;
-		serial_pos = 0;  // reset immediately to ignore trailing \n after \r
-            }
-	    csp_print_char('\r');
-	    csp_print_char('\n');
-        }
-	else if (c == '\b') {
-	     if (serial_pos == 0)
-		 csp_print_char('\a');
-	     else {
-	     	serial_pos--;
-		csp_print_char('\b');
-		csp_print_char(' ');
-		csp_print_char('\b');
-	     }
-	}
-        else if (serial_pos < SERIAL_BUF_SIZE - 1) {
-            serial_buf[serial_pos++] = c;
-	    csp_print_char(c); // ECHO
-        }
-    }
+    csp_setup(st);
+    serial_print_ok();    
+    return CSP_CMD_OK;
 }
 
 // ============================================================
@@ -562,8 +447,8 @@ void setup()
     csp_rt_init(&state, TRANSACTION_DEFAULT, REACTIVE_DEFAULT);
 
     // try to load from EEPROM
-    int r = csp_storage_load(&state);
-    if (r == 0) {
+    int r = csp_eeprom_load(&state);
+    if (r < 0) {
         Serial.println(F("Loaded from EEPROM"));
     }
     else {
@@ -590,13 +475,14 @@ void loop()
 	x = csp_eval(&state);
     }
 
-    // check for serial commands
-    serial_poll(&state);
-
-    if (line_ready) {
-	process_serial_line(&state, serial_buf);
-	line_ready = 0;
-	serial_pos = 0;
+    while (Serial.available()) {
+	csp_line_input(Serial.read());
+    }
+    
+    if (csp_line_ready) {
+	csp_process_line(&state, csp_line_buf);
+	csp_line_ready = 0;
+	csp_line_pos = 0;
     }
 
     // run evaluation cycle
@@ -616,7 +502,8 @@ void loop()
             uint32_t chunk = min(remaining, (uint32_t)50);
             delay(chunk);
             remaining -= chunk;
-            serial_poll(&state);  // check serial during wait
+	    if (Serial.available())
+		csp_line_input(Serial.read());
         }
     }
 }

@@ -675,6 +675,8 @@ typedef struct _csp_rt_t
 #if defined(SUPPORT_TRANSACTION) && (SUPPORT_TRANSACTION==1)
     value_t dv1[MAX_INDEX];       // declaration (leaf) value (y,z)    
 #endif
+    // allow device output latch=0 or disallow latch=1
+    uint8_t latch;
     // check if any node has been set: anyx|anyd == CSP_TRUE
     int8_t  anyd;  // CSP_TRUE|CSP_FALSE
     bitset_decl(dset, MAX_INDEX); // mark decl updated during cycle
@@ -748,6 +750,7 @@ typedef struct PACKED {
 	};
     };
 } rentry_t;
+
 
 // Built-in function table (defined in csp_rt.c)
 extern const csp_func_t csp_builtin_funcs[];
@@ -854,6 +857,7 @@ extern void csp_output(csp_rt_t* st);
 extern int csp_eeprom_save(csp_rt_t* st);
 extern int csp_eeprom_load(csp_rt_t* st);
 extern int csp_eeprom_size(csp_rt_t* st);
+extern int csp_eeprom_clear(csp_rt_t* st);
 
 // stack check/debug
 extern int stack_used();
@@ -866,7 +870,16 @@ extern int csp_print_uint(uvalue_t v);
 extern int csp_print_float(fvalue_t v);
 extern int csp_print_hex(uvalue_t v);
 extern int csp_println(void);
+extern void csp_flush(void);
 extern int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val);
+
+extern const char  csp_tag(csp_rt_t* st, index_t n);
+extern const char* csp_fmt_pindir(uint8_t dir);
+extern const char* csp_fmt_pull(csp_rt_t* st, int ix);
+extern const char* csp_fmt_pwm(csp_rt_t* st, int ix);
+extern const char* csp_fmt_vtype(vtype_t vt);
+extern const char* csp_fmt_endian(vendian_t et);
+extern const char* csp_format_error(csp_err_t err);
 
 extern const char* csp_opcode_name(opcode_t op);
 extern uint8_t csp_opcode_rtype(opcode_t op);
@@ -881,6 +894,45 @@ extern void csp_clr_error(csp_rt_t*);
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 extern void csp_enq_elist(csp_rt_t* st, index_t x);
 #endif
+
+// Interactive command handling
+#define CSP_CMD_OK       0
+#define CSP_CMD_QUIT     1
+#define CSP_CMD_NOTFOUND -1
+#define CSP_CMD_ERROR    -2
+
+typedef int (*csp_cmd_fn)(csp_rt_t* st, const char* args);
+
+typedef struct {
+    const char* name;
+    const char* help;
+    csp_cmd_fn fn;
+} csp_cmd_t;
+
+extern int csp_cmd_dispatch(csp_rt_t* st, const char* cmd);
+extern void csp_cmd_help(void);
+extern int csp_process_line(csp_rt_t* st, char* line);
+
+// Line input handling (shared between platforms)
+#define CSP_LINE_BUF_SIZE 128
+extern char csp_line_buf[CSP_LINE_BUF_SIZE];
+extern uint8_t csp_line_pos;
+extern uint8_t csp_line_ready;
+
+extern void csp_line_init(void);
+extern void csp_line_input(char c);
+extern void csp_line_prompt(void);
+
+// Platform hooks for commands (implemented per platform)
+extern int csp_cmd_save(csp_rt_t* st, const char* args);
+extern int csp_cmd_load(csp_rt_t* st, const char* args);
+
+// eeprom api
+extern int csp_eeprom_open_read(void);
+extern int csp_eeprom_open_write(void);
+extern void csp_eeprom_close(void);
+extern int csp_eeprom_read(void* buf, size_t len);
+extern int csp_eeprom_write(const void* buf, size_t len);
 
 #ifdef __cplusplus
 EXTERN_C_END

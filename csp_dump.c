@@ -72,11 +72,11 @@ void csp_fprint_tag(FILE* f, csp_rt_t* st, index_t n)
     int m = OBJ(n);
     int i = INDEX(n);
     if (m == GLOBAL) // global
-	fprintf(f, "{%s,%d}", csp_tag(st,n), i);
+	fprintf(f, "{%c,%d}", csp_tag(st,n), i);
     else if (m == CURRENT) // match
-	fprintf(f, "{cur,%s,%d}", csp_tag(st,n), i);
+	fprintf(f, "{cur,%c,%d}", csp_tag(st,n), i);
     else
-	fprintf(f, "{%d,%s,%d}", m, csp_tag(st,n), i);
+	fprintf(f, "{%d,%c,%d}", m, csp_tag(st,n), i);
 }
 
 void csp_print_tag(csp_rt_t* st, index_t n)

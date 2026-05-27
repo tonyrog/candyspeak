@@ -16,11 +16,38 @@ typedef struct {
 #define EEPROM_VERSION 1
 
 // Platform stub functions - implement per platform
-extern int csp_eeprom_open_read(void);
-extern int csp_eeprom_open_write(void);
-extern void csp_eeprom_close(void);
-extern int csp_eeprom_read(void* buf, size_t len);
-extern int csp_eeprom_write(const void* buf, size_t len);
+#if 0
+static uint16_t calc_checksum(csp_rt_t* st)
+{
+    uint16_t sum = 0;
+    uint8_t* p;
+    size_t i;
+
+    p = (uint8_t*)st->instr;
+    for (i = 0; i < st->ps.nn * sizeof(csp_instr_t); i++)
+        sum += p[i];
+
+    p = (uint8_t*)st->decl;
+    for (i = 0; i < st->ps.nd * sizeof(csp_decl_t); i++)
+        sum += p[i];
+
+    p = (uint8_t*)&st->str[st->ps.strp];
+    for (i = 0; i < st->ps.strp; i++) 
+        sum += p[i];
+    return sum;
+}
+#endif
+
+int csp_eeprom_clear(csp_rt_t* st)
+{
+    uint8_t invalid[2] = {0xff, 0xff};
+    if (csp_eeprom_open_write() < 0)
+	return -1;
+    if (csp_eeprom_write(invalid, 2) < 0)
+	return -1;
+    csp_eeprom_close();
+    return 0;
+}
 
 // Save state to eeprom (binary format)
 int csp_eeprom_save(csp_rt_t* st)
@@ -122,3 +149,4 @@ int csp_eeprom_size(csp_rt_t* st)
 	   sizeof(csp_decl_t) * st->ps.nd +
 	   sizeof(csp_instr_t) * st->ps.nn;
 }
+
