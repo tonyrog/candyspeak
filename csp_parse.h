@@ -46,7 +46,7 @@ enum {
     P_CALL,       // callback: P_CALL, <func_id>
 };
 
-// Callback signature: returns 1 on success, 0 on failure
+// Callback signature: returns tokens consumed (>= 0), or -1 on failure
 // st = runtime, tv = current token, ti = token index, data = user struct
 typedef int (*pmatch_cb_t)(csp_rt_t* st, token_t* tv, int ti, void* data);
 

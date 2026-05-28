@@ -1,0 +1,11 @@
+#module Delay
+#timer T 100
+#variable Done integer = 0
+Done = 1 ? timeout(T)
+#end
+
+#Delay a
+#Delay b T=200
+
+a.T = 1 ? 1
+b.T = 1 ? 1

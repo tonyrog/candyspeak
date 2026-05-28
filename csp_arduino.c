@@ -11,28 +11,8 @@
 #define CSP_EMBEDDED 1
 #include "csp.h"
 
-// Serial input buffer
-#define SERIAL_BUF_SIZE 128
-static char serial_buf[SERIAL_BUF_SIZE];
-static uint8_t serial_pos = 0;
-static uint8_t line_ready = 0;
-
-#ifdef CSP_HAS_EEPROM
-// EEPROM layout
-#define EEPROM_MAGIC      0xC5B0  // "CSP0"
-#define EEPROM_VERSION    1
-#define EEPROM_ADDR_START 0
-
-typedef struct {
-    uint16_t magic;
-    uint8_t  version;
-    uint8_t  flags;
-    uint16_t nn;       // number of instructions
-    uint16_t nd;       // number of declarations
-    uint16_t strp;     // string pointer position
-    uint16_t checksum;
-} eeprom_header_t;
-#endif
+// Line input uses shared buffer from csp_rt.c:
+// csp_line_buf[], csp_line_pos, csp_line_ready
 
 csp_rt_t state;
 
@@ -63,6 +43,11 @@ int csp_print_char(char c)
 int csp_print_str(const char* s)
 {
     return Serial.print(s);
+}
+
+int csp_print_str_P(const rochar* s)
+{
+    return Serial.print((__FlashStringHelper*)s);
 }
 
 int csp_print_int(ivalue_t v)
@@ -221,19 +206,22 @@ void csp_input(csp_rt_t* st)
     for (i = 0; i < st->nt; i++) {
 	index_t ix = st->timer[i];
 	int di = INDEX(ix);
-	if (st->decl[di].tm.running) {
-	    uvalue_t t0 = csp_uvalue(st, st->decl[di].tm.tx);
+	index_t tx = st->decl[di].tm.tx;
+	int tx_slot = st_index(st, tx);
+	uvalue_t tx_val = st->dout[tx_slot].u;
+	// tx value: 0=stopped, >0=running (start_time+1)
+	if (tx_val != 0) {
+	    uvalue_t t0 = tx_val - 1;
 	    ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
-	    if ((now_ms - t0) >= period) {
-		st->decl[di].tm.running = 0;
+	    if ((now_ms - t0) >= (uvalue_t)period) {
+		st->dout[tx_slot].u = 0;  // stopped
 		csp_set_ivalue(st, ix, 0);
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 		if (st->reactive) {
 		    csp_enq_elist(st, ix);
 		}
-#endif		
+#endif
 	    }
-	    break;
 	}
     }
 }
@@ -286,8 +274,13 @@ void csp_output(csp_rt_t* st)
 	index_t ix = st->timer[i];
 	int di = INDEX(ix);
 	int vi = st_index(st, ix);
-	if (st->decl[di].tm.running) {
-	    uvalue_t t0 = csp_uvalue(st, st->decl[di].tm.tx);
+	index_t tx = st->decl[di].tm.tx;
+	int tx_slot = st_index(st, tx);
+	uvalue_t tx_val = st->dout[tx_slot].u;
+	// tx value: 0=stopped, >0=running (start_time+1)
+	if (tx_val != 0) {
+	    // running - calculate wait time
+	    uvalue_t t0 = tx_val - 1;
 	    ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
 	    int32_t dt = (now_ms - t0);
 	    if (dt > period)
@@ -296,13 +289,12 @@ void csp_output(csp_rt_t* st)
 		wait_ms = period - dt;
 	}
 	else {
+	    // stopped - check if start requested
 	    if (st->dout[vi].i) {
 		ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
 		uint32_t dt = period;
-		int k = st_index(st, st->decl[di].tm.tx);
-		st->decl[di].tm.running = 1;
-		st->dout[k].u = now_ms;
-		st->dout[vi].i = 0;  // not timeout
+		st->dout[tx_slot].u = now_ms + 1;  // start (time+1)
+		st->dout[vi].i = 0;  // not timeout yet
 		if (dt < wait_ms)
 		    wait_ms = dt;
 	    }
@@ -498,7 +490,7 @@ void loop()
         uint32_t remaining = state.wait_ms;
 	// FIXME: we must re-read current time and update,
 	// we do not know how long poll is taking!
-        while ((remaining > 0) && !line_ready) {
+        while ((remaining > 0) && !csp_line_ready) {
             uint32_t chunk = min(remaining, (uint32_t)50);
             delay(chunk);
             remaining -= chunk;

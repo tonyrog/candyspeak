@@ -1,14 +1,25 @@
 #ifndef __CSP_CONFIG_H__
 #define __CSP_CONFIG_H__
 
+#if defined(__AVR__)
+
+#define TRANSACTION_DEFAULT 1
+#ifndef SUPPORT_TRANSACTION
+#define SUPPORT_TRANSACTION 1  // saves ~130 bytes RAM on AVR
+#endif
+
+#else
+
 #define TRANSACTION_DEFAULT 1
 #ifndef SUPPORT_TRANSACTION
 #define SUPPORT_TRANSACTION 1  // use commit/undo
 #endif
 
+#endif
+
 #define REACTIVE_DEFAULT 0
 #ifndef SUPPORT_REACTIVE
-#define SUPPORT_REACTIVE    0 // enq/deq
+#define SUPPORT_REACTIVE    0 // enq/deq - saves ~1KB RAM on AVR
 #endif
 
 #ifndef USE_STATISTICS

@@ -817,8 +817,8 @@ static value_t fn_timeout(csp_rt_t* st,uint16_t type,
 {
     value_t ret;
     index_t ty = args[0].u;
-    // int i = st_index(st, ty); fixme. fix object timers!!!
-    ret.i = BOOL(!st->decl[INDEX(ty)].tm.running);
+    int tx_slot = st_index(st, st->decl[INDEX(ty)].tm.tx);
+    ret.i = BOOL(st->dout[tx_slot].u == 0);  // stopped = timed out
     return ret;
 }
 
@@ -1055,13 +1055,14 @@ static inline int8_t op_table_assoc(int i)
 // enq all rules that depend on declaration x
 void csp_enq_elist(csp_rt_t* st, index_t x)
 {
-#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)    
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     int i;
     index_t ix = INDEX(x);
     index_t base = st->ofs[ix];
+    uint8_t obj = OBJ(x);
     for (i = 0; i < st->idg[ix]; i++) {
-	index_t p = st->edg[base+i];  // parent node
-	csp_enq(st, p);
+	index_t p = st->edg[base+i];  // parent node (instruction index)
+	csp_enq(st, obj, p);
     }
 #endif
 }
@@ -3089,7 +3090,6 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, size_t n)
     if (ix == BAD_INDEX) return -1;
 
     i = INDEX(ix);
-    st->decl[i].tm.running = 0;
     st->decl[i].tm.init = d.init;
     st->decl[i].tm.px = px;
     st->decl[i].tm.tx = tx;
@@ -3776,9 +3776,8 @@ int csp_rt_start(csp_rt_t* st)
 	case DECL_TIMER:
 	    if (st->decl[i].tm.init == 1) {
 		int tj = st_index(st, st->decl[i].tm.tx);
-		st->decl[i].tm.running = 1;
-		st->din[tj].u = st->dout[tj].u = csp_time_ms();
-		csp_set_ivalue(st, ix, 1);
+		st->din[tj].u = st->dout[tj].u = csp_time_ms() + 1;  // +1 so 0 means stopped
+		csp_set_ivalue(st, ix, 0);  // not yet timed out
 	    }
 	    st->timer[st->nt++] = ix;
 	    break;

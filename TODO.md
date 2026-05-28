@@ -35,6 +35,16 @@ Directory: tests/regression/
 // Epsilon comparison for float tests (eps=0.0001)
 // Print list formatting: x=1,print(y),z=3 ? cond
 
+## Timer tests with event ordering
+
+Test timer behavior by checking relative order of events, not absolute times.
+Example: if a has T=100 and b has T=200, output pattern should be "a a b a a b..."
+
+Implementation:
+- Capture print() output during test run
+- Verify sequence/pattern matches expected
+- Useful for testing timer-in-modules with different timeouts per instance
+
 # Register allocation work
 
 ## Pinned registers

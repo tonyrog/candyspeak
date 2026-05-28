@@ -40,7 +40,7 @@ typedef uint8_t  reg_t;    // at most 256 registers
 #define RD_WORD(p)      pgm_read_word((p))
 #define RD_PTR(p)       (void *)pgm_read_word((p))
 #define MEMCMP_RD(a,b,n) memcmp_P((a), (b), (n))
-#define STR_RD(d,s)     strcpy_P((d), (s))
+#define STRCPY_RD(d,s)     strcpy_P((d), (s))
 #define DECL_BITS    5
 #define INSTR_BITS   5
 #define OBJ_BITS     3
@@ -51,12 +51,18 @@ typedef uint8_t  reg_t;    // at most 256 registers
 #define RD_WORD(p)      (*(p))
 #define RD_PTR(p)       (*(p))
 #define MEMCMP_RD(a,b,n) memcmp((a), (b), (n))
-#define STR_RD(d,s)     strcpy((d), (s))
+#define STRCPY_RD(d,s)     strcpy((d), (s))
+#define strlen_P(s)        strlen(s)
+#define strncmp_P(a,b,n)   strncmp((a),(b),(n))
+#define csp_print_str_P(s) csp_print_str(s)
 #define DECL_BITS    10
 #define INSTR_BITS   9
 #define OBJ_BITS     4
 #define STRING_BITS  9
 #endif
+
+typedef const char rochar;  // PROGMEM string character type
+
 #define INDEX_BITS   (OBJ_BITS+DECL_BITS)
 #define REG_BITS     4
 #define GLOBAL       0                       // global level
@@ -65,14 +71,25 @@ typedef uint8_t  reg_t;    // at most 256 registers
 #define MAX_REGS     (1 << REG_BITS)
 #define MAX_INSTRS   (1 << INSTR_BITS)
 #define MAX_DECLS    (1 << DECL_BITS)
+#if defined(__AVR__)
+#define MAX_INPUTS   8   // Uno has ~20 pins total
+#define MAX_OUTPUTS  8
+#define MAX_TIMERS   4
+#else
 #define MAX_INPUTS   32  // <= then MAX_DECLS
 #define MAX_OUTPUTS  32  // <= then MAX_DECLS
 #define MAX_TIMERS   16  // <= then MAX_DECLS
+#endif
 #define MAX_VARREFS  MAX_TIMERS
 #define MAX_MODULES  (1 << OBJ_BITS)
 #define MAX_OBJECTS  (1 << OBJ_BITS)
 #define MAX_QUEUE    (MAX_INSTRS)
 #define MAX_INDEX    (MAX_INSTRS+1)
+
+// Queue entry: pack obj and ip together
+#define MAKE_QENTRY(obj, ip)  (((obj) << INSTR_BITS) | (ip))
+#define QENTRY_OBJ(e)         ((e) >> INSTR_BITS)
+#define QENTRY_IP(e)          ((e) & ((1 << INSTR_BITS) - 1))
 #define MAX_STACK_DEPTH 4
 #define NAME_BITS    5
 #define MAX_STR_BUF  (1 << STRING_BITS) // total number of char in var names
@@ -492,10 +509,10 @@ typedef struct PACKED {
 } csp_can_t;
 
 typedef struct PACKED {
-    unsigned running:1;     // != 0 if timer is running
-    unsigned init:1;        // initial value if given
-    unsigned px:INDEX_BITS; // variable | constant (unsigned)
-    unsigned tx:INDEX_BITS; // start time tick (intern variable)
+    unsigned init:1;        // start immediately if given
+    unsigned _unused:1;     // was: running (now in tx value: 0=stopped, >0=start+1)
+    unsigned px:INDEX_BITS; // timeout value (CURRENT for modules)
+    unsigned tx:INDEX_BITS; // start time variable (CURRENT for modules)
 } csp_timer_t;
 
 // new instruction format
@@ -761,19 +778,20 @@ static inline int st_index(csp_rt_t* st, index_t n)
     return st->offs[OBJ(n)] + INDEX(n);
 }
 
-#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)    
-// enq an node for recalculation
-static inline void csp_enq(csp_rt_t* st, uint16_t ip)
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
+// enq a rule for recalculation, with object context
+static inline void csp_enq(csp_rt_t* st, uint8_t obj, uint16_t ip)
 {
     if (bitset_tst(st->inq,ip))
 	return;
     if ((st->tl - st->hd) != MAX_QUEUE) {
-	st->queue[st->tl % MAX_QUEUE] = ip;
+	st->queue[st->tl % MAX_QUEUE] = MAKE_QENTRY(obj, ip);
 	st->tl++;
 	bitset_set(st->inq, ip);
     }
 }
 
+// deq returns packed (obj, ip) - use QENTRY_OBJ/QENTRY_IP to unpack
 static inline index_t csp_deq(csp_rt_t* st)
 {
     index_t x;
@@ -865,6 +883,9 @@ extern int stack_used();
 // platform print functions
 extern int csp_print_char(char c);
 extern int csp_print_str(const char* s);
+#if defined(__AVR__)
+extern int csp_print_str_P(rochar* s);  // PROGMEM string
+#endif
 extern int csp_print_int(ivalue_t v);
 extern int csp_print_uint(uvalue_t v);
 extern int csp_print_float(fvalue_t v);
@@ -874,12 +895,12 @@ extern void csp_flush(void);
 extern int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val);
 
 extern const char  csp_tag(csp_rt_t* st, index_t n);
-extern const char* csp_fmt_pindir(uint8_t dir);
-extern const char* csp_fmt_pull(csp_rt_t* st, int ix);
-extern const char* csp_fmt_pwm(csp_rt_t* st, int ix);
-extern const char* csp_fmt_vtype(vtype_t vt);
-extern const char* csp_fmt_endian(vendian_t et);
-extern const char* csp_format_error(csp_err_t err);
+extern rochar* csp_fmt_pindir(uint8_t dir);
+extern rochar* csp_fmt_pull(csp_rt_t* st, int ix);
+extern rochar* csp_fmt_pwm(csp_rt_t* st, int ix);
+extern rochar* csp_fmt_vtype(vtype_t vt);
+extern rochar* csp_fmt_endian(vendian_t et);
+extern rochar* csp_format_error(csp_err_t err);
 
 extern const char* csp_opcode_name(opcode_t op);
 extern uint8_t csp_opcode_rtype(opcode_t op);
@@ -904,8 +925,8 @@ extern void csp_enq_elist(csp_rt_t* st, index_t x);
 typedef int (*csp_cmd_fn)(csp_rt_t* st, const char* args);
 
 typedef struct {
-    const char* name;
-    const char* help;
+    rochar* name;
+    rochar* help;
     csp_cmd_fn fn;
 } csp_cmd_t;
 
@@ -914,7 +935,11 @@ extern void csp_cmd_help(void);
 extern int csp_process_line(csp_rt_t* st, char* line);
 
 // Line input handling (shared between platforms)
+#if defined(__AVR__)
+#define CSP_LINE_BUF_SIZE 64
+#else
 #define CSP_LINE_BUF_SIZE 128
+#endif
 extern char csp_line_buf[CSP_LINE_BUF_SIZE];
 extern uint8_t csp_line_pos;
 extern uint8_t csp_line_ready;
