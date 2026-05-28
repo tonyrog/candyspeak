@@ -2015,6 +2015,8 @@ NOINLINE int csp_load_value(csp_rt_t* st, reg_t x, vtype_t vt, value_t val)
 	return csp_load_uint(st, x, val.u);
     case V_FLOAT:
 	return csp_load_float(st, x, val.f);
+    case V_STRING:
+	return csp_new_li(st, x, val.s);  // load string index
     default:
 	return -1;
     }

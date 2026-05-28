@@ -127,17 +127,16 @@ NOINLINE static int pmatch_expr(pmatch_st_t* pst, token_t* tv, int ti,
 {
     int k = ti;
     size_t num;
-    rentry_t result;
     pexpr_t range;
-    
+
+    // Find expression boundary (stop at NEWLINE or QUEST)
     while ((k < (int)n) &&
 	   (tv[k].t != NEWLINE) &&
 	   (tv[k].t != QUEST))
 	k++;
     num = (k > ti) ? k - ti : 1;
     DBG("expr: ti=%d, num=%ld\n", ti, num);
-    if (!csp_parse_const_expr(pst->st, &tv[ti], &num, &result))
-	return -1;
+    // Just record boundaries - actual parsing happens in csp_parse_rule
     range.pos = pst->tb+ti;
     range.len = num;
     store_expr(pst->data, pst->eo+off, range);
