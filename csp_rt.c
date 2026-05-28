@@ -816,11 +816,40 @@ static value_t fn_timeout(csp_rt_t* st,uint16_t type,
 			  value_t* args, uint8_t nargs)
 {
     value_t ret;
-    index_t ty = args[0].u;
-    int tx_slot = st_index(st, st->decl[INDEX(ty)].tm.tx);
-    ret.i = BOOL(st->dout[tx_slot].u == 0);  // stopped = timed out
+    index_t ty = args[0].u;  // timer
+    ret.i = BOOL(st->decl[INDEX(ty)].tm.fired);
     return ret;
 }
+
+static value_t fn_elapsed(csp_rt_t* st,uint16_t type,
+			  value_t* args, uint8_t nargs)
+{
+    value_t ret;
+    index_t ty = args[0].u; // timer
+    // index_t px = st->decl[INDEX(ty)].tm.px;
+    index_t tx = st->decl[INDEX(ty)].tm.tx;
+    uint32_t td = csp_time_ms() - csp_uvalue(st, tx);    
+    ret.u = td;
+    return ret;
+}
+
+static value_t fn_progress(csp_rt_t* st,uint16_t type,
+			   value_t* args, uint8_t nargs)
+{
+    value_t ret;
+    index_t ty = args[0].u; // timer
+    index_t px = st->decl[INDEX(ty)].tm.px;
+    index_t tx = st->decl[INDEX(ty)].tm.tx;
+    uint32_t td = csp_time_ms() - csp_uvalue(st, tx);
+    uint32_t tmo = csp_ivalue(st, px);
+
+    if (td >= tmo)
+	ret.f = op_CVTIF(1);
+    else
+	ret.f = op_FDIV(op_CVTIF(td), op_CVTIF(tmo));
+    return ret;
+}
+
 
 // FIXME: compile  changed(X) -> OP_CHG
 static value_t fn_changed(csp_rt_t* st,uint16_t type,
@@ -872,7 +901,10 @@ static const char s_fabs[] RODATA = "fabs";
 static const char s_sign[] RODATA = "sign";
 static const char s_clip[] RODATA = "clip";
 static const char s_timeout[] RODATA = "timeout";
+static const char s_elapsed[] RODATA = "elapsed";
+static const char s_progress[] RODATA = "progress";
 static const char s_changed[] RODATA = "changed";
+
 static const char s_print[] RODATA = "print";
 static const char s_println[] RODATA = "println";
 static const char s_tick[] RODATA = "tick";
@@ -892,7 +924,10 @@ const csp_func_t csp_builtin_funcs[] RODATA = {
     CSP_FUNC_ENT(s_sign,    1, 1, V_INTEGER, MAKE_TYPE1(V_NUMBER),  fn_sign ),
     CSP_FUNC_ENT(s_clip,    3, 1, V_INTEGER, MAKE_TYPE3(V_INTEGER,V_INTEGER,V_INTEGER), fn_clip),
     CSP_FUNC_ENT(s_timeout, 1, 0, V_INTEGER, MAKE_TYPE1(V_INDEX), fn_timeout),
-    CSP_FUNC_ENT(s_changed, 1, 0, V_INTEGER, MAKE_TYPE1(V_INDEX), fn_changed),    
+    CSP_FUNC_ENT(s_changed, 1, 0, V_INTEGER, MAKE_TYPE1(V_INDEX), fn_changed),
+    CSP_FUNC_ENT(s_progress, 1, 0, V_FLOAT, MAKE_TYPE1(V_INDEX), fn_progress),
+    CSP_FUNC_ENT(s_elapsed,  1, 0, V_INTEGER, MAKE_TYPE1(V_INDEX), fn_elapsed),
+    
     CSP_FUNC_ENT(s_print,   1, 0, V_INTEGER, MAKE_TYPE1(V_ANY),  fn_print),
     CSP_FUNC_ENT(s_println, 1, 0, V_INTEGER, MAKE_TYPE1(V_ANY),  fn_println),
     CSP_FUNC_ENT(s_tick,    0, 0, V_INTEGER, MAKE_TYPE0(),       fn_tick),
@@ -2028,7 +2063,6 @@ static void add_var(csp_rt_t* st, index_t ix)
 {
     if (st->rimp) {  // only when in RHS in expression x <- a+b+c
 	int i;
-	// printf("add_var: %d\n", ix);
 	for (i = 0; i < st->nvar; i++)
 	    if (st->var[i] == ix) return;  // already in list
 	if (st->nvar < MAX_VARREFS)
@@ -2456,7 +2490,8 @@ NOINLINE static int process_fcall(csp_rt_t* st, token_t* word, uint8_t arity,
 	// set error
 	return -1;
     }
-    // FIXME: handle changed(x) and timeout(t) with ops!
+    // FIXME: handle, changed(x), timeout(t) whith ops
+    // FIXME: check object argument type for timeout(t), elapsed(t), progress(t)
     n = arity;
     for (j = 0; j < n; j++) {
 	rentry_t arg = rarg[j];
@@ -2487,6 +2522,7 @@ NOINLINE static int process_fcall(csp_rt_t* st, token_t* word, uint8_t arity,
 		return 0;
 	    break;
 	case V_INDEX:
+	    // check object type !!! 
 	    if (!arg.X) { // must be a "variable"
 		// is this an internal error?
 		csp_set_error(st, ERR_SYNTAX);
@@ -2702,7 +2738,7 @@ operator:
 	if ((p1 = op_table_prec(tok)) == -1)
 	    return 0;
 	if (pp == 0) {
-	    if (tok == RIMP) { st->rimp = 1; /* printf("PUSH RIMP\n"); */ }
+	    if (tok == RIMP) { st->rimp = 1; }
 	    ostack[pp++] = tok;
 	}
 	else {
@@ -2710,7 +2746,7 @@ operator:
 	    int p2;
 	    // FUNC_MARKER acts like LP - don't process operators past it
 	    if (IS_FUNC_MARKER(tok2) || tok2 == LP) {
-		if (tok == RIMP) { st->rimp = 1;  /* printf("PUSH RIMP\n"); */ }
+		if (tok == RIMP) { st->rimp = 1;  }
 		ostack[pp++] = tok;
 		ptok = tok;
 		goto next;
@@ -2727,7 +2763,7 @@ operator:
 		if (IS_FUNC_MARKER(tok2) || (tok2 == LP)) break;
 		p2 = op_table_prec(tok2);
 	    }
-	    if (tok == RIMP) { st->rimp = 1; /*  printf("PUSH RIMP\n"); */ }
+	    if (tok == RIMP) { st->rimp = 1; }
 	    ostack[pp++] = tok;
 	}
 	ptok = tok;
@@ -3438,8 +3474,6 @@ NOINLINE int csp_parse_rule(csp_rt_t* st, token_t* tv, size_t n)
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    // printf("body.pos=%d, body.len=%d\n", d.body.pos, d.body.len);
-    // printf("cond.pos=%d, cond.len=%d\n", d.cond.pos, d.cond.len);
 
     cnd = alloc_reg(st);
     if (st->nvar) {
@@ -4152,3 +4186,79 @@ void csp_line_input(char c)
         csp_flush();
     }
 }
+
+// Common timer input (called from cs_input)
+
+void csp_input_timer(csp_rt_t* st)
+{
+    int i;
+    uvalue_t now_ms;
+    
+    now_ms = csp_time_ms();
+    for (i = 0; i < st->nt; i++) {
+	index_t ix = st->timer[i];
+	int di = INDEX(ix);
+	index_t tx = st->decl[di].tm.tx;
+	int tx_slot = st_index(st, tx);
+	uvalue_t tx_val = st->dout[tx_slot].u;
+
+	st->decl[INDEX(ix)].tm.fired = 0;
+	// tx value: 0=stopped, >0=running (start_time+1)
+	if (tx_val != 0) {
+	    uvalue_t t0 = tx_val - 1;
+	    ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
+	    if ((now_ms - t0) >= (uvalue_t)period) {
+		st->dout[tx_slot].u = 0;    // stopped
+		st->din[tx_slot].u = 0;     // stopped (also next cycle)
+		st->decl[di].tm.fired = 1;  // edge signal
+		csp_set_ivalue(st, ix, 0);
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
+		if (st->reactive) {
+		    csp_enq_elist(st, ix);
+		}
+#endif
+	    }
+	}
+    }
+}
+
+void csp_output_timer(csp_rt_t* st)
+{
+    int i;    
+    uint32_t now_ms;
+    uint32_t wait_ms = NOTIMEOUT;
+
+    now_ms = csp_time_ms();
+    for (i = 0; i < st->nt; ++i) {
+	index_t ix = st->timer[i];
+	int di = INDEX(ix);
+	int vi = st_index(st, ix);
+	index_t tx = st->decl[di].tm.tx;
+	int tx_slot = st_index(st, tx);
+	uvalue_t tx_val = st->dout[tx_slot].u;
+	// tx value: 0=stopped, >0=running (start_time+1)
+	if (tx_val != 0) {
+	    // running - calculate wait time
+	    uvalue_t t0 = tx_val - 1;
+	    ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
+	    int32_t dt = (now_ms - t0);
+	    if (dt > period)
+		wait_ms = 0;
+	    else
+		wait_ms = period - dt;
+	}
+	else {
+	    // stopped - check if start requested
+	    if (st->dout[vi].i) {
+		ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
+		uint32_t dt = period;
+		st->dout[tx_slot].u = now_ms + 1;  // start (time+1)
+		st->dout[vi].i = 0;                // not timeout yet
+		if (dt < wait_ms)
+		    wait_ms = dt;
+	    }
+	}
+    }
+    st->wait_ms = wait_ms;
+}
+

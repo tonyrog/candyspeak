@@ -1,0 +1,9 @@
+//
+// Demo if progress and elapsed
+//
+#timer T1 5000 = 1
+#timer T2 500  = 1
+
+print("elapsed(T1)="), println(elapsed(T1)) ? timeout(T2)
+print("progress(T1)="), println(progress(T1)) ? timeout(T2)
+T2 = 1 ? !timeout(T1) && timeout(T2)

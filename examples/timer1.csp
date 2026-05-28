@@ -1,0 +1,7 @@
+#timer T1 5000  = 1
+#timer T2 2000  = 1
+
+println("T1") ? timeout(T1)
+println("T2") ? timeout(T2)
+
+

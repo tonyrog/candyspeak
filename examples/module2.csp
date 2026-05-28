@@ -20,7 +20,7 @@ c = a - b ? ena
 
 #add a1
 #add a2
-// #sub s1
+#sub s1
 a1.a = a2.a ? A < B
 
 

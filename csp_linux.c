@@ -320,7 +320,6 @@ void csp_setup(csp_rt_t* st)
 void csp_input(csp_rt_t* st)
 {
     int i;
-    uvalue_t now_ms;
     
     for (i = 0; i < st->ni; i++) {
 	index_t ix = st->input[i];
@@ -330,35 +329,12 @@ void csp_input(csp_rt_t* st)
 	default: break;
 	}
     }
-    now_ms = csp_time_ms();
-    for (i = 0; i < st->nt; i++) {
-	index_t ix = st->timer[i];
-	int di = INDEX(ix);
-	index_t tx = st->decl[di].tm.tx;
-	int tx_slot = st_index(st, tx);
-	uvalue_t tx_val = st->dout[tx_slot].u;
-	// tx value: 0=stopped, >0=running (start_time+1)
-	if (tx_val != 0) {
-	    uvalue_t t0 = tx_val - 1;
-	    ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
-	    if ((now_ms - t0) >= (uvalue_t)period) {
-		st->dout[tx_slot].u = 0;  // stopped
-		csp_set_ivalue(st, ix, 0);
-#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-		if (st->reactive) {
-		    csp_enq_elist(st, ix);
-		}
-#endif
-	    }
-	}
-    }
+    csp_input_timer(st);
 }
 
 void csp_output(csp_rt_t* st)
 {
     int i;
-    uint32_t now_ms;
-    uint32_t wait_ms = NOTIMEOUT;
 
     if (!st->latch) {  // allow output    
 	for (i = 0; i < st->no; ++i) {
@@ -370,39 +346,7 @@ void csp_output(csp_rt_t* st)
 	    }
 	}
     }
-    
-    now_ms = csp_time_ms();
-    for (i = 0; i < st->nt; ++i) {
-	index_t ix = st->timer[i];
-	int di = INDEX(ix);
-	int vi = st_index(st, ix);
-	index_t tx = st->decl[di].tm.tx;
-	int tx_slot = st_index(st, tx);
-	uvalue_t tx_val = st->dout[tx_slot].u;
-	// tx value: 0=stopped, >0=running (start_time+1)
-	if (tx_val != 0) {
-	    // running - calculate wait time
-	    uvalue_t t0 = tx_val - 1;
-	    ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
-	    int32_t dt = (now_ms - t0);
-	    if (dt > period)
-		wait_ms = 0;
-	    else
-		wait_ms = period - dt;
-	}
-	else {
-	    // stopped - check if start requested
-	    if (st->dout[vi].i) {
-		ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
-		uint32_t dt = period;
-		st->dout[tx_slot].u = now_ms + 1;  // start (time+1)
-		st->dout[vi].i = 0;  // not timeout yet
-		if (dt < wait_ms)
-		    wait_ms = dt;
-	    }
-	}
-    }
-    st->wait_ms = wait_ms;
+    csp_output_timer(st);
 }
 
 int parse_file(csp_rt_t* st, FILE* fin)

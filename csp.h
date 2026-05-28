@@ -510,7 +510,7 @@ typedef struct PACKED {
 
 typedef struct PACKED {
     unsigned init:1;        // start immediately if given
-    unsigned _unused:1;     // was: running (now in tx value: 0=stopped, >0=start+1)
+    unsigned fired:1;       // timeout occurred this cycle (edge-triggered)
     unsigned px:INDEX_BITS; // timeout value (CURRENT for modules)
     unsigned tx:INDEX_BITS; // start time variable (CURRENT for modules)
 } csp_timer_t;
@@ -870,6 +870,9 @@ extern unsigned long csp_time_us(void);
 extern void csp_setup(csp_rt_t* st);
 extern void csp_input(csp_rt_t* st);
 extern void csp_output(csp_rt_t* st);
+// common timer processing 
+extern void csp_input_timer(csp_rt_t* st);
+extern void csp_output_timer(csp_rt_t* st);
 
 // eeprom save/load (csp_eeprom.c)
 extern int csp_eeprom_save(csp_rt_t* st);
