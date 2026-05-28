@@ -5,7 +5,6 @@
 #include <ctype.h>
 #include "csp.h"
 #include "csp_dump.h"
-#include "csp_format.h"
 
 extern const op_entry_t op_table[];
 

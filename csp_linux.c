@@ -10,7 +10,6 @@
 #include <poll.h>
 
 #include "csp.h"
-#include "csp_format.h"
 #include "csp_dump.h"
 
 
