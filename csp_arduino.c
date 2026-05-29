@@ -402,19 +402,20 @@ void setup()
 
 void loop()
 {
+    static int first_cycle = 1;
     index_t x;
 
-    if (state.cycle)
-	csp_commit(&state);  // always commit before next cycle
-    else if (state.reactive) { // cycle=0
-	// Initial cycle: run full eval to prime the system
-	x = csp_eval(&state);
+    if (first_cycle) {
+	state.cycle = 1;
+	first_cycle = 0;
     }
+    else
+	state.cycle++;
 
     while (Serial.available()) {
 	csp_line_input(Serial.read());
     }
-    
+
     if (csp_line_ready) {
 	csp_process_line(&state, csp_line_buf);
 	csp_line_ready = 0;
@@ -427,6 +428,7 @@ void loop()
 	x = csp_react(&state);
     else
 	x = csp_eval(&state);
+    csp_commit(&state);
     csp_output(&state);
 
     if (state.wait_ms != NOTIMEOUT) {

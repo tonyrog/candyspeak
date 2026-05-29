@@ -1287,7 +1287,6 @@ index_t csp_eval(csp_rt_t* st)
 {
     index_t n = 0;
     index_t x = BAD_INDEX;
-    st->cycle++;
     while(n < st->ps.nn) {
 	n = csp_eval_rule(st, n);
 	x = n;
@@ -1298,7 +1297,6 @@ index_t csp_eval(csp_rt_t* st)
 // run queue until cycle boundary
 index_t csp_react(csp_rt_t* st)
 {
-    st->cycle++;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     index_t x0, x1 = BAD_INDEX;
     if (st->reactive) {
@@ -2377,7 +2375,6 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 	    print_rentry(st, "R", b);
 	    printf("\n");
 #endif
-	    //
 	    if ((!st->ap || ( !a->X && !b->X ))
 		&& a->I && b->I && (csp_opcode_arity(op) == 2)) {
 		// constant fold
@@ -3208,9 +3205,10 @@ NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
 #define MAX_INITS 8
 
 typedef struct {
-    tstr_t field;      // field name
-    pexpr_t expr;      // expression (token pos + len)
-    uint8_t reactive;  // 1 if <-, 0 if =
+    tstr_t field;       // field name
+    token_t* expr_tv;   // pointer to expression tokens
+    int expr_len;       // number of tokens
+    uint8_t reactive;   // 1 if <-, 0 if =
 } init_entry_t;
 
 typedef struct {
@@ -3223,15 +3221,15 @@ typedef struct {
 #define CB_STATIC_INIT   0
 #define CB_REACTIVE_INIT 1
 
-// Callback: save init entry (no codegen)
+// Callback: save init entry - returns tokens consumed
 static int cb_init_entry(csp_rt_t* st, token_t* tv, int ti, void* data, int reactive)
 {
     object_param_t* d = (object_param_t*)data;
     if (d->ninits >= MAX_INITS) return 0;
     init_entry_t* e = &d->inits[d->ninits];
-    e->field = d->inits[0].field;  // field was stored at index 0 by P_STR
+    // e->field already set by P_STR with correct array indexing
     e->reactive = reactive;
-    e->expr.pos = ti;
+    e->expr_tv = &tv[ti];  // save pointer to expression start
     // Find end of expression
     int k = ti;
     while (k < MAX_LINE_TOKENS && tv[k].t != NEWLINE) {
@@ -3240,10 +3238,10 @@ static int cb_init_entry(csp_rt_t* st, token_t* tv, int ti, void* data, int reac
 	    break;
 	k++;
     }
-    e->expr.len = k - ti;
-    if (e->expr.len == 0) { csp_set_error(st, ERR_SYNTAX); return 0; }
+    e->expr_len = k - ti;
+    if (e->expr_len == 0) { csp_set_error(st, ERR_SYNTAX); return 0; }
     d->ninits++;
-    return 1;
+    return e->expr_len;  // return tokens consumed
 }
 
 static int cb_static_init(csp_rt_t* st, token_t* tv, int ti, void* data)
@@ -3257,11 +3255,11 @@ static int cb_reactive_init(csp_rt_t* st, token_t* tv, int ti, void* data)
 }
 
 // Generate code for static init: target = expr
-static int gen_static_init(csp_rt_t* st, token_t* tv, init_entry_t* e, index_t target)
+static int gen_static_init(csp_rt_t* st, init_entry_t* e, index_t target)
 {
-    size_t num = e->expr.len;
+    size_t num = e->expr_len;
     rentry_t rval;
-    if (!csp_parse_expr(st, &tv[e->expr.pos], &num, &rval)) return 0;
+    if (!csp_parse_expr(st, e->expr_tv, &num, &rval)) return 0;
     if (!rval.L) csp_load(st, &rval);
     if (csp_new_mem(st, OP_ST, rval.reg, target) < 0) return 0;
     free_reg(st, rval.reg);
@@ -3269,9 +3267,9 @@ static int gen_static_init(csp_rt_t* st, token_t* tv, init_entry_t* e, index_t t
 }
 
 // Generate code for reactive init: target <- expr (with CHG/RULE)
-static int gen_reactive_init(csp_rt_t* st, token_t* tv, init_entry_t* e, index_t target)
+static int gen_reactive_init(csp_rt_t* st, init_entry_t* e, index_t target)
 {
-    size_t num = e->expr.len;
+    size_t num = e->expr_len;
     rentry_t rval;
     reg_allocator_t* ap_save = st->ap;
 
@@ -3279,10 +3277,10 @@ static int gen_reactive_init(csp_rt_t* st, token_t* tv, init_entry_t* e, index_t
     st->nvar = 0;
     st->rimp = 1;
     st->ap = NULL;
-    csp_parse_const_expr(st, &tv[e->expr.pos], &num, &rval);
+    csp_parse_const_expr(st, e->expr_tv, &num, &rval);
     st->ap = ap_save;
     st->rimp = 0;
-    num = e->expr.len;
+    num = e->expr_len;
 
     // Generate CHG/RULE
     int cnd = alloc_reg(st);
@@ -3299,7 +3297,7 @@ static int gen_reactive_init(csp_rt_t* st, token_t* tv, init_entry_t* e, index_t
 
     // Parse expression for real
     st->rimp = 1;
-    if (!csp_parse_expr(st, &tv[e->expr.pos], &num, &rval)) { st->rimp = 0; return 0; }
+    if (!csp_parse_expr(st, e->expr_tv, &num, &rval)) { st->rimp = 0; return 0; }
     st->rimp = 0;
 
     if (!rval.L) csp_load(st, &rval);
@@ -3380,11 +3378,15 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
 	    csp_set_error(st, ERR_FIELD_NOT_FOUND);
 	    return -1;
 	}
-	index_t target = MAKE_INDEX(m, INDEX(fx));
+	// For timers, write to px (timeout constant), not timer decl
+	int fi = INDEX(fx);
+	if (st->decl[fi].type == DECL_TIMER)
+	    fi = st->decl[fi].tm.px;
+	index_t target = MAKE_INDEX(m, fi);
 	if (e->reactive) {
-	    if (!gen_reactive_init(st, tv, e, target)) return -1;
+	    if (!gen_reactive_init(st, e, target)) return -1;
 	} else {
-	    if (!gen_static_init(st, tv, e, target)) return -1;
+	    if (!gen_static_init(st, e, target)) return -1;
 	}
     }
 
@@ -3724,17 +3726,13 @@ int csp_rt_init(csp_rt_t* st, int transaction, int reactive)
 {
     memset(st, 0x00, sizeof(csp_rt_t));
 
-    // st->xin = st->xout = st->xv0;
     st->din = st->dout = st->dv0;    
-
     st->reactive = reactive;
     if ((st->transaction = transaction) != 0) {
 #if defined(SUPPORT_TRANSACTION) && (SUPPORT_TRANSACTION==1)
-	// st->xout = st->xv1;
 	st->dout = st->dv1;    	
 #endif
     }
-    
     st->ps.nn = 0;
     st->ps.nd = 0;
     st->ps.nq = 0;
@@ -3758,8 +3756,6 @@ int csp_rt_init(csp_rt_t* st, int transaction, int reactive)
     st->ufuncs = NULL;
     st->num_ufuncs = 0;
     st->uconst = NULL;
-    // new_signed_const(st, 0);
-    // new_signed_const(st, 1);
     return 0;
 }
 
@@ -3782,6 +3778,7 @@ int csp_rt_start(csp_rt_t* st)
 {
     int i;
     int offs;
+    int in_module = 0;
     
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)    
     st->tl = st->hd = 0;
@@ -3795,37 +3792,48 @@ int csp_rt_start(csp_rt_t* st)
 	index_t ix = MAKE_INDEX(0,i);
 	switch(st->decl[i].type) {
 	case DECL_MODULE:
+	    in_module=1;	    
 	    if (st->nm < MAX_MODULES)
 		st->module[st->nm++] = ix;
 	    break;
+	case DECL_END:
+	    in_module = 0;
+	    break;
 	case DECL_OBJECT:
-	    break;	    
+	    // Per-object init done after offs[] is allocated
+	    break;
 	case DECL_CONSTANT:
+	    // global or "template" version
 	    st->din[i] = st->dout[i] = st->decl[i].cn.init;
 	    break;
 	case DECL_VARIABLE:
+	    // global or "template" version
 	    st->din[i] = st->decl[i].va.init;
 	    csp_set_value(st, ix, st->din[i]);
 	    break;
 	case DECL_TIMER:
-	    if (st->decl[i].tm.init == 1) {
-		int tj = st_index(st, st->decl[i].tm.tx);
-		st->din[tj].u = st->dout[tj].u = csp_time_ms() + 1;  // +1 so 0 means stopped
-		csp_set_ivalue(st, ix, 0);  // not yet timed out
+	    if (!in_module) {
+		if (st->decl[i].tm.init == 1) {
+		    int tj = st_index(st, st->decl[i].tm.tx);
+		    st->din[tj].u = st->dout[tj].u = csp_time_ms() + 1;
+		    csp_set_ivalue(st, ix, 0);
+		}
+		st->timer[st->nt++] = ix;
 	    }
-	    st->timer[st->nt++] = ix;
 	    break;
 	case DECL_DIGITAL:
 	case DECL_ANALOG:
 	case DECL_CAN:
-	    if (st->decl[i].dir & DIR_IN) {
-		if (st->ni < MAX_INPUTS) // warning?
-		    st->input[st->ni++] = ix;
+	    if (!in_module) {  // FIXME: module versions
+		if (st->decl[i].dir & DIR_IN) {
+		    if (st->ni < MAX_INPUTS) // warning?
+			st->input[st->ni++] = ix;
+		}
+		if (st->decl[i].dir & DIR_OUT) {
+		    if (st->no < MAX_OUTPUTS) // warning
+			st->output[st->no++] = ix;
+		}
 	    }
-	    if (st->decl[i].dir & DIR_OUT) {
-		if (st->no < MAX_OUTPUTS) // warning
-		    st->output[st->no++] = ix;
-	    }	    
 	    break;
 	default:
 	    break;
@@ -3840,9 +3848,46 @@ int csp_rt_start(csp_rt_t* st)
 	ivalue_t dn = st->decl[INDEX(mx)].md.n;  // number of decl elements
 	st->offs[m] = offs;
 	offs += dn;
-	if (offs > MAX_DECLS) // set error
+	if (offs > MAX_DECLS) {
+	    // when objects are included
+	    csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
 	    return -1;
+	}
     }
+    // init per-object data (after offs[] is set)
+    for (i = 0; i < st->ps.nq; i++) {
+	int m = i+1;
+	int j;
+	index_t ix = st->object[m];
+	index_t mx = st->decl[INDEX(ix)].mq.mx;
+	int mod_n = st->decl[INDEX(mx)].md.n;
+	int base = INDEX(mx)+1;
+	for (j = 0; j < mod_n; j++) {
+	    int dj = base + j;  // decl index
+	    int oj = st->offs[m] + j;  // data index
+	    switch (st->decl[dj].type) {
+	    case DECL_CONSTANT:
+		st->din[oj] = st->dout[oj] = st->decl[dj].cn.init;
+		break;
+	    case DECL_VARIABLE:
+		st->din[oj] = st->dout[oj] = st->decl[dj].va.init;
+		break;
+	    case DECL_TIMER: {
+		index_t tix = MAKE_INDEX(m, dj);
+		if (st->decl[dj].tm.init == 1) {
+		    int tj = st->offs[m] + st->decl[dj].tm.tx;
+		    st->din[tj].u = st->dout[tj].u = csp_time_ms() + 1;
+		    csp_set_ivalue(st, tix, 0);
+		}
+		st->timer[st->nt++] = tix;
+		break;
+	    }
+	    default:
+		break;
+	    }
+	}
+    }
+    st->cycle = 0;  // init trace shows cycle 0
     return 0;
 }
 
@@ -4193,20 +4238,22 @@ void csp_input_timer(csp_rt_t* st)
 {
     int i;
     uvalue_t now_ms;
-    
+
     now_ms = csp_time_ms();
     for (i = 0; i < st->nt; i++) {
 	index_t ix = st->timer[i];
+	int obj = OBJ(ix);
 	int di = INDEX(ix);
-	index_t tx = st->decl[di].tm.tx;
+	index_t tx = MAKE_INDEX(obj, INDEX(st->decl[di].tm.tx));
+	index_t px = MAKE_INDEX(obj, INDEX(st->decl[di].tm.px));
 	int tx_slot = st_index(st, tx);
-	uvalue_t tx_val = st->dout[tx_slot].u;
+	uvalue_t tx_val = st->din[tx_slot].u;
 
-	st->decl[INDEX(ix)].tm.fired = 0;
+	st->decl[di].tm.fired = 0;
 	// tx value: 0=stopped, >0=running (start_time+1)
 	if (tx_val != 0) {
 	    uvalue_t t0 = tx_val - 1;
-	    ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
+	    ivalue_t period = csp_ivalue(st, px);
 	    if ((now_ms - t0) >= (uvalue_t)period) {
 		st->dout[tx_slot].u = 0;    // stopped
 		st->din[tx_slot].u = 0;     // stopped (also next cycle)
@@ -4231,29 +4278,31 @@ void csp_output_timer(csp_rt_t* st)
     now_ms = csp_time_ms();
     for (i = 0; i < st->nt; ++i) {
 	index_t ix = st->timer[i];
+	int obj = OBJ(ix);
 	int di = INDEX(ix);
 	int vi = st_index(st, ix);
-	index_t tx = st->decl[di].tm.tx;
+	// Replace CURRENT with actual object
+	index_t tx = MAKE_INDEX(obj, INDEX(st->decl[di].tm.tx));
 	int tx_slot = st_index(st, tx);
-	uvalue_t tx_val = st->dout[tx_slot].u;
+	uvalue_t tx_val = st->din[tx_slot].u;
+	index_t px = MAKE_INDEX(obj, INDEX(st->decl[di].tm.px));
 	// tx value: 0=stopped, >0=running (start_time+1)
 	if (tx_val != 0) {
-	    // running - calculate wait time
+	    // running - calculate wait time (take minimum)
 	    uvalue_t t0 = tx_val - 1;
-	    ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
+	    ivalue_t period = csp_ivalue(st, px);
 	    int32_t dt = (now_ms - t0);
-	    if (dt > period)
-		wait_ms = 0;
-	    else
-		wait_ms = period - dt;
+	    uint32_t w = (dt >= period) ? 0 : (period - dt);
+	    if (w < wait_ms)
+		wait_ms = w;
 	}
 	else {
 	    // stopped - check if start requested
-	    if (st->dout[vi].i) {
-		ivalue_t period = csp_ivalue(st, st->decl[di].tm.px);
+	    if (st->din[vi].i) {
+		ivalue_t period = csp_ivalue(st, px);
 		uint32_t dt = period;
-		st->dout[tx_slot].u = now_ms + 1;  // start (time+1)
-		st->dout[vi].i = 0;                // not timeout yet
+		st->din[tx_slot].u = st->dout[tx_slot].u = now_ms + 1;  // start
+		st->din[vi].i = st->dout[vi].i = 0;  // not timeout yet
 		if (dt < wait_ms)
 		    wait_ms = dt;
 	    }

@@ -1,12 +1,9 @@
 #module Blinker
-#timer T 1000
+#timer T 1000 = 1
 #variable Out:1 inout integer
 #variable ID in integer = 0
-Out=~Out, T=1, println(ID) ? timeout(T)
+Out=~Out, T=1, print(cycle()), print(" "), println(ID) ? timeout(T)
 #end
 
-#Blinker a ID = 10
-#Blinker b ID = 20 
-
-a.T = 1
-b.T = 1
+#Blinker a ID=10
+#Blinker b T=2000 ID=20 

@@ -649,7 +649,9 @@ int main(int argc, char** argv)
     }
 
     start_time = csp_time_ms();
+    int first_cycle = 1;
 
+    // initial trace shows cycle 0 (pre-eval state)
     if (debug_trace)
 	csp_dump_variables(stdout, &state);
     if (state_file)
@@ -663,11 +665,12 @@ loop:
     if (quit_flag)
 	goto done;
 
-    if (state.cycle)
-	csp_commit(&state);
-    else if (state.reactive) {
-	x = csp_eval(&state);
+    if (first_cycle) {
+	state.cycle = 1;
+	first_cycle = 0;
     }
+    else
+	state.cycle++;
 
     if (max_cycles && state.cycle >= max_cycles) {
 	fprintf(stderr, "max cycles (%u) reached\n", max_cycles);
@@ -683,8 +686,11 @@ loop:
 	if (interactive)
 	    csp_line_prompt();
 	int timeout_ms = interactive ? 100 : 0;
-	if (state.wait_ms != NOTIMEOUT && state.wait_ms < (uint32_t)timeout_ms)
-	    timeout_ms = state.wait_ms;
+	// Wait for timer if needed (non-interactive mode)
+	if (state.wait_ms != NOTIMEOUT) {
+	    if (timeout_ms == 0 || state.wait_ms < (uint32_t)timeout_ms)
+		timeout_ms = state.wait_ms;
+	}
 	poll(pfd, nfds, timeout_ms);
 	serial_poll(pfd, nfds);
 
@@ -703,25 +709,30 @@ loop:
     else
 	x = csp_eval(&state);
 
+    int anyd = state.anyd;  // save before commit clears it
+
+    csp_commit(&state);
+
     csp_output(&state);
 
-    if (state.anyd) {
+    if (anyd) {
 	if (debug_trace)
 	    csp_dump_variables(stdout, &state);
 	if (state_file)
 	    csp_dump_state_erl(state_file, &state);
     }
 
+    // Wait for timer in non-interactive mode
+    if (!interactive && state.wait_ms != NOTIMEOUT && state.wait_ms > 0) {
+	poll(NULL, 0, state.wait_ms);
+    }
+
     // Continue loop if: interactive mode, pending changes, timers, or reactive queue
-    if (interactive)
-	goto loop;
-    if (state.anyd)
-	goto loop;
-    if (state.wait_ms != NOTIMEOUT)
-	goto loop;
+    if (interactive) goto loop;
+    if (anyd) goto loop;
+    if (state.wait_ms != NOTIMEOUT) goto loop;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-    if (state.reactive && (state.hd != state.tl))
-	goto loop;
+    if (state.reactive && (state.hd != state.tl)) goto loop;
 #endif
 
 done:

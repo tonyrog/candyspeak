@@ -291,16 +291,13 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     return i+1;
 }
 
-void csp_dump_var(FILE* f, csp_rt_t* st, int m, int i)
+void csp_dump_var(FILE* f, csp_rt_t* st, int m, int di, int ri)
 {
-    index_t ix = MAKE_INDEX(m,i);
+    // di = decl index (for type/name), ri = relative index (for data)
+    index_t ix = MAKE_INDEX(m, di);
     int doffs = st->offs[m];
     fprintf(f, " %-s=", decl_name(st, ix));
-    csp_fprint_value(f, st, st->decl[i].vt, st->dout[doffs+i]);
-    // print previous value 
-//    fputc('[', f);
-//    csp_fprint_value(f, st, st->decl[i].vt, st->din[doffs+i]);
-//    fputc(']', f);
+    csp_fprint_value(f, st, st->decl[di].vt, st->din[doffs+ri]);
 }
 
 void csp_dump_variables(FILE* f, csp_rt_t* st)
@@ -316,7 +313,7 @@ void csp_dump_variables(FILE* f, csp_rt_t* st)
 	}
 	else {
 	    if (st->decl[i].type == DECL_VARIABLE)
-		csp_dump_var(f, st, 0, i);
+		csp_dump_var(f, st, 0, i, i);
 	    i++;
 	}
     }
@@ -331,7 +328,7 @@ void csp_dump_variables(FILE* f, csp_rt_t* st)
 	for (j = 0; j < n; j++) {
 	    int k = INDEX(mx)+1+j;
 	    if (st->decl[k].type == DECL_VARIABLE) {
-		csp_dump_var(f, st, m, k);
+		csp_dump_var(f, st, m, k, j);
 	    }
 	}
 	fprintf(f, "\n");
@@ -358,7 +355,7 @@ void csp_dump_state_erl(FILE* f, csp_rt_t* st)
 		if (!first) fprintf(f, ",");
 		first = 0;
 		fprintf(f, "{var,\"%s\",", decl_name(st, ix));
-		csp_fprint_value(f, st, st->decl[i].vt, st->dout[i]);
+		csp_fprint_value(f, st, st->decl[i].vt, st->din[i]);
 		fprintf(f, "}");
 	    }
 	    i++;
@@ -385,7 +382,7 @@ void csp_dump_state_erl(FILE* f, csp_rt_t* st)
 		if (!first_var) fprintf(f, ",");
 		first_var = 0;
 		fprintf(f, "{var,\"%s\",", decl_name(st, vx));
-		csp_fprint_value(f, st, st->decl[k].vt, st->dout[offs+k]);
+		csp_fprint_value(f, st, st->decl[k].vt, st->din[offs+j]);
 		fprintf(f, "}");
 	    }
 	}

@@ -241,11 +241,11 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
         case P_STR: {
             // Capture WORD as string
             uint8_t val_off = pat[pi++];
-	    DBG("P_STR: val_off=%d\n", val_off);
+	    int off = pst->eo + val_off;  // eo already adjusted by P_REP
+	    DBG("P_STR: val_off=%d, off=%d\n", val_off, off);
             if ((ti >= (int)n) || (tv[ti].t != WORD))
                 return -1;
-            store_str(pst->data, pst->eo+val_off,
-		      *(tstr_t*)&tv[ti].v.str);
+            store_str(pst->data, off, *(tstr_t*)&tv[ti].v.str);
             ti++;
             break;
         }
@@ -349,12 +349,14 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
             break;
         }
         case P_CALL: {
-            // Call registered callback
+            // Call registered callback - returns tokens consumed or 0 on error
             uint8_t id = pat[pi++];
 	    DBG("P_CALL: id=%d\n", id);
             if (id < 8 && callbacks[id]) {
-                if (!callbacks[id](pst->st, tv, ti, pst->data))
+                int r = callbacks[id](pst->st, tv, ti, pst->data);
+                if (r <= 0)
                     return -1;
+		ti += r;
             }
             break;
         }
