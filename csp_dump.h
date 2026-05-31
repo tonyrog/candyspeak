@@ -13,12 +13,16 @@
 EXTERN_C_BEGIN
 #endif
 
+typedef enum {
+    TEXT,    
+    ERLANG
+} csp_lang_t;
+
 extern void    csp_dump(FILE*, csp_rt_t* st);
 extern void    csp_dump_code(FILE* f, csp_rt_t* st);
 extern void    csp_dump_tokens(FILE* f,token_t* tv, int n);
-extern void    csp_dump_variables(FILE* f, csp_rt_t* st);
-extern void    csp_dump_state_erl(FILE* f, csp_rt_t* st);
-extern void    csp_dump_result_erl(FILE* f, csp_rt_t* st, index_t x);
+extern void    csp_dump_state(FILE* f, csp_rt_t* st,csp_lang_t lang);
+extern void    csp_dump_result(FILE* f,csp_rt_t* st,index_t x,csp_lang_t lang);
 
 extern void    csp_print_expr(FILE*, csp_rt_t* st, index_t x);
 extern index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i,char* eot);

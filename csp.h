@@ -114,7 +114,7 @@ typedef const char rochar;  // PROGMEM string character type
 #define CSP_TRUE  -1  // all bits set, like openCL/Forth
 #define CSP_FALSE 0
 
-#define TYPE_BITS 3  // supports up to 8 types
+#define TYPE_BITS 4  // supports up to 15 types & objects
 
 typedef enum {
     V_VOID     = 0,  // value / don't care
@@ -125,7 +125,12 @@ typedef enum {
     V_INDEX    = 5,  // declaration index (pass index, not value)
     // match types (not passed in type code)
     V_NUMBER   = 6,  // V_INTEGER | V_FLOAT
-    V_ANY      = 7,  // 7 - V_INTEGER | V_FLOAT | V_STRING | V_INDEX    
+    V_ANY      = 7,  // 7 - V_INTEGER | V_FLOAT | V_STRING | V_INDEX
+    // object types type that can be use for builtin functions
+    V_TIMER    = 8,
+    V_DIGITAL  = 9,
+    V_ANALOG   = 10,
+    V_CAN      = 11,    
 } vtype_t;
 
 // create argument type bitmask
@@ -419,19 +424,21 @@ typedef enum {
 struct _csp_rt_t;
 struct csp_instr;
 
+// 6 bits may be used to describe declaration type
+// but decl type from 8-15 are also used as object types
 typedef enum {
-    DECL_NOP=0,    // emtpy declaration
-    DECL_MODULE,   // 'module'
-    DECL_END,      // 'end'
-    DECL_OBJECT,   // module instance
-    DECL_CONSTANT, // 'constant'
-    DECL_VARIABLE, // 'variable'
-    DECL_DIGITAL,  // 'digital'
-    DECL_ANALOG,   // 'analog'
-    DECL_TIMER,    // 'timer'
-    DECL_CAN,      // 'can'
-    DECL_UART,     // 'uart'
-    DECL_SOCKET,   // 'socket'
+    // first 8 are used for types as well
+    DECL_NOP=0,      // emtpy declaration
+    DECL_VARIABLE=1, // 'variable'
+    DECL_CONSTANT=2, // 'constant'
+    DECL_MODULE=3,  // 'module'
+    DECL_END=4,     // 'end'
+    DECL_OBJECT=5,  // module instance
+    // 8-15
+    DECL_TIMER=V_TIMER,    // 'timer'    
+    DECL_DIGITAL=V_DIGITAL,  // 'digital'
+    DECL_ANALOG=V_ANALOG,   // 'analog'
+    DECL_CAN=V_CAN,      // 'can'
 } decl_t;
 
 #define DECL_TYPE(s,i) ((s)->decl[(i)].type)
@@ -632,8 +639,16 @@ typedef enum {
     ERR_OBJECT_NOT_DEFINED,
     ERR_VARIABLE_NOT_DECLARED,
     ERR_FIELD_NOT_FOUND,
-    ERR_FUNCTION_DO_NOT_EXIST,
-    ERR_MODULE_ALREADY_DEFINED,    
+    ERR_FUNCTION_DOES_NOT_EXIST,
+    ERR_MODULE_ALREADY_DEFINED,
+    ERR_INTERNAL_ERROR,
+    ERR_FUNCTION_ARGUMENT_TYPE_MISMATCH,
+    ERR_VARIABLE_ALREADY_DEFINED,
+    ERR_CONSTANT_ALREADY_DEFINED,
+    ERR_TIMER_ALREADY_DEFINED,
+    ERR_DIGITAL_ALREADY_DEFINED,
+    ERR_ANALOG_ALREADY_DEFINED,
+    ERR_CAN_ALREADY_DEFINED,                    
 } csp_err_t;
 
 // parser state, save state before parse
@@ -838,7 +853,7 @@ extern int     csp_rt_start(csp_rt_t*);
 extern void    csp_set_ufuncs(csp_rt_t*, const csp_func_t*, uint8_t);
 extern void    csp_set_uconst(csp_rt_t*, csp_const_fn uconst);
 extern const csp_func_t* csp_match_func(csp_rt_t*,
-					const char* name, uint8_t namelen,
+					const tstr_t* name,
 					uint8_t arity, rentry_t* rarg,
 					int* is_user, int* func_idx);
 extern int     csp_set_transaction(csp_rt_t*, int onoff);
@@ -911,7 +926,8 @@ extern uint8_t csp_opcode_arity(opcode_t op);
 
 extern int csp_opcode_to_tok(opcode_t opcode);
 extern uint8_t csp_opcode_rtype(opcode_t opcode);
-extern void csp_set_error(csp_rt_t*, csp_err_t);
+// csp_set_error return 1 if error was set and arguments can be defined!
+extern int csp_set_error(csp_rt_t*, csp_err_t);
 extern void csp_set_err_arg_tstr(csp_rt_t*, int i, const tstr_t* str);
 extern void csp_set_err_arg_ix(csp_rt_t*, int i, index_t ix);
 extern void csp_clr_error(csp_rt_t*);

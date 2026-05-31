@@ -1,7 +1,7 @@
 {cycles, 10}.
 {checks, [
-  {final_object_var, "d1", "In", 5},
-  {final_object_var, "d1", "Out", 10},
-  {final_object_var, "d2", "In", 10},
-  {final_object_var, "d2", "Out", 20}
+  {final_object_var, "Doubler.d1", "In", 5},
+  {final_object_var, "Doubler.d1", "Out", 10},
+  {final_object_var, "Doubler.d2", "In", 10},
+  {final_object_var, "Doubler.d2", "Out", 20}
 ]}.

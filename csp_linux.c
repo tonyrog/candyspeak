@@ -28,6 +28,7 @@ int debug = 0;
 int debug_scan = 0;
 int debug_parse = 0;
 int debug_trace = 0;
+int debug_trace_result = 0;
 
 static void *stack_top(void)
 {
@@ -430,6 +431,7 @@ static struct option long_options[] = {
     {"debug-parse",  no_argument,       0,  'P'},
     {"debug-scan",   no_argument,       0,  'S'},
     {"debug-trace",  no_argument,       0,  'Q'},
+    {"debug-result", no_argument,       0,  'R'},
     {"help",         no_argument,       0,  'h'},
     {"interactive",  no_argument,       0,  'i'},
     {"transaction",  optional_argument, 0,  't'},
@@ -440,7 +442,6 @@ static struct option long_options[] = {
     {"timeout",      required_argument, 0,  'T'},
     {"state-file",   required_argument, 0,  's'},
     {"parse-file",   required_argument, 0,  'p'},
-    {"result-file",  required_argument, 0,  'R'},
     {"compile",      no_argument,       0,  'C'},
     {"object-file",  required_argument, 0,  'O'},
     {"eeprom",       required_argument, 0,  'e'},
@@ -468,7 +469,7 @@ void usage(const char* prog)
     fprintf(stderr, "  -R, --result-file=F  Write result to file (Erlang format)\n");
     fprintf(stderr, "  -O, --object-file=F  Write compiled result to file (C code format)\n");
     fprintf(stderr, "  -e, --eeprom=F       EEPROM file for save/load (default: eeprom.db)\n");
-
+    fprintf(stderr, "  -L[erlang|erl|text|txt]      Trace output language\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "If no file is given, reads from stdin.\n");
     fprintf(stderr, "In interactive mode (-i), type /help for commands.\n");
@@ -480,9 +481,8 @@ int main(int argc, char** argv)
     int r;
     index_t x;
     FILE* fin = stdin;
-    FILE* state_file = NULL;
-    FILE* parse_out = NULL;
-    FILE* result_file = NULL;
+    FILE* state_file = stdout;
+    FILE* parse_out = stdout;
     FILE* object_file = NULL;
     int execute = 1;
     int interactive = 0;
@@ -495,11 +495,11 @@ int main(int argc, char** argv)
     int compile = 0;
     struct pollfd pfd[1];
     nfds_t nfds = 0;
-    
+    csp_lang_t lang = TEXT;    
 
     while (1) {
 	int option_index = 0;
-	c = getopt_long(argc, argv, "hindPQSCc:T:s:p:R:r:t:O:e:",
+	c = getopt_long(argc, argv, "hindPQRSCc:T:s:p:r:t:O:e:L:",
 			long_options, &option_index);
 	if (c == -1)
 	    break;
@@ -518,23 +518,21 @@ int main(int argc, char** argv)
 	case 'T': max_time_ms = atoi(optarg); break;
 	case 'd': debug = 1; break;
 	case 'P': debug_parse = 1; break;
+	case 'R': debug_trace_result = 1; break;
 	case 'Q': debug_trace = 1; break;
 	case 'S': debug_scan = 1; break;
 	case 's':
+	    lang = ERLANG;
+	    debug_trace = 1;
 	    if ((state_file = fopen(optarg, "w")) == NULL) {
 		fprintf(stderr, "unable to open state file '%s'\n", optarg);
 		exit(1);
 	    }
 	    break;
 	case 'p':
+	    debug_parse = 1;
 	    if ((parse_out = fopen(optarg, "w")) == NULL) {
 		fprintf(stderr, "unable to open parse file '%s'\n", optarg);
-		exit(1);
-	    }
-	    break;
-	case 'R':
-	    if ((result_file = fopen(optarg, "w")) == NULL) {
-		fprintf(stderr, "unable to open result file '%s'\n", optarg);
 		exit(1);
 	    }
 	    break;
@@ -543,7 +541,22 @@ int main(int argc, char** argv)
 		fprintf(stderr, "unable to open object file '%s'\n", optarg);
 		exit(1);
 	    }
-	    break;	    
+	    break;
+	case 'L':
+	    if (strcmp(optarg, "erlang") == 0)
+		lang = ERLANG;
+	    else if (strcmp(optarg, "erl") == 0)
+		lang = ERLANG;	    
+	    else if (strcmp(optarg, "text") == 0)
+		lang = TEXT;
+	    else if (strcmp(optarg, "txt") == 0)
+		lang = TEXT;	    
+	    else {
+		fprintf(stderr, "unsupported language %s\n", optarg);
+		usage(argv[0]);
+		exit(1);
+	    }
+	    break;
 	case '?':
 	default:
 	    usage(argv[0]);
@@ -616,21 +629,18 @@ int main(int argc, char** argv)
     csp_setup(&state);
 
     if (debug_parse) {
-	csp_dump(stdout, &state);
-	csp_list_rules(stdout, &state);	
-    }
-    if (parse_out) {
 	csp_dump(parse_out, &state);
+	csp_list_rules(parse_out, &state);	
     }
+
     if (compile) {
 	FILE* objf = object_file == NULL ? stdout : object_file;
 	csp_dump_code(objf, &state);
     }
 
     if (!execute) {
-	if (parse_out) fclose(parse_out);
-	if (state_file) fclose(state_file);
-	if (result_file) fclose(result_file);
+	if (parse_out != stdout) fclose(parse_out);
+	if (state_file != stdout) fclose(state_file);
 	if (object_file) fclose(object_file);	
 	exit(0);
     }
@@ -653,9 +663,7 @@ int main(int argc, char** argv)
 
     // initial trace shows cycle 0 (pre-eval state)
     if (debug_trace)
-	csp_dump_variables(stdout, &state);
-    if (state_file)
-	csp_dump_state_erl(state_file, &state);
+	csp_dump_state(state_file, &state, lang);
 
     // inital poll
     if (nfds > 0)
@@ -669,8 +677,9 @@ loop:
 	state.cycle = 1;
 	first_cycle = 0;
     }
-    else
+    else {
 	state.cycle++;
+    }
 
     if (max_cycles && state.cycle >= max_cycles) {
 	fprintf(stderr, "max cycles (%u) reached\n", max_cycles);
@@ -717,9 +726,7 @@ loop:
 
     if (anyd) {
 	if (debug_trace)
-	    csp_dump_variables(stdout, &state);
-	if (state_file)
-	    csp_dump_state_erl(state_file, &state);
+	    csp_dump_state(state_file, &state, lang);
     }
 
     // Wait for timer in non-interactive mode
@@ -736,25 +743,11 @@ loop:
 #endif
 
 done:
-
-    fprintf(stdout, "cycle=%d\n", state.cycle);
-#if defined(USE_STATISTICS) && (USE_STATISTICS==1)
-    fprintf(stdout, "num_eval_rule=%d\n", state.num_eval_rule);
-    fprintf(stdout, "num_eval0=%d\n", state.num_eval0);
-#endif
-    if (x == BAD_INDEX)
-	fprintf(stdout, "result=none\n");
-    else
-	fprintf(stdout, "result=%d\n", csp_ivalue(&state, x));
-
-    if (result_file) {
-	csp_dump_result_erl(result_file, &state, x);
-	fclose(result_file);
-    }
-    if (state_file)
-	fclose(state_file);
-    if (parse_out)
-	fclose(parse_out);
+    if (debug_trace_result)
+	csp_dump_result(state_file, &state, x, lang);
+    
+    if (state_file != stdout) fclose(state_file);
+    if (parse_out != stdout) fclose(parse_out);
 
     if (interactive)
 	disable_raw_mode();

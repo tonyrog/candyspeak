@@ -291,20 +291,79 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     return i+1;
 }
 
-void csp_dump_var(FILE* f, csp_rt_t* st, int m, int di, int ri)
+void csp_dump_var(FILE* f, csp_rt_t* st, int q, int di, int ri,
+		  int fv,
+		  csp_lang_t lang)
 {
     // di = decl index (for type/name), ri = relative index (for data)
-    index_t ix = MAKE_INDEX(m, di);
-    int doffs = st->offs[m];
-    fprintf(f, " %-s=", decl_name(st, ix));
-    csp_fprint_value(f, st, st->decl[di].vt, st->din[doffs+ri]);
+    index_t ix = MAKE_INDEX(q, di);
+    int doffs = st->offs[q];
+
+    switch(lang) {
+    case ERLANG:
+	if (!fv) fprintf(f, ",");
+	fprintf(f, "{var,\"%s\",", decl_name(st, ix));
+	csp_fprint_value(f, st, st->decl[di].vt, st->din[doffs+ri]);
+	fprintf(f, "}");
+	break;
+    case TEXT:
+	fprintf(f, " %-s=", decl_name(st, ix));
+	csp_fprint_value(f, st, st->decl[di].vt, st->din[doffs+ri]);
+	if (q == 0) fprintf(f, "\n");
+	break;
+    }
 }
 
-void csp_dump_variables(FILE* f, csp_rt_t* st)
+void csp_dump_object(FILE* f,csp_rt_t* st,int q,int fo,csp_lang_t lang)
 {
-    int i;
-    int m;
-    fprintf(f, "%d:", st->cycle);
+    int fv, j;
+    index_t obj = st->object[q];
+    index_t mx  = st->decl[INDEX(obj)].mq.mx;
+    int     n   = st->decl[INDEX(mx)].md.n;    
+    
+    switch(lang) {
+    case ERLANG:
+	if (!fo) fprintf(f, ",");
+	fprintf(f, "{object,\"%s.%s\",[",
+		decl_name(st, mx), decl_name(st, obj));
+	break;
+    case TEXT:
+	fprintf(f, "%s.%s\n", decl_name(st, mx), decl_name(st, obj));
+	break;
+    }
+    fv = 1;
+    for (j = 1; j <= n; j++) {
+	int k = INDEX(mx)+j;
+	if (st->decl[k].type == DECL_VARIABLE) {
+	    csp_dump_var(f, st, q, k, j, fv, lang);
+	    fv = 0;
+	}
+    }
+    switch(lang) {
+    case ERLANG:
+	fprintf(f, "%s", "]}\n");
+	break;
+    case TEXT:
+	fprintf(f, "\n");    
+	break;
+    }    
+}
+
+void csp_dump_state(FILE* f, csp_rt_t* st, csp_lang_t lang)
+{
+    int i, q;
+    int fo=1;
+
+    switch(lang) {
+    case ERLANG:
+	fprintf(f, "{state,%d,[\n", st->cycle);
+	break;
+    case TEXT:
+	fprintf(f, "%d:\n", st->cycle);
+	break;
+    }
+
+    // global variables
     i = 0;
     while(i < st->ps.nd) {
 	if (st->decl[i].type == DECL_MODULE) {
@@ -312,97 +371,59 @@ void csp_dump_variables(FILE* f, csp_rt_t* st)
 	    i += (st->decl[i].md.n+1);
 	}
 	else {
-	    if (st->decl[i].type == DECL_VARIABLE)
-		csp_dump_var(f, st, 0, i, i);
-	    i++;
-	}
-    }
-    fprintf(f, "\n");
-    for (m = 1; m <= st->ps.nq; m++) {
-	int j;
-	index_t obj = st->object[m];
-	index_t mx  = st->decl[INDEX(obj)].mq.mx;
-	int     n   = st->decl[INDEX(mx)].md.n;
-	// index_t ent = st->decl[INDEX(mx)].md.ent;
-	fprintf(f, "%s.%s\n", decl_name(st, mx), decl_name(st, obj));
-	for (j = 0; j < n; j++) {
-	    int k = INDEX(mx)+1+j;
-	    if (st->decl[k].type == DECL_VARIABLE) {
-		csp_dump_var(f, st, m, k, j);
-	    }
-	}
-	fprintf(f, "\n");
-    }
-    fputc('\n', f);
-}
-
-void csp_dump_state_erl(FILE* f, csp_rt_t* st)
-{
-    int i, m, j, k;
-    int first = 1;
-    int first_var;
-
-    fprintf(f, "{state,%d,[", st->cycle);
-
-    // Global variables
-    i = 0;
-    while(i < st->ps.nd) {
-	if (st->decl[i].type == DECL_MODULE) {
-	    i += (st->decl[i].md.n+1);
-	} else {
 	    if (st->decl[i].type == DECL_VARIABLE) {
-		index_t ix = MAKE_INDEX(0,i);
-		if (!first) fprintf(f, ",");
-		first = 0;
-		fprintf(f, "{var,\"%s\",", decl_name(st, ix));
-		csp_fprint_value(f, st, st->decl[i].vt, st->din[i]);
-		fprintf(f, "}");
+		csp_dump_var(f, st, 0, i, i, fo, lang);
+		fo = 0;
 	    }
 	    i++;
 	}
     }
-
-    // Objects
-    for (m = 1; m <= st->ps.nq; m++) {
-	index_t obj = st->object[m];
-	index_t mx  = st->decl[INDEX(obj)].mq.mx;
-	int n = st->decl[INDEX(mx)].md.n;
-	int offs = st->offs[m];
-
-	if (!first) fprintf(f, ",");
-	first = 0;
-	fprintf(f, "{object,\"%s\",'%s',[",
-		decl_name(st, obj), decl_name(st, mx));
-
-	first_var = 1;
-	for (j = 0; j < n; j++) {
-	    k = INDEX(mx)+1+j;
-	    if (st->decl[k].type == DECL_VARIABLE) {
-		index_t vx = MAKE_INDEX(0,k);
-		if (!first_var) fprintf(f, ",");
-		first_var = 0;
-		fprintf(f, "{var,\"%s\",", decl_name(st, vx));
-		csp_fprint_value(f, st, st->decl[k].vt, st->din[offs+j]);
-		fprintf(f, "}");
-	    }
-	}
-	fprintf(f, "]}");
+    
+    for (q = 1; q <= st->ps.nq; q++) {
+	csp_dump_object(f,st,q,fo,lang);
+	fo = 0;
     }
 
-    fprintf(f, "]}.\n");
+    switch(lang) {
+    case ERLANG:
+	fprintf(f, "%s", "]}.\n");
+	break;
+    case TEXT:
+	fprintf(f, "\n");
+	break;
+    }
 }
 
-void csp_dump_result_erl(FILE* f, csp_rt_t* st, index_t x)
+
+void csp_dump_result(FILE* f, csp_rt_t* st, index_t x, csp_lang_t lang)
 {
-    fprintf(f, "{result,[{cycle,%d}", st->cycle);
+    switch(lang) {
+    case ERLANG:
+	fprintf(f, "{result,[{cycle,%d}", st->cycle);
 #if defined(USE_STATISTICS) && (USE_STATISTICS==1)
-    fprintf(f, ",{num_eval0,%d}", st->num_eval0);
+	fprintf(f, ",{num_eval0,%d}", st->num_eval0);
 #endif
-    if (x == BAD_INDEX)
-	fprintf(f, ",{value,undefined}");
-    else
-	fprintf(f, ",{value,%d}", csp_ivalue(st, x));
-    fprintf(f, "]}.\n");
+	if (x == BAD_INDEX)
+	    fprintf(f, ",{value,undefined}");
+	else
+	    fprintf(f, ",{value,%d}", csp_ivalue(st, x));
+#if defined(USE_STATISTICS) && (USE_STATISTICS==1)
+	fprintf(stdout, ",{num_eval_rule,%d}", st->num_eval_rule);
+	fprintf(stdout, ",{num_eval0,%d}", st->num_eval0);
+#endif	
+	fprintf(f, "]}.\n");
+	break;
+    case TEXT:
+	if (x == BAD_INDEX)
+	    fprintf(stdout, "result=none\n");
+	else
+	    fprintf(stdout, "result=%d\n", csp_ivalue(st, x));
+#if defined(USE_STATISTICS) && (USE_STATISTICS==1)
+	fprintf(stdout, "num_eval_rule=%d\n", st->num_eval_rule);
+	fprintf(stdout, "num_eval0=%d\n", st->num_eval0);
+#endif	
+	break;
+    }
 }
 
 
@@ -629,7 +650,11 @@ const char* csp_cfmt_vtype(vtype_t vt)
     case V_STRING: return "V_STRING";
     case V_INDEX: return "V_INDEX";
     case V_NUMBER: return "V_NUMBER";
-    case V_ANY: return "V_ANY";
+    case V_ANY: return "V_ANY";	
+    case V_TIMER: return "V_TIMER";	
+    case V_DIGITAL: return "V_DIGITAL";
+    case V_ANALOG: return "V_ANALOG";
+    case V_CAN: return "V_CAN";
     default: return "UNDEFINED";
     }
 }
@@ -646,8 +671,6 @@ const char* csp_cfmt_dtype(decl_t dt)
     case DECL_ANALOG: return "DECL_ANALOG";
     case DECL_TIMER: return "DECL_TIMER";
     case DECL_CAN: return "DECL_CAN";
-    case DECL_UART: return "DECL_UART";
-    case DECL_SOCKET: return "DECL_SOCKET";
     default: return "?";
     }
 }
@@ -733,8 +756,6 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 		    dp->tm.init, dp->tm.px, dp->tm.tx);
 	    break;
 	case DECL_NOP:    // not used
-	case DECL_UART:   // not defined yet
-	case DECL_SOCKET: // not defined yet
 	}
 	fprintf(f, "},\n");
     }
@@ -1294,6 +1315,10 @@ static int exprbuf_expr(FILE* f, csp_rt_t*  st,
 	    bp->reg[ip->i.x] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
             bp->prio[ip->i.x] = 110;
             break;
+	}
+	case OP_MOV: {
+	    bp->reg[ip->a.x] = bp->reg[ip->a.y];
+	    break;
 	}
 	default:
 	    t = csp_opcode_to_tok(ip->op);
