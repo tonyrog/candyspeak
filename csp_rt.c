@@ -42,79 +42,80 @@
 #define DECL_ENT(o,c,n) \
     [(o)] = { .tok=(o),.code=(c),.name=(n),.namelen=CSTRLEN((n)),.arity=-1,.prec=-1,.assoc=NO }
 
-static const char s_null[] RODATA = "";
-static const char s_module[] RODATA = "module";
-static const char s_end[] RODATA = "end";
-static const char s_constant[] RODATA = "constant";
-static const char s_variable[] RODATA = "variable";
-static const char s_digital[] RODATA = "digital";
-static const char s_analog[] RODATA = "analog";
-static const char s_timer[] RODATA = "timer";
-static const char s_can[] RODATA = "can";
-static const char s_EXCLAMATION[] RODATA = "!";
-static const char s_TILDE[] RODATA = "~";
-static const char s_MINUS[] RODATA = "-";
-static const char s_PLUS[] RODATA = "+";
-static const char s_ASTERISK[] RODATA = "*";
-static const char s_SLASH[] RODATA = "/";
-static const char s_PERCENT[] RODATA = "%";
-static const char s_LTLT[] RODATA = "<<";
-static const char s_GTGT[] RODATA = ">>";
-static const char s_LT[] RODATA = "<";
-static const char s_LTEQ[] RODATA = "<=";
-static const char s_RIMP[] RODATA = "<-";
-static const char s_GT[] RODATA = ">";
-static const char s_GTEQ[] RODATA = ">=";
-static const char s_EQEQ[] RODATA = "==";
-static const char s_NEQ[] RODATA = "!=";
-static const char s_AMP[] RODATA = "&";
-static const char s_CIRC[] RODATA = "^";
-static const char s_BAR[] RODATA = "|";
-static const char s_AMPAMP[] RODATA = "&&";
-static const char s_BARBAR[] RODATA = "||";
-static const char s_EQ[] RODATA = "=";
-static const char s_COMMA[] RODATA = ",";
-static const char s_QUEST[] RODATA = "?";
-static const char s_next[] RODATA = "next";
-static const char s_enter[] RODATA = "enter";
-static const char s_leave[] RODATA = "leave";
-static const char s_new[] RODATA = "new";
-static const char s_call[] RODATA = "call";
-static const char s_ld[] RODATA = "ld";
-static const char s_st[] RODATA = "st";
-static const char s_stimp[] RODATA = "stimp";
-static const char s_li[] RODATA = "li";
-static const char s_chg[] RODATA = "chg";
-static const char s_arg[] RODATA = "arg";
-static const char s_cvtif[] RODATA = "cvtif";
-static const char s_cvtfi[] RODATA = "cvtfi";
-static const char s_pullup[] RODATA = "pullup";
-static const char s_pulldown[] RODATA = "pulldown";
-static const char s_resolution[] RODATA = "resolution";
-static const char s_undefined[] RODATA = "undefined";
-static const char s_none[] RODATA = "none";
-static const char s_in[] RODATA = "in";
-static const char s_out[] RODATA = "out";
-static const char s_inout[] RODATA = "inout";
-static const char s_pwm[] RODATA = "pwm";
-static const char s_void[] RODATA = "void";
-static const char s_float[] RODATA = "float";
-static const char s_integer[] RODATA = "integer";
-static const char s_unsigned[] RODATA = "unsigned";
-static const char s_index[] RODATA = "index";
-static const char s_number[] RODATA = "number";
-static const char s_string[] RODATA = "string";
-static const char s_any[] RODATA = "any";
-static const char s_little[] RODATA = "little";
-static const char s_big[] RODATA = "big";
-static const char s_LP[] RODATA = "(";
-static const char s_RP[] RODATA = ")";
-static const char s_HASH[] RODATA = "#";
-static const char s_DOT[] RODATA = ".";
-static const char s_COLON[] RODATA = ":";
-static const char s_LB[] RODATA = "[";
-static const char s_RB[] RODATA = "]";
-static const char s_MOV[] RODATA = "mov";
+static rochar s_null[] RODATA = "";
+static rochar s_module[] RODATA = "module";
+static rochar s_end[] RODATA = "end";
+static rochar s_constant[] RODATA = "constant";
+static rochar s_variable[] RODATA = "variable";
+static rochar s_digital[] RODATA = "digital";
+static rochar s_analog[] RODATA = "analog";
+static rochar s_timer[] RODATA = "timer";
+static rochar s_can[] RODATA = "can";
+static rochar s_object[] RODATA = "object";
+static rochar s_EXCLAMATION[] RODATA = "!";
+static rochar s_TILDE[] RODATA = "~";
+static rochar s_MINUS[] RODATA = "-";
+static rochar s_PLUS[] RODATA = "+";
+static rochar s_ASTERISK[] RODATA = "*";
+static rochar s_SLASH[] RODATA = "/";
+static rochar s_PERCENT[] RODATA = "%";
+static rochar s_LTLT[] RODATA = "<<";
+static rochar s_GTGT[] RODATA = ">>";
+static rochar s_LT[] RODATA = "<";
+static rochar s_LTEQ[] RODATA = "<=";
+static rochar s_RIMP[] RODATA = "<-";
+static rochar s_GT[] RODATA = ">";
+static rochar s_GTEQ[] RODATA = ">=";
+static rochar s_EQEQ[] RODATA = "==";
+static rochar s_NEQ[] RODATA = "!=";
+static rochar s_AMP[] RODATA = "&";
+static rochar s_CIRC[] RODATA = "^";
+static rochar s_BAR[] RODATA = "|";
+static rochar s_AMPAMP[] RODATA = "&&";
+static rochar s_BARBAR[] RODATA = "||";
+static rochar s_EQ[] RODATA = "=";
+static rochar s_COMMA[] RODATA = ",";
+static rochar s_QUEST[] RODATA = "?";
+static rochar s_next[] RODATA = "next";
+static rochar s_enter[] RODATA = "enter";
+static rochar s_leave[] RODATA = "leave";
+static rochar s_new[] RODATA = "new";
+static rochar s_call[] RODATA = "call";
+static rochar s_ld[] RODATA = "ld";
+static rochar s_st[] RODATA = "st";
+static rochar s_stimp[] RODATA = "stimp";
+static rochar s_li[] RODATA = "li";
+static rochar s_chg[] RODATA = "chg";
+static rochar s_arg[] RODATA = "arg";
+static rochar s_cvtif[] RODATA = "cvtif";
+static rochar s_cvtfi[] RODATA = "cvtfi";
+static rochar s_pullup[] RODATA = "pullup";
+static rochar s_pulldown[] RODATA = "pulldown";
+static rochar s_resolution[] RODATA = "resolution";
+static rochar s_undefined[] RODATA = "undefined";
+static rochar s_none[] RODATA = "none";
+static rochar s_in[] RODATA = "in";
+static rochar s_out[] RODATA = "out";
+static rochar s_inout[] RODATA = "inout";
+static rochar s_pwm[] RODATA = "pwm";
+static rochar s_void[] RODATA = "void";
+static rochar s_float[] RODATA = "float";
+static rochar s_integer[] RODATA = "integer";
+static rochar s_unsigned[] RODATA = "unsigned";
+static rochar s_index[] RODATA = "index";
+static rochar s_number[] RODATA = "number";
+static rochar s_string[] RODATA = "string";
+static rochar s_any[] RODATA = "any";
+static rochar s_little[] RODATA = "little";
+static rochar s_big[] RODATA = "big";
+static rochar s_LP[] RODATA = "(";
+static rochar s_RP[] RODATA = ")";
+static rochar s_HASH[] RODATA = "#";
+static rochar s_DOT[] RODATA = ".";
+static rochar s_COLON[] RODATA = ":";
+static rochar s_LB[] RODATA = "[";
+static rochar s_RB[] RODATA = "]";
+static rochar s_MOV[] RODATA = "mov";
 
 const op_entry_t op_table[] RODATA = {
     TOK_ENT(NONE,OP_NOP,s_null),
@@ -318,63 +319,63 @@ MAKE_IFF(FGTE);
 MAKE_IFF(FEQEQ);
 MAKE_IFF(FNEQ);
 
-static const char s_ADD[] RODATA = "ADD";
-static const char s_SUB[] RODATA = "SUB";
-static const char s_MUL[] RODATA = "MUL";
-static const char s_DIV[] RODATA = "DIV";
-static const char s_REM[] RODATA = "REM";
-static const char s_SLA[] RODATA = "SLA";
-static const char s_SRA[] RODATA = "SRA";
-static const char s_BAND[] RODATA = "BAND";
-static const char s_BOR[] RODATA = "BOR";
-static const char s_BXOR[] RODATA = "BXOR";
-static const char s_AND[] RODATA = "AND";
-static const char s_OR[] RODATA = "OR";
-static const char s_ASSIGN[] RODATA = "ASSIGN";
-static const char ss_LT[] RODATA = "LT";
-static const char ss_LTE[] RODATA = "LTE";
-static const char ss_GT[] RODATA = "GT";
-static const char ss_GTE[] RODATA = "GTE";
-static const char ss_EQ[] RODATA = "EQ";
-static const char ss_NEQ[] RODATA = "NEQ";
-static const char s_BNOT[] RODATA = "BNOT";
-static const char s_NEG[] RODATA = "NEG";
-static const char s_NOT[] RODATA = "NOT";
-static const char ss_MOV[] RODATA = "MOV";
-static const char s_CVTIF[] RODATA = "CVTIF";
-static const char s_CVTFI[] RODATA = "CVTFI";
+static rochar s_ADD[] RODATA = "ADD";
+static rochar s_SUB[] RODATA = "SUB";
+static rochar s_MUL[] RODATA = "MUL";
+static rochar s_DIV[] RODATA = "DIV";
+static rochar s_REM[] RODATA = "REM";
+static rochar s_SLA[] RODATA = "SLA";
+static rochar s_SRA[] RODATA = "SRA";
+static rochar s_BAND[] RODATA = "BAND";
+static rochar s_BOR[] RODATA = "BOR";
+static rochar s_BXOR[] RODATA = "BXOR";
+static rochar s_AND[] RODATA = "AND";
+static rochar s_OR[] RODATA = "OR";
+static rochar s_ASSIGN[] RODATA = "ASSIGN";
+static rochar ss_LT[] RODATA = "LT";
+static rochar ss_LTE[] RODATA = "LTE";
+static rochar ss_GT[] RODATA = "GT";
+static rochar ss_GTE[] RODATA = "GTE";
+static rochar ss_EQ[] RODATA = "EQ";
+static rochar ss_NEQ[] RODATA = "NEQ";
+static rochar s_BNOT[] RODATA = "BNOT";
+static rochar s_NEG[] RODATA = "NEG";
+static rochar s_NOT[] RODATA = "NOT";
+static rochar ss_MOV[] RODATA = "MOV";
+static rochar s_CVTIF[] RODATA = "CVTIF";
+static rochar s_CVTFI[] RODATA = "CVTFI";
 
-static const char s_FADD[] RODATA = "FADD";
-static const char s_FSUB[] RODATA = "FSUB";
-static const char s_FMUL[] RODATA = "FMUL";
-static const char s_FDIV[] RODATA = "FDIV";
-static const char s_FNEG[] RODATA = "FNEG";
-static const char s_FMOV[] RODATA = "FMOV";
+static rochar s_FADD[] RODATA = "FADD";
+static rochar s_FSUB[] RODATA = "FSUB";
+static rochar s_FMUL[] RODATA = "FMUL";
+static rochar s_FDIV[] RODATA = "FDIV";
+static rochar s_FNEG[] RODATA = "FNEG";
+static rochar s_FMOV[] RODATA = "FMOV";
 
-static const char s_FLT[] RODATA = "FLT";
-static const char s_FLTE[] RODATA = "FLTE";
-static const char s_FGT[] RODATA = "FGT";
-static const char s_FGTE[] RODATA = "FGTE";
-static const char s_FEQ[] RODATA = "FEQ";
-static const char s_FNEQ[] RODATA = "FNEQ";
+static rochar s_FLT[] RODATA = "FLT";
+static rochar s_FLTE[] RODATA = "FLTE";
+static rochar s_FGT[] RODATA = "FGT";
+static rochar s_FGTE[] RODATA = "FGTE";
+static rochar s_FEQ[] RODATA = "FEQ";
+static rochar s_FNEQ[] RODATA = "FNEQ";
 
-static const char ss_COMMA[] RODATA = "COMMA";
+static rochar ss_COMMA[] RODATA = "COMMA";
 
-static const char s_ENTER[] RODATA = "ENTER";
-static const char s_LEAVE[] RODATA = "LEAVE";
-static const char s_NEW[] RODATA = "NEW";
-static const char s_LI[] RODATA = "LI";
-static const char s_LIU[] RODATA = "LIU";
-static const char s_LIH[] RODATA = "LIH";
-static const char s_ARG[] RODATA = "ARG";
-static const char s_ST[] RODATA = "ST";
-static const char s_STIMP[] RODATA = "STIMP";
-static const char s_CHG[] RODATA = "CHG";
-static const char s_LD[] RODATA = "LD";
-static const char s_CALL[] RODATA = "CALL";
-static const char s_RULE[] RODATA = "RULE";
-static const char s_NEXT[] RODATA = "NEXT";
-static const char s_NOP[] RODATA = "NOP";
+static rochar s_ENTER[] RODATA = "ENTER";
+static rochar s_LEAVE[] RODATA = "LEAVE";
+static rochar s_NEW[] RODATA = "NEW";
+static rochar s_LI[] RODATA = "LI";
+static rochar s_LIU[] RODATA = "LIU";
+static rochar s_LIH[] RODATA = "LIH";
+static rochar s_ARG[] RODATA = "ARG";
+static rochar s_ST[] RODATA = "ST";
+static rochar s_STIMP[] RODATA = "STIMP";
+static rochar s_CHG[] RODATA = "CHG";
+static rochar s_LD[] RODATA = "LD";
+static rochar s_CALL[] RODATA = "CALL";
+static rochar s_RULE[] RODATA = "RULE";
+static rochar s_NEXT[] RODATA = "NEXT";
+static rochar s_NOP[] RODATA = "NOP";
 
 // opcode => opcode type info
 static const op_info_t info_tab[] RODATA = {
@@ -457,19 +458,19 @@ const char csp_tag(csp_rt_t* st, index_t n)
     return tag_tab[st->decl[INDEX(n)].type];
 }
 
-static const char* const pindir_tab[] RODATA = {
+static rochar* const pindir_tab[] RODATA = {
     [DIR_NONE] = s_none,
     [DIR_IN]   = s_in,
     [DIR_OUT]  = s_out,
     [DIR_INOUT]  = s_inout
 };
 
-const char* csp_fmt_pindir(uint8_t dir)
+rochar* csp_fmt_pindir(uint8_t dir)
 {
-    return pindir_tab[dir&0x3];
+    return RD_PTR(&pindir_tab[dir&0x3]);
 }
 
-const char* csp_fmt_pull(csp_rt_t* st, int ix)
+rochar* csp_fmt_pull(csp_rt_t* st, int ix)
 {
     if (st->decl[ix].di.pullup)
 	return s_pullup;
@@ -479,7 +480,7 @@ const char* csp_fmt_pull(csp_rt_t* st, int ix)
 	return s_undefined;  // floating
 }
 
-const char* csp_fmt_pwm(csp_rt_t* st, int ix)
+rochar* csp_fmt_pwm(csp_rt_t* st, int ix)
 {
     if (st->decl[ix].an.pwm)
 	return s_pwm;
@@ -487,7 +488,7 @@ const char* csp_fmt_pwm(csp_rt_t* st, int ix)
 	return s_undefined;
 }
 
-static const char* const vtype_tab[] RODATA = {
+static rochar* const vtype_tab[] RODATA = {
     [V_VOID] = s_void,
     [V_INTEGER] = s_integer,
     [V_UNSIGNED] = s_unsigned,
@@ -495,13 +496,16 @@ static const char* const vtype_tab[] RODATA = {
     [V_STRING] = s_string,
     [V_INDEX] = s_index,
     [V_NUMBER] = s_number,
-    [V_ANY] = s_any
+    [V_ANY] = s_any,
+    [V_DIGITAL] = s_digital,
+    [V_ANALOG] = s_analog,
+    [V_TIMER] = s_timer,
+    [V_CAN] = s_can,
 };
 
-
-const char* csp_fmt_vtype(vtype_t vt)
+const rochar* csp_fmt_vtype(vtype_t vt)
 {
-    return vtype_tab[vt & 0x7];
+    return (rochar*) RD_PTR(&vtype_tab[vt & 0xf]);
 }
 
 static const char* const endian_tab[] RODATA = {
@@ -514,6 +518,27 @@ static const char* const endian_tab[] RODATA = {
 const char* csp_fmt_endian(vendian_t et)
 {
     return endian_tab[et&0x3];
+}
+
+#define RETURN_TSTR(s_str) { \
+	tstr_t str = {.ptr=(char*)(s_str),.len=sizeof((s_str))-1 };	\
+	return str;							\
+    }
+    
+const tstr_t decl_type_name(decl_t type)
+{
+    switch(type) {
+    case DECL_VARIABLE: RETURN_TSTR(s_variable);
+    case DECL_CONSTANT: RETURN_TSTR(s_constant);
+    case DECL_MODULE:   RETURN_TSTR(s_module);
+    case DECL_END:      RETURN_TSTR(s_end);
+    case DECL_OBJECT:   RETURN_TSTR(s_object);
+    case DECL_TIMER:    RETURN_TSTR(s_timer);
+    case DECL_DIGITAL:  RETURN_TSTR(s_digital);
+    case DECL_ANALOG:   RETURN_TSTR(s_analog);
+    case DECL_CAN:      RETURN_TSTR(s_can);
+    default: RETURN_TSTR(s_undefined);
+    }
 }
 
 const char* csp_format_error(csp_err_t err)
@@ -541,14 +566,14 @@ const char* csp_format_error(csp_err_t err)
 	return "variable %s is already defined";
     case ERR_CONSTANT_ALREADY_DEFINED:
 	return "constant %s is already defined";
-    case ERR_TIMER_ALREADY_DEFINED:
-	return "timer %s is already defined";
-    case ERR_DIGITAL_ALREADY_DEFINED:
-	return "digital %s is already defined";
-    case ERR_ANALOG_ALREADY_DEFINED:
-	return "analog %s is already defined";
-    case ERR_CAN_ALREADY_DEFINED:
-	return "can %s is already defined";	
+//    case ERR_TIMER_ALREADY_DEFINED:
+//	return "timer %s is already defined";
+//    case ERR_DIGITAL_ALREADY_DEFINED:
+//	return "digital %s is already defined";
+//    case ERR_ANALOG_ALREADY_DEFINED:
+//	return "analog %s is already defined";
+//    case ERR_CAN_ALREADY_DEFINED:
+//	return "can %s is already defined";	
     case ERR_MODULE_ALREADY_DEFINED:
 	return "module %s is already defined";
     case ERR_OBJECT_NOT_DEFINED:
@@ -559,6 +584,8 @@ const char* csp_format_error(csp_err_t err)
 	return "field %s not found";
     case ERR_FUNCTION_DOES_NOT_EXIST:
 	return "function %s/%d does not exist";
+    case ERR_ALREADY_DEFINED:
+	return "%s %s is already defined";  // <type> <name> is alread defined
     case ERR_INTERNAL_ERROR:
 	return "internal error";
     case ERR_FUNCTION_ARGUMENT_TYPE_MISMATCH:
@@ -659,9 +686,9 @@ uint8_t csp_opcode_arity(opcode_t op)
 #endif
 }
 
-const char* csp_opcode_name(opcode_t op)
+const rochar* csp_opcode_name(opcode_t op)
 {
-    return (const char*) RD_PTR(&info_tab[op].name);
+    return (rochar*) RD_PTR(&info_tab[op].name);
 }
 
 int csp_set_error(csp_rt_t* st, csp_err_t err)
@@ -859,7 +886,6 @@ static value_t fn_progress(csp_rt_t* st,uint16_t type,
     return ret;
 }
 
-
 // FIXME: compile  changed(X) -> OP_CHG
 static value_t fn_changed(csp_rt_t* st,uint16_t type,
 			  value_t* args, uint8_t nargs)
@@ -868,6 +894,26 @@ static value_t fn_changed(csp_rt_t* st,uint16_t type,
     index_t ty = args[0].u;
     int i = st_index(st, ty);
     ret.i = BOOL(bitset_tst(st->dset, i));
+    return ret;
+}
+
+static value_t fn_rising(csp_rt_t* st,uint16_t type,
+			 value_t* args, uint8_t nargs)
+{
+    value_t ret;
+    index_t ty = args[0].u;
+    int i = st_index(st, ty);
+    ret.i = st->dout[i].i && !st->din[i].i;
+    return ret;
+}
+
+static value_t fn_falling(csp_rt_t* st,uint16_t type,
+			  value_t* args, uint8_t nargs)
+{
+    value_t ret;
+    index_t ty = args[0].u;
+    int i = st_index(st, ty);
+    ret.i = !st->dout[i].i && st->din[i].i;
     return ret;
 }
 
@@ -903,21 +949,33 @@ static value_t fn_cycle(csp_rt_t* st,uint16_t type,value_t* args, uint8_t nargs)
     return ret;
 }
 
-static const char s_min[] RODATA = "min";
-static const char s_max[] RODATA = "max";
-static const char s_abs[] RODATA = "abs";
-static const char s_fabs[] RODATA = "fabs";
-static const char s_sign[] RODATA = "sign";
-static const char s_clip[] RODATA = "clip";
-static const char s_timeout[] RODATA = "timeout";
-static const char s_elapsed[] RODATA = "elapsed";
-static const char s_progress[] RODATA = "progress";
-static const char s_changed[] RODATA = "changed";
+// set latch state and return previous value
+static value_t fn_latch(csp_rt_t* st,uint16_t type,value_t* args, uint8_t nargs)
+{
+    value_t ret;
+    (void)args; (void)nargs;
+    ret.i = csp_set_latch(st, args[0].i);
+    return ret;
+}
 
-static const char s_print[] RODATA = "print";
-static const char s_println[] RODATA = "println";
-static const char s_tick[] RODATA = "tick";
-static const char s_cycle[] RODATA = "cycle";
+static rochar s_min[] RODATA = "min";
+static rochar s_max[] RODATA = "max";
+static rochar s_abs[] RODATA = "abs";
+static rochar s_fabs[] RODATA = "fabs";
+static rochar s_sign[] RODATA = "sign";
+static rochar s_clip[] RODATA = "clip";
+static rochar s_timeout[] RODATA = "timeout";
+static rochar s_elapsed[] RODATA = "elapsed";
+static rochar s_progress[] RODATA = "progress";
+static rochar s_changed[] RODATA = "changed";
+static rochar s_rising[] RODATA = "rising";
+static rochar s_falling[] RODATA = "falling";
+
+static rochar s_print[] RODATA = "print";
+static rochar s_println[] RODATA = "println";
+static rochar s_tick[] RODATA = "tick";
+static rochar s_cycle[] RODATA = "cycle";
+static rochar s_latch[] RODATA = "latch";
 
 #define CSP_FUNC_ENT(str, a, p, rt, args, f)	\
     {.name=(str),.namelen=sizeof((str))-1,.arity=(a),.pure=(p),	\
@@ -939,11 +997,15 @@ const csp_func_t csp_builtin_funcs[] RODATA = {
     CSP_FUNC_ENT(s_progress, 1, 0, V_FLOAT, MAKE_TYPE1(V_TIMER), fn_progress),
     // variable changed detection
     CSP_FUNC_ENT(s_changed, 1, 0, V_INTEGER, MAKE_TYPE1(V_INDEX), fn_changed),
+    CSP_FUNC_ENT(s_rising,  1, 0, V_INTEGER, MAKE_TYPE1(V_INDEX), fn_rising),
+    CSP_FUNC_ENT(s_falling, 1, 0, V_INTEGER, MAKE_TYPE1(V_INDEX), fn_falling),
 
+    
     CSP_FUNC_ENT(s_print,   1, 0, V_INTEGER, MAKE_TYPE1(V_ANY),  fn_print),
     CSP_FUNC_ENT(s_println, 1, 0, V_INTEGER, MAKE_TYPE1(V_ANY),  fn_println),
     CSP_FUNC_ENT(s_tick,    0, 0, V_INTEGER, MAKE_TYPE0(),       fn_tick),
     CSP_FUNC_ENT(s_cycle,   0, 0, V_INTEGER, MAKE_TYPE0(),       fn_cycle),
+    CSP_FUNC_ENT(s_latch,   1, 0, V_INTEGER, MAKE_TYPE1(V_INTEGER), fn_latch),
 };
 
 const uint8_t csp_num_builtin_funcs = sizeof(csp_builtin_funcs)/sizeof(csp_builtin_funcs[0]);
@@ -1144,7 +1206,6 @@ void csp_enq_elist(csp_rt_t* st, index_t x)
 #endif
 }
 
-// set value on declaration node (variable/digital/analog ...)
 NOINLINE void csp_set_value(csp_rt_t* st, index_t n, value_t v)
 {
     int i = st_index(st, n);
@@ -1172,6 +1233,29 @@ NOINLINE void csp_set_fvalue(csp_rt_t* st, index_t n, fvalue_t v)
 {
     value_t vv;
     vv.f = v;
+    csp_set_value(st, n, vv);
+}
+
+// TIMER/DIGIT/ANALOG
+
+NOINLINE void csp_set_tvalue(csp_rt_t* st, index_t n, uvalue_t v)
+{
+    value_t vv;
+    vv.t.val = v;
+    csp_set_value(st, n, vv);
+}
+
+NOINLINE void csp_set_dvalue(csp_rt_t* st, index_t n, uvalue_t v)
+{    
+    value_t vv;
+    vv.d.val = v;
+    csp_set_value(st, n, vv);
+}
+
+NOINLINE void csp_set_avalue(csp_rt_t* st, index_t n, uvalue_t v)
+{
+    value_t vv;
+    vv.a.val = v;
     csp_set_value(st, n, vv);
 }
 
@@ -1362,8 +1446,8 @@ index_t csp_react(csp_rt_t* st)
 }
 
 // look for symbol among nodes in range [start, stop)
-NOINLINE static index_t lookup_decl_in(csp_rt_t* st, char* name, int name_len,
-			      int start, int stop)
+NOINLINE static index_t lookup_decl_in(csp_rt_t* st, const tstr_t* name,
+				       int start, int stop)
 {
     int i = start;
 
@@ -1372,8 +1456,8 @@ NOINLINE static index_t lookup_decl_in(csp_rt_t* st, char* name, int name_len,
 	if (pos > 0) {
 	    int len = st->str[pos-1];  // FIXME: RODATA
 	    index_t ix = MAKE_INDEX(0,i);
-	    if ((len == name_len) &&
-		(memcmp(decl_name(st, ix),name, name_len)==0)) {
+	    if ((len == name->len) &&
+		(memcmp(decl_name(st, ix),name->ptr, name->len)==0)) {
 		return ix;
 	    }
 	}
@@ -1384,13 +1468,13 @@ NOINLINE static index_t lookup_decl_in(csp_rt_t* st, char* name, int name_len,
     return BAD_INDEX;
 }
 
-NOINLINE static index_t lookup_decl(csp_rt_t* st, char* name, int name_len)
+NOINLINE static index_t lookup_decl(csp_rt_t* st, const tstr_t* name)
 {
     int start = (st->mdef != BAD_INDEX) ? INDEX(st->mdef)+1 : 0;
-    return lookup_decl_in(st, name, name_len, start, st->ps.nd);
+    return lookup_decl_in(st, name, start, st->ps.nd);
 }
 
-index_t lookup_const(csp_rt_t* st, vtype_t vt, value_t v)
+NOINLINE index_t lookup_const(csp_rt_t* st, vtype_t vt, value_t v)
 {
     index_t i;
     for (i = 0; i < st->ps.nd; i++) {
@@ -1402,7 +1486,7 @@ index_t lookup_const(csp_rt_t* st, vtype_t vt, value_t v)
     return BAD_INDEX;
 }
 
-index_t lookup_string_const(csp_rt_t* st, char* str, int slen)
+NOINLINE index_t lookup_string_const(csp_rt_t* st, char* str, int slen)
 {
     index_t i;
     for (i = 0; i < st->ps.nd; i++) {
@@ -1421,7 +1505,7 @@ index_t lookup_string_const(csp_rt_t* st, char* str, int slen)
 //  [3] 'a' 'b' 'c' '\0'
 // length byte characters terminated with 0
 // position return is pos efter length byte
-int new_string(csp_rt_t* st, char* name, int len)
+NOINLINE int new_string(csp_rt_t* st, char* name, int len)
 {
     sindex_t pos = st->ps.strp;
     sindex_t next = pos + (len+2);
@@ -1436,7 +1520,7 @@ int new_string(csp_rt_t* st, char* name, int len)
     return pos+1;
 }
 
-index_t next_decl_index(csp_rt_t* st)
+NOINLINE index_t next_decl_index(csp_rt_t* st)
 {
     index_t ix;
     if (st->ps.nd >= MAX_DECLS) {
@@ -1450,7 +1534,7 @@ index_t next_decl_index(csp_rt_t* st)
 
 // install a new decl
 
-NOINLINE index_t csp_new_decl(csp_rt_t* st, char* name, int name_len, decl_t type)
+NOINLINE index_t csp_new_decl(csp_rt_t* st, const tstr_t* name, decl_t type)
 {
     index_t i;
     int pos;
@@ -1459,7 +1543,7 @@ NOINLINE index_t csp_new_decl(csp_rt_t* st, char* name, int name_len, decl_t typ
 	return BAD_INDEX;
     pos = 0;
     if (name != NULL) {
-	if ((pos = new_string(st, name, name_len)) < 0)
+	if ((pos = new_string(st, name->ptr, name->len)) < 0)
 	    return BAD_INDEX;
     }
     st->decl[INDEX(i)].type = type;
@@ -1468,11 +1552,29 @@ NOINLINE index_t csp_new_decl(csp_rt_t* st, char* name, int name_len, decl_t typ
     return i;
 }
 
+// new uniq declaration
+NOINLINE index_t csp_new_udecl(csp_rt_t* st, const tstr_t* name, decl_t type)
+{
+    index_t ix;
+    
+    if ((ix = lookup_decl(st, name)) != BAD_INDEX) {
+	if (csp_set_error(st, ERR_ALREADY_DEFINED)) {
+	    tstr_t typ = { .ptr = "name", .len = 4 };
+	    if (st->decl[ix].type == type) typ = decl_type_name(type);
+	    csp_set_err_arg_tstr(st, 0, &typ);
+	    csp_set_err_arg_tstr(st, 1, name);
+	}
+	return BAD_INDEX;
+    }
+    return csp_new_decl(st, name, type);
+}
+
 NOINLINE index_t new_signed_const(csp_rt_t* st, ivalue_t v)
 {
     index_t ix;
     int i;
-    if ((ix = csp_new_decl(st,NULL,0,DECL_CONSTANT)) == BAD_INDEX)
+    const tstr_t empty = { .ptr = NULL, .len = 0};
+    if ((ix = csp_new_decl(st,&empty,DECL_CONSTANT)) == BAD_INDEX)
 	return BAD_INDEX;
     i = INDEX(ix);
     st->decl[i].res = MAKE_RES(8*sizeof(ivalue_t));
@@ -1486,7 +1588,8 @@ NOINLINE index_t new_float_const(csp_rt_t* st, fvalue_t v)
 {
     index_t ix;
     int i;
-    if ((ix = csp_new_decl(st,NULL,0,DECL_CONSTANT)) == BAD_INDEX)
+    const tstr_t empty = { .ptr = NULL, .len = 0};    
+    if ((ix = csp_new_decl(st,&empty,DECL_CONSTANT)) == BAD_INDEX)
 	return BAD_INDEX;
     i = INDEX(ix);
     st->decl[i].res = MAKE_RES(8*sizeof(fvalue_t));
@@ -1500,7 +1603,8 @@ NOINLINE index_t new_string_const(csp_rt_t* st, char* str, int len)
 {
     index_t ix;
     int pos, i;
-    if ((ix = csp_new_decl(st,NULL,0,DECL_CONSTANT)) == BAD_INDEX)
+    const tstr_t empty = { .ptr = NULL, .len = 0};        
+    if ((ix = csp_new_decl(st,&empty,DECL_CONSTANT)) == BAD_INDEX)
 	return BAD_INDEX;
     if ((pos = new_string(st, str, len)) < 0)
 	return BAD_INDEX;
@@ -1547,18 +1651,6 @@ int csp_new_mem(csp_rt_t* st, opcode_t op, reg_t x, index_t mem)
     }
     return i;
 }
-/*
-int csp_new_st(csp_rt_t* st, reg_t x, index_t mem)
-{
-    return csp_new_mem(st, OP_ST, x, mem);
-}
-*/
-/*
-int csp_new_ld(csp_rt_t* st, reg_t x, index_t mem)
-{
-    return csp_new_mem(st, OP_LD, x, mem);
-}
-*/
 
 int csp_new_imm(csp_rt_t* st, opcode_t op, reg_t x, int16_t imm)
 {
@@ -2307,7 +2399,6 @@ NOINLINE static int coerce_to_int(csp_rt_t* st, rentry_t* e)
     return 0;
 }
 
-
 // Process binary assignment operator: generates ST instruction
 // Returns new ep on success, -1 on error
 NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, int ep)
@@ -2744,7 +2835,7 @@ next:
 	}
 	else {
 	    // Not a function - regular variable/decl lookup
-	    if ((ix = lookup_decl(st,tval.str.ptr,tval.str.len)) == BAD_INDEX) {
+	    if ((ix = lookup_decl(st,&tval.str)) == BAD_INDEX) {
 		if (csp_set_error(st, ERR_VARIABLE_NOT_DECLARED)) {
 		    csp_set_err_arg_tstr(st, 0, &tval.str);
 		}
@@ -2757,7 +2848,7 @@ next:
 		ivalue_t dn = st->decl[INDEX(mx)].md.n;  // number of elements
 		index_t jx;
 		tval = tv[i+1].v;
-		if ((jx = lookup_decl_in(st,tval.str.ptr,tval.str.len,
+		if ((jx = lookup_decl_in(st, &tval.str,
 					 INDEX(mx)+1,INDEX(mx)+1+dn)) == BAD_INDEX) {
 		    if (csp_set_error(st, ERR_OBJECT_NOT_DEFINED)) {
 			csp_set_err_arg_tstr(st, 0, &tval.str);
@@ -2883,15 +2974,8 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, size_t n)
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-
-    if ((ix = lookup_decl(st, d.name.ptr, d.name.len)) != BAD_INDEX) {
-	if (csp_set_error(st, ERR_MODULE_ALREADY_DEFINED)) {
-	    csp_set_err_arg_ix(st, 0, ix);
-	}
+    if ((ix = csp_new_udecl(st, &d.name, DECL_MODULE)) == BAD_INDEX)
 	return -1;
-    }
-    ix = csp_new_decl(st, d.name.ptr, d.name.len, DECL_MODULE);
-    if (ix == BAD_INDEX) return -1;
     st->mdef = ix;  // current module being defined
     if ((jx = csp_new_enter(st, 0, ix)) < 0)
 	return -1;
@@ -2916,7 +3000,8 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
 {
     end_param_t d;
     index_t mx, ex, lx;
-
+    const tstr_t empty = { .ptr = NULL, .len = 0};
+    
     if (pmatch(st, tv, n, end_pat, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
@@ -2924,7 +3009,7 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
     if ((mx = st->mdef) == BAD_INDEX)
 	return -1;
 
-    if ((ex = csp_new_decl(st, NULL, 0, DECL_END)) == BAD_INDEX)
+    if ((ex = csp_new_decl(st, &empty, DECL_END)) == BAD_INDEX)
 	return -1;
     st->decl[INDEX(mx)].md.n = (INDEX(ex) - INDEX(mx)) - 1;
     if ((lx = csp_new_leave(st, 0, 0)) < 0)
@@ -2979,14 +3064,8 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n)
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    if ((ix = lookup_decl(st, d.name.ptr, d.name.len)) != BAD_INDEX) {
-	if (csp_set_error(st, ERR_VARIABLE_ALREADY_DEFINED)) {
-	    csp_set_err_arg_ix(st, 0, ix);
-	}
+    if ((ix = csp_new_udecl(st, &d.name, DECL_VARIABLE)) == BAD_INDEX)
 	return -1;
-    }
-    ix = csp_new_decl(st, d.name.ptr, d.name.len, DECL_VARIABLE);
-    if (ix == BAD_INDEX) return -1;
     i = INDEX(ix);
     st->decl[i].vt = d.opts.vt;
     st->decl[i].res = MAKE_RES(d.res);
@@ -3029,15 +3108,8 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-
-    if ((ix = lookup_decl(st, d.name.ptr, d.name.len)) != BAD_INDEX) {
-	if (csp_set_error(st, ERR_CONSTANT_ALREADY_DEFINED)) {
-	    csp_set_err_arg_ix(st, 0, ix);
-	}
+    if ((ix = csp_new_udecl(st, &d.name, DECL_CONSTANT)) == BAD_INDEX)
 	return -1;
-    }
-    ix = csp_new_decl(st, d.name.ptr, d.name.len, DECL_CONSTANT);
-    if (ix == BAD_INDEX) return -1;
     i = INDEX(ix);
     st->decl[i].vt = d.opts.vt;
     st->decl[i].res = MAKE_RES(d.res);
@@ -3080,18 +3152,10 @@ NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, size_t n)
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-
     if (d.opts.dir == 0) d.opts.dir = DIR_IN;
 
-    if ((ix = lookup_decl(st, d.name.ptr, d.name.len)) != BAD_INDEX) {
-	if (csp_set_error(st, ERR_DIGITAL_ALREADY_DEFINED)) {
-	    csp_set_err_arg_ix(st, 0, ix);
-	}
-	return -1;
-    }
-    ix = csp_new_decl(st, d.name.ptr, d.name.len, DECL_DIGITAL);
-    if (ix == BAD_INDEX) return -1;
-
+    if ((ix = csp_new_udecl(st, &d.name, DECL_DIGITAL)) == BAD_INDEX)
+	return -1;    
     i = INDEX(ix);
     st->decl[i].res = MAKE_RES(1);
     st->decl[i].di.pin = d.pin;
@@ -3144,15 +3208,8 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, size_t n)
     }
     if (d.opts.dir == 0) d.opts.dir = DIR_IN;
 
-    if ((ix = lookup_decl(st, d.name.ptr, d.name.len)) != BAD_INDEX) {
-	if (csp_set_error(st, ERR_ANALOG_ALREADY_DEFINED)) {
-	    csp_set_err_arg_ix(st, 0, ix);
-	}
+    if ((ix = csp_new_udecl(st, &d.name, DECL_ANALOG)) == BAD_INDEX)
 	return -1;
-    }
-    ix = csp_new_decl(st, d.name.ptr, d.name.len, DECL_ANALOG);
-    if (ix == BAD_INDEX) return -1;
-
     i = INDEX(ix);
     st->decl[i].vt = d.opts.vt;
     st->decl[i].res = MAKE_RES(d.res);
@@ -3160,6 +3217,7 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, size_t n)
     st->decl[i].an.port = d.port;
     st->decl[i].dir = d.opts.dir;
     st->decl[i].an.pwm = d.opts.pwm;
+    st->decl[i].an.endian = d.opts.endian;    
     return 0;
 }
 
@@ -3182,34 +3240,27 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, size_t n)
 {
     timer_param_t d = {0};
     index_t tm, px, tx;
-    value_t vtimeout;
     int i;
+    const tstr_t empty = { .ptr = NULL, .len = 0};
 
     d.init = 0;
     if (pmatch(st, tv, n, timer_pat, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-
-    if ((tm = lookup_decl(st, d.name.ptr, d.name.len)) != BAD_INDEX) {
-	if (csp_set_error(st, ERR_TIMER_ALREADY_DEFINED)) {
-	    csp_set_err_arg_ix(st, 0, tm);
-	}
+    if ((tm = csp_new_udecl(st, &d.name, DECL_TIMER)) == BAD_INDEX)
 	return -1;
-    }
-    tm = csp_new_decl(st, d.name.ptr, d.name.len, DECL_TIMER);
-    if (tm == BAD_INDEX) return -1;
-    
-    // create constant timeout value VARIABLE?
-    vtimeout.i = d.timeout;
-    if ((px = lookup_const(st, V_INTEGER, vtimeout)) == BAD_INDEX)
-	px = new_signed_const(st, d.timeout);
-    // create variabel for storing current time
-    tx = csp_new_decl(st, NULL, 0, DECL_VARIABLE);
+    px = csp_new_decl(st, &empty, DECL_VARIABLE);
+    tx = csp_new_decl(st, &empty, DECL_VARIABLE);
     i = INDEX(tx);
     st->decl[i].vt = V_UNSIGNED;
     st->decl[i].res = MAKE_RES(32);
     st->decl[i].va.init.u = 0;
+
+    i = INDEX(px);
+    st->decl[i].vt = V_UNSIGNED;
+    st->decl[i].res = MAKE_RES(32);
+    st->decl[i].va.init.u = d.timeout;
 
     i = INDEX(tm);
     st->decl[i].tm.init = d.init;
@@ -3263,10 +3314,8 @@ NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    if ((ix = lookup_decl(st, d.name.ptr, d.name.len)) == BAD_INDEX)
-	ix = csp_new_decl(st, d.name.ptr, d.name.len, DECL_CAN);
-    if (ix == BAD_INDEX) return -1;
-
+    if ((ix = csp_new_udecl(st, &d.name, DECL_CAN)) == BAD_INDEX)
+	return -1;
     vid.i = d.frameid;
     idx = lookup_const(st, V_INTEGER, vid);
     if (idx == BAD_INDEX)
@@ -3450,7 +3499,7 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
     }
 
     // Lookup module
-    if ((mx = lookup_decl(st, d.mod_name.ptr, d.mod_name.len)) == BAD_INDEX) {
+    if ((mx = lookup_decl(st, &d.mod_name)) == BAD_INDEX) {
 	if (csp_set_error(st, ERR_MODULE_NOT_DECLARED)) {
 	    csp_set_err_arg_tstr(st, 0, &d.mod_name);
 	}
@@ -3466,8 +3515,7 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
 	csp_set_error(st, ERR_TOO_MANY_OBJECTS);
 	return -1;
     }
-    if ((ix = csp_new_decl(st, d.obj_name.ptr, d.obj_name.len, DECL_OBJECT))
-	== BAD_INDEX)
+    if ((ix = csp_new_udecl(st, &d.obj_name, DECL_OBJECT)) == BAD_INDEX)
 	return -1;
 
     // Set up object slot
@@ -3482,7 +3530,7 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
     mod_n = st->decl[INDEX(mx)].md.n;
     for (k = 0; k < d.ninits; k++) {
 	init_entry_t* e = &d.inits[k];
-	index_t fx = lookup_decl_in(st, e->field.ptr, e->field.len,
+	index_t fx = lookup_decl_in(st, &e->field,
 				    INDEX(mx)+1, INDEX(mx)+1+mod_n);
 	if (fx == BAD_INDEX) {
 	    if (csp_set_error(st, ERR_FIELD_NOT_FOUND)) {
@@ -3514,20 +3562,6 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
 // cond = tok[i+1]...tok[num-1]
 // first parse condition
 // then parse expression
-
-// find index of t among tok or -1 if not found
-/*
-NOINLINE static int tok_index(tok_t t, token_t* tv, size_t n)
-{
-    int i;
-    for (i = 0; i < n; i++) {
-	if (t == tv[i].t)
-	    return i;
-    }
-    return -1;
-}
-*/
-
 //
 // <rule> ==
 //        <expr1> '<-' <expr2> [ '?' <cond> ]
@@ -3653,8 +3687,9 @@ index_t make_can_range(csp_rt_t* st, char* str, int len,
 {
     index_t ix;
     int i;
-    ix = csp_new_decl(st, str, len, DECL_CAN);
-    if (ix == BAD_INDEX) return BAD_INDEX;
+    const tstr_t name = { .ptr = str, .len = len};    
+    if ((ix = csp_new_udecl(st, &name, DECL_CAN)) == BAD_INDEX)
+	return BAD_INDEX;
     i = INDEX(ix);
     st->decl[i].res = MAKE_RES(1);
     st->decl[i].vt = V_UNSIGNED;
@@ -3662,8 +3697,6 @@ index_t make_can_range(csp_rt_t* st, char* str, int len,
     st->decl[i].ca.id = idx;
     st->decl[i].ca.bit = p0;
     st->decl[i].ca.len = MAKE_CAN_LEN((p1-p0)+1);
-    // if (st->ni >= MAX_INPUTS) return BAD_INDEX;
-    //   st->input[st->ni++] = ix;
     return ix;
 }
 
@@ -3721,6 +3754,7 @@ NOINLINE int csp_parse_legacy(csp_rt_t* st, token_t* tv, size_t n)
     ivalue_t mask;
     ivalue_t on_bits;
     ivalue_t off_bits;
+    const tstr_t tout = { .ptr = "OUT", .len = 3};    
     int i = 0;
 
     if (tv[0].t != INT) return -1;
@@ -3734,9 +3768,10 @@ NOINLINE int csp_parse_legacy(csp_rt_t* st, token_t* tv, size_t n)
     on_bits = tv[3].v.val.i;
     off_bits = tv[4].v.val.i;
 
-    if ((out = lookup_decl(st, "OUT", 3)) == BAD_INDEX) {
-	// fixme: pin number etc for standard OUT
-	if ((out = csp_new_decl(st,"OUT",3,DECL_DIGITAL)) == BAD_INDEX)
+    // generate OUT pin if not already exist
+    if ((out = lookup_decl(st, &tout)) == BAD_INDEX) {
+	// Fixme: Configure pin number etc for standard OUT
+	if ((out = csp_new_decl(st,&tout,DECL_DIGITAL)) == BAD_INDEX)
 	    return -1;
     }
 
@@ -3987,7 +4022,7 @@ int csp_rt_start(csp_rt_t* st)
 	    case DECL_TIMER: {
 		index_t tix = MAKE_INDEX(m, dj);
 		if (st->decl[dj].tm.init == 1) {
-		    int tj = st->offs[m] + st->decl[dj].tm.tx;
+		    int tj = st->offs[m] + INDEX(st->decl[dj].tm.tx);
 		    st->din[tj].u = st->dout[tj].u = csp_time_ms() + 1;
 		    csp_set_ivalue(st, tix, 0);
 		}
@@ -4021,6 +4056,13 @@ int csp_set_reactive(csp_rt_t* st, int onoff)
     return 0;
 #endif
     return -1;
+}
+
+int csp_set_latch(csp_rt_t* st, int onoff)
+{
+    int old_value = st->latch;
+    st->latch = onoff;
+    return old_value;
 }
 
 // ============================================================
@@ -4168,11 +4210,15 @@ void csp_cmd_help(void)
 
 static int cmd_latch(csp_rt_t* st, const char* args)
 {
+    int latch = 0;
     if (strcmp(args, "on") == 0)
-	st->latch = 1;
+	latch = 1;
     else if (strcmp(args, "off") == 0)
-	st->latch = 0;
-    return 0;
+	latch = 0;
+    else
+	return CSP_CMD_ERROR;
+    csp_set_latch(st, latch);
+    return CSP_CMD_OK;
 }
 
 int csp_cmd_dispatch(csp_rt_t* st, const char* cmd)
@@ -4361,14 +4407,14 @@ void csp_input_timer(csp_rt_t* st)
 	int tx_slot = st_index(st, tx);
 	uvalue_t tx_val = st->din[tx_slot].u;
 
-	st->decl[di].tm.fired = 0;
+	st->decl[di].tm.fired = 0; // BUG? shared???? in objects
 	// tx value: 0=stopped, >0=running (start_time+1)
 	if (tx_val != 0) {
 	    uvalue_t t0 = tx_val - 1;
 	    ivalue_t period = csp_ivalue(st, px);
 	    if ((now_ms - t0) >= (uvalue_t)period) {
 		st->din[tx_slot].u = st->dout[tx_slot].u = 0;  // stopped
-		st->decl[di].tm.fired = 1;  // edge signal
+		st->decl[di].tm.fired = 1;  // edge signal BUG?
 		csp_set_ivalue(st, ix, 0);
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 		if (st->reactive) {

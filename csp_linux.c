@@ -28,7 +28,7 @@ int debug = 0;
 int debug_scan = 0;
 int debug_parse = 0;
 int debug_trace = 0;
-int debug_trace_result = 0;
+int debug_result = 0;
 
 static void *stack_top(void)
 {
@@ -353,6 +353,8 @@ void csp_output(csp_rt_t* st)
 int parse_file(csp_rt_t* st, FILE* fin)
 {
     char buf[MAX_LINE_SIZE];
+    const tstr_t empty = { .ptr = NULL, .len = 0};
+    
     st->ps.line = 1;
     while(fgets(buf, MAX_LINE_SIZE, fin)) {
 	if (debug_scan) {
@@ -366,7 +368,7 @@ int parse_file(csp_rt_t* st, FILE* fin)
 	if (csp_parse(st, buf) < 0)
 	    return -1;
     }
-    csp_new_decl(st, NULL, 0, DECL_END);
+    csp_new_decl(st, &empty, DECL_END);
     return 0;
 }
 
@@ -458,18 +460,18 @@ void usage(const char* prog)
     fprintf(stderr, "  -t, --transaction[=B] Enable transaction mode\n");
     fprintf(stderr, "  -r, --reactive[=B]   Enable reactive mode\n");
     fprintf(stderr, "  -n, --no-execute     Parse only, don't execute\n");
-    fprintf(stderr, "  -C, --compile        Compile to object code\n");
     fprintf(stderr, "  -c, --cycles=N       Max cycles (0=unlimited)\n");
     fprintf(stderr, "  -T, --timeout=MS     Max runtime in ms (0=unlimited)\n");
+    fprintf(stderr, "  -C, --compile        Compile to object code\n");
+    fprintf(stderr, "  -O, --object-file=F  Compiled result file (C code format)\n");
     fprintf(stderr, "  -P, --debug-parse    Enable parser debugging\n");
     fprintf(stderr, "  -S, --debug-scan     Enable tokenizer debugging\n");
     fprintf(stderr, "  -Q, --debug-trace    Enable variable tracing\n");
-    fprintf(stderr, "  -s, --state-file=F   Write state to file (Erlang format)\n");
-    fprintf(stderr, "  -p, --parse-file=F   Write parsed structure to file\n");
-    fprintf(stderr, "  -R, --result-file=F  Write result to file (Erlang format)\n");
-    fprintf(stderr, "  -O, --object-file=F  Write compiled result to file (C code format)\n");
+    fprintf(stderr, "  -R, --debug-result   Add result to tracing (Erl)\n");
+    fprintf(stderr, "  -s, --state-file=F   State file (Erlang format)\n");
+    fprintf(stderr, "  -p, --parse-file=F   Parsed structure file\n");
     fprintf(stderr, "  -e, --eeprom=F       EEPROM file for save/load (default: eeprom.db)\n");
-    fprintf(stderr, "  -L[erlang|erl|text|txt]      Trace output language\n");
+    fprintf(stderr, "  -L[erlang|erl|text|txt]  Trace output language\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "If no file is given, reads from stdin.\n");
     fprintf(stderr, "In interactive mode (-i), type /help for commands.\n");
@@ -518,7 +520,7 @@ int main(int argc, char** argv)
 	case 'T': max_time_ms = atoi(optarg); break;
 	case 'd': debug = 1; break;
 	case 'P': debug_parse = 1; break;
-	case 'R': debug_trace_result = 1; break;
+	case 'R': debug_result = 1; break;
 	case 'Q': debug_trace = 1; break;
 	case 'S': debug_scan = 1; break;
 	case 's':
@@ -655,7 +657,8 @@ int main(int argc, char** argv)
 	nfds = 1;
 
 	printf("CandySpeak Interactive Mode\n");
-	printf("Type /help for commands, /quit to exit\n\n");		
+	printf("Type /help for commands, /quit to exit\n\n");
+	state.latch = 1; // hold output
     }
 
     start_time = csp_time_ms();
@@ -743,7 +746,7 @@ loop:
 #endif
 
 done:
-    if (debug_trace_result)
+    if (debug_result)
 	csp_dump_result(state_file, &state, x, lang);
     
     if (state_file != stdout) fclose(state_file);

@@ -22,6 +22,8 @@
 EXTERN_C_BEGIN
 #endif
 
+#define PACKED __attribute__((packed))
+
 // an index has the following structure
 // obj:4, index:12   // declaration object
 //
@@ -32,6 +34,8 @@ EXTERN_C_BEGIN
 typedef uint16_t index_t;  // sizeof type >= INDEX_BITS
 typedef uint8_t  reg_t;    // at most 256 registers
 
+#define PORT_BITS 4
+#define PIN_BITS  8
 
 #if defined(__AVR__)
 #include <avr/pgmspace.h>
@@ -151,6 +155,30 @@ typedef int32_t  ivalue_t;
 typedef uint32_t uvalue_t;
 typedef int32_t  sindex_t;
 
+typedef struct PACKED {
+    unsigned tmo:30;        // timeout value ms
+    unsigned fired:1;       // timeout occurred this cycle (edge-triggered)
+    unsigned val:1;          // one bit value 1 = start, 0 = stop
+} tvalue_t;
+
+typedef struct PACKED {
+    unsigned pin:PIN_BITS;
+    unsigned port:PORT_BITS;
+    unsigned pullup:1;
+    unsigned pulldown:1;
+    unsigned _undef:2;
+    unsigned val:16;    // we may shift in bits...?
+} dvalue_t;
+
+typedef struct PACKED {
+    unsigned pin:PIN_BITS;
+    unsigned port:PORT_BITS;
+    unsigned pwm:1;
+    unsigned endian:2; // |little|big interpretation    
+    unsigned _undef:1;
+    unsigned val:16;
+} avalue_t;
+
 #if defined(USE_FIXPOINT) && (USE_FIXPOINT == 1)
 #include "csp_fixpoint.h"
 typedef fixpoint_t fvalue_t;
@@ -224,6 +252,9 @@ typedef union {
     uvalue_t u;  // V_UNSIGNED
     fvalue_t f;  // V_FLOAT
     sindex_t s;  // V_STRING (index into string buf)
+    tvalue_t t;  // V_TIMER
+    dvalue_t d;  // V_DIGITAL
+    avalue_t a;  // V_ANALOG
 } value_t;
 
 // require csp_rt_init!
@@ -427,18 +458,17 @@ struct csp_instr;
 // 6 bits may be used to describe declaration type
 // but decl type from 8-15 are also used as object types
 typedef enum {
-    // first 8 are used for types as well
-    DECL_NOP=0,      // emtpy declaration
-    DECL_VARIABLE=1, // 'variable'
-    DECL_CONSTANT=2, // 'constant'
-    DECL_MODULE=3,  // 'module'
-    DECL_END=4,     // 'end'
-    DECL_OBJECT=5,  // module instance
+    DECL_NOP=0,             // emtpy declaration
+    DECL_VARIABLE=1,        // 'variable'
+    DECL_CONSTANT=2,        // 'constant'
+    DECL_MODULE=3,          // 'module'
+    DECL_END=4,             // 'end'
+    DECL_OBJECT=5,          // module instance
     // 8-15
-    DECL_TIMER=V_TIMER,    // 'timer'    
-    DECL_DIGITAL=V_DIGITAL,  // 'digital'
+    DECL_TIMER=V_TIMER,     // 'timer'    
+    DECL_DIGITAL=V_DIGITAL, // 'digital'
     DECL_ANALOG=V_ANALOG,   // 'analog'
-    DECL_CAN=V_CAN,      // 'can'
+    DECL_CAN=V_CAN,         // 'can'
 } decl_t;
 
 #define DECL_TYPE(s,i) ((s)->decl[(i)].type)
@@ -453,7 +483,6 @@ typedef enum {
 
 #define NOTIMEOUT 0xffffffff
 
-#define PACKED __attribute__((packed))
 
 typedef struct PACKED {
     const char* name;  // token name
@@ -494,18 +523,18 @@ typedef struct PACKED  {
 } csp_constant_t;
 
 typedef struct PACKED  {
-    unsigned pin:8;
-    unsigned port:8;
+    unsigned pin:PIN_BITS;
+    unsigned port:PORT_BITS;
     unsigned pullup:1;
     unsigned pulldown:1;
-    // init?
 } csp_digital_t;
 
 typedef struct PACKED {
-    unsigned pin:8;
-    unsigned port:8;
-    unsigned pwm:1;    // pwmoutput
-    // init?    
+    unsigned pin:PIN_BITS;
+    unsigned port:PORT_BITS;
+    unsigned pwm:1;    // pwm output
+    unsigned _undef:1;
+    unsigned endian:2; // |little|big
 } csp_analog_t;
 
 typedef struct PACKED {
@@ -613,7 +642,7 @@ typedef struct PACKED {
     unsigned vt:TYPE_BITS;         // value type (vtype_t)
     unsigned res:5;                // 1-32  (use MAKE_RES)
     unsigned is_mapped:1;          // compiletime: 1 iff reg is valid value
-    unsigned reg:REG_BITS;         // var/constant loaded in register
+    unsigned reg:REG_BITS;         // var/constant loaded in register FIXME!
     union PACKED {
 	csp_module_t   md;
 	csp_object_t   mq;
@@ -635,20 +664,23 @@ typedef enum {
     ERR_TOO_MANY_OBJECTS,
     ERR_MODULE_NOT_DECLARED,
     ERR_NOT_A_MODULE,
-    ERR_OBJECT_ALREADY_DEFINED,
     ERR_OBJECT_NOT_DEFINED,
     ERR_VARIABLE_NOT_DECLARED,
     ERR_FIELD_NOT_FOUND,
     ERR_FUNCTION_DOES_NOT_EXIST,
-    ERR_MODULE_ALREADY_DEFINED,
     ERR_INTERNAL_ERROR,
     ERR_FUNCTION_ARGUMENT_TYPE_MISMATCH,
+
     ERR_VARIABLE_ALREADY_DEFINED,
     ERR_CONSTANT_ALREADY_DEFINED,
-    ERR_TIMER_ALREADY_DEFINED,
-    ERR_DIGITAL_ALREADY_DEFINED,
-    ERR_ANALOG_ALREADY_DEFINED,
-    ERR_CAN_ALREADY_DEFINED,                    
+    // ERR_TIMER_ALREADY_DEFINED,    
+    // ERR_CAN_ALREADY_DEFINED,
+    // ERR_DIGITAL_ALREADY_DEFINED,
+    // ERR_ANALOG_ALREADY_DEFINED,    
+    ERR_MODULE_ALREADY_DEFINED,
+
+    ERR_OBJECT_ALREADY_DEFINED,    
+    ERR_ALREADY_DEFINED,    
 } csp_err_t;
 
 // parser state, save state before parse
@@ -858,6 +890,7 @@ extern const csp_func_t* csp_match_func(csp_rt_t*,
 					int* is_user, int* func_idx);
 extern int     csp_set_transaction(csp_rt_t*, int onoff);
 extern int     csp_set_reactive(csp_rt_t*, int onoff);
+extern int     csp_set_latch(csp_rt_t*, int onoff);
 extern int     csp_scan_line(char* str, token_t* tv, size_t* num_toks);
 extern int     csp_parse(csp_rt_t*, char* str);
 extern void    csp_csr(csp_rt_t* st);
@@ -870,13 +903,16 @@ extern void    csp_commit(csp_rt_t* st);
 extern void csp_set_value(csp_rt_t* st, index_t n, value_t v);
 extern void csp_set_ivalue(csp_rt_t* st, index_t n, ivalue_t v);
 extern void csp_set_fvalue(csp_rt_t* st, index_t n, fvalue_t v);
+extern void csp_set_dvalue(csp_rt_t* st, index_t n, uvalue_t u);
+extern void csp_set_avalue(csp_rt_t* st, index_t n, uvalue_t u);
+extern void csp_set_tvalue(csp_rt_t* st, index_t n, uvalue_t u);
 
 extern int csp_parse_expr(csp_rt_t* st, token_t* tv, size_t* num_toks,
 			  rentry_t* result);
 extern int csp_parse_const_expr(csp_rt_t* st, token_t* tv, size_t* num_toks,
 				rentry_t* result);
 //
-extern index_t csp_new_decl(csp_rt_t* st, char* name, int name_len, decl_t op);
+extern index_t csp_new_decl(csp_rt_t* st, const tstr_t* name, decl_t op);
 extern index_t csp_lookup_decl(csp_rt_t* st, char* module, char* name);
 
 // backend port (linux/arduino/LPCopen/FreeRTOS)

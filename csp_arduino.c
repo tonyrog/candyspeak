@@ -45,10 +45,12 @@ int csp_print_str(const char* s)
     return Serial.print(s);
 }
 
+#if defined(__AVR__)
 int csp_print_str_P(const rochar* s)
 {
     return Serial.print((__FlashStringHelper*)s);
 }
+#endif
 
 int csp_print_int(ivalue_t v)
 {
@@ -195,7 +197,7 @@ void csp_input(csp_rt_t* st)
 	    if (st->decl[di].dir & DIR_IN) {
 		// fixme: must use setvalue to get trigger etc
 		int value = analogRead(st->decl[di].di.pin);
-		csp_set_ivalue(st, ix, value);		
+		csp_set_ivalue(st, ix, value);
 	    }
 	    break;
 	default: break;
