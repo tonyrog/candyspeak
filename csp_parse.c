@@ -1,12 +1,12 @@
 #include "csp_parse.h"
 #include <string.h>
-#ifdef DEBUG
-
-#endif
 
 #ifdef DEBUG
 #include <stdio.h>
-#define DBG(...) printf(__VA_ARGS__)
+extern int debug;
+#define DBG(...) do { \
+	if (debug) printf(__VA_ARGS__);		\
+    } while(0)
 #else
 #define DBG(...)
 #endif

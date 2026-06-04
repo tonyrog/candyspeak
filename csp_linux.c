@@ -337,7 +337,7 @@ void csp_output(csp_rt_t* st)
 {
     int i;
 
-    if (!st->latch) {  // allow output    
+    if (!st->latch) {  // allow output
 	for (i = 0; i < st->no; ++i) {
 	    index_t ix = st->output[i];
 	    switch(st->decl[INDEX(ix)].type) {

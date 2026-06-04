@@ -109,9 +109,12 @@ void csp_fprint_escaped_string(FILE* f, char* ptr, int len)
 void csp_fprint_value(FILE* f, csp_rt_t* st, vtype_t vt, value_t val)
 {
     switch(vt) {
-    case V_INTEGER: fprintf(f, "%d", val.i); break;
-    case V_UNSIGNED: fprintf(f, "16#%x", val.u); break;
-    case V_FLOAT: fprint_fvalue(f, val.f); break;
+    case V_TIMER:
+    case V_DIGITAL:
+    case V_ANALOG:
+    case V_INTEGER:  fprintf(f, "%d", val.i); break;
+    case V_UNSIGNED: fprintf(f, "16#%x", val.u); break; // fixme lang
+    case V_FLOAT:    fprint_fvalue(f, val.f); break;
     case V_STRING:
 	csp_fprint_escaped_string(f, &st->str[val.s], st->str[val.s-1]);
 	break;
@@ -183,6 +186,12 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	csp_fprint_tag(f, st, st->instr[i].m.mem);
 	fprintf(f, "]}%s\n", eot);
 	break;
+    case OP_STP:
+	fprintf(f, "{instr,%d,'STP',[r%d,",
+		i, st->instr[i].m.x);
+	csp_fprint_tag(f, st, st->instr[i].m.mem);
+	fprintf(f, ",%d]}%s\n", st->instr[i].m.part,eot);
+	break;	
     case OP_STIMP:
 	fprintf(f, "{instr,%d,'STIMP',[r%d,",
 		i, st->instr[i].m.x);
@@ -291,33 +300,32 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     return i+1;
 }
 
-void csp_dump_var(FILE* f, csp_rt_t* st, int q, int di, int ri,
-		  int fv,
-		  csp_lang_t lang)
+void csp_dump_var(FILE* f,csp_rt_t* st,
+		  char* dtype, char* name, char* suffix,
+		  int m, int di,
+		  int fv, csp_lang_t lang)
 {
-    // di = decl index (for type/name), ri = relative index (for data)
-    index_t ix = MAKE_INDEX(q, di);
-    int doffs = st->offs[q];
+    index_t ix = MAKE_INDEX(m, di);
 
     switch(lang) {
     case ERLANG:
 	if (!fv) fprintf(f, ",");
-	fprintf(f, "{var,\"%s\",", decl_name(st, ix));
-	csp_fprint_value(f, st, st->decl[di].vt, st->din[doffs+ri]);
+	fprintf(f, "{%s,\"%s%s\",", dtype, name, suffix);
+	csp_fprint_value(f, st, st->decl[di].vt, csp_value(st, ix));
 	fprintf(f, "}");
 	break;
     case TEXT:
-	fprintf(f, " %-s=", decl_name(st, ix));
-	csp_fprint_value(f, st, st->decl[di].vt, st->din[doffs+ri]);
-	if (q == 0) fprintf(f, "\n");
+	fprintf(f, " %-s%s=", name, suffix);
+	csp_fprint_value(f, st, st->decl[di].vt,  csp_value(st, ix));
+	if (m == 0) fprintf(f, "\n");
 	break;
     }
 }
 
-void csp_dump_object(FILE* f,csp_rt_t* st,int q,int fo,csp_lang_t lang)
+void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
 {
     int fv, j;
-    index_t obj = st->object[q];
+    index_t obj = st->object[m];
     index_t mx  = st->decl[INDEX(obj)].mq.mx;
     int     n   = st->decl[INDEX(mx)].md.n;    
     
@@ -332,11 +340,25 @@ void csp_dump_object(FILE* f,csp_rt_t* st,int q,int fo,csp_lang_t lang)
 	break;
     }
     fv = 1;
-    for (j = 1; j <= n; j++) {
+    j = 1;
+    while(j <= n) {
 	int k = INDEX(mx)+j;
-	if (st->decl[k].type == DECL_VARIABLE) {
-	    csp_dump_var(f, st, q, k, j, fv, lang);
+	index_t ix = MAKE_INDEX(m, k);	
+	switch(st->decl[k].type) {
+	case DECL_VARIABLE:
+	    csp_dump_var(f,st,"var",decl_name(st,ix),"",m,k,fv,lang);
 	    fv = 0;
+	    j++;
+	    break;
+	case DECL_TIMER:
+	    csp_dump_var(f,st,"timer",decl_name(st, ix),"",m,k,fv,lang);
+	    csp_dump_var(f,st,"var",decl_name(st,ix),"[t0]",m,k+1,fv,lang);
+	    fv = 0;
+	    j += 2;
+	    break;	    
+	default:
+	    j++;
+	    break;
 	}
     }
     switch(lang) {
@@ -366,16 +388,26 @@ void csp_dump_state(FILE* f, csp_rt_t* st, csp_lang_t lang)
     // global variables
     i = 0;
     while(i < st->ps.nd) {
-	if (st->decl[i].type == DECL_MODULE) {
+	index_t ix = MAKE_INDEX(0, i);
+	switch(st->decl[i].type) {
+	case DECL_MODULE:
 	    // skip module decl (covered by objects)
-	    i += (st->decl[i].md.n+1);
-	}
-	else {
-	    if (st->decl[i].type == DECL_VARIABLE) {
-		csp_dump_var(f, st, 0, i, i, fo, lang);
-		fo = 0;
-	    }
+	    i += st->decl[i].md.n + 1;
+	    break;
+	case DECL_VARIABLE:
+	    csp_dump_var(f,st,"var",decl_name(st,ix),"",0,i,fo,lang);
+	    fo = 0;
 	    i++;
+	    break;
+	case DECL_TIMER:
+	    csp_dump_var(f,st,"timer",decl_name(st,ix),"",0,i,fo,lang);
+	    csp_dump_var(f,st,"var",decl_name(st,ix),"[t0]",0,i+1,fo,lang);
+	    fo = 0;
+	    i += 2;
+	    break;		
+	default:
+	    i++;
+	    break;
 	}
     }
     
@@ -464,7 +496,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		csp_fmt_vtype(vt));
 	csp_fprint_value(f, st, vt, st->decl[i].va.init);
 	fprintf(f, "},{value,");
-	csp_fprint_value(f, st, vt, st->din[i]);
+	csp_fprint_value(f, st, vt, csp_value(st, ix));
 	fprintf(f, "}]}%s\n", eot);
 	break;
     case DECL_CONSTANT:
@@ -476,7 +508,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		csp_fmt_vtype(vt));
 	csp_fprint_value(f, st, vt, st->decl[i].cn.init);
 	fprintf(f, "},{value,");
-	csp_fprint_value(f, st, vt, st->din[i]);
+	csp_fprint_value(f, st, vt, csp_value(st, ix));
 	fprintf(f, "}]}%s\n", eot);	
 	break;
     case DECL_DIGITAL:
@@ -503,14 +535,12 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	break;
     case DECL_TIMER:
 	vt = st->decl[i].vt;
-	fprintf(f, "{decl,%d,timer,\"%s\",[{value,%d},{signed,%d},",
+	fprintf(f, "{decl,%d,timer,\"%s\",[{period,%d},{value,%d}]}%s\n",
 		i,
 		decl_name(st, ix),
-		csp_ivalue(st, st->decl[i].tm.px),
-		st->decl[i].tm.init);
-	fprintf(f, "{t0,");
-	csp_fprint_tag(f, st, st->decl[i].tm.tx);
-	fprintf(f, "}]}%s\n", eot);	
+		st->decl[i].tm.period,
+		st->decl[i].tm.init,
+		eot);
 	break;
     case DECL_CAN:
 	vt = st->decl[i].vt;
@@ -751,9 +781,8 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 		    dp->ca.id, dp->ca.endian, dp->ca.bit, dp->ca.len);
 	    break;
 	case DECL_TIMER:
-	    fprintf(f, ".tm={0,.init=%u,.px=%u,.tx=%u}",
-		    // dp->tm.running (is runtime) set = 0
-		    dp->tm.init, dp->tm.px, dp->tm.tx);
+	    fprintf(f, ".tm={0,.period=%u,.init=%u}",
+		    dp->tm.period, dp->tm.init);
 	    break;
 	case DECL_NOP:    // not used
 	}
@@ -789,6 +818,10 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 	case OP_LD:
 	    fprintf(f, ".m={.x=%u,.mem=%u}", ip->m.x, ip->m.mem);
 	    break;
+	case OP_STP:
+	    fprintf(f, ".m={.x=%u,.mem=%u,.part=%u}",
+		    ip->m.x, ip->m.mem, ip->m.part);
+	    break;	    
 	case OP_CALL:
 	    fprintf(f, ".f={.x=%u,.idx=%u,.usr=%u,avt=0x%04x}",
 		    ip->f.x, ip->f.idx, ip->f.usr, ip->f.avt);
@@ -876,7 +909,7 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 	vt = st->decl[i].vt;
 	fprintf(f, "#timer %s %d = %d\n",
 		decl_name(st, ix),
-		csp_ivalue(st, st->decl[i].tm.px),
+		st->decl[i].tm.period,
 		st->decl[i].tm.init);
 	break;
     case DECL_CAN:
@@ -1172,14 +1205,20 @@ static void exprbuf_fcall(csp_rt_t* st,
 	int a = (ip->f.avt >> i*4) & 0xf;
 	if (a == 0) break;
 	if (i > 0) exprbuf_char(bp, ',');
-	if ((argtypes >> i*4) == V_INDEX) {
+	switch((argtypes >> i*4)) {
+	case V_INDEX:
+	case V_TIMER:
+	case V_ANALOG:
+	case V_DIGITAL: {
 	    // convert argument assumed index integer
 	    uint16_t imm = exprbuf_reftoi(bp, bp->arg[i]);
 	    uint8_t var = exprbuf_var(st, bp, imm);
-	    exprbuf_strref(bp, var);	    
+	    exprbuf_strref(bp, var);
+	    break;
 	}
-	else {
-	    exprbuf_strref(bp, bp->arg[i]);
+	default:
+	    exprbuf_strref(bp, bp->arg[i]);	    
+	    break;
 	}
     }
     exprbuf_char(bp, ')');

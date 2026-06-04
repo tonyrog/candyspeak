@@ -140,7 +140,7 @@ Where:
 - target=expr: static initialization (evaluated once)
 - target <- expr: reactive coupling (generates rule)
 
-# Timer in modules
+// # Timer in modules
 
 Support timer declarations inside modules:
 
@@ -161,7 +161,7 @@ Implementation:
 - At instantiation, copy timer slot (px, tx) per object
 - Runtime handles timer per object-slot
 
-# Digital/Analog in modules
+// # Digital/Analog in modules
 
 Support pin binding at instantiation time:
 
@@ -172,6 +172,11 @@ Support pin binding at instantiation time:
 
 #Button b1 In=pin(13)   // bind to pin 13
 #Button b2 In=pin(14)   // bind to pin 14
+
+// or
+#Button b1 In.pin=13   // bind to pin 13
+#Button b2 In.pin=14   // bind to pin 14
+
 ```
 
 Implementation:

@@ -1,6 +1,11 @@
 #ifndef __CSP_CONFIG_H__
 #define __CSP_CONFIG_H__
 
+#ifndef SUPPORT_STATES
+#define SUPPORT_STATES    1
+#define MAX_STATES 16
+#endif
+
 #define TRANSACTION_DEFAULT 1
 #ifndef SUPPORT_TRANSACTION
 #define SUPPORT_TRANSACTION 1  // use assert/undo
@@ -19,6 +24,5 @@
 #ifndef USE_FIXPOINT
 #define USE_FIXPOINT        1  // 0=float, 1=Q16.16 fixpoint
 #endif
-
 
 #endif

@@ -34,8 +34,8 @@ EXTERN_C_BEGIN
 typedef uint16_t index_t;  // sizeof type >= INDEX_BITS
 typedef uint8_t  reg_t;    // at most 256 registers
 
-#define PORT_BITS 4
-#define PIN_BITS  8
+#define PORT_BITS 4   // port 0..15    mega is 11 ports, with 8 pins each
+#define PIN_BITS  7   // pin  0..127
 
 #if defined(__AVR__)
 #include <avr/pgmspace.h>
@@ -69,6 +69,7 @@ typedef const char rochar;  // PROGMEM string character type
 
 #define INDEX_BITS   (OBJ_BITS+DECL_BITS)
 #define REG_BITS     4
+#define PART_BITS    4
 #define GLOBAL       0                       // global level
 #define CURRENT      ((1 << OBJ_BITS)-1)     // current obj
 #define MAX_INDICES  (1 << INDEX_BITS)
@@ -89,6 +90,9 @@ typedef const char rochar;  // PROGMEM string character type
 #define MAX_OBJECTS  (1 << OBJ_BITS)
 #define MAX_QUEUE    (MAX_INSTRS)
 #define MAX_INDEX    (MAX_INSTRS+1)
+#define DIR_BITS 2
+#define TYPE_BITS 4  // supports up to 15 types & objects
+#define ENDIAN_BITS 2
 
 // Queue entry: pack obj and ip together
 #define MAKE_QENTRY(obj, ip)  (((obj) << INSTR_BITS) | (ip))
@@ -118,8 +122,6 @@ typedef const char rochar;  // PROGMEM string character type
 #define CSP_TRUE  -1  // all bits set, like openCL/Forth
 #define CSP_FALSE 0
 
-#define TYPE_BITS 4  // supports up to 15 types & objects
-
 typedef enum {
     V_VOID     = 0,  // value / don't care
     V_INTEGER  = 1,  // signed integer
@@ -144,7 +146,6 @@ typedef enum {
 #define MAKE_TYPE3(t0,t1,t2)    ((t0)|((t1)<<4)|((t2)<<8))
 #define MAKE_TYPE4(t0,t1,t2,t3) ((t0)|((t1)<<4)|((t2)<<8)|((t3)<<12))
 
-#define ENDIAN_BITS 2
 typedef enum {
     E_UNDEFINED = 0x00,
     E_LITTLE    = 0x01,
@@ -156,28 +157,44 @@ typedef uint32_t uvalue_t;
 typedef int32_t  sindex_t;
 
 typedef struct PACKED {
-    unsigned tmo:30;        // timeout value ms
-    unsigned fired:1;       // timeout occurred this cycle (edge-triggered)
+    unsigned long period:28; // timeout value ms (74h max)
+    unsigned _res:1;         // reserved
+    unsigned fired:1;        // timeout occurred this cycle (edge-triggered)
+    unsigned running:1;      // timer is runnig (tx is valid time)
     unsigned val:1;          // one bit value 1 = start, 0 = stop
 } tvalue_t;
 
 typedef struct PACKED {
     unsigned pin:PIN_BITS;
     unsigned port:PORT_BITS;
+    unsigned dir:DIR_BITS;
     unsigned pullup:1;
     unsigned pulldown:1;
-    unsigned _undef:2;
     unsigned val:16;    // we may shift in bits...?
 } dvalue_t;
 
 typedef struct PACKED {
     unsigned pin:PIN_BITS;
     unsigned port:PORT_BITS;
+    unsigned dir:DIR_BITS;    
     unsigned pwm:1;
     unsigned endian:2; // |little|big interpretation    
-    unsigned _undef:1;
     unsigned val:16;
 } avalue_t;
+
+typedef enum  {
+    PART_VAL=0,
+    PART_PIN,
+    PART_PORT,
+    PART_DIR,
+    PART_PWM,
+    PART_ENDIAN,
+    PART_PULLUP,
+    PART_PULLDOWN,
+    PART_PERIOD,
+    PART_FIRED,
+} csp_part_t;
+
 
 #if defined(USE_FIXPOINT) && (USE_FIXPOINT == 1)
 #include "csp_fixpoint.h"
@@ -257,10 +274,6 @@ typedef union {
     avalue_t a;  // V_ANALOG
 } value_t;
 
-// require csp_rt_init!
-//#define ZERO MAKE_INDEX(0,0)
-//#define ONE  MAKE_INDEX(0,1)
-
 typedef uint32_t set_group_t;  // bit set element
 #define BITSET_GROUP_BITS (8*sizeof(set_group_t))
 #define BITSET_GROUPS(size) (((size)+BITSET_GROUP_BITS-1)/BITSET_GROUP_BITS)
@@ -276,6 +289,9 @@ typedef uint32_t set_group_t;  // bit set element
 typedef enum {
     NONE = 0,  // empty
     // leafs
+#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
+    STATES,   // 'states'
+#endif
     MODULE,   // 'module'
     END,      // 'end'
     CONSTANT, // 'constant'
@@ -326,7 +342,8 @@ typedef enum {
     CALL,
     LD,
     ST,
-    MOV,    
+    MOV,
+    STP,
     STIMP,
     CHG,
     LI,
@@ -440,6 +457,7 @@ typedef enum {
     OP_NEW,     // #<module> <instance-name>
     OP_LD,      // load register from memory
     OP_ST,      // store register to memory
+    OP_STP,     // store register to memory part
     OP_STIMP,   // store for <- (reactive assign), same as ST but marks rimp
     OP_CHG,     // r |= dset[ix], check if variable changed
     OP_LI,      // load signed 16-bit constant
@@ -483,7 +501,6 @@ typedef enum {
 
 #define NOTIMEOUT 0xffffffff
 
-
 typedef struct PACKED {
     const char* name;  // token name
     uint8_t namelen;
@@ -502,7 +519,6 @@ typedef struct PACKED {
     uint8_t rtype;     // return type
     uint8_t type[4];
 } op_info_t;
-
 
 typedef struct PACKED {
     index_t n;          // number of nodes in module definition
@@ -533,7 +549,6 @@ typedef struct PACKED {
     unsigned pin:PIN_BITS;
     unsigned port:PORT_BITS;
     unsigned pwm:1;    // pwm output
-    unsigned _undef:1;
     unsigned endian:2; // |little|big
 } csp_analog_t;
 
@@ -545,10 +560,11 @@ typedef struct PACKED {
 } csp_can_t;
 
 typedef struct PACKED {
-    unsigned init:1;        // start immediately if given
-    unsigned fired:1;       // timeout occurred this cycle (edge-triggered)
-    unsigned px:INDEX_BITS; // timeout value (CURRENT for modules)
-    unsigned tx:INDEX_BITS; // start time variable (CURRENT for modules)
+    unsigned long period:28; // timeout value ms (74h max)
+    unsigned _res:1;         // reserved    
+    unsigned fired:1;        // timeout occurred this cycle (edge-triggered)
+    unsigned running:1;      // timer is runnig (tx is valid time)
+    unsigned init:1;         // one bit value 1 = start, 0 = stop
 } csp_timer_t;
 
 // new instruction format
@@ -563,7 +579,8 @@ typedef struct PACKED {
 // op = ST | LD
 // load or store register from memory
 typedef struct PACKED {
-    opcode_t op:6;    
+    opcode_t op:6;
+    unsigned part:PART_BITS;
     unsigned x:REG_BITS;
     unsigned mem:INDEX_BITS;  // declaration: variable/constant
 } csp_instr_mem_t;
@@ -627,7 +644,6 @@ typedef union {
     csp_instr_alu_t a;
 } csp_instr_t;
 
-#define DIR_BITS 2
 typedef enum {
     DIR_NONE  = 0x00,
     DIR_IN    = 0x01,
@@ -663,6 +679,11 @@ typedef enum {
     ERR_TOO_MANY_INSTRUCTIONS,
     ERR_TOO_MANY_OBJECTS,
     ERR_MODULE_NOT_DECLARED,
+#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
+    ERR_TOO_MANY_STATES,    
+    ERR_STATE_NOT_DECLARED,
+#endif
+    ERR_END_MISMATCH,
     ERR_NOT_A_MODULE,
     ERR_OBJECT_NOT_DEFINED,
     ERR_VARIABLE_NOT_DECLARED,
@@ -670,16 +691,6 @@ typedef enum {
     ERR_FUNCTION_DOES_NOT_EXIST,
     ERR_INTERNAL_ERROR,
     ERR_FUNCTION_ARGUMENT_TYPE_MISMATCH,
-
-    ERR_VARIABLE_ALREADY_DEFINED,
-    ERR_CONSTANT_ALREADY_DEFINED,
-    // ERR_TIMER_ALREADY_DEFINED,    
-    // ERR_CAN_ALREADY_DEFINED,
-    // ERR_DIGITAL_ALREADY_DEFINED,
-    // ERR_ANALOG_ALREADY_DEFINED,    
-    ERR_MODULE_ALREADY_DEFINED,
-
-    ERR_OBJECT_ALREADY_DEFINED,    
     ERR_ALREADY_DEFINED,    
 } csp_err_t;
 
@@ -689,6 +700,9 @@ typedef struct PACKED {
     index_t nn;                  // number of instructions
     index_t nd;                  // number of decls
     index_t nq;                  // number of objects
+#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
+    index_t ns;                  // number of states
+#endif
     uint32_t strp;               // string table position (grows up)
     uint32_t err_strp;           // error string position (grows down from MAX_STR_BUF)
     csp_err_t err;               // error code
@@ -724,21 +738,32 @@ typedef struct
     int pin_top;
 } reg_allocator_t;
 
+typedef enum { DIN = 0, DOUT = 1 } dio_t;
+
+#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
+#define NUM_BITS (16-STRING_BITS)
+typedef struct
+{
+    unsigned name:STRING_BITS;     // string index
+    unsigned snum:NUM_BITS;        // state number
+} state_t;
+#endif
+
 
 typedef struct _csp_rt_t
 {
     csp_instr_t instr[MAX_INSTRS]; // instructions used
     csp_decl_t decl[MAX_DECLS];    // declarations used
 
-    value_t* din;                  // din point to dv0 or dv1
-    value_t* dout;                 // dout point to dv0 or dv1
+    value_t* dio[2];              // dio[DIN], dio[DOUT]
     value_t reg[MAX_REGS];         // register area
     value_t arg[MAX_ARGS];         // loaded before call
     
-    value_t dv0[MAX_INDEX];       // declaration (leaf) value (y,z)    
+    value_t dv0[MAX_INDEX];       // declaration (leaf) value (y,z)
 #if defined(SUPPORT_TRANSACTION) && (SUPPORT_TRANSACTION==1)
     value_t dv1[MAX_INDEX];       // declaration (leaf) value (y,z)    
-#endif
+#endif    
+
     // allow device output latch=0 or disallow latch=1
     uint8_t latch;
     // check if any node has been set: anyx|anyd == CSP_TRUE
@@ -756,7 +781,13 @@ typedef struct _csp_rt_t
 
     csp_pstate_t ps;             // parse state
     reg_allocator_t* ap;
-    
+    int ev;                      // eval variables when ev=1
+#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
+    int sdef;                    // current state (compile time)
+    index_t save_sx;             // save sx during module parse
+    index_t sx;                  // runtime state, state variable    
+    state_t states[MAX_STATES];  // declared states
+#endif
     index_t mdef;                // module being defined
     int     ent;                 // entry op of module in st->instr
     unsigned cur:OBJ_BITS;       // current module index
@@ -852,10 +883,12 @@ static inline index_t csp_deq(csp_rt_t* st)
 }
 #endif
 
-static inline value_t csp_value(csp_rt_t* st, index_t x)
-{
-    return st->din[st_index(st, x)];
-}
+extern value_t* csp_dio_slot(csp_rt_t* st, index_t ix, dio_t dir);
+extern int csp_dio_slots(csp_rt_t* st,index_t ix,value_t** iptr,value_t** optr);
+extern void csp_dio_set(csp_rt_t* st, index_t ix, value_t v, dio_t dir);
+extern void csp_dio_get(csp_rt_t* st, index_t ix, value_t* vp, dio_t dir);
+
+extern value_t  csp_value(csp_rt_t* st, index_t x);
 
 static inline ivalue_t csp_ivalue(csp_rt_t* st, index_t ix)
 {
@@ -874,6 +907,8 @@ static inline fvalue_t csp_fvalue(csp_rt_t* st, index_t ix)
     value_t v = csp_value(st, ix);
     return v.f;        
 }
+
+
 
 static inline char* decl_name(csp_rt_t* st, index_t ix)
 {
