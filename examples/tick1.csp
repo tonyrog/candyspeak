@@ -3,10 +3,10 @@
 #variable run:16 = 1
 #timer t1 1000 = 1  // start at program start
 
-print("START\n") ? i <= 3
+println("START") ? i <= 3
 run = 1 ? timeout(t1) && (i < 10)   // run condition
 run = 0 ? (i >= 10)                 // stop
 i = i + 1 ? run                     // increament i when t1 times out
 t1 = 1 ? run                        // restart t1 when t1 times out
-print("TICK\n") ? run 
-print("STOP\n") ? !run
+println("TICK") ? run 
+println("STOP") ? !run

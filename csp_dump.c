@@ -458,7 +458,6 @@ void csp_dump_result(FILE* f, csp_rt_t* st, index_t x, csp_lang_t lang)
     }
 }
 
-
 index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 {
     index_t ix = MAKE_INDEX(0,i);

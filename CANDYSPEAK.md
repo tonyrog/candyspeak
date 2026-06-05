@@ -183,7 +183,7 @@ Is coded as
 Then the first Off will take precedence but the desired effect
 is probably to have all Off clauses after ALL On clauses.
 	
-# Extension to Analog
+# Analog Extension
 
     <a-statement> := 
 		  <statement>
@@ -292,7 +292,7 @@ In the above example with analog assignment, if forexample Cond0 is false
 and Cond1 and Cond2 are true the output A=1 will be sent and Cond2 will
 not be checked.
 
-# Extension to Timer
+# Timer extension
 
     <t-statement> := 
 		| <statement>
@@ -350,7 +350,7 @@ timeout condition.
 	#variable A:10 = 0
 	A = A + 1 ? (A < 10)
 
-# Extension to modules
+# Module extension
 
   <m-statement> :=
   		'#' module <mod-name>
@@ -396,3 +396,26 @@ Cout = (A & B) | (Cin & (A ^ B)) ? 1
 LED0 = a0.S
 LED1 = a1.S
 LED2 = a2.S
+
+# State extension
+
+State allow grouping of rules that fire together, while rules not
+in current state remains silent.
+
+States are introduced by enumeration
+
+    #states on off
+
+And are used using
+
+    #in off
+      LED=1, State=on, OffTimer=1 ? timeout(OnTimer)
+    #end
+
+    #in on
+      LED=0, State=on, OnTimer=1 ? timeout(OffTimer)
+    #end
+
+The "variable" State is use both globally and in moduled locally and
+are not mixed in any sensible way.
+States in a module are local to the object and do not affect the global state.

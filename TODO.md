@@ -184,3 +184,11 @@ Implementation:
 - Init expression `field=pin(N)` binds to physical pin
 - Conflict detection if same pin used twice
 - Alternative: keep digital/analog global, use variables as bridge
+
+# Optimise
+
+On way to optimise and partial evaluate expression is to
+
+1. straight parse/generate expression
+2. disassemble the expression 
+3. parse/generate again (now all constant expression should be gone)

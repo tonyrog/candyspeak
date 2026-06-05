@@ -6,7 +6,7 @@ OBJS = csp_linux.o csp_rt.o csp_dump.o csp_eeprom.o csp_parse.o
 LIBS =
 
 # -O3 -std=c99
-CFLAGS+= -Wall -g -Wswitch  -Wenum-compare -Wenum-conversion  -Wswitch
+CFLAGS += -Wall -g -Wswitch  -Wenum-compare -Wenum-conversion  -Wswitch
 LDFLAGS = -g
 
 all:	csp

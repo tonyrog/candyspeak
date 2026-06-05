@@ -150,7 +150,7 @@ static int pmatch_const(pmatch_st_t* pst, token_t* tv, int ti, size_t n,
     int k = ti;
     size_t num;
     rentry_t result;
-    
+
     while ((k < (int)n) &&
 	   (tv[k].t != NEWLINE) &&
 	   (tv[k].t != COLON) &&
@@ -160,8 +160,10 @@ static int pmatch_const(pmatch_st_t* pst, token_t* tv, int ti, size_t n,
 	   (tv[k].t != RB) &&
 	   (tv[k].t != EQ))
 	k++;
-    num = (k > ti) ? k - ti : 1;
+    num = (k > ti) ? k - ti : 1;	
 
+//    num = n;
+//    printf("input NUM=%ld\n", num);
     if (!csp_parse_const_expr(pst->st, &tv[ti], &num, &result))
 	return -1;
     if (!result.I)
@@ -186,6 +188,7 @@ static int pmatch_const(pmatch_st_t* pst, token_t* tv, int ti, size_t n,
 	return -1;
     }
     store_val(pst->data, pst->eo+off, result.val);
+    // printf("output NUM=%ld\n", num);    
     return ti + num;
 }
 
@@ -222,18 +225,14 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
 	}
         case P_INTEGER: {
 	    uint8_t val_off = pat[pi++];
-	    
 	    DBG("P_INTEGER: val_off=%d\n", val_off);
-	    
 	    if ((ti = pmatch_const(pst,tv,ti,n,V_INTEGER,val_off)) < 0)
 		return -1;
 	    break;
 	}
         case P_FLOAT: {
 	    uint8_t val_off = pat[pi++];
-
 	    DBG("P_FLOAT: val_off=%d\n", val_off);	    
-	    
 	    if ((ti = pmatch_const(pst,tv,ti,n,V_FLOAT,val_off)) < 0)
 		return -1;
 	    break;
@@ -242,7 +241,8 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
             // Capture WORD as string
             uint8_t val_off = pat[pi++];
 	    int off = pst->eo + val_off;  // eo already adjusted by P_REP
-	    DBG("P_STR: val_off=%d, off=%d\n", val_off, off);
+	    DBG("P_STR: \"%.*s\" val_off=%d, off=%d\n",
+		tv[ti].v.str.len, tv[ti].v.str.ptr, val_off, off);
             if ((ti >= (int)n) || (tv[ti].t != WORD))
                 return -1;
             store_str(pst->data, off, *(tstr_t*)&tv[ti].v.str);

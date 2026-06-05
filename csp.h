@@ -33,6 +33,7 @@ EXTERN_C_BEGIN
 
 typedef uint16_t index_t;  // sizeof type >= INDEX_BITS
 typedef uint8_t  reg_t;    // at most 256 registers
+typedef unsigned bool_t;
 
 #define PORT_BITS 4   // port 0..15    mega is 11 ports, with 8 pins each
 #define PIN_BITS  7   // pin  0..127

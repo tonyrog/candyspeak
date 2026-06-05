@@ -1757,93 +1757,107 @@ NOINLINE index_t new_string_const(csp_rt_t* st, char* str, int len)
     return ix;
 }
 
-int csp_new_instr(csp_rt_t* st, opcode_t op)
+NOINLINE static int alloc_instr(csp_rt_t* st, opcode_t op)
 {
     int i;
+    if (st->ap == NULL)
+	return 0;  // no generate use slot 0 to write temporary args in
     if ((i = st->ps.nn) >= MAX_INSTRS) {
 	csp_set_error(st, ERR_TOO_MANY_INSTRUCTIONS);
 	return -1;
     }
+
     st->ps.nn++;
     st->instr[i].op = op;
     return i;
 }
 
-int csp_new_nop(csp_rt_t* st)
-{
-    return csp_new_instr(st, OP_NOP);
-}
-
-int csp_new_next(csp_rt_t* st, int r)
+NOINLINE bool_t asm_RULE(csp_rt_t* st, int* pos, reg_t cnd, int nxt)
 {
     int i;
-    if ((i = csp_new_instr(st, OP_NEXT)) >= 0) {
-	st->instr[i].x.x = r;
+    if ((i = alloc_instr(st, OP_RULE)) >= 0) {
+	st->instr[i].r.cnd = cnd;
+	st->instr[i].r.nxt = nxt;
+	*pos = i;
+	return 1;
     }
-    return i;
+    return 0;
 }
 
-NOINLINE static int asm_mem_part(csp_rt_t* st, opcode_t op, reg_t x,
+NOINLINE static bool_t asm_NEXT(csp_rt_t* st, int r)
+{
+    int i;
+    if ((i = alloc_instr(st, OP_NEXT)) >= 0) {
+	st->instr[i].x.x = r;
+	return 1;
+    }
+    return 0;
+}
+
+NOINLINE static bool_t asm_mem_part(csp_rt_t* st, opcode_t op, reg_t x,
 				 index_t mem, csp_part_t part)
 {
     int i;
-    if ((i = csp_new_instr(st, op)) >= 0) {
+    if ((i = alloc_instr(st, op)) >= 0) {
 	st->instr[i].m.part = part;
 	st->instr[i].m.x = x;
 	st->instr[i].m.mem = mem;
+	return 1;
     }
-    return i;
+    return 0;
 }
 
-NOINLINE static int asm_mem(csp_rt_t* st, opcode_t op, reg_t x, index_t mem)
+NOINLINE static bool_t asm_mem(csp_rt_t* st, opcode_t op, reg_t x, index_t mem)
 {
     return asm_mem_part(st, op, x, mem, PART_VAL);
 }
 
-NOINLINE static int asm_imm(csp_rt_t* st, opcode_t op, reg_t x, int16_t imm)
+NOINLINE static bool_t asm_imm(csp_rt_t* st, opcode_t op, reg_t x, int16_t imm)
 {
     int i;
-    if ((i = csp_new_instr(st, op)) >= 0) {
+    if ((i = alloc_instr(st, op)) >= 0) {
 	st->instr[i].i.x = x;
 	st->instr[i].i.imm = imm;
+	return 1;
     }
-    return i;
+    return 0;
 }
 
-NOINLINE static int asm_LI(csp_rt_t* st, reg_t x, int16_t imm)
+NOINLINE static bool_t asm_LI(csp_rt_t* st, reg_t x, int16_t imm)
 {
     return asm_imm(st, OP_LI, x, imm);
 }
 
-NOINLINE static int asm_LIU(csp_rt_t* st, reg_t x, uint16_t imm)
+NOINLINE static bool_t asm_LIU(csp_rt_t* st, reg_t x, uint16_t imm)
 {
     return asm_imm(st, OP_LIU, x, (int16_t)imm);
 }
 
-NOINLINE static int asm_LIH(csp_rt_t* st, reg_t x, uint16_t imm)
+NOINLINE static bool_t asm_LIH(csp_rt_t* st, reg_t x, uint16_t imm)
 {
     return asm_imm(st, OP_LIH, x, (int16_t)imm);
 }
 
 // Smart load: choose LI, LIU, or LIU+LIH based on value
-NOINLINE static int csp_load_int(csp_rt_t* st, reg_t x, ivalue_t val)
+NOINLINE static bool_t csp_load_int(csp_rt_t* st, reg_t x, ivalue_t val)
 {
     if ((val >= -32768) && (val <= 32767)) {
 	return asm_LI(st, x, (int16_t)val);
     }
     else {
 	uint32_t uval = (uint32_t)val;
-	if (asm_LIU(st, x, (uint16_t)(uval & 0xFFFF)) < 0)
-	    return -1;
+	if (!asm_LIU(st, x, (uint16_t)(uval & 0xFFFF)))
+	    return 0;
 	if (uval > 0xFFFF) {
-	    if (asm_LIH(st, x, (uint16_t)(uval >> 16)) < 0)
-		return -1;
+	    if (!asm_LIH(st, x, (uint16_t)(uval >> 16)))
+		return 0;
 	}
-	return 0;
+	return 1;
     }
+    return 0;
 }
 
-NOINLINE static int csp_load_uint(csp_rt_t* st, reg_t x, uvalue_t val)
+NOINLINE static bool_t csp_load_uint(csp_rt_t* st, reg_t x, uvalue_t val)
 {
     if (val <= 32767) {
 	return asm_LI(st, x, (int16_t)val);
@@ -1852,13 +1866,13 @@ NOINLINE static int csp_load_uint(csp_rt_t* st, reg_t x, uvalue_t val)
 	return asm_LIU(st, x, (uint16_t)val);
     }
     else {
-	if (asm_LIU(st, x, (uint16_t)(val & 0xFFFF)) < 0)
-	    return -1;
+	if (!asm_LIU(st, x, (uint16_t)(val & 0xFFFF)))
+	    return 0;
 	return asm_LIH(st, x, (uint16_t)(val >> 16));
     }
 }
 
-NOINLINE static int csp_load_float(csp_rt_t* st, reg_t x, fvalue_t val)
+NOINLINE static bool_t csp_load_float(csp_rt_t* st, reg_t x, fvalue_t val)
 {
 #if FVALUE_IS_FIXPOINT
     // Fixpoint is just an int32_t, load as signed
@@ -1869,8 +1883,8 @@ NOINLINE static int csp_load_float(csp_rt_t* st, reg_t x, fvalue_t val)
     if (v.u == 0) {
 	return asm_LI(st, x, 0);  // 0.0
     }
-    if (asm_LIu(st, x, (uint16_t)(v.u & 0xFFFF)) < 0)
-	return -1;
+    if (!asm_LIu(st, x, (uint16_t)(v.u & 0xFFFF)))
+	return 0;
     return asm_LIH(st, x, (uint16_t)(v.u >> 16));
 #endif
 }
@@ -1880,115 +1894,114 @@ static int asm_ARG(csp_rt_t* st, reg_t x, int16_t i)
     return asm_imm(st, OP_ARG, x, i);
 }
 
-
-NOINLINE static int asm_alu(csp_rt_t* st, opcode_t op,reg_t x, reg_t y, reg_t z)
+NOINLINE static bool_t asm_alu(csp_rt_t* st, opcode_t op,
+			       reg_t x, reg_t y, reg_t z)
 {
     int i;
-    if ((i = csp_new_instr(st, op)) >= 0) {
+    if ((i = alloc_instr(st, op)) >= 0) {
 	st->instr[i].a.x = x;
 	st->instr[i].a.y = y;
 	st->instr[i].a.z = z;
+	return 1;
     }
-    return i;
+    return 0;
 }
 
-NOINLINE int csp_new_rule(csp_rt_t* st, reg_t cnd, int nxt)
+NOINLINE static bool_t asm_CALL(csp_rt_t* st, reg_t x, int func_idx, int is_user, uint16_t argcode)
 {
     int i;
-    if ((i = csp_new_instr(st, OP_RULE)) >= 0) {
-	st->instr[i].r.cnd = cnd;
-	st->instr[i].r.nxt = nxt;
-    }
-    return i;
-}
-
-NOINLINE static int asm_call(csp_rt_t* st, reg_t x, int func_idx, int is_user,
-			     uint16_t argcode)
-{
-    int i;
-    if ((i = csp_new_instr(st, OP_CALL)) >= 0) {
+    if ((i = alloc_instr(st, OP_CALL)) >= 0) {
 	st->instr[i].f.x   = x;
 	st->instr[i].f.idx = func_idx;
 	st->instr[i].f.usr = is_user;
 	st->instr[i].f.avt = argcode;
+	return 1;
     }
-    return i;
+    return 0;
 }
 
-NOINLINE static int asm_enter(csp_rt_t* st, int n, index_t mx)
+NOINLINE static bool_t asm_ENTER(csp_rt_t* st, int* pos, int n, index_t mx)
 {
     int i;
-    if ((i = csp_new_instr(st, OP_ENTER)) >= 0) {
+    if ((i = alloc_instr(st, OP_ENTER)) >= 0) {
 	st->instr[i].e.num = n;
 	st->instr[i].e.mx = mx;
+	*pos = i;
+	return 1;
     }
-    return i;
+    return 0;
 }
 
-NOINLINE static int asm_leave(csp_rt_t* st, int n, index_t mx)
+NOINLINE static bool_t asm_LEAVE(csp_rt_t* st, int* pos, int n, index_t mx)
 {
     int i;
-    if ((i = csp_new_instr(st, OP_LEAVE)) >= 0) {
+    if ((i = alloc_instr(st, OP_LEAVE)) >= 0) {
 	st->instr[i].v.num = n;
 	st->instr[i].v.mx = mx;
+	*pos = i;
+	return 1;
     }
-    return i;
+    return 0;
 }
 
-NOINLINE static int asm_new(csp_rt_t* st, unsigned ent, index_t obj)
+NOINLINE static bool_t asm_NEW(csp_rt_t* st, unsigned ent, index_t obj)
 {
     int i;
-    if ((i = csp_new_instr(st, OP_NEW)) >= 0) {
+    if ((i = alloc_instr(st, OP_NEW)) >= 0) {
 	st->instr[i].n.ent = ent;
 	st->instr[i].n.obj = obj;
+	return 1;
     }
-    return i;
+    return 0;
 }
 
-static int asm_bop(csp_rt_t* st, opcode_t op, index_t x ,index_t y, index_t z)
+static bool_t asm_bop(csp_rt_t* st, opcode_t op, index_t x ,index_t y, index_t z)
 {
     return asm_alu(st, op, x, y, z);
 }
 
-static int asm_uop(csp_rt_t* st, opcode_t op, index_t x, index_t y)
+static bool_t asm_uop(csp_rt_t* st, opcode_t op, index_t x, index_t y)
 {
     return asm_alu(st, op, x, y, 0);
 }
 
-static int asm_CVTIF(csp_rt_t* st, index_t x, index_t y)
+static bool_t asm_CVTIF(csp_rt_t* st, index_t x, index_t y)
 {
     return asm_uop(st, OP_CVTIF, x, y);
 }
 
-static int asm_CVTFI(csp_rt_t* st, index_t x, index_t y)
+static bool_t asm_CVTFI(csp_rt_t* st, index_t x, index_t y)
 {
     return asm_uop(st, OP_CVTFI, x, y);
 }
 
-static int asm_MOV(csp_rt_t* st, reg_t x, reg_t y)
+static bool_t asm_MOV(csp_rt_t* st, reg_t x, reg_t y)
 {
     return asm_uop(st, OP_MOV, x, y);
 }
 
-static int asm_AND(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
+static bool_t asm_AND(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
 {
     return asm_bop(st, OP_AND, x, y, z);
 }
 
 // compare equal ==
-static int asm_EQEQ(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
+static bool_t asm_EQEQ(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
 {
     return asm_bop(st, OP_EQEQ, x, y, z);
 }
 
-/*
-static int asm_OR(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
+#if 0
+NOINLINE static bool_t asm_NOP(csp_rt_t* st)
+{
+    return (alloc_instr(st, OP_NOP) >= 0);
+}
+
+static bool_t asm_OR(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
 {
     return asm_bop(st, OP_OR, x, y, z);
 }
-*/
-
-
+#endif
 
 // Build reactive dependency graph: declaration -> rules that depend on it
 // When a declaration changes, we enqueue all rules that read from it (via LD)
@@ -2358,7 +2371,7 @@ NOINLINE static void free_reg(csp_rt_t* st, int r)
 }
 
 // load immedate value.
-NOINLINE int csp_load_value(csp_rt_t* st, reg_t x, vtype_t vt, value_t val)
+NOINLINE static bool_t csp_load_value(csp_rt_t* st, reg_t x, vtype_t vt, value_t val)
 {
     switch(vt) {
     case V_INDEX:
@@ -2376,7 +2389,7 @@ NOINLINE int csp_load_value(csp_rt_t* st, reg_t x, vtype_t vt, value_t val)
     case V_STRING:
 	return asm_LI(st, x, val.s);  // load string index
     default:
-	return -1;
+	return 0;
     }
 }
 
@@ -2414,12 +2427,12 @@ NOINLINE int map_reg(csp_rt_t* st, index_t ix)
 	if (st->decl[INDEX(ix)].type == DECL_CONSTANT) {
 	    value_t val = st->decl[INDEX(ix)].cn.init;
 	    vtype_t vt = st->decl[INDEX(ix)].vt;
-	    if (csp_load_value(st, dst, vt, val) < 0)
+	    if (!csp_load_value(st, dst, vt, val))
 		return -1;
 	    return dst;
 	}
 	// generate LD instruction for variables, track for <- rules
-	if (asm_mem(st,OP_LD,dst,ix) < 0)
+	if (!asm_mem(st,OP_LD,dst,ix))
 	    return -1;
 	return dst;
     }
@@ -2439,7 +2452,7 @@ NOINLINE int csp_load(csp_rt_t* st, rentry_t* rp)
 	}
 	else if (rp->I) {
 	    r = alloc_reg(st);
-	    if (csp_load_value(st, r, rp->vt, rp->val) < 0)
+	    if (!csp_load_value(st, r, rp->vt, rp->val))
 		return -1;
 	}
 	rp->reg = r;
@@ -2512,17 +2525,17 @@ NOINLINE static int push_reg(rentry_t* rstack, int ep, reg_t r, vtype_t vt,
 }
 
 // Convert operand to float (int→float via cvtif)
-NOINLINE static int coerce_to_float(csp_rt_t* st, rentry_t* e)
+NOINLINE static bool_t coerce_to_float(csp_rt_t* st, rentry_t* e)
 {
     rentry_t ent = *e;
 
-    if (ent.vt == V_FLOAT) return 0;  // already float
-    if (ent.vt != V_INTEGER) return -1;  // can only convert int
+    if (ent.vt == V_FLOAT) return 1;  // already float
+    if (ent.vt != V_INTEGER) return 0;  // can only convert int
 
     // For variables (X=1), load first then convert
     if (ent.X && st->ap) {
 	if (csp_load(st, &ent) < 0)
-	    return -1;
+	    return 0;
     }
 
     if (ent.I && !ent.X) {  // pure immediate, not variable
@@ -2532,8 +2545,8 @@ NOINLINE static int coerce_to_float(csp_rt_t* st, rentry_t* e)
     }
     else if (ent.L && st->ap) {
 	reg_t r = alloc_reg(st);
-	if (asm_CVTIF(st, r, ent.reg) < 0)
-	    return -1;
+	if (!asm_CVTIF(st, r, ent.reg))
+	    return 0;
 	free_reg(st, ent.reg);
 	ent.reg = r;
 	ent.L = 1;
@@ -2541,21 +2554,21 @@ NOINLINE static int coerce_to_float(csp_rt_t* st, rentry_t* e)
     }
     ent.vt = V_FLOAT;
     *e = ent;
-    return 0;
+    return 1;
 }
 
 // Convert operand to int (float→int via cvtfi)
-NOINLINE static int coerce_to_int(csp_rt_t* st, rentry_t* e)
+NOINLINE static bool_t coerce_to_int(csp_rt_t* st, rentry_t* e)
 {
     rentry_t ent = *e;
 
-    if (ent.vt == V_INTEGER) return 0;  // already int
-    if (ent.vt != V_FLOAT) return -1;  // can only convert float
+    if (ent.vt == V_INTEGER) return 1;  // already int
+    if (ent.vt != V_FLOAT) return 0;  // can only convert float
 
     // For variables (X=1), load first then convert
     if (ent.X && st->ap) {
 	if (csp_load(st, &ent) < 0)
-	    return -1;
+	    return 0;
     }
 
     if (ent.I && !ent.X) {  // pure immediate, not variable
@@ -2565,8 +2578,8 @@ NOINLINE static int coerce_to_int(csp_rt_t* st, rentry_t* e)
     }
     else if (ent.L && st->ap) {
 	reg_t r = alloc_reg(st);
-	if (asm_CVTFI(st, r, ent.reg) < 0)
-	    return -1;
+	if (!asm_CVTFI(st, r, ent.reg))
+	    return 0;
 	free_reg(st, ent.reg);
 	ent.reg = r;
 	ent.L = 1;
@@ -2574,7 +2587,7 @@ NOINLINE static int coerce_to_int(csp_rt_t* st, rentry_t* e)
     }
     ent.vt = V_INTEGER;
     *e = ent;
-    return 0;
+    return 1;
 }
 
 // Process binary assignment operator: generates ST instruction
@@ -2606,10 +2619,10 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
 
     // Type conversion if needed
     if (ltype == V_INTEGER && (rhs.vt == V_FLOAT)) {
-	if (coerce_to_int(st, &rhs) < 0)
+	if (!coerce_to_int(st, &rhs))
 	    return -1;
     } else if (ltype == V_FLOAT && (rhs.vt == V_INTEGER)) {
-	if (coerce_to_float(st, &rhs) < 0)
+	if (!coerce_to_float(st, &rhs))
 	    return -1;
     }
     if (csp_load(st, &rhs) < 0)
@@ -2626,7 +2639,7 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
 	    csp_set_value(st, lhs.ix, rhs.val);
     }
     else { // Generate store instruction
-	if (asm_mem(st, op, rhs.reg, lhs.ix) < 0)
+	if (!asm_mem(st, op, rhs.reg, lhs.ix))
 	    return -1;
     }
     // Result is the rhs (for chaining A=B=1)
@@ -2687,9 +2700,9 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 
 	    // Type coerce: promote to float if either operand is float
 	    if (at == V_FLOAT || bt == V_FLOAT) {
-		if ((at == V_INTEGER) && (coerce_to_float(st, a) < 0))
+		if ((at == V_INTEGER) && !coerce_to_float(st, a))
 		    return PARSE_ERROR;
-		if ((bt == V_INTEGER) && (coerce_to_float(st, b) < 0))
+		if ((bt == V_INTEGER) && !coerce_to_float(st, b))
 		    return PARSE_ERROR;
 		op = float_op(op_table_code(tok));
 	    } else {
@@ -2720,7 +2733,7 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 		if (a->L && b->L) {
 		    dst = alloc_reg(st);
 		    if (st->ap != NULL) {
-			if (asm_bop(st, op, dst, a->reg, b->reg) < 0)
+			if (!asm_bop(st, op, dst, a->reg, b->reg))
 			    return PARSE_ERROR;
 			free_reg(st, a->reg);
 			if (a->reg != b->reg)
@@ -2773,7 +2786,7 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 	    if (a->L) { // generate code
 		dst = alloc_reg(st);
 		if (st->ap != NULL) {
-		    if (asm_uop(st, op, dst, a->reg) < 0)
+		    if (!asm_uop(st, op, dst, a->reg))
 			return PARSE_ERROR;
 		    free_reg(st, a->reg);
 		}
@@ -2838,11 +2851,11 @@ NOINLINE static int process_fcall(csp_rt_t* st, token_t* word, uint8_t arity,
 		goto type_mismatch;
 	    break;
 	case V_INTEGER:
-	    if (coerce_to_int(st, &arg) < 0)
+	    if (!coerce_to_int(st, &arg))
 		goto type_mismatch;
 	    break;
 	case V_FLOAT:
-	    if (coerce_to_float(st, &arg) < 0)
+	    if (!coerce_to_float(st, &arg))
 		goto type_mismatch;
 	    break;
 	case V_STRING:
@@ -2871,7 +2884,7 @@ NOINLINE static int process_fcall(csp_rt_t* st, token_t* word, uint8_t arity,
 	    csp_set_error(st, ERR_INTERNAL_ERROR);
 	    return -1;
 	}
-	if (asm_ARG(st, arg.reg, j) < 0) {
+	if (!asm_ARG(st, arg.reg, j)) {
 	    csp_set_error(st, ERR_INTERNAL_ERROR);
 	    return -1;
 	}
@@ -2901,8 +2914,8 @@ NOINLINE static int process_fcall(csp_rt_t* st, token_t* word, uint8_t arity,
 	ep -= n;
     }
     dst = alloc_reg(st);
-    if (asm_call(st, dst, func_idx, is_user, argcode) < 0)
-	return 0;
+    if (!asm_CALL(st, dst, func_idx, is_user, argcode))
+	return -1;
     return push_reg(rstack, ep, dst, func->rtype, dval, imm);
 
 type_mismatch:
@@ -3004,17 +3017,17 @@ next:
 	if ((ep = push_imm(st, rstack, ep, V_INTEGER, tval.val)) < 0)
 	    return 0;
 	ptok = INT;
-	break;
+	goto after_primary;
     case FLT:
 	if ((ep = push_imm(st, rstack, ep, V_FLOAT, tval.val)) < 0)
 	    return 0;
 	ptok = FLT;
-	break;
+	goto after_primary;
     case STR:
 	if ((ep = push_str(st, rstack, ep, tval.str.ptr, tval.str.len)) < 0)
 	    return 0;
 	ptok = STR;
-	break;
+	goto after_primary;
     case WORD: {
 	if (tv[i].t == LP) {
 	    // It's a function call - push marker to ostack and skip LP
@@ -3064,6 +3077,7 @@ next:
 		    return 0;
 	    }
 	    ptok = WORD;
+	    goto after_primary;
 	}
 	break;
     }
@@ -3073,6 +3087,19 @@ next:
 	i--;      // return failed token
 	goto out; // let tok terminate exprssion
 	// return 0;
+    }
+    goto next;
+
+after_primary:
+    // After parsing a primary (INT, FLT, STR, WORD), check if next token
+    // can continue the expression. If next is another primary, terminate.
+    if (i < n) {
+	switch (tv[i].t) {
+	case INT: case FLT: case STR: case WORD:
+	    goto out;  // next primary terminates expression
+	default:
+	    break;
+	}
     }
     goto next;
 operator:
@@ -3123,6 +3150,7 @@ out: // expression is terminated with non-expression char
     if (pp < 0)
 	return 0;
     if (ep == 1) {
+	// printf("PARSE_EXPR tokens=%d\n", i);
 	*num_toks = i;
 	if (result)
 	    *result = rstack[0];
@@ -3158,7 +3186,8 @@ static const uint8_t module_pat[] = {
 NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, size_t n)
 {
     module_param_t d;
-    index_t ix, jx;
+    index_t ix;
+    int jx;
     int i;
 
     if (pmatch(st, tv, n, module_pat, &d) < 0) {
@@ -3179,7 +3208,7 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, size_t n)
     }
 #endif
     st->mdef = ix;  // current module being defined
-    if ((jx = asm_enter(st, 0, ix)) < 0)
+    if (!asm_ENTER(st, &jx, 0, ix))
 	return -1;
     st->ent = jx;   // entry point of module being defined
     i = INDEX(ix);
@@ -3201,7 +3230,8 @@ static const uint8_t end_pat[] = {
 NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
 {
     end_param_t d;
-    index_t mx, ex, lx;
+    index_t mx, ex;
+    int lx;
     const tstr_t empty = { .ptr = NULL, .len = 0};
     
     if (pmatch(st, tv, n, end_pat, &d) < 0) {
@@ -3222,7 +3252,7 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
     if ((ex = csp_new_decl(st, &empty, DECL_END)) == BAD_INDEX)
 	return -1;
     st->decl[INDEX(mx)].md.n = (INDEX(ex) - INDEX(mx)) - 1;
-    if ((lx = asm_leave(st, 0, 0)) < 0)
+    if (!asm_LEAVE(st, &lx, 0, 0))
 	return -1;
     // ent MUST be OP_ENTER!
     st->instr[st->ent].e.num = (lx - st->ent - 1);
@@ -3284,6 +3314,7 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n)
     st->decl[i].res = MAKE_RES(d.res);
     st->decl[i].dir = d.opts.dir;
     st->decl[i].va.init = d.init;
+    // printf("VALUE = %d\n", st->decl[i].va.init.i);
     return 0;
 }
 
@@ -3344,12 +3375,12 @@ static const uint8_t digital_pat[] = {
     P_STR, csp_offsetof(digital_param_t, name),
     P_OPTS, csp_offsetof(digital_param_t, opts),
     P_ALT, 2,
-	// Alt 1: port:pin (7 bytes: P_INTEGER,off,P_TOK,COLON,P_INT,off,P_END)
+	// Alt 1: port:pin
     7, P_INTEGER, csp_offsetof(digital_param_t, port),
     P_TOK, COLON,
     P_INTEGER, csp_offsetof(digital_param_t, pin),
     P_END,
-    // Alt 2: just pin (3 bytes: P_INT,off,P_END)
+        // Alt 2: pin
     3, P_INTEGER, csp_offsetof(digital_param_t, pin),
     P_END,
     P_END
@@ -3391,17 +3422,17 @@ static const uint8_t analog_pat[] = {
     P_TOK, HASH,
     P_TOK, ANALOG,
     P_STR, csp_offsetof(analog_param_t, name),
-    P_OPT, 5,P_TOK,COLON,P_INTEGER, csp_offsetof(analog_param_t, res), P_END,
+    P_OPT,5,P_TOK,COLON,P_INTEGER,csp_offsetof(analog_param_t,res),P_END,
     P_OPTS, csp_offsetof(analog_param_t, opts),
     P_ALT, 2,
-	// Alt 1: port:pin (7 bytes: P_INT,off,P_TOK,COLON,P_INT,off,P_END)
-	7, P_INTEGER, csp_offsetof(analog_param_t, port),
-	   P_TOK, COLON,
-	   P_INTEGER, csp_offsetof(analog_param_t, pin),
-	   P_END,
-	// Alt 2: just pin (3 bytes: P_INTEGER,off,P_END)
-	3, P_INTEGER, csp_offsetof(analog_param_t, pin),
-	   P_END,
+	// Alt 1: port:pin
+    7, P_INTEGER, csp_offsetof(analog_param_t, port),
+    P_TOK, COLON,
+    P_INTEGER, csp_offsetof(analog_param_t, pin),
+    P_END,
+    // Alt 2: just pin (3 bytes: P_INTEGER,off,P_END)
+    3, P_INTEGER, csp_offsetof(analog_param_t, pin),
+    P_END,
     P_END
 };
 
@@ -3622,7 +3653,7 @@ static int gen_static_init(csp_rt_t* st, init_entry_t* e,
     if (!csp_parse_expr(st, e->expr_tv, &num, &rval))
 	return 0;
     if (!rval.L) csp_load(st, &rval);
-    if (asm_mem_part(st, OP_ST, rval.reg, target, part) < 0)
+    if (!asm_mem_part(st, OP_ST, rval.reg, target, part))
 	return 0;
     free_reg(st, rval.reg);
     return 1;
@@ -3647,17 +3678,17 @@ static int gen_reactive_init(csp_rt_t* st, init_entry_t* e,
     int cnd = alloc_reg(st);
     if (st->nvar > 0) {
 	int k;
-	if (asm_LI(st, cnd, 0) < 0)
+	if (!asm_LI(st, cnd, 0))
 	    return 0;
 	for (k = 0; k < st->nvar; k++)
-	    if (asm_mem(st, OP_CHG, cnd, st->var[k]) < 0)
+	    if (!asm_mem(st, OP_CHG, cnd, st->var[k]))
 		return 0;
     }
     else {
-	if (asm_LI(st, cnd, -1) < 0)
+	if (!asm_LI(st, cnd, -1))
 	    return 0;
     }
-    if ((j = csp_new_rule(st, cnd, 0)) < 0)
+    if (!asm_RULE(st, &j, cnd, 0))
 	return 0;
     free_reg(st, cnd);
     
@@ -3670,10 +3701,10 @@ static int gen_reactive_init(csp_rt_t* st, init_entry_t* e,
     st->rimp = 0;
 
     if (!rval.L) csp_load(st, &rval);
-    if (asm_mem_part(st, OP_STIMP, rval.reg, target, part) < 0)
+    if (!asm_mem_part(st, OP_STIMP, rval.reg, target, part))
 	return 0;
     st->instr[j].r.nxt = st->ps.nn - j;
-    if (csp_new_next(st, rval.reg) < 0)
+    if (!asm_NEXT(st, rval.reg))
 	return 0;
     free_reg(st, rval.reg);
     return 1;
@@ -3774,9 +3805,8 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
     }
 
     // Generate NEW after init list (module rules run with correct values)
-    if (asm_new(st, st->decl[INDEX(mx)].md.ent, ix) == BAD_INDEX)
+    if (!asm_NEW(st, st->decl[INDEX(mx)].md.ent, ix))
 	return -1;
-
     return 0;
 }
 
@@ -3850,12 +3880,12 @@ NOINLINE int csp_parse_rule(csp_rt_t* st, token_t* tv, size_t n)
     if (st->sdef >= 0) {  // we are in a state!
 	int sr;
 	cnd = alloc_reg(st);
-	if (asm_mem(st,OP_LD,cnd,st->sx) < 0) // load state into cnd
+	if (!asm_mem(st,OP_LD,cnd,st->sx)) // load state into cnd
 	    return -1;
 	sr = alloc_reg(st);
-	if (asm_LI(st, sr, st->sdef) < 0)
+	if (!asm_LI(st, sr, st->sdef))
 	    return -1;
-	if (asm_EQEQ(st, cnd, cnd, sr) < 0)
+	if (!asm_EQEQ(st, cnd, cnd, sr))
 	    return -1;
 	free_reg(st, sr);
     }
@@ -3867,17 +3897,17 @@ NOINLINE int csp_parse_rule(csp_rt_t* st, token_t* tv, size_t n)
     if (st->nvar) {
 	int k;
 	cnd2 = alloc_reg(st);
-	if (asm_LI(st, cnd2, 0) < 0)
+	if (!asm_LI(st, cnd2, 0))
 	    return -1;
 	for (k = 0; k < st->nvar; k++) {
-	    if (asm_mem(st, OP_CHG, cnd2, st->var[k]) < 0)
+	    if (!asm_mem(st, OP_CHG, cnd2, st->var[k]))
 		return -1;
 	}
     }
     // cnd = state condition
     // cnd2 = changed condition
     if ((cnd >= 0) && (cnd2 >= 0)) {
-	if (asm_AND(st, cnd, cnd, cnd2) < 0)
+	if (!asm_AND(st, cnd, cnd, cnd2))
 	    return -1;
 	free_reg(st, cnd2);
     }
@@ -3892,29 +3922,29 @@ NOINLINE int csp_parse_rule(csp_rt_t* st, token_t* tv, size_t n)
 	if (!rcond.L) csp_load(st, &rcond);
 	if (cnd < 0) {
 	    cnd = alloc_reg(st);
-	    if (asm_MOV(st, cnd, rcond.reg) < 0)
+	    if (!asm_MOV(st, cnd, rcond.reg))
 		return -1;
 	}
 	else {
-	    if (asm_AND(st, cnd, rcond.reg, cnd) < 0)
+	    if (!asm_AND(st, cnd, rcond.reg, cnd))
 		return -1;
 	}
 	free_reg(st, rcond.reg);
     }
     if (cnd < 0) {
 	cnd = alloc_reg(st);	
-	if (asm_LI(st, cnd, -1) < 0)
+	if (!asm_LI(st, cnd, -1))
 	    return -1;
     }
     num = d.body.len;
-    if ((j = csp_new_rule(st, cnd, 0)) < 0)
+    if (!asm_RULE(st, &j, cnd, 0))
 	return -1;
     free_reg(st, cnd);
     if (!csp_parse_expr(st, &tv[d.body.pos], &num, &rbody))
 	return -1;
     if (!rbody.L) csp_load(st, &rbody);
-    st->instr[j].r.nxt = st->ps.nn - j;
-    if (csp_new_next(st, rbody.reg) < 0)
+    st->instr[j].r.nxt = st->ps.nn - j;  // relative offset
+    if (!asm_NEXT(st, rbody.reg))
 	return -1;
     if (rbody.L) free_reg(st, rbody.reg);
     return 0;
@@ -3962,11 +3992,11 @@ int make_can_rule(csp_rt_t* st, index_t ox, int k, index_t idx,
 
     // load constant C into cr
     cr = alloc_reg(st);
-    if (csp_load_int(st, cr, c) < 0)
+    if (!csp_load_int(st, cr, c))
 	return -1;
     // load constant k into kr
     kr = alloc_reg(st);
-    if (csp_load_int(st, kr, k) < 0)
+    if (!csp_load_int(st, kr, k))
 	return -1;
 
     // first build condition (can bit test)
@@ -3976,18 +4006,18 @@ int make_can_rule(csp_rt_t* st, index_t ox, int k, index_t idx,
     }
     // load zx into register
     zr = alloc_reg(st);
-    if (asm_mem(st,OP_LD,zr,zx) < 0)
+    if (!asm_mem(st,OP_LD,zr,zx))
 	return -1;
 
     cnd = alloc_reg(st);
-    if (asm_EQEQ(st, cnd, zr, cr) < 0)
+    if (!asm_EQEQ(st, cnd, zr, cr))
 	return -1;
-    if ((j = csp_new_rule(st, cnd, 0)) < 0)
+    if (!asm_RULE(st, &j, cnd, 0))
 	return -1;
-    if (asm_mem(st, OP_ST, kr, ox) < 0)
+    if (!asm_mem(st, OP_ST, kr, ox))
 	return -1;
     st->instr[j].r.nxt = st->ps.nn - j;
-    if (csp_new_next(st, kr) < 0)
+    if (!asm_NEXT(st, kr))
 	return -1;
     free_reg(st, cr);
     free_reg(st, kr);
