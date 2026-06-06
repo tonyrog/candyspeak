@@ -552,6 +552,9 @@ const tstr_t decl_type_name(decl_t type)
     }
 }
 
+#define ify(x) #x
+#define stringify(x) ify(x)
+
 const char* csp_format_error(csp_err_t err)
 {
     switch(err) {
@@ -593,6 +596,8 @@ const char* csp_format_error(csp_err_t err)
 	return "internal error";
     case ERR_FUNCTION_ARGUMENT_TYPE_MISMATCH:
 	return "function %s/%d argument %d type mismatch";
+    case ERR_NAME_TOO_LONG:
+	return "identifier name to long %d max=" stringify(MAX_NAME_LEN);
     default:
 	return "unknown error";
     }
@@ -886,10 +891,13 @@ static value_t fn_elapsed(csp_rt_t* st,uint16_t type,
 			  value_t* args, uint8_t nargs)
 {
     value_t ret;
-    index_t ty = args[0].u; // timer
-    index_t tx = ty+1;
-    uint32_t td = csp_time_ms() - csp_uvalue(st, tx);
-    ret.u = td;
+    index_t ix = args[0].u; // timer
+    index_t tx = ix+1;
+    value_t* vptr = csp_dio_slot(st, ix, DIN);
+    if (vptr->t.running)
+	ret.u = csp_time_ms() - csp_uvalue(st, tx);
+    else
+	ret.u = vptr->t.period;
     return ret;
 }
 
@@ -898,16 +906,18 @@ static value_t fn_progress(csp_rt_t* st,uint16_t type,
 			   value_t* args, uint8_t nargs)
 {
     value_t ret;
-    index_t ty = args[0].u; // timer
-    index_t tx = ty+1;      // start time
-    uint32_t td = csp_time_ms() - csp_uvalue(st, tx);
-    value_t* iptr = csp_dio_slot(st, ty, DIN);    
-    uint32_t period = iptr->t.period;
+    index_t ix = args[0].u; // timer
+    value_t* vptr = csp_dio_slot(st, ix, DIN);
 
-    if (td >= period)
-	ret.f = op_CVTIF(1);
-    else
+    if (vptr->t.running) {
+	index_t tx = ix+1;      // start time
+	uint32_t td = csp_time_ms() - csp_uvalue(st, tx);
+	uint32_t period = vptr->t.period;
 	ret.f = op_FDIV(op_CVTIF(td), op_CVTIF(period));
+    }
+    else {
+	ret.f = op_CVTIF(1);
+    }
     return ret;
 }
 
@@ -1574,6 +1584,22 @@ index_t csp_react(csp_rt_t* st)
 #endif
 }
 
+#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
+
+NOINLINE int lookup_state(csp_rt_t* st, const tstr_t* name)
+{
+    int i;
+    for (i = 0; i < st->ps.ns; i++) {
+	int spos = st->states[i].name;
+	int len = st->str[spos-1];
+	if (len == name->len) {
+	    if (memcmp(&st->str[spos], name->ptr, len) == 0)
+		return i;
+	}
+    }
+    return -1;
+}
+
 // look for symbol among nodes in range [start, stop)
 NOINLINE static index_t lookup_decl_in(csp_rt_t* st, const tstr_t* name,
 				       int start, int stop)
@@ -1664,7 +1690,7 @@ NOINLINE int lookup_string(csp_rt_t* st, char* name, int name_len)
     return -1;
 }
 
-NOINLINE index_t next_decl_index(csp_rt_t* st)
+NOINLINE static index_t next_decl_index(csp_rt_t* st)
 {
     index_t ix;
     if (st->ps.nd >= MAX_DECLS) {
@@ -1676,23 +1702,25 @@ NOINLINE index_t next_decl_index(csp_rt_t* st)
     return ix;
 }
 
-// install a new decl
+// install a new decl (default to INTEGER 32 bit
 
 NOINLINE index_t csp_new_decl(csp_rt_t* st, const tstr_t* name, decl_t type)
 {
-    index_t i;
-    int pos;
+    index_t ix;
+    int i, pos;
 
-    if ((i = next_decl_index(st)) == BAD_INDEX)
+    if ((ix = next_decl_index(st)) == BAD_INDEX)
 	return BAD_INDEX;
     pos = 0;
     if (name != NULL) {
 	if ((pos = new_string(st, name->ptr, name->len)) < 0)
 	    return BAD_INDEX;
     }
-    st->decl[INDEX(i)].type = type;
-    st->decl[INDEX(i)].name = pos;
-    st->decl[INDEX(i)].vt = V_INTEGER;
+    i = INDEX(ix);
+    st->decl[i].type = type;
+    st->decl[i].name = pos;
+    st->decl[i].res = MAKE_RES(8*sizeof(value_t));    
+    st->decl[i].vt = V_INTEGER;
     return i;
 }
 
@@ -1721,8 +1749,6 @@ NOINLINE index_t new_signed_const(csp_rt_t* st, ivalue_t v)
     if ((ix = csp_new_decl(st,&empty,DECL_CONSTANT)) == BAD_INDEX)
 	return BAD_INDEX;
     i = INDEX(ix);
-    st->decl[i].res = MAKE_RES(8*sizeof(ivalue_t));
-    st->decl[i].vt = V_INTEGER;
     st->decl[i].cn.init.i = v;
     return ix;
 }
@@ -1735,7 +1761,6 @@ NOINLINE index_t new_float_const(csp_rt_t* st, fvalue_t v)
     if ((ix = csp_new_decl(st,&empty,DECL_CONSTANT)) == BAD_INDEX)
 	return BAD_INDEX;
     i = INDEX(ix);
-    st->decl[i].res = MAKE_RES(8*sizeof(fvalue_t));
     st->decl[i].vt = V_FLOAT;
     st->decl[i].cn.init.f = v;
     return ix;
@@ -1757,28 +1782,28 @@ NOINLINE index_t new_string_const(csp_rt_t* st, char* str, int len)
     return ix;
 }
 
-NOINLINE static int alloc_instr(csp_rt_t* st, opcode_t op)
+NOINLINE static csp_instr_t* alloc_instr_ptr(csp_rt_t* st,int* pos,opcode_t op)
 {
     int i;
     if (st->ap == NULL)
-	return 0;  // no generate use slot 0 to write temporary args in
-    if ((i = st->ps.nn) >= MAX_INSTRS) {
+	i = MAX_INSTRS;
+    else if ((i = st->ps.nn) >= MAX_INSTRS) {
 	csp_set_error(st, ERR_TOO_MANY_INSTRUCTIONS);
-	return -1;
+	return NULL;
     }
-
-    st->ps.nn++;
+    else
+	st->ps.nn++;
     st->instr[i].op = op;
-    return i;
+    if (pos != NULL) *pos = i;
+    return &st->instr[i];
 }
 
 NOINLINE bool_t asm_RULE(csp_rt_t* st, int* pos, reg_t cnd, int nxt)
 {
-    int i;
-    if ((i = alloc_instr(st, OP_RULE)) >= 0) {
-	st->instr[i].r.cnd = cnd;
-	st->instr[i].r.nxt = nxt;
-	*pos = i;
+    csp_instr_t* ip = alloc_instr_ptr(st, pos, OP_RULE);
+    if (ip != NULL) {
+	ip->r.cnd = cnd;
+	ip->r.nxt = nxt;
 	return 1;
     }
     return 0;
@@ -1786,9 +1811,9 @@ NOINLINE bool_t asm_RULE(csp_rt_t* st, int* pos, reg_t cnd, int nxt)
 
 NOINLINE static bool_t asm_NEXT(csp_rt_t* st, int r)
 {
-    int i;
-    if ((i = alloc_instr(st, OP_NEXT)) >= 0) {
-	st->instr[i].x.x = r;
+    csp_instr_t* ip = alloc_instr_ptr(st, NULL, OP_NEXT);
+    if (ip != NULL) {
+	ip->x.x = r;
 	return 1;
     }
     return 0;
@@ -1797,11 +1822,11 @@ NOINLINE static bool_t asm_NEXT(csp_rt_t* st, int r)
 NOINLINE static bool_t asm_mem_part(csp_rt_t* st, opcode_t op, reg_t x,
 				 index_t mem, csp_part_t part)
 {
-    int i;
-    if ((i = alloc_instr(st, op)) >= 0) {
-	st->instr[i].m.part = part;
-	st->instr[i].m.x = x;
-	st->instr[i].m.mem = mem;
+    csp_instr_t* ip = alloc_instr_ptr(st, NULL, op);
+    if (ip != NULL) {
+	ip->m.part = part;
+	ip->m.x = x;
+	ip->m.mem = mem;
 	return 1;
     }
     return 0;
@@ -1814,10 +1839,10 @@ NOINLINE static bool_t asm_mem(csp_rt_t* st, opcode_t op, reg_t x, index_t mem)
 
 NOINLINE static bool_t asm_imm(csp_rt_t* st, opcode_t op, reg_t x, int16_t imm)
 {
-    int i;
-    if ((i = alloc_instr(st, op)) >= 0) {
-	st->instr[i].i.x = x;
-	st->instr[i].i.imm = imm;
+    csp_instr_t* ip = alloc_instr_ptr(st, NULL, op);
+    if (ip != NULL) {    
+	ip->i.x = x;
+	ip->i.imm = imm;
 	return 1;
     }
     return 0;
@@ -1897,11 +1922,11 @@ static int asm_ARG(csp_rt_t* st, reg_t x, int16_t i)
 NOINLINE static bool_t asm_alu(csp_rt_t* st, opcode_t op,
 			       reg_t x, reg_t y, reg_t z)
 {
-    int i;
-    if ((i = alloc_instr(st, op)) >= 0) {
-	st->instr[i].a.x = x;
-	st->instr[i].a.y = y;
-	st->instr[i].a.z = z;
+    csp_instr_t* ip = alloc_instr_ptr(st, NULL, op);
+    if (ip != NULL) {
+	ip->a.x = x;
+	ip->a.y = y;
+	ip->a.z = z;
 	return 1;
     }
     return 0;
@@ -1909,12 +1934,12 @@ NOINLINE static bool_t asm_alu(csp_rt_t* st, opcode_t op,
 
 NOINLINE static bool_t asm_CALL(csp_rt_t* st, reg_t x, int func_idx, int is_user, uint16_t argcode)
 {
-    int i;
-    if ((i = alloc_instr(st, OP_CALL)) >= 0) {
-	st->instr[i].f.x   = x;
-	st->instr[i].f.idx = func_idx;
-	st->instr[i].f.usr = is_user;
-	st->instr[i].f.avt = argcode;
+    csp_instr_t* ip = alloc_instr_ptr(st, NULL, OP_CALL);    
+    if (ip != NULL) {
+	ip->f.x   = x;
+	ip->f.idx = func_idx;
+	ip->f.usr = is_user;
+	ip->f.avt = argcode;
 	return 1;
     }
     return 0;
@@ -1922,11 +1947,10 @@ NOINLINE static bool_t asm_CALL(csp_rt_t* st, reg_t x, int func_idx, int is_user
 
 NOINLINE static bool_t asm_ENTER(csp_rt_t* st, int* pos, int n, index_t mx)
 {
-    int i;
-    if ((i = alloc_instr(st, OP_ENTER)) >= 0) {
-	st->instr[i].e.num = n;
-	st->instr[i].e.mx = mx;
-	*pos = i;
+    csp_instr_t* ip = alloc_instr_ptr(st, pos, OP_ENTER);        
+    if (ip != NULL) {
+	ip->e.num = n;
+	ip->e.mx = mx;
 	return 1;
     }
     return 0;
@@ -1934,11 +1958,10 @@ NOINLINE static bool_t asm_ENTER(csp_rt_t* st, int* pos, int n, index_t mx)
 
 NOINLINE static bool_t asm_LEAVE(csp_rt_t* st, int* pos, int n, index_t mx)
 {
-    int i;
-    if ((i = alloc_instr(st, OP_LEAVE)) >= 0) {
-	st->instr[i].v.num = n;
-	st->instr[i].v.mx = mx;
-	*pos = i;
+    csp_instr_t* ip = alloc_instr_ptr(st, pos, OP_LEAVE);
+    if (ip != NULL) {
+	ip->v.num = n;
+	ip->v.mx = mx;
 	return 1;
     }
     return 0;
@@ -1946,10 +1969,10 @@ NOINLINE static bool_t asm_LEAVE(csp_rt_t* st, int* pos, int n, index_t mx)
 
 NOINLINE static bool_t asm_NEW(csp_rt_t* st, unsigned ent, index_t obj)
 {
-    int i;
-    if ((i = alloc_instr(st, OP_NEW)) >= 0) {
-	st->instr[i].n.ent = ent;
-	st->instr[i].n.obj = obj;
+    csp_instr_t* ip = alloc_instr_ptr(st, NULL, OP_NEW);
+    if (ip != NULL) {
+	ip->n.ent = ent;
+	ip->n.obj = obj;
 	return 1;
     }
     return 0;
@@ -1994,7 +2017,7 @@ static bool_t asm_EQEQ(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
 #if 0
 NOINLINE static bool_t asm_NOP(csp_rt_t* st)
 {
-    return (alloc_instr(st, OP_NOP) >= 0);
+    return (alloc_instr_ptr(st, NULL, OP_NOP) != NULL);
 }
 
 static bool_t asm_OR(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
@@ -2117,7 +2140,7 @@ NOINLINE static int hex(int c)
 #define TOK_INT(y) do { tok = INT; val.val.i = (y); goto done; } while(0)
 #define TOK_FLT(y) do { tok = FLT; val.val.f = (y); goto done; } while(0)
 
-NOINLINE static int csp_next_token(char* str, token_t* tp)
+NOINLINE static int csp_next_token(csp_rt_t* st, char* str, token_t* tp)
 {
     char* str0 = str;
     int c;
@@ -2247,8 +2270,12 @@ next:
 		str++;
 		len++;
 	    }
-	    if (len > MAX_NAME_LEN)
+	    if (len > MAX_NAME_LEN) {
+		if (csp_set_error(st, ERR_NAME_TOO_LONG)) {
+		    csp_set_err_arg_int(st, 0, len);
+		}
 		return -1; // fixme set error code
+	    }
 	    if ((i = find_op_entry(name,len)) >= 0)
 		TOK(op_table_tok(i));
 	    SYM(WORD, name, len);
@@ -2305,7 +2332,7 @@ done:
 }
 
 // scan one line of tokens
-NOINLINE int csp_scan_line(char* str, token_t* tv, size_t* num_toks)
+NOINLINE int csp_scan_line(csp_rt_t* st, char* str, token_t* tv, size_t* num_toks)
 {
     char* str0 = str;
     size_t i;
@@ -2313,7 +2340,7 @@ NOINLINE int csp_scan_line(char* str, token_t* tv, size_t* num_toks)
 
     i = 0;
     while(i < max_toks) {
-	int n = csp_next_token(str, &tv[i]);
+	int n = csp_next_token(st, str, &tv[i]);
 	if (n < 0)
 	    return -1;
 	str += n;
@@ -3040,6 +3067,15 @@ next:
 	    vtype_t vt;
 	    // Not a function - regular variable/decl/state lookup
 	    if ((ix = lookup_decl(st,&tval.str)) == BAD_INDEX) {
+		int s = lookup_state(st, &tval.str);
+		if (s >= 0) {
+		    value_t sv;
+		    sv.i = st->states[s].snum;
+		    if ((ep = push_imm(st, rstack, ep, V_INTEGER, sv)) < 0)
+			return 0;
+		    ptok = INT;
+		    goto after_primary;
+		}
 		if (csp_set_error(st, ERR_VARIABLE_NOT_DECLARED)) {
 		    csp_set_err_arg_tstr(st, 0, &tval.str);
 		}
@@ -4085,21 +4121,6 @@ NOINLINE int csp_parse_immediate(csp_rt_t* st, token_t* tv, size_t n)
     return 0;
 }
 
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
-
-NOINLINE int lookup_state(csp_rt_t* st, const tstr_t* name)
-{
-    int i;
-    for (i = 0; i < st->ps.ns; i++) {
-	int pos = st->states[i].name;
-	int len = st->str[pos-1];
-	if (len == name->len) {
-	    if (memcmp(&st->str[pos], name->ptr, len) == 0)
-		return i;
-	}
-    }
-    return -1;
-}
 
 NOINLINE int add_state(csp_rt_t* st, const tstr_t* name)
 {
@@ -4172,7 +4193,7 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
     int n;
 
     st->ap = &alloc;
-    while((n = csp_scan_line(str, tv, &num)) > 0) {
+    while((n = csp_scan_line(st, str, tv, &num)) > 0) {
 	int r = -1;
 	str += n;
 	alloc_init(st->ap);
@@ -4740,7 +4761,7 @@ static int csp_process_immediate(csp_rt_t* st, char* line)
     reg_allocator_t* saved_ap;
     rentry_t result;
 
-    if (csp_scan_line(line, tv, &num) < 0) {
+    if (csp_scan_line(st, line, tv, &num) < 0) {
 	csp_print_str("Scan error\n");
 	return -1;
     }

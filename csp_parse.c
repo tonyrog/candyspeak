@@ -49,8 +49,10 @@ NOINLINE decl_opts_t parse_opts(csp_rt_t* st, token_t* tv,
 	i++;
     }
 done:
-    DBG("\n");
-    *ip= i;
+    if (i != *ip) {
+	*ip= i;	
+	DBG("\n");
+    }
     return opts;
 }
 
@@ -135,7 +137,7 @@ NOINLINE static int pmatch_expr(pmatch_st_t* pst, token_t* tv, int ti,
 	   (tv[k].t != QUEST))
 	k++;
     num = (k > ti) ? k - ti : 1;
-    DBG("expr: ti=%d, num=%ld\n", ti, num);
+    DBG("expr: %d:%d, num=%ld\n", ti, ti+pst->tb, num);
     // Just record boundaries - actual parsing happens in csp_parse_rule
     range.pos = pst->tb+ti;
     range.len = num;
@@ -162,8 +164,6 @@ static int pmatch_const(pmatch_st_t* pst, token_t* tv, int ti, size_t n,
 	k++;
     num = (k > ti) ? k - ti : 1;	
 
-//    num = n;
-//    printf("input NUM=%ld\n", num);
     if (!csp_parse_const_expr(pst->st, &tv[ti], &num, &result))
 	return -1;
     if (!result.I)
@@ -188,13 +188,21 @@ static int pmatch_const(pmatch_st_t* pst, token_t* tv, int ti, size_t n,
 	return -1;
     }
     store_val(pst->data, pst->eo+off, result.val);
-    // printf("output NUM=%ld\n", num);    
     return ti + num;
 }
 
+#define SP ' '
+#define NUL '\0'
+#define NSPACES 10
+static char spaces[NSPACES+1] = {SP,SP,SP,SP,SP,SP,SP,SP,SP,SP,NUL};
+
+static char* indent(int l)
+{
+    return &spaces[10-2*l];
+}
 
 // Match pattern, return tokens consumed or -1
-int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
+int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, int l, const uint8_t* pat)
 {
     int ti = 0;  // token index
     int pi = 0;  // pattern index
@@ -205,7 +213,9 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
         case P_TOK: {
             // Match specific token
             uint8_t tok = pat[pi++];
-	    DBG("P_TOK: tok='%s'\n", op_table[tok].name);
+	    DBG("%sP_TOK: %d:%d tok='%s'\n", indent(l),
+		ti, ti+pst->tb,
+		op_table[tok].name);
             if ((ti >= (int)n) || (tv[ti].t != tok))
                 return -1;
             ti++;
@@ -216,8 +226,8 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
 	    uint8_t val_off = pat[pi++];
 	    decl_opts_t opts = fetch_opts(pst->data, pst->eo+opts_off);
 
-	    DBG("P_NUMBER: opts_off=%d, val_off=%d, vt=%d\n",
-		opts_off, val_off, opts.vt);
+	    DBG("%sP_NUMBER: %d:%d opts_off=%d, val_off=%d, vt=%d\n", indent(l),
+		ti, ti+pst->tb, opts_off, val_off, opts.vt);
 		   
 	    if ((ti = pmatch_const(pst,tv,ti,n,opts.vt,val_off)) < 0)
 		return -1;
@@ -225,14 +235,16 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
 	}
         case P_INTEGER: {
 	    uint8_t val_off = pat[pi++];
-	    DBG("P_INTEGER: val_off=%d\n", val_off);
+	    DBG("%sP_INTEGER: %d:%d val_off=%d\n", indent(l),
+		ti, ti+pst->tb, val_off);		
 	    if ((ti = pmatch_const(pst,tv,ti,n,V_INTEGER,val_off)) < 0)
 		return -1;
 	    break;
 	}
         case P_FLOAT: {
 	    uint8_t val_off = pat[pi++];
-	    DBG("P_FLOAT: val_off=%d\n", val_off);	    
+	    DBG("%sP_FLOAT: %d:%d val_off=%d\n", indent(l),
+		ti, ti+pst->tb, val_off);
 	    if ((ti = pmatch_const(pst,tv,ti,n,V_FLOAT,val_off)) < 0)
 		return -1;
 	    break;
@@ -241,7 +253,8 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
             // Capture WORD as string
             uint8_t val_off = pat[pi++];
 	    int off = pst->eo + val_off;  // eo already adjusted by P_REP
-	    DBG("P_STR: \"%.*s\" val_off=%d, off=%d\n",
+	    DBG("%sP_STR: %d:%d \"%.*s\" val_off=%d, off=%d\n", indent(l),
+		ti, ti+pst->tb,
 		tv[ti].v.str.len, tv[ti].v.str.ptr, val_off, off);
             if ((ti >= (int)n) || (tv[ti].t != WORD))
                 return -1;
@@ -252,7 +265,8 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
         case P_EXPR: {
             // Capture EXPR as start/stop index
             uint8_t val_off = pat[pi++];
-	    DBG("P_EXPR: val_off=%d\n", val_off);
+	    DBG("%sP_EXPR: %d:%d val_off=%d\n", indent(l),
+		ti, ti+pst->tb, val_off);
 	    if ((ti = pmatch_expr(pst, tv, ti, n, val_off)) < 0)
 		return -1;
             break;
@@ -261,7 +275,8 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
             // Parse options, store at offset
             uint8_t val_off = pat[pi++];
 	    decl_opts_t opts = fetch_opts(pst->data, pst->eo+val_off);
-	    DBG("P_OPTS: val_off=%d\n", val_off);
+	    DBG("%sP_OPTS: %d:%d val_off=%d\n", indent(l),
+		ti, ti+pst->tb, val_off);
 	    opts = parse_opts(pst->st, tv, &ti, n, opts);
 	    store_opts(pst->data, pst->eo+val_off, opts);
             break;
@@ -269,12 +284,15 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
         case P_OPT: {
             // Optional: try to match, ok if fails
             uint8_t len = pat[pi++];
+	    int tb0 = pst->tb;  // save current tb
             int r;
-	    DBG("P_OPT: len=%d\n", len);
-	    pst->tb = ti;
-	    if ((r = pmatch_(pst, &tv[ti], n-ti, &pat[pi])) >= 0)
+	    DBG("%sP_OPT: %d:%d len=%d\n", indent(l), ti, ti+pst->tb, len);
+	    pst->tb += ti;
+	    if ((r = pmatch_(pst, &tv[ti], n-ti, l+1, &pat[pi])) >= 0) {
                 ti += r;
+	    }
             // else: no match, that's ok for optional
+	    pst->tb = tb0;	    
             pi += len;
             break;
         }
@@ -287,17 +305,20 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
 	    // temp save of data (assumes data < 64 bytes)	    
             uint8_t saved[64]; 
 
-	    DBG("P_ALT: num_alts=%d\n", num_alts);
+	    DBG("%sP_ALT: %d:%d num_alts=%d\n", indent(l),
+		ti, ti+pst->tb, num_alts);
 
             for (int a = 0; a < num_alts && !matched; a++) {
                 uint8_t len = pat[pi++];
+		int tb0 = pst->tb;  // save tb
 		int r;
 		
-		DBG("ALT %d: len=%d\n", a, num_alts);
+		DBG("%sALT[%d]: %d:%d len=%d\n", indent(l),
+		    a, ti, ti+pst->tb, num_alts);
 		
                 memcpy(saved, pst->data, sizeof(saved));
-		pst->tb = ti;
-                if ((r = pmatch_(pst, &tv[ti], n-ti, &pat[pi])) >= 0) {
+		pst->tb += ti;
+                if ((r = pmatch_(pst, &tv[ti], n-ti, l+1, &pat[pi])) >= 0) {
                     ti += r;
                     matched = 1;
                     // Skip remaining alts
@@ -310,6 +331,7 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
                     memcpy(pst->data, saved, sizeof(saved));  // restore
                     pi += len;
                 }
+		pst->tb = tb0;
             }
             if (!matched)
 		return -1;
@@ -318,12 +340,15 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
 	case P_ARRAY: {  // normally used inside P_REP
 	    pst->eo = pat[pi++];  // base offset
 	    pst->ez = pat[pi++];  // element size
+	    DBG("%sP_ARRAY: %d:%d, eo=%d, ez=%d\n", indent(l),
+		ti, ti+pst->tb, pst->eo, pst->ez);
 	    break;
 	}
         case P_REP: {
             // Repeat: match zero or more times
             uint8_t len = pat[pi++];
 	    int ix = 0;
+	    int tb0 = pst->tb;
 	    pst->eo = 0;
 	    pst->ez = 0;
 	    if (pat[pi] == P_ARRAY) {
@@ -331,27 +356,30 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
 		pst->eo = pat[pi++];  // base offset
 		pst->ez = pat[pi++];  // element size
 	    }
-	    DBG("P_REP: len=%d, ez=%d\n", len, pst->ez);
+	    DBG("%sP_REP: %d:%d len=%d, ez=%d\n", indent(l),
+		ti, ti+pst->tb, len, pst->ez);
             while (ti < (int)n) {
 		DBG("ITER %d:\n", ix);
 		// fixme pass ix to pmatch to allow data to store
 		// array elements
-		pst->tb = ti;
+		pst->tb += ti;
 		pst->ix = ix;
-                int r = pmatch_(pst, &tv[ti], n-ti, &pat[pi]);
+                int r = pmatch_(pst, &tv[ti], n-ti, l+1, &pat[pi]);
                 if (r <= 0) break;  // no match or empty match
                 ti += r;
 		ix++;
 		pst->eo += pst->ez;
             }
             pi += len;
+	    pst->tb = tb0;
 	    pst->ez = 0; // reset array
             break;
         }
         case P_CALL: {
             // Call registered callback - returns tokens consumed or 0 on error
             uint8_t id = pat[pi++];
-	    DBG("P_CALL: id=%d\n", id);
+	    DBG("%sP_CALL: %d:%d id=%d\n",
+		indent(l), ti, ti+pst->tb, id);
             if (id < 8 && callbacks[id]) {
                 int r = callbacks[id](pst->st, tv, ti, pst->data);
                 if (r <= 0)
@@ -364,7 +392,7 @@ int pmatch_(pmatch_st_t* pst, token_t* tv, size_t n, const uint8_t* pat)
             return -1;  // unknown command
         }
     }
-
+    DBG("P_END: %d:%d\n", ti, ti+pst->tb);
     return ti;  // tokens consumed
 }
 
@@ -379,5 +407,5 @@ int pmatch(csp_rt_t* st, token_t* tv, size_t n,
     pst.tb   = 0;
     pst.ix   = 0;
     pst.eo   = 0;     // current element offset (P_REP)
-    return pmatch_(&pst, tv, n, pat);
+    return pmatch_(&pst, tv, n, 0, pat);
 }

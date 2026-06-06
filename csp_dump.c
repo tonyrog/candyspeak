@@ -665,6 +665,7 @@ void csp_dump_tokens(FILE* f, token_t* tv, int n)
 	}
     }
     fprintf(f, "eol].\n");
+    fflush(f);
 }
 
 // Dump str, decl and inst tables

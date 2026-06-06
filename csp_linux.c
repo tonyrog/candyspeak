@@ -361,7 +361,7 @@ int parse_file(csp_rt_t* st, FILE* fin)
 	    token_t tv[MAX_LINE_TOKENS];
 	    size_t num = MAX_LINE_TOKENS;
 	    int n;
-	    if ((n = csp_scan_line(buf, tv, &num)) < 0)
+	    if ((n = csp_scan_line(st, buf, tv, &num)) < 0)
 		return -1;
 	    csp_dump_tokens(stdout, tv, num);
 	}

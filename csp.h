@@ -102,7 +102,7 @@ typedef const char rochar;  // PROGMEM string character type
 #define MAX_STACK_DEPTH 4
 #define NAME_BITS    5
 #define MAX_STR_BUF  (1 << STRING_BITS) // total number of char in var names
-#define MAX_NAME_LEN 8     // max var name len
+#define MAX_NAME_LEN 31    // max var name len
 #define MAX_ARGS     4     // max number of arguments to function
 #define MAX_USER_FUNCS 16  // max user-defined functions
 
@@ -159,7 +159,7 @@ typedef int32_t  sindex_t;
 
 typedef struct PACKED {
     unsigned long period:28; // timeout value ms (74h max)
-    unsigned _res:1;         // reserved
+    unsigned _res:1;         // reserved (auto restart?)
     unsigned fired:1;        // timeout occurred this cycle (edge-triggered)
     unsigned running:1;      // timer is runnig (tx is valid time)
     unsigned val:1;          // one bit value 1 = start, 0 = stop
@@ -692,7 +692,8 @@ typedef enum {
     ERR_FUNCTION_DOES_NOT_EXIST,
     ERR_INTERNAL_ERROR,
     ERR_FUNCTION_ARGUMENT_TYPE_MISMATCH,
-    ERR_ALREADY_DEFINED,    
+    ERR_ALREADY_DEFINED,
+    ERR_NAME_TOO_LONG,
 } csp_err_t;
 
 // parser state, save state before parse
@@ -753,7 +754,7 @@ typedef struct
 
 typedef struct _csp_rt_t
 {
-    csp_instr_t instr[MAX_INSTRS]; // instructions used
+    csp_instr_t instr[MAX_INSTRS+1]; // instructions used (one dummy slot!)
     csp_decl_t decl[MAX_DECLS];    // declarations used
 
     value_t* dio[2];              // dio[DIN], dio[DOUT]
@@ -927,7 +928,7 @@ extern const csp_func_t* csp_match_func(csp_rt_t*,
 extern int     csp_set_transaction(csp_rt_t*, int onoff);
 extern int     csp_set_reactive(csp_rt_t*, int onoff);
 extern int     csp_set_latch(csp_rt_t*, int onoff);
-extern int     csp_scan_line(char* str, token_t* tv, size_t* num_toks);
+extern int     csp_scan_line(csp_rt_t*,char* str,token_t* tv,size_t* num_toks);
 extern int     csp_parse(csp_rt_t*, char* str);
 extern void    csp_csr(csp_rt_t* st);
 extern index_t csp_eval(csp_rt_t* st);
