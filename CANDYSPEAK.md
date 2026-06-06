@@ -247,7 +247,7 @@ is probably to have all Off clauses after ALL On clauses.
 
 	<can-range> := 
 		  <frame-id> '[' <bit-pos> '..' <bit-pos> ']'
-		| <frame-id> '[' <bit-pos> ':' <bit-len> ']'
+		| <frame-id> '[' <bit-pos> ']'
 	
 # built in variables
 

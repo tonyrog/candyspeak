@@ -177,6 +177,10 @@ Support pin binding at instantiation time:
 #Button b1 In.pin=13   // bind to pin 13
 #Button b2 In.pin=14   // bind to pin 14
 
+// or
+#Button b1[pin]=13   // bind to pin 13
+#Button b2[pin]=14   // bind to pin 14
+
 ```
 
 Implementation:

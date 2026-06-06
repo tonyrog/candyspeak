@@ -104,7 +104,6 @@ typedef const char rochar;  // PROGMEM string character type
 #define MAX_STR_BUF  (1 << STRING_BITS) // total number of char in var names
 #define MAX_NAME_LEN 31    // max var name len
 #define MAX_ARGS     4     // max number of arguments to function
-#define MAX_USER_FUNCS 16  // max user-defined functions
 
 #define BAD_INDEX   (MAX_INDICES-1)
 #define PARSE_ERROR -1
@@ -195,7 +194,6 @@ typedef enum  {
     PART_PERIOD,
     PART_FIRED,
 } csp_part_t;
-
 
 #if defined(USE_FIXPOINT) && (USE_FIXPOINT == 1)
 #include "csp_fixpoint.h"

@@ -379,8 +379,11 @@ void print_defines()
     printf("USE_STATISTICS=%d\n",USE_STATISTICS);
 
     printf("TRANSACTION_DEFAULT=%d\n", TRANSACTION_DEFAULT);
-    printf("REACTIVE_DeFAULT=%d\n", REACTIVE_DEFAULT);
-    printf("OP_LAST=%d\n", OP_LAST);
+    printf("REACTIVE_DEFAULT=%d\n", REACTIVE_DEFAULT);
+    printf("OP_LAST=%d\n", OP_LAST);  // last opcode = #opcodes
+    printf("LAST=%d\n", LAST);        // last token  = #tokens
+    printf("MAX_NAME_LEN=%d\n", MAX_NAME_LEN);
+    printf("MAX_ARGS=%d\n", MAX_ARGS);
 
     printf("OBJ_BITS=%d\n", OBJ_BITS);
     printf("DECL_BITS=%d\n", DECL_BITS);
