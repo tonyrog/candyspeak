@@ -1,5 +1,5 @@
 {cycles, 5}.
 {checks, [
-  {final_object_var, "Delay.a", "Done", 1},
-  {final_object_var, "Delay.b", "Done", 1}
+  {final_object_var, "Delay.a", "a.Done", 1},
+  {final_object_var, "Delay.b", "b.Done", 1}
 ]}.

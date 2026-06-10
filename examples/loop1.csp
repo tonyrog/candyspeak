@@ -1,13 +1,17 @@
 // demo of three nested loops 128 cycles
 #constant n:4 = 4
-#variable i:10 = 0
+#variable i:10 = 1
 #variable j:10 = 1
 #variable k:10 = 1
 
-i = i + 1 ? (i <= n)
-  j = j + 1 ? (i > n)
-    k = k + 1 ? (j > n)
-i = 1 ? (i > n)
-j = 1 ? (j > n)
-k = 1 ? (k > n)
-print("i="),print(i),print(",j="),print(j),print(",k="),print(k),print("\n") ? 1
+i = 1     ? (i == n)
+i = i + 1 ? (i < n)
+j = 1     ? (j == n) && (i == n)
+j = j + 1 ? (j < n) && (i == n)
+k = 1     ? (k == n) && (j == n) && (i == n)
+k = k + 1 ? (k < n) && (j == n) && (i == n)
+
+print("i=",i)
+print(",j=",j)
+print(",k=",k)
+println()

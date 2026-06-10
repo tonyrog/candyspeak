@@ -300,8 +300,19 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     return i+1;
 }
 
+void csp_dump_var_name(FILE* f, csp_rt_t* st, index_t ix)
+{
+    int m = OBJ(ix);
+    if ((m == GLOBAL) || (m == CURRENT)) // global    
+	fprintf(f, "%s", decl_name(st, ix));
+    else {
+	index_t obj = st->object[m];
+	fprintf(f, "%s.%s", decl_name(st, obj), decl_name(st, ix));
+    }
+}
+
 void csp_dump_var(FILE* f,csp_rt_t* st,
-		  char* dtype, char* name, char* suffix,
+		  char* dtype, char* suffix,
 		  int m, int di,
 		  int fv, csp_lang_t lang)
 {
@@ -310,12 +321,16 @@ void csp_dump_var(FILE* f,csp_rt_t* st,
     switch(lang) {
     case ERLANG:
 	if (!fv) fprintf(f, ",");
-	fprintf(f, "{%s,\"%s%s\",", dtype, name, suffix);
+	fprintf(f, "{%s,\"", dtype);
+	csp_dump_var_name(f, st, ix);
+	fprintf(f, "%s\",", suffix);
 	csp_fprint_value(f, st, st->decl[di].vt, csp_value(st, ix));
 	fprintf(f, "}");
 	break;
     case TEXT:
-	fprintf(f, " %-s%s=", name, suffix);
+	fprintf(f, " ");
+	csp_dump_var_name(f, st, ix);
+	fprintf(f, "%s=", suffix);
 	csp_fprint_value(f, st, st->decl[di].vt,  csp_value(st, ix));
 	if (m == 0) fprintf(f, "\n");
 	break;
@@ -343,16 +358,15 @@ void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
     j = 1;
     while(j <= n) {
 	int k = INDEX(mx)+j;
-	index_t ix = MAKE_INDEX(m, k);	
 	switch(st->decl[k].type) {
 	case DECL_VARIABLE:
-	    csp_dump_var(f,st,"var",decl_name(st,ix),"",m,k,fv,lang);
+	    csp_dump_var(f,st,"var","",m,k,fv,lang);
 	    fv = 0;
 	    j++;
 	    break;
 	case DECL_TIMER:
-	    csp_dump_var(f,st,"timer",decl_name(st, ix),"",m,k,fv,lang);
-	    csp_dump_var(f,st,"var",decl_name(st,ix),"[t0]",m,k+1,fv,lang);
+	    csp_dump_var(f,st,"timer","",m,k,fv,lang);
+	    csp_dump_var(f,st,"var","[t0]",m,k+1,fv,lang);
 	    fv = 0;
 	    j += 2;
 	    break;	    
@@ -388,20 +402,19 @@ void csp_dump_state(FILE* f, csp_rt_t* st, csp_lang_t lang)
     // global variables
     i = 0;
     while(i < st->ps.nd) {
-	index_t ix = MAKE_INDEX(0, i);
 	switch(st->decl[i].type) {
 	case DECL_MODULE:
 	    // skip module decl (covered by objects)
 	    i += st->decl[i].md.n + 1;
 	    break;
 	case DECL_VARIABLE:
-	    csp_dump_var(f,st,"var",decl_name(st,ix),"",0,i,fo,lang);
+	    csp_dump_var(f,st,"var","",0,i,fo,lang);
 	    fo = 0;
 	    i++;
 	    break;
 	case DECL_TIMER:
-	    csp_dump_var(f,st,"timer",decl_name(st,ix),"",0,i,fo,lang);
-	    csp_dump_var(f,st,"var",decl_name(st,ix),"[t0]",0,i+1,fo,lang);
+	    csp_dump_var(f,st,"timer","",0,i,fo,lang);
+	    csp_dump_var(f,st,"var","[t0]",0,i+1,fo,lang);
 	    fo = 0;
 	    i += 2;
 	    break;		
@@ -1057,9 +1070,15 @@ static void exprbuf_str(csp_exprbuf_t* bp, const char *s)
 
 static uint8_t exprbuf_var(csp_rt_t* st, csp_exprbuf_t* bp, uint16_t ix)
 {
-    uint8_t* varname =  (uint8_t*) decl_name(st, ix);
-    uint8_t  varnamelen = varname[-1];
-    return exprbuf_intern(bp, varname, varnamelen);
+    uint8_t *start = exprbuf_ptr(bp);
+    int m = OBJ(ix);
+    
+    if ((m != GLOBAL) && (m != CURRENT)) {
+	exprbuf_str(bp, decl_name(st, st->object[m]));
+	exprbuf_char(bp, '.');
+    }
+    exprbuf_str(bp, decl_name(st, ix));
+    return exprbuf_intern(bp, start, exprbuf_len(bp, start));
 }
 
 static void exprbuf_wrap(csp_exprbuf_t* bp, unsigned r, int outer)
@@ -1231,11 +1250,13 @@ static void exprbuf_store(csp_rt_t* st,
 			  csp_exprbuf_t* bp,
 			  csp_instr_t* ip, int rimp)
 {
-    uint8_t* start = exprbuf_ptr(bp);
-    uint8_t  var = exprbuf_var(st, bp, ip->m.mem);
+    uint8_t* start;
+    uint8_t  var;
 
+    var = exprbuf_var(st, bp, ip->m.mem);
+    start = exprbuf_ptr(bp);
     exprbuf_strref(bp, var);
-    if (rimp) { exprbuf_char(bp, '<'); exprbuf_char(bp, '-'); }
+    if (rimp) exprbuf_str(bp, "<-");
     else exprbuf_char(bp, '=');
     exprbuf_strref(bp, bp->reg[ip->m.x]);
 

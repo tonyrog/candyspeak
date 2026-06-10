@@ -69,7 +69,8 @@ typedef unsigned bool_t;
 typedef const char rochar;  // PROGMEM string character type
 
 #define INDEX_BITS   (OBJ_BITS+DECL_BITS)
-#define REG_BITS     4
+#define REG_BITS     4   // r0..r15
+#define FUNC_BITS    5   // 0..31 (need more!)
 #define PART_BITS    4
 #define GLOBAL       0                       // global level
 #define CURRENT      ((1 << OBJ_BITS)-1)     // current obj
@@ -623,10 +624,10 @@ typedef struct PACKED {
 
 typedef struct PACKED {
     opcode_t op:6;    
-    unsigned x:REG_BITS;    // result register    
-    unsigned idx:REG_BITS;  // function index
-    unsigned usr:1;         // user function
-    unsigned avt:16;        // argument value types 4 bit per argument
+    unsigned x:REG_BITS;     // result register
+    unsigned idx:FUNC_BITS;  // function index
+    unsigned usr:1;          // user function
+    unsigned avt:16;         // argument value types 4 bit per argument
 } csp_instr_call_t;
 
 typedef union {
@@ -673,6 +674,7 @@ typedef struct PACKED {
 typedef enum {
     ERR_OK = 0,
     ERR_SYNTAX,
+    ERR_TOO_MANY_TOKENS,
     ERR_STRING_SPACE_EXHUSTED,    
     ERR_TOO_MANY_DECLARATIONS,
     ERR_TOO_MANY_INSTRUCTIONS,
@@ -684,7 +686,7 @@ typedef enum {
 #endif
     ERR_END_MISMATCH,
     ERR_NOT_A_MODULE,
-    ERR_OBJECT_NOT_DEFINED,
+    ERR_OBJECT_NOT_DECLARED,
     ERR_VARIABLE_NOT_DECLARED,
     ERR_FIELD_NOT_FOUND,
     ERR_FUNCTION_DOES_NOT_EXIST,
@@ -942,9 +944,9 @@ extern void csp_set_dvalue(csp_rt_t* st, index_t n, uvalue_t u);
 extern void csp_set_avalue(csp_rt_t* st, index_t n, uvalue_t u);
 extern void csp_set_tvalue(csp_rt_t* st, index_t n, uvalue_t u);
 
-extern int csp_parse_expr(csp_rt_t* st, token_t* tv, size_t* num_toks,
+extern int csp_parse_expr(csp_rt_t* st, const token_t* tv, size_t* num_toks,
 			  rentry_t* result);
-extern int csp_parse_const_expr(csp_rt_t* st, token_t* tv, size_t* num_toks,
+extern int csp_parse_const_expr(csp_rt_t* st, const token_t* tv, size_t* num_toks,
 				rentry_t* result);
 //
 extern index_t csp_new_decl(csp_rt_t* st, const tstr_t* name, decl_t op);

@@ -157,8 +157,10 @@ const op_entry_t op_table[] RODATA = {
     INSTR_ENT(BAR,OP_BOR,s_BAR,2,30,LEFT),
     INSTR_ENT(AMPAMP,OP_AND,s_AMPAMP,2,20,LEFT),
     INSTR_ENT(BARBAR,OP_OR,s_BARBAR,2,10,LEFT),
-    INSTR_ENT(EQ,OP_EQ,s_EQ,2,5,RIGHT),
-    INSTR_ENT(RIMP,OP_RIMP,s_RIMP,2,4,RIGHT),
+    // INSTR_ENT(EQ,OP_EQ,s_EQ,2,5,RIGHT),
+    // INSTR_ENT(RIMP,OP_RIMP,s_RIMP,2,4,RIGHT),    
+    INSTR_ENT(EQ,OP_EQ,s_EQ,-1,-1,NO),        // assign_expr
+    INSTR_ENT(RIMP,OP_RIMP,s_RIMP,-1,-1,NO),  // assign_expr
     INSTR_ENT(COMMA,OP_COMMA,s_COMMA,2,2,RIGHT),
     INSTR_ENT(QUEST,OP_RULE,s_QUEST,-1,-1,NO),
 
@@ -582,8 +584,8 @@ const char* csp_format_error(csp_err_t err)
 	return "word %s not a module";
     case ERR_END_MISMATCH:
 	return "end mismatch";	
-    case ERR_OBJECT_NOT_DEFINED:
-	return "object %s is not defined";
+    case ERR_OBJECT_NOT_DECLARED:
+	return "object %s is not declared";
     case ERR_VARIABLE_NOT_DECLARED:
 	return "variable %s is not declared";
     case ERR_FIELD_NOT_FOUND:
@@ -962,14 +964,20 @@ static value_t fn_print(csp_rt_t* st, uint16_t type,
 			 value_t* args,uint8_t nargs)
 {
     value_t ret;
-    ret.i = csp_print_value(st, type & 0xf, args[0]);
+    int i;
+    ret.i = 0;
+    for (i = 0; i < nargs; i++) {
+	ret.i += csp_print_value(st, type & 0xf, args[i]);
+	type >>= 4;
+    }
     return ret;
 }
 
 static value_t fn_println(csp_rt_t* st, uint16_t type,
 			  value_t* args,uint8_t nargs)
 {
-    value_t ret = fn_print(st, type, args, nargs);
+    value_t ret;    
+    ret = fn_print(st, type, args, nargs);
     ret.i += csp_println();
     return ret;
 }
@@ -1040,9 +1048,18 @@ const csp_func_t csp_builtin_funcs[] RODATA = {
     CSP_FUNC_ENT(s_changed, 1, 0, V_INTEGER, MAKE_TYPE1(V_INDEX), fn_changed),
     CSP_FUNC_ENT(s_rising,  1, 0, V_INTEGER, MAKE_TYPE1(V_DIGITAL), fn_rising),
     CSP_FUNC_ENT(s_falling, 1, 0, V_INTEGER, MAKE_TYPE1(V_DIGITAL), fn_falling),
-    
+
+    // print 1..4 arguments
     CSP_FUNC_ENT(s_print,   1, 0, V_INTEGER, MAKE_TYPE1(V_ANY),  fn_print),
+    CSP_FUNC_ENT(s_print,   2, 0, V_INTEGER, MAKE_TYPE2(V_ANY,V_ANY),  fn_print),
+    CSP_FUNC_ENT(s_print,   3, 0, V_INTEGER, MAKE_TYPE3(V_ANY,V_ANY,V_ANY),  fn_print),
+    CSP_FUNC_ENT(s_print,   4, 0, V_INTEGER, MAKE_TYPE4(V_ANY,V_ANY,V_ANY,V_ANY),  fn_print),
+    // println 0..4 arguments    
+    CSP_FUNC_ENT(s_println, 0, 0, V_INTEGER, MAKE_TYPE0(),       fn_println),
     CSP_FUNC_ENT(s_println, 1, 0, V_INTEGER, MAKE_TYPE1(V_ANY),  fn_println),
+    CSP_FUNC_ENT(s_println, 2, 0, V_INTEGER, MAKE_TYPE2(V_ANY,V_ANY),  fn_println),
+    CSP_FUNC_ENT(s_println, 3, 0, V_INTEGER, MAKE_TYPE3(V_ANY,V_ANY,V_ANY),  fn_println),
+    CSP_FUNC_ENT(s_println, 4, 0, V_INTEGER, MAKE_TYPE4(V_ANY,V_ANY,V_ANY,V_ANY),  fn_println),
     CSP_FUNC_ENT(s_tick,    0, 0, V_INTEGER, MAKE_TYPE0(),       fn_tick),
     CSP_FUNC_ENT(s_cycle,   0, 0, V_INTEGER, MAKE_TYPE0(),       fn_cycle),
     CSP_FUNC_ENT(s_latch,   1, 0, V_INTEGER, MAKE_TYPE1(V_INTEGER), fn_latch),
@@ -1456,6 +1473,8 @@ again:
 	    index_t ent = st->instr[n].n.ent;;
 	    index_t obj = st->instr[n].n.obj;
 	    // in non-reactive mode this is like a call
+	    if (debug) printf("OP_NEW: esp=%d, cur=%d, ent=%d, obj=%d\n",
+			      st->esp, st->cur, ent, obj);
 	    st->stack[st->esp].ix = n+1;      // return address
 	    st->stack[st->esp].cur = st->cur;  // store current module
 	    st->esp++;
@@ -2352,6 +2371,7 @@ NOINLINE int csp_scan_line(csp_rt_t* st, char* str, token_t* tv, size_t* num_tok
 	}
 	i++;
     }
+    csp_set_error(st, ERR_TOO_MANY_TOKENS);
     return -1;
 }
 
@@ -2844,8 +2864,8 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 //  3    arg3   ep-(4-3)
 //  ep
 //
-NOINLINE static int process_fcall(csp_rt_t* st, token_t* word, uint8_t arity,
-				  rentry_t* rstack, int ep)
+NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
+				  uint8_t arity, rentry_t* rstack, int ep)
 {
     int dst, n, j;
     const csp_func_t* func = NULL;
@@ -2967,7 +2987,7 @@ void print_stack_used()
 // num_toks is number of tokens on input, consumed on output
 // result receives the expression result (reg, immediate flag, value, type)
 // returns: 1=ok, 0=error
-NOINLINE int csp_parse_expr(csp_rt_t* st, token_t* tv, size_t* num_toks,
+NOINLINE int csp_parse_expr(csp_rt_t* st, const token_t* tv, size_t* num_toks,
 		   rentry_t* result)
 {
     tok_t tok;
@@ -3069,7 +3089,7 @@ next:
 	    vtype_t vt;
 	    // Not a function - regular variable/decl/state lookup
 	    if ((ix = lookup_decl(st,&tval.str)) == BAD_INDEX) {
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)		
+#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
 		int s = lookup_state(st, &tval.str);
 		if (s >= 0) {
 		    value_t sv;
@@ -3200,7 +3220,8 @@ out: // expression is terminated with non-expression char
 }
 
 // parse expr while turn of codegen is the same as partial eval
-NOINLINE int csp_parse_const_expr(csp_rt_t* st, token_t* tv, size_t* num_toks,
+NOINLINE int csp_parse_const_expr(csp_rt_t* st,
+				  const token_t* tv, size_t* num_toks,
 				  rentry_t* result)
 {
     reg_allocator_t* saved_ap = st->ap;
@@ -3211,12 +3232,47 @@ NOINLINE int csp_parse_const_expr(csp_rt_t* st, token_t* tv, size_t* num_toks,
     return r;
 }
 
+
+typedef struct {
+    ivalue_t res;
+} res_param_t;
+
+static const uint8_t pat_res[] = {
+    P_OPT,6,
+      P_TOK,COLON,
+      P_INTEGER_S, csp_offsetof(res_param_t,res), STOP_RES,
+    P_OPT_END,
+    P_END
+};
+
+typedef struct {
+    ivalue_t port;
+    ivalue_t pin;
+} port_pin_t;
+
+// sub-pattern for <port> ':' <pin> | <pin>
+// SCANED BEFORE use is scanned
+static const uint8_t pat_port_pin[] = {
+    P_CHOICE, 2,
+      P_ALT, 9, // Alt 1: port:pin
+        P_INTEGER_S, csp_offsetof(port_pin_t, port), STOP_PORT,
+	P_TOK, COLON,
+	P_INTEGER_S, csp_offsetof(port_pin_t, pin), STOP_PIN1,
+      P_ALT_END,
+      P_ALT, 4, // Alt 2: pin
+        P_INTEGER_S, csp_offsetof(port_pin_t, pin), STOP_PIN2,
+      P_ALT_END,
+    P_CHOICE_END,
+    P_END
+};
+
+
 typedef struct {
     tstr_t name;
 } module_param_t;
 
 // '#' 'module' <name>
-static const uint8_t module_pat[] = {
+static const uint8_t pat_module[] = {
     P_TOK, HASH,
     P_TOK, MODULE,
     P_STR, csp_offsetof(module_param_t, name),
@@ -3230,7 +3286,7 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, size_t n)
     int jx;
     int i;
 
-    if (pmatch(st, tv, n, module_pat, &d) < 0) {
+    if (pmatch(st, tv, n, pat_module, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3261,7 +3317,7 @@ typedef struct {
 } end_param_t;
 
 // '#' 'end' [....]
-static const uint8_t end_pat[] = {
+static const uint8_t pat_end[] = {
     P_TOK, HASH,
     P_TOK, END,
     P_END
@@ -3274,7 +3330,7 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
     int lx;
     const tstr_t empty = { .ptr = NULL, .len = 0};
     
-    if (pmatch(st, tv, n, end_pat, &d) < 0) {
+    if (pmatch(st, tv, n, pat_end, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3315,23 +3371,22 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
 
 typedef struct {
     tstr_t name;
-    ivalue_t res;
+    res_param_t r;
     decl_opts_t opts;
     value_t init;
 } variable_param_t;
 
-static const uint8_t variable_pat[] = {
+static const uint8_t pat_variable[] = {
     P_TOK, HASH,
     P_TOK, VARIABLE,
     P_STR, csp_offsetof(variable_param_t, name),
-    P_OPT,6,
-      P_TOK,COLON,
-      P_INTEGER_S,csp_offsetof(variable_param_t,res),STOP_VAR_RES,
-    P_OPT_END,
-    P_OPTS,csp_offsetof(variable_param_t, opts),
-    P_OPT, 6, P_TOK, EQ, P_NUMBER,
-    csp_offsetof(variable_param_t, opts), // pick up vt here
-    csp_offsetof(variable_param_t, init),
+    P_PAT, PAT_RES, csp_offsetof(variable_param_t, r), STOP_VAR_RES_CONT,
+    P_OPTS, csp_offsetof(variable_param_t, opts),
+    P_OPT, 6, P_TOK, EQ,
+    P_NUMBER_S,
+      csp_offsetof(variable_param_t, opts), // pick up vt here
+      csp_offsetof(variable_param_t, init),
+      STOP_VAR_INIT,
     P_OPT_END,
     P_END
 };
@@ -3344,10 +3399,10 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n)
     int i;
 
     // set default values
-    d.res = 8*sizeof(ivalue_t);
+    d.r.res = 8*sizeof(ivalue_t);
     d.opts.vt = V_INTEGER;
 
-    if (pmatch(st, tv, n, variable_pat, &d) < 0) {
+    if (pmatch(st, tv, n, pat_variable, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3355,7 +3410,7 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n)
 	return -1;
     i = INDEX(ix);
     st->decl[i].vt = d.opts.vt;
-    st->decl[i].res = MAKE_RES(d.res);
+    st->decl[i].res = MAKE_RES(d.r.res);
     st->decl[i].dir = d.opts.dir;
     st->decl[i].va.init = d.init;
     // printf("VALUE = %d\n", st->decl[i].va.init.i);
@@ -3365,23 +3420,22 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n)
 // '#' 'constant' <name>[':' <size>] [<opt>+] '=' <num>
 typedef struct {
     tstr_t name;
-    ivalue_t res;
+    res_param_t r;
     decl_opts_t opts;
     value_t init;
 } constant_param_t;
 
-static const uint8_t constant_pat[] = {
+static const uint8_t pat_constant[] = {
     P_TOK, HASH,
     P_TOK, CONSTANT,
     P_STR, csp_offsetof(constant_param_t, name),
-    P_OPT,6,
-      P_TOK,COLON,
-      P_INTEGER_S,csp_offsetof(constant_param_t,res),STOP_CONST_RES,
-    P_OPT_END,
-    P_OPTS,csp_offsetof(constant_param_t, opts),
-    P_TOK, EQ, P_NUMBER,
+    P_PAT, PAT_RES, csp_offsetof(constant_param_t, r), STOP_CONST_RES_CONT,
+    P_OPTS, csp_offsetof(constant_param_t, opts),
+    P_TOK, EQ,
+    P_NUMBER_S,
     csp_offsetof(constant_param_t, opts), // pick up vt here
     csp_offsetof(constant_param_t, init),
+    STOP_CONST_INIT,
     P_END
 };
 
@@ -3392,10 +3446,10 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
     int i;
 
     // set default values
-    d.res = 8*sizeof(ivalue_t);
+    d.r.res = 8*sizeof(ivalue_t);
     d.opts.vt = V_INTEGER;
 
-    if (pmatch(st, tv, n, constant_pat, &d) < 0) {
+    if (pmatch(st, tv, n, pat_constant, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3403,34 +3457,25 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
 	return -1;
     i = INDEX(ix);
     st->decl[i].vt = d.opts.vt;
-    st->decl[i].res = MAKE_RES(d.res);
+    st->decl[i].res = MAKE_RES(d.r.res);
     st->decl[i].cn.init = d.init;
     return 0;
 }
 
+
 // '#' 'digital' <name> [<iodir>|<pull>] [<port>':']<pin>
 typedef struct {
     tstr_t name;
-    ivalue_t port;
-    ivalue_t pin;
+    port_pin_t port_pin;
     decl_opts_t opts;
 } digital_param_t;
 
-static const uint8_t digital_pat[] = {
+static const uint8_t pat_digital[] = {
     P_TOK, HASH,
     P_TOK, DIGITAL,
     P_STR, csp_offsetof(digital_param_t, name),
     P_OPTS, csp_offsetof(digital_param_t, opts),
-    P_CHOICE, 2, 
-      P_ALT, 9, // Alt 1: port:pin
-        P_INTEGER_S, csp_offsetof(digital_param_t, port), STOP_DIGITAL_PORT,
-	P_TOK, COLON,
-	P_INTEGER_S, csp_offsetof(digital_param_t, pin), STOP_DIGITAL_PIN1,
-      P_ALT_END,
-      P_ALT, 4, // Alt 2: pin
-        P_INTEGER_S, csp_offsetof(digital_param_t, pin), STOP_DIGITAL_PIN2,
-      P_ALT_END,
-    P_CHOICE_END,
+    P_PAT, PAT_PORT_PIN, csp_offsetof(digital_param_t, port_pin), STOP_DIGITAL_PP_CONT,
     P_END
 };
 
@@ -3440,7 +3485,7 @@ NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, size_t n)
     index_t ix;
     int i;
 
-    if (pmatch(st, tv, n, digital_pat, &d) < 0) {
+    if (pmatch(st, tv, n, pat_digital, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3450,8 +3495,8 @@ NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, size_t n)
 	return -1;    
     i = INDEX(ix);
     st->decl[i].res = MAKE_RES(1);
-    st->decl[i].di.pin = d.pin;
-    st->decl[i].di.port = d.port;
+    st->decl[i].di.pin = d.port_pin.pin;
+    st->decl[i].di.port = d.port_pin.port;
     st->decl[i].dir = d.opts.dir;
     st->decl[i].di.pullup = d.opts.pullup;
     st->decl[i].di.pulldown = d.opts.pulldown;
@@ -3460,33 +3505,18 @@ NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, size_t n)
 
 typedef struct {
     tstr_t name;
-    ivalue_t res;
-    ivalue_t port;
-    ivalue_t pin;
+    res_param_t r;
+    port_pin_t port_pin;    
     decl_opts_t opts;
 } analog_param_t;
 
-static const uint8_t analog_pat[] = {
+static const uint8_t pat_analog[] = {
     P_TOK, HASH,
     P_TOK, ANALOG,
     P_STR, csp_offsetof(analog_param_t, name),
-    P_OPT,6,
-      P_TOK,COLON,
-      P_INTEGER_S,csp_offsetof(analog_param_t,res),STOP_ANALOG_RES,
-    P_OPT_END,
+    P_PAT, PAT_RES, csp_offsetof(analog_param_t, r), STOP_ANALOG_RES_CONT,
     P_OPTS, csp_offsetof(analog_param_t, opts),
-    P_CHOICE, 2,
-      P_ALT, 9,
-        // Alt 1: port:pin
-        P_INTEGER_S, csp_offsetof(analog_param_t, port), STOP_ANALOG_PORT,
-	P_TOK, COLON,
-	P_INTEGER_S, csp_offsetof(analog_param_t, pin), STOP_ANALOG_PIN1,
-      P_ALT_END,
-      P_ALT, 4,
-        // Alt 2: just pin (3 bytes: P_INTEGER,off,P_END)
-        P_INTEGER_S, csp_offsetof(analog_param_t, pin), STOP_ANALOG_PIN2,
-      P_ALT_END,
-    P_CHOICE_END,
+    P_PAT, PAT_PORT_PIN, csp_offsetof(analog_param_t, port_pin), STOP_ANALOG_PP_CONT,
     P_END
 };
 
@@ -3498,9 +3528,9 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, size_t n)
     index_t ix;
     int i;
 
-    d.res = 10;
+    d.r.res = 10;
     d.opts.vt = V_INTEGER;
-    if (pmatch(st, tv, n, analog_pat, &d) < 0) {
+    if (pmatch(st, tv, n, pat_analog, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3510,9 +3540,9 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, size_t n)
 	return -1;
     i = INDEX(ix);
     st->decl[i].vt = d.opts.vt;
-    st->decl[i].res = MAKE_RES(d.res);
-    st->decl[i].an.pin = d.pin;
-    st->decl[i].an.port = d.port;
+    st->decl[i].res = MAKE_RES(d.r.res);
+    st->decl[i].an.pin = d.port_pin.pin;
+    st->decl[i].an.port = d.port_pin.port;
     st->decl[i].dir = d.opts.dir;
     st->decl[i].an.pwm = d.opts.pwm;
     st->decl[i].an.endian = d.opts.endian;    
@@ -3525,7 +3555,7 @@ typedef struct {
     ivalue_t init;
 } timer_param_t;
 
-static const uint8_t timer_pat[] = {
+static const uint8_t pat_timer[] = {
     P_TOK, HASH,
     P_TOK, TIMER,
     P_STR, csp_offsetof(timer_param_t, name),
@@ -3545,7 +3575,7 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, size_t n)
     const tstr_t empty = { .ptr = NULL, .len = 0};
 
     d.init = 0;
-    if (pmatch(st, tv, n, timer_pat, &d) < 0) {
+    if (pmatch(st, tv, n, pat_timer, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3578,20 +3608,18 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, size_t n)
 //
 typedef struct {
     tstr_t name;
-    ivalue_t res;
+    res_param_t r;
     ivalue_t frameid;
     ivalue_t bit0;
     ivalue_t bit1;
     decl_opts_t opts;
 } can_param_t;
 
-static const uint8_t can_pat[] = {
+static const uint8_t pat_can[] = {
     P_TOK, HASH,
     P_TOK, CAN,
     P_STR, csp_offsetof(timer_param_t, name),
-    P_OPT, 6,
-      P_TOK, COLON, P_INTEGER_S, csp_offsetof(can_param_t, res), STOP_CAN_RES,
-    P_OPT_END,
+    P_PAT, PAT_RES, csp_offsetof(can_param_t, r), STOP_CAN_RES_CONT,
     P_OPTS, csp_offsetof(can_param_t, opts),
     P_INTEGER_S, csp_offsetof(can_param_t, frameid), STOP_CAN_FRAMEID,
     P_TOK, LB,
@@ -3600,7 +3628,7 @@ static const uint8_t can_pat[] = {
       P_ALT, 11,
         P_INTEGER_S, csp_offsetof(can_param_t, bit0), STOP_CAN_BIT0,
 	P_TOK, DOT, P_TOK, DOT,
-        P_INTEGER_S, csp_offsetof(can_param_t, bit1), STOP_CAN_BIT0,
+        P_INTEGER_S, csp_offsetof(can_param_t, bit1), STOP_CAN_BIT1,
       P_ALT_END,
       P_ALT, 4,
         P_INTEGER_S, csp_offsetof(can_param_t, bit0), STOP_CAN_BIT00,
@@ -3618,8 +3646,8 @@ NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
     int i, len;
 
     d.bit0 = d.bit1 = -1;
-    d.res = 1;  // single bit is default ok?
-    if (pmatch(st, tv, n, can_pat, &d) < 0) {
+    d.r.res = 1;  // single bit is default ok?
+    if (pmatch(st, tv, n, pat_can, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3630,15 +3658,15 @@ NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
 	idx = new_signed_const(st, frameid.i);
     if ((d.bit0 >= 0) && (d.bit1 >= d.bit0))
 	len = (d.bit1 - d.bit0)+1;
-    else if ((d.res > 0) && (d.bit0 >= 0))
-	len = d.res;
+    else if ((d.r.res > 0) && (d.bit0 >= 0))
+	len = d.r.res;
     else {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
 
     i = INDEX(ix);
-    st->decl[i].res = MAKE_RES(d.res); // same as len?
+    st->decl[i].res = MAKE_RES(d.r.res); // same as len?
     st->decl[i].vt = d.opts.vt;
     st->decl[i].dir = d.opts.dir;
     st->decl[i].ca.id = idx;
@@ -3648,168 +3676,260 @@ NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
     return 0;
 }
 
+//
+// lookup lhs in assignement
+// var =  oix '.' fld
+//      | obj '.' fld
+//      | fld
+//
+// fixme: add part and bitindex/range
+//      <var> '[' <part> ']'
+//      <var> '[' <pos> ']'             // one bit
+//      <var> '[' <pos0> .. <pos1> ']'  // start pos / end pos
+//
+NOINLINE index_t lookup_lhs(csp_rt_t* st, const token_t* tv,
+			    index_t oix, const pexpr_t* lhs)
+{
+    index_t ix;
+    const tstr_t* name;
+    index_t mx;
+    ivalue_t dn;
+    index_t jx;
+
+    if (oix == BAD_INDEX) {
+	if (lhs->len == 1) {  // global | module local
+	    name = &tv[lhs->pos].v.str;
+	    ix = lookup_decl(st,name);
+	    if (st->mdef != BAD_INDEX)
+		ix = MAKE_INDEX(CURRENT, INDEX(ix));
+	}
+	else if (lhs->len == 3) {  // obj.field
+	    name = &tv[lhs->pos].v.str;
+	    if (((oix = lookup_decl(st,name)) == BAD_INDEX) ||
+		(st->decl[INDEX(oix)].type != DECL_OBJECT)) {
+		if (csp_set_error(st, ERR_OBJECT_NOT_DECLARED)) {
+		    csp_set_err_arg_tstr(st, 0, name);
+		}
+		return BAD_INDEX;
+	    }
+	    name = &tv[lhs->pos+2].v.str;
+	    goto field;
+	}
+	else {
+	    csp_set_error(st, ERR_SYNTAX);
+	    return BAD_INDEX;
+	}
+    }
+    else if (lhs->len == 1) {  // oix. <field>
+	name = &tv[lhs->pos].v.str;
+	goto field;
+    }
+    else {
+	csp_set_error(st, ERR_SYNTAX);
+	return BAD_INDEX;
+    }
+    return ix;
+field:
+    mx = st->decl[INDEX(oix)].mq.mx;  // module def
+    dn = st->decl[INDEX(mx)].md.n;  // number of elements	    
+    if ((jx = lookup_decl_in(st, name,
+			     INDEX(mx)+1,INDEX(mx)+1+dn))==BAD_INDEX) {
+	if (csp_set_error(st, ERR_FIELD_NOT_FOUND)) {
+	    csp_set_err_arg_tstr(st, 0, name);
+	}
+	return BAD_INDEX;
+    }
+    ix = MAKE_INDEX(st->decl[INDEX(oix)].mq.m,INDEX(jx));
+    return ix;
+}
+
+
+//  lhs [(= | <-) rhs]  ? cond]
+//
+//     lhs   op   rhs    ? cond
+//  -------------------------
+//  print(x)             ? x > 10
+//  obj.x    =  10       ? (y > z)
+//  x        <- y+z      ? (y < z)
+//  print(x)            [? true]
+// 
+NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
+		      index_t oix, const pexpr_t* lhs, int assign,
+		      const pexpr_t* rhs, const pexpr_t* cond)
+{
+    size_t num;
+    int j;
+    int dst = -1;
+    int cnd = -1;
+    int cnd2 = -1;
+    
+#ifdef DEBUG
+    printf("asm_rule\n");
+    printf("oix = %d\n", oix);
+    printf("lhs.len=%d, lhs.pos=%d\n", lhs->len, lhs->pos);
+    printf("assign=%d\n",  assign);
+    printf("rhs.len=%d, rhs.pos=%d\n", rhs->len, rhs->pos);
+    if (cond)
+	printf("cond.len=%d, cond.pos=%d\n", cond->len, cond->pos);
+#endif
+    
+#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
+    if (st->sdef >= 0) {  // we are in a state!
+	int sr;
+	cnd = alloc_reg(st);
+	if (!asm_mem(st,OP_LD,cnd,st->sx)) // load state into cnd
+	    return -1;
+	sr = alloc_reg(st);
+	if (!asm_LI(st, sr, st->sdef))
+	    return -1;
+	if (!asm_EQEQ(st, cnd, cnd, sr))
+	    return -1;
+	free_reg(st, sr);
+    }
+#endif
+    // dry run (get nvar)
+    num = rhs->len;
+    if (assign == RIMP) {
+	int r;
+	st->nvar = 0;
+	st->rimp = 1;
+	r = csp_parse_const_expr(st, &tv[rhs->pos], &num, NULL);
+	st->rimp = 0;
+	if (r == 0)
+	    return -1;
+	if (st->nvar) {
+	    int k;
+	    cnd2 = alloc_reg(st);
+	    if (!asm_LI(st, cnd2, 0))
+		return -1;
+	    for (k = 0; k < st->nvar; k++) {
+		if (!asm_mem(st, OP_CHG, cnd2, st->var[k]))
+		    return -1;
+	    }
+	}
+    }
+    // cnd = state condition
+    // cnd2 = changed condition
+    if ((cnd >= 0) && (cnd2 >= 0)) {
+	if (!asm_AND(st, cnd, cnd, cnd2))
+	    return -1;
+	free_reg(st, cnd2);
+    }
+    else if (cnd2 >= 0)
+	cnd = cnd2;
+
+    if (cond && ((num = cond->len) > 0)) {
+	rentry_t rcond;
+	// generate condition
+	if (!csp_parse_expr(st, &tv[cond->pos], &num, &rcond))
+	    return -1;
+	if (!rcond.L) csp_load(st, &rcond);
+	if (cnd < 0) {
+	    cnd = alloc_reg(st);
+	    if (!asm_MOV(st, cnd, rcond.reg))
+		return -1;
+	}
+	else {
+	    if (!asm_AND(st, cnd, rcond.reg, cnd))
+		return -1;
+	}
+	free_reg(st, rcond.reg);
+    }
+    if (cnd < 0) {
+	cnd = alloc_reg(st);	
+	if (!asm_LI(st, cnd, -1))
+	    return -1;
+    }
+    num = rhs->len;
+    if (!asm_RULE(st, &j, cnd, 0))
+	return -1;
+    free_reg(st, cnd);
+    if (num > 0) {
+	rentry_t rbody;
+	if (!csp_parse_expr(st, &tv[rhs->pos], &num, &rbody))
+	    return -1;
+	if (!rbody.L)
+	    csp_load(st, &rbody);
+	dst = rbody.reg;	
+	if ((lhs->len > 0) && (assign != 0)) {
+	    index_t ix;
+	    opcode_t op;
+	    if ((ix = lookup_lhs(st, tv, oix, lhs)) == BAD_INDEX)
+		return -1;
+	    if (assign == EQ)
+		op = OP_ST;
+	    else if (assign == RIMP)
+		op = OP_STIMP;
+	    // fixme: coerce etc! + PART!
+	    if (!asm_mem(st, op, dst, ix))
+		return -1;
+	}
+    }
+    else { // load TRUE
+	dst = alloc_reg(st);
+	if (!asm_LI(st, dst, 0))
+	    return -1;	
+    }
+    st->instr[j].r.nxt = st->ps.nn - j;  // relative offset
+    if (!asm_NEXT(st, dst))
+	return -1;
+    if (dst >= 0) free_reg(st, dst);
+    return 0;
+}
+
 #define MAX_INITS 8
 
+// Field (=|<-) Rhs
 typedef struct {
-    tstr_t field;       // field name
-    token_t* expr_tv;   // pointer to expression tokens
-    int expr_len;       // number of tokens
-    uint8_t reactive;   // 1 if <-, 0 if =
+    tstr_t fld;       // field name
+    int assign;
+    pexpr_t rhs;
 } init_entry_t;
 
 typedef struct {
     tstr_t mod_name;
     tstr_t obj_name;
     init_entry_t inits[MAX_INITS];
-    uint8_t ninits;
 } object_param_t;
 
 #define CB_STATIC_INIT   0
 #define CB_REACTIVE_INIT 1
 
-// Callback: save init entry - returns tokens consumed
-static int cb_init_entry(csp_rt_t* st, token_t* tv, int ti, void* data, int reactive)
-{
-    object_param_t* d = (object_param_t*)data;
-    init_entry_t* e;
-    int k;
-    
-    if (d->ninits >= MAX_INITS)
-	return 0;
-    e = &d->inits[d->ninits];
-    // e->field already set by P_STR with correct array indexing
-    e->reactive = reactive;
-    e->expr_tv = &tv[ti];  // save pointer to expression start
-    // Find end of expression when end of line or next var assign is found
-    // tokens <word> '='
-    // tokens <word> '<-'
-    // tokens \n
-    k = ti;
-    while (k < MAX_LINE_TOKENS && tv[k].t != NEWLINE) {
-	if ((tv[k].t == WORD) && (k+1 < MAX_LINE_TOKENS) &&
-	    ((tv[k+1].t == EQ) || (tv[k+1].t == RIMP)))
-	    break;
-	k++;
-    }
-    e->expr_len = k - ti;
-    if (e->expr_len == 0) { csp_set_error(st, ERR_SYNTAX); return 0; }
-    d->ninits++;
-    return e->expr_len;  // return tokens consumed
-}
-
-static int cb_static_init(csp_rt_t* st, token_t* tv, int ti, void* data)
-{
-    return cb_init_entry(st, tv, ti, data, 0);
-}
-
-static int cb_reactive_init(csp_rt_t* st, token_t* tv, int ti, void* data)
-{
-    return cb_init_entry(st, tv, ti, data, 1);
-}
-
-// Generate code for static init: target = expr
-// FIXME: how to write to target.d.pin / target.a.pin?????
-// FIXME: generate cycle() == 0 condition ?
-static int gen_static_init(csp_rt_t* st, init_entry_t* e,
-			   index_t target, csp_part_t part)
-{
-    size_t num = e->expr_len;
-    rentry_t rval;
-    if (!csp_parse_expr(st, e->expr_tv, &num, &rval))
-	return 0;
-    if (!rval.L) csp_load(st, &rval);
-    if (!asm_mem_part(st, OP_ST, rval.reg, target, part))
-	return 0;
-    free_reg(st, rval.reg);
-    return 1;
-}
-
-// Generate code for reactive init: target <- expr (with CHG/RULE)
-static int gen_reactive_init(csp_rt_t* st, init_entry_t* e,
-			     index_t target, csp_part_t part)
-{
-    size_t num = e->expr_len;
-    rentry_t rval;
-    int j;
-    
-    // Dry-run: collect variables
-    st->nvar = 0;
-    st->rimp = 1;
-    csp_parse_const_expr(st, e->expr_tv, &num, &rval);
-    st->rimp = 0;
-    num = e->expr_len;
-
-    // Generate CHG/RULE
-    int cnd = alloc_reg(st);
-    if (st->nvar > 0) {
-	int k;
-	if (!asm_LI(st, cnd, 0))
-	    return 0;
-	for (k = 0; k < st->nvar; k++)
-	    if (!asm_mem(st, OP_CHG, cnd, st->var[k]))
-		return 0;
-    }
-    else {
-	if (!asm_LI(st, cnd, -1))
-	    return 0;
-    }
-    if (!asm_RULE(st, &j, cnd, 0))
-	return 0;
-    free_reg(st, cnd);
-    
-    // Parse expression for real
-    st->rimp = 1;
-    if (!csp_parse_expr(st, e->expr_tv, &num, &rval)) {
-	st->rimp = 0;
-	return 0;
-    }
-    st->rimp = 0;
-
-    if (!rval.L) csp_load(st, &rval);
-    if (!asm_mem_part(st, OP_STIMP, rval.reg, target, part))
-	return 0;
-    st->instr[j].r.nxt = st->ps.nn - j;
-    if (!asm_NEXT(st, rval.reg))
-	return 0;
-    free_reg(st, rval.reg);
-    return 1;
-}
-
 // '#' ModName ObjName (Field (=|<-) Expr)*
-static const uint8_t object_pat[] = {
+static const uint8_t pat_object[] = {
     P_TOK, HASH,
     P_STR, csp_offsetof(object_param_t, mod_name),
     P_STR, csp_offsetof(object_param_t, obj_name),
-    P_REP, 23,
+    P_OPT, 26,
+    P_REP, 24,
 	P_ARRAY, csp_offsetof(object_param_t, inits), sizeof(init_entry_t),
-	P_STR, csp_offsetof(init_entry_t, field),
+	P_STR, csp_offsetof(init_entry_t, fld),
 	P_CHOICE, 2,
-	    P_ALT, 5,
-	      P_TOK, EQ, P_CALL, CB_STATIC_INIT,
+	    P_ALT, 4,
+	      P_TOK_W, EQ, csp_offsetof(init_entry_t, assign),
 	    P_ALT_END,
-	    P_ALT, 5,
-	      P_TOK, RIMP, P_CALL, CB_REACTIVE_INIT,
+	    P_ALT, 4,
+	      P_TOK_W, RIMP, csp_offsetof(init_entry_t, assign),
 	    P_ALT_END,
 	P_CHOICE_END,
+	P_EXPR_S, csp_offsetof(init_entry_t, rhs), STOP_OBJECT_INIT_RHS,
     P_REP_END,
+    P_OPT_END,
     P_END
 };
+
 
 NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
 {
     object_param_t d = {0};
     index_t mx, ix;
-    int i, m, k;
-    ivalue_t mod_n;
-
-    // Register callbacks
-    pmatch_set_cb(CB_STATIC_INIT, cb_static_init);
-    pmatch_set_cb(CB_REACTIVE_INIT, cb_reactive_init);
-
+    int i, m;
+    int k;
+    // unsigned ent;
+    
     // Parse: # ModName ObjName (Field (=|<-) Expr)*
-    if (pmatch(st, tv, n, object_pat, &d) < 0) {
-	if (st->ps.err == ERR_OK)
-	    csp_set_error(st, ERR_SYNTAX);
+    if (pmatch(st, tv, n, pat_object, &d) < 0) {
+	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
 
@@ -3841,90 +3961,81 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
     st->object[m] = ix;
     st->ps.nq++;
 
-    // Generate code for init list
-    mod_n = st->decl[INDEX(mx)].md.n;
-    for (k = 0; k < d.ninits; k++) {
-	int fi;
-	index_t target;
-	csp_part_t part = PART_VAL;
-	init_entry_t* e = &d.inits[k];
-	index_t fx = lookup_decl_in(st, &e->field,
-				    INDEX(mx)+1, INDEX(mx)+1+mod_n);
-	if (fx == BAD_INDEX) {
-	    if (csp_set_error(st, ERR_FIELD_NOT_FOUND)) {
-		csp_set_err_arg_tstr(st, 0, &e->field);
-	    }
-	    return -1;
-	}
-	// For timers, write to px (timeout constant), not timer decl
-	fi = INDEX(fx);
-	switch(st->decl[fi].type) {
-	case DECL_TIMER:
-	    part = PART_PERIOD;
-	    break;
-	case DECL_DIGITAL: // write to pin (value);
-	    break;
-	default:
-	    break;
-	}
-	target = MAKE_INDEX(m, fi);
-	if (e->reactive) {
-	    if (!gen_reactive_init(st, e, target, part)) return -1;
-	} else {
-	    if (!gen_static_init(st, e, target, part)) return -1;
-	}
+    // ent = st->ps.nn;
+    i = 0;
+#ifdef DEBUG
+    printf("object %s.%s\n", decl_name(st, mx), decl_name(st, ix));
+#endif    
+    while(d.inits[i].fld.len > 0) {
+#ifdef DEBUG
+	printf("  field %.*s\n", d.inits[i].fld.len, d.inits[i].fld.ptr);
+	printf("  assign %d\n", d.inits[i].assign);
+	printf("  rhs.len = %d\n", d.inits[i].rhs.len);
+#endif
+	i++;
+	
     }
+    // Generate code for init list
+    k = 0;
+    while((k < MAX_INITS) && (d.inits[k].fld.len > 0)) {
+	pexpr_t lhs;
+	init_entry_t* e = &d.inits[k];
 
-    // Generate NEW after init list (module rules run with correct values)
-    if (!asm_NEW(st, st->decl[INDEX(mx)].md.ent, ix))
-	return -1;
-    return 0;
+	// lhs cover the field name
+	lhs.pos = e->rhs.pos-2;
+	lhs.len = 1;
+	if (asm_rule(st,tv,n,ix,&lhs,e->assign,&e->rhs,NULL) < 0)
+	    return -1;
+	k++;
+    }
+    return asm_NEW(st, st->decl[INDEX(mx)].md.ent, ix);
 }
 
-// <expr> '?' <cond>
-// expr = tok[0]...tok[i-1]
-// cond = tok[i+1]...tok[num-1]
-// first parse condition
-// then parse expression
 //
-// <rule> ==
-//        <expr1> '<-' <expr2> [ '?' <cond> ]
+// Parse rule
 //
-//     ==> <expr1> = <expr2> ? changed(vars-in-expr2) || <cond>
+//  <lhs> = <rhs> [ ? <cond> ]
+//  <lhs> <- <rhs> [ ? <cond> ]
+//  <lhs> [ ? <cond> ]
 //
-// <rule> ==
-//         <expr1> ? <cond>
-//
-// generates code like
-// BEGIN:
-//    generate ( <cond> )
-//    RULE: if !<cond> goto END
-//    generate ( <expr> )
-//  END:
-//    next
-
-//
-// <rule> == <expr> [ '?' <expr> ]
+//  <lhs> = <var> | <obj>'.'<var>
+//  <rhs> = <expr>
+//  <cond> = <expr>
 //
 
-// Example: mixed assignments and extra condition
-//
-//  A = 1, B <- C+D ? C > 5
-//
-// CONDITION =
-//    C>5 && changed(C)||changed(D)
-// BODY =
-//    A = 1
-//    B = C+D
-//
+#define MAX_BODY_PARTS 8
 
 typedef struct {
-    pexpr_t body;
+    tstr_t  obj;
+    tstr_t  fld;
+    int assign;  // NONE / EQ / RIMP
+    pexpr_t rhs;
+} rule_body_part_t;
+
+// body_part_t body[MAX_BODY_PARTS];
+
+typedef struct {
+    tstr_t  obj;
+    tstr_t  fld;
+    int assign;  // NONE / EQ / RIMP
+    pexpr_t rhs;
+
     pexpr_t cond;
 } rule_param_t;
 
-static const uint8_t rule_pat[] = {
-    P_EXPR_S, csp_offsetof(rule_param_t, body), STOP_RULE_BODY,
+static const uint8_t pat_rule[] = {
+    P_OPT, 25,
+      P_STR, csp_offsetof(rule_param_t, obj),
+      P_OPT, 5,
+        P_TOK, DOT,
+        P_STR, csp_offsetof(rule_param_t, fld),
+      P_OPT_END,
+      P_CHOICE, 2,
+        P_ALT, 4, P_TOK_W, EQ, csp_offsetof(rule_param_t, assign), P_ALT_END,
+        P_ALT, 4, P_TOK_W, RIMP, csp_offsetof(rule_param_t, assign), P_ALT_END,
+      P_CHOICE_END,
+    P_OPT_END,
+    P_EXPR_S, csp_offsetof(rule_param_t, rhs), STOP_RULE_BODY,
     P_OPT, 6,
       P_TOK, QUEST,
       P_EXPR_S, csp_offsetof(rule_param_t, cond), STOP_RULE_COND,
@@ -3932,94 +4043,23 @@ static const uint8_t rule_pat[] = {
     P_END
 };
 
-NOINLINE int csp_parse_rule(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, size_t n)
 {
-    size_t num;
-    rule_param_t d;
-    rentry_t rbody;
-    int j;
-    int cnd = -1;
-    int cnd2 = -1;
-    // int ncnd = 0;
+    rule_param_t d = {0};
+    pexpr_t lhs;
 
-    d.cond.len = 0;
-    d.cond.pos = 0;
-    if (pmatch(st, tv, n, rule_pat, &d) < 0) {
+    if (pmatch(st, tv, n, pat_rule, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
-    if (st->sdef >= 0) {  // we are in a state!
-	int sr;
-	cnd = alloc_reg(st);
-	if (!asm_mem(st,OP_LD,cnd,st->sx)) // load state into cnd
-	    return -1;
-	sr = alloc_reg(st);
-	if (!asm_LI(st, sr, st->sdef))
-	    return -1;
-	if (!asm_EQEQ(st, cnd, cnd, sr))
-	    return -1;
-	free_reg(st, sr);
-    }
-#endif
-    // dry run (get nvar if any)
-    num = d.body.len;
-    if (!csp_parse_const_expr(st, &tv[d.body.pos], &num, NULL))
-	return -1;
-    if (st->nvar) {
-	int k;
-	cnd2 = alloc_reg(st);
-	if (!asm_LI(st, cnd2, 0))
-	    return -1;
-	for (k = 0; k < st->nvar; k++) {
-	    if (!asm_mem(st, OP_CHG, cnd2, st->var[k]))
-		return -1;
-	}
-    }
-    // cnd = state condition
-    // cnd2 = changed condition
-    if ((cnd >= 0) && (cnd2 >= 0)) {
-	if (!asm_AND(st, cnd, cnd, cnd2))
-	    return -1;
-	free_reg(st, cnd2);
-    }
-    else if (cnd2 >= 0)
-	cnd = cnd2;
-
-    if ((num = d.cond.len) > 0) {
-	rentry_t rcond;
-	// generate condition
-	if (!csp_parse_expr(st, &tv[d.cond.pos], &num, &rcond))
-	    return -1;
-	if (!rcond.L) csp_load(st, &rcond);
-	if (cnd < 0) {
-	    cnd = alloc_reg(st);
-	    if (!asm_MOV(st, cnd, rcond.reg))
-		return -1;
-	}
-	else {
-	    if (!asm_AND(st, cnd, rcond.reg, cnd))
-		return -1;
-	}
-	free_reg(st, rcond.reg);
-    }
-    if (cnd < 0) {
-	cnd = alloc_reg(st);	
-	if (!asm_LI(st, cnd, -1))
-	    return -1;
-    }
-    num = d.body.len;
-    if (!asm_RULE(st, &j, cnd, 0))
-	return -1;
-    free_reg(st, cnd);
-    if (!csp_parse_expr(st, &tv[d.body.pos], &num, &rbody))
-	return -1;
-    if (!rbody.L) csp_load(st, &rbody);
-    st->instr[j].r.nxt = st->ps.nn - j;  // relative offset
-    if (!asm_NEXT(st, rbody.reg))
-	return -1;
-    if (rbody.L) free_reg(st, rbody.reg);
-    return 0;
+    // field name
+    lhs.pos = 0;
+    lhs.len = 0;
+    if (d.fld.len == 0)    // then obj is the variable
+	lhs.len = 1;
+    else if (d.obj.len > 0)  // assume <word> '.' <word> ib tv
+	lhs.len = 3;
+    return asm_rule(st, tv, n, BAD_INDEX, &lhs, d.assign, &d.rhs, &d.cond);
 }
 
 index_t lookup_can_range(csp_rt_t* st, index_t idx, ivalue_t p0, ivalue_t p1)
@@ -4235,6 +4275,8 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 	str += n;
 	alloc_init(st->ap);
 
+	st->ps.line++;
+
 	if (tv[0].t == NEWLINE)
 	    r = 0;
 	else if (tv[0].t == INT && tv[1].t == INT) {
@@ -4289,10 +4331,9 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 	}
 	if (r < 0)
 	    return -1;
-	st->ps.line++;
 	num = MAX_LINE_TOKENS;
     }
-    return 0;
+    return n;
 }
 
 int csp_rt_init(csp_rt_t* st, int transaction, int reactive)
@@ -4300,19 +4341,21 @@ int csp_rt_init(csp_rt_t* st, int transaction, int reactive)
     memset(st, 0x00, sizeof(csp_rt_t));
 
     // Initialize stop-sets for P_EXPR_S patterns
-    // Order of scan_pattern() calls must match enum in csp_parse.h
     init_stop_sets();       // creates STOP_NONE (index 0)
 
-    scan_pattern(module_pat);
-    scan_pattern(end_pat);
-    scan_pattern(variable_pat);
-    scan_pattern(constant_pat);
-    scan_pattern(digital_pat);
-    scan_pattern(analog_pat);
-    scan_pattern(timer_pat);
-    scan_pattern(can_pat);
-    scan_pattern(object_pat);
-    scan_pattern(rule_pat);
+    scan_pattern(PAT_PORT_PIN, pat_port_pin);
+    scan_pattern(PAT_RES,      pat_res);        
+
+    scan_pattern(PAT_MODULE,   pat_module);
+    scan_pattern(PAT_END,      pat_end);
+    scan_pattern(PAT_VARIABLE, pat_variable);
+    scan_pattern(PAT_CONSTANT, pat_constant);
+    scan_pattern(PAT_DIGITAL,  pat_digital);
+    scan_pattern(PAT_ANALOG,   pat_analog);
+    scan_pattern(PAT_TIMER,    pat_timer);
+    scan_pattern(PAT_CAN,      pat_can);
+    scan_pattern(PAT_RULE,     pat_rule);
+    scan_pattern(PAT_OBJECT,   pat_object);
     
 #ifdef DEBUG
     if (debug) // or precompile!
