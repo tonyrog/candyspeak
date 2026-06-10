@@ -1,0 +1,20 @@
+// 3-bit adder: three full adder modules, X + Y = 5 + 4 = 9 = 0b1001
+// (inputs chosen so no carry propagates between adders;
+//  Cin=obj.Cout is static init, evaluated once at instantiation)
+#module Add
+#variable A:1 in
+#variable B:1 in
+#variable Cin:1 in
+#variable S:1 out
+#variable Cout:1 out
+
+S = A ^ B ^ Cin ? 1
+Cout = (A & B) | (Cin & (A ^ B)) ? 1
+#end
+
+#variable X:4 = 5
+#variable Y:4 = 4
+
+#Add a0 Cin=0 A=X&1 B=Y&1
+#Add a1 Cin=a0.Cout A=(X>>1)&1 B=(Y>>1)&1
+#Add a2 Cin=a1.Cout A=(X>>2)&1 B=(Y>>2)&1

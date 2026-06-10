@@ -1,0 +1,14 @@
+// coerce at rule assignment: float = int, int = float, unsigned = float
+#variable F float = 0.0
+#variable G float = 2.5
+#variable H float = 0.0
+#variable A integer = 7
+#variable B integer = 0
+#variable C integer = 0
+#variable U:8 unsigned = 0
+
+F = 3 ? 1
+H = A + 1 ? 1
+B = 2.75 ? 1
+C = G * 2.0 ? 1
+U = G + 1.0 ? 1

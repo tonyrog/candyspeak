@@ -1,0 +1,6 @@
+// writing a value equal to the out-buffer initial content must still commit
+#variable y = 10
+#variable z = 0
+
+y = 0 ? z == 0
+z = 1 ? z == 0

@@ -1,0 +1,16 @@
+// generate and execute all float arithmetic operators
+
+#variable F float
+#variable G float = 7.0
+#variable H float = 5.0
+#variable A integer = 0
+#variable S integer = 0
+
+// binary operators supported
+F = G + H,  S=1  ? S==0
+F = G - H,  S=2  ? S==1
+F = G * H,  S=3  ? S==2
+F = G / H,  S=4  ? S==3
+F = -G,     S=5  ? S==4
+F = fabs(G), S=6 ? S==5
+A = sign(G), S=7 ? S==6

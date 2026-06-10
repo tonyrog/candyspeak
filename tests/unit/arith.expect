@@ -1,0 +1,10 @@
+{cycles, 23}.
+{checks, [
+  {var, 1, "X", 12},
+  {var, 4, "X", 1},
+  {var, 5, "X", 2},
+  {var, 6, "X", 224},
+  {var, 17, "X", 5},
+  {final_var, "X", 7},
+  {final_var, "S", 21}
+]}.

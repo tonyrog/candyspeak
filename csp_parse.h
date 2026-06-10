@@ -83,6 +83,7 @@ enum {
     STOP_CAN_BIT00,
     STOP_OBJECT_INIT_RHS,
     // P_PAT continuation sets (built from followers)
+    STOP_RULE_BODY_CONT,    // PAT_BODY in pat_rule (both sites)
     STOP_VAR_RES_CONT,      // PAT_RES in pat_variable
     STOP_CONST_RES_CONT,    // PAT_RES in pat_constant
     STOP_DIGITAL_PP_CONT,   // PAT_PORT_PIN in pat_digital
@@ -104,6 +105,7 @@ enum {
     PAT_TIMER,
     PAT_CAN,
     PAT_OBJECT,
+    PAT_BODY,
     PAT_RULE,
     NUM_PAT
 };

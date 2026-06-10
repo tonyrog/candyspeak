@@ -1,0 +1,9 @@
+// multiple assignments in one rule body
+#variable x = 1
+#variable y = 10
+#variable s = 0
+#variable f float = 0.0
+
+x = 2, y = 20, s = s + 1 ? x == 1
+x = 3, y = 30, s = s + 1 ? x == 2
+f = max(x, 2) + 0.5, y = y + 1 ? s == 2

@@ -42,6 +42,7 @@ static char* stop_set_name(uint8_t sid)
     STRCASE(STOP_CAN_BIT1);
     STRCASE(STOP_CAN_BIT00);
     STRCASE(STOP_OBJECT_INIT_RHS);
+    STRCASE(STOP_RULE_BODY_CONT);
     STRCASE(STOP_VAR_RES_CONT);
     STRCASE(STOP_CONST_RES_CONT);
     STRCASE(STOP_DIGITAL_PP_CONT);
@@ -180,7 +181,7 @@ static void add_stop_tok(uint8_t sid, uint8_t tok)
 {
     int start;
     int i;
-    start = stop_toks[sid];
+    start = stop_pos[sid];
     for (i = start; i < stop_toks_len; i++) {
         if (stop_toks[i] == tok) return;  // already present
     }
@@ -289,9 +290,9 @@ next:
     case P_STR:	
 	pi += 2;
 	break;
-    case P_TOK_W:	
-	pi += 2;
-	break;	
+    case P_TOK_W:	// cmd, tok, offset
+	pi += 3;
+	break;
     case P_NUMBER_S:
 	n = 3;
 	goto p_scan_s;
@@ -335,19 +336,25 @@ next:
 	pi += 3;
 	break;
     case P_PAT: {
-	uint8_t pid = pat[pi+1];
 	uint8_t cont_sid = pat[pi+3];
 
-	// Build continuation stop-set from followers
+	// Build continuation stop-set from followers.
+	// A set shared by several P_PAT sites becomes the union
+	// of the followers from all sites.
 	if (cont_sid != STOP_NONE) {
+	    int old = stop_pos[cont_sid];
 	    if (cont_sid >= num_stop_sets)
 		num_stop_sets = cont_sid + 1;
 	    stop_pos[cont_sid] = stop_toks_len;
 	    DBG("build cont set %d from followers at %d\n", cont_sid, pi+4);
+	    if (old) {  // already built: merge old tokens
+		while (stop_toks[old] != NONE)
+		    add_stop_tok(cont_sid, stop_toks[old++]);
+	    }
 	    collect_first(cont_sid, pat, pi + 4);
 	    add_stop_tok(cont_sid, NONE);
 	}
-	scan_pattern_(pattern[pid]);
+	// sub-pattern is scanned by its own scan_pattern call (enum order)
 	pi += 4;
 	break;
     }
@@ -536,18 +543,35 @@ static inline decl_opts_t fetch_opts(void* data, int off)
     return *((decl_opts_t*)((uint8_t*)data + off));
 }
 
+// Find expression boundary: first stop token at paren depth 0
+static int scan_expr_end(pmatch_st_t* pst, const token_t* tv, int ti,
+			 size_t n, int sid)
+{
+    int k = ti;
+    int depth = 0;
+
+    while (k < (int)n) {
+	uint8_t t = tv[k].t;
+	if ((depth == 0) && stop_match(pst, sid, t))
+	    break;
+	if (t == LP) depth++;
+	else if ((t == RP) && (depth > 0)) depth--;
+	k++;
+    }
+    return k;
+}
+
 // Expression with stop-set
 NOINLINE static int pmatch_expr_s(pmatch_st_t* pst, const token_t* tv, int ti,
 				  size_t n, uint8_t off, int sid)
 {
-    int k = ti;
+    int k;
     size_t num;
     pexpr_t range;
     rentry_t result;
 
     // Find expression boundary using stop-set + continuation sets
-    while ((k < (int)n) && !stop_match(pst, sid, tv[k].t))
-	k++;
+    k = scan_expr_end(pst, tv, ti, n, sid);
     num = (k > ti) ? k - ti : 1;
     if (!csp_parse_const_expr(pst->st, &tv[ti], &num, &result))
 	return -1;
@@ -562,14 +586,13 @@ NOINLINE static int pmatch_expr_s(pmatch_st_t* pst, const token_t* tv, int ti,
 static int pmatch_const_s(pmatch_st_t* pst, const token_t* tv, int ti,
 			  size_t n, uint8_t vt, uint8_t off, int sid)
 {
-    int k = ti;
+    int k;
     size_t num;
     rentry_t result;
 
     // Find expression boundary using stop-set + continuation sets
-    while ((k < (int)n) && !stop_match(pst, sid, tv[k].t))
-	k++;    
-    num = (k > ti) ? k - ti : 1;	
+    k = scan_expr_end(pst, tv, ti, n, sid);
+    num = (k > ti) ? k - ti : 1;
 
     if (!csp_parse_const_expr(pst->st, &tv[ti], &num, &result))
 	return -1;
@@ -789,6 +812,7 @@ next:
     case P_REP: {
 	// Repeat: match zero or more times
 	uint8_t len = pat[pi++];
+	int pi0 = pi;  // len counts from here (including P_REP_END)
 	int ix = 0;
 	pst->eo = 0;
 	pst->ez = 0;
@@ -811,8 +835,9 @@ next:
 	    DBG("%sAFTER_ITER (%d) i=%d:\n",indent(l+1),ti,ix);
 	    pst->eo += pst->ez;
 	}
-	pi += len;
-	pst->ez = 0; // reset array
+	pi = pi0 + len;
+	pst->eo = 0; // reset array
+	pst->ez = 0;
 	break;
     }
     case P_PAT: {
@@ -825,7 +850,8 @@ next:
 
 	DBG("%sP_PAT: (%d) pid=%d off=%d cont=%d\n", indent(l), ti,
 	    pid, off, cont_sid);
-	pst->data = (void*)(((uint8_t*)pst->data) + off);
+	// eo selects current array element when used inside P_REP
+	pst->data = (void*)(((uint8_t*)pst->data) + pst->eo + off);
 	pst->eo = 0;
 	if (cont_sid != STOP_NONE)
 	    pst->cont_stack[pst->cont_sp++] = cont_sid;

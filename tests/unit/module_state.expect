@@ -1,0 +1,7 @@
+{cycles, 5}.
+{checks, [
+  {object_var, 2, "Blink.b1", "b1.State", 3},
+  {object_var, 3, "Blink.b1", "b1.State", 2},
+  {object_var, 4, "Blink.b1", "b1.State", 3},
+  {final_object_var, "Blink.b1", "b1.State", 3}
+]}.

@@ -1473,8 +1473,6 @@ again:
 	    index_t ent = st->instr[n].n.ent;;
 	    index_t obj = st->instr[n].n.obj;
 	    // in non-reactive mode this is like a call
-	    if (debug) printf("OP_NEW: esp=%d, cur=%d, ent=%d, obj=%d\n",
-			      st->esp, st->cur, ent, obj);
 	    st->stack[st->esp].ix = n+1;      // return address
 	    st->stack[st->esp].cur = st->cur;  // store current module
 	    st->esp++;
@@ -1548,23 +1546,44 @@ again:
     goto again;
 }
 
-// undo all values
+#if defined(SUPPORT_TRANSACTION) && (SUPPORT_TRANSACTION==1)
+// copy values marked in dset from src to dst buffer
+NOINLINE static void dset_copy(csp_rt_t* st, value_t* dst, const value_t* src)
+{
+    int g, i;
+    set_group_t bits;
+
+    for (g = 0; g < (int)BITSET_GROUPS(MAX_INDEX); g++) {
+	if ((bits = st->dset[g]) == 0)
+	    continue;
+	i = g*BITSET_GROUP_BITS;
+	while (bits) {
+	    if (bits & 1)
+		dst[i] = src[i];
+	    bits >>= 1;
+	    i++;
+	}
+    }
+}
+#endif
+
+// undo all values (revert dirty out slots to committed values)
 void csp_undo(csp_rt_t* st)
 {
+#if defined(SUPPORT_TRANSACTION) && (SUPPORT_TRANSACTION==1)
+    if (st->transaction && st->anyd)
+	dset_copy(st, st->dio[DOUT], st->dio[DIN]);
+#endif
     st->anyd = CSP_FALSE;
     bitset_zero(st->dset);
 }
 
+// commit changed values to the in buffer
 void csp_commit(csp_rt_t* st)
 {
 #if defined(SUPPORT_TRANSACTION) && (SUPPORT_TRANSACTION==1)
-    // swap in / out
-    if (st->transaction) {
-	value_t* tmp;
-	tmp = st->dio[DIN];
-	st->dio[DIN] = st->dio[DOUT];
-	st->dio[DOUT] = tmp;
-    }
+    if (st->transaction && st->anyd)
+	dset_copy(st, st->dio[DIN], st->dio[DOUT]);
 #endif
     bitset_zero(st->dset);
     st->anyd = CSP_FALSE;
@@ -2639,13 +2658,26 @@ NOINLINE static bool_t coerce_to_int(csp_rt_t* st, rentry_t* e)
     return 1;
 }
 
+// Coerce rhs value to the declared type of assignment target ix
+NOINLINE static bool_t coerce_assign(csp_rt_t* st, index_t ix, rentry_t* e)
+{
+    vtype_t lt = st->decl[INDEX(ix)].vt;
+
+    if (e->vt == V_UNSIGNED)  // same representation as int
+	e->vt = V_INTEGER;
+    if ((lt == V_FLOAT) && (e->vt == V_INTEGER))
+	return coerce_to_float(st, e);
+    if (((lt == V_INTEGER) || (lt == V_UNSIGNED)) && (e->vt == V_FLOAT))
+	return coerce_to_int(st, e);
+    return 1;
+}
+
 // Process binary assignment operator: generates ST instruction
 // Returns new ep on success, -1 on error
 NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, int ep)
 {
     rentry_t lhs = rstack[ep-2];
     rentry_t rhs = rstack[ep-1];
-    vtype_t ltype;
 
 #ifdef DEBUG
     if (debug) {
@@ -2663,17 +2695,9 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
 	return -1;
     }
 
-    // Get target type from declaration
-    ltype = st->decl[INDEX(lhs.ix)].vt;
-
-    // Type conversion if needed
-    if (ltype == V_INTEGER && (rhs.vt == V_FLOAT)) {
-	if (!coerce_to_int(st, &rhs))
-	    return -1;
-    } else if (ltype == V_FLOAT && (rhs.vt == V_INTEGER)) {
-	if (!coerce_to_float(st, &rhs))
-	    return -1;
-    }
+    // Type conversion to declared target type if needed
+    if (!coerce_assign(st, lhs.ix, &rhs))
+	return -1;
     if (csp_load(st, &rhs) < 0)
 	return -1;
 
@@ -3744,35 +3768,48 @@ field:
 }
 
 
-//  lhs [(= | <-) rhs]  ? cond]
+#define MAX_BODY_PARTS 8
+
+// one rule body part: [<obj>['.'<fld>] (=|<-)] <rhs>
+typedef struct {
+    tstr_t  obj;
+    tstr_t  fld;
+    int assign;  // NONE / EQ / RIMP
+    pexpr_t rhs;
+} rule_body_part_t;
+
+//  part (',' part)* [? cond]
 //
 //     lhs   op   rhs    ? cond
 //  -------------------------
 //  print(x)             ? x > 10
 //  obj.x    =  10       ? (y > z)
 //  x        <- y+z      ? (y < z)
+//  x = 1, y = 2         ? (y < z)
 //  print(x)            [? true]
-// 
+//
 NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
-		      index_t oix, const pexpr_t* lhs, int assign,
-		      const pexpr_t* rhs, const pexpr_t* cond)
+		      index_t oix, const rule_body_part_t* part, int np,
+		      const pexpr_t* cond)
 {
     size_t num;
-    int j;
+    int j, k;
     int dst = -1;
     int cnd = -1;
     int cnd2 = -1;
-    
+
 #ifdef DEBUG
     printf("asm_rule\n");
     printf("oix = %d\n", oix);
-    printf("lhs.len=%d, lhs.pos=%d\n", lhs->len, lhs->pos);
-    printf("assign=%d\n",  assign);
-    printf("rhs.len=%d, rhs.pos=%d\n", rhs->len, rhs->pos);
+    printf("np=%d\n", np);
+    for (k = 0; k < np; k++) {
+	printf("part[%d]: assign=%d, rhs.len=%d, rhs.pos=%d\n", k,
+	       part[k].assign, part[k].rhs.len, part[k].rhs.pos);
+    }
     if (cond)
 	printf("cond.len=%d, cond.pos=%d\n", cond->len, cond->pos);
 #endif
-    
+
 #if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
     if (st->sdef >= 0) {  // we are in a state!
 	int sr;
@@ -3787,25 +3824,26 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 	free_reg(st, sr);
     }
 #endif
-    // dry run (get nvar)
-    num = rhs->len;
-    if (assign == RIMP) {
-	int r;
-	st->nvar = 0;
-	st->rimp = 1;
-	r = csp_parse_const_expr(st, &tv[rhs->pos], &num, NULL);
-	st->rimp = 0;
-	if (r == 0)
-	    return -1;
-	if (st->nvar) {
-	    int k;
-	    cnd2 = alloc_reg(st);
-	    if (!asm_LI(st, cnd2, 0))
+    // dry run (get nvar) union over all <- parts
+    st->nvar = 0;
+    for (k = 0; k < np; k++) {
+	if (part[k].assign == RIMP) {
+	    int r;
+	    num = part[k].rhs.len;
+	    st->rimp = 1;
+	    r = csp_parse_const_expr(st, &tv[part[k].rhs.pos], &num, NULL);
+	    st->rimp = 0;
+	    if (r == 0)
 		return -1;
-	    for (k = 0; k < st->nvar; k++) {
-		if (!asm_mem(st, OP_CHG, cnd2, st->var[k]))
-		    return -1;
-	    }
+	}
+    }
+    if (st->nvar) {
+	cnd2 = alloc_reg(st);
+	if (!asm_LI(st, cnd2, 0))
+	    return -1;
+	for (k = 0; k < st->nvar; k++) {
+	    if (!asm_mem(st, OP_CHG, cnd2, st->var[k]))
+		return -1;
 	}
     }
     // cnd = state condition
@@ -3836,44 +3874,68 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 	free_reg(st, rcond.reg);
     }
     if (cnd < 0) {
-	cnd = alloc_reg(st);	
+	cnd = alloc_reg(st);
 	if (!asm_LI(st, cnd, -1))
 	    return -1;
     }
-    num = rhs->len;
     if (!asm_RULE(st, &j, cnd, 0))
 	return -1;
     free_reg(st, cnd);
-    if (num > 0) {
+    for (k = 0; k < np; k++) {
 	rentry_t rbody;
-	if (!csp_parse_expr(st, &tv[rhs->pos], &num, &rbody))
+	index_t ix = BAD_INDEX;
+	pexpr_t lhs;
+
+	if ((num = part[k].rhs.len) == 0)
+	    continue;
+	if (dst >= 0) {  // only last part value is kept (for NEXT)
+	    free_reg(st, dst);
+	    dst = -1;
+	}
+	if (!csp_parse_expr(st, &tv[part[k].rhs.pos], &num, &rbody))
 	    return -1;
+	// lhs tokens directly precede the assign token
+	lhs.pos = 0;
+	lhs.len = 0;
+	if (part[k].assign != 0) {
+	    if (part[k].fld.len > 0) {        // <obj> '.' <fld> op <rhs>
+		lhs.pos = part[k].rhs.pos - 4;
+		lhs.len = 3;
+	    }
+	    else if (part[k].obj.len > 0) {   // <var> op <rhs>
+		lhs.pos = part[k].rhs.pos - 2;
+		lhs.len = 1;
+	    }
+	}
+	if (lhs.len > 0) {
+	    if ((ix = lookup_lhs(st, tv, oix, &lhs)) == BAD_INDEX)
+		return -1;
+	    if (!coerce_assign(st, ix, &rbody))
+		return -1;
+	}
 	if (!rbody.L)
 	    csp_load(st, &rbody);
-	dst = rbody.reg;	
-	if ((lhs->len > 0) && (assign != 0)) {
-	    index_t ix;
+	dst = rbody.reg;
+	if (ix != BAD_INDEX) {
 	    opcode_t op;
-	    if ((ix = lookup_lhs(st, tv, oix, lhs)) == BAD_INDEX)
-		return -1;
-	    if (assign == EQ)
-		op = OP_ST;
-	    else if (assign == RIMP)
+	    if (part[k].assign == RIMP)
 		op = OP_STIMP;
-	    // fixme: coerce etc! + PART!
+	    else
+		op = OP_ST;
+	    // fixme: PART!
 	    if (!asm_mem(st, op, dst, ix))
 		return -1;
 	}
     }
-    else { // load TRUE
+    if (dst < 0) { // no body value, load TRUE
 	dst = alloc_reg(st);
 	if (!asm_LI(st, dst, 0))
-	    return -1;	
+	    return -1;
     }
     st->instr[j].r.nxt = st->ps.nn - j;  // relative offset
     if (!asm_NEXT(st, dst))
 	return -1;
-    if (dst >= 0) free_reg(st, dst);
+    free_reg(st, dst);
     return 0;
 }
 
@@ -3978,13 +4040,16 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
     // Generate code for init list
     k = 0;
     while((k < MAX_INITS) && (d.inits[k].fld.len > 0)) {
-	pexpr_t lhs;
+	rule_body_part_t p;
 	init_entry_t* e = &d.inits[k];
 
-	// lhs cover the field name
-	lhs.pos = e->rhs.pos-2;
-	lhs.len = 1;
-	if (asm_rule(st,tv,n,ix,&lhs,e->assign,&e->rhs,NULL) < 0)
+	// field name is the lhs (derived from rhs.pos in asm_rule)
+	p.obj = e->fld;
+	p.fld.ptr = NULL;
+	p.fld.len = 0;
+	p.assign = e->assign;
+	p.rhs = e->rhs;
+	if (asm_rule(st,tv,n,ix,&p,1,NULL) < 0)
 	    return -1;
 	k++;
     }
@@ -4003,39 +4068,37 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
 //  <cond> = <expr>
 //
 
-#define MAX_BODY_PARTS 8
-
+// cond first! body parts must start at a byte offset
 typedef struct {
-    tstr_t  obj;
-    tstr_t  fld;
-    int assign;  // NONE / EQ / RIMP
-    pexpr_t rhs;
-} rule_body_part_t;
-
-// body_part_t body[MAX_BODY_PARTS];
-
-typedef struct {
-    tstr_t  obj;
-    tstr_t  fld;
-    int assign;  // NONE / EQ / RIMP
-    pexpr_t rhs;
-
     pexpr_t cond;
+    rule_body_part_t body[MAX_BODY_PARTS];
 } rule_param_t;
 
-static const uint8_t pat_rule[] = {
+// PAT_BODY: [<name> ['.' <name>] (=|<-)] <expr>
+static const uint8_t pat_body[] = {
     P_OPT, 25,
-      P_STR, csp_offsetof(rule_param_t, obj),
+      P_STR, csp_offsetof(rule_body_part_t, obj),
       P_OPT, 5,
         P_TOK, DOT,
-        P_STR, csp_offsetof(rule_param_t, fld),
+        P_STR, csp_offsetof(rule_body_part_t, fld),
       P_OPT_END,
       P_CHOICE, 2,
-        P_ALT, 4, P_TOK_W, EQ, csp_offsetof(rule_param_t, assign), P_ALT_END,
-        P_ALT, 4, P_TOK_W, RIMP, csp_offsetof(rule_param_t, assign), P_ALT_END,
+        P_ALT, 4, P_TOK_W, EQ, csp_offsetof(rule_body_part_t, assign), P_ALT_END,
+        P_ALT, 4, P_TOK_W, RIMP, csp_offsetof(rule_body_part_t, assign), P_ALT_END,
       P_CHOICE_END,
     P_OPT_END,
-    P_EXPR_S, csp_offsetof(rule_param_t, rhs), STOP_RULE_BODY,
+    P_EXPR_S, csp_offsetof(rule_body_part_t, rhs), STOP_RULE_BODY,
+    P_END
+};
+
+// <rule> := <body> (',' <body>)* ['?' <cond>]
+static const uint8_t pat_rule[] = {
+    P_PAT, PAT_BODY, csp_offsetof(rule_param_t, body), STOP_RULE_BODY_CONT,
+    P_REP, 10,
+      P_ARRAY, csp_offsetof(rule_param_t, body[1]), sizeof(rule_body_part_t),
+      P_TOK, COMMA,
+      P_PAT, PAT_BODY, 0, STOP_RULE_BODY_CONT,
+    P_REP_END,
     P_OPT, 6,
       P_TOK, QUEST,
       P_EXPR_S, csp_offsetof(rule_param_t, cond), STOP_RULE_COND,
@@ -4046,20 +4109,15 @@ static const uint8_t pat_rule[] = {
 NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, size_t n)
 {
     rule_param_t d = {0};
-    pexpr_t lhs;
+    int np = 0;
 
     if (pmatch(st, tv, n, pat_rule, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    // field name
-    lhs.pos = 0;
-    lhs.len = 0;
-    if (d.fld.len == 0)    // then obj is the variable
-	lhs.len = 1;
-    else if (d.obj.len > 0)  // assume <word> '.' <word> ib tv
-	lhs.len = 3;
-    return asm_rule(st, tv, n, BAD_INDEX, &lhs, d.assign, &d.rhs, &d.cond);
+    while ((np < MAX_BODY_PARTS) && (d.body[np].rhs.len > 0))
+	np++;
+    return asm_rule(st, tv, n, BAD_INDEX, d.body, np, &d.cond);
 }
 
 index_t lookup_can_range(csp_rt_t* st, index_t idx, ivalue_t p0, ivalue_t p1)
@@ -4354,6 +4412,7 @@ int csp_rt_init(csp_rt_t* st, int transaction, int reactive)
     scan_pattern(PAT_ANALOG,   pat_analog);
     scan_pattern(PAT_TIMER,    pat_timer);
     scan_pattern(PAT_CAN,      pat_can);
+    scan_pattern(PAT_BODY,     pat_body);
     scan_pattern(PAT_RULE,     pat_rule);
     scan_pattern(PAT_OBJECT,   pat_object);
     
@@ -4482,9 +4541,9 @@ NOINLINE static void setup_digital(csp_rt_t* st, index_t ix)
     csp_decl_t* dptr = &st->decl[INDEX(ix)];
     
     csp_dio_slots(st, ix, &iptr, &optr);    
-    iptr->d.dir  = optr->d.pin = dptr->dir;	    
+    iptr->d.dir  = optr->d.pin = dptr->dir;
     iptr->d.pin  = optr->d.pin = dptr->di.pin;
-    iptr->d.port = optr->d.pin = dptr->di.port;
+    iptr->d.port = optr->d.port = dptr->di.port;
     iptr->d.pullup = optr->d.pullup = dptr->di.pullup;
     iptr->d.pulldown = optr->d.pulldown = dptr->di.pulldown;    
 }
@@ -4655,6 +4714,8 @@ int csp_set_transaction(csp_rt_t* st, int onoff)
 	    st->dio[DOUT] = st->dv1;
 	else
 	    st->dio[DOUT] = st->dv0;
+	// out buffer must mirror committed state
+	memcpy(st->dio[DOUT], st->dio[DIN], sizeof(st->dv0));
     }
     return 0;
 #endif

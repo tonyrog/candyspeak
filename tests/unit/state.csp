@@ -1,0 +1,13 @@
+#states a b c d
+#states d e
+#variable X
+#variable Y
+#variable Z
+
+#in b
+X = 1 ? (Y < 2)
+#end
+
+#in a
+Y <- X+Z ? (X > 10)
+#end
