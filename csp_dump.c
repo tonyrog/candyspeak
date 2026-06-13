@@ -1272,7 +1272,6 @@ static void exprbuf_ld(csp_rt_t* st,
 {
     uint8_t  var = exprbuf_var(st, bp, ip->m.mem);
     bp->reg[ip->m.x] = var;
-//    printf("LD: R%d = '%s'\n", ip->m.x, bp->reg[ip->m.x]);
     bp->prio[ip->m.x] = 110;
 }
 
