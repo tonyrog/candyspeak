@@ -1102,6 +1102,19 @@ static int exprbuf_reftoi(csp_exprbuf_t* bp, uint8_t ref)
     return val;
 }
 
+// true if ref string is a plain decimal number (an immediate)
+static int exprbuf_ref_isnum(csp_exprbuf_t* bp, uint8_t ref)
+{
+    uint8_t* ptr = bp->strptrs[REF_IDX(ref)];
+    int len = bp->strlens[REF_IDX(ref)];
+    if (len == 0) return 0;
+    while(len--) {
+	if (*ptr < '0' || *ptr > '9') return 0;
+	ptr++;
+    }
+    return 1;
+}
+
 char hex(uint8_t v)
 {
     if (v < 10) return v+'0';
@@ -1199,10 +1212,19 @@ static void exprbuf_fcall(csp_rt_t* st,
     exprbuf_strref(bp, fn);
     exprbuf_char(bp, '(');
     for (i = 0; i < MAX_ARGS; i++) {
-	int a = (ip->f.avt >> i*4) & 0xf;
+	int a = (ip->f.avt >> i*4) & 0xf;    // actual argument type
+	int d = (argtypes >> i*4) & 0xf;     // declared argument type
 	if (a == 0) break;
 	if (i > 0) exprbuf_char(bp, ',');
-	switch((argtypes >> i*4)) {
+	// a string literal arg is an immediate index into the string buffer
+	if ((a == V_STRING) && exprbuf_ref_isnum(bp, bp->arg[i])) {
+	    uint16_t sx = exprbuf_reftoi(bp, bp->arg[i]);
+	    exprbuf_char(bp, '"');
+	    exprbuf_str(bp, &st->str[sx]);
+	    exprbuf_char(bp, '"');
+	    continue;
+	}
+	switch(d) {
 	case V_INDEX:
 	case V_TIMER:
 	case V_ANALOG:
@@ -1214,7 +1236,7 @@ static void exprbuf_fcall(csp_rt_t* st,
 	    break;
 	}
 	default:
-	    exprbuf_strref(bp, bp->arg[i]);	    
+	    exprbuf_strref(bp, bp->arg[i]);
 	    break;
 	}
     }
@@ -1276,6 +1298,58 @@ void exprbuf_body(FILE* f, csp_rt_t* st, csp_exprbuf_t* bp, csp_instr_t* ip)
     }
 }
 
+// Is register reg (produced at instr i) read by a later instruction
+// before being redefined or the rule ends? Used to tell a void
+// statement-call (print) from a call whose result is consumed (x=f()).
+static int reg_consumed(csp_rt_t* st, int i, int reg)
+{
+    int j;
+    tok_t t;
+
+    for (j = i+1; j < st->ps.nn; j++) {
+	csp_instr_t* ip = &st->instr[j];
+	switch (ip->op) {
+	case OP_NEXT:
+	case OP_RULE:
+	    return 0;  // rule boundary, never read
+	case OP_ST:
+	case OP_STP:
+	case OP_STIMP:
+	case OP_CHG:
+	    if (ip->m.x == reg) return 1;
+	    break;
+	case OP_ARG:
+	    if (ip->i.x == reg) return 1;
+	    break;
+	case OP_LD:
+	    if (ip->m.x == reg) return 0;  // redefined
+	    break;
+	case OP_LI:
+	case OP_LIU:
+	case OP_LIH:
+	    if (ip->i.x == reg) return 0;  // redefined
+	    break;
+	case OP_CALL:
+	    if (ip->f.x == reg) return 0;  // redefined
+	    break;
+	case OP_MOV:
+	case OP_CVTIF:
+	case OP_CVTFI:
+	    if (ip->a.y == reg) return 1;
+	    if (ip->a.x == reg) return 0;  // redefined
+	    break;
+	default:
+	    t = op_info[ip->op].tok;
+	    if (tok_table[t].arity >= 0) {
+		if (ip->a.y == reg || ip->a.z == reg) return 1;
+		if (ip->a.x == reg) return 0;  // redefined
+	    }
+	    break;
+	}
+    }
+    return 0;
+}
+
 //
 // trace instructions util
 // 1. OP_RULE  then we have a condition expression
@@ -1311,12 +1385,9 @@ static int exprbuf_expr(FILE* f, csp_rt_t*  st,
 	    break;
 	case OP_CALL:
 	    exprbuf_fcall(st, bp, ip);
-	    // Add side-effect calls (void funcs like print) to body list
-	    if (bp->nbody > 0 ||
-		(i+1 < st->ps.nn &&
-		 (st->instr[i+1].op == OP_RULE || st->instr[i+1].op == OP_NEXT ||
-		  st->instr[i+1].op == OP_ST || st->instr[i+1].op == OP_STIMP ||
-		  st->instr[i+1].op == OP_CALL))) {
+	    // A call result that is not consumed later is a void
+	    // statement (e.g. print) and belongs in the body list.
+	    if (!reg_consumed(st, i, ip->f.x)) {
 		if (bp->nbody < MAX_BODY)
 		    bp->body[bp->nbody++] = bp->reg[ip->f.x];
 	    }
@@ -1354,8 +1425,11 @@ static int exprbuf_expr(FILE* f, csp_rt_t*  st,
             bp->prio[ip->i.x] = 110;
             break;
 	}
-	case OP_MOV: {
+	case OP_MOV:
+	case OP_CVTIF:   // type conversion is implicit in display
+	case OP_CVTFI: {
 	    bp->reg[ip->a.x] = bp->reg[ip->a.y];
+	    bp->prio[ip->a.x] = bp->prio[ip->a.y];
 	    break;
 	}
 	default:
