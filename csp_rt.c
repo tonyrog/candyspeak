@@ -80,20 +80,7 @@ static rochar s_BARBAR[] RODATA = "||";
 static rochar s_EQ[] RODATA = "=";
 static rochar s_COMMA[] RODATA = ",";
 static rochar s_QUEST[] RODATA = "?";
-static rochar s_next[] RODATA = "next";
-static rochar s_enter[] RODATA = "enter";
-static rochar s_leave[] RODATA = "leave";
-static rochar s_new[] RODATA = "new";
-static rochar s_call[] RODATA = "call";
-static rochar s_ld[] RODATA = "ld";
-static rochar s_st[] RODATA = "st";
-static rochar s_stp[] RODATA = "stp";
-static rochar s_stimp[] RODATA = "stimp";
-static rochar s_li[] RODATA = "li";
-static rochar s_chg[] RODATA = "chg";
-static rochar s_arg[] RODATA = "arg";
-static rochar s_cvtif[] RODATA = "cvtif";
-static rochar s_cvtfi[] RODATA = "cvtfi";
+
 static rochar s_pullup[] RODATA = "pullup";
 static rochar s_pulldown[] RODATA = "pulldown";
 static rochar s_resolution[] RODATA = "resolution";
@@ -122,18 +109,105 @@ static rochar s_LB[] RODATA = "[";
 static rochar s_RB[] RODATA = "]";
 static rochar s_MOV[] RODATA = "mov";
 
-const op_entry_t op_table[] RODATA = {
-    TOK_ENT(NONE,OP_NOP,s_null),
-    // leaf
-    DECL_ENT(MODULE,DECL_MODULE,s_module),
-    DECL_ENT(END,DECL_END, s_end),
-    DECL_ENT(CONSTANT,DECL_CONSTANT,s_constant),
-    DECL_ENT(VARIABLE,DECL_VARIABLE,s_variable),
-    DECL_ENT(DIGITAL,DECL_DIGITAL,s_digital),
-    DECL_ENT(ANALOG,DECL_ANALOG,s_analog),
-    DECL_ENT(TIMER,DECL_TIMER,s_timer),
-    DECL_ENT(CAN,DECL_CAN,s_can),
-    // node - unary
+
+static rochar s_ADD[] RODATA = "ADD";
+static rochar s_SUB[] RODATA = "SUB";
+static rochar s_MUL[] RODATA = "MUL";
+static rochar s_DIV[] RODATA = "DIV";
+static rochar s_REM[] RODATA = "REM";
+static rochar s_SLA[] RODATA = "SLA";
+static rochar s_SRA[] RODATA = "SRA";
+static rochar s_BAND[] RODATA = "BAND";
+static rochar s_BOR[] RODATA = "BOR";
+static rochar s_BXOR[] RODATA = "BXOR";
+static rochar s_AND[] RODATA = "AND";
+static rochar s_OR[] RODATA = "OR";
+static rochar s_ASSIGN[] RODATA = "ASSIGN";
+static rochar ss_LT[] RODATA = "LT";
+static rochar ss_LTE[] RODATA = "LTE";
+static rochar ss_GT[] RODATA = "GT";
+static rochar ss_GTE[] RODATA = "GTE";
+static rochar ss_EQ[] RODATA = "EQ";
+static rochar ss_NEQ[] RODATA = "NEQ";
+static rochar s_BNOT[] RODATA = "BNOT";
+static rochar s_NEG[] RODATA = "NEG";
+static rochar s_NOT[] RODATA = "NOT";
+static rochar ss_MOV[] RODATA = "MOV";
+static rochar s_CVTIF[] RODATA = "CVTIF";
+static rochar s_CVTFI[] RODATA = "CVTFI";
+
+static rochar s_FADD[] RODATA = "FADD";
+static rochar s_FSUB[] RODATA = "FSUB";
+static rochar s_FMUL[] RODATA = "FMUL";
+static rochar s_FDIV[] RODATA = "FDIV";
+static rochar s_FNEG[] RODATA = "FNEG";
+static rochar s_FMOV[] RODATA = "FMOV";
+
+static rochar s_FLT[] RODATA = "FLT";
+static rochar s_FLTE[] RODATA = "FLTE";
+static rochar s_FGT[] RODATA = "FGT";
+static rochar s_FGTE[] RODATA = "FGTE";
+static rochar s_FEQ[] RODATA = "FEQ";
+static rochar s_FNEQ[] RODATA = "FNEQ";
+
+static rochar ss_COMMA[] RODATA = "COMMA";
+
+static rochar s_ENTER[] RODATA = "ENTER";
+static rochar s_LEAVE[] RODATA = "LEAVE";
+static rochar s_NEW[] RODATA = "NEW";
+static rochar s_LI[] RODATA = "LI";
+static rochar s_LIU[] RODATA = "LIU";
+static rochar s_LIH[] RODATA = "LIH";
+static rochar s_ARG[] RODATA = "ARG";
+static rochar s_ST[] RODATA = "ST";
+static rochar s_STP[] RODATA = "STP";
+static rochar s_STIMP[] RODATA = "STIMP";
+static rochar s_CHG[] RODATA = "CHG";
+static rochar s_LD[] RODATA = "LD";
+static rochar s_CALL[] RODATA = "CALL";
+static rochar s_RULE[] RODATA = "RULE";
+static rochar s_NEXT[] RODATA = "NEXT";
+static rochar s_NOP[] RODATA = "NOP";
+
+static rochar s_min[] RODATA = "min";
+static rochar s_max[] RODATA = "max";
+static rochar s_abs[] RODATA = "abs";
+static rochar s_fabs[] RODATA = "fabs";
+static rochar s_sign[] RODATA = "sign";
+static rochar s_clip[] RODATA = "clip";
+static rochar s_timeout[] RODATA = "timeout";
+static rochar s_elapsed[] RODATA = "elapsed";
+static rochar s_progress[] RODATA = "progress";
+static rochar s_changed[] RODATA = "changed";
+static rochar s_rising[] RODATA = "rising";
+static rochar s_falling[] RODATA = "falling";
+
+static rochar s_print[] RODATA = "print";
+static rochar s_println[] RODATA = "println";
+static rochar s_tick[] RODATA = "tick";
+static rochar s_cycle[] RODATA = "cycle";
+static rochar s_latch[] RODATA = "latch";
+
+
+const op_entry_t decl_table[] RODATA = {
+    DECL_ENT(D_NONE,DECL_NONE,s_none),
+    DECL_ENT(D_MODULE,DECL_MODULE,s_module),
+    DECL_ENT(D_END,DECL_END, s_end),
+#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
+    DECL_ENT(D_STATES,DECL_STATES,s_states),
+    DECL_ENT(D_IN,DECL_IN,s_in),       // 'in' FIXME? used as option keyword!
+#endif    
+    DECL_ENT(D_CONSTANT,DECL_CONSTANT,s_constant),
+    DECL_ENT(D_VARIABLE,DECL_VARIABLE,s_variable),
+    DECL_ENT(D_DIGITAL,DECL_DIGITAL,s_digital),
+    DECL_ENT(D_ANALOG,DECL_ANALOG,s_analog),
+    DECL_ENT(D_TIMER,DECL_TIMER,s_timer),
+    DECL_ENT(D_CAN,DECL_CAN,s_can),
+    DECL_ENT(D_LAST,DECL_NONE,s_null),
+};
+
+const op_entry_t tok_table[] RODATA = {
+    INSTR_ENT(NONE,OP_NOP,s_NOP,-1,0,NO),
     INSTR_ENT(EXCLAMATION,OP_NOT,s_EXCLAMATION,1,105,RIGHT),
     INSTR_ENT(TILDE,OP_BNOT,s_TILDE,1,105,RIGHT),
     INSTR_ENT(MINUS1,OP_NEG,s_MINUS,1,105,RIGHT),
@@ -164,30 +238,6 @@ const op_entry_t op_table[] RODATA = {
     INSTR_ENT(COMMA,OP_COMMA,s_COMMA,2,2,RIGHT),
     INSTR_ENT(QUEST,OP_RULE,s_QUEST,-1,-1,NO),
 
-    INSTR_ENT(NEXT,OP_NEXT,s_next,-1,-1,NO),
-
-    // OP_ENTER: y=<num-instr>, z=DECL:module-index
-    INSTR_ENT(ENTER,OP_ENTER,s_enter,-1,-1,NO),
-    // OP_ENTER: y=<num-instr>, z=DECL:module-index
-    INSTR_ENT(LEAVE,OP_LEAVE,s_leave,-1,-1,NO),
-    // OP_NEW: y=INSTR:enter-index, z=DECL:mod-index
-    INSTR_ENT(NEW,OP_NEW,s_new,-1,-1,NO),
-    // functions are now looked up via csp_lookup_func() + csp_builtin_funcs[]
-    INSTR_ENT(CALL,OP_CALL,s_call,-1,-1,NO),
-    INSTR_ENT(LD,OP_LD,s_ld,-1,-1,NO),
-    INSTR_ENT(ST,OP_ST,s_st,-1,-1,NO),
-    INSTR_ENT(STP,OP_STP,s_stp,-1,-1,NO),    
-    INSTR_ENT(STIMP,OP_STIMP,s_stimp,-1,-1,NO),
-    INSTR_ENT(CHG,OP_CHG,s_chg,-1,-1,NO),
-    INSTR_ENT(LI,OP_LI,s_li,-1,-1,NO),
-    INSTR_ENT(ARG,OP_ARG,s_arg,-1,-1,NO),
-    INSTR_ENT(CVTIF,OP_CVTIF,s_cvtif,-1,-1,NO),
-    INSTR_ENT(CVTIF,OP_CVTFI,s_cvtfi,-1,-1,NO),
-
-    // keywords
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)    
-    TOK_ENT(STATES,OP_NOP,s_states),
-#endif
     TOK_ENT(PULLUP,OP_NOP,s_pullup),
     TOK_ENT(PULLDOWN,OP_NOP,s_pulldown),
     TOK_ENT(RESOLUTION,OP_NOP,s_resolution),
@@ -202,7 +252,6 @@ const op_entry_t op_table[] RODATA = {
     TOK_ENT(LITTLE,OP_NOP,s_little),
     TOK_ENT(BIG,OP_NOP,s_big),
 
-    // tokens
     TOK_ENT(LP,OP_NOP,s_LP),
     TOK_ENT(RP,OP_NOP,s_RP),
     TOK_ENT(HASH,OP_NOP,s_HASH),
@@ -215,16 +264,15 @@ const op_entry_t op_table[] RODATA = {
     TOK_ENT(WORD,OP_NOP,s_null),
     TOK_ENT(NEWLINE,OP_NOP,s_null),
     // eot
-    TOK_ENT(LAST,OP_NOP,s_null)
+    TOK_ENT(T_LAST,OP_NOP,s_null)
 };
-
 
 // Function calls are stored in ostack as (LAST + 1 + func_index)
 // func_index encodes: (index << 1) | is_user
 // Note: must use LAST (not LAST_NODE) to avoid overlap with LP, RP, etc.
 // Fixme: (fname-token-index:8,ostack-depth:8,last:8)
 // make ostack uint32_t
-#define FUNC_MARKER_BASE (LAST + 1)
+#define FUNC_MARKER_BASE (T_LAST + 1)
 #define IS_FUNC_MARKER(op) ((op) >= FUNC_MARKER_BASE)
 #define MAKE_FUNC_MARKER(tix, pp0) ((FUNC_MARKER_BASE) +  \
 				    ((tix)<<16) + ((pp0)<< 8))
@@ -330,128 +378,69 @@ MAKE_IFF(FGTE);
 MAKE_IFF(FEQEQ);
 MAKE_IFF(FNEQ);
 
-static rochar s_ADD[] RODATA = "ADD";
-static rochar s_SUB[] RODATA = "SUB";
-static rochar s_MUL[] RODATA = "MUL";
-static rochar s_DIV[] RODATA = "DIV";
-static rochar s_REM[] RODATA = "REM";
-static rochar s_SLA[] RODATA = "SLA";
-static rochar s_SRA[] RODATA = "SRA";
-static rochar s_BAND[] RODATA = "BAND";
-static rochar s_BOR[] RODATA = "BOR";
-static rochar s_BXOR[] RODATA = "BXOR";
-static rochar s_AND[] RODATA = "AND";
-static rochar s_OR[] RODATA = "OR";
-static rochar s_ASSIGN[] RODATA = "ASSIGN";
-static rochar ss_LT[] RODATA = "LT";
-static rochar ss_LTE[] RODATA = "LTE";
-static rochar ss_GT[] RODATA = "GT";
-static rochar ss_GTE[] RODATA = "GTE";
-static rochar ss_EQ[] RODATA = "EQ";
-static rochar ss_NEQ[] RODATA = "NEQ";
-static rochar s_BNOT[] RODATA = "BNOT";
-static rochar s_NEG[] RODATA = "NEG";
-static rochar s_NOT[] RODATA = "NOT";
-static rochar ss_MOV[] RODATA = "MOV";
-static rochar s_CVTIF[] RODATA = "CVTIF";
-static rochar s_CVTFI[] RODATA = "CVTFI";
-
-static rochar s_FADD[] RODATA = "FADD";
-static rochar s_FSUB[] RODATA = "FSUB";
-static rochar s_FMUL[] RODATA = "FMUL";
-static rochar s_FDIV[] RODATA = "FDIV";
-static rochar s_FNEG[] RODATA = "FNEG";
-static rochar s_FMOV[] RODATA = "FMOV";
-
-static rochar s_FLT[] RODATA = "FLT";
-static rochar s_FLTE[] RODATA = "FLTE";
-static rochar s_FGT[] RODATA = "FGT";
-static rochar s_FGTE[] RODATA = "FGTE";
-static rochar s_FEQ[] RODATA = "FEQ";
-static rochar s_FNEQ[] RODATA = "FNEQ";
-
-static rochar ss_COMMA[] RODATA = "COMMA";
-
-static rochar s_ENTER[] RODATA = "ENTER";
-static rochar s_LEAVE[] RODATA = "LEAVE";
-static rochar s_NEW[] RODATA = "NEW";
-static rochar s_LI[] RODATA = "LI";
-static rochar s_LIU[] RODATA = "LIU";
-static rochar s_LIH[] RODATA = "LIH";
-static rochar s_ARG[] RODATA = "ARG";
-static rochar s_ST[] RODATA = "ST";
-static rochar s_STP[] RODATA = "STP";
-static rochar s_STIMP[] RODATA = "STIMP";
-static rochar s_CHG[] RODATA = "CHG";
-static rochar s_LD[] RODATA = "LD";
-static rochar s_CALL[] RODATA = "CALL";
-static rochar s_RULE[] RODATA = "RULE";
-static rochar s_NEXT[] RODATA = "NEXT";
-static rochar s_NOP[] RODATA = "NOP";
-
 // opcode => opcode type info
-static const op_info_t info_tab[] RODATA = {
-    [OP_ADD] = {s_ADD,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_SUB] = {s_SUB,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_MUL] = {s_MUL,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_DIV] = {s_DIV,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_REM] = {s_REM,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_SLA] = {s_SLA,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_SRA] = {s_SRA,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_BAND] = {s_BAND,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_BOR] = {s_BOR,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_BXOR] = {s_BXOR,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_AND] = {s_AND,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_OR] = {s_OR,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_EQ] = {s_ASSIGN,2,V_INTEGER,{V_INDEX,V_INTEGER}},
-    [OP_LT] = {ss_LT,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_LTE] = {ss_LTE,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_GT] = {ss_GT,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_GTE] = {ss_GTE,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_EQEQ] = {ss_EQ,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
-    [OP_NEQ] = {ss_NEQ,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+const op_info_t op_info[] RODATA = {
+    [OP_ADD] = {s_ADD,PLUS,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_SUB] = {s_SUB,MINUS,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_MUL] = {s_MUL,ASTERISK,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_DIV] = {s_DIV,SLASH,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_REM] = {s_REM,PERCENT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_SLA] = {s_SLA,LTLT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_SRA] = {s_SRA,GTGT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_BAND] = {s_BAND,AMP,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_BOR] = {s_BOR,BAR,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_BXOR] = {s_BXOR,CIRC,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_AND] = {s_AND,AMPAMP,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_OR] = {s_OR,BARBAR,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_EQ] = {s_ASSIGN,EQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_LT] = {ss_LT,LT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_LTE] = {ss_LTE,LTEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_GT] = {ss_GT,GT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_GTE] = {ss_GTE,GTEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_EQEQ] = {ss_EQ,EQEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_NEQ] = {ss_NEQ,NEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
     // unary versions (treated as binary with z ignored)
-    [OP_BNOT] = {s_BNOT,1,V_INTEGER,{V_INTEGER}},
-    [OP_NEG] = {s_NEG,1,V_INTEGER,{V_INTEGER}},
-    [OP_MOV] = {ss_MOV,1,V_INTEGER,{V_INTEGER}},
-    [OP_NOT] = {s_NOT,1,V_INTEGER,{V_INTEGER}},
-    [OP_CVTIF] = {s_CVTIF,1,V_FLOAT,{V_INTEGER}},   // int→float
-    [OP_CVTFI] = {s_CVTFI,1,V_INTEGER,{V_FLOAT}},  // float→int
+    [OP_BNOT] = {s_BNOT,TILDE,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
+    [OP_NEG] = {s_NEG,MINUS1,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
+    [OP_MOV] = {ss_MOV,PLUS1,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
+    [OP_NOT] = {s_NOT,EXCLAMATION,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
+    [OP_CVTIF] = {s_CVTIF,NONE,1,V_FLOAT,MAKE_TYPE1(V_INTEGER)},   // int→float
+    [OP_CVTFI] = {s_CVTFI,NONE,1,V_INTEGER,MAKE_TYPE1(V_FLOAT)},   // float→int
 
-    [OP_FNEG] = {s_FNEG,1,V_FLOAT,{V_FLOAT}},
-    [OP_FMOV] = {s_FMOV,1,V_FLOAT,{V_FLOAT}},
-    [OP_FADD] = {s_FADD,2,V_FLOAT,{V_FLOAT,V_FLOAT}},
-    [OP_FSUB] = {s_FSUB,2,V_FLOAT,{V_FLOAT,V_FLOAT}},
-    [OP_FMUL] = {s_FMUL,2,V_FLOAT,{V_FLOAT,V_FLOAT}},
-    [OP_FDIV] = {s_FDIV,2,V_FLOAT,{V_FLOAT,V_FLOAT}},
+    [OP_FNEG] = {s_FNEG,MINUS1,1,V_FLOAT,MAKE_TYPE1(V_FLOAT)},
+    [OP_FMOV] = {s_FMOV,PLUS1,1,V_FLOAT,MAKE_TYPE1(V_FLOAT)},
+    [OP_FADD] = {s_FADD,PLUS,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FSUB] = {s_FSUB,MINUS,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FMUL] = {s_FMUL,ASTERISK,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FDIV] = {s_FDIV,SLASH,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
 
-    [OP_FLT] = {s_FLT,2,V_INTEGER,{V_FLOAT,V_FLOAT}},
-    [OP_FLTE] = {s_FLTE,2,V_INTEGER,{V_FLOAT,V_FLOAT}},
-    [OP_FGT] = {s_FGT,2,V_INTEGER,{V_FLOAT,V_FLOAT}},
-    [OP_FGTE] = {s_FGTE,2,V_INTEGER,{V_FLOAT,V_FLOAT}},
-    [OP_FEQEQ] = {s_FEQ,2,V_INTEGER,{V_FLOAT,V_FLOAT}},
-    [OP_FNEQ] = {s_FNEQ,2,V_INTEGER,{V_FLOAT,V_FLOAT}},
+    [OP_FLT] = {s_FLT,LT,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FLTE] = {s_FLTE,LTEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FGT] = {s_FGT,GT,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FGTE] = {s_FGTE,GTEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FEQEQ] = {s_FEQ,EQEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FNEQ] = {s_FNEQ,NEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
 
     // comman may not be needed?
-    [OP_COMMA] = {ss_COMMA,2,V_INTEGER,{V_INTEGER,V_INTEGER}},
+    [OP_COMMA] = {ss_COMMA,NONE,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
 
     // other operations for name
-    [OP_ENTER] = {s_ENTER,0,V_VOID,{}},
-    [OP_LEAVE] = {s_LEAVE,0,V_VOID,{}},
-    [OP_NEW]   = {s_NEW,0,V_VOID,{}},
-    [OP_LI]    = {s_LI,0,V_VOID,{}},
-    [OP_LIU]   = {s_LIU,0,V_VOID,{}},
-    [OP_LIH]   = {s_LIH,0,V_VOID,{}},
-    [OP_ARG]   = {s_ARG,0,V_VOID,{}},
-    [OP_ST]    = {s_ST,0,V_VOID,{}},
-    [OP_STP]   = {s_STP,0,V_VOID,{}},    
-    [OP_STIMP] = {s_STIMP,0,V_VOID,{}},
-    [OP_CHG]   = {s_CHG,0,V_VOID,{}},
-    [OP_LD]    = {s_LD,0,V_VOID,{}},
-    [OP_CALL]  = {s_CALL,0,V_VOID,{}},
-    [OP_RULE]  = {s_RULE,0,V_VOID,{}},
-    [OP_NEXT]  = {s_NEXT,0,V_VOID,{}},
-    [OP_NOP] = {s_NOP,0,V_VOID,{}},
+    [OP_ENTER] = {s_ENTER,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_LEAVE] = {s_LEAVE,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_NEW]   = {s_NEW,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_LI]    = {s_LI,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_LIU]   = {s_LIU,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_LIH]   = {s_LIH,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_ARG]   = {s_ARG,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_ST]    = {s_ST,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_STP]   = {s_STP,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_STIMP] = {s_STIMP,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_CHG]   = {s_CHG,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_LD]    = {s_LD,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_CALL]  = {s_CALL,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_RULE]  = {s_RULE,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_NEXT]  = {s_NEXT,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_NOP]   = {s_NOP,NONE,-1,V_VOID,MAKE_TYPE0()},
 
 };
 
@@ -681,24 +670,24 @@ static NOINLINE value_t eval2(opcode_t op, value_t y, value_t z)
 uint8_t csp_opcode_rtype(opcode_t op)
 {
 #if defined(__AVR__)
-    return pgm_read_byte(&info_tab[op].rtype);
+    return pgm_read_byte(&op_info[op].rtype);
 #else
-    return info_tab[op].rtype;
+    return op_info[op].rtype;
 #endif
 }
 
 uint8_t csp_opcode_arity(opcode_t op)
 {
 #if defined(__AVR__)
-    return pgm_read_byte(&info_tab[op].arity);
+    return pgm_read_byte(&op_info[op].arity);
 #else
-    return info_tab[op].arity;
+    return op_info[op].arity;
 #endif
 }
 
 const rochar* csp_opcode_name(opcode_t op)
 {
-    return (rochar*) RD_PTR(&info_tab[op].name);
+    return (rochar*) RD_PTR(&op_info[op].name);
 }
 
 int csp_set_error(csp_rt_t* st, csp_err_t err)
@@ -808,19 +797,17 @@ int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val)
 #ifdef DEBUG
 void print_rentry(csp_rt_t* st, char* name, rentry_t* rp)
 {
-    if (debug) {
-    printf("%s={", name);
-    if (rp->X) printf("name=%s,", decl_name(st, rp->ix));
-    printf("flags=");
-    if (rp->I) printf("im ");
-    if (rp->L) printf("ld ");
-    if (rp->X) printf("ix ");
-    printf(",vt=%s", csp_fmt_vtype(rp->vt));
-    if (rp->L) printf(",reg=%d", rp->reg);
-    if (rp->X) printf(",ix=0x%04x", rp->ix);
-    if (rp->I) { printf(",val="); csp_print_value(st, rp->vt, rp->val); }
-    printf("}");
-    }
+    DBG("%s={", name);
+    if (rp->X) DBG("name=%s,", decl_name(st, rp->ix));
+    DBG("flags=");
+    if (rp->I) DBG("im ");
+    if (rp->L) DBG("ld ");
+    if (rp->X) DBG("ix ");
+    DBG(",vt=%s", csp_fmt_vtype(rp->vt));
+    if (rp->L) DBG(",reg=%d", rp->reg);
+    if (rp->X) DBG(",ix=0x%04x", rp->ix);
+    if (rp->I) { DBG(",val="); csp_print_value(st, rp->vt, rp->val); }
+    DBG("}");
 }
 #endif
 
@@ -1007,24 +994,6 @@ static value_t fn_latch(csp_rt_t* st,uint16_t type,value_t* args, uint8_t nargs)
     return ret;
 }
 
-static rochar s_min[] RODATA = "min";
-static rochar s_max[] RODATA = "max";
-static rochar s_abs[] RODATA = "abs";
-static rochar s_fabs[] RODATA = "fabs";
-static rochar s_sign[] RODATA = "sign";
-static rochar s_clip[] RODATA = "clip";
-static rochar s_timeout[] RODATA = "timeout";
-static rochar s_elapsed[] RODATA = "elapsed";
-static rochar s_progress[] RODATA = "progress";
-static rochar s_changed[] RODATA = "changed";
-static rochar s_rising[] RODATA = "rising";
-static rochar s_falling[] RODATA = "falling";
-
-static rochar s_print[] RODATA = "print";
-static rochar s_println[] RODATA = "println";
-static rochar s_tick[] RODATA = "tick";
-static rochar s_cycle[] RODATA = "cycle";
-static rochar s_latch[] RODATA = "latch";
 
 #define CSP_FUNC_ENT(str, a, p, rt, args, f)	\
     {.name=(str),.namelen=sizeof((str))-1,.arity=(a),.pure=(p),	\
@@ -1206,15 +1175,14 @@ const csp_func_t* csp_match_func(csp_rt_t* st,
     return NULL;
 }
 
-
-int find_op_entry(const char* name, int namelen)
+static int find_op_entry(const op_entry_t* tab, int size,
+			 const char* name, int namelen)
 {
-    int i = 0;
-    uint8_t n = sizeof(op_table)/sizeof(op_table[0])-1;
-    for (i = 0; i < n; i++) {
-	uint8_t ronamelen = RD_BYTE(&op_table[i].namelen);
+    int i;
+    for (i = 1; i < size; i++) { // assume none entry in slot 0
+	uint8_t ronamelen = RD_BYTE(&tab[i].namelen);
 	if (ronamelen == namelen) {
-	    const char* roname = RD_PTR(&op_table[i].name);
+	    const char* roname = RD_PTR(&tab[i].name);
 	    if (MEMCMP_RD(name, roname, ronamelen) == 0)
 		return i;
 	}
@@ -1222,29 +1190,41 @@ int find_op_entry(const char* name, int namelen)
     return -1;
 }
 
+static int find_tok_entry(const char* name, int namelen)
+{
+    return find_op_entry(tok_table, sizeof(tok_table)/sizeof(tok_table[0]),
+			 name, namelen);
+}
+
+static int find_decl_entry(const char* name, int namelen)
+{
+    return find_op_entry(decl_table, sizeof(decl_table)/sizeof(decl_table[0]),
+			 name, namelen);
+}
+
 static inline int8_t op_table_tok(int i)
 {
-    return RD_BYTE(&op_table[i].tok);
+    return RD_BYTE(&tok_table[i].tok);
 }
 
 static inline int8_t op_table_arity(int i)
 {
-    return RD_BYTE(&op_table[i].arity);
+    return RD_BYTE(&tok_table[i].arity);
 }
 
 static inline int8_t op_table_code(int i)
 {
-    return RD_BYTE(&op_table[i].code);
+    return RD_BYTE(&tok_table[i].code);
 }
 
 static inline int8_t op_table_prec(int i)
 {
-    return RD_BYTE(&op_table[i].prec);
+    return RD_BYTE(&tok_table[i].prec);
 }
 
 static inline int8_t op_table_assoc(int i)
 {
-    return RD_BYTE(&op_table[i].assoc);
+    return RD_BYTE(&tok_table[i].assoc);
 }
 
 
@@ -1663,7 +1643,7 @@ NOINLINE static index_t lookup_decl_in(csp_rt_t* st, const tstr_t* name,
 }
 
 
-NOINLINE static index_t lookup_decl(csp_rt_t* st, const tstr_t* name)
+NOINLINE index_t csp_lookup_decl(csp_rt_t* st, const tstr_t* name)
 {
     int start = (st->mdef != BAD_INDEX) ? INDEX(st->mdef)+1 : 0;
     return lookup_decl_in(st, name, start, st->ps.nd);
@@ -1769,7 +1749,7 @@ NOINLINE index_t csp_new_udecl(csp_rt_t* st, const tstr_t* name, decl_t type)
 {
     index_t ix;
     
-    if ((ix = lookup_decl(st, name)) != BAD_INDEX) {
+    if ((ix = csp_lookup_decl(st, name)) != BAD_INDEX) {
 	if (csp_set_error(st, ERR_ALREADY_DEFINED)) {
 	    tstr_t typ = { .ptr = "name", .len = 4 };
 	    if (st->decl[ix].type == type) typ = decl_type_name(type);
@@ -2316,7 +2296,7 @@ next:
 		}
 		return -1; // fixme set error code
 	    }
-	    if ((i = find_op_entry(name,len)) >= 0)
+	    if ((i = find_tok_entry(name,len)) >= 0)
 		TOK(op_table_tok(i));
 	    SYM(WORD, name, len);
 	}
@@ -3112,7 +3092,7 @@ next:
 	else {
 	    vtype_t vt;
 	    // Not a function - regular variable/decl/state lookup
-	    if ((ix = lookup_decl(st,&tval.str)) == BAD_INDEX) {
+	    if ((ix = csp_lookup_decl(st,&tval.str)) == BAD_INDEX) {
 #if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
 		int s = lookup_state(st, &tval.str);
 		if (s >= 0) {
@@ -3290,27 +3270,24 @@ static const uint8_t pat_port_pin[] = {
     P_END
 };
 
-
 typedef struct {
     tstr_t name;
 } module_param_t;
 
 // '#' 'module' <name>
 static const uint8_t pat_module[] = {
-    P_TOK, HASH,
-    P_TOK, MODULE,
     P_STR, csp_offsetof(module_param_t, name),
     P_END
 };
 
-NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     module_param_t d;
     index_t ix;
     int jx;
     int i;
 
-    if (pmatch(st, tv, n, pat_module, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_module, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3342,19 +3319,17 @@ typedef struct {
 
 // '#' 'end' [....]
 static const uint8_t pat_end[] = {
-    P_TOK, HASH,
-    P_TOK, END,
     P_END
 };
 
-NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     end_param_t d;
     index_t mx, ex;
     int lx;
     const tstr_t empty = { .ptr = NULL, .len = 0};
     
-    if (pmatch(st, tv, n, pat_end, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_end, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3401,8 +3376,6 @@ typedef struct {
 } variable_param_t;
 
 static const uint8_t pat_variable[] = {
-    P_TOK, HASH,
-    P_TOK, VARIABLE,
     P_STR, csp_offsetof(variable_param_t, name),
     P_PAT, PAT_RES, csp_offsetof(variable_param_t, r), STOP_VAR_RES_CONT,
     P_OPTS, csp_offsetof(variable_param_t, opts),
@@ -3416,7 +3389,7 @@ static const uint8_t pat_variable[] = {
 };
 
 //
-NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     variable_param_t d = {0};
     index_t ix;
@@ -3426,7 +3399,7 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n)
     d.r.res = 8*sizeof(ivalue_t);
     d.opts.vt = V_INTEGER;
 
-    if (pmatch(st, tv, n, pat_variable, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_variable, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3450,8 +3423,6 @@ typedef struct {
 } constant_param_t;
 
 static const uint8_t pat_constant[] = {
-    P_TOK, HASH,
-    P_TOK, CONSTANT,
     P_STR, csp_offsetof(constant_param_t, name),
     P_PAT, PAT_RES, csp_offsetof(constant_param_t, r), STOP_CONST_RES_CONT,
     P_OPTS, csp_offsetof(constant_param_t, opts),
@@ -3463,7 +3434,7 @@ static const uint8_t pat_constant[] = {
     P_END
 };
 
-NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     constant_param_t d = {0};
     index_t ix;
@@ -3473,7 +3444,7 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, size_t n)
     d.r.res = 8*sizeof(ivalue_t);
     d.opts.vt = V_INTEGER;
 
-    if (pmatch(st, tv, n, pat_constant, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_constant, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3495,21 +3466,19 @@ typedef struct {
 } digital_param_t;
 
 static const uint8_t pat_digital[] = {
-    P_TOK, HASH,
-    P_TOK, DIGITAL,
     P_STR, csp_offsetof(digital_param_t, name),
     P_OPTS, csp_offsetof(digital_param_t, opts),
     P_PAT, PAT_PORT_PIN, csp_offsetof(digital_param_t, port_pin), STOP_DIGITAL_PP_CONT,
     P_END
 };
 
-NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     digital_param_t d = {0};
     index_t ix;
     int i;
 
-    if (pmatch(st, tv, n, pat_digital, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_digital, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3535,8 +3504,6 @@ typedef struct {
 } analog_param_t;
 
 static const uint8_t pat_analog[] = {
-    P_TOK, HASH,
-    P_TOK, ANALOG,
     P_STR, csp_offsetof(analog_param_t, name),
     P_PAT, PAT_RES, csp_offsetof(analog_param_t, r), STOP_ANALOG_RES_CONT,
     P_OPTS, csp_offsetof(analog_param_t, opts),
@@ -3546,7 +3513,7 @@ static const uint8_t pat_analog[] = {
 
 //'#' 'analog' <name> [':'<size>] [<opt>*]  [<port>':'] <pin>
 //   <opt> := 'in' | 'out' | 'inout' | 'pwm' | 'float' | 'signed' | 'unsigned'
-NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     analog_param_t d = {0};
     index_t ix;
@@ -3554,7 +3521,7 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, size_t n)
 
     d.r.res = 10;
     d.opts.vt = V_INTEGER;
-    if (pmatch(st, tv, n, pat_analog, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_analog, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3580,8 +3547,6 @@ typedef struct {
 } timer_param_t;
 
 static const uint8_t pat_timer[] = {
-    P_TOK, HASH,
-    P_TOK, TIMER,
     P_STR, csp_offsetof(timer_param_t, name),
     P_INTEGER_S, csp_offsetof(timer_param_t, timeout), STOP_TIMER_TMO,
     P_OPT, 6,
@@ -3591,7 +3556,7 @@ static const uint8_t pat_timer[] = {
     P_END
 };
 
-NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     timer_param_t d = {0};
     index_t tm, tx;
@@ -3599,7 +3564,7 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, size_t n)
     const tstr_t empty = { .ptr = NULL, .len = 0};
 
     d.init = 0;
-    if (pmatch(st, tv, n, pat_timer, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_timer, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3640,8 +3605,6 @@ typedef struct {
 } can_param_t;
 
 static const uint8_t pat_can[] = {
-    P_TOK, HASH,
-    P_TOK, CAN,
     P_STR, csp_offsetof(timer_param_t, name),
     P_PAT, PAT_RES, csp_offsetof(can_param_t, r), STOP_CAN_RES_CONT,
     P_OPTS, csp_offsetof(can_param_t, opts),
@@ -3662,7 +3625,7 @@ static const uint8_t pat_can[] = {
     P_END
 };
 
-NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     can_param_t d = {0};
     value_t frameid;
@@ -3671,7 +3634,7 @@ NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
 
     d.bit0 = d.bit1 = -1;
     d.r.res = 1;  // single bit is default ok?
-    if (pmatch(st, tv, n, pat_can, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_can, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3707,7 +3670,7 @@ NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, size_t n)
 //      | fld
 //
 // fixme: add part and bitindex/range
-//      <var> '[' <part> ']'
+//      <var> '[' <part> ']'  part = 'port'|'pin'|'period'...
 //      <var> '[' <pos> ']'             // one bit
 //      <var> '[' <pos0> .. <pos1> ']'  // start pos / end pos
 //
@@ -3723,13 +3686,14 @@ NOINLINE index_t lookup_lhs(csp_rt_t* st, const token_t* tv,
     if (oix == BAD_INDEX) {
 	if (lhs->len == 1) {  // global | module local
 	    name = &tv[lhs->pos].v.str;
-	    ix = lookup_decl(st,name);
+	    if ((ix = csp_lookup_decl(st,name)) == BAD_INDEX)
+		return BAD_INDEX;
 	    if (st->mdef != BAD_INDEX)
 		ix = MAKE_INDEX(CURRENT, INDEX(ix));
 	}
 	else if (lhs->len == 3) {  // obj.field
 	    name = &tv[lhs->pos].v.str;
-	    if (((oix = lookup_decl(st,name)) == BAD_INDEX) ||
+	    if (((oix = csp_lookup_decl(st,name)) == BAD_INDEX) ||
 		(st->decl[INDEX(oix)].type != DECL_OBJECT)) {
 		if (csp_set_error(st, ERR_OBJECT_NOT_DECLARED)) {
 		    csp_set_err_arg_tstr(st, 0, name);
@@ -3799,15 +3763,15 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
     int cnd2 = -1;
 
 #ifdef DEBUG
-    printf("asm_rule\n");
-    printf("oix = %d\n", oix);
-    printf("np=%d\n", np);
+    DBG("asm_rule\n");
+    DBG("oix = %d\n", oix);
+    DBG("np=%d\n", np);
     for (k = 0; k < np; k++) {
-	printf("part[%d]: assign=%d, rhs.len=%d, rhs.pos=%d\n", k,
-	       part[k].assign, part[k].rhs.len, part[k].rhs.pos);
+	DBG("part[%d]: assign=%d, rhs.len=%d, rhs.pos=%d\n", k,
+	    part[k].assign, part[k].rhs.len, part[k].rhs.pos);
     }
     if (cond)
-	printf("cond.len=%d, cond.pos=%d\n", cond->len, cond->pos);
+	DBG("cond.len=%d, cond.pos=%d\n", cond->len, cond->pos);
 #endif
 
 #if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
@@ -3959,7 +3923,6 @@ typedef struct {
 
 // '#' ModName ObjName (Field (=|<-) Expr)*
 static const uint8_t pat_object[] = {
-    P_TOK, HASH,
     P_STR, csp_offsetof(object_param_t, mod_name),
     P_STR, csp_offsetof(object_param_t, obj_name),
     P_OPT, 26,
@@ -3981,7 +3944,7 @@ static const uint8_t pat_object[] = {
 };
 
 
-NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     object_param_t d = {0};
     index_t mx, ix;
@@ -3990,13 +3953,13 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
     // unsigned ent;
     
     // Parse: # ModName ObjName (Field (=|<-) Expr)*
-    if (pmatch(st, tv, n, pat_object, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_object, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
 
     // Lookup module
-    if ((mx = lookup_decl(st, &d.mod_name)) == BAD_INDEX) {
+    if ((mx = csp_lookup_decl(st, &d.mod_name)) == BAD_INDEX) {
 	if (csp_set_error(st, ERR_MODULE_NOT_DECLARED)) {
 	    csp_set_err_arg_tstr(st, 0, &d.mod_name);
 	}
@@ -4026,13 +3989,13 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, size_t n)
     // ent = st->ps.nn;
     i = 0;
 #ifdef DEBUG
-    printf("object %s.%s\n", decl_name(st, mx), decl_name(st, ix));
+    DBG("object %s.%s\n", decl_name(st, mx), decl_name(st, ix));
 #endif    
     while(d.inits[i].fld.len > 0) {
 #ifdef DEBUG
-	printf("  field %.*s\n", d.inits[i].fld.len, d.inits[i].fld.ptr);
-	printf("  assign %d\n", d.inits[i].assign);
-	printf("  rhs.len = %d\n", d.inits[i].rhs.len);
+	DBG("  field %.*s\n", d.inits[i].fld.len, d.inits[i].fld.ptr);
+	DBG("  assign %d\n", d.inits[i].assign);
+	DBG("  rhs.len = %d\n", d.inits[i].rhs.len);
 #endif
 	i++;
 	
@@ -4106,12 +4069,12 @@ static const uint8_t pat_rule[] = {
     P_END
 };
 
-NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, size_t n)
+NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, int ti, size_t n)
 {
     rule_param_t d = {0};
     int np = 0;
 
-    if (pmatch(st, tv, n, pat_rule, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_rule, &d) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -4197,7 +4160,7 @@ int make_can_rule(csp_rt_t* st, index_t ox, int k, index_t idx,
 }
 
 // FrameID BytePos Mask OnBits OffBits
-NOINLINE int csp_parse_legacy(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_legacy(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     index_t out;
     index_t idx;
@@ -4220,7 +4183,7 @@ NOINLINE int csp_parse_legacy(csp_rt_t* st, token_t* tv, size_t n)
     off_bits = tv[4].v.val.i;
 
     // generate OUT pin if not already exist
-    if ((out = lookup_decl(st, &tout)) == BAD_INDEX) {
+    if ((out = csp_lookup_decl(st, &tout)) == BAD_INDEX) {
 	// Fixme: Configure pin number etc for standard OUT
 	if ((out = csp_new_decl(st,&tout,DECL_DIGITAL)) == BAD_INDEX)
 	    return -1;
@@ -4250,7 +4213,7 @@ NOINLINE int csp_parse_legacy(csp_rt_t* st, token_t* tv, size_t n)
 }
 
 // '>' command
-NOINLINE int csp_parse_immediate(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_immediate(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     return 0;
 }
@@ -4269,9 +4232,7 @@ NOINLINE int add_state(csp_rt_t* st, const tstr_t* name)
 	st->states[s].snum = s;
 	st->ps.ns++;
 #ifdef DEBUG
-	if (debug) {
-	printf("added state %d %.*s\n", s, st->str[i-1], &st->str[i]);
-	}
+	DBG("added state %d %.*s\n", s, st->str[i-1], &st->str[i]);
 #endif
 	return s;
     }
@@ -4279,18 +4240,16 @@ NOINLINE int add_state(csp_rt_t* st, const tstr_t* name)
     return -1;
 }
 
-NOINLINE int csp_parse_in(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_in(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     int i;
-    if (tv[0].t != HASH) return -1;
-    if (tv[1].t != IN) return -1;
-    if (tv[2].t != WORD) return -1;
+    if (tv[ti].t != WORD) return -1;
 
     if (st->sdef != -1) {
 	csp_set_error(st, ERR_END_MISMATCH);
 	return -1;
     }
-    if ((i = lookup_state(st, &tv[2].v.str)) < 0) {
+    if ((i = lookup_state(st, &tv[ti].v.str)) < 0) {
 	csp_set_err_arg_tstr(st, 0, &tv[2].v.str);
 	csp_set_error(st, ERR_STATE_NOT_DECLARED);
 	return -1;
@@ -4301,12 +4260,10 @@ NOINLINE int csp_parse_in(csp_rt_t* st, token_t* tv, size_t n)
 }
 
 // no need to use pattern parser here, yet too simple
-NOINLINE int csp_parse_states(csp_rt_t* st, token_t* tv, size_t n)
+NOINLINE int csp_parse_states(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     int i;
-    if (tv[0].t != HASH) return -1;
-    if (tv[1].t != STATES) return -1;
-    for (i = 2; i < n; i++) {
+    for (i = ti; i < n; i++) {
 	int j;
 	if (tv[i].t != WORD) return -1;
 	if ((j = lookup_state(st, &tv[i].v.str)) >= 0)
@@ -4338,54 +4295,61 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 	if (tv[0].t == NEWLINE)
 	    r = 0;
 	else if (tv[0].t == INT && tv[1].t == INT) {
-	    r = csp_parse_legacy(st, tv, num);
+	    r = csp_parse_legacy(st, tv, 0, num);
 	}
-	else if (tv[0].t == HASH) {
-	    switch(tv[1].t) {
-	    case MODULE:  // '#' 'module' WORD
-		r = csp_parse_module(st, tv, num);
-		break;
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
-	    case IN:     // '#' 'in' WORD
-		r = csp_parse_in(st, tv, num);
-		break;
-	    case STATES:  // '#' 'states' WORD ... WORD
-		r = csp_parse_states(st, tv, num);
-		break;
+#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)	//SPECIAL CASE!
+	else if ((tv[0].t == HASH) && (tv[1].t == IN)) {
+	    r = csp_parse_in(st, tv, 2, num);	    
+	}
 #endif
-	    case END:
-		r = csp_parse_end(st, tv, num);
-		break;
-	    case VARIABLE:
-		r = csp_parse_variable(st, tv, num);
-		break;
-	    case CONSTANT:
-		r = csp_parse_constant(st, tv, num);
-		break;
-	    case DIGITAL:
-		r = csp_parse_digital(st, tv, num);
-		break;
-	    case ANALOG:
-		r = csp_parse_analog(st, tv, num);
-		break;
-	    case TIMER:
-		r = csp_parse_timer(st, tv, num);
-		break;
-	    case CAN:
-		r = csp_parse_can(st, tv, num);
-		break;
-	    case WORD: // module instantiation?
-		r = csp_parse_object(st, tv, num);
-		break;
-	    default:
-		return -1;
+	else if ((tv[0].t == HASH) && (tv[1].t == WORD)) {
+	    int i;
+	    if ((i = find_decl_entry(tv[1].v.str.ptr,tv[1].v.str.len)) >= 0) {
+		switch(decl_table[i].code) {
+		case DECL_MODULE:
+		    r = csp_parse_module(st, tv, 2, num);
+		    break;
+#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
+		case DECL_STATES:  // '#' 'states' WORD ... WORD
+		    r = csp_parse_states(st, tv, 2, num);
+		    break;
+#endif
+		case DECL_END:
+		    r = csp_parse_end(st, tv, 2, num);
+		    break;
+		case DECL_VARIABLE:
+		    r = csp_parse_variable(st, tv, 2, num);
+		    break;
+		case DECL_CONSTANT:
+		    r = csp_parse_constant(st, tv, 2, num);
+		    break;
+		case DECL_DIGITAL:
+		    r = csp_parse_digital(st, tv, 2, num);
+		    break;
+		case DECL_ANALOG:
+		    r = csp_parse_analog(st, tv, 2, num);
+		    break;
+		case DECL_TIMER:
+		    r = csp_parse_timer(st, tv, 2, num);
+		    break;
+		case DECL_CAN:
+		    r = csp_parse_can(st, tv, 2, num);
+		    break;
+		default:
+		    r = -1;		    
+		    csp_set_error(st, ERR_SYNTAX);
+		    break;
+		}
+	    }
+	    else {
+		r = csp_parse_object(st, tv, 1, num);
 	    }
 	}
 	else if (tv[0].t == GT) {
-	    r = csp_parse_immediate(st, tv, num);
+	    r = csp_parse_immediate(st, tv, 1, num);
 	}
 	else {
-	    r = csp_parse_rule(st, tv, num);
+	    r = csp_parse_rule(st, tv, 0, num);
 	}
 	if (r < 0)
 	    return -1;
@@ -4402,7 +4366,7 @@ int csp_rt_init(csp_rt_t* st, int transaction, int reactive)
     init_stop_sets();       // creates STOP_NONE (index 0)
 
     scan_pattern(PAT_PORT_PIN, pat_port_pin);
-    scan_pattern(PAT_RES,      pat_res);        
+    scan_pattern(PAT_RES,      pat_res);   
 
     scan_pattern(PAT_MODULE,   pat_module);
     scan_pattern(PAT_END,      pat_end);
@@ -4461,17 +4425,13 @@ int csp_rt_init(csp_rt_t* st, int transaction, int reactive)
 	// add state INIT=0 and NORMAL=1
 	if (add_state(st, &INIT) != 0) {
 #ifdef DEBUG
-	    if (debug) {
-	    printf("unabled to add INIT state=0\n");
-	    }
+	    DBG("unabled to add INIT state=0\n");
 #endif
 	    return -1;
 	}
 	if (add_state(st, &NORMAL) != 1) {
 #ifdef DEBUG
-	    if (debug) {	    
-	    printf("unabled to add NORMAL state=1\n");
-	    }
+	    DBG("unabled to add NORMAL state=1\n");
 #endif
 	    return -1;
 	}	
@@ -4668,10 +4628,8 @@ int csp_rt_start(csp_rt_t* st)
 	    int dj = base + j;         // decl index
 	    index_t fx = MAKE_INDEX(m,dj); // field index
 #ifdef DEBUG
-	    if (debug) {	    
-	    printf("init OBJECT %s, FIELD %s[%d]\n",
-		   decl_name(st, ix), decl_name(st, fx), dj);
-	    }
+	    DBG("init OBJECT %s, FIELD %s[%d]\n",
+		decl_name(st, ix), decl_name(st, fx), dj);
 #endif
 	    switch (st->decl[dj].type) {
 	    case DECL_CONSTANT:

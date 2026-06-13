@@ -6,38 +6,9 @@
 #include "csp.h"
 #include "csp_dump.h"
 
-extern const op_entry_t op_table[];
-
-int csp_opcode_to_tok(opcode_t opcode)
-{
-    int t = 0;
-
-    switch(opcode) {
-    case OP_FADD: return PLUS;
-    case OP_FSUB: return MINUS;
-    case OP_FMUL: return ASTERISK;
-    case OP_FDIV: return SLASH;
-    case OP_FNEG: return MINUS1;
-    case OP_FLT:  return LT;
-    case OP_FLTE: return LTEQ;
-    case OP_FGT:  return GT;
-    case OP_FGTE: return GTEQ;
-    case OP_FEQEQ: return EQEQ;
-    case OP_FNEQ:  return NEQ;
-    case OP_NEXT: return  NEXT;	
-    case OP_ENTER: return ENTER;
-    case OP_LEAVE: return LEAVE;
-    case OP_NEW: return NEW;
-    default: break;
-    }
-    while(op_table[t].tok != LAST) {
-	if ((op_table[t].arity >= 0) &&
-	    (op_table[t].code == opcode))
-	    return op_table[t].tok;
-	t++;
-    }
-    return -1;
-}
+extern const op_entry_t decl_table[];
+extern const op_entry_t tok_table[];
+extern const op_info_t op_info[];
 
 // Helper to print fvalue_t (works for both float and fixpoint)
 static void fprint_fvalue(FILE* f, fvalue_t v)
@@ -670,10 +641,10 @@ void csp_dump_tokens(FILE* f, token_t* tv, int n)
 		fprintf(f,"'%.*s',", tv[i].v.str.len, tv[i].v.str.ptr);
 	    break;
 	default:
-	    if (maybe_unquoted_atom((char*)op_table[tv[i].t].name, op_table[tv[i].t].namelen))
-		fprintf(f,"%.*s,", op_table[tv[i].t].namelen, op_table[tv[i].t].name);
+	    if (maybe_unquoted_atom((char*)tok_table[tv[i].t].name, tok_table[tv[i].t].namelen))
+		fprintf(f,"%.*s,", tok_table[tv[i].t].namelen, tok_table[tv[i].t].name);
 	    else
-		fprintf(f,"'%.*s',", op_table[tv[i].t].namelen, op_table[tv[i].t].name);
+		fprintf(f,"'%.*s',", tok_table[tv[i].t].namelen, tok_table[tv[i].t].name);
 	    break;
 	}
     }
@@ -797,7 +768,12 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 	    fprintf(f, ".tm={0,.period=%u,.init=%u}",
 		    dp->tm.period, dp->tm.init);
 	    break;
-	case DECL_NOP:    // not used
+#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)	    
+	case DECL_STATES: // do not generate decl
+	case DECL_IN:     // do not generate decl
+#endif
+	case DECL_NONE:   // do not generate decl, not used
+	    break;
 	}
 	fprintf(f, "},\n");
     }
@@ -846,16 +822,18 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 	case OP_RULE:
 	    fprintf(f, ".r={.cnd=%u,.nxt=%u}", ip->r.cnd, ip->r.nxt);
 	    break;
-	default: { // two/three-address-instruction
-	    int t = csp_opcode_to_tok(ip->op);
-	    if (op_table[t].arity == 1)
+	default: // two/three-address-instruction
+	    // int t = csp_opcode_to_tok(ip->op);
+	    if (op_info[ip->op].arity == 1)
+	    // if (op_table[t].arity == 1)
 		fprintf(f, ".a={.x=%u,.y=%u}",
 			ip->a.x, ip->a.y);
-	    else
+	    else if (op_info[ip->op].arity == 2)
 		fprintf(f, ".a={.x=%u,.y=%u,.z=%u}",
 			ip->a.x, ip->a.y, ip->a.z);
+	    else
+		fprintf(f, ".a={???}");
 	    break;
-	}
 	}
 	fprintf(f, "},\n");
     }
@@ -1381,10 +1359,10 @@ static int exprbuf_expr(FILE* f, csp_rt_t*  st,
 	    break;
 	}
 	default:
-	    t = csp_opcode_to_tok(ip->op);
-	    if (op_table[t].arity >= 0) {
-		exprbuf_alu(bp, ip, op_table[t].name,
-			    op_table[t].arity, op_table[t].prec);
+	    t = op_info[ip->op].tok;
+	    if (tok_table[t].arity >= 0) {
+		exprbuf_alu(bp, ip, tok_table[t].name,
+			    tok_table[t].arity, tok_table[t].prec);
 	    }
 	    break;
 	}

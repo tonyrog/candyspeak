@@ -381,7 +381,8 @@ void print_defines()
     printf("TRANSACTION_DEFAULT=%d\n", TRANSACTION_DEFAULT);
     printf("REACTIVE_DEFAULT=%d\n", REACTIVE_DEFAULT);
     printf("OP_LAST=%d\n", OP_LAST);  // last opcode = #opcodes
-    printf("LAST=%d\n", LAST);        // last token  = #tokens
+    printf("T_LAST=%d\n", T_LAST);        // #tokens
+    printf("D_LAST=%d\n", D_LAST);        // #dtok
     printf("MAX_NAME_LEN=%d\n", MAX_NAME_LEN);
     printf("MAX_ARGS=%d\n", MAX_ARGS);
 
@@ -449,6 +450,7 @@ static struct option long_options[] = {
     {"parse-file",   required_argument, 0,  'p'},
     {"compile",      no_argument,       0,  'C'},
     {"object-file",  required_argument, 0,  'O'},
+    {"input-file",   required_argument, 0,  'I'},
     {"eeprom",       required_argument, 0,  'e'},
     {0,              0,                 0,  0 }
 };
@@ -474,11 +476,73 @@ void usage(const char* prog)
     fprintf(stderr, "  -s, --state-file=F   State file (Erlang format)\n");
     fprintf(stderr, "  -p, --parse-file=F   Parsed structure file\n");
     fprintf(stderr, "  -e, --eeprom=F       EEPROM file for save/load (default: eeprom.db)\n");
+    fprintf(stderr, "  -I, --input-file=F   Data input file\n");
     fprintf(stderr, "  -L[erlang|erl|text|txt]  Trace output language\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "If no file is given, reads from stdin.\n");
     fprintf(stderr, "In interactive mode (-i), type /help for commands.\n");
 }
+
+char    input_buf[MAX_LINE_SIZE];
+token_t input_tv[MAX_LINE_TOKENS];
+size_t  input_num = 0;
+uint32_t input_cycle = 0;
+int     input_delay = 0;
+
+// tv[0] is cycle count tv[1] may be delay
+void cycle_input_values(csp_rt_t* st, token_t* tv, size_t num)
+{
+    int i = 1;
+
+    input_delay = 0;
+    if (tv[1].t == INT) {
+	i = 2;
+	input_delay = tv[1].v.val.i;
+    }
+    while(i < num) {
+	if ((tv[i].t == WORD) && (tv[i+1].t == EQ) &&
+	    ((tv[i+2].t == INT) ||(tv[i+2].t == FLT))) {
+	    index_t ix;
+	    ix = csp_lookup_decl(st, &tv[i].v.str);
+	    if (ix != BAD_INDEX)
+		csp_set_value(st, ix, tv[i+2].v.val);
+	}
+	i++;
+    }
+}
+
+// read <cycle> <delay> <var1> '=' <value1>  <var2> '=' <value2> ...
+int cycle_input(csp_rt_t* st, FILE* fin)
+{
+    if (input_cycle < st->cycle) { // catch up
+	char* ptr;
+	while((ptr = fgets(input_buf, MAX_LINE_SIZE, fin)) != NULL) {
+	    int n;
+	    input_num = MAX_LINE_TOKENS;
+	    if ((n = csp_scan_line(st, input_buf, input_tv, &input_num)) < 0)
+		return -1;
+	    if (debug)
+		csp_dump_tokens(stdout, input_tv, input_num);
+	    if ((input_num > 0) && (input_tv[0].t == INT)) {
+		if (input_tv[0].v.val.i < st->cycle) {  // read next
+		    input_cycle = input_tv[0].v.val.i;
+		    continue;
+		}
+		if (input_tv[0].v.val.i > st->cycle) { // wait for it
+		    input_cycle = input_tv[0].v.val.i;
+		    return 0;
+		}
+		input_cycle = input_tv[0].v.val.i;		
+		break;
+	    }
+	}
+	if (ptr == NULL)
+	    return -1;
+    }
+    cycle_input_values(st, input_tv, input_num);
+    return 0;
+}
+
 
 int main(int argc, char** argv)
 {
@@ -489,6 +553,7 @@ int main(int argc, char** argv)
     FILE* state_file = stdout;
     FILE* parse_out = stdout;
     FILE* object_file = NULL;
+    FILE* input_file = NULL;
     int execute = 1;
     int interactive = 0;
     uint32_t max_cycles = 0;
@@ -500,11 +565,12 @@ int main(int argc, char** argv)
     int compile = 0;
     struct pollfd pfd[1];
     nfds_t nfds = 0;
-    csp_lang_t lang = TEXT;    
+    csp_lang_t lang = TEXT;
+    int first_cycle = 1;
 
     while (1) {
 	int option_index = 0;
-	c = getopt_long(argc, argv, "hindPQRSCc:T:s:p:r:t:O:e:L:",
+	c = getopt_long(argc, argv, "hindPQRSCc:T:s:p:r:t:O:e:L:I:",
 			long_options, &option_index);
 	if (c == -1)
 	    break;
@@ -544,6 +610,13 @@ int main(int argc, char** argv)
 	case 'O':
 	    if ((object_file = fopen(optarg, "w")) == NULL) {
 		fprintf(stderr, "unable to open object file '%s'\n", optarg);
+		exit(1);
+	    }
+	    break;
+	case 'I':
+	    // FIXME: multiple input files?
+	    if ((input_file = fopen(optarg, "r")) == NULL) {
+		fprintf(stderr, "unable to open input file '%s'\n", optarg);
 		exit(1);
 	    }
 	    break;
@@ -646,7 +719,8 @@ int main(int argc, char** argv)
     if (!execute) {
 	if (parse_out != stdout) fclose(parse_out);
 	if (state_file != stdout) fclose(state_file);
-	if (object_file) fclose(object_file);	
+	if (object_file) fclose(object_file);
+	if (input_file) fclose(input_file);	
 	exit(0);
     }
 
@@ -665,7 +739,6 @@ int main(int argc, char** argv)
     }
 
     start_time = csp_time_ms();
-    int first_cycle = 1;
 
     // initial trace shows cycle 0 (pre-eval state)
     if (debug_trace)
@@ -686,7 +759,7 @@ loop:
     else {
 	state.cycle++;
     }
-
+    
     if (max_cycles && state.cycle >= max_cycles) {
 	fprintf(stderr, "max cycles (%u) reached\n", max_cycles);
 	goto done;
@@ -718,6 +791,9 @@ loop:
     }
 
     csp_input(&state);
+    if (input_file) {
+	cycle_input(&state, input_file);
+    }
 
     if (state.reactive)
 	x = csp_react(&state);

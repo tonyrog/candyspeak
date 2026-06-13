@@ -45,6 +45,32 @@ Implementation:
 - Verify sequence/pattern matches expected
 - Useful for testing timer-in-modules with different timeouts per instance
 
+
+## Analog and Digital test
+
+Test Alanog and Digital with input streams from input files
+
+data1.dat data2.dat
+
+so given input.csp
+
+#digital X pin 13
+#analog  Y:10 pin 1
+
+then a data file may look like (same as -Q format)
+note that X and Y must be input. also variables may
+have input test channels
+each line is cycle-number cycle-time
+
+1 100 X=1 Y=12
+2 100 X=0 Y=11
+3 100 X=1 Y=10
+...
+99 repeat
+
+multiple channels are merged and stepped and
+(maybe repeated)
+
 # Register allocation work
 
 ## Pinned registers

@@ -22,6 +22,17 @@
 EXTERN_C_BEGIN
 #endif
 
+#ifdef DEBUG
+#include <stdio.h>
+extern int debug;
+#define DBG(...) do { \
+	if (debug) printf(__VA_ARGS__);		\
+    } while(0)
+#else
+#define DBG(...)
+#endif
+
+
 #define PACKED __attribute__((packed))
 
 // an index has the following structure
@@ -288,29 +299,21 @@ typedef uint32_t set_group_t;  // bit set element
 
 typedef enum {
     NONE = 0,  // empty
-    // leafs
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
-    STATES,   // 'states'
-#endif
-    MODULE,   // 'module'
-    END,      // 'end'
-    CONSTANT, // 'constant'
-    VARIABLE, // 'variable'
-    DIGITAL,  // 'digital'
-    ANALOG,   // 'analog'
-    TIMER,    // 'timer'
-    CAN,      // 'can'
-    UART,     // 'uart'
-    SOCKET,   // 'socket'
-    MOD,      // module instance
-    //
-    FIRST_NODE, // built-in + operators start
-    // node - unary
+    NEWLINE,   // \n \r \r\n
+    LP,        // "("
+    RP,        // ")"
+    COLON,     // ":"
+    HASH,      // "#"
+    DOT,       // "."
+    LB,        // "["
+    RB,        // "]"
+    INT,       // 123 | 0x9ab
+    FLT,       // 0.123
+    STR,       // "abc"
     EXCLAMATION, // "!"  x=-y == x=0-y
     TILDE,       // "~"  x=~y =  x=1^y        
     MINUS1,      // "-"  x=-y == x=0-y
     PLUS1,       // "+"  x=+y == x=0+y
-    // node - binary operator
     PLUS,      // "+"
     MINUS,     // "-"
     ASTERISK,  // "*"
@@ -334,29 +337,10 @@ typedef enum {
     COMMA,   // ","
     // query rule/operator
     QUEST,   // "?"
-    // other
-    NEXT,
-    ENTER,
-    LEAVE,
-    NEW,
-    CALL,
-    LD,
-    ST,
-    MOV,
-    STP,
-    STIMP,
-    CHG,
-    LI,
-    LIU,
-    LIH,
-    ARG,
-    CVTIF,
-    CVTFI,
-    // functions are now handled via OP_CALL + function table
-    LAST_NODE, // built-in + operators stop
-    // keywords
-    PULLUP,   // 'pullup'
-    PULLDOWN, // 'pulldown'
+    WORD,       // abc
+    // option keywords
+    PULLUP,     // 'pullup'
+    PULLDOWN,   // 'pulldown'
     RESOLUTION, // 'resolution'
     IN,         // 'in'
     OUT,        // 'out'
@@ -368,22 +352,28 @@ typedef enum {
     STRING,     // 'string'
     LITTLE,     // 'little'
     BIG,        // 'big'
-
-    // tokens
-    LP,      // "("
-    RP,      // ")"
-    COLON,   // ":"
-    HASH,    // "#"
-    DOT,     // "."
-    LB,      // "["
-    RB,      // "]"
-    INT,     // 123 | 0x9ab
-    FLT,     // 0.123
-    STR,     // "abc"
-    WORD,    // abc
-    NEWLINE, // \n \r \r\n
-    LAST,
+    T_LAST,     // number of enumerated tokens
 } tok_t;
+
+typedef enum {
+    D_NONE = 0,
+    D_MODULE,   // 'module'
+    D_END,      // 'end'
+#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
+    D_STATES,   // 'states'
+    D_IN,       // 'in'
+#endif
+    D_CONSTANT, // 'constant'
+    D_VARIABLE, // 'variable'
+    D_DIGITAL,  // 'digital'
+    D_ANALOG,   // 'analog'
+    D_TIMER,    // 'timer'
+    D_CAN,      // 'can'
+    D_UART,     // 'uart'
+    D_SOCKET,   // 'socket'
+    D_MOD,      // module instance
+    D_LAST,     // number of enumerated declarations
+} dtok_t;
 
 typedef struct {
     char* ptr;
@@ -451,9 +441,9 @@ typedef enum {
     // rule
     OP_RULE,    // "?"
     OP_NEXT,    // "next"
-    // generate ops from MODULE/END
-    OP_ENTER,   //
-    OP_LEAVE,   //
+
+    OP_ENTER,   // enter object
+    OP_LEAVE,   // leave object
     OP_NEW,     // #<module> <instance-name>
     OP_LD,      // load register from memory
     OP_ST,      // store register to memory
@@ -476,12 +466,17 @@ struct csp_instr;
 // 6 bits may be used to describe declaration type
 // but decl type from 8-15 are also used as object types
 typedef enum {
-    DECL_NOP=0,             // emtpy declaration
+    DECL_NONE=0,            // emtpy declaration
     DECL_VARIABLE=1,        // 'variable'
     DECL_CONSTANT=2,        // 'constant'
     DECL_MODULE=3,          // 'module'
     DECL_END=4,             // 'end'
     DECL_OBJECT=5,          // module instance
+#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)    
+    DECL_STATES=6,
+    DECL_IN=7,
+#endif
+    
     // 8-15
     DECL_TIMER=V_TIMER,     // 'timer'    
     DECL_DIGITAL=V_DIGITAL, // 'digital'
@@ -511,14 +506,19 @@ typedef struct PACKED {
     int8_t   assoc;
 } op_entry_t;
 
-extern const op_entry_t op_table[] RODATA;
+extern const op_entry_t tok_table[] RODATA;
+extern const op_entry_t decl_table[] RODATA;
 
 typedef struct PACKED {
     const char* name;  // opcode name
-    uint8_t arity;     // number of args
+    uint8_t  tok;      // token that match the op
+    int8_t arity;      // number of args
     uint8_t rtype;     // return type
-    uint8_t type[4];
+    uint8_t _res;      // reserved
+    uint16_t argtypes; // instruction argument types
 } op_info_t;
+
+extern const op_info_t op_info[] RODATA;
 
 typedef struct PACKED {
     index_t n;          // number of nodes in module definition
@@ -730,7 +730,6 @@ typedef struct PACKED {
     csp_func_fn fn;             // function to call
 } csp_func_t;
 
-
 typedef struct
 {
     reg_t   free_regs[MAX_REGS];
@@ -750,7 +749,6 @@ typedef struct
     unsigned snum:NUM_BITS;        // state number
 } state_t;
 #endif
-
 
 typedef struct _csp_rt_t
 {
@@ -910,8 +908,6 @@ static inline fvalue_t csp_fvalue(csp_rt_t* st, index_t ix)
     return v.f;        
 }
 
-
-
 static inline char* decl_name(csp_rt_t* st, index_t ix)
 {
     return &st->str[st->decl[INDEX(ix)].name];
@@ -950,7 +946,7 @@ extern int csp_parse_const_expr(csp_rt_t* st, const token_t* tv, size_t* num_tok
 				rentry_t* result);
 //
 extern index_t csp_new_decl(csp_rt_t* st, const tstr_t* name, decl_t op);
-extern index_t csp_lookup_decl(csp_rt_t* st, char* module, char* name);
+extern index_t csp_lookup_decl(csp_rt_t* st, const tstr_t* name);
 
 // backend port (linux/arduino/LPCopen/FreeRTOS)
 extern uint32_t csp_time_ms(void);

@@ -1,16 +1,6 @@
 #include "csp_parse.h"
 #include <string.h>
 
-#ifdef DEBUG
-#include <stdio.h>
-extern int debug;
-#define DBG(...) do { \
-	if (debug) printf(__VA_ARGS__);		\
-    } while(0)
-#else
-#define DBG(...)
-#endif
-
 // Stop-set storage: all tokens in one array, NONE-terminated sets
 static uint8_t stop_toks[MAX_STOP_TOKENS];
 static uint8_t stop_pos[NUM_STOP_SETS];
@@ -53,25 +43,34 @@ static char* stop_set_name(uint8_t sid)
     }
 }
 
+static char* dtok_name(uint8_t dtok)
+{
+    switch(dtok) {
+    STRCASE(D_NONE);
+    STRCASE(D_MODULE);
+    STRCASE(D_END);
+    STRCASE(D_CONSTANT);
+    STRCASE(D_VARIABLE);
+    STRCASE(D_DIGITAL);
+    STRCASE(D_ANALOG);
+    STRCASE(D_TIMER);
+    STRCASE(D_CAN);
+    STRCASE(D_UART);
+    STRCASE(D_SOCKET);
+    STRCASE(D_MOD);
+#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
+    STRCASE(D_STATES);
+    STRCASE(D_IN);    
+#endif
+    default: return "???";    
+    }
+}
+
+
 static char* tok_name(uint8_t tok)
 {
     switch(tok) {
     STRCASE(NONE);
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
-    STRCASE(STATES);
-#endif
-    STRCASE(MODULE);
-    STRCASE(END);
-    STRCASE(CONSTANT);
-    STRCASE(VARIABLE);
-    STRCASE(DIGITAL);
-    STRCASE(ANALOG);
-    STRCASE(TIMER);
-    STRCASE(CAN);
-    STRCASE(UART);
-    STRCASE(SOCKET);
-    STRCASE(MOD);
-    STRCASE(FIRST_NODE);
     STRCASE(EXCLAMATION);
     STRCASE(TILDE);
     STRCASE(MINUS1);
@@ -98,23 +97,6 @@ static char* tok_name(uint8_t tok)
     STRCASE(RIMP);
     STRCASE(COMMA);
     STRCASE(QUEST);
-    STRCASE(NEXT);
-    STRCASE(ENTER);
-    STRCASE(LEAVE);
-    STRCASE(NEW);
-    STRCASE(CALL);
-    STRCASE(LD);
-    STRCASE(ST);
-    STRCASE(MOV);
-    STRCASE(STP);
-    STRCASE(STIMP);
-    STRCASE(CHG);
-    STRCASE(LI);
-    STRCASE(LIU);
-    STRCASE(LIH);
-    STRCASE(ARG);
-    STRCASE(CVTIF);
-    STRCASE(CVTFI);
     STRCASE(PULLUP);
     STRCASE(PULLDOWN);
     STRCASE(RESOLUTION);
@@ -659,7 +641,7 @@ next:
     case P_TOK: {
 	// Match specific token
 	uint8_t tok = pat[pi++];
-	DBG("%sP_TOK: (%d) tok='%s'\n", indent(l), ti, op_table[tok].name);
+	DBG("%sP_TOK: (%d) tok='%s'\n", indent(l), ti, tok_table[tok].name);
 	if ((ti >= (int)n) || (tv[ti].t != tok))
 	    return -1;
 	ti++;
@@ -672,7 +654,7 @@ next:
 	int off = pst->eo + val_off;
 
 	DBG("%sP_TOK_W: (%d) tok='%s' val_off=%d off=%d\n", indent(l), ti,
-	    op_table[tok].name, val_off, off);
+	    tok_table[tok].name, val_off, off);
 	if ((ti >= (int)n) || (tv[ti].t != tok))
 	    return -1;
 	store_int(pst->data, off, tok);
@@ -871,7 +853,7 @@ next:
     goto next;
 }
 
-int pmatch(csp_rt_t* st, const token_t* tv, size_t n,
+int pmatch(csp_rt_t* st, const token_t* tv, int ti, size_t n,
 	   const uint8_t* pat, void* data)
 {
     pmatch_st_t pst;
@@ -882,5 +864,5 @@ int pmatch(csp_rt_t* st, const token_t* tv, size_t n,
     pst.ix   = 0;
     pst.eo   = 0;     // current element offset (P_REP)
     pst.cont_sp = 0;  // continuation stack empty
-    return pmatch_(&pst, tv, 0, n, 0, pat);
+    return pmatch_(&pst, tv, ti, n, 0, pat);
 }
