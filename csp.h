@@ -856,6 +856,30 @@ static inline int st_index(csp_rt_t* st, index_t n)
     return st->offs[OBJ(n)] + INDEX(n);
 }
 
+// A view describes how to reach a leaf's value.
+// Step 1: every view is VIEW_SLOT -- a typed value_t at dio[dir][slot]
+// (slot == st_index), identical to today. Step 2 adds VIEW_HEAP (bit-field in
+// the buffer heap) and materializes this into a table. See doc/DESCRIPTORS.md.
+typedef enum {
+    VIEW_SLOT = 0,   // typed value_t slot: dio[dir][slot]
+    VIEW_HEAP = 1,   // (step 2) bit-field in the buffer heap
+} view_kind_t;
+
+typedef struct {
+    index_t  slot;   // VIEW_SLOT: flat slot index (== st_index)
+    uint8_t  vt;     // value type (vtype_t)
+    uint8_t  kind;   // view_kind_t
+} csp_view_t;
+
+static inline csp_view_t csp_view(csp_rt_t* st, index_t n)
+{
+    csp_view_t v;
+    v.slot = st_index(st, n);
+    v.vt   = st->decl[INDEX(n)].vt;
+    v.kind = VIEW_SLOT;
+    return v;
+}
+
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 // enq a rule for recalculation, with object context
 static inline void csp_enq(csp_rt_t* st, uint8_t obj, uint16_t ip)

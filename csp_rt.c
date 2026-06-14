@@ -736,16 +736,16 @@ void csp_clr_error(csp_rt_t* st)
 // return pointer to the object/field value slot
 value_t* csp_dio_slot(csp_rt_t* st, index_t ix, dio_t dir)
 {
-    int i = st_index(st, ix);
-    return &st->dio[dir][i];
+    csp_view_t v = csp_view(st, ix);
+    return &st->dio[dir][v.slot];
 }
 
 // return pointer to value pointer for input and output
 int csp_dio_slots(csp_rt_t* st, index_t ix, value_t** iptr, value_t** optr)
 {
-    int i = st_index(st, ix);
-    *iptr = &st->dio[DIN][i];
-    *optr = &st->dio[DOUT][i];
+    csp_view_t v = csp_view(st, ix);
+    *iptr = &st->dio[DIN][v.slot];
+    *optr = &st->dio[DOUT][v.slot];
     return 0;
 }
 
