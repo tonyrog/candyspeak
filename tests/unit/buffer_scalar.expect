@@ -1,0 +1,8 @@
+{cycles, 5}.
+{checks, [
+  {final_var, "B8", 200},
+  {final_var, "B16", 5000},
+  {final_var, "B10", 1000},
+  {final_var, "Masked8", 44},
+  {final_var, "Masked10", 976}
+]}.

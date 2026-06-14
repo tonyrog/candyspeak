@@ -383,12 +383,17 @@ void csp_dump_state(FILE* f, csp_rt_t* st, csp_lang_t lang)
 	    fo = 0;
 	    i++;
 	    break;
+	case DECL_BUFFER:
+	    csp_dump_var(f,st,"var","",0,i,fo,lang);
+	    fo = 0;
+	    i++;
+	    break;
 	case DECL_TIMER:
 	    csp_dump_var(f,st,"timer","",0,i,fo,lang);
 	    csp_dump_var(f,st,"var","[t0]",0,i+1,fo,lang);
 	    fo = 0;
 	    i += 2;
-	    break;		
+	    break;
 	default:
 	    i++;
 	    break;
@@ -685,6 +690,7 @@ const char* csp_cfmt_dtype(decl_t dt)
     case DECL_ANALOG: return "DECL_ANALOG";
     case DECL_TIMER: return "DECL_TIMER";
     case DECL_CAN: return "DECL_CAN";
+    case DECL_BUFFER: return "DECL_BUFFER";
     default: return "?";
     }
 }
@@ -768,7 +774,9 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 	    fprintf(f, ".tm={0,.period=%u,.init=%u}",
 		    dp->tm.period, dp->tm.init);
 	    break;
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)	    
+	case DECL_BUFFER: // no extra union fields (res/vt/dir already printed)
+	    break;
+#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
 	case DECL_STATES: // do not generate decl
 	case DECL_IN:     // do not generate decl
 #endif

@@ -1,0 +1,17 @@
+// #buffer used directly as a heap-backed scalar (like a variable).
+// Exercises the VIEW_HEAP get/set path:
+//   B8 / B16  -> byte-aligned "simple" fast path (memcpy)
+//   B10       -> sub-byte bit-field path (bitpack get_bits/set_bits)
+// and verifies that writes are masked to the declared bit width.
+
+#buffer B8:8
+#buffer B16:16
+#buffer B10:10
+#buffer Masked8:8
+#buffer Masked10:10
+
+B8  = 200  ? 1
+B16 = 5000 ? 1
+B10 = 1000 ? 1
+Masked8  = 300  ? 1
+Masked10 = 2000 ? 1

@@ -90,6 +90,7 @@ enum {
     STOP_ANALOG_RES_CONT,   // PAT_RES in pat_analog
     STOP_ANALOG_PP_CONT,    // PAT_PORT_PIN in pat_analog
     STOP_CAN_RES_CONT,      // PAT_RES in pat_can
+    STOP_BUFFER_RES_CONT,   // PAT_RES in pat_buffer
     NUM_STOP_SETS
 };
 
@@ -104,6 +105,7 @@ enum {
     PAT_ANALOG,
     PAT_TIMER,
     PAT_CAN,
+    PAT_BUFFER,
     PAT_OBJECT,
     PAT_BODY,
     PAT_RULE,

@@ -48,6 +48,7 @@ typedef unsigned bool_t;
 
 #define PORT_BITS 4   // port 0..15    mega is 11 ports, with 8 pins each
 #define PIN_BITS  7   // pin  0..127
+#define BUF_BITS  6   // buffer index
 
 #if defined(__AVR__)
 #include <avr/pgmspace.h>
@@ -93,14 +94,17 @@ typedef const char rochar;  // PROGMEM string character type
 #define MAX_INPUTS   8   // Uno has ~20 pins total
 #define MAX_OUTPUTS  8
 #define MAX_TIMERS   4
+#define MAX_HEAP     64  // buffer heap bytes
 #else
 #define MAX_INPUTS   32  // <= then MAX_DECLS
 #define MAX_OUTPUTS  32  // <= then MAX_DECLS
 #define MAX_TIMERS   16  // <= then MAX_DECLS
+#define MAX_HEAP     1024 // buffer heap bytes
 #endif
 #define MAX_VARREFS  MAX_TIMERS
 #define MAX_MODULES  (1 << OBJ_BITS)
 #define MAX_OBJECTS  (1 << OBJ_BITS)
+#define MAX_BUFS     (1 << BUF_BITS)
 #define MAX_QUEUE    (MAX_INSTRS)
 #define MAX_INDEX    (MAX_INSTRS+1)
 #define DIR_BITS 2
@@ -206,6 +210,41 @@ typedef enum  {
     PART_PERIOD,
     PART_FIRED,
 } csp_part_t;
+
+// How to reach a leaf's value. See doc/DESCRIPTORS.md.
+typedef enum {
+    VIEW_SLOT = 0,   // typed value_t slot: dio[dir][slot]
+    VIEW_HEAP = 1,   // bit-field in the buffer heap
+} view_kind_t;
+
+#define VIEW_F_SIMPLE 0x01   // covers whole buffer, byte aligned, native endian
+#define VIEW_F_GLOBAL 0x02   // buf id is global (not object-offset)
+
+// One per leaf index_t (indexed by st_index).
+typedef struct {
+    uint8_t  kind;   // view_kind_t
+    uint8_t  vt;     // value type (vtype_t); SLOT reads vt from decl instead
+    union {
+	index_t slot;          // VIEW_SLOT: flat slot index into dio[dir]
+	struct {               // VIEW_HEAP:
+	    uint8_t buf;       //   buffer id
+	    uint8_t pos;       //   start bit in buffer
+	    uint8_t len;       //   number of bits - 1
+	    uint8_t endian;    //   little/big
+	    uint8_t flags;     //   VIEW_F_*
+	} h;
+    };
+} csp_view_t;
+
+// One per unique buffer. RAM table, filled at start.
+typedef struct {
+    uint16_t hp;        // heap byte offset
+    uint8_t  nbytes;    // size in bytes
+    uint8_t  loc;       // RAM/ROM/IO
+    uint8_t  transport; // none/pin/can
+    uint8_t  dir;       // in/out
+    uint32_t xref;      // pin-number / can-id
+} csp_buf_t;
 
 #if defined(USE_FIXPOINT) && (USE_FIXPOINT == 1)
 #include "csp_fixpoint.h"
@@ -369,6 +408,7 @@ typedef enum {
     D_ANALOG,   // 'analog'
     D_TIMER,    // 'timer'
     D_CAN,      // 'can'
+    D_BUFFER,   // 'buffer'
     D_UART,     // 'uart'
     D_SOCKET,   // 'socket'
     D_MOD,      // module instance
@@ -478,10 +518,11 @@ typedef enum {
 #endif
     
     // 8-15
-    DECL_TIMER=V_TIMER,     // 'timer'    
+    DECL_TIMER=V_TIMER,     // 'timer'
     DECL_DIGITAL=V_DIGITAL, // 'digital'
     DECL_ANALOG=V_ANALOG,   // 'analog'
     DECL_CAN=V_CAN,         // 'can'
+    DECL_BUFFER=12,         // 'buffer' (heap-backed storage)
 } decl_t;
 
 #define DECL_TYPE(s,i) ((s)->decl[(i)].type)
@@ -761,8 +802,17 @@ typedef struct _csp_rt_t
     
     value_t dv0[MAX_INDEX];       // declaration (leaf) value (y,z)
 #if defined(SUPPORT_TRANSACTION) && (SUPPORT_TRANSACTION==1)
-    value_t dv1[MAX_INDEX];       // declaration (leaf) value (y,z)    
-#endif    
+    value_t dv1[MAX_INDEX];       // declaration (leaf) value (y,z)
+#endif
+
+    csp_view_t view[MAX_INDEX];   // per-leaf view descriptor (step 2)
+    csp_buf_t  buf[MAX_BUFS];     // buffer table
+    index_t    nbuf;              // number of buffers allocated
+    uint8_t*   heap[2];           // heap[DIN], heap[DOUT]
+    uint8_t    heap0[MAX_HEAP];   // buffer heap (HEAP-kind views)
+#if defined(SUPPORT_TRANSACTION) && (SUPPORT_TRANSACTION==1)
+    uint8_t    heap1[MAX_HEAP];   // transaction shadow heap
+#endif
 
     // allow device output latch=0 or disallow latch=1
     uint8_t latch;
@@ -856,28 +906,12 @@ static inline int st_index(csp_rt_t* st, index_t n)
     return st->offs[OBJ(n)] + INDEX(n);
 }
 
-// A view describes how to reach a leaf's value.
-// Step 1: every view is VIEW_SLOT -- a typed value_t at dio[dir][slot]
-// (slot == st_index), identical to today. Step 2 adds VIEW_HEAP (bit-field in
-// the buffer heap) and materializes this into a table. See doc/DESCRIPTORS.md.
-typedef enum {
-    VIEW_SLOT = 0,   // typed value_t slot: dio[dir][slot]
-    VIEW_HEAP = 1,   // (step 2) bit-field in the buffer heap
-} view_kind_t;
-
-typedef struct {
-    index_t  slot;   // VIEW_SLOT: flat slot index (== st_index)
-    uint8_t  vt;     // value type (vtype_t)
-    uint8_t  kind;   // view_kind_t
-} csp_view_t;
-
-static inline csp_view_t csp_view(csp_rt_t* st, index_t n)
+// Resolve a leaf index to its view descriptor (see doc/DESCRIPTORS.md).
+// Step 2: table-driven. Every entry is still VIEW_SLOT with slot == st_index,
+// so behaviour is identical to before. Step 3 starts emitting VIEW_HEAP.
+static inline csp_view_t* csp_view(csp_rt_t* st, index_t n)
 {
-    csp_view_t v;
-    v.slot = st_index(st, n);
-    v.vt   = st->decl[INDEX(n)].vt;
-    v.kind = VIEW_SLOT;
-    return v;
+    return &st->view[st_index(st, n)];
 }
 
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
