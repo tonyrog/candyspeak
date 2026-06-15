@@ -1,0 +1,8 @@
+{cycles, 5}.
+{checks, [
+  {final_var, "B0", 52},
+  {final_var, "B1", 18},
+  {final_var, "Whole", 4660},
+  {final_var, "R0", 52},
+  {final_var, "R1", 18}
+]}.

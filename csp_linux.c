@@ -80,8 +80,16 @@ static tick_t time_tick(void)
     return (tick_t)t.tv_sec*1000000 + t.tv_usec;
 }
 
+// virtual (simulated) time, driven by the -F input file. When enabled the
+// clock is a deterministic counter advanced by the main loop (>=1 tick/cycle,
+// jumping wait_ms when waiting for a timer) instead of the wall clock.
+int      virtual_time = 0;
+uint32_t vclock = 0;
+
 uint32_t csp_time_ms(void)
 {
+    if (virtual_time)
+	return vclock;
     return time_tick() / 1000;
 }
 
@@ -511,9 +519,34 @@ void cycle_input_values(csp_rt_t* st, token_t* tv, size_t num)
     }
 }
 
+int input_applied = 1;   // virtual mode: has the loaded row been applied?
+int input_done = 0;      // virtual mode: input file exhausted
+
 // read <cycle> <delay> <var1> '=' <value1>  <var2> '=' <value2> ...
+// In virtual mode the first field is an absolute virtual time (ms); a row is
+// applied once vclock reaches it, then the next row is loaded.
 int cycle_input(csp_rt_t* st, FILE* fin)
 {
+    if (virtual_time) {
+	while (input_applied) {              // load next row
+	    if (fgets(input_buf, MAX_LINE_SIZE, fin) == NULL)
+		return -1;
+	    input_num = MAX_LINE_TOKENS;
+	    if (csp_scan_line(st, input_buf, input_tv, &input_num) < 0)
+		return -1;
+	    if (debug)
+		csp_dump_tokens(stdout, input_tv, input_num);
+	    if ((input_num > 0) && (input_tv[0].t == INT)) {
+		input_cycle = input_tv[0].v.val.i;
+		input_applied = 0;
+	    }
+	}
+	if (vclock >= input_cycle) {         // due (or overshot): apply once
+	    cycle_input_values(st, input_tv, input_num);
+	    input_applied = 1;
+	}
+	return 0;
+    }
     if (input_cycle < st->cycle) { // catch up
 	char* ptr;
 	while((ptr = fgets(input_buf, MAX_LINE_SIZE, fin)) != NULL) {
@@ -570,7 +603,7 @@ int main(int argc, char** argv)
 
     while (1) {
 	int option_index = 0;
-	c = getopt_long(argc, argv, "hindPQRSCc:T:s:p:r:t:O:e:L:I:",
+	c = getopt_long(argc, argv, "hindPQRSCc:T:s:p:r:t:O:e:L:I:F:",
 			long_options, &option_index);
 	if (c == -1)
 	    break;
@@ -619,6 +652,13 @@ int main(int argc, char** argv)
 		fprintf(stderr, "unable to open input file '%s'\n", optarg);
 		exit(1);
 	    }
+	    break;
+	case 'F':   // virtual-time input file: rows are <time_ms> <var>=<val> ...
+	    if ((input_file = fopen(optarg, "r")) == NULL) {
+		fprintf(stderr, "unable to open input file '%s'\n", optarg);
+		exit(1);
+	    }
+	    virtual_time = 1;
 	    break;
 	case 'L':
 	    if (strcmp(optarg, "erlang") == 0)
@@ -792,7 +832,8 @@ loop:
 
     csp_input(&state);
     if (input_file) {
-	cycle_input(&state, input_file);
+	if (cycle_input(&state, input_file) < 0)
+	    input_done = 1;
     }
 
     if (state.reactive)
@@ -811,13 +852,26 @@ loop:
 	    csp_dump_state(state_file, &state, lang);
     }
 
-    // Wait for timer in non-interactive mode
-    if (!interactive && state.wait_ms != NOTIMEOUT && state.wait_ms > 0) {
+    // Advance time. Virtual: jump the clock (>=1 tick/cycle, wait_ms when a
+    // timer is pending) instead of sleeping. Real: sleep until the next timer.
+    if (virtual_time) {
+	// jump to the nearest pending event (next timer or next input row),
+	// but always advance at least one tick so time never stands still.
+	uint32_t adv = (state.wait_ms == NOTIMEOUT) ? 0xFFFFFFFFu : state.wait_ms;
+	if (!input_done && !input_applied && (input_cycle > vclock)) {
+	    uint32_t inp = input_cycle - vclock;
+	    if (inp < adv) adv = inp;
+	}
+	if ((adv == 0xFFFFFFFFu) || (adv < 1)) adv = 1;
+	vclock += adv;
+    }
+    else if (!interactive && state.wait_ms != NOTIMEOUT && state.wait_ms > 0) {
 	poll(NULL, 0, state.wait_ms);
     }
 
     // Continue loop if: interactive mode, pending changes, timers, or reactive queue
     if (interactive) goto loop;
+    if (virtual_time && !input_done) goto loop;  // more input rows to feed
     if (anyd) goto loop;
     if (state.wait_ms != NOTIMEOUT) goto loop;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)

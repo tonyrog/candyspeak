@@ -1,0 +1,6 @@
+{cycles, 5}.
+{checks, [
+  {final_var, "W1", 4660},
+  {final_var, "LoBack", 52},
+  {final_var, "FieldRead", 35}
+]}.

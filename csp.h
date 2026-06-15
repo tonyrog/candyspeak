@@ -211,10 +211,11 @@ typedef enum  {
     PART_FIRED,
 } csp_part_t;
 
-// How to reach a leaf's value. See doc/DESCRIPTORS.md.
+// How to reach a leaf's value. Everything lives in the buffer heap.
+// See doc/DESCRIPTORS.md.
 typedef enum {
-    VIEW_SLOT = 0,   // typed value_t slot: dio[dir][slot]
-    VIEW_HEAP = 1,   // bit-field in the buffer heap
+    VIEW_SLOT = 0,   // value_t struct stored in its buffer (config+value types)
+    VIEW_HEAP = 1,   // bit-field in a buffer (scalar variables, buffer views)
 } view_kind_t;
 
 #define VIEW_F_SIMPLE 0x01   // covers whole buffer, byte aligned, native endian
@@ -224,16 +225,11 @@ typedef enum {
 typedef struct {
     uint8_t  kind;   // view_kind_t
     uint8_t  vt;     // value type (vtype_t); SLOT reads vt from decl instead
-    union {
-	index_t slot;          // VIEW_SLOT: flat slot index into dio[dir]
-	struct {               // VIEW_HEAP:
-	    uint8_t buf;       //   buffer id
-	    uint8_t pos;       //   start bit in buffer
-	    uint8_t len;       //   number of bits - 1
-	    uint8_t endian;    //   little/big
-	    uint8_t flags;     //   VIEW_F_*
-	} h;
-    };
+    uint8_t  buf;    // buffer id (both kinds)
+    uint8_t  pos;    // VIEW_HEAP: start bit in buffer
+    uint8_t  len;    // VIEW_HEAP: number of bits - 1
+    uint8_t  endian; // VIEW_HEAP: little/big
+    uint8_t  flags;  // VIEW_HEAP: VIEW_F_*
 } csp_view_t;
 
 // One per unique buffer. RAM table, filled at start.
@@ -798,22 +794,18 @@ typedef struct _csp_rt_t
     csp_instr_t instr[MAX_INSTRS+1]; // instructions used (one dummy slot!)
     csp_decl_t decl[MAX_DECLS];    // declarations used
 
-    value_t* dio[2];              // dio[DIN], dio[DOUT]
     value_t reg[MAX_REGS];         // register area
     value_t arg[MAX_ARGS];         // loaded before call
-    
-    value_t dv0[MAX_INDEX];       // declaration (leaf) value (y,z)
-#if defined(SUPPORT_TRANSACTION) && (SUPPORT_TRANSACTION==1)
-    value_t dv1[MAX_INDEX];       // declaration (leaf) value (y,z)
-#endif
 
-    csp_view_t view[MAX_INDEX];   // per-leaf view descriptor (step 2)
+    // All leaf values live in the buffer heap (see doc/DESCRIPTORS.md).
+    csp_view_t view[MAX_INDEX];   // per-leaf view descriptor
     csp_buf_t  buf[MAX_BUFS];     // buffer table
     index_t    nbuf;              // number of buffers allocated
     uint8_t*   heap[2];           // heap[DIN], heap[DOUT]
-    uint8_t    heap0[MAX_HEAP];   // buffer heap (HEAP-kind views)
+    // 4-aligned so VIEW_SLOT value_t access into the heap is aligned
+    uint8_t    heap0[MAX_HEAP] __attribute__((aligned(4)));
 #if defined(SUPPORT_TRANSACTION) && (SUPPORT_TRANSACTION==1)
-    uint8_t    heap1[MAX_HEAP];   // transaction shadow heap
+    uint8_t    heap1[MAX_HEAP] __attribute__((aligned(4)));  // transaction shadow
 #endif
 
     // allow device output latch=0 or disallow latch=1

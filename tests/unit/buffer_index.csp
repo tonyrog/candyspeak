@@ -1,0 +1,22 @@
+// Buffer indexing, read and write:
+//   Buf[pos]        = one byte
+//   Buf[pos0..pos1] = byte range
+// Bytes are little-endian within the buffer.
+
+#buffer Frame:16
+#buffer F2:16
+#variable B0 = 0
+#variable B1 = 0
+#variable Whole = 0
+#variable R0 = 0
+#variable R1 = 0
+
+Frame[0] = 52 ? 1          // write low byte
+Frame[1] = 18 ? 1          // write high byte
+B0 = Frame[0] ? 1
+B1 = Frame[1] ? 1
+Whole = Frame ? 1          // 52 + 256*18 = 4660
+
+F2[0..1] = 4660 ? 1        // write both bytes via a range
+R0 = F2[0] ? 1
+R1 = F2[1] ? 1

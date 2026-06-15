@@ -91,6 +91,76 @@ Examples:
 #timer Timeout 5000
 ```
 
+### Buffers
+
+```
+#buffer <name>:<bits> [<type>]
+```
+
+A buffer is a block of storage that variables can map into. A regular variable
+owns its own value; a buffer is *shared* — several variables can bind to
+different bit-fields of the same buffer, and the buffer can also be read and
+written directly by byte. Buffers are the building block for frames (CAN), bit
+packing, and overlapping data.
+
+```
+#buffer Frame:64           // 8 bytes of storage
+#buffer Word:16
+```
+
+A buffer can be used directly like a variable. The whole buffer is its value
+(up to 32 bits — larger frames are accessed by byte or through bound fields):
+
+```
+#buffer Status:8
+Status = 200 ? 1
+```
+
+**Byte access.** Indexing a buffer selects whole bytes:
+
+```
+Frame[0] = 52 ? 1          // first byte
+Frame[1] = 18 ? 1          // second byte
+X = Frame[0..1] ? 1        // bytes 0..1 as one value (little-endian)
+```
+
+**Binding variables (bit-fields).** Map a variable onto a *bit* range of a
+buffer with `bind`. Writing or reading a bound variable reads/writes the
+underlying buffer bits — they alias the same storage. The buffer must be
+declared before it is bound.
+
+```
+#buffer Frame:16
+#variable Speed:8     bind Frame[0..7]    // bits 0..7
+#variable Rpm:10 big  bind Frame[8..17]   // bits 8..17, big-endian
+
+Speed = 50 ? 1             // writes into Frame's bits 0..7
+```
+
+> **Note:** when indexing a *buffer* directly the index is a **byte**
+> (`Frame[1]`), while a `bind` range is in **bits** (`Frame[8..17]`). Direct
+> indexing is for convenient whole-byte access; `bind` is for packing
+> sub-byte bit-fields.
+
+### CAN frames
+
+A CAN frame is modelled as a buffer that carries a frame id. The signals inside
+a frame are ordinary variables bound to bit-fields, so the same `bind`
+mechanism describes a frame layout:
+
+```
+#buffer Engine:64          // an 8-byte frame layout
+#variable Speed:8     bind Engine[0..7]
+#variable Rpm:10 big  bind Engine[8..17]
+#variable Temp:8      bind Engine[24..31]
+
+Speed = 90 ? 1             // updates the frame
+```
+
+Reading a signal decodes its bits from the frame; writing one encodes back into
+the frame. *(Attaching a frame id and bus direction to the buffer — so the
+frame is transmitted/received automatically — is in development.)*
+
 ### Modules
 
 Modules group related functionality for reuse. A module is a template that can be instantiated multiple times with different configurations.
@@ -309,6 +379,8 @@ make
 | `-Q` | Trace variable values |
 | `-P` | Debug parser |
 | `-L erlang` | Output trace in Erlang format |
+| `-I <file>` | Feed inputs from a file (real time, cycle-stamped rows) |
+| `-F <file>` | Feed inputs with **simulated time** (see below) |
 
 ### Examples
 
@@ -331,6 +403,39 @@ Interactive mode:
 ```bash
 ./csp -i
 ```
+
+## Simulated Time (`-F`)
+
+With `-F` the program runs against a **virtual clock** instead of the wall
+clock, which makes timer and input timing fully deterministic and instant (no
+real waiting). Each input row is stamped with an absolute virtual time in
+milliseconds:
+
+```
+<time_ms>  <var>=<value>  [<var>=<value> ...]
+```
+
+A row is applied once the virtual clock reaches its time. Between rows the clock
+jumps straight to the next event (the next input row or the next timer
+timeout), so a 1-second timer fires after one step rather than a thousand
+cycles — while still advancing at least one tick per cycle so `cycle()` and
+time-reading logic always see time move forward.
+
+Example — feed a sensor at two virtual times and let a timer expire:
+
+```
+# stimulus.dat
+30   Sensor=10
+70   Sensor=21
+```
+
+```bash
+./csp -c 100 -s trace.txt -F stimulus.dat program.csp
+```
+
+`csp_time_ms()` returns the virtual clock in this mode, so `timeout(T)`,
+`elapsed(T)` and `progress(T)` all behave deterministically. This is the
+recommended way to write repeatable tests for timers and analog/digital input.
 
 ## Generate Embedded Code
 
@@ -731,11 +836,23 @@ pandoc doc/manual_en.md -o doc/manual_en.pdf \
 ## Declarations
 ```
 #variable <name>[:<bits>] [type] [= value]
+#variable <name>:<bits> [big] bind <buffer>[<a>..<b>]   // bit-field view
 #digital <name> [in|out|inout] [pullup|pulldown] [<port>:]<pin>
 #analog <name>[:<resolution>] [in|out] [pwm] [<port>:]<pin>
 #timer <name> <period_ms> [= 1]
 #constant <name> = <value>
+#buffer <name>:<bits> [type]            // shared storage / frame layout
 #module <name> ... #end
+```
+
+## Buffers
+```
+#buffer Buf:16              // 2 bytes of shared storage
+Buf[0] = 52                 // byte access (index = byte)
+X = Buf[0..1]               // byte range -> one value (little-endian)
+
+#variable F:8     bind Buf[0..7]    // bind range = bits
+#variable G:10 big bind Buf[8..17]  // big-endian bit-field
 ```
 
 ## Module Instantiation

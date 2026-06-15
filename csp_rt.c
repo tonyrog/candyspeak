@@ -737,19 +737,24 @@ void csp_clr_error(csp_rt_t* st)
 }
 
 
+// pointer to a VIEW_SLOT's value_t struct inside its buffer (in the heap)
+static inline value_t* csp_slot(csp_rt_t* st, csp_view_t* v, dio_t dir)
+{
+    return (value_t*)(st->heap[dir] + st->buf[v->buf].hp);
+}
+
 // return pointer to the object/field value slot (VIEW_SLOT only)
 value_t* csp_dio_slot(csp_rt_t* st, index_t ix, dio_t dir)
 {
-    csp_view_t* v = csp_view(st, ix);
-    return &st->dio[dir][v->slot];
+    return csp_slot(st, csp_view(st, ix), dir);
 }
 
 // return pointer to value pointer for input and output (VIEW_SLOT only)
 int csp_dio_slots(csp_rt_t* st, index_t ix, value_t** iptr, value_t** optr)
 {
     csp_view_t* v = csp_view(st, ix);
-    *iptr = &st->dio[DIN][v->slot];
-    *optr = &st->dio[DOUT][v->slot];
+    *iptr = csp_slot(st, v, DIN);
+    *optr = csp_slot(st, v, DOUT);
     return 0;
 }
 
@@ -1252,36 +1257,36 @@ NOINLINE void csp_enq_elist(csp_rt_t* st, index_t x)
 
 NOINLINE static value_t csp_heap_get(csp_rt_t* st, csp_view_t* vw, dio_t dir)
 {
-    csp_buf_t* b = &st->buf[vw->h.buf];
+    csp_buf_t* b = &st->buf[vw->buf];
     uint8_t* p = st->heap[dir] + b->hp;
     value_t v;
     v.u = 0;
-    if (vw->h.flags & VIEW_F_SIMPLE) {       // whole buffer, byte aligned
+    if (vw->flags & VIEW_F_SIMPLE) {       // whole buffer, byte aligned
 	uint8_t n = b->nbytes;
 	if (n > sizeof(value_t)) n = sizeof(value_t);
 	memcpy(&v, p, n);
     }
-    else if (vw->h.endian == E_BIG)
-	get_bits_be(p, &v.u, vw->h.pos, vw->h.len + 1);
+    else if (vw->endian == E_BIG)
+	get_bits_be(p, &v.u, vw->pos, vw->len + 1);
     else
-	get_bits_le(p, &v.u, vw->h.pos, vw->h.len + 1);
+	get_bits_le(p, &v.u, vw->pos, vw->len + 1);
     return v;
 }
 
 NOINLINE static void csp_heap_set(csp_rt_t* st, csp_view_t* vw, dio_t dir,
 				  value_t v)
 {
-    csp_buf_t* b = &st->buf[vw->h.buf];
+    csp_buf_t* b = &st->buf[vw->buf];
     uint8_t* p = st->heap[dir] + b->hp;
-    if (vw->h.flags & VIEW_F_SIMPLE) {       // whole buffer, byte aligned
+    if (vw->flags & VIEW_F_SIMPLE) {       // whole buffer, byte aligned
 	uint8_t n = b->nbytes;
 	if (n > sizeof(value_t)) n = sizeof(value_t);
 	memcpy(p, &v, n);
     }
-    else if (vw->h.endian == E_BIG)
-	set_bits_be(p, v.u, vw->h.pos, vw->h.len + 1);
+    else if (vw->endian == E_BIG)
+	set_bits_be(p, v.u, vw->pos, vw->len + 1);
     else
-	set_bits_le(p, v.u, vw->h.pos, vw->h.len + 1);
+	set_bits_le(p, v.u, vw->pos, vw->len + 1);
 }
 
 NOINLINE void csp_dio_set_pin_part(csp_rt_t* st, value_t* vslot,
@@ -1348,7 +1353,7 @@ NOINLINE void csp_dio_set_part(csp_rt_t* st, index_t ix, value_t v,
 	    csp_heap_set(st, vw, dir, v);
 	return;
     }
-    vslot = &st->dio[dir][vw->slot];
+    vslot = csp_slot(st, vw, dir);
     switch(part) {
     case PART_VAL:
 	csp_dio_set_val_part(st, vslot, vt, v);
@@ -1397,7 +1402,7 @@ NOINLINE void csp_dio_set(csp_rt_t* st, index_t ix, value_t v, dio_t dir)
 	csp_heap_set(st, vw, dir, v);
 	return;
     }
-    csp_dio_set_val_part(st, &st->dio[dir][vw->slot],
+    csp_dio_set_val_part(st, csp_slot(st, vw, dir),
 			 st->decl[INDEX(ix)].vt, v);
 }
 
@@ -1408,7 +1413,7 @@ NOINLINE void csp_dio_get(csp_rt_t* st, index_t ix, value_t* vp, dio_t dir)
 	*vp = csp_heap_get(st, vw, dir);
 	return;
     }
-    csp_dio_get_val_part(st, &st->dio[dir][vw->slot],
+    csp_dio_get_val_part(st, csp_slot(st, vw, dir),
 			 st->decl[INDEX(ix)].vt, vp);
 }
 
@@ -1583,26 +1588,7 @@ again:
 }
 
 #if defined(SUPPORT_TRANSACTION) && (SUPPORT_TRANSACTION==1)
-// copy values marked in dset from src to dst buffer
-NOINLINE static void dset_copy(csp_rt_t* st, value_t* dst, const value_t* src)
-{
-    int g, i;
-    set_group_t bits;
-
-    for (g = 0; g < (int)BITSET_GROUPS(MAX_INDEX); g++) {
-	if ((bits = st->dset[g]) == 0)
-	    continue;
-	i = g*BITSET_GROUP_BITS;
-	while (bits) {
-	    if (bits & 1)
-		dst[i] = src[i];
-	    bits >>= 1;
-	    i++;
-	}
-    }
-}
-
-// mirror dirty HEAP-view buffers between the two heaps (parallel to dset_copy)
+// mirror dirty leaf buffers between the two heaps (everything lives in the heap)
 NOINLINE static void heap_dset_copy(csp_rt_t* st, dio_t to, dio_t from)
 {
     int g, i;
@@ -1613,8 +1599,8 @@ NOINLINE static void heap_dset_copy(csp_rt_t* st, dio_t to, dio_t from)
 	    continue;
 	i = g*BITSET_GROUP_BITS;
 	while (bits) {
-	    if ((bits & 1) && (st->view[i].kind == VIEW_HEAP)) {
-		csp_buf_t* b = &st->buf[st->view[i].h.buf];
+	    if (bits & 1) {
+		csp_buf_t* b = &st->buf[st->view[i].buf];
 		memcpy(st->heap[to] + b->hp, st->heap[from] + b->hp, b->nbytes);
 	    }
 	    bits >>= 1;
@@ -1628,10 +1614,8 @@ NOINLINE static void heap_dset_copy(csp_rt_t* st, dio_t to, dio_t from)
 void csp_undo(csp_rt_t* st)
 {
 #if defined(SUPPORT_TRANSACTION) && (SUPPORT_TRANSACTION==1)
-    if (st->transaction && st->anyd) {
-	dset_copy(st, st->dio[DOUT], st->dio[DIN]);
+    if (st->transaction && st->anyd)
 	heap_dset_copy(st, DOUT, DIN);
-    }
 #endif
     st->anyd = CSP_FALSE;
     bitset_zero(st->dset);
@@ -1641,10 +1625,8 @@ void csp_undo(csp_rt_t* st)
 void csp_commit(csp_rt_t* st)
 {
 #if defined(SUPPORT_TRANSACTION) && (SUPPORT_TRANSACTION==1)
-    if (st->transaction && st->anyd) {
-	dset_copy(st, st->dio[DIN], st->dio[DOUT]);
+    if (st->transaction && st->anyd)
 	heap_dset_copy(st, DIN, DOUT);
-    }
 #endif
     bitset_zero(st->dset);
     st->anyd = CSP_FALSE;
@@ -4645,13 +4627,11 @@ int csp_rt_init(csp_rt_t* st, int transaction, int reactive)
     if (debug) // or precompile!
 	dump_stop_sets();       // debugging
 #endif
-    st->dio[DIN] = st->dio[DOUT] = st->dv0;
     st->heap[DIN] = st->heap[DOUT] = st->heap0;
     st->nbuf = 0;
     st->reactive = reactive;
     if ((st->transaction = transaction) != 0) {
 #if defined(SUPPORT_TRANSACTION) && (SUPPORT_TRANSACTION==1)
-	st->dio[DOUT] = st->dv1;
 	st->heap[DOUT] = st->heap1;
 #endif
     }
@@ -4721,24 +4701,16 @@ NOINLINE static void setup_timer(csp_rt_t* st, index_t ix)
 {
     value_t* iptr;
     value_t* optr;
-    int m = OBJ(ix);
     csp_decl_t* dptr = &st->decl[INDEX(ix)];
-    index_t tx = MAKE_INDEX(m, INDEX(ix+1));
 
-    // clear timeout flag
+    // clear timeout flag and load config into the timer's value_t buffer.
+    // The start-time slot (tx = ix+1) is an ordinary variable, initialised to 0
+    // by its own setup_variable; the timer arms it at runtime.
     csp_dio_slots(st, ix, &iptr, &optr);
     iptr->t.fired = optr->t.fired = 0;
     iptr->t.val = optr->t.val = dptr->tm.init;
     iptr->t.running = optr->t.running = dptr->tm.init;
     iptr->t.period = optr->t.period = dptr->tm.period;
-    
-    // load current time+1
-    csp_dio_slots(st, tx, &iptr, &optr);
-    if (dptr->tm.init) {
-	iptr->u = optr->u = csp_time_ms();
-    }
-    else 
-	iptr->u = optr->u = 0;
 }
 
 
@@ -4784,6 +4756,7 @@ NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint8_t nbytes,
 {
     index_t b = st->nbuf;
     uint16_t hp = (b == 0) ? 0 : (st->buf[b-1].hp + st->buf[b-1].nbytes);
+    hp = (hp + 3) & ~3;   // 4-align so value_t access into the heap is aligned
     if ((b >= MAX_BUFS) || (hp + nbytes > MAX_HEAP)) {
 	csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
 	return BAD_INDEX;
@@ -4811,11 +4784,54 @@ NOINLINE static int setup_buffer(csp_rt_t* st, index_t ix)
     vw = &st->view[st_index(st, ix)];
     vw->kind     = VIEW_HEAP;
     vw->vt       = st->decl[i].vt;
-    vw->h.buf    = b;
-    vw->h.pos    = 0;
-    vw->h.len    = res - 1;
-    vw->h.endian = E_LITTLE;
-    vw->h.flags  = ((res & 7) == 0) ? VIEW_F_SIMPLE : 0;
+    vw->buf    = b;
+    vw->pos    = 0;
+    vw->len    = res - 1;
+    vw->endian = E_LITTLE;
+    vw->flags  = ((res & 7) == 0) ? VIEW_F_SIMPLE : 0;
+    return 0;
+}
+
+// A variable lives in the heap: bound -> a view into an existing buffer,
+// otherwise its own auto-buffer seeded with the init value. Works for globals
+// and per-object fields alike (st_index/decl pick the right slot/template).
+NOINLINE static int setup_variable(csp_rt_t* st, index_t ix)
+{
+    int i = INDEX(ix);
+    csp_view_t* vw = &st->view[st_index(st, ix)];
+
+    if (st->decl[i].bound) {              // bit-field view into a buffer
+	csp_view_t* pv = &st->view[st->decl[i].ca.id];
+	vw->kind     = VIEW_HEAP;
+	vw->vt       = st->decl[i].vt;
+	vw->buf    = pv->buf;
+	vw->pos    = st->decl[i].ca.bit;
+	vw->len    = st->decl[i].ca.len;
+	vw->endian = st->decl[i].ca.endian;
+	vw->flags  = 0;
+	return 0;
+    }
+    if (setup_buffer(st, ix) < 0)         // auto-buffer
+	return -1;
+    csp_heap_set(st, vw, DIN,  st->decl[i].va.init);
+    csp_heap_set(st, vw, DOUT, st->decl[i].va.init);
+    return 0;
+}
+
+// config+value types (constant/digital/analog/timer) live as a value_t struct
+// in their own buffer. Allocate it + point a VIEW_SLOT view at it; the caller
+// then fills it through the normal csp_dio_slot(s)/PART path (now -> heap).
+NOINLINE static int setup_slot(csp_rt_t* st, index_t ix)
+{
+    int i = INDEX(ix);
+    index_t b = csp_buf_alloc(st, sizeof(value_t), 0, 0, st->decl[i].dir);
+    csp_view_t* vw;
+    if (b == BAD_INDEX)
+	return -1;
+    vw = &st->view[st_index(st, ix)];
+    vw->kind = VIEW_SLOT;
+    vw->vt   = st->decl[i].vt;
+    vw->buf  = b;
     return 0;
 }
 
@@ -4852,17 +4868,8 @@ int csp_rt_start(csp_rt_t* st)
     st->nm = 0;
     st->nbuf = 0;
 
-    // step 2: materialize view table. Every leaf is VIEW_SLOT with slot equal
-    // to its st_index, so behaviour is identical to the previous computed view.
-    // slot==index regardless of offs[], so this needs no decl/object info.
-    {
-	int k;
-	for (k = 0; k < MAX_INDEX; k++) {
-	    st->view[k].kind = VIEW_SLOT;
-	    st->view[k].vt   = 0;       // SLOT reads vt from decl
-	    st->view[k].slot = k;
-	}
-    }
+    // clear the view table; setup_* assigns a buffer to each value leaf below.
+    memset(st->view, 0, sizeof(st->view));
     memset(st->heap0, 0, sizeof(st->heap0));
 #if defined(SUPPORT_TRANSACTION) && (SUPPORT_TRANSACTION==1)
     memset(st->heap1, 0, sizeof(st->heap1));
@@ -4883,48 +4890,45 @@ int csp_rt_start(csp_rt_t* st)
 	    // Per-object init done after offs[] is allocated
 	    break;
 	case DECL_CONSTANT:
-	    // global or "template" version
-	    csp_dio_slots(st, ix, &iptr, &optr);
-	    *iptr = *optr = st->decl[i].cn.init;
+	    if (!in_module) {               // global; templates set up per-object
+		if (setup_slot(st, ix) < 0)
+		    return -1;
+		csp_dio_slots(st, ix, &iptr, &optr);
+		*iptr = *optr = st->decl[i].cn.init;
+	    }
 	    break;
 	case DECL_VARIABLE:
-	    if (st->decl[i].bound) {        // bit-field view into a buffer
-		index_t parent = st->decl[i].ca.id;
-		csp_view_t* pv = &st->view[parent];
-		csp_view_t* vw = &st->view[st_index(st, ix)];
-		vw->kind     = VIEW_HEAP;
-		vw->vt       = st->decl[i].vt;
-		vw->h.buf    = pv->h.buf;
-		vw->h.pos    = st->decl[i].ca.bit;
-		vw->h.len    = st->decl[i].ca.len;
-		vw->h.endian = st->decl[i].ca.endian;
-		vw->h.flags  = 0;
-	    }
-	    else {  // global or "template" version
-		csp_dio_slots(st, ix, &iptr, &optr);
-		*iptr = *optr = st->decl[i].va.init;
+	    if (!in_module) {               // global; templates set up per-object
+		if (setup_variable(st, ix) < 0)
+		    return -1;
 	    }
 	    break;
 	case DECL_TIMER:
 	    if (!in_module) {
+		if (setup_slot(st, ix) < 0)
+		    return -1;
 		setup_timer(st, ix);
 		st->timer[st->nt++] = ix;
 	    }
 	    break;
-	    
+
 	case DECL_DIGITAL:
 	    if (!in_module) {
+		if (setup_slot(st, ix) < 0)
+		    return -1;
 		setup_digital(st, ix);
 		add_io(st, ix);
 	    }
 	    break;
-	    
+
 	case DECL_ANALOG:
 	    if (!in_module) {
+		if (setup_slot(st, ix) < 0)
+		    return -1;
 		setup_analog(st, ix);
 		add_io(st, ix);
 	    }
-	    break;	    
+	    break;
 	    
 	case DECL_CAN:
 	    if (!in_module) {
@@ -4946,11 +4950,11 @@ int csp_rt_start(csp_rt_t* st)
 	    csp_view_t* vw = &st->view[st_index(st, ix)];
 	    vw->kind     = VIEW_HEAP;
 	    vw->vt       = st->decl[i].vt;
-	    vw->h.buf    = pv->h.buf;
-	    vw->h.pos    = st->decl[i].ca.bit;
-	    vw->h.len    = st->decl[i].ca.len;     // already len-1
-	    vw->h.endian = st->decl[i].ca.endian;
-	    vw->h.flags  = 0;                       // sub-view -> generic bit path
+	    vw->buf    = pv->buf;
+	    vw->pos    = st->decl[i].ca.bit;
+	    vw->len    = st->decl[i].ca.len;     // already len-1
+	    vw->endian = st->decl[i].ca.endian;
+	    vw->flags  = 0;                       // sub-view -> generic bit path
 	    break;
 	}
 	default:
@@ -4990,22 +4994,30 @@ int csp_rt_start(csp_rt_t* st)
 #endif
 	    switch (st->decl[dj].type) {
 	    case DECL_CONSTANT:
+		if (setup_slot(st, fx) < 0)
+		    return -1;
 		csp_dio_slots(st, fx, &iptr, &optr);
 		*iptr = *optr = st->decl[dj].cn.init;
 		break;
 	    case DECL_VARIABLE:
-		csp_dio_slots(st, fx, &iptr, &optr);
-		*iptr = *optr = st->decl[dj].va.init;
+		if (setup_variable(st, fx) < 0)
+		    return -1;
 		break;
 	    case DECL_TIMER:
+		if (setup_slot(st, fx) < 0)
+		    return -1;
 		setup_timer(st, fx);
 		st->timer[st->nt++] = fx;
 		break;
 	    case DECL_DIGITAL:
+		if (setup_slot(st, fx) < 0)
+		    return -1;
 		setup_digital(st, fx);
 		add_io(st, fx);
 		break;
 	    case DECL_ANALOG:
+		if (setup_slot(st, fx) < 0)
+		    return -1;
 		setup_analog(st, fx);
 		add_io(st, fx);
 		break;
@@ -5025,16 +5037,8 @@ int csp_set_transaction(csp_rt_t* st, int onoff)
 {
 #if defined(SUPPORT_TRANSACTION) && (SUPPORT_TRANSACTION==1)
     if ((st->transaction = onoff) != 0) {
-	if (st->dio[DIN] == st->dv0) {
-	    st->dio[DOUT] = st->dv1;
-	    st->heap[DOUT] = st->heap1;
-	}
-	else {
-	    st->dio[DOUT] = st->dv0;
-	    st->heap[DOUT] = st->heap0;
-	}
+	st->heap[DOUT] = (st->heap[DIN] == st->heap0) ? st->heap1 : st->heap0;
 	// out buffer must mirror committed state
-	memcpy(st->dio[DOUT], st->dio[DIN], sizeof(st->dv0));
 	memcpy(st->heap[DOUT], st->heap[DIN], sizeof(st->heap0));
     }
     return 0;

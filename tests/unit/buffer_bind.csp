@@ -1,0 +1,21 @@
+// #variable ... bind Buf[a..b] : a variable that is a bit-field view into a
+// buffer. The bind range is in BITS. Writing the variable changes the buffer
+// bytes (and vice versa) -- they alias the same heap storage.
+
+#buffer Frame:16
+#variable Lo:8 bind Frame[0..7]     // bits 0..7  = byte 0
+#variable Hi:8 bind Frame[8..15]    // bits 8..15 = byte 1
+#variable W1 = 0
+#variable LoBack = 0
+
+#buffer F2:16
+#variable Field:8 bind F2[4..11]    // bit-field crossing a byte boundary
+#variable FieldRead = 0
+
+Lo = 52 ? 1                          // -> Frame byte 0
+Hi = 18 ? 1                          // -> Frame byte 1
+W1 = Frame ? 1                       // 52 + 256*18 = 4660 (variables alias buffer)
+LoBack = Lo ? 1                      // 52
+
+F2 = 4660 ? 1                        // 0x1234
+FieldRead = Field ? 1                // bits 4..11 of 0x1234 = (4660>>4)&0xFF = 35
