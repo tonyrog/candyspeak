@@ -523,6 +523,7 @@ typedef enum {
     DECL_ANALOG=V_ANALOG,   // 'analog'
     DECL_CAN=V_CAN,         // 'can'
     DECL_BUFFER=12,         // 'buffer' (heap-backed storage)
+    DECL_VIEW=13,           // synthetic bit/byte view into a buffer (Buf[a..b])
 } decl_t;
 
 #define DECL_TYPE(s,i) ((s)->decl[(i)].type)
@@ -699,6 +700,7 @@ typedef struct PACKED {
     unsigned vt:TYPE_BITS;         // value type (vtype_t)
     unsigned res:5;                // 1-32  (use MAKE_RES)
     unsigned is_mapped:1;          // compiletime: 1 iff reg is valid value
+    unsigned bound:1;              // variable bound to a buffer (ca holds view)
     unsigned reg:REG_BITS;         // var/constant loaded in register FIXME!
     union PACKED {
 	csp_module_t   md;

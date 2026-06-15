@@ -691,6 +691,7 @@ const char* csp_cfmt_dtype(decl_t dt)
     case DECL_TIMER: return "DECL_TIMER";
     case DECL_CAN: return "DECL_CAN";
     case DECL_BUFFER: return "DECL_BUFFER";
+    case DECL_VIEW: return "DECL_VIEW";
     default: return "?";
     }
 }
@@ -775,6 +776,8 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 		    dp->tm.period, dp->tm.init);
 	    break;
 	case DECL_BUFFER: // no extra union fields (res/vt/dir already printed)
+	    break;
+	case DECL_VIEW:   // synthetic; not emitted to ROM
 	    break;
 #if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
 	case DECL_STATES: // do not generate decl

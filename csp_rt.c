@@ -3072,6 +3072,9 @@ void print_stack_used()
 // num_toks is number of tokens on input, consumed on output
 // result receives the expression result (reg, immediate flag, value, type)
 // returns: 1=ok, 0=error
+NOINLINE index_t make_buf_view(csp_rt_t* st, index_t parent,
+			       ivalue_t b0, ivalue_t b1);
+
 NOINLINE int csp_parse_expr(csp_rt_t* st, const token_t* tv, size_t* num_toks,
 		   rentry_t* result)
 {
@@ -3210,6 +3213,24 @@ next:
 	    // Apply module context
 	    if ((st->mdef != BAD_INDEX) && (OBJ(ix) == 0))
 		ix = MAKE_INDEX(CURRENT, INDEX(ix));
+
+	    // Buf[pos] / Buf[pos0..pos1] -- byte access on a buffer
+	    if ((i < n) && (tv[i].t == LB) &&
+		(st->decl[INDEX(ix)].type == DECL_BUFFER)) {
+		ivalue_t p0, p1;
+		i++;                                   // '['
+		if (tv[i].t != INT) { csp_set_error(st, ERR_SYNTAX); return 0; }
+		p0 = p1 = tv[i].v.val.i; i++;
+		if ((tv[i].t == DOT) && (tv[i+1].t == DOT)) {
+		    i += 2;
+		    if (tv[i].t != INT) {csp_set_error(st,ERR_SYNTAX); return 0;}
+		    p1 = tv[i].v.val.i; i++;
+		}
+		if (tv[i].t != RB) { csp_set_error(st, ERR_SYNTAX); return 0; }
+		i++;                                   // ']'
+		if ((ix = make_buf_view(st, ix, p0*8, (p1+1)*8-1)) == BAD_INDEX)
+		    return 0;
+	    }
 
 	    // Check if this is an l-value (assignment target)
 	    vt = st->decl[INDEX(ix)].vt;
@@ -3474,13 +3495,13 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     variable_param_t d = {0};
     index_t ix;
-    int i;
+    int i, r;
 
     // set default values
     d.r.res = 8*sizeof(ivalue_t);
     d.opts.vt = V_INTEGER;
 
-    if (pmatch(st, tv, ti, n, pat_variable, &d) < 0) {
+    if ((r = pmatch(st, tv, ti, n, pat_variable, &d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3491,7 +3512,42 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
     st->decl[i].res = MAKE_RES(d.r.res);
     st->decl[i].dir = d.opts.dir;
     st->decl[i].va.init = d.init;
-    // printf("VALUE = %d\n", st->decl[i].va.init.i);
+
+    // optional:  bind <buffer> '[' <bit0> ['..' <bit1>] ']'
+    // a bound variable is a bit-field view into a buffer (bits, not bytes)
+    if ((r < (int)n) && (tv[r].t == WORD) && (tv[r].v.str.len == 4) &&
+	(memcmp(tv[r].v.str.ptr, "bind", 4) == 0)) {
+	index_t bx;
+	ivalue_t b0, b1;
+	int j = r + 1;
+	if ((j >= (int)n) || (tv[j].t != WORD) ||
+	    ((bx = csp_lookup_decl(st, &tv[j].v.str)) == BAD_INDEX) ||
+	    (st->decl[INDEX(bx)].type != DECL_BUFFER)) {
+	    csp_set_error(st, ERR_SYNTAX); return -1;
+	}
+	j++;
+	if ((j >= (int)n) || (tv[j].t != LB) ||
+	    (j+1 >= (int)n) || (tv[j+1].t != INT)) {
+	    csp_set_error(st, ERR_SYNTAX); return -1;
+	}
+	j += 2;
+	b0 = b1 = tv[j-1].v.val.i;
+	if ((j+1 < (int)n) && (tv[j].t == DOT) && (tv[j+1].t == DOT)) {
+	    j += 2;
+	    if ((j >= (int)n) || (tv[j].t != INT)) {
+		csp_set_error(st, ERR_SYNTAX); return -1;
+	    }
+	    b1 = tv[j].v.val.i; j++;
+	}
+	if ((j >= (int)n) || (tv[j].t != RB)) {
+	    csp_set_error(st, ERR_SYNTAX); return -1;
+	}
+	st->decl[i].bound  = 1;
+	st->decl[i].ca.id  = INDEX(bx);
+	st->decl[i].ca.bit = b0;
+	st->decl[i].ca.len = MAKE_CAN_LEN((b1-b0)+1);
+	st->decl[i].ca.endian = d.opts.endian;
+    }
     return 0;
 }
 
@@ -3821,6 +3877,28 @@ NOINLINE index_t lookup_lhs(csp_rt_t* st, const token_t* tv,
 	    name = &tv[lhs->pos+2].v.str;
 	    goto field;
 	}
+	else if ((lhs->len >= 4) && (tv[lhs->pos+1].t == LB)) {
+	    // Buf[pos] / Buf[pos0..pos1] -- byte access on a buffer
+	    int j = lhs->pos;
+	    ivalue_t p0, p1;
+	    name = &tv[j].v.str;
+	    if ((ix = csp_lookup_decl(st, name)) == BAD_INDEX) {
+		if (csp_set_error(st, ERR_VARIABLE_NOT_DECLARED))
+		    csp_set_err_arg_tstr(st, 0, name);
+		return BAD_INDEX;
+	    }
+	    if (st->decl[INDEX(ix)].type != DECL_BUFFER) {
+		csp_set_error(st, ERR_SYNTAX);
+		return BAD_INDEX;
+	    }
+	    if (tv[j+2].t != INT) { csp_set_error(st, ERR_SYNTAX); return BAD_INDEX; }
+	    p0 = p1 = tv[j+2].v.val.i;
+	    if ((tv[j+3].t == DOT) && (tv[j+4].t == DOT)) {
+		if (tv[j+5].t != INT) {csp_set_error(st,ERR_SYNTAX);return BAD_INDEX;}
+		p1 = tv[j+5].v.val.i;
+	    }
+	    return make_buf_view(st, ix, p0*8, (p1+1)*8-1);
+	}
 	else {
 	    csp_set_error(st, ERR_SYNTAX);
 	    return BAD_INDEX;
@@ -3852,11 +3930,15 @@ field:
 
 #define MAX_BODY_PARTS 8
 
-// one rule body part: [<obj>['.'<fld>] (=|<-)] <rhs>
+// one rule body part: [<obj>['.'<fld>]['['<idx0>['..'<idx1>]']'] (=|<-)] <rhs>
 typedef struct {
     tstr_t  obj;
     tstr_t  fld;
-    int assign;  // NONE / EQ / RIMP
+    int assign;     // NONE / EQ / RIMP
+    int has_idx;    // nonzero (= LB token) if '[' index present
+    int has_range;  // nonzero (= DOT token) if '..' range present
+    ivalue_t idx0;  // Buf[idx0 ..]
+    ivalue_t idx1;  // Buf[.. idx1]
     pexpr_t rhs;
 } rule_body_part_t;
 
@@ -3980,7 +4062,22 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 	lhs.pos = 0;
 	lhs.len = 0;
 	if (part[k].assign != 0) {
-	    if (part[k].fld.len > 0) {        // <obj> '.' <fld> op <rhs>
+	    if (part[k].has_idx) {            // <buf> '[' i0 ['..' i1] ']' op <rhs>
+		index_t bx = csp_lookup_decl(st, &part[k].obj);
+		ivalue_t p0, p1;
+		if ((bx == BAD_INDEX) ||
+		    (st->decl[INDEX(bx)].type != DECL_BUFFER)) {
+		    csp_set_error(st, ERR_SYNTAX);
+		    return -1;
+		}
+		p0 = part[k].idx0;
+		p1 = part[k].has_range ? part[k].idx1 : p0;
+		if ((ix = make_buf_view(st, bx, p0*8, (p1+1)*8-1)) == BAD_INDEX)
+		    return -1;
+		if (!coerce_assign(st, ix, &rbody))
+		    return -1;
+	    }
+	    else if (part[k].fld.len > 0) {   // <obj> '.' <fld> op <rhs>
 		lhs.pos = part[k].rhs.pos - 4;
 		lhs.len = 3;
 	    }
@@ -4121,7 +4218,7 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
     // Generate code for init list
     k = 0;
     while((k < MAX_INITS) && (d.inits[k].fld.len > 0)) {
-	rule_body_part_t p;
+	rule_body_part_t p = {0};
 	init_entry_t* e = &d.inits[k];
 
 	// field name is the lhs (derived from rhs.pos in asm_rule)
@@ -4155,13 +4252,23 @@ typedef struct {
     rule_body_part_t body[MAX_BODY_PARTS];
 } rule_param_t;
 
-// PAT_BODY: [<name> ['.' <name>] (=|<-)] <expr>
+// PAT_BODY: [<name> ['.' <name>] ['[' <idx0> ['..' <idx1>] ']'] (=|<-)] <expr>
 static const uint8_t pat_body[] = {
-    P_OPT, 25,
+    P_OPT, 47,
       P_STR, csp_offsetof(rule_body_part_t, obj),
       P_OPT, 5,
         P_TOK, DOT,
         P_STR, csp_offsetof(rule_body_part_t, fld),
+      P_OPT_END,
+      P_OPT, 20,
+        P_TOK_W, LB, csp_offsetof(rule_body_part_t, has_idx),
+        P_INTEGER_S, csp_offsetof(rule_body_part_t, idx0), STOP_BODY_IDX0,
+        P_OPT, 9,
+          P_TOK_W, DOT, csp_offsetof(rule_body_part_t, has_range),
+          P_TOK, DOT,
+          P_INTEGER_S, csp_offsetof(rule_body_part_t, idx1), STOP_BODY_IDX1,
+        P_OPT_END,
+        P_TOK, RB,
       P_OPT_END,
       P_CHOICE, 2,
         P_ALT, 4, P_TOK_W, EQ, csp_offsetof(rule_body_part_t, assign), P_ALT_END,
@@ -4229,6 +4336,38 @@ index_t make_can_range(csp_rt_t* st, char* str, int len,
     st->decl[i].ca.id = idx;
     st->decl[i].ca.bit = p0;
     st->decl[i].ca.len = MAKE_CAN_LEN((p1-p0)+1);
+    return ix;
+}
+
+// create (or reuse) a synthetic HEAP sub-view into buffer `parent`, covering
+// bits [b0 .. b1]. Used for Buf[pos]/Buf[pos0..pos1]. Parent decl index, start
+// bit and length are stashed in the can fields and translated to a VIEW_HEAP
+// entry in csp_rt_start (after the parent buffer has been allocated).
+NOINLINE index_t make_buf_view(csp_rt_t* st, index_t parent,
+			       ivalue_t b0, ivalue_t b1)
+{
+    index_t ix;
+    int i;
+    index_t pi = INDEX(parent);
+    const tstr_t name = { .ptr = NULL, .len = 0 };
+
+    for (i = 0; i < st->ps.nd; i++) {  // dedup
+	if ((st->decl[i].type == DECL_VIEW) &&
+	    (st->decl[i].ca.id == pi) &&
+	    (st->decl[i].ca.bit == b0) &&
+	    (st->decl[i].ca.len == MAKE_CAN_LEN((b1-b0)+1)))
+	    return MAKE_INDEX(0, i);
+    }
+    if ((ix = csp_new_decl(st, &name, DECL_VIEW)) == BAD_INDEX)
+	return BAD_INDEX;
+    i = INDEX(ix);
+    st->decl[i].vt     = V_UNSIGNED;
+    st->decl[i].dir    = st->decl[pi].dir;
+    st->decl[i].res    = MAKE_RES((b1-b0)+1);
+    st->decl[i].ca.id  = pi;
+    st->decl[i].ca.bit = b0;
+    st->decl[i].ca.len = MAKE_CAN_LEN((b1-b0)+1);
+    st->decl[i].ca.endian = E_LITTLE;
     return ix;
 }
 
@@ -4749,9 +4888,22 @@ int csp_rt_start(csp_rt_t* st)
 	    *iptr = *optr = st->decl[i].cn.init;
 	    break;
 	case DECL_VARIABLE:
-	    // global or "template" version
-	    csp_dio_slots(st, ix, &iptr, &optr);
-	    *iptr = *optr = st->decl[i].va.init;
+	    if (st->decl[i].bound) {        // bit-field view into a buffer
+		index_t parent = st->decl[i].ca.id;
+		csp_view_t* pv = &st->view[parent];
+		csp_view_t* vw = &st->view[st_index(st, ix)];
+		vw->kind     = VIEW_HEAP;
+		vw->vt       = st->decl[i].vt;
+		vw->h.buf    = pv->h.buf;
+		vw->h.pos    = st->decl[i].ca.bit;
+		vw->h.len    = st->decl[i].ca.len;
+		vw->h.endian = st->decl[i].ca.endian;
+		vw->h.flags  = 0;
+	    }
+	    else {  // global or "template" version
+		csp_dio_slots(st, ix, &iptr, &optr);
+		*iptr = *optr = st->decl[i].va.init;
+	    }
 	    break;
 	case DECL_TIMER:
 	    if (!in_module) {
@@ -4786,6 +4938,21 @@ int csp_rt_start(csp_rt_t* st)
 		    return -1;
 	    }
 	    break;
+	case DECL_VIEW: {
+	    // synthetic Buf[a..b] view: translate to a HEAP view into the
+	    // parent buffer (already set up, since it has a lower index)
+	    index_t parent = st->decl[i].ca.id;
+	    csp_view_t* pv = &st->view[parent];
+	    csp_view_t* vw = &st->view[st_index(st, ix)];
+	    vw->kind     = VIEW_HEAP;
+	    vw->vt       = st->decl[i].vt;
+	    vw->h.buf    = pv->h.buf;
+	    vw->h.pos    = st->decl[i].ca.bit;
+	    vw->h.len    = st->decl[i].ca.len;     // already len-1
+	    vw->h.endian = st->decl[i].ca.endian;
+	    vw->h.flags  = 0;                       // sub-view -> generic bit path
+	    break;
+	}
 	default:
 	    break;
 	}
