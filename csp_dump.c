@@ -161,7 +161,7 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	fprintf(f, "{instr,%d,'STP',[r%d,",
 		i, st->instr[i].m.x);
 	csp_fprint_tag(f, st, st->instr[i].m.mem);
-	fprintf(f, ",%d]}%s\n", st->instr[i].m.part,eot);
+	fprintf(f, ",%d]}%s\n", st->instr[i].m.y,eot);
 	break;	
     case OP_STIMP:
 	fprintf(f, "{instr,%d,'STIMP',[r%d,",
@@ -820,7 +820,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 	    break;
 	case OP_STP:
 	    fprintf(f, ".m={.x=%u,.mem=%u,.part=%u}",
-		    ip->m.x, ip->m.mem, ip->m.part);
+		    ip->m.x, ip->m.mem, ip->m.y);
 	    break;	    
 	case OP_CALL:
 	    fprintf(f, ".f={.x=%u,.idx=%u,.usr=%u,avt=0x%04x}",

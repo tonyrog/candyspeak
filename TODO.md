@@ -193,27 +193,19 @@ Support pin binding at instantiation time:
 
 ```
 #module Button
-#digital In in pullup   // pin unspecified
+#digital P in pullup   // pin unspecified
 #end
 
-#Button b1 In=pin(13)   // bind to pin 13
-#Button b2 In=pin(14)   // bind to pin 14
-
 // or
-#Button b1 In.pin=13   // bind to pin 13
-#Button b2 In.pin=14   // bind to pin 14
-
-// or
-#Button b1[pin]=13   // bind to pin 13
-#Button b2[pin]=14   // bind to pin 14
+#Button b1 P[pin]=13   // bind to pin 13
+#Button b2 P[pin]=14   // bind to pin 14
 
 ```
 
 Implementation:
 - Digital/analog in module has pin=UNBOUND
-- Init expression `field=pin(N)` binds to physical pin
-- Conflict detection if same pin used twice
-- Alternative: keep digital/analog global, use variables as bridge
+- Init expression `field[pin]=N` binds to physical pin
+- Conflict detection if same pin used twice?
 
 # Optimise
 
@@ -222,3 +214,27 @@ On way to optimise and partial evaluate expression is to
 1. straight parse/generate expression
 2. disassemble the expression 
 3. parse/generate again (now all constant expression should be gone)
+
+# Use of object in modules? test!
+
+#module Add
+#variable A:1 in
+#variable B:1 in
+#variable S:1 out
+S = A+B
+#end
+
+#module Add4
+#variable A:4 in
+#variable B:4 in
+#variable S:4 out
+
+#Add a1 A=A[0] B=B[0]
+#Add a2 A=A[1] B=B[1]
+#Add a3 A=A[2] B=B[2]
+#Add a4 A=A[3] B=B[3]
+S[0] = a1.S
+S[1] = a2.S
+S[2] = a3.S
+S[3] = a4.S
+#end

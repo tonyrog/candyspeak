@@ -209,6 +209,7 @@ typedef enum  {
     PART_PULLDOWN,
     PART_PERIOD,
     PART_FIRED,
+    PART_LAST,
 } csp_part_t;
 
 // How to reach a leaf's value. Everything lives in the buffer heap.
@@ -614,12 +615,18 @@ typedef struct PACKED {
     unsigned z:REG_BITS;
 } csp_instr_alu_t;
 
-// op = ST | LD
+// op = ST | LD | STP | LDP?
 // load or store register from memory
+//
+//   x = mem[y]
+//   x = mem[y,z]
+//   x = mem[part]
+// 
 typedef struct PACKED {
     opcode_t op:6;
-    unsigned part:PART_BITS;
-    unsigned x:REG_BITS;
+    unsigned x:REG_BITS;      // destination register
+    unsigned y:REG_BITS;      // y register when pos, y imm when part (STP)
+    unsigned z:REG_BITS;      // len register
     unsigned mem:INDEX_BITS;  // declaration: variable/constant
 } csp_instr_mem_t;
 

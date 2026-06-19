@@ -1480,7 +1480,7 @@ again:
 	break;
     case OP_STP:
 	csp_dio_set_part(st, st->instr[n].m.mem, st->reg[st->instr[n].m.x],
-			 st->instr[n].m.part, DOUT);
+			 st->instr[n].m.y, DOUT);
 	break;
     case OP_CHG: {  // r |= dset[ix]
 	int i = st_index(st, st->instr[n].m.mem);
@@ -1693,8 +1693,10 @@ NOINLINE static index_t lookup_decl_in(csp_rt_t* st, const tstr_t* name,
 	if (pos > 0) {
 	    int len = st->str[pos-1];  // FIXME: RODATA
 	    index_t ix = MAKE_INDEX(0,i);
+	    char* dname = decl_name(st, ix);
+	    DBG("lookup %.*s with %s\n", name->len, name->ptr, dname);
 	    if ((len == name->len) &&
-		(memcmp(decl_name(st, ix),name->ptr, name->len)==0)) {
+		(memcmp(dname,name->ptr,name->len)==0)) {
 		return ix;
 	    }
 	}
@@ -1907,7 +1909,7 @@ NOINLINE static bool_t asm_mem_part(csp_rt_t* st, opcode_t op, reg_t x,
 {
     csp_instr_t* ip = alloc_instr_ptr(st, NULL, op);
     if (ip != NULL) {
-	ip->m.part = part;
+	ip->m.y = part;
 	ip->m.x = x;
 	ip->m.mem = mem;
 	return 1;
@@ -3824,11 +3826,11 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 // var =  oix '.' fld
 //      | obj '.' fld
 //      | fld
+//      | <var> '[' <pos> ']'             // one bit
+//      | <var> '[' <pos0> .. <pos1> ']'  // start pos / end pos
 //
-// fixme: add part and bitindex/range
+// fixme: add part 
 //      <var> '[' <part> ']'  part = 'port'|'pin'|'period'...
-//      <var> '[' <pos> ']'             // one bit
-//      <var> '[' <pos0> .. <pos1> ']'  // start pos / end pos
 //
 NOINLINE index_t lookup_lhs(csp_rt_t* st, const token_t* tv,
 			    index_t oix, const pexpr_t* lhs)
@@ -4102,52 +4104,30 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 
 #define MAX_INITS 8
 
-// Field (=|<-) Rhs
-typedef struct {
-    tstr_t fld;       // field name
-    int assign;
-    pexpr_t rhs;
-} init_entry_t;
-
 typedef struct {
     tstr_t mod_name;
     tstr_t obj_name;
-    init_entry_t inits[MAX_INITS];
+    rule_body_part_t inits[MAX_INITS];
 } object_param_t;
-
-#define CB_STATIC_INIT   0
-#define CB_REACTIVE_INIT 1
 
 // '#' ModName ObjName (Field (=|<-) Expr)*
 static const uint8_t pat_object[] = {
     P_STR, csp_offsetof(object_param_t, mod_name),
     P_STR, csp_offsetof(object_param_t, obj_name),
-    P_OPT, 26,
-    P_REP, 24,
-	P_ARRAY, csp_offsetof(object_param_t, inits), sizeof(init_entry_t),
-	P_STR, csp_offsetof(init_entry_t, fld),
-	P_CHOICE, 2,
-	    P_ALT, 4,
-	      P_TOK_W, EQ, csp_offsetof(init_entry_t, assign),
-	    P_ALT_END,
-	    P_ALT, 4,
-	      P_TOK_W, RIMP, csp_offsetof(init_entry_t, assign),
-	    P_ALT_END,
-	P_CHOICE_END,
-	P_EXPR_S, csp_offsetof(init_entry_t, rhs), STOP_OBJECT_INIT_RHS,
+    P_OPT, 11,
+    P_REP, 8,
+      P_ARRAY, csp_offsetof(object_param_t, inits), sizeof(rule_body_part_t),
+      P_PAT, PAT_BODY, 0, STOP_OBJECT_INIT_CONT,
     P_REP_END,
-    P_OPT_END,
+    P_OPT_END,    
     P_END
 };
-
 
 NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     object_param_t d = {0};
     index_t mx, ix;
-    int i, m;
-    int k;
-    // unsigned ent;
+    int m, k;
     
     // Parse: # ModName ObjName (Field (=|<-) Expr)*
     if (pmatch(st, tv, ti, n, pat_object, &d) < 0) {
@@ -4155,8 +4135,8 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	return -1;
     }
 
-    // Lookup module
-    if ((mx = csp_lookup_decl(st, &d.mod_name)) == BAD_INDEX) {
+    // Lookup module (global)
+    if ((mx = lookup_decl_in(st, &d.mod_name, 0, st->ps.nd)) == BAD_INDEX) {
 	if (csp_set_error(st, ERR_MODULE_NOT_DECLARED)) {
 	    csp_set_err_arg_tstr(st, 0, &d.mod_name);
 	}
@@ -4176,39 +4156,34 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	return -1;
 
     // Set up object slot
-    i = INDEX(ix);
-    st->decl[i].mq.mx = mx;
+    st->decl[INDEX(ix)].mq.mx = mx;
     m = st->ps.nq + 1;
-    st->decl[i].mq.m = m;
+    st->decl[INDEX(ix)].mq.m = m;
     st->object[m] = ix;
     st->ps.nq++;
 
-    // ent = st->ps.nn;
-    i = 0;
-#ifdef DEBUG
-    DBG("object %s.%s\n", decl_name(st, mx), decl_name(st, ix));
-#endif    
-    while(d.inits[i].fld.len > 0) {
-#ifdef DEBUG
-	DBG("  field %.*s\n", d.inits[i].fld.len, d.inits[i].fld.ptr);
-	DBG("  assign %d\n", d.inits[i].assign);
-	DBG("  rhs.len = %d\n", d.inits[i].rhs.len);
-#endif
-	i++;
-	
-    }
+    DBG("object %s.%s\n", decl_name(st, mx), decl_name(st, ix));    
+
     // Generate code for init list
     k = 0;
-    while((k < MAX_INITS) && (d.inits[k].fld.len > 0)) {
+    while((k < MAX_INITS) && (d.inits[k].obj.len > 0)) {
 	rule_body_part_t p = {0};
-	init_entry_t* e = &d.inits[k];
+	rule_body_part_t* e = &d.inits[k];
 
 	// field name is the lhs (derived from rhs.pos in asm_rule)
-	p.obj = e->fld;
-	p.fld.ptr = NULL;
-	p.fld.len = 0;
-	p.assign = e->assign;
-	p.rhs = e->rhs;
+	p = *e;
+	// p.obj.len = 0;
+
+	DBG("  obj %.*s\n", p.obj.len, p.obj.ptr);
+	DBG("  field %.*s\n", p.fld.len, p.fld.ptr);
+	DBG("  assign %d\n", p.assign);
+	DBG("  has_idx %d\n", p.has_idx);
+	DBG("  has_range %d\n", p.has_range);
+	DBG("  idx0 %d\n", p.idx0);
+	DBG("  idx1 %d\n", p.idx1);
+	DBG("  rhs.pos = %d\n", p.rhs.pos);
+	DBG("  rhs.len = %d\n", p.rhs.len);
+	
 	if (asm_rule(st,tv,n,ix,&p,1,NULL) < 0)
 	    return -1;
 	k++;

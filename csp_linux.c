@@ -320,7 +320,6 @@ int csp_uconst(csp_rt_t* st, const char* name, int len,
     return 0;
 }
 
-
 void csp_setup(csp_rt_t* st)
 {
     time_init();
@@ -391,6 +390,7 @@ void print_defines()
     printf("OP_LAST=%d\n", OP_LAST);  // last opcode = #opcodes
     printf("T_LAST=%d\n", T_LAST);        // #tokens
     printf("D_LAST=%d\n", D_LAST);        // #dtok
+    printf("PART_LAST=%d\n", PART_LAST);  // <= 16 (4-bit max)
     printf("MAX_NAME_LEN=%d\n", MAX_NAME_LEN);
     printf("MAX_ARGS=%d\n", MAX_ARGS);
 

@@ -93,6 +93,7 @@ enum {
     STOP_BUFFER_RES_CONT,   // PAT_RES in pat_buffer
     STOP_BODY_IDX0,         // first index in body lhs  Buf[idx0 ..]
     STOP_BODY_IDX1,         // second index in body lhs Buf[.. idx1]
+    STOP_OBJECT_INIT_CONT,
     NUM_STOP_SETS
 };
 

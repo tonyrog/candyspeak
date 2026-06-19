@@ -39,6 +39,7 @@ static char* stop_set_name(uint8_t sid)
     STRCASE(STOP_ANALOG_RES_CONT);
     STRCASE(STOP_ANALOG_PP_CONT);
     STRCASE(STOP_CAN_RES_CONT);
+    STRCASE(STOP_OBJECT_INIT_CONT);
     default: return "???";
     }
 }
