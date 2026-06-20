@@ -3921,6 +3921,9 @@ typedef struct {
     int assign;     // NONE / EQ / RIMP
     int has_idx;    // nonzero (= LB token) if '[' index present
     int has_range;  // nonzero (= DOT token) if '..' range present
+    int idx_bits;   // idx0/idx1 are bit positions (pack), not byte indices
+    int is_unpack;  // <var> = <src_view>  (unpack: rhs is a prebuilt sub-view)
+    index_t src_view; // the source sub-view decl (when is_unpack)
     ivalue_t idx0;  // Buf[idx0 ..]
     ivalue_t idx1;  // Buf[.. idx1]
     pexpr_t rhs;
@@ -4034,6 +4037,29 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 	index_t ix = BAD_INDEX;
 	pexpr_t lhs;
 
+	if (part[k].is_unpack) {          // <var> = <buffer>[bits]   (unpack)
+	    index_t lx = csp_lookup_decl(st, &part[k].obj);
+	    if (lx == BAD_INDEX) {
+		csp_set_error(st, ERR_SYNTAX);
+		return -1;
+	    }
+	    if ((st->mdef != BAD_INDEX) && (OBJ(lx) == 0))
+		lx = MAKE_INDEX(CURRENT, INDEX(lx));
+	    if (dst >= 0) { free_reg(st, dst); dst = -1; }
+	    memset(&rbody, 0, sizeof(rbody));
+	    rbody.ix = part[k].src_view;  // load from the source sub-view
+	    rbody.X  = 1;
+	    rbody.vt = st->decl[INDEX(part[k].src_view)].vt;
+	    if (!coerce_assign(st, lx, &rbody))
+		return -1;
+	    if (!rbody.L)
+		csp_load(st, &rbody);
+	    dst = rbody.reg;
+	    if (!asm_mem(st, OP_ST, dst, lx))
+		return -1;
+	    continue;
+	}
+
 	if ((num = part[k].rhs.len) == 0)
 	    continue;
 	if (dst >= 0) {  // only last part value is kept (for NEXT)
@@ -4048,15 +4074,25 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 	if (part[k].assign != 0) {
 	    if (part[k].has_idx) {            // <buf> '[' i0 ['..' i1] ']' op <rhs>
 		index_t bx = csp_lookup_decl(st, &part[k].obj);
-		ivalue_t p0, p1;
-		if ((bx == BAD_INDEX) ||
-		    (st->decl[INDEX(bx)].type != DECL_BUFFER)) {
+		ivalue_t lo, hi;
+		decl_t bt = (bx==BAD_INDEX)?DECL_NONE:st->decl[INDEX(bx)].type;
+		// byte access targets a buffer; pack (idx_bits) also a variable
+		if ((bx == BAD_INDEX) || ((bt != DECL_BUFFER) &&
+		    !(part[k].idx_bits && (bt == DECL_VARIABLE)))) {
 		    csp_set_error(st, ERR_SYNTAX);
 		    return -1;
 		}
-		p0 = part[k].idx0;
-		p1 = part[k].has_range ? part[k].idx1 : p0;
-		if ((ix = make_buf_view(st, bx, p0*8, (p1+1)*8-1)) == BAD_INDEX)
+		if (part[k].idx_bits) {       // already bit positions
+		    lo = part[k].idx0;
+		    hi = part[k].idx1;
+		}
+		else {                        // byte index -> bit range
+		    ivalue_t p0 = part[k].idx0;
+		    ivalue_t p1 = part[k].has_range ? part[k].idx1 : p0;
+		    lo = p0*8;
+		    hi = (p1+1)*8-1;
+		}
+		if ((ix = make_buf_view(st, bx, lo, hi)) == BAD_INDEX)
 		    return -1;
 		if (!coerce_assign(st, ix, &rbody))
 		    return -1;
@@ -4263,6 +4299,112 @@ NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, int ti, size_t n)
     while ((np < MAX_BODY_PARTS) && (d.body[np].rhs.len > 0))
 	np++;
     return asm_rule(st, tv, n, BAD_INDEX, d.body, np, &d.cond);
+}
+
+// '<buffer>' '<<=' <field>... ['?' <cond>]   (frame packing)
+//   <field> := <expr> [':' <bits>]   blank separated
+// Fields are laid out at ascending bit offsets, each masked to its width.
+// Sugar for a sequence of bit-field stores: <buf>[off..off+w-1] = <expr>.
+#define MAX_PACK MAX_BODY_PARTS
+
+typedef struct {
+    pexpr_t  val;     // value expression to pack
+    ivalue_t bits;    // field width in bits; 0 => the value's declared width
+} pack_field_t;
+
+typedef struct {
+    pack_field_t field[MAX_PACK];
+    tstr_t       buffer;
+    int          op;       // LTLT = pack '<<=', GTGT = unpack '>>='
+    pexpr_t      cond;
+} pack_param_t;
+
+static const uint8_t pat_field[] = {
+    P_EXPR_S, csp_offsetof(pack_field_t, val), STOP_PACK_VAL,
+    P_OPT, 6,
+      P_TOK, COLON,
+      P_INTEGER_S, csp_offsetof(pack_field_t, bits), STOP_PACK_BITS,
+    P_OPT_END,
+    P_END
+};
+
+static const uint8_t pat_pack[] = {
+    P_STR, csp_offsetof(pack_param_t, buffer),
+    P_CHOICE, 2,
+      P_ALT, 4, P_TOK_W, LTLT, csp_offsetof(pack_param_t, op), P_ALT_END,
+      P_ALT, 4, P_TOK_W, GTGT, csp_offsetof(pack_param_t, op), P_ALT_END,
+    P_CHOICE_END,
+    P_TOK, EQ,
+    P_REP, 8,
+      P_ARRAY, csp_offsetof(pack_param_t, field), sizeof(pack_field_t),
+      P_PAT, PAT_FIELD, 0, STOP_PACK_FIELD_CONT,
+    P_REP_END,
+    P_OPT, 6,
+      P_TOK, QUEST,
+      P_EXPR_S, csp_offsetof(pack_param_t, cond), STOP_RULE_COND,
+    P_OPT_END,
+    P_END
+};
+
+NOINLINE int csp_parse_pack(csp_rt_t* st, token_t* tv, size_t n)
+{
+    pack_param_t d = {0};
+    rule_body_part_t part[MAX_PACK];
+    index_t bx;
+    int np = 0, off = 0;
+    decl_t bt;
+
+    if (pmatch(st, tv, 0, n, pat_pack, &d) < 0) {
+	csp_set_error(st, ERR_SYNTAX);
+	return -1;
+    }
+    int unpack = (d.op == GTGT);
+    bx = csp_lookup_decl(st, &d.buffer);
+    bt = (bx == BAD_INDEX) ? DECL_NONE : st->decl[INDEX(bx)].type;
+    if ((bt != DECL_BUFFER) && (bt != DECL_VARIABLE)) {
+	csp_set_error(st, ERR_SYNTAX);
+	return -1;
+    }
+    while ((np < MAX_PACK) && (d.field[np].val.len > 0)) {
+	pack_field_t* f = &d.field[np];
+	int w = f->bits;
+	index_t fx = BAD_INDEX;            // the field's variable, if a single name
+	if ((f->val.len == 1) && (tv[f->val.pos].t == WORD))
+	    fx = csp_lookup_decl(st, &tv[f->val.pos].v.str);
+	if (w <= 0) {                      // default width: variable's resolution
+	    if (fx == BAD_INDEX) {
+		csp_set_error(st, ERR_SYNTAX);
+		return -1;
+	    }
+	    w = GET_RES(st->decl[INDEX(fx)].res);
+	}
+	memset(&part[np], 0, sizeof(part[np]));
+	part[np].assign = EQ;
+	if (unpack) {                      // <var> = <buffer>[off..off+w-1]
+	    index_t vw;
+	    if (fx == BAD_INDEX) {         // unpack target must be a variable
+		csp_set_error(st, ERR_SYNTAX);
+		return -1;
+	    }
+	    if ((vw = make_buf_view(st, bx, off, off + w - 1)) == BAD_INDEX)
+		return -1;
+	    part[np].obj       = tv[f->val.pos].v.str;
+	    part[np].is_unpack = 1;
+	    part[np].src_view  = vw;
+	}
+	else {                             // <buffer>[off..off+w-1] = <expr>
+	    part[np].obj      = d.buffer;
+	    part[np].has_idx  = 1;
+	    part[np].idx_bits = 1;
+	    part[np].idx0     = off;
+	    part[np].idx1     = off + w - 1;
+	    part[np].rhs      = f->val;
+	}
+	off += w;
+	np++;
+    }
+    return asm_rule(st, tv, n, BAD_INDEX, part, np,
+		    (d.cond.len > 0) ? &d.cond : NULL);
 }
 
 index_t lookup_can_range(csp_rt_t* st, index_t idx, ivalue_t p0, ivalue_t p1)
@@ -4565,6 +4707,10 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 	else if (tv[0].t == GT) {
 	    r = csp_parse_immediate(st, tv, 1, num);
 	}
+	else if ((num >= 3) && (tv[0].t == WORD) && (tv[2].t == EQ) &&
+		 ((tv[1].t == LTLT) || (tv[1].t == GTGT))) {
+	    r = csp_parse_pack(st, tv, num);        // <buf> <<=/>>= <fields>
+	}
 	else {
 	    r = csp_parse_rule(st, tv, 0, num);
 	}
@@ -4596,6 +4742,8 @@ int csp_rt_init(csp_rt_t* st, int transaction, int reactive)
     scan_pattern(PAT_BUFFER,   pat_buffer);
     scan_pattern(PAT_BODY,     pat_body);
     scan_pattern(PAT_RULE,     pat_rule);
+    scan_pattern(PAT_FIELD,    pat_field);
+    scan_pattern(PAT_PACK,     pat_pack);
     scan_pattern(PAT_OBJECT,   pat_object);
     
 #ifdef DEBUG
