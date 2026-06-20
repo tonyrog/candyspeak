@@ -109,6 +109,7 @@ static char* tok_name(uint8_t tok)
     STRCASE(INTEGER);
     STRCASE(UNSIGNED);
     STRCASE(STRING);
+    STRCASE(NATIVE);
     STRCASE(LITTLE);
     STRCASE(BIG);
     STRCASE(LP);
@@ -387,6 +388,7 @@ void init_stop_sets(void)
     stop_toks[stop_toks_len++] = IN;
     stop_toks[stop_toks_len++] = OUT;
     stop_toks[stop_toks_len++] = INOUT;
+    stop_toks[stop_toks_len++] = NATIVE;    
     stop_toks[stop_toks_len++] = LITTLE;
     stop_toks[stop_toks_len++] = BIG;
     stop_toks[stop_toks_len++] = PULLUP;
@@ -472,6 +474,7 @@ NOINLINE decl_opts_t parse_opts(csp_rt_t* st, const token_t* tv,
 	case IN:       opts.dir |= DIR_IN; DBG("IN,"); break;
 	case OUT:      opts.dir |= DIR_OUT; DBG("OUT,"); break;
 	case INOUT:    opts.dir |= DIR_INOUT; DBG("INOUT,"); break;
+	case NATIVE:   opts.endian=E_NATIVE; DBG("NATIVE,"); break;	    
 	case LITTLE:   opts.endian=E_LITTLE; DBG("LITTLE,"); break;
 	case BIG:      opts.endian=E_BIG; DBG("BIG,"); break;	    
 	case PULLUP:   opts.pullup=1; DBG("PULLUP,"); break;

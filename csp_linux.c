@@ -331,7 +331,7 @@ void csp_input(csp_rt_t* st)
     
     for (i = 0; i < st->ni; i++) {
 	index_t ix = st->input[i];
-	switch(st->decl[INDEX(ix)].type) {
+	switch(st->ram_decl[INDEX(ix)].type) {
 	case DECL_DIGITAL: break;
 	case DECL_ANALOG: break;
 	default: break;
@@ -347,7 +347,7 @@ void csp_output(csp_rt_t* st)
     if (!st->latch) {  // allow output
 	for (i = 0; i < st->no; ++i) {
 	    index_t ix = st->output[i];
-	    switch(st->decl[INDEX(ix)].type) {
+	    switch(st->ram_decl[INDEX(ix)].type) {
 	    case DECL_DIGITAL: break;
 	    case DECL_ANALOG: break;
 	    default: break;
@@ -600,6 +600,7 @@ int main(int argc, char** argv)
     nfds_t nfds = 0;
     csp_lang_t lang = TEXT;
     int first_cycle = 1;
+    int nn0;
 
     while (1) {
 	int option_index = 0;
@@ -705,6 +706,8 @@ int main(int argc, char** argv)
     csp_rt_init(&state, transaction, reactive);
     csp_set_uconst(&state, csp_uconst);
 
+    nn0 = state.ps.nn;
+
     // Parse input files (if any)
     if (optind < argc) {
 	while (optind < argc) {
@@ -734,6 +737,9 @@ int main(int argc, char** argv)
 	}
     }
 
+    if (nn0 == state.ps.nn)
+	csp_eeprom_load(&state);
+    
     if (state.reactive)
 	csp_csr(&state); // build graph
 
@@ -748,7 +754,7 @@ int main(int argc, char** argv)
 
     if (debug_parse) {
 	csp_dump(parse_out, &state);
-	csp_list_rules(parse_out, &state);	
+	csp_list_rules(parse_out, &state);
     }
 
     if (compile) {

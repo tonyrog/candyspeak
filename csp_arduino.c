@@ -134,18 +134,18 @@ void csp_setup(csp_rt_t* st)
     for (i = 0; i < st->ni; i++) {
 	index_t ix = st->input[i];
 	int j = INDEX(ix);
-	switch(st->decl[j].type) {
+	switch(decl(st,j,type)) {
 	case DECL_DIGITAL:
-            if (st->decl[j].dir & DIR_IN) {
-		if (st->decl[j].di.pullup)
-		    pinMode(st->decl[j].di.pin, INPUT_PULLUP);
+            if (decl(st,j,dir) & DIR_IN) {
+		if (decl(st,j,di.pullup))
+		    pinMode(decl(st,j,di.pin), INPUT_PULLUP);
 		else
-		    pinMode(st->decl[j].di.pin, INPUT);
+		    pinMode(decl(st,j,di.pin), INPUT);
 	    }
 	    break;
 	case DECL_ANALOG:
-	    if ((st->decl[j].dir & DIR_IN) && st->decl[j].res)
-		res = max(res, st->decl[j].res);
+	    if ((decl(st,j,dir) & DIR_IN) && decl(st,j,res))
+		res = max(res, decl(st,j,res));
 	    break;
 	default:
 	    break;
@@ -160,15 +160,15 @@ void csp_setup(csp_rt_t* st)
     for (i = 0; i < st->no; i++) {
 	index_t ix = st->output[i];
 	int j = INDEX(ix);
-	if (st->decl[j].dir & DIR_IN) continue;
-	switch(st->decl[j].type) {
+	if (decl(st,j,dir) & DIR_IN) continue;
+	switch(decl(st,j,type)) {
 	case DECL_DIGITAL:
-	    if (st->decl[j].dir & DIR_OUT)
-		pinMode(st->decl[j].di.pin, OUTPUT);
+	    if (decl(st,j,dir) & DIR_OUT)
+		pinMode(decl(st,j,di.pin), OUTPUT);
 	    break;
 	case DECL_ANALOG:
-	    if ((st->decl[j].dir & DIR_OUT) && st->decl[j].an.pwm)
-		pinMode(st->decl[j].an.pin, OUTPUT);
+	    if ((decl(st,j,dir) & DIR_OUT) && decl(st,j,an.pwm))
+		pinMode(decl(st,j,an.pin), OUTPUT);
 	    break;
 	default:
 	    break;
@@ -186,7 +186,7 @@ void csp_input(csp_rt_t* st)
 	int di = INDEX(ix);
 	value_t* vptr;	
 	int vi = st_index(st, ix);
-	switch(st->decl[di].type) {
+	switch(decl(st,di,type)) {
 	case DECL_DIGITAL:
 	    vptr = csp_dio_slot(st, ix, DOUT);
 	    if (vptr->d.dir & DIR_IN) {
@@ -216,7 +216,7 @@ void csp_output(csp_rt_t* st)
 	    index_t ix = st->output[i];
 	    int di = INDEX(ix);
 	    value_t* vptr;
-	    switch(st->decl[di].type) {
+	    switch(decl(st,di,type)) {
 	    case DECL_DIGITAL:
 		vptr = csp_dio_slot(st, ix, DOUT);
 		if (vptr->d.dir & DIR_OUT) {
@@ -239,7 +239,7 @@ void csp_output(csp_rt_t* st)
 		if ((vptr->a.dir & DIR_OUT) && (vptr->a.pwm)) {
 		    // handle type! accept float as well
 		    int val = map(vptr->a.val,
-				  0, (1<<st->decl[di].res)-1,
+				  0, (1<<decl(st,di,res))-1,
 				  0, 255);
 		    analogWrite(vptr->a.pin, val);
 		}

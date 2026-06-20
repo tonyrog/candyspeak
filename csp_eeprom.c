@@ -69,15 +69,15 @@ int csp_eeprom_save(csp_rt_t* st)
 	goto error;
 
     // Write string table
-    if (csp_eeprom_write(st->str, st->ps.strp) < 0)
+    if (csp_eeprom_write(st->ram_str, st->ps.strp) < 0)
 	goto error;
 
     // Write declarations
-    if (csp_eeprom_write(st->decl, sizeof(csp_decl_t) * st->ps.nd) < 0)
+    if (csp_eeprom_write(st->ram_decl, sizeof(csp_decl_t) * st->ps.nd) < 0)
 	goto error;
 
     // Write instructions
-    if (csp_eeprom_write(st->instr, sizeof(csp_instr_t) * st->ps.nn) < 0)
+    if (csp_eeprom_write(st->ram_instr, sizeof(csp_instr_t) * st->ps.nn) < 0)
 	goto error;
 
     csp_eeprom_close();
@@ -111,23 +111,22 @@ int csp_eeprom_load(csp_rt_t* st)
     reactive = st->reactive;
     csp_rt_init(st, 0, reactive);
 
+    // Restore parse state
+    st->ram.str_len = hdr.strp;
+    st->ram.n_decl  = hdr.nd;
+    st->ram.n_instr = hdr.nn;
+
     // Read string table
-    if (csp_eeprom_read(st->str, hdr.strp) < 0)
+    if (csp_eeprom_read(st->ram_str, hdr.strp) < 0)
 	goto error;
 
     // Read declarations
-    if (csp_eeprom_read(st->decl, sizeof(csp_decl_t) * hdr.nd) < 0)
+    if (csp_eeprom_read(st->ram_decl, sizeof(csp_decl_t) * hdr.nd) < 0)
 	goto error;
 
     // Read instructions
-    if (csp_eeprom_read(st->instr, sizeof(csp_instr_t) * hdr.nn) < 0)
+    if (csp_eeprom_read(st->ram_instr, sizeof(csp_instr_t) * hdr.nn) < 0)
 	goto error;
-
-    // Restore parse state
-    st->ps.nn = hdr.nn;
-    st->ps.nd = hdr.nd;
-    st->ps.nq = hdr.nq;
-    st->ps.strp = hdr.strp;
 
     csp_eeprom_close();
 
