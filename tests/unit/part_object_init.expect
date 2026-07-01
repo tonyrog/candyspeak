@@ -1,0 +1,5 @@
+{cycles, 5}.
+{checks, [
+  {final_object_var, "Blinker.b1", "b1.P", 13},
+  {final_object_var, "Blinker.b2", "b2.P", 0}
+]}.

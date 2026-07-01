@@ -4098,6 +4098,7 @@ field:
 typedef struct {
     tstr_t  obj;
     tstr_t  fld;
+    tstr_t  pfld;   // third dotted name: <obj>.<fld>.<part>
     int assign;     // NONE / EQ / RIMP
     int has_idx;    // nonzero (= LB token) if '[' index present
     int has_range;  // nonzero (= DOT token) if '..' range present
@@ -4278,20 +4279,42 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 		if (!coerce_assign(st, ix, &rbody))
 		    return -1;
 	    }
+	    else if (part[k].pfld.len > 0) {  // <obj> '.' <fld> '.' <part>
+		csp_part_t pt = part_from_tstr(&part[k].pfld);
+		pexpr_t of;
+		if (pt == PART_LAST) {
+		    csp_set_error(st, ERR_SYNTAX);
+		    return -1;
+		}
+		of.pos = part[k].rhs.pos - 6;  // <obj> '.' <fld>
+		of.len = 3;
+		if ((ix = lookup_lhs(st, tv, oix, &of)) == BAD_INDEX)
+		    return -1;
+		lpart = pt;
+	    }
 	    else if (part[k].fld.len > 0) {   // <obj> '.' <fld>  (field or part)
 		csp_part_t pt = part_from_tstr(&part[k].fld);
 		index_t ox2 = csp_lookup_decl(st, &part[k].obj);
 		int is_obj = (ox2 != BAD_INDEX) &&
 		    (st->ram_decl[INDEX(ox2)].type == DECL_OBJECT);
-		if ((oix == BAD_INDEX) && !is_obj && (pt != PART_LAST)) {
-		    ix = ox2;                 // <var> '.' <part> op <rhs>
-		    if (ix == BAD_INDEX) {
-			if (csp_set_error(st, ERR_VARIABLE_NOT_DECLARED))
-			    csp_set_err_arg_tstr(st, 0, &part[k].obj);
-			return -1;
+		if (!is_obj && (pt != PART_LAST)) { // <var|field> '.' <part>
+		    if (oix != BAD_INDEX) {   // object-init: obj is a field
+			pexpr_t f;
+			f.pos = part[k].rhs.pos - 4;
+			f.len = 1;
+			if ((ix = lookup_lhs(st, tv, oix, &f)) == BAD_INDEX)
+			    return -1;
 		    }
-		    if ((st->mdef != BAD_INDEX) && (OBJ(ix) == 0))
-			ix = MAKE_INDEX(CURRENT, INDEX(ix));
+		    else {                    // global | module-local var
+			ix = ox2;
+			if (ix == BAD_INDEX) {
+			    if (csp_set_error(st, ERR_VARIABLE_NOT_DECLARED))
+				csp_set_err_arg_tstr(st, 0, &part[k].obj);
+			    return -1;
+			}
+			if ((st->mdef != BAD_INDEX) && (OBJ(ix) == 0))
+			    ix = MAKE_INDEX(CURRENT, INDEX(ix));
+		    }
 		    lpart = pt;
 		}
 		else {                        // <obj> '.' <fld> op <rhs>
@@ -4444,13 +4467,17 @@ typedef struct {
     rule_body_part_t body[MAX_BODY_PARTS];
 } rule_param_t;
 
-// PAT_BODY: [<name> ['.' <name>] ['[' <idx0> ['..' <idx1>] ']'] (=|<-)] <expr>
+// PAT_BODY: [<name> ['.' <name> ['.' <name>]] ['[' <idx0> ['..' <idx1>] ']'] (=|<-)] <expr>
 static const uint8_t pat_body[] = {
-    P_OPT, 47,
+    P_OPT, 54,
       P_STR, csp_offsetof(rule_body_part_t, obj),
-      P_OPT, 5,
+      P_OPT, 12,
         P_TOK, DOT,
         P_STR, csp_offsetof(rule_body_part_t, fld),
+        P_OPT, 5,
+          P_TOK, DOT,
+          P_STR, csp_offsetof(rule_body_part_t, pfld),
+        P_OPT_END,
       P_OPT_END,
       P_OPT, 20,
         P_TOK_W, LB, csp_offsetof(rule_body_part_t, has_idx),

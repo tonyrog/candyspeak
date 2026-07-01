@@ -1,0 +1,12 @@
+// Per-object part override in the init list: b1 overrides Led.pin, b2 keeps
+// the module default. The module rule reads its own Led.pin back into P so the
+// harness can observe the per-instance config.
+
+#module Blinker
+#digital Led out 0
+#variable P
+P = Led.pin ? 1
+#end
+
+#Blinker b1 Led.pin=13
+#Blinker b2

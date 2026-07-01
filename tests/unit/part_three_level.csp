@@ -1,0 +1,17 @@
+// Three-level obj.var.part from top level: write and read a part on a
+// specific object's field.  b1.Led.pin = 21 targets b1's per-object slot;
+// X reads it back (3-level LDP), and the module's own rule P = Led.pin sees
+// the same override via CURRENT.
+
+#module Blinker
+#digital Led out 0
+#variable P
+P = Led.pin ? 1
+#end
+
+#Blinker b1
+
+#variable X
+
+b1.Led.pin = 21 ? 1     // 3-level STP
+X = b1.Led.pin    ? 1   // 3-level LDP -> 21
