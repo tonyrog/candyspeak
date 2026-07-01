@@ -387,7 +387,6 @@ Cout = (A & B) | (Cin & (A ^ B)) ? 1
 #analog A:3 integer A0
 #variable B:3 integer = 0x4
 
-// fixme init expressions!
 #Add a0 a0.Cin=0 a0.A <- (A&1) a0.B <- (B&1)
 #Add a1 a1.Cin <- a0.Cout a1.A <- ((A >> 1)&1) a1.B <- ((B>>1)&1)
 #Add a2 a2.Cin <- a1.Cout a2.A <- ((A >> 2)&1) a2.B <- ((B>>2)&1)

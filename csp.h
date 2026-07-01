@@ -210,6 +210,7 @@ typedef enum  {
     PART_PULLDOWN,
     PART_PERIOD,
     PART_FIRED,
+    PART_ID,
     PART_LAST,
 } csp_part_t;
 
@@ -485,6 +486,7 @@ typedef enum {
     OP_LEAVE,   // leave object
     OP_NEW,     // #<module> <instance-name>
     OP_LD,      // load register from memory
+    OP_LDP,     // load register from memory part
     OP_ST,      // store register to memory
     OP_STP,     // store register to memory part
     OP_STIMP,   // store for <- (reactive assign), same as ST but marks rimp
@@ -916,8 +918,48 @@ typedef struct _csp_rt_t
     csp_const_fn uconst;
 } csp_rt_t;
 
+// Read a whole RO record by value. On AVR the ROM segment is in PROGMEM, so we
+// copy it into a RAM temporary -- then bit-field access works as usual. (The
+// "clever" bit: never deref a PROGMEM struct directly.)
+#if defined(__AVR__)
+static inline csp_decl_t  rd_decl(const csp_decl_t* p)
+{ csp_decl_t d;  memcpy_P(&d, p, sizeof(d)); return d; }
+static inline csp_instr_t rd_instr(const csp_instr_t* p)
+{ csp_instr_t v; memcpy_P(&v, p, sizeof(v)); return v; }
+#else
+#define rd_decl(p)  (*(p))
+#define rd_instr(p) (*(p))
+#endif
+
+// Segment-aware read by logical index. ROM (index below the RAM base) is read
+// from flash; RAM is the mutable interactive segment. WRITES always go straight
+// to ram_decl/ram_instr -- you never write the ROM segment.
+static inline csp_decl_t csp_get_decl(csp_rt_t* st, index_t i)
+{
+    if (i < st->ram.decl_base)
+	return rd_decl(&st->rom.decl[i]);
+    return st->ram_decl[i - st->ram.decl_base];
+}
+
+static inline csp_instr_t csp_get_instr(csp_rt_t* st, index_t n)
+{
+    if (n < st->rom.n_instr)
+	return rd_instr(&st->rom.instr[n]);
+    return st->ram_instr[n - st->rom.n_instr];
+}
+
+// is a ROM (firmware) program linked / present?
+static inline int csp_has_rom(csp_rt_t* st)
+{
+    return st->rom.n_instr > 0;
+}
+
+// Read access. RAM-only for now (ROM execution still WIP: needs the parser to
+// allocate RAM indices offset by the ROM base and eval to run the full ROM+RAM
+// range). Flip to the segment-aware csp_get_*() once that index model lands.
 #define decl(st,i,fld)  ((st)->ram_decl[(i)].fld)
-#define instr(st,i,fld) ((st)->ram_instr[(i)].fld)
+#define instr(st,n,fld) ((st)->ram_instr[(n)].fld)
+// segment-aware versions ready to switch in: csp_get_decl(st,i), csp_get_instr(st,n)
 
 // Parser stack entry - tracks both register and declaration index
 typedef struct PACKED {
@@ -931,6 +973,7 @@ typedef struct PACKED {
 	    unsigned L:1;    // == 1 when reg is valid (loaded)
 	    unsigned I:1;    // == 1 when val is immediate value
 	    unsigned X:1;    // == 1 when ix is decl index
+	    unsigned part:PART_BITS; // csp_part_t, PART_VAL for the plain value
 	};
     };
 } rentry_t;

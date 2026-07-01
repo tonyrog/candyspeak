@@ -151,6 +151,12 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	csp_fprint_tag(f, st, st->ram_instr[i].m.mem);
 	fprintf(f, "]}%s\n", eot);
 	break;
+    case OP_LDP:
+	fprintf(f, "{instr,%d,'LDP',[r%d,",
+		i, st->ram_instr[i].m.x);
+	csp_fprint_tag(f, st, st->ram_instr[i].m.mem);
+	fprintf(f, ",%d]}%s\n", st->ram_instr[i].m.y, eot);
+	break;
     case OP_ST:
 	fprintf(f, "{instr,%d,'ST',[r%d,",
 		i, st->ram_instr[i].m.x);
@@ -823,9 +829,10 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 	    fprintf(f, ".m={.x=%u,.mem=%u}", ip->m.x, ip->m.mem);
 	    break;
 	case OP_STP:
+	case OP_LDP:
 	    fprintf(f, ".m={.x=%u,.mem=%u,.part=%u}",
 		    ip->m.x, ip->m.mem, ip->m.y);
-	    break;	    
+	    break;
 	case OP_CALL:
 	    fprintf(f, ".f={.x=%u,.idx=%u,.usr=%u,.avt=0x%04x}",
 		    ip->f.x, ip->f.idx, ip->f.usr, ip->f.avt);
@@ -1336,6 +1343,7 @@ static int reg_consumed(csp_rt_t* st, int i, int reg)
 	    if (ip->i.x == reg) return 1;
 	    break;
 	case OP_LD:
+	case OP_LDP:
 	    if (ip->m.x == reg) return 0;  // redefined
 	    break;
 	case OP_LI:
@@ -1407,6 +1415,7 @@ static int exprbuf_expr(FILE* f, csp_rt_t*  st,
 	    }
 	    break;
         case OP_LD:
+	case OP_LDP:  // best effort: renders as the plain variable (no .part yet)
 	    exprbuf_ld(st, bp, ip);
 	    break;
         case OP_LIU: {

@@ -103,6 +103,12 @@ static rochar s_any[] RODATA = "any";
 static rochar s_native[] RODATA = "native";
 static rochar s_little[] RODATA = "little";
 static rochar s_big[] RODATA = "big";
+static rochar s_pin[] RODATA = "pin";
+static rochar s_port[] RODATA = "port";
+static rochar s_dir[] RODATA = "dir";
+static rochar s_endian[] RODATA = "endian";
+static rochar s_id[] RODATA = "id";
+static rochar s_value[] RODATA = "value";
 static rochar s_LP[] RODATA = "(";
 static rochar s_RP[] RODATA = ")";
 static rochar s_HASH[] RODATA = "#";
@@ -166,6 +172,7 @@ static rochar s_STP[] RODATA = "STP";
 static rochar s_STIMP[] RODATA = "STIMP";
 static rochar s_CHG[] RODATA = "CHG";
 static rochar s_LD[] RODATA = "LD";
+static rochar s_LDP[] RODATA = "LDP";
 static rochar s_CALL[] RODATA = "CALL";
 static rochar s_RULE[] RODATA = "RULE";
 static rochar s_NEXT[] RODATA = "NEXT";
@@ -441,6 +448,7 @@ const op_info_t op_info[] RODATA = {
     [OP_STIMP] = {s_STIMP,NONE,-1,V_VOID,MAKE_TYPE0()},
     [OP_CHG]   = {s_CHG,NONE,-1,V_VOID,MAKE_TYPE0()},
     [OP_LD]    = {s_LD,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_LDP]   = {s_LDP,NONE,-1,V_VOID,MAKE_TYPE0()},
     [OP_CALL]  = {s_CALL,NONE,-1,V_VOID,MAKE_TYPE0()},
     [OP_RULE]  = {s_RULE,NONE,-1,V_VOID,MAKE_TYPE0()},
     [OP_NEXT]  = {s_NEXT,NONE,-1,V_VOID,MAKE_TYPE0()},
@@ -1287,6 +1295,20 @@ NOINLINE static void csp_heap_set(csp_rt_t* st, csp_view_t* vw, dio_t dir,
 	set_bits_le(p, v.u, vw->pos, vw->len + 1);
 }
 
+// A digital/analog/timer decl carries vt=V_INTEGER (its value type); the
+// union member for its config lives under the decl *type*. Map type -> the
+// vtype the pin/port/dir/... helpers switch on. Plain vars keep their vt.
+NOINLINE static vtype_t decl_cfg_vt(decl_t dt, vtype_t vt)
+{
+    switch (dt) {
+    case DECL_DIGITAL: return V_DIGITAL;
+    case DECL_ANALOG:  return V_ANALOG;
+    case DECL_TIMER:   return V_TIMER;
+    case DECL_CAN:     return V_CAN;
+    default:           return vt;
+    }
+}
+
 NOINLINE void csp_dio_set_pin_part(csp_rt_t* st, value_t* vslot,
 				   vtype_t vt, value_t v)
 {
@@ -1339,6 +1361,36 @@ NOINLINE void csp_dio_get_val_part(csp_rt_t* st, value_t* vslot,
     }
 }
 
+NOINLINE void csp_dio_get_pin_part(csp_rt_t* st, value_t* vslot,
+				   vtype_t vt, value_t* vp)
+{
+    switch(vt) {
+    case V_DIGITAL: vp->i = vslot->d.pin; break;
+    case V_ANALOG:  vp->i = vslot->a.pin; break;
+    default: vp->i = 0; break;
+    }
+}
+
+NOINLINE void csp_dio_get_port_part(csp_rt_t* st, value_t* vslot,
+				    vtype_t vt, value_t* vp)
+{
+    switch(vt) {
+    case V_DIGITAL: vp->i = vslot->d.port; break;
+    case V_ANALOG:  vp->i = vslot->a.port; break;
+    default: vp->i = 0; break;
+    }
+}
+
+NOINLINE void csp_dio_get_dir_part(csp_rt_t* st, value_t* vslot,
+				   vtype_t vt, value_t* vp)
+{
+    switch(vt) {
+    case V_DIGITAL: vp->i = vslot->d.dir; break;
+    case V_ANALOG:  vp->i = vslot->a.dir; break;
+    default: vp->i = 0; break;
+    }
+}
+
 // Set value part in dio (config data & value)
 NOINLINE void csp_dio_set_part(csp_rt_t* st, index_t ix, value_t v,
 			       csp_part_t part, dio_t dir)
@@ -1346,6 +1398,7 @@ NOINLINE void csp_dio_set_part(csp_rt_t* st, index_t ix, value_t v,
     csp_view_t* vw = csp_view(st, ix);
     value_t* vslot;
     vtype_t vt = st->ram_decl[INDEX(ix)].vt;
+    vtype_t cvt = decl_cfg_vt(st->ram_decl[INDEX(ix)].type, vt);
     if (vw->kind == VIEW_HEAP) {  // bit-fields only carry a value, no pin/port
 	if (part == PART_VAL)
 	    csp_heap_set(st, vw, dir, v);
@@ -1357,38 +1410,89 @@ NOINLINE void csp_dio_set_part(csp_rt_t* st, index_t ix, value_t v,
 	csp_dio_set_val_part(st, vslot, vt, v);
 	break;
     case PART_PIN:
-	csp_dio_set_pin_part(st, vslot, vt, v);
+	csp_dio_set_pin_part(st, vslot, cvt, v);
 	break;
     case PART_PORT:
-	csp_dio_set_port_part(st, vslot, vt, v);
+	csp_dio_set_port_part(st, vslot, cvt, v);
 	break;
     case PART_DIR:      // V_DIGITAL/V_ANALOG/V_CAN
-	csp_dio_set_dir_part(st, vslot, vt, v);	
+	csp_dio_set_dir_part(st, vslot, cvt, v);
+	break;
     case PART_PWM:      // V_ANALOG
-	if (vt == V_ANALOG)
+	if (cvt == V_ANALOG)
 	    vslot->a.pwm = v.i;
 	break;
     case PART_ENDIAN:   // V_ANALOG/V_CAN
-	if (vt == V_ANALOG)
+	if (cvt == V_ANALOG)
 	    vslot->a.endian = v.i;
 	break;
     case PART_PULLUP:   // V_DIGITAL
-	if (vt == V_DIGITAL)
+	if (cvt == V_DIGITAL)
 	    vslot->d.pullup = v.i;
-	break;	
+	break;
     case PART_PULLDOWN: // V_DIGITAL
-	if (vt == V_DIGITAL)
-	    vslot->d.pulldown = v.i;	
+	if (cvt == V_DIGITAL)
+	    vslot->d.pulldown = v.i;
 	break;
     case PART_PERIOD:   // V_TIMER
-	if (vt == V_TIMER)
+	if (cvt == V_TIMER)
 	    vslot->t.period = v.i;
 	break;
     case PART_FIRED:    // V_TIMER
-	if (vt == V_TIMER)
+	if (cvt == V_TIMER)
 	    vslot->t.fired = v.i;
-	break;	
+	break;
     default:
+	break;
+    }
+}
+
+// Get value part from dio (config data & value)
+NOINLINE void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp,
+			       csp_part_t part, dio_t dir)
+{
+    csp_view_t* vw = csp_view(st, ix);
+    value_t* vslot;
+    vtype_t vt = st->ram_decl[INDEX(ix)].vt;
+    vtype_t cvt = decl_cfg_vt(st->ram_decl[INDEX(ix)].type, vt);
+    if (vw->kind == VIEW_HEAP) {  // bit-fields only carry a value, no pin/port
+	*vp = (part == PART_VAL) ? csp_heap_get(st, vw, dir) : (value_t){0};
+	return;
+    }
+    vslot = csp_slot(st, vw, dir);
+    switch(part) {
+    case PART_VAL:
+	csp_dio_get_val_part(st, vslot, vt, vp);
+	break;
+    case PART_PIN:
+	csp_dio_get_pin_part(st, vslot, cvt, vp);
+	break;
+    case PART_PORT:
+	csp_dio_get_port_part(st, vslot, cvt, vp);
+	break;
+    case PART_DIR:      // V_DIGITAL/V_ANALOG/V_CAN
+	csp_dio_get_dir_part(st, vslot, cvt, vp);
+	break;
+    case PART_PWM:      // V_ANALOG
+	vp->i = (cvt == V_ANALOG) ? vslot->a.pwm : 0;
+	break;
+    case PART_ENDIAN:   // V_ANALOG/V_CAN
+	vp->i = (cvt == V_ANALOG) ? vslot->a.endian : 0;
+	break;
+    case PART_PULLUP:   // V_DIGITAL
+	vp->i = (cvt == V_DIGITAL) ? vslot->d.pullup : 0;
+	break;
+    case PART_PULLDOWN: // V_DIGITAL
+	vp->i = (cvt == V_DIGITAL) ? vslot->d.pulldown : 0;
+	break;
+    case PART_PERIOD:   // V_TIMER
+	vp->i = (cvt == V_TIMER) ? vslot->t.period : 0;
+	break;
+    case PART_FIRED:    // V_TIMER
+	vp->i = (cvt == V_TIMER) ? vslot->t.fired : 0;
+	break;
+    default:
+	vp->i = 0;
 	break;
     }
 }
@@ -1472,14 +1576,22 @@ again:
     case OP_LD:
 	st->reg[instr(st,n,m.x)] = csp_value(st, instr(st,n,m.mem));
 	break;
+    case OP_LDP:
+	csp_dio_get_part(st, instr(st,n,m.mem), &st->reg[instr(st,n,m.x)],
+			 instr(st,n,m.y), DIN);
+	break;
     case OP_STIMP:  // same as ST, but marks reactive assignment
     case OP_ST:
 	csp_set_value(st, instr(st,n,m.mem), st->reg[instr(st,n,m.x)]);
 	break;
-    case OP_STP:
-	csp_dio_set_part(st, instr(st,n,m.mem), st->reg[instr(st,n,m.x)],
+    case OP_STP: {
+	index_t mm = instr(st,n,m.mem);
+	csp_dio_set_part(st, mm, st->reg[instr(st,n,m.x)],
 			 instr(st,n,m.y), DOUT);
+	bitset_set(st->dset, st_index(st, mm));  // config change must commit
+	st->anyd = CSP_TRUE;
 	break;
+    }
     case OP_CHG: {  // r |= dset[ix]
 	int i = st_index(st, instr(st, n, m.mem));
 	st->reg[instr(st,n,m.x)].i |= bitset_tst(st->dset, i) ? 1 : 0;
@@ -1821,6 +1933,33 @@ NOINLINE index_t csp_new_udecl(csp_rt_t* st, const tstr_t* name, decl_t type)
 	return BAD_INDEX;
     }
     return csp_new_decl(st, name, type);
+}
+
+// Map a name after '.' to a part selector, PART_LAST if it is not a part.
+// Parts are ordinary words disambiguated by position (obj.field wins in code).
+NOINLINE static csp_part_t part_from_tstr(const tstr_t* s)
+{
+    switch (s->len) {
+    case 2:
+	if (MEMCMP_RD(s->ptr, s_id, 2) == 0)     return PART_ID;
+	break;
+    case 3:
+	if (MEMCMP_RD(s->ptr, s_pin, 3) == 0)    return PART_PIN;
+	if (MEMCMP_RD(s->ptr, s_dir, 3) == 0)    return PART_DIR;
+	break;
+    case 4:
+	if (MEMCMP_RD(s->ptr, s_port, 4) == 0)   return PART_PORT;
+	break;
+    case 5:
+	if (MEMCMP_RD(s->ptr, s_value, 5) == 0)  return PART_VAL;
+	break;
+    case 6:
+	if (MEMCMP_RD(s->ptr, s_endian, 6) == 0) return PART_ENDIAN;
+	break;
+    default:
+	break;
+    }
+    return PART_LAST;
 }
 
 NOINLINE index_t new_signed_const(csp_rt_t* st, ivalue_t v)
@@ -2557,7 +2696,12 @@ NOINLINE int csp_load(csp_rt_t* st, rentry_t* rp)
 	int r;
 
 	if (rp->X) {  // load variable
-	    if ((r = map_reg(st, rp->ix)) < 0)
+	    if (rp->part != PART_VAL) {  // config part: fresh LDP, never cached
+		r = alloc_reg(st);
+		if (!asm_mem_part(st, OP_LDP, r, rp->ix, rp->part))
+		    return -1;
+	    }
+	    else if ((r = map_reg(st, rp->ix)) < 0)
 		return -1;
 	}
 	else if (rp->I) {
@@ -2623,6 +2767,21 @@ NOINLINE static int push_var(csp_rt_t* st, rentry_t* rstack, int ep,
 NOINLINE static int push_lval(rentry_t* rstack, int ep, index_t ix, vtype_t vt)
 {
     rstack[ep] = (rentry_t) { .ix=ix,.X=1,.L=0,.I=0,.vt=vt };
+    return ep+1;
+}
+
+// Push a config-part read (<var> '.' <part>), e.g. Led.pin, Frame.endian.
+// During eval fold it to the current part value; otherwise defer to an LDP.
+NOINLINE static int push_part(csp_rt_t* st, rentry_t* rstack, int ep,
+			      index_t ix, csp_part_t part)
+{
+    if (st->ev) {
+	value_t pv;
+	csp_dio_get_part(st, ix, &pv, part, DIN);
+	return push_imm(st, rstack, ep, V_INTEGER, pv);
+    }
+    rstack[ep] = (rentry_t){ .ix=ix, .L=0, .I=0, .X=1, .part=part,
+			     .vt=V_INTEGER };
     return ep+1;
 }
 
@@ -3146,6 +3305,17 @@ next:
 	    return 0;
 	ptok = STR;
 	goto after_primary;
+    case IN:  case OUT:  case INOUT:       // dir keyword as int  (Led.dir=out)
+    case NATIVE: case LITTLE: case BIG: {  // endian keyword as int
+	value_t kv;
+	kv.i = (tok==IN)    ? DIR_IN  : (tok==OUT)    ? DIR_OUT   :
+	       (tok==INOUT) ? DIR_INOUT :
+	       (tok==NATIVE) ? E_NATIVE : (tok==LITTLE) ? E_LITTLE : E_BIG;
+	if ((ep = push_imm(st, rstack, ep, V_INTEGER, kv)) < 0)
+	    return 0;
+	ptok = INT;
+	goto after_primary;
+    }
     case WORD: {
 	if (tv[i].t == LP) {
 	    // It's a function call - push marker to ostack and skip LP
@@ -3211,6 +3381,19 @@ next:
 		i++;                                   // ']'
 		if ((ix = make_buf_view(st, ix, p0*8, (p1+1)*8-1)) == BAD_INDEX)
 		    return 0;
+	    }
+
+	    // <var> '.' <part>  -- config part read (obj.field handled above)
+	    if ((i+1 < n) && (tv[i].t == DOT) && (tv[i+1].t == WORD) &&
+		(st->ram_decl[INDEX(ix)].type != DECL_OBJECT)) {
+		csp_part_t pt = part_from_tstr(&tv[i+1].v.str);
+		if (pt != PART_LAST) {
+		    i += 2;
+		    if ((ep = push_part(st, rstack, ep, ix, pt)) < 0)
+			return 0;
+		    ptok = WORD;
+		    goto after_primary;
+		}
 	    }
 
 	    // Check if this is an l-value (assignment target)
@@ -3826,8 +4009,8 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 //      | <var> '[' <pos> ']'             // one bit
 //      | <var> '[' <pos0> .. <pos1> ']'  // start pos / end pos
 //
-// fixme: add part 
-//      <var> '[' <part> ']'  part = 'port'|'pin'|'period'...
+// FIXME: add part 
+//      <var> '.' <part>   part = 'port'|'pin'|'period'...
 //
 NOINLINE index_t lookup_lhs(csp_rt_t* st, const token_t* tv,
 			    index_t oix, const pexpr_t* lhs)
@@ -4032,6 +4215,7 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
     for (k = 0; k < np; k++) {
 	rentry_t rbody;
 	index_t ix = BAD_INDEX;
+	csp_part_t lpart = PART_VAL;
 	pexpr_t lhs;
 
 	if (part[k].is_unpack) {          // <var> = <buffer>[bits]   (unpack)
@@ -4094,9 +4278,26 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 		if (!coerce_assign(st, ix, &rbody))
 		    return -1;
 	    }
-	    else if (part[k].fld.len > 0) {   // <obj> '.' <fld> op <rhs>
-		lhs.pos = part[k].rhs.pos - 4;
-		lhs.len = 3;
+	    else if (part[k].fld.len > 0) {   // <obj> '.' <fld>  (field or part)
+		csp_part_t pt = part_from_tstr(&part[k].fld);
+		index_t ox2 = csp_lookup_decl(st, &part[k].obj);
+		int is_obj = (ox2 != BAD_INDEX) &&
+		    (st->ram_decl[INDEX(ox2)].type == DECL_OBJECT);
+		if ((oix == BAD_INDEX) && !is_obj && (pt != PART_LAST)) {
+		    ix = ox2;                 // <var> '.' <part> op <rhs>
+		    if (ix == BAD_INDEX) {
+			if (csp_set_error(st, ERR_VARIABLE_NOT_DECLARED))
+			    csp_set_err_arg_tstr(st, 0, &part[k].obj);
+			return -1;
+		    }
+		    if ((st->mdef != BAD_INDEX) && (OBJ(ix) == 0))
+			ix = MAKE_INDEX(CURRENT, INDEX(ix));
+		    lpart = pt;
+		}
+		else {                        // <obj> '.' <fld> op <rhs>
+		    lhs.pos = part[k].rhs.pos - 4;
+		    lhs.len = 3;
+		}
 	    }
 	    else if (part[k].obj.len > 0) {   // <var> op <rhs>
 		lhs.pos = part[k].rhs.pos - 2;
@@ -4113,14 +4314,15 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 	    csp_load(st, &rbody);
 	dst = rbody.reg;
 	if (ix != BAD_INDEX) {
-	    opcode_t op;
-	    if (part[k].assign == RIMP)
-		op = OP_STIMP;
-	    else
-		op = OP_ST;
-	    // fixme: PART!
-	    if (!asm_mem(st, op, dst, ix))
-		return -1;
+	    if (lpart != PART_VAL) {      // <var> '.' <part> op <rhs>  -> STP
+		if (!asm_mem_part(st, OP_STP, dst, ix, lpart))
+		    return -1;
+	    }
+	    else {
+		opcode_t op = (part[k].assign == RIMP) ? OP_STIMP : OP_ST;
+		if (!asm_mem(st, op, dst, ix))
+		    return -1;
+	    }
 	}
     }
     if (dst < 0) { // no body value, load TRUE
@@ -4878,7 +5080,7 @@ NOINLINE static void setup_digital(csp_rt_t* st, index_t ix)
     csp_decl_t* dptr = &st->ram_decl[INDEX(ix)];
     
     csp_dio_slots(st, ix, &iptr, &optr);    
-    iptr->d.dir  = optr->d.pin = dptr->dir;
+    iptr->d.dir  = optr->d.dir = dptr->dir;
     iptr->d.pin  = optr->d.pin = dptr->di.pin;
     iptr->d.port = optr->d.port = dptr->di.port;
     iptr->d.pullup = optr->d.pullup = dptr->di.pullup;
