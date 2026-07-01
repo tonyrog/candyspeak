@@ -1,0 +1,21 @@
+// Part access: obj.var.part reduced to <var>.<part> (2-level).
+//   LDP  -- read a config part on the rhs (Led.pin, Led.dir)
+//   STP  -- write a config part on the lhs (Led.pin = 7)
+//   opt A -- 'in'/'out' keywords act as integers (Motor.dir = in)
+// dir enum: DIR_IN=1, DIR_OUT=2
+
+#digital Led    out 13
+#digital Sensor in  5
+#digital Motor  out 9
+
+#variable D
+#variable Pin5
+#variable Q
+#variable Dm
+
+D    = Led.dir    ? 1     // DIR_OUT = 2
+Pin5 = Sensor.pin ? 1     // 5 (not overwritten)
+Led.pin = 7       ? 1     // STP: overwrite pin
+Q    = Led.pin    ? 1     // read back -> 7 after commit
+Motor.dir = in    ? 1     // STP dir via opt-A keyword -> DIR_IN = 1
+Dm   = Motor.dir  ? 1     // read back -> 1

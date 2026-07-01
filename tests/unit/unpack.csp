@@ -1,0 +1,14 @@
+// Frame unpacking:  <buffer> >>= <var>...   (mirror of <<=)
+// Each variable receives the next bit-field from the buffer.
+// Round-trip: pack three fields, then unpack them back.
+
+#buffer Frame:8
+#variable A:3 = 5
+#variable B:2 = 3
+#variable C:3 = 6
+#variable RA = 0
+#variable RB = 0
+#variable RC = 0
+
+Frame <<= A:3 B:2 C:3 ? 1       // pack   -> Frame = 5 | 3<<3 | 6<<5 = 221
+Frame >>= RA:3 RB:2 RC:3 ? 1    // unpack -> RA=5, RB=3, RC=6

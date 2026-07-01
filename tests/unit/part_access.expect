@@ -1,0 +1,7 @@
+{cycles, 5}.
+{checks, [
+  {final_var, "D", 2},
+  {final_var, "Pin5", 5},
+  {final_var, "Q", 7},
+  {final_var, "Dm", 1}
+]}.
