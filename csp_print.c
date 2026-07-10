@@ -122,6 +122,14 @@ static void exprbuf_str(csp_exprbuf_t* bp, const char *s)
     while ((c = *s++)) exprbuf_char(bp, c);
 }
 
+// append a nul-terminated RODATA string (operator/keyword names live in flash);
+// AVR-PROGMEM-safe. On the host ro_byte==plain so it matches exprbuf_str.
+static void exprbuf_ro_str(csp_exprbuf_t* bp, const char *s)
+{
+    uint8_t c;
+    while ((c = ro_byte((const uint8_t*)s)) != 0) { exprbuf_char(bp, c); s++; }
+}
+
 // append the length-prefixed string at a logical position (ROM flash or RAM);
 // AVR-PROGMEM-safe (reads byte by byte via csp_str_byte)
 static void exprbuf_str_at(csp_rt_t* st, csp_exprbuf_t* bp, sindex_t pos)
@@ -241,7 +249,7 @@ static void exprbuf_alu(csp_exprbuf_t* bp,
 {
     uint8_t* start = exprbuf_ptr(bp);
     if (arity == 1) {
-	exprbuf_str(bp, op);
+	exprbuf_ro_str(bp, op);
 	exprbuf_wrap(bp, ip->a.y, prio);
     }
     else { // assume 2
@@ -264,7 +272,7 @@ static void exprbuf_alu(csp_exprbuf_t* bp,
 	    return;
 	}
 	exprbuf_wrap(bp, ip->a.y, prio);
-	exprbuf_str(bp, op);
+	exprbuf_ro_str(bp, op);
 	exprbuf_wrap(bp, ip->a.z, prio);
     }
     bp->reg[ip->a.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
@@ -438,8 +446,8 @@ static int reg_consumed(csp_rt_t* st, int i, int reg)
 	    if (ip->a.x == reg) return 0;  // redefined
 	    break;
 	default:
-	    t = op_info[ip->op].tok;
-	    if (tok_table[t].arity >= 0) {
+	    t = ro_byte(&op_info[ip->op].tok);
+	    if ((int8_t)ro_byte(&tok_table[t].arity) >= 0) {
 		if (ip->a.y == reg || ip->a.z == reg) return 1;
 		if (ip->a.x == reg) return 0;  // redefined
 	    }
@@ -551,10 +559,11 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	    break;
 	}
 	default:
-	    t = op_info[ip->op].tok;
-	    if (tok_table[t].arity >= 0) {
-		exprbuf_alu(bp, ip, tok_table[t].name,
-			    tok_table[t].arity, tok_table[t].prec);
+	    t = ro_byte(&op_info[ip->op].tok);
+	    if ((int8_t)ro_byte(&tok_table[t].arity) >= 0) {
+		exprbuf_alu(bp, ip, (const char*)ro_ptr(&tok_table[t].name),
+			    (int8_t)ro_byte(&tok_table[t].arity),
+			    (int8_t)ro_byte(&tok_table[t].prec));
 	    }
 	    break;
 	}

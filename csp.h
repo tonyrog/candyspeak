@@ -537,7 +537,7 @@ typedef enum {
 #define NOTIMEOUT 0xffffffff
 
 typedef struct PACKED {
-    const char* name;  // token name
+    rochar*  name;     // token name (RODATA)
     uint8_t namelen;
     uint8_t  tok;
     int8_t   code;
@@ -550,7 +550,7 @@ extern const op_entry_t tok_table[] RODATA;
 extern const op_entry_t decl_table[] RODATA;
 
 typedef struct PACKED {
-    const char* name;  // opcode name
+    rochar*  name;     // opcode name (RODATA)
     uint8_t  tok;      // token that match the op
     int8_t arity;      // number of args
     uint8_t rtype;     // return type

@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "csp.h"
+#include "csp_strings.h"   // shared RODATA strings (generated from strings.tab)
 #include "csp_parse.h"
 #include "csp_print.h"
 #include "bitpack.h"
@@ -45,159 +46,24 @@ extern int debug;
 #define DECL_ENT(o,c,n) \
     [(o)] = { .tok=(o),.code=(c),.name=(n),.namelen=CSTRLEN((n)),.arity=-1,.prec=-1,.assoc=NO }
 
-static rochar s_null[] RODATA = "";
-static rochar s_module[] RODATA = "module";
-static rochar s_end[] RODATA = "end";
 #if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
-static rochar s_states[] RODATA = "states";
 #endif
-static rochar s_constant[] RODATA = "constant";
-static rochar s_variable[] RODATA = "variable";
-static rochar s_digital[] RODATA = "digital";
-static rochar s_analog[] RODATA = "analog";
-static rochar s_timer[] RODATA = "timer";
-static rochar s_can[] RODATA = "can";
-static rochar s_buffer[] RODATA = "buffer";
-static rochar s_object[] RODATA = "object";
-static rochar s_EXCLAMATION[] RODATA = "!";
-static rochar s_TILDE[] RODATA = "~";
-static rochar s_MINUS[] RODATA = "-";
-static rochar s_PLUS[] RODATA = "+";
-static rochar s_ASTERISK[] RODATA = "*";
-static rochar s_SLASH[] RODATA = "/";
-static rochar s_PERCENT[] RODATA = "%";
-static rochar s_LTLT[] RODATA = "<<";
-static rochar s_GTGT[] RODATA = ">>";
-static rochar s_LT[] RODATA = "<";
-static rochar s_LTEQ[] RODATA = "<=";
-static rochar s_RIMP[] RODATA = "<-";
-static rochar s_GT[] RODATA = ">";
-static rochar s_GTEQ[] RODATA = ">=";
-static rochar s_EQEQ[] RODATA = "==";
-static rochar s_NEQ[] RODATA = "!=";
-static rochar s_AMP[] RODATA = "&";
-static rochar s_CIRC[] RODATA = "^";
-static rochar s_BAR[] RODATA = "|";
-static rochar s_AMPAMP[] RODATA = "&&";
-static rochar s_BARBAR[] RODATA = "||";
-static rochar s_EQ[] RODATA = "=";
-static rochar s_COMMA[] RODATA = ",";
-static rochar s_QUEST[] RODATA = "?";
 
-static rochar s_pullup[] RODATA = "pullup";
-static rochar s_pulldown[] RODATA = "pulldown";
-static rochar s_resolution[] RODATA = "resolution";
-static rochar s_undefined[] RODATA = "undefined";
-static rochar s_none[] RODATA = "none";
-static rochar s_in[] RODATA = "in";
-static rochar s_out[] RODATA = "out";
-static rochar s_inout[] RODATA = "inout";
-static rochar s_pwm[] RODATA = "pwm";
-static rochar s_void[] RODATA = "void";
-static rochar s_float[] RODATA = "float";
-static rochar s_integer[] RODATA = "integer";
-static rochar s_unsigned[] RODATA = "unsigned";
-static rochar s_index[] RODATA = "index";
-static rochar s_number[] RODATA = "number";
-static rochar s_string[] RODATA = "string";
-static rochar s_any[] RODATA = "any";
-static rochar s_native[] RODATA = "native";
-static rochar s_little[] RODATA = "little";
-static rochar s_big[] RODATA = "big";
-static rochar s_pin[] RODATA = "pin";
-static rochar s_port[] RODATA = "port";
-static rochar s_dir[] RODATA = "dir";
-static rochar s_endian[] RODATA = "endian";
-static rochar s_id[] RODATA = "id";
-static rochar s_value[] RODATA = "value";
-static rochar s_LP[] RODATA = "(";
-static rochar s_RP[] RODATA = ")";
-static rochar s_HASH[] RODATA = "#";
-static rochar s_DOT[] RODATA = ".";
-static rochar s_COLON[] RODATA = ":";
-static rochar s_LB[] RODATA = "[";
-static rochar s_RB[] RODATA = "]";
-static rochar s_MOV[] RODATA = "mov";
 
-static rochar s_ADD[] RODATA = "ADD";
-static rochar s_SUB[] RODATA = "SUB";
-static rochar s_MUL[] RODATA = "MUL";
-static rochar s_DIV[] RODATA = "DIV";
-static rochar s_REM[] RODATA = "REM";
-static rochar s_SLA[] RODATA = "SLA";
-static rochar s_SRA[] RODATA = "SRA";
-static rochar s_BAND[] RODATA = "BAND";
-static rochar s_BOR[] RODATA = "BOR";
-static rochar s_BXOR[] RODATA = "BXOR";
-static rochar s_AND[] RODATA = "AND";
-static rochar s_OR[] RODATA = "OR";
-static rochar s_ASSIGN[] RODATA = "ASSIGN";
 static rochar ss_LT[] RODATA = "LT";
 static rochar ss_LTE[] RODATA = "LTE";
 static rochar ss_GT[] RODATA = "GT";
 static rochar ss_GTE[] RODATA = "GTE";
 static rochar ss_EQ[] RODATA = "EQ";
 static rochar ss_NEQ[] RODATA = "NEQ";
-static rochar s_BNOT[] RODATA = "BNOT";
-static rochar s_NEG[] RODATA = "NEG";
-static rochar s_NOT[] RODATA = "NOT";
 static rochar ss_MOV[] RODATA = "MOV";
-static rochar s_CVTIF[] RODATA = "CVTIF";
-static rochar s_CVTFI[] RODATA = "CVTFI";
 
-static rochar s_FADD[] RODATA = "FADD";
-static rochar s_FSUB[] RODATA = "FSUB";
-static rochar s_FMUL[] RODATA = "FMUL";
-static rochar s_FDIV[] RODATA = "FDIV";
-static rochar s_FNEG[] RODATA = "FNEG";
-static rochar s_FMOV[] RODATA = "FMOV";
 
-static rochar s_FLT[] RODATA = "FLT";
-static rochar s_FLTE[] RODATA = "FLTE";
-static rochar s_FGT[] RODATA = "FGT";
-static rochar s_FGTE[] RODATA = "FGTE";
-static rochar s_FEQ[] RODATA = "FEQ";
-static rochar s_FNEQ[] RODATA = "FNEQ";
 
 static rochar ss_COMMA[] RODATA = "COMMA";
 
-static rochar s_ENTER[] RODATA = "ENTER";
-static rochar s_LEAVE[] RODATA = "LEAVE";
-static rochar s_NEW[] RODATA = "NEW";
-static rochar s_LI[] RODATA = "LI";
-static rochar s_LIU[] RODATA = "LIU";
-static rochar s_LIH[] RODATA = "LIH";
-static rochar s_ARG[] RODATA = "ARG";
-static rochar s_ST[] RODATA = "ST";
-static rochar s_STP[] RODATA = "STP";
-static rochar s_STIMP[] RODATA = "STIMP";
-static rochar s_CHG[] RODATA = "CHG";
-static rochar s_LD[] RODATA = "LD";
-static rochar s_LDP[] RODATA = "LDP";
-static rochar s_CALL[] RODATA = "CALL";
-static rochar s_EQI[] RODATA = "EQI";
-static rochar s_RULE[] RODATA = "RULE";
-static rochar s_NEXT[] RODATA = "NEXT";
-static rochar s_NOP[] RODATA = "NOP";
 
-static rochar s_min[] RODATA = "min";
-static rochar s_max[] RODATA = "max";
-static rochar s_abs[] RODATA = "abs";
-static rochar s_fabs[] RODATA = "fabs";
-static rochar s_sign[] RODATA = "sign";
-static rochar s_clip[] RODATA = "clip";
-static rochar s_timeout[] RODATA = "timeout";
-static rochar s_elapsed[] RODATA = "elapsed";
-static rochar s_progress[] RODATA = "progress";
-static rochar s_changed[] RODATA = "changed";
-static rochar s_rising[] RODATA = "rising";
-static rochar s_falling[] RODATA = "falling";
 
-static rochar s_print[] RODATA = "print";
-static rochar s_println[] RODATA = "println";
-static rochar s_tick[] RODATA = "tick";
-static rochar s_cycle[] RODATA = "cycle";
-static rochar s_latch[] RODATA = "latch";
 
 
 const op_entry_t decl_table[] RODATA = {
