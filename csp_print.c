@@ -276,25 +276,33 @@ static void exprbuf_fcall(csp_rt_t* st,
 			  csp_instr_t* ip)
 {
     int i;
-    uint8_t* start = exprbuf_ptr(bp);
+    uint8_t* start;
     const char* fname;
     int fnamelen;
     uint8_t fn;
     uint16_t argtypes;
-    
-    if (ip->f.usr) {
-	// maybe RODATA on AVR! fixme
-	fname = st->ufuncs[ip->f.idx].name;
-	fnamelen = st->ufuncs[ip->f.idx].namelen;
-	argtypes = st->ufuncs[ip->f.idx].argtypes;
+    int usr = ip->f.usr;
+    const csp_func_t* tab = usr ? st->ufuncs : csp_builtin_funcs;
+    int rom = usr ? st->ufuncs_rom : BUILTIN_ROM;   // func table in ROM?
+    int idx = ip->f.idx;
+    int roname;
+
+    // rom-aware field reads (host: ro_*==plain, so rom is a no-op there)
+    fname    = rom ? (const char*)ro_ptr(&tab[idx].name) : tab[idx].name;
+    fnamelen = rom ? ro_byte(&tab[idx].namelen)          : tab[idx].namelen;
+    argtypes = rom ? ro_word(&tab[idx].argtypes)         : tab[idx].argtypes;
+    roname   = (rom ? ro_byte(&tab[idx].flags) : tab[idx].flags) & FUNC_RONAME;
+
+    // Copy the name into the buffer and intern THAT, so the interned reference
+    // is deref-safe on AVR even when the name string lives in flash.
+    {
+	uint8_t* ns = exprbuf_ptr(bp);
+	for (i = 0; i < fnamelen; i++)
+	    exprbuf_char(bp, roname ? ro_byte((const uint8_t*)fname + i)
+				    : (uint8_t)fname[i]);
+	fn = exprbuf_intern(bp, ns, exprbuf_len(bp, ns));
     }
-    else {
-	// always RODATA on AVR!
-	fname = csp_builtin_funcs[ip->f.idx].name;
-	fnamelen = csp_builtin_funcs[ip->f.idx].namelen;
-	argtypes = csp_builtin_funcs[ip->f.idx].argtypes;	
-    }
-    fn = exprbuf_intern(bp, (uint8_t*)fname, fnamelen);
+    start = exprbuf_ptr(bp);   // the fcall expression starts after the name copy
 
     exprbuf_strref(bp, fn);
     exprbuf_char(bp, '(');

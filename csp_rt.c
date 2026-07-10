@@ -485,6 +485,22 @@ extern const index_t __attribute__((weak)) rom_idg[];
 extern const index_t __attribute__((weak)) rom_ofs[];
 extern const index_t __attribute__((weak)) rom_edg[];
 
+// Segment-aware reads (see csp.h). NOINLINE keeps the flash-copy in one place
+// instead of expanding it at every decl()/instr() call site.
+NOINLINE csp_decl_t csp_get_decl(csp_rt_t* st, index_t i)
+{
+    if (i < st->rom_nd)
+	return ro_decl(&st->rom_decl_p[i]);
+    return st->ram_decl[i - st->rom_nd];
+}
+
+NOINLINE csp_instr_t csp_get_instr(csp_rt_t* st, index_t n)
+{
+    if (n < st->rom_nn)
+	return ro_instr(&st->rom_instr_p[n]);
+    return st->ram_instr[n - st->rom_nn];
+}
+
 const char csp_tag(csp_rt_t* st, index_t n)
 {
     return tag_tab[decl(st,INDEX(n),type)];
@@ -1056,7 +1072,8 @@ static value_t fn_latch(csp_rt_t* st,uint16_t type,value_t* args, uint8_t nargs)
 
 
 #define CSP_FUNC_ENT(str, a, p, rt, args, f)	\
-    {.name=(str),.namelen=sizeof((str))-1,.arity=(a),.pure=(p),	\
+    {.name=(str),.namelen=sizeof((str))-1,.arity=(a),			\
+	    .flags=((p)?FUNC_PURE:0)|FUNC_RONAME,			\
 	    .rtype=(rt),.argtypes=(args),.fn=(f)}
 
 // Built-in function table
@@ -1096,30 +1113,43 @@ const csp_func_t csp_builtin_funcs[] RODATA = {
 
 const uint8_t csp_num_builtin_funcs = sizeof(csp_builtin_funcs)/sizeof(csp_builtin_funcs[0]);
 
-static uint8_t func_arity(const csp_func_t* fn, int i)
+// rom-aware scalar reads: on the host both branches are identical (ro_*==plain);
+// on AVR the rom branch uses PROGMEM. One code path serves RAM and ROM tables.
+static inline uint8_t  rd8 (const void* p, int rom){ return rom?ro_byte((const uint8_t*)p):*(const uint8_t*)p; }
+static inline uint16_t rd16(const void* p, int rom){ return rom?ro_word((const uint16_t*)p):*(const uint16_t*)p; }
+static inline void*    rdvp(const void* p, int rom){ return rom?ro_ptr((void* const*)p):*(void* const*)p; }
+
+static uint8_t func_arity(const csp_func_t* fn, int i, int rom)
 {
-    return ro_byte(&fn[i].arity);
+    return rd8(&fn[i].arity, rom);
 }
 
-// is function "pure"
-static uint8_t func_pure(const csp_func_t* fn, int i)
+// function flags (FUNC_PURE | FUNC_RONAME)
+static uint8_t func_flags(const csp_func_t* fn, int i, int rom)
 {
-    return ro_byte(&fn[i].pure);
+    return rd8(&fn[i].flags, rom);
+}
+#define func_pure(fn,i,rom)   (func_flags((fn),(i),(rom)) & FUNC_PURE)
+#define func_roname(fn,i,rom) (func_flags((fn),(i),(rom)) & FUNC_RONAME)
+
+static uint8_t func_namelen(const csp_func_t* fn,int i, int rom)
+{
+    return rd8(&fn[i].namelen, rom);
 }
 
-static uint8_t func_namelen(const csp_func_t* fn,int i)
+static const char* func_name(const csp_func_t* fn, int i, int rom)
 {
-    return ro_byte(&fn[i].namelen);
+    return (const char*) rdvp(&fn[i].name, rom);
 }
 
-static csp_func_fn func_fn(const csp_func_t* fn, int i)
+static csp_func_fn func_fn(const csp_func_t* fn, int i, int rom)
 {
-    return (csp_func_fn) ro_ptr(&fn[i].fn);
+    return (csp_func_fn) rdvp(&fn[i].fn, rom);
 }
 
-static uint8_t fn_type(const csp_func_t* fn, int j)
+static uint8_t fn_type(const csp_func_t* fn, int j, int rom)
 {
-    uint16_t argtypes = ro_word(&fn->argtypes);
+    uint16_t argtypes = rd16(&fn->argtypes, rom);
     return (argtypes >> 4*j) & 0xf;
 }
 
@@ -1127,13 +1157,14 @@ static uint8_t fn_type(const csp_func_t* fn, int j)
 // flt->int. the goal is to match BEST? function to use
 // return 0 on match
 // return argument number 1...n on mismatch
-int csp_match_args(csp_rt_t* st, const csp_func_t* fn, int arity, rentry_t* rarg)
+int csp_match_args(csp_rt_t* st, const csp_func_t* fn, int arity, rentry_t* rarg,
+		   int rom)
 {
     int j;
     for (j = 0; j < arity; j++) {
 	rentry_t arg = rarg[j];
 	vtype_t argvt = arg.vt;
-	uint8_t ftype = fn_type(fn, j);
+	uint8_t ftype = fn_type(fn, j, rom);
 	switch(ftype) {
 	case V_ANY:
 	    break;
@@ -1177,20 +1208,22 @@ mismatch:
 }
 
 static int csp_match_fn(csp_rt_t* st,
-			const csp_func_t* fn, int num,
+			const csp_func_t* fn, int num, int rom,
 			const tstr_t* name,
 			uint8_t arity, rentry_t* rarg)
 {
     int i;
     int a, f = -1;
     for (i = 0; i < num; i++) {
-	uint8_t roarity = func_arity(fn, i);
-	uint8_t ronamelen = func_namelen(fn, i);
-	if ((roarity == arity) && (ronamelen == name->len)) {
-	    const char* roname = ro_ptr(&fn[i].name);
-	    if (ro_memcmp(name->ptr, roname, name->len) == 0) {
+	if ((func_arity(fn,i,rom) == arity) &&
+	    (func_namelen(fn,i,rom) == name->len)) {
+	    const char* fnm = func_name(fn, i, rom);
+	    int eq = func_roname(fn,i,rom)
+		? (ro_memcmp(name->ptr, fnm, name->len) == 0)   // name in ROM
+		: (memcmp(name->ptr, fnm, name->len) == 0);     // name in RAM
+	    if (eq) {
 		int j;
-		if ((j=csp_match_args(st, &fn[i], arity, rarg)) == 0) // ok
+		if ((j=csp_match_args(st, &fn[i], arity, rarg, rom)) == 0) // ok
 		    return i;
 		f = i;  // last name match
 		a = j;  // and argument poistion that failed
@@ -1215,14 +1248,14 @@ const csp_func_t* csp_match_func(csp_rt_t* st,
     int idx;
 
     if (st->ufuncs) {
-	if ((idx = csp_match_fn(st, st->ufuncs, st->num_ufuncs,
+	if ((idx = csp_match_fn(st, st->ufuncs, st->num_ufuncs, st->ufuncs_rom,
 				name, arity, rarg)) >= 0) {
 	    *is_user = 1;
 	    *func_idx = idx;
 	    return &st->ufuncs[idx];
 	}
     }
-    if ((idx = csp_match_fn(st, csp_builtin_funcs, csp_num_builtin_funcs,
+    if ((idx = csp_match_fn(st, csp_builtin_funcs, csp_num_builtin_funcs, BUILTIN_ROM,
 			    name, arity, rarg)) >= 0) {
 	*is_user = 0;
 	*func_idx = idx;
@@ -1713,14 +1746,14 @@ again:
 	// Get function pointer
 	if (instr(st,n,f.usr)) {
 	    if (st->ufuncs && (idx < st->num_ufuncs)) {
-		arity = func_arity(st->ufuncs, idx);
-		fn    = func_fn(st->ufuncs, idx);
+		arity = func_arity(st->ufuncs, idx, st->ufuncs_rom);
+		fn    = func_fn(st->ufuncs, idx, st->ufuncs_rom);
 	    }
 	}
 	else {
 	    if (idx < csp_num_builtin_funcs) {
-		arity = func_arity(csp_builtin_funcs, idx);
-		fn    = func_fn(csp_builtin_funcs, idx);
+		arity = func_arity(csp_builtin_funcs, idx, BUILTIN_ROM);
+		fn    = func_fn(csp_builtin_funcs, idx, BUILTIN_ROM);
 	    }
 	}
 	if (fn) {
@@ -3241,6 +3274,7 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
     // int func_res;
     int is_user;
     int func_idx;
+    int from;                           // func table in ROM?
     rentry_t* rarg = &rstack[ep-arity]; // first arg
     value_t dval;
     int imm = 0;
@@ -3248,12 +3282,13 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
     if ((func = csp_match_func(st, &word->v.str, arity,
 			       rarg, &is_user, &func_idx)) == NULL)
 	return -1;
+    from = is_user ? st->ufuncs_rom : BUILTIN_ROM;
     // FIXME: handle, changed(x), timeout(t) whith ops
     n = arity;
     for (j = 0; j < n; j++) {
 	rentry_t arg = rarg[j];
 	vtype_t argvt = arg.vt;
-	vtype_t argtype = fn_type(func, j); // read RO data!
+	vtype_t argtype = fn_type(func, j, from); // read RO data!
 
 	argcode |= (argvt << 4*j);
 	argimm  |= (arg.I << j);
@@ -3312,14 +3347,14 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
     // we may have to do a "dryrun" to check if function is pure
     // or we have special functions
     imm = (argimm == ((1 << arity)-1));
-    if (func_pure(func,0) && imm) {
+    if (func_pure(func,0,from) && imm) {
 	value_t arg[MAX_ARGS];
 	csp_func_fn fn = NULL;
 
 	if (is_user)
-	    fn = func_fn(st->ufuncs, func_idx);
+	    fn = func_fn(st->ufuncs, func_idx, st->ufuncs_rom);
 	else
-	    fn = func_fn(csp_builtin_funcs, func_idx);
+	    fn = func_fn(csp_builtin_funcs, func_idx, BUILTIN_ROM);
 	for (j = 0; j < arity; j++)
 	    arg[j] = rarg[j].val;
 	dval = fn(st, argcode, arg, arity);
@@ -5214,10 +5249,12 @@ int csp_rt_init(csp_rt_t* st, int reactive)
 }
 
 // Set user function table (called before parsing)
-void csp_set_ufuncs(csp_rt_t* st, const csp_func_t* funcs, uint8_t count)
+// rom = 1 if the funcs table (and, per-entry FUNC_RONAME, its names) is in ROM.
+void csp_set_ufuncs(csp_rt_t* st, const csp_func_t* funcs, uint8_t count, uint8_t rom)
 {
     st->ufuncs = funcs;
     st->num_ufuncs = count;
+    st->ufuncs_rom = rom;
 }
 
 void csp_set_uconst(csp_rt_t* st, csp_const_fn uconst)

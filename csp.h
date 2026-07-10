@@ -790,12 +790,25 @@ typedef value_t (*csp_func_fn)(struct _csp_rt_t* st, uint16_t type,
 typedef int (*csp_const_fn)(struct _csp_rt_t* st, const char* name, int len,
 			    value_t*, vtype_t*);
 
+// csp_func_t.flags bits (packed; a whole byte so ro_byte(&e.flags) works)
+#define FUNC_PURE   0x01        // side-effect free
+#define FUNC_RONAME 0x02        // .name points to a rochar (RODATA) string
+
+// Is a func table in ROM? Builtin is compile-time (RODATA on AVR); user funcs
+// pass a flag to csp_set_ufuncs. On the host RODATA==RAM so this is always 0
+// and the rom-aware readers collapse to plain access.
+#if defined(__AVR__)
+#define BUILTIN_ROM 1
+#else
+#define BUILTIN_ROM 0
+#endif
+
 // Function table entry
 typedef struct PACKED {
     const char* name;
     uint8_t namelen;
     uint8_t arity;              // number of arguments (0-4)
-    uint8_t pure;               // function is pure! side-effect free
+    uint8_t flags;              // FUNC_PURE | FUNC_RONAME
     uint8_t rtype;              // return type
     uint16_t argtypes;          // argument types MAKE_TYPEx
     csp_func_fn fn;             // function to call
@@ -914,6 +927,7 @@ typedef struct _csp_rt_t
     // user-defined functions (checked before builtin)
     const csp_func_t* ufuncs;
     uint8_t num_ufuncs;
+    uint8_t ufuncs_rom;          // 1 if the ufuncs table is in ROM (PROGMEM)
     // user hook to lookup platform constants
     csp_const_fn uconst;
 } csp_rt_t;
@@ -935,20 +949,10 @@ static inline csp_instr_t ro_instr(const csp_instr_t* p)
 // PROGMEM-safe ro_decl/ro_instr), a RAM index reads ram_*[logical - base]. ROM
 // is never written -- writes go to the RAM slots (ram_decl_at/ram_instr_at),
 // whose logical index is always >= the base. With no ROM active (rom_n*==0) all
-// of these reduce to plain ram_* access.
-static inline csp_decl_t csp_get_decl(csp_rt_t* st, index_t i)
-{
-    if (i < st->rom_nd)
-	return ro_decl(&st->rom_decl_p[i]);
-    return st->ram_decl[i - st->rom_nd];
-}
-
-static inline csp_instr_t csp_get_instr(csp_rt_t* st, index_t n)
-{
-    if (n < st->rom_nn)
-	return ro_instr(&st->rom_instr_p[n]);
-    return st->ram_instr[n - st->rom_nn];
-}
+// of these reduce to plain ram_* access. NOINLINE (defined in csp_rt.c) so the
+// flash-copy is not expanded at every decl()/instr() site (code size on AVR).
+extern csp_decl_t  csp_get_decl(csp_rt_t* st, index_t i);
+extern csp_instr_t csp_get_instr(csp_rt_t* st, index_t n);
 
 // one string byte at a logical position (length byte or char)
 static inline uint8_t csp_str_byte(csp_rt_t* st, sindex_t pos)
@@ -1080,7 +1084,7 @@ extern int     csp_rt_init(csp_rt_t*,  int reactive);
 extern void    csp_load_rom(csp_rt_t*);
 extern int     csp_has_firmware(void);
 extern int     csp_rt_start(csp_rt_t*);
-extern void    csp_set_ufuncs(csp_rt_t*, const csp_func_t*, uint8_t);
+extern void    csp_set_ufuncs(csp_rt_t*, const csp_func_t*, uint8_t count, uint8_t rom);
 extern void    csp_set_uconst(csp_rt_t*, csp_const_fn uconst);
 extern const csp_func_t* csp_match_func(csp_rt_t*,
 					const tstr_t* name,
