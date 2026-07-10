@@ -6,11 +6,6 @@
 #define MAX_STATES 16
 #endif
 
-#define TRANSACTION_DEFAULT 1
-#ifndef SUPPORT_TRANSACTION
-#define SUPPORT_TRANSACTION 1  // use assert/undo
-#endif
-
 #define REACTIVE_DEFAULT 0
 #ifndef SUPPORT_REACTIVE
 #define SUPPORT_REACTIVE    1 // enq/deq

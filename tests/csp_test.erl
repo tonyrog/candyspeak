@@ -75,8 +75,10 @@ eval_test(File, Opts) ->
 
 %% Helper: get variable value from state
 get_var(Name, State) when is_list(State) ->
+    %% accept any leaf tag: var, digital, analog, timer, ...
     case lists:keyfind(Name, 2, State) of
-        {var, Name, Value} -> {ok, Value};
+        {object, Name, _} -> {error, not_found};
+        {_Tag, Name, Value} -> {ok, Value};
         false -> {error, not_found}
     end;
 get_var(Name, {state, _Cycle, Vars}) ->

@@ -1,0 +1,26 @@
+#module Add
+#variable A:1 in
+#variable B:1 in
+#variable Cin:1 in
+#variable S:1 out
+#variable Cout:1 out
+
+S = A ^ B ^ Cin ? 1
+Cout = (A & B) | (Cin & (A ^ B)) ? 1
+#end
+
+#analog A:3 integer 0
+#variable B:3 integer = 0x4
+#digital LED0 out pulldown 2
+#digital LED1 out pulldown 3
+#digital LED2 out pulldown 4
+
+// fixme init expressions!
+#Add a0 Cin=0 A=A&1 B=B&1
+#Add a1 Cin=a0.Cout A=((A >> 1)&1) B=((B>>1)&1)
+#Add a2 Cin=a1.Cout A=((A >> 2)&1) B=((B>>2)&1)
+
+// reflect sum in LEDs
+LED0 = a0.S
+LED1 = a1.S
+LED2 = a2.S

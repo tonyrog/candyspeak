@@ -1,0 +1,25 @@
+#timer OpenTimer 10000
+#analog Req:16   1    // Button request sensor
+#analog Floor:16 2    // Floor sensor
+#states Idle GoingUp GoingDown DoorOpen
+
+#in INIT
+    State=Idle
+#end
+
+#in Idle
+    State=GoingUp   ? Req>Floor
+    State=GoingDown ? Req<Floor
+#end
+
+#in GoingUp
+    State=DoorOpen, OpenTimer=1 ? Req <= Floor
+#end
+
+#in GoingDown
+    State=DoorOpen, OpenTimer=1 ? Req >= Floor
+#end
+
+#in DoorOpen
+    State=Idle ? timeout(OpenTimer)
+#end

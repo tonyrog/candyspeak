@@ -1,0 +1,6 @@
+#digital Led out 0:5
+#analog Dac:10 out 0:2
+#variable N
+N = N + 1 ? N < 5
+Led = 1 ? N > 2
+Dac = N * 10 ? 1

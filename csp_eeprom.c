@@ -2,18 +2,23 @@
 #include "csp.h"
 #include <string.h>
 
-// Binary eeprom format header
+// Binary eeprom format header. Only the RAM patch area is persisted -- ROM runs
+// from flash. The rom_* fields fingerprint the firmware the patches were made
+// against, so a load can reject patches saved for a different ROM.
 typedef struct {
     uint8_t  magic[4];   // "CSP\0"
     uint16_t version;    // format version
-    uint16_t nn;         // number of instructions
-    uint16_t nd;         // number of declarations
+    uint16_t rom_nd;     // firmware fingerprint: ROM decl/instr/string sizes
+    uint16_t rom_nn;
+    uint16_t rom_strp;
+    uint16_t ram_nd;     // RAM patch sizes (counts above the ROM base)
+    uint16_t ram_nn;
+    uint16_t ram_strp;
     uint16_t nq;         // number of objects
-    uint32_t strp;       // string table size
 } eeprom_header_t;
 
 #define EEPROM_MAGIC "CSP"
-#define EEPROM_VERSION 1
+#define EEPROM_VERSION 2
 
 // Platform stub functions - implement per platform
 #if 0
@@ -53,31 +58,31 @@ int csp_eeprom_clear(csp_rt_t* st)
 int csp_eeprom_save(csp_rt_t* st)
 {
     eeprom_header_t hdr;
+    uint16_t ram_nd   = st->ps.nd   - st->rom_nd;   // RAM patch counts
+    uint16_t ram_nn   = st->ps.nn   - st->rom_nn;
+    uint16_t ram_strp = st->ps.strp - st->rom_strp;
 
     if (csp_eeprom_open_write() < 0)
 	return -1;
 
-    // Write header
     memcpy(hdr.magic, EEPROM_MAGIC, 4);
-    hdr.version = EEPROM_VERSION;
-    hdr.nn = st->ps.nn;
-    hdr.nd = st->ps.nd;
-    hdr.nq = st->ps.nq;
-    hdr.strp = st->ps.strp;
+    hdr.version  = EEPROM_VERSION;
+    hdr.rom_nd   = st->rom_nd;
+    hdr.rom_nn   = st->rom_nn;
+    hdr.rom_strp = st->rom_strp;
+    hdr.ram_nd   = ram_nd;
+    hdr.ram_nn   = ram_nn;
+    hdr.ram_strp = ram_strp;
+    hdr.nq       = st->ps.nq;
 
     if (csp_eeprom_write(&hdr, sizeof(hdr)) < 0)
 	goto error;
-
-    // Write string table
-    if (csp_eeprom_write(st->ram_str, st->ps.strp) < 0)
+    // Only the RAM patch area (ram_*[0..delta)); ROM stays in flash.
+    if (csp_eeprom_write(st->ram_str, ram_strp) < 0)
 	goto error;
-
-    // Write declarations
-    if (csp_eeprom_write(st->ram_decl, sizeof(csp_decl_t) * st->ps.nd) < 0)
+    if (csp_eeprom_write(st->ram_decl, sizeof(csp_decl_t) * ram_nd) < 0)
 	goto error;
-
-    // Write instructions
-    if (csp_eeprom_write(st->ram_instr, sizeof(csp_instr_t) * st->ps.nn) < 0)
+    if (csp_eeprom_write(st->ram_instr, sizeof(csp_instr_t) * ram_nn) < 0)
 	goto error;
 
     csp_eeprom_close();
@@ -107,32 +112,32 @@ int csp_eeprom_load(csp_rt_t* st)
     if (hdr.version != EEPROM_VERSION)
 	goto error;
 
-    // Reset state but keep reactive flag
+    // Rebuild the ROM baseline, then load the RAM patches on top of it.
     reactive = st->reactive;
-    csp_rt_init(st, 0, reactive);
+    csp_rt_init(st, reactive);
+    csp_load_rom(st);   // rebase ps.* to the ROM sizes (no-op if no firmware)
 
-    // Restore parse state
-    st->ram.str_len = hdr.strp;
-    st->ram.n_decl  = hdr.nd;
-    st->ram.n_instr = hdr.nn;
-
-    // Read string table
-    if (csp_eeprom_read(st->ram_str, hdr.strp) < 0)
+    // reject patches saved against a different firmware ROM
+    if ((hdr.rom_nd != st->rom_nd) || (hdr.rom_nn != st->rom_nn) ||
+	(hdr.rom_strp != st->rom_strp))
 	goto error;
 
-    // Read declarations
-    if (csp_eeprom_read(st->ram_decl, sizeof(csp_decl_t) * hdr.nd) < 0)
+    // Read the RAM patch area into the RAM-local slots
+    if (csp_eeprom_read(st->ram_str, hdr.ram_strp) < 0)
+	goto error;
+    if (csp_eeprom_read(st->ram_decl, sizeof(csp_decl_t) * hdr.ram_nd) < 0)
+	goto error;
+    if (csp_eeprom_read(st->ram_instr, sizeof(csp_instr_t) * hdr.ram_nn) < 0)
 	goto error;
 
-    // Read instructions
-    if (csp_eeprom_read(st->ram_instr, sizeof(csp_instr_t) * hdr.nn) < 0)
-	goto error;
+    // Logical counts = ROM base + RAM patch
+    st->ps.strp = st->rom_strp + hdr.ram_strp;
+    st->ps.nd   = st->rom_nd   + hdr.ram_nd;
+    st->ps.nn   = st->rom_nn   + hdr.ram_nn;
+    st->ps.nq   = hdr.nq;
 
     csp_eeprom_close();
-
-    // Initialize values
-    csp_rt_start(st);
-
+    csp_rt_start(st);   // initialise values (ROM + RAM leaves)
     return 0;
 
 error:
@@ -140,12 +145,12 @@ error:
     return -1;
 }
 
-// Get save size in bytes
+// Get save size in bytes (RAM patch area only)
 int csp_eeprom_size(csp_rt_t* st)
 {
     return sizeof(eeprom_header_t) +
-	   st->ps.strp +
-	   sizeof(csp_decl_t) * st->ps.nd +
-	   sizeof(csp_instr_t) * st->ps.nn;
+	   (st->ps.strp - st->rom_strp) +
+	   sizeof(csp_decl_t) * (st->ps.nd - st->rom_nd) +
+	   sizeof(csp_instr_t) * (st->ps.nn - st->rom_nn);
 }
 

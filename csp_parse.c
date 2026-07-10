@@ -810,11 +810,12 @@ next:
 	DBG("%sP_REP: (%d) n=%ld, len=%d, ez=%d\n", indent(l),
 	    ti, n, len, pst->ez);
 	while (ti < (int)n) {
+	    int r;
 	    DBG("%sITER (%d) i=%d:\n", indent(l), ti, ix);
 	    // fixme pass ix to pmatch to allow data to store
 	    // array elements
 	    pst->ix = ix;
-	    int r = pmatch_(pst, tv, ti, n, l+1, &pat[pi]);
+	    r = pmatch_(pst, tv, ti, n, l+1, &pat[pi]);
 	    if (r <= 0) break;  // no match or empty match
 	    ti = r;
 	    ix++;

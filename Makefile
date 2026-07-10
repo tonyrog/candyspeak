@@ -2,11 +2,13 @@
 
 CC = gcc
 CFLAGS=-MMD -MP -MF .$<.d
-OBJS = csp_linux.o csp_rt.o csp_dump.o csp_eeprom.o csp_parse.o rom.o
+OBJS = csp_linux.o csp_rt.o csp_dump.o csp_eeprom.o \
+	csp_parse.o csp_print.o rom.o
+
 LIBS =
 
 # -O3 -std=c99
-CFLAGS += -Wall -g -Wswitch  -Wenum-compare -Wenum-conversion  -Wswitch
+CFLAGS += -Wall -g -Wdeclaration-after-statement -Wenum-compare -Wenum-conversion -Wswitch 
 LDFLAGS = -g
 
 all:	csp

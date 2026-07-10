@@ -69,12 +69,15 @@ typedef int32_t fixpoint_t;
 // }
 
 // Integer sqrt for fixed-point (result is Q16.16)
-static inline fixpoint_t fix_sqrt(fixpoint_t x) {
+static inline fixpoint_t fix_sqrt(fixpoint_t x)
+{
+    uint32_t val, result, bit;
+    
     if (x <= 0) return 0;
 
-    uint32_t val = (uint32_t)x;
-    uint32_t result = 0;
-    uint32_t bit = 1UL << 30;
+    val = (uint32_t)x;
+    result = 0;
+    bit = 1UL << 30;
 
     // Find highest bit
     while (bit > val) bit >>= 2;

@@ -2,7 +2,6 @@
 #define CSP_PARSE_H
 
 #include "csp.h"
-// #include <stddef.h>  // for offsetof
 
 #define csp_offsetof(type, member) ((size_t) &((type *)0)->member)
 

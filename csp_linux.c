@@ -98,77 +98,83 @@ unsigned long csp_time_us(void)
     return time_tick();
 }
 
+static FILE* file_output = NULL;
+
+void* csp_set_file_output(void* f)
+{
+    FILE* prev = file_output;
+    file_output = (FILE*) f;
+    return prev;
+}
+
+int csp_will_output()
+{
+    return (file_output != NULL);
+}
+
 // platform print functions
 int csp_print_char(char c)
 {
-    return putchar(c);
+    if (file_output) {
+	if (fputc(c, file_output) == EOF)
+	    return 0;
+    }
+    return 1;
 }
 
 int csp_print_str(const char* s)
 {
-    return printf("%s", s);
+    if (file_output)
+	return fprintf(file_output, "%s", s);
+    return strlen(s);
 }
 
 int csp_print_int(ivalue_t v)
 {
-    return printf("%d", v);
+    if (file_output)
+	return fprintf(file_output, "%d", v);
+    return 1; // fixme: return number of chars
 }
 
 int csp_print_uint(uvalue_t v)
 {
-    return printf("%u", v);
+    if (file_output)
+	return fprintf(file_output, "%u", v);
+    return 1; // fixme: return number of chars    
 }
-
-int csp_print_uintw(uvalue_t v, int nw)
-{
-    int n;
-    while (v < nw) {
-	csp_print_char('0');
-	nw /= 10;
-	n++;
-    }
-    return n+csp_print_uint(v);
-}
-
 
 int csp_print_float(fvalue_t v)
 {
+    if (file_output) {    
 #if FVALUE_IS_FIXPOINT
-    // Print Q16.16 as decimal
-    int n;
-    int neg = (v < 0);
-    uint32_t absv = neg ? -v : v;
-    int32_t intpart = absv >> FIX_SHIFT;
-    uint32_t fracpart = absv & FIX_MASK;
-    // Use 64-bit to avoid overflow: fracpart * 1000000 can exceed 32 bits
-    fracpart = (uint32_t)(((uint64_t)fracpart * 1000000) >> FIX_SHIFT);
-    if (neg) {
-	csp_print_char('-');
-	n = 1 + csp_print_uint(intpart);
-    }
-    else {
-	n = csp_print_uint(intpart);
-    }
-    csp_print_char('.'); n++;
-    return n+csp_print_uintw(fracpart, 100000);
+	return csp_print_fixpoint(v);
 #else
-    return printf("%f", v);
+	return fprintf(file_output, "%f", v);
 #endif
+    }
+    return 1;
 }
 
 int csp_print_hex(uvalue_t v)
 {
-    return printf("0x%x", v);
+    if (file_output)
+	return fprintf(file_output, "0x%x", v);
+    return 1;
 }
 
 int csp_println(void)
 {
-    return putchar('\n');
+    if (file_output) {
+	if (fputc('\n', file_output) == EOF)
+	    return 0;
+    }
+    return 1;
 }
 
 void csp_flush(void)
 {
-    fflush(stdout);
+    if (file_output)
+	fflush(file_output);
 }
 
 // Terminal raw mode handling
@@ -182,6 +188,8 @@ static void disable_raw_mode(void)
 
 static int enable_raw_mode(void)
 {
+    struct termios raw;
+    
     if (!isatty(STDIN_FILENO))
 	return -1;
 
@@ -190,7 +198,7 @@ static int enable_raw_mode(void)
 
     atexit(disable_raw_mode);
 
-    struct termios raw = orig_termios;
+    raw = orig_termios;
     raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
     raw.c_oflag |= (OPOST);  // keep output processing
     raw.c_cflag |= (CS8);
@@ -241,28 +249,31 @@ int csp_eeprom_write(const void* buf, size_t len)
 }
 
 // Platform-specific command implementations
-int csp_cmd_save(csp_rt_t* st, const char* args)
+int csp_cmd_save(csp_rt_t* st, int argc, char* argv[])
 {
-    (void)args;
+    (void)argv;
+    
     if (csp_eeprom_save(st) < 0) {
 	printf("Error: cannot save to %s\n", eeprom_file);
 	return CSP_CMD_ERROR;
     }
-    printf("Saved to %s (%d decls, %d instrs, %d bytes)\n",
-	   eeprom_file, st->ps.nd, st->ps.nn, csp_eeprom_size(st));
+    printf("Saved to %s (%d RAM decls, %d RAM instrs, %d bytes)\n",
+	   eeprom_file, st->ps.nd - st->rom_nd, st->ps.nn - st->rom_nn,
+	   csp_eeprom_size(st));
     return CSP_CMD_OK;
 }
 
-int csp_cmd_load(csp_rt_t* st, const char* args)
+int csp_cmd_load(csp_rt_t* st, int argc, char* argv[])
 {
-    (void)args;
+    (void)argc;    
+    (void)argv;
     if (csp_eeprom_load(st) < 0) {
 	printf("Error: cannot load from %s\n", eeprom_file);
 	return CSP_CMD_ERROR;
     }
     csp_setup(st);
-    printf("Loaded from %s (%d decls, %d instrs)\n",
-	   eeprom_file, st->ps.nd, st->ps.nn);
+    printf("Loaded from %s (%d RAM decls, %d RAM instrs)\n",
+	   eeprom_file, st->ps.nd - st->rom_nd, st->ps.nn - st->rom_nn);
     return CSP_CMD_OK;
 }
 
@@ -381,11 +392,8 @@ int parse_file(csp_rt_t* st, FILE* fin)
 
 void print_defines()
 {
-    printf("SUPPORT_TRANSACTION=%d\n", SUPPORT_TRANSACTION);
     printf("SUPPORT_REACTIVE=%d\n", SUPPORT_REACTIVE);
     printf("USE_STATISTICS=%d\n",USE_STATISTICS);
-
-    printf("TRANSACTION_DEFAULT=%d\n", TRANSACTION_DEFAULT);
     printf("REACTIVE_DEFAULT=%d\n", REACTIVE_DEFAULT);
     printf("OP_LAST=%d\n", OP_LAST);  // last opcode = #opcodes
     printf("T_LAST=%d\n", T_LAST);        // #tokens
@@ -593,7 +601,6 @@ int main(int argc, char** argv)
     uint32_t max_time_ms = 0;
     uint32_t start_time;
     int c;
-    int transaction = TRANSACTION_DEFAULT;
     int reactive = REACTIVE_DEFAULT;
     int compile = 0;
     struct pollfd pfd[1];
@@ -601,6 +608,9 @@ int main(int argc, char** argv)
     csp_lang_t lang = TEXT;
     int first_cycle = 1;
     int nn0;
+    int anyd;
+
+    file_output = stdout;
 
     while (1) {
 	int option_index = 0;
@@ -616,7 +626,7 @@ int main(int argc, char** argv)
 	case 'i': interactive = 1; break;
 	case 'e': eeprom_file = optarg; break;
 	case 'r': reactive =  atoi(optarg); break;
-	case 't': transaction = atoi(optarg); break;
+	case 't': break;
 	case 'n': execute = 0; break;
 	case 'C': compile = 1; break;
 	case 'c': max_cycles = atoi(optarg); break;
@@ -685,17 +695,9 @@ int main(int argc, char** argv)
 
     if (debug) {
 	print_defines();
-	printf("transaction=%d\n", transaction);
 	printf("reactive=%d\n", reactive);
 	printf("execute=%d\n", execute);	
     }
-#if !defined(SUPPORT_TRANSACTION) || (SUPPORT_TRANSACTION==0)
-    if (transaction) {
-	fprintf(stderr, "transaction mode not configured\n");
-	exit(1);
-    }
-#endif
-    
 #if !defined(SUPPORT_REACTIVE) || (SUPPORT_REACTIVE==0)
     if (reactive) {
 	fprintf(stderr, "reactive mode not configured\n");
@@ -703,8 +705,13 @@ int main(int argc, char** argv)
     }
 #endif
 
-    csp_rt_init(&state, transaction, reactive);
+    csp_rt_init(&state, reactive);
     csp_set_uconst(&state, csp_uconst);
+
+    // Activate flash-resident firmware: run ROM in place from flash, RAM holds
+    // patches. Skip when compiling (-C) so the dump is exactly the parsed program.
+    if (!compile)
+	csp_load_rom(&state);
 
     nn0 = state.ps.nn;
 
@@ -737,7 +744,9 @@ int main(int argc, char** argv)
 	}
     }
 
-    if (nn0 == state.ps.nn)
+    // No new rules parsed: restore a persisted RAM program from eeprom -- but
+    // never when firmware is linked in, or it would clobber the preloaded ROM.
+    if ((nn0 == state.ps.nn) && !csp_has_firmware())
 	csp_eeprom_load(&state);
     
     if (state.reactive)
@@ -817,9 +826,11 @@ loop:
 
     // Handle interactive input - poll and process complete lines
     if (nfds > 0) {
+	int timeout_ms;
+	
 	if (interactive)
 	    csp_line_prompt();
-	int timeout_ms = interactive ? 100 : 0;
+	timeout_ms = interactive ? 100 : 0;
 	// Wait for timer if needed (non-interactive mode)
 	if (state.wait_ms != NOTIMEOUT) {
 	    if (timeout_ms == 0 || state.wait_ms < (uint32_t)timeout_ms)
@@ -847,7 +858,7 @@ loop:
     else
 	x = csp_eval(&state);
 
-    int anyd = state.anyd;  // save before commit clears it
+    anyd = state.anyd;  // save before commit clears it
 
     csp_commit(&state);
 

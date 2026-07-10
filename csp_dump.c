@@ -5,6 +5,7 @@
 #include <ctype.h>
 #include "csp.h"
 #include "csp_dump.h"
+#include "csp_print.h"
 
 extern const op_entry_t decl_table[];
 extern const op_entry_t tok_table[];
@@ -87,7 +88,7 @@ void csp_fprint_value(FILE* f, csp_rt_t* st, vtype_t vt, value_t val)
     case V_UNSIGNED: fprintf(f, "16#%x", val.u); break; // fixme lang
     case V_FLOAT:    fprint_fvalue(f, val.f); break;
     case V_STRING:
-	csp_fprint_escaped_string(f, &st->ram_str[val.s], st->ram_str[val.s-1]);
+	csp_fprint_escaped_string(f, csp_str_at(st, val.s), csp_str_byte(st, val.s-1));
 	break;
     default: fprintf(f, "???"); break;
     }
@@ -115,7 +116,7 @@ void dump_edge_list(FILE* f, csp_rt_t* st, index_t ix)
 index_t csp_dump_rule(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 {
     index_t ix = MAKE_INDEX(0,i);
-    switch(st->ram_decl[i].type) {
+    switch(decl(st,i,type)) {
     case DECL_VARIABLE:
     case DECL_DIGITAL:
     case DECL_ANALOG:
@@ -135,98 +136,106 @@ index_t csp_dump_rule(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 {
     fprintf(f, "%s", indent(lev));
-    switch(st->ram_instr[i].op) {
+    switch(instr(st,i,op)) {
     case OP_NOP:
 	fprintf(f, "{instr,%d,'NOP'}%s\n",
 		i, eot);
 	break;
     case OP_NEXT:
 	fprintf(f, "{instr,%d,'NEXT',[r%d]}%s\n",
-		i, st->ram_instr[i].x.x, eot);
+		i, instr(st,i,x.x), eot);
 	break;
     case OP_LD:
 	fprintf(f, "{instr,%d,'LD',[r%d,",
 		i,
-		st->ram_instr[i].m.x);
-	csp_fprint_tag(f, st, st->ram_instr[i].m.mem);
+		instr(st,i,m.x));
+	csp_fprint_tag(f, st, instr(st,i,m.mem));
 	fprintf(f, "]}%s\n", eot);
 	break;
     case OP_LDP:
 	fprintf(f, "{instr,%d,'LDP',[r%d,",
-		i, st->ram_instr[i].m.x);
-	csp_fprint_tag(f, st, st->ram_instr[i].m.mem);
-	fprintf(f, ",%d]}%s\n", st->ram_instr[i].m.y, eot);
+		i, instr(st,i,m.x));
+	csp_fprint_tag(f, st, instr(st,i,m.mem));
+	fprintf(f, ",%d]}%s\n", instr(st,i,m.y), eot);
 	break;
     case OP_ST:
 	fprintf(f, "{instr,%d,'ST',[r%d,",
-		i, st->ram_instr[i].m.x);
-	csp_fprint_tag(f, st, st->ram_instr[i].m.mem);
+		i, instr(st,i,m.x));
+	csp_fprint_tag(f, st, instr(st,i,m.mem));
 	fprintf(f, "]}%s\n", eot);
 	break;
     case OP_STP:
 	fprintf(f, "{instr,%d,'STP',[r%d,",
-		i, st->ram_instr[i].m.x);
-	csp_fprint_tag(f, st, st->ram_instr[i].m.mem);
-	fprintf(f, ",%d]}%s\n", st->ram_instr[i].m.y,eot);
+		i, instr(st,i,m.x));
+	csp_fprint_tag(f, st, instr(st,i,m.mem));
+	fprintf(f, ",%d]}%s\n", instr(st,i,m.y),eot);
 	break;	
     case OP_STIMP:
 	fprintf(f, "{instr,%d,'STIMP',[r%d,",
-		i, st->ram_instr[i].m.x);
-	csp_fprint_tag(f, st, st->ram_instr[i].m.mem);
+		i, instr(st,i,m.x));
+	csp_fprint_tag(f, st, instr(st,i,m.mem));
 	fprintf(f, "]}%s\n", eot);
 	break;
     case OP_CHG:
 	fprintf(f, "{instr,%d,'CHG',[r%d,",
-		i, st->ram_instr[i].m.x);
-	csp_fprint_tag(f, st, st->ram_instr[i].m.mem);
+		i, instr(st,i,m.x));
+	csp_fprint_tag(f, st, instr(st,i,m.mem));
 	fprintf(f, "]}%s\n", eot);
 	break;
     case OP_LI:
 	fprintf(f, "{instr,%d,'LI',[r%d,%d]}%s\n",
 		i,
-		st->ram_instr[i].i.x,
-		st->ram_instr[i].i.imm,
+		instr(st,i,i.x),
+		instr(st,i,i.imm),
 		eot);
 	break;
     case OP_LIU:
 	fprintf(f, "{instr,%d,'LIU',[r%d,%u]}%s\n",
 		i,
-		st->ram_instr[i].i.x,
-		(uint16_t)st->ram_instr[i].i.imm,
+		instr(st,i,i.x),
+		(uint16_t)instr(st,i,i.imm),
 		eot);
 	break;
     case OP_LIH:
 	fprintf(f, "{instr,%d,'LIH',[r%d,16#%04x]}%s\n",
 		i,
-		st->ram_instr[i].i.x,
-		(uint16_t)st->ram_instr[i].i.imm,
+		instr(st,i,i.x),
+		(uint16_t)instr(st,i,i.imm),
 		eot);
 	break;
+    case OP_EQI:
+	fprintf(f, "{instr,%d,'EQI',[r%d,",
+		i,
+		instr(st,i,mi.x));
+	csp_fprint_tag(f, st, instr(st,i,mi.mem));
+	fprintf(f, ",%d", instr(st,i,mi.imm));
+	fprintf(f, "]}%s\n", eot);
+	break;	
     case OP_ARG:
 	fprintf(f, "{instr,%d,'ARG',[r%d,%d]}%s\n",
 		i,
-		st->ram_instr[i].i.x,
-		st->ram_instr[i].i.imm,
+		instr(st,i,i.x),
+		instr(st,i,i.imm),
 		eot);
 	break;
     case OP_CALL:
 	fprintf(f, "{instr,%d,'CALL',[r%d,%s,16#%04x]}%s\n",
 		i,
-		st->ram_instr[i].f.x,
-		(st->ram_instr[i].f.usr ?
-		 st->ufuncs[st->ram_instr[i].f.idx].name :
-		 csp_builtin_funcs[st->ram_instr[i].f.idx].name),
-		st->ram_instr[i].f.avt,	
+		instr(st,i,f.x),
+		(instr(st,i,f.usr) ?
+		 st->ufuncs[instr(st,i,f.idx)].name :
+		 csp_builtin_funcs[instr(st,i,f.idx)].name),
+		instr(st,i,f.avt),	
 		eot);
 	break;
     case OP_RULE:
 	fprintf(f, "{instr,%d,'RULE',[r%d,%d]}%s\n",
 		i,
-		st->ram_instr[i].r.cnd, st->ram_instr[i].r.nxt, eot);
+		instr(st,i,r.cnd), instr(st,i,r.nxt), eot);
 	break;
     case OP_ENTER: {
-	index_t mx = st->ram_instr[i].e.mx;
-	int n = st->ram_instr[i].e.num;
+	index_t mx = instr(st,i,e.mx);
+	int n = instr(st,i,e.num);
 	int j;
 	fprintf(f, "{instr,%d,'ENTER','%s',[{n,%d}],[\n",
 		i, decl_name(st, mx), n);
@@ -237,39 +246,39 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	return i; // do not update after module block
     }
     case OP_LEAVE: {
-	index_t mx = st->ram_instr[i].v.mx;
-	int n = st->ram_instr[i].v.num;
+	index_t mx = instr(st,i,v.mx);
+	int n = instr(st,i,v.num);
 	fprintf(f, "{instr,%d,'LEAVE','%s',[{n,%d}]}%s\n",
 		i, decl_name(st,mx), n, eot);
 	break;
     }
     case OP_NEW: {
-	index_t ent = st->ram_instr[i].n.ent;
-	index_t obj = st->ram_instr[i].n.obj;
-	index_t mx  = st->ram_decl[INDEX(obj)].mq.mx;
-	unsigned m       = st->ram_decl[INDEX(obj)].mq.m;
+	index_t ent = instr(st,i,n.ent);
+	index_t obj = instr(st,i,n.obj);
+	index_t mx  = decl(st,INDEX(obj),mq.mx);
+	unsigned m       = decl(st,INDEX(obj),mq.m);
 	fprintf(f, "{instr,%d,'NEW',\"%s\",\"%s\",[{ent,%d},{obj,%u}]}%s\n",
 		i, decl_name(st, mx), decl_name(st, obj), 
 		INDEX(ent), m, eot);
 	break;
     }
     default:
-	switch(csp_opcode_arity(st->ram_instr[i].op)) {
+	switch(csp_opcode_arity(instr(st,i,op))) {
 	case 1:
 	    fprintf(f, "{instr,%d,'%s',[r%d,r%d]}%s\n",
 		    i,
-		    csp_opcode_name(st->ram_instr[i].op),
-		    st->ram_instr[i].a.x,
-		    st->ram_instr[i].a.y,
+		    csp_opcode_name(instr(st,i,op)),
+		    instr(st,i,a.x),
+		    instr(st,i,a.y),
 		    eot);
 	    break;	    
 	case 2:
 	    fprintf(f, "{instr,%d,'%s',[r%d,r%d,r%d]}%s\n",
 		    i,
-		    csp_opcode_name(st->ram_instr[i].op),
-		    st->ram_instr[i].a.x,
-		    st->ram_instr[i].a.y,
-		    st->ram_instr[i].a.z,
+		    csp_opcode_name(instr(st,i,op)),
+		    instr(st,i,a.x),
+		    instr(st,i,a.y),
+		    instr(st,i,a.z),
 		    eot);
 	    break;
 	}
@@ -301,14 +310,14 @@ void csp_dump_var(FILE* f,csp_rt_t* st,
 	fprintf(f, "{%s,\"", dtype);
 	csp_dump_var_name(f, st, ix);
 	fprintf(f, "%s\",", suffix);
-	csp_fprint_value(f, st, st->ram_decl[di].vt, csp_value(st, ix));
+	csp_fprint_value(f, st, decl(st,di,vt), csp_value(st, ix));
 	fprintf(f, "}");
 	break;
     case TEXT:
 	fprintf(f, " ");
 	csp_dump_var_name(f, st, ix);
 	fprintf(f, "%s=", suffix);
-	csp_fprint_value(f, st, st->ram_decl[di].vt,  csp_value(st, ix));
+	csp_fprint_value(f, st, decl(st,di,vt),  csp_value(st, ix));
 	if (m == 0) fprintf(f, "\n");
 	break;
     }
@@ -318,8 +327,8 @@ void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
 {
     int fv, j;
     index_t obj = st->object[m];
-    index_t mx  = st->ram_decl[INDEX(obj)].mq.mx;
-    int     n   = st->ram_decl[INDEX(mx)].md.n;    
+    index_t mx  = decl(st,INDEX(obj),mq.mx);
+    int     n   = decl(st,INDEX(mx),md.n);    
     
     switch(lang) {
     case ERLANG:
@@ -335,7 +344,7 @@ void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
     j = 1;
     while(j <= n) {
 	int k = INDEX(mx)+j;
-	switch(st->ram_decl[k].type) {
+	switch(decl(st,k,type)) {
 	case DECL_VARIABLE:
 	    csp_dump_var(f,st,"var","",m,k,fv,lang);
 	    fv = 0;
@@ -379,10 +388,10 @@ void csp_dump_state(FILE* f, csp_rt_t* st, csp_lang_t lang)
     // global variables
     i = 0;
     while(i < st->ps.nd) {
-	switch(st->ram_decl[i].type) {
+	switch(decl(st,i,type)) {
 	case DECL_MODULE:
 	    // skip module decl (covered by objects)
-	    i += st->ram_decl[i].md.n + 1;
+	    i += decl(st,i,md.n) + 1;
 	    break;
 	case DECL_VARIABLE:
 	    csp_dump_var(f,st,"var","",0,i,fo,lang);
@@ -391,6 +400,16 @@ void csp_dump_state(FILE* f, csp_rt_t* st, csp_lang_t lang)
 	    break;
 	case DECL_BUFFER:
 	    csp_dump_var(f,st,"var","",0,i,fo,lang);
+	    fo = 0;
+	    i++;
+	    break;
+	case DECL_DIGITAL:
+	    csp_dump_var(f,st,"digital","",0,i,fo,lang);
+	    fo = 0;
+	    i++;
+	    break;
+	case DECL_ANALOG:
+	    csp_dump_var(f,st,"analog","",0,i,fo,lang);
 	    fo = 0;
 	    i++;
 	    break;
@@ -405,7 +424,7 @@ void csp_dump_state(FILE* f, csp_rt_t* st, csp_lang_t lang)
 	    break;
 	}
     }
-    
+
     for (q = 1; q <= st->ps.nq; q++) {
 	csp_dump_object(f,st,q,fo,lang);
 	fo = 0;
@@ -459,9 +478,9 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     int vt = V_INTEGER;
     
     fprintf(f, "%s", indent(lev));
-    switch(st->ram_decl[i].type) {
+    switch(decl(st,i,type)) {
     case DECL_MODULE: {
-	index_t n = st->ram_decl[i].md.n;
+	index_t n = decl(st,i,md.n);
 	int j;
 	fprintf(f, "{decl,%d,module,'%s',[\n", i, decl_name(st, ix));
 	i++;
@@ -477,77 +496,77 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     case DECL_OBJECT:
 	fprintf(f, "{decl,%d,object,'%s','%s'}%s\n",
 		i,
-		decl_name(st, st->ram_decl[i].mq.mx),
+		decl_name(st, decl(st,i,mq.mx)),
 		decl_name(st, ix), eot);
 	break;
     case DECL_VARIABLE:
-	vt = st->ram_decl[i].vt;
+	vt = decl(st,i,vt);
 	fprintf(f, "{decl,%d,variable,\"%s\",[{size,%d},{dir,%s},{type,%s},{init,",
 		i,
 		decl_name(st, ix),
-		GET_RES(st->ram_decl[i].res),
-		csp_fmt_pindir(st->ram_decl[i].dir),
+		GET_RES(decl(st,i,res)),
+		csp_fmt_pindir(decl(st,i,dir)),
 		csp_fmt_vtype(vt));
-	csp_fprint_value(f, st, vt, st->ram_decl[i].va.init);
+	csp_fprint_value(f, st, vt, decl(st,i,va.init));
 	fprintf(f, "},{value,");
 	csp_fprint_value(f, st, vt, csp_value(st, ix));
 	fprintf(f, "}]}%s\n", eot);
 	break;
     case DECL_CONSTANT:
-	vt = st->ram_decl[i].vt;	    
+	vt = decl(st,i,vt);	    
 	fprintf(f, "{decl,%d,constant,\"%s\",[{size,%d},{type,%s},{init,",
 		i,
 		decl_name(st, ix),
-		GET_RES(st->ram_decl[i].res),
+		GET_RES(decl(st,i,res)),
 		csp_fmt_vtype(vt));
-	csp_fprint_value(f, st, vt, st->ram_decl[i].cn.init);
+	csp_fprint_value(f, st, vt, decl(st,i,cn.init));
 	fprintf(f, "},{value,");
 	csp_fprint_value(f, st, vt, csp_value(st, ix));
 	fprintf(f, "}]}%s\n", eot);	
 	break;
     case DECL_DIGITAL:
-	vt = st->ram_decl[i].vt; // should be unsigned
+	vt = decl(st,i,vt); // should be unsigned
 	fprintf(f, "{decl,%d,digital,\"%s\",[{dir,%s},{pull,%s},{port,%d},{pin,%d}]}%s\n",
 		i,
 		decl_name(st, ix),
-		csp_fmt_pindir(st->ram_decl[i].dir),
+		csp_fmt_pindir(decl(st,i,dir)),
 		csp_fmt_pull(st, i),
-		st->ram_decl[i].di.port,st->ram_decl[i].di.pin,
+		decl(st,i,di.port),decl(st,i,di.pin),
 		eot);
 	break;
     case DECL_ANALOG:
-	vt = st->ram_decl[i].vt;	    
+	vt = decl(st,i,vt);	    
 	fprintf(f,"{decl,%d,analog,\"%s\",[{size,%d},{type,%s},{dir,%s},{pwm,%s},{port,%d},{pin,%d}]}%s\n",
 	       i,
 		decl_name(st, ix),
-		GET_RES(st->ram_decl[i].res),
+		GET_RES(decl(st,i,res)),
 		csp_fmt_vtype(vt),
-		csp_fmt_pindir(st->ram_decl[i].dir),
+		csp_fmt_pindir(decl(st,i,dir)),
 		csp_fmt_pwm(st, i),
-		st->ram_decl[i].an.port, st->ram_decl[i].an.pin,
+		decl(st,i,an.port), decl(st,i,an.pin),
 		eot);
 	break;
     case DECL_TIMER:
-	vt = st->ram_decl[i].vt;
+	vt = decl(st,i,vt);
 	fprintf(f, "{decl,%d,timer,\"%s\",[{period,%d},{value,%d}]}%s\n",
 		i,
 		decl_name(st, ix),
-		st->ram_decl[i].tm.period,
-		st->ram_decl[i].tm.init,
+		decl(st,i,tm.period),
+		decl(st,i,tm.init),
 		eot);
 	break;
     case DECL_CAN:
-	vt = st->ram_decl[i].vt;
+	vt = decl(st,i,vt);
 	fprintf(f, "{decl,%d,can,\"%s\",[{size,%d},{type,%s},{endian,%s},{dir,%s},{id,16#%x},{bit,%d},{len,%d}]}%s\n",
 		i,
 		decl_name(st, ix),
-		GET_RES(st->ram_decl[i].res),
+		GET_RES(decl(st,i,res)),
 		csp_fmt_vtype(vt),
-		csp_fmt_endian(st->ram_decl[i].ca.endian),
-		csp_fmt_pindir(st->ram_decl[i].dir),
-		csp_ivalue(st, st->ram_decl[i].ca.id),
-		st->ram_decl[i].ca.bit,
-		GET_CAN_LEN(st->ram_decl[i].ca.len), eot);
+		csp_fmt_endian(decl(st,i,ca.endian)),
+		csp_fmt_pindir(decl(st,i,dir)),
+		csp_ivalue(st, decl(st,i,ca.id)),
+		decl(st,i,ca.bit),
+		GET_CAN_LEN(decl(st,i,ca.len)), eot);
 	break;
     default:
 	break;
@@ -610,7 +629,7 @@ void csp_dump(FILE* f, csp_rt_t* st)
 	index_t ix = st->object[m];
 	fputc(',', f);
 	fprintf(f, "{'%s',%d,",
-		decl_name(st, st->ram_decl[INDEX(ix)].mq.mx),
+		decl_name(st, decl(st,INDEX(ix),mq.mx)),
 		st->offs[m]);
 	csp_fprint_tag(f, st, ix);
 	fprintf(f, "}");
@@ -748,54 +767,58 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
     fprintf(f, "const int rom_n_decl RODATA = %d;\n", st->ps.nd);
     fprintf(f, "const csp_decl_t rom_decl[%d] RODATA = {\n", st->ps.nd);
     for (i = 0; i < st->ps.nd; i++) {
-	// fixme: output .type as DECL_abc
+	// csp_decl_t is a UNION whose every arm begins with DECL_COMMON, so the
+	// common fields MUST be written inside the same arm designator as the
+	// type-specific fields -- a trailing ".va={..}" would otherwise clobber
+	// (zero) the common fields set before it (last union initializer wins).
 	csp_decl_t* dp = &st->ram_decl[i];
-	fprintf(f, "  {.type=%s,.name=%u,.vt=%s,.res=%u,.dir=%u,",
-		csp_cfmt_dtype(dp->type), dp->name, csp_cfmt_vtype(dp->vt),
-		dp->res, dp->dir);
+	char cmn[128];
+	snprintf(cmn, sizeof(cmn), ".type=%s,.dir=%u,.name=%u,.vt=%s,.res=%u",
+		 csp_cfmt_dtype(dp->type), dp->dir, dp->name,
+		 csp_cfmt_vtype(dp->vt), dp->res);
 	switch(dp->type) {
 	case DECL_MODULE:
-	    fprintf(f, ".md={.nn=%u,.ent=%u}", dp->md.n, dp->md.ent);
-	    break;
-	case DECL_END:
+	    fprintf(f, "  {.md={%s,.n=%u,.ent=%u}},\n",
+		    cmn, dp->md.n, dp->md.ent);
 	    break;
 	case DECL_OBJECT:
-	    fprintf(f, ".mq={.mx=%u,.m=%u}", dp->mq.mx, dp->mq.m);
+	    fprintf(f, "  {.mq={%s,.mx=%u,.m=%u}},\n",
+		    cmn, dp->mq.mx, dp->mq.m);
 	    break;
 	case DECL_VARIABLE:
-	    fprintf(f, ".va={%u}", dp->va.init.u);
+	    fprintf(f, "  {.va={%s,.init={.u=%u}}},\n", cmn, dp->va.init.u);
 	    break;
 	case DECL_CONSTANT:
-	    fprintf(f, ".cn={%u}", dp->va.init.u);
-	    break; 
+	    fprintf(f, "  {.cn={%s,.init={.u=%u}}},\n", cmn, dp->cn.init.u);
+	    break;
 	case DECL_DIGITAL:
-	    fprintf(f, ".di={.pin=%u,.port=%u,.pullup=%u,.pulldown=%u}",
-		    dp->di.pin, dp->di.port, dp->di.pullup, dp->di.pulldown);
+	    fprintf(f, "  {.di={%s,.pin=%u,.port=%u,.pullup=%u,.pulldown=%u}},\n",
+		    cmn, dp->di.pin, dp->di.port, dp->di.pullup, dp->di.pulldown);
 	    break;
 	case DECL_ANALOG:
-	    fprintf(f, ".an={.pin=%u,.port=%u,.pwm=%u}",
-		    dp->an.pin, dp->an.port, dp->an.pwm);
+	    fprintf(f, "  {.an={%s,.pin=%u,.port=%u,.pwm=%u,.endian=%u}},\n",
+		    cmn, dp->an.pin, dp->an.port, dp->an.pwm, dp->an.endian);
 	    break;
 	case DECL_CAN:
-	    fprintf(f, ".an={.id=%u,.endian=%u,.bit=%u,.len=%u}",
-		    dp->ca.id, dp->ca.endian, dp->ca.bit, dp->ca.len);
+	    fprintf(f, "  {.ca={%s,.id=%u,.endian=%u,.bit=%u,.len=%u}},\n",
+		    cmn, dp->ca.id, dp->ca.endian, dp->ca.bit, dp->ca.len);
 	    break;
 	case DECL_TIMER:
-	    fprintf(f, ".tm={0,.period=%u,.init=%u}",
-		    dp->tm.period, dp->tm.init);
+	    fprintf(f, "  {.tm={%s,.period=%u,.init=%u}},\n",
+		    cmn, (unsigned)dp->tm.period, dp->tm.init);
 	    break;
-	case DECL_BUFFER: // no extra union fields (res/vt/dir already printed)
-	    break;
-	case DECL_VIEW:   // synthetic; not emitted to ROM
-	    break;
+	case DECL_END:    // common fields only (anonymous union arm)
+	case DECL_BUFFER: // no extra union fields (res/vt/dir already in cmn)
+	case DECL_VIEW:   // synthetic; emitted as common only
 #if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
-	case DECL_STATES: // do not generate decl
-	case DECL_IN:     // do not generate decl
+	case DECL_STATES:
+	case DECL_IN:
 #endif
-	case DECL_NONE:   // do not generate decl, not used
+	case DECL_NONE:
+	default:
+	    fprintf(f, "  {%s},\n", cmn);
 	    break;
 	}
-	fprintf(f, "},\n");
     }
     fprintf(f, "};\n");
 
@@ -803,61 +826,64 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
     fprintf(f, "const int rom_n_instr RODATA = %d;\n", st->ps.nn);
     fprintf(f, "const csp_instr_t rom_instr[%d] RODATA = {\n", st->ps.nn);
     for (i = 0; i < st->ps.nn; i++) {
+	// csp_instr_t is a UNION whose every arm begins with INSTR_COMMON (op),
+	// so .op MUST be written inside the same arm designator -- a leading
+	// ".op=..,.m={..}" would let the .m arm clobber (zero) op to OP_NOP.
 	csp_instr_t* ip = &st->ram_instr[i];
-	fprintf(f, "  {.op=OP_%s,", csp_opcode_name(ip->op));
+	char op[24];
+	snprintf(op, sizeof(op), ".op=OP_%s", csp_opcode_name(ip->op));
 	switch(ip->op) {
 	    // FIXME: OP_ENTER/OP_LEAVE could share format?
 	case OP_ENTER:
-	    fprintf(f, ".e={.num=%u,.mx=%u}", ip->e.num, ip->e.mx);
-	    break;	    
+	    fprintf(f, "  {.e={%s,.num=%u,.mx=%u}},\n", op, ip->e.num, ip->e.mx);
+	    break;
 	case OP_LEAVE:
-	    fprintf(f, ".v={.num=%u,.mx=%u}", ip->v.num, ip->v.mx);
-	    break;	    
+	    fprintf(f, "  {.v={%s,.num=%u,.mx=%u}},\n", op, ip->v.num, ip->v.mx);
+	    break;
 	case OP_NEW:
-	    fprintf(f, ".n={.ent=%u,.obj=%u}", ip->n.ent, ip->n.obj);
+	    fprintf(f, "  {.n={%s,.ent=%u,.obj=%u}},\n", op, ip->n.ent, ip->n.obj);
 	    break;
 	case OP_LI:
 	case OP_LIU:
 	case OP_LIH:
 	case OP_ARG:
-	    fprintf(f, ".i={.x=%u,.imm=%d}", ip->i.x, ip->i.imm);
+	    fprintf(f, "  {.i={%s,.x=%u,.imm=%d}},\n", op, ip->i.x, ip->i.imm);
 	    break;
 	case OP_ST:
 	case OP_STIMP:
 	case OP_CHG:
 	case OP_LD:
-	    fprintf(f, ".m={.x=%u,.mem=%u}", ip->m.x, ip->m.mem);
+	    fprintf(f, "  {.m={%s,.x=%u,.mem=%u}},\n", op, ip->m.x, ip->m.mem);
 	    break;
 	case OP_STP:
 	case OP_LDP:
-	    fprintf(f, ".m={.x=%u,.mem=%u,.part=%u}",
-		    ip->m.x, ip->m.mem, ip->m.y);
+	    fprintf(f, "  {.m={%s,.x=%u,.mem=%u,.y=%u}},\n",
+		    op, ip->m.x, ip->m.mem, ip->m.y);
+	    break;
+	case OP_EQI:
+	    fprintf(f, "  {.mi={%s,.x=%u,.mem=%u,.imm=%d}},\n",
+		    op, ip->mi.x, ip->mi.mem, ip->mi.imm);
 	    break;
 	case OP_CALL:
-	    fprintf(f, ".f={.x=%u,.idx=%u,.usr=%u,.avt=0x%04x}",
-		    ip->f.x, ip->f.idx, ip->f.usr, ip->f.avt);
+	    fprintf(f, "  {.f={%s,.x=%u,.idx=%u,.usr=%u,.avt=0x%04x}},\n",
+		    op, ip->f.x, ip->f.idx, ip->f.usr, ip->f.avt);
 	    break;
 	case OP_NEXT:
-	    fprintf(f, ".x={.x=%u}",
-		    ip->a.x);
+	    fprintf(f, "  {.x={%s,.x=%u}},\n", op, ip->x.x);
 	    break;
 	case OP_RULE:
-	    fprintf(f, ".r={.cnd=%u,.nxt=%u}", ip->r.cnd, ip->r.nxt);
+	    fprintf(f, "  {.r={%s,.cnd=%u,.nxt=%d}},\n", op, ip->r.cnd, ip->r.nxt);
 	    break;
 	default: // two/three-address-instruction
-	    // int t = csp_opcode_to_tok(ip->op);
 	    if (op_info[ip->op].arity == 1)
-	    // if (op_table[t].arity == 1)
-		fprintf(f, ".a={.x=%u,.y=%u}",
-			ip->a.x, ip->a.y);
+		fprintf(f, "  {.a={%s,.x=%u,.y=%u}},\n", op, ip->a.x, ip->a.y);
 	    else if (op_info[ip->op].arity == 2)
-		fprintf(f, ".a={.x=%u,.y=%u,.z=%u}",
-			ip->a.x, ip->a.y, ip->a.z);
+		fprintf(f, "  {.a={%s,.x=%u,.y=%u,.z=%u}},\n",
+			op, ip->a.x, ip->a.y, ip->a.z);
 	    else
-		fprintf(f, ".a={???}");
+		fprintf(f, "  {%s},\n", op);  // no operands (NOP etc)
 	    break;
 	}
-	fprintf(f, "},\n");
     }
     fprintf(f, "};\n");    
 }
@@ -869,7 +895,7 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
     index_t ix = MAKE_INDEX(0,i);
     int vt = V_INTEGER;
     
-    switch(st->ram_decl[i].type) {
+    switch(decl(st,i,type)) {
     case DECL_MODULE:
 	fprintf(f, "#module %s\n", decl_name(st, ix));
 	break;
@@ -878,64 +904,64 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 	break;
     case DECL_OBJECT:
 	fprintf(f, "#%s %s\n",
-		decl_name(st, st->ram_decl[i].mq.mx),
+		decl_name(st, decl(st,i,mq.mx)),
 		decl_name(st, ix));
 	break;
     case DECL_VARIABLE:
-	vt = st->ram_decl[i].vt;
+	vt = decl(st,i,vt);
 	fprintf(f, "#variable %s:%d %s %s = ", // show init value
 		decl_name(st, ix),
-		GET_RES(st->ram_decl[i].res),
-		csp_fmt_pindir(st->ram_decl[i].dir),
+		GET_RES(decl(st,i,res)),
+		csp_fmt_pindir(decl(st,i,dir)),
 		csp_fmt_vtype(vt));
-	csp_fprint_value(f, st, vt, st->ram_decl[i].va.init);
+	csp_fprint_value(f, st, vt, decl(st,i,va.init));
 	fprintf(f, "\n");
 	break;
     case DECL_CONSTANT:
-	vt = st->ram_decl[i].vt;	    
+	vt = decl(st,i,vt);	    
 	fprintf(f, "#constant %s:%d %s = ",
 		decl_name(st, ix),
-		GET_RES(st->ram_decl[i].res),
+		GET_RES(decl(st,i,res)),
 		csp_fmt_vtype(vt));
-	csp_fprint_value(f, st, vt, st->ram_decl[i].cn.init);
+	csp_fprint_value(f, st, vt, decl(st,i,cn.init));
 	fprintf(f, "\n");	
 	break;
     case DECL_DIGITAL:
-	vt = st->ram_decl[i].vt; // should be unsigned
+	vt = decl(st,i,vt); // should be unsigned
 	fprintf(f, "#digital %s %s %s %d:%d\n",
 		decl_name(st, ix),
-		csp_fmt_pindir(st->ram_decl[i].dir),
+		csp_fmt_pindir(decl(st,i,dir)),
 		csp_fmt_pull(st, i),
-		st->ram_decl[i].di.port,st->ram_decl[i].di.pin);
+		decl(st,i,di.port),decl(st,i,di.pin));
 	break;
     case DECL_ANALOG:
-	vt = st->ram_decl[i].vt;
+	vt = decl(st,i,vt);
 	fprintf(f,"#analog %s:%d %s %s %s %d:%d\n",
 		decl_name(st, ix),
-		GET_RES(st->ram_decl[i].res),
+		GET_RES(decl(st,i,res)),
 		csp_fmt_vtype(vt),
-		csp_fmt_pindir(st->ram_decl[i].dir),
+		csp_fmt_pindir(decl(st,i,dir)),
 		csp_fmt_pwm(st, i),
-		st->ram_decl[i].an.port, st->ram_decl[i].an.pin);
+		decl(st,i,an.port), decl(st,i,an.pin));
 	break;
     case DECL_TIMER:
-	vt = st->ram_decl[i].vt;
+	vt = decl(st,i,vt);
 	fprintf(f, "#timer %s %d = %d\n",
 		decl_name(st, ix),
-		st->ram_decl[i].tm.period,
-		st->ram_decl[i].tm.init);
+		decl(st,i,tm.period),
+		decl(st,i,tm.init));
 	break;
     case DECL_CAN:
-	vt = st->ram_decl[i].vt;
+	vt = decl(st,i,vt);
 	fprintf(f, "#can %s:%d %s %s %s 0x%x[%d:%d]\n",
 		decl_name(st, ix),
-		GET_RES(st->ram_decl[i].res),
+		GET_RES(decl(st,i,res)),
 		csp_fmt_vtype(vt),
-		csp_fmt_endian(st->ram_decl[i].ca.endian),
-		csp_fmt_pindir(st->ram_decl[i].dir),
-		csp_ivalue(st, st->ram_decl[i].ca.id),
-		st->ram_decl[i].ca.bit,
-		st->ram_decl[i].ca.bit + GET_CAN_LEN(st->ram_decl[i].ca.len));
+		csp_fmt_endian(decl(st,i,ca.endian)),
+		csp_fmt_pindir(decl(st,i,dir)),
+		csp_ivalue(st, decl(st,i,ca.id)),
+		decl(st,i,ca.bit),
+		decl(st,i,ca.bit) + GET_CAN_LEN(decl(st,i,ca.len)));
 	break;
     default:
 	break;
@@ -950,569 +976,24 @@ void csp_list_declarations(FILE* f, csp_rt_t* st)
 	i = csp_list_decl(f, st, i);
 }
 
-#define MAX_STRPTRS 64
-#define MAX_BODY 16
-#define PRINT_STACK 16
-#define STRREF(i)  (0x80|(i))
-#define IS_REF(x)  ((x) & 0x80)
-#define REF_IDX(x) ((x) & 0x7f)
 
-typedef struct {
-    uint8_t pos;
-    uint8_t buf[MAX_STR_BUF];
-    uint8_t nstrptrs;
-    uint8_t* strptrs[MAX_STRPTRS];
-    uint8_t strlens[MAX_STRPTRS];   // length of strptrs[i]
-    bitset_decl(strflags, MAX_STRPTRS);   // RODATA or not
-    //
-    uint8_t prio[MAX_REGS];
-    uint8_t reg[MAX_REGS];    // INDEX!
-    uint8_t arg[MAX_ARGS];    // INDEX
-    // body side-effects list
-    uint8_t nbody;
-    uint8_t body[MAX_BODY];   // strptrs indices
-} csp_exprbuf_t;
-
-void exprbuf_init(csp_exprbuf_t* bp)
-{
-    bp->pos = 0;
-    bp->nstrptrs = 0;
-    bp->nbody = 0;
-}
-
-// return current pointer
-static uint8_t* exprbuf_ptr(csp_exprbuf_t* bp)
-{
-    return bp->buf + bp->pos;
-}
-
-// return length given start pointer
-static uint8_t exprbuf_len(csp_exprbuf_t* bp, uint8_t* ptr0)
-{
-    return (bp->buf + bp->pos) - ptr0;
-}
-
-#if 0
-// pre-allocate len bytes
-static uint8_t* exprbuf_alloc(csp_exprbuf_t* bp, int len)
-{
-    uint8_t* ptr = bp->buf + bp->pos;
-    bp->pos += len;
-    return ptr;
-}
-#endif
-
-// print expresssion r must be a index or tagged index
-void exprbuf_print(FILE* f, csp_exprbuf_t* bp, unsigned idx)
-{
-    typedef struct { unsigned char *p; unsigned char *end; } frame_t;
-    frame_t stack[PRINT_STACK];
-    int top = 0;
-
-    stack[top].p = bp->strptrs[REF_IDX(idx)];
-    stack[top].end = stack[top].p + bp->strlens[REF_IDX(idx)];
-    top++;
-
-    while (top > 0) {
-        frame_t *sp = &stack[--top];
-        while (sp->p < sp->end) {
-            unsigned char b = *sp->p++;
-            if (IS_REF(b)) {
-                if (sp->p < sp->end)
-                    stack[top++] = *sp;
-                stack[top].p   = bp->strptrs[REF_IDX(b)];
-                stack[top].end = stack[top].p + bp->strlens[REF_IDX(b)];
-                top++;
-                goto next_frame;
-            }
-#ifdef __AVR__
-            // pgm_read_byte om romflag satt — hanteras i strentry
-#endif
-            fputc(b, f);
-        }
-        continue;
-next_frame:;
-    }
-}
-
-// return strptrs index
-static uint8_t exprbuf_intern(csp_exprbuf_t* bp, uint8_t* ptr, uint8_t len)
-{
-    int i;
-    int n = bp->nstrptrs;
-    for (i = 0; i < n; i++) {
-	// fixme check same memspace (AVR)
-	if ((bp->strptrs[i] == ptr) && (bp->strlens[i] == len))
-	    return i;
-	// optimise string extension?
-    }
-    bp->strptrs[n] = ptr;
-    bp->strlens[n] = len;
-    bp->nstrptrs++;
-    return n;
-}
-
-static void exprbuf_char(csp_exprbuf_t* bp, char c)
-{
-    bp->buf[bp->pos++] = c;
-}
-
-static void exprbuf_strref(csp_exprbuf_t* bp, uint8_t ix)
-{
-    bp->buf[bp->pos++] = STRREF(ix);
-}
-
-static void exprbuf_str(csp_exprbuf_t* bp, const char *s)
-{
-    char c;
-    while ((c = *s++)) exprbuf_char(bp, c);
-}
-
-static uint8_t exprbuf_var(csp_rt_t* st, csp_exprbuf_t* bp, uint16_t ix)
-{
-    uint8_t *start = exprbuf_ptr(bp);
-    int m = OBJ(ix);
-    
-    if ((m != GLOBAL) && (m != CURRENT)) {
-	exprbuf_str(bp, decl_name(st, st->object[m]));
-	exprbuf_char(bp, '.');
-    }
-    exprbuf_str(bp, decl_name(st, ix));
-    return exprbuf_intern(bp, start, exprbuf_len(bp, start));
-}
-
-static void exprbuf_wrap(csp_exprbuf_t* bp, unsigned r, int outer)
-{
-    if (bp->prio[r] < outer) {
-        exprbuf_char(bp, '(');
-        exprbuf_strref(bp, bp->reg[r]);
-	exprbuf_char(bp, ')');
-    }
-    else {
-        exprbuf_strref(bp, bp->reg[r]);
-    }
-}
-
-static void exprbuf_uint16(csp_exprbuf_t* bp, uint16_t v)
-{
-    if (v >= 10000) { exprbuf_char(bp, (v / 10000)+'0'); v %= 10000; }
-    if (v >= 1000)  { exprbuf_char(bp, (v / 1000)+'0'); v %= 1000; }
-    if (v >= 100)   { exprbuf_char(bp, (v / 100)+'0'); v %= 100; }
-    if (v >= 10)    { exprbuf_char(bp, (v / 10)+'0'); v %= 10; }
-    exprbuf_char(bp, v+'0');
-}
-
-static void exprbuf_int16(csp_exprbuf_t* bp, int16_t v)
-{
-    if (v < 0) {
-	exprbuf_char(bp, '-');
-	exprbuf_uint16(bp, -v);
-    }
-    else {
-	exprbuf_uint16(bp, v);
-    }
-}
-
-// convert string(ref) to integer
-static int exprbuf_reftoi(csp_exprbuf_t* bp, uint8_t ref)
-{
-    uint8_t* ptr = bp->strptrs[REF_IDX(ref)];
-    int len = bp->strlens[REF_IDX(ref)];
-    int val = 0;
-    while(len--)
-	val = val*10 + (*ptr++ - '0');
-    return val;
-}
-
-// true if ref string is a plain decimal number (an immediate)
-static int exprbuf_ref_isnum(csp_exprbuf_t* bp, uint8_t ref)
-{
-    uint8_t* ptr = bp->strptrs[REF_IDX(ref)];
-    int len = bp->strlens[REF_IDX(ref)];
-    if (len == 0) return 0;
-    while(len--) {
-	if (*ptr < '0' || *ptr > '9') return 0;
-	ptr++;
-    }
-    return 1;
-}
-
-char hex(uint8_t v)
-{
-    if (v < 10) return v+'0';
-    return (v-10) + 'a';
-}
-
-static void __xuint16(csp_exprbuf_t* bp, uint16_t v)
-{
-    exprbuf_char(bp, hex((v >> 12)&0xf));
-    exprbuf_char(bp, hex((v >> 8)&0xf));
-    exprbuf_char(bp, hex((v >> 4)&0xf));
-    exprbuf_char(bp, hex((v >> 0)&0xf));
-}
-
-static void exprbuf_xuint16(csp_exprbuf_t* bp, uint16_t v)
-{
-    exprbuf_char(bp, '0');
-    exprbuf_char(bp, 'x');
-    __xuint16(bp, v);
-}
-
-static void exprbuf_xint16(csp_exprbuf_t* bp, int16_t v)
-{
-    if (v < 0) {
-	exprbuf_char(bp, '-');
-	v = -v;
-    }
-    exprbuf_char(bp, '0');
-    exprbuf_char(bp, 'x');	
-    __xuint16(bp, v);
-}
-
-static void exprbuf_alu(csp_exprbuf_t* bp,
-			csp_instr_t* ip,
-			const char *op,
-			int arity, int prio)
-{
-    uint8_t* start = exprbuf_ptr(bp);
-    if (arity == 1) {
-	exprbuf_str(bp, op);
-	exprbuf_wrap(bp, ip->a.y, prio);
-    }
-    else { // assume 2
-	// Skip empty operands (from CHG in <- rules)
-	int y_empty = (bp->strlens[bp->reg[ip->a.y]] == 0);
-	int z_empty = (bp->strlens[bp->reg[ip->a.z]] == 0);
-	if (y_empty && z_empty) {
-	    bp->reg[ip->a.x] = bp->reg[ip->a.y];  // both empty
-	    bp->prio[ip->a.x] = prio;
-	    return;
-	}
-	if (y_empty) {
-	    bp->reg[ip->a.x] = bp->reg[ip->a.z];
-	    bp->prio[ip->a.x] = bp->prio[ip->a.z];
-	    return;
-	}
-	if (z_empty) {
-	    bp->reg[ip->a.x] = bp->reg[ip->a.y];
-	    bp->prio[ip->a.x] = bp->prio[ip->a.y];
-	    return;
-	}
-	exprbuf_wrap(bp, ip->a.y, prio);
-	exprbuf_str(bp, op);
-	exprbuf_wrap(bp, ip->a.z, prio);
-    }
-    bp->reg[ip->a.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
-    bp->prio[ip->a.x] = prio;
-}
-
-static void exprbuf_fcall(csp_rt_t* st,
-			  csp_exprbuf_t* bp,
-			  csp_instr_t* ip)
-{
-    int i;
-    uint8_t* start = exprbuf_ptr(bp);
-    const char* fname;
-    int fnamelen;
-    uint8_t fn;
-    uint16_t argtypes;
-    
-    if (ip->f.usr) {
-	// maybe RODATA on AVR! fixme
-	fname = st->ufuncs[ip->f.idx].name;
-	fnamelen = st->ufuncs[ip->f.idx].namelen;
-	argtypes = st->ufuncs[ip->f.idx].argtypes;
-    }
-    else {
-	// always RODATA on AVR!
-	fname = csp_builtin_funcs[ip->f.idx].name;
-	fnamelen = csp_builtin_funcs[ip->f.idx].namelen;
-	argtypes = csp_builtin_funcs[ip->f.idx].argtypes;	
-    }
-    fn = exprbuf_intern(bp, (uint8_t*)fname, fnamelen);
-
-    exprbuf_strref(bp, fn);
-    exprbuf_char(bp, '(');
-    for (i = 0; i < MAX_ARGS; i++) {
-	int a = (ip->f.avt >> i*4) & 0xf;    // actual argument type
-	int d = (argtypes >> i*4) & 0xf;     // declared argument type
-	if (a == 0) break;
-	if (i > 0) exprbuf_char(bp, ',');
-	// a string literal arg is an immediate index into the string buffer
-	if ((a == V_STRING) && exprbuf_ref_isnum(bp, bp->arg[i])) {
-	    uint16_t sx = exprbuf_reftoi(bp, bp->arg[i]);
-	    exprbuf_char(bp, '"');
-	    exprbuf_str(bp, &st->ram_str[sx]);
-	    exprbuf_char(bp, '"');
-	    continue;
-	}
-	switch(d) {
-	case V_INDEX:
-	case V_TIMER:
-	case V_ANALOG:
-	case V_DIGITAL: {
-	    // convert argument assumed index integer
-	    uint16_t imm = exprbuf_reftoi(bp, bp->arg[i]);
-	    uint8_t var = exprbuf_var(st, bp, imm);
-	    exprbuf_strref(bp, var);
-	    break;
-	}
-	default:
-	    exprbuf_strref(bp, bp->arg[i]);
-	    break;
-	}
-    }
-    exprbuf_char(bp, ')');
-    bp->reg[ip->f.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
-    // printf("FCALL: R%d = '%s'\n", ip->f.x, bp->reg[ip->f.x]);
-    bp->prio[ip->f.x] = 110;
-}
-
-static void exprbuf_store(csp_rt_t* st,
-			  csp_exprbuf_t* bp,
-			  csp_instr_t* ip, int rimp)
-{
-    uint8_t* start;
-    uint8_t  var;
-
-    var = exprbuf_var(st, bp, ip->m.mem);
-    start = exprbuf_ptr(bp);
-    exprbuf_strref(bp, var);
-    if (rimp) exprbuf_str(bp, "<-");
-    else exprbuf_char(bp, '=');
-    exprbuf_strref(bp, bp->reg[ip->m.x]);
-
-    bp->reg[ip->m.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
-    bp->prio[ip->m.x] = 5;
-    if (bp->nbody < MAX_BODY)
-	bp->body[bp->nbody++] = bp->reg[ip->m.x];
-}
-
-static void exprbuf_ld(csp_rt_t* st,
-		       csp_exprbuf_t* bp,
-		       csp_instr_t* ip)
-{
-    uint8_t  var = exprbuf_var(st, bp, ip->m.mem);
-    bp->reg[ip->m.x] = var;
-    bp->prio[ip->m.x] = 110;
-}
-
-// exprbuf contains rule condition
-void exprbuf_rule(FILE* f, csp_rt_t* st, csp_exprbuf_t* bp, csp_instr_t* ip)
-{
-    if (f != NULL)
-	exprbuf_print(f, bp, bp->reg[ip->r.cnd]);
-}
-
-// exprbuf contains rule body - print side-effects then final expression
-void exprbuf_body(FILE* f, csp_rt_t* st, csp_exprbuf_t* bp, csp_instr_t* ip)
-{
-    int i;
-    for (i = 0; i < bp->nbody; i++) {
-	if (i > 0) fputc(',', f);
-	exprbuf_print(f, bp, bp->body[i]);
-    }
-    // add final expression if different from last body element
-    if (bp->nbody == 0 || bp->body[bp->nbody-1] != bp->reg[ip->x.x]) {
-	if (bp->nbody > 0) fputc(',', f);
-	exprbuf_print(f, bp, bp->reg[ip->x.x]);
-    }
-}
-
-// Is register reg (produced at instr i) read by a later instruction
-// before being redefined or the rule ends? Used to tell a void
-// statement-call (print) from a call whose result is consumed (x=f()).
-static int reg_consumed(csp_rt_t* st, int i, int reg)
-{
-    int j;
-    tok_t t;
-
-    for (j = i+1; j < st->ps.nn; j++) {
-	csp_instr_t* ip = &st->ram_instr[j];
-	switch (ip->op) {
-	case OP_NEXT:
-	case OP_RULE:
-	    return 0;  // rule boundary, never read
-	case OP_ST:
-	case OP_STP:
-	case OP_STIMP:
-	case OP_CHG:
-	    if (ip->m.x == reg) return 1;
-	    break;
-	case OP_ARG:
-	    if (ip->i.x == reg) return 1;
-	    break;
-	case OP_LD:
-	case OP_LDP:
-	    if (ip->m.x == reg) return 0;  // redefined
-	    break;
-	case OP_LI:
-	case OP_LIU:
-	case OP_LIH:
-	    if (ip->i.x == reg) return 0;  // redefined
-	    break;
-	case OP_CALL:
-	    if (ip->f.x == reg) return 0;  // redefined
-	    break;
-	case OP_MOV:
-	case OP_CVTIF:
-	case OP_CVTFI:
-	    if (ip->a.y == reg) return 1;
-	    if (ip->a.x == reg) return 0;  // redefined
-	    break;
-	default:
-	    t = op_info[ip->op].tok;
-	    if (tok_table[t].arity >= 0) {
-		if (ip->a.y == reg || ip->a.z == reg) return 1;
-		if (ip->a.x == reg) return 0;  // redefined
-	    }
-	    break;
-	}
-    }
-    return 0;
-}
-
-//
-// trace instructions util
-// 1. OP_RULE  then we have a condition expression
-// 2. OP_NEXT  then we have a body expression
-//
-static int exprbuf_expr(FILE* f, csp_rt_t*  st,
-			csp_exprbuf_t* bp,
-			int i)
-{
-    while(i < st->ps.nn) {
-	tok_t t;
-	csp_instr_t* ip = &st->ram_instr[i];
-	switch(ip->op) {
-	case OP_RULE:
-	    exprbuf_rule(f, st, bp, ip);
-	    return i+1;
-	case OP_NEXT:
-	    exprbuf_body(f, st, bp, ip);
-	    return i+1;
-        case OP_ST:  // assignment in body
-	    exprbuf_store(st, bp, ip, 0);
-	    break;
-	case OP_STIMP:  // reactive assignment (<-)
-	    exprbuf_store(st, bp, ip, 1);
-	    break;
-	case OP_CHG:
-	    // Mark register as "reactive condition" - empty string for AND to skip
-	    bp->reg[ip->m.x] = exprbuf_intern(bp, (uint8_t*)"", 0);
-	    bp->prio[ip->m.x] = 110;
-	    break;
-	case OP_ARG:
-	    bp->arg[ip->i.imm] = bp->reg[ip->i.x];
-	    break;
-	case OP_CALL:
-	    exprbuf_fcall(st, bp, ip);
-	    // A call result that is not consumed later is a void
-	    // statement (e.g. print) and belongs in the body list.
-	    if (!reg_consumed(st, i, ip->f.x)) {
-		if (bp->nbody < MAX_BODY)
-		    bp->body[bp->nbody++] = bp->reg[ip->f.x];
-	    }
-	    break;
-        case OP_LD:
-	case OP_LDP:  // best effort: renders as the plain variable (no .part yet)
-	    exprbuf_ld(st, bp, ip);
-	    break;
-        case OP_LIU: {
-            uint8_t *start = exprbuf_ptr(bp);
-            exprbuf_xuint16(bp, (uint16_t)ip->i.imm);
-	    bp->reg[ip->i.x] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
-            bp->prio[ip->i.x] = 110;
-            break;
-	}
-        case OP_LIH: {
-            uint8_t *start = exprbuf_ptr(bp);
-	    uint8_t ih;
-	    
-            exprbuf_xint16(bp, ip->i.imm);
-	    ih = exprbuf_intern(bp,start,exprbuf_len(bp, start));
-
-            start = exprbuf_ptr(bp);
-	    exprbuf_strref(bp, ih);
-	    exprbuf_char(bp, '.');	    
-	    exprbuf_strref(bp, bp->reg[ip->i.x]);  // from LIU
-	    
-	    bp->reg[ip->i.x] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
-            bp->prio[ip->i.x] = 110;
-            break;
-	}
-        case OP_LI: {
-            uint8_t *start = exprbuf_ptr(bp);
-            exprbuf_int16(bp, ip->i.imm);
-	    bp->reg[ip->i.x] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
-            bp->prio[ip->i.x] = 110;
-            break;
-	}
-	case OP_MOV:
-	case OP_CVTIF:   // type conversion is implicit in display
-	case OP_CVTFI: {
-	    bp->reg[ip->a.x] = bp->reg[ip->a.y];
-	    bp->prio[ip->a.x] = bp->prio[ip->a.y];
-	    break;
-	}
-	default:
-	    t = op_info[ip->op].tok;
-	    if (tok_table[t].arity >= 0) {
-		exprbuf_alu(bp, ip, tok_table[t].name,
-			    tok_table[t].arity, tok_table[t].prec);
-	    }
-	    break;
-	}
-	i++;
-    }
-    return i;
-}
-
-// ci:
-//    Condition
-// ri: OP_RULE: if !ri then NEXT
-//
-// ni: OP_NEXT:
-//
-int csp_list_rule(FILE* f, csp_rt_t* st, int i)
-{
-    int Lc = i;
-    csp_exprbuf_t buf;
-
-    while(i < st->ps.nn) {
-	if (st->ram_instr[i].op == OP_RULE) {
-	    csp_instr_t* ip = &st->ram_instr[i];
-	    fprintf(f, "RULE-%d\n", Lc);
-	    exprbuf_init(&buf);
-	    exprbuf_expr(f, st, &buf, i+1);   // print body
-	    // Build condition in buffer, check if non-empty
-	    exprbuf_init(&buf);
-	    exprbuf_expr(NULL, st, &buf, Lc); // build but don't print
-	    switch(buf.strlens[buf.reg[ip->r.cnd]]) {
-	    case 0:
-		break;
-	    case 2:
-		if ((buf.buf[buf.reg[ip->r.cnd]] == '-') &&
-		    (buf.buf[buf.reg[ip->r.cnd]+1] == '1'))
-		    break;		
-	    default:
-		fprintf(f, " ? ");
-		exprbuf_print(f, &buf, buf.reg[ip->r.cnd]);
-	    }
-	    fprintf(f, "\n");
-	    return i+st->ram_instr[i].r.nxt+1;
-	}
-	i++;
-    }
-    return i;
-}
 
 // rules are generate as code
 // here we try to reverse engineer the rules, is there a better way?
 //
+
+int csp_list_rule(csp_rt_t* st, int i)
+{
+    return csp_print_rule(st, i);
+}
+
 void csp_list_rules(FILE* f, csp_rt_t* st)
 {
     int i = 0;
-    while(i < st->ps.nn)
-	i = csp_list_rule(f, st, i);
+    void* savef = csp_set_file_output(f);
+    while(i < st->ps.nn) {
+	fprintf(f, "RULE-%d\n", i);
+	i = csp_list_rule(st, i);
+    }
+    csp_set_file_output(savef);
 }

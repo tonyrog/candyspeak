@@ -10,13 +10,13 @@
 
 #define CSP_EMBEDDED 1
 #include "csp.h"
-
-// Line input uses shared buffer from csp_rt.c:
-// csp_line_buf[], csp_line_pos, csp_line_ready
+#include "csp_print.h"
 
 csp_rt_t state;
 
 extern char __StackTop;
+
+EXTERN_C_BEGIN
 
 int stack_used(void)
 {
@@ -34,75 +34,92 @@ unsigned long csp_time_us(void)
     return micros();
 }
 
+static long serial_output = 0;
+
+void* csp_set_file_output(void* f)
+{
+    long prev = serial_output;
+    serial_output = (long) f;
+    return (void*) prev;
+}
+
+int csp_will_output()
+{
+    return (serial_output != 0);
+}
+
 // platform print functions
 int csp_print_char(char c)
 {
-    return Serial.write(c);
+    if (serial_output)
+	return Serial.write(c);
+    return 1;
 }
 
 int csp_print_str(const char* s)
 {
-    return Serial.print(s);
+    if (serial_output)
+	return Serial.print(s);
+    return strlen(s);    
 }
 
 #if defined(__AVR__)
 int csp_print_str_P(const rochar* s)
 {
-    return Serial.print((__FlashStringHelper*)s);
+    if (serial_output)    
+	return Serial.print((__FlashStringHelper*)s);
+    // fixme number of strlen_P(s);
+    return strlen_P(s);
 }
 #endif
 
 int csp_print_int(ivalue_t v)
 {
-    return Serial.print(v);
+    if (serial_output)    
+	return Serial.print(v);
+    return 1; // fixme number of chars?
 }
 
 int csp_print_uint(uvalue_t v)
 {
-    return Serial.print(v);
+    if (serial_output)        
+	return Serial.print(v);
+    return 1; // fixme number of chars?
 }
 
 int csp_print_float(fvalue_t v)
 {
-#if FVALUE_IS_FIXPOINT
-    int n;
-    int neg = (v < 0);
-    uint32_t absv = neg ? -v : v;
-    uint32_t intpart = absv >> FIX_SHIFT;
-    uint32_t fracpart = absv & FIX_MASK;
-    fracpart = (uint32_t)(((uint64_t)fracpart * 1000000) >> FIX_SHIFT);
-    if (neg) {
-	Serial.print('-');
-	n = 1 + Serial.print(intpart);
-    } else {
-	n = Serial.print(intpart);
-    }
-    Serial.print('.');
-    n++;
-    // Print with leading zeros (6 digits)
-    for (uint32_t d = 100000; d > 1; d /= 10) {
-	if (fracpart < d) { Serial.print('0'); n++; }
-    }
-    return n + Serial.print(fracpart);
+    if (serial_output) {
+#if FVALUE_IS_FIXPOINT    
+	return csp_print_fixpoint(v);
 #else
-    return Serial.print(v);
-#endif
+	return Serial.print(v);
+#endif	
+    }
+    return 1; // fixme: number of chars
 }
 
 int csp_print_hex(uvalue_t v)
 {
-    Serial.print("0x");
-    return Serial.print(v, HEX);
+    if (serial_output) {
+	Serial.print("0x");
+	return Serial.print(v, HEX);
+    }
+    return 1;
 }
 
 int csp_println(void)
 {
-    return Serial.println();
+    if (serial_output)
+	return Serial.println();
+    return 1;
 }
 
 void csp_flush(void)
 {
 }
+
+EXTERN_C_END
 
 
 int csp_uconst(csp_rt_t* st, const char* name, int len, ivalue_t* ret)
@@ -353,9 +370,10 @@ void serial_print_error(const char* msg)
 }
 
 // Platform-specific command implementations
-int csp_cmd_save(csp_rt_t* st, const char* args)
+int csp_cmd_save(csp_rt_t* st, int argc, char* argv[])
 {
-    (void)args;
+    (void)argc;
+    (void)argv;
     if (csp_eeprom_save(st) < 0) {
 	serial_print_error("cannot save eeprom");
 	return CSP_CMD_ERROR;
@@ -364,9 +382,10 @@ int csp_cmd_save(csp_rt_t* st, const char* args)
     return CSP_CMD_OK;
 }
 
-int csp_cmd_load(csp_rt_t* st, const char* args)
+int csp_cmd_load(csp_rt_t* st, int argc, char* argv[])
 {
-    (void)args;
+    (void)argc;
+    (void)argv;
     if (csp_eeprom_load(st) < 0) {
 	serial_print_error("cannot load from eeprom");
 	return CSP_CMD_ERROR;
@@ -385,7 +404,8 @@ void setup()
     Serial.begin(115200);
     while (!Serial) { ; }  // wait for USB serial
 
-    csp_rt_init(&state, TRANSACTION_DEFAULT, REACTIVE_DEFAULT);
+    serial_output = 1;
+    csp_rt_init(&state, REACTIVE_DEFAULT);
 
     // try to load from EEPROM
     int r = csp_eeprom_load(&state);

@@ -249,6 +249,7 @@ typedef struct {
 #include "csp_fixpoint.h"
 typedef fixpoint_t fvalue_t;
 #define FVALUE_IS_FIXPOINT 1
+extern int csp_print_fixpoint(fvalue_t v);
 #else
 typedef float fvalue_t;
 #define FVALUE_IS_FIXPOINT 0
@@ -496,6 +497,7 @@ typedef enum {
     OP_LIH,     // load high 16-bit (OR into high bits)
     OP_ARG,     // load argument from register
     OP_CALL,    // function call:
+    OP_EQI,     // compare memory with 8 bit value, result in x
     OP_LAST,
 } opcode_t;
 
@@ -527,7 +529,7 @@ typedef enum {
     DECL_VIEW=13,           // synthetic bit/byte view into a buffer (Buf[a..b])
 } decl_t;
 
-#define DECL_TYPE(s,i) ((s)->ram_decl[(i)].type)
+#define DECL_TYPE(s,i) (decl((s),(i),type))
 #define IS_CONST(s,i)  (DECL_TYPE((s),(i))==DECL_CONSTANT)
 #define IS_CAN(s,i)    (DECL_TYPE((s),(i))==DECL_CAN)
 
@@ -585,12 +587,20 @@ typedef struct PACKED {
 //   x = mem[part]
 // 
 typedef struct PACKED {
-    INSTR_COMMON;    
+    INSTR_COMMON;
     unsigned x:REG_BITS;      // destination register
     unsigned y:REG_BITS;      // y register when pos, y imm when part (STP)
     unsigned z:REG_BITS;      // len register
     unsigned mem:INDEX_BITS;  // declaration: variable/constant
 } csp_instr_mem_t;
+
+// op EQI - compare 8 bit immediate with memory and store in x
+typedef struct PACKED {
+    INSTR_COMMON;
+    unsigned x:REG_BITS;      // destination register
+    signed imm:8;             // y register when pos, y imm when part (STP)
+    unsigned mem:INDEX_BITS;  // declaration: variable/constant
+} csp_instr_memi_t;
 
 // op LI / ARG
 // load immediate LI load small 16 bit signed constant
@@ -645,6 +655,7 @@ typedef union {
     csp_instr_new_t n;
     csp_instr_imm_t i;
     csp_instr_mem_t m;
+    csp_instr_memi_t mi;
     csp_instr_call_t f;
     csp_instr_rule_t r;
     csp_instr_next_t x;    
@@ -815,20 +826,6 @@ typedef struct
 } state_t;
 #endif
 
-#define SEGMENT_ROM 0x01
-#define SEGMENT_RAM 0x02
-#define SEGMENT_RO  0x80           // RO data PGMEM on avr
-
-typedef struct segment {
-    const char*        str;         // string table
-    uint16_t           str_len;
-    const csp_decl_t*  decl;    // declarations
-    uint16_t           n_decl;
-    const csp_instr_t* instr;   // instructions  
-    uint16_t           n_instr;
-    uint16_t           decl_base;   // index offset for this segment
-    uint8_t            flags;
-} segment_t;
 
 typedef struct _csp_rt_t
 {
@@ -844,12 +841,13 @@ typedef struct _csp_rt_t
     csp_view_t view[MAX_INDEX];   // per-leaf view descriptor
     csp_buf_t  buf[MAX_BUFS];     // buffer table
     index_t    nbuf;              // number of buffers allocated
-    uint8_t*   heap[2];           // heap[DIN], heap[DOUT]
+    // The transaction model is permanent: rules read the committed DIN heap and
+    // write the DOUT shadow; csp_commit copies dirty leaves DOUT->DIN. So a cycle
+    // never sees its own writes -> sequential and reactive yield the same state.
+    uint8_t*   heap[2];           // heap[DIN]=heap0, heap[DOUT]=heap1
     // 4-aligned so VIEW_SLOT value_t access into the heap is aligned
-    uint8_t    heap0[MAX_HEAP] __attribute__((aligned(4)));
-#if defined(SUPPORT_TRANSACTION) && (SUPPORT_TRANSACTION==1)
-    uint8_t    heap1[MAX_HEAP] __attribute__((aligned(4)));  // transaction shadow
-#endif
+    uint8_t    heap0[MAX_HEAP] __attribute__((aligned(4)));  // committed (DIN)
+    uint8_t    heap1[MAX_HEAP] __attribute__((aligned(4)));  // shadow (DOUT)
     // allow device output latch=0 or disallow latch=1
     uint8_t latch;
     // check if any node has been set: anyx|anyd == CSP_TRUE
@@ -861,11 +859,18 @@ typedef struct _csp_rt_t
     int esp;                       // eval stack pointer
     struct PACKED { index_t ix; unsigned cur:OBJ_BITS; }
 	stack[MAX_STACK_DEPTH];
-    unsigned transaction:1;      // 1 if keeping a log
     unsigned reactive:1;         // 1 if push backedges to queue
 
-    segment_t rom;               // fixed, from flash/ROM
-    segment_t ram;               // interactive additions
+    // Firmware ROM executes in place from flash (see doc/ROM_RAM.md); RAM holds
+    // patches. The logical index space is [0,rom_n*) = ROM (read via the pointers
+    // below), [rom_n*, .) = RAM (ram_*[logical - rom_n*]). rom_n*==0 => no ROM
+    // active, everything is RAM. Also the ROM/RAM boundary /list tags against.
+    const csp_decl_t*  rom_decl_p;  // ROM decl table (flash), or NULL
+    const csp_instr_t* rom_instr_p; // ROM instr table (flash), or NULL
+    const char*        rom_str_p;   // ROM string table (flash), or NULL
+    index_t rom_nd;              // # ROM decls   (RAM decl base)
+    index_t rom_nn;              // # ROM instrs  (RAM instr base)
+    index_t rom_strp;            // # ROM string bytes (RAM string base)
 
     csp_pstate_t ps;             // parse state
     reg_allocator_t* ap;
@@ -931,35 +936,49 @@ static inline csp_instr_t rd_instr(const csp_instr_t* p)
 #define rd_instr(p) (*(p))
 #endif
 
-// Segment-aware read by logical index. ROM (index below the RAM base) is read
-// from flash; RAM is the mutable interactive segment. WRITES always go straight
-// to ram_decl/ram_instr -- you never write the ROM segment.
+// Segment-aware read by logical index: a firmware ROM index reads flash (via the
+// PROGMEM-safe rd_decl/rd_instr), a RAM index reads ram_*[logical - base]. ROM
+// is never written -- writes go to the RAM slots (ram_decl_at/ram_instr_at),
+// whose logical index is always >= the base. With no ROM active (rom_n*==0) all
+// of these reduce to plain ram_* access.
 static inline csp_decl_t csp_get_decl(csp_rt_t* st, index_t i)
 {
-    if (i < st->ram.decl_base)
-	return rd_decl(&st->rom.decl[i]);
-    return st->ram_decl[i - st->ram.decl_base];
+    if (i < st->rom_nd)
+	return rd_decl(&st->rom_decl_p[i]);
+    return st->ram_decl[i - st->rom_nd];
 }
 
 static inline csp_instr_t csp_get_instr(csp_rt_t* st, index_t n)
 {
-    if (n < st->rom.n_instr)
-	return rd_instr(&st->rom.instr[n]);
-    return st->ram_instr[n - st->rom.n_instr];
+    if (n < st->rom_nn)
+	return rd_instr(&st->rom_instr_p[n]);
+    return st->ram_instr[n - st->rom_nn];
 }
 
-// is a ROM (firmware) program linked / present?
-static inline int csp_has_rom(csp_rt_t* st)
+// one string byte at a logical position (length byte or char)
+static inline uint8_t csp_str_byte(csp_rt_t* st, sindex_t pos)
 {
-    return st->rom.n_instr > 0;
+    if (pos < (sindex_t)st->rom_strp)
+	return RD_BYTE(&st->rom_str_p[pos]);
+    return (uint8_t)st->ram_str[pos - st->rom_strp];
 }
 
-// Read access. RAM-only for now (ROM execution still WIP: needs the parser to
-// allocate RAM indices offset by the ROM base and eval to run the full ROM+RAM
-// range). Flip to the segment-aware csp_get_*() once that index model lands.
-#define decl(st,i,fld)  ((st)->ram_decl[(i)].fld)
-#define instr(st,n,fld) ((st)->ram_instr[(n)].fld)
-// segment-aware versions ready to switch in: csp_get_decl(st,i), csp_get_instr(st,n)
+// char* to the string at a logical position (host: RODATA is normal memory;
+// an AVR PROGMEM string needs a copy-out API -- deferred). Base 0 -> ram_str.
+static inline char* csp_str_at(csp_rt_t* st, sindex_t pos)
+{
+    if (pos < (sindex_t)st->rom_strp)
+	return (char*)&st->rom_str_p[pos];
+    return &st->ram_str[pos - st->rom_strp];
+}
+
+// RAM write slots -- logical index must be at/above the ROM base (RAM region)
+#define ram_decl_at(st, logical)  (&(st)->ram_decl[(logical) - (st)->rom_nd])
+#define ram_instr_at(st, logical) (&(st)->ram_instr[(logical) - (st)->rom_nn])
+#define ram_str_at(st, logical)   ((st)->ram_str[(logical) - (st)->rom_strp])
+
+#define decl(st,i,fld)  (csp_get_decl((st),(i)).fld)
+#define instr(st,n,fld) (csp_get_instr((st),(n)).fld)
 
 // Parser stack entry - tracks both register and declaration index
 typedef struct PACKED {
@@ -1050,10 +1069,15 @@ static inline fvalue_t csp_fvalue(csp_rt_t* st, index_t ix)
 
 static inline char* decl_name(csp_rt_t* st, index_t ix)
 {
-    return &st->ram_str[st->ram_decl[INDEX(ix)].name];
+    // name is a LOGICAL string position: ROM range -> flash table, else RAM.
+    // (On the host RODATA is ordinary memory; an AVR PROGMEM name needs a
+    // copy-out API -- deferred.) At base 0 this is plain ram_str access.
+    return csp_str_at(st, csp_get_decl(st, INDEX(ix)).name);
 }
 
-extern int     csp_rt_init(csp_rt_t*,  int transaction, int reactive);
+extern int     csp_rt_init(csp_rt_t*,  int reactive);
+extern void    csp_load_rom(csp_rt_t*);
+extern int     csp_has_firmware(void);
 extern int     csp_rt_start(csp_rt_t*);
 extern void    csp_set_ufuncs(csp_rt_t*, const csp_func_t*, uint8_t);
 extern void    csp_set_uconst(csp_rt_t*, csp_const_fn uconst);
@@ -1061,7 +1085,6 @@ extern const csp_func_t* csp_match_func(csp_rt_t*,
 					const tstr_t* name,
 					uint8_t arity, rentry_t* rarg,
 					int* is_user, int* func_idx);
-extern int     csp_set_transaction(csp_rt_t*, int onoff);
 extern int     csp_set_reactive(csp_rt_t*, int onoff);
 extern int     csp_set_latch(csp_rt_t*, int onoff);
 extern int     csp_scan_line(csp_rt_t*,char* str,token_t* tv,size_t* num_toks);
@@ -1107,20 +1130,6 @@ extern int csp_eeprom_clear(csp_rt_t* st);
 // stack check/debug
 extern int stack_used();
 
-// platform print functions
-extern int csp_print_char(char c);
-extern int csp_print_str(const char* s);
-#if defined(__AVR__)
-extern int csp_print_str_P(rochar* s);  // PROGMEM string
-#endif
-extern int csp_print_int(ivalue_t v);
-extern int csp_print_uint(uvalue_t v);
-extern int csp_print_float(fvalue_t v);
-extern int csp_print_hex(uvalue_t v);
-extern int csp_println(void);
-extern void csp_flush(void);
-extern int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val);
-
 extern const char  csp_tag(csp_rt_t* st, index_t n);
 extern rochar* csp_fmt_pindir(uint8_t dir);
 extern rochar* csp_fmt_pull(csp_rt_t* st, int ix);
@@ -1150,7 +1159,7 @@ extern void csp_enq_elist(csp_rt_t* st, index_t x);
 #define CSP_CMD_NOTFOUND -1
 #define CSP_CMD_ERROR    -2
 
-typedef int (*csp_cmd_fn)(csp_rt_t* st, const char* args);
+typedef int (*csp_cmd_fn)(csp_rt_t* st, int argc, char* argv[]);
 
 typedef struct {
     rochar* name;
@@ -1158,7 +1167,7 @@ typedef struct {
     csp_cmd_fn fn;
 } csp_cmd_t;
 
-extern int csp_cmd_dispatch(csp_rt_t* st, const char* cmd);
+extern int csp_cmd_dispatch(csp_rt_t* st, char* cmd);
 extern void csp_cmd_help(void);
 extern int csp_process_line(csp_rt_t* st, char* line);
 
@@ -1177,8 +1186,8 @@ extern void csp_line_input(char c);
 extern void csp_line_prompt(void);
 
 // Platform hooks for commands (implemented per platform)
-extern int csp_cmd_save(csp_rt_t* st, const char* args);
-extern int csp_cmd_load(csp_rt_t* st, const char* args);
+extern int csp_cmd_save(csp_rt_t* st, int argc, char* argv[]);
+extern int csp_cmd_load(csp_rt_t* st, int argc, char* argv[]);
 
 // eeprom api
 extern int csp_eeprom_open_read(void);
