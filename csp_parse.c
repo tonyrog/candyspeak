@@ -104,7 +104,7 @@ static char* tok_name(uint8_t tok)
     STRCASE(IN);
     STRCASE(OUT);
     STRCASE(INOUT);
-    STRCASE(PWM);
+    STRCASE(T_PWM);
     STRCASE(FLOAT);
     STRCASE(INTEGER);
     STRCASE(UNSIGNED);
@@ -384,7 +384,7 @@ void init_stop_sets(void)
     stop_toks[stop_toks_len++] = UNSIGNED;
     stop_toks[stop_toks_len++] = INTEGER;
     stop_toks[stop_toks_len++] = FLOAT;
-    stop_toks[stop_toks_len++] = PWM;
+    stop_toks[stop_toks_len++] = T_PWM;
     stop_toks[stop_toks_len++] = IN;
     stop_toks[stop_toks_len++] = OUT;
     stop_toks[stop_toks_len++] = INOUT;
@@ -470,7 +470,7 @@ NOINLINE decl_opts_t parse_opts(csp_rt_t* st, const token_t* tv,
 	case UNSIGNED: opts.vt=V_UNSIGNED; DBG("UNSIGNED,"); break;
 	case INTEGER:  opts.vt=V_INTEGER; DBG("INTEGER,"); break;
 	case FLOAT:    opts.vt=V_FLOAT; DBG("FLOAT,"); break;
-	case PWM:      opts.pwm = 1; DBG("PWM,"); break;
+	case T_PWM:      opts.pwm = 1; DBG("T_PWM,"); break;
 	case IN:       opts.dir |= DIR_IN; DBG("IN,"); break;
 	case OUT:      opts.dir |= DIR_OUT; DBG("OUT,"); break;
 	case INOUT:    opts.dir |= DIR_INOUT; DBG("INOUT,"); break;

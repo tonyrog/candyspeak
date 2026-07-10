@@ -1,0 +1,73 @@
+// Adafruit Circuit Playground Express  (SAMD21 -- ro_ is plain there)
+//
+// Port convention that csp_arduino interprets:
+//   port 0 : GPIO by Arduino pin number  (digital), and A8/A9 analog sensors
+//   port 8 : accelerometer  (pin 0/1/2 = X/Y/Z)
+//   port 9 : NeoPixel ring   (pin = pixel index 0..9), 16-bit RGB565 "fake DAC"
+
+// --- buttons / switch / onboard LED ---
+// CPX buttons A/B are active-high -> need internal pulldown; the slide switch
+// is active-low -> needs pullup. (Options go BEFORE the port:pin.)
+#digital BtnA   in pulldown 0:4      // button A (pressed = 1)
+#digital BtnB   in pulldown 0:5      // button B
+#digital Switch in pullup   0:7      // slide switch
+#digital Led    out 0:13             // onboard red LED
+
+// --- analog sensors ---
+#analog Light:10 in 0:8      // light sensor  (A8)
+#analog Temp:10  in 0:9      // thermistor    (A9)
+#analog AccX:10  in 8:0      // accelerometer X  (scaled ~-512..511)
+#analog AccY:10  in 8:1
+#analog AccZ:10  in 8:2
+
+// --- 10 NeoPixels as RGB565 analog outputs (port 9, pin = index) ---
+#analog P0:16 out 9:0
+#analog P1:16 out 9:1
+#analog P2:16 out 9:2
+#analog P3:16 out 9:3
+#analog P4:16 out 9:4
+#analog P5:16 out 9:5
+#analog P6:16 out 9:6
+#analog P7:16 out 9:7
+#analog P8:16 out 9:8
+#analog P9:16 out 9:9
+
+// working values
+#variable Idx:8      // tilt-ball ring index 0..9
+#variable Col:16     // current pixel colour (RGB565)
+
+// ---- demo rules ----------------------------------------------------------
+// onboard LED mirrors button A
+Led = BtnA
+
+// colour: A = green, B = blue, both = white, idle = amber
+Col = 0xFFFF ? BtnA & BtnB
+Col = 0x07E0 ? BtnA & !BtnB     // green
+Col = 0x001F ? BtnB & !BtnA     // blue
+Col = 0xFD20 ? !BtnA & !BtnB    // amber (idle)
+
+// tilt ball: map accelerometer X (~-512..511) to a ring position 0..9,
+// then light exactly that pixel with Col, the rest off.
+Idx = (AccX + 512) / 103
+
+P0 = Col ? Idx == 0
+P1 = Col ? Idx == 1
+P2 = Col ? Idx == 2
+P3 = Col ? Idx == 3
+P4 = Col ? Idx == 4
+P5 = Col ? Idx == 5
+P6 = Col ? Idx == 6
+P7 = Col ? Idx == 7
+P8 = Col ? Idx == 8
+P9 = Col ? Idx == 9
+
+P0 = 0 ? Idx != 0
+P1 = 0 ? Idx != 1
+P2 = 0 ? Idx != 2
+P3 = 0 ? Idx != 3
+P4 = 0 ? Idx != 4
+P5 = 0 ? Idx != 5
+P6 = 0 ? Idx != 6
+P7 = 0 ? Idx != 7
+P8 = 0 ? Idx != 8
+P9 = 0 ? Idx != 9

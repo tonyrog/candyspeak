@@ -54,7 +54,7 @@ static rochar ss_LT[] RODATA = "LT";
 static rochar ss_LTE[] RODATA = "LTE";
 static rochar ss_GT[] RODATA = "GT";
 static rochar ss_GTE[] RODATA = "GTE";
-static rochar ss_EQ[] RODATA = "EQ";
+static rochar ss_EQEQ[] RODATA = "EQEQ";
 static rochar ss_NEQ[] RODATA = "NEQ";
 static rochar ss_MOV[] RODATA = "MOV";
 
@@ -122,7 +122,7 @@ const op_entry_t tok_table[] RODATA = {
     TOK_ENT(IN,OP_NOP,s_in),
     TOK_ENT(OUT,OP_NOP,s_out),
     TOK_ENT(INOUT,OP_NOP,s_inout),
-    TOK_ENT(PWM,OP_NOP,s_pwm),
+    TOK_ENT(T_PWM,OP_NOP,s_pwm),
     TOK_ENT(FLOAT,OP_NOP,s_float),
     TOK_ENT(INTEGER,OP_NOP,s_integer),
     TOK_ENT(UNSIGNED,OP_NOP,s_unsigned),
@@ -276,7 +276,7 @@ const op_info_t op_info[] RODATA = {
     [OP_LTE] = {ss_LTE,LTEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
     [OP_GT] = {ss_GT,GT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
     [OP_GTE] = {ss_GTE,GTEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_EQEQ] = {ss_EQ,EQEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_EQEQ] = {ss_EQEQ,EQEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
     [OP_NEQ] = {ss_NEQ,NEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
 
     // unary versions (treated as binary with z ignored)
@@ -337,19 +337,24 @@ static const char tag_tab[] RODATA = {
     [DECL_CAN] = 'k',
 };
 
-extern const char __attribute__((weak)) rom_str[];
-const int __attribute__((weak)) rom_str_len = 0;
-extern const csp_decl_t __attribute__((weak)) rom_decl[];
-extern const csp_instr_t __attribute__((weak)) rom_instr[];
-const int __attribute__((weak)) rom_n_decl = 0;
-const int __attribute__((weak)) rom_n_instr = 0;
-// Non-zero when the firmware carries a precomputed reactive graph (its own
-// queue). The CSR graph (ROM decl -> ROM rules) lives in flash; csp_enq_elist
-// consumes it alongside the runtime RAM graph. Emitted by csp -C -r.
-const int __attribute__((weak)) rom_n_edg = 0;
-extern const index_t __attribute__((weak)) rom_idg[];
-extern const index_t __attribute__((weak)) rom_ofs[];
-extern const index_t __attribute__((weak)) rom_edg[];
+// The firmware ROM image lives in rom.c, which every build links exactly once
+// (an empty default rom.c provides zero-sized stubs when no program is baked
+// in). These are plain externs -- NOT weak fallbacks defined here: a weak
+// definition in this TU would be bound locally by csp_load_rom and let
+// -fdata-sections/--gc-sections drop the strong rom.c copy, so the firmware
+// would boot with an empty ROM. rom_n_edg > 0 means the ROM carries its own
+// precomputed reactive graph (ROM decl -> ROM rules), consumed by
+// csp_enq_elist alongside the runtime RAM graph. Emitted by csp -C -r.
+extern const char        rom_str[];
+extern const int         rom_str_len;
+extern const csp_decl_t  rom_decl[];
+extern const csp_instr_t rom_instr[];
+extern const int         rom_n_decl;
+extern const int         rom_n_instr;
+extern const int         rom_n_edg;
+extern const index_t     rom_idg[];
+extern const index_t     rom_ofs[];
+extern const index_t     rom_edg[];
 
 // Segment-aware reads (see csp.h). NOINLINE keeps the flash-copy in one place
 // instead of expanding it at every decl()/instr() call site.
@@ -1457,7 +1462,8 @@ NOINLINE void csp_dio_set(csp_rt_t* st, index_t ix, value_t v, dio_t dir)
 	return;
     }
     csp_dio_set_val_part(st, csp_slot(st, vw, dir),
-			 decl(st, INDEX(ix), vt), v);
+			 decl_cfg_vt(decl(st, INDEX(ix), type),
+				     decl(st, INDEX(ix), vt)), v);
 }
 
 NOINLINE void csp_dio_get(csp_rt_t* st, index_t ix, value_t* vp, dio_t dir)
@@ -1468,7 +1474,8 @@ NOINLINE void csp_dio_get(csp_rt_t* st, index_t ix, value_t* vp, dio_t dir)
 	return;
     }
     csp_dio_get_val_part(st, csp_slot(st, vw, dir),
-			 decl(st, INDEX(ix), vt), vp);
+			 decl_cfg_vt(decl(st, INDEX(ix), type),
+				     decl(st, INDEX(ix), vt)), vp);
 }
 
 NOINLINE void csp_set_value(csp_rt_t* st, index_t n, value_t v)
@@ -5720,13 +5727,23 @@ match:
 	    list_name(st, cur_mod, npos);
 	    csp_print_char(' ');
 	    csp_print_str(csp_fmt_pindir(decl(st,i,dir)));
+	    csp_print_char(' ');              // port:pin (needed to mod/rewire)
+	    csp_print_uint(decl(st,i,di.port));
+	    csp_print_char(':');
+	    csp_print_uint(decl(st,i,di.pin));
 	    csp_print_char('\n');
 	    break;
 	case DECL_ANALOG:
 	    csp_print_str("#analog ");
 	    list_name(st, cur_mod, npos);
+	    csp_print_char(':');              // :width (res stored as bits-1)
+	    csp_print_uint(decl(st,i,an.res)+1);
 	    csp_print_char(' ');
 	    csp_print_str(csp_fmt_pindir(decl(st,i,dir)));
+	    csp_print_char(' ');              // port:pin
+	    csp_print_uint(decl(st,i,an.port));
+	    csp_print_char(':');
+	    csp_print_uint(decl(st,i,an.pin));
 	    csp_print_char('\n');
 	    break;
 	default:
@@ -5798,22 +5815,62 @@ match:
 
 static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 {
-    (void)argv;
-    csp_print_str("latch = ");
+    int i;
+    (void)argv; (void)argc;
+
+    csp_print_str("cycle = ");
+    csp_print_uint(st->cycle);
+    csp_print_str("\nlatch = ");
     csp_print_str(st->latch ? "on" : "off");
     csp_print_char('\n');
 
-    for (int i = 0; i < st->ps.nd; i++) {
+    for (i = 0; i < st->ps.nd; i++) {
+	index_t ix = MAKE_INDEX(0, i);
+	decl_t t = decl(st,i,type);
 	const char* name;
-	if (decl(st,i,type) != DECL_VARIABLE) continue;  // skips ENDs too
-	name = decl_name(st, MAKE_INDEX(0, i));
+	value_t* o;
+
+	if ((t != DECL_VARIABLE) && (t != DECL_DIGITAL) && (t != DECL_ANALOG))
+	    continue;                                    // skips ENDs too
+	name = decl_name(st, ix);
 	if (!name || !*name) continue;
 
 	csp_print_str(name);
+	csp_print_char(' ');
+
+	if (t == DECL_VARIABLE) {
+	    csp_print_str("var = ");
+	    csp_print_value(st, decl(st,i,vt), csp_value(st, ix));
+	    csp_print_char('\n');
+	    continue;
+	}
+
+	// digital/analog: dir, port:pin, committed value, then the raw DOUT slot
+	// (pin+val that csp_output actually writes -- so we can see if the value
+	// reached the output slot and the pin is right).
+	csp_print_str(csp_fmt_pindir(decl(st,i,dir)));
+	csp_print_char(' ');
+	csp_print_str((t == DECL_DIGITAL) ? "digital " : "analog ");
+	if (t == DECL_DIGITAL) {
+	    csp_print_uint(decl(st,i,di.port)); csp_print_char(':');
+	    csp_print_uint(decl(st,i,di.pin));
+	} else {
+	    csp_print_uint(decl(st,i,an.port)); csp_print_char(':');
+	    csp_print_uint(decl(st,i,an.pin));
+	}
 	csp_print_str(" = ");
-	csp_print_value(st, decl(st,i,vt),
-		       csp_value(st, MAKE_INDEX(0, i)));
-	csp_print_char('\n');
+	csp_print_value(st, decl(st,i,vt), csp_value(st, ix));
+
+	o = csp_dio_slot(st, ix, DOUT);
+	csp_print_str("  [DOUT pin=");
+	if (t == DECL_DIGITAL) {
+	    csp_print_uint(o->d.pin); csp_print_str(" val=");
+	    csp_print_uint(o->d.val);
+	} else {
+	    csp_print_uint(o->a.pin); csp_print_str(" val=");
+	    csp_print_uint(o->a.val);
+	}
+	csp_print_str("]\n");
     }
     return CSP_CMD_OK;
 }
@@ -5952,6 +6009,8 @@ static int csp_process_immediate(csp_rt_t* st, char* line)
 // Process persistent definition (# declaration or rule)
 static int csp_process_persistent(csp_rt_t* st, char* line)
 {
+    index_t nd0 = st->ps.nd;
+
     if (csp_parse(st, line) < 0) {
 	csp_print_str("Error: ");
 	csp_print_str(csp_format_error(st->ps.err));
@@ -5959,8 +6018,14 @@ static int csp_process_persistent(csp_rt_t* st, char* line)
 	csp_clr_error(st);
 	return -1;
     }
-    csp_rt_start(st);
-    csp_setup(st);
+    // Only (re)build leaves and device I/O when a new declaration was added.
+    // A bare rule grows the instruction list only; it needs no rt_start, and
+    // skipping it keeps the running state (rt_start re-inits all values) and
+    // makes interactive paste much faster.
+    if (st->ps.nd != nd0) {
+	csp_rt_start(st);
+	csp_setup(st);
+    }
     csp_print_str("OK\n");
     return 0;
 }

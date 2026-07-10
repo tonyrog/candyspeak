@@ -18,7 +18,7 @@ typedef struct {
 } eeprom_header_t;
 
 #define EEPROM_MAGIC "CSP"
-#define EEPROM_VERSION 2
+#define EEPROM_VERSION 3   // v3: bumped to invalidate stray v2 saves
 
 // Platform stub functions - implement per platform
 #if 0

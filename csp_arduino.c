@@ -1,4 +1,11 @@
 #include <Arduino.h>
+// Include the Adafruit CPX library BEFORE csp.h: csp_config.h poisons the
+// `float` keyword (fixpoint-only firmware), and the library's sensor headers
+// have float members. Parsed here (before the poison) they are fine; our own
+// CPX code below stays float-free so the poison still guards the firmware.
+#ifdef CSP_CPX
+#include <Adafruit_CircuitPlayground.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 
@@ -11,6 +18,27 @@
 #define CSP_EMBEDDED 1
 #include "csp.h"
 #include "csp_print.h"
+
+// --- Adafruit Circuit Playground Express (SAMD21) -------------------------
+// Port convention used by the .csp:  port 8 = accelerometer (pin 0/1/2 = X/Y/Z),
+// port 9 = NeoPixel ring (pin = index, a.val holds an RGB565 "fake DAC" value).
+// CPX is ARM, so RODATA/ro_* are plain there (no PROGMEM special case).
+#ifdef CSP_CPX
+// (Adafruit_CircuitPlayground.h is included above, before csp.h's float poison)
+#define PORT_ACCEL 8
+#define PORT_NEO   9
+// RGB565 -> 0x00RRGGBB for the NeoPixels
+static uint32_t cpx_565(uint16_t c) {
+    uint8_t r = (c >> 11) & 0x1f, g = (c >> 5) & 0x3f, b = c & 0x1f;
+    return ((uint32_t)(r << 3) << 16) | ((uint32_t)(g << 2) << 8) | (b << 3);
+}
+static int cpx_neo_dirty = 0;   // strip.show() once per cycle if a pixel changed
+#define MINLEV 2
+#define MAXLEV 50
+
+uint16_t lev = MAXLEV;
+
+#endif
 
 csp_rt_t state;
 
@@ -146,7 +174,13 @@ void csp_setup(csp_rt_t* st)
 {
     int i;
     unsigned res = 0;
-    
+
+#ifdef CSP_CPX
+    CircuitPlayground.begin();   // owns NeoPixels, accelerometer, sensors
+    CircuitPlayground.strip.setBrightness(lev);
+    CircuitPlayground.strip.show();
+#endif
+
     // setup in and inout (inout startup as input)
     for (i = 0; i < st->ni; i++) {
 	index_t ix = st->input[i];
@@ -156,6 +190,8 @@ void csp_setup(csp_rt_t* st)
             if (decl(st,j,dir) & DIR_IN) {
 		if (decl(st,j,di.pullup))
 		    pinMode(decl(st,j,di.pin), INPUT_PULLUP);
+		else if (decl(st,j,di.pulldown))
+		    pinMode(decl(st,j,di.pin), INPUT_PULLDOWN);
 		else
 		    pinMode(decl(st,j,di.pin), INPUT);
 	    }
@@ -197,6 +233,9 @@ void csp_setup(csp_rt_t* st)
 void csp_input(csp_rt_t* st)
 {
     int i;
+#ifdef CSP_CPX
+    int accel_read = 0;   // read the LIS3DH once per cycle, not once per axis
+#endif
 
     for (i = 0; i < st->ni; i++) {
 	index_t ix = st->input[i];
@@ -214,8 +253,28 @@ void csp_input(csp_rt_t* st)
 	case DECL_ANALOG:
 	    vptr = csp_dio_slot(st, ix, DOUT);
 	    if (vptr->a.dir & DIR_IN) {
-		int value = analogRead(vptr->a.pin);
-		csp_set_ivalue(st, ix, value);
+#ifdef CSP_CPX
+		// float-free reads (soft-float is big/slow on the M0+, and the
+		// core is built fixpoint): use the raw LIS3DH ints and analogRead.
+		if (vptr->a.port == PORT_ACCEL) {   // accelerometer X/Y/Z (raw)
+		    int raw;
+		    if (!accel_read) { CircuitPlayground.lis.read(); accel_read = 1; }
+		    raw = (vptr->a.pin == 0) ? CircuitPlayground.lis.x
+			: (vptr->a.pin == 1) ? CircuitPlayground.lis.y
+					     : CircuitPlayground.lis.z;
+		    csp_set_ivalue(st, ix, raw >> 5);   // ~+-1g -> +-512 (tune)
+		    break;
+		}
+		if (vptr->a.pin == 8) {             // A8 light sensor
+		    csp_set_ivalue(st, ix, CircuitPlayground.lightSensor());
+		    break;
+		}
+		if (vptr->a.pin == 9) {             // A9 thermistor (raw ADC)
+		    csp_set_ivalue(st, ix, analogRead(A9));
+		    break;
+		}
+#endif
+		csp_set_ivalue(st, ix, analogRead(vptr->a.pin));
 	    }
 	    break;
 	default: break;
@@ -252,7 +311,15 @@ void csp_output(csp_rt_t* st)
 		}
 		break;
 	    case DECL_ANALOG:
-		vptr = csp_dio_slot(st, ix, DOUT);		
+		vptr = csp_dio_slot(st, ix, DOUT);
+#ifdef CSP_CPX
+		if (vptr->a.port == PORT_NEO) {   // NeoPixel: RGB565 -> pixel
+		    CircuitPlayground.strip.setPixelColor(vptr->a.pin,
+							  cpx_565(vptr->a.val));
+		    cpx_neo_dirty = 1;
+		    break;
+		}
+#endif
 		if ((vptr->a.dir & DIR_OUT) && (vptr->a.pwm)) {
 		    // handle type! accept float as well
 		    int val = map(vptr->a.val,
@@ -266,6 +333,14 @@ void csp_output(csp_rt_t* st)
 	    }
 	}
     }
+#ifdef CSP_CPX
+    // push the frame once per cycle (dirty is only set while not latched)
+    if (cpx_neo_dirty) {
+	CircuitPlayground.strip.setBrightness(lev);
+	CircuitPlayground.strip.show();
+	cpx_neo_dirty = 0;
+    }
+#endif
     csp_output_timer(st);
 }
 
@@ -401,27 +476,37 @@ int csp_cmd_load(csp_rt_t* st, int argc, char* argv[])
 
 void setup()
 {
+    uint32_t t0;
+
     Serial.begin(115200);
-    while (!Serial) { ; }  // wait for USB serial
+    // Bounded wait: never hang forever if the USB port is never opened.
+    t0 = millis();
+    while (!Serial && (millis() - t0) < 3000)
+	;
 
     serial_output = 1;
     csp_rt_init(&state, REACTIVE_DEFAULT);
 
-    // try to load from EEPROM
-    int r = csp_eeprom_load(&state);
-    if (r < 0) {
+    // Wire up the ROM firmware (rom.c) first, so the program runs even when
+    // there is no valid save. csp_eeprom_load re-does this on its success path,
+    // but on failure (no save / wrong version / wrong firmware) it returns
+    // before touching ROM -- so we must load it here.
+    csp_load_rom(&state);
+
+    // Overlay any saved RAM patches on top of the ROM. Returns 0 on success.
+    if (csp_eeprom_load(&state) == 0) {
         Serial.println(F("Loaded from EEPROM"));
     }
     else {
-        Serial.println(F("No saved state, starting fresh"));
+        Serial.println(F("No saved state, running ROM"));
     }
 
     // setup all input/output/timers... lists
     csp_rt_start(&state);
-    
+
     // initialize input/output/timers ...
     csp_setup(&state);
-	
+
     Serial.println(F("CandySpeak ready"));
 }
 
@@ -429,7 +514,8 @@ void loop()
 {
     static int first_cycle = 1;
     index_t x;
-
+    int anyd;
+    
     if (first_cycle) {
 	state.cycle = 1;
 	first_cycle = 0;
@@ -442,17 +528,21 @@ void loop()
     }
 
     if (csp_line_ready) {
+	// Pace pasted input: parsing a line (and any rt_start) is slow enough to
+	// overflow the UART RX buffer. Ask the sender to pause (XOFF) while we
+	// process, then resume (XON). Enable "software flow control" in the
+	// terminal (minicom: Ctrl-A O -> Serial port setup -> G = Yes).
+	Serial.write(0x13);   // XOFF
 	csp_process_line(&state, csp_line_buf);
+	Serial.write(0x11);   // XON
 	csp_line_ready = 0;
 	csp_line_pos = 0;
     }
 
     // run evaluation cycle
     csp_input(&state);
-    if (state.reactive)
-	x = csp_react(&state);
-    else
-	x = csp_eval(&state);
+    x = csp_cycle(&state);   // ROM (seq) + RAM (reactive/seq), one model
+    anyd = state.anyd;  // save before commit clears it
     csp_commit(&state);
     csp_output(&state);
 
@@ -468,5 +558,8 @@ void loop()
 	    if (Serial.available())
 		csp_line_input(Serial.read());
         }
+    }
+    else {
+	delay(5);   // pace a timer-less program: don't free-run and hammer I2C
     }
 }

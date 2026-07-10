@@ -1,13 +1,16 @@
 #include "csp.h"
-const char rom_str_len RODATA = 24;
-const char rom_str[24] RODATA = {
-0,5,'S','t','a','t','e',0,4,'I','N','I','T',0,6,'N',
-'O','R','M','A','L',0,0,0,};
-const int rom_n_decl RODATA = 2;
-const csp_decl_t rom_decl[2] RODATA = {
-  {.va={.type=DECL_VARIABLE,.dir=0,.name=2,.vt=V_INTEGER,.res=31,.init={.u=0}}},
-  {.type=DECL_END,.dir=0,.name=23,.vt=V_INTEGER,.res=31},
-};
-const int rom_n_instr RODATA = 0;
-const csp_instr_t rom_instr[0] RODATA = {
-};
+// Empty default ROM image -- linked when no program is baked into the firmware.
+// Every build links exactly one rom.c; this is the fallback with no program.
+// Bake a program by overwriting this file:
+//     csp -C -n prog.csp > rom.c      (sequential)
+//     csp -C -r prog.csp > rom.c      (reactive: also carries its own graph)
+const int         rom_str_len RODATA = 0;
+const char        rom_str[1]  RODATA = { 0 };
+const int         rom_n_decl  RODATA = 0;
+const csp_decl_t  rom_decl[1] RODATA = { {{0}} };
+const int         rom_n_instr RODATA = 0;
+const csp_instr_t rom_instr[1] RODATA = { {{0}} };
+const int         rom_n_edg   RODATA = 0;
+const index_t     rom_idg[1]  RODATA = { 0 };
+const index_t     rom_ofs[1]  RODATA = { 0 };
+const index_t     rom_edg[1]  RODATA = { 0 };

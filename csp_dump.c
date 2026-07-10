@@ -739,7 +739,10 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 
     fprintf(f, "#include \"csp.h\"\n");
     // first dump string table
-    fprintf(f, "const char rom_str_len RODATA = %d;\n", st->ps.strp);
+    // int, not char: matches the `extern const int rom_str_len` in csp_rt.c so
+    // the read is 4-byte aligned (a char at an odd address read as int HardFaults
+    // on Cortex-M0), and avoids signed-char overflow for tables > 127 bytes.
+    fprintf(f, "const int rom_str_len RODATA = %d;\n", st->ps.strp);
     fprintf(f, "const char rom_str[%d] RODATA = {\n", st->ps.strp);
     i = 0;
     while (i < st->ps.strp) {
@@ -887,10 +890,12 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
     }
     fprintf(f, "};\n");
 
-    // Reactive dependency graph (only when built -- compiled with -r). Maps each
-    // ROM decl -> the ROM rules that read it. Consumed at runtime by
-    // csp_enq_elist so firmware runs reactively without rebuilding its graph in
-    // RAM. Indices match the ROM segment 1:1 (compiled at base 0).
+    // Reactive dependency graph: maps each ROM decl -> the ROM rules that read
+    // it, so firmware runs reactively without rebuilding its graph in RAM
+    // (compiled with -r). Indices match the ROM segment 1:1 (compiled at base
+    // 0). These four symbols are ALWAYS emitted -- csp_rt references them
+    // unconditionally -- with rom_n_edg=0 and stub arrays when there is no
+    // graph, so every generated rom.c links without a weak fallback.
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     if (st->reactive) {
 	int nd = st->ps.nd;
@@ -907,7 +912,15 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 	if (!nedg) fprintf(f, "0");   // avoid a zero-length array
 	fprintf(f, "};\n");
     }
+    else
 #endif
+    {
+	// No graph: stub symbols so rom.c links (all reads gated by rom_n_edg==0).
+	fprintf(f, "const int rom_n_edg RODATA = 0;\n");
+	fprintf(f, "const index_t rom_idg[1] RODATA = {0};\n");
+	fprintf(f, "const index_t rom_ofs[1] RODATA = {0};\n");
+	fprintf(f, "const index_t rom_edg[1] RODATA = {0};\n");
+    }
 }
 
 // list declarations

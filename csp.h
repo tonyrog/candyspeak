@@ -379,7 +379,7 @@ typedef enum {
     IN,         // 'in'
     OUT,        // 'out'
     INOUT,      // 'inout'
-    PWM,        // 'pwm'
+    T_PWM,        // 'pwm'
     FLOAT,      // 'float'
     INTEGER,    // 'integer'
     UNSIGNED,   // 'unsigned'
