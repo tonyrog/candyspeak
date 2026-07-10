@@ -885,7 +885,29 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 	    break;
 	}
     }
-    fprintf(f, "};\n");    
+    fprintf(f, "};\n");
+
+    // Reactive dependency graph (only when built -- compiled with -r). Maps each
+    // ROM decl -> the ROM rules that read it. Consumed at runtime by
+    // csp_enq_elist so firmware runs reactively without rebuilding its graph in
+    // RAM. Indices match the ROM segment 1:1 (compiled at base 0).
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
+    if (st->reactive) {
+	int nd = st->ps.nd;
+	int nedg = st->ofs[nd];
+	fprintf(f, "const int rom_n_edg RODATA = %d;\n", nedg);
+	fprintf(f, "const index_t rom_idg[%d] RODATA = {", nd);
+	for (i = 0; i < nd; i++) fprintf(f, "%u,", st->idg[i]);
+	fprintf(f, "};\n");
+	fprintf(f, "const index_t rom_ofs[%d] RODATA = {", nd+1);
+	for (i = 0; i <= nd; i++) fprintf(f, "%u,", st->ofs[i]);
+	fprintf(f, "};\n");
+	fprintf(f, "const index_t rom_edg[%d] RODATA = {", nedg ? nedg : 1);
+	for (i = 0; i < nedg; i++) fprintf(f, "%u,", st->edg[i]);
+	if (!nedg) fprintf(f, "0");   // avoid a zero-length array
+	fprintf(f, "};\n");
+    }
+#endif
 }
 
 // list declarations

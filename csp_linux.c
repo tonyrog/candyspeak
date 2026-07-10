@@ -342,7 +342,7 @@ void csp_input(csp_rt_t* st)
     
     for (i = 0; i < st->ni; i++) {
 	index_t ix = st->input[i];
-	switch(st->ram_decl[INDEX(ix)].type) {
+	switch(decl(st, INDEX(ix), type)) {
 	case DECL_DIGITAL: break;
 	case DECL_ANALOG: break;
 	default: break;
@@ -853,10 +853,7 @@ loop:
 	    input_done = 1;
     }
 
-    if (state.reactive)
-	x = csp_react(&state);
-    else
-	x = csp_eval(&state);
+    x = csp_cycle(&state);   // ROM (seq) + RAM (reactive/seq), one model
 
     anyd = state.anyd;  // save before commit clears it
 

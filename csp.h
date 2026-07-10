@@ -53,25 +53,20 @@ typedef unsigned bool_t;
 #if defined(__AVR__)
 #include <avr/pgmspace.h>
 #define RODATA          PROGMEM
-#define RD_BYTE(p)      pgm_read_byte((p))
-#define RD_WORD(p)      pgm_read_word((p))
-#define RD_PTR(p)       (void *)pgm_read_word((p))
-#define MEMCMP_RD(a,b,n) memcmp_P((a), (b), (n))
-#define STRCPY_RD(d,s)     strcpy_P((d), (s))
+#define ro_byte(p)      pgm_read_byte((p))
+#define ro_word(p)      pgm_read_word((p))
+#define ro_ptr(p)       (void *)pgm_read_word((p))
+#define ro_memcmp(a,b,n) memcmp_P((a), (b), (n))
 #define DECL_BITS    4
 #define INSTR_BITS   4
 #define OBJ_BITS     3
 #define STRING_BITS  7
 #else
 #define RODATA
-#define RD_BYTE(p)      (*(p))
-#define RD_WORD(p)      (*(p))
-#define RD_PTR(p)       (*(p))
-#define MEMCMP_RD(a,b,n) memcmp((a), (b), (n))
-#define STRCPY_RD(d,s)     strcpy((d), (s))
-#define strlen_P(s)        strlen(s)
-#define strncmp_P(a,b,n)   strncmp((a),(b),(n))
-#define csp_print_str_P(s) csp_print_str(s)
+#define ro_byte(p)      (*(p))
+#define ro_word(p)      (*(p))
+#define ro_ptr(p)       (*(p))
+#define ro_memcmp(a,b,n) memcmp((a), (b), (n))
 #define DECL_BITS    9
 #define INSTR_BITS   8
 #define OBJ_BITS     4
@@ -927,31 +922,31 @@ typedef struct _csp_rt_t
 // copy it into a RAM temporary -- then bit-field access works as usual. (The
 // "clever" bit: never deref a PROGMEM struct directly.)
 #if defined(__AVR__)
-static inline csp_decl_t  rd_decl(const csp_decl_t* p)
+static inline csp_decl_t  ro_decl(const csp_decl_t* p)
 { csp_decl_t d;  memcpy_P(&d, p, sizeof(d)); return d; }
-static inline csp_instr_t rd_instr(const csp_instr_t* p)
+static inline csp_instr_t ro_instr(const csp_instr_t* p)
 { csp_instr_t v; memcpy_P(&v, p, sizeof(v)); return v; }
 #else
-#define rd_decl(p)  (*(p))
-#define rd_instr(p) (*(p))
+#define ro_decl(p)  (*(p))
+#define ro_instr(p) (*(p))
 #endif
 
 // Segment-aware read by logical index: a firmware ROM index reads flash (via the
-// PROGMEM-safe rd_decl/rd_instr), a RAM index reads ram_*[logical - base]. ROM
+// PROGMEM-safe ro_decl/ro_instr), a RAM index reads ram_*[logical - base]. ROM
 // is never written -- writes go to the RAM slots (ram_decl_at/ram_instr_at),
 // whose logical index is always >= the base. With no ROM active (rom_n*==0) all
 // of these reduce to plain ram_* access.
 static inline csp_decl_t csp_get_decl(csp_rt_t* st, index_t i)
 {
     if (i < st->rom_nd)
-	return rd_decl(&st->rom_decl_p[i]);
+	return ro_decl(&st->rom_decl_p[i]);
     return st->ram_decl[i - st->rom_nd];
 }
 
 static inline csp_instr_t csp_get_instr(csp_rt_t* st, index_t n)
 {
     if (n < st->rom_nn)
-	return rd_instr(&st->rom_instr_p[n]);
+	return ro_instr(&st->rom_instr_p[n]);
     return st->ram_instr[n - st->rom_nn];
 }
 
@@ -959,7 +954,7 @@ static inline csp_instr_t csp_get_instr(csp_rt_t* st, index_t n)
 static inline uint8_t csp_str_byte(csp_rt_t* st, sindex_t pos)
 {
     if (pos < (sindex_t)st->rom_strp)
-	return RD_BYTE(&st->rom_str_p[pos]);
+	return ro_byte(&st->rom_str_p[pos]);
     return (uint8_t)st->ram_str[pos - st->rom_strp];
 }
 
@@ -1075,6 +1070,12 @@ static inline char* decl_name(csp_rt_t* st, index_t ix)
     return csp_str_at(st, csp_get_decl(st, INDEX(ix)).name);
 }
 
+// logical string position of a decl's name (for the segment-aware str helpers)
+static inline sindex_t decl_name_pos(csp_rt_t* st, index_t ix)
+{
+    return csp_get_decl(st, INDEX(ix)).name;
+}
+
 extern int     csp_rt_init(csp_rt_t*,  int reactive);
 extern void    csp_load_rom(csp_rt_t*);
 extern int     csp_has_firmware(void);
@@ -1090,9 +1091,17 @@ extern int     csp_set_latch(csp_rt_t*, int onoff);
 extern int     csp_scan_line(csp_rt_t*,char* str,token_t* tv,size_t* num_toks);
 extern int     csp_parse(csp_rt_t*, char* str);
 extern void    csp_csr(csp_rt_t* st);
+// Segment-aware string helpers: operate on a logical string position (ROM in
+// flash or RAM), so they are AVR-PROGMEM-safe where csp_str_at's raw pointer is
+// not. NOINLINE to keep the flash-access logic in one place (code size).
+extern int  csp_str_ncmp(csp_rt_t* st, sindex_t pos, const char* s, int n);
+extern int  csp_str_eq(csp_rt_t* st, sindex_t pos, const char* s, int n);
+extern void csp_print_str_at(csp_rt_t* st, sindex_t pos);
 extern index_t csp_eval(csp_rt_t* st);
+extern index_t csp_eval_range(csp_rt_t* st, index_t start, index_t stop);
 extern int     csp_eval_rule(csp_rt_t* st, int);
 extern index_t csp_react(csp_rt_t* st);
+extern index_t csp_cycle(csp_rt_t* st);   // one cycle: mixes ROM/RAM modes
 extern void    csp_undo(csp_rt_t* st);
 extern void    csp_commit(csp_rt_t* st);
 

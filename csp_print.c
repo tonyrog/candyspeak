@@ -122,16 +122,25 @@ static void exprbuf_str(csp_exprbuf_t* bp, const char *s)
     while ((c = *s++)) exprbuf_char(bp, c);
 }
 
+// append the length-prefixed string at a logical position (ROM flash or RAM);
+// AVR-PROGMEM-safe (reads byte by byte via csp_str_byte)
+static void exprbuf_str_at(csp_rt_t* st, csp_exprbuf_t* bp, sindex_t pos)
+{
+    int len = csp_str_byte(st, pos-1);
+    int i;
+    for (i = 0; i < len; i++) exprbuf_char(bp, csp_str_byte(st, pos+i));
+}
+
 static uint8_t exprbuf_var(csp_rt_t* st, csp_exprbuf_t* bp, uint16_t ix)
 {
     uint8_t *start = exprbuf_ptr(bp);
     int m = OBJ(ix);
-    
+
     if ((m != GLOBAL) && (m != CURRENT)) {
-	exprbuf_str(bp, decl_name(st, st->object[m]));
+	exprbuf_str_at(st, bp, decl_name_pos(st, st->object[m]));
 	exprbuf_char(bp, '.');
     }
-    exprbuf_str(bp, decl_name(st, ix));
+    exprbuf_str_at(st, bp, decl_name_pos(st, ix));
     return exprbuf_intern(bp, start, exprbuf_len(bp, start));
 }
 
@@ -298,7 +307,7 @@ static void exprbuf_fcall(csp_rt_t* st,
 	if ((a == V_STRING) && exprbuf_ref_isnum(bp, bp->arg[i])) {
 	    uint16_t sx = exprbuf_reftoi(bp, bp->arg[i]);
 	    exprbuf_char(bp, '"');
-	    exprbuf_str(bp, csp_str_at(st, sx));
+	    exprbuf_str_at(st, bp, sx);
 	    exprbuf_char(bp, '"');
 	    continue;
 	}
@@ -492,7 +501,7 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 #if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
 	    for (s = 0; s < st->ps.ns; s++) {
 		if (st->states[s].snum == ip->mi.imm) {
-		    exprbuf_str(bp, csp_str_at(st, st->states[s].name));
+		    exprbuf_str_at(st, bp, st->states[s].name);
 		    goto named;
 		}
 	    }

@@ -1,4 +1,7 @@
 
-4. Print rule then parse rule to optimise rules
+- Optimse rules. print rule then parse ?
 
-5. How to combine ROM + RAM => new ROM base?
+- How to combine ROM + RAM => new ROM base?
+
+- ROM disable flag to kill off REAL firmware.
+
