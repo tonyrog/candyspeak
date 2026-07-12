@@ -4604,34 +4604,36 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
     {
 	// obj.State: State is always the module's first member (module decl + 1).
 	index_t state_ix = MAKE_INDEX(m, INDEX(mx) + 1);
-	int have_static = 0;
+	int nstatic = 0;
 	int mk = -1;
 	reg_t cnd;
 
+	// Emit reactive (<-) bindings as standing rules; compact the static parts
+	// to the front of d.inits[] (in place, order preserved) so they can go
+	// into ONE grouped rule below.
 	for (k = 0; (k < MAX_INITS) && (d.inits[k].obj.len > 0); k++) {
 	    if (d.inits[k].assign == RIMP) {          // reactive: standing rule
 		rule_body_part_t p = d.inits[k];
 		if (asm_rule(st, tv, n, ix, &p, 1, NULL) < 0)
 		    return -1;
 	    }
-	    else
-		have_static = 1;
+	    else {
+		if (nstatic != k)
+		    d.inits[nstatic] = d.inits[k];
+		nstatic++;
+	    }
 	}
 
-	if (have_static) {
+	if (nstatic > 0) {
 	    cnd = alloc_reg(st);
 	    if (!asm_mem(st, OP_LD, cnd, state_ix))   // load obj.State
 		return -1;
 	    if (!asm_INSTATE(st, &mk, cnd, 0))        // gate on INIT (snum 0)
 		return -1;
 	    free_reg(st, cnd);
-	    for (k = 0; (k < MAX_INITS) && (d.inits[k].obj.len > 0); k++) {
-		if (d.inits[k].assign != RIMP) {      // static: one-time write
-		    rule_body_part_t p = d.inits[k];
-		    if (asm_rule(st, tv, n, ix, &p, 1, NULL) < 0)
-			return -1;
-		}
-	    }
+	    // all static config/init writes in ONE rule (shares one LI/RULE/NEXT)
+	    if (asm_rule(st, tv, n, ix, d.inits, nstatic, NULL) < 0)
+		return -1;
 	    // auto-transition, AFTER the last static init: State = NORMAL (snum 1)
 	    if (asm_state_set(st, state_ix, 1) < 0)
 		return -1;
