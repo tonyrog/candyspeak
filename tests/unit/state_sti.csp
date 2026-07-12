@@ -1,0 +1,22 @@
+// STI (single-instruction immediate store) must store the literal number, even
+// when that number equals a state's snum. Here V is a plain variable that gets
+// the same values as State's snums (2=on, 3=off) -- V must hold the raw ints,
+// not be confused with states. State itself toggles via STI too.
+#module Blk
+  #states on off
+  #variable V integer = 0
+
+  #in INIT
+    State = on, V = 2
+  #end
+
+  #in on
+    State = off, V = 3
+  #end
+
+  #in off
+    State = on, V = 2
+  #end
+#end
+
+#Blk b1

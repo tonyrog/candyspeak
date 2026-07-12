@@ -14,3 +14,5 @@ const int         rom_n_edg   RODATA = 0;
 const index_t     rom_idg[1]  RODATA = { 0 };
 const index_t     rom_ofs[1]  RODATA = { 0 };
 const index_t     rom_edg[1]  RODATA = { 0 };
+const int         rom_n_states  RODATA = 0;
+const state_t     rom_states[1] RODATA = { {0} };

@@ -1,0 +1,7 @@
+// timer fires (init=1) and self-restarts; Done latches on first timeout
+#timer T 100 = 1
+#variable Done integer = 0
+#variable Count integer = 0
+Done = 1 ? timeout(T)
+Count = Count + 1 ? timeout(T)
+T = 1 ? timeout(T)

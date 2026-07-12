@@ -296,6 +296,8 @@ const op_info_t op_info[] RODATA = {
     [OP_STIMP] = {s_STIMP,NONE,-1,V_VOID,MAKE_TYPE0()},
     [OP_CHG]   = {s_CHG,NONE,-1,V_VOID,MAKE_TYPE0()},
     [OP_EQI]   = {s_EQI,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_STI]   = {s_STI,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_INSTATE] = {s_INSTATE,NONE,-1,V_VOID,MAKE_TYPE0()},
     [OP_LD]    = {s_LD,NONE,-1,V_VOID,MAKE_TYPE0()},
     [OP_LDP]   = {s_LDP,NONE,-1,V_VOID,MAKE_TYPE0()},
     [OP_CALL]  = {s_CALL,NONE,-1,V_VOID,MAKE_TYPE0()},
@@ -333,6 +335,12 @@ extern const int         rom_n_edg;
 extern const index_t     rom_idg[];
 extern const index_t     rom_ofs[];
 extern const index_t     rom_edg[];
+// State table (name<->number) baked with the program: rule listing and runtime
+// state lookup need the user states, which csp_rt_init only seeds with
+// INIT/NORMAL. Always emitted (rom_n_states>=2 for a baked program, 0 stub when
+// no firmware is linked).
+extern const int         rom_n_states;
+extern const state_t     rom_states[];
 
 // Segment-aware reads (see csp.h). NOINLINE keeps the flash-copy in one place
 // instead of expanding it at every decl()/instr() call site.
@@ -1539,6 +1547,12 @@ again:
 	st->reg[instr(st,n,mi.x)].i =
 	    csp_value(st, instr(st,n,mi.mem)).i == instr(st,n,mi.imm);
 	break;
+    case OP_STI: {  // store immediate to memory (mirror of EQI)
+	value_t v;
+	v.i = instr(st,n,mi.imm);
+	csp_set_value(st, instr(st,n,mi.mem), v);
+	break;
+    }
     case OP_STIMP:  // same as ST, but marks reactive assignment
     case OP_ST:
 	csp_set_value(st, instr(st,n,m.mem), st->reg[instr(st,n,m.x)]);
@@ -1573,6 +1587,11 @@ again:
 	    n = n+1;
 	else
 	    n = n+instr(st,n,r.nxt);  // relative jump
+	goto again;
+    case OP_INSTATE:  // #in block gate: skip the whole block if State != imm
+	if (st->reg[instr(st,n,in.x)].i != instr(st,n,in.imm))
+	    return n + instr(st,n,in.nxt);
+	n = n+1;
 	goto again;
     case OP_NEXT: // rule is done executing
 	return n+1;
@@ -2038,6 +2057,20 @@ NOINLINE static bool_t asm_NEXT(csp_rt_t* st, int r)
     return 0;
 }
 
+// #in <state> block gate: reg x holds the current State (loaded just before);
+// nxt is patched at #end to the distance skipping the whole block.
+NOINLINE static bool_t asm_INSTATE(csp_rt_t* st, int* pos, reg_t x, int imm)
+{
+    csp_instr_t* ip = alloc_instr_ptr(st, pos, OP_INSTATE);
+    if (ip != NULL) {
+	ip->in.x = x;
+	ip->in.imm = imm;
+	ip->in.nxt = 0;   // patched at #end
+	return 1;
+    }
+    return 0;
+}
+
 NOINLINE static bool_t asm_mem_part(csp_rt_t* st, opcode_t op, reg_t x,
 				 index_t mem, csp_part_t part)
 {
@@ -2067,6 +2100,23 @@ NOINLINE static bool_t asm_memi(csp_rt_t* st, opcode_t op, reg_t x,
 NOINLINE static bool_t asm_EQI(csp_rt_t* st, reg_t x, index_t mem, int8_t imm)
 {
     return asm_memi(st, OP_EQI, x, mem, imm);
+}
+
+// STI: store a small immediate to memory in one instruction (mirror of EQI).
+// x is the register the rule's NEXT points at -- STI never writes it at runtime,
+// so it stays a dead slot used only to render the rule body in disassembly.
+NOINLINE static bool_t asm_STI(csp_rt_t* st, reg_t x, index_t mem, int8_t imm)
+{
+    return asm_memi(st, OP_STI, x, mem, imm);
+}
+
+// A plain (non-part, non-reactive) store of a small signed-8-bit integer
+// immediate can collapse LI+ST into a single STI. Keeps state assignments and
+// other small constants to one instruction and one disassembly hit.
+static int fits_sti(opcode_t op, const rentry_t* r)
+{
+    return (op == OP_ST) && r->I && (r->vt != V_FLOAT) &&
+	   (r->val.i >= -128) && (r->val.i <= 127);
 }
 
 NOINLINE static bool_t asm_mem(csp_rt_t* st, opcode_t op, reg_t x, index_t mem)
@@ -2953,6 +3003,16 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
     // Type conversion to declared target type if needed
     if (!coerce_assign(st, lhs.ix, &rhs))
 	return -1;
+
+    // Compiled path: collapse LI+ST into a single STI for a small immediate
+    // plain-value store (mirror of EQI). Keeps e.g. State=OFF one instruction.
+    if (st->ap && (lhs.part == PART_VAL) && fits_sti(op, &rhs)) {
+	if (!asm_STI(st, 0, lhs.ix, (int8_t)rhs.val.i))
+	    return -1;
+	rstack[ep-2] = rhs;   // result is the rhs (for chaining A=B=1)
+	return ep - 1;
+    }
+
     if (csp_load(st, &rhs) < 0)
 	return -1;
 
@@ -3675,6 +3735,9 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
     }
 
     if (st->sdef >= 0) {
+	// close the #in block: patch OP_INSTATE.nxt to jump past everything
+	// emitted since the gate, so a State mismatch skips the whole block.
+	ram_instr_at(st, st->in_marker)->in.nxt = st->ps.nn - st->in_marker;
 	st->sdef = -1;
 	return 0;
     }
@@ -4406,6 +4469,17 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 	    if (!coerce_assign(st, ix, &rbody))
 		return -1;
 	}
+	// <var> = <small-int-imm>  (plain value, not reactive) -> single STI,
+	// mirroring EQI so the rule lists cleanly (State=OFF, not State=3). dst is
+	// a dead register: STI never writes it, but NEXT points at it so the body
+	// renders as the assignment.
+	if ((ix != BAD_INDEX) && (lpart == PART_VAL) && !rbody.L &&
+	    fits_sti((part[k].assign == RIMP) ? OP_STIMP : OP_ST, &rbody)) {
+	    dst = alloc_reg(st);
+	    if (!asm_STI(st, dst, ix, (int8_t)rbody.val.i))
+		return -1;
+	    continue;
+	}
 	if (!rbody.L)
 	    csp_load(st, &rbody);
 	dst = rbody.reg;
@@ -4454,6 +4528,29 @@ static const uint8_t pat_object[] = {
     P_END
 };
 
+// Emit an always-true rule "state_ix = snum" (RULE/body/NEXT shape, like
+// asm_rule). Used for the object-init INIT auto-transition to NORMAL.
+NOINLINE static int asm_state_set(csp_rt_t* st, index_t state_ix, int snum)
+{
+    reg_t cnd, dst;
+    int rpos;
+
+    cnd = alloc_reg(st);
+    if (!asm_LI(st, cnd, -1))            // always-true condition
+	return -1;
+    if (!asm_RULE(st, &rpos, cnd, 0))
+	return -1;
+    free_reg(st, cnd);
+    dst = alloc_reg(st);                 // dead reg for NEXT's body value
+    if (!asm_STI(st, dst, state_ix, snum))
+	return -1;
+    ram_instr_at(st, rpos)->r.nxt = st->ps.nn - rpos;  // skip body when false
+    if (!asm_NEXT(st, dst))
+	return -1;
+    free_reg(st, dst);
+    return 0;
+}
+
 NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     object_param_t d = {0};
@@ -4495,29 +4592,52 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
 
     DBG("object %s.%s\n", decl_name(st, mx), decl_name(st, ix));    
 
-    // Generate code for init list
-    k = 0;
-    while((k < MAX_INITS) && (d.inits[k].obj.len > 0)) {
-	rule_body_part_t p = {0};
-	rule_body_part_t* e = &d.inits[k];
+    // Generate code for the init list. Two kinds:
+    //  - reactive (<-) bindings become STANDING rules (must re-evaluate every
+    //    cycle as their inputs change).
+    //  - static (=, .part=) config/initial values run ONCE: gated on the
+    //    object's State == INIT and terminated by State = NORMAL. Writing them
+    //    every cycle is wasteful and, for config parts (OP_STP), keeps `anyd`
+    //    set forever so the program never idles. The State = NORMAL is a default
+    //    the module's own #in INIT may override within the same cycle (its write
+    //    lands in DOUT after this one, and last-writer wins at commit).
+    {
+	// obj.State: State is always the module's first member (module decl + 1).
+	index_t state_ix = MAKE_INDEX(m, INDEX(mx) + 1);
+	int have_static = 0;
+	int mk = -1;
+	reg_t cnd;
 
-	// field name is the lhs (derived from rhs.pos in asm_rule)
-	p = *e;
-	// p.obj.len = 0;
+	for (k = 0; (k < MAX_INITS) && (d.inits[k].obj.len > 0); k++) {
+	    if (d.inits[k].assign == RIMP) {          // reactive: standing rule
+		rule_body_part_t p = d.inits[k];
+		if (asm_rule(st, tv, n, ix, &p, 1, NULL) < 0)
+		    return -1;
+	    }
+	    else
+		have_static = 1;
+	}
 
-	DBG("  obj %.*s\n", p.obj.len, p.obj.ptr);
-	DBG("  field %.*s\n", p.fld.len, p.fld.ptr);
-	DBG("  assign %d\n", p.assign);
-	DBG("  has_idx %d\n", p.has_idx);
-	DBG("  has_range %d\n", p.has_range);
-	DBG("  idx0 %d\n", p.idx0);
-	DBG("  idx1 %d\n", p.idx1);
-	DBG("  rhs.pos = %d\n", p.rhs.pos);
-	DBG("  rhs.len = %d\n", p.rhs.len);
-	
-	if (asm_rule(st,tv,n,ix,&p,1,NULL) < 0)
-	    return -1;
-	k++;
+	if (have_static) {
+	    cnd = alloc_reg(st);
+	    if (!asm_mem(st, OP_LD, cnd, state_ix))   // load obj.State
+		return -1;
+	    if (!asm_INSTATE(st, &mk, cnd, 0))        // gate on INIT (snum 0)
+		return -1;
+	    free_reg(st, cnd);
+	    for (k = 0; (k < MAX_INITS) && (d.inits[k].obj.len > 0); k++) {
+		if (d.inits[k].assign != RIMP) {      // static: one-time write
+		    rule_body_part_t p = d.inits[k];
+		    if (asm_rule(st, tv, n, ix, &p, 1, NULL) < 0)
+			return -1;
+		}
+	    }
+	    // auto-transition, AFTER the last static init: State = NORMAL (snum 1)
+	    if (asm_state_set(st, state_ix, 1) < 0)
+		return -1;
+	    // patch the gate to skip the whole INIT block when State != INIT
+	    ram_instr_at(st, mk)->in.nxt = st->ps.nn - mk;
+	}
     }
     return asm_NEW(st, decl(st,INDEX(mx),md.ent), ix);
 }
@@ -4911,6 +5031,19 @@ NOINLINE int csp_parse_in(csp_rt_t* st, token_t* tv, int ti, size_t n)
     }
     // compile time state, add rules to states[i].snum
     st->sdef = st->states[i].snum;
+    // Emit the block gate: LD the current State into a scratch register, then
+    // OP_INSTATE which skips the whole block (sequential) when State != sdef.
+    // nxt is patched at #end. The per-rule EQI stays for the reactive path.
+    {
+	int mk;
+	reg_t cnd = alloc_reg(st);
+	if (!asm_mem(st, OP_LD, cnd, st->sx))
+	    return -1;
+	if (!asm_INSTATE(st, &mk, cnd, st->sdef))
+	    return -1;
+	free_reg(st, cnd);
+	st->in_marker = mk;
+    }
     return 0;
 }
 
@@ -5045,6 +5178,17 @@ NOINLINE void csp_load_rom(csp_rt_t* st)
     st->ps.nn   = st->rom_nn;
     st->ps.strp = st->rom_strp;
     st->sx = 0;                   // State is ROM decl 0
+    // Restore the baked state table (name offsets index rom_str, which we just
+    // pointed at). Overwrites the INIT/NORMAL seed from csp_rt_init with the
+    // program's full table so ON/OFF/... resolve in listing and lookup.
+    {
+	int i, ns = rom_n_states;
+	if (ns > MAX_STATES) ns = MAX_STATES;
+	for (i = 0; i < ns; i++)
+	    st->states[i] = ro_state(&rom_states[i]);
+	st->ps.ns = ns;
+	st->rom_ns = ns;   // baseline; EEPROM persists only additions above this
+    }
 }
 
 int csp_rt_init(csp_rt_t* st, int reactive)
@@ -5119,7 +5263,9 @@ int csp_rt_init(csp_rt_t* st, int reactive)
 	    DBG("unabled to add NORMAL state=1\n");
 	    return -1;
 	}
+	st->rom_ns = st->ps.ns;  // baseline (2); raised by csp_load_rom if firmware
     }
+    st->list_state = -1;         // no #in block being listed
     return 0;
 }
 
@@ -5313,6 +5459,8 @@ int csp_rt_start(csp_rt_t* st)
     st->no = 0;
     st->nm = 0;
     st->nbuf = 0;
+    st->ps.nq = 0;   // rebuilt from DECL_OBJECT below (parse-time table is not
+		     // restored from ROM); idempotent for a freshly parsed program
 
     // clear the view table; setup_* assigns a buffer to each value leaf below.
     memset(st->view, 0, sizeof(st->view));
@@ -5331,7 +5479,11 @@ int csp_rt_start(csp_rt_t* st)
 	    in_module = 0;
 	    break;
 	case DECL_OBJECT:
-	    // Per-object init done after offs[] is allocated
+	    // Rebuild the object slot table (1-based, decl order == parse order),
+	    // so ROM-baked objects get per-object storage and list with their real
+	    // names. Per-object value init still happens after offs[] is allocated.
+	    if (st->ps.nq < MAX_OBJECTS-1)
+		st->object[++st->ps.nq] = ix;
 	    break;
 	case DECL_CONSTANT:
 	    if (!in_module) {               // global; templates set up per-object
@@ -5504,6 +5656,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* arg[]);
 static int cmd_state(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_reset(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_clear(csp_rt_t* st, int argc, char* argv[]);
+static int cmd_memory(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_commit(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_quit(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_latch(csp_rt_t* st, int argc, char* argv[]);
@@ -5513,6 +5666,7 @@ static const csp_cmd_t builtin_cmds[] = {
     { "?",      NULL,                      cmd_help },
     { "list",   "List rules",              cmd_list },
     { "state",  "Show current values",     cmd_state },
+    { "memory", "Show code/RAM usage",      cmd_memory },
     { "reset",  "Reset to initial values", cmd_reset },
     { "clear",  "Drop RAM patches (keep ROM)", cmd_clear },
     { "latch",  "on or off, device output", cmd_latch },
@@ -5822,6 +5976,13 @@ match:
 	    }
 	    i++;
 	    break;
+	case OP_STI:  // immediate store: memory index in the .mi arm
+	    if (nf) {
+		if ((f = lookup_filter(instr(st,i,mi.mem), cnd, filt, nf)) >= 0)
+		    fbits |= (1 << f);
+	    }
+	    i++;
+	    break;
 	default: i++; break;
 	}
     }
@@ -5988,6 +6149,54 @@ static int cmd_clear(csp_rt_t* st, int argc, char* argv[])
 	csp_csr(st);   // rebuild the dependency graph for ROM-only
 #endif
     csp_print_str("Cleared RAM patches -- ROM restored\n");
+    return CSP_CMD_OK;
+}
+
+// print v right-aligned in a field of width w (v assumed >= 0)
+static void mem_int_r(int v, int w)
+{
+    int n = 1, t = v;
+    while (t >= 10) { n++; t /= 10; }
+    while (n++ < w) csp_print_char(' ');
+    csp_print_int(v);
+}
+
+static void mem_row(const char* name, int used, int max)
+{
+    int len = 0;
+    csp_print_str("  ");
+    csp_print_str(name);
+    while (name[len]) len++;
+    while (len++ < 8) csp_print_char(' ');
+    mem_int_r(used, 5);
+    mem_int_r(max, 7);
+    mem_int_r(max - used, 7);
+    csp_print_char('\n');
+}
+
+// /memory: per-category usage. decl/instr/string live in the RAM arrays (ROM
+// stays in flash), so those show the RAM-patch usage; the rest are rebuilt
+// whole into RAM arrays, so their counts include any ROM content.
+static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
+{
+    (void)argc; (void)argv;
+    if (st->rom_nd || st->rom_nn || st->rom_strp) {
+	csp_print_str("ROM base: ");
+	csp_print_int(st->rom_nd);   csp_print_str(" decl, ");
+	csp_print_int(st->rom_nn);   csp_print_str(" instr, ");
+	csp_print_int(st->rom_strp); csp_print_str(" str\n");
+    }
+    csp_print_str("category   used    max   free\n");
+    mem_row("decl",   st->ps.nd   - st->rom_nd,   MAX_DECLS);
+    mem_row("instr",  st->ps.nn   - st->rom_nn,   MAX_INSTRS);
+    mem_row("string", st->ps.strp - st->rom_strp, MAX_STR_BUF);
+    mem_row("object", st->ps.nq,  MAX_OBJECTS);
+    mem_row("state",  st->ps.ns,  MAX_STATES);
+    mem_row("module", st->nm,     MAX_MODULES);
+    mem_row("input",  st->ni,     MAX_INPUTS);
+    mem_row("output", st->no,     MAX_OUTPUTS);
+    mem_row("timer",  st->nt,     MAX_TIMERS);
+    mem_row("buffer", st->nbuf,   MAX_BUFS);
     return CSP_CMD_OK;
 }
 

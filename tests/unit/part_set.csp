@@ -1,0 +1,11 @@
+// Writing a config part (<var>.<part> = expr) must reach the value slot and
+// commit to DIN, so a later read sees the new value. Covers digital .pin and
+// timer .period -- both go through the STP path.
+#digital D 5
+#timer T 200 = 0
+#variable Pin integer = 0
+#variable Per integer = 0
+D.pin = 17
+T.period = 500
+Pin = D.pin
+Per = T.period

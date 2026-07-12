@@ -1,0 +1,15 @@
+// Object-init runs ONCE (in INIT), not every cycle. m1.V is initialised to 5 by
+// object-init; once in state 'run', a rule sets V=99. If object-init re-ran
+// every cycle it would keep re-asserting V=5 and V would oscillate; with the
+// INIT gate it stays 99.
+#module M
+  #variable V integer = 0
+  #states run
+  #in INIT
+    State = run
+  #end
+  #in run
+    V = 99 ? V == 5
+  #end
+#end
+#M m1 V = 5

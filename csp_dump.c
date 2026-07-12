@@ -88,7 +88,13 @@ void csp_fprint_value(FILE* f, csp_rt_t* st, vtype_t vt, value_t val)
     case V_UNSIGNED: fprintf(f, "16#%x", val.u); break; // fixme lang
     case V_FLOAT:    fprint_fvalue(f, val.f); break;
     case V_STRING:
-	csp_fprint_escaped_string(f, csp_str_at(st, val.s), csp_str_byte(st, val.s-1));
+	// val.s == 0 is the "no string" sentinel: new_string() never returns 0
+	// (the length byte would sit at offset -1). String constants leave their
+	// runtime value slot at 0, so guard before reading the length prefix.
+	if (val.s <= 0)
+	    fputs("\"\"", f);
+	else
+	    csp_fprint_escaped_string(f, csp_str_at(st, val.s), csp_str_byte(st, val.s-1));
 	break;
     default: fprintf(f, "???"); break;
     }
@@ -210,7 +216,13 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	csp_fprint_tag(f, st, instr(st,i,mi.mem));
 	fprintf(f, ",%d", instr(st,i,mi.imm));
 	fprintf(f, "]}%s\n", eot);
-	break;	
+	break;
+    case OP_STI:  // store immediate to memory (no result register)
+	fprintf(f, "{instr,%d,'STI',[", i);
+	csp_fprint_tag(f, st, instr(st,i,mi.mem));
+	fprintf(f, ",%d", instr(st,i,mi.imm));
+	fprintf(f, "]}%s\n", eot);
+	break;
     case OP_ARG:
 	fprintf(f, "{instr,%d,'ARG',[r%d,%d]}%s\n",
 		i,
@@ -232,6 +244,11 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	fprintf(f, "{instr,%d,'RULE',[r%d,%d]}%s\n",
 		i,
 		instr(st,i,r.cnd), instr(st,i,r.nxt), eot);
+	break;
+    case OP_INSTATE:
+	fprintf(f, "{instr,%d,'INSTATE',[r%d,%d,%d]}%s\n",
+		i,
+		instr(st,i,in.x), instr(st,i,in.imm), instr(st,i,in.nxt), eot);
 	break;
     case OP_ENTER: {
 	index_t mx = instr(st,i,e.mx);
@@ -861,6 +878,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 	    fprintf(f, "  {.m={%s,.x=%u,.mem=%u,.y=%u}},\n",
 		    op, ip->m.x, ip->m.mem, ip->m.y);
 	    break;
+	case OP_STI:
 	case OP_EQI:
 	    fprintf(f, "  {.mi={%s,.x=%u,.mem=%u,.imm=%d}},\n",
 		    op, ip->mi.x, ip->mi.mem, ip->mi.imm);
@@ -871,6 +889,10 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 	    break;
 	case OP_NEXT:
 	    fprintf(f, "  {.x={%s,.x=%u}},\n", op, ip->x.x);
+	    break;
+	case OP_INSTATE:
+	    fprintf(f, "  {.in={%s,.x=%u,.imm=%d,.nxt=%d}},\n",
+		    op, ip->in.x, ip->in.imm, ip->in.nxt);
 	    break;
 	case OP_RULE:
 	    fprintf(f, "  {.r={%s,.cnd=%u,.nxt=%d}},\n", op, ip->r.cnd, ip->r.nxt);
@@ -919,6 +941,16 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 	fprintf(f, "const index_t rom_ofs[1] RODATA = {0};\n");
 	fprintf(f, "const index_t rom_edg[1] RODATA = {0};\n");
     }
+
+    // State table (name offset -> state number). csp_load_rom copies this back
+    // into st->states so baked user states resolve. Name offsets index rom_str.
+    fprintf(f, "const int rom_n_states RODATA = %d;\n", st->ps.ns);
+    fprintf(f, "const state_t rom_states[%d] RODATA = {", st->ps.ns ? st->ps.ns : 1);
+    for (i = 0; i < st->ps.ns; i++)
+	fprintf(f, "{.name=%u,.snum=%u},",
+		st->states[i].name, st->states[i].snum);
+    if (!st->ps.ns) fprintf(f, "{0}");   // avoid a zero-length array
+    fprintf(f, "};\n");
 }
 
 // list declarations
@@ -1020,13 +1052,73 @@ int csp_list_rule(csp_rt_t* st, int i)
     return csp_print_rule(st, i);
 }
 
+// Name string position of the state numbered snum (0 if none).
+static sindex_t list_state_name_pos(csp_rt_t* st, int snum)
+{
+    int s;
+    for (s = 0; s < st->ps.ns; s++)
+	if (st->states[s].snum == snum)
+	    return st->states[s].name;
+    return 0;
+}
+
+// Reconstruct source-shaped output: #module/#in blocks are recovered from the
+// OP_ENTER/OP_LEAVE and OP_INSTATE markers, rules are indented within them, and
+// the per-rule State==S gate is suppressed (implied by the #in header).
 void csp_list_rules(FILE* f, csp_rt_t* st)
 {
     int i = 0;
+    int lev = 0;
+    int block_end = -1;
     void* savef = csp_set_file_output(f);
-    while(i < st->ps.nn) {
-	fprintf(f, "RULE-%d\n", i);
-	i = csp_list_rule(st, i);
+
+    while (i < st->ps.nn) {
+	opcode_t op;
+	if ((block_end >= 0) && (i >= block_end)) {   // close finished #in block
+	    if (lev > 0) lev--;
+	    fprintf(f, "%s#end\n", indent(lev));
+	    block_end = -1;
+	    st->list_state = -1;
+	}
+	op = instr(st, i, op);
+	if (op == OP_ENTER) {
+	    fprintf(f, "%s#module %s\n", indent(lev), decl_name(st, instr(st,i,e.mx)));
+	    lev++;
+	    i++;
+	    continue;
+	}
+	if (op == OP_LEAVE) {
+	    if (lev > 0) lev--;
+	    fprintf(f, "%s#end\n", indent(lev));
+	    i++;
+	    continue;
+	}
+	if (op == OP_INSTATE) {
+	    sindex_t np = list_state_name_pos(st, instr(st,i,in.imm));
+	    fprintf(f, "%s#in %s\n", indent(lev), np ? csp_str_at(st, np) : "?");
+	    block_end = i + instr(st,i,in.nxt);
+	    st->list_state = instr(st,i,in.imm);
+	    lev++;
+	    i++;
+	    continue;
+	}
+	// the block gate's LD (feeds the following INSTATE) is not a rule
+	if ((op == OP_LD) && (i+1 < st->ps.nn) &&
+	    (instr(st, i+1, op) == OP_INSTATE)) {
+	    i++;
+	    continue;
+	}
+	if ((op == OP_NEW) || (op == OP_NOP)) {
+	    i++;
+	    continue;
+	}
+	fprintf(f, "%s", indent(lev));   // a rule starts here
+	i = csp_print_rule(st, i);
     }
+    if (block_end >= 0) {   // block runs to the very end
+	if (lev > 0) lev--;
+	fprintf(f, "%s#end\n", indent(lev));
+    }
+    st->list_state = -1;
     csp_set_file_output(savef);
 }

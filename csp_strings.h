@@ -120,6 +120,8 @@ extern rochar s_LD[3] RODATA;
 extern rochar s_LDP[4] RODATA;
 extern rochar s_CALL[5] RODATA;
 extern rochar s_EQI[4] RODATA;
+extern rochar s_STI[4] RODATA;
+extern rochar s_INSTATE[8] RODATA;
 extern rochar s_RULE[5] RODATA;
 extern rochar s_NEXT[5] RODATA;
 extern rochar s_NOP[4] RODATA;

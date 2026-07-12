@@ -351,6 +351,56 @@ static void exprbuf_fcall(csp_rt_t* st,
     bp->prio[ip->f.x] = 110;
 }
 
+// Name of a config part (<var>.<part>), for disassembly only.
+static const char* part_name(csp_part_t part)
+{
+    switch (part) {
+    case PART_PIN:      return "pin";
+    case PART_PORT:     return "port";
+    case PART_DIR:      return "dir";
+    case PART_PWM:      return "pwm";
+    case PART_ENDIAN:   return "endian";
+    case PART_PULLUP:   return "pullup";
+    case PART_PULLDOWN: return "pulldown";
+    case PART_PERIOD:   return "period";
+    case PART_FIRED:    return "fired";
+    case PART_ID:       return "id";
+    case PART_VAL:
+    default:            return "value";
+    }
+}
+
+// The per-module (and global) state variable is always the internally-created
+// DECL_VARIABLE named "State". State numbers render symbolically only for it,
+// so a plain "T==1" or "T=1" is never mistaken for a state.
+static int is_state_var(csp_rt_t* st, uint16_t mem)
+{
+    index_t i = INDEX(mem);
+    if (i >= st->ps.nd)
+	return 0;
+    if (decl(st, i, type) != DECL_VARIABLE)
+	return 0;
+    return csp_str_eq(st, decl_name_pos(st, mem), "State", 5);
+}
+
+// If mem is the state variable and imm names a declared state, append that
+// state's name and return 1; otherwise leave the buffer untouched, return 0.
+// Shared by the EQI (State==) and STI (State=) disassembly.
+static int exprbuf_state_name(csp_rt_t* st, csp_exprbuf_t* bp,
+			      uint16_t mem, int imm)
+{
+    int s;
+    if (!is_state_var(st, mem))
+	return 0;
+    for (s = 0; s < st->ps.ns; s++) {
+	if (st->states[s].snum == imm) {
+	    exprbuf_str_at(st, bp, st->states[s].name);
+	    return 1;
+	}
+    }
+    return 0;
+}
+
 static void exprbuf_store(csp_rt_t* st,
 			  csp_exprbuf_t* bp,
 			  csp_instr_t* ip, int rimp)
@@ -371,12 +421,73 @@ static void exprbuf_store(csp_rt_t* st,
 	bp->body[bp->nbody++] = bp->reg[ip->m.x];
 }
 
+// STP: config-part assignment (<var>.<part> = rhs). The part is in ip->m.y.
+static void exprbuf_store_part(csp_rt_t* st,
+			       csp_exprbuf_t* bp,
+			       csp_instr_t* ip)
+{
+    uint8_t* start;
+    uint8_t  var;
+
+    var = exprbuf_var(st, bp, ip->m.mem);
+    start = exprbuf_ptr(bp);
+    exprbuf_strref(bp, var);
+    exprbuf_char(bp, '.');
+    exprbuf_str(bp, part_name((csp_part_t)ip->m.y));
+    exprbuf_char(bp, '=');
+    exprbuf_strref(bp, bp->reg[ip->m.x]);
+
+    bp->reg[ip->m.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
+    bp->prio[ip->m.x] = 5;
+    if (bp->nbody < MAX_BODY)
+	bp->body[bp->nbody++] = bp->reg[ip->m.x];
+}
+
+// STI: store immediate to memory (<var> = imm). The immediate is in ip->mi.imm;
+// ip->mi.x is the (runtime-dead) register the rule's NEXT points at, so the
+// interned string is recorded there to render the rule body cleanly.
+static void exprbuf_store_imm(csp_rt_t* st,
+			      csp_exprbuf_t* bp,
+			      csp_instr_t* ip)
+{
+    uint8_t* start;
+    uint8_t  var;
+
+    var = exprbuf_var(st, bp, ip->mi.mem);
+    start = exprbuf_ptr(bp);
+    exprbuf_strref(bp, var);
+    exprbuf_char(bp, '=');
+    if (!exprbuf_state_name(st, bp, ip->mi.mem, ip->mi.imm))
+	exprbuf_int16(bp, ip->mi.imm);
+
+    bp->reg[ip->mi.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
+    bp->prio[ip->mi.x] = 5;
+    if (bp->nbody < MAX_BODY)
+	bp->body[bp->nbody++] = bp->reg[ip->mi.x];
+}
+
 static void exprbuf_ld(csp_rt_t* st,
 		       csp_exprbuf_t* bp,
 		       csp_instr_t* ip)
 {
     uint8_t  var = exprbuf_var(st, bp, ip->m.mem);
     bp->reg[ip->m.x] = var;
+    bp->prio[ip->m.x] = 110;
+}
+
+// LDP: config-part read (<var>.<part>). The part is in ip->m.y.
+static void exprbuf_ld_part(csp_rt_t* st,
+			    csp_exprbuf_t* bp,
+			    csp_instr_t* ip)
+{
+    uint8_t* start;
+    uint8_t  var = exprbuf_var(st, bp, ip->m.mem);
+
+    start = exprbuf_ptr(bp);
+    exprbuf_strref(bp, var);
+    exprbuf_char(bp, '.');
+    exprbuf_str(bp, part_name((csp_part_t)ip->m.y));
+    bp->reg[ip->m.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
     bp->prio[ip->m.x] = 110;
 }
 
@@ -480,6 +591,12 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
         case OP_ST:  // assignment in body
 	    exprbuf_store(st, bp, ip, 0);
 	    break;
+	case OP_STP:  // config-part assignment (<var>.<part> = rhs)
+	    exprbuf_store_part(st, bp, ip);
+	    break;
+	case OP_STI:  // store immediate (<var> = imm, mirror of EQI)
+	    exprbuf_store_imm(st, bp, ip);
+	    break;
 	case OP_STIMP:  // reactive assignment (<-)
 	    exprbuf_store(st, bp, ip, 1);
 	    break;
@@ -501,8 +618,10 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	    }
 	    break;
         case OP_LD:
-	case OP_LDP:  // best effort: renders as the plain variable (no .part yet)
 	    exprbuf_ld(st, bp, ip);
+	    break;
+	case OP_LDP:  // config-part read (<var>.<part>)
+	    exprbuf_ld_part(st, bp, ip);
 	    break;
         case OP_LIU: {
             uint8_t *start = exprbuf_ptr(bp);
@@ -513,17 +632,18 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	}
 	case OP_EQI: {
 	    uint8_t *start = exprbuf_ptr(bp);
-	    int s;
+	    // Inside a listed #in <S> block, the per-rule State==S gate is implied
+	    // by the block header -- render it empty so AND drops it from the cond.
+	    if ((st->list_state >= 0) && (ip->mi.imm == st->list_state) &&
+		is_state_var(st, ip->mi.mem)) {
+		bp->reg[ip->a.x] = exprbuf_intern(bp, (uint8_t*)"", 0);
+		bp->prio[ip->a.x] = 110;
+		break;
+	    }
 	    exprbuf_var(st, bp, ip->mi.mem);
 	    exprbuf_str(bp, "==");
-	    for (s = 0; s < st->ps.ns; s++) {
-		if (st->states[s].snum == ip->mi.imm) {
-		    exprbuf_str_at(st, bp, st->states[s].name);
-		    goto named;
-		}
-	    }
-            exprbuf_int16(bp, ip->mi.imm);
-	    named:
+	    if (!exprbuf_state_name(st, bp, ip->mi.mem, ip->mi.imm))
+		exprbuf_int16(bp, ip->mi.imm);
 	    bp->reg[ip->a.x] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
 	    bp->prio[ip->a.x] = 60;
 	    break;

@@ -1,0 +1,23 @@
+// Multiple #in <S> blocks for the SAME state must all run in that state, and a
+// block for a different state (bb) interleaved between them must not disturb the
+// INSTATE skip distances. In state aa both aa-blocks run (X=1, Y=2); the bb
+// block never runs (Y stays != 99).
+#states aa bb
+#variable X integer = 0
+#variable Y integer = 0
+
+#in INIT
+  State = aa
+#end
+
+#in aa
+  X = 1 ? X == 0
+#end
+
+#in bb
+  Y = 99 ? Y == 0
+#end
+
+#in aa
+  Y = 2 ? Y == 0
+#end

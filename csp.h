@@ -491,6 +491,8 @@ typedef enum {
     OP_ARG,     // load argument from register
     OP_CALL,    // function call:
     OP_EQI,     // compare memory with 8 bit value, result in x
+    OP_STI,     // store immediate value to memory (mirror of EQI)
+    OP_INSTATE, // #in <state> block gate: if reg != state, skip block (nxt)
     OP_LAST,
 } opcode_t;
 
@@ -612,6 +614,15 @@ typedef struct PACKED {
     unsigned x:REG_BITS;   // body result
 } csp_instr_next_t;
 
+// op INSTATE - #in <state> block gate. A LD of the state variable precedes it;
+// if that register != imm, jump nxt to skip the whole block (sequential path).
+typedef struct PACKED {
+    INSTR_COMMON;
+    unsigned x:REG_BITS;   // register holding the current State value
+    signed   imm:8;        // target state number
+    signed   nxt:14;       // relative jump to skip the block if x != imm
+} csp_instr_instate_t;
+
 typedef struct PACKED {
     INSTR_COMMON;
     unsigned num:INSTR_BITS;  // number of instructions
@@ -649,7 +660,8 @@ typedef union {
     csp_instr_memi_t mi;
     csp_instr_call_t f;
     csp_instr_rule_t r;
-    csp_instr_next_t x;    
+    csp_instr_next_t x;
+    csp_instr_instate_t in;
     csp_instr_alu_t a;
 } csp_instr_t;
 
@@ -868,11 +880,17 @@ typedef struct _csp_rt_t
     index_t rom_nd;              // # ROM decls   (RAM decl base)
     index_t rom_nn;              // # ROM instrs  (RAM instr base)
     index_t rom_strp;            // # ROM string bytes (RAM string base)
+    index_t rom_ns;              // # baseline states (INIT/NORMAL + ROM states);
+				 // EEPROM persists only the runtime additions above
 
     csp_pstate_t ps;             // parse state
     reg_allocator_t* ap;
     int ev;                      // eval variables when ev=1
     int sdef;                    // current state (compile time)
+    index_t in_marker;           // instr index of the pending OP_INSTATE block
+				 // gate (patched with the skip distance at #end)
+    int list_state;              // during listing: state of the #in block being
+				 // rendered (-1 = none), suppresses State==S in cond
     index_t save_sx;             // save sx during module parse
     index_t sx;                  // runtime state, state variable    
     state_t states[MAX_STATES];  // declared states
@@ -927,9 +945,12 @@ static inline csp_decl_t  ro_decl(const csp_decl_t* p)
 { csp_decl_t d;  memcpy_P(&d, p, sizeof(d)); return d; }
 static inline csp_instr_t ro_instr(const csp_instr_t* p)
 { csp_instr_t v; memcpy_P(&v, p, sizeof(v)); return v; }
+static inline state_t     ro_state(const state_t* p)
+{ state_t s; memcpy_P(&s, p, sizeof(s)); return s; }
 #else
 #define ro_decl(p)  (*(p))
 #define ro_instr(p) (*(p))
+#define ro_state(p) (*(p))
 #endif
 
 // Segment-aware read by logical index: a firmware ROM index reads flash (via the

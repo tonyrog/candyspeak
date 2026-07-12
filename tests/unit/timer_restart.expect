@@ -1,0 +1,4 @@
+{cycles, 5}.
+{checks, [
+  {final_var, "Done", 1}
+]}.

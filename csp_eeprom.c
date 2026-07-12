@@ -14,11 +14,12 @@ typedef struct {
     uint16_t ram_nd;     // RAM patch sizes (counts above the ROM base)
     uint16_t ram_nn;
     uint16_t ram_strp;
+    uint16_t ram_ns;     // runtime state additions (above the ROM/init baseline)
     uint16_t nq;         // number of objects
 } eeprom_header_t;
 
 #define EEPROM_MAGIC "CSP"
-#define EEPROM_VERSION 3   // v3: bumped to invalidate stray v2 saves
+#define EEPROM_VERSION 4   // v4: persist runtime state-table additions (ram_ns)
 
 // Platform stub functions - implement per platform
 #if 0
@@ -61,6 +62,7 @@ int csp_eeprom_save(csp_rt_t* st)
     uint16_t ram_nd   = st->ps.nd   - st->rom_nd;   // RAM patch counts
     uint16_t ram_nn   = st->ps.nn   - st->rom_nn;
     uint16_t ram_strp = st->ps.strp - st->rom_strp;
+    uint16_t ram_ns   = st->ps.ns   - st->rom_ns;
 
     if (csp_eeprom_open_write() < 0)
 	return -1;
@@ -73,6 +75,7 @@ int csp_eeprom_save(csp_rt_t* st)
     hdr.ram_nd   = ram_nd;
     hdr.ram_nn   = ram_nn;
     hdr.ram_strp = ram_strp;
+    hdr.ram_ns   = ram_ns;
     hdr.nq       = st->ps.nq;
 
     if (csp_eeprom_write(&hdr, sizeof(hdr)) < 0)
@@ -83,6 +86,10 @@ int csp_eeprom_save(csp_rt_t* st)
     if (csp_eeprom_write(st->ram_decl, sizeof(csp_decl_t) * ram_nd) < 0)
 	goto error;
     if (csp_eeprom_write(st->ram_instr, sizeof(csp_instr_t) * ram_nn) < 0)
+	goto error;
+    // Runtime state-table additions (name offsets already covered by ram_str).
+    if (ram_ns &&
+	csp_eeprom_write(&st->states[st->rom_ns], sizeof(state_t) * ram_ns) < 0)
 	goto error;
 
     csp_eeprom_close();
@@ -129,11 +136,17 @@ int csp_eeprom_load(csp_rt_t* st)
 	goto error;
     if (csp_eeprom_read(st->ram_instr, sizeof(csp_instr_t) * hdr.ram_nn) < 0)
 	goto error;
+    // Runtime state additions land above the baseline (rom_ns = INIT/NORMAL or
+    // the restored ROM table); their name strings came in with ram_str above.
+    if (hdr.ram_ns &&
+	csp_eeprom_read(&st->states[st->rom_ns], sizeof(state_t) * hdr.ram_ns) < 0)
+	goto error;
 
     // Logical counts = ROM base + RAM patch
     st->ps.strp = st->rom_strp + hdr.ram_strp;
     st->ps.nd   = st->rom_nd   + hdr.ram_nd;
     st->ps.nn   = st->rom_nn   + hdr.ram_nn;
+    st->ps.ns   = st->rom_ns   + hdr.ram_ns;
     st->ps.nq   = hdr.nq;
 
     csp_eeprom_close();
@@ -151,6 +164,7 @@ int csp_eeprom_size(csp_rt_t* st)
     return sizeof(eeprom_header_t) +
 	   (st->ps.strp - st->rom_strp) +
 	   sizeof(csp_decl_t) * (st->ps.nd - st->rom_nd) +
-	   sizeof(csp_instr_t) * (st->ps.nn - st->rom_nn);
+	   sizeof(csp_instr_t) * (st->ps.nn - st->rom_nn) +
+	   sizeof(state_t) * (st->ps.ns - st->rom_ns);
 }
 
