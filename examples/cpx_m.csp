@@ -1,0 +1,51 @@
+// Adafruit Circuit Playground Express  (SAMD21 -- ro_ is plain there)
+//
+// Port convention that csp_arduino interprets:
+//   port 0 : GPIO by Arduino pin number  (digital), and A8/A9 analog sensors
+//   port 8 : accelerometer  (pin 0/1/2 = X/Y/Z)
+//   port 9 : NeoPixel ring   (pin = pixel index 0..9), 16-bit RGB565 "fake DAC"
+
+// --- buttons / switch / onboard LED ---
+// CPX buttons A/B are active-high -> need internal pulldown; the slide switch
+// is active-low -> needs pullup. (Options go BEFORE the port:pin.)
+#digital BtnA   in pulldown 0:4      // button A (pressed = 1)
+#digital BtnB   in pulldown 0:5      // button B
+#digital Switch in pullup   0:7      // slide switch
+#digital Led    out 0:13             // onboard red LED
+
+// --- analog sensors ---
+#analog Light:10 in 0:8      // light sensor  (A8)
+#analog Temp:10  in 0:9      // thermistor    (A9)
+#analog AccX:10  in 8:0      // accelerometer X  (scaled ~-512..511)
+#analog AccY:10  in 8:1
+#analog AccZ:10  in 8:2
+
+// --- 10 NeoPixels as RGB565 analog outputs (port 9, pin = index) ---
+#module Pixel
+  #analog P out 9:0
+  #timer  T 1000
+  #states ON OFF
+
+  #in INIT
+    State=OFF
+  #end
+
+  #in OFF
+    P=0xFD20, State=ON, T=1, println("ON") ? timeout(T)
+  #end
+
+  #in ON
+    P=0, State=OFF, T=1, println("OFF") ? timeout(T)
+  #end
+#end
+
+#Pixel p0 P.pin=0 T.period=500 T=1
+#Pixel p1 P.pin=1 T.period=600 T=1
+#Pixel p2 P.pin=2 T.period=700 T=1
+#Pixel p3 P.pin=3 T.period=800 T=1
+#Pixel p4 P.pin=4 T.period=900 T=1
+#Pixel p5 P.pin=5 T.period=1000 T=1
+#Pixel p6 P.pin=6 T.period=1100 T=1
+#Pixel p7 P.pin=7 T.period=1200 T=1
+#Pixel p8 P.pin=8 T.period=1300 T=1
+#Pixel p9 P.pin=9 T.period=1400 T=1
