@@ -59,10 +59,8 @@ static char* dtok_name(uint8_t dtok)
     STRCASE(D_UART);
     STRCASE(D_SOCKET);
     STRCASE(D_MOD);
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
     STRCASE(D_STATES);
     STRCASE(D_IN);    
-#endif
     default: return "???";    
     }
 }

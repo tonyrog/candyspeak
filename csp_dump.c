@@ -813,10 +813,8 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 	case DECL_END:    // common fields only (anonymous union arm)
 	case DECL_BUFFER: // no extra union fields (res/vt/dir already in cmn)
 	case DECL_VIEW:   // synthetic; emitted as common only
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
 	case DECL_STATES:
 	case DECL_IN:
-#endif
 	case DECL_NONE:
 	default:
 	    fprintf(f, "  {%s},\n", cmn);

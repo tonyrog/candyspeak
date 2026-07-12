@@ -332,10 +332,12 @@ static void exprbuf_fcall(csp_rt_t* st,
 	case V_TIMER:
 	case V_ANALOG:
 	case V_DIGITAL: {
-	    // convert argument assumed index integer
+	    // convert argument assumed index integer. exprbuf_var writes the
+	    // name inline into the fcall buffer (and interns it); we want the
+	    // inline copy only -- an extra strref would render the name twice
+	    // (the "T1T1"/"XX" bug), since here `start` precedes the loop.
 	    uint16_t imm = exprbuf_reftoi(bp, bp->arg[i]);
-	    uint8_t var = exprbuf_var(st, bp, imm);
-	    exprbuf_strref(bp, var);
+	    (void)exprbuf_var(st, bp, imm);
 	    break;
 	}
 	default:
@@ -514,14 +516,12 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	    int s;
 	    exprbuf_var(st, bp, ip->mi.mem);
 	    exprbuf_str(bp, "==");
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
 	    for (s = 0; s < st->ps.ns; s++) {
 		if (st->states[s].snum == ip->mi.imm) {
 		    exprbuf_str_at(st, bp, st->states[s].name);
 		    goto named;
 		}
 	    }
-#endif
             exprbuf_int16(bp, ip->mi.imm);
 	    named:
 	    bp->reg[ip->a.x] = exprbuf_intern(bp,start,exprbuf_len(bp, start));

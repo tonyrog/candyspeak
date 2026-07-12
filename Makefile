@@ -8,13 +8,26 @@ OBJS = csp_linux.o csp_rt.o csp_dump.o csp_eeprom.o \
 LIBS =
 
 # -O3 -std=c99
-CFLAGS += -Wall -g -Wdeclaration-after-statement -Wenum-compare -Wenum-conversion -Wswitch 
+CFLAGS += -Wall -g -Wdeclaration-after-statement -Wenum-compare -Wenum-conversion -Wswitch
 LDFLAGS = -g
+
+# `make ubsan` fills SAN with sanitizer flags for a host build (see target below).
+SAN =
+CFLAGS  += $(SAN)
+LDFLAGS += $(SAN)
 
 all:	csp
 
 debug: CFLAGS += -DDEBUG
 debug: all
+
+# Sanitizer build (host): catches misaligned access -- the Cortex-M0 HardFault
+# class that x86 tolerates silently -- plus out-of-bounds and other UB. Forces a
+# clean rebuild so every object carries the flags. Then run e.g.:
+#   UBSAN_OPTIONS=halt_on_error=0 ./csp examples/cpx.csp
+ubsan:
+	$(MAKE) clean
+	$(MAKE) all SAN='-fsanitize=undefined,address -fno-omit-frame-pointer -O0'
 
 csp:	$(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) $(LIBS) -o $@
@@ -47,4 +60,4 @@ test-examples: csp
 
 -include .*.d
 
-.PHONY: all clean test test-examples
+.PHONY: all clean test test-examples debug ubsan

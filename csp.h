@@ -394,10 +394,8 @@ typedef enum {
     D_NONE = 0,
     D_MODULE,   // 'module'
     D_END,      // 'end'
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
     D_STATES,   // 'states'
     D_IN,       // 'in'
-#endif
     D_CONSTANT, // 'constant'
     D_VARIABLE, // 'variable'
     D_DIGITAL,  // 'digital'
@@ -510,10 +508,8 @@ typedef enum {
     DECL_MODULE=3,          // 'module'
     DECL_END=4,             // 'end'
     DECL_OBJECT=5,          // module instance
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)    
     DECL_STATES=6,
     DECL_IN=7,
-#endif
     
     // 8-15
     DECL_TIMER=V_TIMER,     // 'timer'
@@ -751,10 +747,8 @@ typedef enum {
     ERR_TOO_MANY_INSTRUCTIONS,
     ERR_TOO_MANY_OBJECTS,
     ERR_MODULE_NOT_DECLARED,
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
     ERR_TOO_MANY_STATES,    
     ERR_STATE_NOT_DECLARED,
-#endif
     ERR_END_MISMATCH,
     ERR_NOT_A_MODULE,
     ERR_OBJECT_NOT_DECLARED,
@@ -773,9 +767,7 @@ typedef struct PACKED {
     index_t nn;                  // number of instructions
     index_t nd;                  // number of decls
     index_t nq;                  // number of objects
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
     index_t ns;                  // number of states
-#endif
     uint32_t strp;               // string table position (grows up)
     uint32_t err_strp;           // error string position (grows down from MAX_STR_BUF)
     csp_err_t err;               // error code
@@ -804,7 +796,7 @@ typedef int (*csp_const_fn)(struct _csp_rt_t* st, const char* name, int len,
 #endif
 
 // Function table entry
-typedef struct PACKED {
+typedef struct {  // not packed?
     const char* name;
     uint8_t namelen;
     uint8_t arity;              // number of arguments (0-4)
@@ -825,15 +817,12 @@ typedef struct
 
 typedef enum { DIN = 0, DOUT = 1 } dio_t;
 
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
 #define NUM_BITS (16-STRING_BITS)
 typedef struct
 {
     unsigned name:STRING_BITS;     // string index
     unsigned snum:NUM_BITS;        // state number
 } state_t;
-#endif
-
 
 typedef struct _csp_rt_t
 {
@@ -883,12 +872,10 @@ typedef struct _csp_rt_t
     csp_pstate_t ps;             // parse state
     reg_allocator_t* ap;
     int ev;                      // eval variables when ev=1
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
     int sdef;                    // current state (compile time)
     index_t save_sx;             // save sx during module parse
     index_t sx;                  // runtime state, state variable    
     state_t states[MAX_STATES];  // declared states
-#endif
     index_t mdef;                // module being defined
     int     ent;                 // entry op of module in st->instr
     unsigned cur:OBJ_BITS;       // current module index

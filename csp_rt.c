@@ -46,34 +46,12 @@ extern int debug;
 #define DECL_ENT(o,c,n) \
     [(o)] = { .tok=(o),.code=(c),.name=(n),.namelen=CSTRLEN((n)),.arity=-1,.prec=-1,.assoc=NO }
 
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
-#endif
-
-
-static rochar ss_LT[] RODATA = "LT";
-static rochar ss_LTE[] RODATA = "LTE";
-static rochar ss_GT[] RODATA = "GT";
-static rochar ss_GTE[] RODATA = "GTE";
-static rochar ss_EQEQ[] RODATA = "EQEQ";
-static rochar ss_NEQ[] RODATA = "NEQ";
-static rochar ss_MOV[] RODATA = "MOV";
-
-
-
-static rochar ss_COMMA[] RODATA = "COMMA";
-
-
-
-
-
 const op_entry_t decl_table[] RODATA = {
     DECL_ENT(D_NONE,DECL_NONE,s_none),
     DECL_ENT(D_MODULE,DECL_MODULE,s_module),
     DECL_ENT(D_END,DECL_END, s_end),
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
     DECL_ENT(D_STATES,DECL_STATES,s_states),
     DECL_ENT(D_IN,DECL_IN,s_in),       // 'in' FIXME? used as option keyword!
-#endif    
     DECL_ENT(D_CONSTANT,DECL_CONSTANT,s_constant),
     DECL_ENT(D_VARIABLE,DECL_VARIABLE,s_variable),
     DECL_ENT(D_DIGITAL,DECL_DIGITAL,s_digital),
@@ -109,10 +87,11 @@ const op_entry_t tok_table[] RODATA = {
     INSTR_ENT(BAR,OP_BOR,s_BAR,2,30,LEFT),
     INSTR_ENT(AMPAMP,OP_AND,s_AMPAMP,2,20,LEFT),
     INSTR_ENT(BARBAR,OP_OR,s_BARBAR,2,10,LEFT),
-    // INSTR_ENT(EQ,OP_EQ,s_EQ,2,5,RIGHT),
-    // INSTR_ENT(RIMP,OP_RIMP,s_RIMP,2,4,RIGHT),    
-    INSTR_ENT(EQ,OP_EQ,s_EQ,-1,-1,NO),        // assign_expr
-    INSTR_ENT(RIMP,OP_RIMP,s_RIMP,-1,-1,NO),  // assign_expr
+    // EQ/RIMP are shunted as low-precedence right-assoc operators so that the
+    // expression parser handles `var = expr` -- needed for immediate `> T1=1`
+    // (one-shot assignment / timer start). Rules use asm_rule, not this path.
+    INSTR_ENT(EQ,OP_EQ,s_EQ,2,5,RIGHT),       // assign_expr
+    INSTR_ENT(RIMP,OP_RIMP,s_RIMP,2,4,RIGHT), // assign_expr
     INSTR_ENT(COMMA,OP_COMMA,s_COMMA,2,2,RIGHT),
     INSTR_ENT(QUEST,OP_RULE,s_QUEST,-1,-1,NO),
 
@@ -272,17 +251,17 @@ const op_info_t op_info[] RODATA = {
     [OP_AND] = {s_AND,AMPAMP,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
     [OP_OR] = {s_OR,BARBAR,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
     [OP_EQ] = {s_ASSIGN,EQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_LT] = {ss_LT,LT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_LTE] = {ss_LTE,LTEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_GT] = {ss_GT,GT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_GTE] = {ss_GTE,GTEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_EQEQ] = {ss_EQEQ,EQEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_NEQ] = {ss_NEQ,NEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_LT] = {s_OLT,LT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_LTE] = {s_OLTE,LTEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_GT] = {s_OGT,GT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_GTE] = {s_OGTE,GTEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_EQEQ] = {s_OEQEQ,EQEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_NEQ] = {s_ONEQ,NEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
 
     // unary versions (treated as binary with z ignored)
     [OP_BNOT] = {s_BNOT,TILDE,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
     [OP_NEG] = {s_NEG,MINUS1,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
-    [OP_MOV] = {ss_MOV,PLUS1,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
+    [OP_MOV] = {s_OMOV,PLUS1,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
     [OP_NOT] = {s_NOT,EXCLAMATION,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
     [OP_CVTIF] = {s_CVTIF,NONE,1,V_FLOAT,MAKE_TYPE1(V_INTEGER)},   // int→float
     [OP_CVTFI] = {s_CVTFI,NONE,1,V_INTEGER,MAKE_TYPE1(V_FLOAT)},   // float→int
@@ -302,7 +281,7 @@ const op_info_t op_info[] RODATA = {
     [OP_FNEQ] = {s_FNEQ,NEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
 
     // comman may not be needed?
-    [OP_COMMA] = {ss_COMMA,NONE,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_COMMA] = {s_OCOMMA,NONE,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
 
     // other operations for name
     [OP_ENTER] = {s_ENTER,NONE,-1,V_VOID,MAKE_TYPE0()},
@@ -323,7 +302,6 @@ const op_info_t op_info[] RODATA = {
     [OP_RULE]  = {s_RULE,NONE,-1,V_VOID,MAKE_TYPE0()},
     [OP_NEXT]  = {s_NEXT,NONE,-1,V_VOID,MAKE_TYPE0()},
     [OP_NOP]   = {s_NOP,NONE,-1,V_VOID,MAKE_TYPE0()},
-
 };
 
 static const char tag_tab[] RODATA = {
@@ -481,12 +459,10 @@ const char* csp_format_error(csp_err_t err)
 	return "too many objects";	
     case ERR_MODULE_NOT_DECLARED:
 	return "module %s not declared";
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
     case ERR_TOO_MANY_STATES:
 	return "too many states";
     case ERR_STATE_NOT_DECLARED:
 	return "state %s not declared";
-#endif
     case ERR_NOT_A_MODULE:
 	return "word %s not a module";
     case ERR_END_MISMATCH:
@@ -986,9 +962,29 @@ const uint8_t csp_num_builtin_funcs = sizeof(csp_builtin_funcs)/sizeof(csp_built
 
 // rom-aware scalar reads: on the host both branches are identical (ro_*==plain);
 // on AVR the rom branch uses PROGMEM. One code path serves RAM and ROM tables.
-static inline uint8_t  rd8 (const void* p, int rom){ return rom?ro_byte((const uint8_t*)p):*(const uint8_t*)p; }
-static inline uint16_t rd16(const void* p, int rom){ return rom?ro_word((const uint16_t*)p):*(const uint16_t*)p; }
-static inline void*    rdvp(const void* p, int rom){ return rom?ro_ptr((void* const*)p):*(void* const*)p; }
+static inline uint8_t  rd8 (const void* p, int rom)
+{
+    return rom ? ro_byte((const uint8_t*)p): *(const uint8_t*)p;
+}
+
+static inline uint16_t rd16(const void* p, int rom)
+{
+    return rom ? ro_word((const uint16_t*)p): *(const uint16_t*)p;
+}
+
+static inline void* rdvp(const void* p, int rom)
+{
+    void* v;
+#if defined(__AVR__)
+    if (rom)
+	return ro_ptr((void* const*)p);   // PROGMEM: byte-wise read
+#endif
+    // fn sits at a misaligned offset in the PACKED csp_func_t table; a direct
+    // deref HardFaults on Cortex-M0 (no unaligned access). memcpy is byte-wise
+    // and alignment-safe -- and the compiler folds it to a plain load where the
+    // address happens to be aligned.
+    memcpy((void*) &v, p, sizeof(v)); return v;
+}
 
 static uint8_t func_arity(const csp_func_t* fn, int i, int rom)
 {
@@ -1760,8 +1756,6 @@ index_t csp_cycle(csp_rt_t* st)
     return csp_eval(st);   // sequential ROM + RAM (override stays consistent)
 }
 
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
-
 NOINLINE int lookup_state(csp_rt_t* st, const tstr_t* name)
 {
     int i;
@@ -1771,7 +1765,6 @@ NOINLINE int lookup_state(csp_rt_t* st, const tstr_t* name)
     }
     return -1;
 }
-#endif
 
 // Compare n bytes at a logical string position against a RAM string (memcmp-
 // like: 0 == equal). Segment-aware per byte, so it is PROGMEM-safe on AVR where
@@ -1862,7 +1855,8 @@ NOINLINE int new_string(csp_rt_t* st, char* name, int len)
     }
     st->ps.strp = next;  // allocate
     ram_str_at(st, pos) = len;
-    memcpy(&ram_str_at(st, pos+1), name, len);
+    if (len > 0)                  // len==0 (empty string) may pass a NULL name
+	memcpy(&ram_str_at(st, pos+1), name, len);
     ram_str_at(st, pos+1+len) = '\0';
     return pos+1;
 }
@@ -1949,9 +1943,11 @@ NOINLINE static csp_part_t part_from_tstr(const tstr_t* s)
 	break;
     case 5:
 	if (ro_memcmp(s->ptr, s_value, 5) == 0)  return PART_VAL;
+	if (ro_memcmp(s->ptr, s_fired, 5) == 0)  return PART_FIRED;
 	break;
     case 6:
 	if (ro_memcmp(s->ptr, s_endian, 6) == 0) return PART_ENDIAN;
+	if (ro_memcmp(s->ptr, s_period, 6) == 0) return PART_PERIOD;
 	break;
     default:
 	break;
@@ -2818,6 +2814,16 @@ NOINLINE static int push_lval(rentry_t* rstack, int ep, index_t ix, vtype_t vt)
     return ep+1;
 }
 
+// Push a config-part L-value (<var> '.' <part> '='): defer to the store, don't
+// fold to a read the way push_part does -- process_assign turns it into an STP
+// (or a direct csp_dio_set_part in immediate mode).
+NOINLINE static int push_lval_part(rentry_t* rstack, int ep, index_t ix,
+				   csp_part_t part, vtype_t vt)
+{
+    rstack[ep] = (rentry_t) { .ix=ix,.X=1,.L=0,.I=0,.part=part,.vt=vt };
+    return ep+1;
+}
+
 // Push a config-part read (<var> '.' <part>), e.g. Led.pin, Frame.endian.
 // During eval fold it to the current part value; otherwise defer to an LDP.
 NOINLINE static int push_part(csp_rt_t* st, rentry_t* rstack, int ep,
@@ -2957,11 +2963,22 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
     }
 
     if (!st->ap) {
-	if (rhs.I)
-	    csp_set_value(st, lhs.ix, rhs.val);
+	if (rhs.I) {
+	    if (lhs.part != PART_VAL) {  // <var> '.' <part> = imm  (config write)
+		csp_dio_set_part(st, lhs.ix, rhs.val, lhs.part, DOUT);
+		bitset_set(st->dset, st_index(st, lhs.ix)); // must commit
+		st->anyd = CSP_TRUE;
+	    }
+	    else
+		csp_set_value(st, lhs.ix, rhs.val);
+	}
     }
     else { // Generate store instruction
-	if (!asm_mem(st, op, rhs.reg, lhs.ix))
+	if (lhs.part != PART_VAL) {  // <var> '.' <part> = rhs  -> STP
+	    if (!asm_mem_part(st, OP_STP, rhs.reg, lhs.ix, lhs.part))
+		return -1;
+	}
+	else if (!asm_mem(st, op, rhs.reg, lhs.ix))
 	    return -1;
     }
     // Result is the rhs (for chaining A=B=1)
@@ -3149,7 +3166,7 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
     int func_idx;
     int from;                           // func table in ROM?
     rentry_t* rarg = &rstack[ep-arity]; // first arg
-    value_t dval;
+    value_t dval = {.u = 0};   // result value when folded; 0 keeps it defined
     int imm = 0;
 
     if ((func = csp_match_func(st, &word->v.str, arity,
@@ -3220,7 +3237,11 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
     // we may have to do a "dryrun" to check if function is pure
     // or we have special functions
     imm = (argimm == ((1 << arity)-1));
-    if (func_pure(func,0,from) && imm) {
+    // Fold when all args are immediate AND either the function is pure, or we
+    // are in eval mode (st->ev, i.e. an immediate `> expr` at the prompt) where
+    // even an impure call like latch()/print() must run now for its side effect
+    // -- otherwise the emitted OP_CALL is never executed and the call no-ops.
+    if (imm && (func_pure(func,0,from) || st->ev)) {
 	value_t arg[MAX_ARGS];
 	csp_func_fn fn = NULL;
 
@@ -3378,7 +3399,6 @@ next:
 	    vtype_t vt;
 	    // Not a function - regular variable/decl/state lookup
 	    if ((ix = csp_lookup_decl(st,&tval.str)) == BAD_INDEX) {
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
 		int s = lookup_state(st, &tval.str);
 		if (s >= 0) {
 		    value_t sv;
@@ -3388,7 +3408,6 @@ next:
 		    ptok = INT;
 		    goto after_primary;
 		}
-#endif
 		if (csp_set_error(st, ERR_VARIABLE_NOT_DECLARED)) {
 		    csp_set_err_arg_tstr(st, 0, &tval.str);
 		}
@@ -3439,7 +3458,13 @@ next:
 		csp_part_t pt = part_from_tstr(&tv[i+1].v.str);
 		if (pt != PART_LAST) {
 		    i += 2;
-		    if ((ep = push_part(st, rstack, ep, ix, pt)) < 0)
+		    // '=' / '<-' after the part -> assignment target (STP), else
+		    // a plain part read (LDP / eval-fold).
+		    if ((i < n) && ((tv[i].t == EQ) || (tv[i].t == RIMP))) {
+			ep = push_lval_part(rstack, ep, ix, pt,
+					    decl(st,INDEX(ix),vt));
+		    }
+		    else if ((ep = push_part(st, rstack, ep, ix, pt)) < 0)
 			return 0;
 		    ptok = WORD;
 		    goto after_primary;
@@ -3609,7 +3634,6 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
     }
     if ((ix = csp_new_udecl(st, &d.name, DECL_MODULE)) == BAD_INDEX)
 	return -1;
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
     {
 	// create a local state variable (if states are supported)
 	// maybe only if #states are defined in module context?
@@ -3619,7 +3643,7 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	ix = csp_new_decl(st, &State, DECL_VARIABLE);
 	st->sx = MAKE_INDEX(CURRENT, INDEX(ix));
     }
-#endif
+
     st->mdef = ix;  // current module being defined
     if (!asm_ENTER(st, &jx, 0, ix))
 	return -1;
@@ -3650,12 +3674,10 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	return -1;
     }
 
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
     if (st->sdef >= 0) {
 	st->sdef = -1;
 	return 0;
     }
-#endif
     if ((mx = st->mdef) == BAD_INDEX) {
 	csp_set_error(st, ERR_END_MISMATCH);
 	return -1;  // no module
@@ -3672,9 +3694,7 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
     // stack?
     st->mdef = BAD_INDEX;
     st->ent = 0;
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
     st->sx   = st->save_sx;
-#endif
     return 0;
 }
 
@@ -4191,8 +4211,6 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
     if (cond)
 	DBG("cond.len=%d, cond.pos=%d\n", cond->len, cond->pos);
 #endif
-
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
     if (st->sdef >= 0) {  // we are in a state!
 	int sr;
 	cnd = alloc_reg(st);
@@ -4210,7 +4228,7 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 	    free_reg(st, sr);
 	}
     }
-#endif
+
     // dry run (get nvar) union over all <- parts
     st->nvar = 0;
     for (k = 0; k < np; k++) {
@@ -4856,7 +4874,6 @@ NOINLINE int csp_parse_immediate(csp_rt_t* st, token_t* tv, int ti, size_t n)
     return 0;
 }
 
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
 NOINLINE int add_state(csp_rt_t* st, const tstr_t* name)
 {
     int i;
@@ -4912,9 +4929,6 @@ NOINLINE int csp_parse_states(csp_rt_t* st, token_t* tv, int ti, size_t n)
     return 0;
 }
 
-#endif
-
-
 NOINLINE int csp_parse(csp_rt_t* st, char* str)
 {
     token_t tv[MAX_LINE_TOKENS];
@@ -4935,11 +4949,9 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 	else if (tv[0].t == INT && tv[1].t == INT) {
 	    r = csp_parse_legacy(st, tv, 0, num);
 	}
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)	//SPECIAL CASE!
 	else if ((tv[0].t == HASH) && (tv[1].t == IN)) {
 	    r = csp_parse_in(st, tv, 2, num);	    
 	}
-#endif
 	else if ((tv[0].t == HASH) && (tv[1].t == WORD)) {
 	    int i;
 	    if ((i = find_decl_entry(tv[1].v.str.ptr,tv[1].v.str.len)) >= 0) {
@@ -4947,11 +4959,9 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 		case DECL_MODULE:
 		    r = csp_parse_module(st, tv, 2, num);
 		    break;
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
 		case DECL_STATES:  // '#' 'states' WORD ... WORD
 		    r = csp_parse_states(st, tv, 2, num);
 		    break;
-#endif
 		case DECL_END:
 		    r = csp_parse_end(st, tv, 2, num);
 		    break;
@@ -5034,9 +5044,7 @@ NOINLINE void csp_load_rom(csp_rt_t* st)
     st->ps.nd   = st->rom_nd;
     st->ps.nn   = st->rom_nn;
     st->ps.strp = st->rom_strp;
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
     st->sx = 0;                   // State is ROM decl 0
-#endif
 }
 
 int csp_rt_init(csp_rt_t* st, int reactive)
@@ -5095,7 +5103,6 @@ int csp_rt_init(csp_rt_t* st, int reactive)
     st->ufuncs = NULL;
     st->num_ufuncs = 0;
     st->uconst = NULL;
-#if defined(SUPPORT_STATES) && (SUPPORT_STATES==1)
     {
 	const tstr_t State = { .ptr = "State", .len = 5};
 	const tstr_t INIT  = { .ptr = "INIT", .len = 4};
@@ -5105,19 +5112,14 @@ int csp_rt_init(csp_rt_t* st, int reactive)
 	st->sdef = -1;
 	// add state INIT=0 and NORMAL=1
 	if (add_state(st, &INIT) != 0) {
-#ifdef DEBUG
 	    DBG("unabled to add INIT state=0\n");
-#endif
 	    return -1;
 	}
 	if (add_state(st, &NORMAL) != 1) {
-#ifdef DEBUG
 	    DBG("unabled to add NORMAL state=1\n");
-#endif
 	    return -1;
 	}
     }
-#endif
     return 0;
 }
 
@@ -5301,6 +5303,11 @@ int csp_rt_start(csp_rt_t* st)
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     st->tl = st->hd = 0;
 #endif
+    // SAFE state: unwind any runtime accumulators so /clear, /reset and a
+    // post-parse rebuild all land on a coherent baseline (like boot's memset).
+    st->esp = 0;              // drop half-run OP_NEW/OP_LEAVE call stack
+    st->cur = 0;              // back to the global module
+    bitset_zero(st->dset);    // no stale dirty leaves survive into the rebuild
     st->nt = 0;
     st->ni = 0;
     st->no = 0;
@@ -5567,7 +5574,9 @@ static int lookup_filter(index_t ix, int cnd, filter_var_t* fv, int nf)
 	if (ix == fv[i].ix) {
 	    if ((cnd==1) && (fv[i].typ=='?'))
 		return i;
-	    if ((cnd==0) && (fv[i].typ==' '))
+	    // a bare name (typ ' ') matches wherever the var is referenced --
+	    // in the body (cnd 0) OR the condition (cnd 1). '?' stays condition-only.
+	    if (((cnd==0)||(cnd==1)) && (fv[i].typ==' '))
 		return i;
 	    if ((cnd == 2) && ((fv[i].typ=='?')||(fv[i].typ==' ')))
 		return i;
@@ -5775,7 +5784,13 @@ match:
 	case OP_NEXT:
 	    cnd=1; i++;
 	    {
-		int show = (nf==0)||((fbits&cmask)==cmask)||((fbits&bmask)!=0);
+		// Guard each mask: a zero mask must NOT vacuously pass (the old
+		// `(fbits&0)==0` bug made a bare filter list every rule). Only-":"
+		// state filters (cmask==bmask==0) keep the legacy show-all.
+		int show = (nf==0)
+		    || (cmask && ((fbits&cmask)==cmask))
+		    || (bmask && ((fbits&bmask)!=0))
+		    || (cmask==0 && bmask==0);
 		if (scope && !(cur_mod && csp_str_eq(st, cur_mod, scope, strlen(scope))))
 		    show = 0;
 		if (show) {
@@ -5813,16 +5828,78 @@ match:
     return CSP_CMD_OK;
 }
 
-static int cmd_state(csp_rt_t* st, int argc, char* argv[])
+// true if x is in the first n entries of a[]
+static int ix_in(const index_t* a, int n, index_t x)
 {
     int i;
-    (void)argv; (void)argc;
+    for (i = 0; i < n; i++)
+	if (a[i] == x) return 1;
+    return 0;
+}
+
+static int cmd_state(csp_rt_t* st, int argc, char* argv[])
+{
+    int i, a;
+    int f_timer = 0, f_var = 0, f_dig = 0, f_ana = 0, any_cat = 0;
+    uint8_t dir_filter = 0;    // 0 = any dir; else DIR_IN / DIR_OUT mask
+    index_t named[MAX_ARGV];   // explicit "show just these" decl filters (OR)
+    int nnamed = 0;
+
+    // Tokens are OR'd: category words union, `in`/`out` narrow the direction,
+    // bare names pick specific decls. `/state digital analog input` == input.
+    for (a = 0; a < argc; a++) {
+	const char* w = argv[a];
+	if      (strcmp(w,"all")==0)     { f_timer=f_var=f_dig=f_ana=1; any_cat=1; }
+	else if (strcmp(w,"timers")==0 || strcmp(w,"timer")==0)  { f_timer=1; any_cat=1; }
+	else if (strcmp(w,"var")==0 || strcmp(w,"variables")==0 || strcmp(w,"variable")==0) { f_var=1; any_cat=1; }
+	else if (strcmp(w,"digital")==0) { f_dig=1; any_cat=1; }
+	else if (strcmp(w,"analog")==0)  { f_ana=1; any_cat=1; }
+	else if (strcmp(w,"input")==0  || strcmp(w,"in")==0)  { f_dig=f_ana=1; dir_filter=DIR_IN;  any_cat=1; }
+	else if (strcmp(w,"output")==0 || strcmp(w,"out")==0) { f_dig=f_ana=1; dir_filter=DIR_OUT; any_cat=1; }
+	else {
+	    const tstr_t sn = { (char*)w, strlen(w) };
+	    index_t ix = csp_lookup_decl(st, &sn);
+	    if ((ix != BAD_INDEX) && (nnamed < MAX_ARGV))
+		named[nnamed++] = ix;
+	    else {
+		csp_print_str("unknown: "); csp_print_str(w); csp_print_char('\n');
+	    }
+	}
+    }
+    if (!any_cat && !nnamed)            // bare /state -> show everything
+	f_timer = f_var = f_dig = f_ana = 1;
 
     csp_print_str("cycle = ");
     csp_print_uint(st->cycle);
     csp_print_str("\nlatch = ");
     csp_print_str(st->latch ? "on" : "off");
     csp_print_char('\n');
+
+    // timers: period, running/stopped, ms until next timeout, fired-this-cycle
+    if (f_timer || nnamed) {
+	uint32_t now = csp_time_ms();
+	for (i = 0; i < st->nt; i++) {
+	    index_t ix = st->timer[i];
+	    value_t* v;
+	    const char* nm;
+	    if (nnamed && !ix_in(named, nnamed, ix))
+		continue;          // names given: only the named timers
+	    v = csp_dio_slot(st, ix, DIN);
+	    nm = decl_name(st, ix);
+	    csp_print_str(nm ? nm : "?");
+	    csp_print_str(" timer period=");
+	    csp_print_uint(v->t.period);
+	    csp_print_str(v->t.running ? " running next=" : " stopped");
+	    if (v->t.running) {
+		index_t tx = MAKE_INDEX(OBJ(ix), INDEX(ix)+1);
+		uint32_t t0 = csp_dio_slot(st, tx, DIN)->u;
+		uint32_t dt = now - t0;
+		csp_print_uint((dt >= v->t.period) ? 0 : (v->t.period - dt));
+	    }
+	    if (v->t.fired) csp_print_str(" FIRED");
+	    csp_print_char('\n');
+	}
+    }
 
     for (i = 0; i < st->ps.nd; i++) {
 	index_t ix = MAKE_INDEX(0, i);
@@ -5832,6 +5909,17 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 
 	if ((t != DECL_VARIABLE) && (t != DECL_DIGITAL) && (t != DECL_ANALOG))
 	    continue;                                    // skips ENDs too
+	if (nnamed) {
+	    if (!ix_in(named, nnamed, ix))
+		continue;                                // names given: only those
+	} else {
+	    if ((t == DECL_VARIABLE && !f_var) ||
+		(t == DECL_DIGITAL  && !f_dig) ||
+		(t == DECL_ANALOG   && !f_ana))
+		continue;
+	    if (dir_filter && (t != DECL_VARIABLE) && !(decl(st,i,dir) & dir_filter))
+		continue;
+	}
 	name = decl_name(st, ix);
 	if (!name || !*name) continue;
 
@@ -6063,16 +6151,17 @@ int csp_process_line(csp_rt_t* st, char* line)
 	return CSP_CMD_OK;
     }
     else {
-	// Bare line: an assignment (has a top-level '=') is a persistent rule,
-	// exactly as in a source file, so it is stored and captured by /save.
-	// A plain expression (a query) is evaluated once.
+	// Bare line: a persistent rule (stored, captured by /save) if it either
+	// assigns (top-level '=') or carries a '?' guard -- e.g. a bare action
+	// like `println("hi") ? Idx==1`, which has no '=' at all. A plain
+	// expression (a query) has neither and is evaluated once.
 	token_t tv[MAX_LINE_TOKENS];
 	size_t num = MAX_LINE_TOKENS;
 	int is_rule = 0;
 	if (csp_scan_line(st, line, tv, &num) > 0) {
 	    size_t k;
 	    for (k = 0; k < num; k++) {
-		if (tv[k].t == EQ) { is_rule = 1; break; }
+		if (tv[k].t == EQ || tv[k].t == QUEST) { is_rule = 1; break; }
 	    }
 	}
 	if (is_rule)

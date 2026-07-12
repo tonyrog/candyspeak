@@ -46,9 +46,9 @@ Col = 0x07E0 ? BtnA & !BtnB     // green
 Col = 0x001F ? BtnB & !BtnA     // blue
 Col = 0xFD20 ? !BtnA & !BtnB    // amber (idle)
 
-// tilt ball: map accelerometer X (~-512..511) to a ring position 0..9,
+// tilt ball: AccX is 0..1023 (512 = flat) -> ring position 0..9,
 // then light exactly that pixel with Col, the rest off.
-Idx = (AccX + 512) / 103
+Idx = AccX / 103
 
 P0 = Col ? Idx == 0
 P1 = Col ? Idx == 1

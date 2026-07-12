@@ -60,6 +60,8 @@ dir dir
 endian endian
 id id
 value value
+period period
+fired fired
 LP (
 RP )
 HASH #
@@ -133,3 +135,11 @@ println println
 tick tick
 cycle cycle
 latch latch
+OLT LT
+OLTE LTE
+OGT GT
+OGTE GTE
+OEQEQ EQEQ
+ONEQ NEQ
+OMOV MOV
+OCOMMA COMMA

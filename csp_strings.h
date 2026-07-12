@@ -65,6 +65,8 @@ extern rochar s_dir[4] RODATA;
 extern rochar s_endian[7] RODATA;
 extern rochar s_id[3] RODATA;
 extern rochar s_value[6] RODATA;
+extern rochar s_period[7] RODATA;
+extern rochar s_fired[6] RODATA;
 extern rochar s_LP[2] RODATA;
 extern rochar s_RP[2] RODATA;
 extern rochar s_HASH[2] RODATA;
@@ -138,5 +140,13 @@ extern rochar s_println[8] RODATA;
 extern rochar s_tick[5] RODATA;
 extern rochar s_cycle[6] RODATA;
 extern rochar s_latch[6] RODATA;
+extern rochar s_OLT[3] RODATA;
+extern rochar s_OLTE[4] RODATA;
+extern rochar s_OGT[3] RODATA;
+extern rochar s_OGTE[4] RODATA;
+extern rochar s_OEQEQ[5] RODATA;
+extern rochar s_ONEQ[4] RODATA;
+extern rochar s_OMOV[4] RODATA;
+extern rochar s_OCOMMA[6] RODATA;
 
 #endif

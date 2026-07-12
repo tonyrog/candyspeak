@@ -169,17 +169,149 @@ int csp_uconst(csp_rt_t* st, const char* name, int len, ivalue_t* ret)
     return 0;
 }
 
+#ifdef CSP_CPX
+void csp_board_setup(csp_rt_t* st)
+{
+    CircuitPlayground.begin();   // owns NeoPixels, accelerometer, sensors
+    CircuitPlayground.strip.setBrightness(lev);
+    CircuitPlayground.strip.show();
+}
+
+// Base sampling period (ms). Bounds the loop's idle sleep so continuous inputs
+// (accel, sensors) and the reactive display keep updating at ~100 Hz even when a
+// slow timer is armed. Timers stay accurate to within one SAMPLE_MS tick.
+#define SAMPLE_MS 10
+
+int accel_read = 0;   // read the LIS3DH once per cycle, not once per axis
+
+// start input cycle
+void csp_board_start_input(csp_rt_t* st)
+{
+    accel_read = 0;
+}
+
+void csp_board_start_output(csp_rt_t* st)
+{
+    cpx_neo_dirty = 0;    
+}
+
+// push the frame once per cycle (dirty is only set while not latched)
+void csp_board_stop_output(csp_rt_t* st)
+{
+    if (cpx_neo_dirty) {
+	CircuitPlayground.strip.setBrightness(lev);
+	CircuitPlayground.strip.show();
+    }
+}
+
+// float-free reads (soft-float is big/slow on the M0+, and the
+// core is built fixpoint): use the raw LIS3DH ints and analogRead.
+
+void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
+{
+    int value;
+    if (vptr->a.port == PORT_ACCEL) {   // accelerometer X/Y/Z (raw)
+	if (!accel_read) {
+	    CircuitPlayground.lis.read();
+	    accel_read = 1;
+	}
+	value = (vptr->a.pin == 0) ? CircuitPlayground.lis.x
+	    : (vptr->a.pin == 1) ? CircuitPlayground.lis.y
+	    : CircuitPlayground.lis.z;
+	// a.val is unsigned:16 -> a signed reading wraps to ~65000.
+	// Offset+clamp to 0..1023 (unsigned 10-bit): 512 = flat,
+	// ~1g tilt swings to the ends. Rule: Idx = AccX / 103.
+	value = (value >> 5) + 512;
+	if (value < 0) value = 0; else if (value > 1023) value = 1023;
+    }
+    else if (vptr->a.pin == 8)               // A8 light sensor
+	value = CircuitPlayground.lightSensor();
+    else if (vptr->a.pin == 9)              // A9 thermistor (raw ADC)
+	value = analogRead(A9);
+    else
+	value = analogRead(vptr->a.pin);
+
+    csp_set_ivalue(st, ix, value);    
+}
+
+void csp_board_analog_output(csp_rt_t* st, int di, value_t* vptr)
+{
+    if (vptr->a.port == PORT_NEO) {   // NeoPixel: RGB565 -> pixel
+	CircuitPlayground.strip.setPixelColor(vptr->a.pin,
+					      cpx_565(vptr->a.val));
+	cpx_neo_dirty = 1; // need update
+    }
+    else if (vptr->a.pwm) {
+	int val = map(vptr->a.val, 0, (1<<decl(st,di,res))-1, 0, 255);
+	analogWrite(vptr->a.pin, val);
+    }	
+}
+
+#else
+
+void csp_board_setup(csp_rt_t* st)
+{
+}
+
+void csp_board_start_input(csp_rt_t* st)
+{
+}
+
+void csp_board_start_output(csp_rt_t* st)
+{
+}
+
+// push the frame once per cycle (dirty is only set while not latched)
+void csp_board_stop_output(csp_rt_t* st)
+{
+}
+
+void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
+{
+    csp_set_ivalue(st, ix, analogRead(vptr->a.pin));    
+}
+
+// handle type! accept float as well
+void csp_board_analog_output(csp_rt_t* st, int di, value_t* vptr)
+{
+    if (vptr->a.pwm) {
+	int val = map(vptr->a.val, 0, (1<<decl(st,di,res))-1, 0, 255);
+	analogWrite(vptr->a.pin, val);
+    }
+}
+
+#endif
+
+// The generic board routines
+void csp_board_digital_input(csp_rt_t* st, index_t ix, value_t* vptr)
+{
+    int value = digitalRead(vptr->d.pin);
+    csp_set_ivalue(st, ix, value);    
+}
+
+void csp_board_digital_output(csp_rt_t* st, value_t* vptr)
+{
+    if (vptr->d.dir & DIR_IN) {  // in & out
+	pinMode(vptr->d.pin, OUTPUT);
+	digitalWrite(vptr->d.pin, (vptr->d.val & 1));
+	// prepare for next input
+	if (vptr->d.pullup)
+	    pinMode(vptr->d.pin, INPUT_PULLUP);
+	else
+	    pinMode(vptr->d.pin, INPUT);
+    }
+    else { // plain out
+	digitalWrite(vptr->d.pin, (vptr->d.val & 1));
+    }    
+}
+
 
 void csp_setup(csp_rt_t* st)
 {
     int i;
     unsigned res = 0;
 
-#ifdef CSP_CPX
-    CircuitPlayground.begin();   // owns NeoPixels, accelerometer, sensors
-    CircuitPlayground.strip.setBrightness(lev);
-    CircuitPlayground.strip.show();
-#endif
+    csp_board_setup(st);
 
     // setup in and inout (inout startup as input)
     for (i = 0; i < st->ni; i++) {
@@ -229,13 +361,11 @@ void csp_setup(csp_rt_t* st)
     }
 }
 
-
 void csp_input(csp_rt_t* st)
 {
     int i;
-#ifdef CSP_CPX
-    int accel_read = 0;   // read the LIS3DH once per cycle, not once per axis
-#endif
+
+    csp_board_start_input(st);
 
     for (i = 0; i < st->ni; i++) {
 	index_t ix = st->input[i];
@@ -246,6 +376,7 @@ void csp_input(csp_rt_t* st)
 	case DECL_DIGITAL:
 	    vptr = csp_dio_slot(st, ix, DOUT);
 	    if (vptr->d.dir & DIR_IN) {
+		csp_board_digital_input(st, ix, vptr);
 		int value = digitalRead(vptr->d.pin);
 		csp_set_ivalue(st, ix, value);
 	    }
@@ -253,28 +384,7 @@ void csp_input(csp_rt_t* st)
 	case DECL_ANALOG:
 	    vptr = csp_dio_slot(st, ix, DOUT);
 	    if (vptr->a.dir & DIR_IN) {
-#ifdef CSP_CPX
-		// float-free reads (soft-float is big/slow on the M0+, and the
-		// core is built fixpoint): use the raw LIS3DH ints and analogRead.
-		if (vptr->a.port == PORT_ACCEL) {   // accelerometer X/Y/Z (raw)
-		    int raw;
-		    if (!accel_read) { CircuitPlayground.lis.read(); accel_read = 1; }
-		    raw = (vptr->a.pin == 0) ? CircuitPlayground.lis.x
-			: (vptr->a.pin == 1) ? CircuitPlayground.lis.y
-					     : CircuitPlayground.lis.z;
-		    csp_set_ivalue(st, ix, raw >> 5);   // ~+-1g -> +-512 (tune)
-		    break;
-		}
-		if (vptr->a.pin == 8) {             // A8 light sensor
-		    csp_set_ivalue(st, ix, CircuitPlayground.lightSensor());
-		    break;
-		}
-		if (vptr->a.pin == 9) {             // A9 thermistor (raw ADC)
-		    csp_set_ivalue(st, ix, analogRead(A9));
-		    break;
-		}
-#endif
-		csp_set_ivalue(st, ix, analogRead(vptr->a.pin));
+		csp_board_analog_input(st, ix, vptr);
 	    }
 	    break;
 	default: break;
@@ -288,6 +398,8 @@ void csp_output(csp_rt_t* st)
     int i;
 
     if (!st->latch) {  // allow output
+	csp_board_start_output(st);
+
 	for (i = 0; i < st->no; ++i) {
 	    index_t ix = st->output[i];
 	    int di = INDEX(ix);
@@ -296,51 +408,20 @@ void csp_output(csp_rt_t* st)
 	    case DECL_DIGITAL:
 		vptr = csp_dio_slot(st, ix, DOUT);
 		if (vptr->d.dir & DIR_OUT) {
-		    if (vptr->d.dir & DIR_IN) {
-			pinMode(vptr->d.pin, OUTPUT);
-			digitalWrite(vptr->d.pin, (vptr->d.val & 1));
-			// prepare for next input
-			if (vptr->d.pullup)
-			    pinMode(vptr->d.pin, INPUT_PULLUP);
-			else
-			    pinMode(vptr->d.pin, INPUT);
-		    }
-		    else { // plain out
-			digitalWrite(vptr->d.pin, (vptr->d.val & 1));
-		    }
+		    csp_board_digital_output(st, vptr);
 		}
 		break;
 	    case DECL_ANALOG:
 		vptr = csp_dio_slot(st, ix, DOUT);
-#ifdef CSP_CPX
-		if (vptr->a.port == PORT_NEO) {   // NeoPixel: RGB565 -> pixel
-		    CircuitPlayground.strip.setPixelColor(vptr->a.pin,
-							  cpx_565(vptr->a.val));
-		    cpx_neo_dirty = 1;
-		    break;
-		}
-#endif
-		if ((vptr->a.dir & DIR_OUT) && (vptr->a.pwm)) {
-		    // handle type! accept float as well
-		    int val = map(vptr->a.val,
-				  0, (1<<decl(st,di,res))-1,
-				  0, 255);
-		    analogWrite(vptr->a.pin, val);
-		}
+		if (vptr->a.dir & DIR_OUT)
+		    csp_board_analog_output(st, di, vptr);
 		break;
 	    default:
 		break;
 	    }
 	}
+	csp_board_stop_output(st);
     }
-#ifdef CSP_CPX
-    // push the frame once per cycle (dirty is only set while not latched)
-    if (cpx_neo_dirty) {
-	CircuitPlayground.strip.setBrightness(lev);
-	CircuitPlayground.strip.show();
-	cpx_neo_dirty = 0;
-    }
-#endif
     csp_output_timer(st);
 }
 
@@ -546,20 +627,21 @@ void loop()
     csp_commit(&state);
     csp_output(&state);
 
-    if (state.wait_ms != NOTIMEOUT) {
-        // use smaller delays to stay responsive to serial
-        uint32_t remaining = state.wait_ms;
-	// FIXME: we must re-read current time and update,
-	// we do not know how long poll is taking!
-        while ((remaining > 0) && !csp_line_ready) {
-            uint32_t chunk = min(remaining, (uint32_t)50);
-            delay(chunk);
-            remaining -= chunk;
-	    if (Serial.available())
+    // A running timer sets wait_ms to time-until-fire, but that must NOT gate the
+    // whole loop: continuous inputs (accelerometer, light) and the reactive
+    // display have to keep sampling at a steady rate. So never sleep longer than
+    // SAMPLE_MS in one pass -- timers still fire on time because csp_input_timer
+    // checks wall-clock every cycle. wait_ms only bounds how long we may idle.
+    {
+	uint32_t remaining = (state.wait_ms != NOTIMEOUT) ? state.wait_ms : SAMPLE_MS;
+	if (remaining > SAMPLE_MS)
+	    remaining = SAMPLE_MS;   // cap: sample rate wins over timer wait
+	while ((remaining > 0) && !csp_line_ready) {
+	    uint32_t chunk = min(remaining, (uint32_t)10);
+	    delay(chunk);
+	    remaining -= chunk;
+	    while (Serial.available())   // drain fully, not one byte per chunk
 		csp_line_input(Serial.read());
-        }
-    }
-    else {
-	delay(5);   // pace a timer-less program: don't free-run and hammer I2C
+	}
     }
 }

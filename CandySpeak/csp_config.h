@@ -1,10 +1,7 @@
 #ifndef __CSP_CONFIG_H__
 #define __CSP_CONFIG_H__
 
-#ifndef SUPPORT_STATES
-#define SUPPORT_STATES    1
 #define MAX_STATES 16
-#endif
 
 #define REACTIVE_DEFAULT 0
 #ifndef SUPPORT_REACTIVE
