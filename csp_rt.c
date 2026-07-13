@@ -1572,9 +1572,10 @@ again:
 	st->anyd = CSP_TRUE;
 	break;
     }
-    case OP_CHG: {  // r |= dset[ix]
+    case OP_CHG: {  // r |= dset[ix]  (force-true on the seed cycle)
 	int i = st_index(st, instr(st, n, m.mem));
-	st->reg[instr(st,n,m.x)].i |= bitset_tst(st->dset, i) ? 1 : 0;
+	st->reg[instr(st,n,m.x)].i |=
+	    (st->seed_all || bitset_tst(st->dset, i)) ? 1 : 0;
 	break;
     }
     case OP_LI:
@@ -1781,6 +1782,9 @@ index_t csp_react(csp_rt_t* st)
 // fall back to full sequential, which keeps override consistent.
 index_t csp_cycle(csp_rt_t* st)
 {
+    // First cycle: force OP_CHG true so every <- binding fires once and seeds
+    // its initial value. Same boundary as the reactive seed sweep below.
+    st->seed_all = (st->cycle <= 1);
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     if (st->reactive && ((st->rom_nn == 0) || rom_n_edg)) {
 	// The reactive queue is change-driven, so it starts empty. Seed it with

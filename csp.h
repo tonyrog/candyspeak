@@ -873,6 +873,9 @@ typedef struct _csp_rt_t
     unsigned sweep:1;            // 1 during a full sequential sweep (csp_eval /
 				 // reactive seed): OP_NEW/LEAVE enter/leave objects.
 				 // 0 during csp_react single-rule dispatch.
+    unsigned seed_all:1;         // 1 during the first cycle: OP_CHG reads true for
+				 // every input so each <- binding fires once to
+				 // establish its initial value (least surprise).
 
     // Firmware ROM executes in place from flash (see doc/ROM_RAM.md); RAM holds
     // patches. The logical index space is [0,rom_n*) = ROM (read via the pointers

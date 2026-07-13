@@ -1,0 +1,9 @@
+// A <- binding is change-triggered: it re-evaluates when an input changes. But
+// its input here (Y) is set once at declaration and never changes, so without a
+// startup seed the binding would never fire and X would stay 0. The seed cycle
+// forces every <- to fire once, so X gets its initial value Y+1 = 8 and then
+// stays there (Y never changes -> no further firing). Runs in BOTH modes.
+#variable Y integer = 7
+#variable X integer = 0
+
+X <- Y + 1

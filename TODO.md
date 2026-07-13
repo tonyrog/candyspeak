@@ -9,6 +9,13 @@
 
   Acc[INDEX] <- Acc[INDEX] + A[INDEX % 5]
   INDEX <- (INDEX + 1) % 5 ? timeout(Td)
+
+- Memory
+
+How can we use all available memory to rules and declarations
+without affecting overhead?
+
+
   
 - How to combine ROM + RAM => new ROM base?
 
