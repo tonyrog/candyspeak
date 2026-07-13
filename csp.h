@@ -102,6 +102,7 @@ typedef const char rochar;  // PROGMEM string character type
 #define MAX_BUFS     (1 << BUF_BITS)
 #define MAX_QUEUE    (MAX_INSTRS)
 #define MAX_INDEX    (MAX_INSTRS+1)
+#define MAX_QENTRY   (1 << (OBJ_BITS + INSTR_BITS)) // packed (obj,ip) key space
 #define DIR_BITS 2
 #define TYPE_BITS 4  // supports up to 15 types & objects
 #define ENDIAN_BITS 2
@@ -869,6 +870,9 @@ typedef struct _csp_rt_t
     struct PACKED { index_t ix; unsigned cur:OBJ_BITS; }
 	stack[MAX_STACK_DEPTH];
     unsigned reactive:1;         // 1 if push backedges to queue
+    unsigned sweep:1;            // 1 during a full sequential sweep (csp_eval /
+				 // reactive seed): OP_NEW/LEAVE enter/leave objects.
+				 // 0 during csp_react single-rule dispatch.
 
     // Firmware ROM executes in place from flash (see doc/ROM_RAM.md); RAM holds
     // patches. The logical index space is [0,rom_n*) = ROM (read via the pointers
@@ -916,7 +920,7 @@ typedef struct _csp_rt_t
     uint32_t update;             // update counter
     uint32_t wait_ms;            // sleep time or NOTIMEOUT
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)        
-    bitset_decl(inq, MAX_INDEX); // mark nodes in queue during eval
+    bitset_decl(inq, MAX_QENTRY); // mark queued (obj,ip) entries during eval
     index_t queue[MAX_QUEUE];    // nodes in queue
     int hd,tl;  // queue head and tail
     // back references
@@ -1026,12 +1030,13 @@ static inline csp_view_t* csp_view(csp_rt_t* st, index_t n)
 // enq a rule for recalculation, with object context
 static inline void csp_enq(csp_rt_t* st, uint8_t obj, uint16_t ip)
 {
-    if (bitset_tst(st->inq,ip))
+    index_t e = MAKE_QENTRY(obj, ip);   // dedup per (obj,ip): the same rule runs
+    if (bitset_tst(st->inq, e))         // once per object, not once overall
 	return;
     if ((st->tl - st->hd) != MAX_QUEUE) {
-	st->queue[st->tl % MAX_QUEUE] = MAKE_QENTRY(obj, ip);
+	st->queue[st->tl % MAX_QUEUE] = e;
 	st->tl++;
-	bitset_set(st->inq, ip);
+	bitset_set(st->inq, e);
     }
 }
 

@@ -1,3 +1,4 @@
+{modes, [seq, reactive]}.
 {cycles, 5}.
 {checks, [
   {final_var, "State", 2},

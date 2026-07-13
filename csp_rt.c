@@ -1203,6 +1203,11 @@ NOINLINE void csp_enq_elist(csp_rt_t* st, index_t x)
     int i;
     index_t ix = INDEX(x);
     uint8_t obj = OBJ(x);
+    // A CURRENT-relative write (a module rule touching its own object's field)
+    // must enqueue under the concrete object, not the CURRENT placeholder, or
+    // the dispatcher can't restore the right instance context.
+    if (obj == CURRENT)
+	obj = st->cur;
     // baked ROM graph in flash: ROM decl -> ROM rules that read it
     if (rom_n_edg && (ix < st->rom_nd)) {
 	index_t base = ro_word(&rom_ofs[ix]);
@@ -1529,6 +1534,8 @@ int csp_eval_rule(csp_rt_t* st, int n)
 #endif
 
 again:
+    if (n >= (int)st->ps.nn)   // never walk past the last instruction into garbage
+	return n;
 #if defined(USE_STATISTICS) && (USE_STATISTICS==1)
     st->num_eval0++;
 #endif
@@ -1598,26 +1605,26 @@ again:
     case OP_ENTER: // skip y + 2
 	return n + instr(st,n,e.num) + 2;
     case OP_NEW:
-	if (!st->reactive) {
+	// Enter the object like a call -- but only during a full sweep (csp_eval:
+	// non-reactive execution and the reactive SEED). csp_react dispatches
+	// single rules by ip; if one reaches OP_NEW it must be a no-op, else esp
+	// grows unboundedly and corrupts the struct.
+	if (st->sweep) {
 	    index_t ent = instr(st,n,n.ent);
 	    index_t obj = instr(st,n,n.obj);
-	    // in non-reactive mode this is like a call
 	    st->stack[st->esp].ix = n+1;      // return address
 	    st->stack[st->esp].cur = st->cur;  // store current module
 	    st->esp++;
-	    // setup locals
 	    st->cur = decl(st, INDEX(obj), mq.m);    // set current module
 	    st->offs[CURRENT] = st->offs[st->cur];  // setup locals
 	    return INDEX(ent)+1; // first instruction
 	}
 	break;
     case OP_LEAVE:
-	if (!st->reactive) {
-	    // return in non-reactive-mode
+	if (st->sweep) {
 	    if (st->esp == 0)
 		return st->ps.nn; // make it stop
 	    st->esp--;
-	    // restore locals
 	    st->cur = st->stack[st->esp].cur;
 	    n = st->stack[st->esp].ix;
 	    st->offs[CURRENT] = st->offs[st->cur];
@@ -1719,10 +1726,12 @@ index_t csp_eval_range(csp_rt_t* st, index_t start, index_t stop)
 {
     index_t n = start;
     index_t x = BAD_INDEX;
+    st->sweep = 1;   // full sweep: OP_NEW/LEAVE enter/leave objects
     while(n < stop) {
 	n = csp_eval_rule(st, n);
 	x = n;
     }
+    st->sweep = 0;
     return x;
 }
 
@@ -1741,9 +1750,19 @@ index_t csp_react(csp_rt_t* st)
 	int cycle_end = st->tl;  // items added during cycle go to next cycle
 	memset(st->inq, 0, sizeof(st->inq));  // allow rules to be queued again
 	while(st->hd < cycle_end) {
+	    uint8_t obj;
+	    index_t ip;
 	    x0 = csp_deq(st);
-	    csp_eval_rule(st, x0);
-	    x1 = x0;
+	    // Queue entries are packed (obj, ip). Restore the object context so a
+	    // module rule's CURRENT-relative field access hits the right instance
+	    // (sequential does this via OP_NEW; reactive skips NEW). obj 0 = global
+	    // (offs[0] == 0), leaving global rules unchanged.
+	    obj = QENTRY_OBJ(x0);
+	    ip  = QENTRY_IP(x0);
+	    st->cur = obj;                       // instance context for CURRENT-rel
+	    st->offs[CURRENT] = st->offs[obj];   //   reads/writes and re-enqueues
+	    csp_eval_rule(st, ip);
+	    x1 = ip;
 	}
     }
     return x1;
@@ -2322,9 +2341,16 @@ void csp_csr(csp_rt_t* st)
     int i;
     int current_rule = -1;
     index_t wr[MAX_DECLS];
+    // timeout(T)/elapsed(T)/... pass the timer as an immediate index (LI -> ARG
+    // -> CALL), not an OP_LD, so track LI values per register and per arg slot to
+    // recover the timer a CALL depends on and give it a graph edge.
+    index_t reg_imm[MAX_REGS];
+    index_t arg_imm[MAX_ARGS];
 
     // Clear in-degree counts
     memset(st->idg, 0, st->ps.nd * sizeof(index_t));
+    memset(reg_imm, 0, sizeof(reg_imm));
+    memset(arg_imm, 0, sizeof(arg_imm));
 
     // Pass 1: Count how many rules depend on each declaration
     // A rule depends on a declaration if it contains an LD from that declaration
@@ -2356,6 +2382,26 @@ void csp_csr(csp_rt_t* st)
 		}
 	    }
 	    break;
+	case OP_LI:
+	case OP_LIU:
+	    reg_imm[instr(st,i,i.x)] = (index_t)instr(st,i,i.imm);
+	    break;
+	case OP_ARG:
+	    arg_imm[instr(st,i,i.imm)] = reg_imm[instr(st,i,i.x)];
+	    break;
+	case OP_CALL:   // timer args (timeout(T), ...) become timer -> rule edges
+	    if (current_rule >= 0) {
+		uint16_t avt = instr(st,i,f.avt);
+		int a;
+		for (a = 0; a < MAX_ARGS; a++) {
+		    if (((avt >> (a*4)) & 0xf) == V_TIMER) {
+			index_t mem = INDEX(arg_imm[a]);
+			if (mem < st->ps.nd)
+			    st->idg[mem]++;
+		    }
+		}
+	    }
+	    break;
 	case OP_ENTER:
 	    current_rule = i+1;
 	    break;
@@ -2375,6 +2421,8 @@ void csp_csr(csp_rt_t* st)
 
     // Pass 3: Fill in rule indices for each declaration
     memcpy(wr, st->ofs, st->ps.nd * sizeof(index_t));
+    memset(reg_imm, 0, sizeof(reg_imm));
+    memset(arg_imm, 0, sizeof(arg_imm));
 
     // Only RAM rules go into the runtime graph; ROM rules run sequentially (or
     // from their own baked graph). Scan from the RAM instruction base.
@@ -2402,6 +2450,27 @@ void csp_csr(csp_rt_t* st)
 		if (mem < st->ps.nd &&
 		    (wr[mem] == st->ofs[mem] || st->edg[wr[mem]-1] != current_rule))
 		    st->edg[wr[mem]++] = current_rule;
+	    }
+	    break;
+	case OP_LI:
+	case OP_LIU:
+	    reg_imm[instr(st,i,i.x)] = (index_t)instr(st,i,i.imm);
+	    break;
+	case OP_ARG:
+	    arg_imm[instr(st,i,i.imm)] = reg_imm[instr(st,i,i.x)];
+	    break;
+	case OP_CALL:   // timer args (timeout(T), ...) become timer -> rule edges
+	    if (current_rule >= 0) {
+		uint16_t avt = instr(st,i,f.avt);
+		int a;
+		for (a = 0; a < MAX_ARGS; a++) {
+		    if (((avt >> (a*4)) & 0xf) == V_TIMER) {
+			index_t mem = INDEX(arg_imm[a]);
+			if (mem < st->ps.nd &&
+			    (wr[mem] == st->ofs[mem] || st->edg[wr[mem]-1] != current_rule))
+			    st->edg[wr[mem]++] = current_rule;
+		    }
+		}
 	    }
 	    break;
 	case OP_ENTER:  // start of object

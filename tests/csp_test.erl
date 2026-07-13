@@ -1,6 +1,6 @@
 -module(csp_test).
 -export([all/0, all/1, run/1, run/2]).
--export([parse_test/1, eval_test/1, eval_test/2]).
+-export([parse_test/1, eval_test/1, eval_test/2, eval_test/3]).
 -export([get_var/2, get_var/3, get_object_var/3, get_object_var/4]).
 -export([state_at/2, last_state/1]).
 
@@ -56,13 +56,18 @@ parse_test(File) ->
 
 %% Eval test - run and get state/result
 eval_test(File) ->
-    eval_test(File, []).
+    eval_test(File, [], seq).
 
 eval_test(File, Opts) ->
+    eval_test(File, Opts, seq).
+
+%% Mode: seq (default) or reactive (adds -r 1)
+eval_test(File, Opts, Mode) ->
     Cycles = proplists:get_value(cycles, Opts, 20),
     TmpState = tmp_file("state"),
-    Cmd = io_lib:format("~s -c ~p -s ~s -R ~s 2>&1",
-                        [?CSP, Cycles, TmpState, File]),
+    RFlag = case Mode of reactive -> "-r 1 "; _ -> "" end,
+    Cmd = io_lib:format("~s ~s-c ~p -s ~s -R ~s 2>&1",
+                        [?CSP, RFlag, Cycles, TmpState, File]),
     _Output = os:cmd(lists:flatten(Cmd)),
     StateResult = file:consult(TmpState),
     file:delete(TmpState),
@@ -150,14 +155,28 @@ run_basic(File, Name, _Opts) ->
 run_with_expect(File, ExpectFile, Name, _Opts) ->
     case file:consult(ExpectFile) of
         {ok, Expects} ->
-            case eval_test(File, Expects) of
-                {ok, Data} ->
-                    check_expectations(Name, Expects, Data);
-                {error, R} ->
-                    {fail, Name, {eval, R}}
-            end;
+            %% Run each requested mode; default is sequential only. A test opts
+            %% into reactive with {modes, [seq, reactive]}. All modes must pass.
+            Modes = proplists:get_value(modes, Expects, [seq]),
+            run_modes(Modes, File, Expects, Name);
         {error, R} ->
             {fail, Name, {expect_file, R}}
+    end.
+
+run_modes(Modes, File, Expects, Name) ->
+    Results = [run_mode(M, File, Expects, Name) || M <- Modes],
+    case [F || {fail, _, _} = F <- Results] of
+        []          -> {pass, Name, Modes};
+        [First | _] -> First
+    end.
+
+run_mode(Mode, File, Expects, Name) ->
+    MName = lists:flatten(io_lib:format("~s[~s]", [Name, Mode])),
+    case eval_test(File, Expects, Mode) of
+        {ok, Data} ->
+            check_expectations(MName, Expects, Data);
+        {error, R} ->
+            {fail, MName, {eval, R}}
     end.
 
 check_expectations(Name, Expects, Data) ->
