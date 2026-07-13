@@ -1,0 +1,23 @@
+// Two objects, each a multi-state machine (INIT -> s1 -> s2). Verifies per-
+// object reactive dispatch: each instance progresses independently and the
+// reactive run must match the sequential one (V: 0 -> 10 -> 20, State ends s2).
+// See {modes} in the .expect -- this runs in BOTH sequential and reactive.
+#module M
+  #variable V integer = 0
+  #states s1 s2
+
+  #in INIT
+    State = s1
+  #end
+
+  #in s1
+    V = 10, State = s2 ? V == 0
+  #end
+
+  #in s2
+    V = 20 ? V == 10
+  #end
+#end
+
+#M m1
+#M m2

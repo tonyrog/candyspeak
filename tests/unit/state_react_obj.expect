@@ -1,0 +1,8 @@
+{modes, [seq, reactive]}.
+{cycles, 8}.
+{checks, [
+  {final_object_var, "M.m1", "m1.V", 20},
+  {final_object_var, "M.m1", "m1.State", 3},
+  {final_object_var, "M.m2", "m2.V", 20},
+  {final_object_var, "M.m2", "m2.State", 3}
+]}.
