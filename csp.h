@@ -324,7 +324,7 @@ typedef uint32_t set_group_t;  // bit set element
 #define BITSET_GROUP_BITS (8*sizeof(set_group_t))
 #define BITSET_GROUPS(size) (((size)+BITSET_GROUP_BITS-1)/BITSET_GROUP_BITS)
 #define BITSET_GROUP(i) ((i)/BITSET_GROUP_BITS)
-#define BITSET_BIT(i)   (1 << ((i)%BITSET_GROUP_BITS))
+#define BITSET_BIT(i)   ((set_group_t)1 << ((i)%BITSET_GROUP_BITS))
 
 #define bitset_decl(name,size) set_group_t (name)[BITSET_GROUPS(size)]
 #define bitset_zero(name) memset(&(name), 0x00, sizeof(name))
@@ -837,14 +837,29 @@ typedef struct
     unsigned snum:NUM_BITS;        // state number
 } state_t;
 
+// RAM code arena layout: instr[] region (MAX_INSTRS+1 slots, 8-aligned so the
+// following decl[] and any value_t access are aligned) then decl[]. These sizes
+// are the single source of truth for both csp_mem_init and the static-buffer
+// backend default.
+#define CSP_ARENA_INSTR_BYTES \
+    ((((MAX_INSTRS+1)*sizeof(csp_instr_t)) + 7) & ~(size_t)7)
+#define CSP_ARENA_DECL_BYTES  (MAX_DECLS * sizeof(csp_decl_t))
+#define CSP_ARENA_BYTES       (CSP_ARENA_INSTR_BYTES + CSP_ARENA_DECL_BYTES)
+
 typedef struct _csp_rt_t
 {
     value_t reg[MAX_REGS];         // register area
     value_t arg[MAX_ARGS];         // loaded before call
 
-    // experiments and test in RAM
-    csp_instr_t ram_instr[MAX_INSTRS+1]; // instructions used (one dummy slot!)
-    csp_decl_t  ram_decl[MAX_DECLS];     // declarations used
+    // RAM code arena (allocated once in csp_rt_init via csp_mem_init). instr[] and
+    // decl[] are two forward-indexed regions inside one block: ram_instr has
+    // MAX_INSTRS+1 slots (the last is the immediate-eval scratch slot), ram_decl
+    // follows it. Moving them off the struct shrinks it and lets the pool size be
+    // chosen at init. See doc/MEMORY_LAYOUT.md.
+    uint8_t*    mem;                     // arena base (malloc'd)
+    size_t      mem_size;                // arena size in bytes
+    csp_instr_t* ram_instr;              // -> mem (MAX_INSTRS+1 slots, +1 = scratch)
+    csp_decl_t*  ram_decl;               // -> mem + instr region
     char        ram_str[MAX_STR_BUF];    // store variable names
 
     // All leaf values live in the buffer heap (see doc/DESCRIPTORS.md).
@@ -1097,6 +1112,12 @@ static inline sindex_t decl_name_pos(csp_rt_t* st, index_t ix)
 }
 
 extern int     csp_rt_init(csp_rt_t*,  int reactive);
+extern int     csp_mem_init(csp_rt_t*, size_t size);
+// Backend hook: return >= `need` bytes of RAM for the code arena (called once at
+// startup, never freed), or NULL on failure. Default is a static buffer (works
+// on any target, no heap); a backend selects malloc with CSP_ARENA_MALLOC or
+// provides its own definition with CSP_ARENA_CUSTOM (e.g. claim free RAM).
+extern uint8_t* csp_arena_mem(size_t need);
 extern void    csp_load_rom(csp_rt_t*);
 extern int     csp_has_firmware(void);
 extern int     csp_rt_start(csp_rt_t*);

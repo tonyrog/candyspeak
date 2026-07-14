@@ -56,7 +56,7 @@ enum {
 // Match pattern against tokens
 // Returns: number of tokens consumed, or -1 on mismatch
 int pmatch(csp_rt_t* st, const token_t* tv, int ti, size_t n,
-	   const uint8_t* pat, void* data);
+	   const uint8_t* pat, void* data, size_t data_size);
 
 // Stop-set functions for P_EXPR_S
 #define MAX_STOP_TOKENS 128

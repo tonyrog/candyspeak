@@ -434,6 +434,7 @@ void dump_stop_sets(void)
 typedef struct {
     csp_rt_t* st;
     void* data;
+    const uint8_t* dend;  // one past the end of the data struct (bounds backtracking)
     uint8_t ez;   // element size (set by P_ARRAY) (max element size=255!)
     int ix;       // one-level repetition arrary index
     int eo;       // element offset
@@ -739,8 +740,12 @@ next:
 	uint8_t num_alts = pat[pi++];
 	int matched = 0;
 	// is this really needed (mode compact way)
-	// temp save of data (assumes data < 64 bytes)
-	uint8_t saved[64]; 
+	// temp save of data for backtracking. Copy only what actually remains of
+	// the data struct from the current cursor (clamped to the buffer), so a
+	// struct smaller than 64 bytes is never over-read/written.
+	uint8_t saved[64];
+	size_t  avail = (const uint8_t*)pst->dend - (const uint8_t*)pst->data;
+	size_t  slen  = avail < sizeof(saved) ? avail : sizeof(saved);
 	
 	DBG("%sP_CHOICE: (%d) num_alts=%d\n", indent(l),
 	    ti, num_alts);
@@ -756,7 +761,7 @@ next:
 	    len = pat[pi++];
 	    DBG("%sALT[%d]: (%d) len=%d\n", indent(l+1), ti, a, num_alts);
 		
-	    memcpy(saved, pst->data, sizeof(saved));
+	    memcpy(saved, pst->data, slen);
 	    if ((r = pmatch_(pst, tv, ti, n, l+2, &pat[pi])) >= 0) {
 		ti = r;
 		matched = 1;
@@ -778,7 +783,7 @@ next:
 		    return -1;		    
 		}
 	    } else {
-		memcpy(pst->data, saved, sizeof(saved));  // restore
+		memcpy(pst->data, saved, slen);  // restore
 		pi += len;
 	    }
 	}
@@ -857,12 +862,13 @@ next:
 }
 
 int pmatch(csp_rt_t* st, const token_t* tv, int ti, size_t n,
-	   const uint8_t* pat, void* data)
+	   const uint8_t* pat, void* data, size_t data_size)
 {
     pmatch_st_t pst;
 
     pst.st = st;
     pst.data = data;
+    pst.dend = (const uint8_t*)data + data_size;  // never save/restore past this
     pst.ez   = 0;     // element size (P_ARRAY)
     pst.ix   = 0;
     pst.eo   = 0;     // current element offset (P_REP)

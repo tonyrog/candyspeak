@@ -3761,7 +3761,7 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
     int jx;
     int i;
 
-    if (pmatch(st, tv, ti, n, pat_module, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_module, &d, sizeof(d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3802,7 +3802,7 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
     int lx;
     const tstr_t empty = { .ptr = NULL, .len = 0};
     
-    if (pmatch(st, tv, ti, n, pat_end, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_end, &d, sizeof(d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3871,7 +3871,7 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
     d.r.res = 8*sizeof(ivalue_t);
     d.opts.vt = V_INTEGER;
 
-    if ((r = pmatch(st, tv, ti, n, pat_variable, &d)) < 0) {
+    if ((r = pmatch(st, tv, ti, n, pat_variable, &d, sizeof(d))) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3951,7 +3951,7 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n)
     d.r.res = 8*sizeof(ivalue_t);
     d.opts.vt = V_INTEGER;
 
-    if (pmatch(st, tv, ti, n, pat_constant, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_constant, &d, sizeof(d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3985,7 +3985,7 @@ NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, int ti, size_t n)
     index_t ix;
     int i;
 
-    if (pmatch(st, tv, ti, n, pat_digital, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_digital, &d, sizeof(d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -4028,7 +4028,7 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, int ti, size_t n)
 
     d.r.res = 10;
     d.opts.vt = V_INTEGER;
-    if (pmatch(st, tv, ti, n, pat_analog, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_analog, &d, sizeof(d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -4071,7 +4071,7 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     const tstr_t empty = { .ptr = NULL, .len = 0};
 
     d.init = 0;
-    if (pmatch(st, tv, ti, n, pat_timer, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_timer, &d, sizeof(d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -4141,7 +4141,7 @@ NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, int ti, size_t n)
 
     d.bit0 = d.bit1 = -1;
     d.r.res = 1;  // single bit is default ok?
-    if (pmatch(st, tv, ti, n, pat_can, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_can, &d, sizeof(d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -4194,7 +4194,7 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 
     d.r.res = 8;                 // default one byte
     d.opts.vt = V_UNSIGNED;      // raw bits -> unsigned by default
-    if (pmatch(st, tv, ti, n, pat_buffer, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_buffer, &d, sizeof(d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -4631,7 +4631,7 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
     int m, k;
     
     // Parse: # ModName ObjName (Field (=|<-) Expr)*
-    if (pmatch(st, tv, ti, n, pat_object, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_object, &d, sizeof(d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -4786,7 +4786,7 @@ NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, int ti, size_t n)
     rule_param_t d = {0};
     int np = 0;
 
-    if (pmatch(st, tv, ti, n, pat_rule, &d) < 0) {
+    if (pmatch(st, tv, ti, n, pat_rule, &d, sizeof(d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -4849,7 +4849,7 @@ NOINLINE int csp_parse_pack(csp_rt_t* st, token_t* tv, size_t n)
     decl_t bt;
     int unpack;
     
-    if (pmatch(st, tv, 0, n, pat_pack, &d) < 0) {
+    if (pmatch(st, tv, 0, n, pat_pack, &d, sizeof(d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -5266,9 +5266,51 @@ NOINLINE void csp_load_rom(csp_rt_t* st)
     }
 }
 
+// Backend hook: hand out the raw RAM for the code arena. The memory source is a
+// per-target choice; the layout below is shared. Default is a static buffer so a
+// new backend (LPCopen, bare-metal, no-heap) works with no porting. A weak
+// symbol would be cleaner but gets stripped under -ffunction-sections/gc-sections
+// on some targets (see the weak-ROM note), so select at build time instead.
+#if defined(CSP_ARENA_CUSTOM)
+// backend provides its own csp_arena_mem() (e.g. malloc, or claim free RAM)
+#elif defined(CSP_ARENA_MALLOC)
+uint8_t* csp_arena_mem(size_t need)
+{
+    return (uint8_t*)malloc(need);
+}
+#else
+uint8_t* csp_arena_mem(size_t need)   // portable default: no heap required
+{
+    static uint8_t arena[CSP_ARENA_BYTES] __attribute__((aligned(8)));
+    return (need <= sizeof(arena)) ? arena : NULL;
+}
+#endif
+
+// Lay out the RAM code arena as two forward-indexed regions: instr[] (MAX_INSTRS
+// +1 slots -- the last is the immediate-eval scratch slot) followed by decl[].
+// `size` is reserved for a future single shared pool; step 1 uses the fixed
+// layout that exactly matches the old static arrays. The raw memory comes from
+// the csp_arena_mem() backend hook. Returns 0 on success, -1 on failure.
+int csp_mem_init(csp_rt_t* st, size_t size)
+{
+    (void)size;   // reserved: a future shared arena sizes the pool from here
+    st->mem = csp_arena_mem(CSP_ARENA_BYTES);
+    if (st->mem == NULL)
+	return -1;
+    memset(st->mem, 0, CSP_ARENA_BYTES);   // match the zeroed static arrays we replaced
+    st->mem_size  = CSP_ARENA_BYTES;
+    st->ram_instr = (csp_instr_t*)st->mem;
+    st->ram_decl  = (csp_decl_t*)(st->mem + CSP_ARENA_INSTR_BYTES);
+    return 0;
+}
+
 int csp_rt_init(csp_rt_t* st, int reactive)
 {
     memset(st, 0x00, sizeof(csp_rt_t));
+
+    // Allocate the RAM code arena (instr[]/decl[]) before anything parses.
+    if (csp_mem_init(st, 0) < 0)
+	return -1;
 
     // Initialize stop-sets for P_EXPR_S patterns
     init_stop_sets();       // creates STOP_NONE (index 0)

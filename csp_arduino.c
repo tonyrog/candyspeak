@@ -555,6 +555,14 @@ int csp_cmd_load(csp_rt_t* st, int argc, char* argv[])
 // Arduino setup/loop
 // ============================================================
 
+// Base loop sampling period (ms). Bounds the idle sleep so continuous inputs and
+// the reactive display keep updating even when a slow timer is armed. Boards with
+// their own value (e.g. CPX above) define it first; this is the default for the
+// rest.
+#ifndef SAMPLE_MS
+#define SAMPLE_MS 10
+#endif
+
 void setup()
 {
     uint32_t t0;
