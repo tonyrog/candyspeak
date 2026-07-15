@@ -468,6 +468,8 @@ static struct option long_options[] = {
     {"object-file",  required_argument, 0,  'O'},
     {"input-file",   required_argument, 0,  'I'},
     {"eeprom",       required_argument, 0,  'e'},
+    {"memory",       required_argument, 0,  'm'},
+    {"pause",        no_argument,       0,  'b'},
     {0,              0,                 0,  0 }
 };
 
@@ -493,6 +495,8 @@ void usage(const char* prog)
     fprintf(stderr, "  -p, --parse-file=F   Parsed structure file\n");
     fprintf(stderr, "  -e, --eeprom=F       EEPROM file for save/load (default: eeprom.db)\n");
     fprintf(stderr, "  -I, --input-file=F   Data input file\n");
+    fprintf(stderr, "  -m, --memory=N[k]    Usable code memory budget in bytes (or Nk KiB)\n");
+    fprintf(stderr, "  -b, --pause          Start paused after load (inspect, then /resume); implies -i\n");
     fprintf(stderr, "  -L[erlang|erl|text|txt]  Trace output language\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "If no file is given, reads from stdin.\n");
@@ -599,6 +603,8 @@ int main(int argc, char** argv)
     int interactive = 0;
     uint32_t max_cycles = 0;
     uint32_t max_time_ms = 0;
+    size_t   mem_limit = 0;   // -m: usable code-memory budget (0 = full arena)
+    int      pause_start = 0; // -b: start paused (inspect counters, then /resume)
     uint32_t start_time;
     int c;
     int reactive = REACTIVE_DEFAULT;
@@ -614,7 +620,7 @@ int main(int argc, char** argv)
 
     while (1) {
 	int option_index = 0;
-	c = getopt_long(argc, argv, "hindPQRSCc:T:s:p:r:t:O:e:L:I:F:",
+	c = getopt_long(argc, argv, "hindPQRSCc:T:s:p:r:t:O:e:L:I:F:m:b",
 			long_options, &option_index);
 	if (c == -1)
 	    break;
@@ -624,6 +630,7 @@ int main(int argc, char** argv)
 	    usage(argv[0]);
 	    exit(0);
 	case 'i': interactive = 1; break;
+	case 'b': pause_start = 1; interactive = 1; break;  // pause needs the REPL
 	case 'e': eeprom_file = optarg; break;
 	case 'r': reactive =  atoi(optarg); break;
 	case 't': break;
@@ -671,6 +678,14 @@ int main(int argc, char** argv)
 	    }
 	    virtual_time = 1;
 	    break;
+	case 'm': {   // usable code-memory budget; accepts a trailing k/K = KiB
+	    char* end = NULL;
+	    unsigned long v = strtoul(optarg, &end, 0);
+	    if (end && (*end == 'k' || *end == 'K'))
+		v *= 1024;
+	    mem_limit = (size_t)v;
+	    break;
+	}
 	case 'L':
 	    if (strcmp(optarg, "erlang") == 0)
 		lang = ERLANG;
@@ -706,6 +721,10 @@ int main(int argc, char** argv)
 #endif
 
     csp_rt_init(&state, reactive);
+    // -m shrinks the usable code-memory budget to exercise the out-of-memory
+    // path. Clamp to the physical arena; the field is a byte cap, not a re-alloc.
+    if (mem_limit > 0)
+	state.mem_limit = (mem_limit < state.mem_size) ? mem_limit : state.mem_size;
     csp_set_uconst(&state, csp_uconst);
 
     // Activate flash-resident firmware: run ROM in place from flash, RAM holds
@@ -749,17 +768,28 @@ int main(int argc, char** argv)
     if ((nn0 == state.ps.nn) && !csp_has_firmware())
 	csp_eeprom_load(&state);
     
-    if (state.reactive)
-	csp_csr(&state); // build graph
-
     // initialize time before starting timers
     time_init();
 
-    // setup all input/output/timers..
-    csp_rt_start(&state);
-
-    // initialize input/output/timers ... load default values
-    csp_setup(&state);
+    // -b: come up paused *before* csp_rt_start allocates anything, so /memory can
+    // show the estimate first; edited makes /resume run csr + rt_start + setup.
+    // Otherwise build the graph and set up now (reporting a setup failure -- e.g.
+    // the buffer table or heap ran out -- instead of running a corrupt state).
+    if (pause_start) {
+	state.paused = 1;
+	state.edited = 1;
+    }
+    else {
+	if (state.reactive)
+	    csp_csr(&state); // build graph
+	if (csp_rt_start(&state) < 0) {
+	    fprintf(stderr, "setup failed: ");
+	    fprintf(stderr, csp_format_error(state.ps.err),
+		    state.ps.err_args[0], state.ps.err_args[1], state.ps.err_args[2]);
+	    fprintf(stderr, "\n");
+	}
+	csp_setup(&state);
+    }
 
     if (debug_parse) {
 	csp_dump(parse_out, &state);
@@ -789,7 +819,10 @@ int main(int argc, char** argv)
 	nfds = 1;
 
 	printf("CandySpeak Interactive Mode\n");
-	printf("Type /help for commands, /quit to exit\n\n");
+	printf("Type /help for commands, /quit to exit\n");
+	if (pause_start)
+	    printf("Started paused -- /memory /state to inspect, /resume to run\n");
+	printf("\n");
 	state.latch = 1; // hold output
     }
 
@@ -811,7 +844,7 @@ loop:
 	state.cycle = 1;
 	first_cycle = 0;
     }
-    else {
+    else if (!state.paused) {   // frozen while /pause is in effect
 	state.cycle++;
     }
     
@@ -846,6 +879,11 @@ loop:
 	    if (quit_flag) goto done;
 	}
     }
+
+    // /pause freezes execution: keep servicing interactive input (above) so
+    // /resume and edits still work, but run no input/cycle/commit/output.
+    if (state.paused)
+	goto loop;
 
     csp_input(&state);
     if (input_file) {

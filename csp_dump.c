@@ -460,13 +460,17 @@ void csp_dump_state(FILE* f, csp_rt_t* st, csp_lang_t lang)
 
 void csp_dump_result(FILE* f, csp_rt_t* st, index_t x, csp_lang_t lang)
 {
+    // x is a cycle's last instruction index, not necessarily a value leaf; only
+    // read it as a value when it maps into the (now actual-sized) leaf space.
+    int valid = (x != BAD_INDEX) && (st_index(st, x) < (int)st->view_cap);
+
     switch(lang) {
     case ERLANG:
 	fprintf(f, "{result,[{cycle,%d}", st->cycle);
 #if defined(USE_STATISTICS) && (USE_STATISTICS==1)
 	fprintf(f, ",{num_eval0,%d}", st->num_eval0);
 #endif
-	if (x == BAD_INDEX)
+	if (!valid)
 	    fprintf(f, ",{value,undefined}");
 	else
 	    fprintf(f, ",{value,%d}", csp_ivalue(st, x));
@@ -477,7 +481,7 @@ void csp_dump_result(FILE* f, csp_rt_t* st, index_t x, csp_lang_t lang)
 	fprintf(f, "]}.\n");
 	break;
     case TEXT:
-	if (x == BAD_INDEX)
+	if (!valid)
 	    fprintf(stdout, "result=none\n");
 	else
 	    fprintf(stdout, "result=%d\n", csp_ivalue(st, x));

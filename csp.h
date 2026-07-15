@@ -48,7 +48,7 @@ typedef unsigned bool_t;
 
 #define PORT_BITS 4   // port 0..15    mega is 11 ports, with 8 pins each
 #define PIN_BITS  7   // pin  0..127
-#define BUF_BITS  6   // buffer index
+#define BUF_BITS  8   // buffer index (max 256 == csp_view_t.buf uint8_t ceiling)
 
 #if defined(__AVR__)
 #include <avr/pgmspace.h>
@@ -837,14 +837,32 @@ typedef struct
     unsigned snum:NUM_BITS;        // state number
 } state_t;
 
-// RAM code arena layout: instr[] region (MAX_INSTRS+1 slots, 8-aligned so the
-// following decl[] and any value_t access are aligned) then decl[]. These sizes
-// are the single source of truth for both csp_mem_init and the static-buffer
-// backend default.
-#define CSP_ARENA_INSTR_BYTES \
-    ((((MAX_INSTRS+1)*sizeof(csp_instr_t)) + 7) & ~(size_t)7)
-#define CSP_ARENA_DECL_BYTES  (MAX_DECLS * sizeof(csp_decl_t))
-#define CSP_ARENA_BYTES       (CSP_ARENA_INSTR_BYTES + CSP_ARENA_DECL_BYTES)
+// One RAM arena holds everything that used to be fixed struct arrays: the parse-
+// time code (instr[]/decl[]) plus the rt_start-derived tables (heap, view, buf,
+// dset/inq bitsets, reactive graph). Moving them off the struct keeps sizeof
+// (csp_rt_t) tiny, so widening the index bits only grows this one block, not the
+// struct. Each region is 8-aligned (CSP_A8) so region starts stay aligned when
+// bump-allocated in order. These macros are the single source of truth for both
+// csp_mem_init and the static-buffer backend default.
+#define CSP_A8(n) (((size_t)(n) + 7) & ~(size_t)7)
+
+#define CSP_ARENA_INSTR_BYTES CSP_A8((MAX_INSTRS+1) * sizeof(csp_instr_t))
+#define CSP_ARENA_DECL_BYTES  CSP_A8(MAX_DECLS * sizeof(csp_decl_t))
+// instr+decl share this byte budget (st->mem_limit); the binding cap on code
+#define CSP_ARENA_CODE_BYTES  (CSP_ARENA_INSTR_BYTES + CSP_ARENA_DECL_BYTES)
+
+#define CSP_HEAP_BYTES CSP_A8(MAX_HEAP)                                  // per DIN/DOUT
+#define CSP_VIEW_BYTES CSP_A8(MAX_INDEX * sizeof(csp_view_t))
+#define CSP_BUF_BYTES  CSP_A8(MAX_BUFS * sizeof(csp_buf_t))
+#define CSP_DSET_BYTES CSP_A8(BITSET_GROUPS(MAX_INDEX) * sizeof(set_group_t))
+#define CSP_INQ_BYTES  CSP_A8(BITSET_GROUPS(MAX_QENTRY) * sizeof(set_group_t))
+#define CSP_QUEUE_BYTES CSP_A8(MAX_QUEUE * sizeof(index_t))
+
+// Everything derived from the program is sized to actual (own allocations), NOT
+// reserved at MAX_* worst case: graph (idg/ofs/edg) + inq (csp_csr), buffer table
+// + heap + view + dset (csp_rt_start, from csp_estimate). Only the code region
+// (instr/decl) and the reactive queue stay pre-reserved in this arena.
+#define CSP_ARENA_BYTES (CSP_ARENA_CODE_BYTES + CSP_QUEUE_BYTES)
 
 typedef struct _csp_rt_t
 {
@@ -856,28 +874,34 @@ typedef struct _csp_rt_t
     // MAX_INSTRS+1 slots (the last is the immediate-eval scratch slot), ram_decl
     // follows it. Moving them off the struct shrinks it and lets the pool size be
     // chosen at init. See doc/MEMORY_LAYOUT.md.
-    uint8_t*    mem;                     // arena base (malloc'd)
-    size_t      mem_size;                // arena size in bytes
+    uint8_t*    mem;                     // arena base (malloc'd or static)
+    size_t      mem_size;                // physical arena size in bytes
+    size_t      mem_limit;               // usable byte budget for instr+decl (<=
+					 // mem_size); the binding cap on how many
+					 // instructions/declarations fit. Set from
+					 // csp_mem_init(size); -m on linux shrinks it.
     csp_instr_t* ram_instr;              // -> mem (MAX_INSTRS+1 slots, +1 = scratch)
     csp_decl_t*  ram_decl;               // -> mem + instr region
     char        ram_str[MAX_STR_BUF];    // store variable names
 
-    // All leaf values live in the buffer heap (see doc/DESCRIPTORS.md).
-    csp_view_t view[MAX_INDEX];   // per-leaf view descriptor
-    csp_buf_t  buf[MAX_BUFS];     // buffer table
+    // All leaf values live in the buffer heap (see doc/DESCRIPTORS.md). These
+    // point into the arena (csp_mem_init); sizes are CSP_VIEW_BYTES etc.
+    csp_view_t* view;             // per-leaf view (own alloc, sized to estimate)
+    index_t    view_cap;          // leaves view[]/dset hold (csp_estimate.nleaf);
+				  // rt_start reruns on any decl add so it stays >= max st_index
+    csp_buf_t*  buf;              // buffer table (own alloc, sized to estimate)
+    index_t    buf_cap;          // buffers the table can hold (csp_estimate.nbuf)
     index_t    nbuf;              // number of buffers allocated
     // The transaction model is permanent: rules read the committed DIN heap and
     // write the DOUT shadow; csp_commit copies dirty leaves DOUT->DIN. So a cycle
     // never sees its own writes -> sequential and reactive yield the same state.
-    uint8_t*   heap[2];           // heap[DIN]=heap0, heap[DOUT]=heap1
-    // 4-aligned so VIEW_SLOT value_t access into the heap is aligned
-    uint8_t    heap0[MAX_HEAP] __attribute__((aligned(4)));  // committed (DIN)
-    uint8_t    heap1[MAX_HEAP] __attribute__((aligned(4)));  // shadow (DOUT)
+    uint8_t*   heap[2];           // heap[DIN]/heap[DOUT] -> own allocs, heap_cap each
+    uint32_t   heap_cap;          // heap bytes per half (csp_estimate.heap)
     // allow device output latch=0 or disallow latch=1
     uint8_t latch;
     // check if any node has been set: anyx|anyd == CSP_TRUE
     int8_t  anyd;  // CSP_TRUE|CSP_FALSE
-    bitset_decl(dset, MAX_INDEX); // mark decl updated during cycle
+    set_group_t* dset;            // mark decl updated during cycle (arena, CSP_DSET_BYTES)
     
     index_t offs[MAX_OBJECTS];     // offset to object locals
     // stack used during eval
@@ -891,6 +915,10 @@ typedef struct _csp_rt_t
     unsigned seed_all:1;         // 1 during the first cycle: OP_CHG reads true for
 				 // every input so each <- binding fires once to
 				 // establish its initial value (least surprise).
+    unsigned paused:1;           // 1 = /pause: driver runs no cycle (inspect/edit)
+    unsigned edited:1;           // 1 = program changed while paused; /resume rebuilds
+    unsigned started:1;          // 1 once csp_rt_start has allocated+set up leaves;
+				 // 0 with -b before /resume (value ops not ready)
 
     // Firmware ROM executes in place from flash (see doc/ROM_RAM.md); RAM holds
     // patches. The logical index space is [0,rom_n*) = ROM (read via the pointers
@@ -937,14 +965,23 @@ typedef struct _csp_rt_t
     // during eval
     uint32_t update;             // update counter
     uint32_t wait_ms;            // sleep time or NOTIMEOUT
-#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)        
-    bitset_decl(inq, MAX_QENTRY); // mark queued (obj,ip) entries during eval
-    index_t queue[MAX_QUEUE];    // nodes in queue
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
+    // All arena-backed (csp_mem_init); sizes CSP_INQ_BYTES etc.
+    // inq: dedup bitset over (obj,ip) queue keys. Sized to the actual key space
+    // ((nq+1)<<INSTR_BITS bits) in csp_csr, not MAX_QENTRY. inq_cap = that bit
+    // count (0 until built); csp_enq only touches inq for keys below it.
+    set_group_t* inq;          // (own allocation, not arena)
+    uint32_t inq_cap;          // inq size in bits; a key >= this skips dedup
+    index_t* queue;            // nodes in queue                           [MAX_QUEUE]
     int hd,tl;  // queue head and tail
     // back references
-    index_t idg[MAX_INDEX];    // in degree per instr
-    index_t ofs [MAX_INDEX+1]; // output offset from each instr
-    index_t edg [MAX_INDEX+1]; // edg[ofs[n]+0...ideg[n]-1] back pointer
+    // Reactive graph, sized to the actual node/edge counts in csp_csr (own
+    // allocation, not the arena). graph_n = nodes it was built for; a decl added
+    // after the last csr is >= graph_n and simply has no edges (enq skips it).
+    index_t  graph_n;          // node count the graph currently covers
+    index_t* idg;              // in-degree per decl                       [graph_n]
+    index_t* ofs;              // edge offset per decl                     [graph_n+1]
+    index_t* edg;              // back edges (decl -> rules)               [ofs[graph_n]]
 #endif
     uint32_t cycle;
 #if defined(USE_STATISTICS) && (USE_STATISTICS==1)
@@ -1049,12 +1086,15 @@ static inline csp_view_t* csp_view(csp_rt_t* st, index_t n)
 static inline void csp_enq(csp_rt_t* st, uint8_t obj, uint16_t ip)
 {
     index_t e = MAKE_QENTRY(obj, ip);   // dedup per (obj,ip): the same rule runs
-    if (bitset_tst(st->inq, e))         // once per object, not once overall
+    // A key beyond the sized bitset (e.g. an object added since the last csr)
+    // is not tracked: enqueue without dedup -- correct, just possibly twice.
+    if ((e < st->inq_cap) && bitset_tst(st->inq, e)) // once per object, not overall
 	return;
     if ((st->tl - st->hd) != MAX_QUEUE) {
 	st->queue[st->tl % MAX_QUEUE] = e;
 	st->tl++;
-	bitset_set(st->inq, e);
+	if (e < st->inq_cap)
+	    bitset_set(st->inq, e);
     }
 }
 
@@ -1113,6 +1153,16 @@ static inline sindex_t decl_name_pos(csp_rt_t* st, index_t ix)
 
 extern int     csp_rt_init(csp_rt_t*,  int reactive);
 extern int     csp_mem_init(csp_rt_t*, size_t size);
+// Memory an already-parsed program needs, computed WITHOUT running csp_rt_start
+// (mirrors its global+object walk, counting only). Lets /memory and -b show the
+// sizing before allocation, and lets rt_start size its tables to the actual need.
+typedef struct {
+    index_t  nleaf;   // view[]/dset span = max leaf (st_index) + 1
+    index_t  nbuf;    // buffers allocated
+    uint32_t heap;    // heap bytes (per DIN/DOUT half)
+    index_t  ni, no;  // inputs, outputs
+} csp_estimate_t;
+extern void    csp_estimate(csp_rt_t* st, csp_estimate_t* e);
 // Backend hook: return >= `need` bytes of RAM for the code arena (called once at
 // startup, never freed), or NULL on failure. Default is a static buffer (works
 // on any target, no heap); a backend selects malloc with CSP_ARENA_MALLOC or
