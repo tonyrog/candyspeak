@@ -83,8 +83,17 @@ int csp_eeprom_save(csp_rt_t* st)
     // Only the RAM patch area (ram_*[0..delta)); ROM stays in flash.
     if (csp_eeprom_write(st->ram_str, ram_strp) < 0)
 	goto error;
-    if (csp_eeprom_write(st->ram_decl, sizeof(csp_decl_t) * ram_nd) < 0)
-	goto error;
+    // decl[] grows DOWN from the pool top, so the RAM decls are not contiguous in
+    // save order -- walk them through the accessor. The stored format is unchanged
+    // (logical order 0..ram_nd-1); only the memory walk differs. instr[] still
+    // grows up, so it stays one block write.
+    {
+	uint16_t i;
+	for (i = 0; i < ram_nd; i++)
+	    if (csp_eeprom_write(ram_decl_at(st, st->rom_nd + i),
+				 sizeof(csp_decl_t)) < 0)
+		goto error;
+    }
     if (csp_eeprom_write(st->ram_instr, sizeof(csp_instr_t) * ram_nn) < 0)
 	goto error;
     // Runtime state-table additions (name offsets already covered by ram_str).
@@ -132,8 +141,15 @@ int csp_eeprom_load(csp_rt_t* st)
     // Read the RAM patch area into the RAM-local slots
     if (csp_eeprom_read(st->ram_str, hdr.ram_strp) < 0)
 	goto error;
-    if (csp_eeprom_read(st->ram_decl, sizeof(csp_decl_t) * hdr.ram_nd) < 0)
-	goto error;
+    // decl[] grows DOWN (see csp_eeprom_save): place them one at a time, or a
+    // block read would write straight past the top of the pool.
+    {
+	uint16_t i;
+	for (i = 0; i < hdr.ram_nd; i++)
+	    if (csp_eeprom_read(ram_decl_at(st, st->rom_nd + i),
+				sizeof(csp_decl_t)) < 0)
+		goto error;
+    }
     if (csp_eeprom_read(st->ram_instr, sizeof(csp_instr_t) * hdr.ram_nn) < 0)
 	goto error;
     // Runtime state additions land above the baseline (rom_ns = INIT/NORMAL or

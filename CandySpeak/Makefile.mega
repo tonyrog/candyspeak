@@ -1,0 +1,25 @@
+# Simply use arduino-cli
+#
+FQBN=arduino:avr:mega
+DEV=/dev/serial/by-id/usb-Arduino_Srl_Arduino_mega_55431313038351C04281-if00
+BPATH="./build/tmp.arduino.avr.mega"
+# CSP_CODE_BUDGET: the shared instr+decl pool. The AVR default (512B) is sized for
+# a 2K uno; the mega has 8K SRAM and 4K EEPROM so it can afford more. But the pool
+# is static, while the derived tables (view/heap/buf/graph/QUEUE) are malloc'd out
+# of what is left -- and the queue alone can be 2K. Measured globals/free here:
+#   512 -> 3908/4284    1024 -> 4420/3772    2048 -> 5444/2748    3072 -> 6468/1724
+# 1024 is a provisional middle: it doubles the code space and still leaves ~3.7K.
+# Pinning this properly needs the RAM reserve accounting (see TODO) -- getTotalRAM
+# ()/freeRam() in csp_arduino.c are the hooks for it.
+BUDGET=-DCSP_CODE_BUDGET=1024
+OPTS=--build-property "compiler.c.extra_flags=-Os $(BUDGET)" \
+     --build-property "compiler.cpp.extra_flags=-Os $(BUDGET)"
+
+compile:
+	arduino-cli compile -e --fqbn $(FQBN) $(OPTS) --build-path $(BPATH)
+
+clean:
+	arduino-cli compile --clean --fqbn $(FQBN) .
+
+upload:
+	arduino-cli upload -p $(DEV) --fqbn $(FQBN)

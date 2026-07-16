@@ -1,0 +1,49 @@
+// Regression: more buffers than a byte can index.
+// 30 objects x 10 member variables = 300+ buffers. Every value-carrying decl
+// takes a buffer -- per object instance -- so object count multiplies fast.
+// csp_view_t.buf used to be uint8_t: buffer id 300 wrapped to 44 and the leaf
+// silently read another object's value (m0.A came back as 4, not 1). buf is now
+// as wide as the nbuf counter that produces it, so it cannot truncate.
+#module M
+  #variable A integer = 1
+  #variable B integer = 2
+  #variable C integer = 3
+  #variable D integer = 4
+  #variable E integer = 5
+  #variable F integer = 6
+  #variable G integer = 7
+  #variable H integer = 8
+  #variable I integer = 9
+  #variable J integer = 10
+#end
+
+#M m0
+#M m1
+#M m2
+#M m3
+#M m4
+#M m5
+#M m6
+#M m7
+#M m8
+#M m9
+#M m10
+#M m11
+#M m12
+#M m13
+#M m14
+#M m15
+#M m16
+#M m17
+#M m18
+#M m19
+#M m20
+#M m21
+#M m22
+#M m23
+#M m24
+#M m25
+#M m26
+#M m27
+#M m28
+#M m29

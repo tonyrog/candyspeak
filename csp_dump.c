@@ -795,7 +795,8 @@ void csp_dump_code(FILE* f, csp_rt_t* st)
 	// common fields MUST be written inside the same arm designator as the
 	// type-specific fields -- a trailing ".va={..}" would otherwise clobber
 	// (zero) the common fields set before it (last union initializer wins).
-	csp_decl_t* dp = &st->ram_decl[i];
+	csp_decl_t dv = csp_get_decl(st, i);  // RAM decls grow down: use the accessor
+	csp_decl_t* dp = &dv;
 	char cmn[128];
 	snprintf(cmn, sizeof(cmn), ".type=%s,.dir=%u,.name=%u,.vt=%s,.res=%u",
 		 csp_cfmt_dtype(dp->type), dp->dir, dp->name,

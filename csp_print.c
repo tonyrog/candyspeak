@@ -22,6 +22,14 @@ typedef struct {
     uint8_t prio[MAX_REGS];
     uint8_t reg[MAX_REGS];    // INDEX!
     uint8_t arg[MAX_ARGS];    // INDEX
+    // Raw immediate carried alongside the rendered register/arg. An index passed
+    // to a function (timeout(T), changed(X)) reaches us as an LI/LIU immediate,
+    // and we need the VALUE back to name the variable. Recovering it by parsing
+    // the rendered string cannot work: OP_LI renders signed decimal ("-2035") and
+    // OP_LIU renders hex ("0xF80D"), and neither survives a decimal atoi. Keep
+    // the number instead of re-reading the text.
+    uint16_t regi[MAX_REGS];
+    uint16_t argi[MAX_ARGS];
     // body side-effects list
     uint8_t nbody;
     uint8_t body[MAX_BODY];   // strptrs indices
@@ -336,8 +344,11 @@ static void exprbuf_fcall(csp_rt_t* st,
 	    // name inline into the fcall buffer (and interns it); we want the
 	    // inline copy only -- an extra strref would render the name twice
 	    // (the "T1T1"/"XX" bug), since here `start` precedes the loop.
-	    uint16_t imm = exprbuf_reftoi(bp, bp->arg[i]);
-	    (void)exprbuf_var(st, bp, imm);
+	    // Take the RAW value (argi), never the rendered text: a CURRENT-
+	    // relative index exceeds int16 range, so it renders as "-2035" or
+	    // "0xF80D", and parsing either back as decimal gives a bogus decl
+	    // index -> SIGSEGV in the name lookup.
+	    (void)exprbuf_var(st, bp, bp->argi[i]);
 	    break;
 	}
 	default:
@@ -607,6 +618,7 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	    break;
 	case OP_ARG:
 	    bp->arg[ip->i.imm] = bp->reg[ip->i.x];
+	    bp->argi[ip->i.imm] = bp->regi[ip->i.x];
 	    break;
 	case OP_CALL:
 	    exprbuf_fcall(st, bp, ip);
@@ -627,6 +639,7 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
             uint8_t *start = exprbuf_ptr(bp);
             exprbuf_xuint16(bp, (uint16_t)ip->i.imm);
 	    bp->reg[ip->i.x] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
+	    bp->regi[ip->i.x] = (uint16_t)ip->i.imm;   // keep the number, not the text
             bp->prio[ip->i.x] = 110;
             break;
 	}
@@ -668,6 +681,7 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
             uint8_t *start = exprbuf_ptr(bp);
             exprbuf_int16(bp, ip->i.imm);
 	    bp->reg[ip->i.x] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
+	    bp->regi[ip->i.x] = (uint16_t)ip->i.imm;   // keep the number, not the text
             bp->prio[ip->i.x] = 110;
             break;
 	}

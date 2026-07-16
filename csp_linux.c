@@ -12,7 +12,6 @@
 #include "csp.h"
 #include "csp_dump.h"
 
-
 #include <sys/time.h>
 
 // Interactive mode globals
@@ -64,6 +63,52 @@ int stack_used(void)
     if (!top)
         return -1;
     return (char *)top - &local;
+}
+
+#include <stdio.h>
+#include <unistd.h>
+
+// Returnerar använt fysiskt RAM i bytes för den aktuella processen
+long csp_system_ram_allocated()
+{
+    long total_pages;
+    long resident_pages;
+    long page_size;
+    FILE* fp;
+    
+    if ((fp = fopen("/proc/self/statm", "r")) == NULL)
+        return -1;
+    if (fscanf(fp, "%ld %ld", &total_pages, &resident_pages) != 2) {
+        fclose(fp);
+        return -1;
+    }
+    fclose(fp);
+    page_size = sysconf(_SC_PAGESIZE);
+    return resident_pages * page_size;
+}
+
+static unsigned long system_ram_capacity = SYSTEM_RAM_CAPACITY;
+
+uint32_t csp_system_ram_capacity()
+{
+    return system_ram_capacity;
+}
+
+extern char __data_start;  // Starte of initialized data
+extern char _edata;        // End of .data / start of .bss
+extern char _end;          // End of .bss
+
+uint32_t csp_system_ram_used()
+{
+    uint32_t used_ram;
+
+    used_ram = &_end - &__data_start; 
+    return used_ram;
+}
+
+uint32_t csp_system_ram_avail()
+{
+    return csp_system_ram_capacity() - csp_system_ram_used();
 }
 
 static void time_init()
@@ -215,6 +260,9 @@ static int enable_raw_mode(void)
 
 // Platform stub functions for csp_eeprom.c
 static FILE* eeprom_fp = NULL;
+// Simulated EEPROM capacity in bytes (-E). 0 = unbounded, which is what a host
+// file really is. Set it to a board's size to reproduce that board's ceiling.
+static uint32_t eeprom_cap = 0;
 
 int csp_eeprom_open_read(void)
 {
@@ -245,7 +293,20 @@ int csp_eeprom_read(void* buf, size_t len)
 int csp_eeprom_write(const void* buf, size_t len)
 {
     if (!eeprom_fp) return -1;
+    // Honour a simulated board capacity so the host can reproduce the limit a
+    // real MCU imposes (a plain file has none).
+    if (eeprom_cap > 0) {
+	long pos = ftell(eeprom_fp);
+	if ((pos >= 0) && ((uint32_t)pos + len > eeprom_cap))
+	    return -1;
+    }
     return (fwrite(buf, 1, len, eeprom_fp) == len) ? 0 : -1;
+}
+
+uint32_t csp_eeprom_capacity(void)
+{
+    // A plain file has no ceiling; -E imposes one to mimic a board.
+    return eeprom_cap ? eeprom_cap : CSP_EEPROM_UNBOUNDED;
 }
 
 // Platform-specific command implementations
@@ -358,7 +419,7 @@ void csp_output(csp_rt_t* st)
     if (!st->latch) {  // allow output
 	for (i = 0; i < st->no; ++i) {
 	    index_t ix = st->output[i];
-	    switch(st->ram_decl[INDEX(ix)].type) {
+	    switch(decl(st, INDEX(ix), type)) {
 	    case DECL_DIGITAL: break;
 	    case DECL_ANALOG: break;
 	    default: break;
@@ -409,15 +470,14 @@ void print_defines()
     printf("MAX_INDICES=%d\n", MAX_INDICES);
     printf("MAX_INSTRS=%d\n", MAX_INSTRS);
     printf("MAX_DECLS=%d\n", MAX_DECLS);
-    printf("MAX_INPUTS=%d\n", MAX_INPUTS);
-    printf("MAX_OUTPUTS=%d\n", MAX_OUTPUTS);
-    printf("MAX_TIMERS=%d\n", MAX_TIMERS);
     printf("MAX_MODULES=%d\n", MAX_MODULES);
     printf("MAX_OBJECTS=%d\n", MAX_OBJECTS);
-    printf("MAX_INDEX=%d\n", MAX_INDEX);    
     printf("MAX_STR_BUF=%d\n", MAX_STR_BUF);
     printf("MAX_STACK_DEPTH=%d\n", MAX_STACK_DEPTH);
 
+    // per-leaf / per-buffer tables: multiplied by the program's leaf count
+    printf("sizeof(csp_view_t) = %ld\n", sizeof(csp_view_t));
+    printf("sizeof(csp_buf_t) = %ld\n", sizeof(csp_buf_t));
     printf("sizeof(value_t) = %ld\n", sizeof(value_t));
     printf("sizeof(rentry_t) = %ld\n", sizeof(rentry_t));
     printf("sizeof(op_entry_t) = %ld\n", sizeof(op_entry_t));
@@ -435,15 +495,17 @@ void print_defines()
     printf("sizeof(csp_can_t) = %ld\n", sizeof(csp_can_t));
 
     printf("sizeof(csp_instr_t) = %ld\n", sizeof(csp_instr_t));
-    printf("sizeof(csp_instr_alu_t) = %ld\n", sizeof(csp_instr_alu_t));    
-    printf("sizeof(csp_instr_mem_t) = %ld\n", sizeof(csp_instr_mem_t));
-    printf("sizeof(csp_instr_imm_t) = %ld\n", sizeof(csp_instr_imm_t));
-    printf("sizeof(csp_instr_call_t) = %ld\n", sizeof(csp_instr_call_t));
-    printf("sizeof(csp_instr_rule_t) = %ld\n", sizeof(csp_instr_rule_t));
     printf("sizeof(csp_instr_enter_t) = %ld\n", sizeof(csp_instr_enter_t));
     printf("sizeof(csp_instr_leave_t) = %ld\n", sizeof(csp_instr_leave_t));
-    printf("sizeof(csp_instr_new_t) = %ld\n", sizeof(csp_instr_new_t));        
-    
+    printf("sizeof(csp_instr_new_t) = %ld\n", sizeof(csp_instr_new_t));
+    printf("sizeof(csp_instr_imm_t) = %ld\n", sizeof(csp_instr_imm_t));        
+    printf("sizeof(csp_instr_mem_t) = %ld\n", sizeof(csp_instr_mem_t));
+    printf("sizeof(csp_instr_memi_t) = %ld\n", sizeof(csp_instr_memi_t));    
+    printf("sizeof(csp_instr_call_t) = %ld\n", sizeof(csp_instr_call_t));
+    printf("sizeof(csp_instr_rule_t) = %ld\n", sizeof(csp_instr_rule_t));
+    printf("sizeof(csp_instr_next_t) = %ld\n", sizeof(csp_instr_next_t));
+    printf("sizeof(csp_instr_instate_t) = %ld\n", sizeof(csp_instr_instate_t));
+    printf("sizeof(csp_instr_alu_t) = %ld\n", sizeof(csp_instr_alu_t));
     printf("sizeof(csp_rt_t) = %ld\n", sizeof(csp_rt_t));
 }
 
@@ -468,6 +530,7 @@ static struct option long_options[] = {
     {"object-file",  required_argument, 0,  'O'},
     {"input-file",   required_argument, 0,  'I'},
     {"eeprom",       required_argument, 0,  'e'},
+    {"eeprom-size",  required_argument, 0,  'E'},
     {"memory",       required_argument, 0,  'm'},
     {"pause",        no_argument,       0,  'b'},
     {0,              0,                 0,  0 }
@@ -496,6 +559,8 @@ void usage(const char* prog)
     fprintf(stderr, "  -e, --eeprom=F       EEPROM file for save/load (default: eeprom.db)\n");
     fprintf(stderr, "  -I, --input-file=F   Data input file\n");
     fprintf(stderr, "  -m, --memory=N[k]    Usable code memory budget in bytes (or Nk KiB)\n");
+    fprintf(stderr, "  -E, --eeprom-size=N[k] Simulated EEPROM capacity (0=unbounded); /save\n");
+    fprintf(stderr, "                       fails past it, as it would on a real board\n");
     fprintf(stderr, "  -b, --pause          Start paused after load (inspect, then /resume); implies -i\n");
     fprintf(stderr, "  -L[erlang|erl|text|txt]  Trace output language\n");
     fprintf(stderr, "\n");
@@ -620,7 +685,7 @@ int main(int argc, char** argv)
 
     while (1) {
 	int option_index = 0;
-	c = getopt_long(argc, argv, "hindPQRSCc:T:s:p:r:t:O:e:L:I:F:m:b",
+	c = getopt_long(argc, argv, "hindPQRSCc:T:s:p:r:t:O:e:L:I:F:m:E:b",
 			long_options, &option_index);
 	if (c == -1)
 	    break;
@@ -684,6 +749,15 @@ int main(int argc, char** argv)
 	    if (end && (*end == 'k' || *end == 'K'))
 		v *= 1024;
 	    mem_limit = (size_t)v;
+	    break;
+	}
+	case 'E': {   // simulated EEPROM capacity, so the host can hit a board's
+		      // /save ceiling; accepts a trailing k/K = KiB
+	    char* end = NULL;
+	    unsigned long v = strtoul(optarg, &end, 0);
+	    if (end && (*end == 'k' || *end == 'K'))
+		v *= 1024;
+	    eeprom_cap = (uint32_t)v;
 	    break;
 	}
 	case 'L':

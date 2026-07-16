@@ -48,7 +48,6 @@ typedef unsigned bool_t;
 
 #define PORT_BITS 4   // port 0..15    mega is 11 ports, with 8 pins each
 #define PIN_BITS  7   // pin  0..127
-#define BUF_BITS  8   // buffer index (max 256 == csp_view_t.buf uint8_t ceiling)
 
 #if defined(__AVR__)
 #include <avr/pgmspace.h>
@@ -57,8 +56,10 @@ typedef unsigned bool_t;
 #define ro_word(p)      pgm_read_word((p))
 #define ro_ptr(p)       (void *)pgm_read_word((p))
 #define ro_memcmp(a,b,n) memcmp_P((a), (b), (n))
-#define DECL_BITS    4
-#define INSTR_BITS   4
+// These two still buy RAM directly, so they stay per-target: OBJ_BITS sizes the
+// fixed offs/object/module arrays (3 x 1<<OBJ_BITS), and STRING_BITS sizes
+// ram_str plus the exprbuf scratch (2 x 1<<STRING_BITS). On a 2K part that is
+// the difference between fitting and not.
 #define OBJ_BITS     3
 #define STRING_BITS  7
 #else
@@ -67,15 +68,35 @@ typedef unsigned bool_t;
 #define ro_word(p)      (*(p))
 #define ro_ptr(p)       (*(p))
 #define ro_memcmp(a,b,n) memcmp((a), (b), (n))
-#define DECL_BITS    9
-#define INSTR_BITS   8
-#define OBJ_BITS     4
+#define OBJ_BITS     5
 #define STRING_BITS  9
 #endif
 
+// Shared by every target: nothing is dimensioned from these any more, so a wider
+// index costs no RAM. They are pure ceilings on how many decls/instructions can
+// be addressed -- what actually binds is the CSP_CODE_BUDGET byte pool (mem_fits)
+// and, for the reactive tables, the rule count (they key on a rule ordinal, not a
+// raw ip). The last holdout was csp_csr's index_t wr[MAX_DECLS] stack array,
+// which now lives in the idg block sized to the actual decl count.
+#define DECL_BITS    11
+#define INSTR_BITS   11
+
 typedef const char rochar;  // PROGMEM string character type
 
+// A .ino compiles this header as C++, where _Static_assert is only an extension
+// (the SAMD toolchain accepts it, the older AVR one rejects it outright).
+#if defined(__cplusplus)
+#define CSP_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#else
+#define CSP_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#endif
+
 #define INDEX_BITS   (OBJ_BITS+DECL_BITS)
+// A relative body length / entry-point index that shares the 32-bit instruction
+// word with a full index_t member (enter/leave/new): 32 - INSTR_COMMON(6) -
+// index_t(16) = 10 bits. This caps a module body / entry offset at 1024, which is
+// independent of (and smaller than) the INSTR_BITS instruction-count ceiling.
+#define BODY_BITS    10
 #define REG_BITS     4   // r0..r15
 #define FUNC_BITS    5   // 0..31 (need more!)
 #define PART_BITS    4
@@ -85,32 +106,33 @@ typedef const char rochar;  // PROGMEM string character type
 #define MAX_REGS     (1 << REG_BITS)
 #define MAX_INSTRS   (1 << INSTR_BITS)
 #define MAX_DECLS    (1 << DECL_BITS)
+// The input/output/timer lists and the buffer heap are sized to what the program
+// actually declares (csp_estimate -> csp_rt_start), so they have no MAX_* here.
+// What remains are limits the ENCODING imposes, not reservations: an index must
+// fit its bit field.
+// Concurrent variable refs on the RHS of one <- binding: parse-time scratch
+// (var_buf), bounded by expression size, not by memory.
 #if defined(__AVR__)
-#define MAX_INPUTS   8   // Uno has ~20 pins total
-#define MAX_OUTPUTS  8
-#define MAX_TIMERS   4
-#define MAX_HEAP     64  // buffer heap bytes
+#define MAX_VARREFS  4    // tiny RAM: keep <- expressions short
 #else
-#define MAX_INPUTS   32  // <= then MAX_DECLS
-#define MAX_OUTPUTS  32  // <= then MAX_DECLS
-#define MAX_TIMERS   16  // <= then MAX_DECLS
-#define MAX_HEAP     1024 // buffer heap bytes
+#define MAX_VARREFS  16
 #endif
-#define MAX_VARREFS  MAX_TIMERS
 #define MAX_MODULES  (1 << OBJ_BITS)
 #define MAX_OBJECTS  (1 << OBJ_BITS)
-#define MAX_BUFS     (1 << BUF_BITS)
-#define MAX_QUEUE    (MAX_INSTRS)
-#define MAX_INDEX    (MAX_INSTRS+1)
-#define MAX_QENTRY   (1 << (OBJ_BITS + INSTR_BITS)) // packed (obj,ip) key space
+// (buffers need no MAX_*: csp_view_t.buf is as wide as the nbuf counter feeding it)
+#define MAX_QUEUE    (MAX_INSTRS)      // ceiling csp_csr clamps the queue to
 #define DIR_BITS 2
 #define TYPE_BITS 4  // supports up to 15 types & objects
 #define ENDIAN_BITS 2
 
 // Queue entry: pack obj and ip together
-#define MAKE_QENTRY(obj, ip)  (((obj) << INSTR_BITS) | (ip))
-#define QENTRY_OBJ(e)         ((e) >> INSTR_BITS)
-#define QENTRY_IP(e)          ((e) & ((1 << INSTR_BITS) - 1))
+// A queue entry packs (object, rule ORDINAL) -- not a raw ip. The ordinal field
+// is st->ord_shift wide (log2 of the rule count, rounded up), set by csp_csr, so
+// these take st. obj is OBJ_BITS, and ord_shift <= INSTR_BITS, so an entry still
+// fits index_t.
+#define MAKE_QENTRY(st, obj, ord) (((obj) << (st)->ord_shift) | (ord))
+#define QENTRY_OBJ(st, e)         ((e) >> (st)->ord_shift)
+#define QENTRY_ORD(st, e)         ((e) & ((1 << (st)->ord_shift) - 1))
 #define MAX_STACK_DEPTH 4
 #define NAME_BITS    5
 #define MAX_STR_BUF  (1 << STRING_BITS) // total number of char in var names
@@ -220,15 +242,22 @@ typedef enum {
 #define VIEW_F_SIMPLE 0x01   // covers whole buffer, byte aligned, native endian
 #define VIEW_F_GLOBAL 0x02   // buf id is global (not object-offset)
 
-// One per leaf index_t (indexed by st_index).
+// One per leaf index_t (indexed by st_index) -- the biggest per-program table
+// (nleaf entries), so every byte here is multiplied by the leaf count. kind/vt/
+// endian pack into one byte (2+4+2), which pays for a 16-bit buf.
+// NOTE: uint8_t bit fields, deliberately NOT a PACKED struct -- packing would
+// misalign `buf` and fault on M0 (see the csp_func_t lesson), and `unsigned:16`
+// after 26 bits would spill to 8 bytes.
+// `buf` is uint16_t: the same width as the nbuf counter (index_t) that produces
+// it, so a buffer id can no longer silently truncate the way uint8_t did.
 typedef struct {
-    uint8_t  kind;   // view_kind_t
-    uint8_t  vt;     // value type (vtype_t); SLOT reads vt from decl instead
-    uint8_t  buf;    // buffer id (both kinds)
-    uint8_t  pos;    // VIEW_HEAP: start bit in buffer
-    uint8_t  len;    // VIEW_HEAP: number of bits - 1
-    uint8_t  endian; // VIEW_HEAP: little/big
-    uint8_t  flags;  // VIEW_HEAP: VIEW_F_*
+    uint8_t  kind:2;              // view_kind_t (VIEW_SLOT/VIEW_HEAP)
+    uint8_t  vt:TYPE_BITS;        // value type (vtype_t 0..11); SLOT reads it from decl
+    uint8_t  endian:ENDIAN_BITS;  // VIEW_HEAP: vendian_t (native/little/big)
+    uint8_t  flags;               // VIEW_HEAP: VIEW_F_*
+    uint8_t  pos;                 // VIEW_HEAP: start bit in buffer
+    uint8_t  len;                 // VIEW_HEAP: number of bits - 1
+    uint16_t buf;                 // buffer id (both kinds)
 } csp_view_t;
 
 // One per unique buffer. RAM table, filled at start.
@@ -584,15 +613,17 @@ typedef struct PACKED {
     INSTR_COMMON;
     unsigned x:REG_BITS;      // destination register
     unsigned y:REG_BITS;      // y register when pos, y imm when part (STP)
-    unsigned z:REG_BITS;      // len register
     unsigned mem:INDEX_BITS;  // declaration: variable/constant
 } csp_instr_mem_t;
 
 // op EQI - compare 8 bit immediate with memory and store in x
+#define TINY_BITS 6
+#define TINY_MAX ((1 << 5)-1)
+#define TINY_MIN (-(1 << 5))
 typedef struct PACKED {
     INSTR_COMMON;
     unsigned x:REG_BITS;      // destination register
-    signed imm:8;             // y register when pos, y imm when part (STP)
+    signed imm:TINY_BITS;     // signed tiny immediate bits
     unsigned mem:INDEX_BITS;  // declaration: variable/constant
 } csp_instr_memi_t;
 
@@ -626,20 +657,20 @@ typedef struct PACKED {
 
 typedef struct PACKED {
     INSTR_COMMON;
-    unsigned num:INSTR_BITS;  // number of instructions
+    unsigned num:BODY_BITS;   // number of instructions (shares the word with mx)
     index_t  mx;     // module index
 } csp_instr_enter_t;
 
 typedef struct PACKED {
     INSTR_COMMON;
-    unsigned num:INSTR_BITS;  // number of instructions
+    unsigned num:BODY_BITS;   // number of instructions (shares the word with mx)
     index_t  mx;     // module index
 } csp_instr_leave_t;
 
 typedef struct PACKED {
     INSTR_COMMON;
-    unsigned ent:INSTR_BITS; // entry point index in instr[]
-    index_t  obj;            // object declaration index 
+    unsigned ent:BODY_BITS;  // entry point index in instr[] (shares word with obj)
+    index_t  obj;            // object declaration index
 } csp_instr_new_t;
 
 typedef struct PACKED {
@@ -665,6 +696,11 @@ typedef union {
     csp_instr_instate_t in;
     csp_instr_alu_t a;
 } csp_instr_t;
+
+// The instruction word must stay a clean 4 bytes: every format has to fit
+// INSTR_COMMON(6) + a full index_t(16) leaves 10 bits (BODY_BITS) for any packed
+// index. If this fails after a bit-width change, a format overflowed 32 bits.
+CSP_STATIC_ASSERT(sizeof(csp_instr_t) == 4, "csp_instr_t must be 4 bytes");
 
 typedef enum {
     DIR_NONE  = 0x00,
@@ -846,23 +882,32 @@ typedef struct
 // csp_mem_init and the static-buffer backend default.
 #define CSP_A8(n) (((size_t)(n) + 7) & ~(size_t)7)
 
-#define CSP_ARENA_INSTR_BYTES CSP_A8((MAX_INSTRS+1) * sizeof(csp_instr_t))
+#define CSP_ARENA_INSTR_BYTES CSP_A8(MAX_INSTRS * sizeof(csp_instr_t))
 #define CSP_ARENA_DECL_BYTES  CSP_A8(MAX_DECLS * sizeof(csp_decl_t))
-// instr+decl share this byte budget (st->mem_limit); the binding cap on code
+// The worst case: every instruction AND every declaration index in use at once.
 #define CSP_ARENA_CODE_BYTES  (CSP_ARENA_INSTR_BYTES + CSP_ARENA_DECL_BYTES)
 
-#define CSP_HEAP_BYTES CSP_A8(MAX_HEAP)                                  // per DIN/DOUT
-#define CSP_VIEW_BYTES CSP_A8(MAX_INDEX * sizeof(csp_view_t))
-#define CSP_BUF_BYTES  CSP_A8(MAX_BUFS * sizeof(csp_buf_t))
-#define CSP_DSET_BYTES CSP_A8(BITSET_GROUPS(MAX_INDEX) * sizeof(set_group_t))
-#define CSP_INQ_BYTES  CSP_A8(BITSET_GROUPS(MAX_QENTRY) * sizeof(set_group_t))
-#define CSP_QUEUE_BYTES CSP_A8(MAX_QUEUE * sizeof(index_t))
+// Physical size of the shared double-ended instr+decl pool. On host (plenty of
+// RAM) it is the full worst case, so capacity is unchanged. On a RAM-constrained
+// microcontroller it is capped well below MAX_INSTRS+MAX_DECLS: the index bits can
+// still address up to MAX_* each, but their COMBINED bytes must fit this pool
+// (mem_fits) -- which is exactly the point, few programs need both maxed. Override
+// with -DCSP_CODE_BUDGET=<bytes> to tune per board.
+#ifndef CSP_CODE_BUDGET
+#if defined(__AVR__)                        // 2K part: the pool is the RAM budget
+#define CSP_CODE_BUDGET  CSP_A8(512)
+#elif defined(ARDUINO)                      // SAMD21 (mkrzero/cpx) and similar ARM
+#define CSP_CODE_BUDGET  CSP_A8(12*1024)
+#else                                        // host: full worst case
+#define CSP_CODE_BUDGET  CSP_ARENA_CODE_BYTES
+#endif
+#endif
 
 // Everything derived from the program is sized to actual (own allocations), NOT
-// reserved at MAX_* worst case: graph (idg/ofs/edg) + inq (csp_csr), buffer table
-// + heap + view + dset (csp_rt_start, from csp_estimate). Only the code region
-// (instr/decl) and the reactive queue stay pre-reserved in this arena.
-#define CSP_ARENA_BYTES (CSP_ARENA_CODE_BYTES + CSP_QUEUE_BYTES)
+// reserved at MAX_* worst case: graph (idg/ofs/edg) + inq + queue (csp_csr),
+// buffer table + heap + view + dset (csp_rt_start, from csp_estimate). Only the
+// shared code pool (instr/decl) stays pre-reserved in this arena.
+#define CSP_ARENA_BYTES (CSP_CODE_BUDGET)
 
 typedef struct _csp_rt_t
 {
@@ -870,22 +915,25 @@ typedef struct _csp_rt_t
     value_t arg[MAX_ARGS];         // loaded before call
 
     // RAM code arena (allocated once in csp_rt_init via csp_mem_init). instr[] and
-    // decl[] are two forward-indexed regions inside one block: ram_instr has
-    // MAX_INSTRS+1 slots (the last is the immediate-eval scratch slot), ram_decl
-    // follows it. Moving them off the struct shrinks it and lets the pool size be
-    // chosen at init. See doc/MEMORY_LAYOUT.md.
+    // decl[] share ONE double-ended pool of CSP_CODE_BUDGET bytes: instructions
+    // grow UP from the base (ram_instr[0..]), declarations grow DOWN from the top
+    // (ram_decl[0], [-1], [-2] ...). They meet in the middle -- mem_fits() rejects
+    // an add once instr_bytes + decl_bytes would exceed mem_limit, so the split is
+    // dynamic (a program with few decls may use more of the pool for instrs, and
+    // vice versa) instead of reserving MAX for each end. See doc/MEMORY_LAYOUT.md.
     uint8_t*    mem;                     // arena base (malloc'd or static)
     size_t      mem_size;                // physical arena size in bytes
     size_t      mem_limit;               // usable byte budget for instr+decl (<=
-					 // mem_size); the binding cap on how many
+					 // CSP_CODE_BUDGET); the binding cap on how many
 					 // instructions/declarations fit. Set from
 					 // csp_mem_init(size); -m on linux shrinks it.
-    csp_instr_t* ram_instr;              // -> mem (MAX_INSTRS+1 slots, +1 = scratch)
-    csp_decl_t*  ram_decl;               // -> mem + instr region
+    csp_instr_t* ram_instr;              // -> pool base, grows up
+    csp_decl_t*  ram_decl;               // -> pool top slot, indexed DOWN (ram_decl[-local])
+    csp_instr_t  imm_scratch;            // dummy slot for immediate `> expr` eval fold
     char        ram_str[MAX_STR_BUF];    // store variable names
 
-    // All leaf values live in the buffer heap (see doc/DESCRIPTORS.md). These
-    // point into the arena (csp_mem_init); sizes are CSP_VIEW_BYTES etc.
+    // All leaf values live in the buffer heap (see doc/DESCRIPTORS.md). Each of
+    // these is its own allocation, sized to csp_estimate in csp_rt_start.
     csp_view_t* view;             // per-leaf view (own alloc, sized to estimate)
     index_t    view_cap;          // leaves view[]/dset hold (csp_estimate.nleaf);
 				  // rt_start reruns on any decl add so it stays >= max st_index
@@ -895,13 +943,15 @@ typedef struct _csp_rt_t
     // The transaction model is permanent: rules read the committed DIN heap and
     // write the DOUT shadow; csp_commit copies dirty leaves DOUT->DIN. So a cycle
     // never sees its own writes -> sequential and reactive yield the same state.
-    uint8_t*   heap[2];           // heap[DIN]/heap[DOUT] -> own allocs, heap_cap each
+    // ONE allocation holds both halves: heap[DOUT] points at its second half, so
+    // only heap[DIN] is owned (freed). heap_cap is the usable bytes per half.
+    uint8_t*   heap[2];           // heap[DIN] = block base, heap[DOUT] = base + half
     uint32_t   heap_cap;          // heap bytes per half (csp_estimate.heap)
     // allow device output latch=0 or disallow latch=1
     uint8_t latch;
     // check if any node has been set: anyx|anyd == CSP_TRUE
     int8_t  anyd;  // CSP_TRUE|CSP_FALSE
-    set_group_t* dset;            // mark decl updated during cycle (arena, CSP_DSET_BYTES)
+    set_group_t* dset;            // mark decl updated during cycle (own alloc, view_cap bits)
     
     index_t offs[MAX_OBJECTS];     // offset to object locals
     // stack used during eval
@@ -953,12 +1003,22 @@ typedef struct _csp_rt_t
     index_t ni;                  // number of input
     index_t no;                  // number of output
     index_t nm;                  // number of modules
-    index_t input[MAX_INPUTS];     // list of inputs (digital/analog ...)
-    index_t output[MAX_OUTPUTS];   // list of outputs (digital/analog ...)
+    // input/output/timer are sized to the actual program (csp_estimate) and
+    // allocated in csp_rt_start -- not MAX_* reserved -- so a program may have as
+    // many as it declares (bounded only by RAM). *_cap is the allocated length.
+    index_t* input;              // list of inputs (digital/analog ...), in_cap slots
+    index_t  in_cap;
+    index_t* output;             // list of outputs (digital/analog ...), out_cap slots
+    index_t  out_cap;
+    index_t* timer;              // list of timers, timer_cap slots
+    index_t  timer_cap;
+    // module[] and object[] are bounded by the encoding: a module/object index is
+    // OBJ_BITS wide and CURRENT reserves the top slot, so 1<<OBJ_BITS is their true
+    // max (object[] is also filled incrementally during parse). Kept struct-fixed.
     index_t module[MAX_MODULES];   // list of modules
     index_t object[MAX_OBJECTS];   // list of objects
-    index_t timer[MAX_TIMERS];     // list of timers
-    // temp var list during <- parsing (reuses timer[], set by csp_rt_init)
+    // temp var list during <- parsing (own scratch, set by csp_rt_init)
+    index_t  var_buf[MAX_VARREFS];
     index_t* var;
     index_t nvar;
     int     rimp;                // 1 if parse_expr is in RHS in <- 
@@ -966,13 +1026,27 @@ typedef struct _csp_rt_t
     uint32_t update;             // update counter
     uint32_t wait_ms;            // sleep time or NOTIMEOUT
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-    // All arena-backed (csp_mem_init); sizes CSP_INQ_BYTES etc.
-    // inq: dedup bitset over (obj,ip) queue keys. Sized to the actual key space
-    // ((nq+1)<<INSTR_BITS bits) in csp_csr, not MAX_QENTRY. inq_cap = that bit
-    // count (0 until built); csp_enq only touches inq for keys below it.
-    set_group_t* inq;          // (own allocation, not arena)
+    // Rule bodies are numbered densely 0..n_rule-1 in instruction order (csp_csr),
+    // and it is that ORDINAL -- not the raw instruction index -- that edg[] stores
+    // and the queue carries. Raw ip spans MAX_INSTRS, of which only rule bodies can
+    // ever be queued, so an (obj,ip) key space is almost entirely holes; (obj,ord)
+    // is dense. rule_ip maps back on dequeue. The numbering composes with a baked
+    // ROM graph for free: dumping ran the same walk with rom_nn == 0, so rescanning
+    // [0,rom_nn) reproduces exactly the ordinals rom_edg was baked with.
+    index_t* rule_ip;          // ordinal -> instruction index (own alloc, n_rule)
+    index_t  n_rule;           // rule bodies (ROM + RAM); 0 until csr has run
+    uint8_t  ord_shift;        // log2 of the ordinal field: key = (obj<<shift)|ord
+    // inq: dedup bitset over (obj,ord) queue keys, sized to the actual key space
+    // ((nq+1)<<ord_shift bits) in csp_csr. inq_cap = that bit count (0 until
+    // built); csp_enq only touches inq for keys below it.
+    set_group_t* inq;          // (own allocation)
     uint32_t inq_cap;          // inq size in bits; a key >= this skips dedup
-    index_t* queue;            // nodes in queue                           [MAX_QUEUE]
+    // Reactive work queue (own allocation, csp_csr), sized to the actual program:
+    // 2*(nq+1)*R rounded up to a power of two (R = rule bodies), clamped to
+    // MAX_QUEUE. Power-of-two so csp_enq/csp_deq index with a mask, not a divide.
+    // Peak occupancy is <= 2*D (this cycle + next), D = distinct (obj,ip) keys.
+    index_t* queue;            // circular buffer, queue_cap slots
+    index_t  queue_cap;        // slot count (power of two); 0 => not built, enq skips
     int hd,tl;  // queue head and tail
     // back references
     // Reactive graph, sized to the actual node/edge counts in csp_csr (own
@@ -1038,8 +1112,10 @@ static inline char* csp_str_at(csp_rt_t* st, sindex_t pos)
     return &st->ram_str[pos - st->rom_strp];
 }
 
-// RAM write slots -- logical index must be at/above the ROM base (RAM region)
-#define ram_decl_at(st, logical)  (&(st)->ram_decl[(logical) - (st)->rom_nd])
+// RAM write slots -- logical index must be at/above the ROM base (RAM region).
+// decl grows DOWN from the pool top, so the local index is negated (ram_decl
+// points at local 0, the topmost slot; local 1 is ram_decl[-1], and so on).
+#define ram_decl_at(st, logical)  (&(st)->ram_decl[(st)->rom_nd - (logical)])
 #define ram_instr_at(st, logical) (&(st)->ram_instr[(logical) - (st)->rom_nn])
 #define ram_str_at(st, logical)   ((st)->ram_str[(logical) - (st)->rom_strp])
 
@@ -1082,29 +1158,31 @@ static inline csp_view_t* csp_view(csp_rt_t* st, index_t n)
 }
 
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-// enq a rule for recalculation, with object context
-static inline void csp_enq(csp_rt_t* st, uint8_t obj, uint16_t ip)
+// enq a rule for recalculation, with object context. `ord` is a rule ORDINAL --
+// edg[] (and the baked rom_edg) already store ordinals, so there is no ip->ord
+// lookup here; csp_react maps back via rule_ip on the way out.
+static inline void csp_enq(csp_rt_t* st, uint8_t obj, uint16_t ord)
 {
-    index_t e = MAKE_QENTRY(obj, ip);   // dedup per (obj,ip): the same rule runs
+    index_t e = MAKE_QENTRY(st, obj, ord);  // dedup per (obj,ord): the same rule runs
     // A key beyond the sized bitset (e.g. an object added since the last csr)
     // is not tracked: enqueue without dedup -- correct, just possibly twice.
     if ((e < st->inq_cap) && bitset_tst(st->inq, e)) // once per object, not overall
 	return;
-    if ((st->tl - st->hd) != MAX_QUEUE) {
-	st->queue[st->tl % MAX_QUEUE] = e;
+    if (st->queue_cap && (st->tl - st->hd) != st->queue_cap) {
+	st->queue[st->tl & (st->queue_cap - 1)] = e;   // cap is a power of two
 	st->tl++;
 	if (e < st->inq_cap)
 	    bitset_set(st->inq, e);
     }
 }
 
-// deq returns packed (obj, ip) - use QENTRY_OBJ/QENTRY_IP to unpack
+// deq returns packed (obj, ordinal) - use QENTRY_OBJ/QENTRY_ORD to unpack
 static inline index_t csp_deq(csp_rt_t* st)
 {
     index_t x;
     if (st->tl == st->hd)
 	return BAD_INDEX;
-    x = st->queue[st->hd % MAX_QUEUE];
+    x = st->queue[st->hd & (st->queue_cap - 1)];   // cap is a power of two
     st->hd++;
     // don't clear inq bit here - cleared at cycle start to prevent
     // same rule being queued multiple times within a cycle
@@ -1161,6 +1239,7 @@ typedef struct {
     index_t  nbuf;    // buffers allocated
     uint32_t heap;    // heap bytes (per DIN/DOUT half)
     index_t  ni, no;  // inputs, outputs
+    index_t  nt;      // timers (global + per-object)
 } csp_estimate_t;
 extern void    csp_estimate(csp_rt_t* st, csp_estimate_t* e);
 // Backend hook: return >= `need` bytes of RAM for the code arena (called once at
@@ -1224,7 +1303,7 @@ extern void csp_output_timer(csp_rt_t* st);
 // eeprom save/load (csp_eeprom.c)
 extern int csp_eeprom_save(csp_rt_t* st);
 extern int csp_eeprom_load(csp_rt_t* st);
-extern int csp_eeprom_size(csp_rt_t* st);
+extern int csp_eeprom_size(csp_rt_t* st);   // bytes THIS program needs to save
 extern int csp_eeprom_clear(csp_rt_t* st);
 
 // stack check/debug
@@ -1295,6 +1374,18 @@ extern int csp_eeprom_open_write(void);
 extern void csp_eeprom_close(void);
 extern int csp_eeprom_read(void* buf, size_t len);
 extern int csp_eeprom_write(const void* buf, size_t len);
+// Backend: bytes of persistent storage this board HAS. Pair it with
+// csp_eeprom_size(): RAM can hold more code than you can persist, and code you
+// cannot save is only good for testing -- so on a real board this, not
+// CSP_CODE_BUDGET, is often the binding limit.
+#define CSP_EEPROM_NONE      0u           // board has none: /save can never work
+#define CSP_EEPROM_UNBOUNDED 0xFFFFFFFFu  // a host file -- no board ceiling
+extern uint32_t csp_eeprom_capacity(void);
+
+// RAM statistics
+extern uint32_t csp_system_ram_capacity(void);
+extern uint32_t csp_system_ram_used(void);
+extern uint32_t csp_system_ram_avail(void);
 
 #ifdef __cplusplus
 EXTERN_C_END

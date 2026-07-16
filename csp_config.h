@@ -1,6 +1,9 @@
 #ifndef __CSP_CONFIG_H__
 #define __CSP_CONFIG_H__
 
+// Linux - has plenty of memory
+#define SYSTEM_RAM_CAPACITY (256*1024)
+
 #define MAX_STATES 16
 
 #define REACTIVE_DEFAULT 0

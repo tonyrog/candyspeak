@@ -9,5 +9,8 @@ OPTS=--build-property "compiler.c.extra_flags=-Os" \
 compile:
 	arduino-cli compile -e --fqbn $(FQBN) $(OPTS) --build-path $(BPATH)
 
+clean:
+	arduino-cli compile --clean --fqbn $(FQBN) .
+
 upload:
 	arduino-cli upload -p $(DEV) --fqbn $(FQBN)

@@ -348,7 +348,7 @@ NOINLINE csp_decl_t csp_get_decl(csp_rt_t* st, index_t i)
 {
     if (i < st->rom_nd)
 	return ro_decl(&st->rom_decl_p[i]);
-    return st->ram_decl[i - st->rom_nd];
+    return st->ram_decl[st->rom_nd - i];   // RAM decls grow down (see ram_decl_at)
 }
 
 NOINLINE csp_instr_t csp_get_instr(csp_rt_t* st, index_t n)
@@ -1756,12 +1756,13 @@ index_t csp_react(csp_rt_t* st)
 	    uint8_t obj;
 	    index_t ip;
 	    x0 = csp_deq(st);
-	    // Queue entries are packed (obj, ip). Restore the object context so a
-	    // module rule's CURRENT-relative field access hits the right instance
+	    // Queue entries are packed (obj, rule ordinal) -- rule_ip maps the
+	    // ordinal back to the instruction to run. Restore the object context so
+	    // a module rule's CURRENT-relative field access hits the right instance
 	    // (sequential does this via OP_NEW; reactive skips NEW). obj 0 = global
 	    // (offs[0] == 0), leaving global rules unchanged.
-	    obj = QENTRY_OBJ(x0);
-	    ip  = QENTRY_IP(x0);
+	    obj = QENTRY_OBJ(st, x0);
+	    ip  = st->rule_ip[QENTRY_ORD(st, x0)];
 	    st->cur = obj;                       // instance context for CURRENT-rel
 	    st->offs[CURRENT] = st->offs[obj];   //   reads/writes and re-enqueues
 	    csp_eval_rule(st, ip);
@@ -2056,8 +2057,8 @@ NOINLINE static csp_instr_t* alloc_instr_ptr(csp_rt_t* st,int* pos,opcode_t op)
     int i;                        // logical instr index (or the dummy slot)
     csp_instr_t* ip;
     if (st->ap == NULL) {
-	i = MAX_INSTRS;           // dummy scratch slot for immediate eval
-	ip = &st->ram_instr[MAX_INSTRS];
+	i = MAX_INSTRS;           // scratch index (never fetched: ev folds inline)
+	ip = &st->imm_scratch;    // write-only dummy for immediate `> expr` eval
     }
     else if ((st->ps.nn - st->rom_nn) >= MAX_INSTRS ||   // index cap, or
 	     !mem_fits(st, sizeof(csp_instr_t))) {       // arena byte budget
@@ -2153,7 +2154,7 @@ NOINLINE static bool_t asm_STI(csp_rt_t* st, reg_t x, index_t mem, int8_t imm)
 static int fits_sti(opcode_t op, const rentry_t* r)
 {
     return (op == OP_ST) && r->I && (r->vt != V_FLOAT) &&
-	   (r->val.i >= -128) && (r->val.i <= 127);
+	(r->val.i >= TINY_MIN) && (r->val.i <= TINY_MAX);
 }
 
 NOINLINE static bool_t asm_mem(csp_rt_t* st, opcode_t op, reg_t x, index_t mem)
@@ -2353,12 +2354,41 @@ static bool_t asm_OR(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
 
 // Build reactive dependency graph: declaration -> rules that depend on it
 // When a declaration changes, we enqueue all rules that read from it (via LD)
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
+// Number the rule bodies of instruction range [lo,hi) in scan order, continuing
+// from ordinal `ord`. A body starts at the range base (code before any NEXT/ENTER
+// belongs to it -- csp_csr seeds current_rule with the base for exactly that
+// reason) and again after every NEXT/ENTER. Fills rule_ip[ord] = ip when given a
+// table, otherwise just counts. Returns the next free ordinal.
+//
+// Calling this on [0,rom_nn) reproduces the ordinals a baked rom_edg holds: the
+// dump ran this same walk over the same instructions with rom_nn == 0.
+NOINLINE static int number_rules(csp_rt_t* st, int lo, int hi,
+				 index_t* rule_ip, int ord)
+{
+    int i;
+    if (rule_ip != NULL) rule_ip[ord] = lo;
+    ord++;                              // the implicit body at the range base
+    for (i = lo; i < hi; i++) {
+	opcode_t o = instr(st, i, op);
+	if ((o == OP_NEXT) || (o == OP_ENTER)) {
+	    if (rule_ip != NULL) rule_ip[ord] = i+1;
+	    ord++;
+	}
+    }
+    return ord;
+}
+#endif
+
 void csp_csr(csp_rt_t* st)
 {
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     int i;
+    int r_rom = 0;                 // ordinals [0,r_rom) belong to baked ROM rules
     int current_rule = -1;
-    index_t wr[MAX_DECLS];
+    int ord = 0;                   // ordinal of the rule body being scanned
+    int next_ord = 0;              // next ordinal to hand out
+    index_t* wr;                   // pass-3 write cursors (into the idg block)
     // timeout(T)/elapsed(T)/... pass the timer as an immediate index (LI -> ARG
     // -> CALL), not an OP_LD, so track LI values per register and per arg slot to
     // recover the timer a CALL depends on and give it a graph edge.
@@ -2366,22 +2396,49 @@ void csp_csr(csp_rt_t* st)
     index_t arg_imm[MAX_ARGS];
     int n = st->ps.nd;             // graph nodes = declarations
 
-    // Size the graph to the actual node/edge counts, not MAX_INDEX. idg[n] and
-    // ofs[n+1] share one block (idg is its base -> free(idg) frees both); edg is
-    // sized after the counting pass. Rebuilds free the previous blocks first.
+    // Size the graph to the actual node/edge counts. idg[n], ofs[n+1] and the
+    // pass-3 write cursors wr[n] share one block (idg is its base -> free(idg)
+    // frees all three); edg is sized after the counting pass. Rebuilds free the
+    // previous blocks first. wr used to be an index_t[MAX_DECLS] local -- 4K of
+    // stack at DECL_BITS=11, and the last thing dimensioned by that width.
     free(st->idg);                 // NULL-safe (mem_init leaves it NULL)
     free(st->edg);
     st->edg = NULL;
     st->graph_n = 0;               // enq skips the graph until it is fully built
-    st->idg = (index_t*)malloc((size_t)(n + n + 1) * sizeof(index_t));
+    st->idg = (index_t*)malloc((size_t)(n + (n+1) + n) * sizeof(index_t));
     if (st->idg == NULL) { st->ofs = NULL; return; }  // out of memory: no graph
     st->ofs = st->idg + n;
+    wr      = st->ofs + (n+1);
 
-    // Size the inq dedup bitset to the actual (obj,ip) key space: objects
-    // 0..nq each with the instruction index range, i.e. (nq+1)<<INSTR_BITS keys.
+    // Number every rule body 0..n_rule-1 and build the ordinal -> ip map. ROM
+    // first (so its ordinals match what rom_edg was baked with), then RAM.
+    free(st->rule_ip);                 // NULL-safe
+    st->rule_ip = NULL;
+    st->n_rule = 0;
+    st->ord_shift = 0;
+    {
+	int nr;
+	if (st->rom_nn > 0)
+	    r_rom = number_rules(st, 0, st->rom_nn, NULL, 0);
+	nr = number_rules(st, st->rom_nn, st->ps.nn, NULL, r_rom);
+	st->rule_ip = (index_t*)malloc((size_t)nr * sizeof(index_t));
+	if (st->rule_ip == NULL) { st->ofs = NULL; return; }  // no graph
+	if (st->rom_nn > 0)
+	    number_rules(st, 0, st->rom_nn, st->rule_ip, 0);
+	number_rules(st, st->rom_nn, st->ps.nn, st->rule_ip, r_rom);
+	st->n_rule = (index_t)nr;
+	// Widest ordinal field needed, so the (obj,ord) key stays a shift+or.
+	while ((1 << st->ord_shift) < nr)
+	    st->ord_shift++;
+    }
+
+    // Size the inq dedup bitset to the actual (obj,ord) key space: objects 0..nq
+    // each with the rule-ordinal range, i.e. (nq+1)<<ord_shift keys. Indexing by
+    // ordinal instead of raw ip is what makes this dense -- by ip it would be
+    // (nq+1)<<INSTR_BITS, nearly all holes (only rule bodies can be queued).
     // On failure inq_cap stays 0 and csp_enq simply skips dedup (still correct).
     {
-	size_t inq_bits = (size_t)(st->ps.nq + 1) << INSTR_BITS;
+	size_t inq_bits = (size_t)(st->ps.nq + 1) << st->ord_shift;
 	size_t inq_grp  = BITSET_GROUPS(inq_bits);
 	free(st->inq);
 	st->inq = (set_group_t*)malloc(inq_grp * sizeof(set_group_t));
@@ -2466,14 +2523,22 @@ void csp_csr(csp_rt_t* st)
     }
 
     // Now the total edge count is known -> size edg exactly (min 1 to dodge
-    // malloc(0), which may return NULL).
+    // malloc(0), which may return NULL). Zeroed because pass 3 leaves HOLES: pass
+    // 1 counts every reference but pass 3 drops consecutive duplicates, so decl i
+    // fills only [ofs[i], ofs[i]+idg[i]) and the rest of its span stays unwritten.
+    // enq_elist reads only the filled part, but csp_dump_code bakes the whole
+    // array into rom_edg -- leaving it uninitialised put heap garbage in flash.
     {
 	size_t edges = st->ofs[st->ps.nd];
-	st->edg = (index_t*)malloc((edges ? edges : 1) * sizeof(index_t));
+	st->edg = (index_t*)calloc(edges ? edges : 1, sizeof(index_t));
 	if (st->edg == NULL) return;   // out of memory: leave idg/ofs, no edges
     }
 
-    // Pass 3: Fill in rule indices for each declaration
+    // Pass 3: Fill in rule ORDINALS for each declaration. edg stores the ordinal,
+    // not the ip, so csp_enq needs no lookup (and dumping bakes rom_edg with the
+    // same numbering). `ord` walks in lockstep with current_rule, matching the
+    // order number_rules handed ordinals out in: the implicit body at the RAM
+    // base first (r_rom), then one per NEXT/ENTER.
     memcpy(wr, st->ofs, st->ps.nd * sizeof(index_t));
     memset(reg_imm, 0, sizeof(reg_imm));
     memset(arg_imm, 0, sizeof(arg_imm));
@@ -2481,6 +2546,8 @@ void csp_csr(csp_rt_t* st)
     // Only RAM rules go into the runtime graph; ROM rules run sequentially (or
     // from their own baked graph). Scan from the RAM instruction base.
     current_rule = st->rom_nn;
+    ord = r_rom;
+    next_ord = r_rom + 1;
     for (i = st->rom_nn; i < st->ps.nn; i++) {
 	switch (instr(st,i,op)) {
 	case OP_RULE:
@@ -2488,22 +2555,23 @@ void csp_csr(csp_rt_t* st)
 	    break;
 	case OP_NEXT:
 	    current_rule = i+1;
+	    ord = next_ord++;
 	    break;
 	case OP_LD:
 	case OP_CHG:
 	    if (current_rule >= 0) {
 		index_t mem = INDEX(instr(st,i,m.mem));
 		if (mem < st->ps.nd &&
-		    (wr[mem] == st->ofs[mem] || st->edg[wr[mem]-1] != current_rule))
-		    st->edg[wr[mem]++] = current_rule;
+		    (wr[mem] == st->ofs[mem] || st->edg[wr[mem]-1] != ord))
+		    st->edg[wr[mem]++] = ord;
 	    }
 	    break;
 	case OP_EQI:
 	    if (current_rule >= 0) {
 		index_t mem = INDEX(instr(st,i,mi.mem));
 		if (mem < st->ps.nd &&
-		    (wr[mem] == st->ofs[mem] || st->edg[wr[mem]-1] != current_rule))
-		    st->edg[wr[mem]++] = current_rule;
+		    (wr[mem] == st->ofs[mem] || st->edg[wr[mem]-1] != ord))
+		    st->edg[wr[mem]++] = ord;
 	    }
 	    break;
 	case OP_LI:
@@ -2521,14 +2589,15 @@ void csp_csr(csp_rt_t* st)
 		    if (((avt >> (a*4)) & 0xf) == V_TIMER) {
 			index_t mem = INDEX(arg_imm[a]);
 			if (mem < st->ps.nd &&
-			    (wr[mem] == st->ofs[mem] || st->edg[wr[mem]-1] != current_rule))
-			    st->edg[wr[mem]++] = current_rule;
+			    (wr[mem] == st->ofs[mem] || st->edg[wr[mem]-1] != ord))
+			    st->edg[wr[mem]++] = ord;
 		    }
 		}
 	    }
 	    break;
 	case OP_ENTER:  // start of object
 	    current_rule = i+1;
+	    ord = next_ord++;
 	    break;
 	case OP_LEAVE:  // end of object
 	    current_rule = -1;
@@ -2537,10 +2606,54 @@ void csp_csr(csp_rt_t* st)
 	    break;
 	}
     }
-    // Update idg to reflect actual (deduplicated) counts
-    for (i = 0; i < st->ps.nd; i++)
-	st->idg[i] = wr[i] - st->ofs[i];
+    // Compact. Pass 1 counts every reference but pass 3 keeps only distinct
+    // consecutive ones, so each decl's span ends in unwritten holes. Slide the
+    // edges down and rebuild ofs/idg dense: enq_elist gets a tighter walk, edg
+    // shrinks to the real edge count, and csp_dump_code (which bakes the whole
+    // [0,ofs[nd]) span into rom_edg) no longer emits hole padding.
+    // Safe in place: the new write cursor never overtakes the read base, since
+    // every decl's deduplicated count is <= the counted one.
+    {
+	index_t w = 0;
+	for (i = 0; i < st->ps.nd; i++) {
+	    index_t base = st->ofs[i];             // read BEFORE overwriting it
+	    index_t cnt  = wr[i] - base;           // edges pass 3 actually wrote
+	    index_t j;
+	    st->ofs[i] = w;
+	    for (j = 0; j < cnt; j++)
+		st->edg[w++] = st->edg[base+j];
+	    st->idg[i] = cnt;
+	}
+	st->ofs[st->ps.nd] = w;
+	if (w > 0) {                               // give the holes back
+	    index_t* p = (index_t*)realloc(st->edg, (size_t)w * sizeof(index_t));
+	    if (p != NULL) st->edg = p;            // on failure keep the larger block
+	}
+    }
     st->graph_n = n;   // graph is complete: enq may now read it for ix < n
+
+    // Size the reactive work queue to the actual program. Peak occupancy is <=
+    // 2*D: an entry pending from last cycle can be enqueued again this cycle,
+    // because csp_react clears inq at cycle START (so a rule runs once per cycle),
+    // not on dequeue -- so each key can sit in the queue twice. The distinct
+    // (obj,ordinal) count D <= (nq+1)*n_rule. n_rule spans ROM and RAM alike: both
+    // feed the same queue (csp_enq_elist enqueues a changed decl's ROM and RAM
+    // dependents together), so it is their sum, not the max. Round up to a power
+    // of two (csp_enq/csp_deq mask, no divide) and clamp to MAX_QUEUE.
+    // NOTE: (nq+1)*n_rule is a safe SUPERSET -- it assumes every object can queue
+    // every rule, but an object only ever queues its own module's. A full queue
+    // drops silently, so this errs high on purpose; see TODO for the tight bound.
+    {
+	size_t need;
+	index_t cap = 16;                     // small floor
+	need = (size_t)2 * (st->ps.nq + 1) * (st->n_rule ? st->n_rule : 1);
+	while ((cap < need) && (cap < MAX_QUEUE))
+	    cap <<= 1;
+	free(st->queue);                      // NULL-safe (mem_init leaves it NULL)
+	st->queue = (index_t*)malloc((size_t)cap * sizeof(index_t));
+	st->queue_cap = st->queue ? cap : 0;  // 0 => enq skips (no queue this build)
+	st->hd = st->tl = 0;
+    }
 #endif
 }
 
@@ -2841,7 +2954,10 @@ NOINLINE static bool_t csp_load_value(csp_rt_t* st, reg_t x, vtype_t vt, value_t
     case V_DIGITAL:
     case V_ANALOG:
     case V_CAN:
-	return asm_LI(st, x, val.i);
+	// indices are unsigned MAKE_INDEX values: a CURRENT-relative index can
+	// exceed int16 positive range, so load unsigned (LIU) -- a signed LI
+	// would store it negative and misrender on disassembly.
+	return csp_load_uint(st, x, val.u);
     case V_INTEGER:
 	return csp_load_int(st, x, val.i);
     case V_UNSIGNED:
@@ -4402,7 +4518,7 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 	int sr;
 	cnd = alloc_reg(st);
 	
-	if (st->sdef < 128)
+	if (st->sdef <= TINY_MAX)
 	    asm_EQI(st, cnd, st->sx, st->sdef);
 	else {
 	    if (!asm_mem(st,OP_LD,cnd,st->sx)) // load state into cnd
@@ -5344,23 +5460,23 @@ uint8_t* csp_arena_mem(size_t need)   // portable default: no heap required
 // the csp_arena_mem() backend hook. Returns 0 on success, -1 on failure.
 int csp_mem_init(csp_rt_t* st, size_t size)
 {
-    uint8_t* p;
-
     st->mem = csp_arena_mem(CSP_ARENA_BYTES);
     if (st->mem == NULL)
 	return -1;
     memset(st->mem, 0, CSP_ARENA_BYTES);   // match the zeroed static arrays we replaced
     st->mem_size  = CSP_ARENA_BYTES;
-    // Usable byte budget for instr+decl (the code region). `size` (e.g. linux
-    // -m) shrinks it to exercise the out-of-memory path; 0 or an oversize value
-    // uses the whole code region. Raising it needs wider index bits first.
-    st->mem_limit = (size > 0 && size < CSP_ARENA_CODE_BYTES) ? size
-							      : CSP_ARENA_CODE_BYTES;
-    // Bump-allocate every region in order. Each CSP_*_BYTES is 8-aligned and the
-    // base is 8-aligned, so every region start stays aligned.
-    p = st->mem;
-    st->ram_instr = (csp_instr_t*)p; p += CSP_ARENA_INSTR_BYTES;
-    st->ram_decl  = (csp_decl_t*)p;  p += CSP_ARENA_DECL_BYTES;
+    // Usable byte budget for the shared instr+decl pool. `size` (e.g. linux -m)
+    // shrinks it to exercise the out-of-memory path; 0 or an oversize value uses
+    // the whole pool. Raising it above CSP_CODE_BUDGET needs a bigger arena.
+    st->mem_limit = (size > 0 && size < CSP_CODE_BUDGET) ? size
+							 : CSP_CODE_BUDGET;
+    // Double-ended pool: instr[] grows up from the base, decl[] grows down from
+    // the top. ram_decl points at the topmost decl slot and is indexed with a
+    // negated local index (ram_decl_at / csp_get_decl). The pool base and top are
+    // 8-aligned (base 8-aligned, CSP_CODE_BUDGET is CSP_A8), so both ends stay
+    // aligned. They can never overlap: mem_fits keeps instr+decl <= mem_limit.
+    st->ram_instr = (csp_instr_t*)st->mem;
+    st->ram_decl  = (csp_decl_t*)(st->mem + CSP_CODE_BUDGET) - 1;
     // view/dset/buf/heap are all sized to the estimate in csp_rt_start.
     st->view = NULL;
     st->dset = NULL;
@@ -5369,11 +5485,19 @@ int csp_mem_init(csp_rt_t* st, size_t size)
     st->buf = NULL;
     st->buf_cap = 0;
     st->heap_cap = 0;
+    // input/output/timer are sized to the estimate in csp_rt_start too.
+    st->input = NULL;  st->in_cap = 0;
+    st->output = NULL; st->out_cap = 0;
+    st->timer = NULL;  st->timer_cap = 0;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-    st->queue = (index_t*)p;         p += CSP_QUEUE_BYTES;
-    // inq and idg/ofs/edg are sized to actual in csp_csr (own allocations).
+    // queue, inq, rule_ip and idg/ofs/edg are all sized to actual in csp_csr.
+    st->queue = NULL;
+    st->queue_cap = 0;
     st->inq = NULL;
     st->inq_cap = 0;
+    st->rule_ip = NULL;
+    st->n_rule = 0;
+    st->ord_shift = 0;
     st->idg = st->ofs = st->edg = NULL;
 #endif
     return 0;
@@ -5429,7 +5553,7 @@ int csp_rt_init(csp_rt_t* st, int reactive)
     st->nm = 0;
     st->cur = 0;      // current module = global
     st->mdef = BAD_INDEX;  // no module being defined
-    st->var = st->timer;  // reuse timer[] for var list during <- parse
+    st->var = st->var_buf;  // dedicated scratch for var list during <- parse
     st->nvar = 0;
     st->rimp = 0;
 
@@ -5618,11 +5742,11 @@ NOINLINE static void add_io(csp_rt_t* st, index_t ix)
 {
     int i = INDEX(ix);
     if (decl(st,i,dir) & DIR_IN) {
-	if (st->ni < MAX_INPUTS) // warning?
+	if (st->ni < st->in_cap)  // sized to csp_estimate.ni; guard is belt+braces
 	    st->input[st->ni++] = ix;
     }
     if (decl(st,i,dir) & DIR_OUT) {
-	if (st->no < MAX_OUTPUTS) // warning
+	if (st->no < st->out_cap)
 	    st->output[st->no++] = ix;
     }
 }
@@ -5642,8 +5766,11 @@ NOINLINE static void est_leaf(csp_rt_t* st, int j, csp_estimate_t* e)
     case DECL_BUFFER:
 	nbytes = (GET_RES(decl(st,j,res)) + 7) >> 3;
 	break;
-    case DECL_CONSTANT:
     case DECL_TIMER:
+	e->nt++;                              // timer list entry (setup_timer)
+	nbytes = sizeof(value_t);
+	break;
+    case DECL_CONSTANT:
 	nbytes = sizeof(value_t);
 	break;
     case DECL_DIGITAL:
@@ -5652,6 +5779,11 @@ NOINLINE static void est_leaf(csp_rt_t* st, int j, csp_estimate_t* e)
 	if (decl(st,j,dir) & DIR_IN)  e->ni++;
 	if (decl(st,j,dir) & DIR_OUT) e->no++;
 	break;
+    case DECL_CAN:
+	// CAN is device I/O (add_io) but has no buffer/heap (no setup_slot).
+	if (decl(st,j,dir) & DIR_IN)  e->ni++;
+	if (decl(st,j,dir) & DIR_OUT) e->no++;
+	return;
     default:
 	return;                               // module/end/object/view: no buffer
     }
@@ -5669,7 +5801,7 @@ void csp_estimate(csp_rt_t* st, csp_estimate_t* e)
     int offs = nd;                            // object storage base (== rt_start)
 
     e->nleaf = nd;                            // globals occupy leaves [0, nd)
-    e->nbuf = e->ni = e->no = 0;
+    e->nbuf = e->ni = e->no = e->nt = 0;
     e->heap = 0;
 
     for (i = 0; i < (int)nd; i++) {           // globals
@@ -5710,38 +5842,53 @@ int csp_rt_start(csp_rt_t* st)
     value_t* optr;
     csp_estimate_t e;
 
-    // Size every derived table to what this program actually needs (csp_estimate,
-    // no prior setup) instead of MAX_INDEX/MAX_BUFS/MAX_HEAP. Freed+reallocated on
-    // every rebuild; the fill below stays within these. rt_start reruns on any
-    // decl add (see csp_process_persistent) so view_cap always covers max st_index.
+    // Size every derived table to what this program actually declares
+    // (csp_estimate, no prior setup) -- nothing here is a MAX_* reservation.
+    // Freed+reallocated on every rebuild; the fill below stays within these.
+    // rt_start reruns on any decl add (see csp_process_persistent) so view_cap
+    // always covers max st_index.
     {
-	size_t vbytes, dbytes;
+	size_t vbytes, dbytes, hbytes;
 	csp_estimate(st, &e);
 	vbytes = (size_t)(e.nleaf ? e.nleaf : 1) * sizeof(csp_view_t);
 	dbytes = (size_t)BITSET_GROUPS(e.nleaf ? e.nleaf : 1) * sizeof(set_group_t);
+	// The DIN/DOUT transaction halves are ONE allocation: heap[DOUT] points at
+	// the second half. 8-aligned so a buffer at the same hp offset is equally
+	// aligned in both halves. Only heap[DIN] is owned (never free heap[DOUT]).
+	hbytes = CSP_A8(e.heap ? e.heap : 8);
 	free(st->view);
 	free(st->dset);
 	free(st->buf);
 	free(st->heap[DIN]);
-	free(st->heap[DOUT]);
+	free(st->input);
+	free(st->output);
+	free(st->timer);
 	st->view       = (csp_view_t*)malloc(vbytes);
 	st->dset       = (set_group_t*)malloc(dbytes);
 	st->buf        = (csp_buf_t*)malloc((size_t)(e.nbuf ? e.nbuf : 1) * sizeof(csp_buf_t));
-	st->heap[DIN]  = (uint8_t*)malloc(e.heap ? e.heap : 1);
-	st->heap[DOUT] = (uint8_t*)malloc(e.heap ? e.heap : 1);
-	if (!st->view || !st->dset || !st->buf || !st->heap[DIN] || !st->heap[DOUT]) {
+	st->heap[DIN]  = (uint8_t*)malloc(2 * hbytes);
+	st->input      = (index_t*)malloc((size_t)(e.ni ? e.ni : 1) * sizeof(index_t));
+	st->output     = (index_t*)malloc((size_t)(e.no ? e.no : 1) * sizeof(index_t));
+	st->timer      = (index_t*)malloc((size_t)(e.nt ? e.nt : 1) * sizeof(index_t));
+	if (!st->view || !st->dset || !st->buf || !st->heap[DIN] ||
+	    !st->input || !st->output || !st->timer) {
+	    st->heap[DOUT] = NULL;
 	    st->view_cap = 0; st->buf_cap = 0; st->heap_cap = 0;
+	    st->in_cap = 0; st->out_cap = 0; st->timer_cap = 0;
 	    csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
 	    return -1;
 	}
+	st->heap[DOUT] = st->heap[DIN] + hbytes;   // second half of the same block
 	st->view_cap = e.nleaf;
 	st->buf_cap  = e.nbuf;
 	st->heap_cap = e.heap;
+	st->in_cap   = e.ni;
+	st->out_cap  = e.no;
+	st->timer_cap = e.nt;
 	memset(st->view, 0, vbytes);
 	memset(st->dset, 0, dbytes);
 	memset(st->buf, 0, (size_t)(e.nbuf ? e.nbuf : 1) * sizeof(csp_buf_t));
-	memset(st->heap[DIN],  0, e.heap ? e.heap : 1);
-	memset(st->heap[DOUT], 0, e.heap ? e.heap : 1);
+	memset(st->heap[DIN],  0, 2 * hbytes);       // both halves in one go
     }
 
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
@@ -5799,7 +5946,8 @@ int csp_rt_start(csp_rt_t* st)
 		if (setup_slot(st, ix) < 0)
 		    return -1;
 		setup_timer(st, ix);
-		st->timer[st->nt++] = ix;
+		if (st->nt < st->timer_cap)
+		    st->timer[st->nt++] = ix;
 	    }
 	    break;
 
@@ -5898,7 +6046,8 @@ int csp_rt_start(csp_rt_t* st)
 		if (setup_slot(st, fx) < 0)
 		    return -1;
 		setup_timer(st, fx);
-		st->timer[st->nt++] = fx;
+		if (st->nt < st->timer_cap)
+		    st->timer[st->nt++] = fx;
 		break;
 	    case DECL_DIGITAL:
 		if (setup_slot(st, fx) < 0)
@@ -5993,12 +6142,6 @@ static int cmd_help(csp_rt_t* st, int argc, char* argv[])
 	    csp_print_char('\n');
 	}
     }
-    csp_print_str("\nSyntax:\n");
-    csp_print_str("  #variable X integer    Declare variable\n");
-    csp_print_str("  X = Y + 1              Rule (always)\n");
-    csp_print_str("  X = Y + 1 ? cond       Rule (conditional)\n");
-    csp_print_str("  > X + 1                Evaluate expression\n");
-    csp_print_str("  > X = 5                Assign value\n");
     return CSP_CMD_OK;
 }
 
@@ -6159,9 +6302,12 @@ match:
 	    list_name(st, cur_mod, npos);
 	    csp_print_char(' ');
 	    csp_print_str(csp_fmt_vtype(decl(st,i,vt)));
-	    csp_print_str(" = ");
-	    csp_print_value(st, decl(st,i,vt),
-			   csp_value(st, MAKE_INDEX(0, i)));
+	    // list the declaration's init value, not the live state (like #constant
+	    // below); reading a value here would touch leaf storage /list must not.
+	    if (!decl(st,i,bound)) {
+		csp_print_str(" = ");
+		csp_print_value(st, decl(st,i,vt), decl(st,i,va.init));
+	    }
 	    csp_print_char('\n');
 	    break;
 	case DECL_CONSTANT:
@@ -6500,22 +6646,65 @@ static void mem_int_r(int v, int w)
     csp_print_int(v);
 }
 
-static void mem_row(const char* name, int used, int max)
+static void mem_name(const char* name)
 {
     int len = 0;
     csp_print_str("  ");
     csp_print_str(name);
     while (name[len]) len++;
     while (len++ < 8) csp_print_char(' ');
+}
+
+// A category the ENCODING caps (an index must fit its bit field): show the
+// ceiling and the headroom left.
+static void mem_row(const char* name, int used, int max)
+{
+    mem_name(name);
     mem_int_r(used, 5);
     mem_int_r(max, 7);
     mem_int_r(max - used, 7);
     csp_print_char('\n');
 }
 
-// /memory: per-category usage. decl/instr/string live in the RAM arrays (ROM
-// stays in flash), so those show the RAM-patch usage; the rest are rebuilt
-// whole into RAM arrays, so their counts include any ROM content.
+// A category sized to the actual program (csp_estimate): there IS no ceiling --
+// it is allocated to exactly what is used -- so max/free would be noise.
+static void mem_row_n(const char* name, int used)
+{
+    mem_name(name);
+    mem_int_r(used, 5);
+    csp_print_char('\n');
+}
+
+// Bytes CandySpeak holds OUTSIDE the code arena: everything csp_rt_start and
+// csp_csr size to the actual program. Together with the arena this is what the
+// language costs the board's RAM, which is the number worth relating to
+// csp_system_ram_*. Counts allocations, so it reads 0 before /resume.
+NOINLINE static uint32_t csp_derived_bytes(csp_rt_t* st)
+{
+    uint32_t n = 0;
+    n += (uint32_t)st->view_cap * sizeof(csp_view_t);
+    n += (uint32_t)BITSET_GROUPS(st->view_cap) * sizeof(set_group_t);   // dset
+    n += (uint32_t)st->buf_cap * sizeof(csp_buf_t);
+    n += st->heap_cap * 2;                                // DIN + DOUT halves
+    n += (uint32_t)(st->in_cap + st->out_cap + st->timer_cap) * sizeof(index_t);
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
+    if (st->idg != NULL)     // idg[n] + ofs[n+1] + wr[n] share one block
+	n += (uint32_t)(3*st->graph_n + 1) * sizeof(index_t);
+    if (st->edg != NULL)
+	n += (uint32_t)st->ofs[st->ps.nd] * sizeof(index_t);
+    n += (uint32_t)BITSET_GROUPS(st->inq_cap) * sizeof(set_group_t);
+    n += (uint32_t)st->queue_cap * sizeof(index_t);
+    n += (uint32_t)st->n_rule * sizeof(index_t);          // rule_ip
+#endif
+    return n;
+}
+
+// /memory: what CandySpeak costs and what binds it. Three ceilings matter and
+// they are different: the board's RAM, the code pool's byte budget (mem_fits),
+// and the EEPROM -- code that will not fit the last cannot be saved, only tested.
+// The category table below is counts, not bytes: decl/instr/string live in the
+// RAM arrays (ROM stays in flash) so those show the RAM-patch usage; the rest are
+// rebuilt whole into RAM arrays, so their counts include any ROM content.
 static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 {
     size_t ib = (size_t)(st->ps.nn - st->rom_nn) * sizeof(csp_instr_t);
@@ -6524,13 +6713,49 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
     size_t limit = st->mem_limit;
     (void)argc; (void)argv;
 
-    // Byte budget is the binding constraint now: instr and decl share it.
-    csp_print_str("arena ");
-    csp_print_uint((uvalue_t)used);  csp_print_char('/');
-    csp_print_uint((uvalue_t)limit); csp_print_str(" bytes (");
-    csp_print_uint((uvalue_t)(limit ? (used * 100 / limit) : 0));
-    csp_print_str("% used, ");
-    csp_print_uint((uvalue_t)(limit - used)); csp_print_str(" free)\n");
+    // The board's RAM, then what CandySpeak takes out of it: the code arena plus
+    // the tables derived from the program. Both are inside "used" above.
+    {
+	uint32_t derived = csp_derived_bytes(st);
+	csp_print_str("RAM:     "); csp_print_uint((uvalue_t)csp_system_ram_capacity());
+	csp_print_str(" total, "); csp_print_uint((uvalue_t)csp_system_ram_used());
+	csp_print_str(" used, "); csp_print_uint((uvalue_t)csp_system_ram_avail());
+	csp_print_str(" avail\n");
+
+	// instr and decl share one byte budget (mem_fits): this is what caps code.
+	csp_print_str("  arena  "); csp_print_uint((uvalue_t)used);
+	csp_print_char('/'); csp_print_uint((uvalue_t)limit);
+	csp_print_str(" bytes (");
+	csp_print_uint((uvalue_t)(limit ? (used * 100 / limit) : 0));
+	csp_print_str("% used, "); csp_print_uint((uvalue_t)(limit - used));
+	csp_print_str(" free) -- instr+decl pool\n");
+
+	csp_print_str("  derived "); csp_print_uint((uvalue_t)derived);
+	csp_print_str(" bytes -- view/dset/buf/heap/io/graph/inq/queue");
+	if (!st->started)
+	    csp_print_str(" (not allocated until /resume)");
+	csp_println();
+    }
+
+    // What /save costs vs what the board HAS. This, not RAM, is usually what
+    // bounds a program you can KEEP: RAM holds more code than you can persist,
+    // and code you cannot save is only good for testing.
+    {
+	uint32_t cap = csp_eeprom_capacity();
+	uint32_t need = (uint32_t)csp_eeprom_size(st);
+	csp_print_str("EEPROM:  "); csp_print_uint((uvalue_t)need);
+	csp_print_str(" needed / ");
+	if (cap == CSP_EEPROM_NONE)
+	    csp_print_str("none on this board (cannot /save)");
+	else if (cap == CSP_EEPROM_UNBOUNDED)
+	    csp_print_str("unbounded (host file; -E sets a board ceiling)");
+	else {
+	    csp_print_uint((uvalue_t)cap); csp_print_str(" bytes");
+	    if (need > cap)
+		csp_print_str("  -- TOO BIG TO SAVE");
+	}
+	csp_println();
+    }
 
     {   // computed need (independent of rt_start) -- see csp_estimate
 	csp_estimate_t e;
@@ -6539,8 +6764,18 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 	csp_print_str(" buf="); csp_print_uint((uvalue_t)e.nbuf);
 	csp_print_str(" heap="); csp_print_uint((uvalue_t)e.heap);
 	csp_print_str(" in="); csp_print_uint((uvalue_t)e.ni);
-	csp_print_str(" out="); csp_print_uint((uvalue_t)e.no); csp_println();
+	csp_print_str(" out="); csp_print_uint((uvalue_t)e.no);
+	csp_print_str(" timer="); csp_print_uint((uvalue_t)e.nt); csp_println();
     }
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
+    // The reactive tables key on the rule ORDINAL, so they scale with the rule
+    // count -- not with MAX_INSTRS the way an (obj,ip) key space would.
+    csp_print_str("reactive: rules="); csp_print_uint((uvalue_t)st->n_rule);
+    csp_print_str(" queue="); csp_print_uint((uvalue_t)st->queue_cap);
+    csp_print_str(" inq=");
+    csp_print_uint((uvalue_t)(BITSET_GROUPS(st->inq_cap) * sizeof(set_group_t)));
+    csp_print_str(" bytes\n");
+#endif
 
     if (st->rom_nd || st->rom_nn || st->rom_strp) {
 	csp_print_str("ROM base: ");
@@ -6552,13 +6787,13 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
     mem_row("instr",  st->ps.nn   - st->rom_nn,   MAX_INSTRS);
     mem_row("decl",   st->ps.nd   - st->rom_nd,   MAX_DECLS);
     mem_row("string", st->ps.strp - st->rom_strp, MAX_STR_BUF);
-    mem_row("input",  st->ni,     MAX_INPUTS);
-    mem_row("output", st->no,     MAX_OUTPUTS);
+    mem_row_n("input",  st->ni);
+    mem_row_n("output", st->no);
     mem_row("object", st->ps.nq,  MAX_OBJECTS);
     mem_row("state",  st->ps.ns,  MAX_STATES);
     mem_row("module", st->nm,     MAX_MODULES);
-    mem_row("timer",  st->nt,     MAX_TIMERS);
-    mem_row("buffer", st->nbuf,   st->buf_cap ? st->buf_cap : MAX_BUFS);
+    mem_row_n("timer",  st->nt);
+    mem_row_n("buffer", st->nbuf);
     return CSP_CMD_OK;
 }
 

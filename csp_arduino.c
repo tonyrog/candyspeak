@@ -13,6 +13,13 @@
 #if defined(__AVR__) || defined(ESP32) || defined(ESP8266)
 #define CSP_HAS_EEPROM 1
 #include <EEPROM.h>
+#elif defined(ARDUINO_ARCH_SAMD)
+// SAMD has no EEPROM: emulate one in a reserved flash region (see below).
+// csp_flash_samd is a vendored subset of cmaglie/FlashStorage -- the low-level
+// FlashClass only. Including the library proper would drag in its EEPROMClass
+// global and 1027 bytes of RAM shadow we never use; see csp_flash_samd.h.
+#define CSP_HAS_FLASH_EEPROM 1
+#include "csp_flash_samd.h"
 #endif
 
 #define CSP_EMBEDDED 1
@@ -50,6 +57,49 @@ int stack_used(void)
 {
     char local;
     return &__StackTop - &local;
+}
+
+#ifdef __arm__
+// For ARM-based Arduinos (Due, Zero, etc.)
+extern "C" char* sbrk(int incr);
+uint32_t csp_system_ram_avail()
+{
+    char top;
+    return &top - reinterpret_cast<char*>(sbrk(0));
+}
+#else
+// For 8-bit AVR Arduinos (Uno, Nano, Mega, etc.)
+extern unsigned int __heap_start, *__brkval;
+uint32_t csp_system_ram_avail()
+{
+    int free_memory;
+    if ((int)__brkval == 0) {
+	free_memory = ((int)&free_memory) - ((int)&__heap_start);
+    } else {
+	free_memory = ((int)&free_memory) - ((int)__brkval);
+    }
+    return free_memory;
+}
+#endif
+
+uint32_t csp_system_ram_capacity()
+{
+#if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega168__)
+    return 2048; // Arduino Uno, Nano Pro Mini
+#elif defined(__AVR_ATmega2560__) || defined(__AVR_ATmega1280__)
+    return 8192; // Arduino Mega
+#elif defined(__AVR_ATmega32U4__)
+    return 2560; // Arduino Leonardo, Micro
+#elif defined(ARDUINO_ARCH_SAMD)
+    return 32768; // Arduino Zero / M0 (32KB)
+#else
+    return -1; // Unknown board
+#endif
+}
+
+uint32_t csp_system_ram_used()
+{
+    return csp_system_ram_capacity() - csp_system_ram_avail();
 }
 
 uint32_t csp_time_ms(void)
@@ -322,8 +372,10 @@ void csp_setup(csp_rt_t* st)
             if (decl(st,j,dir) & DIR_IN) {
 		if (decl(st,j,di.pullup))
 		    pinMode(decl(st,j,di.pin), INPUT_PULLUP);
+#ifdef INPUT_PULLDOWN
 		else if (decl(st,j,di.pulldown))
 		    pinMode(decl(st,j,di.pin), INPUT_PULLDOWN);
+#endif
 		else
 		    pinMode(decl(st,j,di.pin), INPUT);
 	    }
@@ -463,10 +515,19 @@ int csp_eeprom_read(void* buf, size_t len)
     return 0;
 }
 
+uint32_t csp_eeprom_capacity(void)
+{
+    return (uint32_t) EEPROM.length();   // AVR: E2END+1 (uno 1K, mega 4K)
+}
+
 int csp_eeprom_write(const void* buf, size_t len)
 {
     uint8_t* ptr = (uint8_t*) buf;
     if (eeprom_addr < 0)
+	return -1;
+    // Refuse to run off the end: EEPROM.update() past the last cell wraps or
+    // corrupts, so a program too big to persist would half-save silently.
+    if ((uint32_t)eeprom_addr + len > csp_eeprom_capacity())
 	return -1;
     while(len--) {
 	EEPROM.update(eeprom_addr, *ptr++);
@@ -475,13 +536,117 @@ int csp_eeprom_write(const void* buf, size_t len)
     return 0;
 }
 
+#elif defined(CSP_HAS_FLASH_EEPROM)
+
+// SAMD21 has no EEPROM, so emulate one in a reserved flash region.
+//
+// We deliberately do NOT use the library's own FlashAsEEPROM layer: it keeps a
+// RAM shadow of the WHOLE emulated region (byte data[EEPROM_EMULATION_SIZE]),
+// because its API allows scattered writes with a deferred commit and so must
+// read-modify-write. Our access is strictly sequential and csp_eeprom_save
+// rewrites the entire image every time -- we never need to preserve what is
+// already there. So: erase the region up front, then stream forward through one
+// row buffer. That costs CSP_FLASH_ROW bytes of RAM instead of the region size.
+//
+// Reads cost nothing at all: SAMD flash is memory-mapped, so a read is a memcpy
+// straight out of the region.
+//
+// Geometry (FlashClass): erase works per ROW, write per PAGE with a page-aligned
+// destination and no auto-erase. SAMD21 ROW_SIZE = PAGE_SIZE*4 = 256, and
+// FlashClass::write() loops the page writes for us, so writing 256-aligned
+// chunks satisfies the page alignment automatically.
+#ifndef CSP_EEPROM_FLASH_SIZE
+#define CSP_EEPROM_FLASH_SIZE 2048   // must be a multiple of CSP_FLASH_ROW
+#endif
+#define CSP_FLASH_ROW 256            // SAMD21 erase granularity
+
+// const => the linker places this in flash; aligned to the erase unit so erasing
+// it cannot touch anything else.
+__attribute__((__aligned__(CSP_FLASH_ROW)))
+static const uint8_t eeprom_region[CSP_EEPROM_FLASH_SIZE] = { 0 };
+
+static FlashClass eeprom_flash(eeprom_region, sizeof(eeprom_region));
+
+static uint32_t ee_pos;        // read cursor (byte offset into the region)
+static uint32_t ee_row_base;   // flash offset that ee_row[0] maps to
+static uint32_t ee_row_used;   // bytes buffered in ee_row
+static int      ee_writing;
+static uint8_t  ee_row[CSP_FLASH_ROW];
+
+uint32_t csp_eeprom_capacity(void)
+{
+    return CSP_EEPROM_FLASH_SIZE;
+}
+
+int csp_eeprom_open_read(void)
+{
+    ee_pos = 0;
+    ee_writing = 0;
+    return 0;
+}
+
+int csp_eeprom_open_write(void)
+{
+    // Erase everything now: we are about to overwrite the whole image anyway,
+    // which is exactly why no read-modify-write (and no shadow) is needed.
+    eeprom_flash.erase(eeprom_region, sizeof(eeprom_region));
+    ee_row_base = 0;
+    ee_row_used = 0;
+    ee_writing = 1;
+    return 0;
+}
+
+int csp_eeprom_read(void* buf, size_t len)
+{
+    if (ee_writing)
+	return -1;
+    if (ee_pos + len > CSP_EEPROM_FLASH_SIZE)
+	return -1;
+    memcpy(buf, eeprom_region + ee_pos, len);   // memory-mapped: no buffer needed
+    ee_pos += len;
+    return 0;
+}
+
+int csp_eeprom_write(const void* buf, size_t len)
+{
+    const uint8_t* p = (const uint8_t*) buf;
+    if (!ee_writing)
+	return -1;
+    if (ee_row_base + ee_row_used + len > CSP_EEPROM_FLASH_SIZE)
+	return -1;   // too big to persist: fail loudly rather than wrap
+    while (len > 0) {
+	uint32_t n = CSP_FLASH_ROW - ee_row_used;
+	if (n > len) n = (uint32_t) len;
+	memcpy(ee_row + ee_row_used, p, n);
+	ee_row_used += n;
+	p += n;
+	len -= n;
+	if (ee_row_used == CSP_FLASH_ROW) {      // row full -> commit it
+	    eeprom_flash.write(eeprom_region + ee_row_base, ee_row, CSP_FLASH_ROW);
+	    ee_row_base += CSP_FLASH_ROW;
+	    ee_row_used = 0;
+	}
+    }
+    return 0;
+}
+
+void csp_eeprom_close(void)
+{
+    if (ee_writing && (ee_row_used > 0)) {    // flush the partial tail row
+	// Pad with 0xFF: the region was erased, so those cells stay untouched.
+	memset(ee_row + ee_row_used, 0xFF, CSP_FLASH_ROW - ee_row_used);
+	eeprom_flash.write(eeprom_region + ee_row_base, ee_row, CSP_FLASH_ROW);
+    }
+    ee_writing = 0;
+}
+
 #else
 
 int eeprom_addr = -1;
 
 int csp_eeprom_open_read(void)
 {
-    eeprom_addr = 0;    
+    eeprom_addr = 0;
     return 0;
 }
 
@@ -496,14 +661,24 @@ void csp_eeprom_close(void)
     eeprom_addr = -1;
 }
 
-int csp_eeprom_read(void* buf, size_t len)
+// This board has no persistent storage (SAMD21 has no EEPROM; it needs a
+// flash-emulation library). Report that honestly rather than accepting the call:
+// these used to return 0, so /save printed "Saved" and wrote nothing.
+uint32_t csp_eeprom_capacity(void)
 {
     return 0;
 }
 
+int csp_eeprom_read(void* buf, size_t len)
+{
+    (void)buf; (void)len;
+    return -1;
+}
+
 int csp_eeprom_write(const void* buf, size_t len)
 {
-    return 0;
+    (void)buf; (void)len;
+    return -1;
 }
 
 #endif
