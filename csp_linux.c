@@ -558,6 +558,7 @@ void usage(const char* prog)
     fprintf(stderr, "  -p, --parse-file=F   Parsed structure file\n");
     fprintf(stderr, "  -e, --eeprom=F       EEPROM file for save/load (default: eeprom.db)\n");
     fprintf(stderr, "  -I, --input-file=F   Data input file\n");
+    fprintf(stderr, "  -M, --ram=N[k]       Toal RAM (or Nk KiB)\n");    
     fprintf(stderr, "  -m, --memory=N[k]    Usable code memory budget in bytes (or Nk KiB)\n");
     fprintf(stderr, "  -E, --eeprom-size=N[k] Simulated EEPROM capacity (0=unbounded); /save\n");
     fprintf(stderr, "                       fails past it, as it would on a real board\n");
@@ -678,14 +679,14 @@ int main(int argc, char** argv)
     nfds_t nfds = 0;
     csp_lang_t lang = TEXT;
     int first_cycle = 1;
-    int nn0;
+    int given = 0;    // was a program handed to us (file or stdin)?
     int anyd;
 
     file_output = stdout;
 
     while (1) {
 	int option_index = 0;
-	c = getopt_long(argc, argv, "hindPQRSCc:T:s:p:r:t:O:e:L:I:F:m:E:b",
+	c = getopt_long(argc, argv, "hindPQRSCc:T:s:p:r:t:O:e:L:I:F:m:M:E:b",
 			long_options, &option_index);
 	if (c == -1)
 	    break;
@@ -751,6 +752,14 @@ int main(int argc, char** argv)
 	    mem_limit = (size_t)v;
 	    break;
 	}
+	case 'M': {   // total RAM avaiable
+	    char* end = NULL;
+	    unsigned long v = strtoul(optarg, &end, 0);
+	    if (end && (*end == 'k' || *end == 'K'))
+		v *= 1024;
+	    system_ram_capacity = (size_t)v;
+	    break;	    
+	}
 	case 'E': {   // simulated EEPROM capacity, so the host can hit a board's
 		      // /save ceiling; accepts a trailing k/K = KiB
 	    char* end = NULL;
@@ -806,8 +815,6 @@ int main(int argc, char** argv)
     if (!compile)
 	csp_load_rom(&state);
 
-    nn0 = state.ps.nn;
-
     // Parse input files (if any)
     if (optind < argc) {
 	while (optind < argc) {
@@ -824,10 +831,12 @@ int main(int argc, char** argv)
 	    }
 	    fclose(fin);
 	    optind++;
+	    given = 1;
 	}
     }
     else if (!interactive) {
 	// no files given, read from stdin (unless interactive)
+	given = 1;
 	if ((r = parse_file(&state, stdin)) < 0) {
 	    fprintf(stderr, "*stdin*:%d ", state.ps.line);
 	    fprintf(stderr, csp_format_error(state.ps.err),
@@ -837,10 +846,22 @@ int main(int argc, char** argv)
 	}
     }
 
-    // No new rules parsed: restore a persisted RAM program from eeprom -- but
-    // never when firmware is linked in, or it would clobber the preloaded ROM.
-    if ((nn0 == state.ps.nn) && !csp_has_firmware())
-	csp_eeprom_load(&state);
+    // No program was handed to us -> restore whatever was last /saved. Never when
+    // firmware is linked in, or it would clobber the preloaded ROM.
+    //
+    // This asks "was a program given?", NOT "did any instructions appear?" -- the
+    // old test compared the instruction count, so a declarations-only program (a
+    // data model, or one still being built at the prompt) looked like "nothing to
+    // run" and was silently replaced by eeprom.db, since csp_eeprom_load re-inits
+    // from scratch. Deriving it from the decl count would work only by accident:
+    // parse_file always appends a DECL_END, so the count moves even for an empty
+    // file.
+    if (!given && !csp_has_firmware()) {
+	if (csp_eeprom_load(&state) == 0)
+	    printf("Restored %d decls, %d instrs from %s\n",
+		   state.ps.nd - state.rom_nd, state.ps.nn - state.rom_nn,
+		   eeprom_file);
+    }
     
     // initialize time before starting timers
     time_init();
@@ -1001,7 +1022,7 @@ loop:
     if (anyd) goto loop;
     if (state.wait_ms != NOTIMEOUT) goto loop;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-    if (state.reactive && (state.hd != state.tl)) goto loop;
+    if (state.reactive && csp_pending(&state)) goto loop;
 #endif
 
 done:

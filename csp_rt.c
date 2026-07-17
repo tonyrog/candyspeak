@@ -1747,26 +1747,40 @@ index_t csp_eval(csp_rt_t* st)
 index_t csp_react(csp_rt_t* st)
 {
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-    index_t x0, x1 = BAD_INDEX;
-    if (st->reactive) {
-	int cycle_end = st->tl;  // items added during cycle go to next cycle
-	if (st->inq)                        // allow rules to be queued again
-	    memset(st->inq, 0, BITSET_GROUPS(st->inq_cap) * sizeof(set_group_t));
-	while(st->hd < cycle_end) {
-	    uint8_t obj;
-	    index_t ip;
-	    x0 = csp_deq(st);
-	    // Queue entries are packed (obj, rule ordinal) -- rule_ip maps the
-	    // ordinal back to the instruction to run. Restore the object context so
-	    // a module rule's CURRENT-relative field access hits the right instance
-	    // (sequential does this via OP_NEW; reactive skips NEW). obj 0 = global
-	    // (offs[0] == 0), leaving global rules unchanged.
-	    obj = QENTRY_OBJ(st, x0);
-	    ip  = st->rule_ip[QENTRY_ORD(st, x0)];
-	    st->cur = obj;                       // instance context for CURRENT-rel
-	    st->offs[CURRENT] = st->offs[obj];   //   reads/writes and re-enqueues
-	    csp_eval_rule(st, ip);
-	    x1 = ip;
+    index_t x1 = BAD_INDEX;
+    if (st->reactive && st->pending_cap) {
+	set_group_t* cur = st->pending[st->gen];
+	uint32_t ngrp = BITSET_GROUPS(st->pending_cap);
+	uint32_t w;
+	// Swap generations FIRST: whatever a rule enqueues while we run belongs to
+	// the next cycle, so it must land in the other set. (The old code took a
+	// snapshot of the queue tail for the same reason.)
+	st->gen ^= 1;
+	memset(st->pending[st->gen], 0, ngrp * sizeof(set_group_t));
+
+	// Walk the set UPWARDS. A key is (ordinal << obj_shift) | obj and ordinals
+	// are handed out in instruction order, so this evaluates rules in the order
+	// they are written -- which is exactly what makes a later rule override an
+	// earlier one. Empty words are skipped whole, so the cost follows the
+	// pending work, not the key space.
+	for (w = 0; w < ngrp; w++) {
+	    set_group_t bits = cur[w];
+	    cur[w] = 0;              // consumed: this set is the free one next cycle
+	    while (bits) {
+		uint32_t b = (uint32_t)__builtin_ctz(bits);
+		index_t  e = (index_t)(w * BITSET_GROUP_BITS + b);
+		uint8_t  obj = QENTRY_OBJ(st, e);
+		index_t  ip  = st->rule_ip[QENTRY_ORD(st, e)];
+		bits &= (bits - 1);              // drop the bit we just took
+		// Restore the object context so a module rule's CURRENT-relative
+		// field access hits the right instance (sequential does this via
+		// OP_NEW; reactive skips NEW). obj 0 = global (offs[0] == 0),
+		// leaving global rules unchanged.
+		st->cur = obj;
+		st->offs[CURRENT] = st->offs[obj];
+		csp_eval_rule(st, ip);
+		x1 = ip;
+	    }
 	}
     }
     return x1;
@@ -2415,7 +2429,6 @@ void csp_csr(csp_rt_t* st)
     free(st->rule_ip);                 // NULL-safe
     st->rule_ip = NULL;
     st->n_rule = 0;
-    st->ord_shift = 0;
     {
 	int nr;
 	if (st->rom_nn > 0)
@@ -2427,27 +2440,32 @@ void csp_csr(csp_rt_t* st)
 	    number_rules(st, 0, st->rom_nn, st->rule_ip, 0);
 	number_rules(st, st->rom_nn, st->ps.nn, st->rule_ip, r_rom);
 	st->n_rule = (index_t)nr;
-	// Widest ordinal field needed, so the (obj,ord) key stays a shift+or.
-	while ((1 << st->ord_shift) < nr)
-	    st->ord_shift++;
     }
 
-    // Size the inq dedup bitset to the actual (obj,ord) key space: objects 0..nq
-    // each with the rule-ordinal range, i.e. (nq+1)<<ord_shift keys. Indexing by
-    // ordinal instead of raw ip is what makes this dense -- by ip it would be
-    // (nq+1)<<INSTR_BITS, nearly all holes (only rule bodies can be queued).
-    // On failure inq_cap stays 0 and csp_enq simply skips dedup (still correct).
+    // Size the two pending sets to the (ordinal, object) key space. Two things
+    // keep it small. Keying by ORDINAL rather than raw ip: by ip the space would
+    // be MAX_INSTRS wide per object and almost all holes, since only rule bodies
+    // can ever be pending. And sizing the object field to the objects that EXIST
+    // rather than to OBJ_BITS: a program with none gets a 0-bit field (one slot
+    // per rule) instead of reserving all 32.
+    // On failure pending_cap stays 0 and csp_enq drops the mark -- reactive then
+    // does nothing, which is visible rather than silently wrong.
     {
-	size_t inq_bits = (size_t)(st->ps.nq + 1) << st->ord_shift;
-	size_t inq_grp  = BITSET_GROUPS(inq_bits);
-	free(st->inq);
-	st->inq = (set_group_t*)malloc(inq_grp * sizeof(set_group_t));
-	if (st->inq == NULL) {
-	    st->inq_cap = 0;
-	} else {
-	    st->inq_cap = (uint32_t)inq_bits;
-	    memset(st->inq, 0, inq_grp * sizeof(set_group_t));
-	}
+	size_t bits, grp;
+	st->obj_shift = 0;
+	while ((1u << st->obj_shift) < (unsigned)(st->ps.nq + 1))
+	    st->obj_shift++;
+	bits = (size_t)st->n_rule << st->obj_shift;
+	grp  = BITSET_GROUPS(bits);
+	free(st->pending[0]);
+	free(st->pending[1]);
+	st->pending[0] = (set_group_t*)calloc(grp, sizeof(set_group_t));
+	st->pending[1] = (set_group_t*)calloc(grp, sizeof(set_group_t));
+	if (!st->pending[0] || !st->pending[1])
+	    st->pending_cap = 0;
+	else
+	    st->pending_cap = (uint32_t)bits;
+	st->gen = 0;
     }
 
     // Clear in-degree counts
@@ -2632,28 +2650,6 @@ void csp_csr(csp_rt_t* st)
     }
     st->graph_n = n;   // graph is complete: enq may now read it for ix < n
 
-    // Size the reactive work queue to the actual program. Peak occupancy is <=
-    // 2*D: an entry pending from last cycle can be enqueued again this cycle,
-    // because csp_react clears inq at cycle START (so a rule runs once per cycle),
-    // not on dequeue -- so each key can sit in the queue twice. The distinct
-    // (obj,ordinal) count D <= (nq+1)*n_rule. n_rule spans ROM and RAM alike: both
-    // feed the same queue (csp_enq_elist enqueues a changed decl's ROM and RAM
-    // dependents together), so it is their sum, not the max. Round up to a power
-    // of two (csp_enq/csp_deq mask, no divide) and clamp to MAX_QUEUE.
-    // NOTE: (nq+1)*n_rule is a safe SUPERSET -- it assumes every object can queue
-    // every rule, but an object only ever queues its own module's. A full queue
-    // drops silently, so this errs high on purpose; see TODO for the tight bound.
-    {
-	size_t need;
-	index_t cap = 16;                     // small floor
-	need = (size_t)2 * (st->ps.nq + 1) * (st->n_rule ? st->n_rule : 1);
-	while ((cap < need) && (cap < MAX_QUEUE))
-	    cap <<= 1;
-	free(st->queue);                      // NULL-safe (mem_init leaves it NULL)
-	st->queue = (index_t*)malloc((size_t)cap * sizeof(index_t));
-	st->queue_cap = st->queue ? cap : 0;  // 0 => enq skips (no queue this build)
-	st->hd = st->tl = 0;
-    }
 #endif
 }
 
@@ -5325,7 +5321,7 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 	    r = csp_parse_legacy(st, tv, 0, num);
 	}
 	else if ((tv[0].t == HASH) && (tv[1].t == IN)) {
-	    r = csp_parse_in(st, tv, 2, num);	    
+	    r = csp_parse_in(st, tv, 2, num);
 	}
 	else if ((tv[0].t == HASH) && (tv[1].t == WORD)) {
 	    int i;
@@ -5490,14 +5486,13 @@ int csp_mem_init(csp_rt_t* st, size_t size)
     st->output = NULL; st->out_cap = 0;
     st->timer = NULL;  st->timer_cap = 0;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-    // queue, inq, rule_ip and idg/ofs/edg are all sized to actual in csp_csr.
-    st->queue = NULL;
-    st->queue_cap = 0;
-    st->inq = NULL;
-    st->inq_cap = 0;
+    // pending sets, rule_ip and idg/ofs/edg are all sized to actual in csp_csr.
+    st->pending[0] = st->pending[1] = NULL;
+    st->pending_cap = 0;
+    st->obj_shift = 0;
+    st->gen = 0;
     st->rule_ip = NULL;
     st->n_rule = 0;
-    st->ord_shift = 0;
     st->idg = st->ofs = st->edg = NULL;
 #endif
     return 0;
@@ -5892,7 +5887,12 @@ int csp_rt_start(csp_rt_t* st)
     }
 
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-    st->tl = st->hd = 0;
+    if (st->pending_cap) {          // drop any work left from a previous build
+	uint32_t g = BITSET_GROUPS(st->pending_cap) * sizeof(set_group_t);
+	memset(st->pending[0], 0, g);
+	memset(st->pending[1], 0, g);
+	st->gen = 0;
+    }
 #endif
     // SAFE state: unwind any runtime accumulators so /clear, /reset and a
     // post-parse rebuild all land on a coherent baseline (like boot's memset).
@@ -6435,18 +6435,173 @@ match:
     return CSP_CMD_OK;
 }
 
-// true if x is in the first n entries of a[]
-static int ix_in(const index_t* a, int n, index_t x)
+// --- /state rendering ------------------------------------------------------
+// Fixed columns: NAME  DIR  KIND  PIN  = VALUE. Only committed (DIN) values are
+// shown -- the DOUT shadow is an internal half of the transaction model, not
+// something a user reading their program's state should have to decode.
+// The DIR column doubles as the timer's running/stopped, and the PIN column as
+// its period/remaining -- a timer has neither a direction nor a pin, so it costs
+// no extra columns.
+#define STATE_W_NAME 13
+#define STATE_W_DIR   8
+#define STATE_W_KIND  9
+#define STATE_W_PIN   8
+
+static void state_pad(int printed, int w)
 {
-    int i;
-    for (i = 0; i < n; i++)
-	if (a[i] == x) return 1;
+    while (printed++ < w) csp_print_char(' ');
+}
+
+static int state_strlen(const char* s)
+{
+    int n = 0;
+    while (s && s[n]) n++;
+    return n;
+}
+
+static void state_col(const char* s, int w)
+{
+    if (s) csp_print_str(s);
+    state_pad(state_strlen(s), w);
+}
+
+static int state_udigits(uvalue_t v)
+{
+    int n = 1;
+    while (v >= 10) { v /= 10; n++; }
+    return n;
+}
+
+// Object-qualified name, as the state dump writes it: "p0.State", or the bare
+// name for a global.
+static void state_name(csp_rt_t* st, index_t ix)
+{
+    int m = OBJ(ix);
+    int n = 0;
+    if ((m != GLOBAL) && (m != CURRENT)) {
+	const char* on = decl_name(st, st->object[m]);
+	csp_print_str(on);
+	csp_print_char('.');
+	n = state_strlen(on) + 1;
+    }
+    csp_print_str(decl_name(st, ix));
+    state_pad(n + state_strlen(decl_name(st, ix)), STATE_W_NAME);
+}
+
+// A DECL_VARIABLE named "State" holds a state NUMBER; show it symbolically, the
+// way /list does, so "ON" does not read as "3". Same rule as the disassembler's
+// is_state_var: only that name, so a plain "T=1" is never mistaken for a state.
+static int state_is_state_var(csp_rt_t* st, int di)
+{
+    if (decl(st, di, type) != DECL_VARIABLE)
+	return 0;
+    return csp_str_eq(st, decl_name_pos(st, MAKE_INDEX(0, di)), "State", 5);
+}
+
+// Print the declared state numbered `v`; 0 if no state has that number.
+static int state_print_state(csp_rt_t* st, ivalue_t v)
+{
+    int s;
+    for (s = 0; s < st->ps.ns; s++) {
+	if (st->states[s].snum == v) {
+	    csp_print_str_at(st, st->states[s].name);
+	    return 1;
+	}
+    }
     return 0;
+}
+
+// One leaf row. ix is the object-qualified leaf, di its declaration index.
+NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
+{
+    decl_t t = decl(st, di, type);
+    int is_state;
+
+    state_name(st, ix);
+
+    if (t == DECL_TIMER) {
+	value_t* v = csp_dio_slot(st, ix, DIN);
+	uint32_t left = 0;
+	if (v->t.running) {
+	    // t0 lives in the slot right after the timer
+	    index_t tx = MAKE_INDEX(OBJ(ix), INDEX(ix)+1);
+	    uint32_t dt = csp_time_ms() - csp_dio_slot(st, tx, DIN)->u;
+	    left = (dt >= v->t.period) ? 0 : (v->t.period - dt);
+	}
+	state_col(v->t.running ? "running" : "stopped", STATE_W_DIR);
+	state_col("timer", STATE_W_KIND);
+	csp_print_uint(v->t.period);          // period/remaining, in the pin column
+	if (v->t.running) {
+	    csp_print_char('/');
+	    csp_print_uint(left);
+	}
+	if (v->t.fired)
+	    csp_print_str("  FIRED");
+	csp_println();
+	return;
+    }
+
+    is_state = state_is_state_var(st, di);
+    if (t == DECL_VARIABLE) {
+	state_col("", STATE_W_DIR);
+	state_col(is_state ? "state" : "var", STATE_W_KIND);
+	state_col("", STATE_W_PIN);
+    }
+    else {   // digital / analog
+	// port/pin/dir live in the VALUE slot, not the declaration: an object's
+	// init list (P.pin=0, P.pin=1, ...) writes them per instance, so reading
+	// the decl would print the template's pin for every object.
+	value_t* v = csp_dio_slot(st, ix, DIN);
+	int port, pin, dir;
+	if (t == DECL_DIGITAL) { port = v->d.port; pin = v->d.pin; dir = v->d.dir; }
+	else                   { port = v->a.port; pin = v->a.pin; dir = v->a.dir; }
+	state_col(csp_fmt_pindir(dir), STATE_W_DIR);
+	state_col((t == DECL_DIGITAL) ? "digital" : "analog", STATE_W_KIND);
+	csp_print_uint(port); csp_print_char(':'); csp_print_uint(pin);
+	state_pad(state_udigits(port) + 1 + state_udigits(pin), STATE_W_PIN);
+    }
+    csp_print_str("= ");
+    if (!is_state || !state_print_state(st, csp_value(st, ix).i))
+	csp_print_value(st, decl(st,di,vt), csp_value(st, ix));
+    csp_println();
+}
+
+// Does declaration `di` pass the /state filters? Shared by the global and the
+// per-object pass. A named filter matches on the DECLARATION, so `/state State`
+// shows the global State and every object's State alike.
+static int state_want(csp_rt_t* st, int di,
+		      int f_var, int f_dig, int f_ana, int f_timer,
+		      uint8_t dir_filter, const index_t* named, int nnamed)
+{
+    decl_t t = decl(st, di, type);
+    const char* nm;
+
+    if ((t != DECL_VARIABLE) && (t != DECL_DIGITAL) &&
+	(t != DECL_ANALOG) && (t != DECL_TIMER))
+	return 0;
+    nm = decl_name(st, MAKE_INDEX(0, di));
+    if (!nm || !*nm)
+	return 0;
+    if (nnamed) {
+	int k;
+	for (k = 0; k < nnamed; k++)
+	    if (INDEX(named[k]) == (index_t)di)
+		return 1;
+	return 0;
+    }
+    if ((t == DECL_VARIABLE && !f_var) || (t == DECL_DIGITAL && !f_dig) ||
+	(t == DECL_ANALOG && !f_ana)   || (t == DECL_TIMER && !f_timer))
+	return 0;
+    if (dir_filter && ((t == DECL_DIGITAL) || (t == DECL_ANALOG)) &&
+	!(decl(st,di,dir) & dir_filter))
+	return 0;
+    return 1;
 }
 
 static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 {
     int i, a;
+    int in_module = 0;
     int f_timer = 0, f_var = 0, f_dig = 0, f_ana = 0, any_cat = 0;
     uint8_t dir_filter = 0;    // 0 = any dir; else DIR_IN / DIR_OUT mask
     index_t named[MAX_ARGV];   // explicit "show just these" decl filters (OR)
@@ -6481,96 +6636,56 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
     if (!any_cat && !nnamed)            // bare /state -> show everything
 	f_timer = f_var = f_dig = f_ana = 1;
 
-    csp_print_str("cycle = ");
+    csp_print_str("cycle ");
     csp_print_uint(st->cycle);
-    csp_print_str("\nlatch = ");
+    csp_print_str("   latch ");
     csp_print_str(st->latch ? "on" : "off");
-    csp_print_char('\n');
+    csp_print_str("\n\n");
 
-    // timers: period, running/stopped, ms until next timeout, fired-this-cycle
-    if (f_timer || nnamed) {
-	uint32_t now = csp_time_ms();
-	for (i = 0; i < st->nt; i++) {
-	    index_t ix = st->timer[i];
-	    value_t* v;
-	    const char* nm;
-	    if (nnamed && !ix_in(named, nnamed, ix))
-		continue;          // names given: only the named timers
-	    v = csp_dio_slot(st, ix, DIN);
-	    nm = decl_name(st, ix);
-	    csp_print_str(nm ? nm : "?");
-	    csp_print_str(" timer period=");
-	    csp_print_uint(v->t.period);
-	    csp_print_str(v->t.running ? " running next=" : " stopped");
-	    if (v->t.running) {
-		index_t tx = MAKE_INDEX(OBJ(ix), INDEX(ix)+1);
-		uint32_t t0 = csp_dio_slot(st, tx, DIN)->u;
-		uint32_t dt = now - t0;
-		csp_print_uint((dt >= v->t.period) ? 0 : (v->t.period - dt));
-	    }
-	    if (v->t.fired) csp_print_str(" FIRED");
-	    csp_print_char('\n');
-	}
+    // Two passes so object INSTANCES actually appear: the globals, then each
+    // object with its own fields. The old walk indexed MAKE_INDEX(0,i) -- obj 0
+    // only -- so it printed the module TEMPLATE once and never p0..p9, while the
+    // timers came from st->timer[] (per-object, but named bare "T", so ten
+    // indistinguishable rows).
+    for (i = 0; i < st->ps.nd; i++) {
+	decl_t t = decl(st,i,type);
+	if (t == DECL_MODULE) { in_module = 1; continue; }
+	if (t == DECL_END)    { in_module = 0; continue; }
+	if (in_module)        continue;   // template fields belong to the objects
+	if (!state_want(st, i, f_var, f_dig, f_ana, f_timer, dir_filter,
+			named, nnamed))
+	    continue;
+	state_row(st, MAKE_INDEX(0, i), i);
     }
 
     for (i = 0; i < st->ps.nd; i++) {
-	index_t ix = MAKE_INDEX(0, i);
-	decl_t t = decl(st,i,type);
-	const char* name;
-	value_t* o;
-
-	if ((t != DECL_VARIABLE) && (t != DECL_DIGITAL) && (t != DECL_ANALOG))
-	    continue;                                    // skips ENDs too
-	if (nnamed) {
-	    if (!ix_in(named, nnamed, ix))
-		continue;                                // names given: only those
-	} else {
-	    if ((t == DECL_VARIABLE && !f_var) ||
-		(t == DECL_DIGITAL  && !f_dig) ||
-		(t == DECL_ANALOG   && !f_ana))
-		continue;
-	    if (dir_filter && (t != DECL_VARIABLE) && !(decl(st,i,dir) & dir_filter))
-		continue;
-	}
-	name = decl_name(st, ix);
-	if (!name || !*name) continue;
-
-	csp_print_str(name);
-	csp_print_char(' ');
-
-	if (t == DECL_VARIABLE) {
-	    csp_print_str("var = ");
-	    csp_print_value(st, decl(st,i,vt), csp_value(st, ix));
-	    csp_print_char('\n');
+	index_t mx;
+	int dn, base, j, m, shown = 0;
+	if (decl(st,i,type) != DECL_OBJECT)
 	    continue;
+	mx   = decl(st, i, mq.mx);
+	m    = decl(st, i, mq.m);
+	dn   = decl(st, INDEX(mx), md.n);
+	base = INDEX(mx) + 1;
+	for (j = 0; j < dn; j++) {
+	    int dj = base + j;
+	    decl_t t = decl(st, dj, type);
+	    if (state_want(st, dj, f_var, f_dig, f_ana, f_timer, dir_filter,
+			   named, nnamed)) {
+		if (!shown) {           // header only once, and only if non-empty
+		    csp_println();
+		    csp_print_char('#');
+		    csp_print_str(decl_name(st, MAKE_INDEX(0, i)));
+		    csp_print_char(' ');
+		    csp_print_str(decl_name(st, mx));
+		    csp_println();
+		    shown = 1;
+		}
+		state_row(st, MAKE_INDEX(m, dj), dj);
+	    }
+	    if (t == DECL_TIMER)   // a timer owns the next slot too (its t0)
+		j++;
 	}
-
-	// digital/analog: dir, port:pin, committed value, then the raw DOUT slot
-	// (pin+val that csp_output actually writes -- so we can see if the value
-	// reached the output slot and the pin is right).
-	csp_print_str(csp_fmt_pindir(decl(st,i,dir)));
-	csp_print_char(' ');
-	csp_print_str((t == DECL_DIGITAL) ? "digital " : "analog ");
-	if (t == DECL_DIGITAL) {
-	    csp_print_uint(decl(st,i,di.port)); csp_print_char(':');
-	    csp_print_uint(decl(st,i,di.pin));
-	} else {
-	    csp_print_uint(decl(st,i,an.port)); csp_print_char(':');
-	    csp_print_uint(decl(st,i,an.pin));
-	}
-	csp_print_str(" = ");
-	csp_print_value(st, decl(st,i,vt), csp_value(st, ix));
-
-	o = csp_dio_slot(st, ix, DOUT);
-	csp_print_str("  [DOUT pin=");
-	if (t == DECL_DIGITAL) {
-	    csp_print_uint(o->d.pin); csp_print_str(" val=");
-	    csp_print_uint(o->d.val);
-	} else {
-	    csp_print_uint(o->a.pin); csp_print_str(" val=");
-	    csp_print_uint(o->a.val);
-	}
-	csp_print_str("]\n");
     }
     return CSP_CMD_OK;
 }
@@ -6652,27 +6767,27 @@ static void mem_name(const char* name)
     csp_print_str("  ");
     csp_print_str(name);
     while (name[len]) len++;
-    while (len++ < 8) csp_print_char(' ');
+    while (len++ < 9) csp_print_char(' ');
 }
 
-// A category the ENCODING caps (an index must fit its bit field): show the
-// ceiling and the headroom left.
-static void mem_row(const char* name, int used, int max)
+// One /memory row: NAME  used  limit [ pct ]. `limit` < 0 means there is no
+// ceiling -- the row is sized to whatever the program needs -- and prints "-".
+// pct is only meaningful against a real limit.
+static void mem_row(const char* name, uint32_t used, int32_t limit, int show_pct)
 {
     mem_name(name);
-    mem_int_r(used, 5);
-    mem_int_r(max, 7);
-    mem_int_r(max - used, 7);
-    csp_print_char('\n');
-}
-
-// A category sized to the actual program (csp_estimate): there IS no ceiling --
-// it is allocated to exactly what is used -- so max/free would be noise.
-static void mem_row_n(const char* name, int used)
-{
-    mem_name(name);
-    mem_int_r(used, 5);
-    csp_print_char('\n');
+    mem_int_r((int)used, 8);
+    if (limit < 0) {
+	int k;
+	for (k = 1; k < 9; k++) csp_print_char(' ');
+	csp_print_char('-');
+    }
+    else
+	mem_int_r(limit, 9);
+    if (show_pct && (limit > 0)) {
+	mem_int_r((int)((used * 100) / (uint32_t)limit), 5);
+	csp_print_char('%');
+    }
 }
 
 // Bytes CandySpeak holds OUTSIDE the code arena: everything csp_rt_start and
@@ -6692,8 +6807,7 @@ NOINLINE static uint32_t csp_derived_bytes(csp_rt_t* st)
 	n += (uint32_t)(3*st->graph_n + 1) * sizeof(index_t);
     if (st->edg != NULL)
 	n += (uint32_t)st->ofs[st->ps.nd] * sizeof(index_t);
-    n += (uint32_t)BITSET_GROUPS(st->inq_cap) * sizeof(set_group_t);
-    n += (uint32_t)st->queue_cap * sizeof(index_t);
+    n += 2 * (uint32_t)BITSET_GROUPS(st->pending_cap) * sizeof(set_group_t);
     n += (uint32_t)st->n_rule * sizeof(index_t);          // rule_ip
 #endif
     return n;
@@ -6713,87 +6827,57 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
     size_t limit = st->mem_limit;
     (void)argc; (void)argv;
 
-    // The board's RAM, then what CandySpeak takes out of it: the code arena plus
-    // the tables derived from the program. Both are inside "used" above.
+    // Top half: what takes space. Bottom half: what the program is made of.
+    // The blank line between them is the whole distinction -- above, `limit` is
+    // real memory; below, it is the INDEX ceiling the encoding imposes.
+    csp_print_str("                used     limit\n");
+
+    mem_row("code", (uint32_t)used, (int32_t)limit, 1);
+    csp_println();
+    mem_row("data", csp_derived_bytes(st), -1, 0);
+    if (!st->started)
+	csp_print_str("   (allocated on /resume)");
+    csp_println();
+    mem_row("RAM", csp_system_ram_used(), (int32_t)csp_system_ram_capacity(), 1);
+    csp_println();
+
     {
-	uint32_t derived = csp_derived_bytes(st);
-	csp_print_str("RAM:     "); csp_print_uint((uvalue_t)csp_system_ram_capacity());
-	csp_print_str(" total, "); csp_print_uint((uvalue_t)csp_system_ram_used());
-	csp_print_str(" used, "); csp_print_uint((uvalue_t)csp_system_ram_avail());
-	csp_print_str(" avail\n");
-
-	// instr and decl share one byte budget (mem_fits): this is what caps code.
-	csp_print_str("  arena  "); csp_print_uint((uvalue_t)used);
-	csp_print_char('/'); csp_print_uint((uvalue_t)limit);
-	csp_print_str(" bytes (");
-	csp_print_uint((uvalue_t)(limit ? (used * 100 / limit) : 0));
-	csp_print_str("% used, "); csp_print_uint((uvalue_t)(limit - used));
-	csp_print_str(" free) -- instr+decl pool\n");
-
-	csp_print_str("  derived "); csp_print_uint((uvalue_t)derived);
-	csp_print_str(" bytes -- view/dset/buf/heap/io/graph/inq/queue");
-	if (!st->started)
-	    csp_print_str(" (not allocated until /resume)");
-	csp_println();
-    }
-
-    // What /save costs vs what the board HAS. This, not RAM, is usually what
-    // bounds a program you can KEEP: RAM holds more code than you can persist,
-    // and code you cannot save is only good for testing.
-    {
-	uint32_t cap = csp_eeprom_capacity();
+	uint32_t cap  = csp_eeprom_capacity();
 	uint32_t need = (uint32_t)csp_eeprom_size(st);
-	csp_print_str("EEPROM:  "); csp_print_uint((uvalue_t)need);
-	csp_print_str(" needed / ");
-	if (cap == CSP_EEPROM_NONE)
-	    csp_print_str("none on this board (cannot /save)");
-	else if (cap == CSP_EEPROM_UNBOUNDED)
-	    csp_print_str("unbounded (host file; -E sets a board ceiling)");
+	if (cap == CSP_EEPROM_NONE) {
+	    mem_row("EEPROM", need, 0, 0);
+	    csp_print_str("   (NONE)");
+	}
+	else if (cap == CSP_EEPROM_UNBOUNDED) {
+	    mem_row("EEPROM", need, -1, 0);
+	    csp_print_str("   (OK)");
+	}
 	else {
-	    csp_print_uint((uvalue_t)cap); csp_print_str(" bytes");
-	    if (need > cap)
-		csp_print_str("  -- TOO BIG TO SAVE");
+	    mem_row("EEPROM", need, (int32_t)cap, 1);
+	    csp_print_str((need > cap) ? "  (FULL)" : "  (OK)");
 	}
 	csp_println();
     }
 
-    {   // computed need (independent of rt_start) -- see csp_estimate
-	csp_estimate_t e;
-	csp_estimate(st, &e);
-	csp_print_str("estimate: leaf="); csp_print_uint((uvalue_t)e.nleaf);
-	csp_print_str(" buf="); csp_print_uint((uvalue_t)e.nbuf);
-	csp_print_str(" heap="); csp_print_uint((uvalue_t)e.heap);
-	csp_print_str(" in="); csp_print_uint((uvalue_t)e.ni);
-	csp_print_str(" out="); csp_print_uint((uvalue_t)e.no);
-	csp_print_str(" timer="); csp_print_uint((uvalue_t)e.nt); csp_println();
-    }
-#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-    // The reactive tables key on the rule ORDINAL, so they scale with the rule
-    // count -- not with MAX_INSTRS the way an (obj,ip) key space would.
-    csp_print_str("reactive: rules="); csp_print_uint((uvalue_t)st->n_rule);
-    csp_print_str(" queue="); csp_print_uint((uvalue_t)st->queue_cap);
-    csp_print_str(" inq=");
-    csp_print_uint((uvalue_t)(BITSET_GROUPS(st->inq_cap) * sizeof(set_group_t)));
-    csp_print_str(" bytes\n");
-#endif
-
     if (st->rom_nd || st->rom_nn || st->rom_strp) {
-	csp_print_str("ROM base: ");
+	csp_println();
+	csp_print_str("  ROM base   ");
 	csp_print_int(st->rom_nd);   csp_print_str(" decl, ");
 	csp_print_int(st->rom_nn);   csp_print_str(" instr, ");
 	csp_print_int(st->rom_strp); csp_print_str(" str\n");
     }
-    csp_print_str("category   used    max   free\n");
-    mem_row("instr",  st->ps.nn   - st->rom_nn,   MAX_INSTRS);
-    mem_row("decl",   st->ps.nd   - st->rom_nd,   MAX_DECLS);
-    mem_row("string", st->ps.strp - st->rom_strp, MAX_STR_BUF);
-    mem_row_n("input",  st->ni);
-    mem_row_n("output", st->no);
-    mem_row("object", st->ps.nq,  MAX_OBJECTS);
-    mem_row("state",  st->ps.ns,  MAX_STATES);
-    mem_row("module", st->nm,     MAX_MODULES);
-    mem_row_n("timer",  st->nt);
-    mem_row_n("buffer", st->nbuf);
+
+    csp_println();
+    mem_row("instr",   st->ps.nn   - st->rom_nn,   MAX_INSTRS, 0);   csp_println();
+    mem_row("decl",    st->ps.nd   - st->rom_nd,   MAX_DECLS,  0);   csp_println();
+    mem_row("string",  st->ps.strp - st->rom_strp, MAX_STR_BUF, 0);  csp_println();
+    mem_row("objects", st->ps.nq,  MAX_OBJECTS, 0);                  csp_println();
+    mem_row("modules", st->nm,     MAX_MODULES, 0);                  csp_println();
+    mem_row("states",  st->ps.ns,  MAX_STATES,  0);                  csp_println();
+    mem_row("in",      st->ni,   -1, 0);                             csp_println();
+    mem_row("out",     st->no,   -1, 0);                             csp_println();
+    mem_row("timers",  st->nt,   -1, 0);                             csp_println();
+    mem_row("buffers", st->nbuf, -1, 0);                             csp_println();
     return CSP_CMD_OK;
 }
 

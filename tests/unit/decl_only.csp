@@ -1,0 +1,9 @@
+// Regression: a program may be declarations only, with no rules at all.
+// The boot path used to decide "restore the saved program from eeprom" by asking
+// whether any INSTRUCTIONS had appeared. A declarations-only program has none, so
+// it looked like "nothing to run" and was silently replaced by whatever eeprom.db
+// held (csp_eeprom_load re-inits from scratch) -- no error, exit 0, declarations
+// just gone. The test now is whether a program was GIVEN, not whether it has rules.
+#variable Alpha integer = 11
+#variable Beta integer = 22
+#variable Gamma integer = 33

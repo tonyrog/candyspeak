@@ -1,0 +1,6 @@
+{cycles, 3}.
+{checks, [
+  {final_var, "Alpha", 11},
+  {final_var, "Beta", 22},
+  {final_var, "Gamma", 33}
+]}.

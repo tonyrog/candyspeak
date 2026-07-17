@@ -126,13 +126,20 @@ typedef const char rochar;  // PROGMEM string character type
 #define ENDIAN_BITS 2
 
 // Queue entry: pack obj and ip together
-// A queue entry packs (object, rule ORDINAL) -- not a raw ip. The ordinal field
-// is st->ord_shift wide (log2 of the rule count, rounded up), set by csp_csr, so
-// these take st. obj is OBJ_BITS, and ord_shift <= INSTR_BITS, so an entry still
-// fits index_t.
-#define MAKE_QENTRY(st, obj, ord) (((obj) << (st)->ord_shift) | (ord))
-#define QENTRY_OBJ(st, e)         ((e) >> (st)->ord_shift)
-#define QENTRY_ORD(st, e)         ((e) & ((1 << (st)->ord_shift) - 1))
+// A pending-work key packs (rule ORDINAL, object) -- ORDINAL IN THE HIGH BITS.
+// That order is the whole point: ordinals are handed out in instruction order
+// (number_rules), so walking keys upwards evaluates rules in the order they are
+// written, and a rule added later overrides an earlier one -- which is how a
+// running program gets patched. Keying obj-major instead would run a late global
+// patch before the object rules it is meant to override.
+//
+// The object field is st->obj_shift wide -- sized to the objects that EXIST, not
+// to OBJ_BITS. A program with no objects gets a 0-bit field (one slot per rule);
+// one with 10 objects gets 4 bits, not 5. A shift, not a multiply by nq+1, so the
+// decode stays a mask and the set can still be walked a word at a time.
+#define MAKE_QENTRY(st, obj, ord) (((ord) << (st)->obj_shift) | (obj))
+#define QENTRY_OBJ(st, e)         ((e) & ((1u << (st)->obj_shift) - 1))
+#define QENTRY_ORD(st, e)         ((e) >> (st)->obj_shift)
 #define MAX_STACK_DEPTH 4
 #define NAME_BITS    5
 #define MAX_STR_BUF  (1 << STRING_BITS) // total number of char in var names
@@ -1035,19 +1042,23 @@ typedef struct _csp_rt_t
     // [0,rom_nn) reproduces exactly the ordinals rom_edg was baked with.
     index_t* rule_ip;          // ordinal -> instruction index (own alloc, n_rule)
     index_t  n_rule;           // rule bodies (ROM + RAM); 0 until csr has run
-    uint8_t  ord_shift;        // log2 of the ordinal field: key = (obj<<shift)|ord
-    // inq: dedup bitset over (obj,ord) queue keys, sized to the actual key space
-    // ((nq+1)<<ord_shift bits) in csp_csr. inq_cap = that bit count (0 until
-    // built); csp_enq only touches inq for keys below it.
-    set_group_t* inq;          // (own allocation)
-    uint32_t inq_cap;          // inq size in bits; a key >= this skips dedup
-    // Reactive work queue (own allocation, csp_csr), sized to the actual program:
-    // 2*(nq+1)*R rounded up to a power of two (R = rule bodies), clamped to
-    // MAX_QUEUE. Power-of-two so csp_enq/csp_deq index with a mask, not a divide.
-    // Peak occupancy is <= 2*D (this cycle + next), D = distinct (obj,ip) keys.
-    index_t* queue;            // circular buffer, queue_cap slots
-    index_t  queue_cap;        // slot count (power of two); 0 => not built, enq skips
-    int hd,tl;  // queue head and tail
+    // Pending work is a BIT SET over (ord,obj) keys, not a queue. The set already
+    // is the pending state -- a queue would only add an order, and the order it
+    // adds is the wrong one: fed in change order it runs rules in whatever
+    // sequence their triggers fired, so an overriding rule loses whenever its
+    // trigger changed first (see tests/unit/rule_order.csp). Walking the set
+    // upwards evaluates in ORDINAL order = instruction order = the order the
+    // rules are written, which is what "last rule wins" means.
+    //
+    // Two sets: work for THIS cycle, and what this cycle queues for the NEXT.
+    // csp_react swaps them, so a rule enqueued while its own cycle runs waits its
+    // turn -- the same generation split the old cycle_end snapshot gave.
+    // Dedup is inherent (a bit is set or it is not) and a bit set CANNOT overflow,
+    // so the silent drop a full queue used to cause is gone by construction.
+    set_group_t* pending[2];   // own allocation, pending_cap bits each
+    uint32_t pending_cap;      // key space in bits = n_rule << obj_shift; 0 = not built
+    uint8_t  obj_shift;        // object field width: ceil(log2(nq+1)), <= OBJ_BITS
+    uint8_t  gen;              // which set csp_enq fills (the other is running)
     // back references
     // Reactive graph, sized to the actual node/edge counts in csp_csr (own
     // allocation, not the arena). graph_n = nodes it was built for; a decl added
@@ -1158,35 +1169,29 @@ static inline csp_view_t* csp_view(csp_rt_t* st, index_t n)
 }
 
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-// enq a rule for recalculation, with object context. `ord` is a rule ORDINAL --
-// edg[] (and the baked rom_edg) already store ordinals, so there is no ip->ord
-// lookup here; csp_react maps back via rule_ip on the way out.
+// Mark a rule for recalculation in an object's context. `ord` is a rule ORDINAL
+// -- edg[] (and the baked rom_edg) already store ordinals, so there is no ip->ord
+// lookup here; csp_react maps back via rule_ip when it runs the rule.
+// Setting a bit twice is a no-op, so this needs no dedup test, and it cannot
+// overflow: a key beyond the built set just means the graph has not been rebuilt
+// for it yet (an object added since the last csr) and is dropped, as it was
+// before -- such a rule has no edges to reach it anyway.
 static inline void csp_enq(csp_rt_t* st, uint8_t obj, uint16_t ord)
 {
-    index_t e = MAKE_QENTRY(st, obj, ord);  // dedup per (obj,ord): the same rule runs
-    // A key beyond the sized bitset (e.g. an object added since the last csr)
-    // is not tracked: enqueue without dedup -- correct, just possibly twice.
-    if ((e < st->inq_cap) && bitset_tst(st->inq, e)) // once per object, not overall
-	return;
-    if (st->queue_cap && (st->tl - st->hd) != st->queue_cap) {
-	st->queue[st->tl & (st->queue_cap - 1)] = e;   // cap is a power of two
-	st->tl++;
-	if (e < st->inq_cap)
-	    bitset_set(st->inq, e);
-    }
+    index_t e = MAKE_QENTRY(st, obj, ord);
+    if (e < st->pending_cap)
+	bitset_set(st->pending[st->gen], e);
 }
 
-// deq returns packed (obj, ordinal) - use QENTRY_OBJ/QENTRY_ORD to unpack
-static inline index_t csp_deq(csp_rt_t* st)
+// Is any rule waiting for the next cycle? The driver's idle test -- it used to
+// ask whether the queue was non-empty.
+static inline int csp_pending(csp_rt_t* st)
 {
-    index_t x;
-    if (st->tl == st->hd)
-	return BAD_INDEX;
-    x = st->queue[st->hd & (st->queue_cap - 1)];   // cap is a power of two
-    st->hd++;
-    // don't clear inq bit here - cleared at cycle start to prevent
-    // same rule being queued multiple times within a cycle
-    return x;
+    uint32_t w, n = BITSET_GROUPS(st->pending_cap);
+    for (w = 0; w < n; w++)
+	if (st->pending[st->gen][w])
+	    return 1;
+    return 0;
 }
 #endif
 

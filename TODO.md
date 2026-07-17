@@ -152,10 +152,14 @@ that trigger on digital state change, analog sample compleation...
   inte kod-poolen som binder på små bräder -- det är de härledda tabellerna.
   Köns tighta gräns (nedan) är därmed den enskilt största vinsten.
 
-- Kön är största reaktiva tabellen (1024 slots = 2 KB för cpx_m).
-  queue_cap = pow2(2*(nq+1)*R) är en SÄKER men lös superset: den antar att
-  varje objekt kan köa varje regel, men ett objekt kan bara köa sin egen
-  moduls regler. Tight vore D = summa över objekt av (regler i dess modul).
-  OBS: full kö droppar TYST (csp_enq) = tappad reaktiv uppdatering, så en
-  tightare gräns måste vara bevisbart säker (peak <= 2*D, se csp_react).
+- Kön BORTTAGEN (2026-07-17). Ersatt av två bitset över (ordinal,objekt) --
+  kön och inq bar samma information, kön lade bara till en ordning, och det
+  var FEL ordning (ändringsordning, inte regelordning) => se rule_order-testet.
+  Bitsetet kan inte spilla över, så det tysta droppet är borta by construction.
+  KVAR (nu en ren storleksfråga, inte korrekthet): nyckelrymden är
+  n_rule << OBJ_BITS, dvs den reserverar alla 32 objekt-slots per regel fast
+  en regel bara kan köas för sin egen moduls instanser. Tight vore en per-modul
+  bas (som offs[] gör för leaves): rymden blir då summa över objekt av (regler i
+  dess modul) = exakt D. För cpx_m: 200 B -> ~70 B. Värsta fallet slutar skala
+  med produkten n_rule x MAX_OBJECTS.
  

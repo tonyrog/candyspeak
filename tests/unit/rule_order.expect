@@ -1,0 +1,5 @@
+{cycles, 5}.
+{modes, [seq, reactive]}.
+{checks, [
+  {final_var, "X", 2}
+]}.
