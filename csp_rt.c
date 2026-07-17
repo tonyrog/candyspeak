@@ -2368,6 +2368,44 @@ static bool_t asm_OR(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
 
 // Build reactive dependency graph: declaration -> rules that depend on it
 // When a declaration changes, we enqueue all rules that read from it (via LD)
+// --- middle-region bump allocator ------------------------------------------
+// Reset the middle to the gap between the code growing in from both ends. Called
+// once per csp_rebuild; every derived table is then handed out from here, so a
+// rebuild simply forgets the old layout instead of freeing eleven blocks.
+NOINLINE void csp_mid_reset(csp_rt_t* st)
+{
+    size_t ib = (size_t)(st->ps.nn - st->rom_nn) * sizeof(csp_instr_t);
+    size_t db = (size_t)(st->ps.nd - st->rom_nd) * sizeof(csp_decl_t);
+    st->mid_base = CSP_A8(ib + CSP_SCRATCH);
+    st->mid      = st->mid_base;
+    st->mid_full = 0;
+    // The decl end grows DOWN from the top of the pool, so the middle must stop
+    // short of it. Guard the subtraction: a program that already fills the pool
+    // leaves no middle at all rather than wrapping to a huge end.
+    if (st->mem_limit > (db + CSP_SCRATCH + st->mid_base))
+	st->mid_end = st->mem_limit - db - CSP_SCRATCH;
+    else
+	st->mid_end = st->mid_base;
+}
+
+// Hand out `n` bytes from the middle, 8-aligned so every table start is aligned
+// regardless of what preceded it. NULL when the middle is exhausted -- the caller
+// reports it, and mid_full makes the reason visible in /memory rather than
+// looking like a mysterious out-of-memory.
+NOINLINE void* csp_mid_alloc(csp_rt_t* st, size_t n)
+{
+    void* p;
+    n = CSP_A8(n ? n : 1);
+    if ((st->mid + n) > st->mid_end) {
+	st->mid_full = 1;
+	return NULL;
+    }
+    p = st->mem + st->mid;
+    st->mid += n;
+    memset(p, 0, n);
+    return p;
+}
+
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 // Number the rule bodies of instruction range [lo,hi) in scan order, continuing
 // from ordinal `ord`. A body starts at the range base (code before any NEXT/ENTER
@@ -2411,22 +2449,19 @@ void csp_csr(csp_rt_t* st)
     int n = st->ps.nd;             // graph nodes = declarations
 
     // Size the graph to the actual node/edge counts. idg[n], ofs[n+1] and the
-    // pass-3 write cursors wr[n] share one block (idg is its base -> free(idg)
-    // frees all three); edg is sized after the counting pass. Rebuilds free the
-    // previous blocks first. wr used to be an index_t[MAX_DECLS] local -- 4K of
-    // stack at DECL_BITS=11, and the last thing dimensioned by that width.
-    free(st->idg);                 // NULL-safe (mem_init leaves it NULL)
-    free(st->edg);
+    // pass-3 write cursors wr[n] share one bump block (idg is its base). edg is
+    // sized after the counting pass. Nothing is freed -- csp_rebuild resets the
+    // middle. wr used to be an index_t[MAX_DECLS] local -- 4K of stack at
+    // DECL_BITS=11, and the last thing dimensioned by that width.
     st->edg = NULL;
     st->graph_n = 0;               // enq skips the graph until it is fully built
-    st->idg = (index_t*)malloc((size_t)(n + (n+1) + n) * sizeof(index_t));
-    if (st->idg == NULL) { st->ofs = NULL; return; }  // out of memory: no graph
+    st->idg = (index_t*)csp_mid_alloc(st, (size_t)(n + (n+1) + n) * sizeof(index_t));
+    if (st->idg == NULL) { st->ofs = NULL; return; }  // middle full: no graph
     st->ofs = st->idg + n;
     wr      = st->ofs + (n+1);
 
     // Number every rule body 0..n_rule-1 and build the ordinal -> ip map. ROM
     // first (so its ordinals match what rom_edg was baked with), then RAM.
-    free(st->rule_ip);                 // NULL-safe
     st->rule_ip = NULL;
     st->n_rule = 0;
     {
@@ -2434,8 +2469,8 @@ void csp_csr(csp_rt_t* st)
 	if (st->rom_nn > 0)
 	    r_rom = number_rules(st, 0, st->rom_nn, NULL, 0);
 	nr = number_rules(st, st->rom_nn, st->ps.nn, NULL, r_rom);
-	st->rule_ip = (index_t*)malloc((size_t)nr * sizeof(index_t));
-	if (st->rule_ip == NULL) { st->ofs = NULL; return; }  // no graph
+	st->rule_ip = (index_t*)csp_mid_alloc(st, (size_t)nr * sizeof(index_t));
+	if (st->rule_ip == NULL) { st->ofs = NULL; return; }  // middle full
 	if (st->rom_nn > 0)
 	    number_rules(st, 0, st->rom_nn, st->rule_ip, 0);
 	number_rules(st, st->rom_nn, st->ps.nn, st->rule_ip, r_rom);
@@ -2457,10 +2492,8 @@ void csp_csr(csp_rt_t* st)
 	    st->obj_shift++;
 	bits = (size_t)st->n_rule << st->obj_shift;
 	grp  = BITSET_GROUPS(bits);
-	free(st->pending[0]);
-	free(st->pending[1]);
-	st->pending[0] = (set_group_t*)calloc(grp, sizeof(set_group_t));
-	st->pending[1] = (set_group_t*)calloc(grp, sizeof(set_group_t));
+	st->pending[0] = (set_group_t*)csp_mid_alloc(st, grp * sizeof(set_group_t));
+	st->pending[1] = (set_group_t*)csp_mid_alloc(st, grp * sizeof(set_group_t));
 	if (!st->pending[0] || !st->pending[1])
 	    st->pending_cap = 0;
 	else
@@ -2540,16 +2573,16 @@ void csp_csr(csp_rt_t* st)
 	st->ofs[i+1] = st->ofs[i] + st->idg[i];
     }
 
-    // Now the total edge count is known -> size edg exactly (min 1 to dodge
-    // malloc(0), which may return NULL). Zeroed because pass 3 leaves HOLES: pass
+    // Now the total edge count is known -> size edg exactly. It comes out zeroed
+    // because pass 3 leaves HOLES: pass
     // 1 counts every reference but pass 3 drops consecutive duplicates, so decl i
     // fills only [ofs[i], ofs[i]+idg[i]) and the rest of its span stays unwritten.
     // enq_elist reads only the filled part, but csp_dump_code bakes the whole
     // array into rom_edg -- leaving it uninitialised put heap garbage in flash.
     {
 	size_t edges = st->ofs[st->ps.nd];
-	st->edg = (index_t*)calloc(edges ? edges : 1, sizeof(index_t));
-	if (st->edg == NULL) return;   // out of memory: leave idg/ofs, no edges
+	st->edg = (index_t*)csp_mid_alloc(st, (edges ? edges : 1) * sizeof(index_t));
+	if (st->edg == NULL) return;   // middle full: leave idg/ofs, no edges
     }
 
     // Pass 3: Fill in rule ORDINALS for each declaration. edg stores the ordinal,
@@ -2643,10 +2676,9 @@ void csp_csr(csp_rt_t* st)
 	    st->idg[i] = cnt;
 	}
 	st->ofs[st->ps.nd] = w;
-	if (w > 0) {                               // give the holes back
-	    index_t* p = (index_t*)realloc(st->edg, (size_t)w * sizeof(index_t));
-	    if (p != NULL) st->edg = p;            // on failure keep the larger block
-	}
+	// Give the holes back. edg is the last thing bumped so far, so the cursor
+	// can simply be rewound over them -- a bump allocator can free its top.
+	st->mid = (size_t)((uint8_t*)st->edg - st->mem) + CSP_A8((size_t)w * sizeof(index_t));
     }
     st->graph_n = n;   // graph is complete: enq may now read it for ix < n
 
@@ -5434,18 +5466,23 @@ NOINLINE void csp_load_rom(csp_rt_t* st)
 // new backend (LPCopen, bare-metal, no-heap) works with no porting. A weak
 // symbol would be cleaner but gets stripped under -ffunction-sections/gc-sections
 // on some targets (see the weak-ROM note), so select at build time instead.
+// `want` is how much the runtime would like to claim; *got is set to what the
+// backend can actually hand over (a claim may cap out, a static buffer is fixed).
 #if defined(CSP_ARENA_CUSTOM)
-// backend provides its own csp_arena_mem() (e.g. malloc, or claim free RAM)
+// backend provides its own csp_arena_mem() (e.g. sbrk-based claim of free RAM)
 #elif defined(CSP_ARENA_MALLOC)
-uint8_t* csp_arena_mem(size_t need)
+uint8_t* csp_arena_mem(size_t want, size_t* got)   // claim: take what we asked for
 {
-    return (uint8_t*)malloc(need);
+    uint8_t* p = (uint8_t*)malloc(want);
+    *got = p ? want : 0;
+    return p;
 }
 #else
-uint8_t* csp_arena_mem(size_t need)   // portable default: no heap required
+uint8_t* csp_arena_mem(size_t want, size_t* got)   // portable default: no heap
 {
     static uint8_t arena[CSP_ARENA_BYTES] __attribute__((aligned(8)));
-    return (need <= sizeof(arena)) ? arena : NULL;
+    *got = (want < sizeof(arena)) ? want : sizeof(arena);  // fixed ceiling
+    return arena;
 }
 #endif
 
@@ -5454,25 +5491,52 @@ uint8_t* csp_arena_mem(size_t need)   // portable default: no heap required
 // `size` is reserved for a future single shared pool; step 1 uses the fixed
 // layout that exactly matches the old static arrays. The raw memory comes from
 // the csp_arena_mem() backend hook. Returns 0 on success, -1 on failure.
+// Struct size the RAM model should charge. On a target it is the real thing; on
+// the host --board overrides it with the target's (16/32-bit) size so the model
+// is not skewed by the host's wider pointers.
+size_t csp_sim_state = 0;
+static uint32_t model_state(void)
+{
+    return (uint32_t)(csp_sim_state ? csp_sim_state : sizeof(csp_rt_t));
+}
+
 int csp_mem_init(csp_rt_t* st, size_t size)
 {
-    st->mem = csp_arena_mem(CSP_ARENA_BYTES);
-    if (st->mem == NULL)
+    size_t want;
+    // How much to CLAIM. With no explicit budget, take everything the system left
+    // us less the stack we still grow into -- csp_system_ram_avail() already
+    // excludes the system (freeRam() on a target: what is free after the core and
+    // every linked library took theirs), so nothing about the board's overhead is
+    // guessed. This one pool holds the program AND its derived data, so it is
+    // CandySpeak's whole RAM budget, fixed at boot from what is actually free
+    // rather than a per-board constant. `size` (linux -m) overrides, for testing a
+    // tighter budget than the machine really has.
+    if (size > 0)
+	want = size;
+    else {
+	uint32_t avail = csp_system_ram_avail();
+	uint32_t over  = model_state() + CSP_STACK_RESERVE;
+	want = (avail > over) ? (avail - over) : 0;
+    }
+    want = CSP_A8(want);
+
+    // The backend hands back what it can actually give (a claim may cap out, a
+    // static buffer is fixed). The whole block is the pool; CSP_CODE_BUDGET is no
+    // longer the ceiling -- the claim is.
+    st->mem = csp_arena_mem(want, &st->mem_size);
+    if ((st->mem == NULL) || (st->mem_size < 16))
 	return -1;
-    memset(st->mem, 0, CSP_ARENA_BYTES);   // match the zeroed static arrays we replaced
-    st->mem_size  = CSP_ARENA_BYTES;
-    // Usable byte budget for the shared instr+decl pool. `size` (e.g. linux -m)
-    // shrinks it to exercise the out-of-memory path; 0 or an oversize value uses
-    // the whole pool. Raising it above CSP_CODE_BUDGET needs a bigger arena.
-    st->mem_limit = (size > 0 && size < CSP_CODE_BUDGET) ? size
-							 : CSP_CODE_BUDGET;
+    st->mem_size &= ~(size_t)7;          // keep the decl anchor 8-aligned
+    st->mem_limit = st->mem_size;
+    memset(st->mem, 0, st->mem_size);
+
     // Double-ended pool: instr[] grows up from the base, decl[] grows down from
-    // the top. ram_decl points at the topmost decl slot and is indexed with a
-    // negated local index (ram_decl_at / csp_get_decl). The pool base and top are
-    // 8-aligned (base 8-aligned, CSP_CODE_BUDGET is CSP_A8), so both ends stay
-    // aligned. They can never overlap: mem_fits keeps instr+decl <= mem_limit.
+    // the top of the CLAIMED block. ram_decl points at the topmost decl slot and
+    // is indexed with a negated local index (ram_decl_at / csp_get_decl). Base and
+    // top are both 8-aligned. They can never overlap: mem_fits keeps instr+decl,
+    // and the middle bump allocator keeps the derived tables, inside mem_limit.
     st->ram_instr = (csp_instr_t*)st->mem;
-    st->ram_decl  = (csp_decl_t*)(st->mem + CSP_CODE_BUDGET) - 1;
+    st->ram_decl  = (csp_decl_t*)(st->mem + st->mem_limit) - 1;
     // view/dset/buf/heap are all sized to the estimate in csp_rt_start.
     st->view = NULL;
     st->dset = NULL;
@@ -5825,6 +5889,23 @@ void csp_estimate(csp_rt_t* st, csp_estimate_t* e)
     }
 }
 
+// Lay the whole program out again: the reactive graph, then the leaf/device
+// setup. These two used to be called separately, which was fine while each
+// malloc'd its own tables -- but they now bump-allocate from one shared middle
+// region, so running rt_start alone would hand csr's tables out a second time.
+// One entry point keeps the region consistent, and it also means a declaration
+// added at the prompt rewires the graph (running rt_start alone left the new
+// decl above graph_n, i.e. with no edges, so it never fired reactively).
+int csp_rebuild(csp_rt_t* st)
+{
+    csp_mid_reset(st);          // forget the old layout; everything below re-bumps
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
+    if (st->reactive)
+	csp_csr(st);
+#endif
+    return csp_rt_start(st);
+}
+
 // copy constant and init values
 // setup input, output and timer lists
 //
@@ -5843,28 +5924,22 @@ int csp_rt_start(csp_rt_t* st)
     // rt_start reruns on any decl add (see csp_process_persistent) so view_cap
     // always covers max st_index.
     {
-	size_t vbytes, dbytes, hbytes;
+	size_t hbytes;
 	csp_estimate(st, &e);
-	vbytes = (size_t)(e.nleaf ? e.nleaf : 1) * sizeof(csp_view_t);
-	dbytes = (size_t)BITSET_GROUPS(e.nleaf ? e.nleaf : 1) * sizeof(set_group_t);
-	// The DIN/DOUT transaction halves are ONE allocation: heap[DOUT] points at
-	// the second half. 8-aligned so a buffer at the same hp offset is equally
-	// aligned in both halves. Only heap[DIN] is owned (never free heap[DOUT]).
+	// The DIN/DOUT transaction halves are ONE block: heap[DOUT] points at the
+	// second half. 8-aligned so a buffer at the same hp offset is equally
+	// aligned in both halves.
 	hbytes = CSP_A8(e.heap ? e.heap : 8);
-	free(st->view);
-	free(st->dset);
-	free(st->buf);
-	free(st->heap[DIN]);
-	free(st->input);
-	free(st->output);
-	free(st->timer);
-	st->view       = (csp_view_t*)malloc(vbytes);
-	st->dset       = (set_group_t*)malloc(dbytes);
-	st->buf        = (csp_buf_t*)malloc((size_t)(e.nbuf ? e.nbuf : 1) * sizeof(csp_buf_t));
-	st->heap[DIN]  = (uint8_t*)malloc(2 * hbytes);
-	st->input      = (index_t*)malloc((size_t)(e.ni ? e.ni : 1) * sizeof(index_t));
-	st->output     = (index_t*)malloc((size_t)(e.no ? e.no : 1) * sizeof(index_t));
-	st->timer      = (index_t*)malloc((size_t)(e.nt ? e.nt : 1) * sizeof(index_t));
+	// All of these come out of the middle, already zeroed. Nothing to free: the
+	// next csp_rebuild resets the cursor and lays the region out again.
+	st->view  = (csp_view_t*)csp_mid_alloc(st, (size_t)e.nleaf * sizeof(csp_view_t));
+	st->dset  = (set_group_t*)csp_mid_alloc(st,
+		     (size_t)BITSET_GROUPS(e.nleaf ? e.nleaf : 1) * sizeof(set_group_t));
+	st->buf   = (csp_buf_t*)csp_mid_alloc(st, (size_t)e.nbuf * sizeof(csp_buf_t));
+	st->heap[DIN] = (uint8_t*)csp_mid_alloc(st, 2 * hbytes);
+	st->input  = (index_t*)csp_mid_alloc(st, (size_t)e.ni * sizeof(index_t));
+	st->output = (index_t*)csp_mid_alloc(st, (size_t)e.no * sizeof(index_t));
+	st->timer  = (index_t*)csp_mid_alloc(st, (size_t)e.nt * sizeof(index_t));
 	if (!st->view || !st->dset || !st->buf || !st->heap[DIN] ||
 	    !st->input || !st->output || !st->timer) {
 	    st->heap[DOUT] = NULL;
@@ -5880,10 +5955,6 @@ int csp_rt_start(csp_rt_t* st)
 	st->in_cap   = e.ni;
 	st->out_cap  = e.no;
 	st->timer_cap = e.nt;
-	memset(st->view, 0, vbytes);
-	memset(st->dset, 0, dbytes);
-	memset(st->buf, 0, (size_t)(e.nbuf ? e.nbuf : 1) * sizeof(csp_buf_t));
-	memset(st->heap[DIN],  0, 2 * hbytes);       // both halves in one go
     }
 
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
@@ -6106,6 +6177,7 @@ static int cmd_commit(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_quit(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_latch(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_pause(csp_rt_t* st, int argc, char* argv[]);
+static int cmd_live(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_resume(csp_rt_t* st, int argc, char* argv[]);
 
 static const csp_cmd_t builtin_cmds[] = {
@@ -6115,6 +6187,7 @@ static const csp_cmd_t builtin_cmds[] = {
     { "state",  "Show current values",     cmd_state },
     { "memory", "Show code/RAM usage",      cmd_memory },
     { "pause",  "Stop execution (inspect/edit)", cmd_pause },
+    { "live",   "Freeze rules, keep I/O (poke hardware)", cmd_live },
     { "resume", "Resume execution (rebuild if edited)", cmd_resume },
     { "reset",  "Reset to initial values", cmd_reset },
     { "clear",  "Drop RAM patches (keep ROM)", cmd_clear },
@@ -6636,10 +6709,14 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
     if (!any_cat && !nnamed)            // bare /state -> show everything
 	f_timer = f_var = f_dig = f_ana = 1;
 
+    // Status line -- the germ of a future terminal status bar. mode is one of
+    // three mutually exclusive run states (paused and live can't both be on).
     csp_print_str("cycle ");
     csp_print_uint(st->cycle);
     csp_print_str("   latch ");
     csp_print_str(st->latch ? "on" : "off");
+    csp_print_str("   ");
+    csp_print_str(st->paused ? "paused" : st->live ? "live" : "running");
     csp_print_str("\n\n");
 
     // Two passes so object INSTANCES actually appear: the globals, then each
@@ -6693,7 +6770,7 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 static int cmd_reset(csp_rt_t* st, int argc, char* argv[])
 {
     (void)argv;
-    csp_rt_start(st);
+    csp_rebuild(st);
     csp_setup(st);
     csp_print_str("Reset\n");
     return CSP_CMD_OK;
@@ -6706,7 +6783,25 @@ static int cmd_pause(csp_rt_t* st, int argc, char* argv[])
 {
     (void)argc; (void)argv;
     st->paused = 1;
+    st->live = 0;
     csp_print_str("Paused (execution stopped; edit/inspect, then /resume)\n");
+    return CSP_CMD_OK;
+}
+
+// /live -- freeze the rules but keep I/O running: inputs keep sampling (watch
+// sensors with /state) and outputs keep being driven (> Led=1 lights the pin) so
+// you can poke at the hardware while the program logic stands still. /resume goes
+// back to running the rules.
+static int cmd_live(csp_rt_t* st, int argc, char* argv[])
+{
+    (void)argc; (void)argv;
+    if (!st->started) {
+	csp_print_str("not started -- /resume first\n");
+	return CSP_CMD_OK;
+    }
+    st->live = 1;
+    st->paused = 0;
+    csp_print_str("Live (rules frozen, I/O running -- poke away; /resume to run)\n");
     return CSP_CMD_OK;
 }
 
@@ -6717,11 +6812,14 @@ static int cmd_resume(csp_rt_t* st, int argc, char* argv[])
 {
     (void)argc; (void)argv;
     if (st->edited) {
-#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-	if (st->reactive)
-	    csp_csr(st);        // wire newly added rules into the dependency graph
-#endif
-	csp_rt_start(st);
+	if (csp_rebuild(st) < 0) {   // say so: this used to fail silently
+	    csp_print_str("Cannot resume: ");
+	    csp_print_str(csp_format_error(st->ps.err));
+	    csp_print_str("\n(the code pool must hold the program AND its data --"
+			  " see /memory, raise -m)\n");
+	    csp_clr_error(st);
+	    return CSP_CMD_ERROR;
+	}
 	csp_setup(st);
 	st->edited = 0;
 	csp_print_str("Resumed (rebuilt)\n");
@@ -6730,6 +6828,7 @@ static int cmd_resume(csp_rt_t* st, int argc, char* argv[])
 	csp_print_str("Resumed\n");
     }
     st->paused = 0;
+    st->live = 0;
     return CSP_CMD_OK;
 }
 
@@ -6742,12 +6841,8 @@ static int cmd_clear(csp_rt_t* st, int argc, char* argv[])
     st->ps.nn   = st->rom_nn;
     st->ps.strp = st->rom_strp;
     st->ps.nq   = 0;
-    csp_rt_start(st);
+    csp_rebuild(st);
     csp_setup(st);
-#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-    if (st->reactive)
-	csp_csr(st);   // rebuild the dependency graph for ROM-only
-#endif
     csp_print_str("Cleared RAM patches -- ROM restored\n");
     return CSP_CMD_OK;
 }
@@ -6790,29 +6885,28 @@ static void mem_row(const char* name, uint32_t used, int32_t limit, int show_pct
     }
 }
 
-// Bytes CandySpeak holds OUTSIDE the code arena: everything csp_rt_start and
-// csp_csr size to the actual program. Together with the arena this is what the
-// language costs the board's RAM, which is the number worth relating to
-// csp_system_ram_*. Counts allocations, so it reads 0 before /resume.
-NOINLINE static uint32_t csp_derived_bytes(csp_rt_t* st)
+// Bytes handed out of the middle region. The bump cursor already knows exactly,
+// alignment padding included -- no need to re-add up the individual tables and
+// hope the sum tracks what was actually allocated.
+// A flat "name  value" row for the RAM breakdown (no ceiling, no percent).
+static void mem_val(const char* name, uint32_t v)
 {
-    uint32_t n = 0;
-    n += (uint32_t)st->view_cap * sizeof(csp_view_t);
-    n += (uint32_t)BITSET_GROUPS(st->view_cap) * sizeof(set_group_t);   // dset
-    n += (uint32_t)st->buf_cap * sizeof(csp_buf_t);
-    n += st->heap_cap * 2;                                // DIN + DOUT halves
-    n += (uint32_t)(st->in_cap + st->out_cap + st->timer_cap) * sizeof(index_t);
-#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-    if (st->idg != NULL)     // idg[n] + ofs[n+1] + wr[n] share one block
-	n += (uint32_t)(3*st->graph_n + 1) * sizeof(index_t);
-    if (st->edg != NULL)
-	n += (uint32_t)st->ofs[st->ps.nd] * sizeof(index_t);
-    n += 2 * (uint32_t)BITSET_GROUPS(st->pending_cap) * sizeof(set_group_t);
-    n += (uint32_t)st->n_rule * sizeof(index_t);          // rule_ip
-#endif
-    return n;
+    mem_name(name);
+    mem_int_r((int)v, 8);
+    csp_println();
 }
 
+NOINLINE static uint32_t csp_derived_bytes(csp_rt_t* st)
+{
+    return (uint32_t)(st->mid - st->mid_base);
+}
+
+// What CandySpeak itself costs the board's RAM, computed from our OWN structures
+// so it means the same thing on host and target. The backend's ram_used() cannot
+// answer this on the host: it measures the whole PROCESS (libc, stdio, the host's
+// own oversized arena), so comparing that against a simulated -M is meaningless
+// -- it read 338% of a mega for a program that fits. This is arena + state +
+// derived. The stack is deliberately NOT in here: it is measured, not computed.
 // /memory: what CandySpeak costs and what binds it. Three ceilings matter and
 // they are different: the board's RAM, the code pool's byte budget (mem_fits),
 // and the EEPROM -- code that will not fit the last cannot be saved, only tested.
@@ -6824,22 +6918,39 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
     size_t ib = (size_t)(st->ps.nn - st->rom_nn) * sizeof(csp_instr_t);
     size_t db = (size_t)(st->ps.nd - st->rom_nd) * sizeof(csp_decl_t);
     size_t used = ib + db;
-    size_t limit = st->mem_limit;
     (void)argc; (void)argv;
 
-    // Top half: what takes space. Bottom half: what the program is made of.
-    // The blank line between them is the whole distinction -- above, `limit` is
-    // real memory; below, it is the INDEX ceiling the encoding imposes.
-    csp_print_str("                used     limit\n");
-
-    mem_row("code", (uint32_t)used, (int32_t)limit, 1);
-    csp_println();
-    mem_row("data", csp_derived_bytes(st), -1, 0);
-    if (!st->started)
-	csp_print_str("   (allocated on /resume)");
-    csp_println();
-    mem_row("RAM", csp_system_ram_used(), (int32_t)csp_system_ram_capacity(), 1);
-    csp_println();
+    // Where the board's RAM went. Since CandySpeak claims all free RAM, a
+    // "used / total" line would always read 100% -- useless. What is worth seeing
+    // is the OVERHEAD: what everything except your program's code costs, because
+    // that is what decides how much is left to grow into, and what a linked
+    // library actually costs you. These sum to capacity.
+    //   system   Arduino core + libraries + startup + C++ globals (moves when you
+    //            link CircuitPlayground, a CAN driver, ...)
+    //   struct   the csp_rt_t runtime state
+    //   buffers  CandySpeak's derived tables (view/heap/buf/graph/inq/pending/...)
+    //   stack    reserved
+    //   code     your program: instr + decl
+    //   free     spare -- room for a bigger program or more data
+    {
+	uint32_t cap     = csp_system_ram_capacity();
+	uint32_t sys     = csp_system_ram_used();
+	uint32_t buffers = csp_derived_bytes(st);
+	uint32_t acc     = sys + model_state() + buffers
+			 + CSP_STACK_RESERVE + (uint32_t)used;
+	uint32_t freeram = (cap > acc) ? (cap - acc) : 0;
+	csp_print_str("RAM ");
+	csp_print_uint((uvalue_t)cap);
+	csp_print_str(" total:\n");
+	mem_val("system",  sys);
+	mem_val("struct",  model_state());
+	mem_name("buffers"); mem_int_r((int)buffers, 8);
+	if (!st->started) csp_print_str("   (allocated on /resume)");
+	csp_println();
+	mem_val("stack",   CSP_STACK_RESERVE);
+	mem_val("code",    (uint32_t)used);
+	mem_val("free",    freeram);
+    }
 
     {
 	uint32_t cap  = csp_eeprom_capacity();
@@ -7006,7 +7117,7 @@ static int csp_process_persistent(csp_rt_t* st, char* line)
     // view would be read out of bounds). Values re-init as they always do on a
     // declaration. Still mark edited when paused so /resume rebuilds the graph.
     if ((st->ps.nd != nd0) && st->started) {
-	csp_rt_start(st);
+	csp_rebuild(st);
 	csp_setup(st);
 	if (st->paused)
 	    st->edited = 1;

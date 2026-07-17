@@ -2,8 +2,11 @@
 #
 FQBN=arduino:samd:mkrzero
 DEV=/dev/ttyACM0
-OPTS=--build-property "compiler.c.extra_flags=-Os" \
-     --build-property "compiler.cpp.extra_flags=-Os"
+# CSP_ARENA_MALLOC: claim the pool from the heap at boot, sized to freeRam() minus
+# the stack reserve, rather than a fixed CSP_CODE_BUDGET. Model with: ./csp --board mkrzero
+ARENA=-DCSP_ARENA_MALLOC
+OPTS=--build-property "compiler.c.extra_flags=-Os $(ARENA)" \
+     --build-property "compiler.cpp.extra_flags=-Os $(ARENA)"
 
 compile:
 	arduino-cli compile -e --fqbn $(FQBN) $(OPTS)

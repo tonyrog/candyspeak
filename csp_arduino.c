@@ -26,6 +26,10 @@
 #include "csp.h"
 #include "csp_print.h"
 
+#if defined(__AVR__)
+#define INPUT_PULLDOWN INPUT
+#endif
+
 // --- Adafruit Circuit Playground Express (SAMD21) -------------------------
 // Port convention used by the .csp:  port 8 = accelerometer (pin 0/1/2 = X/Y/Z),
 // port 9 = NeoPixel ring (pin = index, a.val holds an RGB565 "fake DAC" value).
@@ -51,36 +55,46 @@ csp_rt_t state;
 
 extern char __StackTop;
 
-EXTERN_C_BEGIN
-
 int stack_used(void)
 {
     char local;
     return &__StackTop - &local;
 }
 
+// raw_free(): the actual free RAM right now, heap-top..stack. It EXCLUDES the
+// .bss struct AND (with the static-arena backend) the static arena, since both
+// are .bss below the heap.
 #ifdef __arm__
-// For ARM-based Arduinos (Due, Zero, etc.)
 extern "C" char* sbrk(int incr);
-uint32_t csp_system_ram_avail()
+static uint32_t raw_free()
 {
     char top;
-    return &top - reinterpret_cast<char*>(sbrk(0));
+    return (uint32_t)(&top - reinterpret_cast<char*>(sbrk(0)));
 }
 #else
-// For 8-bit AVR Arduinos (Uno, Nano, Mega, etc.)
 extern unsigned int __heap_start, *__brkval;
-uint32_t csp_system_ram_avail()
+static uint32_t raw_free()
 {
     int free_memory;
-    if ((int)__brkval == 0) {
+    if ((int)__brkval == 0)
 	free_memory = ((int)&free_memory) - ((int)&__heap_start);
-    } else {
+    else
 	free_memory = ((int)&free_memory) - ((int)__brkval);
-    }
-    return free_memory;
+    return (uint32_t)free_memory;
 }
 #endif
+
+EXTERN_C_BEGIN
+
+
+// avail = RAM the pool may claim, INCLUDING the struct (added back because
+// csp_mem_init subtracts it out again; the struct is already placed in .bss).
+// Used only at boot to size the claim -- must not depend on mem_limit, which is
+// still being computed then.
+uint32_t csp_system_ram_avail()
+{
+    return raw_free() + sizeof(csp_rt_t);
+}
 
 uint32_t csp_system_ram_capacity()
 {
@@ -97,9 +111,14 @@ uint32_t csp_system_ram_capacity()
 #endif
 }
 
+// system = core + libraries: everything present minus CandySpeak's own pool and
+// struct. Subtracting mem_limit is what stops the (static) arena, which sits in
+// .bss and so is excluded from raw_free(), from being double-counted as system.
 uint32_t csp_system_ram_used()
 {
-    return csp_system_ram_capacity() - csp_system_ram_avail();
+    uint32_t total = csp_system_ram_capacity() - raw_free();  // all statics + stack used
+    uint32_t ours  = (uint32_t)state.mem_limit + (uint32_t)sizeof(csp_rt_t);
+    return (total > ours) ? (total - ours) : 0;
 }
 
 uint32_t csp_time_ms(void)
@@ -372,10 +391,8 @@ void csp_setup(csp_rt_t* st)
             if (decl(st,j,dir) & DIR_IN) {
 		if (decl(st,j,di.pullup))
 		    pinMode(decl(st,j,di.pin), INPUT_PULLUP);
-#ifdef INPUT_PULLDOWN
 		else if (decl(st,j,di.pulldown))
 		    pinMode(decl(st,j,di.pin), INPUT_PULLDOWN);
-#endif
 		else
 		    pinMode(decl(st,j,di.pin), INPUT);
 	    }
@@ -749,7 +766,21 @@ void setup()
 	;
 
     serial_output = 1;
-    csp_rt_init(&state, REACTIVE_DEFAULT);
+
+    // Report the real memory picture on the board -- the numbers we can only
+    // model on the host. free is what csp_mem_init claims the pool from.
+    Serial.print(F("boot: RAM ")); Serial.print(csp_system_ram_capacity());
+    Serial.print(F(", free ")); Serial.print(csp_system_ram_avail());
+    Serial.print(F(", struct ")); Serial.println((uint32_t)sizeof(csp_rt_t));
+
+    // A failed init leaves a half-set-up state; say so instead of running into a
+    // fault. This is where an over-eager claim (freeRam - reserve too tight)
+    // would surface, rather than as a mystery hang.
+    if (csp_rt_init(&state, REACTIVE_DEFAULT) < 0) {
+	Serial.println(F("FATAL: csp_rt_init failed (out of memory)"));
+	return;   // leave loop() a no-op rather than crash
+    }
+    Serial.print(F("pool ")); Serial.println((uint32_t)state.mem_limit);
 
     // Wire up the ROM firmware (rom.c) first, so the program runs even when
     // there is no valid save. csp_eeprom_load re-does this on its success path,
@@ -765,8 +796,13 @@ void setup()
         Serial.println(F("No saved state, running ROM"));
     }
 
-    // setup all input/output/timers... lists
-    csp_rt_start(&state);
+    // Lay out the whole program: reactive graph + leaf/device setup. MUST be
+    // csp_rebuild, not csp_rt_start alone -- rebuild resets the middle bump
+    // allocator (csp_mid_reset) that every derived table is carved from. Calling
+    // rt_start directly leaves mid_end = 0, so every table allocation fails and
+    // the first cycle faults on null view/heap pointers.
+    if (csp_rebuild(&state) < 0)
+	Serial.println(F("setup failed: out of memory"));
 
     // initialize input/output/timers ...
     csp_setup(&state);
@@ -779,12 +815,17 @@ void loop()
     static int first_cycle = 1;
     index_t x;
     int anyd;
-    
+
+    // If setup could not build a pool, do nothing but let USB/Serial live, so the
+    // FATAL message above is readable instead of being buried by a crash loop.
+    if (state.mem == NULL || state.mem_limit == 0)
+	return;
+
     if (first_cycle) {
 	state.cycle = 1;
 	first_cycle = 0;
     }
-    else
+    else if (!state.paused)     // frozen while /pause is in effect
 	state.cycle++;
 
     while (Serial.available()) {
@@ -803,9 +844,16 @@ void loop()
 	csp_line_pos = 0;
     }
 
-    // run evaluation cycle
+    // /pause freezes execution: keep reading Serial (above) so /resume and edits
+    // still work, but run no input/cycle/commit/output. loop() is re-entered, so
+    // the USB stack keeps being serviced between calls.
+    if (state.paused)
+	return;
+
+    // run evaluation cycle. /live freezes the rules (skip csp_cycle) but keeps I/O
+    // running, so immediate commands drive outputs and inputs keep sampling.
     csp_input(&state);
-    x = csp_cycle(&state);   // ROM (seq) + RAM (reactive/seq), one model
+    x = state.live ? BAD_INDEX : csp_cycle(&state);   // ROM (seq) + RAM, one model
     anyd = state.anyd;  // save before commit clears it
     csp_commit(&state);
     csp_output(&state);

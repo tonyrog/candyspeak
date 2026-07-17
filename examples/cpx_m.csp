@@ -30,12 +30,12 @@
     State=OFF
   #end
 
-  #in OFF
-    P=0xFD20, State=ON, T=1, println("ON") ? timeout(T)
+  #in OFF // set green 0x07E0
+    P=0x07E0, State=ON, T=1, println("ON") ? timeout(T)
   #end
 
-  #in ON
-    P=0, State=OFF, T=1, println("OFF") ? timeout(T)
+  #in ON  // set blue 0x001F
+    P=0x001F, State=OFF, T=1, println("OFF") ? timeout(T)
   #end
 #end
 

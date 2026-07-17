@@ -11,6 +11,7 @@
 
 #include "csp.h"
 #include "csp_dump.h"
+#include "csp_boards.h"   // generated: make boards
 
 #include <sys/time.h>
 
@@ -18,6 +19,12 @@
 static struct termios orig_termios;
 static int raw_mode = 0;
 static const char* eeprom_file = "eeprom.db";
+static const char* src_file = NULL;   // first .csp on the command line (ROM banner)
+
+// git version, injected by the Makefile; a plain build still says something.
+#ifndef CSP_VERSION
+#define CSP_VERSION "unknown"
+#endif
 
 #define MAX_LINE_SIZE 128
 
@@ -94,16 +101,19 @@ uint32_t csp_system_ram_capacity()
     return system_ram_capacity;
 }
 
-extern char __data_start;  // Starte of initialized data
-extern char _edata;        // End of .data / start of .bss
-extern char _end;          // End of .bss
+// What the SYSTEM takes before CandySpeak gets a look in: on a board that is
+// capacity - freeRam(), i.e. the core plus every library linked in -- which is
+// exactly the number that moves when you add CircuitPlayground or a CAN driver.
+// The host has no such system, so -O supplies it: measure it once on the board
+// (/memory reports it there) and hand it to the simulation.
+//
+// The linker symbols cannot answer this: &_end - &__data_start is the HOST
+// process's statics (libc, stdio, ~27K), which has nothing to do with a target.
+static uint32_t system_ram_used = 0;
 
 uint32_t csp_system_ram_used()
 {
-    uint32_t used_ram;
-
-    used_ram = &_end - &__data_start; 
-    return used_ram;
+    return system_ram_used;
 }
 
 uint32_t csp_system_ram_avail()
@@ -531,6 +541,8 @@ static struct option long_options[] = {
     {"input-file",   required_argument, 0,  'I'},
     {"eeprom",       required_argument, 0,  'e'},
     {"eeprom-size",  required_argument, 0,  'E'},
+    {"ram-used",     required_argument, 0,  'U'},
+    {"board",        required_argument, 0,  1000},
     {"memory",       required_argument, 0,  'm'},
     {"pause",        no_argument,       0,  'b'},
     {0,              0,                 0,  0 }
@@ -558,7 +570,10 @@ void usage(const char* prog)
     fprintf(stderr, "  -p, --parse-file=F   Parsed structure file\n");
     fprintf(stderr, "  -e, --eeprom=F       EEPROM file for save/load (default: eeprom.db)\n");
     fprintf(stderr, "  -I, --input-file=F   Data input file\n");
-    fprintf(stderr, "  -M, --ram=N[k]       Toal RAM (or Nk KiB)\n");    
+    fprintf(stderr, "      --board=NAME     Simulate a board: mega, mkrzero (measured;\n");
+    fprintf(stderr, "                       sets --ram/--ram-used/--eeprom-size)\n");
+    fprintf(stderr, "  -M, --ram=N[k]       Total RAM the board has (or Nk KiB)\n");
+    fprintf(stderr, "  -U, --ram-used=N[k]  RAM the system/linked libraries take\n");    
     fprintf(stderr, "  -m, --memory=N[k]    Usable code memory budget in bytes (or Nk KiB)\n");
     fprintf(stderr, "  -E, --eeprom-size=N[k] Simulated EEPROM capacity (0=unbounded); /save\n");
     fprintf(stderr, "                       fails past it, as it would on a real board\n");
@@ -686,7 +701,7 @@ int main(int argc, char** argv)
 
     while (1) {
 	int option_index = 0;
-	c = getopt_long(argc, argv, "hindPQRSCc:T:s:p:r:t:O:e:L:I:F:m:M:E:b",
+	c = getopt_long(argc, argv, "hindPQRSCc:T:s:p:r:t:O:e:L:I:F:m:M:E:U:b",
 			long_options, &option_index);
 	if (c == -1)
 	    break;
@@ -760,6 +775,34 @@ int main(int argc, char** argv)
 	    system_ram_capacity = (size_t)v;
 	    break;	    
 	}
+	case 1000:    // --board=NAME: RAM/system/EEPROM measured from that board's
+		      // firmware build (csp_boards.h). Beats guessing the three.
+	    if (strcmp(optarg, "mega") == 0) {
+		system_ram_capacity = CSP_BOARD_MEGA_RAM;
+		system_ram_used     = CSP_BOARD_MEGA_SYSTEM;
+		csp_sim_state       = CSP_BOARD_MEGA_STATE;
+		eeprom_cap          = CSP_BOARD_MEGA_EEPROM;
+	    }
+	    else if (strcmp(optarg, "mkrzero") == 0) {
+		system_ram_capacity = CSP_BOARD_MKRZERO_RAM;
+		system_ram_used     = CSP_BOARD_MKRZERO_SYSTEM;
+		csp_sim_state       = CSP_BOARD_MKRZERO_STATE;
+		eeprom_cap          = CSP_BOARD_MKRZERO_EEPROM;
+	    }
+	    else {
+		fprintf(stderr, "unknown board '%s' (mega, mkrzero)\n", optarg);
+		exit(1);
+	    }
+	    break;
+	case 'U': {   // what the system/linked packages take, so the host can model
+		      // a board's overhead; accepts a trailing k/K = KiB
+	    char* end = NULL;
+	    unsigned long v = strtoul(optarg, &end, 0);
+	    if (end && (*end == 'k' || *end == 'K'))
+		v *= 1024;
+	    system_ram_used = (uint32_t)v;
+	    break;
+	}
 	case 'E': {   // simulated EEPROM capacity, so the host can hit a board's
 		      // /save ceiling; accepts a trailing k/K = KiB
 	    char* end = NULL;
@@ -817,6 +860,7 @@ int main(int argc, char** argv)
 
     // Parse input files (if any)
     if (optind < argc) {
+	src_file = argv[optind];   // first one, for the ROM provenance banner
 	while (optind < argc) {
 	    if ((fin = fopen(argv[optind], "r")) == NULL) {
 		fprintf(stderr, "unable to open file '%s'\n", argv[optind]);
@@ -875,9 +919,7 @@ int main(int argc, char** argv)
 	state.edited = 1;
     }
     else {
-	if (state.reactive)
-	    csp_csr(&state); // build graph
-	if (csp_rt_start(&state) < 0) {
+	if (csp_rebuild(&state) < 0) {   // graph + leaf/device setup, one layout
 	    fprintf(stderr, "setup failed: ");
 	    fprintf(stderr, csp_format_error(state.ps.err),
 		    state.ps.err_args[0], state.ps.err_args[1], state.ps.err_args[2]);
@@ -893,7 +935,11 @@ int main(int argc, char** argv)
 
     if (compile) {
 	FILE* objf = object_file == NULL ? stdout : object_file;
-	csp_dump_code(objf, &state);
+	csp_rom_meta_t meta;
+	meta.src     = src_file;
+	meta.version = CSP_VERSION;
+	meta.date    = __DATE__ " " __TIME__;
+	csp_dump_code(objf, &state, &meta);
     }
 
     if (!execute) {
@@ -986,7 +1032,8 @@ loop:
 	    input_done = 1;
     }
 
-    x = csp_cycle(&state);   // ROM (seq) + RAM (reactive/seq), one model
+    // /live freezes the rules but keeps I/O running (poke outputs, watch inputs).
+    x = state.live ? BAD_INDEX : csp_cycle(&state);  // ROM (seq) + RAM, one model
 
     anyd = state.anyd;  // save before commit clears it
 

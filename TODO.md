@@ -1,3 +1,24 @@
+- POKE-PROPAGERING + REGEL-TRACE (debug-verktyg, drömt fram 2026-07-17)
+  Idé: i /live-läge, poka ett värde och kör BARA de regler som beror på det --
+  inget annat. Motorn gör redan 90%: en manuell tilldelning skulle anropa
+  csp_enq_elist(ix) (köar beroende regler i pending-bitsetet) följt av EN
+  csp_react(st) (drainar och kör dem + deras kaskad). Kräver att immediate-assign
+  (csp_process_immediate / csp_dio_set-vägen i live) routas via enqueue istället
+  för bara sätta värdet.
+  Användningsfall (Tonys): en regel du trodde skulle fyra gör inte det (inget
+  pling). Du tittar: "Led = 1 ? BtnA && X > 7". Du kollar X, sätter > X = 8, och
+  ser om regeln fyrar nu. Interaktiv trigger-felsökning.
+  TRACE ovanpå (fristående, gör FÖRST -- nyttigt i vanligt kör-läge också):
+  /trace on|off. csp_react dequeuear regel-ordinal -> rule_ip -> kör; där, bakom
+  flaggan, printa vilken regel som fyrar. Billig variant: regel-index/ip. Snygg
+  variant: kör exprbuf-disassemblern (funkar nu) -> full regeltext.
+  ÄRLIGA BEGRÄNSNINGAR: (1) timers/timeout(T) fyrar INTE av en poke -- triggern
+  är timern, inte ett värde; behöver riktig tid (csp_input_timer). Poke når allt
+  som hänger på VÄRDEN, inte det som väntar på TID. (2) states/#in gate:ar rätt
+  (regel bakom State==ON fyrar bara om staten matchar) -- funkar, men man styr
+  staten genom att poka State också.
+  Hooks finns: csp_enq_elist, csp_react, rule_ip, exprbuf (regeltext), st->live.
+
 - exit csp_linux after -d and -n or no program / no interaction
 
 - display available EEPROM memory

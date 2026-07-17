@@ -754,9 +754,22 @@ const char* csp_cfmt_endian(vendian_t et)
 
 // dump C code 
 // FIXME: struct version to check match when compile
-void csp_dump_code(FILE* f, csp_rt_t* st)
+void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 {
     int i;
+
+    // Provenance banner: what this ROM is, where it came from, how big. The
+    // counts are what actually goes into flash, so a glance at the top of rom.c
+    // tells you the program AND its size without reading the tables.
+    fprintf(f, "// Generated CandySpeak ROM -- do not edit.\n");
+    if (meta) {
+	if (meta->src)     fprintf(f, "//   source:  %s\n", meta->src);
+	if (meta->version) fprintf(f, "//   version: %s\n", meta->version);
+	if (meta->date)    fprintf(f, "//   built:   %s\n", meta->date);
+    }
+    fprintf(f, "//   size:    %d instr, %d decl, %d str, %d states\n",
+	    st->ps.nn, st->ps.nd, st->ps.strp, st->ps.ns);
+    fprintf(f, "\n");
 
     fprintf(f, "#include \"csp.h\"\n");
     // first dump string table

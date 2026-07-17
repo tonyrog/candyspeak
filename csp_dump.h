@@ -19,7 +19,15 @@ typedef enum {
 } csp_lang_t;
 
 extern void    csp_dump(FILE*, csp_rt_t* st);
-extern void    csp_dump_code(FILE* f, csp_rt_t* st);
+// Provenance stamped into the generated rom.c so a baked firmware says where it
+// came from. src/version/date come from outside (the tool that runs the dump
+// knows them; the dumper does not); pass NULL for any that is unknown.
+typedef struct {
+    const char* src;      // the .csp file this was compiled from
+    const char* version;  // CandySpeak version (git describe / short hash)
+    const char* date;     // build date/time
+} csp_rom_meta_t;
+extern void    csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta);
 extern void    csp_dump_tokens(FILE* f,token_t* tv, int n);
 extern void    csp_dump_state(FILE* f, csp_rt_t* st,csp_lang_t lang);
 extern void    csp_dump_result(FILE* f,csp_rt_t* st,index_t x,csp_lang_t lang);

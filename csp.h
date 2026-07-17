@@ -910,6 +910,21 @@ typedef struct
 #endif
 #endif
 
+// Stack CandySpeak needs at runtime, as a RESERVE rather than a measurement.
+// stack_used() reports the caller's own depth, which on the host is the REPL's
+// (~14K) and says nothing about a board -- so modelling a board means reserving,
+// not measuring. The deep paths are the expression parser and csp_eval's
+// recursion. Override with -DCSP_STACK_RESERVE=<bytes> once measured on a board.
+#ifndef CSP_STACK_RESERVE
+#define CSP_STACK_RESERVE 512
+#endif
+
+// Gap left between the code growing in from each end and the derived tables in
+// the middle, so a handful of adds at the prompt fit without a re-layout.
+#ifndef CSP_SCRATCH
+#define CSP_SCRATCH 64
+#endif
+
 // Everything derived from the program is sized to actual (own allocations), NOT
 // reserved at MAX_* worst case: graph (idg/ofs/edg) + inq + queue (csp_csr),
 // buffer table + heap + view + dset (csp_rt_start, from csp_estimate). Only the
@@ -936,6 +951,17 @@ typedef struct _csp_rt_t
 					 // csp_mem_init(size); -m on linux shrinks it.
     csp_instr_t* ram_instr;              // -> pool base, grows up
     csp_decl_t*  ram_decl;               // -> pool top slot, indexed DOWN (ram_decl[-local])
+    // Everything derived from the program is bump-allocated from the MIDDLE of
+    // the same pool -- between the instructions growing up and the declarations
+    // growing down -- and laid out fresh on every csp_rebuild. So there is
+    // nothing to free, no heap, no fragmentation: the whole runtime is one block,
+    // which is what lets this run on a target with no malloc at all.
+    // A scratch gap is left at each end so a few adds at the prompt do not have
+    // to shove the middle around; mem_fits() keeps the ends out of it.
+    size_t mid;                          // bump cursor (offset into mem)
+    size_t mid_base;                     // where the middle starts (after instr+scratch)
+    size_t mid_end;                      // where it must stop (before decl+scratch)
+    uint8_t mid_full;                    // 1 = a request did not fit
     csp_instr_t  imm_scratch;            // dummy slot for immediate `> expr` eval fold
     char        ram_str[MAX_STR_BUF];    // store variable names
 
@@ -973,6 +999,9 @@ typedef struct _csp_rt_t
 				 // every input so each <- binding fires once to
 				 // establish its initial value (least surprise).
     unsigned paused:1;           // 1 = /pause: driver runs no cycle (inspect/edit)
+    unsigned live:1;             // 1 = /live: rules frozen but I/O runs, so you can
+				 // poke outputs (> Led=1 drives the pin) and watch
+				 // inputs while the program logic stands still
     unsigned edited:1;           // 1 = program changed while paused; /resume rebuilds
     unsigned started:1;          // 1 once csp_rt_start has allocated+set up leaves;
 				 // 0 with -b before /resume (value ops not ready)
@@ -1251,10 +1280,17 @@ extern void    csp_estimate(csp_rt_t* st, csp_estimate_t* e);
 // startup, never freed), or NULL on failure. Default is a static buffer (works
 // on any target, no heap); a backend selects malloc with CSP_ARENA_MALLOC or
 // provides its own definition with CSP_ARENA_CUSTOM (e.g. claim free RAM).
-extern uint8_t* csp_arena_mem(size_t need);
+extern uint8_t* csp_arena_mem(size_t want, size_t* got);
 extern void    csp_load_rom(csp_rt_t*);
 extern int     csp_has_firmware(void);
 extern int     csp_rt_start(csp_rt_t*);
+// Re-lay the whole program out (graph + leaf/device setup). Use this rather than
+// calling csp_csr/csp_rt_start separately: they share one bump-allocated region.
+extern int     csp_rebuild(csp_rt_t*);
+// The runtime struct's size for the RAM model. Normally sizeof(csp_rt_t); the
+// host sets it to a target's size (--board) so the simulation is not skewed by
+// the host's 64-bit pointers. 0 = use the real sizeof.
+extern size_t  csp_sim_state;
 extern void    csp_set_ufuncs(csp_rt_t*, const csp_func_t*, uint8_t count, uint8_t rom);
 extern void    csp_set_uconst(csp_rt_t*, csp_const_fn uconst);
 extern const csp_func_t* csp_match_func(csp_rt_t*,
