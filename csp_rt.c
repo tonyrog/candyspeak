@@ -1939,10 +1939,39 @@ NOINLINE static index_t lookup_decl_in(csp_rt_t* st, const tstr_t* name,
     return BAD_INDEX;
 }
 
-NOINLINE index_t csp_lookup_decl(csp_rt_t* st, const tstr_t* name)
+// True when decl `di` belongs to the module body currently being parsed. Used
+// to decide whether a name resolves to a per-instance member (which has to be
+// addressed CURRENT-relative) or to a global (which must NOT be).
+NOINLINE int is_module_local(csp_rt_t* st, index_t di)
+{
+    return (st->mdef != BAD_INDEX) && ((int)INDEX(di) > (int)INDEX(st->mdef));
+}
+
+// Lookup for DECLARING a name: only the scope the new decl lands in. A module
+// member may shadow a global -- otherwise adding a global later would break
+// every module that happens to use that name.
+NOINLINE index_t csp_lookup_decl_local(csp_rt_t* st, const tstr_t* name)
 {
     int start = (st->mdef != BAD_INDEX) ? INDEX(st->mdef)+1 : 0;
     return lookup_decl_in(st, name, start, st->ps.nd);
+}
+
+// Lookup for REFERENCING a name.
+NOINLINE index_t csp_lookup_decl(csp_rt_t* st, const tstr_t* name)
+{
+    if (st->mdef != BAD_INDEX) {
+	index_t ix;
+	// Module body first, so a local shadows a global of the same name.
+	if ((ix = lookup_decl_in(st, name, INDEX(st->mdef)+1, st->ps.nd))
+	    != BAD_INDEX)
+	    return ix;
+	// Then the globals declared before this module. lookup_decl_in skips
+	// other modules' bodies, so their members stay private. Without this a
+	// module body could not see ANY global -- not a constant, not a timer,
+	// nothing.
+	return lookup_decl_in(st, name, 0, INDEX(st->mdef));
+    }
+    return lookup_decl_in(st, name, 0, st->ps.nd);
 }
 
 NOINLINE index_t lookup_const(csp_rt_t* st, vtype_t vt, value_t v)
@@ -2053,7 +2082,7 @@ NOINLINE index_t csp_new_udecl(csp_rt_t* st, const tstr_t* name, decl_t type)
 {
     index_t ix;
     
-    if ((ix = csp_lookup_decl(st, name)) != BAD_INDEX) {
+    if ((ix = csp_lookup_decl_local(st, name)) != BAD_INDEX) {
 	if (csp_set_error(st, ERR_ALREADY_DEFINED)) {
 	    tstr_t typ = { .ptr = "name", .len = 4 };
 	    if (decl(st,ix,type) == type) typ = decl_type_name(type);
@@ -3869,7 +3898,7 @@ next:
 		i += 2;
 	    }
 	    // Apply module context
-	    if ((st->mdef != BAD_INDEX) && (OBJ(ix) == 0))
+	    if ((OBJ(ix) == 0) && is_module_local(st, ix))
 		ix = MAKE_INDEX(CURRENT, INDEX(ix));
 
 	    // Buf[pos] / Buf[pos0..pos1] -- byte access on a buffer
@@ -4579,7 +4608,9 @@ NOINLINE index_t lookup_lhs(csp_rt_t* st, const token_t* tv,
 	    name = &tv[lhs->pos].v.str;
 	    if ((ix = csp_lookup_decl(st,name)) == BAD_INDEX)
 		return BAD_INDEX;
-	    if (st->mdef != BAD_INDEX)
+	    // Only a member of THIS module is per-instance; a global resolved
+	    // from inside the body stays global.
+	    if (is_module_local(st, ix))
 		ix = MAKE_INDEX(CURRENT, INDEX(ix));
 	}
 	else if (lhs->len == 3) {  // obj.field
@@ -4781,7 +4812,7 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 		csp_set_error(st, ERR_SYNTAX);
 		return -1;
 	    }
-	    if ((st->mdef != BAD_INDEX) && (OBJ(lx) == 0))
+	    if ((OBJ(lx) == 0) && is_module_local(st, lx))
 		lx = MAKE_INDEX(CURRENT, INDEX(lx));
 	    if (dst >= 0) { free_reg(st, dst); dst = -1; }
 	    memset(&rbody, 0, sizeof(rbody));
@@ -4868,7 +4899,7 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 				csp_set_err_arg_tstr(st, 0, &part[k].obj);
 			    return -1;
 			}
-			if ((st->mdef != BAD_INDEX) && (OBJ(ix) == 0))
+			if ((OBJ(ix) == 0) && is_module_local(st, ix))
 			    ix = MAKE_INDEX(CURRENT, INDEX(ix));
 		    }
 		    lpart = pt;
@@ -6596,6 +6627,18 @@ match:
 	    if (!decl(st,i,bound)) {
 		csp_print_str(" = ");
 		csp_print_value(st, decl(st,i,vt), decl(st,i,va.init));
+	    }
+	    else {
+		// bind <buffer>[<lo>..<hi>] -- a bit-field view, so there is no
+		// init value to show; without this the bind vanished from /list
+		// and the output could not be pasted back.
+		csp_print_str(" bind ");
+		csp_print_str_at(st, decl_name_pos(st, decl(st,i,ca.id)));
+		csp_print_char('[');
+		csp_print_uint(decl(st,i,ca.bit));
+		csp_print_str("..");
+		csp_print_uint(decl(st,i,ca.bit) + decl(st,i,ca.len));
+		csp_print_char(']');
 	    }
 	    csp_print_char('\n');
 	    break;

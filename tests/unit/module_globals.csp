@@ -1,0 +1,26 @@
+// A module body must see the globals declared before it -- a constant, a
+// variable, anything. It could not: csp_lookup_decl started the search at the
+// module's own decl, so everything above was unreachable.
+//
+// And a member may still SHADOW a global of the same name, which is what makes
+// the fix safe: adding a global later must not break a module that happens to
+// use that name.
+#constant K = 7
+#variable G = 42
+
+#module M
+  #variable V = 0
+  #variable W = 0
+  V = K ? 1        // global constant, seen from inside the body
+  W = G ? 1        // global variable
+#end
+
+#module S
+  #variable K = 99   // shadows the global K
+  #variable V = 0
+  V = K ? 1          // must pick the local one
+#end
+
+#M m1
+#M m2
+#S s1

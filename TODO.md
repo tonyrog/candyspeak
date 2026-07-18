@@ -66,6 +66,15 @@ Last row should be Led=0 ? !BtnA || !BntB
   expanderar till vanliga regler mot namngivna fält).
   OBS make_buf_view hör INTE hit (den driver Buf[a..b]) och är kvar.
 
+## #buffer inne i en modul instansieras aldrig per objekt.
+  Per-objekt-uppsättningen i csp_rt_start har case för CONSTANT/VARIABLE/
+  TIMER/DIGITAL/ANALOG/CAN men INTE för DECL_BUFFER -- den faller i
+  `default: break`. Parsar utan klagomål, allokeras aldrig.
+  Värre: en `#variable X:n bind Buf[a..b]` i samma modul sätts DÅ upp ändå
+  (setup_variable bound-vägen) och läser `st->view[ca.id]` för en buffert som
+  aldrig blivit uppsatt => binder mot en icke-initierad vy, tyst.
+  Hittat när jag testade en RGB565-buffert per pixel i cpx_m.
+
 ## csp_buf_t: bitfält sparar NOLL. Mätt 2026-07-18, fyra layouter.
     nuvarande (allt uint8_t)              12 byte
     A: små fält hopslagna till ett u16    12

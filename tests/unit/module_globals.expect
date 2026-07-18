@@ -1,0 +1,11 @@
+%% Both instances must get the global values, and the shadowing module must
+%% get its own K, not the global one.
+{modes, [seq]}.
+{checks, [
+  {final_object_var, "M.m1", "m1.V", 7},
+  {final_object_var, "M.m1", "m1.W", 42},
+  {final_object_var, "M.m2", "m2.V", 7},
+  {final_object_var, "M.m2", "m2.W", 42},
+  {final_object_var, "S.s1", "s1.K", 99},
+  {final_object_var, "S.s1", "s1.V", 99}
+]}.
