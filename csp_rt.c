@@ -6702,7 +6702,7 @@ match:
 	    csp_print_str("#digital ");
 	    list_name(st, cur_mod, npos);
 	    csp_print_char(' ');
-	    csp_print_str(csp_fmt_pindir(decl(st,i,dir)));
+	    csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
 	    if (decl(st,i,di.pullup)) {
 		csp_print_char(' ');		
 		csp_print_rostr(s_pullup);
@@ -6722,7 +6722,7 @@ match:
 	    csp_print_char(':');              // :width (res stored as bits-1)
 	    csp_print_uint(decl(st,i,an.res)+1);
 	    csp_print_char(' ');
-	    csp_print_str(csp_fmt_pindir(decl(st,i,dir)));
+	    csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
 	    if (decl(st,i,an.pwm)) {
 		csp_print_char(' ');
 		csp_print_rostr(s_pwm);
@@ -6745,7 +6745,7 @@ match:
 		csp_print_uint(decl(st,i,bf.nbits));
 	    if (decl(st,i,dir)) {
 		csp_print_char(' ');
-		csp_print_str(csp_fmt_pindir(decl(st,i,dir)));
+		csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
 	    }
 	    if (decl(st,i,bf.transport) == TR_CAN) {
 		csp_print_str(" can ");   // csp_print_hex emits the 0x itself
@@ -6762,7 +6762,7 @@ match:
 	    csp_print_char(':');
 	    csp_print_uint(decl(st,i,ca.len)+1);
 	    csp_print_char(' ');
-	    csp_print_str(csp_fmt_pindir(decl(st,i,dir)));
+	    csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
 	    csp_print_char(' ');
 	    csp_print_str(csp_fmt_vtype(decl(st,i,vt)));
 	    csp_print_char(' ');
