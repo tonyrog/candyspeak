@@ -1,0 +1,77 @@
+// Circuit Playground Express -- cpx_m.csp with the colours made readable.
+//
+// Two ways to say what a colour is, instead of writing 0xabcd and hoping:
+//   1. named constants, for colours that are fixed at write time
+//   2. a 16-bit buffer with bound r/g/b fields, for a colour COMPUTED at run
+//      time -- here the ring tracks the light sensor
+//
+// RGB565 packs into 16 bits as  r:5 << 11 | g:6 << 5 | b:5.
+// Note g has SIX bits (the eye is most sensitive to green), so its max is 63
+// while r and b max out at 31.
+
+// --- buttons / switch / onboard LED ---
+#digital BtnA   in pulldown 0:4
+#digital BtnB   in pulldown 0:5
+#digital Switch in pullup   0:7
+#digital Led    out 0:13
+
+// --- analog sensors ---
+#analog Light:10 in 0:8      // light sensor (A8), 0..1023
+#analog Temp:10  in 0:9
+
+// --- 1: fixed colours as named constants -------------------------------
+#constant GREEN = 0x07E0     // r=0  g=63 b=0
+#constant BLUE  = 0x001F     // r=0  g=0  b=31
+#constant RED   = 0xF800     // r=31 g=0  b=0
+#constant BLACK = 0x0000
+
+// --- 2: a colour built from parts --------------------------------------
+// The buffer IS the colour; the three variables are bit-field views into it,
+// so writing them writes the frame. Global, so every Pixel object can read it
+// (a module body sees globals; a member of the same name would shadow one).
+#buffer Live:16
+#variable r:5 bind Live[11..15]
+#variable g:6 bind Live[5..10]
+#variable b:5 bind Live[0..4]
+
+// Map the light sensor onto blue, and its inverse onto red: dark room -> red,
+// bright room -> blue. Live assembles itself as the parts are written.
+#timer Sample 100
+Sample = 1
+Sample = 1 ? timeout(Sample)
+b = Light / 33          ? timeout(Sample)      // 0..1023 -> 0..31
+r = 31 - (Light / 33)   ? timeout(Sample)
+g = 0                   ? timeout(Sample)
+
+// --- the ring ----------------------------------------------------------
+#module Pixel
+  #analog P out 9:0
+  #timer  T 1000
+  #states ON OFF
+
+  #in INIT
+    State=OFF
+  #end
+
+  // Button A held: show the live sensor colour instead of blinking.
+  #in OFF
+    P=Live, State=ON, T=1 ? timeout(T) && BtnA
+    P=GREEN, State=ON, T=1 ? timeout(T) && !BtnA
+  #end
+
+  #in ON
+    P=Live, State=OFF, T=1 ? timeout(T) && BtnA
+    P=BLUE, State=OFF, T=1 ? timeout(T) && !BtnA
+  #end
+#end
+
+#Pixel p0 P.pin=0 T.period=500 T=1
+#Pixel p1 P.pin=1 T.period=600 T=1
+#Pixel p2 P.pin=2 T.period=700 T=1
+#Pixel p3 P.pin=3 T.period=800 T=1
+#Pixel p4 P.pin=4 T.period=900 T=1
+#Pixel p5 P.pin=5 T.period=1000 T=1
+#Pixel p6 P.pin=6 T.period=1100 T=1
+#Pixel p7 P.pin=7 T.period=1200 T=1
+#Pixel p8 P.pin=8 T.period=1300 T=1
+#Pixel p9 P.pin=9 T.period=1400 T=1
