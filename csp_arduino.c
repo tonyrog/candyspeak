@@ -173,12 +173,17 @@ int csp_print_str(const char* s)
 }
 
 #if defined(__AVR__)
-int csp_print_str_P(const rochar* s)
+int csp_print_rostr(const rochar* s)
 {
     if (serial_output)    
 	return Serial.print((__FlashStringHelper*)s);
     // fixme number of strlen_P(s);
     return strlen_P(s);
+}
+#else
+int csp_print_rostr(const rochar* s)
+{
+    return csp_print_str((const char*) s);
 }
 #endif
 

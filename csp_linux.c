@@ -192,6 +192,11 @@ int csp_print_str(const char* s)
     return strlen(s);
 }
 
+int csp_print_rostr(const rochar* s)
+{
+    return csp_print_str((const char*) s);
+}
+
 int csp_print_int(ivalue_t v)
 {
     if (file_output)

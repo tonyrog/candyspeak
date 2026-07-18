@@ -6703,8 +6703,15 @@ match:
 	    list_name(st, cur_mod, npos);
 	    csp_print_char(' ');
 	    csp_print_str(csp_fmt_pindir(decl(st,i,dir)));
-	    csp_print_char(' ');              // port:pin (needed to mod/rewire)
-	    csp_print_uint(decl(st,i,di.port));
+	    if (decl(st,i,di.pullup)) {
+		csp_print_char(' ');		
+		csp_print_rostr(s_pullup);
+	    }
+	    else if (decl(st,i,di.pulldown)) {
+		csp_print_char(' ');
+		csp_print_rostr(s_pulldown);
+	    }
+	    csp_print_char(' ');              // port:pin (needed to mod/rewire)	    csp_print_uint(decl(st,i,di.port));
 	    csp_print_char(':');
 	    csp_print_uint(decl(st,i,di.pin));
 	    csp_print_char('\n');
@@ -6716,6 +6723,10 @@ match:
 	    csp_print_uint(decl(st,i,an.res)+1);
 	    csp_print_char(' ');
 	    csp_print_str(csp_fmt_pindir(decl(st,i,dir)));
+	    if (decl(st,i,an.pwm)) {
+		csp_print_char(' ');
+		csp_print_rostr(s_pwm);
+	    }	    
 	    csp_print_char(' ');              // port:pin
 	    csp_print_uint(decl(st,i,an.port));
 	    csp_print_char(':');

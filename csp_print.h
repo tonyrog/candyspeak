@@ -13,9 +13,7 @@ int csp_will_output(void);
 // platform print functions
 int csp_print_char(char c);
 int csp_print_str(const char* s);
-#if defined(__AVR__)
-int csp_print_str_P(rochar* s);  // PROGMEM string
-#endif
+int csp_print_rostr(rochar* s);
 int csp_print_int(ivalue_t v);
 int csp_print_uint(uvalue_t v);
 int csp_print_uintw(uvalue_t v, int nw);
