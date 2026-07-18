@@ -33,6 +33,10 @@ Count = n
 Level = level
 Flags = 0x05
 
+// Only 4 of the 8 declared bytes carry anything, so send 4. On the receive side
+// .dlc reads back what the sender actually sent.
+F300.dlc = 4
+
 // A cyclic PDO instead: send every second even when nothing changed. An
 // unchanged frame is not dirty, so .tx is the only way to say "send anyway".
 // Comment out the rules above and this one keeps the bus fed on its own.

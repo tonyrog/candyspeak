@@ -1373,11 +1373,22 @@ NOINLINE void csp_dio_set_part(csp_rt_t* st, index_t ix, value_t v,
 	// A frame's transport state lives on the BUFFER, not in a value slot,
 	// and is a command rather than a value -- so it is not DIN/DOUT
 	// shadowed and does not go through the dirty set.
-	else if ((part == PART_TX) && (st->buf[vw->buf].transport == TR_CAN)) {
-	    if (v.i)
-		st->buf[vw->buf].flags |= BUF_F_TX;
-	    else
-		st->buf[vw->buf].flags &= ~BUF_F_TX;
+	else if (st->buf[vw->buf].transport == TR_CAN) {
+	    csp_buf_t* bp = &st->buf[vw->buf];
+	    if (part == PART_TX) {
+		if (v.i)
+		    bp->flags |= BUF_F_TX;
+		else
+		    bp->flags &= ~BUF_F_TX;
+	    }
+	    else if (part == PART_DLC) {
+		// Clamped, not rejected: the heap holds nbytes and no more, so
+		// a longer frame would read past the buffer.
+		ivalue_t n = v.i;
+		if (n < 0) n = 0;
+		if (n > bp->nbytes) n = bp->nbytes;
+		bp->dlc = (uint8_t)n;
+	    }
 	}
 	return;
     }
@@ -1450,6 +1461,10 @@ NOINLINE void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp,
 	case PART_ID:
 	    if (bp->transport == TR_CAN)
 		vp->i = (ivalue_t)bp->xref;
+	    break;
+	case PART_DLC:
+	    if (bp->transport == TR_CAN)
+		vp->i = bp->dlc;
 	    break;
 	default: break;
 	}
@@ -2063,6 +2078,7 @@ NOINLINE static csp_part_t part_from_tstr(const tstr_t* s)
     case 3:
 	if (ro_memcmp(s->ptr, s_pin, 3) == 0)    return PART_PIN;
 	if (ro_memcmp(s->ptr, s_dir, 3) == 0)    return PART_DIR;
+	if (ro_memcmp(s->ptr, s_dlc, 3) == 0)    return PART_DLC;
 	break;
     case 4:
 	if (ro_memcmp(s->ptr, s_port, 4) == 0)   return PART_PORT;
@@ -5776,6 +5792,29 @@ NOINLINE static int setup_can(csp_rt_t* st, index_t ix)
 NOINLINE static void can_mark_fields(csp_rt_t* st, index_t b)
 {
     int i;
+    // The frame's own leaf first. A frame declared as a plain #buffer (no #can
+    // fields at all -- read with >>= or with bound variables) has nothing in
+    // the input list, so without this nothing would be marked, commit would
+    // copy nothing, and the received bytes would never reach the committed
+    // half. heap_dset_copy moves the WHOLE buffer for any dirty leaf of it, so
+    // this one mark is what actually lands the frame.
+    for (i = 0; i < (int)st->ps.nd; i++) {
+	if ((decl(st,i,type) != DECL_BUFFER) ||
+	    (st->view[i].buf != b))
+	    continue;
+	// Marked unconditionally, not diffed: a frame is wider than a value_t,
+	// so there is no single value to compare. Granularity comes from the
+	// per-field pass below; this mark only has to make the copy happen.
+	bitset_set(st->dset, i);
+	st->anyd = CSP_TRUE;
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
+	if (st->reactive)
+	    csp_enq_elist(st, MAKE_INDEX(0, i));
+#endif
+	break;
+    }
+    // Then per-field, so changed() has real granularity and only the fields
+    // that moved wake their rules.
     for (i = 0; i < st->ni; i++) {
 	index_t ix = st->input[i];
 	int leaf;
@@ -5830,14 +5869,17 @@ void csp_can_input(csp_rt_t* st)
 	    return;
 	for (b = 0; b < st->nbuf; b++) {
 	    csp_buf_t* bp = &st->buf[b];
+	    uint8_t n;
 	    if ((bp->transport != TR_CAN) || (bp->xref != id) ||
 		!(bp->dir & DIR_IN))
 		continue;
 	    // Into the SHADOW, not the committed half: DIN must keep the previous
 	    // frame so can_mark_fields can tell what actually changed.
-	    // A short frame updates only the bytes it carried.
-	    memcpy(st->heap[DOUT] + bp->hp, data,
-		   (len < bp->nbytes) ? len : bp->nbytes);
+	    // A short frame updates only the bytes it carried. Clamp per buffer,
+	    // not once: the same id may feed several buffers of different sizes.
+	    n = (len < bp->nbytes) ? len : bp->nbytes;
+	    memcpy(st->heap[DOUT] + bp->hp, data, n);
+	    bp->dlc = n;                   // what the sender actually sent
 	    bp->flags |= BUF_F_RXPEND;     // csp_commit turns this into BUF_F_RX
 	    can_mark_fields(st, b);
 	}
@@ -5856,7 +5898,7 @@ void csp_can_output(csp_rt_t* st)
 	    continue;
 	bp->flags &= ~(BUF_F_DIRTY|BUF_F_TX);
 	if (bp->dir & DIR_OUT)
-	    csp_can_send(st, bp->xref, st->heap[DIN] + bp->hp, bp->nbytes);
+	    csp_can_send(st, bp->xref, st->heap[DIN] + bp->hp, bp->dlc);
     }
 }
 
@@ -5880,6 +5922,8 @@ NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint8_t nbytes,
     st->buf[b].transport = transport;
     st->buf[b].xref      = xref;
     st->buf[b].dir       = dir;
+    st->buf[b].flags     = 0;
+    st->buf[b].dlc       = nbytes;     // send the whole frame unless told less
     st->nbuf++;
     return b;
 }

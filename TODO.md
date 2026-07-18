@@ -66,6 +66,33 @@ Last row should be Led=0 ? !BtnA || !BntB
   expanderar till vanliga regler mot namngivna fält).
   OBS make_buf_view hör INTE hit (den driver Buf[a..b]) och är kvar.
 
+## csp_buf_t: bitfält sparar NOLL. Mätt 2026-07-18, fyra layouter.
+    nuvarande (allt uint8_t)              12 byte
+    A: små fält hopslagna till ett u16    12
+    B: xref:29 + resten inpackat          12
+    C: allt i två u32-ord + en u8         12
+    D: som C men PACKED                    9
+  uint32 xref tvingar 4-bytes-alignment, så allt utom PACKED landar på 12
+  oavsett hur bitarna arrangeras. Bitfält är alltså rent bortkastad möda här.
+  PACKED ger 9 byte (25%), på cpx_m 70 buffertar = 210 byte. MEN: PACKED-array
+  => oalignade multibyte-accesser på Cortex-M0, vilket är exakt fällan som
+  HardFaultade projektet förut (packad csp_func_t). Rekommenderar INTE.
+  För att nå 8 byte med naturlig alignment krävs <= 64 bitar; behovet är 71:
+    hp 16 + nbytes 8 + dlc 8 + xref 29 + transport 2 + dir 2 + flags 4
+  Alltså måste något verkligt offras: extended CAN-id (xref -> 24 bitar) eller
+  hp -> 12-13 bitar. Ingetdera gratis.
+
+  `loc` (RAM/ROM/IO) SKRIVS men LÄSES ALDRIG -- ta bort den. Krymper inte
+  structen (alignment), men det är ett dött fält.
+
+  STÖRRE FISK: nbuf ~= antal leafs, för varje konstant/timer/digital/variabel
+  får en EGEN buffert via setup_slot/auto-buffer. cpx_m: 70 buffertar för ett
+  program med en handfull riktiga buffertar. Alltså 12 byte metadata för att
+  beskriva 4 byte value_t. Om VIEW_SLOT-leafs slapp csp_buf_t helt (vyn pekar
+  rakt på en heap-offset) skulle buf-tabellen krympa till de riktiga
+  buffertarna -- storleksordningen 700+ byte på cpx_m, ~3x mer än PACKED ger,
+  utan alignment-risk. Verifiera antagandet först.
+
 ## CAN, kvar att göra
   - view.pos är en byte => bara de första 32 byten av en frame är adresserbara.
     Deklarationen klarar hela 64 (ca.bit är 9 bitar); setup_can vägrar nu
@@ -76,8 +103,17 @@ Last row should be Led=0 ? !BtnA || !BntB
     att tvinga fram en sändning.
   - Objektinstanser med #can-fält: alla instanser binder mot SAMMA #buffer, så
     de delar frame. Rimligt? Eller ska varje instans ha sin egen frame/id?
-  - `.dlc` som part vore nästa naturliga: skicka färre byte än ramens storlek.
-    Nu skickas alltid nbytes.
+  - Buffert-parts (.dlc/.tx/.rx/.id) är INTE DIN/DOUT-skuggade -- de ligger på
+    csp_buf_t, inte i en value-slot. Följd: `F.dlc = 3` följt av `x = F.dlc` i
+    SAMMA cykel ger 3, medan `.period` på en timer (som ligger i value-sloten)
+    hade gett det gamla värdet. Pinnat i tests/unit/can_parts (d1 == 3).
+    För `.tx` är det rätt -- det är ett kommando, inte ett värde. För `.dlc`,
+    som är konfiguration, är det en inkonsekvens mot `.period`. Avgör om det
+    ska enhetliggöras eller dokumenteras som avsiktligt.
+  - `.ext` (extended id) -- Tony förklarar varför senare. RTR medvetet utelämnat.
+  - CAN FD har diskreta DLC-värden (0-8,12,16,20,24,32,48,64). `.dlc` klampas
+    bara till nbytes, den rundar inte upp till nästa giltiga FD-längd. Spelar
+    ingen roll så länge Linux-backenden kör classic can_frame (max 8).
   - Arduino-backenden (arduino-CAN bakom CSP_HAS_CAN) är INTE körd på järn.
     Linux/vcan0 är verifierat i båda riktningarna.
 

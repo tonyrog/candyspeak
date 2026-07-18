@@ -69,6 +69,7 @@ extern rochar s_period[7] RODATA;
 extern rochar s_fired[6] RODATA;
 extern rochar s_rx[3] RODATA;
 extern rochar s_tx[3] RODATA;
+extern rochar s_dlc[4] RODATA;
 extern rochar s_LP[2] RODATA;
 extern rochar s_RP[2] RODATA;
 extern rochar s_HASH[2] RODATA;

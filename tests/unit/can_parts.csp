@@ -18,3 +18,14 @@ vid = V.id         // a field answers for its frame
 gotrx = F300.rx    // starts at 1, must be driven to 0
 F300.tx = 1
 didtx = F300.tx
+
+// .dlc starts at the declared frame size and is clamped to it on write: the
+// heap holds nbytes and no more, so a longer frame would read past the buffer.
+#variable d0 = 0
+#variable d1 = 0
+#variable d2 = 0
+d0 = F300.dlc      // 8, the declared size
+F300.dlc = 3
+d1 = F300.dlc      // 3
+F300.dlc = 99
+d2 = F300.dlc      // 8, clamped

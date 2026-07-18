@@ -238,6 +238,7 @@ typedef enum  {
     PART_ID,
     PART_RX,     // TR_CAN buffer: a frame arrived and is now readable (1 cycle)
     PART_TX,     // TR_CAN buffer: write 1 to force a send this cycle
+    PART_DLC,    // TR_CAN buffer: bytes to send / bytes last received
     PART_LAST,
 } csp_part_t;
 
@@ -284,6 +285,9 @@ typedef struct {
     uint8_t  transport; // transport_t
     uint8_t  dir;       // in/out
     uint8_t  flags;     // BUF_F_*
+    uint8_t  dlc;       // TR_CAN: bytes to send / bytes last received. Starts
+			// at nbytes (the declared frame size) and is never
+			// allowed past it -- the heap has room for no more.
     uint32_t xref;      // pin-number / can-id
 } csp_buf_t;
 

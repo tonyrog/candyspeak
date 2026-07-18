@@ -1,0 +1,63 @@
+// A CAN frame with NO #can declarations at all. The frame is just a #buffer
+// that happens to have can transport, so everything that works on a buffer
+// works on it: bind, <<= pack, >>= unpack.
+//
+//   sudo ip link add dev vcan0 type vcan && sudo ip link set up vcan0
+//   ./csp --can=vcan0 -c 0 examples/can_pack.csp
+//   candump vcan0
+//   cansend vcan0 401#0501C0
+//
+// This is the point of binding #can to #buffer rather than to a raw id: a frame
+// stopped being a special kind of thing and became a buffer with an address.
+
+// ---- outgoing: build a frame from variables -----------------------------
+#buffer Out:8 out can 0x400
+#variable speed = 0
+#variable temp  = 0
+#variable mode  = 0
+#timer Tick 250
+
+Tick = 1
+Tick = 1 ? timeout(Tick)
+speed = (speed + 7) % 65536 ? timeout(Tick)
+temp  = 25
+mode  = 2
+
+// Pack fills the frame from the low bit up: speed in bits 0..15, temp in
+// 16..23, mode in 24..25. Writing the buffer marks it dirty, so this line is
+// also what puts the frame on the bus.
+Out <<= speed:16 temp:8 mode:2 ? timeout(Tick)
+Out.dlc = 4
+
+// ---- incoming: take a frame apart into variables ------------------------
+#buffer In:8 in can 0x401
+#variable cmd   = 0
+#variable arg   = 0
+#variable flags = 0
+
+// Unpack is the mirror of pack. In.rx is true for exactly the cycle where the
+// received bytes have become readable.
+In >>= cmd:8 arg:8 flags:8 ? In.rx
+
+// ...but cmd/arg/flags are COPIES, and a value written this cycle is readable
+// the next one. So the print waits one cycle: `ready` is written when In.rx is
+// true and read the cycle after, which is when the copies have landed.
+#variable ready = 0
+ready = In.rx
+print("0x401 cmd=", cmd, " arg=", arg)  ? ready
+println(" flags=", flags)               ? ready
+
+// Only interested in a field when it actually CHANGES, not on every frame?
+// Guard on changed() instead of on .rx -- a frame that repeats its contents
+// then prints nothing. Same one-cycle rule applies, so the trigger goes through
+// a variable again; guarding directly on changed(cmd) fires at the right time
+// but prints the PREVIOUS value.
+#variable cmdchg = 0
+cmdchg = changed(cmd)
+println("       cmd changed to ", cmd) ? cmdchg
+
+// A bound variable is the other way in, and it behaves differently on purpose:
+// it ALIASES the frame bits instead of copying them, so it needs no rule and no
+// waiting -- it is already correct in the In.rx cycle.
+#variable first:8 bind In[0..7]
+println("  aliased first byte=", first) ? In.rx

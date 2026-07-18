@@ -64,6 +64,7 @@ period period
 fired fired
 rx rx
 tx tx
+dlc dlc
 LP (
 RP )
 HASH #

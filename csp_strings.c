@@ -67,6 +67,7 @@ rochar s_period[] RODATA = "period";
 rochar s_fired[] RODATA = "fired";
 rochar s_rx[] RODATA = "rx";
 rochar s_tx[] RODATA = "tx";
+rochar s_dlc[] RODATA = "dlc";
 rochar s_LP[] RODATA = "(";
 rochar s_RP[] RODATA = ")";
 rochar s_HASH[] RODATA = "#";
