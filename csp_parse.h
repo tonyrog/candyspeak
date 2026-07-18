@@ -90,6 +90,7 @@ enum {
     STOP_ANALOG_PP_CONT,    // PAT_PORT_PIN in pat_analog
     STOP_CAN_RES_CONT,      // PAT_RES in pat_can
     STOP_BUFFER_RES_CONT,   // PAT_RES in pat_buffer
+    STOP_BUFFER_CAN_ID,     // frame id after 'can' in pat_buffer
     STOP_BODY_IDX0,         // first index in body lhs  Buf[idx0 ..]
     STOP_BODY_IDX1,         // second index in body lhs Buf[.. idx1]
     STOP_OBJECT_INIT_CONT,

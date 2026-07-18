@@ -62,6 +62,8 @@ id id
 value value
 period period
 fired fired
+rx rx
+tx tx
 LP (
 RP )
 HASH #

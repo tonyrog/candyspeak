@@ -1,0 +1,18 @@
+// CAN field packing. The frame is a declared buffer; fa and fb are byte 0 and
+// byte 1 of it, fw covers both. Writing fa and fb must be readable through fw:
+// rw == 0x0201 == 513 (little endian).
+// This is the whole CAN storage model in one test -- a frame is a buffer, its
+// fields are bit views into it, and the view machinery does the packing.
+// No bus is involved.
+#buffer F200:8 out can 0x200
+#can fa:8  unsigned F200[0..7]
+#can fb:8  unsigned F200[8..15]
+#can fw:16 unsigned F200[0..15]
+#variable ra = 0
+#variable rb = 0
+#variable rw = 0
+fa = 1
+fb = 2
+ra = fa
+rb = fb
+rw = fw

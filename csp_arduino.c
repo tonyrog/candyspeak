@@ -22,6 +22,18 @@
 #include "csp_flash_samd.h"
 #endif
 
+// CAN. Opt in per board by defining CSP_HAS_CAN in the board Makefile -- the
+// library, the transceiver and the wiring are all board decisions, and linking
+// a CAN library that is not there costs flash and breaks the build.
+// Expects Sandeep Mistry's arduino-CAN API (CAN.begin/parsePacket/beginPacket),
+// which covers the MCP2515 shields and the SAMD/ESP32 built-in controllers.
+#if defined(CSP_HAS_CAN)
+#include <CAN.h>
+#ifndef CSP_CAN_BITRATE
+#define CSP_CAN_BITRATE 500E3
+#endif
+#endif
+
 #define CSP_EMBEDDED 1
 #include "csp.h"
 #include "csp_print.h"
@@ -381,6 +393,7 @@ void csp_setup(csp_rt_t* st)
     unsigned res = 0;
 
     csp_board_setup(st);
+    csp_can_init(st);
 
     // setup in and inout (inout startup as input)
     for (i = 0; i < st->ni; i++) {
@@ -459,8 +472,70 @@ void csp_input(csp_rt_t* st)
 	default: break;
 	}
     }
+    csp_can_input(st);
     csp_input_timer(st);
 }
+
+// ============================================================
+// CAN backend
+// ============================================================
+
+#if defined(CSP_HAS_CAN)
+
+int csp_can_init(csp_rt_t* st)
+{
+    (void)st;
+    if (!CAN.begin(CSP_CAN_BITRATE)) {
+	csp_print_str("can: init failed\n");
+	return -1;
+    }
+    return 0;
+}
+
+int csp_can_recv(csp_rt_t* st, uint32_t* id, uint8_t* data, uint8_t* len)
+{
+    int n, i;
+    (void)st;
+
+    if ((n = CAN.parsePacket()) <= 0)
+	return 0;
+    if (CAN.packetRtr())            // remote request carries no data
+	return 0;
+    if (n > 8) n = 8;               // classic CAN
+    *id = (uint32_t)CAN.packetId();
+    for (i = 0; i < n; i++)
+	data[i] = (uint8_t)CAN.read();
+    *len = (uint8_t)n;
+    return 1;
+}
+
+int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
+{
+    (void)st;
+    if (len > 8) len = 8;
+    // Anything past the 11-bit standard id range goes out extended.
+    if (id > 0x7FF)
+	CAN.beginExtendedPacket(id);
+    else
+	CAN.beginPacket((int)id);
+    CAN.write(data, len);
+    return CAN.endPacket() ? 0 : -1;
+}
+
+#else   /* no CAN on this board: stubs, so #can still parses and runs dry */
+
+int csp_can_init(csp_rt_t* st) { (void)st; return 0; }
+int csp_can_recv(csp_rt_t* st, uint32_t* id, uint8_t* data, uint8_t* len)
+{
+    (void)st; (void)id; (void)data; (void)len;
+    return 0;
+}
+int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
+{
+    (void)st; (void)id; (void)data; (void)len;
+    return 0;
+}
+#endif
 
 void csp_output(csp_rt_t* st)
 {
@@ -489,6 +564,7 @@ void csp_output(csp_rt_t* st)
 		break;
 	    }
 	}
+	csp_can_output(st);
 	csp_board_stop_output(st);
     }
     csp_output_timer(st);

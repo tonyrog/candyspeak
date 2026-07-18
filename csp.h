@@ -236,6 +236,8 @@ typedef enum  {
     PART_PERIOD,
     PART_FIRED,
     PART_ID,
+    PART_RX,     // TR_CAN buffer: a frame arrived and is now readable (1 cycle)
+    PART_TX,     // TR_CAN buffer: write 1 to force a send this cycle
     PART_LAST,
 } csp_part_t;
 
@@ -267,15 +269,34 @@ typedef struct {
     uint16_t buf;                 // buffer id (both kinds)
 } csp_view_t;
 
+// csp_buf_t.transport -- what the buffer is bound to on the outside
+typedef enum {
+    TR_NONE = 0,        // plain RAM buffer
+    TR_PIN  = 1,        // reserved: pin-mapped
+    TR_CAN  = 2,        // a CAN frame; xref is the frame id
+} transport_t;
+
 // One per unique buffer. RAM table, filled at start.
 typedef struct {
     uint16_t hp;        // heap byte offset
     uint8_t  nbytes;    // size in bytes
     uint8_t  loc;       // RAM/ROM/IO
-    uint8_t  transport; // none/pin/can
+    uint8_t  transport; // transport_t
     uint8_t  dir;       // in/out
+    uint8_t  flags;     // BUF_F_*
     uint32_t xref;      // pin-number / can-id
 } csp_buf_t;
+
+// csp_buf_t.flags
+#define BUF_F_DIRTY  0x01  // a field changed: an out frame needs sending.
+			   // Set at commit (the dset walk already resolves the
+			   // owning buffer), cleared by csp_can_output.
+#define BUF_F_RXPEND 0x02  // a frame arrived this cycle, not committed yet
+#define BUF_F_RX     0x04  // ...and now it is. Set at commit so it is visible
+			   // in the SAME cycle as the data it describes, which
+			   // is what makes `? F.rx` line up. Lives one cycle.
+#define BUF_F_TX     0x08  // a rule asked for a send (F.tx = 1), regardless of
+			   // whether any field changed -- cyclic PDO
 
 #if defined(USE_FIXPOINT) && (USE_FIXPOINT == 1)
 #include "csp_fixpoint.h"
@@ -424,6 +445,7 @@ typedef enum {
     NATIVE,     // 'native'
     LITTLE,     // 'little'
     BIG,        // 'big'
+    T_CAN,      // 'can' -- transport option on #buffer: `#buffer F:8 in can 0x201`
     T_LAST,     // number of enumerated tokens
 } tok_t;
 
@@ -765,12 +787,22 @@ typedef struct PACKED {
 } csp_analog_t;
 
 typedef struct PACKED {
-    DECL_COMMON;    
-    unsigned id:INDEX_BITS; // variable | constant (unsigned) 11/29 bit
+    DECL_COMMON;
+    unsigned id:INDEX_BITS; // the #buffer this field is a view into
     unsigned endian:2; // |little|big
     unsigned bit:9;   // 0-511   // bit start pos
     unsigned len:5;   // (1-32)  // data length -1
 } csp_can_t;
+
+// #buffer. Its size does NOT live in DECL_COMMON.res: that is 5 bits holding
+// bits-1, so anything past 32 bits truncated silently (a 64-bit buffer became
+// 4 bytes). nbits here is the one source of truth for how big a buffer is.
+typedef struct PACKED {
+    DECL_COMMON;
+    unsigned nbits:10;      // 1..1023; a CAN FD frame is 512
+    unsigned transport:2;   // transport_t: TR_NONE plain RAM, TR_CAN a frame
+    unsigned id:INDEX_BITS; // TR_CAN: constant holding the frame id
+} csp_bufdecl_t;
 
 typedef struct PACKED {
     DECL_COMMON;    
@@ -791,6 +823,7 @@ typedef union {
     csp_digital_t  di;
     csp_analog_t   an;
     csp_can_t      ca;
+    csp_bufdecl_t  bf;
     csp_timer_t    tm;
 } csp_decl_t;
 
@@ -830,6 +863,22 @@ typedef struct PACKED {
     uintptr_t err_args[3];       // error arguments for printf
     uint32_t line;               // line number when parsing
 } csp_pstate_t;
+
+// Full parse mark: csp_pstate_t plus every cursor a parse mutates that does
+// not live in it. Rewinding nn/nd/nq/ns/strp un-writes the emitted code
+// implicitly, but the module/state cursors would survive a failed line and
+// swallow everything typed after it into a module that never gets its #end.
+typedef struct {
+    csp_pstate_t ps;
+    index_t  mdef;               // module being defined
+    int      ent;                // entry op of that module
+    int      sdef;               // state being defined
+    index_t  in_marker;          // pending OP_INSTATE gate
+    index_t  save_sx;            // sx saved across the module body
+    index_t  sx;                 // state variable
+    index_t  cur;                // current module index
+    index_t  n_rule_emit;        // rules emitted so far
+} csp_pmark_t;
 
 // Function pointer types
 typedef value_t (*csp_func_fn)(struct _csp_rt_t* st, uint16_t type,
@@ -1031,6 +1080,10 @@ typedef struct _csp_rt_t
     index_t sx;                  // runtime state, state variable    
     state_t states[MAX_STATES];  // declared states
     index_t mdef;                // module being defined
+    csp_pmark_t mod_mark;        // parse mark taken at #module: a failure before
+				 // #end rewinds the whole module, so the lines
+				 // after it are not silently absorbed into a
+				 // module that can never be closed
     int     ent;                 // entry op of module in st->instr
     unsigned cur:OBJ_BITS;       // current module index
 
@@ -1061,6 +1114,12 @@ typedef struct _csp_rt_t
     // during eval
     uint32_t update;             // update counter
     uint32_t wait_ms;            // sleep time or NOTIMEOUT
+    // Rule bodies counted at EMIT time (alloc_instr_ptr), no scan. csp_rebuild
+    // snapshots the counter into graph_rules, so n_rule_emit != graph_rules
+    // means "code was added since the last rebuild" -- the cheap staleness test
+    // csp_cycle uses. Unconditional: emission happens with or without reactive.
+    index_t  n_rule_emit;
+    index_t  graph_rules;        // n_rule_emit the last rebuild covered
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     // Rule bodies are numbered densely 0..n_rule-1 in instruction order (csp_csr),
     // and it is that ORDINAL -- not the raw instruction index -- that edg[] stores
@@ -1323,6 +1382,9 @@ extern void csp_set_dvalue(csp_rt_t* st, index_t n, uvalue_t u);
 extern void csp_set_avalue(csp_rt_t* st, index_t n, uvalue_t u);
 extern void csp_set_tvalue(csp_rt_t* st, index_t n, uvalue_t u);
 
+extern void csp_pstate_save(csp_rt_t* st, csp_pmark_t* pm);
+extern void csp_pstate_restore(csp_rt_t* st, csp_pmark_t* pm);
+
 extern int csp_parse_expr(csp_rt_t* st, const token_t* tv, size_t* num_toks,
 			  rentry_t* result);
 extern int csp_parse_const_expr(csp_rt_t* st, const token_t* tv, size_t* num_toks,
@@ -1338,6 +1400,27 @@ extern void csp_setup(csp_rt_t* st);
 extern void csp_input(csp_rt_t* st);
 extern void csp_output(csp_rt_t* st);
 // common timer processing 
+// Frames drained per csp_input. A bound is required: an idle bus costs one
+// failed recv, a saturated one must not starve the cycle.
+#ifndef CSP_CAN_RX_BURST
+#define CSP_CAN_RX_BURST 8
+#endif
+
+// CAN. The core owns the frame logic (id -> buffer, bit packing, dirty
+// tracking) and calls down to three driver hooks. A driver with no bus links
+// the weak no-op versions in csp_can_none.c and everything above still works.
+//   csp_can_recv: 1 = a frame was read, 0 = nothing pending, -1 = error.
+//   csp_can_send: 0 = sent, -1 = error.
+extern int  csp_can_init(csp_rt_t* st);
+extern int  csp_can_recv(csp_rt_t* st, uint32_t* id, uint8_t* data, uint8_t* len);
+extern int  csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len);
+// Called from the driver's csp_input/csp_output.
+extern void csp_can_input(csp_rt_t* st);
+extern void csp_can_output(csp_rt_t* st);
+// 1 if the program has an inbound frame, i.e. the driver loop must keep running
+// even with no timers and nothing changing.
+extern int  csp_can_active(csp_rt_t* st);
+
 extern void csp_input_timer(csp_rt_t* st);
 extern void csp_output_timer(csp_rt_t* st);
 

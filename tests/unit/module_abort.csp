@@ -1,0 +1,5 @@
+// Base program. The interesting part happens in module_abort.csp.stdin:
+// a module is opened, a line inside it fails to parse, and everything after
+// it must land in the GLOBAL scope -- not be absorbed into a module that
+// never gets its #end.
+#variable Base = 0

@@ -1,0 +1,41 @@
+// Build a CAN frame from variables and put it on the bus. The counterpart to
+// can_input.csp, and it shows both ways a frame gets sent.
+//
+// Run it against a virtual bus:
+//   sudo ip link add dev vcan0 type vcan && sudo ip link set up vcan0
+//   ./csp --can=vcan0 -c 0 examples/can_output.csp
+// and watch it from another shell:
+//   candump vcan0
+//
+// Frame 0x300, 8 bytes:
+//   bit  0..7   Count    8 bit   = byte 0    a counter, changes every 200 ms
+//   bit  8..23  Level   16 bit   = bytes 1-2 tracks a variable
+//   bit 24..31  Flags    8 bit   = byte 3    bit flags
+#buffer F300:8 out can 0x300
+#can Count:8  unsigned F300[0..7]
+#can Level:16 unsigned F300[8..23]
+#can Flags:8  unsigned F300[24..31]
+
+#variable n = 0
+#variable level = 1000
+#timer Tick 200
+#timer Beat 1000
+
+// Free-running counter driving the frame contents.
+Tick = 1
+Tick = 1 ? timeout(Tick)
+n = (n + 1) % 256 ? timeout(Tick)
+
+// Packing: writing a field writes the bits of the frame. Changing any field
+// marks the frame dirty, and a dirty out-frame is sent at the end of the cycle.
+// So these three rules ARE the transmit trigger -- this is an event PDO.
+Count = n
+Level = level
+Flags = 0x05
+
+// A cyclic PDO instead: send every second even when nothing changed. An
+// unchanged frame is not dirty, so .tx is the only way to say "send anyway".
+// Comment out the rules above and this one keeps the bus fed on its own.
+Beat = 1
+Beat = 1 ? timeout(Beat)
+F300.tx = 1 ? timeout(Beat)

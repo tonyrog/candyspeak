@@ -1,0 +1,25 @@
+// Monitor CAN frame 0x201 and print its three fields whenever one changes.
+//
+// Run it against a virtual bus:
+//   sudo ip link add dev vcan0 type vcan && sudo ip link set up vcan0
+//   ./csp --can=vcan0 -c 0 examples/can_input.csp
+// then from another shell:
+//   cansend vcan0 201#2A3412785634120000
+//
+// The frame is a declared buffer; the fields are bit views into it. Buffer size
+// is in BYTES when the transport is can (it is the DLC), in bits otherwise.
+//   bit  0..7   A   8 bit   = byte 0
+//   bit  8..23  B  16 bit   = bytes 1-2
+//   bit 24..55  C  32 bit   = bytes 3-6
+// Little endian, so 201#2A 3412 78563412 reads A=0x2A, B=0x1234, C=0x12345678.
+#buffer F201:8 in can 0x201
+#can A:8  unsigned F201[0..7]
+#can B:16 unsigned F201[8..23]
+#can C:32 unsigned F201[24..55]
+
+// F201.rx is true for exactly one cycle: the one where the received frame has
+// crossed the commit and A/B/C are readable. That is the whole point of it --
+// changed(A) would be true one cycle EARLIER, while the new bytes are still in
+// the shadow and A/B/C still hold the previous frame.
+print("0x201  A=", A, "  B=", B)   ? F201.rx
+println("  C=", C)                 ? F201.rx

@@ -8,6 +8,13 @@
 #include <termios.h>
 #include <ctype.h>
 #include <poll.h>
+#include <errno.h>
+#include <fcntl.h>
+
+// SocketCAN is a Linux kernel facility; nothing else has it.
+#if defined(__linux__) && !defined(CSP_NO_SOCKETCAN)
+#define CSP_HAS_SOCKETCAN 1
+#endif
 
 #include "csp.h"
 #include "csp_dump.h"
@@ -19,6 +26,7 @@
 static struct termios orig_termios;
 static int raw_mode = 0;
 static const char* eeprom_file = "eeprom.db";
+static const char* can_iface = NULL;   // --can=vcan0; NULL = no bus, stubs
 static const char* src_file = NULL;   // first .csp on the command line (ROM banner)
 
 // git version, injected by the Makefile; a plain build still says something.
@@ -402,9 +410,119 @@ int csp_uconst(csp_rt_t* st, const char* name, int len,
     return 0;
 }
 
+// ============================================================
+// CAN backend
+//
+// SocketCAN when a --can interface was given, otherwise a no-op stub so a
+// program with #can declarations still parses, runs and can be inspected on a
+// machine with no bus. Test with a virtual interface:
+//   sudo ip link add dev vcan0 type vcan && sudo ip link set up vcan0
+//   ./csp --can=vcan0 prog.csp
+// ============================================================
+
+#if defined(CSP_HAS_SOCKETCAN)
+#include <net/if.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <linux/can.h>
+#include <linux/can/raw.h>
+
+static int can_fd = -1;
+
+int csp_can_init(csp_rt_t* st)
+{
+    struct sockaddr_can addr;
+    struct ifreq ifr;
+    (void)st;
+
+    if (can_iface == NULL)
+	return 0;                       // no bus asked for: stay a stub
+    if ((can_fd = socket(PF_CAN, SOCK_RAW, CAN_RAW)) < 0) {
+	perror("can: socket");
+	return -1;
+    }
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, can_iface, IFNAMSIZ-1);
+    if (ioctl(can_fd, SIOCGIFINDEX, &ifr) < 0) {
+	fprintf(stderr, "can: no interface '%s': %s\n",
+		can_iface, strerror(errno));
+	close(can_fd);
+	can_fd = -1;
+	return -1;
+    }
+    memset(&addr, 0, sizeof(addr));
+    addr.can_family  = AF_CAN;
+    addr.can_ifindex = ifr.ifr_ifindex;
+    if (bind(can_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+	perror("can: bind");
+	close(can_fd);
+	can_fd = -1;
+	return -1;
+    }
+    // Non-blocking: csp_can_input polls once per cycle and must never stall it.
+    fcntl(can_fd, F_SETFL, fcntl(can_fd, F_GETFL, 0) | O_NONBLOCK);
+    return 0;
+}
+
+int csp_can_recv(csp_rt_t* st, uint32_t* id, uint8_t* data, uint8_t* len)
+{
+    struct can_frame f;
+    ssize_t n;
+    (void)st;
+
+    if (can_fd < 0)
+	return 0;
+    if ((n = read(can_fd, &f, sizeof(f))) != (ssize_t)sizeof(f)) {
+	if ((n < 0) && (errno != EAGAIN) && (errno != EWOULDBLOCK))
+	    return -1;
+	return 0;
+    }
+    *id  = f.can_id & (f.can_id & CAN_EFF_FLAG ? CAN_EFF_MASK : CAN_SFF_MASK);
+    *len = f.can_dlc;
+    memcpy(data, f.data, f.can_dlc);
+    return 1;
+}
+
+// The socket, so the main loop can wait on frames instead of spinning.
+int csp_can_pollfd(void) { return can_fd; }
+
+int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
+{
+    struct can_frame f;
+    (void)st;
+
+    if (can_fd < 0)
+	return 0;
+    memset(&f, 0, sizeof(f));
+    // Anything that does not fit the 11-bit standard id goes out extended.
+    f.can_id  = (id > CAN_SFF_MASK) ? (id | CAN_EFF_FLAG) : id;
+    f.can_dlc = (len > 8) ? 8 : len;    // classic CAN via this socket type
+    memcpy(f.data, data, f.can_dlc);
+    if (write(can_fd, &f, sizeof(f)) != (ssize_t)sizeof(f))
+	return -1;
+    return 0;
+}
+
+#else  /* no SocketCAN: stubs, so #can still parses and runs dry */
+
+int csp_can_init(csp_rt_t* st) { (void)st; return 0; }
+int csp_can_pollfd(void) { return -1; }
+int csp_can_recv(csp_rt_t* st, uint32_t* id, uint8_t* data, uint8_t* len)
+{
+    (void)st; (void)id; (void)data; (void)len;
+    return 0;
+}
+int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
+{
+    (void)st; (void)id; (void)data; (void)len;
+    return 0;
+}
+#endif
+
 void csp_setup(csp_rt_t* st)
 {
     time_init();
+    csp_can_init(st);
 }
 
 void csp_input(csp_rt_t* st)
@@ -419,6 +537,7 @@ void csp_input(csp_rt_t* st)
 	default: break;
 	}
     }
+    csp_can_input(st);
     csp_input_timer(st);
 }
 
@@ -435,6 +554,7 @@ void csp_output(csp_rt_t* st)
 	    default: break;
 	    }
 	}
+	csp_can_output(st);
     }
     csp_output_timer(st);
 }
@@ -443,7 +563,8 @@ int parse_file(csp_rt_t* st, FILE* fin)
 {
     char buf[MAX_LINE_SIZE];
     const tstr_t empty = { .ptr = NULL, .len = 0};
-    
+    csp_pmark_t pm;
+
     st->ps.line = 1;
     while(fgets(buf, MAX_LINE_SIZE, fin)) {
 	if (debug_scan) {
@@ -454,8 +575,13 @@ int parse_file(csp_rt_t* st, FILE* fin)
 		return -1;
 	    csp_dump_tokens(stdout, tv, num);
 	}
-	if (csp_parse(st, buf) < 0)
+	csp_pstate_save(st, &pm);
+	if (csp_parse(st, buf) < 0) {
+	    // Drop the partial definition so an error report is not followed by
+	    // a cascade from a half-open module.
+	    csp_pstate_restore(st, &pm);
 	    return -1;
+	}
     }
     csp_new_decl(st, &empty, DECL_END);
     return 0;
@@ -543,6 +669,7 @@ static struct option long_options[] = {
     {"eeprom-size",  required_argument, 0,  'E'},
     {"ram-used",     required_argument, 0,  'U'},
     {"board",        required_argument, 0,  1000},
+    {"can",          required_argument, 0,  1001},
     {"memory",       required_argument, 0,  'm'},
     {"pause",        no_argument,       0,  'b'},
     {0,              0,                 0,  0 }
@@ -572,6 +699,8 @@ void usage(const char* prog)
     fprintf(stderr, "  -I, --input-file=F   Data input file\n");
     fprintf(stderr, "      --board=NAME     Simulate a board: mega, mkrzero (measured;\n");
     fprintf(stderr, "                       sets --ram/--ram-used/--eeprom-size)\n");
+    fprintf(stderr, "      --can=IFACE      SocketCAN interface for #can frames\n");
+    fprintf(stderr, "                       (e.g. vcan0); omit to run without a bus\n");
     fprintf(stderr, "  -M, --ram=N[k]       Total RAM the board has (or Nk KiB)\n");
     fprintf(stderr, "  -U, --ram-used=N[k]  RAM the system/linked libraries take\n");    
     fprintf(stderr, "  -m, --memory=N[k]    Usable code memory budget in bytes (or Nk KiB)\n");
@@ -690,8 +819,9 @@ int main(int argc, char** argv)
     int c;
     int reactive = REACTIVE_DEFAULT;
     int compile = 0;
-    struct pollfd pfd[1];
+    struct pollfd pfd[2];
     nfds_t nfds = 0;
+    int can_slot = 0;   // index of the CAN socket in pfd (0 = not polled)
     csp_lang_t lang = TEXT;
     int first_cycle = 1;
     int given = 0;    // was a program handed to us (file or stdin)?
@@ -713,6 +843,7 @@ int main(int argc, char** argv)
 	case 'i': interactive = 1; break;
 	case 'b': pause_start = 1; interactive = 1; break;  // pause needs the REPL
 	case 'e': eeprom_file = optarg; break;
+	case 1001: can_iface = optarg; break;
 	case 'r': reactive =  atoi(optarg); break;
 	case 't': break;
 	case 'n': execute = 0; break;
@@ -958,6 +1089,7 @@ int main(int argc, char** argv)
 	pfd[0].fd = STDIN_FILENO;
 	pfd[0].events = POLLIN;
 	nfds = 1;
+	can_slot = 1;
 
 	printf("CandySpeak Interactive Mode\n");
 	printf("Type /help for commands, /quit to exit\n");
@@ -965,6 +1097,14 @@ int main(int argc, char** argv)
 	    printf("Started paused -- /memory /state to inspect, /resume to run\n");
 	printf("\n");
 	state.latch = 1; // hold output
+    }
+
+    // Wait on the CAN socket alongside stdin. Without this a program whose only
+    // input is the bus has nothing to wake it: no timer, nothing changing.
+    if (csp_can_pollfd() >= 0) {
+	pfd[can_slot].fd = csp_can_pollfd();
+	pfd[can_slot].events = POLLIN;
+	nfds = can_slot + 1;
     }
 
     start_time = csp_time_ms();
@@ -1059,8 +1199,17 @@ loop:
 	if ((adv == 0xFFFFFFFFu) || (adv < 1)) adv = 1;
 	vclock += adv;
     }
-    else if (!interactive && state.wait_ms != NOTIMEOUT && state.wait_ms > 0) {
-	poll(NULL, 0, state.wait_ms);
+    else if (!interactive) {
+	// Wait for the next event: a timer deadline, or a frame on the bus.
+	int tmo = (state.wait_ms != NOTIMEOUT) ? (int)state.wait_ms : -1;
+	if (csp_can_active(&state) && (nfds > 0)) {
+	    // Bounded even when a frame would wake us, so -T still expires
+	    // while the bus is quiet.
+	    if ((tmo < 0) || (tmo > 100)) tmo = 100;
+	    poll(pfd, nfds, tmo);
+	}
+	else if (tmo > 0)
+	    poll(NULL, 0, tmo);
     }
 
     // Continue loop if: interactive mode, pending changes, timers, or reactive queue
@@ -1068,6 +1217,7 @@ loop:
     if (virtual_time && !input_done) goto loop;  // more input rows to feed
     if (anyd) goto loop;
     if (state.wait_ms != NOTIMEOUT) goto loop;
+    if (csp_can_active(&state)) goto loop;   // a frame may still arrive
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     if (state.reactive && csp_pending(&state)) goto loop;
 #endif

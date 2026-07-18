@@ -1,0 +1,20 @@
+// Frame parts. These read off the buffer, not out of a value slot, so they
+// work through the frame AND through any field of it.
+//   .id  the CAN frame id
+//   .rx  a frame arrived and is readable this cycle (false: no bus here)
+//   .tx  a send has been requested
+// No bus is involved: with no driver attached nothing is ever received, so .rx
+// must stay 0, and .tx must reflect what a rule asked for.
+#buffer F300:8 out can 0x300
+#can V:8 unsigned F300[0..7]
+
+#variable fid = 0
+#variable vid = 0
+#variable gotrx = 1
+#variable didtx = 0
+
+fid = F300.id      // 0x300 = 768
+vid = V.id         // a field answers for its frame
+gotrx = F300.rx    // starts at 1, must be driven to 0
+F300.tx = 1
+didtx = F300.tx

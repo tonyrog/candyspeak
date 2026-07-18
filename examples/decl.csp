@@ -23,9 +23,17 @@
 #timer T1 100
 #timer T2 200
 
-#can K1 0x123[4]
-#can K2 0x124[5]
-#can K3 0x125[9]
-#can K4:32 in float 0x126[0..31]
-#can K5:8 in unsigned 0x126[8..15]
-#can K6:8 out unsigned 0x127[0..7]
+// A #can field is a bit view into a declared frame, so the frame comes first.
+// Buffer size is in BYTES when the transport is can -- it is the DLC.
+#buffer F123:8 in can 0x123
+#buffer F124:8 in can 0x124
+#buffer F125:8 in can 0x125
+#buffer F126:8 in can 0x126
+#buffer F127:8 out can 0x127
+
+#can K1 F123[4]
+#can K2 F124[5]
+#can K3 F125[9]
+#can K4:32 float F126[0..31]
+#can K5:8 unsigned F126[8..15]
+#can K6:8 unsigned F127[0..7]

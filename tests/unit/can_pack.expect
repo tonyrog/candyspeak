@@ -1,0 +1,15 @@
+%% CAN fields of one frame id must share one buffer, so the bytes written
+%% through fa/fb are readable through the wider fw view.
+%%   fa = 1  -> byte 0
+%%   fb = 2  -> byte 1
+%%   fw      -> 0x0201 = 513 (little endian)
+%% seq only, by design: this test uses plain `=` rules, and the reactive graph
+%% is built from what stands behind `?` (and from `X <- Expr ? Cond`, which
+%% takes both Expr and Cond). An unguarded `ra = fa` therefore has no trigger
+%% reactively -- correct, not a gap. Nothing CAN-specific about it.
+{modes, [seq]}.
+{checks, [
+  {final_var, "ra", 1},
+  {final_var, "rb", 2},
+  {final_var, "rw", 513}
+]}.

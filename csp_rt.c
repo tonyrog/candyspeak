@@ -109,6 +109,7 @@ const op_entry_t tok_table[] RODATA = {
     TOK_ENT(NATIVE,OP_NOP,s_native),    
     TOK_ENT(LITTLE,OP_NOP,s_little),
     TOK_ENT(BIG,OP_NOP,s_big),
+    TOK_ENT(T_CAN,OP_NOP,s_can),   // shares the #can keyword's string
 
     TOK_ENT(LP,OP_NOP,s_LP),
     TOK_ENT(RP,OP_NOP,s_RP),
@@ -1369,6 +1370,15 @@ NOINLINE void csp_dio_set_part(csp_rt_t* st, index_t ix, value_t v,
     if (vw->kind == VIEW_HEAP) {  // bit-fields only carry a value, no pin/port
 	if (part == PART_VAL)
 	    csp_heap_set(st, vw, dir, v);
+	// A frame's transport state lives on the BUFFER, not in a value slot,
+	// and is a command rather than a value -- so it is not DIN/DOUT
+	// shadowed and does not go through the dirty set.
+	else if ((part == PART_TX) && (st->buf[vw->buf].transport == TR_CAN)) {
+	    if (v.i)
+		st->buf[vw->buf].flags |= BUF_F_TX;
+	    else
+		st->buf[vw->buf].flags &= ~BUF_F_TX;
+	}
 	return;
     }
     vslot = csp_slot(st, vw, dir);
@@ -1423,7 +1433,26 @@ NOINLINE void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp,
     vtype_t vt = decl(st,INDEX(ix),vt);
     vtype_t cvt = decl_cfg_vt(decl(st,INDEX(ix),type), vt);
     if (vw->kind == VIEW_HEAP) {  // bit-fields only carry a value, no pin/port
-	*vp = (part == PART_VAL) ? csp_heap_get(st, vw, dir) : (value_t){0};
+	csp_buf_t* bp = &st->buf[vw->buf];
+	vp->u = 0;
+	switch (part) {
+	case PART_VAL: *vp = csp_heap_get(st, vw, dir); break;
+	// Frame state, read off the buffer. A #can field answers for its frame
+	// too: `A.rx` and `F201.rx` are the same fact.
+	case PART_RX:
+	    if (bp->transport == TR_CAN)
+		vp->i = BOOL(bp->flags & BUF_F_RX);
+	    break;
+	case PART_TX:
+	    if (bp->transport == TR_CAN)
+		vp->i = BOOL(bp->flags & BUF_F_TX);
+	    break;
+	case PART_ID:
+	    if (bp->transport == TR_CAN)
+		vp->i = (ivalue_t)bp->xref;
+	    break;
+	default: break;
+	}
 	return;
     }
     vslot = csp_slot(st, vw, dir);
@@ -1698,6 +1727,10 @@ NOINLINE static void heap_dset_copy(csp_rt_t* st, dio_t to, dio_t from)
 	    if (bits & 1) {
 		csp_buf_t* b = &st->buf[st->view[i].buf];
 		memcpy(st->heap[to] + b->hp, st->heap[from] + b->hp, b->nbytes);
+		// Committing a change into a CAN frame is what makes it due for
+		// sending. Free ride: this walk already resolved view -> buffer.
+		if ((to == DIN) && (b->transport == TR_CAN))
+		    b->flags |= BUF_F_DIRTY;
 	    }
 	    bits >>= 1;
 	    i++;
@@ -1717,8 +1750,21 @@ void csp_undo(csp_rt_t* st)
 // commit changed values to the in buffer
 void csp_commit(csp_rt_t* st)
 {
+    index_t b;
     if (st->anyd)
 	heap_dset_copy(st, DIN, DOUT);
+    // Promote arrival flags across the commit. A frame received during
+    // csp_input landed in the DOUT shadow, so it becomes readable only now --
+    // and `.rx` has to become true now too, or a rule guarded on it would read
+    // the PREVIOUS frame. One cycle of life, then gone.
+    for (b = 0; b < st->nbuf; b++) {
+	csp_buf_t* bp = &st->buf[b];
+	if (bp->transport != TR_CAN)
+	    continue;
+	bp->flags &= ~BUF_F_RX;
+	if (bp->flags & BUF_F_RXPEND)
+	    bp->flags = (bp->flags & ~BUF_F_RXPEND) | BUF_F_RX;
+    }
     memset(st->dset, 0, BITSET_GROUPS(st->view_cap) * sizeof(set_group_t));
     st->anyd = CSP_FALSE;
 }
@@ -1799,6 +1845,14 @@ index_t csp_react(csp_rt_t* st)
 // fall back to full sequential, which keeps override consistent.
 index_t csp_cycle(csp_rt_t* st)
 {
+    // Pick up anything added since the last rebuild. Two signals: `edited` is
+    // set by the add paths, and the rule-body counter is an independent check
+    // that costs one comparison and needs no scan -- it catches an emission on
+    // a path that forgot to mark. Doing it here, at a cycle boundary, is the
+    // only safe point: mid_reset moves every derived table.
+    if (st->started && (st->edited || (st->n_rule_emit != st->graph_rules)))
+	csp_rebuild(st);
+
     // First cycle: force OP_CHG true so every <- binding fires once and seeds
     // its initial value. Same boundary as the reactive seed sweep below.
     st->seed_all = (st->cycle <= 1);
@@ -2003,6 +2057,8 @@ NOINLINE static csp_part_t part_from_tstr(const tstr_t* s)
     switch (s->len) {
     case 2:
 	if (ro_memcmp(s->ptr, s_id, 2) == 0)     return PART_ID;
+	if (ro_memcmp(s->ptr, s_rx, 2) == 0)     return PART_RX;
+	if (ro_memcmp(s->ptr, s_tx, 2) == 0)     return PART_TX;
 	break;
     case 3:
 	if (ro_memcmp(s->ptr, s_pin, 3) == 0)    return PART_PIN;
@@ -2082,6 +2138,10 @@ NOINLINE static csp_instr_t* alloc_instr_ptr(csp_rt_t* st,int* pos,opcode_t op)
     else {
 	i = st->ps.nn++;
 	ip = ram_instr_at(st, i);
+	// Mirror number_rules: a rule body ends at NEXT/ENTER, so each one opens
+	// the next body. The implicit body at the range base is the initial 1.
+	if ((op == OP_NEXT) || (op == OP_ENTER))
+	    st->n_rule_emit++;
     }
     ip->op = op;
     if (pos != NULL) *pos = i;
@@ -2928,14 +2988,48 @@ NOINLINE int csp_scan_line(csp_rt_t* st, char* str, token_t* tv, size_t* num_tok
     return -1;
 }
 
-void csp_pstate_save(csp_rt_t* st, csp_pstate_t* ps)
+void csp_pstate_save(csp_rt_t* st, csp_pmark_t* pm)
 {
-    *ps = st->ps;
+    pm->ps          = st->ps;
+    pm->mdef        = st->mdef;
+    pm->ent         = st->ent;
+    pm->sdef        = st->sdef;
+    pm->in_marker   = st->in_marker;
+    pm->save_sx     = st->save_sx;
+    pm->sx          = st->sx;
+    pm->cur         = st->cur;
+    pm->n_rule_emit = st->n_rule_emit;
 }
 
-void csp_pstate_restore(csp_rt_t* st, csp_pstate_t* ps)
+// Rewind to a mark. Dropping nn/nd/nq/ns/strp back un-writes whatever the
+// failed parse emitted: the slots are simply reused by the next parse. Only
+// the cursors need explicit restoring.
+void csp_pstate_restore(csp_rt_t* st, csp_pmark_t* pm)
 {
-    st->ps = *ps;
+    // Keep the diagnostics: err/err_args/err_strp describe why we are rewinding
+    // and the caller has not necessarily reported them yet. Restoring them would
+    // reset err to ERR_OK and the failure would print as "ok".
+    csp_err_t err = st->ps.err;
+    uintptr_t a0 = st->ps.err_args[0], a1 = st->ps.err_args[1],
+	      a2 = st->ps.err_args[2];
+    uint32_t esp = st->ps.err_strp;
+    uint32_t line = st->ps.line;
+
+    st->ps          = pm->ps;
+    st->ps.err      = err;
+    st->ps.err_args[0] = a0;
+    st->ps.err_args[1] = a1;
+    st->ps.err_args[2] = a2;
+    st->ps.err_strp = esp;
+    st->ps.line     = line;
+    st->mdef        = pm->mdef;
+    st->ent         = pm->ent;
+    st->sdef        = pm->sdef;
+    st->in_marker   = pm->in_marker;
+    st->save_sx     = pm->save_sx;
+    st->sx          = pm->sx;
+    st->cur         = pm->cur;
+    st->n_rule_emit = pm->n_rule_emit;
 }
 
 NOINLINE static void alloc_init(reg_allocator_t* ap)
@@ -3960,6 +4054,8 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
+    // Mark before anything is emitted: this is where an aborted module rewinds to.
+    csp_pstate_save(st, &st->mod_mark);
     if ((ix = csp_new_udecl(st, &d.name, DECL_MODULE)) == BAD_INDEX)
 	return -1;
     {
@@ -4300,7 +4396,7 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 typedef struct {
     tstr_t name;
     res_param_t r;
-    ivalue_t frameid;
+    tstr_t frame;        // the #buffer this field is a view into
     ivalue_t bit0;
     ivalue_t bit1;
     decl_opts_t opts;
@@ -4310,7 +4406,7 @@ static const uint8_t pat_can[] = {
     P_STR, csp_offsetof(timer_param_t, name),
     P_PAT, PAT_RES, csp_offsetof(can_param_t, r), STOP_CAN_RES_CONT,
     P_OPTS, csp_offsetof(can_param_t, opts),
-    P_INTEGER_S, csp_offsetof(can_param_t, frameid), STOP_CAN_FRAMEID,
+    P_STR, csp_offsetof(can_param_t, frame),
     P_TOK, LB,
     P_CHOICE, 2,
       // note the longer pattern first !!!
@@ -4330,7 +4426,6 @@ static const uint8_t pat_can[] = {
 NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     can_param_t d = {0};
-    value_t frameid;
     index_t ix, idx;
     int i, len;
 
@@ -4340,11 +4435,19 @@ NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
+    // The frame must already be declared: a field is a view into it, and the
+    // buffer carries the id, the size and the direction.
+    if ((idx = csp_lookup_decl(st, &d.frame)) == BAD_INDEX) {
+	csp_set_error(st, ERR_VARIABLE_NOT_DECLARED);
+	return -1;
+    }
+    if ((decl(st, INDEX(idx), type) != DECL_BUFFER) ||
+	(decl(st, INDEX(idx), bf.transport) != TR_CAN)) {
+	csp_set_error(st, ERR_NOT_A_MODULE);   // "not a can buffer"
+	return -1;
+    }
     if ((ix = csp_new_udecl(st, &d.name, DECL_CAN)) == BAD_INDEX)
 	return -1;
-    frameid.i = d.frameid;
-    if ((idx = lookup_const(st, V_INTEGER, frameid)) == BAD_INDEX)
-	idx = new_signed_const(st, frameid.i);
     if ((d.bit0 >= 0) && (d.bit1 >= d.bit0))
 	len = (d.bit1 - d.bit0)+1;
     else if ((d.r.res > 0) && (d.bit0 >= 0))
@@ -4358,26 +4461,42 @@ NOINLINE int csp_parse_can(csp_rt_t* st, token_t* tv, int ti, size_t n)
     ram_decl_at(st,i)->res = MAKE_RES(d.r.res); // same as len?
     ram_decl_at(st,i)->vt = d.opts.vt;
     ram_decl_at(st,i)->dir = d.opts.dir;
-    ram_decl_at(st,i)->ca.id = idx;
+    ram_decl_at(st,i)->ca.id = INDEX(idx);   // the #buffer decl
     ram_decl_at(st,i)->ca.bit = d.bit0;
     ram_decl_at(st,i)->ca.len = MAKE_CAN_LEN(len);
     ram_decl_at(st,i)->ca.endian = d.opts.endian;
+    // The field inherits its direction from the frame unless it says otherwise:
+    // a frame is read or written as a whole, so per-field dir is rarely wanted.
+    if (ram_decl_at(st,i)->dir == 0)
+	ram_decl_at(st,i)->dir = decl(st, INDEX(idx), dir);
     return 0;
 }
 
-// '#' 'buffer' <name> ':' <size-in-bits> [<opt>*]
+// '#' 'buffer' <name> ':' <size> [<opt>*] ['can' <frame-id>]
 // Heap-backed storage. Used directly like a variable (whole buffer = value);
-// later mapped with bit-field views (#variable X:n bind Buf[a..b]).
+// later mapped with bit-field views (#variable X:n bind Buf[a..b], #can).
+//
+// The size unit follows the transport: BITS for a plain buffer, BYTES for a
+// CAN frame -- a frame's size is its DLC, and writing `:64` for a classic
+// 8-byte frame would read as CAN FD to anyone who knows the bus.
+//   #buffer Buf:16                 16 bits
+//   #buffer F201:8  in  can 0x201  8 bytes, classic frame
+//   #buffer Fbig:64 out can 0x300  64 bytes, CAN FD
 typedef struct {
     tstr_t name;
     res_param_t r;
     decl_opts_t opts;
+    ivalue_t frameid;
+    uint8_t is_can;
 } buffer_param_t;
 
 static const uint8_t pat_buffer[] = {
     P_STR, csp_offsetof(buffer_param_t, name),
     P_PAT, PAT_RES, csp_offsetof(buffer_param_t, r), STOP_BUFFER_RES_CONT,
     P_OPTS, csp_offsetof(buffer_param_t, opts),
+    P_OPT, 5, P_TOK, T_CAN,
+      P_INTEGER_S, csp_offsetof(buffer_param_t, frameid), STOP_BUFFER_CAN_ID,
+    P_OPT_END,
     P_END
 };
 
@@ -4385,11 +4504,19 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     buffer_param_t d = {0};
     index_t ix;
+    uint32_t nbits;
     int i;
 
     d.r.res = 8;                 // default one byte
+    d.frameid = -1;              // no 'can' clause seen
     d.opts.vt = V_UNSIGNED;      // raw bits -> unsigned by default
     if (pmatch(st, tv, ti, n, pat_buffer, &d, sizeof(d)) < 0) {
+	csp_set_error(st, ERR_SYNTAX);
+	return -1;
+    }
+    d.is_can = (d.frameid >= 0);
+    nbits = d.is_can ? (uint32_t)d.r.res * 8 : (uint32_t)d.r.res;
+    if ((nbits == 0) || (nbits > 1023) || (d.is_can && (d.r.res > 64))) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -4397,8 +4524,17 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	return -1;
     i = INDEX(ix);
     ram_decl_at(st,i)->vt  = d.opts.vt;
-    ram_decl_at(st,i)->res = MAKE_RES(d.r.res);
     ram_decl_at(st,i)->dir = d.opts.dir;
+    ram_decl_at(st,i)->bf.nbits = nbits;
+    ram_decl_at(st,i)->bf.transport = d.is_can ? TR_CAN : TR_NONE;
+    if (d.is_can) {
+	value_t fid;
+	index_t cx;
+	fid.i = d.frameid;
+	if ((cx = lookup_const(st, V_INTEGER, fid)) == BAD_INDEX)
+	    cx = new_signed_const(st, fid.i);
+	ram_decl_at(st,i)->bf.id = cx;
+    }
     return 0;
 }
 
@@ -5097,37 +5233,6 @@ NOINLINE int csp_parse_pack(csp_rt_t* st, token_t* tv, size_t n)
 		    (d.cond.len > 0) ? &d.cond : NULL);
 }
 
-index_t lookup_can_range(csp_rt_t* st, index_t idx, ivalue_t p0, ivalue_t p1)
-{
-    index_t i;
-    for (i = 0; i < st->ps.nd; i++) {
-	if (IS_CAN(st, i) && (idx == ram_decl_at(st,i)->ca.id)) {
-	    if ((ram_decl_at(st,i)->ca.bit == p0) &&
-		(ram_decl_at(st,i)->ca.len == MAKE_CAN_LEN((p1-p0)+1)))
-		return MAKE_INDEX(0,i);
-	}
-    }
-    return BAD_INDEX;
-}
-
-index_t make_can_range(csp_rt_t* st, char* str, int len,
-		       index_t idx, ivalue_t p0, ivalue_t p1)
-{
-    index_t ix;
-    int i;
-    const tstr_t name = { .ptr = str, .len = len};    
-    if ((ix = csp_new_udecl(st, &name, DECL_CAN)) == BAD_INDEX)
-	return BAD_INDEX;
-    i = INDEX(ix);
-    ram_decl_at(st,i)->res = MAKE_RES(1);
-    ram_decl_at(st,i)->vt = V_UNSIGNED;
-    ram_decl_at(st,i)->dir = DIR_IN;
-    ram_decl_at(st,i)->ca.id = idx;
-    ram_decl_at(st,i)->ca.bit = p0;
-    ram_decl_at(st,i)->ca.len = MAKE_CAN_LEN((p1-p0)+1);
-    return ix;
-}
-
 // create (or reuse) a synthetic HEAP sub-view into buffer `parent`, covering
 // bits [b0 .. b1]. Used for Buf[pos]/Buf[pos0..pos1]. Parent decl index, start
 // bit and length are stashed in the can fields and translated to a VIEW_HEAP
@@ -5158,104 +5263,6 @@ NOINLINE index_t make_buf_view(csp_rt_t* st, index_t parent,
     ram_decl_at(st,i)->ca.len = MAKE_CAN_LEN((b1-b0)+1);
     ram_decl_at(st,i)->ca.endian = E_NATIVE;
     return ix;
-}
-
-// make legacy CAN rule for one set or clr expression
-// <or> = <k> ? (<idx>[p0] == <c>)
-int make_can_rule(csp_rt_t* st, index_t ox, int k, index_t idx,
-		  int byte, int bit, int16_t c)
-{
-    int cnd, cr, zr, kr, j;
-    index_t zx;
-    int p0 = byte*8 + bit;
-
-    // load constant C into cr
-    cr = alloc_reg(st);
-    if (!csp_load_int(st, cr, c))
-	return -1;
-    // load constant k into kr
-    kr = alloc_reg(st);
-    if (!csp_load_int(st, kr, k))
-	return -1;
-
-    // first build condition (can bit test)
-    if ((zx = lookup_can_range(st, idx, p0, p0)) == BAD_INDEX) {
-	if ((zx = make_can_range(st, NULL, 0, idx, p0, p0)) == BAD_INDEX)
-	    return -1;
-    }
-    // load zx into register
-    zr = alloc_reg(st);
-    if (!asm_mem(st,OP_LD,zr,zx))
-	return -1;
-
-    cnd = alloc_reg(st);
-    if (!asm_EQEQ(st, cnd, zr, cr))
-	return -1;
-    if (!asm_RULE(st, &j, cnd, 0))
-	return -1;
-    if (!asm_mem(st, OP_ST, kr, ox))
-	return -1;
-    ram_instr_at(st,j)->r.nxt = st->ps.nn - j;
-    if (!asm_NEXT(st, kr))
-	return -1;
-    free_reg(st, cr);
-    free_reg(st, kr);
-    free_reg(st, zr);
-    free_reg(st, cnd);
-    return 0;
-}
-
-// FrameID BytePos Mask OnBits OffBits
-NOINLINE int csp_parse_legacy(csp_rt_t* st, token_t* tv, int ti, size_t n)
-{
-    index_t out;
-    index_t idx;
-    ivalue_t pos;
-    ivalue_t mask;
-    ivalue_t on_bits;
-    ivalue_t off_bits;
-    const tstr_t tout = { .ptr = "OUT", .len = 3};    
-    int i = 0;
-
-    if (tv[0].t != INT) return -1;
-    if (tv[1].t != INT) return -1;
-    if (tv[2].t != INT) return -1;
-    if (tv[3].t != INT) return -1;
-    if (tv[4].t != INT) return -1;
-
-    pos = tv[1].v.val.i;
-    mask = tv[2].v.val.i;
-    on_bits = tv[3].v.val.i;
-    off_bits = tv[4].v.val.i;
-
-    // generate OUT pin if not already exist
-    if ((out = csp_lookup_decl(st, &tout)) == BAD_INDEX) {
-	// Fixme: Configure pin number etc for standard OUT
-	if ((out = csp_new_decl(st,&tout,DECL_DIGITAL)) == BAD_INDEX)
-	    return -1;
-    }
-
-    if ((idx = lookup_const(st, V_INTEGER, tv[0].v.val)) == BAD_INDEX)
-	idx = new_signed_const(st, tv[0].v.val.i);
-
-    // OUT = 1
-    for (i = 7; i >= 0; i--) {
-	uint8_t bit = (1 << i);
-	if ((mask & bit) && (on_bits & bit)) {
-	    if (make_can_rule(st, out, 1, idx, pos, i, 1) < 0)
-		return -1;
-	}
-    }
-
-    // OUT = 0
-    for (i = 7; i >= 0; i--) {
-	uint8_t bit = (1 << i);
-	if ((mask & bit) && !(off_bits & bit)) {
-	    if (make_can_rule(st, out, 0, idx, pos, i, 0) < 0)
-		return -1;
-	}
-    }
-    return 0;
 }
 
 // '>' command
@@ -5349,11 +5356,13 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 
 	if (tv[0].t == NEWLINE)
 	    r = 0;
-	else if (tv[0].t == INT && tv[1].t == INT) {
-	    r = csp_parse_legacy(st, tv, 0, num);
-	}
 	else if ((tv[0].t == HASH) && (tv[1].t == IN)) {
 	    r = csp_parse_in(st, tv, 2, num);
+	}
+	// 'can' is a reserved token (the transport option on #buffer), so it does
+	// not arrive here as a WORD -- same reason #in needs its own branch.
+	else if ((tv[0].t == HASH) && (tv[1].t == T_CAN)) {
+	    r = csp_parse_can(st, tv, 2, num);
 	}
 	else if ((tv[0].t == HASH) && (tv[1].t == WORD)) {
 	    int i;
@@ -5612,6 +5621,7 @@ int csp_rt_init(csp_rt_t* st, int reactive)
     st->nm = 0;
     st->cur = 0;      // current module = global
     st->mdef = BAD_INDEX;  // no module being defined
+    st->n_rule_emit = 1;   // the implicit rule body at the RAM range base
     st->var = st->var_buf;  // dedicated scratch for var list during <- parse
     st->nvar = 0;
     st->rimp = 0;
@@ -5704,9 +5714,150 @@ NOINLINE static void setup_digital(csp_rt_t* st, index_t ix)
     iptr->d.pulldown = optr->d.pulldown = d.di.pulldown;
 }
 
-// copy config data to value slot config
-NOINLINE static void setup_can(csp_rt_t* st, index_t ix)
+NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint8_t nbytes,
+				      uint8_t transport, uint32_t xref,
+				      pindir_t dir);
+
+// Bind a #can field to its frame. ca.id is the #buffer decl; that buffer was
+// already allocated by setup_buffer (it has a lower decl index, since the frame
+// must be declared before a field can view it), so this is purely a view.
+NOINLINE static int setup_can(csp_rt_t* st, index_t ix)
 {
+    int i = INDEX(ix);
+    index_t fx = decl(st, i, ca.id);            // the #buffer
+    uint16_t pos = decl(st, i, ca.bit);         // ca.bit is 9 bits: 0..511
+    csp_view_t* pv = &st->view[fx];
+    csp_view_t* vw;
+
+    // The declaration can name any bit of a 64-byte FD frame, but csp_view_t.pos
+    // is a byte -- so only the first 32 bytes are addressable at runtime. Refuse
+    // rather than silently wrap to a wrong field.
+    if (pos > 255) {
+	csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
+	return -1;
+    }
+    if (pos + decl(st,i,ca.len) + 1 > decl(st, fx, bf.nbits)) {
+	csp_set_error(st, ERR_SYNTAX);          // field reaches past the frame
+	return -1;
+    }
+    vw = &st->view[st_index(st, ix)];
+    vw->kind   = VIEW_HEAP;
+    vw->vt     = decl(st, i, vt);
+    vw->buf    = pv->buf;                       // share the frame's buffer
+    vw->pos    = (uint8_t)pos;
+    vw->len    = decl(st, i, ca.len);
+    vw->endian = decl(st, i, ca.endian);
+    vw->flags  = 0;
+    return 0;
+}
+
+// ============================================================
+// CAN frame I/O
+//
+// A frame is one buffer; its fields are bit views into it. So receiving is a
+// memcpy into the committed (DIN) heap and sending is a memcpy out of it --
+// the packing and unpacking is the view machinery, already there.
+//
+// This is where the CANopen PDO shapes fall out, without any PDO code:
+//   RPDO       frame arrives -> fields change -> dependent rules enqueue
+//   TPDO event a rule writes a field -> commit marks dirty -> sent
+//   TPDO cyclic  Frame.X = ... ? timeout(T)  -- the timer is the trigger
+// ============================================================
+
+// A received frame has to enter through the same door as any other device
+// input: compare against the committed value, and where a field differs mark
+// it dirty and push its dependents. That is what makes changed() see it and
+// what wakes the reactive rules.
+//
+// No extra copy of the old bytes is needed -- the transaction already keeps
+// one. csp_can_input drops the frame into the DOUT shadow, DIN still holds the
+// previous frame, so the diff below is old-vs-new, and commit then moves DOUT
+// to DIN exactly as it does for a value a rule wrote.
+NOINLINE static void can_mark_fields(csp_rt_t* st, index_t b)
+{
+    int i;
+    for (i = 0; i < st->ni; i++) {
+	index_t ix = st->input[i];
+	int leaf;
+	csp_view_t* vw;
+	if (decl(st, INDEX(ix), type) != DECL_CAN)
+	    continue;
+	leaf = st_index(st, ix);
+	vw = &st->view[leaf];
+	if (vw->buf != b)
+	    continue;
+	if (csp_heap_get(st, vw, DOUT).u == csp_heap_get(st, vw, DIN).u)
+	    continue;                     // this field of the frame is unchanged
+	bitset_set(st->dset, leaf);
+	st->anyd = CSP_TRUE;
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
+	if (st->reactive)
+	    csp_enq_elist(st, ix);
+#endif
+	st->update++;
+    }
+}
+
+// Does this program listen to the bus? A driver loop has to keep running for a
+// program whose only input is CAN -- there is no timer and nothing changes, so
+// every other "is there work left" test says no and the loop would quit before
+// the first frame ever arrived.
+int csp_can_active(csp_rt_t* st)
+{
+    index_t b;
+    for (b = 0; b < st->nbuf; b++) {
+	if ((st->buf[b].transport == TR_CAN) && (st->buf[b].dir & DIR_IN))
+	    return 1;
+    }
+    return 0;
+}
+
+// Drain the receive side. One frame can feed several buffers only if the same
+// id is declared twice, so the loop below keeps scanning rather than stopping
+// at the first match.
+void csp_can_input(csp_rt_t* st)
+{
+    uint8_t data[64];
+    uint32_t id;
+    uint8_t len;
+    int guard;
+
+    // Bounded: a busy bus would otherwise keep this loop fed forever and the
+    // cycle would never run.
+    for (guard = 0; guard < CSP_CAN_RX_BURST; guard++) {
+	index_t b;
+	if (csp_can_recv(st, &id, data, &len) != 1)
+	    return;
+	for (b = 0; b < st->nbuf; b++) {
+	    csp_buf_t* bp = &st->buf[b];
+	    if ((bp->transport != TR_CAN) || (bp->xref != id) ||
+		!(bp->dir & DIR_IN))
+		continue;
+	    // Into the SHADOW, not the committed half: DIN must keep the previous
+	    // frame so can_mark_fields can tell what actually changed.
+	    // A short frame updates only the bytes it carried.
+	    memcpy(st->heap[DOUT] + bp->hp, data,
+		   (len < bp->nbytes) ? len : bp->nbytes);
+	    bp->flags |= BUF_F_RXPEND;     // csp_commit turns this into BUF_F_RX
+	    can_mark_fields(st, b);
+	}
+    }
+}
+
+// Send every out frame that either changed or was explicitly asked for.
+// BUF_F_TX is what makes a CYCLIC PDO expressible: an unchanged frame is not
+// dirty, so `F.tx = 1 ? timeout(T)` is the only way to say "send it anyway".
+void csp_can_output(csp_rt_t* st)
+{
+    index_t b;
+    for (b = 0; b < st->nbuf; b++) {
+	csp_buf_t* bp = &st->buf[b];
+	if ((bp->transport != TR_CAN) || !(bp->flags & (BUF_F_DIRTY|BUF_F_TX)))
+	    continue;
+	bp->flags &= ~(BUF_F_DIRTY|BUF_F_TX);
+	if (bp->dir & DIR_OUT)
+	    csp_can_send(st, bp->xref, st->heap[DIN] + bp->hp, bp->nbytes);
+    }
 }
 
 // bump-allocate a buffer in the heap, return its id (or BAD_INDEX)
@@ -5737,18 +5888,30 @@ NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint8_t nbytes,
 NOINLINE static int setup_buffer(csp_rt_t* st, index_t ix)
 {
     int i = INDEX(ix);
-    uint8_t res = GET_RES(decl(st,i,res));   // size in bits
+    // Only a real #buffer carries bf.nbits. This function is shared with the
+    // auto-buffer a plain #variable gets, and there the size lives in res.
+    int is_buf = (decl(st,i,type) == DECL_BUFFER);
+    uint16_t res = is_buf ? decl(st,i,bf.nbits) : GET_RES(decl(st,i,res));
     uint8_t nbytes = (res + 7) >> 3;
-    index_t b = csp_buf_alloc(st, nbytes, 0, 0, decl(st,i,dir));
+    uint8_t transport = is_buf ? decl(st,i,bf.transport) : TR_NONE;
+    uint32_t xref = 0;
+    index_t b;
     csp_view_t* vw;
-    if (b == BAD_INDEX)
+
+    if (transport == TR_CAN)                 // the frame id, out of its constant
+	xref = (uint32_t)decl(st, decl(st,i,bf.id), cn.init).i;
+    if ((b = csp_buf_alloc(st, nbytes, transport, xref, decl(st,i,dir)))
+	== BAD_INDEX)
 	return -1;
     vw = &st->view[st_index(st, ix)];
     vw->kind     = VIEW_HEAP;
     vw->vt       = decl(st,i,vt);
     vw->buf    = b;
     vw->pos    = 0;
-    vw->len    = res - 1;
+    // A whole-frame view would need len up to 511, but len is 8 bits. Cap it:
+    // the frame is read and written field by field, and the whole-buffer view
+    // only matters for a plain #buffer used as one value.
+    vw->len    = (res > 256) ? 255 : (uint8_t)(res - 1);
     vw->endian = E_NATIVE;
     vw->flags  = ((res & 7) == 0) ? VIEW_F_SIMPLE : 0;
     return 0;
@@ -5823,7 +5986,7 @@ NOINLINE static void est_leaf(csp_rt_t* st, int j, csp_estimate_t* e)
 	nbytes = (GET_RES(decl(st,j,res)) + 7) >> 3;
 	break;
     case DECL_BUFFER:
-	nbytes = (GET_RES(decl(st,j,res)) + 7) >> 3;
+	nbytes = (decl(st,j,bf.nbits) + 7) >> 3;   // #buffer: size is in bf.nbits
 	break;
     case DECL_TIMER:
 	e->nt++;                              // timer list entry (setup_timer)
@@ -5839,7 +6002,8 @@ NOINLINE static void est_leaf(csp_rt_t* st, int j, csp_estimate_t* e)
 	if (decl(st,j,dir) & DIR_OUT) e->no++;
 	break;
     case DECL_CAN:
-	// CAN is device I/O (add_io) but has no buffer/heap (no setup_slot).
+	// A field is a view into its #buffer, which is counted as a buffer in
+	// its own right. Only the I/O list entry belongs here.
 	if (decl(st,j,dir) & DIR_IN)  e->ni++;
 	if (decl(st,j,dir) & DIR_OUT) e->no++;
 	return;
@@ -5903,6 +6067,9 @@ int csp_rebuild(csp_rt_t* st)
     if (st->reactive)
 	csp_csr(st);
 #endif
+    // Everything emitted so far is now covered: clear both staleness signals.
+    st->graph_rules = st->n_rule_emit;
+    st->edited = 0;
     return csp_rt_start(st);
 }
 
@@ -6042,7 +6209,8 @@ int csp_rt_start(csp_rt_t* st)
 	    
 	case DECL_CAN:
 	    if (!in_module) {
-		setup_can(st, ix);
+		if (setup_can(st, ix) < 0)
+		    return -1;
 		add_io(st, ix);
 	    }
 	    break;
@@ -6133,8 +6301,12 @@ int csp_rt_start(csp_rt_t* st)
 		add_io(st, fx);
 		break;
 	    case DECL_CAN:
-		setup_can(st, ix);
-		add_io(st, ix);		
+		// fx, not ix: this object's field, not the object itself. And an
+		// explicit break -- it used to fall through to default.
+		if (setup_can(st, fx) < 0)
+		    return -1;
+		add_io(st, fx);
+		break;
 	    default:
 		break;
 	    }
@@ -6427,6 +6599,46 @@ match:
 	    csp_print_char(':');
 	    csp_print_uint(decl(st,i,an.pin));
 	    csp_print_char('\n');
+	    break;
+	case DECL_BUFFER:
+	    // #buffer <name>:<size> <dir> [can 0x<id>].  Size is BYTES for a can
+	    // frame (it is the DLC), bits otherwise -- see csp_parse_buffer.
+	    csp_print_str("#buffer ");
+	    list_name(st, cur_mod, npos);
+	    csp_print_char(':');
+	    if (decl(st,i,bf.transport) == TR_CAN)
+		csp_print_uint(decl(st,i,bf.nbits) >> 3);
+	    else
+		csp_print_uint(decl(st,i,bf.nbits));
+	    if (decl(st,i,dir)) {
+		csp_print_char(' ');
+		csp_print_str(csp_fmt_pindir(decl(st,i,dir)));
+	    }
+	    if (decl(st,i,bf.transport) == TR_CAN) {
+		csp_print_str(" can ");   // csp_print_hex emits the 0x itself
+		csp_print_hex((uvalue_t)decl(st, decl(st,i,bf.id), cn.init).i);
+	    }
+	    csp_print_char('\n');
+	    break;
+	case DECL_CAN:
+	    // #can <name>:<width> <dir> <type> <frame>[<lo>..<hi>].  ca.id is the
+	    // #buffer decl the field is a view into, so the frame is named, not
+	    // repeated as a raw id.
+	    csp_print_str("#can ");
+	    list_name(st, cur_mod, npos);
+	    csp_print_char(':');
+	    csp_print_uint(decl(st,i,ca.len)+1);
+	    csp_print_char(' ');
+	    csp_print_str(csp_fmt_pindir(decl(st,i,dir)));
+	    csp_print_char(' ');
+	    csp_print_str(csp_fmt_vtype(decl(st,i,vt)));
+	    csp_print_char(' ');
+	    csp_print_str_at(st, decl_name_pos(st, decl(st,i,ca.id)));
+	    csp_print_char('[');
+	    csp_print_uint(decl(st,i,ca.bit));
+	    csp_print_str("..");
+	    csp_print_uint(decl(st,i,ca.bit) + decl(st,i,ca.len));
+	    csp_print_str("]\n");
 	    break;
 	default:
 	    csp_print_char('\n');
@@ -7103,32 +7315,41 @@ static int csp_process_immediate(csp_rt_t* st, char* line)
 // Process persistent definition (# declaration or rule)
 static int csp_process_persistent(csp_rt_t* st, char* line)
 {
+    csp_pmark_t pm;
     index_t nd0 = st->ps.nd;
 
+    csp_pstate_save(st, &pm);
     if (csp_parse(st, line) < 0) {
 	csp_print_str("Error: ");
 	csp_print_str(csp_format_error(st->ps.err));
 	csp_print_char('\n');
 	csp_clr_error(st);
+	// Rewind. Inside an unclosed module the whole module goes: otherwise
+	// mdef stays set with no #end in sight and every following line is
+	// swallowed by a module that can never be closed.
+	if (st->mdef != BAD_INDEX) {
+	    csp_pstate_restore(st, &st->mod_mark);
+	    csp_print_str("Module aborted\n");
+	}
+	else
+	    csp_pstate_restore(st, &pm);
 	return -1;
     }
     // A new declaration grows the leaf space, so once started we must re-run
     // rt_start now to keep view/dset/buf/heap sized to it (a stale, too-small
     // view would be read out of bounds). Values re-init as they always do on a
-    // declaration. Still mark edited when paused so /resume rebuilds the graph.
-    if ((st->ps.nd != nd0) && st->started) {
-	csp_rebuild(st);
+    // declaration.
+    if ((st->ps.nd != nd0) && st->started && !st->paused) {
+	csp_rebuild(st);            // clears edited
 	csp_setup(st);
-	if (st->paused)
-	    st->edited = 1;
     }
-    // -b before /resume (not started), or a paused rule-only add: defer to
-    // /resume, keeping the running state until then.
-    else if (st->paused) {
+    else {
+	// Any other add -- rule-only, paused, live, or before /resume. Mark it
+	// and let the rebuild happen where it is safe: /resume, or the top of
+	// the next cycle. A rule-only add used to skip this entirely, which left
+	// the new rule without graph edges: reactively it never fired.
 	st->edited = 1;
     }
-    // else: not paused, rule-only add -- appended to the instruction list, no
-    // rebuild needed, running state kept (fast interactive paste).
     csp_print_str("OK\n");
     return 0;
 }

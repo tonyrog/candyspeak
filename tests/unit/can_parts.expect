@@ -1,0 +1,14 @@
+%% Frame parts read off the buffer, so a field answers for its frame too:
+%% V.id == F300.id. True is -1 in CandySpeak (BOOL(y) = -(y!=0)), same as
+%% changed()/rising().
+%% .rx must stay 0: no driver is attached in the test suite, so no frame can
+%% ever arrive.
+%% seq only for the same reason as can_pack: plain `=` rules have no reactive
+%% trigger, which is by design.
+{modes, [seq]}.
+{checks, [
+  {final_var, "fid", 768},
+  {final_var, "vid", 768},
+  {final_var, "gotrx", 0},
+  {final_var, "didtx", -1}
+]}.
