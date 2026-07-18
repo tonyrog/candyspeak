@@ -1,0 +1,28 @@
+// A #buffer inside a module gets its own storage per instance, like every
+// other member. The per-object setup simply had no case for DECL_BUFFER: it
+// parsed fine and was then never allocated, and a member bound to it aliased
+// an uninitialised view.
+//
+// Both branches of the parent lookup are exercised:
+//   lo/hi  -> bound to B, a member of the SAME module  => per instance
+//   gb     -> bound to Shared, a global buffer         => one for everyone
+#buffer Shared:16
+
+#module M
+  #buffer B:16
+  #variable lo:8 bind B[0..7]
+  #variable hi:8 bind B[8..15]
+  #variable gb:8 bind Shared[0..7]
+  #variable whole = 0
+  whole = B ? 1
+#end
+
+#M m1 lo=1 hi=2
+#M m2 lo=9 hi=8
+
+// Written through m2's view of the global; both instances must see it.
+#variable seen1 = 0
+#variable seen2 = 0
+seen1 = m1.gb ? 1
+seen2 = m2.gb ? 1
+Shared = 4660 ? 1        // 0x1234, low byte 0x34 = 52

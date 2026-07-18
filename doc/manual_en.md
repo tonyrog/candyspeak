@@ -1,7 +1,7 @@
 ---
 title: "CandySpeak Manual"
 author: "Tony Rogvall"
-date: 2026-07-14
+date: 2026-07-18
 geometry: margin=2.5cm
 fontsize: 11pt
 documentclass: article
@@ -27,6 +27,7 @@ The language is rule-based - each line describes WHAT should happen and WHEN, no
 - **Modules** - reusable components
 - **States** - organise rules into state machines
 - **Buffers & frames** - shared storage, bit-fields, pack/unpack
+- **CAN** - a frame is a buffer with an address; fields are bit views into it
 
 # Language Reference
 
@@ -111,7 +112,7 @@ Examples:
 ### Buffers
 
 ```
-#buffer <name>:<bits> [<type>]
+#buffer <name>:<size> [<type>] [in|out] [can <frame-id>]
 ```
 
 A buffer is a block of storage that variables can map into. A regular variable
@@ -121,9 +122,17 @@ written directly by byte. Buffers are the building block for frames (CAN), bit
 packing, and overlapping data.
 
 ```
-#buffer Frame:64           // 8 bytes of storage
+#buffer Frame:64           // 64 bits = 8 bytes of storage
 #buffer Word:16
 ```
+
+> **The size unit follows the transport.** For a plain buffer `<size>` is in
+> **bits**. For a CAN buffer (`can <id>`) it is in **bytes**, because a frame's
+> size *is* its DLC — writing `:64` for an ordinary 8-byte frame would read as
+> CAN FD to anyone who knows the bus. See *CAN frames*.
+
+A buffer may be declared inside a module, in which case every instance gets its
+own storage — see *What a Module May Contain*.
 
 A buffer can be used directly like a variable. The whole buffer is its value
 (up to 32 bits — larger frames are accessed by byte or through bound fields):
@@ -161,22 +170,159 @@ Speed = 50             // writes into Frame's bits 0..7
 
 ### CAN frames
 
-A CAN frame is modelled as a buffer that carries a frame id. The signals inside
-a frame are ordinary variables bound to bit-fields, so the same `bind`
-mechanism describes a frame layout:
+**A frame is a buffer with an address.** Declaring one adds a transport and a
+frame id to an ordinary buffer; everything else about buffers then applies
+unchanged — `bind`, `<<=`, `>>=`, byte indexing.
 
 ```
-#buffer Engine:64          // an 8-byte frame layout
-#variable Speed:8     bind Engine[0..7]
-#variable Rpm:10 big  bind Engine[8..17]
-#variable Temp:8      bind Engine[24..31]
-
-Speed = 90             // updates the frame
+#buffer F201:8 in  can 0x201      // 8 BYTES (the DLC), received
+#buffer Fbig:64 out can 0x300     // CAN FD, transmitted
 ```
 
-Reading a signal decodes its bits from the frame; writing one encodes back into
-the frame. *(Attaching a frame id and bus direction to the buffer — so the
-frame is transmitted and received automatically — is in development.)*
+The direction is the bus direction: `in` frames are received and unpacked,
+`out` frames are assembled and transmitted. Ids above `0x7FF` are sent as
+extended (29-bit) frames automatically.
+
+#### Fields
+
+Signals inside a frame are bit views into it. There are three ways to reach
+them, and they are interchangeable — pick whichever reads best:
+
+```
+#buffer F201:8 in can 0x201
+
+// 1. #can -- a named field, declared against the frame
+#can Speed:16 unsigned F201[0..15]
+#can Temp:8   unsigned F201[16..23]
+
+// 2. bind -- the same thing spelled as a variable
+#variable Rpm:16 bind F201[24..39]
+
+// 3. >>= -- no declaration at all, unpack on the fly
+F201 >>= a:8 b:8 c:16 ? F201.rx
+```
+
+A `#can` field inherits its direction from the frame, so it rarely needs one of
+its own. The bit range is in **bits**, counted from bit 0 of byte 0, and the
+value is little-endian unless the field says `big`.
+
+Because all fields of a frame are views into one buffer, writing one field and
+reading another shows the packing directly:
+
+```
+#buffer Out:8 out can 0x200
+#can Lo:8  unsigned Out[0..7]
+#can Hi:8  unsigned Out[8..15]
+#can Both:16 unsigned Out[0..15]
+
+Lo = 1
+Hi = 2                  // Both now reads 0x0201
+```
+
+#### Transmitting
+
+An `out` frame is sent at the end of any cycle in which one of its fields
+changed. That is an **event PDO** and needs no extra syntax — assigning a field
+is the trigger:
+
+```
+Speed = v               // frame 0x200 goes out this cycle
+```
+
+For a **cyclic PDO** — send on a schedule whether or not anything changed —
+there is nothing to make the frame dirty, so ask for the send explicitly with
+the `.tx` part:
+
+```
+#timer Beat 100
+Beat = 1
+Beat = 1      ? timeout(Beat)
+Out.tx = 1    ? timeout(Beat)     // send every 100 ms regardless
+```
+
+`.dlc` controls how many bytes go out. It starts at the declared frame size and
+is clamped to it:
+
+```
+Out.dlc = 3             // send 3 bytes instead of 8
+```
+
+#### Receiving
+
+A received frame is delivered into the buffer and its fields update. `.rx` is
+true for **exactly one cycle** — the one in which the received bytes have
+become readable:
+
+```
+println("speed=", Speed) ? F201.rx
+```
+
+On the receive side `.dlc` reads back how many bytes the sender actually sent,
+and `.id` gives the frame id. Both work through the frame or through any field
+of it (`Speed.id` and `F201.id` are the same fact).
+
+To react only when a *signal* changes rather than on every frame, guard on
+`changed()` instead — a frame that repeats its contents then prints nothing:
+
+```
+println("speed changed") ? changed(Speed)
+```
+
+> **One-cycle rule.** `.rx`, `changed()` and `<-` all fire in the cycle where
+> the new value is still in the shadow copy, and rules read the *committed*
+> side. Guarding a print on them directly therefore shows the **previous**
+> value. Route the trigger through a variable to line them up — see
+> *Execution Model*:
+>
+> ```
+> #variable fresh = 0
+> fresh = F201.rx
+> println("speed=", Speed) ? fresh      // now in phase
+> ```
+>
+> A `bind`ed variable does not have this problem: it *aliases* the frame bits
+> rather than copying them, so it is already correct in the `.rx` cycle. An
+> unpack (`>>=`) writes copies, which land next cycle like any other write.
+
+#### Frame parts
+
+| Part | Direction | Meaning |
+|------|-----------|---------|
+| `.id` | read | the CAN frame id |
+| `.rx` | read | a frame arrived and is readable this cycle (one cycle only) |
+| `.tx` | read/write | write 1 to force a send; reads back what was requested |
+| `.dlc` | read/write | bytes to send / bytes last received |
+| `.dir` | read/write | bus direction (`in` = 1, `out` = 2) |
+
+`.dir` is a property of the buffer, so it also works on a plain `#buffer`.
+
+Note that frame parts live on the buffer rather than in a value slot, so unlike
+`.period` they are **not** shadowed: `F.dlc = 3` followed by a read of `F.dlc`
+in the same cycle gives 3.
+
+#### Connecting to a bus
+
+On Linux the frames go to SocketCAN, selected with `--can`:
+
+```bash
+sudo ip link add dev vcan0 type vcan && sudo ip link set up vcan0
+./csp --can=vcan0 -c 0 examples/can_input.csp
+# from another shell:
+cansend vcan0 201#2A3412785634120000
+candump vcan0
+```
+
+Without `--can` the declarations still parse and the program still runs; frames
+simply go nowhere. On Arduino the backend is enabled per board by defining
+`CSP_HAS_CAN` in its Makefile (it expects the arduino-CAN API and a
+transceiver).
+
+See `examples/can_input.csp`, `examples/can_output.csp` and
+`examples/can_pack.csp` for worked programs.
+
+> **Limits today.** Field bit positions above 255 are rejected, so only the
+> first 32 bytes of a 64-byte FD frame are addressable at runtime. RTR frames
+> are not supported.
 
 ### Packing and Unpacking Frames
 
@@ -242,9 +388,12 @@ Where `<init>` can be:
 
 | Form | Meaning |
 |------|---------|
-| `field = value` | Set initial value (static, runs once) |
-| `field.part = value` | Set a field attribute once (e.g. `Pin.pin`, `T.period`) |
+| `field = value` | Set the field's **value** (static, runs once) |
+| `field.part = value` | Set a field **attribute** once — `D.pin`, `D.port`, `T.period` |
 | `field <- expr` | Reactive connection (updates when expr changes) |
+
+Note the first two are different things: `D = 2` writes a value into `D`, while
+`D.pin = 2` places the pin. Configuring hardware is always the `.part` form.
 
 Init expressions can be mixed freely. Fields marked `in` must be initialized.
 
@@ -281,9 +430,41 @@ Total = m1.Out + m2.Out    // relate fields across instances with a rule
 
 A module is a template. Inside `#module ... #end` you can declare the same
 resources as at top level — `#variable`, `#digital`, `#analog`, `#timer`,
-`#buffer`, `#constant` — plus module-local `#states`, and the rules (including
-`#in <state>` blocks) that act on them. Each instance gets its own copy of every
-declared member and its own state.
+`#buffer`, `#can`, `#constant` — plus module-local `#states`, and the rules
+(including `#in <state>` blocks) that act on them. Each instance gets its own
+copy of every declared member and its own state, including its own buffer
+storage:
+
+```
+#module Frame
+  #buffer B:16                       // one buffer PER INSTANCE
+  #variable lo:8 bind B[0..7]
+  #variable hi:8 bind B[8..15]
+#end
+
+#Frame f1 lo=1 hi=2                  // f1.B is 0x0201
+#Frame f2 lo=9 hi=8                  // f2.B is 0x0809, independent
+```
+
+**Modules can read globals.** A module body sees everything declared above it —
+constants, variables, timers, buffers. A member with the same name **shadows**
+the global, so adding a global later cannot break a module that happens to use
+that name.
+
+```
+#constant GREEN = 0x07E0
+#buffer Live:16                      // shared by every instance
+
+#module Pixel
+  #analog P out 9:0
+  P = GREEN ? ...                    // global constant
+  P = Live  ? ...                    // global buffer, one for all instances
+#end
+```
+
+Binding a member to a *global* buffer therefore shares it across instances,
+while binding to a *member* buffer gives each instance its own — which of the
+two you get follows from where the buffer is declared.
 
 #### Example: Full Adder
 
@@ -308,26 +489,32 @@ Here `a0` has static inputs, while `a1` and `a2` chain their carry input reactiv
 
 #### Pin Assignment for I/O
 
-When a module contains `#digital` or `#analog` declarations, the pin number can be omitted in the module and assigned at instantiation:
+When a module contains `#digital` or `#analog` declarations, the pin can be
+left at a placeholder in the module and assigned per instance with the `.pin`
+part:
 
 ```
 #module Button
-#digital Pin in pullup       // no pin number
-#variable Out:1 out = 0
+#digital Pin in pullup 0     // placeholder pin
+#variable Out = 0
 #timer T 50
 
 T = 1 ? Pin != Out
 Out = Pin ? timeout(T)
 #end
 
-#Button btn1 Pin=2           // assign pin at instantiation
-#Button btn2 Pin=3
-#Button btn3 Pin=4
+#Button btn1 Pin.pin=2       // assign the PIN at instantiation
+#Button btn2 Pin.pin=3
+#Button btn3 Pin.pin=4
 ```
 
-This makes modules reusable across different hardware configurations.
+> **`Pin = 2` is not the same thing.** A bare `field = value` sets the field's
+> **value**, exactly as it does for a variable — for a 1-bit digital, `Pin = 2`
+> writes the value 1 and leaves the pin at 0. Use `Pin.pin = 2` to place it, and
+> `Pin.port = 1` for the port. The same applies to `#analog`.
 
-Pin assignment can also override a default:
+This makes modules reusable across different hardware configurations. It also
+overrides a default given in the module:
 
 ```
 #module Led
@@ -336,7 +523,7 @@ Pin assignment can also override a default:
 #end
 
 #Led led1                    // uses default pin 13
-#Led led2 Out=12             // override to pin 12
+#Led led2 Out.pin=12         // override to pin 12
 ```
 
 #### Accessing Module Fields
@@ -455,9 +642,9 @@ code, doing initial setup, and moving on is the common shape:
 #end
 ```
 
-**Mental model.** An `#in S` block is exactly sugar for adding `&& State == S`
-to every rule's condition. The two forms below are equivalent — the block form
-is just clearer and lets the runtime gate the whole group at once:
+**Mental model.** To reason about behaviour, read `#in S` as adding
+`&& State == S` to every rule in the block. The two forms below behave the
+same:
 
 ```
 #in A
@@ -467,6 +654,13 @@ is just clearer and lets the runtime gate the whole group at once:
 ```
 Y = 1, State = B ? X > Z && State == A
 ```
+
+But it is a mental model, not a source rewrite. The block compiles to a **gate**
+in front of the group: one state test that jumps over the whole block when the
+state does not match, so an inactive state costs a single check no matter how
+many rules it holds — that is the point of grouping them. A per-rule state test
+is kept alongside it for the reactive path, which reaches rules individually
+rather than by walking the block.
 
 You may add as many rules to a state as you like, and split a state across
 several `#in S` blocks — they accumulate.
@@ -491,8 +685,8 @@ carries its own `State`, so instances step through the machine independently:
   #end
 #end
 
-#Blinker b1 Led=12
-#Blinker b2 Led=13
+#Blinker b1 Led.pin=12
+#Blinker b2 Led.pin=13
 ```
 
 ## Parts
@@ -511,14 +705,22 @@ written by a rule.
 | `.val` | any | the plain value (the default when no part is given) |
 | `.pin` | digital / analog | pin number |
 | `.port` | digital / analog | port number |
-| `.dir` | digital / analog | direction (in/out) |
+| `.dir` | digital / analog / buffer | direction (in/out) |
 | `.pwm` | analog | PWM flag |
 | `.endian` | bound field | big/little endian |
 | `.pullup` | digital | pull-up enable |
 | `.pulldown` | digital | pull-down enable |
 | `.period` | timer | timer period in ms |
 | `.fired` | timer | timeout occurred this cycle |
-| `.id` | buffer / frame | frame id |
+| `.id` | CAN frame / field | the frame id |
+| `.rx` | CAN frame / field | a frame arrived and is readable this cycle |
+| `.tx` | CAN frame / field | write 1 to force a send |
+| `.dlc` | CAN frame / field | bytes to send / bytes last received |
+
+A CAN field answers for its frame, so `Speed.id` and `F201.id` are the same
+fact. Frame parts are stored on the buffer rather than in a value slot, so
+unlike the others they are **not** shadowed — writing `.dlc` and reading it back
+in the same cycle gives the new value.
 
 Examples — reading and writing attributes like any other value:
 
@@ -551,9 +753,41 @@ A single cycle works like this.
   drives `changed(x)` and the `<-` reactive trigger, and what the reactive
   execution mode uses to decide which rules to re-run.
 - **Sequential vs reactive.** Sequential mode evaluates every rule each cycle.
-  Reactive mode evaluates only rules whose inputs changed. Both are designed to
-  reach the **same committed state** for a whole-program run — reactive just
-  avoids re-checking rules that cannot have changed.
+  Reactive mode evaluates only rules whose triggers fired. The dependency graph
+  is built from what stands behind `?`, and from both sides of `X <- Expr ?
+  Cond`. A rule with neither a condition nor `<-` — a bare `Y = X` — therefore
+  has **no trigger** and runs only in the first (seeding) cycle. That is by
+  design, not a limitation: reactive mode runs what you told it to watch.
+
+**The one-cycle rule.** Reads see the previous commit; writes land at the next
+one. Everything that *triggers on change* — `changed(x)`, `<-`, a frame's `.rx`
+— fires in the cycle where the new value is still in the shadow copy. So in that
+cycle the value itself still reads as the **old** one:
+
+```
+X = 1                      // X changes 0 -> 1
+println(X) ? changed(X)    // prints 0, not 1
+```
+
+This is the transaction model applied consistently, not a special case: an input
+sampled this cycle becomes readable the next one, and that holds for a changed
+variable too. Two consequences worth knowing:
+
+- To act on a change *with the new value*, route the trigger through a variable.
+  It is delayed by exactly as much as the value, which puts them back in phase:
+
+  ```
+  #variable fresh = 0
+  fresh = changed(X)
+  println(X) ? fresh         // prints 1
+  ```
+
+- A source that changes **exactly once** never re-triggers, so `Y <- X` captures
+  the pre-change value and keeps it. With a continuously changing source the same
+  mechanism just shows up as a one-cycle lag, which is harmless.
+
+Values that *alias* rather than copy are exempt: a `bind`ed variable is the same
+storage as its buffer, so it is correct immediately.
 
 ## Built-in Functions
 
@@ -632,6 +866,27 @@ make
 | `-e <file>` | EEPROM (persisted state) file to use |
 | `-I <file>` | Feed inputs from a file (real time, cycle-stamped rows) |
 | `-F <file>` | Feed inputs with **simulated time** (see below) |
+| `-b` | Start paused; inspect, then `/resume` (implies `-i`) |
+| `--can=IFACE` | SocketCAN interface for `#can` frames (e.g. `vcan0`) |
+| `-m N[k]` | Usable code-memory budget in bytes |
+| `-M N[k]` | Total RAM the simulated board has |
+| `-U N[k]` | RAM the system and linked libraries take |
+| `-E N[k]` | Simulated EEPROM capacity (0 = unbounded) |
+| `--board=NAME` | Simulate a measured board: `mega`, `mkrzero` |
+
+### Simulating a Board
+
+The host tool can pretend to have a microcontroller's memory, so `/memory`
+reports numbers that mean something before you flash anything:
+
+```bash
+./csp --board=mega -i program.csp     # measured RAM/EEPROM for an ATmega2560
+./csp -M 8k -U 2700 -i program.csp    # or set the numbers by hand
+```
+
+`--board` fills in `-M`, `-U` and `-E` from figures measured on real firmware
+builds (regenerate them with `make boards`). `/memory` then shows how much of
+that board's RAM the program would actually claim.
 
 ### Examples
 
@@ -719,7 +974,22 @@ In reactive mode, only rules whose inputs have changed are evaluated. This is mo
 - Program has many rules
 - System has limited CPU
 
-The result is identical to evaluating all rules, but uses more memory for dependency tracking.
+It costs some memory for the dependency graph.
+
+**What gets a trigger.** The graph is built from what stands behind `?`, and
+from both sides of `X <- Expr ? Cond`. A rule that has neither a condition nor
+`<-` is not watching anything, so in reactive mode it runs only in the first
+(seeding) cycle:
+
+```
+Y = X            // sequential: every cycle. reactive: first cycle only.
+Y <- X           // reactive: whenever X changes
+Y = X ? cond     // reactive: whenever cond's inputs change
+```
+
+Write the rules the reactive way and both modes reach the same committed state.
+Rule order is honoured in both: when two rules write the same field, the one
+written last wins — which is what makes patching a running system predictable.
 
 ```bash
 ./csp -r1 program.csp    # reactive mode
@@ -770,17 +1040,60 @@ Start interactive mode with `-i`:
 | Command | Description |
 |---------|-------------|
 | `/help` | Show commands |
-| `/list` | List rules |
-| `/state` | Show current values |
-| `/memory` | Show code/RAM usage per category (how much space is left) |
+| `/list` | List declarations and rules, tagged `[ROM]`/`[RAM]` |
+| `/state` | Show current values, grouped per object |
+| `/memory` | Show RAM usage per category (how much space is left) |
 | `/reset` | Reset to initial values |
 | `/clear` | Drop RAM patches, keep the ROM program |
+| `/pause` | Freeze execution; the prompt stays live |
+| `/resume` | Continue (rebuilds first if the program was edited) |
+| `/live` | Freeze the *rules* but keep I/O running |
 | `/latch on` | Hold outputs (freeze current values) |
 | `/latch off` | Release outputs (normal operation) |
 | `/commit` | Commit pending values |
 | `/save` | Save state to storage (EEPROM file) |
 | `/load` | Load state from storage (EEPROM file) |
 | `/quit` (or `/exit`) | Exit |
+
+`/state` opens with a status line showing where you are:
+
+```
+cycle 214   latch on   running
+```
+
+The last field is the run mode — `running`, `paused` or `live`.
+
+### Pause and Live
+
+`/pause` stops the cycle entirely: no input, no rules, no output. The prompt
+keeps working, so you can inspect state and add declarations or rules; the
+rebuild is deferred until `/resume`.
+
+`/live` freezes only the **rules**. Input is still sampled and output is still
+written, so the hardware stays connected while the program stands still — which
+is what you want when you are poking at pins by hand:
+
+```
+/live
+> Led = 1          # actually lights the LED
+> Btn              # reads the real pin
+/resume
+```
+
+`/resume` leaves both modes.
+
+### Editing a Running Program
+
+Declarations and rules can be added at any time — running, paused or live. A
+new rule is wired into the reactive graph at the next cycle boundary, so it
+starts firing without a restart. This is the intended way to patch a live
+system: since the last rule to write a field wins, adding a rule at the prompt
+overrides an earlier one.
+
+If a line fails to parse, nothing is kept. A failure inside an unfinished
+`#module` rewinds the **whole module** and reports `Module aborted`, so the
+lines you type next are not silently swallowed by a module that can never be
+closed.
 
 ### Direct Evaluation
 
@@ -1108,13 +1421,15 @@ pandoc doc/manual_en.md -o doc/manual_en.pdf \
 #timer <name> <period_ms> [= 1]
 #constant <name> = <value>
 #buffer <name>:<bits> [type]            // shared storage / frame layout
+#buffer <name>:<bytes> [in|out] can <id>  // CAN frame (size in BYTES)
+#can <name>:<bits> [type] <frame>[<a>..<b>]  // field of a frame
 #states <name> ...                      // enumerate states (INIT/NORMAL implicit)
 #module <name> ... #end
 ```
 
 ## Buffers
 ```
-#buffer Buf:16              // 2 bytes of shared storage
+#buffer Buf:16              // 16 BITS = 2 bytes of shared storage
 Buf[0] = 52                 // byte access (index = byte)
 X = Buf[0..1]               // byte range -> one value (little-endian)
 
@@ -1122,15 +1437,35 @@ X = Buf[0..1]               // byte range -> one value (little-endian)
 #variable G:10 big bind Buf[8..17]  // big-endian bit-field
 ```
 
+## CAN
+```
+#buffer F201:8 in  can 0x201     // 8 BYTES (the DLC), received
+#buffer Out:8  out can 0x200     // transmitted
+#can Speed:16 unsigned F201[0..15]   // field: a bit view into the frame
+
+Speed = v                        // writing a field sends the frame (event PDO)
+Out.tx  = 1 ? timeout(Beat)      // cyclic PDO: send even if unchanged
+Out.dlc = 3                      // send 3 bytes instead of 8
+
+println(Speed) ? F201.rx         // .rx: true the cycle the frame is readable
+Got = F201.dlc                   // bytes the sender actually sent
+Id  = F201.id                    // frame id
+
+./csp --can=vcan0 prog.csp       // Linux: SocketCAN
+```
+
 ## Module Instantiation
 ```
 #<Module> <instance> [<init>]*
 
 Init forms (can be mixed):
-  field = value      // static init, runs once in INIT
-  field.part = value // set a field attribute once (e.g. Pin.pin, T.period)
+  field = value      // static init of the field's VALUE, runs once in INIT
+  field.part = value // set a field attribute once
   field <- expr      // reactive connection (seeded once at start-up)
-  Pin = number       // pin assignment for #digital/#analog
+
+  D.pin = 2          // place a #digital/#analog  (NOT `D = 2`, that is a value)
+  D.port = 1
+  T.period = 500
 ```
 
 ## Rules
@@ -1172,8 +1507,17 @@ falling(x)    // 1 -> 0
 ```
 <resource>.<part>             // read or write an attribute
 D.pin = 17                    // .val .pin .port .dir .pwm .endian
-T.period = 500                // .pullup .pulldown .period .fired .id
+T.period = 500                // .pullup .pulldown .period .fired
 Ready = 1 ? T.fired
+F.id  F.rx  F.tx  F.dlc       // CAN frame parts (also via any of its fields)
+```
+
+## Interactive
+```
+/pause  /resume  /live        // freeze all / continue / freeze rules only
+/latch on|off                 // hold or release outputs
+/list  /state  /memory        // inspect
+/save  /load                  // EEPROM
 ```
 
 ## Packing and Unpacking

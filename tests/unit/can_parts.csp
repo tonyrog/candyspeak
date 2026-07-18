@@ -24,6 +24,16 @@ didtx = F300.tx
 #variable d0 = 0
 #variable d1 = 0
 #variable d2 = 0
+// .dir is a property of the BUFFER, so it answers for a plain #buffer, for a
+// CAN frame, and for a field of one. DIR_IN=1, DIR_OUT=2.
+#buffer F301:8 in can 0x301
+#variable dout = 0
+#variable din  = 0
+#variable dfld = 0
+dout = F300.dir    // 2, out
+din  = F301.dir    // 1, in
+dfld = V.dir       // 2, the field reads its frame
+
 d0 = F300.dlc      // 8, the declared size
 F300.dlc = 3
 d1 = F300.dlc      // 3

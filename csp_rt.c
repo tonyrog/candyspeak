@@ -1373,6 +1373,8 @@ NOINLINE void csp_dio_set_part(csp_rt_t* st, index_t ix, value_t v,
 	// A frame's transport state lives on the BUFFER, not in a value slot,
 	// and is a command rather than a value -- so it is not DIN/DOUT
 	// shadowed and does not go through the dirty set.
+	else if (part == PART_DIR)
+	    st->buf[vw->buf].dir = v.i;
 	else if (st->buf[vw->buf].transport == TR_CAN) {
 	    csp_buf_t* bp = &st->buf[vw->buf];
 	    if (part == PART_TX) {
@@ -1448,6 +1450,10 @@ NOINLINE void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp,
 	vp->u = 0;
 	switch (part) {
 	case PART_VAL: *vp = csp_heap_get(st, vw, dir); break;
+	// Direction is a property of the buffer, so it answers for a plain
+	// #buffer as well as a CAN frame -- and for a #can field, which reads
+	// its frame's direction.
+	case PART_DIR: vp->i = bp->dir; break;
 	// Frame state, read off the buffer. A #can field answers for its frame
 	// too: `A.rx` and `F201.rx` are the same fact.
 	case PART_RX:
@@ -5764,6 +5770,7 @@ NOINLINE static void setup_digital(csp_rt_t* st, index_t ix)
 NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint8_t nbytes,
 				      uint8_t transport, uint32_t xref,
 				      pindir_t dir);
+NOINLINE static int parent_leaf(csp_rt_t* st, index_t ix);
 
 // Bind a #can field to its frame. ca.id is the #buffer decl; that buffer was
 // already allocated by setup_buffer (it has a lower decl index, since the frame
@@ -5771,9 +5778,9 @@ NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint8_t nbytes,
 NOINLINE static int setup_can(csp_rt_t* st, index_t ix)
 {
     int i = INDEX(ix);
-    index_t fx = decl(st, i, ca.id);            // the #buffer
+    index_t fx = decl(st, i, ca.id);            // the #buffer (decl index)
     uint16_t pos = decl(st, i, ca.bit);         // ca.bit is 9 bits: 0..511
-    csp_view_t* pv = &st->view[fx];
+    csp_view_t* pv = &st->view[parent_leaf(st, ix)];
     csp_view_t* vw;
 
     // The declaration can name any bit of a 64-byte FD frame, but csp_view_t.pos
@@ -5995,13 +6002,33 @@ NOINLINE static int setup_buffer(csp_rt_t* st, index_t ix)
 // A variable lives in the heap: bound -> a view into an existing buffer,
 // otherwise its own auto-buffer seeded with the init value. Works for globals
 // and per-object fields alike (st_index/decl pick the right slot/template).
+// Leaf of the buffer that decl `ix` is a view into. ca.id holds the parent's
+// DECL index, which is not a leaf: for a member of an object, a parent that is
+// a member of the SAME module lives in that object's storage, while a global
+// parent does not. Getting this wrong aliases every instance onto the module
+// template's slot.
+NOINLINE static int parent_leaf(csp_rt_t* st, index_t ix)
+{
+    index_t p = decl(st, INDEX(ix), ca.id);
+    int m = OBJ(ix);
+    if ((m != 0) && (m != CURRENT)) {
+	index_t ox = st->object[m];
+	index_t mx = decl(st, INDEX(ox), mq.mx);
+	int base = INDEX(mx) + 1;
+	int dn = decl(st, INDEX(mx), md.n);
+	if (((int)p >= base) && ((int)p < base + dn))
+	    return st_index(st, MAKE_INDEX(m, p));   // this instance's parent
+    }
+    return st_index(st, MAKE_INDEX(0, p));           // a global parent
+}
+
 NOINLINE static int setup_variable(csp_rt_t* st, index_t ix)
 {
     int i = INDEX(ix);
     csp_view_t* vw = &st->view[st_index(st, ix)];
 
     if (decl(st,i,bound)) {                   // bit-field view into a buffer
-	csp_view_t* pv = &st->view[decl(st,i,ca.id)];
+	csp_view_t* pv = &st->view[parent_leaf(st, ix)];
 	vw->kind     = VIEW_HEAP;
 	vw->vt       = decl(st,i,vt);
 	vw->buf    = pv->buf;
@@ -6374,6 +6401,14 @@ int csp_rt_start(csp_rt_t* st)
 		    return -1;
 		setup_analog(st, fx);
 		add_io(st, fx);
+		break;
+	    case DECL_BUFFER:
+		// Each instance gets its own storage, like every other member.
+		// This case was simply missing: a #buffer inside a module parsed
+		// fine and was then never allocated, and a member bound to it
+		// aliased an uninitialised view.
+		if (setup_buffer(st, fx) < 0)
+		    return -1;
 		break;
 	    case DECL_CAN:
 		// fx, not ix: this object's field, not the object itself. And an

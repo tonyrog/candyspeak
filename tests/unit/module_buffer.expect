@@ -1,0 +1,13 @@
+%% Per-instance buffers: m1 packs 1/2 -> 0x0201 = 513, m2 packs 9/8 -> 0x0809
+%% = 2057. If the instances shared one buffer these could not both hold.
+%% Global parent: both instances' gb view the SAME Shared buffer, so both read
+%% its low byte 0x34 = 52.
+{modes, [seq]}.
+{checks, [
+  {final_object_var, "M.m1", "m1.whole", 513},
+  {final_object_var, "M.m2", "m2.whole", 2057},
+  {final_object_var, "M.m1", "m1.gb", 52},
+  {final_object_var, "M.m2", "m2.gb", 52},
+  {final_var, "seen1", 52},
+  {final_var, "seen2", 52}
+]}.
