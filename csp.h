@@ -775,7 +775,7 @@ typedef struct PACKED {
 typedef struct PACKED {
     DECL_COMMON;    
     unsigned long period:28; // timeout value ms (74h max)
-    unsigned _res:1;         // reserved    
+    unsigned _res:1;         // reserved
     unsigned fired:1;        // timeout occurred this cycle (edge-triggered)
     unsigned running:1;      // timer is runnig (tx is valid time)
     unsigned init:1;         // one bit value 1 = start, 0 = stop
@@ -818,7 +818,7 @@ typedef enum {
 } csp_err_t;
 
 // parser state, save state before parse
-// so that restore may be possible when error
+// so that restore may be possible on error
 typedef struct PACKED {
     index_t nn;                  // number of instructions
     index_t nd;                  // number of decls

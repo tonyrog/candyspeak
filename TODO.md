@@ -86,12 +86,6 @@ that trigger on digital state change, analog sample compleation...
 - man borde kunna köra value och pin init i INIT också
   (kanske lägga initiering som kod istf i deklarations ?)
 
-- /list disassembler: GJORT (2026-07-16). fcall index-argument (timeout(T) m.fl.)
-  round-trippade variabelindexet genom en RENDERAD tal-sträng, vilket sprack när
-  CURRENT-relativa index passerade int16 ("-2035" / "0xF80D" -> skräp-index ->
-  SIGSEGV). csp_exprbuf_t bär nu råvärdet parallellt (regi[]/argi[], satt i
-  OP_LI/OP_LIU, kopierat i OP_ARG) och exprbuf_fcall tar argi[i] direkt.
-
 - /memory: visa HELHETEN för embedded (Tonys önskemål).
   Hookarna finns redan i csp_arduino.c: getTotalRAM() (per board-macro),
   freeRam() (sbrk på ARM, __brkval på AVR) och stack_used(). Saknas: en
@@ -129,11 +123,6 @@ that trigger on digital state change, analog sample compleation...
   Wear: EJ prioriterat, och ingen /save-varning heller (Tony: "Glöm Wear" /
   "vi struntar i varningen, det är ju ändå bara leksaker än så länge").
   OBS: kör ALDRIG stress-/loop-tester mot EEPROM eller flash.
-
-- LICENSE-fil saknas i repot. Tony kör GPL 2/3 på sina projekt men det är inte
-  deklarerat någonstans (ingen LICENSE, inga headers). Nu när LGPL-kod är vendrad
-  (csp_flash_samd.*) bör GPL:n faktiskt skrivas ut -- LGPL-2.1 §3 tillåter att en
-  kopia används under vanlig GPL, men det förutsätter att projektets licens finns.
 
 - EEPROM-round-trip-test saknas i suiten -- DÄRFÖR slank en allvarlig bugg
   igenom (block-write/read av ram_decl efter att decl blivit nedåtväxande =
@@ -183,4 +172,12 @@ that trigger on digital state change, analog sample compleation...
   bas (som offs[] gör för leaves): rymden blir då summa över objekt av (regler i
   dess modul) = exakt D. För cpx_m: 200 B -> ~70 B. Värsta fallet slutar skala
   med produkten n_rule x MAX_OBJECTS.
- 
+
+# BUGS - remove when fixed
+
+Listing of RAM rule, list as [ROM]
+
+[ROM] Led=1 ? BtnA&&BtnB                                                        
+[RAM] Led=0                                                                     
+
+Last row should be Led=0 ? !BtnA || !BntB
