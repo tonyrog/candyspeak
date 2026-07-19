@@ -53,6 +53,8 @@ int main(int argc, char** argv)
 	// the tables) works across translation units -- an unsized extern array
 	// is an incomplete type. Size = string length + 1 for the terminator.
 	fprintf(fh, "extern rochar s_%s[%d] RODATA;\n", name, (int)strlen(p) + 1);
+	fprintf(fh, "#define ros_%s ((rostring_t) s_%s)\n", name, name);
+	
 	fprintf(fc, "rochar s_%s[] RODATA = \"", name);
 	for (; *p; p++) {                        // literal, C-escaped
 	    if (*p == '"' || *p == '\\')

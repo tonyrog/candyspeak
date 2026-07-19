@@ -66,7 +66,7 @@ typedef unsigned bool_t;
 #define RODATA
 #define ro_byte(p)      (*(p))
 #define ro_word(p)      (*(p))
-#define ro_ptr(p)       (*(p))
+#define ro_ptr(p)       (*((const void**)(p)))
 #define ro_memcmp(a,b,n) memcmp((a), (b), (n))
 #define OBJ_BITS     5
 #define STRING_BITS  9
@@ -82,11 +82,12 @@ typedef unsigned bool_t;
 #define INSTR_BITS   11
 
 typedef const char rochar;  // PROGMEM string character type
+typedef const struct rochar* rostring_t;
 
 // strlen for a string that may live in flash. Walking one with s[n] reads the
 // wrong address space on AVR, and the plain `const char*` a helper takes hides
 // that from the compiler -- so anything holding a rochar* uses this.
-static inline int ro_strlen(rochar* s)
+static inline int ro_strlen(rostring_t s)
 {
     int n = 0;
     if (s) while (ro_byte((const uint8_t*)s + n)) n++;
@@ -96,7 +97,7 @@ static inline int ro_strlen(rochar* s)
 // strncmp against a flash string. NOT ro_memcmp: memcmp compares all n bytes
 // even when the flash entry is shorter, reading past its end -- comparing
 // "listing" (7) against "list" (4) walks 3 bytes off the array.
-static inline int ro_strncmp(const char* a, rochar* b, int n)
+static inline int ro_strncmp(const char* a, rostring_t b, int n)
 {
     int i;
     for (i = 0; i < n; i++) {
@@ -623,7 +624,7 @@ typedef enum {
 #define NOTIMEOUT 0xffffffff
 
 typedef struct PACKED {
-    rochar*  name;     // token name (RODATA)
+    rostring_t name;     // token name (RODATA)
     uint8_t namelen;
     uint8_t  tok;
     int8_t   code;
@@ -636,7 +637,7 @@ extern const op_entry_t tok_table[] RODATA;
 extern const op_entry_t decl_table[] RODATA;
 
 typedef struct PACKED {
-    rochar*  name;     // opcode name (RODATA)
+    rostring_t name;    // opcode name (RODATA)
     uint8_t  tok;      // token that match the op
     int8_t arity;      // number of args
     uint8_t rtype;     // return type
@@ -1479,12 +1480,12 @@ extern int csp_eeprom_clear(csp_rt_t* st);
 extern int stack_used();
 
 extern const char  csp_tag(csp_rt_t* st, index_t n);
-extern rochar* csp_fmt_pindir(uint8_t dir);
-extern rochar* csp_fmt_pull(csp_rt_t* st, int ix);
-extern rochar* csp_fmt_pwm(csp_rt_t* st, int ix);
-extern rochar* csp_fmt_vtype(vtype_t vt);
-extern rochar* csp_fmt_endian(vendian_t et);
-extern rochar* csp_format_error(csp_err_t err);
+extern rostring_t csp_fmt_pindir(uint8_t dir);
+extern rostring_t csp_fmt_pull(csp_rt_t* st, int ix);
+extern rostring_t csp_fmt_pwm(csp_rt_t* st, int ix);
+extern rostring_t csp_fmt_vtype(vtype_t vt);
+extern rostring_t csp_fmt_endian(vendian_t et);
+extern rostring_t csp_format_error(csp_err_t err);
 // Print the current error with %s/%d substituted (light printf, no stdio).
 extern void    csp_print_error(csp_rt_t* st);
 
@@ -1512,8 +1513,8 @@ extern void csp_enq_elist(csp_rt_t* st, index_t x);
 typedef int (*csp_cmd_fn)(csp_rt_t* st, int argc, char* argv[]);
 
 typedef struct {
-    rochar* name;
-    rochar* help;
+    rostring_t name;
+    rostring_t help;
     csp_cmd_fn fn;
 } csp_cmd_t;
 

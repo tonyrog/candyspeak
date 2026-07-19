@@ -1004,7 +1004,7 @@ int main(int argc, char** argv)
 	    }
 	    if ((r = parse_file(&state, fin)) < 0) {
 		fprintf(stderr, "%s:%d ", argv[optind], state.ps.line);
-		fprintf(stderr, csp_format_error(state.ps.err),
+		fprintf(stderr, (char*) csp_format_error(state.ps.err),
 			state.ps.err_args[0], state.ps.err_args[1], state.ps.err_args[2]);
 		fprintf(stderr, "\n");
 		exit(1);
@@ -1019,7 +1019,7 @@ int main(int argc, char** argv)
 	given = 1;
 	if ((r = parse_file(&state, stdin)) < 0) {
 	    fprintf(stderr, "*stdin*:%d ", state.ps.line);
-	    fprintf(stderr, csp_format_error(state.ps.err),
+	    fprintf(stderr, (char*) csp_format_error(state.ps.err),
 		    state.ps.err_args[0], state.ps.err_args[1], state.ps.err_args[2]);
 	    fprintf(stderr, "\n");
 	    exit(1);
@@ -1057,7 +1057,7 @@ int main(int argc, char** argv)
     else {
 	if (csp_rebuild(&state) < 0) {   // graph + leaf/device setup, one layout
 	    fprintf(stderr, "setup failed: ");
-	    fprintf(stderr, csp_format_error(state.ps.err),
+	    fprintf(stderr, (char*) csp_format_error(state.ps.err),
 		    state.ps.err_args[0], state.ps.err_args[1], state.ps.err_args[2]);
 	    fprintf(stderr, "\n");
 	}

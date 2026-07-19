@@ -38,13 +38,13 @@ extern int debug;
 #define CSTRLEN(str) (sizeof((str))-1)
 
 #define TOK_ENT(o,c,n) \
-    [(o)] = { .tok=(o),.code=(c),.name=(n),.namelen=CSTRLEN((n)),.arity=-1,.prec=-1,.assoc=NO }
+    [(o)] = { .tok=(o),.code=(c),.name=(rostring_t)(n),.namelen=CSTRLEN((n)),.arity=-1,.prec=-1,.assoc=NO }
 
 #define INSTR_ENT(o,c,n,a,p,s) \
-    [(o)] = { .tok=(o),.code=(c),.name=(n),.namelen=CSTRLEN((n)),.arity=(a),.prec=(p),.assoc=(s) }
+    [(o)] = { .tok=(o),.code=(c),.name=(rostring_t)(n),.namelen=CSTRLEN((n)),.arity=(a),.prec=(p),.assoc=(s) }
 
 #define DECL_ENT(o,c,n) \
-    [(o)] = { .tok=(o),.code=(c),.name=(n),.namelen=CSTRLEN((n)),.arity=-1,.prec=-1,.assoc=NO }
+    [(o)] = { .tok=(o),.code=(c),.name=(rostring_t)(n),.namelen=CSTRLEN((n)),.arity=-1,.prec=-1,.assoc=NO }
 
 const op_entry_t decl_table[] RODATA = {
     DECL_ENT(D_NONE,DECL_NONE,s_none),
@@ -239,72 +239,72 @@ MAKE_IFF(FNEQ);
 
 // opcode => opcode type info
 const op_info_t op_info[] RODATA = {
-    [OP_ADD] = {s_ADD,PLUS,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_SUB] = {s_SUB,MINUS,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_MUL] = {s_MUL,ASTERISK,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_DIV] = {s_DIV,SLASH,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_REM] = {s_REM,PERCENT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_SLA] = {s_SLA,LTLT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_SRA] = {s_SRA,GTGT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_BAND] = {s_BAND,AMP,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_BOR] = {s_BOR,BAR,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_BXOR] = {s_BXOR,CIRC,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_AND] = {s_AND,AMPAMP,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_OR] = {s_OR,BARBAR,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_EQ] = {s_ASSIGN,EQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_LT] = {s_OLT,LT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_LTE] = {s_OLTE,LTEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_GT] = {s_OGT,GT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_GTE] = {s_OGTE,GTEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_EQEQ] = {s_OEQEQ,EQEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_NEQ] = {s_ONEQ,NEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_ADD] = {ros_ADD,PLUS,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_SUB] = {ros_SUB,MINUS,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_MUL] = {ros_MUL,ASTERISK,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_DIV] = {ros_DIV,SLASH,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_REM] = {ros_REM,PERCENT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_SLA] = {ros_SLA,LTLT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_SRA] = {ros_SRA,GTGT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_BAND] = {ros_BAND,AMP,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_BOR] = {ros_BOR,BAR,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_BXOR] = {ros_BXOR,CIRC,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_AND] = {ros_AND,AMPAMP,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_OR] = {ros_OR,BARBAR,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_EQ] = {ros_ASSIGN,EQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_LT] = {ros_OLT,LT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_LTE] = {ros_OLTE,LTEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_GT] = {ros_OGT,GT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_GTE] = {ros_OGTE,GTEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_EQEQ] = {ros_OEQEQ,EQEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_NEQ] = {ros_ONEQ,NEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
 
     // unary versions (treated as binary with z ignored)
-    [OP_BNOT] = {s_BNOT,TILDE,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
-    [OP_NEG] = {s_NEG,MINUS1,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
-    [OP_MOV] = {s_OMOV,PLUS1,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
-    [OP_NOT] = {s_NOT,EXCLAMATION,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
-    [OP_CVTIF] = {s_CVTIF,NONE,1,V_FLOAT,MAKE_TYPE1(V_INTEGER)},   // int→float
-    [OP_CVTFI] = {s_CVTFI,NONE,1,V_INTEGER,MAKE_TYPE1(V_FLOAT)},   // float→int
+    [OP_BNOT] = {ros_BNOT,TILDE,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
+    [OP_NEG] = {ros_NEG,MINUS1,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
+    [OP_MOV] = {ros_OMOV,PLUS1,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
+    [OP_NOT] = {ros_NOT,EXCLAMATION,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
+    [OP_CVTIF] = {ros_CVTIF,NONE,1,V_FLOAT,MAKE_TYPE1(V_INTEGER)},   // int→float
+    [OP_CVTFI] = {ros_CVTFI,NONE,1,V_INTEGER,MAKE_TYPE1(V_FLOAT)},   // float→int
 
-    [OP_FNEG] = {s_FNEG,MINUS1,1,V_FLOAT,MAKE_TYPE1(V_FLOAT)},
-    [OP_FMOV] = {s_FMOV,PLUS1,1,V_FLOAT,MAKE_TYPE1(V_FLOAT)},
-    [OP_FADD] = {s_FADD,PLUS,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
-    [OP_FSUB] = {s_FSUB,MINUS,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
-    [OP_FMUL] = {s_FMUL,ASTERISK,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
-    [OP_FDIV] = {s_FDIV,SLASH,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FNEG] = {ros_FNEG,MINUS1,1,V_FLOAT,MAKE_TYPE1(V_FLOAT)},
+    [OP_FMOV] = {ros_FMOV,PLUS1,1,V_FLOAT,MAKE_TYPE1(V_FLOAT)},
+    [OP_FADD] = {ros_FADD,PLUS,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FSUB] = {ros_FSUB,MINUS,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FMUL] = {ros_FMUL,ASTERISK,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FDIV] = {ros_FDIV,SLASH,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
 
-    [OP_FLT] = {s_FLT,LT,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
-    [OP_FLTE] = {s_FLTE,LTEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
-    [OP_FGT] = {s_FGT,GT,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
-    [OP_FGTE] = {s_FGTE,GTEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
-    [OP_FEQEQ] = {s_FEQ,EQEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
-    [OP_FNEQ] = {s_FNEQ,NEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FLT] = {ros_FLT,LT,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FLTE] = {ros_FLTE,LTEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FGT] = {ros_FGT,GT,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FGTE] = {ros_FGTE,GTEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FEQEQ] = {ros_FEQ,EQEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FNEQ] = {ros_FNEQ,NEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
 
     // comman may not be needed?
-    [OP_COMMA] = {s_OCOMMA,NONE,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_COMMA] = {ros_OCOMMA,NONE,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
 
     // other operations for name
-    [OP_ENTER] = {s_ENTER,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_LEAVE] = {s_LEAVE,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_NEW]   = {s_NEW,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_LI]    = {s_LI,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_LIU]   = {s_LIU,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_LIH]   = {s_LIH,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_ARG]   = {s_ARG,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_ST]    = {s_ST,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_STP]   = {s_STP,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_STIMP] = {s_STIMP,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_CHG]   = {s_CHG,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_EQI]   = {s_EQI,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_STI]   = {s_STI,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_INSTATE] = {s_INSTATE,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_LD]    = {s_LD,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_LDP]   = {s_LDP,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_CALL]  = {s_CALL,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_RULE]  = {s_RULE,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_NEXT]  = {s_NEXT,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_NOP]   = {s_NOP,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_ENTER] = {ros_ENTER,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_LEAVE] = {ros_LEAVE,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_NEW]   = {ros_NEW,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_LI]    = {ros_LI,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_LIU]   = {ros_LIU,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_LIH]   = {ros_LIH,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_ARG]   = {ros_ARG,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_ST]    = {ros_ST,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_STP]   = {ros_STP,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_STIMP] = {ros_STIMP,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_CHG]   = {ros_CHG,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_EQI]   = {ros_EQI,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_STI]   = {ros_STI,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_INSTATE] = {ros_INSTATE,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_LD]    = {ros_LD,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_LDP]   = {ros_LDP,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_CALL]  = {ros_CALL,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_RULE]  = {ros_RULE,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_NEXT]  = {ros_NEXT,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_NOP]   = {ros_NOP,NONE,-1,V_VOID,MAKE_TYPE0()},
 };
 
 static const char tag_tab[] RODATA = {
@@ -364,64 +364,64 @@ const char csp_tag(csp_rt_t* st, index_t n)
     return tag_tab[decl(st,INDEX(n),type)];
 }
 
-static rochar* const pindir_tab[] RODATA = {
-    [DIR_NONE] = s_none,
-    [DIR_IN]   = s_in,
-    [DIR_OUT]  = s_out,
-    [DIR_INOUT]  = s_inout
+static rostring_t const pindir_tab[] RODATA = {
+    [DIR_NONE] = ros_none,
+    [DIR_IN]   = ros_in,
+    [DIR_OUT]  = ros_out,
+    [DIR_INOUT]  = ros_inout
 };
 
-rochar* csp_fmt_pindir(uint8_t dir)
+rostring_t csp_fmt_pindir(uint8_t dir)
 {
     return ro_ptr(&pindir_tab[dir&0x3]);
 }
 
-rochar* csp_fmt_pull(csp_rt_t* st, int ix)
+rostring_t csp_fmt_pull(csp_rt_t* st, int ix)
 {
     if (decl(st,ix,di.pullup))
-	return s_pullup;
+	return ros_pullup;
     else if (decl(st,ix,di.pulldown))
-	return s_pulldown;
+	return ros_pulldown;
     else
-	return s_undefined;  // floating
+	return ros_undefined;  // floating
 }
 
-rochar* csp_fmt_pwm(csp_rt_t* st, int ix)
+rostring_t csp_fmt_pwm(csp_rt_t* st, int ix)
 {
     if (decl(st,ix,an.pwm))
-	return s_pwm;
+	return ros_pwm;
     else
-	return s_undefined;
+	return ros_undefined;
 }
 
-static rochar* const vtype_tab[] RODATA = {
-    [V_VOID] = s_void,
-    [V_INTEGER] = s_integer,
-    [V_UNSIGNED] = s_unsigned,
-    [V_FLOAT] = s_float,
-    [V_STRING] = s_string,
-    [V_INDEX] = s_index,
-    [V_NUMBER] = s_number,
-    [V_ANY] = s_any,
-    [V_DIGITAL] = s_digital,
-    [V_ANALOG] = s_analog,
-    [V_TIMER] = s_timer,
-    [V_CAN] = s_can,
+static rostring_t const vtype_tab[] RODATA = {
+    [V_VOID] = ros_void,
+    [V_INTEGER] = ros_integer,
+    [V_UNSIGNED] = ros_unsigned,
+    [V_FLOAT] = ros_float,
+    [V_STRING] = ros_string,
+    [V_INDEX] = ros_index,
+    [V_NUMBER] = ros_number,
+    [V_ANY] = ros_any,
+    [V_DIGITAL] = ros_digital,
+    [V_ANALOG] = ros_analog,
+    [V_TIMER] = ros_timer,
+    [V_CAN] = ros_can,
 };
 
-const rochar* csp_fmt_vtype(vtype_t vt)
+rostring_t csp_fmt_vtype(vtype_t vt)
 {
-    return (rochar*) ro_ptr(&vtype_tab[vt & 0xf]);
+    return (rostring_t) ro_ptr(&vtype_tab[vt & 0xf]);
 }
 
-static const char* const endian_tab[] RODATA = {
-    [E_NATIVE] = s_native,
-    [E_LITTLE] = s_little,
-    [E_BIG] = s_big,
-    [0x3] = s_undefined
+static rostring_t  const endian_tab[] RODATA = {
+    [E_NATIVE] = ros_native,
+    [E_LITTLE] = ros_little,
+    [E_BIG] = ros_big,
+    [0x3] = ros_undefined
 };
 
-const char* csp_fmt_endian(vendian_t et)
+rostring_t csp_fmt_endian(vendian_t et)
 {
     return endian_tab[et&0x3];
 }
@@ -454,29 +454,29 @@ const tstr_t decl_type_name(decl_t type)
 // Error texts live in strings.tab (s_err_*), so they are in FLASH like every
 // other string in that table instead of being RAM literals. Read them with
 // csp_print_error, never with csp_print_str.
-rochar* csp_format_error(csp_err_t err)
+rostring_t csp_format_error(csp_err_t err)
 {
     switch(err) {
-    case ERR_OK:                  return s_err_ok;
-    case ERR_SYNTAX:              return s_err_syntax;
-    case ERR_STRING_SPACE_EXHUSTED: return s_err_string_space;
-    case ERR_TOO_MANY_DECLARATIONS: return s_err_many_decls;
-    case ERR_TOO_MANY_INSTRUCTIONS: return s_err_many_instrs;
-    case ERR_TOO_MANY_OBJECTS:    return s_err_many_objects;
-    case ERR_MODULE_NOT_DECLARED: return s_err_no_module;
-    case ERR_TOO_MANY_STATES:     return s_err_many_states;
-    case ERR_STATE_NOT_DECLARED:  return s_err_no_state;
-    case ERR_NOT_A_MODULE:        return s_err_not_module;
-    case ERR_END_MISMATCH:        return s_err_end_mismatch;
-    case ERR_OBJECT_NOT_DECLARED: return s_err_no_object;
-    case ERR_VARIABLE_NOT_DECLARED: return s_err_no_variable;
-    case ERR_FIELD_NOT_FOUND:     return s_err_no_field;
-    case ERR_FUNCTION_DOES_NOT_EXIST: return s_err_no_function;
-    case ERR_ALREADY_DEFINED:     return s_err_defined;
-    case ERR_INTERNAL_ERROR:      return s_err_internal;
-    case ERR_FUNCTION_ARGUMENT_TYPE_MISMATCH: return s_err_arg_mismatch;
-    case ERR_NAME_TOO_LONG:       return s_err_name_long;
-    default:                      return s_err_unknown;
+    case ERR_OK:                  return ros_err_ok;
+    case ERR_SYNTAX:              return ros_err_syntax;
+    case ERR_STRING_SPACE_EXHUSTED: return ros_err_string_space;
+    case ERR_TOO_MANY_DECLARATIONS: return ros_err_many_decls;
+    case ERR_TOO_MANY_INSTRUCTIONS: return ros_err_many_instrs;
+    case ERR_TOO_MANY_OBJECTS:    return ros_err_many_objects;
+    case ERR_MODULE_NOT_DECLARED: return ros_err_no_module;
+    case ERR_TOO_MANY_STATES:     return ros_err_many_states;
+    case ERR_STATE_NOT_DECLARED:  return ros_err_no_state;
+    case ERR_NOT_A_MODULE:        return ros_err_not_module;
+    case ERR_END_MISMATCH:        return ros_err_end_mismatch;
+    case ERR_OBJECT_NOT_DECLARED: return ros_err_no_object;
+    case ERR_VARIABLE_NOT_DECLARED: return ros_err_no_variable;
+    case ERR_FIELD_NOT_FOUND:     return ros_err_no_field;
+    case ERR_FUNCTION_DOES_NOT_EXIST: return ros_err_no_function;
+    case ERR_ALREADY_DEFINED:     return ros_err_defined;
+    case ERR_INTERNAL_ERROR:      return ros_err_internal;
+    case ERR_FUNCTION_ARGUMENT_TYPE_MISMATCH: return ros_err_arg_mismatch;
+    case ERR_NAME_TOO_LONG:       return ros_err_name_long;
+    default:                      return ros_err_unknown;
     }
 }
 
@@ -490,17 +490,18 @@ rochar* csp_format_error(csp_err_t err)
 // (csp_set_err_arg_ix copies ROM names out for exactly this reason).
 void csp_print_error(csp_rt_t* st)
 {
-    rochar* f = csp_format_error(st->ps.err);
+    rostring_t f = csp_format_error(st->ps.err);
+    const uint8_t* fp = (const uint8_t*) f;
     int ai = 0;
     char c;
 
-    while ((c = (char)ro_byte((const uint8_t*)f++)) != '\0') {
+    while ((c = (char)ro_byte(fp++)) != '\0') {
 	if (c != '%') {
 	    csp_print_char(c);
 	    continue;
 	}
-	c = (char)ro_byte((const uint8_t*)f);
-	if (c) f++;
+	c = (char)ro_byte(fp);
+	if (c) fp++;
 	switch (c) {
 	case 's': {
 	    const char* s = (ai < 3) ? (const char*)st->ps.err_args[ai++] : NULL;
@@ -6510,22 +6511,22 @@ static int cmd_resume(csp_rt_t* st, int argc, char* argv[]);
 // pointer does not fit in 16 bits. That is the same trap as the packed
 // csp_func_t that HardFaulted this project once. So: text out, pointers stay.
 static const csp_cmd_t builtin_cmds[] = {
-    { s_cmd_help,   s_h_help,    cmd_help },
-    { s_cmd_query,  NULL,        cmd_help },
-    { s_cmd_list,   s_h_list,    cmd_list },
-    { s_cmd_state,  s_h_state,   cmd_state },
-    { s_cmd_memory, s_h_memory,  cmd_memory },
-    { s_cmd_pause,  s_h_pause,   cmd_pause },
-    { s_cmd_live,   s_h_live,    cmd_live },
-    { s_cmd_resume, s_h_resume,  cmd_resume },
-    { s_cmd_reset,  s_h_reset,   cmd_reset },
-    { s_cmd_clear,  s_h_clear,   cmd_clear },
-    { s_cmd_latch,  s_h_latch,   cmd_latch },
-    { s_cmd_commit, s_h_commit,  cmd_commit },
-    { s_cmd_save,   s_h_save,    csp_cmd_save },
-    { s_cmd_load,   s_h_load,    csp_cmd_load },
-    { s_cmd_quit,   s_h_quit,    cmd_quit },
-    { s_cmd_exit,   NULL,        cmd_quit },
+    { ros_cmd_help,   ros_h_help,    cmd_help },
+    { ros_cmd_query,  NULL,        cmd_help },
+    { ros_cmd_list,   ros_h_list,    cmd_list },
+    { ros_cmd_state,  ros_h_state,   cmd_state },
+    { ros_cmd_memory, ros_h_memory,  cmd_memory },
+    { ros_cmd_pause,  ros_h_pause,   cmd_pause },
+    { ros_cmd_live,   ros_h_live,    cmd_live },
+    { ros_cmd_resume, ros_h_resume,  cmd_resume },
+    { ros_cmd_reset,  ros_h_reset,   cmd_reset },
+    { ros_cmd_clear,  ros_h_clear,   cmd_clear },
+    { ros_cmd_latch,  ros_h_latch,   cmd_latch },
+    { ros_cmd_commit, ros_h_commit,  cmd_commit },
+    { ros_cmd_save,   ros_h_save,    csp_cmd_save },
+    { ros_cmd_load,   ros_h_load,    csp_cmd_load },
+    { ros_cmd_quit,   ros_h_quit,    cmd_quit },
+    { ros_cmd_exit,   NULL,        cmd_quit },
     { NULL, NULL, NULL }
 };
 
@@ -6611,21 +6612,21 @@ static void print_decl(decl_t d)
 {
     csp_print_char('#');
     switch(d) {
-    case DECL_MODULE: csp_print_rostr(s_module); break;
-    case DECL_VARIABLE:	csp_print_rostr(s_variable); break;
-    case DECL_CONSTANT:	csp_print_rostr(s_constant); break;
-    case DECL_TIMER:	csp_print_rostr(s_timer); break;
-    case DECL_ANALOG:	csp_print_rostr(s_analog); break;
-    case DECL_DIGITAL:	csp_print_rostr(s_digital); break;
-    case DECL_BUFFER:   csp_print_rostr(s_buffer); break;
-    case DECL_CAN:      csp_print_rostr(s_can); break;
-    case DECL_STATES:   csp_print_rostr(s_states); break;	
-    case DECL_NONE:     csp_print_rostr(s_none); break;
-    case DECL_IN:       csp_print_rostr(s_in); break;
-    case DECL_END:      csp_print_rostr(s_end); break;
+    case DECL_MODULE: csp_print_rostr(ros_module); break;
+    case DECL_VARIABLE:	csp_print_rostr(ros_variable); break;
+    case DECL_CONSTANT:	csp_print_rostr(ros_constant); break;
+    case DECL_TIMER:	csp_print_rostr(ros_timer); break;
+    case DECL_ANALOG:	csp_print_rostr(ros_analog); break;
+    case DECL_DIGITAL:	csp_print_rostr(ros_digital); break;
+    case DECL_BUFFER:   csp_print_rostr(ros_buffer); break;
+    case DECL_CAN:      csp_print_rostr(ros_can); break;
+    case DECL_STATES:   csp_print_rostr(ros_states); break;	
+    case DECL_NONE:     csp_print_rostr(ros_none); break;
+    case DECL_IN:       csp_print_rostr(ros_in); break;
+    case DECL_END:      csp_print_rostr(ros_end); break;
     case DECL_OBJECT:
     case DECL_VIEW:
-	csp_print_rostr(s_undefined); break;	
+	csp_print_rostr(ros_undefined); break;	
     }    
     csp_print_char(' ');    
 }
@@ -6706,7 +6707,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
      for (i = 0; i < st->ps.nd; i++) {
 	 index_t ix = MAKE_INDEX(0, i);
 	 decl_t t = decl(st,i,type);
-	 rochar* seg = (i < st->rom_nd) ? s_ROM : s_RAM;
+	 rostring_t seg = (i < st->rom_nd) ? ros_ROM : ros_RAM;
 	 if (t == DECL_MODULE) {
 	     cur_mod = decl(st, i, name);
 	     if (!scope) {
@@ -6792,11 +6793,11 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
 	    if (decl(st,i,di.pullup)) {
 		csp_print_char(' ');		
-		csp_print_rostr(s_pullup);
+		csp_print_rostr(ros_pullup);
 	    }
 	    else if (decl(st,i,di.pulldown)) {
 		csp_print_char(' ');
-		csp_print_rostr(s_pulldown);
+		csp_print_rostr(ros_pulldown);
 	    }
 	    csp_print_char(' ');  // port:pin (needed to mod/rewire)
 	    csp_print_uint(decl(st,i,di.port));
@@ -6812,7 +6813,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
 	    if (decl(st,i,an.pwm)) {
 		csp_print_char(' ');
-		csp_print_rostr(s_pwm);
+		csp_print_rostr(ros_pwm);
 	    }	    
 	    csp_print_char(' ');              // port:pin
 	    csp_print_uint(decl(st,i,an.port));
@@ -6972,7 +6973,7 @@ static void state_col(const char* s, int w)
 // friends). Both the print AND the length walk have to go through ro_byte --
 // passing one of these to state_col reads the wrong address space on AVR, and
 // the const char* parameter hides that from the compiler.
-static void state_rocol(rochar* s, int w)
+static void state_rocol(rostring_t s, int w)
 {
     if (s) csp_print_rostr(s);
     state_pad(ro_strlen(s), w);
