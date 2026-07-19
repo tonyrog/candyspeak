@@ -6536,7 +6536,8 @@ static int cmd_help(csp_rt_t* st, int argc, char* argv[])
     for (const csp_cmd_t* c = builtin_cmds; c->name; c++) {
 	if (c->help) {
 	    int len;
-	    csp_print_lit("  /");
+	    csp_print_char(' ');
+	    csp_print_char('/');
 	    csp_print_rostr(c->name);       // name/help are in flash
 	    len = ro_strlen(c->name);
 	    while (len++ < 10) csp_print_char(' ');
@@ -6592,14 +6593,6 @@ static int is_fvar(index_t ix, int cnd, filter_var_t* fv, int nf)
     return (lookup_filter(ix, cnd, fv, nf) >= 0);
 }
 
-// print a leaf name (by logical string position), qualified as Mod.name when
-// inside a module. mod == 0 means global. Segment-aware (ROM flash or RAM).
-static void list_name(csp_rt_t* st, sindex_t mod, sindex_t name)
-{
-    if (mod) { csp_print_str_at(st, mod); csp_print_char('.'); }
-    csp_print_str_at(st, name);
-}
-
 // find a #module declaration by name (for /list <Module> scoping)
 static index_t find_module(csp_rt_t* st, const char* name)
 {
@@ -6612,6 +6605,43 @@ static index_t find_module(csp_rt_t* st, const char* name)
 	}
     }
     return BAD_INDEX;
+}
+
+static void print_decl(decl_t d)
+{
+    csp_print_char('#');
+    switch(d) {
+    case DECL_MODULE: csp_print_rostr(s_module); break;
+    case DECL_VARIABLE:	csp_print_rostr(s_variable); break;
+    case DECL_CONSTANT:	csp_print_rostr(s_constant); break;
+    case DECL_TIMER:	csp_print_rostr(s_timer); break;
+    case DECL_ANALOG:	csp_print_rostr(s_analog); break;
+    case DECL_DIGITAL:	csp_print_rostr(s_digital); break;
+    case DECL_BUFFER:   csp_print_rostr(s_buffer); break;
+    case DECL_CAN:      csp_print_rostr(s_can); break;
+    case DECL_STATES:   csp_print_rostr(s_states); break;	
+    case DECL_NONE:     csp_print_rostr(s_none); break;
+    case DECL_IN:       csp_print_rostr(s_in); break;
+    case DECL_END:      csp_print_rostr(s_end); break;
+    case DECL_OBJECT:
+    case DECL_VIEW:
+	csp_print_rostr(s_undefined); break;	
+    }    
+    csp_print_char(' ');    
+}
+
+// print a leaf name (by logical string position), qualified as Mod.name when
+// inside a module. mod == 0 means global. Segment-aware (ROM flash or RAM).
+static void list_name(csp_rt_t* st, sindex_t mod, sindex_t name)
+{
+    if (mod) { csp_print_str_at(st, mod); csp_print_char('.'); }
+    csp_print_str_at(st, name);
+}
+
+static void print_decl_and_name(csp_rt_t* st, decl_t d, sindex_t mod, sindex_t name)
+{
+    print_decl(d);
+    list_name(st, mod, name);
 }
 
 static int cmd_list(csp_rt_t* st, int argc, char* argv[])
@@ -6651,57 +6681,70 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 		}
 	    }
 	}
-	else if ((typ == ' ') && (find_module(st, name) != BAD_INDEX)) {
-	    scope = name;   // restrict listing to this module's members
-	}
-	else {
-	    const tstr_t sname = { (char*)name, strlen(name) };
-	    if ((ix = csp_lookup_decl(st, &sname)) != BAD_INDEX) {
-		if ((f = lookup_filter(ix, (typ == '?'), filt, nf)) < 0) {
-		    if (nf >= MAX_FILTER) goto match;
-		    if (typ == '?') cmask |= (1 << nf);
-		    else if (typ == ' ') bmask |= (1 << nf);
-		    filt[nf].typ = typ;
-		    filt[nf++].ix = ix;
-		}
-	    }
-	}
-    }
+	 else if ((typ == ' ') && (find_module(st, name) != BAD_INDEX)) {
+	     scope = name;   // restrict listing to this module's members
+	 }
+	 else {
+	     const tstr_t sname = { (char*)name, strlen(name) };
+	     if ((ix = csp_lookup_decl(st, &sname)) != BAD_INDEX) {
+		 if ((f = lookup_filter(ix, (typ == '?'), filt, nf)) < 0) {
+		     if (nf >= MAX_FILTER) goto match;
+		     if (typ == '?') cmask |= (1 << nf);
+		     else if (typ == ' ') bmask |= (1 << nf);
+		     filt[nf].typ = typ;
+		     filt[nf++].ix = ix;
+		 }
+	     }
+	 }
+     }
 
-match:
-    // list declarations that match the filter. Iterate ALL decls (do not stop
-    // at the first DECL_END -- module ends and the terminator are ENDs too).
-    // Each line is tagged [ROM]/[RAM] by segment; module members are shown with
-    // a Mod. prefix. scope != NULL restricts to that module's members.
-    for (i = 0; i < st->ps.nd; i++) {
-	index_t ix = MAKE_INDEX(0, i);
-	decl_t t = decl(st,i,type);
-	const char* seg = (i < st->rom_nd) ? "ROM" : "RAM";
-	if (t == DECL_MODULE) {
-	    cur_mod = decl(st, i, name);
-	    if (!scope) {
-		csp_print_lit("["); csp_print_str(seg);
-		csp_print_lit("] #module "); csp_print_str_at(st, cur_mod);
-		csp_print_char('\n');
+ match:
+     // list declarations that match the filter. Iterate ALL decls (do not stop
+     // at the first DECL_END -- module ends and the terminator are ENDs too).
+     // Each line is tagged [ROM]/[RAM] by segment; module members are shown with
+     // a Mod. prefix. scope != NULL restricts to that module's members.
+     for (i = 0; i < st->ps.nd; i++) {
+	 index_t ix = MAKE_INDEX(0, i);
+	 decl_t t = decl(st,i,type);
+	 rochar* seg = (i < st->rom_nd) ? s_ROM : s_RAM;
+	 if (t == DECL_MODULE) {
+	     cur_mod = decl(st, i, name);
+	     if (!scope) {
+		 csp_print_char('['); csp_print_rostr(seg); csp_print_char(']');
+		 csp_print_char(' ');
+		 print_decl(DECL_MODULE);
+		 csp_print_str_at(st, cur_mod);
+		 csp_print_char('\n');
+	     }
+	     continue;
+	 }
+	if (t == DECL_END) {         // module end or top-level terminator
+	    if (cur_mod) {
+		csp_print_char('['); csp_print_rostr(seg); csp_print_char(']');
+		csp_print_char(' ');	    
+		print_decl(DECL_END);
+		csp_print_char('\n');	    
+		cur_mod = 0;
 	    }
 	    continue;
 	}
-	if (t == DECL_END) {         // module end or top-level terminator
-	    cur_mod = 0;
-	    continue;
+	if (scope) {
+	    if (!(cur_mod && csp_str_eq(st, cur_mod, scope, strlen(scope))))
+		continue;                // only this module's members
 	}
-	if (scope && !(cur_mod && csp_str_eq(st, cur_mod, scope, strlen(scope))))
-	    continue;                // only this module's members
 	npos = decl(st, i, name);
 	if ((npos == 0) || (csp_str_byte(st, npos-1) == 0))
 	    continue;                // no / empty name
 	if (nf && !is_fvar(ix, 2, filt, nf))
 	    continue;
-	csp_print_lit("["); csp_print_str(seg); csp_print_lit("] ");
+	csp_print_char('['); csp_print_rostr(seg); csp_print_char(']');
+	csp_print_char(' ');
+	if (cur_mod) {
+	    csp_print_char(' '); csp_print_char(' ');
+	}
 	switch (t) {
 	case DECL_VARIABLE:
-	    csp_print_lit("#variable ");
-	    list_name(st, cur_mod, npos);
+	    print_decl_and_name(st, t, cur_mod, npos);
 	    csp_print_char(' ');
 	    csp_print_rostr(csp_fmt_vtype(decl(st,i,vt)));
 	    // list the declaration's init value, not the live state (like #constant
@@ -6725,8 +6768,7 @@ match:
 	    csp_print_char('\n');
 	    break;
 	case DECL_CONSTANT:
-	    csp_print_lit("#constant ");
-	    list_name(st, cur_mod, npos);
+	    print_decl_and_name(st, t, cur_mod, npos);
 	    csp_print_char(' ');
 	    csp_print_rostr(csp_fmt_vtype(decl(st,i,vt)));
 	    csp_print_lit(" = ");
@@ -6734,20 +6776,18 @@ match:
 	    csp_print_char('\n');
 	    break;
 	case DECL_OBJECT:
-	    csp_print_lit("#");
+	    csp_print_char('#');
 	    csp_print_str_at(st, decl_name_pos(st, decl(st,i,mq.mx)));
 	    csp_print_char(' ');
 	    csp_print_str_at(st, npos);
 	    csp_print_char('\n');
 	    break;
 	case DECL_TIMER:
-	    csp_print_lit("#timer ");
-	    list_name(st, cur_mod, npos);
+	    print_decl_and_name(st, t, cur_mod, npos);
 	    csp_print_char('\n');
 	    break;
 	case DECL_DIGITAL:
-	    csp_print_lit("#digital ");
-	    list_name(st, cur_mod, npos);
+	    print_decl_and_name(st, t, cur_mod, npos);
 	    csp_print_char(' ');
 	    csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
 	    if (decl(st,i,di.pullup)) {
@@ -6758,14 +6798,14 @@ match:
 		csp_print_char(' ');
 		csp_print_rostr(s_pulldown);
 	    }
-	    csp_print_char(' ');              // port:pin (needed to mod/rewire)	    csp_print_uint(decl(st,i,di.port));
+	    csp_print_char(' ');  // port:pin (needed to mod/rewire)
+	    csp_print_uint(decl(st,i,di.port));
 	    csp_print_char(':');
 	    csp_print_uint(decl(st,i,di.pin));
 	    csp_print_char('\n');
 	    break;
 	case DECL_ANALOG:
-	    csp_print_lit("#analog ");
-	    list_name(st, cur_mod, npos);
+	    print_decl_and_name(st, t, cur_mod, npos);	    
 	    csp_print_char(':');              // :width (res stored as bits-1)
 	    csp_print_uint(decl(st,i,an.res)+1);
 	    csp_print_char(' ');
@@ -6781,10 +6821,9 @@ match:
 	    csp_print_char('\n');
 	    break;
 	case DECL_BUFFER:
-	    // #buffer <name>:<size> <dir> [can 0x<id>].  Size is BYTES for a can
+	    // #buffer <name>:<size> <dir> [can 0x<id>]. Size is BYTES for a can
 	    // frame (it is the DLC), bits otherwise -- see csp_parse_buffer.
-	    csp_print_lit("#buffer ");
-	    list_name(st, cur_mod, npos);
+	    print_decl_and_name(st, t, cur_mod, npos);
 	    csp_print_char(':');
 	    if (decl(st,i,bf.transport) == TR_CAN)
 		csp_print_uint(decl(st,i,bf.nbits) >> 3);
@@ -6801,11 +6840,10 @@ match:
 	    csp_print_char('\n');
 	    break;
 	case DECL_CAN:
-	    // #can <name>:<width> <dir> <type> <frame>[<lo>..<hi>].  ca.id is the
+	    // #can <name>:<width> <dir> <type> <frame>[<lo>..<hi>].ca.id is the
 	    // #buffer decl the field is a view into, so the frame is named, not
 	    // repeated as a raw id.
-	    csp_print_lit("#can ");
-	    list_name(st, cur_mod, npos);
+	    print_decl_and_name(st, t, cur_mod, npos);
 	    csp_print_char(':');
 	    csp_print_uint(decl(st,i,ca.len)+1);
 	    csp_print_char(' ');

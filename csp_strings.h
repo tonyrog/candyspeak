@@ -203,5 +203,7 @@ extern rochar s_OEQEQ[5] RODATA;
 extern rochar s_ONEQ[4] RODATA;
 extern rochar s_OMOV[4] RODATA;
 extern rochar s_OCOMMA[6] RODATA;
+extern rochar s_RAM[4] RODATA;
+extern rochar s_ROM[4] RODATA;
 
 #endif

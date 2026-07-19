@@ -201,3 +201,5 @@ rochar s_OEQEQ[] RODATA = "EQEQ";
 rochar s_ONEQ[] RODATA = "NEQ";
 rochar s_OMOV[] RODATA = "MOV";
 rochar s_OCOMMA[] RODATA = "COMMA";
+rochar s_RAM[] RODATA = "RAM";
+rochar s_ROM[] RODATA = "ROM";
