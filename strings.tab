@@ -65,6 +65,62 @@ fired fired
 rx rx
 tx tx
 dlc dlc
+# error texts -- here rather than as literals in csp_format_error so they land
+# in flash like every other string in this table. Printed by csp_print_error,
+# which substitutes %s and %d.
+err_ok ok
+err_syntax syntax error
+err_string_space string space exhausted
+err_many_decls too many declarations
+err_many_instrs too many instructions
+err_many_objects too many objects
+err_no_module module %s not declared
+err_many_states too many states
+err_no_state state %s not declared
+err_not_module word %s not a module
+err_end_mismatch end mismatch
+err_no_object object %s is not declared
+err_no_variable variable %s is not declared
+err_no_field field %s not found
+err_no_function function %s/%d does not exist
+err_defined %s %s is already defined
+err_internal internal error
+err_arg_mismatch function %s/%d argument %d type mismatch
+err_name_long identifier name too long %d, max %d
+err_unknown unknown error
+# REPL command names and help texts. Only the TEXT moves to flash -- the table
+# itself keeps its function pointers and stays in RAM, because ro_ptr is a
+# 16-bit pgm_read_word and a function pointer on mega2560 (256K flash) is not.
+cmd_help help
+cmd_query ?
+cmd_list list
+cmd_state state
+cmd_memory memory
+cmd_pause pause
+cmd_live live
+cmd_resume resume
+cmd_reset reset
+cmd_clear clear
+cmd_latch latch
+cmd_commit commit
+cmd_save save
+cmd_load load
+cmd_quit quit
+cmd_exit exit
+h_help Show this help
+h_list List rules
+h_state Show current values
+h_memory Show code/RAM usage
+h_pause Stop execution (inspect/edit)
+h_live Freeze rules, keep I/O (poke hardware)
+h_resume Resume execution (rebuild if edited)
+h_reset Reset to initial values
+h_clear Drop RAM patches (keep ROM)
+h_latch on or off, device output
+h_commit Commit pending values
+h_save Save state to storage
+h_load Load state from storage
+h_quit Exit interactive mode
 LP (
 RP )
 HASH #

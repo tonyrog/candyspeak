@@ -83,6 +83,31 @@ typedef unsigned bool_t;
 
 typedef const char rochar;  // PROGMEM string character type
 
+// strlen for a string that may live in flash. Walking one with s[n] reads the
+// wrong address space on AVR, and the plain `const char*` a helper takes hides
+// that from the compiler -- so anything holding a rochar* uses this.
+static inline int ro_strlen(rochar* s)
+{
+    int n = 0;
+    if (s) while (ro_byte((const uint8_t*)s + n)) n++;
+    return n;
+}
+
+// strncmp against a flash string. NOT ro_memcmp: memcmp compares all n bytes
+// even when the flash entry is shorter, reading past its end -- comparing
+// "listing" (7) against "list" (4) walks 3 bytes off the array.
+static inline int ro_strncmp(const char* a, rochar* b, int n)
+{
+    int i;
+    for (i = 0; i < n; i++) {
+	uint8_t cb = ro_byte((const uint8_t*)b + i);
+	uint8_t ca = (uint8_t)a[i];
+	if (ca != cb) return (int)ca - (int)cb;
+	if (cb == 0) return 0;          // both ended here
+    }
+    return 0;
+}
+
 // A .ino compiles this header as C++, where _Static_assert is only an extension
 // (the SAMD toolchain accepts it, the older AVR one rejects it outright).
 #if defined(__cplusplus)
@@ -1326,6 +1351,22 @@ static inline sindex_t decl_name_pos(csp_rt_t* st, index_t ix)
     return csp_get_decl(st, INDEX(ix)).name;
 }
 
+// Length of a decl's name, read segment-aware. decl_name() hands back a raw
+// pointer that lands in FLASH for a ROM-range name and in RAM otherwise, and
+// the caller cannot tell which -- so walking it with s[n] reads the wrong
+// address space on AVR. These two go through csp_str_byte instead.
+static inline int decl_name_len(csp_rt_t* st, index_t ix)
+{
+    sindex_t pos = decl_name_pos(st, ix);
+    return pos ? csp_str_byte(st, pos - 1) : 0;   // length byte precedes the text
+}
+
+static inline int decl_name_empty(csp_rt_t* st, index_t ix)
+{
+    sindex_t pos = decl_name_pos(st, ix);
+    return (pos == 0) || (csp_str_byte(st, pos - 1) == 0);
+}
+
 extern int     csp_rt_init(csp_rt_t*,  int reactive);
 extern int     csp_mem_init(csp_rt_t*, size_t size);
 // Memory an already-parsed program needs, computed WITHOUT running csp_rt_start
@@ -1444,6 +1485,8 @@ extern rochar* csp_fmt_pwm(csp_rt_t* st, int ix);
 extern rochar* csp_fmt_vtype(vtype_t vt);
 extern rochar* csp_fmt_endian(vendian_t et);
 extern rochar* csp_format_error(csp_err_t err);
+// Print the current error with %s/%d substituted (light printf, no stdio).
+extern void    csp_print_error(csp_rt_t* st);
 
 extern const char* csp_opcode_name(opcode_t op);
 extern uint8_t csp_opcode_rtype(opcode_t op);

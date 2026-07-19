@@ -451,49 +451,73 @@ const tstr_t decl_type_name(decl_t type)
 #define ify(x) #x
 #define stringify(x) ify(x)
 
-const char* csp_format_error(csp_err_t err)
+// Error texts live in strings.tab (s_err_*), so they are in FLASH like every
+// other string in that table instead of being RAM literals. Read them with
+// csp_print_error, never with csp_print_str.
+rochar* csp_format_error(csp_err_t err)
 {
     switch(err) {
-    case ERR_OK:
-	return "ok";
-    case ERR_SYNTAX:
-	return "syntax error";
-    case ERR_STRING_SPACE_EXHUSTED:
-	return "string space exhuasted";
-    case ERR_TOO_MANY_DECLARATIONS:
-	return "too many declarations";
-    case ERR_TOO_MANY_INSTRUCTIONS:
-	return "too many instructions";
-    case ERR_TOO_MANY_OBJECTS:
-	return "too many objects";	
-    case ERR_MODULE_NOT_DECLARED:
-	return "module %s not declared";
-    case ERR_TOO_MANY_STATES:
-	return "too many states";
-    case ERR_STATE_NOT_DECLARED:
-	return "state %s not declared";
-    case ERR_NOT_A_MODULE:
-	return "word %s not a module";
-    case ERR_END_MISMATCH:
-	return "end mismatch";	
-    case ERR_OBJECT_NOT_DECLARED:
-	return "object %s is not declared";
-    case ERR_VARIABLE_NOT_DECLARED:
-	return "variable %s is not declared";
-    case ERR_FIELD_NOT_FOUND:
-	return "field %s not found";
-    case ERR_FUNCTION_DOES_NOT_EXIST:
-	return "function %s/%d does not exist";
-    case ERR_ALREADY_DEFINED:
-	return "%s %s is already defined";  // <type> <name> is alread defined
-    case ERR_INTERNAL_ERROR:
-	return "internal error";
-    case ERR_FUNCTION_ARGUMENT_TYPE_MISMATCH:
-	return "function %s/%d argument %d type mismatch";
-    case ERR_NAME_TOO_LONG:
-	return "identifier name to long %d max=" stringify(MAX_NAME_LEN);
-    default:
-	return "unknown error";
+    case ERR_OK:                  return s_err_ok;
+    case ERR_SYNTAX:              return s_err_syntax;
+    case ERR_STRING_SPACE_EXHUSTED: return s_err_string_space;
+    case ERR_TOO_MANY_DECLARATIONS: return s_err_many_decls;
+    case ERR_TOO_MANY_INSTRUCTIONS: return s_err_many_instrs;
+    case ERR_TOO_MANY_OBJECTS:    return s_err_many_objects;
+    case ERR_MODULE_NOT_DECLARED: return s_err_no_module;
+    case ERR_TOO_MANY_STATES:     return s_err_many_states;
+    case ERR_STATE_NOT_DECLARED:  return s_err_no_state;
+    case ERR_NOT_A_MODULE:        return s_err_not_module;
+    case ERR_END_MISMATCH:        return s_err_end_mismatch;
+    case ERR_OBJECT_NOT_DECLARED: return s_err_no_object;
+    case ERR_VARIABLE_NOT_DECLARED: return s_err_no_variable;
+    case ERR_FIELD_NOT_FOUND:     return s_err_no_field;
+    case ERR_FUNCTION_DOES_NOT_EXIST: return s_err_no_function;
+    case ERR_ALREADY_DEFINED:     return s_err_defined;
+    case ERR_INTERNAL_ERROR:      return s_err_internal;
+    case ERR_FUNCTION_ARGUMENT_TYPE_MISMATCH: return s_err_arg_mismatch;
+    case ERR_NAME_TOO_LONG:       return s_err_name_long;
+    default:                      return s_err_unknown;
+    }
+}
+
+// Print the current error with its arguments substituted. A light printf:
+// %s, %d and %% -- that is every conversion the error texts use.
+//
+// Needed because embedded has no stdio, and printing the format string raw
+// (which is what csp_print_str did) shows the user a literal
+// "variable %s is not declared". The format is read with ro_byte so it works
+// whether it sits in flash or RAM; the arguments are always plain RAM strings
+// (csp_set_err_arg_ix copies ROM names out for exactly this reason).
+void csp_print_error(csp_rt_t* st)
+{
+    rochar* f = csp_format_error(st->ps.err);
+    int ai = 0;
+    char c;
+
+    while ((c = (char)ro_byte((const uint8_t*)f++)) != '\0') {
+	if (c != '%') {
+	    csp_print_char(c);
+	    continue;
+	}
+	c = (char)ro_byte((const uint8_t*)f);
+	if (c) f++;
+	switch (c) {
+	case 's': {
+	    const char* s = (ai < 3) ? (const char*)st->ps.err_args[ai++] : NULL;
+	    if (s) csp_print_str(s);
+	    break;
+	}
+	case 'd':
+	    csp_print_int((ivalue_t)((ai < 3) ? st->ps.err_args[ai++] : 0));
+	    break;
+	case '%':
+	    csp_print_char('%');
+	    break;
+	default:                        // unknown conversion: show it verbatim
+	    csp_print_char('%');
+	    if (c) csp_print_char(c);
+	    break;
+	}
     }
 }
 
@@ -614,10 +638,24 @@ void csp_set_err_arg_tstr(csp_rt_t* st, int i, const tstr_t* str)
     }
 }
 
-// Decl name (already null-terminated in str[])
+// Decl name. COPIED into the error temp area rather than pointed at in place:
+// a ROM-range name lives in FLASH on AVR and a RAM-range one does not, and the
+// formatter cannot tell the two apart from the pointer. Copying makes every
+// err_arg a plain RAM string, which is what both fprintf and csp_print_error
+// expect.
 void csp_set_err_arg_ix(csp_rt_t* st, int i, index_t ix)
 {
-    st->ps.err_args[i] = (uintptr_t)decl_name(st, ix);
+    sindex_t pos = decl_name_pos(st, ix);
+    int len = pos ? csp_str_byte(st, pos - 1) : 0;
+
+    if (st->ps.err_strp >= st->ps.strp + (uint32_t)len + 1) {
+	int k;
+	st->ps.err_strp -= len + 1;
+	for (k = 0; k < len; k++)
+	    st->ram_str[st->ps.err_strp + k] = (char)csp_str_byte(st, pos + k);
+	st->ram_str[st->ps.err_strp + len] = '\0';
+	st->ps.err_args[i] = (uintptr_t)&st->ram_str[st->ps.err_strp];
+    }
 }
 
 void csp_clr_error(csp_rt_t* st)
@@ -722,7 +760,8 @@ int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val)
     case V_FLOAT: return csp_print_float(val.f);
     case V_STRING: csp_print_str_at(st, val.s); return 1;
     case V_TIMER: return csp_print_int(val.t.val);
-    default: return csp_print_str("???");
+    // csp_print_lit is a statement, so it cannot sit in a return expression
+    default: csp_print_lit("???"); return 3;
     }
 }
 
@@ -2957,6 +2996,9 @@ next:
 	    if (len > MAX_NAME_LEN) {
 		if (csp_set_error(st, ERR_NAME_TOO_LONG)) {
 		    csp_set_err_arg_int(st, 0, len);
+		    // the limit as an ARG, so the text can live in strings.tab
+		    // (it used to be pasted in with stringify(MAX_NAME_LEN))
+		    csp_set_err_arg_int(st, 1, MAX_NAME_LEN);
 		}
 		return -1; // fixme set error code
 	    }
@@ -3748,7 +3790,7 @@ type_mismatch:
 void print_stack_used()
 {
     // stack debug
-    csp_print_str("StackUsed=");
+    csp_print_lit("StackUsed=");
     csp_print_int(stack_used());
     csp_println();
 }
@@ -6462,38 +6504,43 @@ static int cmd_pause(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_live(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_resume(csp_rt_t* st, int argc, char* argv[]);
 
+// name and help point into FLASH (strings.tab); the table itself stays in RAM.
+// Moving the whole table would put the FUNCTION POINTERS in flash too, and
+// ro_ptr is a 16-bit pgm_read_word -- on a mega2560 (256K flash) a function
+// pointer does not fit in 16 bits. That is the same trap as the packed
+// csp_func_t that HardFaulted this project once. So: text out, pointers stay.
 static const csp_cmd_t builtin_cmds[] = {
-    { "help",   "Show this help",          cmd_help },
-    { "?",      NULL,                      cmd_help },
-    { "list",   "List rules",              cmd_list },
-    { "state",  "Show current values",     cmd_state },
-    { "memory", "Show code/RAM usage",      cmd_memory },
-    { "pause",  "Stop execution (inspect/edit)", cmd_pause },
-    { "live",   "Freeze rules, keep I/O (poke hardware)", cmd_live },
-    { "resume", "Resume execution (rebuild if edited)", cmd_resume },
-    { "reset",  "Reset to initial values", cmd_reset },
-    { "clear",  "Drop RAM patches (keep ROM)", cmd_clear },
-    { "latch",  "on or off, device output", cmd_latch },
-    { "commit", "Commit pending values",   cmd_commit },
-    { "save",   "Save state to storage",   csp_cmd_save },
-    { "load",   "Load state from storage", csp_cmd_load },
-    { "quit",   "Exit interactive mode",   cmd_quit },
-    { "exit",   NULL,                      cmd_quit },
+    { s_cmd_help,   s_h_help,    cmd_help },
+    { s_cmd_query,  NULL,        cmd_help },
+    { s_cmd_list,   s_h_list,    cmd_list },
+    { s_cmd_state,  s_h_state,   cmd_state },
+    { s_cmd_memory, s_h_memory,  cmd_memory },
+    { s_cmd_pause,  s_h_pause,   cmd_pause },
+    { s_cmd_live,   s_h_live,    cmd_live },
+    { s_cmd_resume, s_h_resume,  cmd_resume },
+    { s_cmd_reset,  s_h_reset,   cmd_reset },
+    { s_cmd_clear,  s_h_clear,   cmd_clear },
+    { s_cmd_latch,  s_h_latch,   cmd_latch },
+    { s_cmd_commit, s_h_commit,  cmd_commit },
+    { s_cmd_save,   s_h_save,    csp_cmd_save },
+    { s_cmd_load,   s_h_load,    csp_cmd_load },
+    { s_cmd_quit,   s_h_quit,    cmd_quit },
+    { s_cmd_exit,   NULL,        cmd_quit },
     { NULL, NULL, NULL }
 };
 
 static int cmd_help(csp_rt_t* st, int argc, char* argv[])
 {
     (void)st; (void)argv;
-    csp_print_str("Commands:\n");
+    csp_print_lit("Commands:\n");
     for (const csp_cmd_t* c = builtin_cmds; c->name; c++) {
 	if (c->help) {
 	    int len;
-	    csp_print_str("  /");
-	    csp_print_str(c->name);
-	    len = strlen(c->name);
+	    csp_print_lit("  /");
+	    csp_print_rostr(c->name);       // name/help are in flash
+	    len = ro_strlen(c->name);
 	    while (len++ < 10) csp_print_char(' ');
-	    csp_print_str(c->help);
+	    csp_print_rostr(c->help);
 	    csp_print_char('\n');
 	}
     }
@@ -6633,8 +6680,8 @@ match:
 	if (t == DECL_MODULE) {
 	    cur_mod = decl(st, i, name);
 	    if (!scope) {
-		csp_print_str("["); csp_print_str(seg);
-		csp_print_str("] #module "); csp_print_str_at(st, cur_mod);
+		csp_print_lit("["); csp_print_str(seg);
+		csp_print_lit("] #module "); csp_print_str_at(st, cur_mod);
 		csp_print_char('\n');
 	    }
 	    continue;
@@ -6650,56 +6697,56 @@ match:
 	    continue;                // no / empty name
 	if (nf && !is_fvar(ix, 2, filt, nf))
 	    continue;
-	csp_print_str("["); csp_print_str(seg); csp_print_str("] ");
+	csp_print_lit("["); csp_print_str(seg); csp_print_lit("] ");
 	switch (t) {
 	case DECL_VARIABLE:
-	    csp_print_str("#variable ");
+	    csp_print_lit("#variable ");
 	    list_name(st, cur_mod, npos);
 	    csp_print_char(' ');
-	    csp_print_str(csp_fmt_vtype(decl(st,i,vt)));
+	    csp_print_rostr(csp_fmt_vtype(decl(st,i,vt)));
 	    // list the declaration's init value, not the live state (like #constant
 	    // below); reading a value here would touch leaf storage /list must not.
 	    if (!decl(st,i,bound)) {
-		csp_print_str(" = ");
+		csp_print_lit(" = ");
 		csp_print_value(st, decl(st,i,vt), decl(st,i,va.init));
 	    }
 	    else {
 		// bind <buffer>[<lo>..<hi>] -- a bit-field view, so there is no
 		// init value to show; without this the bind vanished from /list
 		// and the output could not be pasted back.
-		csp_print_str(" bind ");
+		csp_print_lit(" bind ");
 		csp_print_str_at(st, decl_name_pos(st, decl(st,i,ca.id)));
 		csp_print_char('[');
 		csp_print_uint(decl(st,i,ca.bit));
-		csp_print_str("..");
+		csp_print_lit("..");
 		csp_print_uint(decl(st,i,ca.bit) + decl(st,i,ca.len));
 		csp_print_char(']');
 	    }
 	    csp_print_char('\n');
 	    break;
 	case DECL_CONSTANT:
-	    csp_print_str("#constant ");
+	    csp_print_lit("#constant ");
 	    list_name(st, cur_mod, npos);
 	    csp_print_char(' ');
-	    csp_print_str(csp_fmt_vtype(decl(st,i,vt)));
-	    csp_print_str(" = ");
+	    csp_print_rostr(csp_fmt_vtype(decl(st,i,vt)));
+	    csp_print_lit(" = ");
 	    csp_print_value(st, decl(st,i,vt), decl(st,i,cn.init));
 	    csp_print_char('\n');
 	    break;
 	case DECL_OBJECT:
-	    csp_print_str("#");
+	    csp_print_lit("#");
 	    csp_print_str_at(st, decl_name_pos(st, decl(st,i,mq.mx)));
 	    csp_print_char(' ');
 	    csp_print_str_at(st, npos);
 	    csp_print_char('\n');
 	    break;
 	case DECL_TIMER:
-	    csp_print_str("#timer ");
+	    csp_print_lit("#timer ");
 	    list_name(st, cur_mod, npos);
 	    csp_print_char('\n');
 	    break;
 	case DECL_DIGITAL:
-	    csp_print_str("#digital ");
+	    csp_print_lit("#digital ");
 	    list_name(st, cur_mod, npos);
 	    csp_print_char(' ');
 	    csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
@@ -6717,7 +6764,7 @@ match:
 	    csp_print_char('\n');
 	    break;
 	case DECL_ANALOG:
-	    csp_print_str("#analog ");
+	    csp_print_lit("#analog ");
 	    list_name(st, cur_mod, npos);
 	    csp_print_char(':');              // :width (res stored as bits-1)
 	    csp_print_uint(decl(st,i,an.res)+1);
@@ -6736,7 +6783,7 @@ match:
 	case DECL_BUFFER:
 	    // #buffer <name>:<size> <dir> [can 0x<id>].  Size is BYTES for a can
 	    // frame (it is the DLC), bits otherwise -- see csp_parse_buffer.
-	    csp_print_str("#buffer ");
+	    csp_print_lit("#buffer ");
 	    list_name(st, cur_mod, npos);
 	    csp_print_char(':');
 	    if (decl(st,i,bf.transport) == TR_CAN)
@@ -6748,7 +6795,7 @@ match:
 		csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
 	    }
 	    if (decl(st,i,bf.transport) == TR_CAN) {
-		csp_print_str(" can ");   // csp_print_hex emits the 0x itself
+		csp_print_lit(" can ");   // csp_print_hex emits the 0x itself
 		csp_print_hex((uvalue_t)decl(st, decl(st,i,bf.id), cn.init).i);
 	    }
 	    csp_print_char('\n');
@@ -6757,21 +6804,21 @@ match:
 	    // #can <name>:<width> <dir> <type> <frame>[<lo>..<hi>].  ca.id is the
 	    // #buffer decl the field is a view into, so the frame is named, not
 	    // repeated as a raw id.
-	    csp_print_str("#can ");
+	    csp_print_lit("#can ");
 	    list_name(st, cur_mod, npos);
 	    csp_print_char(':');
 	    csp_print_uint(decl(st,i,ca.len)+1);
 	    csp_print_char(' ');
 	    csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
 	    csp_print_char(' ');
-	    csp_print_str(csp_fmt_vtype(decl(st,i,vt)));
+	    csp_print_rostr(csp_fmt_vtype(decl(st,i,vt)));
 	    csp_print_char(' ');
 	    csp_print_str_at(st, decl_name_pos(st, decl(st,i,ca.id)));
 	    csp_print_char('[');
 	    csp_print_uint(decl(st,i,ca.bit));
-	    csp_print_str("..");
+	    csp_print_lit("..");
 	    csp_print_uint(decl(st,i,ca.bit) + decl(st,i,ca.len));
-	    csp_print_str("]\n");
+	    csp_print_lit("]\n");
 	    break;
 	default:
 	    csp_print_char('\n');
@@ -6815,7 +6862,7 @@ match:
 		    csp_print_str((rule < st->rom_nn) ? "[ROM] " : "[RAM] ");
 		    if (cur_mod) {
 			csp_print_str_at(st, cur_mod);
-			csp_print_str(": ");
+			csp_print_lit(": ");
 		    }
 		    csp_print_rule(st, rule);
 		}
@@ -6883,6 +6930,16 @@ static void state_col(const char* s, int w)
     state_pad(state_strlen(s), w);
 }
 
+// Same column, but for a string that lives in FLASH (csp_fmt_pindir and
+// friends). Both the print AND the length walk have to go through ro_byte --
+// passing one of these to state_col reads the wrong address space on AVR, and
+// the const char* parameter hides that from the compiler.
+static void state_rocol(rochar* s, int w)
+{
+    if (s) csp_print_rostr(s);
+    state_pad(ro_strlen(s), w);
+}
+
 static int state_udigits(uvalue_t v)
 {
     int n = 1;
@@ -6897,13 +6954,13 @@ static void state_name(csp_rt_t* st, index_t ix)
     int m = OBJ(ix);
     int n = 0;
     if ((m != GLOBAL) && (m != CURRENT)) {
-	const char* on = decl_name(st, st->object[m]);
-	csp_print_str(on);
+	index_t ox = st->object[m];
+	csp_print_str_at(st, decl_name_pos(st, ox));
 	csp_print_char('.');
-	n = state_strlen(on) + 1;
+	n = decl_name_len(st, ox) + 1;
     }
-    csp_print_str(decl_name(st, ix));
-    state_pad(n + state_strlen(decl_name(st, ix)), STATE_W_NAME);
+    csp_print_str_at(st, decl_name_pos(st, ix));
+    state_pad(n + decl_name_len(st, ix), STATE_W_NAME);
 }
 
 // A DECL_VARIABLE named "State" holds a state NUMBER; show it symbolically, the
@@ -6954,7 +7011,7 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
 	    csp_print_uint(left);
 	}
 	if (v->t.fired)
-	    csp_print_str("  FIRED");
+	    csp_print_lit("  FIRED");
 	csp_println();
 	return;
     }
@@ -6973,12 +7030,12 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
 	int port, pin, dir;
 	if (t == DECL_DIGITAL) { port = v->d.port; pin = v->d.pin; dir = v->d.dir; }
 	else                   { port = v->a.port; pin = v->a.pin; dir = v->a.dir; }
-	state_col(csp_fmt_pindir(dir), STATE_W_DIR);
+	state_rocol(csp_fmt_pindir(dir), STATE_W_DIR);
 	state_col((t == DECL_DIGITAL) ? "digital" : "analog", STATE_W_KIND);
 	csp_print_uint(port); csp_print_char(':'); csp_print_uint(pin);
 	state_pad(state_udigits(port) + 1 + state_udigits(pin), STATE_W_PIN);
     }
-    csp_print_str("= ");
+    csp_print_lit("= ");
     if (!is_state || !state_print_state(st, csp_value(st, ix).i))
 	csp_print_value(st, decl(st,di,vt), csp_value(st, ix));
     csp_println();
@@ -6992,13 +7049,11 @@ static int state_want(csp_rt_t* st, int di,
 		      uint8_t dir_filter, const index_t* named, int nnamed)
 {
     decl_t t = decl(st, di, type);
-    const char* nm;
 
     if ((t != DECL_VARIABLE) && (t != DECL_DIGITAL) &&
 	(t != DECL_ANALOG) && (t != DECL_TIMER))
 	return 0;
-    nm = decl_name(st, MAKE_INDEX(0, di));
-    if (!nm || !*nm)
+    if (decl_name_empty(st, MAKE_INDEX(0, di)))
 	return 0;
     if (nnamed) {
 	int k;
@@ -7026,7 +7081,7 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
     int nnamed = 0;
 
     if (!st->started) {   // -b before /resume: no leaves allocated yet
-	csp_print_str("not started -- /resume to allocate and run\n");
+	csp_print_lit("not started -- /resume to allocate and run\n");
 	return CSP_CMD_OK;
     }
 
@@ -7047,7 +7102,7 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 	    if ((ix != BAD_INDEX) && (nnamed < MAX_ARGV))
 		named[nnamed++] = ix;
 	    else {
-		csp_print_str("unknown: "); csp_print_str(w); csp_print_char('\n');
+		csp_print_lit("unknown: "); csp_print_str(w); csp_print_char('\n');
 	    }
 	}
     }
@@ -7056,13 +7111,13 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 
     // Status line -- the germ of a future terminal status bar. mode is one of
     // three mutually exclusive run states (paused and live can't both be on).
-    csp_print_str("cycle ");
+    csp_print_lit("cycle ");
     csp_print_uint(st->cycle);
-    csp_print_str("   latch ");
+    csp_print_lit("   latch ");
     csp_print_str(st->latch ? "on" : "off");
-    csp_print_str("   ");
+    csp_print_lit("   ");
     csp_print_str(st->paused ? "paused" : st->live ? "live" : "running");
-    csp_print_str("\n\n");
+    csp_print_lit("\n\n");
 
     // Two passes so object INSTANCES actually appear: the globals, then each
     // object with its own fields. The old walk indexed MAKE_INDEX(0,i) -- obj 0
@@ -7097,9 +7152,9 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 		if (!shown) {           // header only once, and only if non-empty
 		    csp_println();
 		    csp_print_char('#');
-		    csp_print_str(decl_name(st, MAKE_INDEX(0, i)));
+		    csp_print_str_at(st, decl_name_pos(st, MAKE_INDEX(0, i)));
 		    csp_print_char(' ');
-		    csp_print_str(decl_name(st, mx));
+		    csp_print_str_at(st, decl_name_pos(st, mx));
 		    csp_println();
 		    shown = 1;
 		}
@@ -7117,7 +7172,7 @@ static int cmd_reset(csp_rt_t* st, int argc, char* argv[])
     (void)argv;
     csp_rebuild(st);
     csp_setup(st);
-    csp_print_str("Reset\n");
+    csp_print_lit("Reset\n");
     return CSP_CMD_OK;
 }
 
@@ -7129,7 +7184,7 @@ static int cmd_pause(csp_rt_t* st, int argc, char* argv[])
     (void)argc; (void)argv;
     st->paused = 1;
     st->live = 0;
-    csp_print_str("Paused (execution stopped; edit/inspect, then /resume)\n");
+    csp_print_lit("Paused (execution stopped; edit/inspect, then /resume)\n");
     return CSP_CMD_OK;
 }
 
@@ -7141,12 +7196,12 @@ static int cmd_live(csp_rt_t* st, int argc, char* argv[])
 {
     (void)argc; (void)argv;
     if (!st->started) {
-	csp_print_str("not started -- /resume first\n");
+	csp_print_lit("not started -- /resume first\n");
 	return CSP_CMD_OK;
     }
     st->live = 1;
     st->paused = 0;
-    csp_print_str("Live (rules frozen, I/O running -- poke away; /resume to run)\n");
+    csp_print_lit("Live (rules frozen, I/O running -- poke away; /resume to run)\n");
     return CSP_CMD_OK;
 }
 
@@ -7158,19 +7213,19 @@ static int cmd_resume(csp_rt_t* st, int argc, char* argv[])
     (void)argc; (void)argv;
     if (st->edited) {
 	if (csp_rebuild(st) < 0) {   // say so: this used to fail silently
-	    csp_print_str("Cannot resume: ");
-	    csp_print_str(csp_format_error(st->ps.err));
-	    csp_print_str("\n(the code pool must hold the program AND its data --"
+	    csp_print_lit("Cannot resume: ");
+	    csp_print_error(st);
+	    csp_print_lit("\n(the code pool must hold the program AND its data --"
 			  " see /memory, raise -m)\n");
 	    csp_clr_error(st);
 	    return CSP_CMD_ERROR;
 	}
 	csp_setup(st);
 	st->edited = 0;
-	csp_print_str("Resumed (rebuilt)\n");
+	csp_print_lit("Resumed (rebuilt)\n");
     }
     else {
-	csp_print_str("Resumed\n");
+	csp_print_lit("Resumed\n");
     }
     st->paused = 0;
     st->live = 0;
@@ -7188,7 +7243,7 @@ static int cmd_clear(csp_rt_t* st, int argc, char* argv[])
     st->ps.nq   = 0;
     csp_rebuild(st);
     csp_setup(st);
-    csp_print_str("Cleared RAM patches -- ROM restored\n");
+    csp_print_lit("Cleared RAM patches -- ROM restored\n");
     return CSP_CMD_OK;
 }
 
@@ -7204,7 +7259,7 @@ static void mem_int_r(int v, int w)
 static void mem_name(const char* name)
 {
     int len = 0;
-    csp_print_str("  ");
+    csp_print_lit("  ");
     csp_print_str(name);
     while (name[len]) len++;
     while (len++ < 9) csp_print_char(' ');
@@ -7284,13 +7339,13 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 	uint32_t acc     = sys + model_state() + buffers
 			 + CSP_STACK_RESERVE + (uint32_t)used;
 	uint32_t freeram = (cap > acc) ? (cap - acc) : 0;
-	csp_print_str("RAM ");
+	csp_print_lit("RAM ");
 	csp_print_uint((uvalue_t)cap);
-	csp_print_str(" total:\n");
+	csp_print_lit(" total:\n");
 	mem_val("system",  sys);
 	mem_val("struct",  model_state());
 	mem_name("buffers"); mem_int_r((int)buffers, 8);
-	if (!st->started) csp_print_str("   (allocated on /resume)");
+	if (!st->started) csp_print_lit("   (allocated on /resume)");
 	csp_println();
 	mem_val("stack",   CSP_STACK_RESERVE);
 	mem_val("code",    (uint32_t)used);
@@ -7302,11 +7357,11 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 	uint32_t need = (uint32_t)csp_eeprom_size(st);
 	if (cap == CSP_EEPROM_NONE) {
 	    mem_row("EEPROM", need, 0, 0);
-	    csp_print_str("   (NONE)");
+	    csp_print_lit("   (NONE)");
 	}
 	else if (cap == CSP_EEPROM_UNBOUNDED) {
 	    mem_row("EEPROM", need, -1, 0);
-	    csp_print_str("   (OK)");
+	    csp_print_lit("   (OK)");
 	}
 	else {
 	    mem_row("EEPROM", need, (int32_t)cap, 1);
@@ -7317,10 +7372,10 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 
     if (st->rom_nd || st->rom_nn || st->rom_strp) {
 	csp_println();
-	csp_print_str("  ROM base   ");
-	csp_print_int(st->rom_nd);   csp_print_str(" decl, ");
-	csp_print_int(st->rom_nn);   csp_print_str(" instr, ");
-	csp_print_int(st->rom_strp); csp_print_str(" str\n");
+	csp_print_lit("  ROM base   ");
+	csp_print_int(st->rom_nd);   csp_print_lit(" decl, ");
+	csp_print_int(st->rom_nn);   csp_print_lit(" instr, ");
+	csp_print_int(st->rom_strp); csp_print_lit(" str\n");
     }
 
     csp_println();
@@ -7341,7 +7396,7 @@ static int cmd_commit(csp_rt_t* st, int argc, char* argv[])
 {
     (void)argv;
     csp_commit(st);
-    csp_print_str("Committed\n");
+    csp_print_lit("Committed\n");
     return CSP_CMD_OK;
 }
 
@@ -7393,8 +7448,9 @@ int csp_cmd_dispatch(csp_rt_t* st, char* cmd)
     }
     argv[argc] = NULL;
     for (c = builtin_cmds; c->name; c++) {
-	if ((strncmp(cmd, c->name, namelen) == 0) &&
-	    (c->name[namelen] == '\0')) {
+	// c->name is in flash: compare and index it segment-aware.
+	if ((ro_strncmp(cmd, c->name, namelen) == 0) &&
+	    (ro_byte((const uint8_t*)c->name + namelen) == '\0')) {
 	    return c->fn(st, argc, argv);
 	}
     }
@@ -7410,12 +7466,12 @@ static int csp_process_immediate(csp_rt_t* st, char* line)
     rentry_t result;
 
     if (!st->started) {   // -b before /resume: value slots not allocated yet
-	csp_print_str("not started -- /resume to allocate and run\n");
+	csp_print_lit("not started -- /resume to allocate and run\n");
 	return -1;
     }
 
     if (csp_scan_line(st, line, tv, &num) < 0) {
-	csp_print_str("Scan error\n");
+	csp_print_lit("Scan error\n");
 	return -1;
     }
     if (num == 0 || tv[0].t == NEWLINE)
@@ -7426,8 +7482,8 @@ static int csp_process_immediate(csp_rt_t* st, char* line)
     st->ev = 1; // eval variables during (compile)
     if (!csp_parse_expr(st, tv, &num, &result)) {
 	st->ap = saved_ap;
-	csp_print_str("Error: ");
-	csp_print_str(csp_format_error(st->ps.err));
+	csp_print_lit("Error: ");
+	csp_print_error(st);
 	csp_print_char('\n');
 	csp_clr_error(st);
 	return -1;
@@ -7440,7 +7496,7 @@ static int csp_process_immediate(csp_rt_t* st, char* line)
     else if (result.ix != BAD_INDEX)
 	csp_print_value(st, result.vt, csp_value(st, result.ix));
     else
-	csp_print_str("NONE");
+	csp_print_lit("NONE");
     csp_println();
     return 0;
 }
@@ -7453,8 +7509,8 @@ static int csp_process_persistent(csp_rt_t* st, char* line)
 
     csp_pstate_save(st, &pm);
     if (csp_parse(st, line) < 0) {
-	csp_print_str("Error: ");
-	csp_print_str(csp_format_error(st->ps.err));
+	csp_print_lit("Error: ");
+	csp_print_error(st);
 	csp_print_char('\n');
 	csp_clr_error(st);
 	// Rewind. Inside an unclosed module the whole module goes: otherwise
@@ -7462,7 +7518,7 @@ static int csp_process_persistent(csp_rt_t* st, char* line)
 	// swallowed by a module that can never be closed.
 	if (st->mdef != BAD_INDEX) {
 	    csp_pstate_restore(st, &st->mod_mark);
-	    csp_print_str("Module aborted\n");
+	    csp_print_lit("Module aborted\n");
 	}
 	else
 	    csp_pstate_restore(st, &pm);
@@ -7483,7 +7539,7 @@ static int csp_process_persistent(csp_rt_t* st, char* line)
 	// the new rule without graph edges: reactively it never fired.
 	st->edited = 1;
     }
-    csp_print_str("OK\n");
+    csp_print_lit("OK\n");
     return 0;
 }
 
@@ -7503,9 +7559,9 @@ int csp_process_line(csp_rt_t* st, char* line)
 	// Command
 	int r = csp_cmd_dispatch(st, line + 1);
 	if (r == CSP_CMD_NOTFOUND) {
-	    csp_print_str("Unknown command: ");
+	    csp_print_lit("Unknown command: ");
 	    csp_print_str(line);
-	    csp_print_str(" (try /help)\n");
+	    csp_print_lit(" (try /help)\n");
 	}
 	return r;
     }
@@ -7560,7 +7616,7 @@ void csp_line_init(void)
 void csp_line_prompt(void)
 {
     if (need_prompt) {
-	csp_print_str("> ");
+	csp_print_lit("> ");
 	csp_flush();
 	need_prompt = 0;
     }
@@ -7573,7 +7629,7 @@ void csp_line_input(char c)
 	    csp_line_buf[csp_line_pos] = '\0';
 	    csp_line_ready = 1;
 	}
-	csp_print_str("\r\n");
+	csp_print_lit("\r\n");
 	csp_flush();
 	need_prompt = 1;
     }
@@ -7582,14 +7638,14 @@ void csp_line_input(char c)
 	    csp_print_char('\a');
 	} else {
 	    csp_line_pos--;
-	    csp_print_str("\b \b");
+	    csp_print_lit("\b \b");
 	}
 	csp_flush();
     }
     else if (c == 21) { // Ctrl-U: clear line
 	while (csp_line_pos > 0) {
 	    csp_line_pos--;
-	    csp_print_str("\b \b");
+	    csp_print_lit("\b \b");
 	}
 	csp_flush();
     }

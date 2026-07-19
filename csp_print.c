@@ -737,7 +737,7 @@ int csp_print_rule(csp_rt_t* st, int i)
 		    (buf.buf[buf.reg[ip->r.cnd]+1] == '1'))
 		    break;		
 	    default:
-		csp_print_str(" ? ");
+		csp_print_lit(" ? ");
 		exprbuf_print(&buf, buf.reg[ip->r.cnd]);
 	    }
 	    csp_print_char('\n');
