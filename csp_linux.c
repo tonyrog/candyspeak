@@ -192,7 +192,7 @@ int csp_print_str(const char* s)
     return strlen(s);
 }
 
-int csp_print_rostr(const rochar* s)
+int csp_print_rostr(rostring_t s)
 {
     return csp_print_str((const char*) s);
 }

@@ -19,3 +19,7 @@ clean:
 
 upload:
 	arduino-cli upload -p $(DEV) --fqbn $(FQBN)
+
+strings:
+	avr-objcopy -O binary --only-section=.data build/arduino.avr.mega/CandySpeak.ino.elf mega_data.bin
+	strings -n 4 mega_data.bin

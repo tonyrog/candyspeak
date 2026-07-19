@@ -318,6 +318,38 @@ static const char tag_tab[] RODATA = {
     [DECL_CAN] = 'k',
 };
 
+NOINLINE int ro_strlen(rostring_t s)
+{
+    int n = 0;
+    if (s) while (ro_byte((const uint8_t*)s + n)) n++;
+    return n;
+}
+
+NOINLINE int ro_strncmp(const char* a, rostring_t b, int n)
+{
+    int i;
+    for (i = 0; i < n; i++) {
+	uint8_t cb = ro_byte((const uint8_t*)b + i);
+	uint8_t ca = (uint8_t)a[i];
+	if (ca != cb) return (int)ca - (int)cb;
+	if (cb == 0) return 0;          // both ended here
+    }
+    return 0;
+}
+
+NOINLINE int ro_strcmp(const char* a, rostring_t b)
+{
+    rochar* bp = (rochar*)b;
+    uint8_t ca, cb;
+    do {
+	ca = *a++;
+	cb = ro_byte(bp++);
+	if (ca != cb) return (int)ca - (int)cb;
+    } while(cb);
+    return 0;
+}
+
+
 // The firmware ROM image lives in rom.c, which every build links exactly once
 // (an empty default rom.c provides zero-sized stubs when no program is baked
 // in). These are plain externs -- NOT weak fallbacks defined here: a weak
@@ -775,7 +807,7 @@ void print_rentry(csp_rt_t* st, char* name, rentry_t* rp)
     if (rp->I) DBG("im ");
     if (rp->L) DBG("ld ");
     if (rp->X) DBG("ix ");
-    DBG(",vt=%s", csp_fmt_vtype(rp->vt));
+    DBG(",vt=%s", (char*)csp_fmt_vtype(rp->vt));
     if (rp->L) DBG(",reg=%d", rp->reg);
     if (rp->X) DBG(",ix=0x%04x", rp->ix);
     if (rp->I) { DBG(",val="); csp_print_value(st, rp->vt, rp->val); }
@@ -2131,7 +2163,8 @@ NOINLINE index_t csp_new_udecl(csp_rt_t* st, const tstr_t* name, decl_t type)
     if ((ix = csp_lookup_decl_local(st, name)) != BAD_INDEX) {
 	if (csp_set_error(st, ERR_ALREADY_DEFINED)) {
 	    tstr_t typ = { .ptr = "name", .len = 4 };
-	    if (decl(st,ix,type) == type) typ = decl_type_name(type);
+	    if (decl(st,ix,type) == type)
+		typ = decl_type_name(type);
 	    csp_set_err_arg_tstr(st, 0, &typ);
 	    csp_set_err_arg_tstr(st, 1, name);
 	}
@@ -4271,7 +4304,7 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
     // optional:  bind <buffer> '[' <bit0> ['..' <bit1>] ']'
     // a bound variable is a bit-field view into a buffer (bits, not bytes)
     if ((r < (int)n) && (tv[r].t == WORD) && (tv[r].v.str.len == 4) &&
-	(memcmp(tv[r].v.str.ptr, "bind", 4) == 0)) {
+	(ro_memcmp(ros_bind, tv[r].v.str.ptr, 4) == 0)) {
 	index_t bx;
 	ivalue_t b0, b1;
 	int j = r + 1;
@@ -6898,7 +6931,13 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 		if (scope && !(cur_mod && csp_str_eq(st, cur_mod, scope, strlen(scope))))
 		    show = 0;
 		if (show) {
-		    csp_print_str((rule < st->rom_nn) ? "[ROM] " : "[RAM] ");
+		    csp_print_char('[');
+		    if (rule < st->rom_nn)
+			csp_print_rostr(ros_ROM);
+		    else
+			csp_print_rostr(ros_RAM);
+		    csp_print_char(']');
+		    csp_print_char(' ');
 		    if (cur_mod) {
 			csp_print_str_at(st, cur_mod);
 			csp_print_lit(": ");
@@ -7042,8 +7081,12 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
 	    uint32_t dt = csp_time_ms() - csp_dio_slot(st, tx, DIN)->u;
 	    left = (dt >= v->t.period) ? 0 : (v->t.period - dt);
 	}
-	state_col(v->t.running ? "running" : "stopped", STATE_W_DIR);
-	state_col("timer", STATE_W_KIND);
+	if (v->t.running)
+	    state_rocol(ros_running, STATE_W_DIR);
+	else
+	    state_rocol(ros_stopped, STATE_W_DIR);
+	// state_col(v->t.running ? "running" : "stopped", STATE_W_DIR);
+	state_rocol(ros_timer, STATE_W_KIND);
 	csp_print_uint(v->t.period);          // period/remaining, in the pin column
 	if (v->t.running) {
 	    csp_print_char('/');
@@ -7058,19 +7101,25 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
     is_state = state_is_state_var(st, di);
     if (t == DECL_VARIABLE) {
 	state_col("", STATE_W_DIR);
-	state_col(is_state ? "state" : "var", STATE_W_KIND);
+	if (is_state)
+	    state_rocol(ros_state, STATE_W_KIND);
+	else
+	    state_rocol(ros_var, STATE_W_KIND);
 	state_col("", STATE_W_PIN);
     }
     else {   // digital / analog
 	// port/pin/dir live in the VALUE slot, not the declaration: an object's
-	// init list (P.pin=0, P.pin=1, ...) writes them per instance, so reading
+	// init list (P.pin=0, P.pin=1,...) writes them per instance, so reading
 	// the decl would print the template's pin for every object.
 	value_t* v = csp_dio_slot(st, ix, DIN);
 	int port, pin, dir;
 	if (t == DECL_DIGITAL) { port = v->d.port; pin = v->d.pin; dir = v->d.dir; }
 	else                   { port = v->a.port; pin = v->a.pin; dir = v->a.dir; }
 	state_rocol(csp_fmt_pindir(dir), STATE_W_DIR);
-	state_col((t == DECL_DIGITAL) ? "digital" : "analog", STATE_W_KIND);
+	if (t == DECL_DIGITAL)
+	    state_rocol(ros_digital,STATE_W_KIND);
+	else
+	    state_rocol(ros_analog,STATE_W_KIND);
 	csp_print_uint(port); csp_print_char(':'); csp_print_uint(pin);
 	state_pad(state_udigits(port) + 1 + state_udigits(pin), STATE_W_PIN);
     }
@@ -7080,33 +7129,87 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
     csp_println();
 }
 
+typedef enum {
+    F_NONE     = 0x0000,
+    F_IN       = DIR_IN,  // 0x01
+    F_OUT      = DIR_OUT, // 0x02,
+    F_VARIABLE = 0x0010,
+    F_CONSTANT = 0x0020, 
+    F_DIGITAL  = 0x0040,
+    F_ANALOG   = 0x0080,
+    F_TIMER    = 0x0100,
+    F_BUFFER   = 0x0200,
+    F_CAN      = 0x0400,
+    F_ANY_CAT  = 0x8000,
+    F_ALL      = 0xffff,
+} filter_flag_t;
+
+typedef struct {
+    rostring_t key;
+    filter_flag_t flags;
+} filt_entry_t;
+
+const filt_entry_t filt_table[] RODATA = {
+    { ros_all,       F_ALL },
+    { ros_timer,     F_TIMER|F_ANY_CAT },
+    { ros_timers,    F_TIMER|F_ANY_CAT },
+    { ros_var,       F_VARIABLE|F_ANY_CAT },
+    { ros_variable,  F_VARIABLE|F_ANY_CAT },
+    { ros_variables, F_VARIABLE|F_ANY_CAT },
+    { ros_digital,   F_DIGITAL|F_ANY_CAT },
+    { ros_analog,    F_ANALOG|F_ANY_CAT },
+    { ros_buffer,    F_BUFFER|F_ANY_CAT },
+    { ros_can,       F_CAN|F_ANY_CAT },
+    { ros_input,     F_IN|F_DIGITAL|F_ANALOG|F_BUFFER|F_ANY_CAT },
+    { ros_in,        F_IN|F_DIGITAL|F_ANALOG|F_BUFFER|F_ANY_CAT },
+    { ros_output,    F_OUT|F_DIGITAL|F_ANALOG|F_BUFFER|F_ANY_CAT },
+    { ros_out,       F_OUT|F_DIGITAL|F_ANALOG|F_BUFFER|F_ANY_CAT },
+    { ros_undefined, 0 }
+};
+
 // Does declaration `di` pass the /state filters? Shared by the global and the
 // per-object pass. A named filter matches on the DECLARATION, so `/state State`
 // shows the global State and every object's State alike.
-static int state_want(csp_rt_t* st, int di,
-		      int f_var, int f_dig, int f_ana, int f_timer,
-		      uint8_t dir_filter, const index_t* named, int nnamed)
+static int state_want(csp_rt_t* st, int i,
+		      uint16_t f_flags, const index_t* named, int nnamed)
 {
-    decl_t t = decl(st, di, type);
-
-    if ((t != DECL_VARIABLE) && (t != DECL_DIGITAL) &&
-	(t != DECL_ANALOG) && (t != DECL_TIMER))
+    decl_t t = decl(st, i, type);
+    uint16_t f_io;
+    
+    if ((t != DECL_VARIABLE) &&
+	(t != DECL_DIGITAL) &&
+	(t != DECL_ANALOG) &&
+	(t != DECL_BUFFER) &&
+	(t != DECL_CAN) &&	
+	(t != DECL_TIMER))
 	return 0;
-    if (decl_name_empty(st, MAKE_INDEX(0, di)))
+    if (decl_name_empty(st, MAKE_INDEX(0, i)))
 	return 0;
     if (nnamed) {
 	int k;
 	for (k = 0; k < nnamed; k++)
-	    if (INDEX(named[k]) == (index_t)di)
+	    if (INDEX(named[k]) == (index_t)i)
 		return 1;
 	return 0;
     }
-    if ((t == DECL_VARIABLE && !f_var) || (t == DECL_DIGITAL && !f_dig) ||
-	(t == DECL_ANALOG && !f_ana)   || (t == DECL_TIMER && !f_timer))
+    if (((t == DECL_VARIABLE) && !(f_flags & F_VARIABLE)) ||
+	((t == DECL_CONSTANT) && !(f_flags & F_CONSTANT)) ||
+	((t == DECL_DIGITAL) && !(f_flags & F_DIGITAL)) ||
+	((t == DECL_ANALOG) && !(f_flags & F_ANALOG))   ||
+	((t == DECL_TIMER) && !(f_flags & F_TIMER)) ||
+	((t == DECL_CAN) && !(f_flags & F_CAN)) ||
+	((t == DECL_BUFFER) && !(f_flags & F_BUFFER)) )
 	return 0;
-    if (dir_filter && ((t == DECL_DIGITAL) || (t == DECL_ANALOG)) &&
-	!(decl(st,di,dir) & dir_filter))
-	return 0;
+    f_io = f_flags & (F_IN|F_OUT);
+    if (f_io) {
+	uint16_t dir = decl(st,i,dir) & f_io;
+	if ((t==DECL_DIGITAL) && !dir)
+	    return 0;
+	if ((t==DECL_ANALOG) && !dir)
+	    return 0;
+	if ((t==DECL_BUFFER) && !dir)
+	    return 0;
+    }
     return 1;
 }
 
@@ -7114,11 +7217,10 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 {
     int i, a;
     int in_module = 0;
-    int f_timer = 0, f_var = 0, f_dig = 0, f_ana = 0, any_cat = 0;
-    uint8_t dir_filter = 0;    // 0 = any dir; else DIR_IN / DIR_OUT mask
     index_t named[MAX_ARGV];   // explicit "show just these" decl filters (OR)
     int nnamed = 0;
-
+    uint16_t f_flags = 0;
+    
     if (!st->started) {   // -b before /resume: no leaves allocated yet
 	csp_print_lit("not started -- /resume to allocate and run\n");
 	return CSP_CMD_OK;
@@ -7128,34 +7230,51 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
     // bare names pick specific decls. `/state digital analog input` == input.
     for (a = 0; a < argc; a++) {
 	const char* w = argv[a];
-	if      (strcmp(w,"all")==0)     { f_timer=f_var=f_dig=f_ana=1; any_cat=1; }
-	else if (strcmp(w,"timers")==0 || strcmp(w,"timer")==0)  { f_timer=1; any_cat=1; }
-	else if (strcmp(w,"var")==0 || strcmp(w,"variables")==0 || strcmp(w,"variable")==0) { f_var=1; any_cat=1; }
-	else if (strcmp(w,"digital")==0) { f_dig=1; any_cat=1; }
-	else if (strcmp(w,"analog")==0)  { f_ana=1; any_cat=1; }
-	else if (strcmp(w,"input")==0  || strcmp(w,"in")==0)  { f_dig=f_ana=1; dir_filter=DIR_IN;  any_cat=1; }
-	else if (strcmp(w,"output")==0 || strcmp(w,"out")==0) { f_dig=f_ana=1; dir_filter=DIR_OUT; any_cat=1; }
-	else {
+	int i = 0;
+	
+	while(i < (sizeof(filt_table)/sizeof(filt_table[0]))) {
+	    if (ro_strcmp(w, filt_table[i].key) == 0) {
+		f_flags |= filt_table[i].flags;
+		break;
+	    }
+	    i++;
+	}
+	if (f_flags == 0) {
 	    const tstr_t sn = { (char*)w, strlen(w) };
 	    index_t ix = csp_lookup_decl(st, &sn);
 	    if ((ix != BAD_INDEX) && (nnamed < MAX_ARGV))
 		named[nnamed++] = ix;
 	    else {
-		csp_print_lit("unknown: "); csp_print_str(w); csp_print_char('\n');
+		csp_print_lit("unknown: ");
+		csp_print_str(w);
+		csp_print_char('\n');
 	    }
 	}
     }
-    if (!any_cat && !nnamed)            // bare /state -> show everything
-	f_timer = f_var = f_dig = f_ana = 1;
+    DBG("f_flags = 0x%04x\n", f_flags);
+    if ((f_flags & F_IN) && !(f_flags & (F_DIGITAL|F_ANALOG|F_BUFFER)))
+	f_flags |= (F_DIGITAL|F_ANALOG|F_BUFFER);
+    if ((f_flags & F_OUT) && !(f_flags & (F_DIGITAL|F_ANALOG|F_BUFFER)))
+	f_flags |= (F_DIGITAL|F_ANALOG|F_BUFFER);    
+    if (!nnamed && !(f_flags & F_ANY_CAT)) // bare /state -> show everything
+	f_flags = F_ALL;
 
     // Status line -- the germ of a future terminal status bar. mode is one of
     // three mutually exclusive run states (paused and live can't both be on).
     csp_print_lit("cycle ");
     csp_print_uint(st->cycle);
     csp_print_lit("   latch ");
-    csp_print_str(st->latch ? "on" : "off");
+    if (st->latch)
+	csp_print_lit("on");
+    else
+	csp_print_lit("off");
     csp_print_lit("   ");
-    csp_print_str(st->paused ? "paused" : st->live ? "live" : "running");
+    if (st->paused)
+	csp_print_lit("paused");
+    else if (st->live)
+	csp_print_lit("live");
+    else
+	csp_print_lit("running");
     csp_print_lit("\n\n");
 
     // Two passes so object INSTANCES actually appear: the globals, then each
@@ -7168,8 +7287,7 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 	if (t == DECL_MODULE) { in_module = 1; continue; }
 	if (t == DECL_END)    { in_module = 0; continue; }
 	if (in_module)        continue;   // template fields belong to the objects
-	if (!state_want(st, i, f_var, f_dig, f_ana, f_timer, dir_filter,
-			named, nnamed))
+	if (!state_want(st, i, f_flags, named, nnamed))
 	    continue;
 	state_row(st, MAKE_INDEX(0, i), i);
     }
@@ -7186,8 +7304,7 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 	for (j = 0; j < dn; j++) {
 	    int dj = base + j;
 	    decl_t t = decl(st, dj, type);
-	    if (state_want(st, dj, f_var, f_dig, f_ana, f_timer, dir_filter,
-			   named, nnamed)) {
+	    if (state_want(st, dj, f_flags, named, nnamed)) {
 		if (!shown) {           // header only once, and only if non-empty
 		    csp_println();
 		    csp_print_char('#');
@@ -7295,21 +7412,21 @@ static void mem_int_r(int v, int w)
     csp_print_int(v);
 }
 
-static void mem_name(const char* name)
+static void mem_roname(rostring_t name)
 {
     int len = 0;
     csp_print_lit("  ");
-    csp_print_str(name);
-    while (name[len]) len++;
+    csp_print_rostr(name);
+    len = ro_strlen(name);
     while (len++ < 9) csp_print_char(' ');
 }
 
 // One /memory row: NAME  used  limit [ pct ]. `limit` < 0 means there is no
 // ceiling -- the row is sized to whatever the program needs -- and prints "-".
 // pct is only meaningful against a real limit.
-static void mem_row(const char* name, uint32_t used, int32_t limit, int show_pct)
+static void mem_row(rostring_t name, uint32_t used, int32_t limit, int show_pct)
 {
-    mem_name(name);
+    mem_roname(name);
     mem_int_r((int)used, 8);
     if (limit < 0) {
 	int k;
@@ -7328,9 +7445,9 @@ static void mem_row(const char* name, uint32_t used, int32_t limit, int show_pct
 // alignment padding included -- no need to re-add up the individual tables and
 // hope the sum tracks what was actually allocated.
 // A flat "name  value" row for the RAM breakdown (no ceiling, no percent).
-static void mem_val(const char* name, uint32_t v)
+static void mem_val(rostring_t name, uint32_t v)
 {
-    mem_name(name);
+    mem_roname(name);
     mem_int_r((int)v, 8);
     csp_println();
 }
@@ -7381,30 +7498,34 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 	csp_print_lit("RAM ");
 	csp_print_uint((uvalue_t)cap);
 	csp_print_lit(" total:\n");
-	mem_val("system",  sys);
-	mem_val("struct",  model_state());
-	mem_name("buffers"); mem_int_r((int)buffers, 8);
+	mem_val(ros_system,  sys);
+	mem_val(ros_struct,  model_state());
+	mem_roname(ros_buffers); mem_int_r((int)buffers, 8);
 	if (!st->started) csp_print_lit("   (allocated on /resume)");
 	csp_println();
-	mem_val("stack",   CSP_STACK_RESERVE);
-	mem_val("code",    (uint32_t)used);
-	mem_val("free",    freeram);
+	mem_val(ros_stack,   CSP_STACK_RESERVE);
+	mem_val(ros_code,    (uint32_t)used);
+	mem_val(ros_free,    freeram);
     }
 
     {
 	uint32_t cap  = csp_eeprom_capacity();
 	uint32_t need = (uint32_t)csp_eeprom_size(st);
+	csp_print_lit("   ");
 	if (cap == CSP_EEPROM_NONE) {
-	    mem_row("EEPROM", need, 0, 0);
-	    csp_print_lit("   (NONE)");
+	    mem_row(ros_EEPROM, need, 0, 0);
+	    csp_print_lit("(NONE)");
 	}
 	else if (cap == CSP_EEPROM_UNBOUNDED) {
-	    mem_row("EEPROM", need, -1, 0);
-	    csp_print_lit("   (OK)");
+	    mem_row(ros_EEPROM, need, -1, 0);
+	    csp_print_lit("(OK)");
 	}
 	else {
-	    mem_row("EEPROM", need, (int32_t)cap, 1);
-	    csp_print_str((need > cap) ? "  (FULL)" : "  (OK)");
+	    mem_row(ros_EEPROM, need, (int32_t)cap, 1);
+	    if (need > cap)
+		csp_print_lit("(FULL)");
+	    else
+		csp_print_lit("(OK)");
 	}
 	csp_println();
     }
@@ -7418,16 +7539,16 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
     }
 
     csp_println();
-    mem_row("instr",   st->ps.nn   - st->rom_nn,   MAX_INSTRS, 0);   csp_println();
-    mem_row("decl",    st->ps.nd   - st->rom_nd,   MAX_DECLS,  0);   csp_println();
-    mem_row("string",  st->ps.strp - st->rom_strp, MAX_STR_BUF, 0);  csp_println();
-    mem_row("objects", st->ps.nq,  MAX_OBJECTS, 0);                  csp_println();
-    mem_row("modules", st->nm,     MAX_MODULES, 0);                  csp_println();
-    mem_row("states",  st->ps.ns,  MAX_STATES,  0);                  csp_println();
-    mem_row("in",      st->ni,   -1, 0);                             csp_println();
-    mem_row("out",     st->no,   -1, 0);                             csp_println();
-    mem_row("timers",  st->nt,   -1, 0);                             csp_println();
-    mem_row("buffers", st->nbuf, -1, 0);                             csp_println();
+    mem_row(ros_instr,   st->ps.nn   - st->rom_nn,   MAX_INSTRS, 0);   csp_println();
+    mem_row(ros_decl,    st->ps.nd   - st->rom_nd,   MAX_DECLS,  0);   csp_println();
+    mem_row(ros_string,  st->ps.strp - st->rom_strp, MAX_STR_BUF, 0);  csp_println();
+    mem_row(ros_objects, st->ps.nq,  MAX_OBJECTS, 0);                  csp_println();
+    mem_row(ros_modules, st->nm,     MAX_MODULES, 0);                  csp_println();
+    mem_row(ros_states,  st->ps.ns,  MAX_STATES,  0);                  csp_println();
+    mem_row(ros_in,      st->ni,   -1, 0);                             csp_println();
+    mem_row(ros_out,     st->no,   -1, 0);                             csp_println();
+    mem_row(ros_timers,  st->nt,   -1, 0);                             csp_println();
+    mem_row(ros_buffers, st->nbuf, -1, 0);                             csp_println();
     return CSP_CMD_OK;
 }
 

@@ -645,7 +645,7 @@ next:
     case P_TOK: {
 	// Match specific token
 	uint8_t tok = pat[pi++];
-	DBG("%sP_TOK: (%d) tok='%s'\n", indent(l), ti, tok_table[tok].name);
+	DBG("%sP_TOK: (%d) tok='%s'\n",indent(l),ti,(char*)tok_table[tok].name);
 	if ((ti >= (int)n) || (tv[ti].t != tok))
 	    return -1;
 	ti++;
@@ -657,8 +657,8 @@ next:
 	uint8_t val_off = pat[pi++];
 	int off = pst->eo + val_off;
 
-	DBG("%sP_TOK_W: (%d) tok='%s' val_off=%d off=%d\n", indent(l), ti,
-	    tok_table[tok].name, val_off, off);
+	DBG("%sP_TOK_W: (%d) tok='%s' val_off=%d off=%d\n",
+	    indent(l), ti, (char*)tok_table[tok].name, val_off, off);
 	if ((ti >= (int)n) || (tv[ti].t != tok))
 	    return -1;
 	store_int(pst->data, off, tok);

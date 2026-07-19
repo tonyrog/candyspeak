@@ -3,6 +3,7 @@
  */
 
 #include "csp_print.h"
+#include "csp_strings.h"
 
 #define MAX_STRPTRS 64
 #define MAX_BODY 16
@@ -132,10 +133,14 @@ static void exprbuf_str(csp_exprbuf_t* bp, const char *s)
 
 // append a nul-terminated RODATA string (operator/keyword names live in flash);
 // AVR-PROGMEM-safe. On the host ro_byte==plain so it matches exprbuf_str.
-static void exprbuf_ro_str(csp_exprbuf_t* bp, const char *s)
+static void exprbuf_rostr(csp_exprbuf_t* bp, rostring_t s)
 {
     uint8_t c;
-    while ((c = ro_byte((const uint8_t*)s)) != 0) { exprbuf_char(bp, c); s++; }
+    const uint8_t* sp = (const uint8_t*) s;
+    while ((c = ro_byte(sp)) != 0) {
+	exprbuf_char(bp, c);
+	sp++;
+    }
 }
 
 // append the length-prefixed string at a logical position (ROM flash or RAM);
@@ -252,12 +257,12 @@ static void exprbuf_xint16(csp_exprbuf_t* bp, int16_t v)
 
 static void exprbuf_alu(csp_exprbuf_t* bp,
 			csp_instr_t* ip,
-			const char *op,
+			rostring_t op,
 			int arity, int prio)
 {
     uint8_t* start = exprbuf_ptr(bp);
     if (arity == 1) {
-	exprbuf_ro_str(bp, op);
+	exprbuf_rostr(bp, op);
 	exprbuf_wrap(bp, ip->a.y, prio);
     }
     else { // assume 2
@@ -280,7 +285,7 @@ static void exprbuf_alu(csp_exprbuf_t* bp,
 	    return;
 	}
 	exprbuf_wrap(bp, ip->a.y, prio);
-	exprbuf_ro_str(bp, op);
+	exprbuf_rostr(bp, op);
 	exprbuf_wrap(bp, ip->a.z, prio);
     }
     bp->reg[ip->a.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
@@ -363,21 +368,24 @@ static void exprbuf_fcall(csp_rt_t* st,
 }
 
 // Name of a config part (<var>.<part>), for disassembly only.
-static const char* part_name(csp_part_t part)
+static rostring_t part_name(csp_part_t part)
 {
     switch (part) {
-    case PART_PIN:      return "pin";
-    case PART_PORT:     return "port";
-    case PART_DIR:      return "dir";
-    case PART_PWM:      return "pwm";
-    case PART_ENDIAN:   return "endian";
-    case PART_PULLUP:   return "pullup";
-    case PART_PULLDOWN: return "pulldown";
-    case PART_PERIOD:   return "period";
-    case PART_FIRED:    return "fired";
-    case PART_ID:       return "id";
+    case PART_PIN:      return ros_pin;
+    case PART_PORT:     return ros_port;
+    case PART_DIR:      return ros_dir;
+    case PART_PWM:      return ros_pwm;
+    case PART_ENDIAN:   return ros_endian;
+    case PART_PULLUP:   return ros_pullup;
+    case PART_PULLDOWN: return ros_pulldown;
+    case PART_PERIOD:   return ros_period;
+    case PART_FIRED:    return ros_fired;
+    case PART_ID:       return ros_id;
+    case PART_RX:       return ros_rx;
+    case PART_TX:       return ros_tx;
+    case PART_DLC:      return ros_dlc;		
     case PART_VAL:
-    default:            return "value";
+    default:            return ros_value;
     }
 }
 
@@ -444,7 +452,7 @@ static void exprbuf_store_part(csp_rt_t* st,
     start = exprbuf_ptr(bp);
     exprbuf_strref(bp, var);
     exprbuf_char(bp, '.');
-    exprbuf_str(bp, part_name((csp_part_t)ip->m.y));
+    exprbuf_rostr(bp, part_name((csp_part_t)ip->m.y));
     exprbuf_char(bp, '=');
     exprbuf_strref(bp, bp->reg[ip->m.x]);
 
@@ -497,7 +505,7 @@ static void exprbuf_ld_part(csp_rt_t* st,
     start = exprbuf_ptr(bp);
     exprbuf_strref(bp, var);
     exprbuf_char(bp, '.');
-    exprbuf_str(bp, part_name((csp_part_t)ip->m.y));
+    exprbuf_rostr(bp, part_name((csp_part_t)ip->m.y));
     bp->reg[ip->m.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
     bp->prio[ip->m.x] = 110;
 }
@@ -695,7 +703,7 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	default:
 	    t = ro_byte(&op_info[ip->op].tok);
 	    if ((int8_t)ro_byte(&tok_table[t].arity) >= 0) {
-		exprbuf_alu(bp, ip, (const char*)ro_ptr(&tok_table[t].name),
+		exprbuf_alu(bp, ip, (rostring_t)ro_ptr(&tok_table[t].name),
 			    (int8_t)ro_byte(&tok_table[t].arity),
 			    (int8_t)ro_byte(&tok_table[t].prec));
 	    }

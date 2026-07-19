@@ -206,3 +206,26 @@ OMOV MOV
 OCOMMA COMMA
 RAM RAM
 ROM ROM
+EEPROM EEPROM
+all all
+timers timers
+var
+variables variables
+input input
+output output
+running running
+stopped stopped
+state state
+instr instr
+decl decl
+objects objects
+modules modules
+buffers buffers
+bind bind
+system system
+struct struct
+stack stack
+code code
+free free
+err_cannot_save cannot save eeprom
+err_cannot_load cannot load from eeprom

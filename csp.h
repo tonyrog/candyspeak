@@ -81,33 +81,21 @@ typedef unsigned bool_t;
 #define DECL_BITS    11
 #define INSTR_BITS   11
 
-typedef const char rochar;  // PROGMEM string character type
-typedef const struct rochar* rostring_t;
+typedef const char rochar;                // PROGMEM string character type
+typedef const struct rostr* rostring_t;  // PROGMEM string object type
 
 // strlen for a string that may live in flash. Walking one with s[n] reads the
 // wrong address space on AVR, and the plain `const char*` a helper takes hides
 // that from the compiler -- so anything holding a rochar* uses this.
-static inline int ro_strlen(rostring_t s)
-{
-    int n = 0;
-    if (s) while (ro_byte((const uint8_t*)s + n)) n++;
-    return n;
-}
+extern int ro_strlen(rostring_t s);
+
 
 // strncmp against a flash string. NOT ro_memcmp: memcmp compares all n bytes
 // even when the flash entry is shorter, reading past its end -- comparing
 // "listing" (7) against "list" (4) walks 3 bytes off the array.
-static inline int ro_strncmp(const char* a, rostring_t b, int n)
-{
-    int i;
-    for (i = 0; i < n; i++) {
-	uint8_t cb = ro_byte((const uint8_t*)b + i);
-	uint8_t ca = (uint8_t)a[i];
-	if (ca != cb) return (int)ca - (int)cb;
-	if (cb == 0) return 0;          // both ended here
-    }
-    return 0;
-}
+extern int ro_strncmp(const char* a, rostring_t b, int n);
+
+extern int ro_strcmp(const char* a, rostring_t b);
 
 // A .ino compiles this header as C++, where _Static_assert is only an extension
 // (the SAMD toolchain accepts it, the older AVR one rejects it outright).

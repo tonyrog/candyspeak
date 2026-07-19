@@ -37,6 +37,7 @@
 #define CSP_EMBEDDED 1
 #include "csp.h"
 #include "csp_print.h"
+#include "csp_strings.h"
 
 #if defined(__AVR__)
 #define INPUT_PULLDOWN INPUT
@@ -173,15 +174,15 @@ int csp_print_str(const char* s)
 }
 
 #if defined(__AVR__)
-int csp_print_rostr(const rochar* s)
+int csp_print_rostr(rostring_t s)
 {
     if (serial_output)    
 	return Serial.print((__FlashStringHelper*)s);
     // fixme number of strlen_P(s);
-    return strlen_P(s);
+    return strlen_P((const char*)s);
 }
 #else
-int csp_print_rostr(const rochar* s)
+int csp_print_rostr(rostring_t s)
 {
     return csp_print_str((const char*) s);
 }
@@ -491,7 +492,7 @@ int csp_can_init(csp_rt_t* st)
 {
     (void)st;
     if (!CAN.begin(CSP_CAN_BITRATE)) {
-	csp_print_str("can: init failed\n");
+	csp_print_lit("can: init failed\n");
 	return -1;
     }
     return 0;
@@ -789,13 +790,15 @@ int csp_eeprom_write(const void* buf, size_t len)
 
 void serial_print_ok(void)
 {
-    Serial.println(F("OK"));
+    csp_print_lit("OK");
+    csp_println();
 }
 
-void serial_print_error(const char* msg)
+void serial_print_error(rostring_t msg)
 {
-    Serial.print("ERROR: ");
-    Serial.println(msg);
+    csp_print_lit("ERROR: ");
+    csp_print_rostr(msg);
+    csp_println();
 }
 
 // Platform-specific command implementations
@@ -804,7 +807,7 @@ int csp_cmd_save(csp_rt_t* st, int argc, char* argv[])
     (void)argc;
     (void)argv;
     if (csp_eeprom_save(st) < 0) {
-	serial_print_error("cannot save eeprom");
+	serial_print_error(ros_err_cannot_save);
 	return CSP_CMD_ERROR;
     }
     serial_print_ok();
@@ -816,7 +819,7 @@ int csp_cmd_load(csp_rt_t* st, int argc, char* argv[])
     (void)argc;
     (void)argv;
     if (csp_eeprom_load(st) < 0) {
-	serial_print_error("cannot load from eeprom");
+	serial_print_error(ros_err_cannot_load);
 	return CSP_CMD_ERROR;
     }
     csp_setup(st);
