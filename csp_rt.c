@@ -110,6 +110,8 @@ const op_entry_t tok_table[] RODATA = {
     TOK_ENT(LITTLE,OP_NOP,s_little),
     TOK_ENT(BIG,OP_NOP,s_big),
     TOK_ENT(T_CAN,OP_NOP,s_can),   // shares the #can keyword's string
+    TOK_ENT(T_DISABLE,OP_NOP,s_disable),
+    TOK_ENT(T_ENABLE,OP_NOP,s_enable),
 
     TOK_ENT(LP,OP_NOP,s_LP),
     TOK_ENT(RP,OP_NOP,s_RP),
@@ -518,6 +520,8 @@ static rostring_t csp_format_error(csp_err_t err)
     case ERR_INTERNAL_ERROR:      return ros_err_internal;
     case ERR_FUNCTION_ARGUMENT_TYPE_MISMATCH: return ros_err_arg_mismatch;
     case ERR_NAME_TOO_LONG:       return ros_err_name_long;
+    case ERR_BAD_RULE_RANGE:      return ros_err_rule_range;
+    case ERR_NO_SUCH_RULE:        return ros_err_no_rule;
     default:                      return ros_err_unknown;
     }
 }
@@ -1679,7 +1683,6 @@ int csp_eval_rule(csp_rt_t* st, int n)
 #if defined(USE_STATISTICS) && (USE_STATISTICS==1)
     st->num_eval_rule++;
 #endif
-
 again:
     if (n >= (int)st->ps.nn)   // never walk past the last instruction into garbage
 	return n;
@@ -1738,7 +1741,14 @@ again:
 	st->arg[instr(st,n,i.imm)] = st->reg[instr(st,n,i.x)];
 	break;
     case OP_RULE:
-	if (st->reg[instr(st,n,r.cnd)].i)
+	// #disable. Keyed by the OP_RULE's OWN ip: it is the one instruction
+	// every rule has exactly one of, and both dispatch paths run through it
+	// (csp_react enters at rule_ip[ord], which is the condition, and falls
+	// into the OP_RULE that closes it). The r.nxt jump that skips a
+	// false-guard body is exactly the skip a disabled rule needs, so
+	// disabling costs nothing but the test.
+	if (((st->dis_ip == NULL) || !bitset_tst(st->dis_ip, n)) &&
+	    st->reg[instr(st,n,r.cnd)].i)
 	    n = n+1;
 	else
 	    n = n+instr(st,n,r.nxt);  // relative jump
@@ -5433,6 +5443,69 @@ NOINLINE index_t make_buf_view(csp_rt_t* st, index_t parent,
     return ix;
 }
 
+// '#' ('disable'|'enable') <rule-range>
+//   <rule-range> = <item> (WS <item>)*,  <item> = N | N '-' M
+//
+// Emits NO instructions: this edits the disable set, it is not part of the
+// program. Numbers are stored as typed and only resolved to instruction
+// addresses in build_dis_ip, so an edit that renumbers re-resolves on its own.
+//
+// A number past the last rule is an ERROR, not a note: naming a rule that does
+// not exist is far more often a typo than intent. That does mean `#disable 5`
+// cannot sit ABOVE the rules in a source file -- which is fine, since counting
+// rules that come later is awkward and the line reads better after them.
+//
+// A RANGE is different: `1-40` on a six-rule program is a sweep, not a claim
+// about rule 40, so the top end is clamped and only a range that starts past
+// the end is rejected.
+//
+// The scanner has already turned "1-3" into INT MINUS INT, which is why this
+// reads tokens rather than the raw text.
+NOINLINE static int csp_parse_disable(csp_rt_t* st, token_t* tv, int ti,
+				      size_t n, int off)
+{
+    int i = ti;
+    int nr = (int)csp_n_rules(st);   // current, not the last rebuild's count
+    int cap = (nr < MAX_DIS_RULES) ? nr : MAX_DIS_RULES;
+
+    if ((int)n <= ti) {                       // bare "#disable": nothing to do
+	csp_set_error(st, ERR_SYNTAX);
+	return -1;
+    }
+    while ((i < (int)n) && (tv[i].t != NEWLINE)) {
+	int lo, hi, k;
+	if (tv[i].t != INT) {
+	    csp_set_error(st, ERR_SYNTAX);
+	    return -1;
+	}
+	lo = hi = (int)tv[i].v.val.i;
+	i++;
+	if ((i+1 < (int)n) && (tv[i].t == MINUS) && (tv[i+1].t == INT)) {
+	    hi = (int)tv[i+1].v.val.i;
+	    i += 2;
+	}
+	if ((lo < 1) || (hi < lo)) {
+	    csp_set_error(st, ERR_BAD_RULE_RANGE);
+	    csp_set_err_arg_int(st, 0, MAX_DIS_RULES);
+	    return -1;
+	}
+	if (lo > cap) {              // the whole item is past the last rule
+	    csp_set_error(st, ERR_NO_SUCH_RULE);
+	    csp_set_err_arg_int(st, 0, lo);
+	    csp_set_err_arg_int(st, 1, nr);
+	    return -1;
+	}
+	if (hi > cap)
+	    hi = cap;                // range overshoot: sweep to the end
+	for (k = lo; k <= hi; k++) {
+	    if (off) bitset_set(st->dis_rule, k-1);
+	    else     bitset_clr(st->dis_rule, k-1);
+	}
+    }
+    st->edited = 1;      // csp_cycle rebuilds, which re-derives dis_ip
+    return 0;
+}
+
 // '>' command
 NOINLINE int csp_parse_immediate(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
@@ -5531,6 +5604,12 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 	// not arrive here as a WORD -- same reason #in needs its own branch.
 	else if ((tv[0].t == HASH) && (tv[1].t == T_CAN)) {
 	    r = csp_parse_can(st, tv, 2, num);
+	}
+	// Same reason: reserved tokens, so they never reach the WORD branch and
+	// get mistaken for a module instantiation.
+	else if ((tv[0].t == HASH) &&
+		 ((tv[1].t == T_DISABLE) || (tv[1].t == T_ENABLE))) {
+	    r = csp_parse_disable(st, tv, 2, num, (tv[1].t == T_DISABLE));
 	}
 	else if ((tv[0].t == HASH) && (tv[1].t == WORD)) {
 	    int i;
@@ -6277,6 +6356,64 @@ void csp_estimate(csp_rt_t* st, csp_estimate_t* e)
 // One entry point keeps the region consistent, and it also means a declaration
 // added at the prompt rewires the graph (running rt_start alone left the new
 // decl above graph_n, i.e. with no edges, so it never fired reactively).
+// Walk the instruction stream and, for every rule whose NUMBER is in dis_rule,
+// set the bit for that rule's OP_RULE ip in dis_ip. Also refreshes n_rule_no.
+//
+// Rule N is the Nth OP_RULE in instruction order, 1-based. Every rule emits
+// exactly one -- an unguarded rule gets an always-true LI first -- so the
+// sequence has no holes. Note this is NOT the reactive ordinal from
+// number_rules, which also numbers module entries and range-base bodies.
+//
+// Keying on the OP_RULE rather than on the rule's first instruction is
+// deliberate. A rule's start can only be inferred statically, and the set of
+// instructions that end a csp_eval_rule call is larger than it looks
+// (OP_NEXT, OP_ENTER, OP_NEW, OP_LEAVE, and OP_INSTATE when it skips a block).
+// Getting that list wrong put a disable bit on an OP_LEAVE, whose skip then
+// swallowed the matching pops and ran the object stack off its end. The
+// OP_RULE ip needs no inference: it is right here in the walk.
+NOINLINE index_t csp_n_rules(csp_rt_t* st)
+{
+    index_t i, no = 0;
+    for (i = 0; i < st->ps.nn; i++) {
+	if (instr(st, i, op) == OP_RULE)
+	    no++;
+    }
+    return no;
+}
+
+NOINLINE static void build_dis_ip(csp_rt_t* st)
+{
+    index_t i;
+    int no = 0;
+    int any = 0;
+
+    st->dis_ip = NULL;
+    st->n_rule_no = 0;
+    if (st->ps.nn == 0)
+	return;
+    for (i = 0; i < BITSET_GROUPS(MAX_DIS_RULES); i++)
+	any |= (st->dis_rule[i] != 0);
+
+    for (i = 0; i < st->ps.nn; i++) {
+	if (instr(st, i, op) != OP_RULE)
+	    continue;
+	no++;
+	// Allocate lazily: a program with nothing disabled never pays for the
+	// table, and a failed allocation leaves dis_ip NULL (nothing is
+	// skipped) rather than silently skipping the wrong rules.
+	if (any && (no <= MAX_DIS_RULES) && bitset_tst(st->dis_rule, no-1)) {
+	    if (st->dis_ip == NULL) {
+		st->dis_ip = (set_group_t*)csp_mid_alloc(st,
+			      (size_t)BITSET_GROUPS(st->ps.nn) * sizeof(set_group_t));
+		if (st->dis_ip == NULL)
+		    return;
+	    }
+	    bitset_set(st->dis_ip, i);
+	}
+    }
+    st->n_rule_no = (index_t)no;
+}
+
 int csp_rebuild(csp_rt_t* st)
 {
     csp_mid_reset(st);          // forget the old layout; everything below re-bumps
@@ -6284,6 +6421,7 @@ int csp_rebuild(csp_rt_t* st)
     if (st->reactive)
 	csp_csr(st);
 #endif
+    build_dis_ip(st);           // rule numbers -> start ips, after mid_reset
     // Everything emitted so far is now covered: clear both staleness signals.
     st->graph_rules = st->n_rule_emit;
     st->edited = 0;
@@ -6666,6 +6804,38 @@ static int is_fvar(index_t ix, int cnd, filter_var_t* fv, int nf)
     return (lookup_filter(ix, cnd, fv, nf) >= 0);
 }
 
+// The leading column of a /list line: "%3d R  " for a rule, "    R  " for a
+// declaration (nothing to number). Same width either way, so the two kinds line
+// up. Pass no <= 0 for the blank form. A disabled rule gets '!' in place of the
+// trailing space, so the mark sits in its own column and nothing shifts.
+//
+// The NUMBER is 1-based and counts OP_RULE in instruction order. Every rule
+// emits one -- an unguarded rule gets an always-true LI first (see the cnd < 0
+// branch in asm_rule) -- so the sequence has no holes and matches what a user
+// counts on screen. Deliberately NOT the reactive ordinal from number_rules,
+// which also numbers module entries and the implicit body at each range base.
+//
+// The SEGMENT comes from the OP_RULE's own ip, not from the body start. The
+// body start is only reset at OP_NEXT/ENTER/LEAVE, so if the ROM range does not
+// happen to end on one, it stays below rom_nn while the walk has already moved
+// into RAM -- which is what tagged RAM rules as [ROM].
+//
+// R = RAM (editable), F = flash/ROM (baked in, survives a reset).
+static void list_column(int no, int is_rom, int off)
+{
+    if (no <= 0)
+	csp_print_lit("   ");
+    else {
+	if (no < 100) csp_print_char(' ');
+	if (no < 10)  csp_print_char(' ');
+	csp_print_uint(no);
+    }
+    csp_print_char(' ');
+    csp_print_char(is_rom ? 'F' : 'R');
+    csp_print_char(off ? '!' : ' ');
+    csp_print_char(' ');
+}
+
 // find a #module declaration by name (for /list <Module> scoping)
 static index_t find_module(csp_rt_t* st, const char* name)
 {
@@ -6729,6 +6899,8 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
     uint32_t fbits;  // currently present variables / states (by filter index)
     int cnd;         // in condition part
     int rule;        // rule start index (in condition part)
+    int rule_pos;    // ip of this body's OP_RULE, -1 if it has none
+    int rule_no;     // user-facing rule number, 1-based (see rule_column)
     const char* name;
     sindex_t cur_mod = 0;        // module name pos being listed (0 = global)
     sindex_t npos;               // current decl's name position
@@ -6779,12 +6951,11 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
      for (i = 0; i < st->ps.nd; i++) {
 	 index_t ix = MAKE_INDEX(0, i);
 	 decl_t t = decl(st,i,type);
-	 rostring_t seg = (i < st->rom_nd) ? ros_ROM : ros_RAM;
+	 int is_rom = (i < st->rom_nd);
 	 if (t == DECL_MODULE) {
 	     cur_mod = decl(st, i, name);
 	     if (!scope) {
-		 csp_print_char('['); csp_print_rostr(seg); csp_print_char(']');
-		 csp_print_char(' ');
+		 list_column(0, is_rom, 0);
 		 print_decl(DECL_MODULE);
 		 csp_print_str_at(st, cur_mod);
 		 csp_print_char('\n');
@@ -6793,8 +6964,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	 }
 	if (t == DECL_END) {         // module end or top-level terminator
 	    if (cur_mod) {
-		csp_print_char('['); csp_print_rostr(seg); csp_print_char(']');
-		csp_print_char(' ');	    
+		list_column(0, is_rom, 0);
 		print_decl(DECL_END);
 		csp_print_char('\n');	    
 		cur_mod = 0;
@@ -6810,8 +6980,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    continue;                // no / empty name
 	if (nf && !is_fvar(ix, 2, filt, nf))
 	    continue;
-	csp_print_char('['); csp_print_rostr(seg); csp_print_char(']');
-	csp_print_char(' ');
+	list_column(0, is_rom, 0);
 	if (cur_mod) {
 	    csp_print_char(' '); csp_print_char(' ');
 	}
@@ -6937,12 +7106,14 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	}
     }
 
-    // now list all rules that match the filter. Each rule is tagged [ROM]/[RAM]
-    // by its start index vs the ROM boundary; OP_ENTER/OP_LEAVE track the module
-    // a rule belongs to (module bodies are inline but skipped during linear eval).
+    // now list all rules that match the filter. OP_ENTER/OP_LEAVE track the
+    // module a rule belongs to (module bodies are inline but skipped during
+    // linear eval). Segment and number come from the OP_RULE -- see rule_column.
     rule = 0;  // condition index
     i  = rule;
     cnd = 1;
+    rule_pos = -1;
+    rule_no = 0;
     fbits = 0;
     cur_mod = 0;
     while(i < st->ps.nn) {
@@ -6955,7 +7126,8 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    cur_mod = 0;
 	    i++; rule = i;
 	    break;
-	case OP_RULE: cnd=0; i++;
+	case OP_RULE:
+	    cnd=0; rule_pos = i; rule_no++; i++;
 	    break;
 	case OP_NEXT:
 	    cnd=1; i++;
@@ -6969,14 +7141,10 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 		    || (cmask==0 && bmask==0);
 		if (scope && !(cur_mod && csp_str_eq(st, cur_mod, scope, strlen(scope))))
 		    show = 0;
-		if (show) {
-		    csp_print_char('[');
-		    if (rule < st->rom_nn)
-			csp_print_rostr(ros_ROM);
-		    else
-			csp_print_rostr(ros_RAM);
-		    csp_print_char(']');
-		    csp_print_char(' ');
+		if (show && (rule_pos >= 0)) {
+		    list_column(rule_no, rule_pos < (int)st->rom_nn,
+				(rule_no <= MAX_DIS_RULES) &&
+				bitset_tst(st->dis_rule, rule_no-1));
 		    if (cur_mod) {
 			csp_print_str_at(st, cur_mod);
 			csp_print_lit(": ");
@@ -6986,6 +7154,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    }
 	    fbits = 0;
 	    rule = i;  // start new rule
+	    rule_pos = -1;
 	    break;
 	case OP_LD:
 	case OP_LDP:
@@ -7431,9 +7600,20 @@ static int cmd_resume(csp_rt_t* st, int argc, char* argv[])
 // (RAM-added #states are not yet unwound -- see doc/ROM_RAM.md section 4.)
 static int cmd_clear(csp_rt_t* st, int argc, char* argv[])
 {
+    index_t rom_rules;
+
     (void)argc; (void)argv;
-    st->ps.nd   = st->rom_nd;
+    // Drop the disable bits of the rules that are about to disappear, or a rule
+    // added later inherits a disable it never asked for. ROM rules keep theirs:
+    // they are numbered 1..rom_rules and survive the clear.
     st->ps.nn   = st->rom_nn;
+    rom_rules = csp_n_rules(st);
+    // bitset_clr expands its index twice -- no side effects in the argument.
+    while (rom_rules < MAX_DIS_RULES) {
+	bitset_clr(st->dis_rule, rom_rules);
+	rom_rules++;
+    }
+    st->ps.nd   = st->rom_nd;
     st->ps.strp = st->rom_strp;
     st->ps.nq   = 0;
     csp_rebuild(st);

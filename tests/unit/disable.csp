@@ -1,0 +1,20 @@
+// #disable / #enable. The disable set is keyed by rule NUMBER (1-based, one per
+// OP_RULE in instruction order) but checked against the rule's FIRST
+// instruction, which is what both the sequential loop and csp_react enter
+// csp_eval_rule with -- so one test covers both dispatch paths, and this file
+// runs in BOTH modes to prove they agree.
+//
+// Rules 1 and 2 are seeded <- bindings: without the seed neither would ever
+// fire (Y never changes), so a rule that runs at all is visible as a non-zero
+// result. Rule 3 is disabled and then re-enabled, so it must still run.
+#variable Y integer = 7
+#variable X integer = 0
+#variable Z integer = 0
+#variable W integer = 0
+
+X <- Y + 1
+Z <- Y + 2
+W <- Y + 3
+
+#disable 2-3
+#enable 3

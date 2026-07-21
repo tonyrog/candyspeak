@@ -9,6 +9,8 @@ analog analog
 timer timer
 can can
 buffer buffer
+disable disable
+enable enable
 object object
 EXCLAMATION !
 TILDE ~
@@ -87,6 +89,8 @@ err_defined %s %s is already defined
 err_internal internal error
 err_arg_mismatch function %s/%d argument %d type mismatch
 err_name_long identifier name too long %d, max %d
+err_rule_range bad rule range, rules are numbered 1..%d
+err_no_rule no rule %d, the program has %d
 err_unknown unknown error
 # REPL command names and help texts. Only the TEXT moves to flash -- the table
 # itself keeps its function pointers and stays in RAM, because ro_ptr is a

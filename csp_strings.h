@@ -25,6 +25,10 @@ extern rochar s_can[4] RODATA;
 #define ros_can ((rostring_t) s_can)
 extern rochar s_buffer[7] RODATA;
 #define ros_buffer ((rostring_t) s_buffer)
+extern rochar s_disable[8] RODATA;
+#define ros_disable ((rostring_t) s_disable)
+extern rochar s_enable[7] RODATA;
+#define ros_enable ((rostring_t) s_enable)
 extern rochar s_object[7] RODATA;
 #define ros_object ((rostring_t) s_object)
 extern rochar s_EXCLAMATION[2] RODATA;
@@ -175,6 +179,10 @@ extern rochar s_err_arg_mismatch[41] RODATA;
 #define ros_err_arg_mismatch ((rostring_t) s_err_arg_mismatch)
 extern rochar s_err_name_long[36] RODATA;
 #define ros_err_name_long ((rostring_t) s_err_name_long)
+extern rochar s_err_rule_range[41] RODATA;
+#define ros_err_rule_range ((rostring_t) s_err_rule_range)
+extern rochar s_err_no_rule[31] RODATA;
+#define ros_err_no_rule ((rostring_t) s_err_no_rule)
 extern rochar s_err_unknown[14] RODATA;
 #define ros_err_unknown ((rostring_t) s_err_unknown)
 extern rochar s_cmd_help[5] RODATA;

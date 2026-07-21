@@ -151,6 +151,11 @@ extern int ro_strcpy(char* dst, rostring_t src, int max);
 #define MAX_OBJECTS  (1 << OBJ_BITS)
 // (buffers need no MAX_*: csp_view_t.buf is as wide as the nbuf counter feeding it)
 #define MAX_QUEUE    (MAX_INSTRS)      // ceiling csp_csr clamps the queue to
+// Highest rule number #disable can address. A fixed bitset on csp_rt_t (it has
+// to outlive every rebuild), so this is RAM spent whether or not it is used --
+// 128 bits = 16 bytes. Programs with more rules than this still RUN fine; only
+// #disable refuses past the cap.
+#define MAX_DIS_RULES 128
 #define DIR_BITS 2
 #define TYPE_BITS 4  // supports up to 15 types & objects
 #define ENDIAN_BITS 2
@@ -480,6 +485,10 @@ typedef enum {
     LITTLE,     // 'little'
     BIG,        // 'big'
     T_CAN,      // 'can' -- transport option on #buffer: `#buffer F:8 in can 0x201`
+    // Reserved so the '#' dispatch can branch on them: it looks for a WORD after
+    // '#' and would otherwise read "disable" as a module name.
+    T_DISABLE,  // 'disable' -- #disable <rule-range>
+    T_ENABLE,   // 'enable'  -- #enable <rule-range>
     T_LAST,     // number of enumerated tokens
 } tok_t;
 
@@ -882,6 +891,8 @@ typedef enum {
     ERR_FUNCTION_ARGUMENT_TYPE_MISMATCH,
     ERR_ALREADY_DEFINED,
     ERR_NAME_TOO_LONG,
+    ERR_BAD_RULE_RANGE,
+    ERR_NO_SUCH_RULE,
 } csp_err_t;
 
 // parser state, save state before parse
@@ -1190,6 +1201,21 @@ typedef struct _csp_rt_t
     index_t* ofs;              // edge offset per decl                     [graph_n+1]
     index_t* edg;              // back edges (decl -> rules)               [ofs[graph_n]]
 #endif
+    // #disable / #enable. Two representations, on purpose:
+    //
+    // dis_rule is keyed by the user-facing rule NUMBER and is the source of
+    // truth. It has to survive csp_rebuild (which resets the middle allocator)
+    // and it is what a range like "3 7-9" writes, so it lives on the struct.
+    //
+    // dis_ip is keyed by the rule's FIRST INSTRUCTION -- where its condition
+    // starts, which is what csp_eval_rule is entered with and what rule_ip
+    // holds -- so the sequential and reactive paths agree without either
+    // knowing about the other. Derived in csp_rebuild, and only allocated when
+    // something is actually disabled: NULL is the common case and costs one
+    // test in the hot loop.
+    bitset_decl(dis_rule, MAX_DIS_RULES);
+    set_group_t* dis_ip;       // ps.nn bits, or NULL when nothing is disabled
+    index_t  n_rule_no;        // rules seen by the last numbering walk
     uint32_t cycle;
 #if defined(USE_STATISTICS) && (USE_STATISTICS==1)
     uint32_t num_eval_rule;    
@@ -1419,6 +1445,10 @@ extern int  csp_str_eq(csp_rt_t* st, sindex_t pos, const char* s, int n);
 // csp_str_eq against a RODATA string: both sides read a byte at a time through
 // their own segment accessor, so neither has to be copied out first.
 extern int  csp_str_eq_ro(csp_rt_t* st, sindex_t pos, rostring_t s, int n);
+// How many rules the program has: the number #disable counts against, i.e. the
+// OP_RULE count. Walks the stream, so it is always current -- st->n_rule_no is
+// only as fresh as the last csp_rebuild.
+extern index_t csp_n_rules(csp_rt_t* st);
 extern void csp_print_str_at(csp_rt_t* st, sindex_t pos);
 extern index_t csp_eval(csp_rt_t* st);
 extern index_t csp_eval_range(csp_rt_t* st, index_t start, index_t stop);
