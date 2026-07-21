@@ -229,3 +229,14 @@ code code
 free free
 err_cannot_save cannot save eeprom
 err_cannot_load cannot load from eeprom
+# Names the runtime creates itself: the implicit State variable and the two
+# built-in states. Distinct from the lowercase 'state' entry above, which is a
+# keyword. Materialized as a tstr_t with RO_TSTR where a declaration name is
+# needed, compared in place with csp_str_eq_ro where it is not.
+State State
+INIT INIT
+NORMAL NORMAL
+name name
+# /latch argument, and the value it prints back in /state
+on on
+off off

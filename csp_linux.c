@@ -245,6 +245,20 @@ void csp_flush(void)
 	fflush(file_output);
 }
 
+// Report st's pending error through the runtime's own formatter. The host used
+// to hand csp_format_error's string straight to fprintf, which only worked
+// because RODATA is ordinary memory here -- the same call on AVR reads the
+// wrong address space, and the two formatters could drift apart unnoticed.
+// csp_print_* writes to the current sink and these belong on stderr, so the
+// sink is swapped for the duration.
+static void print_error(csp_rt_t* st)
+{
+    void* prev = csp_set_file_output(stderr);
+    csp_print_error(st);
+    csp_println();
+    csp_set_file_output(prev);
+}
+
 // Terminal raw mode handling
 static void disable_raw_mode(void)
 {
@@ -1004,9 +1018,7 @@ int main(int argc, char** argv)
 	    }
 	    if ((r = parse_file(&state, fin)) < 0) {
 		fprintf(stderr, "%s:%d ", argv[optind], state.ps.line);
-		fprintf(stderr, (char*) csp_format_error(state.ps.err),
-			state.ps.err_args[0], state.ps.err_args[1], state.ps.err_args[2]);
-		fprintf(stderr, "\n");
+		print_error(&state);
 		exit(1);
 	    }
 	    fclose(fin);
@@ -1019,9 +1031,7 @@ int main(int argc, char** argv)
 	given = 1;
 	if ((r = parse_file(&state, stdin)) < 0) {
 	    fprintf(stderr, "*stdin*:%d ", state.ps.line);
-	    fprintf(stderr, (char*) csp_format_error(state.ps.err),
-		    state.ps.err_args[0], state.ps.err_args[1], state.ps.err_args[2]);
-	    fprintf(stderr, "\n");
+	    print_error(&state);
 	    exit(1);
 	}
     }
@@ -1057,9 +1067,7 @@ int main(int argc, char** argv)
     else {
 	if (csp_rebuild(&state) < 0) {   // graph + leaf/device setup, one layout
 	    fprintf(stderr, "setup failed: ");
-	    fprintf(stderr, (char*) csp_format_error(state.ps.err),
-		    state.ps.err_args[0], state.ps.err_args[1], state.ps.err_args[2]);
-	    fprintf(stderr, "\n");
+	    print_error(&state);
 	}
 	csp_setup(&state);
     }

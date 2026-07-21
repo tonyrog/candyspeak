@@ -399,7 +399,7 @@ static int is_state_var(csp_rt_t* st, uint16_t mem)
 	return 0;
     if (decl(st, i, type) != DECL_VARIABLE)
 	return 0;
-    return csp_str_eq(st, decl_name_pos(st, mem), "State", 5);
+    return csp_str_eq_ro(st, decl_name_pos(st, mem), ros_State, 5);
 }
 
 // If mem is the state variable and imm names a declared state, append that

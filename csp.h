@@ -56,6 +56,7 @@ typedef unsigned bool_t;
 #define ro_word(p)      pgm_read_word((p))
 #define ro_ptr(p)       (void *)pgm_read_word((p))
 #define ro_memcmp(a,b,n) memcmp_P((a), (b), (n))
+#define ro_memcpy(d,s,n) memcpy_P((d), (s), (n))
 // These two still buy RAM directly, so they stay per-target: OBJ_BITS sizes the
 // fixed offs/object/module arrays (3 x 1<<OBJ_BITS), and STRING_BITS sizes
 // ram_str plus the exprbuf scratch (2 x 1<<STRING_BITS). On a 2K part that is
@@ -68,6 +69,7 @@ typedef unsigned bool_t;
 #define ro_word(p)      (*(p))
 #define ro_ptr(p)       (*((const void**)(p)))
 #define ro_memcmp(a,b,n) memcmp((a), (b), (n))
+#define ro_memcpy(d,s,n) memcpy((d), (s), (n))
 #define OBJ_BITS     5
 #define STRING_BITS  9
 #endif
@@ -96,6 +98,20 @@ extern int ro_strlen(rostring_t s);
 extern int ro_strncmp(const char* a, rostring_t b, int n);
 
 extern int ro_strcmp(const char* a, rostring_t b);
+
+// Copy a flash string into RAM, at most max-1 chars plus a terminator; returns
+// the copied length. For the few places that need a RODATA string as a plain
+// char* -- see RO_TSTR below.
+extern int ro_strcpy(char* dst, rostring_t src, int max);
+
+// A tstr_t naming a RODATA string, materialized on the stack. The string table
+// and the name comparators take RAM pointers (new_string memcpy's the text in),
+// so an internal name kept in flash has to be pulled into RAM to be used as a
+// declaration name. Buffer is sized for those internal names; anything longer
+// truncates, which is why this is not a general-purpose conversion.
+#define RO_TSTR(var, ros)					\
+    char var##_b[12];						\
+    tstr_t var = { var##_b, ro_strcpy(var##_b, (ros), sizeof(var##_b)) }
 
 // A .ino compiles this header as C++, where _Static_assert is only an extension
 // (the SAMD toolchain accepts it, the older AVR one rejects it outright).
@@ -1400,6 +1416,9 @@ extern void    csp_csr(csp_rt_t* st);
 // not. NOINLINE to keep the flash-access logic in one place (code size).
 extern int  csp_str_ncmp(csp_rt_t* st, sindex_t pos, const char* s, int n);
 extern int  csp_str_eq(csp_rt_t* st, sindex_t pos, const char* s, int n);
+// csp_str_eq against a RODATA string: both sides read a byte at a time through
+// their own segment accessor, so neither has to be copied out first.
+extern int  csp_str_eq_ro(csp_rt_t* st, sindex_t pos, rostring_t s, int n);
 extern void csp_print_str_at(csp_rt_t* st, sindex_t pos);
 extern index_t csp_eval(csp_rt_t* st);
 extern index_t csp_eval_range(csp_rt_t* st, index_t start, index_t stop);
@@ -1473,7 +1492,9 @@ extern rostring_t csp_fmt_pull(csp_rt_t* st, int ix);
 extern rostring_t csp_fmt_pwm(csp_rt_t* st, int ix);
 extern rostring_t csp_fmt_vtype(vtype_t vt);
 extern rostring_t csp_fmt_endian(vendian_t et);
-extern rostring_t csp_format_error(csp_err_t err);
+// The error text itself is not exported: it is a format string that only
+// csp_print_error knows how to read (flash on AVR, %s/%d substituted from
+// ps.err_args). Print an error with csp_print_error(st).
 // Print the current error with %s/%d substituted (light printf, no stdio).
 extern void    csp_print_error(csp_rt_t* st);
 
@@ -1486,6 +1507,7 @@ extern uint8_t csp_opcode_rtype(opcode_t opcode);
 // csp_set_error return 1 if error was set and arguments can be defined!
 extern int csp_set_error(csp_rt_t*, csp_err_t);
 extern void csp_set_err_arg_tstr(csp_rt_t*, int i, const tstr_t* str);
+extern void csp_set_err_arg_rostr(csp_rt_t*, int i, rostring_t str);
 extern void csp_set_err_arg_ix(csp_rt_t*, int i, index_t ix);
 extern void csp_clr_error(csp_rt_t*);
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)

@@ -3,11 +3,6 @@
 
 ## Listing of RAM rule, list as [ROM]
 
-[ROM] Led=1 ? BtnA&&BtnB
-[RAM] Led=0                                                                     
-
-Last row should be Led=0 ? !BtnA || !BntB
-
 ## `<-` och changed() fastnar på FÖRE-värdet när källan ändras exakt en gång.
   De fyrar på ändring, men regler läser den committade sidan -- alltså värdet
   från före den ändring de fyrade på.
@@ -42,6 +37,27 @@ Last row should be Led=0 ? !BtnA || !BntB
   en villkorad regel alltid-på -- tyst. Troligen samma rot som [ROM]/[RAM]-
   listningsbuggen överst: guard-delen tappas någonstans mellan parse och
   emission istället för att sätta ERR_SYNTAX.
+
+## Fel felmeddelande efter autoladdad eeprom.db (2026-07-21)
+  Ligger det en `eeprom.db` i katalogen och inget program ges, laddas den vid
+  start (`!given && !csp_has_firmware()`). En omdefiniering ger då fel svar:
+
+      $ ./csp -i                          # med eeprom.db i katalogen
+      #variable x = 1     OK
+      #variable x = 5     Error: too many declarations
+
+      $ ./csp -i -e /finns/inte           # utan
+      #variable x = 1     OK
+      #variable x = 5     Error: variable x is already defined
+
+  Det senare är rätt. Budgeten är inte slut: `/memory` efter den felande raden
+  är IDENTISK i båda fallen (decl 2/2048, code 16, free 260104), så
+  meddelandet ljuger.
+  eeprom.db-filen kom från EN `/save` av ett program som bara innehöll
+  baslinjen -- `/list` efter laddningen visar enbart `#variable State`.
+  Verifierat att det INTE är en regression: ren HEAD-build med samma
+  eeprom.db beter sig likadant.
+  Reproducera med EN save och EN load. Inga loopar mot EEPROM/flash.
 
 ## exit csp_linux after -d and -n or no program / no interaction
 
@@ -195,10 +211,6 @@ Can we run CandySpeek rules during interrupt,
 is it possibel / feasible. At least have rules
 that trigger on digital state change, analog sample compleation...
 
-- How to combine ROM + RAM => new ROM base?
-
-- ROM disable flag to kill off REAL firmware.
-
 What about using states?
 
 #in ISR
@@ -207,5 +219,17 @@ What about using states?
   State = RTI
 #end
 
+"We could queue interrupts (when possible) serv som interrupts
+when needed in real isr, but queue the facr. Then schedule to
+run ISR rules in ISR state until interrupt stack is empty!
+(could work) then we would have minor troubles without running
+runtime during interrupt time."
+
 - atomic keyword
+
+## Other
+
+- How to combine ROM + RAM => new ROM base?
+
+- ROM disable flag to kill off REAL firmware.
 

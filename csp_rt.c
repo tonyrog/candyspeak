@@ -349,6 +349,17 @@ NOINLINE int ro_strcmp(const char* a, rostring_t b)
     return 0;
 }
 
+NOINLINE int ro_strcpy(char* dst, rostring_t src, int max)
+{
+    rochar* sp = (rochar*)src;
+    int n = 0;
+    uint8_t c;
+    while ((n < max-1) && (c = ro_byte(sp+n)) != 0)
+	dst[n++] = (char)c;
+    dst[n] = '\0';
+    return n;
+}
+
 
 // The firmware ROM image lives in rom.c, which every build links exactly once
 // (an empty default rom.c provides zero-sized stubs when no program is baked
@@ -458,25 +469,23 @@ rostring_t csp_fmt_endian(vendian_t et)
     return endian_tab[et&0x3];
 }
 
-#define RETURN_TSTR(s_str) { \
-	tstr_t str = {.ptr=(char*)(s_str),.len=sizeof((s_str))-1 };	\
-	return str;							\
-    }
-    
-const tstr_t decl_type_name(decl_t type)
+// Returns the RODATA name as-is. It used to hand back a tstr_t pointing at the
+// same flash bytes, which csp_set_err_arg_tstr then memcpy'd -- the wrong
+// address space on AVR. Flash names go through csp_set_err_arg_rostr instead.
+static rostring_t decl_type_name(decl_t type)
 {
     switch(type) {
-    case DECL_VARIABLE: RETURN_TSTR(s_variable);
-    case DECL_CONSTANT: RETURN_TSTR(s_constant);
-    case DECL_MODULE:   RETURN_TSTR(s_module);
-    case DECL_END:      RETURN_TSTR(s_end);
-    case DECL_OBJECT:   RETURN_TSTR(s_object);
-    case DECL_TIMER:    RETURN_TSTR(s_timer);
-    case DECL_DIGITAL:  RETURN_TSTR(s_digital);
-    case DECL_ANALOG:   RETURN_TSTR(s_analog);
-    case DECL_CAN:      RETURN_TSTR(s_can);
-    case DECL_BUFFER:   RETURN_TSTR(s_buffer);
-    default: RETURN_TSTR(s_undefined);
+    case DECL_VARIABLE: return ros_variable;
+    case DECL_CONSTANT: return ros_constant;
+    case DECL_MODULE:   return ros_module;
+    case DECL_END:      return ros_end;
+    case DECL_OBJECT:   return ros_object;
+    case DECL_TIMER:    return ros_timer;
+    case DECL_DIGITAL:  return ros_digital;
+    case DECL_ANALOG:   return ros_analog;
+    case DECL_CAN:      return ros_can;
+    case DECL_BUFFER:   return ros_buffer;
+    default:            return ros_undefined;
     }
 }
 
@@ -484,9 +493,10 @@ const tstr_t decl_type_name(decl_t type)
 #define stringify(x) ify(x)
 
 // Error texts live in strings.tab (s_err_*), so they are in FLASH like every
-// other string in that table instead of being RAM literals. Read them with
-// csp_print_error, never with csp_print_str.
-rostring_t csp_format_error(csp_err_t err)
+// other string in that table instead of being RAM literals. static on purpose:
+// the returned format is only meaningful to csp_print_error, and handing it to
+// printf/csp_print_str reads the wrong address space on AVR.
+static rostring_t csp_format_error(csp_err_t err)
 {
     switch(err) {
     case ERR_OK:                  return ros_err_ok;
@@ -667,6 +677,20 @@ void csp_set_err_arg_tstr(csp_rt_t* st, int i, const tstr_t* str)
 	st->ps.err_strp -= str->len + 1;
 	memcpy(&st->ram_str[st->ps.err_strp], str->ptr, str->len);
 	st->ram_str[st->ps.err_strp + str->len] = '\0';
+	st->ps.err_args[i] = (uintptr_t)&st->ram_str[st->ps.err_strp];
+    }
+}
+
+// Same, for a RODATA string. Copied byte by byte for the same reason
+// csp_set_err_arg_ix is: every err_arg has to end up a plain RAM string,
+// because neither fprintf nor csp_print_error can tell the segments apart.
+void csp_set_err_arg_rostr(csp_rt_t* st, int i, rostring_t str)
+{
+    int len = ro_strlen(str);
+
+    if (st->ps.err_strp >= st->ps.strp + (uint32_t)len + 1) {
+	st->ps.err_strp -= len + 1;
+	ro_strcpy(&st->ram_str[st->ps.err_strp], str, len + 1);
 	st->ps.err_args[i] = (uintptr_t)&st->ram_str[st->ps.err_strp];
     }
 }
@@ -1992,6 +2016,21 @@ NOINLINE int csp_str_eq(csp_rt_t* st, sindex_t pos, const char* s, int n)
 	   (csp_str_ncmp(st, pos, s, n) == 0);
 }
 
+// Same, but the reference string is in flash. Kept separate from csp_str_eq
+// rather than copying the RODATA name out to a stack buffer first: the callers
+// sit in /state and the disassembler, once per declaration printed.
+NOINLINE int csp_str_eq_ro(csp_rt_t* st, sindex_t pos, rostring_t s, int n)
+{
+    int i;
+    if (csp_str_byte(st, pos-1) != (uint8_t)n)
+	return 0;
+    for (i = 0; i < n; i++) {
+	if (csp_str_byte(st, pos+i) != ro_byte((rochar*)s + i))
+	    return 0;
+    }
+    return 1;
+}
+
 // Print the length-prefixed string at logical position `pos`, byte by byte.
 NOINLINE void csp_print_str_at(csp_rt_t* st, sindex_t pos)
 {
@@ -2162,10 +2201,10 @@ NOINLINE index_t csp_new_udecl(csp_rt_t* st, const tstr_t* name, decl_t type)
     
     if ((ix = csp_lookup_decl_local(st, name)) != BAD_INDEX) {
 	if (csp_set_error(st, ERR_ALREADY_DEFINED)) {
-	    tstr_t typ = { .ptr = "name", .len = 4 };
+	    rostring_t typ = ros_name;
 	    if (decl(st,ix,type) == type)
 		typ = decl_type_name(type);
-	    csp_set_err_arg_tstr(st, 0, &typ);
+	    csp_set_err_arg_rostr(st, 0, typ);
 	    csp_set_err_arg_tstr(st, 1, name);
 	}
 	return BAD_INDEX;
@@ -4188,7 +4227,7 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
     {
 	// create a local state variable (if states are supported)
 	// maybe only if #states are defined in module context?
-	const tstr_t State = { .ptr = "State", .len = 5};
+	RO_TSTR(State, ros_State);
 	index_t ix;
 	st->save_sx = st->sx;
 	ix = csp_new_decl(st, &State, DECL_VARIABLE);
@@ -5760,9 +5799,9 @@ int csp_rt_init(csp_rt_t* st, int reactive)
     st->num_ufuncs = 0;
     st->uconst = NULL;
     {
-	const tstr_t State = { .ptr = "State", .len = 5};
-	const tstr_t INIT  = { .ptr = "INIT", .len = 4};
-	const tstr_t NORMAL = { .ptr = "NORMAL", .len = 6};
+	RO_TSTR(State, ros_State);
+	RO_TSTR(INIT, ros_INIT);
+	RO_TSTR(NORMAL, ros_NORMAL);
 	st->ps.ns = 0;  // install INIT (cycle()==0) and NORMAL
 	st->sx = csp_new_decl(st, &State, DECL_VARIABLE);
 	st->sdef = -1;
@@ -7048,7 +7087,7 @@ static int state_is_state_var(csp_rt_t* st, int di)
 {
     if (decl(st, di, type) != DECL_VARIABLE)
 	return 0;
-    return csp_str_eq(st, decl_name_pos(st, MAKE_INDEX(0, di)), "State", 5);
+    return csp_str_eq_ro(st, decl_name_pos(st, MAKE_INDEX(0, di)), ros_State, 5);
 }
 
 // Print the declared state numbered `v`; 0 if no state has that number.
@@ -7511,17 +7550,19 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
     {
 	uint32_t cap  = csp_eeprom_capacity();
 	uint32_t need = (uint32_t)csp_eeprom_size(st);
-	csp_print_lit("   ");
 	if (cap == CSP_EEPROM_NONE) {
 	    mem_row(ros_EEPROM, need, 0, 0);
+	    csp_print_lit("   ");
 	    csp_print_lit("(NONE)");
 	}
 	else if (cap == CSP_EEPROM_UNBOUNDED) {
 	    mem_row(ros_EEPROM, need, -1, 0);
+	    csp_print_lit("   ");	    
 	    csp_print_lit("(OK)");
 	}
 	else {
 	    mem_row(ros_EEPROM, need, (int32_t)cap, 1);
+	    csp_print_lit("   ");	    
 	    if (need > cap)
 		csp_print_lit("(FULL)");
 	    else
@@ -7574,9 +7615,9 @@ void csp_cmd_help(void)
 static int cmd_latch(csp_rt_t* st, int argc, char* argv[])
 {
     int latch = 0;
-    if ((argc == 1) && (strcmp(argv[0], "on") == 0))
+    if ((argc == 1) && (ro_strcmp(argv[0], ros_on) == 0))
 	latch = 1;
-    else if ((argc == 1) && (strcmp(argv[0], "off") == 0))
+    else if ((argc == 1) && (ro_strcmp(argv[0], ros_off) == 0))
 	latch = 0;
     else
 	return CSP_CMD_ERROR;

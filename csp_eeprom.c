@@ -18,7 +18,10 @@ typedef struct {
     uint16_t nq;         // number of objects
 } eeprom_header_t;
 
-#define EEPROM_MAGIC "CSP"
+// In RODATA rather than a plain literal so it costs flash, not RAM, on AVR --
+// read and written through ro_memcmp/ro_memcpy. 4 bytes, terminator included.
+static rochar eeprom_magic[4] RODATA = "CSP";
+#define EEPROM_MAGIC eeprom_magic
 #define EEPROM_VERSION 4   // v4: persist runtime state-table additions (ram_ns)
 
 // Platform stub functions - implement per platform
@@ -67,7 +70,7 @@ int csp_eeprom_save(csp_rt_t* st)
     if (csp_eeprom_open_write() < 0)
 	return -1;
 
-    memcpy(hdr.magic, EEPROM_MAGIC, 4);
+    ro_memcpy(hdr.magic, EEPROM_MAGIC, 4);
     hdr.version  = EEPROM_VERSION;
     hdr.rom_nd   = st->rom_nd;
     hdr.rom_nn   = st->rom_nn;
@@ -122,7 +125,7 @@ int csp_eeprom_load(csp_rt_t* st)
     if (csp_eeprom_read(&hdr, sizeof(hdr)) < 0)
 	goto error;
 
-    if (memcmp(hdr.magic, EEPROM_MAGIC, 4) != 0)
+    if (ro_memcmp(hdr.magic, EEPROM_MAGIC, 4) != 0)
 	goto error;
 
     if (hdr.version != EEPROM_VERSION)

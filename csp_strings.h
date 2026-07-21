@@ -453,5 +453,17 @@ extern rochar s_err_cannot_save[19] RODATA;
 #define ros_err_cannot_save ((rostring_t) s_err_cannot_save)
 extern rochar s_err_cannot_load[24] RODATA;
 #define ros_err_cannot_load ((rostring_t) s_err_cannot_load)
+extern rochar s_State[6] RODATA;
+#define ros_State ((rostring_t) s_State)
+extern rochar s_INIT[5] RODATA;
+#define ros_INIT ((rostring_t) s_INIT)
+extern rochar s_NORMAL[7] RODATA;
+#define ros_NORMAL ((rostring_t) s_NORMAL)
+extern rochar s_name[5] RODATA;
+#define ros_name ((rostring_t) s_name)
+extern rochar s_on[3] RODATA;
+#define ros_on ((rostring_t) s_on)
+extern rochar s_off[4] RODATA;
+#define ros_off ((rostring_t) s_off)
 
 #endif
