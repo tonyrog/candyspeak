@@ -6,7 +6,7 @@
 // No bus is involved: with no driver attached nothing is ever received, so .rx
 // must stay 0, and .tx must reflect what a rule asked for.
 #buffer F300:8 out can 0x300
-#can V:8 unsigned F300[0..7]
+#field V:8 unsigned F300[0..7]
 
 #variable fid = 0
 #variable vid = 0

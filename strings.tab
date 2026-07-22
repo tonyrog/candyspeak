@@ -8,6 +8,7 @@ digital digital
 analog analog
 timer timer
 can can
+field field
 buffer buffer
 disable disable
 enable enable

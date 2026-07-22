@@ -23,6 +23,8 @@ extern rochar s_timer[6] RODATA;
 #define ros_timer ((rostring_t) s_timer)
 extern rochar s_can[4] RODATA;
 #define ros_can ((rostring_t) s_can)
+extern rochar s_field[6] RODATA;
+#define ros_field ((rostring_t) s_field)
 extern rochar s_buffer[7] RODATA;
 #define ros_buffer ((rostring_t) s_buffer)
 extern rochar s_disable[8] RODATA;

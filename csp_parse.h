@@ -110,7 +110,7 @@ enum {
     PAT_DIGITAL,
     PAT_ANALOG,
     PAT_TIMER,
-    PAT_CAN,
+    PAT_FDECL,       // the #field DECLARATION; PAT_FIELD below is <obj>.<field>
     PAT_BUFFER,
     PAT_OBJECT,
     PAT_BODY,

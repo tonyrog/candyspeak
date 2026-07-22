@@ -62,29 +62,6 @@ static uint16_t rom_crc16(csp_rt_t* st)
     return crc;
 }
 
-// Platform stub functions - implement per platform
-#if 0
-static uint16_t calc_checksum(csp_rt_t* st)
-{
-    uint16_t sum = 0;
-    uint8_t* p;
-    size_t i;
-
-    p = (uint8_t*)st->instr;
-    for (i = 0; i < st->ps.nn * sizeof(csp_instr_t); i++)
-        sum += p[i];
-
-    p = (uint8_t*)st->decl;
-    for (i = 0; i < st->ps.nd * sizeof(csp_decl_t); i++)
-        sum += p[i];
-
-    p = (uint8_t*)&st->str[st->ps.strp];
-    for (i = 0; i < st->ps.strp; i++) 
-        sum += p[i];
-    return sum;
-}
-#endif
-
 int csp_eeprom_clear(csp_rt_t* st)
 {
     uint8_t invalid[2] = {0xff, 0xff};
@@ -106,7 +83,7 @@ int csp_eeprom_save(csp_rt_t* st)
     uint16_t ram_ns   = st->ps.ns   - st->rom_ns;
 
     if (csp_eeprom_open_write() < 0)
-	return -1;
+	goto error;
 
     ro_memcpy(hdr.magic, EEPROM_MAGIC, 4);
     hdr.version  = EEPROM_VERSION;
@@ -155,6 +132,7 @@ int csp_eeprom_save(csp_rt_t* st)
 
 error:
     csp_eeprom_close();
+    csp_set_error(st, ERR_CANNOT_SAVE);
     return -1;
 }
 
@@ -165,7 +143,7 @@ int csp_eeprom_load(csp_rt_t* st)
     int reactive;
 
     if (csp_eeprom_open_read() < 0)
-	return -1;
+	goto error;
 
     // Read and validate header
     if (csp_eeprom_read(&hdr, sizeof(hdr)) < 0)
@@ -230,7 +208,7 @@ int csp_eeprom_load(csp_rt_t* st)
 	    csp_print_uint(hdr.n_dis);
 	    csp_print_lit(" rules, program has ");
 	    csp_print_uint(have);
-	    csp_print_lit(")\n");
+	    csp_print_line(")");
 	}
 	else if (csp_eeprom_read(st->dis_rule, DIS_BYTES(hdr.n_dis)) < 0)
 	    goto error;
@@ -242,6 +220,7 @@ int csp_eeprom_load(csp_rt_t* st)
 
 error:
     csp_eeprom_close();
+    csp_set_error(st, ERR_CANNOT_LOAD);
     return -1;
 }
 

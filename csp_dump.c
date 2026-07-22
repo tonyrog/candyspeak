@@ -126,7 +126,7 @@ index_t csp_dump_rule(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     case DECL_VARIABLE:
     case DECL_DIGITAL:
     case DECL_ANALOG:
-    case DECL_CAN:
+    case DECL_FIELD:
     case DECL_TIMER:	
 	fprintf(f, "%s", indent(lev));	
 	fprintf(f, "{rules,%d,'%s',", i, decl_name(st, ix));
@@ -576,7 +576,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		decl(st,i,tm.init),
 		eot);
 	break;
-    case DECL_CAN:
+    case DECL_FIELD:
 	vt = decl(st,i,vt);
 	fprintf(f, "{decl,%d,can,\"%s\",[{size,%d},{type,%s},{endian,%s},{dir,%s},{id,16#%x},{bit,%d},{len,%d}]}%s\n",
 		i,
@@ -719,7 +719,7 @@ const char* csp_cfmt_vtype(vtype_t vt)
     case V_TIMER: return "V_TIMER";	
     case V_DIGITAL: return "V_DIGITAL";
     case V_ANALOG: return "V_ANALOG";
-    case V_CAN: return "V_CAN";
+    case V_FIELD: return "V_FIELD";
     default: return "UNDEFINED";
     }
 }
@@ -735,7 +735,7 @@ const char* csp_cfmt_dtype(decl_t dt)
     case DECL_DIGITAL: return "DECL_DIGITAL";
     case DECL_ANALOG: return "DECL_ANALOG";
     case DECL_TIMER: return "DECL_TIMER";
-    case DECL_CAN: return "DECL_CAN";
+    case DECL_FIELD: return "DECL_FIELD";
     case DECL_BUFFER: return "DECL_BUFFER";
     case DECL_VIEW: return "DECL_VIEW";
     default: return "?";
@@ -837,7 +837,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    fprintf(f, "  {.an={%s,.pin=%u,.port=%u,.pwm=%u,.endian=%u}},\n",
 		    cmn, dp->an.pin, dp->an.port, dp->an.pwm, dp->an.endian);
 	    break;
-	case DECL_CAN:
+	case DECL_FIELD:
 	    fprintf(f, "  {.ca={%s,.id=%u,.endian=%u,.bit=%u,.len=%u}},\n",
 		    cmn, dp->ca.id, dp->ca.endian, dp->ca.bit, dp->ca.len);
 	    break;
@@ -1034,7 +1034,7 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 		decl(st,i,tm.period),
 		decl(st,i,tm.init));
 	break;
-    case DECL_CAN:
+    case DECL_FIELD:
 	vt = decl(st,i,vt);
 	fprintf(f, "#can %s:%d %s %s %s 0x%x[%d:%d]\n",
 		decl_name(st, ix),

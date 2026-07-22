@@ -159,27 +159,50 @@ int csp_will_output()
 }
 
 // platform print functions
+//
+// The CR belongs HERE, not in csp_println. The runtime ends a line three ways
+// -- csp_println(), a bare csp_print_char('\n'), and a '\n' inside a
+// csp_print_lit("...\n") literal -- and Serial.print of a literal never passes
+// through println, so translating there left the board emitting 37 bare LFs
+// against 22 CRLFs. Every byte the runtime prints goes through these three
+// functions, so this is the one place that sees them all.
+//
+// Serial.print(s) is given up for a per-character loop to get that: on a
+// buffered UART the cost is noise next to the transmission itself.
+//
+// Returns LOGICAL characters -- a newline counts as one whatever it costs on
+// the wire -- so csp_print_just's column arithmetic matches the host's.
 int csp_print_char(char c)
 {
-    if (serial_output)
-	return Serial.write(c);
+    if (serial_output) {
+	if (c == '\n')
+	    Serial.write('\r');
+	Serial.write(c);
+    }
     return 1;
 }
 
 int csp_print_str(const char* s)
 {
-    if (serial_output)
-	return Serial.print(s);
-    return strlen(s);    
+    int n = 0;
+    while (s[n] != '\0') {
+	csp_print_char(s[n]);
+	n++;
+    }
+    return n;
 }
 
 #if defined(__AVR__)
 int csp_print_rostr(rostring_t s)
 {
-    if (serial_output)    
-	return Serial.print((__FlashStringHelper*)s);
-    // fixme number of strlen_P(s);
-    return strlen_P((const char*)s);
+    rochar* p = (rochar*)s;
+    int n = 0;
+    uint8_t c;
+    while ((c = ro_byte(p + n)) != 0) {
+	csp_print_char((char)c);
+	n++;
+    }
+    return n;
 }
 #else
 int csp_print_rostr(rostring_t s)
@@ -187,48 +210,6 @@ int csp_print_rostr(rostring_t s)
     return csp_print_str((const char*) s);
 }
 #endif
-
-int csp_print_int(ivalue_t v)
-{
-    if (serial_output)    
-	return Serial.print(v);
-    return 1; // fixme number of chars?
-}
-
-int csp_print_uint(uvalue_t v)
-{
-    if (serial_output)        
-	return Serial.print(v);
-    return 1; // fixme number of chars?
-}
-
-int csp_print_float(fvalue_t v)
-{
-    if (serial_output) {
-#if FVALUE_IS_FIXPOINT    
-	return csp_print_fixpoint(v);
-#else
-	return Serial.print(v);
-#endif	
-    }
-    return 1; // fixme: number of chars
-}
-
-int csp_print_hex(uvalue_t v)
-{
-    if (serial_output) {
-	Serial.print("0x");
-	return Serial.print(v, HEX);
-    }
-    return 1;
-}
-
-int csp_println(void)
-{
-    if (serial_output)
-	return Serial.println();
-    return 1;
-}
 
 void csp_flush(void)
 {
@@ -492,7 +473,7 @@ int csp_can_init(csp_rt_t* st)
 {
     (void)st;
     if (!CAN.begin(CSP_CAN_BITRATE)) {
-	csp_print_lit("can: init failed\n");
+	csp_print_line("can: init failed");
 	return -1;
     }
     return 0;
@@ -788,43 +769,13 @@ int csp_eeprom_write(const void* buf, size_t len)
 // Serial command interface
 // ============================================================
 
-void serial_print_ok(void)
-{
-    csp_print_lit("OK");
-    csp_println();
-}
-
-void serial_print_error(rostring_t msg)
-{
-    csp_print_lit("ERROR: ");
-    csp_print_rostr(msg);
-    csp_println();
-}
-
 // Platform-specific command implementations
-int csp_cmd_save(csp_rt_t* st, int argc, char* argv[])
+// The store has no filename on a board; /save and /load are shared code in
+// csp_rt.c and just need something to call it.
+const char* csp_eeprom_name(void)
 {
-    (void)argc;
-    (void)argv;
-    if (csp_eeprom_save(st) < 0) {
-	serial_print_error(ros_err_cannot_save);
-	return CSP_CMD_ERROR;
-    }
-    serial_print_ok();
-    return CSP_CMD_OK;
-}
-
-int csp_cmd_load(csp_rt_t* st, int argc, char* argv[])
-{
-    (void)argc;
-    (void)argv;
-    if (csp_eeprom_load(st) < 0) {
-	serial_print_error(ros_err_cannot_load);
-	return CSP_CMD_ERROR;
-    }
-    csp_setup(st);
-    serial_print_ok();    
-    return CSP_CMD_OK;
+    static const char nm[] = "EEPROM";
+    return nm;
 }
 
 // ============================================================
@@ -853,18 +804,20 @@ void setup()
 
     // Report the real memory picture on the board -- the numbers we can only
     // model on the host. free is what csp_mem_init claims the pool from.
-    Serial.print(F("boot: RAM ")); Serial.print(csp_system_ram_capacity());
-    Serial.print(F(", free ")); Serial.print(csp_system_ram_avail());
-    Serial.print(F(", struct ")); Serial.println((uint32_t)sizeof(csp_rt_t));
+    csp_print_lit("boot: RAM "); csp_print_uint(csp_system_ram_capacity());
+    csp_print_lit(", free ");    csp_print_uint(csp_system_ram_avail());
+    csp_print_lit(", struct ");  csp_print_uint((uint32_t)sizeof(csp_rt_t));
+    csp_println();
 
     // A failed init leaves a half-set-up state; say so instead of running into a
     // fault. This is where an over-eager claim (freeRam - reserve too tight)
     // would surface, rather than as a mystery hang.
     if (csp_rt_init(&state, REACTIVE_DEFAULT) < 0) {
-	Serial.println(F("FATAL: csp_rt_init failed (out of memory)"));
+	csp_print_line("FATAL: csp_rt_init failed (out of memory)");
 	return;   // leave loop() a no-op rather than crash
     }
-    Serial.print(F("pool ")); Serial.println((uint32_t)state.mem_limit);
+    csp_print_lit("pool "); csp_print_uint((uint32_t)state.mem_limit);
+    csp_println();
 
     // Wire up the ROM firmware (rom.c) first, so the program runs even when
     // there is no valid save. csp_eeprom_load re-does this on its success path,
@@ -874,10 +827,12 @@ void setup()
 
     // Overlay any saved RAM patches on top of the ROM. Returns 0 on success.
     if (csp_eeprom_load(&state) == 0) {
-        Serial.println(F("Loaded from EEPROM"));
+        csp_print_line("Loaded from EEPROM");
     }
     else {
-        Serial.println(F("No saved state, running ROM"));
+	csp_clr_error(&state);   // "no saved state" is the normal case at boot,
+				 // not an error to carry into the first command
+        csp_print_line("No saved state, running ROM");
     }
 
     // Lay out the whole program: reactive graph + leaf/device setup. MUST be
@@ -886,12 +841,12 @@ void setup()
     // rt_start directly leaves mid_end = 0, so every table allocation fails and
     // the first cycle faults on null view/heap pointers.
     if (csp_rebuild(&state) < 0)
-	Serial.println(F("setup failed: out of memory"));
+	csp_print_line("setup failed: out of memory");
 
     // initialize input/output/timers ...
     csp_setup(&state);
 
-    Serial.println(F("CandySpeak ready"));
+    csp_print_line("CandySpeak ready");
 }
 
 void loop()

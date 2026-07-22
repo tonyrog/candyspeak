@@ -191,9 +191,9 @@ them, and they are interchangeable — pick whichever reads best:
 ```
 #buffer F201:8 in can 0x201
 
-// 1. #can -- a named field, declared against the frame
-#can Speed:16 unsigned F201[0..15]
-#can Temp:8   unsigned F201[16..23]
+// 1. #field -- a named field, declared against the frame
+#field Speed:16 unsigned F201[0..15]
+#field Temp:8   unsigned F201[16..23]
 
 // 2. bind -- the same thing spelled as a variable
 #variable Rpm:16 bind F201[24..39]
@@ -202,7 +202,7 @@ them, and they are interchangeable — pick whichever reads best:
 F201 >>= a:8 b:8 c:16 ? F201.rx
 ```
 
-A `#can` field inherits its direction from the frame, so it rarely needs one of
+A `#field` field inherits its direction from the frame, so it rarely needs one of
 its own. The bit range is in **bits**, counted from bit 0 of byte 0, and the
 value is little-endian unless the field says `big`.
 
@@ -211,9 +211,9 @@ reading another shows the packing directly:
 
 ```
 #buffer Out:8 out can 0x200
-#can Lo:8  unsigned Out[0..7]
-#can Hi:8  unsigned Out[8..15]
-#can Both:16 unsigned Out[0..15]
+#field Lo:8  unsigned Out[0..7]
+#field Hi:8  unsigned Out[8..15]
+#field Both:16 unsigned Out[0..15]
 
 Lo = 1
 Hi = 2                  // Both now reads 0x0201
@@ -430,7 +430,7 @@ Total = m1.Out + m2.Out    // relate fields across instances with a rule
 
 A module is a template. Inside `#module ... #end` you can declare the same
 resources as at top level — `#variable`, `#digital`, `#analog`, `#timer`,
-`#buffer`, `#can`, `#constant` — plus module-local `#states`, and the rules
+`#buffer`, `#field`, `#constant` — plus module-local `#states`, and the rules
 (including `#in <state>` blocks) that act on them. Each instance gets its own
 copy of every declared member and its own state, including its own buffer
 storage:
@@ -867,7 +867,7 @@ make
 | `-I <file>` | Feed inputs from a file (real time, cycle-stamped rows) |
 | `-F <file>` | Feed inputs with **simulated time** (see below) |
 | `-b` | Start paused; inspect, then `/resume` (implies `-i`) |
-| `--can=IFACE` | SocketCAN interface for `#can` frames (e.g. `vcan0`) |
+| `--can=IFACE` | SocketCAN interface for `#field` frames (e.g. `vcan0`) |
 | `-m N[k]` | Usable code-memory budget in bytes |
 | `-M N[k]` | Total RAM the simulated board has |
 | `-U N[k]` | RAM the system and linked libraries take |
@@ -1422,7 +1422,7 @@ pandoc doc/manual_en.md -o doc/manual_en.pdf \
 #constant <name> = <value>
 #buffer <name>:<bits> [type]            // shared storage / frame layout
 #buffer <name>:<bytes> [in|out] can <id>  // CAN frame (size in BYTES)
-#can <name>:<bits> [type] <frame>[<a>..<b>]  // field of a frame
+#field <name>:<bits> [type] <frame>[<a>..<b>]  // field of a frame
 #states <name> ...                      // enumerate states (INIT/NORMAL implicit)
 #module <name> ... #end
 ```
@@ -1441,7 +1441,7 @@ X = Buf[0..1]               // byte range -> one value (little-endian)
 ```
 #buffer F201:8 in  can 0x201     // 8 BYTES (the DLC), received
 #buffer Out:8  out can 0x200     // transmitted
-#can Speed:16 unsigned F201[0..15]   // field: a bit view into the frame
+#field Speed:16 unsigned F201[0..15]   // field: a bit view into the frame
 
 Speed = v                        // writing a field sends the frame (event PDO)
 Out.tx  = 1 ? timeout(Beat)      // cyclic PDO: send even if unchanged

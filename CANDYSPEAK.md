@@ -268,8 +268,8 @@ Allow, (latch=0) or disallow (latch=1) system output. But do allow variable and 
 Now we can set relay output or analog output
 depending on input expressions
 
-	#can SPEED 0x100[0..7]   // 8 bit from can frame 0x100
-	#can RPM   0x200[6..15]  // 10 bit from can bit 6
+	#field SPEED 0x100[0..7]   // 8 bit from can frame 0x100
+	#field RPM   0x200[6..15]  // 10 bit from can bit 6
 	#digital HEADLIGHT 0:8   // relay output at port 0 pin 8
 	
 	HEADLIGHT=1 ? (SPEED > 100), (RPM > 1000)

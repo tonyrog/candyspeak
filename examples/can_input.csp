@@ -13,9 +13,9 @@
 //   bit 24..55  C  32 bit   = bytes 3-6
 // Little endian, so 201#2A 3412 78563412 reads A=0x2A, B=0x1234, C=0x12345678.
 #buffer F201:8 in can 0x201
-#can A:8  unsigned F201[0..7]
-#can B:16 unsigned F201[8..23]
-#can C:32 unsigned F201[24..55]
+#field A:8  unsigned F201[0..7]
+#field B:16 unsigned F201[8..23]
+#field C:32 unsigned F201[24..55]
 
 // F201.rx is true for exactly one cycle: the one where the received frame has
 // crossed the commit and A/B/C are readable. That is the whole point of it --

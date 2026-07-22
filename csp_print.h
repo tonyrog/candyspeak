@@ -26,8 +26,29 @@ int csp_print_rostr(rostring_t s);
 // (names, arguments) and csp_print_rostr for a rochar* you already hold.
 #define csp_print_lit(lit) \
     do { static rochar s__lit[] RODATA = lit; csp_print_rostr((rostring_t)s__lit); } while(0)
+
+// A whole LINE: the literal, then the platform's line ending. Keeps '\n' out of
+// the literals themselves, so csp_println stays the single place a newline is
+// spelled and the platform decides what reaches the wire. Wrapped like
+// csp_print_lit, so it is still ONE statement and survives an unbraced if/else.
+#define csp_print_line(lit) \
+    do { csp_print_lit(lit); csp_println(); } while(0)
 int csp_print_int(ivalue_t v);
 int csp_print_uint(uvalue_t v);
+
+// Column justification for csp_print_just. NJUST prints and stops (no padding),
+// so it is the plain print with a length back.
+typedef enum {
+    NJUST = 0,   // no padding
+    LJUST,       // text, then pad right
+    RJUST,       // pad left, then text
+    CJUST        // pad both, text centred
+} just_t;
+
+// Print s in a w-wide column; returns the characters written. A string longer
+// than w is NOT truncated -- the column widens. LJUST costs no strlen.
+int csp_print_just(const char* s, just_t j, int w);
+int csp_print_rojust(rostring_t s, just_t j, int w);
 int csp_print_uintw(uvalue_t v, int nw);
 int csp_print_float(fvalue_t v);
 int csp_print_hex(uvalue_t v);

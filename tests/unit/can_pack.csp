@@ -5,9 +5,9 @@
 // fields are bit views into it, and the view machinery does the packing.
 // No bus is involved.
 #buffer F200:8 out can 0x200
-#can fa:8  unsigned F200[0..7]
-#can fb:8  unsigned F200[8..15]
-#can fw:16 unsigned F200[0..15]
+#field fa:8  unsigned F200[0..7]
+#field fb:8  unsigned F200[8..15]
+#field fw:16 unsigned F200[0..15]
 #variable ra = 0
 #variable rb = 0
 #variable rw = 0

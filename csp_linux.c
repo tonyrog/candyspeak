@@ -17,6 +17,7 @@
 #endif
 
 #include "csp.h"
+#include "csp_print.h"
 #include "csp_dump.h"
 #include "csp_boards.h"   // generated: make boards
 
@@ -26,6 +27,7 @@
 static struct termios orig_termios;
 static int raw_mode = 0;
 static const char* eeprom_file = "eeprom.db";
+
 static const char* can_iface = NULL;   // --can=vcan0; NULL = no bus, stubs
 static const char* src_file = NULL;   // first .csp on the command line (ROM banner)
 
@@ -197,48 +199,6 @@ int csp_print_rostr(rostring_t s)
     return csp_print_str((const char*) s);
 }
 
-int csp_print_int(ivalue_t v)
-{
-    if (file_output)
-	return fprintf(file_output, "%d", v);
-    return 1; // fixme: return number of chars
-}
-
-int csp_print_uint(uvalue_t v)
-{
-    if (file_output)
-	return fprintf(file_output, "%u", v);
-    return 1; // fixme: return number of chars    
-}
-
-int csp_print_float(fvalue_t v)
-{
-    if (file_output) {    
-#if FVALUE_IS_FIXPOINT
-	return csp_print_fixpoint(v);
-#else
-	return fprintf(file_output, "%f", v);
-#endif
-    }
-    return 1;
-}
-
-int csp_print_hex(uvalue_t v)
-{
-    if (file_output)
-	return fprintf(file_output, "0x%x", v);
-    return 1;
-}
-
-int csp_println(void)
-{
-    if (file_output) {
-	if (fputc('\n', file_output) == EOF)
-	    return 0;
-    }
-    return 1;
-}
-
 void csp_flush(void)
 {
     if (file_output)
@@ -301,6 +261,11 @@ static FILE* eeprom_fp = NULL;
 // file really is. Set it to a board's size to reproduce that board's ceiling.
 static uint32_t eeprom_cap = 0;
 
+const char* csp_eeprom_name(void)
+{
+    return eeprom_file;
+}
+
 int csp_eeprom_open_read(void)
 {
     eeprom_fp = fopen(eeprom_file, "rb");
@@ -347,34 +312,6 @@ uint32_t csp_eeprom_capacity(void)
 }
 
 // Platform-specific command implementations
-int csp_cmd_save(csp_rt_t* st, int argc, char* argv[])
-{
-    (void)argv;
-    
-    if (csp_eeprom_save(st) < 0) {
-	printf("Error: cannot save to %s\n", eeprom_file);
-	return CSP_CMD_ERROR;
-    }
-    printf("Saved to %s (%d RAM decls, %d RAM instrs, %d bytes)\n",
-	   eeprom_file, st->ps.nd - st->rom_nd, st->ps.nn - st->rom_nn,
-	   csp_eeprom_size(st));
-    return CSP_CMD_OK;
-}
-
-int csp_cmd_load(csp_rt_t* st, int argc, char* argv[])
-{
-    (void)argc;    
-    (void)argv;
-    if (csp_eeprom_load(st) < 0) {
-	printf("Error: cannot load from %s\n", eeprom_file);
-	return CSP_CMD_ERROR;
-    }
-    csp_setup(st);
-    printf("Loaded from %s (%d RAM decls, %d RAM instrs)\n",
-	   eeprom_file, st->ps.nd - st->rom_nd, st->ps.nn - st->rom_nn);
-    return CSP_CMD_OK;
-}
-
 // Platform-specific input polling
 static int quit_flag = 0;
 
@@ -1051,6 +988,9 @@ int main(int argc, char** argv)
 	    printf("Restored %d decls, %d instrs from %s\n",
 		   state.ps.nd - state.rom_nd, state.ps.nn - state.rom_nn,
 		   eeprom_file);
+	else
+	    csp_clr_error(&state);   // "no saved state" is the normal case here,
+				     // not something to report on the next line
     }
     
     // initialize time before starting timers

@@ -126,6 +126,51 @@ Så är X = 1 redan i cycle 0
   eeprom.db beter sig likadant.
   Reproducera med EN save och EN load. Inga loopar mot EEPROM/flash.
 
+## Fälttypen läses aldrig -- `integer` ger inget tecken (2026-07-22)
+  Deklarationen bär `vt`, läsvägen struntar i den:
+
+      #buffer F:8 out can 0x123
+      #field S:16 out integer F[0..15]
+      v = 0 - 300
+      S = v
+      -> S = 65236, inte -300
+
+  Vyn är 16 bitar; att läsa ut den ska teckenutvidga när `vt` är V_INTEGER.
+  Samma sak för `endian`: `make_buf_view` (som `<<=`/`>>=` bygger) hårdkodar
+  dessutom V_UNSIGNED och E_NATIVE, så pack/unpack kan inte ens UTTRYCKA ett
+  signed eller big-endian fält. Automotive-signaler är rutinmässigt båda.
+  Två arbeten: (a) låt läsvägen respektera vt/endian, (b) ge pack-syntaxen ett
+  sätt att ange dem.
+  Hittades när #can/#field vägdes mot variabler+pack: det HÄR var argumentet
+  för att behålla mekanismen, och det visade sig inte finnas i koden.
+
+## Float-literal över 2^31 overflowar i parsern (2026-07-22)
+  `d = 2500000000.0 * 4.0` ger `-7168`. UBSan pekar på csp_rt.c:3095:
+
+      runtime error: signed integer overflow: 250000000 * 10 cannot be
+      represented in type 'int'
+      csp_rt.c:3111: left shift of negative value -1794967296
+
+  Literalen byggs upp i en `int` och skiftas sedan till Q16.16. Både
+  ackumuleringen och skiftet spiller. Bör antingen räknas i uint32/int64 eller
+  avvisas med ett fel -- ett tyst fel värde är det sämsta utfallet.
+  Verifierat pre-existerande (ren HEAD-build ger samma UBSan-utskrift).
+
+## `/load` i en pågående session segfaultar (2026-07-22)
+  `/save` följt av `/load` i samma REPL kraschar i nästa cykel:
+
+      #0  csp_dio_get      csp_rt.c:1634
+      #1  csp_value        csp_rt.c:1663
+      #2  csp_eval_rule    csp_rt.c:1699
+      #3  csp_eval_range / csp_eval / csp_cycle
+
+  `csp_eeprom_load` kör `csp_rt_init` + `csp_rt_start`, alltså en HELT ny
+  arena-layout, medan main-loopen fortsätter köra mot de gamla pekarna.
+  Misstanke: view/heap/buf pekar i tomma luften, eller så saknas ett
+  `csp_setup`/rebuild-steg innan cykeln får gå vidare.
+  Autoladdningen vid start är OK -- det är bara load MITT i en körning.
+  Verifierat pre-existerande: identiskt stackspår på ren HEAD-build.
+
 ## `-r <fil>` slukar filnamnet, och bart `-r` är atoi(NULL) (2026-07-22)
   Två fel i samma optionsrad. `case 'r': reactive = atoi(optarg);`
 

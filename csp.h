@@ -212,7 +212,7 @@ typedef enum {
     V_TIMER    = 8,
     V_DIGITAL  = 9,
     V_ANALOG   = 10,
-    V_CAN      = 11,    
+    V_FIELD      = 11,    
 } vtype_t;
 
 // create argument type bitmask
@@ -503,7 +503,7 @@ typedef enum {
     D_DIGITAL,  // 'digital'
     D_ANALOG,   // 'analog'
     D_TIMER,    // 'timer'
-    D_CAN,      // 'can'
+    D_FIELD,      // 'can'
     D_BUFFER,   // 'buffer'
     D_UART,     // 'uart'
     D_SOCKET,   // 'socket'
@@ -619,14 +619,14 @@ typedef enum {
     DECL_TIMER=V_TIMER,     // 'timer'
     DECL_DIGITAL=V_DIGITAL, // 'digital'
     DECL_ANALOG=V_ANALOG,   // 'analog'
-    DECL_CAN=V_CAN,         // 'can'
+    DECL_FIELD=V_FIELD,         // 'can'
     DECL_BUFFER=12,         // 'buffer' (heap-backed storage)
     DECL_VIEW=13,           // synthetic bit/byte view into a buffer (Buf[a..b])
 } decl_t;
 
 #define DECL_TYPE(s,i) (decl((s),(i),type))
 #define IS_CONST(s,i)  (DECL_TYPE((s),(i))==DECL_CONSTANT)
-#define IS_CAN(s,i)    (DECL_TYPE((s),(i))==DECL_CAN)
+#define IS_CAN(s,i)    (DECL_TYPE((s),(i))==DECL_FIELD)
 
 #define MAKE_RES(r) ((r)-1)
 #define GET_RES(rr) ((rr)+1)
@@ -893,6 +893,8 @@ typedef enum {
     ERR_NAME_TOO_LONG,
     ERR_BAD_RULE_RANGE,
     ERR_NO_SUCH_RULE,
+    ERR_CANNOT_SAVE,
+    ERR_CANNOT_LOAD,
 } csp_err_t;
 
 // parser state, save state before parse
@@ -1576,11 +1578,11 @@ extern void csp_line_init(void);
 extern void csp_line_input(char c);
 extern void csp_line_prompt(void);
 
-// Platform hooks for commands (implemented per platform)
-extern int csp_cmd_save(csp_rt_t* st, int argc, char* argv[]);
-extern int csp_cmd_load(csp_rt_t* st, int argc, char* argv[]);
-
 // eeprom api
+// What to CALL the backing store in /save and /load output ("eeprom.db" on the
+// host, "EEPROM" on a board). The only platform-specific part of those commands
+// -- everything else is shared, so the two print identically.
+extern const char* csp_eeprom_name(void);
 extern int csp_eeprom_open_read(void);
 extern int csp_eeprom_open_write(void);
 extern void csp_eeprom_close(void);

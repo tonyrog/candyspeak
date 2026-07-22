@@ -12,9 +12,9 @@
 //   bit  8..23  Level   16 bit   = bytes 1-2 tracks a variable
 //   bit 24..31  Flags    8 bit   = byte 3    bit flags
 #buffer F300:8 out can 0x300
-#can Count:8  unsigned F300[0..7]
-#can Level:16 unsigned F300[8..23]
-#can Flags:8  unsigned F300[24..31]
+#field Count:8  unsigned F300[0..7]
+#field Level:16 unsigned F300[8..23]
+#field Flags:8  unsigned F300[24..31]
 
 #variable n = 0
 #variable level = 1000

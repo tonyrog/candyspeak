@@ -1,4 +1,4 @@
-// A CAN frame with NO #can declarations at all. The frame is just a #buffer
+// A CAN frame with NO #field declarations at all. The frame is just a #buffer
 // that happens to have can transport, so everything that works on a buffer
 // works on it: bind, <<= pack, >>= unpack.
 //
@@ -7,7 +7,7 @@
 //   candump vcan0
 //   cansend vcan0 401#0501C0
 //
-// This is the point of binding #can to #buffer rather than to a raw id: a frame
+// This is the point of binding #field to #buffer rather than to a raw id: a frame
 // stopped being a special kind of thing and became a buffer with an address.
 
 // ---- outgoing: build a frame from variables -----------------------------

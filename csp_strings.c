@@ -11,6 +11,7 @@ rochar s_digital[] RODATA = "digital";
 rochar s_analog[] RODATA = "analog";
 rochar s_timer[] RODATA = "timer";
 rochar s_can[] RODATA = "can";
+rochar s_field[] RODATA = "field";
 rochar s_buffer[] RODATA = "buffer";
 rochar s_disable[] RODATA = "disable";
 rochar s_enable[] RODATA = "enable";

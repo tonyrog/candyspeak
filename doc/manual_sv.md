@@ -193,9 +193,9 @@ de är utbytbara — välj det som läser bäst:
 ```
 #buffer F201:8 in can 0x201
 
-// 1. #can -- a named field, declared against the frame
-#can Speed:16 unsigned F201[0..15]
-#can Temp:8   unsigned F201[16..23]
+// 1. #field -- a named field, declared against the frame
+#field Speed:16 unsigned F201[0..15]
+#field Temp:8   unsigned F201[16..23]
 
 // 2. bind -- the same thing spelled as a variable
 #variable Rpm:16 bind F201[24..39]
@@ -204,7 +204,7 @@ de är utbytbara — välj det som läser bäst:
 F201 >>= a:8 b:8 c:16 ? F201.rx
 ```
 
-Ett `#can`-fält ärver riktning från ramen och behöver därför sällan en egen.
+Ett `#field`-fält ärver riktning från ramen och behöver därför sällan en egen.
 Bitintervallet anges i **bitar**, räknat från bit 0 i byte 0, och värdet är
 little-endian om inte fältet säger `big`.
 
@@ -213,9 +213,9 @@ direkt om man skriver ett fält och läser ett annat:
 
 ```
 #buffer Out:8 out can 0x200
-#can Lo:8  unsigned Out[0..7]
-#can Hi:8  unsigned Out[8..15]
-#can Both:16 unsigned Out[0..15]
+#field Lo:8  unsigned Out[0..7]
+#field Hi:8  unsigned Out[8..15]
+#field Both:16 unsigned Out[0..15]
 
 Lo = 1
 Hi = 2                  // Both now reads 0x0201
@@ -277,7 +277,7 @@ println("speed changed") ? changed(Speed)
 > ```
 > #variable fresh = 0
 > fresh = F201.rx
-> println("speed=", Speed) ? fresh      // nu i fas
+> println("speed=", Speed) ? fresh      // now in phase
 > ```
 >
 > En `bind`ad variabel har inte det problemet: den *aliaserar* rambitarna i
@@ -431,7 +431,7 @@ Total = m1.Out + m2.Out    // relate fields across instances with a rule
 
 En modul är en mall. Inne i `#module ... #end` kan du deklarera samma resurser
 som på toppnivå — `#variable`, `#digital`, `#analog`, `#timer`, `#buffer`,
-`#can`, `#constant` — plus modul-lokala `#states`, och de regler (inklusive
+`#field`, `#constant` — plus modul-lokala `#states`, och de regler (inklusive
 `#in <state>`-block) som verkar på dem. Varje instans får sin egen kopia av
 varje deklarerad medlem och sitt eget tillstånd, inklusive sin egen
 buffertlagring:
@@ -783,7 +783,7 @@ variabel också. Två följder värda att känna till:
   ```
   #variable fresh = 0
   fresh = changed(X)
-  println(X) ? fresh         // skriver 1
+  println(X) ? fresh         // prints 1
   ```
 
 - En källa som ändras **exakt en gång** triggar aldrig om, så `Y <- X` fångar
@@ -871,7 +871,7 @@ make
 | `-I <fil>` | Mata ingångar från fil (realtid, cykelstämplade rader) |
 | `-F <fil>` | Mata ingångar med **simulerad tid** (se nedan) |
 | `-b` | Starta pausad; inspektera, sedan `/resume` (implicerar `-i`) |
-| `--can=IFACE` | SocketCAN-interface för `#can`-ramar (t.ex. `vcan0`) |
+| `--can=IFACE` | SocketCAN-interface för `#field`-ramar (t.ex. `vcan0`) |
 | `-m N[k]` | Användbar kodminnesbudget i byte |
 | `-M N[k]` | Totalt RAM som den simulerade brädan har |
 | `-U N[k]` | RAM som systemet och länkade bibliotek tar |
@@ -1428,7 +1428,7 @@ pandoc doc/manual_sv.md -o doc/manual_sv.pdf \
 #constant <name> = <value>
 #buffer <name>:<bits> [type]            // shared storage / frame layout
 #buffer <name>:<bytes> [in|out] can <id>  // CAN frame (size in BYTES)
-#can <name>:<bits> [type] <frame>[<a>..<b>]  // field of a frame
+#field <name>:<bits> [type] <frame>[<a>..<b>]  // field of a frame
 #states <name> ...                      // enumerate states (INIT/NORMAL implicit)
 #module <name> ... #end
 ```
@@ -1447,7 +1447,7 @@ X = Buf[0..1]               // byte range -> one value (little-endian)
 ```
 #buffer F201:8 in  can 0x201     // 8 BYTES (the DLC), received
 #buffer Out:8  out can 0x200     // transmitted
-#can Speed:16 unsigned F201[0..15]   // field: a bit view into the frame
+#field Speed:16 unsigned F201[0..15]   // field: a bit view into the frame
 
 Speed = v                        // writing a field sends the frame (event PDO)
 Out.tx  = 1 ? timeout(Beat)      // cyclic PDO: send even if unchanged
