@@ -779,10 +779,18 @@ void csp_set_err_arg_int(csp_rt_t* st, int i, int ival)
     st->ps.err_args[i] = ival;
 }
 
-// Token string to temp area (grows down), set error with it
+// Token string to temp area (grows down), set error with it.
+//
+// The temp area and err_strp are RAM-LOCAL (0..MAX_STR_BUF, top of ram_str),
+// but ps.strp is a LOGICAL string position that includes rom_strp. Comparing
+// them directly meant that with a ROM linked (rom_strp = 130 for cpx) the guard
+// read `err_strp(128) >= 130+...` = false, so no error arg was ever stored and
+// every "%s" in a message printed blank on the board. Subtract rom_strp to get
+// the RAM string usage the err area actually shares space with. (All three
+// csp_set_err_arg_* had this.)
 void csp_set_err_arg_tstr(csp_rt_t* st, int i, const tstr_t* str)
 {
-    if (st->ps.err_strp >= st->ps.strp + (uint32_t)str->len + 1) {
+    if (st->ps.err_strp >= (st->ps.strp - st->rom_strp) + (uint32_t)str->len + 1) {
 	st->ps.err_strp -= str->len + 1;
 	memcpy(&st->ram_str[st->ps.err_strp], str->ptr, str->len);
 	st->ram_str[st->ps.err_strp + str->len] = '\0';
@@ -797,7 +805,7 @@ void csp_set_err_arg_rostr(csp_rt_t* st, int i, rostring_t str)
 {
     int len = ro_strlen(str);
 
-    if (st->ps.err_strp >= st->ps.strp + (uint32_t)len + 1) {
+    if (st->ps.err_strp >= (st->ps.strp - st->rom_strp) + (uint32_t)len + 1) {
 	st->ps.err_strp -= len + 1;
 	ro_strcpy(&st->ram_str[st->ps.err_strp], str, len + 1);
 	st->ps.err_args[i] = (uintptr_t)&st->ram_str[st->ps.err_strp];
@@ -814,7 +822,7 @@ void csp_set_err_arg_ix(csp_rt_t* st, int i, index_t ix)
     sindex_t pos = decl_name_pos(st, ix);
     int len = pos ? csp_str_byte(st, pos - 1) : 0;
 
-    if (st->ps.err_strp >= st->ps.strp + (uint32_t)len + 1) {
+    if (st->ps.err_strp >= (st->ps.strp - st->rom_strp) + (uint32_t)len + 1) {
 	int k;
 	st->ps.err_strp -= len + 1;
 	for (k = 0; k < len; k++)
@@ -5899,11 +5907,22 @@ NOINLINE void csp_load_rom(csp_rt_t* st)
 #if defined(CSP_ARENA_CUSTOM)
 // backend provides its own csp_arena_mem() (e.g. sbrk-based claim of free RAM)
 #elif defined(CSP_ARENA_MALLOC)
-uint8_t* csp_arena_mem(size_t want, size_t* got)   // claim: take what we asked for
+uint8_t* csp_arena_mem(size_t want, size_t* got)   // claim ONCE, then reuse
 {
-    uint8_t* p = (uint8_t*)malloc(want);
-    *got = p ? want : 0;
-    return p;
+    // Allocated once and cached: the pool lives for the whole run, so a second
+    // call (csp_rt_init re-runs on /load) must return the SAME block. malloc'ing
+    // again would leak the first arena AND, on a RAM-tight target, shrink freeRam
+    // so the recomputed `want` is smaller -- csp_rebuild then OOMs ("too many
+    // declarations") even though the program fit at boot. The first claim (boot,
+    // max freeRam) is the one to keep; later `want` values are ignored.
+    static uint8_t* arena = NULL;
+    static size_t   arena_size = 0;
+    if (arena == NULL) {
+	arena = (uint8_t*)malloc(want);
+	arena_size = arena ? want : 0;
+    }
+    *got = arena_size;
+    return arena;
 }
 #else
 uint8_t* csp_arena_mem(size_t want, size_t* got)   // portable default: no heap
