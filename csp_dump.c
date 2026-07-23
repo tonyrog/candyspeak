@@ -772,6 +772,17 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     fprintf(f, "\n");
 
     fprintf(f, "#include \"csp.h\"\n");
+    // Compile-time reject: if this rom.c was generated for an older ROM format
+    // than the csp.h it is now built against, fail the BUILD with a clear message
+    // instead of flashing a firmware that rejects its own ROM at boot. The
+    // runtime check (csp_load_rom) is the backstop for a corrupt or wrongly
+    // matched flash image; this catches the far more common "forgot to
+    // regenerate" at the earliest possible point.
+    fprintf(f, "#if ROM_FORMAT_VERSION != %u\n", (unsigned)ROM_FORMAT_VERSION);
+    fprintf(f, "#error \"rom.c is stale: generated for ROM format %u, "
+	       "csp.h is newer -- regenerate with 'csp -C'\"\n",
+	    (unsigned)ROM_FORMAT_VERSION);
+    fprintf(f, "#endif\n");
     // first dump string table
     // int, not char: matches the `extern const int rom_str_len` in csp_rt.c so
     // the read is 4-byte aligned (a char at an odd address read as int HardFaults
@@ -969,6 +980,16 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 		st->states[i].name, st->states[i].snum);
     if (!st->ps.ns) fprintf(f, "{0}");   // avoid a zero-length array
     fprintf(f, "};\n");
+
+    // Version + CRC last, so csp_load_rom can reject a stale or corrupt generate.
+    // CRC over the SAME instructions this file emits (st->ram_instr[0..nn), the
+    // array the loop above dumped) -- csp_load_rom re-runs csp_rom_crc16 over the
+    // compiled rom_instr[] and they must match. On the host ro_instr is a plain
+    // read, so this equals what a mega computes via memcpy_P.
+    fprintf(f, "const uint16_t rom_version RODATA = %u;\n",
+	    (unsigned)ROM_FORMAT_VERSION);
+    fprintf(f, "const uint16_t rom_crc RODATA = %u;\n",
+	    (unsigned)csp_rom_crc16(st->ram_instr, st->ps.nn));
 }
 
 // list declarations

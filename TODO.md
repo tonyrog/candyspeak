@@ -1,5 +1,25 @@
 # FIXES
 
+## Full-ROM/EEPROM CRC via KANONISK serialisering (2026-07-23, beslutat)
+  Idag CRC:ar rom_crc bara ROM-INSTRUKTIONERNA (layout-stabila: PACKED 4-byte).
+  Vill utoka till att tacka decls, strangar OCH storleks-skalarerna -- "en cell
+  racker for att bli galen".
+  HAKEN: generatorn kor pa host, flash-byten laggs ut av avr-gcc. str (char) och
+  instr (PACKED 4B) ar byte-identiska bada mal; decls (bitfalt + padding) och
+  skalarer (int = 2B AVR / 4B host) ar det INTE. En ra byte-CRC bakad pa host
+  matchar da inte AVR-flashen.
+  BESLUT: kanonisk serialisering. CRC:a LOGISKA varden i ett fast format (str
+  som ar, varje decl-falt fast bredd LE, instr 4B, storlekar uint16 LE), inte
+  raa struct-byte. Haller decl LITET (byte-stabilitet behovs aldrig), robust mot
+  framtida falt-tillagg/kompilatorbyte/BE-mal, kostar FLASH inte RAM.
+  FORKASTAT: (a) arrangera om decl till fasta falt -> vaxer 8->~12-16B/decl,
+  betalar RAM (knappt) for CRC-enkelhet. (b) tva CRC (BE/LE) -> bada mal ar
+  little-endian, loser fel problem.
+  OCKSA: EEPROM behover en CRC over sin EGNA payload (inte bara rom_crc som ar
+  firmware-fingeravtryck) -- den ar oproblematisk, samma maskin skriver/laser.
+  Generalisera csp_rom_crc16 -> csp_crc16(ptr, n, is_rom, seed) forst.
+
+
 1.  Vi inför #disable <rule-range> / #enable
 <rule-range> där rule range är en list av regel-nummber 1,2,3 eller range
 1-3 separerade med blank-tecken. #disable 10 ska se till att regel nummer 10

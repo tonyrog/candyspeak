@@ -93,6 +93,15 @@ typedef unsigned bool_t;
 // rejects a position that will not fit rather than truncating (ERR_STRING_SPACE).
 #define NAMEPOS_BITS 9
 
+// Format version of a generated ROM (rom.c). Baked in by `csp -C` as rom_version
+// and checked by csp_load_rom at boot. Bump it whenever the ROM layout changes
+// in a way an old generate could not survive: csp_decl_t / csp_instr_t bitfield
+// widths, the rom_* symbol set, or the meaning of a baked field. A mismatch
+// rejects the ROM (runs empty, with a message) instead of executing garbage --
+// exactly the "stale generate" trap that cost us the July-18 ROM and EEPROM v5.
+//   v1: first versioned ROM (post NAMEPOS_BITS)
+#define ROM_FORMAT_VERSION 1
+
 typedef const char rochar;                // PROGMEM string character type
 typedef const struct rostr* rostring_t;  // PROGMEM string object type
 
@@ -1443,6 +1452,7 @@ extern void    csp_estimate(csp_rt_t* st, csp_estimate_t* e);
 // provides its own definition with CSP_ARENA_CUSTOM (e.g. claim free RAM).
 extern uint8_t* csp_arena_mem(size_t want, size_t* got);
 extern void    csp_load_rom(csp_rt_t*);
+extern uint16_t csp_rom_crc16(const csp_instr_t* code, index_t n);
 extern int     csp_has_firmware(void);
 extern int     csp_rt_start(csp_rt_t*);
 // Re-lay the whole program out (graph + leaf/device setup). Use this rather than

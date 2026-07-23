@@ -39,33 +39,13 @@ static rochar eeprom_magic[4] RODATA = "CSP";
     ((size_t)BITSET_GROUPS((n) > MAX_DIS_RULES ? MAX_DIS_RULES : (n)) \
      * sizeof(set_group_t))
 
-// CRC-16/CCITT over the ROM instruction words.
-//
-// The disable set is stored as rule NUMBERS, and a number only means something
-// relative to a specific program. The rom_nd/rom_nn/rom_strp fingerprint says
-// the firmware is the same SIZE; it says nothing about the content, and rule 7
-// is a different rule the moment the content changes. This closes that gap.
-//
-// Read through csp_get_instr so it works on AVR, where the ROM half lives in
-// flash. Bitwise and table-free: it runs once per save and once per load.
-static uint16_t rom_crc16(csp_rt_t* st)
-{
-    uint16_t crc = 0xFFFF;
-    index_t i;
-    unsigned k, b;
-
-    for (i = 0; i < st->rom_nn; i++) {
-	csp_instr_t ins = csp_get_instr(st, i);
-	const uint8_t* p = (const uint8_t*)&ins;
-	for (k = 0; k < sizeof(csp_instr_t); k++) {
-	    crc ^= (uint16_t)((uint16_t)p[k] << 8);
-	    for (b = 0; b < 8; b++)
-		crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021)
-				     : (uint16_t)(crc << 1);
-	}
-    }
-    return crc;
-}
+// Fingerprint the firmware ROM a save was made against. The disable set stores
+// rule NUMBERS, and a number only means something relative to a specific
+// program; the rom_nd/rom_nn/rom_strp sizes say the firmware is the same SIZE
+// but nothing about content, and rule 7 is a different rule the moment the
+// content changes. csp_rom_crc16 (shared with csp_load_rom, in csp_rt.c) closes
+// that gap. rom_instr_p/rom_nn are the loaded ROM.
+#define rom_crc16(st) csp_rom_crc16((st)->rom_instr_p, (st)->rom_nn)
 
 int csp_eeprom_clear(csp_rt_t* st)
 {
