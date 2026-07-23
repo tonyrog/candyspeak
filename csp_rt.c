@@ -436,12 +436,12 @@ NOINLINE int ro_strcpy(char* dst, rostring_t src, int max)
 // precomputed reactive graph (ROM decl -> ROM rules), consumed by
 // csp_enq_elist alongside the runtime RAM graph. Emitted by csp -C -r.
 extern const char        rom_str[];
-extern const int         rom_str_len;
+extern const uint16_t    rom_str_len;
 extern const csp_decl_t  rom_decl[];
 extern const csp_instr_t rom_instr[];
-extern const int         rom_n_decl;
-extern const int         rom_n_instr;
-extern const int         rom_n_edg;
+extern const uint16_t    rom_n_decl;
+extern const uint16_t    rom_n_instr;
+extern const uint16_t    rom_n_edg;
 extern const index_t     rom_idg[];
 extern const index_t     rom_ofs[];
 extern const index_t     rom_edg[];
@@ -449,7 +449,7 @@ extern const index_t     rom_edg[];
 // state lookup need the user states, which csp_rt_init only seeds with
 // INIT/NORMAL. Always emitted (rom_n_states>=2 for a baked program, 0 stub when
 // no firmware is linked).
-extern const int         rom_n_states;
+extern const uint16_t    rom_n_states;
 extern const state_t     rom_states[];
 // Baked by csp -C so csp_load_rom can reject a stale or corrupt generate:
 // rom_version is ROM_FORMAT_VERSION as of generation, rom_crc is a CRC over the
@@ -457,26 +457,36 @@ extern const state_t     rom_states[];
 extern const uint16_t    rom_version;
 extern const uint16_t    rom_crc;
 
-// CRC-16/CCITT over n instruction words, read through ro_instr so it is correct
-// on AVR (rom_instr is PROGMEM) and on the host (plain). Shared: the generator
-// runs it over the program it is emitting, csp_load_rom re-runs it over the
-// baked rom_instr, and csp_eeprom uses it to fingerprint the firmware a save was
-// made against. Table-free; runs once per boot / save / load.
-uint16_t csp_rom_crc16(const csp_instr_t* code, index_t n)
-{
-    uint16_t crc = 0xFFFF;
-    index_t i;
-    unsigned k, b;
+// The ROM CRC is a byte-CRC over the RAW flash image (str, decls, instrs,
+// states, sizes). That is only reproducible between the host generator and the
+// AVR runtime because both are LITTLE-ENDIAN: a big-endian machine packs the
+// same bitfields MSB-first (measured: arm-BE decl `05 aa 8f e5` vs LE
+// `41 55 e3 57`), so a CRC baked on a BE host would never match an LE target,
+// and the board would reject its own ROM. If CandySpeak is ever built on a
+// big-endian host, or ported to a big-endian target, this assert fires and the
+// fix is canonical field-by-field serialization instead of a raw byte-CRC.
+#if defined(__BYTE_ORDER__)
+CSP_STATIC_ASSERT(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
+    "ROM/EEPROM byte-CRC assumes little-endian; a big-endian host or target "
+    "needs canonical field serialization");
+#endif
 
-    for (i = 0; i < n; i++) {
-	csp_instr_t ins = ro_instr(&code[i]);
-	const uint8_t* p = (const uint8_t*)&ins;
-	for (k = 0; k < sizeof(csp_instr_t); k++) {
-	    crc ^= (uint16_t)((uint16_t)p[k] << 8);
-	    for (b = 0; b < 8; b++)
-		crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021)
-				     : (uint16_t)(crc << 1);
-	}
+// CRC-16/CCITT, incremental: folds n bytes into `crc` and returns it, so a
+// caller can chain several regions (str, then decls, then instrs, ...). is_rom
+// selects ro_byte, which is memcpy_P on AVR (the region is PROGMEM) and a plain
+// read on the host; pass 0 for ordinary RAM. Table-free. Seed with 0xFFFF.
+uint16_t csp_crc16(uint16_t crc, const void* data, size_t n, int is_rom)
+{
+    const uint8_t* p = (const uint8_t*)data;
+    size_t k;
+    unsigned b;
+
+    for (k = 0; k < n; k++) {
+	uint8_t byte = is_rom ? ro_byte(p + k) : p[k];
+	crc ^= (uint16_t)((uint16_t)byte << 8);
+	for (b = 0; b < 8; b++)
+	    crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021)
+				 : (uint16_t)(crc << 1);
     }
     return crc;
 }
@@ -5800,11 +5810,33 @@ int csp_has_firmware(void)
     return rom_n_instr > 0;
 }
 
+// CRC of the linked ROM image, computed over the RAW flash bytes of the sized
+// arrays plus the size scalars. The generator (csp -C) computes the identical
+// value over the program it emits and bakes it as rom_crc; csp_load_rom checks
+// it here. Byte-CRC is valid because host and target are both little-endian and
+// str/decl/instr are byte-stable (see the CSP_STATIC_ASSERT at csp_crc16).
+//
+// Covers str + decls + instrs + the counts. NOT the reactive graph (present
+// only for -r ROMs) nor rom_states (state_t is not PACKED -- 4 bytes on the host
+// vs 2 on AVR -- so its raw bytes are not cross-platform; its NAME offsets index
+// rom_str, which IS covered). Order here MUST match the generator's fold.
+static uint16_t rom_image_crc(void)
+{
+    uint16_t crc = 0xFFFF;
+    uint16_t scal[5];
+    scal[0] = rom_str_len; scal[1] = rom_n_decl; scal[2] = rom_n_instr;
+    scal[3] = rom_n_edg;   scal[4] = rom_n_states;
+    crc = csp_crc16(crc, scal, sizeof(scal), 0);
+    crc = csp_crc16(crc, rom_str,   rom_str_len,                             1);
+    crc = csp_crc16(crc, rom_decl,  (size_t)rom_n_decl  * sizeof(csp_decl_t),  1);
+    crc = csp_crc16(crc, rom_instr, (size_t)rom_n_instr * sizeof(csp_instr_t), 1);
+    return crc;
+}
+
 // Activate the linked firmware ROM: run it in place from flash by setting the
 // RAM base offsets to the ROM sizes. No copy -- csp_get_decl/instr read flash
 // for logical indices below the base. The parse_file DECL_END terminator at the
 // end of the ROM image is dropped so RAM decls append seamlessly.
-// STEG2: not called yet (base stays 0, ROM inactive); needs State-from-ROM.
 NOINLINE void csp_load_rom(csp_rt_t* st)
 {
     index_t nd = rom_n_decl;
@@ -5824,7 +5856,7 @@ NOINLINE void csp_load_rom(csp_rt_t* st)
 	csp_print_line(" -- regenerate rom.c");
 	return;
     }
-    if (rom_crc != csp_rom_crc16(rom_instr, rom_n_instr)) {
+    if (rom_crc != rom_image_crc()) {
 	csp_print_line("ROM rejected: CRC mismatch (corrupt flash image)");
 	return;
     }

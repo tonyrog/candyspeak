@@ -1452,7 +1452,7 @@ extern void    csp_estimate(csp_rt_t* st, csp_estimate_t* e);
 // provides its own definition with CSP_ARENA_CUSTOM (e.g. claim free RAM).
 extern uint8_t* csp_arena_mem(size_t want, size_t* got);
 extern void    csp_load_rom(csp_rt_t*);
-extern uint16_t csp_rom_crc16(const csp_instr_t* code, index_t n);
+extern uint16_t csp_crc16(uint16_t crc, const void* data, size_t n, int is_rom);
 extern int     csp_has_firmware(void);
 extern int     csp_rt_start(csp_rt_t*);
 // Re-lay the whole program out (graph + leaf/device setup). Use this rather than

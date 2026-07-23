@@ -1,92 +1,22 @@
 # FIXES
 
-## Full-ROM/EEPROM CRC via KANONISK serialisering (2026-07-23, beslutat)
-  Idag CRC:ar rom_crc bara ROM-INSTRUKTIONERNA (layout-stabila: PACKED 4-byte).
-  Vill utoka till att tacka decls, strangar OCH storleks-skalarerna -- "en cell
-  racker for att bli galen".
-  HAKEN: generatorn kor pa host, flash-byten laggs ut av avr-gcc. str (char) och
-  instr (PACKED 4B) ar byte-identiska bada mal; decls (bitfalt + padding) och
-  skalarer (int = 2B AVR / 4B host) ar det INTE. En ra byte-CRC bakad pa host
-  matchar da inte AVR-flashen.
-  BESLUT: kanonisk serialisering. CRC:a LOGISKA varden i ett fast format (str
-  som ar, varje decl-falt fast bredd LE, instr 4B, storlekar uint16 LE), inte
-  raa struct-byte. Haller decl LITET (byte-stabilitet behovs aldrig), robust mot
-  framtida falt-tillagg/kompilatorbyte/BE-mal, kostar FLASH inte RAM.
-  FORKASTAT: (a) arrangera om decl till fasta falt -> vaxer 8->~12-16B/decl,
-  betalar RAM (knappt) for CRC-enkelhet. (b) tva CRC (BE/LE) -> bada mal ar
-  little-endian, loser fel problem.
-  OCKSA: EEPROM behover en CRC over sin EGNA payload (inte bara rom_crc som ar
-  firmware-fingeravtryck) -- den ar oproblematisk, samma maskin skriver/laser.
-  Generalisera csp_rom_crc16 -> csp_crc16(ptr, n, is_rom, seed) forst.
-
-
-1.  Vi inför #disable <rule-range> / #enable
-<rule-range> där rule range är en list av regel-nummber 1,2,3 eller range
-1-3 separerade med blank-tecken. #disable 10 ska se till att regel nummer 10
-aldrig exekverar. men genom att skriva #enable <rule-range> så kan man
-återaktivera dessa regler. Regel nummer är löpane för varje OP_RULE (funkar ?) men listas som 1,2,...N så i listningen behöver vi markera vilka som ligger i RAM / ROM som förut (kanske lite mer kompakt, smartare) också om regel redan är disable markerad (förslag? )
-disable listan måste sparas i EEPROM.
-
-    KLART 2026-07-22, steg 1-6. Tokens, range-parser, dis_rule/dis_ip, check i
-    OP_RULE, `!` i /list, EEPROM-persistens. Testat i BÅDA lägena
-    (tests/unit/disable) och round-trip verifierat med EN save + EN load.
-    Kvar/öppet:
-      - Fel rom_crc avvisar hela sparningen TYST (samma som en
-        storleksmismatch gör i dag). Den som flashat om ser bara att inget
-        återställdes. Ev. säg ifrån.
-
-    STEG 6 -- persistens. ETT bitset, sparat i sin helhet.
-
-    dis_rule täcker redan både ROM och RAM: regelnummer löper 1..r_rom genom
-    ROM-reglerna och fortsätter in i RAM. Så det finns inget att dela upp.
-
-      - csp_eeprom_save skriver ut dis_rule, ceil(n_rule_no/8) byte. Ett
-        30-regelsprogram kostar fyra. Nytt headerfält: n_dis (antal regler
-        setet gällde när det skrevs).
-      - csp_eeprom_load läser tillbaka det till dis_rule. csp_rebuild härleder
-        dis_ip som vanligt -- ingen ny kod på den sidan.
-      - CRC över ROM-instruktionerna, lagrad i EEPROM. Setet gäller
-        regelnummer, och de numren betyder ingenting om ROM:en bytts ut under
-        fötterna. Matchar inte CRC:n, eller matchar inte n_dis programmets
-        faktiska regelantal: SLÄNG setet och SÄG TILL. Applicera det aldrig på
-        fel regler.
-      - Formatversionen blir kvar VID SIDAN av CRC:n. De svarar på olika
-        frågor: versionen på "förstår jag den här layouten", CRC:n på "är det
-        samma program". En version som stiger säger inget om ROM-innehållet,
-        och en CRC-träff säger inget om att fälten flyttat.
-        EEPROM_VERSION 4 -> 5.
-
-    ÖVERVÄGT OCH FÖRKASTAT: disable-biten i OP_RULE-ordet för RAM-regler (det
-    finns 6 lediga bitar i csp_instr_rule_t) plus ett separat ROM-set i EEPROM.
-    Lockelsen var gratis persistens för RAM -- instruktionsarrayen sparas redan
-    rakt av. Två skäl att låta bli:
-      - Det ger FYRA representationer av samma faktum (dis_rule, dis_ip,
-        instruktionsbiten, ROM-setet), varav tre måste hållas i synk vid varje
-        #disable, #enable och rebuild.
-      - Vinsten finns inte. csp_eeprom_load avvisar redan HELA sparningen om
-        ROM:en inte stämmer (rom_nd/rom_nn/rom_strp-kollen, som CRC:n skärper),
-        så det finns inget fall där RAM-disables överlever medan ROM-disables
-        kastas. Asymmetrin svarade mot en situation som inte kan uppstå.
-    De sex bitarna i OP_RULE-ordet är alltså fortfarande lediga.
-
-2. Regeler är reaktiva (konsekvent)
-
-X = Expr ? Cond   ska tolkas som  X <- Expr ? Cond
-
-X = Expr ska tolkas som ( X = Expr ? 1 ) :
-
-#in INIT
-X = Expr
-#end
-
-Dvs bara köras EN gång (X = Expr i cycle 1) medan:
-
-#variable X = 1
-
-Så är X = 1 redan i cycle 0
-
-
-# BUGS - remove when fixed
+## CRC: kvarvarande luckor + emitter-buggar (2026-07-23)
+  Full ROM-CRC + EEPROM data_crc KLART (se DONE). Kvar:
+  - GENERATOR-NORMALISERING KOPPLAD TILL EMITTERN: rom_image_crc folder
+    rom_decl som den ar; generatorn maste nolla exakt de falt emittern INTE
+    skriver (is_mapped/bound/reg + timer fired/running/_res). Andras emittern
+    maste normaliseringen folja med, annars tyst CRC-miss -> ROM rejected.
+    Sarbar. Ev. gor en delad rom_decl_canonical(d) som BADA anvander.
+  - EMITTER DROPPAR #buffer-falt: csp_dump.c DECL_BUFFER-grenen skriver bara
+    common (rad ~860 "no extra union fields") men csp_bufdecl_t HAR
+    nbits/transport/id. Sa en buffer overlever inte ROM-bakning (storlek =0)
+    OCH CRC:n mismatchar for buffer-ROMs -> avvisas. cpx har inga buffrar sa
+    ej triggat. FIX: emittera .nbits/.transport/.id for DECL_BUFFER.
+  - GRAFEN (rom_idg/ofs/edg) ej i CRC:n. Bara reaktiva (-r) ROMs har den.
+    Lagg till om reaktiv firmware ska skyddas.
+  - rom_states ej i CRC:n: state_t ar inte PACKED (4B host / 2B AVR). Gor
+    state_t PACKED (blir 2B bada, byte-stabil som decl) sa kan den foldas.
+    Namn-offsetarna indexerar rom_str som redan ar med, sa delvis tackt.
 
 ## Listing of RAM rule, list as [ROM]
 
