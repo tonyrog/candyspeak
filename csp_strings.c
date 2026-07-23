@@ -235,6 +235,7 @@ rochar s_err_cannot_load[] RODATA = "cannot load from eeprom";
 rochar s_State[] RODATA = "State";
 rochar s_INIT[] RODATA = "INIT";
 rochar s_NORMAL[] RODATA = "NORMAL";
+rochar s_FAILSAFE[] RODATA = "FAILSAFE";
 rochar s_name[] RODATA = "name";
 rochar s_on[] RODATA = "on";
 rochar s_off[] RODATA = "off";

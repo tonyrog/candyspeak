@@ -242,6 +242,7 @@ err_cannot_load cannot load from eeprom
 State State
 INIT INIT
 NORMAL NORMAL
+FAILSAFE FAILSAFE
 name name
 # /latch argument, and the value it prints back in /state
 on on

@@ -1,5 +1,5 @@
 {cycles, 5}.
 {checks, [
-  {final_object_var, "Blk.b1", "b1.State", 3},
+  {final_object_var, "Blk.b1", "b1.State", 4},
   {final_object_var, "Blk.b1", "b1.V", 3}
 ]}.

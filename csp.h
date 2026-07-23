@@ -200,6 +200,16 @@ extern int ro_strcpy(char* dst, rostring_t src, int max);
 #define MAX_NAME_LEN 31    // max var name len
 #define MAX_ARGS     4     // max number of arguments to function
 
+// Reserved state numbers, installed by csp_rt_init in this order. INIT is the
+// boot state (cycle()==0), NORMAL the running state. FAILSAFE is the designated
+// safe state: once the State variable holds it, it is STICKY -- no rule may
+// leave it, only a reset -- so a safe configuration cannot be bounced out of by
+// a flaky guard. Its `#in FAILSAFE` block (at most one) drives outputs to a
+// known-safe setting. User states are numbered from FAILSAFE+1 up.
+#define STATE_INIT     0
+#define STATE_NORMAL   1
+#define STATE_FAILSAFE 2
+
 #define BAD_INDEX   (MAX_INDICES-1)
 #define PARSE_ERROR -1
 
@@ -1551,12 +1561,18 @@ extern int csp_eeprom_clear(csp_rt_t* st);
 
 // stack check/debug
 extern int stack_used();
-// Stack watch: worst-ever margin between the stack pointer and the arena top.
-// Sample it anywhere; the deeper the call, the more it is worth.
+// Stack watch (diagnostic): worst-ever margin between the stack pointer and the
+// arena top. Sample it anywhere; the deeper the call, the more it is worth.
+// Gated behind CSP_STACK_WATCH (the `watch` make target) -- off, the sample
+// calls vanish and the runtime carries none of it. See csp_rt.c.
+#ifdef CSP_STACK_WATCH
 extern char* csp_arena_top;
 extern long  csp_stack_low;
 extern void* csp_stack_low_fn;
 extern void  csp_stack_mark(void);
+#else
+#define csp_stack_mark() ((void)0)
+#endif
 
 extern const char  csp_tag(csp_rt_t* st, index_t n);
 extern rostring_t csp_fmt_pindir(uint8_t dir);

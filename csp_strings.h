@@ -471,6 +471,8 @@ extern rochar s_INIT[5] RODATA;
 #define ros_INIT ((rostring_t) s_INIT)
 extern rochar s_NORMAL[7] RODATA;
 #define ros_NORMAL ((rostring_t) s_NORMAL)
+extern rochar s_FAILSAFE[9] RODATA;
+#define ros_FAILSAFE ((rostring_t) s_FAILSAFE)
 extern rochar s_name[5] RODATA;
 #define ros_name ((rostring_t) s_name)
 extern rochar s_on[3] RODATA;

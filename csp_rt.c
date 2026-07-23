@@ -330,9 +330,14 @@ static const char tag_tab[] RODATA = {
 // A negative low-water mark means the stack has already been inside the
 // declarations. CSP_STACK_RESERVE is only the guess made at boot; this is the
 // measurement.
+// Diagnostic-only: gated behind CSP_STACK_WATCH so a normal build carries none
+// of it (the csp_stack_mark() calls compile to nothing -- see csp.h). Enable via
+// the `watch` make target. csp_stack_mark measures how close the stack has come
+// to the arena; the -finstrument hooks below find the deepest function.
+#ifdef CSP_STACK_WATCH
 char* csp_arena_top = NULL;      // set by csp_mem_init
 long  csp_stack_low = 0x7fffffffL;
-void* csp_stack_low_fn = NULL;   // the function that set the record (WATCH build)
+void* csp_stack_low_fn = NULL;   // the function that set the record
 
 void csp_stack_mark(void)
     __attribute__((no_instrument_function));
@@ -350,11 +355,10 @@ void csp_stack_mark(void)
 
 // Built with -finstrument-functions, gcc calls these on EVERY function entry
 // and exit -- so the deepest point is found by measurement instead of by
-// guessing where to put a probe. Diagnostic builds only: it costs a call pair
-// per function. Both must carry no_instrument_function or they recurse.
+// guessing where to put a probe. Costs a call pair per function. Both must
+// carry no_instrument_function or they recurse.
 //
-//   make -f Makefile.mega ARENA="-DCSP_ARENA_MALLOC -DCSP_STACK_WATCH -finstrument-functions"
-#ifdef CSP_STACK_WATCH
+//   make -f Makefile.mega watch
 void __cyg_profile_func_enter(void* fn, void* call)
     __attribute__((no_instrument_function));
 void __cyg_profile_func_exit(void* fn, void* call)
@@ -1783,6 +1787,8 @@ NOINLINE void csp_set_value(csp_rt_t* st, index_t n, value_t v)
     }
 }
 
+static int state_is_state_var(csp_rt_t* st, int di);   // fwd: sticky FAILSAFE
+
 NOINLINE value_t csp_value(csp_rt_t* st, index_t n)
 {
     value_t cv;
@@ -1834,9 +1840,19 @@ again:
 	    csp_value(st, instr(st,n,mi.mem)).i == instr(st,n,mi.imm);
 	break;
     case OP_STI: {  // store immediate to memory (mirror of EQI)
+	index_t sm = instr(st,n,mi.mem);
 	value_t v;
 	v.i = instr(st,n,mi.imm);
-	csp_set_value(st, instr(st,n,mi.mem), v);
+	// Sticky FAILSAFE: once the State variable holds it, only a reset leaves
+	// it -- a rule that tries to set State to anything else is ignored, so a
+	// flaky guard cannot bounce the device out of its safe configuration.
+	// Cheap guard: the name check runs only when the slot already reads
+	// FAILSAFE (rare) and the write is not re-asserting it.
+	if (v.i != STATE_FAILSAFE &&
+	    csp_value(st, sm).i == STATE_FAILSAFE &&
+	    state_is_state_var(st, INDEX(sm)))
+	    break;
+	csp_set_value(st, sm, v);
 	break;
     }
     case OP_STIMP:  // same as ST, but marks reactive assignment
@@ -5976,9 +5992,11 @@ int csp_mem_init(csp_rt_t* st, size_t size)
     st->mem_size &= ~(size_t)7;          // keep the decl anchor 8-aligned
     st->mem_limit = st->mem_size;
     memset(st->mem, 0, st->mem_size);
+#ifdef CSP_STACK_WATCH
     // Top of the pool = where RAM declarations start growing down from, and the
     // address the stack must never reach. csp_stack_mark measures against it.
     csp_arena_top = (char*)st->mem + st->mem_limit;
+#endif
 
     // Double-ended pool: instr[] grows up from the base, decl[] grows down from
     // the top of the CLAIMED block. ram_decl points at the topmost decl slot and
@@ -6075,19 +6093,26 @@ int csp_rt_init(csp_rt_t* st, int reactive)
 	RO_TSTR(State, ros_State);
 	RO_TSTR(INIT, ros_INIT);
 	RO_TSTR(NORMAL, ros_NORMAL);
-	st->ps.ns = 0;  // install INIT (cycle()==0) and NORMAL
+	RO_TSTR(FAILSAFE, ros_FAILSAFE);
+	st->ps.ns = 0;  // install INIT (cycle()==0), NORMAL, FAILSAFE
 	st->sx = csp_new_decl(st, &State, DECL_VARIABLE);
 	st->sdef = -1;
-	// add state INIT=0 and NORMAL=1
-	if (add_state(st, &INIT) != 0) {
-	    DBG("unabled to add INIT state=0\n");
+	// Reserved states in fixed order: INIT=0, NORMAL=1, FAILSAFE=2 (sticky
+	// safe state). User states follow from 3. The numbers are contract --
+	// STATE_* in csp.h and the sticky check depend on them.
+	if (add_state(st, &INIT) != STATE_INIT) {
+	    DBG("unable to add INIT state\n");
 	    return -1;
 	}
-	if (add_state(st, &NORMAL) != 1) {
-	    DBG("unabled to add NORMAL state=1\n");
+	if (add_state(st, &NORMAL) != STATE_NORMAL) {
+	    DBG("unable to add NORMAL state\n");
 	    return -1;
 	}
-	st->rom_ns = st->ps.ns;  // baseline (2); raised by csp_load_rom if firmware
+	if (add_state(st, &FAILSAFE) != STATE_FAILSAFE) {
+	    DBG("unable to add FAILSAFE state\n");
+	    return -1;
+	}
+	st->rom_ns = st->ps.ns;  // baseline (3); raised by csp_load_rom if firmware
     }
     st->list_state = -1;         // no #in block being listed
     return 0;
@@ -7949,18 +7974,19 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 	if (!st->started) csp_print_lit("   (allocated on /resume)");
 	csp_println();
 	mem_val(ros_stack,   CSP_STACK_RESERVE);
+#ifdef CSP_STACK_WATCH
 	// Measured, not reserved: the closest the stack has come to the arena.
-	// Small or negative means declarations are being overwritten.
+	// Small or negative means declarations are being overwritten. Diagnostic
+	// build only (the `watch` target); a normal build shows just the reserve.
 	mem_roname(ros_margin);
 	if (csp_stack_low > 0x7fff)          // host: stack and arena never meet
 	    csp_print_just("-", RJUST, 8);
 	else
 	    mem_int_r((int)csp_stack_low, 8);
-#ifdef CSP_STACK_WATCH
 	csp_print_lit("  at ");
 	csp_print_hex((uvalue_t)(uintptr_t)csp_stack_low_fn);
-#endif
 	csp_println();
+#endif
 	mem_val(ros_code,    (uint32_t)used);
 	mem_val(ros_free,    freeram);
     }

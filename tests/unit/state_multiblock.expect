@@ -1,7 +1,7 @@
 {modes, [seq, reactive]}.
 {cycles, 5}.
 {checks, [
-  {final_var, "State", 2},
+  {final_var, "State", 3},
   {final_var, "X", 1},
   {final_var, "Y", 2}
 ]}.

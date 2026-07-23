@@ -1,0 +1,13 @@
+// FAILSAFE: the reserved sticky safe state. A guard drives State into it; once
+// there, a competing rule that tries to leave (State = NORMAL) is IGNORED, and
+// the #in FAILSAFE block parks 'outp' at its safe value. Runs seq + reactive.
+#variable n = 0
+#variable outp = 9
+
+n = n + 1
+State = FAILSAFE ? n == 2       // enter on cycle 2
+State = NORMAL ? n >= 4         // sticky must BLOCK this
+
+#in FAILSAFE
+  outp = 0                      // safe configuration
+#end

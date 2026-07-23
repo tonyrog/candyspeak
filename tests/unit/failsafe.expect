@@ -1,0 +1,6 @@
+{modes, [seq]}.
+{cycles, 8}.
+{checks, [
+  {final_var, "State", 2},
+  {final_var, "outp", 0}
+]}.

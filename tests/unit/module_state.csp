@@ -1,27 +1,28 @@
-
+// Per-instance module state, driven by NAMES not literal numbers -- literal
+// State = 2 now means FAILSAFE (a reserved sticky state), so a state machine
+// must use its declared names. Toggles on<->off every cycle.
 #module Blink
   #states on off
   #digital LED out pulldown 13
   #timer T1 1000
 
   #in INIT
-    State = 2
+    State = on
     LED = 1
     T1 = 1
   #end
 
   #in off
-    State = 2
+    State = on
     LED = 1
     T1 = 1
   #end
 
   #in on
-    State = 3
+    State = off
     LED = 0
     T1 = 1
   #end
-
 #end
 
 #Blink b1
