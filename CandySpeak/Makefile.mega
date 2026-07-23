@@ -14,6 +14,44 @@ OPTS=--build-property "compiler.c.extra_flags=-Os $(ARENA)" \
 compile:
 	arduino-cli compile -e --fqbn $(FQBN) $(OPTS) --build-path $(BPATH)
 
+# --- stack watch -----------------------------------------------------------
+# Diagnose the stack/arena collision (blank decls, reboot loops). Two layers,
+# both behind #ifdef CSP_STACK_WATCH so a normal build carries none of it:
+#
+#   CSP_STACK_WATCH          adds the "at 0x..." column to /memory's margin row:
+#                            the function that got closest to the arena.
+#   -finstrument-functions   makes gcc sample stack depth on EVERY function
+#                            entry, so that "closest" is found by measurement,
+#                            not by hand-placed probes. Costs ~4.5K flash.
+#
+# Read the margin row: `margin  -NNN  at 0xADDR`. Negative = the stack has been
+# inside the declarations. Resolve ADDR with:  make -f Makefile.mega whichfn ADDR=0xADDR
+#
+# The margin row itself (without the fn address) is ALWAYS present -- csp_stack_mark
+# samples the known-deep points (csp_eval_rule, csp_parse, csp_parse_expr, pmatch)
+# in every build. This target adds the address and full coverage.
+WATCH_FLAGS=$(ARENA) -DCSP_STACK_WATCH -finstrument-functions
+
+watch:
+	arduino-cli compile -e --fqbn $(FQBN) \
+	  --build-property "compiler.c.extra_flags=-Os $(WATCH_FLAGS)" \
+	  --build-property "compiler.cpp.extra_flags=-Os $(WATCH_FLAGS)" \
+	  --build-path $(BPATH)
+
+# Resolve a `margin ... at 0xADDR` value to a function. AVR function pointers on
+# a 256K part are WORD addresses, so the real byte address is ADDR*2 -- this
+# prints the symbol at both interpretations so you can't pick the wrong one.
+#   usage: make -f Makefile.mega whichfn ADDR=0x17e1
+whichfn:
+	@test -n "$(ADDR)" || { echo "usage: make -f Makefile.mega whichfn ADDR=0x17e1"; exit 1; }
+	@elf=$(BPATH)/CandySpeak.ino.elf; \
+	 for scale in 1 2; do \
+	   b=$$(( $(ADDR) * scale )); \
+	   printf "ADDR*%d = 0x%X:\n" $$scale $$b; \
+	   avr-nm -C $$elf | grep -iE ' [tTwW] ' | sort | \
+	     awk -v t=$$b '{a=strtonum("0x"$$1)} a<=t {last=$$0} a>t {print "  "last" <-- here"; print "  "$$0; exit}'; \
+	 done
+
 clean:
 	arduino-cli compile --clean --fqbn $(FQBN) .
 

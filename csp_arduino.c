@@ -860,6 +860,25 @@ void loop()
     if (state.mem == NULL || state.mem_limit == 0)
 	return;
 
+    // Serial FIRST, unconditionally, so the prompt stays alive even when the
+    // program below cannot run. Without this a boot where csp_rebuild failed
+    // (mem != NULL but the derived tables did not fit -> started == 0) fell
+    // through to csp_cycle and read NULL view/heap, faulting the board into an
+    // unresponsive state right after "setup failed". Now the user can /memory,
+    // /clear, or edit their way out instead.
+    while (Serial.available())
+	csp_line_input(Serial.read());
+    if (csp_line_ready) {
+	Serial.write(0x13);   // XOFF -- pace pasted input (see below)
+	csp_process_line(&state, csp_line_buf);
+	Serial.write(0x11);   // XON
+	csp_line_ready = 0;
+	csp_line_pos = 0;
+    }
+    // No leaves/tables: skip all execution but keep looping (serial handled above).
+    if (!state.started)
+	return;
+
     if (first_cycle) {
 	state.cycle = 1;
 	first_cycle = 0;
@@ -867,25 +886,13 @@ void loop()
     else if (!state.paused)     // frozen while /pause is in effect
 	state.cycle++;
 
-    while (Serial.available()) {
-	csp_line_input(Serial.read());
-    }
+    // Pasted input pacing note: parsing a line (and any rt_start) is slow enough
+    // to overflow the UART RX buffer, so csp_process_line above brackets itself
+    // with XOFF/XON. Enable "software flow control" in the terminal (minicom:
+    // Ctrl-A O -> Serial port setup -> G = Yes).
 
-    if (csp_line_ready) {
-	// Pace pasted input: parsing a line (and any rt_start) is slow enough to
-	// overflow the UART RX buffer. Ask the sender to pause (XOFF) while we
-	// process, then resume (XON). Enable "software flow control" in the
-	// terminal (minicom: Ctrl-A O -> Serial port setup -> G = Yes).
-	Serial.write(0x13);   // XOFF
-	csp_process_line(&state, csp_line_buf);
-	Serial.write(0x11);   // XON
-	csp_line_ready = 0;
-	csp_line_pos = 0;
-    }
-
-    // /pause freezes execution: keep reading Serial (above) so /resume and edits
-    // still work, but run no input/cycle/commit/output. loop() is re-entered, so
-    // the USB stack keeps being serviced between calls.
+    // /pause freezes execution: serial was already handled at the top so /resume
+    // and edits still work; run no input/cycle/commit/output.
     if (state.paused)
 	return;
 

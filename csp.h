@@ -83,6 +83,16 @@ typedef unsigned bool_t;
 #define DECL_BITS    11
 #define INSTR_BITS   11
 
+// Width of a decl's `name` field: a LOGICAL string position (rom_strp + RAM
+// offset), NOT a RAM-buffer size. It used to reuse STRING_BITS, which is a RAM
+// budget (7 on AVR = a 128-byte ram_str). That coupling was a bug: with a ROM
+// string table of 130 bytes the very first RAM decl name lands at position 131
+// and a 7-bit field truncates it to garbage. Sized here to rom_strp + the RAM
+// buffer with headroom, independent of the buffer. 9 bits (0..511) fits inside
+// DECL_COMMON's two spare bits on AVR, so csp_decl_t does not grow. new_string
+// rejects a position that will not fit rather than truncating (ERR_STRING_SPACE).
+#define NAMEPOS_BITS 9
+
 typedef const char rochar;                // PROGMEM string character type
 typedef const struct rostr* rostring_t;  // PROGMEM string object type
 
@@ -784,7 +794,7 @@ typedef enum {
 #define DECL_COMMON \
     decl_t type:6; \
     pindir_t dir:DIR_BITS; \
-    unsigned name:STRING_BITS; \
+    unsigned name:NAMEPOS_BITS; \
     unsigned vt:TYPE_BITS; \
     unsigned res:5; \
     unsigned is_mapped:1; \
@@ -969,11 +979,15 @@ typedef struct
 
 typedef enum { DIN = 0, DOUT = 1 } dio_t;
 
-#define NUM_BITS (16-STRING_BITS)
+// name is a LOGICAL string position, so it needs NAMEPOS_BITS just like a
+// decl's -- the same STRING_BITS coupling bug bit runtime-added #states on a
+// board with a ROM string table >=128 bytes. snum takes the rest of the 16-bit
+// word: 7 bits, max 127, versus MAX_STATES 16, so state_t stays 2 bytes.
+#define NUM_BITS (16-NAMEPOS_BITS)
 typedef struct
 {
-    unsigned name:STRING_BITS;     // string index
-    unsigned snum:NUM_BITS;        // state number
+    unsigned name:NAMEPOS_BITS;    // logical string position
+    unsigned snum:NUM_BITS;        // state number (0..MAX_STATES-1)
 } state_t;
 
 // One RAM arena holds everything that used to be fixed struct arrays: the parse-
@@ -1006,13 +1020,23 @@ typedef struct
 #endif
 #endif
 
-// Stack CandySpeak needs at runtime, as a RESERVE rather than a measurement.
-// stack_used() reports the caller's own depth, which on the host is the REPL's
-// (~14K) and says nothing about a board -- so modelling a board means reserving,
-// not measuring. The deep paths are the expression parser and csp_eval's
-// recursion. Override with -DCSP_STACK_RESERVE=<bytes> once measured on a board.
+// Stack CandySpeak keeps clear of the arena, measured on a mega2560.
+//
+// The arena grows RAM declarations DOWN from its top; the stack grows DOWN from
+// RAMEND toward that same top. This is the gap between them. Too small and the
+// stack overwrites the newest declarations SILENTLY -- which caused, across a
+// three-day hunt: blank /list lines, a false "setup failed: out of memory" (the
+// deep csp_rebuild corrupted its own estimate/mid state, not a real shortage),
+// and reboot loops (the stack reached a return address).
+//
+// 512 was a guess and far too low: /memory's `margin` row measured the stack
+// reaching 919 bytes PAST a 512 reserve into the arena (deepest point: push_imm,
+// in the expression parser). 2048 puts margin at +617 with the cpx.csp ROM and
+// leaves the arena big enough (~4080 bytes; cpx needs <3000). WATCH the margin
+// row when a program parses deeper (modules, long nested expressions) -- it is
+// the live check that 2048 still holds. Override with -DCSP_STACK_RESERVE=<n>.
 #ifndef CSP_STACK_RESERVE
-#define CSP_STACK_RESERVE 512
+#define CSP_STACK_RESERVE 2048
 #endif
 
 // Gap left between the code growing in from each end and the derived tables in
@@ -1517,6 +1541,12 @@ extern int csp_eeprom_clear(csp_rt_t* st);
 
 // stack check/debug
 extern int stack_used();
+// Stack watch: worst-ever margin between the stack pointer and the arena top.
+// Sample it anywhere; the deeper the call, the more it is worth.
+extern char* csp_arena_top;
+extern long  csp_stack_low;
+extern void* csp_stack_low_fn;
+extern void  csp_stack_mark(void);
 
 extern const char  csp_tag(csp_rt_t* st, index_t n);
 extern rostring_t csp_fmt_pindir(uint8_t dir);

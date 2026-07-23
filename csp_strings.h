@@ -455,6 +455,8 @@ extern rochar s_struct[7] RODATA;
 #define ros_struct ((rostring_t) s_struct)
 extern rochar s_stack[6] RODATA;
 #define ros_stack ((rostring_t) s_stack)
+extern rochar s_margin[7] RODATA;
+#define ros_margin ((rostring_t) s_margin)
 extern rochar s_code[5] RODATA;
 #define ros_code ((rostring_t) s_code)
 extern rochar s_free[5] RODATA;

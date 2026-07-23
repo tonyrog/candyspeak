@@ -25,7 +25,12 @@ typedef struct {
 // read and written through ro_memcmp/ro_memcpy. 4 bytes, terminator included.
 static rochar eeprom_magic[4] RODATA = "CSP";
 #define EEPROM_MAGIC eeprom_magic
-#define EEPROM_VERSION 5   // v5: rom_crc + the #disable bitset (v4: ram_ns)
+// v6: NAMEPOS_BITS widened the decl `name` field, which shifts every bitfield
+//     after it in csp_decl_t -- a v5 save is binary-incompatible and would be
+//     misread as garbage decls. The rom_crc fingerprint does NOT catch this: it
+//     is over the ROM INSTRUCTIONS, whose layout did not change. So the version
+//     is what rejects a stale save here, before ps.* is touched.
+#define EEPROM_VERSION 6   // v5: rom_crc + #disable bitset; v4: ram_ns
 
 // Bytes the #disable bitset occupies for a program with n rules. Rounded up to
 // whole set_group_t words so the read/write is a straight memcpy of the front
@@ -215,11 +220,36 @@ int csp_eeprom_load(csp_rt_t* st)
     }
 
     csp_eeprom_close();
-    csp_rt_start(st);   // initialise values (ROM + RAM leaves)
+    // csp_rebuild, NOT csp_rt_start. rebuild resets the middle bump allocator
+    // (csp_mid_reset) that view/buf/heap/input/output/timer are all carved
+    // from; csp_rt_init above zeroed mid_base and mid_end, so calling rt_start
+    // on its own makes every csp_mid_alloc return NULL. rt_start DOES notice
+    // and return -1 -- but that return was dropped here, so /load reported
+    // success and the next cycle faulted on a null heap.
+    //
+    // The boot paths got away with it because main() and the .ino call
+    // csp_rebuild themselves right afterwards. /load had nothing to repair it.
+    //
+    // The error is left as rebuild set it (ERR_TOO_MANY_DECLARATIONS when the
+    // pool is genuinely full); ERR_CANNOT_LOAD would be a lie -- the image read
+    // back fine, it is the layout that did not fit.
+    if (csp_rebuild(st) < 0)
+	return -1;
     return 0;
 
 error:
     csp_eeprom_close();
+    // A failure past the header may have inflated ps.* (line "Logical counts")
+    // and half-written RAM slots. Restore the clean ROM baseline so the caller
+    // runs the ROM program, not ROM + partially-loaded garbage. Resetting the
+    // counts is enough: the stale ram_* content is never read once the indices
+    // stop at rom_nd. (rom_* are the caller's, set by csp_load_rom before us, or
+    // by our own line 161 -- either way correct.)
+    st->ps.nd   = st->rom_nd;
+    st->ps.nn   = st->rom_nn;
+    st->ps.strp = st->rom_strp;
+    st->ps.ns   = st->rom_ns;
+    st->ps.nq   = 0;
     csp_set_error(st, ERR_CANNOT_LOAD);
     return -1;
 }

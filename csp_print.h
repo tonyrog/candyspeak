@@ -53,6 +53,7 @@ int csp_print_uintw(uvalue_t v, int nw);
 int csp_print_float(fvalue_t v);
 int csp_print_hex(uvalue_t v);
 int csp_println(void);
+int csp_print_blank(void);
 void csp_flush(void);
 int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val);
 int csp_print_rule(csp_rt_t* st, int i);

@@ -723,7 +723,17 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 int csp_print_rule(csp_rt_t* st, int i)
 {
     int Lc = i;
-    csp_exprbuf_t buf;
+    // STATIC, not a local. This is ~420 bytes on AVR (buf[MAX_STR_BUF] plus 64
+    // string pointers and their lengths), and the stack it sat on grows DOWN
+    // from RAMEND toward the arena -- whose top is where RAM declarations live,
+    // because they grow down from there. On a mega the gap measured 626 bytes
+    // while /list alone needed this 423 plus two nested token_t tv[24]. The
+    // stack reached the arena and the newest declarations were overwritten;
+    // what came back was a ro_decl() stack temporary (a verbatim ROM record).
+    // As .bss it is accounted for by freeRam() at boot, so the arena simply
+    // claims that much less -- the same RAM, but declared instead of a hidden
+    // spike. csp_print_rule is called only from cmd_list and never recurses.
+    static csp_exprbuf_t buf;
 
     while(i < st->ps.nn) {
 	csp_instr_t ipv = csp_get_instr(st, i);   // ROM or RAM instr, by value
@@ -819,7 +829,7 @@ static int just_pad(int n)          // n spaces, n <= 0 prints nothing
 {
     int i;
     for (i = 0; i < n; i++)
-	csp_print_char(' ');
+	csp_print_blank();
     return (n > 0) ? n : 0;
 }
 
@@ -948,4 +958,9 @@ int csp_print_float(fvalue_t v)
 int csp_println(void)
 {
     return csp_print_char('\n');
+}
+
+int csp_print_blank(void)
+{
+    return csp_print_char(' ');
 }

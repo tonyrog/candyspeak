@@ -227,6 +227,7 @@ rochar s_bind[] RODATA = "bind";
 rochar s_system[] RODATA = "system";
 rochar s_struct[] RODATA = "struct";
 rochar s_stack[] RODATA = "stack";
+rochar s_margin[] RODATA = "margin";
 rochar s_code[] RODATA = "code";
 rochar s_free[] RODATA = "free";
 rochar s_err_cannot_save[] RODATA = "cannot save eeprom";

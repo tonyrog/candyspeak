@@ -867,6 +867,7 @@ int pmatch(csp_rt_t* st, const token_t* tv, int ti, size_t n,
 {
     pmatch_st_t pst;
 
+    csp_stack_mark();   // recursive over the pattern -- sample every level
     pst.st = st;
     pst.data = data;
     pst.dend = (const uint8_t*)data + data_size;  // never save/restore past this

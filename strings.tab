@@ -230,6 +230,7 @@ bind bind
 system system
 struct struct
 stack stack
+margin margin
 code code
 free free
 err_cannot_save cannot save eeprom

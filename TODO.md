@@ -105,26 +105,17 @@ Så är X = 1 redan i cycle 0
   listningsbuggen överst: guard-delen tappas någonstans mellan parse och
   emission istället för att sätta ERR_SYNTAX.
 
-## Fel felmeddelande efter autoladdad eeprom.db (2026-07-21)
-  Ligger det en `eeprom.db` i katalogen och inget program ges, laddas den vid
-  start (`!given && !csp_has_firmware()`). En omdefiniering ger då fel svar:
-
-      $ ./csp -i                          # med eeprom.db i katalogen
-      #variable x = 1     OK
-      #variable x = 5     Error: too many declarations
-
-      $ ./csp -i -e /finns/inte           # utan
-      #variable x = 1     OK
-      #variable x = 5     Error: variable x is already defined
-
-  Det senare är rätt. Budgeten är inte slut: `/memory` efter den felande raden
-  är IDENTISK i båda fallen (decl 2/2048, code 16, free 260104), så
-  meddelandet ljuger.
-  eeprom.db-filen kom från EN `/save` av ett program som bara innehöll
-  baslinjen -- `/list` efter laddningen visar enbart `#variable State`.
-  Verifierat att det INTE är en regression: ren HEAD-build med samma
-  eeprom.db beter sig likadant.
-  Reproducera med EN save och EN load. Inga loopar mot EEPROM/flash.
+## Stack/arena-marginalen: overvaka, ev. varna (2026-07-23)
+  LOST: CSP_STACK_RESERVE 512 -> 2048 (se DONE). margin ar nu +617 med cpx.csp.
+  Kvar som forbattring, inte bugg:
+    - Lat /memory VARNA (inte bara visa) nar margin kryper under t.ex. 256 -- en
+      rad "WARNING: stack near arena" sa man ser det utan att lasa siffran.
+    - 2048 ar matt mot cpx.csp + korta REPL-rader. Ett program med moduler eller
+      djupt nastlade uttryck kan ga djupare an push_imm gjorde. margin-raden ar
+      livechecken; om den gar negativt pa ett riktigt program, hoj mer eller
+      krymp djup-vagen (nasta kandidat: de tva nastlade token_t tv[24] i
+      csp_process_line + csp_parse, ~288 byte -- linjen ar redan tokeniserad en
+      gang, andra passet ar redundant).
 
 ## Fälttypen läses aldrig -- `integer` ger inget tecken (2026-07-22)
   Deklarationen bär `vt`, läsvägen struntar i den:
@@ -155,21 +146,6 @@ Så är X = 1 redan i cycle 0
   ackumuleringen och skiftet spiller. Bör antingen räknas i uint32/int64 eller
   avvisas med ett fel -- ett tyst fel värde är det sämsta utfallet.
   Verifierat pre-existerande (ren HEAD-build ger samma UBSan-utskrift).
-
-## `/load` i en pågående session segfaultar (2026-07-22)
-  `/save` följt av `/load` i samma REPL kraschar i nästa cykel:
-
-      #0  csp_dio_get      csp_rt.c:1634
-      #1  csp_value        csp_rt.c:1663
-      #2  csp_eval_rule    csp_rt.c:1699
-      #3  csp_eval_range / csp_eval / csp_cycle
-
-  `csp_eeprom_load` kör `csp_rt_init` + `csp_rt_start`, alltså en HELT ny
-  arena-layout, medan main-loopen fortsätter köra mot de gamla pekarna.
-  Misstanke: view/heap/buf pekar i tomma luften, eller så saknas ett
-  `csp_setup`/rebuild-steg innan cykeln får gå vidare.
-  Autoladdningen vid start är OK -- det är bara load MITT i en körning.
-  Verifierat pre-existerande: identiskt stackspår på ren HEAD-build.
 
 ## `-r <fil>` slukar filnamnet, och bart `-r` är atoi(NULL) (2026-07-22)
   Två fel i samma optionsrad. `case 'r': reactive = atoi(optarg);`

@@ -320,6 +320,70 @@ static const char tag_tab[] RODATA = {
     [DECL_FIELD] = 'f',
 };
 
+// --- stack watch ------------------------------------------------------------
+// Declarations grow DOWN from the arena top; the stack grows DOWN from RAMEND
+// toward the very same address. Nothing enforces a gap between them, and when
+// they met the newest declarations were silently overwritten (see TODO). So
+// measure the thing that actually matters -- not how deep the stack is, but how
+// close it got to the arena -- and keep the WORST value ever seen.
+//
+// A negative low-water mark means the stack has already been inside the
+// declarations. CSP_STACK_RESERVE is only the guess made at boot; this is the
+// measurement.
+char* csp_arena_top = NULL;      // set by csp_mem_init
+long  csp_stack_low = 0x7fffffffL;
+void* csp_stack_low_fn = NULL;   // the function that set the record (WATCH build)
+
+void csp_stack_mark(void)
+    __attribute__((no_instrument_function));
+
+void csp_stack_mark(void)
+{
+    char probe;
+    long m;
+    if (csp_arena_top == NULL)
+	return;
+    m = (long)(&probe - csp_arena_top);
+    if (m < csp_stack_low)
+	csp_stack_low = m;
+}
+
+// Built with -finstrument-functions, gcc calls these on EVERY function entry
+// and exit -- so the deepest point is found by measurement instead of by
+// guessing where to put a probe. Diagnostic builds only: it costs a call pair
+// per function. Both must carry no_instrument_function or they recurse.
+//
+//   make -f Makefile.mega ARENA="-DCSP_ARENA_MALLOC -DCSP_STACK_WATCH -finstrument-functions"
+#ifdef CSP_STACK_WATCH
+void __cyg_profile_func_enter(void* fn, void* call)
+    __attribute__((no_instrument_function));
+void __cyg_profile_func_exit(void* fn, void* call)
+    __attribute__((no_instrument_function));
+
+// Records WHICH function was entered at the deepest point. Print it with
+// /memory and resolve it with:  avr-nm -C <elf> | sort | grep -i <addr>
+// Note avr-gcc reports fn as a BYTE address; nm prints byte addresses too, so
+// they compare directly.
+void __cyg_profile_func_enter(void* fn, void* call)
+{
+    char probe;
+    long m;
+    (void)call;
+    if (csp_arena_top == NULL)
+	return;
+    m = (long)(&probe - csp_arena_top);
+    if (m < csp_stack_low) {
+	csp_stack_low = m;
+	csp_stack_low_fn = fn;
+    }
+}
+
+void __cyg_profile_func_exit(void* fn, void* call)
+{
+    (void)fn; (void)call;
+}
+#endif
+
 NOINLINE int ro_strlen(rostring_t s)
 {
     int n = 0;
@@ -1277,6 +1341,17 @@ static int find_decl_entry(const char* name, int namelen)
 			 name, namelen);
 }
 
+// decl_table lives in RODATA. On AVR that is PROGMEM, so `decl_table[i].code`
+// does NOT read the table -- it reads DATA space at the table's flash address,
+// which on a mega lands inside CandySpeak's own arena. The byte found there
+// changes with the program, the pool layout and every size change, so the
+// dispatch worked or failed by luck. Every other reader of these tables already
+// goes through ro_byte (op_table_tok, op_table_arity, ...); this one did not.
+static inline int8_t decl_table_code(int i)
+{
+    return (int8_t)ro_byte(&decl_table[i].code);
+}
+
 static inline int8_t op_table_tok(int i)
 {
     return ro_byte(&tok_table[i].tok);
@@ -1686,6 +1761,7 @@ NOINLINE void csp_set_fvalue(csp_rt_t* st, index_t n, fvalue_t v)
 int csp_eval_rule(csp_rt_t* st, int n)
 {
     opcode_t op;
+    csp_stack_mark();
 #if defined(USE_STATISTICS) && (USE_STATISTICS==1)
     st->num_eval_rule++;
 #endif
@@ -2140,6 +2216,14 @@ NOINLINE int new_string(csp_rt_t* st, char* name, int len)
     sindex_t pos = st->ps.strp;               // logical position
     sindex_t next = pos + (len+2);
     if ((next - st->rom_strp) >= MAX_STR_BUF) {  // check RAM-local room
+	csp_set_error(st, ERR_STRING_SPACE_EXHUSTED);
+	return -1;
+    }
+    // The returned position (pos+1) is stored in a decl's NAMEPOS_BITS-wide name
+    // field. rom_strp + MAX_STR_BUF can exceed that on a board with a large ROM
+    // string table; fail loudly rather than truncate the field to garbage (which
+    // is exactly what the old STRING_BITS-wide field did on AVR).
+    if ((pos + 1) >= (sindex_t)(1u << NAMEPOS_BITS)) {
 	csp_set_error(st, ERR_STRING_SPACE_EXHUSTED);
 	return -1;
     }
@@ -3905,6 +3989,9 @@ NOINLINE int csp_parse_expr(csp_rt_t* st, const token_t* tv, size_t* num_toks,
     size_t n = *num_toks;
     int in_func = 0;
 
+    csp_stack_mark();   // deepest known point (the expression parser + pmatch
+			// recursion); this is where margin bottoms out
+
 next:
     if ((i >= n) || (tv[i].t==NEWLINE) || (tv[i].t==NONE))  // end-of-list
 	goto out;
@@ -5594,6 +5681,7 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
     int n;
 
     st->ap = &alloc;
+    csp_stack_mark();     // tv[MAX_LINE_TOKENS] is already on the stack here
     while((n = csp_scan_line(st, str, tv, &num)) > 0) {
 	int r = -1;
 	str += n;
@@ -5619,7 +5707,7 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 	else if ((tv[0].t == HASH) && (tv[1].t == WORD)) {
 	    int i;
 	    if ((i = find_decl_entry(tv[1].v.str.ptr,tv[1].v.str.len)) >= 0) {
-		switch(decl_table[i].code) {
+		switch(decl_table_code(i)) {
 		case DECL_MODULE:
 		    r = csp_parse_module(st, tv, 2, num);
 		    break;
@@ -5790,6 +5878,9 @@ int csp_mem_init(csp_rt_t* st, size_t size)
     st->mem_size &= ~(size_t)7;          // keep the decl anchor 8-aligned
     st->mem_limit = st->mem_size;
     memset(st->mem, 0, st->mem_size);
+    // Top of the pool = where RAM declarations start growing down from, and the
+    // address the stack must never reach. csp_stack_mark measures against it.
+    csp_arena_top = (char*)st->mem + st->mem_limit;
 
     // Double-ended pool: instr[] grows up from the base, decl[] grows down from
     // the top of the CLAIMED block. ram_decl points at the topmost decl slot and
@@ -6754,11 +6845,11 @@ static int cmd_help(csp_rt_t* st, int argc, char* argv[])
     for (const csp_cmd_t* c = builtin_cmds; c->name; c++) {
 	if (c->help) {
 	    int len;
-	    csp_print_char(' ');
+	    csp_print_blank();
 	    csp_print_char('/');
 	    csp_print_rostr(c->name);       // name/help are in flash
 	    len = ro_strlen(c->name);
-	    while (len++ < 10) csp_print_char(' ');
+	    while (len++ < 10) csp_print_blank();
 	    csp_print_rostr(c->help);
 	    csp_println();
 	}
@@ -6833,14 +6924,14 @@ static void list_column(int no, int is_rom, int off)
     if (no <= 0)
 	csp_print_lit("   ");
     else {
-	if (no < 100) csp_print_char(' ');
-	if (no < 10)  csp_print_char(' ');
+	if (no < 100) csp_print_blank();
+	if (no < 10)  csp_print_blank();
 	csp_print_uint(no);
     }
-    csp_print_char(' ');
+    csp_print_blank();
     csp_print_char(is_rom ? 'F' : 'R');
     csp_print_char(off ? '!' : ' ');
-    csp_print_char(' ');
+    csp_print_blank();
 }
 
 // find a #module declaration by name (for /list <Module> scoping)
@@ -6877,7 +6968,7 @@ static void print_decl(decl_t d)
     case DECL_VIEW:
 	csp_print_rostr(ros_undefined); break;	
     }    
-    csp_print_char(' ');    
+    csp_print_blank();    
 }
 
 // print a leaf name (by logical string position), qualified as Mod.name when
@@ -6989,12 +7080,12 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    continue;
 	list_column(0, is_rom, 0);
 	if (cur_mod) {
-	    csp_print_char(' '); csp_print_char(' ');
+	    csp_print_blank(); csp_print_blank();
 	}
 	switch (t) {
 	case DECL_VARIABLE:
 	    print_decl_and_name(st, t, cur_mod, npos);
-	    csp_print_char(' ');
+	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_vtype(decl(st,i,vt)));
 	    // list the declaration's init value, not the live state (like #constant
 	    // below); reading a value here would touch leaf storage /list must not.
@@ -7018,7 +7109,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    break;
 	case DECL_CONSTANT:
 	    print_decl_and_name(st, t, cur_mod, npos);
-	    csp_print_char(' ');
+	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_vtype(decl(st,i,vt)));
 	    csp_print_lit(" = ");
 	    csp_print_value(st, decl(st,i,vt), decl(st,i,cn.init));
@@ -7027,29 +7118,29 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	case DECL_OBJECT:
 	    csp_print_char('#');
 	    csp_print_str_at(st, decl_name_pos(st, decl(st,i,mq.mx)));
-	    csp_print_char(' ');
+	    csp_print_blank();
 	    csp_print_str_at(st, npos);
 	    csp_println();
 	    break;
 	case DECL_TIMER:
 	    print_decl_and_name(st, t, cur_mod, npos);
-	    csp_print_char(' ');
+	    csp_print_blank();
 	    csp_print_uint(decl(st,i,tm.period));	    
 	    csp_println();
 	    break;
 	case DECL_DIGITAL:
 	    print_decl_and_name(st, t, cur_mod, npos);
-	    csp_print_char(' ');
+	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
 	    if (decl(st,i,di.pullup)) {
-		csp_print_char(' ');		
+		csp_print_blank();		
 		csp_print_rostr(ros_pullup);
 	    }
 	    else if (decl(st,i,di.pulldown)) {
-		csp_print_char(' ');
+		csp_print_blank();
 		csp_print_rostr(ros_pulldown);
 	    }
-	    csp_print_char(' ');  // port:pin (needed to mod/rewire)
+	    csp_print_blank();  // port:pin (needed to mod/rewire)
 	    csp_print_uint(decl(st,i,di.port));
 	    csp_print_char(':');
 	    csp_print_uint(decl(st,i,di.pin));
@@ -7059,13 +7150,13 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    print_decl_and_name(st, t, cur_mod, npos);	    
 	    csp_print_char(':');              // :width (res stored as bits-1)
 	    csp_print_uint(decl(st,i,an.res)+1);
-	    csp_print_char(' ');
+	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
 	    if (decl(st,i,an.pwm)) {
-		csp_print_char(' ');
+		csp_print_blank();
 		csp_print_rostr(ros_pwm);
 	    }	    
-	    csp_print_char(' ');              // port:pin
+	    csp_print_blank();              // port:pin
 	    csp_print_uint(decl(st,i,an.port));
 	    csp_print_char(':');
 	    csp_print_uint(decl(st,i,an.pin));
@@ -7081,7 +7172,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    else
 		csp_print_uint(decl(st,i,bf.nbits));
 	    if (decl(st,i,dir)) {
-		csp_print_char(' ');
+		csp_print_blank();
 		csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
 	    }
 	    if (decl(st,i,bf.transport) == TR_CAN) {
@@ -7097,11 +7188,11 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    print_decl_and_name(st, t, cur_mod, npos);
 	    csp_print_char(':');
 	    csp_print_uint(decl(st,i,ca.len)+1);
-	    csp_print_char(' ');
+	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
-	    csp_print_char(' ');
+	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_vtype(decl(st,i,vt)));
-	    csp_print_char(' ');
+	    csp_print_blank();
 	    csp_print_str_at(st, decl_name_pos(st, decl(st,i,ca.id)));
 	    csp_print_char('[');
 	    csp_print_uint(decl(st,i,ca.bit));
@@ -7212,7 +7303,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 // The column helpers themselves are csp_print_just / csp_print_rojust.
 static void state_pad(int printed, int w)
 {
-    while (printed++ < w) csp_print_char(' ');
+    while (printed++ < w) csp_print_blank();
 }
 
 static int state_udigits(uvalue_t v)
@@ -7507,7 +7598,7 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 		    csp_println();
 		    csp_print_char('#');
 		    csp_print_str_at(st, decl_name_pos(st, MAKE_INDEX(0, i)));
-		    csp_print_char(' ');
+		    csp_print_blank();
 		    csp_print_str_at(st, decl_name_pos(st, mx));
 		    csp_println();
 		    shown = 1;
@@ -7618,7 +7709,7 @@ static void mem_int_r(int v, int w)
 {
     int n = 1, t = v;
     while (t >= 10) { n++; t /= 10; }
-    while (n++ < w) csp_print_char(' ');
+    while (n++ < w) csp_print_blank();
     csp_print_int(v);
 }
 
@@ -7686,7 +7777,7 @@ static void mem_row(rostring_t name, uint32_t used, int32_t limit, int show_pct)
     mem_int_r((int)used, 8);
     if (limit < 0) {
 	int k;
-	for (k = 1; k < 9; k++) csp_print_char(' ');
+	for (k = 1; k < 9; k++) csp_print_blank();
 	csp_print_char('-');
     }
     else
@@ -7760,6 +7851,18 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 	if (!st->started) csp_print_lit("   (allocated on /resume)");
 	csp_println();
 	mem_val(ros_stack,   CSP_STACK_RESERVE);
+	// Measured, not reserved: the closest the stack has come to the arena.
+	// Small or negative means declarations are being overwritten.
+	mem_roname(ros_margin);
+	if (csp_stack_low > 0x7fff)          // host: stack and arena never meet
+	    csp_print_just("-", RJUST, 8);
+	else
+	    mem_int_r((int)csp_stack_low, 8);
+#ifdef CSP_STACK_WATCH
+	csp_print_lit("  at ");
+	csp_print_hex((uvalue_t)(uintptr_t)csp_stack_low_fn);
+#endif
+	csp_println();
 	mem_val(ros_code,    (uint32_t)used);
 	mem_val(ros_free,    freeram);
     }
