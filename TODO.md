@@ -1,5 +1,50 @@
 # FIXES
 
+## END-markörer => scan-baserad återhämtning vid korrupt header (2026-07-24)
+  IDÉ (Tony). Idag: crc_hdr täcker räknarna (n_str/n_decl/n_instr/n_state) OCH
+  sektions-CRC:erna. Failar crc_hdr avvisar vi HELT -- vi vågar inte lita på
+  räknarna, så vi vet inte hur långa sektionerna är och kan inte ens beräkna
+  sektions-CRC:erna. Metadata och innehålls-integritet sitter ihop.
+
+  Förslag: frikoppla dem med END-markörer så längderna kan ÅTERSKAPAS genom att
+  skanna uppifrån-ner, oberoende av headerns räknare. Då blir det:
+    crc_hdr OK                    -> snabbvägen som idag.
+    crc_hdr FAIL men skannade
+      längder + sektions-CRC:er
+      matchar                     -> DATAN är intakt, bara metadatan/crc_hdr
+                                     ruttnade. KÖR med varning ("header CRC
+                                     corrupt, sektioner verifierade via scan").
+    crc_hdr FAIL + sektion X:s
+      CRC mismatchar              -> sektion X (eller dess lagrade CRC) trasig
+                                     -> avvisa/degradera som idag (för graf:
+                                     sekventiell fallback, redan gjort).
+
+  Vad som krävs:
+  - decls: DECL_END finns redan (n_decl räknas med terminatorn).
+  - strängar: längd-prefixade, självdelimiterande (slutar 0,0). OK.
+  - INSTRUKTIONER: saknar terminal markör. Behövs en OP_END (eller motsvarande)
+    så en scan kan hitta instruktionsantalet utan headern.
+  - states: saknar terminator; antingen egen END eller förbli header-beroende
+    (states är sist, minst kritiskt).
+
+  Fällor att respektera:
+  - Scanen MÅSTE fysiskt bindas av arrayens compile-time-storlek (rom_instr[N]);
+    ALDRIG lita på en räknare. En flippad byte som förfalskar/raderar en END-
+    markör får aldrig läsa förbi arrayen.
+  - En flippad DATA-byte kan skapa en falsk END -> fel längd -> sektions-CRC
+    matchar inte -> vi avvisar (korrekt utfall). Mekanismen gör aldrig något
+    VÄRRE, den lägger bara till återhämtning i "bara-headern-ruttnade"-fallet.
+  - Mest värdefullt för EEPROM (muterbar, partiella skrivningar, bit-rot). För
+    ROM/flash betyder korrupt header oftast trasig flash eller fel version --
+    överlappar version-avvisningen, mindre att vinna. Börja med EEPROM.
+
+## Max ETT #in FAILSAFE block (2026-07-24)
+  FAILSAFE-mekaniken finns (reserverat sticky state, #in FAILSAFE-block, se
+  DONE). Kvar: parsern tillater flera #in FAILSAFE. Ska vara max ETT sa det ar
+  entydigt utpekbart och verifierbart. csp_parse_in: om state==FAILSAFE och ett
+  FAILSAFE-block redan finns -> fel. (Del av failsafe-arbetet; crc_failsafe och
+  park-fallback aterstar ocksa -- se DONE-noten.)
+
 ## CRC: kvarvarande luckor + emitter-buggar (2026-07-23)
   Full ROM-CRC + EEPROM data_crc KLART (se DONE). Kvar:
   - GENERATOR-NORMALISERING KOPPLAD TILL EMITTERN: rom_image_crc folder

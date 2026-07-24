@@ -440,26 +440,17 @@ NOINLINE int ro_strcpy(char* dst, rostring_t src, int max)
 // precomputed reactive graph (ROM decl -> ROM rules), consumed by
 // csp_enq_elist alongside the runtime RAM graph. Emitted by csp -C -r.
 extern const char        rom_str[];
-extern const uint16_t    rom_str_len;
 extern const csp_decl_t  rom_decl[];
 extern const csp_instr_t rom_instr[];
-extern const uint16_t    rom_n_decl;
-extern const uint16_t    rom_n_instr;
-extern const uint16_t    rom_n_edg;
 extern const index_t     rom_idg[];
 extern const index_t     rom_ofs[];
 extern const index_t     rom_edg[];
-// State table (name<->number) baked with the program: rule listing and runtime
-// state lookup need the user states, which csp_rt_init only seeds with
-// INIT/NORMAL. Always emitted (rom_n_states>=2 for a baked program, 0 stub when
-// no firmware is linked).
-extern const uint16_t    rom_n_states;
 extern const state_t     rom_states[];
-// Baked by csp -C so csp_load_rom can reject a stale or corrupt generate:
-// rom_version is ROM_FORMAT_VERSION as of generation, rom_crc is a CRC over the
-// ROM instructions (csp_rom_crc16). Present in the empty rom.c too (0/0).
-extern const uint16_t    rom_version;
-extern const uint16_t    rom_crc;
+// The counts and integrity, in ONE header (see csp_image_header_t). rom_header.
+// n_edg > 0 means the ROM carries its own precomputed reactive graph (emitted by
+// csp -C -r). Present in the empty rom.c too (all zero). Read via ro_header so a
+// PROGMEM header on AVR is copied out, never dereferenced in place.
+extern const csp_image_header_t rom_header;
 
 // The ROM CRC is a byte-CRC over the RAW flash image (str, decls, instrs,
 // states, sizes). That is only reproducible between the host generator and the
@@ -1442,7 +1433,7 @@ NOINLINE void csp_enq_elist(csp_rt_t* st, index_t x)
     if (obj == CURRENT)
 	obj = st->cur;
     // baked ROM graph in flash: ROM decl -> ROM rules that read it
-    if (rom_n_edg && (ix < st->rom_nd)) {
+    if (st->rom_nedg && (ix < st->rom_nd)) {
 	index_t base = ro_word(&rom_ofs[ix]);
 	index_t n    = ro_word(&rom_idg[ix]);
 	for (i = 0; i < (int)n; i++)
@@ -2129,7 +2120,7 @@ index_t csp_cycle(csp_rt_t* st)
     // its initial value. Same boundary as the reactive seed sweep below.
     st->seed_all = (st->cycle <= 1);
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-    if (st->reactive && ((st->rom_nn == 0) || rom_n_edg)) {
+    if (st->reactive && ((st->rom_nn == 0) || st->rom_nedg)) {
 	// The reactive queue is change-driven, so it starts empty. Seed it with
 	// a full sequential first cycle (csp_set_value enqueues each dependent
 	// for the next cycle); run reactively thereafter.
@@ -5831,30 +5822,56 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 // True when firmware with executable rules is linked in (rom.c).
 int csp_has_firmware(void)
 {
-    return rom_n_instr > 0;
+    return ro_header(&rom_header).n_instr > 0;
 }
 
-// CRC of the linked ROM image, computed over the RAW flash bytes of the sized
-// arrays plus the size scalars. The generator (csp -C) computes the identical
-// value over the program it emits and bakes it as rom_crc; csp_load_rom checks
-// it here. Byte-CRC is valid because host and target are both little-endian and
-// str/decl/instr are byte-stable (see the CSP_STATIC_ASSERT at csp_crc16).
-//
-// Covers str + decls + instrs + the counts. NOT the reactive graph (present
-// only for -r ROMs) nor rom_states (state_t is not PACKED -- 4 bytes on the host
-// vs 2 on AVR -- so its raw bytes are not cross-platform; its NAME offsets index
-// rom_str, which IS covered). Order here MUST match the generator's fold.
-static uint16_t rom_image_crc(void)
+// Verify the ROM image against its baked header, section by section. Returns 0
+// on success, or a rostring naming the corrupt section for the caller to print.
+// Per-section so a flipped flash cell is PINPOINTED, not just "corrupt". The
+// header itself is checked first (crc_hdr over every field above it), so a
+// corrupt count cannot mislead the section checks. Byte-CRC is valid because
+// host and target are both little-endian and str/decl/instr/state are all
+// byte-stable (see the CSP_STATIC_ASSERT at csp_crc16).
+static rostring_t rom_verify(const csp_image_header_t* h)
 {
-    uint16_t crc = 0xFFFF;
-    uint16_t scal[5];
-    scal[0] = rom_str_len; scal[1] = rom_n_decl; scal[2] = rom_n_instr;
-    scal[3] = rom_n_edg;   scal[4] = rom_n_states;
-    crc = csp_crc16(crc, scal, sizeof(scal), 0);
-    crc = csp_crc16(crc, rom_str,   rom_str_len,                             1);
-    crc = csp_crc16(crc, rom_decl,  (size_t)rom_n_decl  * sizeof(csp_decl_t),  1);
-    crc = csp_crc16(crc, rom_instr, (size_t)rom_n_instr * sizeof(csp_instr_t), 1);
-    return crc;
+    // crc_hdr covers the fields before it -- everything but the trailing crc_hdr.
+    if (csp_crc16(0xFFFF, h, sizeof(*h) - sizeof(uint16_t), 0) != h->crc_hdr)
+	return ros_hdr;
+    if (csp_crc16(0xFFFF, rom_str, h->n_str, 1) != h->crc_str)
+	return ros_str;
+    if (csp_crc16(0xFFFF, rom_decl, (size_t)h->n_decl * sizeof(csp_decl_t), 1)
+	!= h->crc_decl)
+	return ros_decl;
+    if (csp_crc16(0xFFFF, rom_instr, (size_t)h->n_instr * sizeof(csp_instr_t), 1)
+	!= h->crc_instr)
+	return ros_instr;
+    if (csp_crc16(0xFFFF, rom_states, (size_t)h->n_state * sizeof(state_t), 1)
+	!= h->crc_state)
+	return ros_states;
+    // NOTE: the reactive graph is checked SEPARATELY (rom_graph_ok), not here --
+    // a corrupt graph is recoverable (run sequential), a corrupt anything-else is
+    // not. Keeping it out of rom_verify keeps this function "fatal sections only".
+    return NULL;
+}
+
+// Verify the reactive-graph section on its own. Returns 1 if intact (or absent),
+// 0 if corrupt. Separate from rom_verify because a bad graph is NOT fatal: the
+// graph only tells the reactive scheduler which rules a change wakes -- pure
+// optimization. If just it is corrupt the instructions and decls are still
+// trustworthy, so csp_load_rom drops the graph (rom_nedg = 0) and the program
+// runs full sequential (csp_cycle -> csp_eval), which the transaction model
+// guarantees yields the same committed state. Degrade toward running, not dead.
+// The three arrays are folded in the same order and sizes the generator used:
+// rom_idg[n_decl], rom_ofs[n_decl+1], rom_edg[n_edg].
+static int rom_graph_ok(const csp_image_header_t* h)
+{
+    uint16_t crc;
+    if (h->n_edg == 0)
+	return 1;   // no graph: link stubs, never read -- nothing to verify
+    crc = csp_crc16(0xFFFF, rom_idg, (size_t)h->n_decl * sizeof(index_t), 1);
+    crc = csp_crc16(crc, rom_ofs, (size_t)(h->n_decl + 1) * sizeof(index_t), 1);
+    crc = csp_crc16(crc, rom_edg, (size_t)h->n_edg * sizeof(index_t), 1);
+    return crc == h->crc_graph;
 }
 
 // Activate the linked firmware ROM: run it in place from flash by setting the
@@ -5863,25 +5880,30 @@ static uint16_t rom_image_crc(void)
 // end of the ROM image is dropped so RAM decls append seamlessly.
 NOINLINE void csp_load_rom(csp_rt_t* st)
 {
-    index_t nd = rom_n_decl;
-    if (rom_n_decl == 0)          // no firmware linked
+    csp_image_header_t h = ro_header(&rom_header);
+    rostring_t bad;
+    index_t nd = h.n_decl;
+
+    if (h.n_decl == 0)            // no firmware linked
 	return;
     // Reject a stale or corrupt generate before touching ps.*: an incompatible
     // rom.c would otherwise be read as garbage decls/instructions. Version
-    // catches "generated by an older csp" (layout changed); CRC catches a
-    // damaged flash image. Either way run EMPTY (return before rom_* are set)
-    // with a message, so the board is usable and the cause is visible instead
-    // of a silent crash.
-    if (rom_version != ROM_FORMAT_VERSION) {
+    // catches "generated by an older csp" (layout changed); the per-section CRC
+    // catches a damaged flash image and names the section. Either way run EMPTY
+    // (return before rom_* are set) with a message, so the board is usable and
+    // the cause is visible instead of a silent crash.
+    if (h.version != ROM_FORMAT_VERSION) {
 	csp_print_lit("ROM rejected: format ");
-	csp_print_uint(rom_version);
+	csp_print_uint(h.version);
 	csp_print_lit(", firmware expects ");
 	csp_print_uint(ROM_FORMAT_VERSION);
 	csp_print_line(" -- regenerate rom.c");
 	return;
     }
-    if (rom_crc != rom_image_crc()) {
-	csp_print_line("ROM rejected: CRC mismatch (corrupt flash image)");
+    if ((bad = rom_verify(&h)) != NULL) {
+	csp_print_lit("ROM rejected: CRC mismatch in ");
+	csp_print_rostr(bad);
+	csp_print_line(" section (corrupt flash image)");
 	return;
     }
     st->rom_decl_p  = rom_decl;
@@ -5890,8 +5912,17 @@ NOINLINE void csp_load_rom(csp_rt_t* st)
     if ((nd > 0) && (ro_decl(&rom_decl[nd-1]).type == DECL_END))
 	nd--;                     // drop the trailing terminator
     st->rom_nd   = nd;
-    st->rom_nn   = rom_n_instr;
-    st->rom_strp = rom_str_len;
+    st->rom_nn   = h.n_instr;
+    st->rom_strp = h.n_str;
+    st->rom_nedg = h.n_edg;
+    // A corrupt graph is recoverable where a corrupt section above is not: drop
+    // the baked graph and let csp_cycle fall back to full sequential (rom_nedg
+    // == 0 -> csp_eval). The program still runs -- reactive is just an
+    // optimization -- so warn instead of rejecting. (See rom_graph_ok.)
+    if (!rom_graph_ok(&h)) {
+	st->rom_nedg = 0;
+	csp_print_line("ROM graph corrupt -- running sequential");
+    }
     // Rebase the parse state onto ROM: RAM starts empty above the ROM sizes.
     // This discards the RAM State/strings csp_rt_init created -- State is now
     // ROM decl 0, and the ROM string prefix mirrors init's so the states table
@@ -5904,7 +5935,7 @@ NOINLINE void csp_load_rom(csp_rt_t* st)
     // pointed at). Overwrites the INIT/NORMAL seed from csp_rt_init with the
     // program's full table so ON/OFF/... resolve in listing and lookup.
     {
-	int i, ns = rom_n_states;
+	int i, ns = h.n_state;
 	if (ns > MAX_STATES) ns = MAX_STATES;
 	for (i = 0; i < ns; i++)
 	    st->states[i] = ro_state(&rom_states[i]);

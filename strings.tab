@@ -223,6 +223,9 @@ stopped stopped
 state state
 instr instr
 decl decl
+str str
+hdr hdr
+graph graph
 objects objects
 modules modules
 buffers buffers

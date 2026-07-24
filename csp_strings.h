@@ -441,6 +441,12 @@ extern rochar s_instr[6] RODATA;
 #define ros_instr ((rostring_t) s_instr)
 extern rochar s_decl[5] RODATA;
 #define ros_decl ((rostring_t) s_decl)
+extern rochar s_str[4] RODATA;
+#define ros_str ((rostring_t) s_str)
+extern rochar s_hdr[4] RODATA;
+#define ros_hdr ((rostring_t) s_hdr)
+extern rochar s_graph[6] RODATA;
+#define ros_graph ((rostring_t) s_graph)
 extern rochar s_objects[8] RODATA;
 #define ros_objects ((rostring_t) s_objects)
 extern rochar s_modules[8] RODATA;

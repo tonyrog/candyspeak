@@ -1,37 +1,41 @@
 // csp_eeprom.c - Binary eeprom save/load (shared between platforms)
 #include "csp.h"
 #include "csp_print.h"
+#include "csp_strings.h"   // ros_str/ros_decl/ros_instr/ros_states section names
 #include <string.h>
 
-// Binary eeprom format header. Only the RAM patch area is persisted -- ROM runs
-// from flash. The rom_* fields fingerprint the firmware the patches were made
-// against, so a load can reject patches saved for a different ROM.
+// The firmware ROM image header, so a load can identify the firmware the patches
+// were saved against (see rom_fp below). Declared here the same way csp_rt.c does.
+extern const csp_image_header_t rom_header;
+
+// Binary eeprom format. Only the RAM patch area is persisted -- ROM runs from
+// flash. The layout mirrors the ROM image: a csp_image_header_t describes the RAM
+// patch (counts + per-section CRCs) exactly as rom_header describes the flash
+// program, so the same folding/verify shape serves both. rom_fp fingerprints the
+// firmware; the #disable bitmap gets its own count+CRC; crc_hdr covers the whole
+// header so a flipped count cannot mislead the per-section data checks.
 typedef struct {
-    uint8_t  magic[4];   // "CSP\0"
-    uint16_t version;    // format version
-    uint16_t rom_nd;     // firmware fingerprint: ROM decl/instr/string sizes
-    uint16_t rom_nn;
-    uint16_t rom_strp;
-    uint16_t ram_nd;     // RAM patch sizes (counts above the ROM base)
-    uint16_t ram_nn;
-    uint16_t ram_strp;
-    uint16_t ram_ns;     // runtime state additions (above the ROM/init baseline)
-    uint16_t nq;         // number of objects
-    uint16_t rom_crc;    // firmware fingerprint (ROM instrs) -- see rom_fingerprint()
-    uint16_t n_dis;      // rules the trailing #disable bitset was counted over
-    uint16_t data_crc;   // CRC over the SAVED PAYLOAD itself -- see payload_crc()
+    uint8_t  magic[4];        // "CSP\0"
+    uint16_t version;         // eeprom format version (EEPROM_VERSION)
+    uint16_t rom_fp;          // firmware identity: the live rom_header.crc_hdr
+    uint16_t nq;              // object count
+    csp_image_header_t ram;   // RAM patch AS AN IMAGE: counts + per-section CRCs
+    uint16_t n_dis;           // #disable bitmap: rule count it was sized over
+    uint16_t crc_dis;         // #disable bitmap CRC (0xFFFF when n_dis == 0)
+    uint16_t crc_hdr;         // CRC over every field above -- MUST stay last
 } eeprom_header_t;
 
 // In RODATA rather than a plain literal so it costs flash, not RAM, on AVR --
 // read and written through ro_memcmp/ro_memcpy. 4 bytes, terminator included.
 static rochar eeprom_magic[4] RODATA = "CSP";
 #define EEPROM_MAGIC eeprom_magic
-// v6: NAMEPOS_BITS widened the decl `name` field, which shifts every bitfield
-//     after it in csp_decl_t -- a v5 save is binary-incompatible and would be
-//     misread as garbage decls. The rom_crc fingerprint does NOT catch this: it
-//     is over the ROM INSTRUCTIONS, whose layout did not change. So the version
-//     is what rejects a stale save here, before ps.* is touched.
-#define EEPROM_VERSION 7   // v7: data_crc (payload integrity); v6: NAMEPOS layout
+// v8: RAM patch described by an embedded csp_image_header_t (per-section CRCs +
+//     crc_graph placeholder), separate crc_dis for the #disable bitmap, ROM
+//     identity is the whole-header rom_header.crc_hdr, and a crc_hdr over the
+//     eeprom header itself. Binary-incompatible with v7's flat header.
+// v7: data_crc (single payload CRC).  v6: NAMEPOS_BITS widened decl `name`.
+// The version is what rejects a stale save, before ps.* is touched.
+#define EEPROM_VERSION 8
 
 // Bytes the #disable bitset occupies for a program with n rules. Rounded up to
 // whole set_group_t words so the read/write is a straight memcpy of the front
@@ -40,37 +44,53 @@ static rochar eeprom_magic[4] RODATA = "CSP";
     ((size_t)BITSET_GROUPS((n) > MAX_DIS_RULES ? MAX_DIS_RULES : (n)) \
      * sizeof(set_group_t))
 
-// Fingerprint the firmware ROM a save was made against. The disable set stores
-// rule NUMBERS, and a number only means something relative to a specific
-// program; the rom_nd/rom_nn/rom_strp sizes say the firmware is the same SIZE
-// but nothing about content, and rule 7 is a different rule the moment the
-// content changes. A CRC over the loaded ROM instructions closes that gap.
-// (Only the instructions -- enough to tell one firmware from another.)
-#define rom_fingerprint(st) \
-    csp_crc16(0xFFFF, (st)->rom_instr_p, \
-	      (size_t)(st)->rom_nn * sizeof(csp_instr_t), 1)
-
-// CRC over the RAM patch this save carries -- the payload's OWN integrity, as
-// opposed to rom_fingerprint which identifies the firmware. Same machine writes
-// and reads, so raw bytes are fine (no host/target question) and runtime-scratch
-// fields are saved and restored verbatim -- no normalization. Folds the regions
-// in write order (see csp_eeprom_save): str, decls, instrs, state additions. The
-// #disable bitset is left out; it has its own consistency gate (n_dis).
-static uint16_t payload_crc(csp_rt_t* st, uint16_t ram_nd, uint16_t ram_nn,
-			    uint16_t ram_strp, uint16_t ram_ns)
+// Fill a csp_image_header_t describing the RAM patch currently in st->ram_*. The
+// sizes are passed in -- save uses the ps deltas, load uses the stored header's
+// counts -- so the same folder serves both. The SAME machine writes and reads, so
+// raw bytes are fine (no host/target question, no ROM-style normalization) and
+// runtime-scratch decl fields are folded verbatim, matching what save wrote and
+// load read back. n_edg/crc_graph are 0: a RAM patch never carries a reactive
+// graph -- that is rebuilt in RAM at runtime. Folds the regions in write order:
+// str, decls (via the accessor -- decl[] grows down, not contiguous), instrs,
+// state additions. crc_hdr closes the sub-header (kept for symmetry with ROM).
+static void ram_image(csp_rt_t* st, csp_image_header_t* im,
+		      uint16_t n_str, uint16_t n_decl,
+		      uint16_t n_instr, uint16_t n_state)
 {
-    uint16_t crc = 0xFFFF;
     uint16_t i;
 
-    crc = csp_crc16(crc, st->ram_str, ram_strp, 0);
-    for (i = 0; i < ram_nd; i++)
-	crc = csp_crc16(crc, ram_decl_at(st, st->rom_nd + i),
-			sizeof(csp_decl_t), 0);
-    crc = csp_crc16(crc, st->ram_instr, (size_t)ram_nn * sizeof(csp_instr_t), 0);
-    if (ram_ns)
-	crc = csp_crc16(crc, &st->states[st->rom_ns],
-			(size_t)ram_ns * sizeof(state_t), 0);
-    return crc;
+    im->version = ROM_FORMAT_VERSION;
+    im->n_str = n_str; im->n_decl = n_decl; im->n_instr = n_instr;
+    im->n_edg = 0;     im->n_state = n_state;
+
+    im->crc_str  = csp_crc16(0xFFFF, st->ram_str, n_str, 0);
+    im->crc_decl = 0xFFFF;
+    for (i = 0; i < n_decl; i++)
+	im->crc_decl = csp_crc16(im->crc_decl, ram_decl_at(st, st->rom_nd + i),
+				 sizeof(csp_decl_t), 0);
+    im->crc_instr = csp_crc16(0xFFFF, st->ram_instr,
+			      (size_t)n_instr * sizeof(csp_instr_t), 0);
+    im->crc_state = csp_crc16(0xFFFF, &st->states[st->rom_ns],
+			      (size_t)n_state * sizeof(state_t), 0);
+    im->crc_graph = 0;
+    im->crc_hdr = csp_crc16(0xFFFF, im, sizeof(*im) - sizeof(uint16_t), 0);
+}
+
+// Verify the RAM patch just read against the stored image header, section by
+// section (symmetry with rom_verify). Recompute the CRCs over the RAM slots now
+// holding the loaded data and compare to what save baked. Returns the corrupt
+// section's name, or NULL if intact. Counts come from the header, trusted because
+// the outer crc_hdr already passed.
+static rostring_t ram_verify(csp_rt_t* st, const csp_image_header_t* im)
+{
+    csp_image_header_t chk;
+
+    ram_image(st, &chk, im->n_str, im->n_decl, im->n_instr, im->n_state);
+    if (chk.crc_str   != im->crc_str)   return ros_str;
+    if (chk.crc_decl  != im->crc_decl)  return ros_decl;
+    if (chk.crc_instr != im->crc_instr) return ros_instr;
+    if (chk.crc_state != im->crc_state) return ros_states;
+    return NULL;
 }
 
 int csp_eeprom_clear(csp_rt_t* st)
@@ -96,19 +116,17 @@ int csp_eeprom_save(csp_rt_t* st)
     if (csp_eeprom_open_write() < 0)
 	goto error;
 
+    // memset first so any incidental struct padding is a fixed value the crc_hdr
+    // fold (and the load-side re-fold) agree on.
+    memset(&hdr, 0, sizeof(hdr));
     ro_memcpy(hdr.magic, EEPROM_MAGIC, 4);
-    hdr.version  = EEPROM_VERSION;
-    hdr.rom_nd   = st->rom_nd;
-    hdr.rom_nn   = st->rom_nn;
-    hdr.rom_strp = st->rom_strp;
-    hdr.ram_nd   = ram_nd;
-    hdr.ram_nn   = ram_nn;
-    hdr.ram_strp = ram_strp;
-    hdr.ram_ns   = ram_ns;
-    hdr.nq       = st->ps.nq;
-    hdr.rom_crc  = rom_fingerprint(st);
-    hdr.n_dis    = (uint16_t)csp_n_rules(st);
-    hdr.data_crc = payload_crc(st, ram_nd, ram_nn, ram_strp, ram_ns);
+    hdr.version = EEPROM_VERSION;
+    hdr.rom_fp  = ro_header(&rom_header).crc_hdr;
+    hdr.nq      = st->ps.nq;
+    ram_image(st, &hdr.ram, ram_strp, ram_nd, ram_nn, ram_ns);
+    hdr.n_dis   = (uint16_t)csp_n_rules(st);
+    hdr.crc_dis = csp_crc16(0xFFFF, st->dis_rule, DIS_BYTES(hdr.n_dis), 0);
+    hdr.crc_hdr = csp_crc16(0xFFFF, &hdr, sizeof(hdr) - sizeof(uint16_t), 0);
 
     if (csp_eeprom_write(&hdr, sizeof(hdr)) < 0)
 	goto error;
@@ -152,6 +170,7 @@ error:
 int csp_eeprom_load(csp_rt_t* st)
 {
     eeprom_header_t hdr;
+    rostring_t bad;
     int reactive;
     int did_init = 0;   // csp_rt_init has run -> a failure must leave rebuilt state
 
@@ -168,61 +187,71 @@ int csp_eeprom_load(csp_rt_t* st)
     if (hdr.version != EEPROM_VERSION)
 	goto error;
 
+    // Header integrity before trusting ANY count: a flipped count would make the
+    // section reads below run off into garbage. crc_hdr covers everything above it.
+    if (csp_crc16(0xFFFF, &hdr, sizeof(hdr) - sizeof(uint16_t), 0) != hdr.crc_hdr)
+	goto error;
+
     // Rebuild the ROM baseline, then load the RAM patches on top of it.
     reactive = st->reactive;
     csp_rt_init(st, reactive);
     did_init = 1;       // from here a failure has torn down view/heap/tables
     csp_load_rom(st);   // rebase ps.* to the ROM sizes (no-op if no firmware)
 
-    // reject patches saved against a different firmware ROM. rom_crc catches
-    // the case the size fingerprint cannot: same shape, different content.
-    // Whole save, not just the disable set -- the RAM patches reference ROM
-    // decls by index, and those indices mean something else now.
-    if ((hdr.rom_nd != st->rom_nd) || (hdr.rom_nn != st->rom_nn) ||
-	(hdr.rom_strp != st->rom_strp) || (hdr.rom_crc != rom_fingerprint(st)))
+    // Reject patches saved against a different firmware ROM. rom_header.crc_hdr is
+    // a complete fingerprint (counts + every section CRC), so any change to the
+    // flash program -- size OR content -- shows up here. The RAM patches reference
+    // ROM decls by index; a different program makes those indices mean something
+    // else, so the whole save must go, not just the disable set.
+    if (hdr.rom_fp != ro_header(&rom_header).crc_hdr)
 	goto error;
 
-    // Read the RAM patch area into the RAM-local slots
-    if (csp_eeprom_read(st->ram_str, hdr.ram_strp) < 0)
+    // Read the RAM patch area into the RAM-local slots (counts from the header,
+    // now trusted -- crc_hdr passed).
+    if (csp_eeprom_read(st->ram_str, hdr.ram.n_str) < 0)
 	goto error;
     // decl[] grows DOWN (see csp_eeprom_save): place them one at a time, or a
     // block read would write straight past the top of the pool.
     {
 	uint16_t i;
-	for (i = 0; i < hdr.ram_nd; i++)
+	for (i = 0; i < hdr.ram.n_decl; i++)
 	    if (csp_eeprom_read(ram_decl_at(st, st->rom_nd + i),
 				sizeof(csp_decl_t)) < 0)
 		goto error;
     }
-    if (csp_eeprom_read(st->ram_instr, sizeof(csp_instr_t) * hdr.ram_nn) < 0)
+    if (csp_eeprom_read(st->ram_instr, sizeof(csp_instr_t) * hdr.ram.n_instr) < 0)
 	goto error;
     // Runtime state additions land above the baseline (rom_ns = INIT/NORMAL or
     // the restored ROM table); their name strings came in with ram_str above.
-    if (hdr.ram_ns &&
-	csp_eeprom_read(&st->states[st->rom_ns], sizeof(state_t) * hdr.ram_ns) < 0)
+    if (hdr.ram.n_state &&
+	csp_eeprom_read(&st->states[st->rom_ns],
+			sizeof(state_t) * hdr.ram.n_state) < 0)
 	goto error;
 
-    // Payload integrity: recompute the CRC over what we just read and compare to
-    // what was baked at save. Catches a flipped storage cell independently of the
-    // firmware fingerprint above. Mismatch -> error path restores the ROM
-    // baseline, so a corrupt save never half-loads.
-    if (payload_crc(st, hdr.ram_nd, hdr.ram_nn, hdr.ram_strp, hdr.ram_ns)
-	!= hdr.data_crc)
+    // Payload integrity, per section: recompute each section CRC over what we just
+    // read and compare to the header. Catches a flipped storage cell independently
+    // of the firmware fingerprint above, and NAMES the corrupt section. Mismatch
+    // -> error path restores the ROM baseline, so a corrupt save never half-loads.
+    if ((bad = ram_verify(st, &hdr.ram)) != NULL) {
+	csp_print_lit("eeprom rejected: CRC mismatch in ");
+	csp_print_rostr(bad);
+	csp_print_line(" section");
 	goto error;
+    }
 
     // Logical counts = ROM base + RAM patch
-    st->ps.strp = st->rom_strp + hdr.ram_strp;
-    st->ps.nd   = st->rom_nd   + hdr.ram_nd;
-    st->ps.nn   = st->rom_nn   + hdr.ram_nn;
-    st->ps.ns   = st->rom_ns   + hdr.ram_ns;
+    st->ps.strp = st->rom_strp + hdr.ram.n_str;
+    st->ps.nd   = st->rom_nd   + hdr.ram.n_decl;
+    st->ps.nn   = st->rom_nn   + hdr.ram.n_instr;
+    st->ps.ns   = st->rom_ns   + hdr.ram.n_state;
     st->ps.nq   = hdr.nq;
 
-    // The #disable set. csp_rt_init above zeroed dis_rule, so a save without
-    // one (n_dis == 0) simply leaves everything enabled. The rule count has to
-    // agree with what the restored program actually has: if it does not, the
-    // numbers address different rules than the ones that were disabled, so drop
-    // the set and SAY SO rather than silence the wrong rules. The program
-    // itself is fine -- only the overlay is suspect.
+    // The #disable set, with its own count+CRC descriptor. csp_rt_init above
+    // zeroed dis_rule, so a save without one (n_dis == 0) leaves everything
+    // enabled. The rule count has to agree with what the restored program actually
+    // has: if it does not, the numbers address different rules than the ones that
+    // were disabled, so drop the set and SAY SO rather than silence the wrong
+    // rules. When it agrees, read the bitmap and verify crc_dis before trusting it.
     if (hdr.n_dis) {
 	index_t have = csp_n_rules(st);
 	if (hdr.n_dis != (uint16_t)have) {
@@ -232,8 +261,15 @@ int csp_eeprom_load(csp_rt_t* st)
 	    csp_print_uint(have);
 	    csp_print_line(")");
 	}
-	else if (csp_eeprom_read(st->dis_rule, DIS_BYTES(hdr.n_dis)) < 0)
-	    goto error;
+	else {
+	    if (csp_eeprom_read(st->dis_rule, DIS_BYTES(hdr.n_dis)) < 0)
+		goto error;
+	    if (csp_crc16(0xFFFF, st->dis_rule, DIS_BYTES(hdr.n_dis), 0)
+		!= hdr.crc_dis) {
+		csp_print_line("eeprom rejected: CRC mismatch in disable set");
+		goto error;
+	    }
+	}
     }
 
     csp_eeprom_close();
@@ -261,7 +297,7 @@ error:
     // runs the ROM program, not ROM + partially-loaded garbage. Resetting the
     // counts is enough: the stale ram_* content is never read once the indices
     // stop at rom_nd. (rom_* are the caller's, set by csp_load_rom before us, or
-    // by our own line 161 -- either way correct.)
+    // by our own csp_load_rom above -- either way correct.)
     st->ps.nd   = st->rom_nd;
     st->ps.nn   = st->rom_nn;
     st->ps.strp = st->rom_strp;
@@ -270,9 +306,8 @@ error:
     // If csp_rt_init ran, it tore down view/heap/the derived tables (they are
     // NULL until a rebuild). A caller that just runs the next cycle -- the host
     // main loop does -- would then fault. The boot callers rebuild themselves;
-    // a failing /load did not, so a post-init failure (bad payload CRC, ROM
-    // fingerprint mismatch) crashed. Rebuild the clean ROM baseline here so the
-    // state is always runnable after we return.
+    // a failing /load did not, so a post-init failure crashed. Rebuild the clean
+    // ROM baseline here so the state is always runnable after we return.
     if (did_init) {
 	csp_rebuild(st);
 	csp_setup(st);
@@ -292,4 +327,3 @@ int csp_eeprom_size(csp_rt_t* st)
 	   sizeof(state_t) * (st->ps.ns - st->rom_ns) +
 	   (nr ? DIS_BYTES(nr) : 0);
 }
-

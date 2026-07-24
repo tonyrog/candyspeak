@@ -787,7 +787,6 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     // int, not char: matches the `extern const int rom_str_len` in csp_rt.c so
     // the read is 4-byte aligned (a char at an odd address read as int HardFaults
     // on Cortex-M0), and avoids signed-char overflow for tables > 127 bytes.
-    fprintf(f, "const uint16_t rom_str_len RODATA = %d;\n", st->ps.strp);
     fprintf(f, "const char rom_str[%d] RODATA = {\n", st->ps.strp);
     i = 0;
     while (i < st->ps.strp) {
@@ -812,7 +811,6 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     fprintf(f, "};\n");
 
     // now dump declatrations
-    fprintf(f, "const uint16_t rom_n_decl RODATA = %d;\n", st->ps.nd);
     fprintf(f, "const csp_decl_t rom_decl[%d] RODATA = {\n", st->ps.nd);
     for (i = 0; i < st->ps.nd; i++) {
 	// csp_decl_t is a UNION whose every arm begins with DECL_COMMON, so the
@@ -870,7 +868,6 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     fprintf(f, "};\n");
 
     // and then dump instructions
-    fprintf(f, "const uint16_t rom_n_instr RODATA = %d;\n", st->ps.nn);
     fprintf(f, "const csp_instr_t rom_instr[%d] RODATA = {\n", st->ps.nn);
     for (i = 0; i < st->ps.nn; i++) {
 	// csp_instr_t is a UNION whose every arm begins with INSTR_COMMON (op),
@@ -949,7 +946,6 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     if (st->reactive) {
 	int nd = st->ps.nd;
 	int nedg = st->ofs[nd];
-	fprintf(f, "const uint16_t rom_n_edg RODATA = %d;\n", nedg);
 	fprintf(f, "const index_t rom_idg[%d] RODATA = {", nd);
 	for (i = 0; i < nd; i++) fprintf(f, "%u,", st->idg[i]);
 	fprintf(f, "};\n");
@@ -965,7 +961,6 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 #endif
     {
 	// No graph: stub symbols so rom.c links (all reads gated by rom_n_edg==0).
-	fprintf(f, "const uint16_t rom_n_edg RODATA = 0;\n");
 	fprintf(f, "const index_t rom_idg[1] RODATA = {0};\n");
 	fprintf(f, "const index_t rom_ofs[1] RODATA = {0};\n");
 	fprintf(f, "const index_t rom_edg[1] RODATA = {0};\n");
@@ -973,7 +968,6 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 
     // State table (name offset -> state number). csp_load_rom copies this back
     // into st->states so baked user states resolve. Name offsets index rom_str.
-    fprintf(f, "const uint16_t rom_n_states RODATA = %d;\n", st->ps.ns);
     fprintf(f, "const state_t rom_states[%d] RODATA = {", st->ps.ns ? st->ps.ns : 1);
     for (i = 0; i < st->ps.ns; i++)
 	fprintf(f, "{.name=%u,.snum=%u},",
@@ -981,43 +975,64 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     if (!st->ps.ns) fprintf(f, "{0}");   // avoid a zero-length array
     fprintf(f, "};\n");
 
-    // Version + CRC last, so csp_load_rom can reject a stale or corrupt generate.
-    // The CRC folds the SAME bytes this file emits, in the SAME order as the
-    // runtime rom_image_crc(): counts, then rom_str, decls (logical order via
-    // csp_get_decl -- ram decls grow down), instrs. On the host ro_* is a plain
-    // read, so byte-for-byte this equals what a little-endian target computes.
-    // Graph and states are excluded there and here (see rom_image_crc).
+    // The image header LAST: counts + per-section CRCs, so csp_load_rom can
+    // reject a stale or corrupt generate and name the bad section. Each section
+    // CRC folds the SAME bytes this file emits, byte-for-byte what a
+    // little-endian target reads back (see rom_verify). crc_hdr covers the whole
+    // header up to itself.
     {
-	uint16_t crc = 0xFFFF;
-	uint16_t scal[5];
+	csp_image_header_t h;
 	index_t di;
 	int nedg = 0;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 	if (st->reactive) nedg = st->ofs[st->ps.nd];
 #endif
-	scal[0] = st->ps.strp; scal[1] = st->ps.nd; scal[2] = st->ps.nn;
-	scal[3] = nedg;        scal[4] = st->ps.ns;
-	crc = csp_crc16(crc, scal, sizeof(scal), 0);
-	crc = csp_crc16(crc, st->ram_str, st->ps.strp, 0);
+	h.version = ROM_FORMAT_VERSION;
+	h.n_str = st->ps.strp; h.n_decl = st->ps.nd; h.n_instr = st->ps.nn;
+	h.n_edg = nedg;        h.n_state = st->ps.ns;
+
+	h.crc_str = csp_crc16(0xFFFF, st->ram_str, st->ps.strp, 0);
+	h.crc_decl = 0xFFFF;
 	for (di = 0; di < st->ps.nd; di++) {
-	    // Fold the CANONICAL decl -- the bytes rom_decl[] will actually hold,
-	    // which is what the runtime rom_image_crc reads. The emitted initializer
-	    // sets only the persistent fields and zero-fills the rest, so a live
-	    // decl's runtime-scratch bytes (set during parse/codegen, recomputed at
-	    // boot) must be cleared here to match. This MUST track the emitter switch
-	    // below: whatever a case does NOT write, zero it here.
+	    // Fold the CANONICAL decl -- the bytes rom_decl[] will actually hold.
+	    // The emitted initializer sets only the persistent fields and zero-
+	    // fills the rest, so a live decl's runtime-scratch bytes (set during
+	    // parse/codegen, recomputed at boot) must be cleared here to match.
+	    // This MUST track the emitter switch above: whatever a case does NOT
+	    // write, zero it here.
 	    csp_decl_t d = csp_get_decl(st, di);
 	    d.is_mapped = 0; d.bound = 0; d.reg = 0;   // DECL_COMMON runtime state
 	    if (d.type == DECL_TIMER) {                // period,init emitted; rest not
 		d.tm.fired = 0; d.tm.running = 0; d.tm._res = 0;
 	    }
-	    crc = csp_crc16(crc, &d, sizeof(d), 0);
+	    h.crc_decl = csp_crc16(h.crc_decl, &d, sizeof(d), 0);
 	}
-	crc = csp_crc16(crc, st->ram_instr,
-			(size_t)st->ps.nn * sizeof(csp_instr_t), 0);
-	fprintf(f, "const uint16_t rom_version RODATA = %u;\n",
-		(unsigned)ROM_FORMAT_VERSION);
-	fprintf(f, "const uint16_t rom_crc RODATA = %u;\n", (unsigned)crc);
+	h.crc_instr = csp_crc16(0xFFFF, st->ram_instr,
+				(size_t)st->ps.nn * sizeof(csp_instr_t), 0);
+	h.crc_state = csp_crc16(0xFFFF, st->states,
+				(size_t)st->ps.ns * sizeof(state_t), 0);
+	// Graph CRC folds the same three arrays rom_verify reads back, in the same
+	// order and with the same sizes the emission above used: idg[nd], ofs[nd+1],
+	// edg[nedg]. Only when a graph exists (nedg > 0); else baked 0 and skipped.
+	h.crc_graph = 0;
+	if (nedg > 0) {
+	    h.crc_graph = csp_crc16(0xFFFF, st->idg,
+				    (size_t)st->ps.nd * sizeof(index_t), 0);
+	    h.crc_graph = csp_crc16(h.crc_graph, st->ofs,
+				    (size_t)(st->ps.nd + 1) * sizeof(index_t), 0);
+	    h.crc_graph = csp_crc16(h.crc_graph, st->edg,
+				    (size_t)nedg * sizeof(index_t), 0);
+	}
+	h.crc_hdr = csp_crc16(0xFFFF, &h, sizeof(h) - sizeof(uint16_t), 0);
+
+	fprintf(f, "const csp_image_header_t rom_header RODATA = {\n"
+		   "  .version=%u, .n_str=%u, .n_decl=%u, .n_instr=%u,"
+		   " .n_edg=%u, .n_state=%u,\n"
+		   "  .crc_str=%u, .crc_decl=%u, .crc_instr=%u, .crc_state=%u,"
+		   " .crc_graph=%u, .crc_hdr=%u };\n",
+		h.version, h.n_str, h.n_decl, h.n_instr, h.n_edg, h.n_state,
+		h.crc_str, h.crc_decl, h.crc_instr, h.crc_state,
+		h.crc_graph, h.crc_hdr);
     }
 }
 

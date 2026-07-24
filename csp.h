@@ -100,7 +100,31 @@ typedef unsigned bool_t;
 // rejects the ROM (runs empty, with a message) instead of executing garbage --
 // exactly the "stale generate" trap that cost us the July-18 ROM and EEPROM v5.
 //   v1: first versioned ROM (post NAMEPOS_BITS)
-#define ROM_FORMAT_VERSION 1
+//   v2: csp_image_header_t (per-section CRCs) replaces the loose rom_* scalars
+//   v3: crc_graph covers the reactive graph (rom_idg/rom_ofs/rom_edg)
+#define ROM_FORMAT_VERSION 3
+
+// One header for the whole ROM image, baked by `csp -C` as `rom_header`, so the
+// counts and integrity live in ONE symbol instead of seven loose globals. Per-
+// section CRCs let csp_load_rom say WHICH section is corrupt, not just that
+// something is. crc_hdr covers every field ABOVE it (counts + section CRCs), so
+// a flipped count is caught too. All uint16 + PACKED -> byte-identical on the
+// host generator and a little-endian target (see the CSP_STATIC_ASSERT at
+// csp_crc16), so a byte-CRC baked on the host matches the flash.
+typedef struct PACKED {
+    uint16_t version;    // ROM_FORMAT_VERSION at generation
+    uint16_t n_str;      // rom_str bytes
+    uint16_t n_decl;     // rom_decl entries (incl. the trailing DECL_END)
+    uint16_t n_instr;    // rom_instr entries
+    uint16_t n_edg;      // rom_edg entries (0 = no reactive graph)
+    uint16_t n_state;    // rom_states entries
+    uint16_t crc_str;    // CRC-16/CCITT per section
+    uint16_t crc_decl;
+    uint16_t crc_instr;
+    uint16_t crc_state;
+    uint16_t crc_graph;  // over rom_idg + rom_ofs + rom_edg (0 when n_edg == 0)
+    uint16_t crc_hdr;    // over all fields ABOVE this one -- MUST stay last
+} csp_image_header_t;
 
 typedef const char rochar;                // PROGMEM string character type
 typedef const struct rostr* rostring_t;  // PROGMEM string object type
@@ -1003,7 +1027,11 @@ typedef enum { DIN = 0, DOUT = 1 } dio_t;
 // board with a ROM string table >=128 bytes. snum takes the rest of the 16-bit
 // word: 7 bits, max 127, versus MAX_STATES 16, so state_t stays 2 bytes.
 #define NUM_BITS (16-NAMEPOS_BITS)
-typedef struct
+// PACKED so it is exactly 2 bytes on BOTH host and AVR (a bare bitfield struct
+// is 4 bytes on the host, where the storage unit is a 32-bit int). That makes
+// rom_states byte-stable across the generator and the target, so it can go in
+// the ROM CRC like decls and instrs.
+typedef struct PACKED
 {
     unsigned name:NAMEPOS_BITS;    // logical string position
     unsigned snum:NUM_BITS;        // state number (0..MAX_STATES-1)
@@ -1157,6 +1185,7 @@ typedef struct _csp_rt_t
     index_t rom_strp;            // # ROM string bytes (RAM string base)
     index_t rom_ns;              // # baseline states (INIT/NORMAL + ROM states);
 				 // EEPROM persists only the runtime additions above
+    index_t rom_nedg;            // # ROM reactive-graph edges (0 = no baked graph)
 
     csp_pstate_t ps;             // parse state
     reg_allocator_t* ap;
@@ -1284,10 +1313,13 @@ static inline csp_instr_t ro_instr(const csp_instr_t* p)
 { csp_instr_t v; memcpy_P(&v, p, sizeof(v)); return v; }
 static inline state_t     ro_state(const state_t* p)
 { state_t s; memcpy_P(&s, p, sizeof(s)); return s; }
+static inline csp_image_header_t ro_header(const csp_image_header_t* p)
+{ csp_image_header_t h; memcpy_P(&h, p, sizeof(h)); return h; }
 #else
 #define ro_decl(p)  (*(p))
 #define ro_instr(p) (*(p))
 #define ro_state(p) (*(p))
+#define ro_header(p) (*(p))
 #endif
 
 // Segment-aware read by logical index: a firmware ROM index reads flash (via the
