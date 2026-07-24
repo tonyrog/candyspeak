@@ -55,22 +55,17 @@
   park-fallback aterstar ocksa -- se DONE-noten.)
 
 ## CRC: kvarvarande luckor + emitter-buggar (2026-07-23)
-  Full ROM-CRC + EEPROM data_crc KLART (se DONE). Kvar:
+  Full ROM-CRC + EEPROM data_crc KLART (se DONE). Graf-CRC, rom_states-CRC
+  (state_t PACKED) och #buffer-emittern ar OCKSA klara (se DONE 2026-07-24).
+  Kvar:
   - GENERATOR-NORMALISERING KOPPLAD TILL EMITTERN: rom_image_crc folder
     rom_decl som den ar; generatorn maste nolla exakt de falt emittern INTE
     skriver (is_mapped/bound/reg + timer fired/running/_res). Andras emittern
     maste normaliseringen folja med, annars tyst CRC-miss -> ROM rejected.
     Sarbar. Ev. gor en delad rom_decl_canonical(d) som BADA anvander.
-  - EMITTER DROPPAR #buffer-falt: csp_dump.c DECL_BUFFER-grenen skriver bara
-    common (rad ~860 "no extra union fields") men csp_bufdecl_t HAR
-    nbits/transport/id. Sa en buffer overlever inte ROM-bakning (storlek =0)
-    OCH CRC:n mismatchar for buffer-ROMs -> avvisas. cpx har inga buffrar sa
-    ej triggat. FIX: emittera .nbits/.transport/.id for DECL_BUFFER.
-  - GRAFEN (rom_idg/ofs/edg) ej i CRC:n. Bara reaktiva (-r) ROMs har den.
-    Lagg till om reaktiv firmware ska skyddas.
-  - rom_states ej i CRC:n: state_t ar inte PACKED (4B host / 2B AVR). Gor
-    state_t PACKED (blir 2B bada, byte-stabil som decl) sa kan den foldas.
-    Namn-offsetarna indexerar rom_str som redan ar med, sa delvis tackt.
+    (Nu extra relevant: #buffer-grenen lades till -- bf har inga runtime-scratch
+    utover common is_mapped/bound/reg som redan nollas, sa den var safe, men
+    monstret ar fortfarande sprott.)
 
 ## Listing of RAM rule, list as [ROM]
 

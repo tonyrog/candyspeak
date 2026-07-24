@@ -4799,10 +4799,11 @@ NOINLINE int csp_parse_field(csp_rt_t* st, token_t* tv, int ti, size_t n)
 // Heap-backed storage. Used directly like a variable (whole buffer = value);
 // later mapped with bit-field views (#variable X:n bind Buf[a..b], #can).
 //
-// The size unit follows the transport: BITS for a plain buffer, BYTES for a
-// CAN frame -- a frame's size is its DLC, and writing `:64` for a classic
-// 8-byte frame would read as CAN FD to anyone who knows the bus.
-//   #buffer Buf:16                 16 bits
+// The size is always in BYTES -- a #buffer is a byte container, whatever its
+// transport. One rule for plain and CAN alike (a frame's size is its DLC, also
+// bytes). Sub-byte widths are not a buffer's job: use #variable for a masked
+// scalar (it carries its own bit width) and #field for a bit-view into a buffer.
+//   #buffer Buf:2                  2 bytes (16 bits)
 //   #buffer F201:8  in  can 0x201  8 bytes, classic frame
 //   #buffer Fbig:64 out can 0x300  64 bytes, CAN FD
 typedef struct {
@@ -4830,7 +4831,8 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     uint32_t nbits;
     int i;
 
-    d.r.res = 8;                 // default one byte
+    d.r.res = 8;                 // default 8 bytes (a full classic CAN frame;
+				 // plain buffers default the same, for uniformity)
     d.frameid = -1;              // no 'can' clause seen
     d.opts.vt = V_UNSIGNED;      // raw bits -> unsigned by default
     if (pmatch(st, tv, ti, n, pat_buffer, &d, sizeof(d)) < 0) {
@@ -4838,8 +4840,11 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	return -1;
     }
     d.is_can = (d.frameid >= 0);
-    nbits = d.is_can ? (uint32_t)d.r.res * 8 : (uint32_t)d.r.res;
-    if ((nbits == 0) || (nbits > 1023) || (d.is_can && (d.r.res > 64))) {
+    // #buffer size is BYTES, always -- one rule for plain and CAN. bf.nbits (the
+    // internal storage width) is that byte count times 8. Cap at 127 bytes so
+    // nbits stays inside its 10-bit field (127*8 = 1016 <= 1023); CAN FD is 64.
+    nbits = (uint32_t)d.r.res * 8;
+    if ((d.r.res == 0) || (d.r.res > 127) || (d.is_can && (d.r.res > 64))) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -7317,14 +7322,11 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    csp_println();
 	    break;
 	case DECL_BUFFER:
-	    // #buffer <name>:<size> <dir> [can 0x<id>]. Size is BYTES for a can
-	    // frame (it is the DLC), bits otherwise -- see csp_parse_buffer.
+	    // #buffer <name>:<size> <dir> [can 0x<id>]. Size is BYTES, always
+	    // (nbits/8) -- see csp_parse_buffer.
 	    print_decl_and_name(st, t, cur_mod, npos);
 	    csp_print_char(':');
-	    if (decl(st,i,bf.transport) == TR_CAN)
-		csp_print_uint(decl(st,i,bf.nbits) >> 3);
-	    else
-		csp_print_uint(decl(st,i,bf.nbits));
+	    csp_print_uint(decl(st,i,bf.nbits) >> 3);
 	    if (decl(st,i,dir)) {
 		csp_print_blank();
 		csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));

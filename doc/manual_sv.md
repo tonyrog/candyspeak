@@ -123,24 +123,24 @@ skrivas direkt byte för byte. Buffertar är byggstenen för ramar (CAN),
 bitpackning och överlappande data.
 
 ```
-#buffer Frame:64           // 64 bits = 8 bytes of storage
-#buffer Word:16
+#buffer Frame:8            // 8 byte lagring (64 bitar)
+#buffer Word:2             // 2 byte
 ```
 
-> **Storleksenheten följer transporten.** För en vanlig buffert anges
-> `<storlek>` i **bitar**. För en CAN-buffert (`can <id>`) anges den i **byte**,
-> eftersom en rams storlek *är* dess DLC — att skriva `:64` för en vanlig
-> 8-bytes ram skulle läsas som CAN FD av var och en som kan bussen.
-> Se *CAN-ramar*.
+> **Storleken anges alltid i byte.** En `#buffer` är en byte-behållare, oavsett
+> transport — vanlig och CAN lika (en rams storlek *är* dess DLC, också byte).
+> Vill du ha ett maskat sub-byte-värde? Det är en `#variable` (den bär sin egen
+> bitbredd). Vill du ha en bit-vy in i en buffert? Det är ett `#field` eller ett
+> `bind`-intervall.
 
 En buffert kan deklareras inne i en modul, och då får varje instans sin egen
 lagring — se *Vad en modul får innehålla*.
 
 En buffert kan användas direkt som en variabel. Hela bufferten är dess värde
-(upp till 32 bitar — större ramar nås byte för byte eller via bundna fält):
+(upp till 4 byte — större buffertar nås byte för byte eller via bundna fält):
 
 ```
-#buffer Status:8
+#buffer Status:1
 Status = 200
 ```
 
@@ -158,7 +158,7 @@ underliggande bitarna — de aliaserar samma lagring. Bufferten måste vara
 deklarerad innan den binds.
 
 ```
-#buffer Frame:16
+#buffer Frame:3                           // 3 byte = 24 bitar lagring
 #variable Speed:8     bind Frame[0..7]    // bits 0..7
 #variable Rpm:10 big  bind Frame[8..17]   // bits 8..17, big-endian
 
@@ -1504,7 +1504,7 @@ pandoc doc/manual_sv.md -o doc/manual_sv.pdf \
 
 ## Buffertar
 ```
-#buffer Buf:16              // 16 BITS = 2 bytes of shared storage
+#buffer Buf:3               // 3 BYTE delad lagring (storleken är alltid byte)
 Buf[0] = 52                 // byte access (index = byte)
 X = Buf[0..1]               // byte range -> one value (little-endian)
 

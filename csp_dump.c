@@ -127,8 +127,9 @@ index_t csp_dump_rule(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     case DECL_DIGITAL:
     case DECL_ANALOG:
     case DECL_FIELD:
-    case DECL_TIMER:	
-	fprintf(f, "%s", indent(lev));	
+    case DECL_BUFFER:   // pack (Buf <<= ...) makes a buffer a reactive target
+    case DECL_TIMER:
+	fprintf(f, "%s", indent(lev));
 	fprintf(f, "{rules,%d,'%s',", i, decl_name(st, ix));
 	dump_edge_list(f, st, ix);
 	fprintf(f, "}%s\n", eot);
@@ -367,12 +368,32 @@ void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
 	    fv = 0;
 	    j++;
 	    break;
+	case DECL_BUFFER:   // a #buffer member: per-instance storage, like a var
+	    csp_dump_var(f,st,"var","",m,k,fv,lang);
+	    fv = 0;
+	    j++;
+	    break;
+	case DECL_DIGITAL:
+	    csp_dump_var(f,st,"digital","",m,k,fv,lang);
+	    fv = 0;
+	    j++;
+	    break;
+	case DECL_ANALOG:
+	    csp_dump_var(f,st,"analog","",m,k,fv,lang);
+	    fv = 0;
+	    j++;
+	    break;
+	case DECL_FIELD:    // a #field member: a bit-view, reads like a value
+	    csp_dump_var(f,st,"var","",m,k,fv,lang);
+	    fv = 0;
+	    j++;
+	    break;
 	case DECL_TIMER:
 	    csp_dump_var(f,st,"timer","",m,k,fv,lang);
 	    csp_dump_var(f,st,"var","[t0]",m,k+1,fv,lang);
 	    fv = 0;
 	    j += 2;
-	    break;	    
+	    break;
 	default:
 	    j++;
 	    break;
@@ -416,6 +437,11 @@ void csp_dump_state(FILE* f, csp_rt_t* st, csp_lang_t lang)
 	    i++;
 	    break;
 	case DECL_BUFFER:
+	    csp_dump_var(f,st,"var","",0,i,fo,lang);
+	    fo = 0;
+	    i++;
+	    break;
+	case DECL_FIELD:    // a #field: a bit-view into a buffer, reads like a value
 	    csp_dump_var(f,st,"var","",0,i,fo,lang);
 	    fo = 0;
 	    i++;
@@ -588,6 +614,19 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		csp_ivalue(st, decl(st,i,ca.id)),
 		decl(st,i,ca.bit),
 		GET_CAN_LEN(decl(st,i,ca.len)), eot);
+	break;
+    case DECL_BUFFER:
+	vt = decl(st,i,vt);
+	// {size,N} in BYTES, matching the source syntax (nbits/8).
+	fprintf(f, "{decl,%d,buffer,\"%s\",[{size,%d},{type,%s},{transport,%d},{id,16#%x}]}%s\n",
+		i,
+		decl_name(st, ix),
+		decl(st,i,bf.nbits) >> 3,
+		(char*)csp_fmt_vtype(vt),
+		decl(st,i,bf.transport),
+		(decl(st,i,bf.transport) == TR_CAN)
+		    ? (unsigned)csp_ivalue(st, decl(st,i,bf.id)) : 0u,
+		eot);
 	break;
     default:
 	break;
@@ -854,8 +893,14 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    fprintf(f, "  {.tm={%s,.period=%u,.init=%u}},\n",
 		    cmn, (unsigned)dp->tm.period, dp->tm.init);
 	    break;
+	case DECL_BUFFER:
+	    // The buffer's SIZE (nbits) lives here, not in cmn.res -- omitting it
+	    // baked a zero-length buffer AND made crc_decl mismatch (the fold sees
+	    // the real nbits, the emit wrote 0) -> "CRC mismatch in decl section".
+	    fprintf(f, "  {.bf={%s,.nbits=%u,.transport=%u,.id=%u}},\n",
+		    cmn, dp->bf.nbits, dp->bf.transport, dp->bf.id);
+	    break;
 	case DECL_END:    // common fields only (anonymous union arm)
-	case DECL_BUFFER: // no extra union fields (res/vt/dir already in cmn)
 	case DECL_VIEW:   // synthetic; emitted as common only
 	case DECL_STATES:
 	case DECL_IN:
@@ -1101,7 +1146,7 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 	break;
     case DECL_FIELD:
 	vt = decl(st,i,vt);
-	fprintf(f, "#can %s:%d %s %s %s 0x%x[%d:%d]\n",
+	fprintf(f, "#field %s:%d %s %s %s 0x%x[%d:%d]\n",
 		decl_name(st, ix),
 		GET_RES(decl(st,i,res)),
 		(char*)csp_fmt_vtype(vt),
@@ -1110,6 +1155,18 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 		csp_ivalue(st, decl(st,i,ca.id)),
 		decl(st,i,ca.bit),
 		decl(st,i,ca.bit) + GET_CAN_LEN(decl(st,i,ca.len)));
+	break;
+    case DECL_BUFFER:
+	// #buffer <name>:<size> [dir] [can 0x<id>]. Size is BYTES, always (nbits/8)
+	// -- matching the board lister and the parser.
+	fprintf(f, "#buffer %s:%d",
+		decl_name(st, ix),
+		decl(st,i,bf.nbits) >> 3);
+	if (decl(st,i,dir))
+	    fprintf(f, " %s", (char*)csp_fmt_pindir(decl(st,i,dir)));
+	if (decl(st,i,bf.transport) == TR_CAN)
+	    fprintf(f, " can 0x%x", (unsigned)csp_ivalue(st, decl(st,i,bf.id)));
+	fprintf(f, "\n");
 	break;
     default:
 	break;

@@ -29,7 +29,7 @@
 // The buffer IS the colour; the three variables are bit-field views into it,
 // so writing them writes the frame. Global, so every Pixel object can read it
 // (a module body sees globals; a member of the same name would shadow one).
-#buffer Live:16
+#buffer Live:2                 // 2 bytes = 16 bits (RGB565)
 #variable r:5 bind Live[11..15]
 #variable g:6 bind Live[5..10]
 #variable b:5 bind Live[0..4]

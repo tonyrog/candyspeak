@@ -122,23 +122,23 @@ written directly by byte. Buffers are the building block for frames (CAN), bit
 packing, and overlapping data.
 
 ```
-#buffer Frame:64           // 64 bits = 8 bytes of storage
-#buffer Word:16
+#buffer Frame:8            // 8 bytes of storage (64 bits)
+#buffer Word:2             // 2 bytes
 ```
 
-> **The size unit follows the transport.** For a plain buffer `<size>` is in
-> **bits**. For a CAN buffer (`can <id>`) it is in **bytes**, because a frame's
-> size *is* its DLC — writing `:64` for an ordinary 8-byte frame would read as
-> CAN FD to anyone who knows the bus. See *CAN frames*.
+> **The size is always in bytes.** A `#buffer` is a byte container, whatever its
+> transport — plain or CAN alike (a frame's size *is* its DLC, also bytes). Need
+> a sub-byte masked value? That is a `#variable` (it carries its own bit width).
+> Need a bit-view into a buffer? That is a `#field`, or a `bind` range.
 
 A buffer may be declared inside a module, in which case every instance gets its
 own storage — see *What a Module May Contain*.
 
 A buffer can be used directly like a variable. The whole buffer is its value
-(up to 32 bits — larger frames are accessed by byte or through bound fields):
+(up to 4 bytes — larger buffers are accessed by byte or through bound fields):
 
 ```
-#buffer Status:8
+#buffer Status:1
 Status = 200
 ```
 
@@ -156,7 +156,7 @@ underlying buffer bits — they alias the same storage. The buffer must be
 declared before it is bound.
 
 ```
-#buffer Frame:16
+#buffer Frame:3                           // 3 bytes = 24 bits of storage
 #variable Speed:8     bind Frame[0..7]    // bits 0..7
 #variable Rpm:10 big  bind Frame[8..17]   // bits 8..17, big-endian
 
@@ -1495,7 +1495,7 @@ pandoc doc/manual_en.md -o doc/manual_en.pdf \
 
 ## Buffers
 ```
-#buffer Buf:16              // 16 BITS = 2 bytes of shared storage
+#buffer Buf:3               // 3 BYTES of shared storage (size is always bytes)
 Buf[0] = 52                 // byte access (index = byte)
 X = Buf[0..1]               // byte range -> one value (little-endian)
 
