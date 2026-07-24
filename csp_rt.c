@@ -1674,10 +1674,10 @@ NOINLINE void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp,
 	switch (part) {
 	case PART_VAL: *vp = csp_heap_get(st, vw, dir); break;
 	// Direction is a property of the buffer, so it answers for a plain
-	// #buffer as well as a CAN frame -- and for a #can field, which reads
+	// #buffer as well as a CAN frame -- and for a #field,  which reads
 	// its frame's direction.
 	case PART_DIR: vp->i = bp->dir; break;
-	// Frame state, read off the buffer. A #can field answers for its frame
+	// Frame state, read off the buffer. A #field answers for its frame
 	// too: `A.rx` and `F201.rx` are the same fact.
 	case PART_RX:
 	    if (bp->transport == TR_CAN)
@@ -4797,7 +4797,7 @@ NOINLINE int csp_parse_field(csp_rt_t* st, token_t* tv, int ti, size_t n)
 
 // '#' 'buffer' <name> ':' <size> [<opt>*] ['can' <frame-id>]
 // Heap-backed storage. Used directly like a variable (whole buffer = value);
-// later mapped with bit-field views (#variable X:n bind Buf[a..b], #can).
+// later mapped with bit-field views (#variable X:n bind Buf[a..b], #field).
 //
 // The size is always in BYTES -- a #buffer is a byte container, whatever its
 // transport. One rule for plain and CAN alike (a frame's size is its DLC, also
@@ -5756,7 +5756,7 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 	// #field needs no branch of its own: 'field' is not a reserved token, so
 	// it arrives as a WORD and find_decl_entry maps it like every other
 	// declaration keyword. ('can' still is reserved -- it is the transport
-	// option on #buffer -- which is exactly why #can DID need one.)
+	// option on #buffer -- which is exactly why #field DID need one.)
 	// Reserved tokens, so they never reach the WORD branch and
 	// get mistaken for a module instantiation.
 	else if ((tv[0].t == HASH) &&
@@ -6221,10 +6221,10 @@ NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint8_t nbytes,
 				      pindir_t dir);
 NOINLINE static int parent_leaf(csp_rt_t* st, index_t ix);
 
-// Bind a #can field to its frame. ca.id is the #buffer decl; that buffer was
+// Bind a #field to its frame. ca.id is the #buffer decl; that buffer was
 // already allocated by setup_buffer (it has a lower decl index, since the frame
 // must be declared before a field can view it), so this is purely a view.
-NOINLINE static int setup_can(csp_rt_t* st, index_t ix)
+NOINLINE static int setup_field(csp_rt_t* st, index_t ix)
 {
     int i = INDEX(ix);
     index_t fx = decl(st, i, ca.id);            // the #buffer (decl index)
@@ -6279,8 +6279,8 @@ NOINLINE static int setup_can(csp_rt_t* st, index_t ix)
 NOINLINE static void can_mark_fields(csp_rt_t* st, index_t b)
 {
     int i;
-    // The frame's own leaf first. A frame declared as a plain #buffer (no #can
-    // fields at all -- read with >>= or with bound variables) has nothing in
+    // The frame's own leaf first. A frame declared as a plain #buffer (no #field
+    // at all -- read with >>= or with bound variables) has nothing in
     // the input list, so without this nothing would be marked, commit would
     // copy nothing, and the received bytes would never reach the committed
     // half. heap_dset_copy moves the WHOLE buffer for any dirty leaf of it, so
@@ -6819,7 +6819,7 @@ int csp_rt_start(csp_rt_t* st)
 	    
 	case DECL_FIELD:
 	    if (!in_module) {
-		if (setup_can(st, ix) < 0)
+		if (setup_field(st, ix) < 0)
 		    return -1;
 		add_io(st, ix);
 	    }
@@ -6921,7 +6921,7 @@ int csp_rt_start(csp_rt_t* st)
 	    case DECL_FIELD:
 		// fx, not ix: this object's field, not the object itself. And an
 		// explicit break -- it used to fall through to default.
-		if (setup_can(st, fx) < 0)
+		if (setup_field(st, fx) < 0)
 		    return -1;
 		add_io(st, fx);
 		break;
@@ -7338,7 +7338,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    csp_println();
 	    break;
 	case DECL_FIELD:
-	    // #can <name>:<width> <dir> <type> <frame>[<lo>..<hi>].ca.id is the
+	    // #field <name>:<width> <dir> <type> <frame>[<lo>..<hi>].ca.id is the
 	    // #buffer decl the field is a view into, so the frame is named, not
 	    // repeated as a raw id.
 	    print_decl_and_name(st, t, cur_mod, npos);

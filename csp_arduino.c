@@ -509,7 +509,7 @@ int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
     return CAN.endPacket() ? 0 : -1;
 }
 
-#else   /* no CAN on this board: stubs, so #can still parses and runs dry */
+#else   /* no CAN on this board: stubs, so CAN still parses and runs dry */
 
 int csp_can_init(csp_rt_t* st) { (void)st; return 0; }
 int csp_can_recv(csp_rt_t* st, uint32_t* id, uint8_t* data, uint8_t* len)

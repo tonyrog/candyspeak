@@ -888,7 +888,7 @@ typedef struct PACKED {
     unsigned endian:2; // |little|big
     unsigned bit:9;   // 0-511   // bit start pos
     unsigned len:5;   // (1-32)  // data length -1
-} csp_can_t;
+} csp_field_t;
 
 // #buffer. Its size does NOT live in DECL_COMMON.res: that is 5 bits holding
 // bits-1, so anything past 32 bits truncated silently (a 64-bit buffer became
@@ -918,7 +918,7 @@ typedef union {
     csp_constant_t cn;
     csp_digital_t  di;
     csp_analog_t   an;
-    csp_can_t      ca;
+    csp_field_t    ca;
     csp_bufdecl_t  bf;
     csp_timer_t    tm;
 } csp_decl_t;

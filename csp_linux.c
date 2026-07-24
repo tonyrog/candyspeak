@@ -370,7 +370,7 @@ int csp_uconst(csp_rt_t* st, const char* name, int len,
 // CAN backend
 //
 // SocketCAN when a --can interface was given, otherwise a no-op stub so a
-// program with #can declarations still parses, runs and can be inspected on a
+// program with CAN declarations still parses, runs and can be inspected on a
 // machine with no bus. Test with a virtual interface:
 //   sudo ip link add dev vcan0 type vcan && sudo ip link set up vcan0
 //   ./csp --can=vcan0 prog.csp
@@ -459,7 +459,7 @@ int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
     return 0;
 }
 
-#else  /* no SocketCAN: stubs, so #can still parses and runs dry */
+#else  /* no SocketCAN: stubs, so CAN still parses and runs dry */
 
 int csp_can_init(csp_rt_t* st) { (void)st; return 0; }
 int csp_can_pollfd(void) { return -1; }
@@ -583,8 +583,9 @@ void print_defines()
     printf("sizeof(csp_constant_t) = %ld\n", sizeof(csp_constant_t));
     printf("sizeof(csp_digital_t) = %ld\n", sizeof(csp_digital_t));
     printf("sizeof(csp_analog_t) = %ld\n", sizeof(csp_analog_t));
+    printf("sizeof(csp_field_t) = %ld\n", sizeof(csp_field_t));    
+    printf("sizeof(csp_bufdecl_t) = %ld\n", sizeof(csp_bufdecl_t));    
     printf("sizeof(csp_timer_t) = %ld\n", sizeof(csp_timer_t));
-    printf("sizeof(csp_can_t) = %ld\n", sizeof(csp_can_t));
 
     printf("sizeof(csp_instr_t) = %ld\n", sizeof(csp_instr_t));
     printf("sizeof(csp_instr_enter_t) = %ld\n", sizeof(csp_instr_enter_t));
@@ -655,7 +656,7 @@ void usage(const char* prog)
     fprintf(stderr, "  -I, --input-file=F   Data input file\n");
     fprintf(stderr, "      --board=NAME     Simulate a board: mega, mkrzero (measured;\n");
     fprintf(stderr, "                       sets --ram/--ram-used/--eeprom-size)\n");
-    fprintf(stderr, "      --can=IFACE      SocketCAN interface for #can frames\n");
+    fprintf(stderr, "      --can=IFACE      SocketCAN interface for CAN frames\n");
     fprintf(stderr, "                       (e.g. vcan0); omit to run without a bus\n");
     fprintf(stderr, "  -M, --ram=N[k]       Total RAM the board has (or Nk KiB)\n");
     fprintf(stderr, "  -U, --ram-used=N[k]  RAM the system/linked libraries take\n");    
