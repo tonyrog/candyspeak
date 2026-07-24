@@ -1095,6 +1095,72 @@ If a line fails to parse, nothing is kept. A failure inside an unfinished
 lines you type next are not silently swallowed by a module that can never be
 closed.
 
+### Disabling and Enabling Rules
+
+`#disable` turns a single rule **off** by its number; `#enable` turns it back
+on. A disabled rule is skipped every cycle — nothing else changes.
+
+`/list` numbers the rules in its left column and marks a disabled one with `!`:
+
+```
+> /list
+  1 R   Btn ? Led = 1
+  2 R   Temp > 30 ? Fan = 1
+> #disable 2
+> /list
+  1 R   Btn ? Led = 1
+  2 R!  Temp > 30 ? Fan = 1     # off
+> #enable 2                     # back on
+```
+
+You can name a list or a range, and sweep with a range:
+
+```
+#disable 3 5 7        # several at once
+#disable 2-6          # an inclusive range
+#enable  1-99         # re-enable everything (the top is clamped to the last rule)
+```
+
+**What it is good for**
+
+- **Building past a bug.** A rule misbehaves — it fights another rule, trips on
+  a bad sensor, floods an output. Instead of stopping the whole program to edit
+  and reflash, switch that one rule off and keep running:
+
+  ```
+  > #disable 4              # silence the offending rule
+  > Fan = Temp > 25         # add a corrected replacement rule
+  ```
+
+  The rest of the program is untouched. You have *built past* the bug live, and
+  can take your time on a proper fix.
+
+- **Patching firmware without reflashing.** Rule numbers run straight through the
+  baked ROM rules and on into the ones you add at the prompt, so `#disable 2` can
+  turn off a **firmware** rule just as easily as an interactive one. Silence a
+  ROM rule, add a RAM rule in its place, and the board behaves the new way — no
+  rebuild, no upload.
+
+- **Bisecting behaviour.** Not sure which rule causes an effect? Disable a range,
+  confirm it stops, then re-enable rules a few at a time to find the culprit.
+
+- **Commissioning and testing.** Bring a machine up one rule at a time: disable
+  everything, enable rules as each subsystem is verified.
+
+**Things worth knowing**
+
+- A disable **follows its rule**. Rule numbers shift when you insert or remove a
+  rule, but a disable is remembered by identity across those edits — it stays on
+  the rule you switched off, not on whatever number it happened to have.
+- Disables **persist**. `/save` writes them to EEPROM and `/load` restores them,
+  so a board comes back up with the same rules switched off. (If the program has
+  changed so much that the numbers no longer line up, the saved set is dropped
+  with a message rather than switching off the wrong rules.)
+- `#disable 9` when there is no rule 9 is an **error** — naming a rule that does
+  not exist is almost always a typo. A *range* that overshoots (`2-99`) is read
+  as "to the end" and simply clamped.
+- The first 128 rules each carry a switch; rules beyond that always run.
+
 ### Direct Evaluation
 
 In interactive mode you can:
@@ -1518,6 +1584,8 @@ F.id  F.rx  F.tx  F.dlc       // CAN frame parts (also via any of its fields)
 /latch on|off                 // hold or release outputs
 /list  /state  /memory        // inspect
 /save  /load                  // EEPROM
+#disable 2   #enable 2        // switch a rule off / on by number
+#disable 2-6                  // a list or inclusive range
 ```
 
 ## Packing and Unpacking

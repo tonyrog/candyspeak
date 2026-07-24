@@ -1,5 +1,14 @@
 # FIXES
 
+## Korrupt #disable-set i EEPROM => FAILSAFE i st f ROM? (2026-07-24)
+  Idag: crc_dis-miss vid load -> avvisa HELA saven, fall tillbaka till ROM-
+  baslinjen (se DONE + doc/DISABLE.md). Rimligt default (ROM = betrodd), MEN:
+  disable-seten kan ha stangt av en FARLIG ROM-regel. Faller vi da tillbaka
+  till "bara ROM" ATERAKTIVERAS just den regeln -> osakert. For en korrupt
+  disable-set specifikt ar sakraste destinationen kanske FAILSAFE (reserverat
+  sticky state), inte ROM. Vantar pa FAILSAFE park-fallback (se failsafe-noten).
+  Dokumenterat som oppen fraga i doc/DISABLE.md "Failure mode".
+
 ## END-markörer => scan-baserad återhämtning vid korrupt header (2026-07-24)
   IDÉ (Tony). Idag: crc_hdr täcker räknarna (n_str/n_decl/n_instr/n_state) OCH
   sektions-CRC:erna. Failar crc_hdr avvisar vi HELT -- vi vågar inte lita på

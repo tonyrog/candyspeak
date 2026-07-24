@@ -1101,6 +1101,75 @@ Om en rad inte går att parsa behålls ingenting. Ett fel inne i en oavslutad
 raderna du skriver därefter inte tyst sväljs av en modul som aldrig kan
 stängas.
 
+### Slå av och på regler
+
+`#disable` slår **av** en enskild regel via dess nummer; `#enable` slår på den
+igen. En avslagen regel hoppas över varje cykel — inget annat ändras.
+
+`/list` numrerar reglerna i vänsterkolumnen och markerar en avslagen med `!`:
+
+```
+> /list
+  1 R   Btn ? Led = 1
+  2 R   Temp > 30 ? Fan = 1
+> #disable 2
+> /list
+  1 R   Btn ? Led = 1
+  2 R!  Temp > 30 ? Fan = 1     # av
+> #enable 2                     # på igen
+```
+
+Du kan ange en lista eller ett intervall, och svepa med ett intervall:
+
+```
+#disable 3 5 7        # flera på en gång
+#disable 2-6          # ett inklusivt intervall
+#enable  1-99         # slå på allt igen (toppen klampas till sista regeln)
+```
+
+**Vad den är bra för**
+
+- **Bygga sig förbi en bugg.** En regel bråkar — den slåss med en annan regel,
+  snubblar på en trasig sensor, dränker en utgång. Istället för att stoppa hela
+  programmet för att redigera och omflasha, slå av just den regeln och fortsätt
+  köra:
+
+  ```
+  > #disable 4              # tysta den felande regeln
+  > Fan = Temp > 25         # lägg till en korrigerad ersättningsregel
+  ```
+
+  Resten av programmet är orört. Du har *byggt dig förbi* buggen live och kan ta
+  dig tid med en ordentlig fix.
+
+- **Patcha firmware utan omflashning.** Regelnummer löper rakt genom de bakade
+  ROM-reglerna och vidare in i dem du lägger till vid prompten, så `#disable 2`
+  kan slå av en **firmware**-regel lika enkelt som en interaktiv. Tysta en ROM-
+  regel, lägg en RAM-regel i dess ställe, och brädan beter sig på det nya sättet
+  — ingen ombyggnad, ingen uppladdning.
+
+- **Bisektera beteende.** Osäker på vilken regel som orsakar en effekt? Slå av
+  ett intervall, bekräfta att det upphör, slå sedan på reglerna några i taget för
+  att hitta boven.
+
+- **Driftsättning och test.** Ta upp en maskin en regel i taget: slå av allt, slå
+  på reglerna efter hand som varje delsystem verifieras.
+
+**Värt att veta**
+
+- En avslagning **följer sin regel**. Regelnummer förskjuts när du infogar eller
+  tar bort en regel, men en avslagning kommer ihåg via identitet genom de
+  ändringarna — den stannar på regeln du slog av, inte på vilket nummer den råkade
+  ha.
+- Avslagningar **består**. `/save` skriver dem till EEPROM och `/load` återställer
+  dem, så en bräda kommer upp igen med samma regler avslagna. (Om programmet
+  ändrats så mycket att numren inte längre stämmer släpps den sparade mängden med
+  ett meddelande istället för att slå av fel regler.)
+- `#disable 9` när det inte finns någon regel 9 är ett **fel** — att namnge en
+  regel som inte finns är nästan alltid ett skrivfel. Ett *intervall* som svämmar
+  över (`2-99`) läses som "till slutet" och klampas.
+- De första 128 reglerna bär var sin brytare; regler bortom det körs alltid.
+
 ### Direkt evaluering
 
 I interaktivt läge kan du:
@@ -1524,6 +1593,8 @@ F.id  F.rx  F.tx  F.dlc       // CAN frame parts (also via any of its fields)
 /latch on|off                 // hold or release outputs
 /list  /state  /memory        // inspect
 /save  /load                  // EEPROM
+#disable 2   #enable 2        // slå av / på en regel via nummer
+#disable 2-6                  // en lista eller ett inklusivt intervall
 ```
 
 ## Packa och packa upp
