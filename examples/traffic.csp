@@ -1,0 +1,34 @@
+// This example matches  wokwi.com rp400 traffic light example
+// generate a rom ./csp -C -n examples/traffic.csp > rom.c
+// make -f Makefile.rp2040
+// in wokwi put cursor in edit window and press F1 write "upload" and
+// click on Upload firmware. Select CandySpeak.ino.elf / hex
+// it will run in about 10-12% of the real speed.
+//
+#digital Red    out 1
+#digital Yellow out 5
+#digital Green  out 9
+#timer   Phase  1000 = 1
+#states  red redyellow green yellow
+
+#in INIT
+    State = red
+#end
+#in red
+    Red=1, Yellow=0, Green=0
+    State = redyellow ? timeout(Phase)
+#end
+#in redyellow
+    Red=1, Yellow=1, Green=0
+    State = green ? timeout(Phase)
+#end
+#in green
+    Red=0, Yellow=0, Green=1
+    State = yellow ? timeout(Phase)
+#end
+#in yellow
+    Red=0, Yellow=1, Green=0
+    State = red ? timeout(Phase)
+#end
+
+Phase = 1 ? timeout(Phase)      // restart the timer each phase
