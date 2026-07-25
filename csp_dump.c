@@ -617,11 +617,11 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	break;
     case DECL_BUFFER:
 	vt = decl(st,i,vt);
-	// {size,N} in BYTES, matching the source syntax (nbits/8).
+	// {size,N} in BYTES, matching the source syntax (bf.nbytes).
 	fprintf(f, "{decl,%d,buffer,\"%s\",[{size,%d},{type,%s},{transport,%d},{id,16#%x}]}%s\n",
 		i,
 		decl_name(st, ix),
-		decl(st,i,bf.nbits) >> 3,
+		decl(st,i,bf.nbytes),
 		(char*)csp_fmt_vtype(vt),
 		decl(st,i,bf.transport),
 		(decl(st,i,bf.transport) == TR_CAN)
@@ -894,11 +894,11 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 		    cmn, (unsigned)dp->tm.period, dp->tm.init);
 	    break;
 	case DECL_BUFFER:
-	    // The buffer's SIZE (nbits) lives here, not in cmn.res -- omitting it
+	    // The buffer's SIZE (nbytes) lives here, not in cmn.res -- omitting it
 	    // baked a zero-length buffer AND made crc_decl mismatch (the fold sees
-	    // the real nbits, the emit wrote 0) -> "CRC mismatch in decl section".
-	    fprintf(f, "  {.bf={%s,.nbits=%u,.transport=%u,.id=%u}},\n",
-		    cmn, dp->bf.nbits, dp->bf.transport, dp->bf.id);
+	    // the real nbytes, the emit wrote 0) -> "CRC mismatch in decl section".
+	    fprintf(f, "  {.bf={%s,.nbytes=%u,.transport=%u,.id=%u}},\n",
+		    cmn, dp->bf.nbytes, dp->bf.transport, dp->bf.id);
 	    break;
 	case DECL_END:    // common fields only (anonymous union arm)
 	case DECL_VIEW:   // synthetic; emitted as common only
@@ -1157,11 +1157,11 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 		decl(st,i,ca.bit) + GET_CAN_LEN(decl(st,i,ca.len)));
 	break;
     case DECL_BUFFER:
-	// #buffer <name>:<size> [dir] [can 0x<id>]. Size is BYTES, always (nbits/8)
+	// #buffer <name>:<size> [dir] [can 0x<id>]. Size is BYTES (bf.nbytes)
 	// -- matching the board lister and the parser.
 	fprintf(f, "#buffer %s:%d",
 		decl_name(st, ix),
-		decl(st,i,bf.nbits) >> 3);
+		decl(st,i,bf.nbytes));
 	if (decl(st,i,dir))
 	    fprintf(f, " %s", (char*)csp_fmt_pindir(decl(st,i,dir)));
 	if (decl(st,i,bf.transport) == TR_CAN)

@@ -29,13 +29,14 @@ typedef struct {
 // read and written through ro_memcmp/ro_memcpy. 4 bytes, terminator included.
 static rochar eeprom_magic[4] RODATA = "CSP";
 #define EEPROM_MAGIC eeprom_magic
+// v9: bufdecl change from nbits nbytes
 // v8: RAM patch described by an embedded csp_image_header_t (per-section CRCs +
 //     crc_graph placeholder), separate crc_dis for the #disable bitmap, ROM
 //     identity is the whole-header rom_header.crc_hdr, and a crc_hdr over the
 //     eeprom header itself. Binary-incompatible with v7's flat header.
 // v7: data_crc (single payload CRC).  v6: NAMEPOS_BITS widened decl `name`.
 // The version is what rejects a stale save, before ps.* is touched.
-#define EEPROM_VERSION 8
+#define EEPROM_VERSION 9
 
 // Bytes the #disable bitset occupies for a program with n rules. Rounded up to
 // whole set_group_t words so the read/write is a straight memcpy of the front

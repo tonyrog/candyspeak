@@ -102,7 +102,7 @@ typedef unsigned bool_t;
 //   v1: first versioned ROM (post NAMEPOS_BITS)
 //   v2: csp_image_header_t (per-section CRCs) replaces the loose rom_* scalars
 //   v3: crc_graph covers the reactive graph (rom_idg/rom_ofs/rom_edg)
-#define ROM_FORMAT_VERSION 3
+#define ROM_FORMAT_VERSION 4
 
 // One header for the whole ROM image, baked by `csp -C` as `rom_header`, so the
 // counts and integrity live in ONE symbol instead of seven loose globals. Per-
@@ -368,8 +368,7 @@ typedef enum {
 // One per unique buffer. RAM table, filled at start.
 typedef struct {
     uint16_t hp;        // heap byte offset
-    uint8_t  nbytes;    // size in bytes
-    uint8_t  loc;       // RAM/ROM/IO
+    uint16_t nbytes;    // size in bytes (up to 1023 -- widened from the freed loc)
     uint8_t  transport; // transport_t
     uint8_t  dir;       // in/out
     uint8_t  flags;     // BUF_F_*
@@ -892,16 +891,16 @@ typedef struct PACKED {
 
 // #buffer. Its size does NOT live in DECL_COMMON.res: that is 5 bits holding
 // bits-1, so anything past 32 bits truncated silently (a 64-bit buffer became
-// 4 bytes). nbits here is the one source of truth for how big a buffer is.
+// 4 bytes). nbytes here is the one source of truth for how big a buffer is.
 typedef struct PACKED {
     DECL_COMMON;
-    unsigned nbits:10;      // 1..1023; a CAN FD frame is 512
+    unsigned nbytes:10;     // 1..1023; a CAN FD frame is 64 bytes
     unsigned transport:2;   // transport_t: TR_NONE plain RAM, TR_CAN a frame
     unsigned id:INDEX_BITS; // TR_CAN: constant holding the frame id
 } csp_bufdecl_t;
 
 typedef struct PACKED {
-    DECL_COMMON;    
+    DECL_COMMON;
     unsigned long period:28; // timeout value ms (74h max)
     unsigned _res:1;         // reserved
     unsigned fired:1;        // timeout occurred this cycle (edge-triggered)

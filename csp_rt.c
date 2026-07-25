@@ -4828,7 +4828,7 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     buffer_param_t d = {0};
     index_t ix;
-    uint32_t nbits;
+    uint32_t nbytes;
     int i;
 
     d.r.res = 8;                 // default 8 bytes (a full classic CAN frame;
@@ -4840,11 +4840,11 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	return -1;
     }
     d.is_can = (d.frameid >= 0);
-    // #buffer size is BYTES, always -- one rule for plain and CAN. bf.nbits (the
-    // internal storage width) is that byte count times 8. Cap at 127 bytes so
-    // nbits stays inside its 10-bit field (127*8 = 1016 <= 1023); CAN FD is 64.
-    nbits = (uint32_t)d.r.res * 8;
-    if ((d.r.res == 0) || (d.r.res > 127) || (d.is_can && (d.r.res > 64))) {
+    // #buffer size is BYTES, always -- one rule for plain and CAN. bf.nbytes (the
+    // internal storage width) is that byte count. Cap at 1023 bytes (10 bits)
+    // CAN FD is 64.
+    nbytes = (uint32_t)d.r.res;
+    if ((d.r.res == 0) || (d.r.res > 1023) || (d.is_can && (d.r.res > 64))) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -4853,7 +4853,7 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     i = INDEX(ix);
     ram_decl_at(st,i)->vt  = d.opts.vt;
     ram_decl_at(st,i)->dir = d.opts.dir;
-    ram_decl_at(st,i)->bf.nbits = nbits;
+    ram_decl_at(st,i)->bf.nbytes = nbytes;
     ram_decl_at(st,i)->bf.transport = d.is_can ? TR_CAN : TR_NONE;
     if (d.is_can) {
 	value_t fid;
@@ -6216,7 +6216,7 @@ NOINLINE static void setup_digital(csp_rt_t* st, index_t ix)
     iptr->d.pulldown = optr->d.pulldown = d.di.pulldown;
 }
 
-NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint8_t nbytes,
+NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint16_t nbytes,
 				      uint8_t transport, uint32_t xref,
 				      pindir_t dir);
 NOINLINE static int parent_leaf(csp_rt_t* st, index_t ix);
@@ -6239,7 +6239,7 @@ NOINLINE static int setup_field(csp_rt_t* st, index_t ix)
 	csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
 	return -1;
     }
-    if (pos + decl(st,i,ca.len) + 1 > decl(st, fx, bf.nbits)) {
+    if (pos + decl(st,i,ca.len) + 1 > decl(st, fx, bf.nbytes)*8) {
 	csp_set_error(st, ERR_SYNTAX);          // field reaches past the frame
 	return -1;
     }
@@ -6390,7 +6390,7 @@ void csp_can_output(csp_rt_t* st)
 }
 
 // bump-allocate a buffer in the heap, return its id (or BAD_INDEX)
-NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint8_t nbytes,
+NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint16_t nbytes,
 				      uint8_t transport, uint32_t xref,
 				      pindir_t dir)
 {
@@ -6405,7 +6405,6 @@ NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint8_t nbytes,
     }
     st->buf[b].hp        = hp;
     st->buf[b].nbytes    = nbytes;
-    st->buf[b].loc       = 0;          // RAM
     st->buf[b].transport = transport;
     st->buf[b].xref      = xref;
     st->buf[b].dir       = dir;
@@ -6419,11 +6418,11 @@ NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint8_t nbytes,
 NOINLINE static int setup_buffer(csp_rt_t* st, index_t ix)
 {
     int i = INDEX(ix);
-    // Only a real #buffer carries bf.nbits. This function is shared with the
+    // Only a real #buffer carries bf.nbytes. This function is shared with the
     // auto-buffer a plain #variable gets, and there the size lives in res.
     int is_buf = (decl(st,i,type) == DECL_BUFFER);
-    uint16_t res = is_buf ? decl(st,i,bf.nbits) : GET_RES(decl(st,i,res));
-    uint8_t nbytes = (res + 7) >> 3;
+    uint16_t res = is_buf ? decl(st,i,bf.nbytes)*8 : GET_RES(decl(st,i,res));
+    uint16_t nbytes = (res + 7) >> 3;
     uint8_t transport = is_buf ? decl(st,i,bf.transport) : TR_NONE;
     uint32_t xref = 0;
     index_t b;
@@ -6537,7 +6536,7 @@ NOINLINE static void est_leaf(csp_rt_t* st, int j, csp_estimate_t* e)
 	nbytes = (GET_RES(decl(st,j,res)) + 7) >> 3;
 	break;
     case DECL_BUFFER:
-	nbytes = (decl(st,j,bf.nbits) + 7) >> 3;   // #buffer: size is in bf.nbits
+	nbytes = decl(st,j,bf.nbytes);       // #buffer: size is in bf.nbytes
 	break;
     case DECL_TIMER:
 	e->nt++;                              // timer list entry (setup_timer)
@@ -7322,11 +7321,11 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    csp_println();
 	    break;
 	case DECL_BUFFER:
-	    // #buffer <name>:<size> <dir> [can 0x<id>]. Size is BYTES, always
-	    // (nbits/8) -- see csp_parse_buffer.
+	    // #buffer <name>:<size> <dir> [can 0x<id>]. Size is BYTES (bf.nbytes)
+	    // -- see csp_parse_buffer.
 	    print_decl_and_name(st, t, cur_mod, npos);
 	    csp_print_char(':');
-	    csp_print_uint(decl(st,i,bf.nbits) >> 3);
+	    csp_print_uint(decl(st,i,bf.nbytes));
 	    if (decl(st,i,dir)) {
 		csp_print_blank();
 		csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
