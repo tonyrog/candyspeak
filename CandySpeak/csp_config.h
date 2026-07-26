@@ -2,6 +2,7 @@
 #define __CSP_CONFIG_H__
 
 #define MAX_STATES 16
+#define MAX_IN_STATES 8   // max states in one `#in A B C ...` OR-list
 
 #define REACTIVE_DEFAULT 0
 #ifndef SUPPORT_REACTIVE

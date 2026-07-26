@@ -301,6 +301,7 @@ const op_info_t op_info[] RODATA = {
     [OP_EQI]   = {ros_EQI,NONE,-1,V_VOID,MAKE_TYPE0()},
     [OP_STI]   = {ros_STI,NONE,-1,V_VOID,MAKE_TYPE0()},
     [OP_INSTATE] = {ros_INSTATE,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_NINSTATE] = {ros_NINSTATE,NONE,-1,V_VOID,MAKE_TYPE0()},
     [OP_LD]    = {ros_LD,NONE,-1,V_VOID,MAKE_TYPE0()},
     [OP_LDP]   = {ros_LDP,NONE,-1,V_VOID,MAKE_TYPE0()},
     [OP_CALL]  = {ros_CALL,NONE,-1,V_VOID,MAKE_TYPE0()},
@@ -1894,6 +1895,11 @@ again:
 	    return n + instr(st,n,in.nxt);
 	n = n+1;
 	goto again;
+    case OP_NINSTATE: // OR-chain gate: jump INTO the block if State == imm
+	if (st->reg[instr(st,n,in.x)].i == instr(st,n,in.imm))
+	    return n + instr(st,n,in.nxt);
+	n = n+1;
+	goto again;
     case OP_NEXT: // rule is done executing
 	return n+1;
     case OP_ENTER: // skip y + 2
@@ -2471,6 +2477,7 @@ NOINLINE bool_t asm_RULE(csp_rt_t* st, int* pos, reg_t cnd, int nxt)
     if (ip != NULL) {
 	ip->r.cnd = cnd;
 	ip->r.nxt = nxt;
+	ip->r.implicit = st->rule_implicit;   // set for bare NORMAL+ rules
 	return 1;
     }
     return 0;
@@ -2487,18 +2494,43 @@ NOINLINE static bool_t asm_NEXT(csp_rt_t* st, int r)
 }
 
 // #in <state> block gate: reg x holds the current State (loaded just before);
-// nxt is patched at #end to the distance skipping the whole block.
-NOINLINE static bool_t asm_INSTATE(csp_rt_t* st, int* pos, reg_t x, int imm)
+// nxt is patched at #end to the distance skipping the whole block. implicit marks
+// the auto NORMAL+ wrap so the listing renders the rule bare (see csp_print.c).
+NOINLINE static bool_t asm_INSTATE(csp_rt_t* st, int* pos, reg_t x, int imm,
+				   int implicit)
 {
     csp_instr_t* ip = alloc_instr_ptr(st, pos, OP_INSTATE);
     if (ip != NULL) {
 	ip->in.x = x;
 	ip->in.imm = imm;
 	ip->in.nxt = 0;   // patched at #end
+	ip->in.implicit = implicit ? 1 : 0;
 	return 1;
     }
     return 0;
 }
+
+// OR-chain gate for `#in A B C`: if State == imm, jump INTO the block. nxt is the
+// forward distance to the block's first rule, patched once the chain is complete
+// (csp_parse_in). The final state of the list uses asm_INSTATE (skip-if-!=), so
+// the chain reads "enter if A, else enter if B, else enter if C, else skip".
+NOINLINE static bool_t asm_NINSTATE(csp_rt_t* st, int* pos, reg_t x, int imm)
+{
+    csp_instr_t* ip = alloc_instr_ptr(st, pos, OP_NINSTATE);
+    if (ip != NULL) {
+	ip->in.x = x;
+	ip->in.imm = imm;
+	ip->in.nxt = 0;   // patched once the block's first instruction is known
+	ip->in.implicit = 0;
+	return 1;
+    }
+    return 0;
+}
+
+// Defined near csp_parse_in; used earlier by csp_parse_end and csp_parse_rule.
+NOINLINE static bool_t open_in_block(csp_rt_t* st, const uint8_t* states, int ns,
+				     int implicit);
+NOINLINE static void close_in_block(csp_rt_t* st);
 
 NOINLINE static bool_t asm_mem_part(csp_rt_t* st, opcode_t op, reg_t x,
 				 index_t mem, csp_part_t part)
@@ -2731,15 +2763,17 @@ static bool_t asm_EQEQ(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
     return asm_bop(st, OP_EQEQ, x, y, z);
 }
 
+// OR two boolean registers -- used to build the multi-state `#in A B C` reactive
+// condition (State==A || State==B || ...). See asm_rule.
+static bool_t asm_OR(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
+{
+    return asm_bop(st, OP_OR, x, y, z);
+}
+
 #if 0
 NOINLINE static bool_t asm_NOP(csp_rt_t* st)
 {
     return (alloc_instr_ptr(st, NULL, OP_NOP) != NULL);
-}
-
-static bool_t asm_OR(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
-{
-    return asm_bop(st, OP_OR, x, y, z);
 }
 #endif
 
@@ -4424,8 +4458,7 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
     if (st->sdef >= 0) {
 	// close the #in block: patch OP_INSTATE.nxt to jump past everything
 	// emitted since the gate, so a State mismatch skips the whole block.
-	ram_instr_at(st, st->in_marker)->in.nxt = st->ps.nn - st->in_marker;
-	st->sdef = -1;
+	close_in_block(st);
 	return 0;
     }
     if ((mx = st->mdef) == BAD_INDEX) {
@@ -5008,21 +5041,35 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
     if (cond)
 	DBG("cond.len=%d, cond.pos=%d\n", cond->len, cond->pos);
 #endif
-    if (st->sdef >= 0) {  // we are in a state!
-	int sr;
+    if (st->sdef >= 0) {  // we are in one or more states (reactive per-rule gate)
+	// cnd = (State==s0) || (State==s1) || ... over the block's state list.
+	// A plain `#in <s>` (n_sdef==1) emits exactly one EQI, as before; a
+	// multi-state `#in A B C` ORs the terms. The sequential path is gated by
+	// the OP_INSTATE/NINSTATE chain (open_in_block); this is for reactive.
+	int ns = st->n_sdef ? st->n_sdef : 1;
+	int si;
 	cnd = alloc_reg(st);
-	
-	if (st->sdef <= TINY_MAX)
-	    asm_EQI(st, cnd, st->sx, st->sdef);
-	else {
-	    if (!asm_mem(st,OP_LD,cnd,st->sx)) // load state into cnd
-		return -1;
-	    sr = alloc_reg(st);
-	    if (!asm_LI(st, sr, st->sdef))
-		return -1;
-	    if (!asm_EQEQ(st, cnd, cnd, sr))
-		return -1;
-	    free_reg(st, sr);
+	for (si = 0; si < ns; si++) {
+	    int s = st->n_sdef ? st->sdefv[si] : st->sdef;
+	    reg_t t = (si == 0) ? cnd : alloc_reg(st);
+	    if (s <= TINY_MAX)
+		asm_EQI(st, t, st->sx, s);
+	    else {
+		reg_t sr;
+		if (!asm_mem(st, OP_LD, t, st->sx)) // load state into t
+		    return -1;
+		sr = alloc_reg(st);
+		if (!asm_LI(st, sr, s))
+		    return -1;
+		if (!asm_EQEQ(st, t, t, sr))
+		    return -1;
+		free_reg(st, sr);
+	    }
+	    if (si > 0) {                       // OR this term into cnd
+		if (!asm_OR(st, cnd, cnd, t))
+		    return -1;
+		free_reg(st, t);
+	    }
 	}
     }
 
@@ -5362,7 +5409,7 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	    cnd = alloc_reg(st);
 	    if (!asm_mem(st, OP_LD, cnd, state_ix))   // load obj.State
 		return -1;
-	    if (!asm_INSTATE(st, &mk, cnd, 0))        // gate on INIT (snum 0)
+	    if (!asm_INSTATE(st, &mk, cnd, 0, 0))     // gate on INIT (snum 0)
 		return -1;
 	    free_reg(st, cnd);
 	    // all static config/init writes in ONE rule (shares one LI/RULE/NEXT)
@@ -5442,10 +5489,37 @@ static const uint8_t pat_rule[] = {
     P_END
 };
 
+// A bare top-level rule (no explicit #in, not inside a module) runs in the two
+// built-in operating states INIT and NORMAL by default -- "NORMAL+". So global
+// logic quiesces when the machine enters a SPECIAL state (FAILSAFE, REBOOT, or a
+// user state) instead of leaking into it: FAILSAFE stays an island. INIT is
+// included so a stateless program -- which sits in INIT forever, with no state
+// machine to move it -- runs its rules from cycle 0 with no startup transition.
+//
+// Only the per-rule condition (State==INIT || State==NORMAL) is folded in (via
+// sdefv, see asm_rule) -- NO OP_INSTATE block gate. A per-rule gate would put an
+// INSTATE at each rule's reactive entry ip and break csp_react's dispatch; the
+// condition alone gates both the sequential and reactive paths correctly. The
+// listing suppresses this implicit State test (csp_print.c OP_EQI) so bare rules
+// list back bare. Module-body rules keep their ENTER/LEAVE gating (sdef stays -1
+// there). Returns 1 if a wrap was applied (caller must clear it after the rule).
+NOINLINE static int wrap_normal_plus(csp_rt_t* st)
+{
+    if ((st->sdef >= 0) || (st->mdef != BAD_INDEX))
+	return 0;                       // inside #in or a module: no wrap
+    st->sdefv[0] = STATE_INIT;
+    st->sdefv[1] = STATE_NORMAL;
+    st->n_sdef   = 2;
+    st->sdef     = STATE_INIT;          // >= 0 so asm_rule folds the OR condition
+    st->rule_implicit = 1;              // mark the OP_RULE for bare listing
+    return 1;
+}
+
 NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, int ti, size_t n)
 {
     rule_param_t d = {0};
     int np = 0;
+    int wrap;
 
     if (pmatch(st, tv, ti, n, pat_rule, &d, sizeof(d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
@@ -5453,7 +5527,15 @@ NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, int ti, size_t n)
     }
     while ((np < MAX_BODY_PARTS) && (d.body[np].rhs.len > 0))
 	np++;
-    return asm_rule(st, tv, n, BAD_INDEX, d.body, np, &d.cond);
+    wrap = wrap_normal_plus(st);
+    if (asm_rule(st, tv, n, BAD_INDEX, d.body, np, &d.cond) < 0)
+	return -1;
+    if (wrap) {                         // clear the NORMAL+ context (no gate)
+	st->sdef   = -1;
+	st->n_sdef = 0;
+	st->rule_implicit = 0;
+    }
+    return 0;
 }
 
 // '<buffer>' '<<=' <field>... ['?' <cond>]   (frame packing)
@@ -5685,34 +5767,82 @@ NOINLINE int add_state(csp_rt_t* st, const tstr_t* name)
     return -1;
 }
 
+// Emit the block gate for `#in <states...>` (or the implicit NORMAL+ wrap). One
+// LD of State, then an OR-chain: each state but the last is an OP_NINSTATE that
+// jumps INTO the block when it matches; the last is an OP_INSTATE that skips the
+// block when it does not. So the chain reads "enter if A, else enter if B, else
+// enter if C, else skip." The NINSTATE targets (block start) are patched here;
+// the INSTATE skip distance is patched at #end. Sets st->sdefv/n_sdef/sdef (used
+// by asm_rule to fold the reactive per-rule State condition) and st->in_marker.
+NOINLINE static bool_t open_in_block(csp_rt_t* st, const uint8_t* states, int ns,
+				     int implicit)
+{
+    reg_t cnd;
+    int npos[MAX_IN_STATES];
+    int mk = 0, k, l1;
+
+    if ((ns < 1) || (ns > MAX_IN_STATES))
+	return 0;
+    cnd = alloc_reg(st);
+    if (!asm_mem(st, OP_LD, cnd, st->sx))
+	return 0;
+    for (k = 0; k < ns - 1; k++)
+	if (!asm_NINSTATE(st, &npos[k], cnd, states[k]))
+	    return 0;
+    if (!asm_INSTATE(st, &mk, cnd, states[ns-1], implicit))
+	return 0;
+    free_reg(st, cnd);
+    l1 = st->ps.nn;                     // block starts right after the chain
+    for (k = 0; k < ns - 1; k++)        // NINSTATE jumps forward into the block
+	ram_instr_at(st, npos[k])->in.nxt = l1 - npos[k];
+    for (k = 0; k < ns; k++)
+	st->sdefv[k] = states[k];
+    st->n_sdef  = (uint8_t)ns;
+    st->sdef    = states[0];
+    st->in_marker = mk;
+    return 1;
+}
+
+// Close the current #in block: patch the terminating OP_INSTATE.nxt to skip the
+// whole block on a State mismatch, and clear the compile-time state context.
+NOINLINE static void close_in_block(csp_rt_t* st)
+{
+    ram_instr_at(st, st->in_marker)->in.nxt = st->ps.nn - st->in_marker;
+    st->sdef   = -1;
+    st->n_sdef = 0;
+}
+
+// #in <state> [<state> ...]  -- a block that runs in ANY of the listed states.
+// Multiple states OR together (see open_in_block). A single state is the common
+// case and emits exactly one OP_INSTATE, byte-identical to the pre-multi format.
 NOINLINE int csp_parse_in(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
+    uint8_t states[MAX_IN_STATES];
+    int ns = 0;
     int i;
+
     if (tv[ti].t != WORD) return -1;
 
-    if (st->sdef != -1) {
-	csp_set_error(st, ERR_END_MISMATCH);
+    if (st->sdef != -1) {   // implicit NORMAL+ wraps close themselves, so an open
+	csp_set_error(st, ERR_END_MISMATCH);   // block here is a genuine nested #in
 	return -1;
     }
-    if ((i = lookup_state(st, &tv[ti].v.str)) < 0) {
-	csp_set_err_arg_tstr(st, 0, &tv[2].v.str);
-	csp_set_error(st, ERR_STATE_NOT_DECLARED);
-	return -1;
+    for (i = ti; (i < (int)n) && (tv[i].t == WORD); i++) {
+	int s;
+	if (ns >= MAX_IN_STATES) {
+	    csp_set_error(st, ERR_SYNTAX);
+	    return -1;
+	}
+	if ((s = lookup_state(st, &tv[i].v.str)) < 0) {
+	    csp_set_err_arg_tstr(st, 0, &tv[i].v.str);
+	    csp_set_error(st, ERR_STATE_NOT_DECLARED);
+	    return -1;
+	}
+	states[ns++] = (uint8_t)st->states[s].snum;
     }
-    // compile time state, add rules to states[i].snum
-    st->sdef = st->states[i].snum;
-    // Emit the block gate: LD the current State into a scratch register, then
-    // OP_INSTATE which skips the whole block (sequential) when State != sdef.
-    // nxt is patched at #end. The per-rule EQI stays for the reactive path.
-    {
-	int mk;
-	reg_t cnd = alloc_reg(st);
-	if (!asm_mem(st, OP_LD, cnd, st->sx))
-	    return -1;
-	if (!asm_INSTATE(st, &mk, cnd, st->sdef))
-	    return -1;
-	free_reg(st, cnd);
-	st->in_marker = mk;
+    if (!open_in_block(st, states, ns, 0)) {
+	csp_set_error(st, ERR_SYNTAX);
+	return -1;
     }
     return 0;
 }
@@ -6133,6 +6263,9 @@ int csp_rt_init(csp_rt_t* st, int reactive)
 	st->ps.ns = 0;  // install INIT (cycle()==0), NORMAL, FAILSAFE
 	st->sx = csp_new_decl(st, &State, DECL_VARIABLE);
 	st->sdef = -1;
+	st->n_sdef = 0;
+	st->rule_implicit = 0;
+	st->list_nstate = 0;
 	// Reserved states in fixed order: INIT=0, NORMAL=1, FAILSAFE=2 (sticky
 	// safe state). User states follow from 3. The numbers are contract --
 	// STATE_* in csp.h and the sticky check depend on them.
@@ -7124,7 +7257,10 @@ static void print_decl(decl_t d)
     case DECL_END:      csp_print_rostr(ros_end); break;
     case DECL_OBJECT:
     case DECL_VIEW:
-	csp_print_rostr(ros_undefined); break;	
+	csp_print_rostr(ros_undefined); break;
+    case DECL_AVAIL:
+    case DECL_END_MARK:
+	break;
     }    
     csp_print_blank();    
 }
@@ -7157,6 +7293,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
     int rule;        // rule start index (in condition part)
     int rule_pos;    // ip of this body's OP_RULE, -1 if it has none
     int rule_no;     // user-facing rule number, 1-based (see rule_column)
+    int block_end;   // ip past the current #in block, -1 if not in one
     const char* name;
     sindex_t cur_mod = 0;        // module name pos being listed (0 = global)
     sindex_t npos;               // current decl's name position
@@ -7371,7 +7508,48 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
     rule_no = 0;
     fbits = 0;
     cur_mod = 0;
+    block_end = -1;
+    st->list_nstate = 0;
     while(i < st->ps.nn) {
+	// Close a finished #in block: print `#end` (no number), leave the state.
+	if ((block_end >= 0) && (i >= block_end)) {
+	    list_column(0, i < (int)st->rom_nn, 0);
+	    csp_print_line("#end");
+	    block_end = -1;
+	    st->list_nstate = 0;
+	}
+	// A block gate is `LD State ; NINSTATE* ; INSTATE` (open_in_block). Emit
+	// `#in <states>` from the chain, arm block_end, and let list_states drop
+	// the per-rule State guard. The whole gate is consumed here, never listed.
+	if ((instr(st,i,op) == OP_LD) && (i+1 < (int)st->ps.nn) &&
+	    ((instr(st,i+1,op) == OP_NINSTATE) ||
+	     (instr(st,i+1,op) == OP_INSTATE))) {
+	    int j = i + 1;
+	    int ns = 0, k;
+	    while ((j < (int)st->ps.nn) && (instr(st,j,op) == OP_NINSTATE)) {
+		if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st,j,in.imm);
+		j++;
+	    }
+	    // terminating INSTATE
+	    if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st,j,in.imm);
+	    block_end = j + instr(st,j,in.nxt);
+	    st->list_nstate = ns;
+	    list_column(0, i < (int)st->rom_nn, 0);
+	    csp_print_lit("#in");
+	    for (k = 0; k < ns; k++) {
+		int s;
+		csp_print_blank();
+		for (s = 0; s < st->ps.ns; s++)
+		    if (st->states[s].snum == st->list_states[k]) {
+			csp_print_str_at(st, st->states[s].name);
+			break;
+		    }
+	    }
+	    csp_println();
+	    i = j + 1;                  // resume after the whole gate
+	    rule = i;
+	    continue;
+	}
 	switch(instr(st,i,op)) {
 	case OP_ENTER:
 	    cur_mod = decl_name_pos(st, MAKE_INDEX(0, instr(st,i,e.mx)));
@@ -7438,6 +7616,11 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	default: i++; break;
 	}
     }
+    if (block_end >= 0) {           // a #in block ran to the end of the program
+	list_column(0, 1, 0);
+	csp_print_line("#end");
+    }
+    st->list_nstate = 0;
     return CSP_CMD_OK;
 }
 

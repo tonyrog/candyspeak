@@ -102,7 +102,9 @@ typedef unsigned bool_t;
 //   v1: first versioned ROM (post NAMEPOS_BITS)
 //   v2: csp_image_header_t (per-section CRCs) replaces the loose rom_* scalars
 //   v3: crc_graph covers the reactive graph (rom_idg/rom_ofs/rom_edg)
-#define ROM_FORMAT_VERSION 4
+//   v4: #buffer size is bytes -- csp_bufdecl_t.nbits became nbytes
+//   v5: OP_NINSTATE + INSTATE.nxt 14->13 with implicit bit (multi-state #in)
+#define ROM_FORMAT_VERSION 5
 
 // One header for the whole ROM image, baked by `csp -C` as `rom_header`, so the
 // counts and integrity live in ONE symbol instead of seven loose globals. Per-
@@ -647,7 +649,9 @@ typedef enum {
     OP_EQI,     // compare memory with 8 bit value, result in x
     OP_STI,     // store immediate value to memory (mirror of EQI)
     OP_INSTATE, // #in <state> block gate: if reg != state, skip block (nxt)
-    OP_LAST,
+    OP_NINSTATE,// #in A B C OR-chain gate: if reg == state, jump INTO block (nxt)
+    OP_AVAIL,
+    OP_END_MARK = 0x3f
 } opcode_t;
 
 
@@ -674,6 +678,9 @@ typedef enum {
     DECL_FIELD=V_FIELD,         // 'can'
     DECL_BUFFER=12,         // 'buffer' (heap-backed storage)
     DECL_VIEW=13,           // synthetic bit/byte view into a buffer (Buf[a..b])
+
+    DECL_AVAIL,
+    DECL_END_MARK = 0x3f
 } decl_t;
 
 #define DECL_TYPE(s,i) (decl((s),(i),type))
@@ -760,9 +767,11 @@ typedef struct PACKED {
 } csp_instr_imm_t;
 
 typedef struct PACKED {
-    INSTR_COMMON;    
+    INSTR_COMMON;
     unsigned cnd:REG_BITS; // condition register
-    int16_t nxt;           // relative jump if !cnd
+    signed   nxt:15;       // relative jump if !cnd (was int16 -- 15 bits is plenty)
+    unsigned implicit:1;   // 1 = bare NORMAL+ rule: list bare, suppress its
+			   // implicit State==INIT||State==NORMAL guard
 } csp_instr_rule_t;
 
 typedef struct PACKED {
@@ -772,11 +781,16 @@ typedef struct PACKED {
 
 // op INSTATE - #in <state> block gate. A LD of the state variable precedes it;
 // if that register != imm, jump nxt to skip the whole block (sequential path).
+// OP_NINSTATE shares this layout but inverts the test: if x == imm, jump nxt to
+// enter the block (used to OR-chain a multi-state `#in A B C`, see csp_parse_in).
+// implicit: set on the auto NORMAL+ gate wrapping a bare top-level rule, so the
+// listing renders that rule bare instead of emitting a `#in NORMAL` header.
 typedef struct PACKED {
     INSTR_COMMON;
     unsigned x:REG_BITS;   // register holding the current State value
     signed   imm:8;        // target state number
-    signed   nxt:14;       // relative jump to skip the block if x != imm
+    signed   nxt:13;       // relative jump (skip block if !=, enter block if ==)
+    unsigned implicit:1;   // 1 = auto NORMAL+ wrap: list the rule bare
 } csp_instr_instate_t;
 
 typedef struct PACKED {
@@ -1189,11 +1203,19 @@ typedef struct _csp_rt_t
     csp_pstate_t ps;             // parse state
     reg_allocator_t* ap;
     int ev;                      // eval variables when ev=1
-    int sdef;                    // current state (compile time)
+    int sdef;                    // current state (compile time); sdefv[0], -1=none
+    uint8_t sdefv[MAX_IN_STATES];// states of the current #in block (OR-list)
+    uint8_t n_sdef;              // number of states in sdefv (1 = plain #in <s>)
+    uint8_t rule_implicit;       // next OP_RULE is a bare NORMAL+ rule (list bare)
     index_t in_marker;           // instr index of the pending OP_INSTATE block
-				 // gate (patched with the skip distance at #end)
+				 // gate (the terminating INSTATE of the OR-chain;
+				 // patched with the skip distance at #end)
     int list_state;              // during listing: state of the #in block being
 				 // rendered (-1 = none), suppresses State==S in cond
+    int list_implicit;           // during listing: this rule is a bare NORMAL+
+				 // rule -- suppress its State==INIT||State==NORMAL
+    uint8_t list_states[MAX_IN_STATES]; // during /list: states of the #in block
+    uint8_t list_nstate;         // being rendered -- suppress State==<any of them>
     index_t save_sx;             // save sx during module parse
     index_t sx;                  // runtime state, state variable    
     state_t states[MAX_STATES];  // declared states

@@ -548,7 +548,8 @@ void print_defines()
     printf("SUPPORT_REACTIVE=%d\n", SUPPORT_REACTIVE);
     printf("USE_STATISTICS=%d\n",USE_STATISTICS);
     printf("REACTIVE_DEFAULT=%d\n", REACTIVE_DEFAULT);
-    printf("OP_LAST=%d\n", OP_LAST);  // last opcode = #opcodes
+    printf("OP_AVAIL=%d\n", OP_AVAIL);  // next available = #opcodes
+    printf("DECL_AVAIL=%d\n", DECL_AVAIL);  // next available = #decls
     printf("T_LAST=%d\n", T_LAST);        // #tokens
     printf("D_LAST=%d\n", D_LAST);        // #dtok
     printf("PART_LAST=%d\n", PART_LAST);  // <= 16 (4-bit max)

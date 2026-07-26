@@ -1,0 +1,17 @@
+// `#in A B C` -- a block that runs in ANY of the listed states (OR-gate, built
+// from an OP_NINSTATE chain + a terminating OP_INSTATE). `hit` counts the cycles
+// the shared block runs: it advances a -> b, then b -> c, so the block fires in
+// a and in b (hit reaches 2) and then stops once State is c. Runs seq + reactive
+// to prove the NINSTATE OR-chain (sequential) and the folded State==a||State==b
+// per-rule condition (reactive) agree.
+#states a b c
+#variable hit = 0
+
+#in INIT
+  State = a
+#end
+#in a b
+  hit = hit + 1
+  State = b ? State == a
+  State = c ? State == b
+#end

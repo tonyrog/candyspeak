@@ -665,6 +665,30 @@ rather than by walking the block.
 You may add as many rules to a state as you like, and split a state across
 several `#in S` blocks — they accumulate.
 
+**Several states at once.** List more than one state to run a block in *any* of
+them — the states OR together. Shared infrastructure (a heartbeat, a panic
+button, a timer restart) that must run across several phases goes here instead of
+being copied into each block:
+
+```
+#in red redyellow green yellow
+    Phase = 1 ? timeout(Phase)     // restart the timer in every driving phase
+    State = FAULT ? Panic          // the panic button, checked in all of them
+#end
+```
+
+Read `#in A B C` as `&& (State == A || State == B || State == C)` on every rule
+in the block.
+
+**Rules with no `#in` — NORMAL+.** A top-level rule that is *not* inside any
+`#in` block runs by default in the two built-in operating states, **INIT** and
+**NORMAL** — never in a special state. So a program with no states at all just
+runs (it sits in INIT/NORMAL), and the moment a state machine steps into a
+*special* state — a user state, or the reserved **FAILSAFE** — the loose global
+rules **quiesce** instead of leaking into it. That is what keeps FAILSAFE an
+island: only `#in FAILSAFE` (and blocks that explicitly list it) run there. To
+run a global rule in a special state too, name that state with `#in`.
+
 **States in modules.** A module can declare its own local states. Each instance
 carries its own `State`, so instances step through the machine independently:
 

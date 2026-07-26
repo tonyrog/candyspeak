@@ -1,0 +1,8 @@
+% seq-only: the shared block counts with a self-referential `hit = hit + 1`,
+% which has no external reactive trigger (see failsafe.csp). Sequential fully
+% exercises the new OP_NINSTATE OR-chain block gate.
+{cycles, 6}.
+{modes, [seq]}.
+{checks, [
+  {final_var, "hit", 2}
+]}.

@@ -666,6 +666,31 @@ vägen, som når regler individuellt i stället för att gå igenom blocket.
 Du kan lägga till hur många regler som helst i ett tillstånd, och dela upp ett
 tillstånd över flera `#in S`-block — de ackumuleras.
 
+**Flera tillstånd samtidigt.** Ange fler än ett tillstånd för att köra ett block
+i *något* av dem — tillstånden OR:as ihop. Delad infrastruktur (en heartbeat, en
+panikknapp, en timer-omstart) som måste köra över flera faser läggs här istället
+för att kopieras in i varje block:
+
+```
+#in red redyellow green yellow
+    Phase = 1 ? timeout(Phase)     // starta om timern i varje kör-fas
+    State = FAULT ? Panic          // panikknappen, kollad i alla
+#end
+```
+
+Läs `#in A B C` som `&& (State == A || State == B || State == C)` på varje regel
+i blocket.
+
+**Regler utan `#in` — NORMAL+.** En top-level-regel som *inte* ligger i något
+`#in`-block körs som standard i de två inbyggda drift-tillstånden **INIT** och
+**NORMAL** — aldrig i ett speciellt tillstånd. Så ett program helt utan tillstånd
+bara kör (det sitter i INIT/NORMAL), och i samma stund en tillståndsmaskin stegar
+in i ett *speciellt* tillstånd — ett användartillstånd, eller reserverade
+**FAILSAFE** — så *tystnar* de lösa globala reglerna istället för att läcka in i
+det. Det är vad som håller FAILSAFE till en ö: bara `#in FAILSAFE` (och block som
+uttryckligen listar det) kör där. Vill du köra en global regel i ett speciellt
+tillstånd också, namnge det tillståndet med `#in`.
+
 **States i moduler.** En modul kan deklarera sina egna lokala tillstånd. Varje
 instans bär sitt eget `State`, så instanserna stegar genom maskinen oberoende
 av varandra:

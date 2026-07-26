@@ -402,6 +402,18 @@ static int is_state_var(csp_rt_t* st, uint16_t mem)
     return csp_str_eq_ro(st, decl_name_pos(st, mem), ros_State, 5);
 }
 
+// True if `snum` is one of the states of the #in block currently being listed --
+// used to drop its State==<s> term from a rule's condition (the #in header shows
+// the states). See the multi-state block reconstruction in cmd_list.
+static int in_list_states(csp_rt_t* st, int snum)
+{
+    int k;
+    for (k = 0; k < st->list_nstate; k++)
+	if (st->list_states[k] == snum)
+	    return 1;
+    return 0;
+}
+
 // If mem is the state variable and imm names a declared state, append that
 // state's name and return 1; otherwise leave the buffer untouched, return 0.
 // Shared by the EQI (State==) and STI (State=) disassembly.
@@ -655,8 +667,16 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	    uint8_t *start = exprbuf_ptr(bp);
 	    // Inside a listed #in <S> block, the per-rule State==S gate is implied
 	    // by the block header -- render it empty so AND drops it from the cond.
-	    if ((st->list_state >= 0) && (ip->mi.imm == st->list_state) &&
-		is_state_var(st, ip->mi.mem)) {
+    // A bare NORMAL+ rule (list_implicit) is guarded by the injected
+	    // State==INIT||State==NORMAL; drop both terms so it lists bare (the OR
+	    // of two empty operands collapses to empty in exprbuf_alu). Inside a
+	    // multi-state `#in A B C` block, drop every State==<listed> term the
+	    // same way, so the block's OR-guard vanishes under the #in header.
+	    if (is_state_var(st, ip->mi.mem) &&
+		(((st->list_state >= 0) && (ip->mi.imm == st->list_state)) ||
+		 in_list_states(st, ip->mi.imm) ||
+		 (st->list_implicit && ((ip->mi.imm == STATE_INIT) ||
+					(ip->mi.imm == STATE_NORMAL))))) {
 		bp->reg[ip->a.x] = exprbuf_intern(bp, (uint8_t*)"", 0);
 		bp->prio[ip->a.x] = 110;
 		break;
@@ -742,11 +762,15 @@ int csp_print_rule(csp_rt_t* st, int i)
 	    void* savef;
 	    exprbuf_init(&buf);
 	    exprbuf_expr(st, &buf, i+1);   // print body
-	    // Build condition in buffer, check if non-empty
+	    // Build condition in buffer, check if non-empty. A bare NORMAL+ rule
+	    // carries an implicit State==INIT||State==NORMAL guard the user never
+	    // wrote -- suppress it (see OP_EQI below) so the rule lists back bare.
+	    st->list_implicit = ip->r.implicit;
 	    exprbuf_init(&buf);
 	    savef = csp_set_file_output(NULL);
 	    exprbuf_expr(st, &buf, Lc); // build but don't print
 	    csp_set_file_output(savef);
+	    st->list_implicit = 0;
 	    switch(buf.strlens[buf.reg[ip->r.cnd]]) {
 	    case 0:
 		break;

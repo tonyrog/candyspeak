@@ -1,0 +1,8 @@
+% seq-only: `n = n + 1` is self-referential, no external reactive trigger (see
+% failsafe.csp). Sequential fully exercises the NORMAL+ gating + FAILSAFE quiesce.
+{cycles, 7}.
+{modes, [seq]}.
+{checks, [
+  {final_var, "n", 4},
+  {final_var, "frozen", 4}
+]}.

@@ -246,6 +246,11 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		i,
 		instr(st,i,r.cnd), instr(st,i,r.nxt), eot);
 	break;
+    case OP_NINSTATE:
+	fprintf(f, "{instr,%d,'NINSTATE',[r%d,%d,%d]}%s\n",
+		i,
+		instr(st,i,in.x), instr(st,i,in.imm), instr(st,i,in.nxt), eot);
+	break;	
     case OP_INSTATE:
 	fprintf(f, "{instr,%d,'INSTATE',[r%d,%d,%d]}%s\n",
 		i,
@@ -961,6 +966,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	case OP_NEXT:
 	    fprintf(f, "  {.x={%s,.x=%u}},\n", op, ip->x.x);
 	    break;
+	case OP_NINSTATE:	    
 	case OP_INSTATE:
 	    fprintf(f, "  {.in={%s,.x=%u,.imm=%d,.nxt=%d}},\n",
 		    op, ip->in.x, ip->in.imm, ip->in.nxt);
@@ -1219,6 +1225,7 @@ void csp_list_rules(FILE* f, csp_rt_t* st)
 	    fprintf(f, "%s#end\n", indent(lev));
 	    block_end = -1;
 	    st->list_state = -1;
+	    st->list_nstate = 0;
 	}
 	op = instr(st, i, op);
 	if (op == OP_ENTER) {
@@ -1233,19 +1240,28 @@ void csp_list_rules(FILE* f, csp_rt_t* st)
 	    i++;
 	    continue;
 	}
-	if (op == OP_INSTATE) {
-	    sindex_t np = list_state_name_pos(st, instr(st,i,in.imm));
-	    fprintf(f, "%s#in %s\n", indent(lev), np ? csp_str_at(st, np) : "?");
-	    block_end = i + instr(st,i,in.nxt);
-	    st->list_state = instr(st,i,in.imm);
-	    lev++;
-	    i++;
-	    continue;
-	}
-	// the block gate's LD (feeds the following INSTATE) is not a rule
+	// A block gate: LD State ; NINSTATE* ; INSTATE (open_in_block). Emit
+	// `#in <states>` and set list_states so each rule's State guard drops
+	// under the header. The whole gate is consumed, never listed as a rule.
 	if ((op == OP_LD) && (i+1 < st->ps.nn) &&
-	    (instr(st, i+1, op) == OP_INSTATE)) {
-	    i++;
+	    ((instr(st, i+1, op) == OP_NINSTATE) ||
+	     (instr(st, i+1, op) == OP_INSTATE))) {
+	    int j = i + 1, ns = 0, k;
+	    fprintf(f, "%s#in", indent(lev));
+	    while ((j < st->ps.nn) && (instr(st, j, op) == OP_NINSTATE)) {
+		if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st,j,in.imm);
+		j++;
+	    }
+	    if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st,j,in.imm);
+	    st->list_nstate = ns;
+	    for (k = 0; k < ns; k++) {
+		sindex_t np = list_state_name_pos(st, st->list_states[k]);
+		fprintf(f, " %s", np ? csp_str_at(st, np) : "?");
+	    }
+	    fprintf(f, "\n");
+	    block_end = j + instr(st, j, in.nxt);
+	    lev++;
+	    i = j + 1;
 	    continue;
 	}
 	if ((op == OP_NEW) || (op == OP_NOP)) {

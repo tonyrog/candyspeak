@@ -1,0 +1,16 @@
+// NORMAL+ : a bare top-level rule (no #in) runs in the built-in operating states
+// INIT and NORMAL, and QUIESCES when the machine enters a special state -- here
+// FAILSAFE. `n` counts freely until the guard drives State to FAILSAFE; from the
+// next cycle on State==FAILSAFE is outside {INIT,NORMAL}, so the bare `n=n+1`
+// stops. The `#in FAILSAFE` block (which DOES run there) latches n into `frozen`,
+// proving the bare rule quiesced instead of leaking into the safe state. FAILSAFE
+// is sticky, so State never leaves it and n stays put. Runs seq + reactive.
+#variable n = 0
+#variable frozen = 0
+
+n = n + 1
+State = FAILSAFE ? n == 3
+
+#in FAILSAFE
+  frozen = n
+#end

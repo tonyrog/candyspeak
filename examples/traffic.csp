@@ -9,10 +9,19 @@
 #digital Yellow out 5
 #digital Green  out 9
 #timer   Phase  1000 = 1
-#states  red redyellow green yellow
+#states  red redyellow green yellow OUT_OF_ORDER
+
+// fail safe panic stuff
+#digital Panic in pulldown 16
+#timer   Blink  500
+#variable Y = 0
 
 #in INIT
     State = red
+#end
+#in OUT_OF_ORDER
+    Yellow=Y, Red=0, Green=0, Y=!Y ? timeout(Blink)
+    Blink = 1 ? timeout(Blink)
 #end
 #in red
     Red=1, Yellow=0, Green=0
@@ -30,5 +39,7 @@
     Red=0, Yellow=1, Green=0
     State = red ? timeout(Phase)
 #end
-
-Phase = 1 ? timeout(Phase)      // restart the timer each phase
+#in red redyellow green yellow
+    Phase = 1 ? timeout(Phase)      // restart the timer each phase
+    State = OUT_OF_ORDER, Blink=1 ? Panic
+#end
