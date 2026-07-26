@@ -185,6 +185,8 @@ extern rochar s_err_rule_range[41] RODATA;
 #define ros_err_rule_range ((rostring_t) s_err_rule_range)
 extern rochar s_err_no_rule[31] RODATA;
 #define ros_err_no_rule ((rostring_t) s_err_no_rule)
+extern rochar s_err_num_range[20] RODATA;
+#define ros_err_num_range ((rostring_t) s_err_num_range)
 extern rochar s_err_unknown[14] RODATA;
 #define ros_err_unknown ((rostring_t) s_err_unknown)
 extern rochar s_cmd_help[5] RODATA;

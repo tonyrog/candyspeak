@@ -1,19 +1,21 @@
 // 3-bit adder: three full adder modules, X + Y = 5 + 4 = 9 = 0b1001
 // (inputs chosen so no carry propagates between adders;
 //  Cin=obj.Cout is static init, evaluated once at instantiation)
+// 1-bit values are unsigned: a set bit reads back 1, not -1 (a 1-bit *signed*
+// integer holds only 0 or -1). Signedness is the variable's declared type.
 #module Add
-#variable A:1 in
-#variable B:1 in
-#variable Cin:1 in
-#variable S:1 out
-#variable Cout:1 out
+#variable A:1 unsigned in
+#variable B:1 unsigned in
+#variable Cin:1 unsigned in
+#variable S:1 unsigned out
+#variable Cout:1 unsigned out
 
 S = A ^ B ^ Cin ? 1
 Cout = (A & B) | (Cin & (A ^ B)) ? 1
 #end
 
-#variable X:4 = 5
-#variable Y:4 = 4
+#variable X:4 unsigned = 5
+#variable Y:4 unsigned = 4
 
 #Add a0 Cin=0 A=X&1 B=Y&1
 #Add a1 Cin=a0.Cout A=(X>>1)&1 B=(Y>>1)&1

@@ -612,8 +612,8 @@ static struct option long_options[] = {
     {"debug-result", no_argument,       0,  'R'},
     {"help",         no_argument,       0,  'h'},
     {"interactive",  no_argument,       0,  'i'},
-    {"transaction",  optional_argument, 0,  't'},
-    {"reactive",     optional_argument, 0,  'r'},
+    {"transaction",  no_argument,       0,  't'},
+    {"reactive",     no_argument,       0,  'r'},
     {"verbose",      no_argument,       0,  'v'},
     {"no-execute",   no_argument,       0,  'n'},
     {"cycles",       required_argument, 0,  'c'},
@@ -642,7 +642,7 @@ void usage(const char* prog)
     fprintf(stderr, "  -i, --interactive    Interactive mode\n");
     fprintf(stderr, "  -d, --debug          Enable debug output\n");
     fprintf(stderr, "  -t, --transaction[=B] Enable transaction mode\n");
-    fprintf(stderr, "  -r, --reactive[=B]   Enable reactive mode\n");
+    fprintf(stderr, "  -r, --reactive       Enable reactive mode\n");
     fprintf(stderr, "  -n, --no-execute     Parse only, don't execute\n");
     fprintf(stderr, "  -c, --cycles=N       Max cycles (0=unlimited)\n");
     fprintf(stderr, "  -T, --timeout=MS     Max runtime in ms (0=unlimited)\n");
@@ -792,7 +792,7 @@ int main(int argc, char** argv)
 
     while (1) {
 	int option_index = 0;
-	c = getopt_long(argc, argv, "hindPQRSCc:T:s:p:r:t:O:e:L:I:F:m:M:E:U:b",
+	c = getopt_long(argc, argv, "hindPQRSCc:T:s:p:rtO:e:L:I:F:m:M:E:U:b",
 			long_options, &option_index);
 	if (c == -1)
 	    break;
@@ -806,8 +806,8 @@ int main(int argc, char** argv)
 	case 'e': eeprom_file = optarg; break;
 	case 1001: can_iface = optarg; break;
 	case 1002: no_eeprom = 1; break;
-	case 'r': reactive =  atoi(optarg); break;
-	case 't': break;
+	case 'r': reactive = 1; break;   // -r: enable reactive mode (no argument)
+	case 't': break;                 // -t: reserved (transaction), no-op flag
 	case 'n': execute = 0; break;
 	case 'C': compile = 1; break;
 	case 'c': max_cycles = atoi(optarg); break;

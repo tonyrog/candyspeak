@@ -623,6 +623,7 @@ static rostring_t csp_format_error(csp_err_t err)
     case ERR_NO_SUCH_RULE:        return ros_err_no_rule;
     case ERR_CANNOT_SAVE:         return ros_err_cannot_save;
     case ERR_CANNOT_LOAD:         return ros_err_cannot_load;
+    case ERR_NUMBER_RANGE:        return ros_err_num_range;
     default:                      return ros_err_unknown;
     }
 }
@@ -1464,10 +1465,20 @@ NOINLINE static value_t csp_heap_get(csp_rt_t* st, csp_view_t* vw, dio_t dir)
 	if (n > sizeof(value_t)) n = sizeof(value_t);
 	memcpy(&v, p, n);
     }
-    else if (vw->endian == E_BIG)
-	get_bits_be(p, &v.u, vw->pos, vw->len + 1);
-    else
-	get_bits_le(p, &v.u, vw->pos, vw->len + 1);
+    else {
+	if (vw->endian == E_BIG)
+	    get_bits_be(p, &v.u, vw->pos, vw->len + 1);
+	else
+	    get_bits_le(p, &v.u, vw->pos, vw->len + 1);
+	// Sign-extend a signed field from its own width up to the container, so a
+	// negative CAN signal reads back negative. get_bits zero-extends; unsigned
+	// fields keep that, as do 32-bit-wide ones (no spare high bits to fill).
+	if (vw->vt == V_INTEGER) {
+	    uint8_t nbits = vw->len + 1;
+	    if ((nbits < 32) && (v.u & ((uvalue_t)1 << (nbits - 1))))
+		v.u |= ~(((uvalue_t)1 << nbits) - 1);
+	}
+    }
     return v;
 }
 
@@ -3434,17 +3445,33 @@ next:
 	return -1;
     number:
 	if ((c == '0') && (*str == 'x')) {
-	    ivalue_t v = 0;
+	    // Accumulate the bit pattern in uint32 -- 0xFFFFFFFF is the idiom for
+	    // an all-ones mask (== -1 as int32), and unsigned wrap is defined
+	    // where signed overflow would be UB. Reject past 32 significant bits.
+	    uint32_t uv = 0;
+	    int ndig = 0;
 	    str++;
 	    while(ISXDIGIT(*str)) {
-		v = v*16 + hex(*str++);
+		uv = uv*16 + hex(*str++);
+		if (++ndig > 8) {
+		    csp_set_error(st, ERR_NUMBER_RANGE);
+		    return -1;
+		}
 	    }
-	    TOK_INT(v*sign);
+	    TOK_INT((ivalue_t)uv * sign);
 	}
 	if (ISDIGIT(c)) {
-	    ivalue_t v = dec(c);
+	    // Accumulate in uint64 so the running value never overflows during
+	    // the scan (v*10 in int32 is UB past 2^31). Range is checked against
+	    // the target type once the whole number -- and whether it is a float
+	    // -- is known.
+	    uint64_t uv = dec(c);
 	    while(ISDIGIT(*str)) {
-		v = v*10 + dec(*str++);
+		uv = uv*10 + dec(*str++);
+		if (uv > 0xffffffffULL) {  // far past any target range; stop early
+		    csp_set_error(st, ERR_NUMBER_RANGE);
+		    return -1;
+		}
 	    }
 	    // parse simple fraction for now
 	    if ((str[0] == '.') && ISDIGIT(str[1])) {
@@ -3454,6 +3481,17 @@ next:
 		fvalue_t frac;
 		uint32_t denom = 1;
 		uint32_t numer = 0;
+		ivalue_t v;
+		// A number literal is always non-negative here -- a leading '-' is a
+		// separate unary-minus token (runtime NEG), never folded in. Q16.16
+		// thus tops out at an integer part of 32767; a larger magnitude
+		// cannot be represented, so reject rather than silently wrap
+		// (FIX_FROM_INT would overflow int32).
+		if (uv > 32767) {
+		    csp_set_error(st, ERR_NUMBER_RANGE);
+		    return -1;
+		}
+		v = (ivalue_t)uv;
 		str++;
 		while(ISDIGIT(*str)) {
 		    numer = numer*10 + dec(*str++);
@@ -3461,7 +3499,7 @@ next:
 		}
 		frac = (int32_t)(((uint64_t)numer<<FIX_SHIFT) / denom);
 		result = FIX_FROM_INT(v) + frac;
-		TOK_FLT(sign >= 0 ? result : -result);
+		TOK_FLT(result);
 #else
 		float b = 0.1;
 		float f = 0.0;
@@ -3470,11 +3508,18 @@ next:
 		    f = f + (b*dec(*str++));
 		    b /= 10.0;
 		}
-		f += v;
+		f += (float)uv;
 		TOK_FLT(f*sign);
 #endif
 	    }
-	    TOK_INT(v*sign);
+	    // Integer literal: must fit int32 (a leading '-' is a separate token,
+	    // so the literal itself is non-negative). Reject anything larger than
+	    // INT32_MAX rather than emit a silently wrapped value.
+	    if (uv > 2147483647ULL) {
+		csp_set_error(st, ERR_NUMBER_RANGE);
+		return -1;
+	    }
+	    TOK_INT((ivalue_t)uv * sign);
 	}
 	return -1;
     }
@@ -5665,6 +5710,21 @@ NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, int ti, size_t n)
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
+    // A bad guard (after `?`) makes P_EXPR_S fail INSIDE the optional `? <cond>`
+    // block; P_OPT then backs off and drops the guard -- silently storing an
+    // always-on rule from a typo. Reject it two ways: an undefined name already
+    // set a (specific) error, so honour it; a malformed expr (`A &&`) may not, so
+    // if a `?` is present but no condition was captured, that is a dropped guard.
+    if (st->ps.err != ERR_OK)
+	return -1;
+    if (d.cond.len == 0) {
+	int q;
+	for (q = ti; q < (int)n; q++)
+	    if (tv[q].t == QUEST) {
+		csp_set_error(st, ERR_SYNTAX);
+		return -1;
+	    }
+    }
     while ((np < MAX_BODY_PARTS) && (d.body[np].rhs.len > 0))
 	np++;
     wrap = wrap_normal_plus(st);
@@ -5735,6 +5795,18 @@ NOINLINE int csp_parse_pack(csp_rt_t* st, token_t* tv, size_t n)
     if (pmatch(st, tv, 0, n, pat_pack, &d, sizeof(d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
+    }
+    // Same dropped-guard trap as csp_parse_rule: a bad `? <cond>` fails inside
+    // the optional block and is silently discarded. Reject it.
+    if (st->ps.err != ERR_OK)
+	return -1;
+    if (d.cond.len == 0) {
+	size_t q;
+	for (q = 0; q < n; q++)
+	    if (tv[q].t == QUEST) {
+		csp_set_error(st, ERR_SYNTAX);
+		return -1;
+	    }
     }
     unpack = (d.op == GTGT);
     bx = csp_lookup_decl(st, &d.buffer);
@@ -6815,7 +6887,7 @@ NOINLINE static int setup_buffer(csp_rt_t* st, index_t ix)
     // A whole-frame view would need len up to 511, but len is 8 bits. Cap it:
     // the frame is read and written field by field, and the whole-buffer view
     // only matters for a plain #buffer used as one value.
-    vw->len    = (res > 256) ? 255 : (uint8_t)(res - 1);
+    vw->len    = (res > VIEW_MAX_LEN) ? VIEW_MAX : (uint8_t)(res - 1);
     vw->endian = E_NATIVE;
     vw->flags  = ((res & 7) == 0) ? VIEW_F_SIMPLE : 0;
     return 0;

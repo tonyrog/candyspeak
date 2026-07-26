@@ -61,11 +61,11 @@ eval_test(File) ->
 eval_test(File, Opts) ->
     eval_test(File, Opts, seq).
 
-%% Mode: seq (default) or reactive (adds -r 1)
+%% Mode: seq (default) or reactive (-r is now a no-argument flag)
 eval_test(File, Opts, Mode) ->
     Cycles = proplists:get_value(cycles, Opts, 20),
     TmpState = tmp_file("state"),
-    RFlag = case Mode of reactive -> "-r 1 "; _ -> "" end,
+    RFlag = case Mode of reactive -> "-r "; _ -> "" end,
     Cmd = io_lib:format("~s ~s-c ~p -s ~s -R ~s 2>&1",
                         [?CSP, RFlag, Cycles, TmpState, File]),
     _Output = os:cmd(lists:flatten(Cmd)),

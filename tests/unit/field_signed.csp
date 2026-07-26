@@ -1,0 +1,21 @@
+// Signed CAN field: a value whose top bit is set must read back NEGATIVE.
+// get_bits zero-extends the raw bits, so the read path sign-extends when the
+// field is declared `integer`. An `unsigned` view over the SAME bits stays
+// positive -- proving the value type, not the bit pattern, drives the read.
+// No bus involved; each field is written and read through its own view.
+#buffer F210:8 out can 0x210
+#field sn:4 integer  F210[0..3]     // signed nibble
+#field un:4 unsigned F210[0..3]     // same bits, unsigned view
+#field sb:8 integer  F210[8..15]    // signed byte
+#field wbe:16 integer big F210[16..31]  // signed, big-endian
+#variable rs = 0
+#variable ru = 0
+#variable rb = 0
+#variable rbe = 0
+sn = -1                             // 0xF into bits 0..3
+sb = -128                           // 0x80 into byte 1
+wbe = -2                            // 0xFFFE, big-endian
+rs = sn                             // -> -1  (sign-extended from 4 bits)
+ru = un                            // -> 15  (same bits, unsigned)
+rb = sb                            // -> -128 (sign-extended from 8 bits)
+rbe = wbe                          // -> -2  (big-endian round-trip + sign)

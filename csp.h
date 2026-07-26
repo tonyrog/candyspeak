@@ -345,6 +345,11 @@ typedef enum {
 #define VIEW_F_SIMPLE 0x01   // covers whole buffer, byte aligned, native endian
 #define VIEW_F_GLOBAL 0x02   // buf id is global (not object-offset)
 
+#define VIEW_F_BITS 2
+#define VIEW_LEN_BITS 6      // max length is 64 bits
+#define VIEW_MAX_LEN  (1 << VIEW_LEN_BITS)
+#define VIEW_MAX      (VIEW_MAX_LEN-1)
+
 // One per leaf index_t (indexed by st_index) -- the biggest per-program table
 // (nleaf entries), so every byte here is multiplied by the leaf count. kind/vt/
 // endian pack into one byte (2+4+2), which pays for a 16-bit buf.
@@ -354,13 +359,13 @@ typedef enum {
 // `buf` is uint16_t: the same width as the nbuf counter (index_t) that produces
 // it, so a buffer id can no longer silently truncate the way uint8_t did.
 typedef struct {
-    uint8_t  kind:2;              // view_kind_t (VIEW_SLOT/VIEW_HEAP)
-    uint8_t  vt:TYPE_BITS;        // value type (vtype_t 0..11); SLOT reads it from decl
-    uint8_t  endian:ENDIAN_BITS;  // VIEW_HEAP: vendian_t (native/little/big)
-    uint8_t  flags;               // VIEW_HEAP: VIEW_F_*
-    uint8_t  pos;                 // VIEW_HEAP: start bit in buffer
-    uint8_t  len;                 // VIEW_HEAP: number of bits - 1
-    uint16_t buf;                 // buffer id (both kinds)
+    uint8_t kind:2;              // view_kind_t (VIEW_SLOT/VIEW_HEAP)
+    uint8_t vt:TYPE_BITS;        // value type (vtype_t 0..11); SLOT reads it from decl
+    uint8_t endian:ENDIAN_BITS;  // VIEW_HEAP: vendian_t (native/little/big)
+    uint8_t flags:VIEW_F_BITS;   // VIEW_HEAP: VIEW_F_*
+    uint8_t len:VIEW_LEN_BITS;   // VIEW_HEAP: number of bits - 1    
+    uint16_t pos;                // VIEW_HEAP: start bit in buffer
+    uint16_t buf;                // buffer id (both kinds)    
 } csp_view_t;
 
 // csp_buf_t.transport -- what the buffer is bound to on the outside
@@ -698,7 +703,7 @@ typedef enum {
 
 #define NOTIMEOUT 0xffffffff
 
-typedef struct PACKED {
+typedef struct {
     rostring_t name;     // token name (RODATA)
     uint8_t namelen;
     uint8_t  tok;
@@ -985,6 +990,7 @@ typedef enum {
     ERR_NO_SUCH_RULE,
     ERR_CANNOT_SAVE,
     ERR_CANNOT_LOAD,
+    ERR_NUMBER_RANGE,
 } csp_err_t;
 
 // parser state, save state before parse

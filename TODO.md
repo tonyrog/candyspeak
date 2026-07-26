@@ -11,17 +11,35 @@
   - "Segmentet" = modulen (kontiguös). crc_failsafe = CRC över modulens decl-
     range + instr-range + refererade strängar (modul-SLICE-crc).
   - Flera kopior / EEPROM-patch = re-instansiera / module-patch.
+  FÖRFINING (Tony 2026-07-26): FAILSAFE = en ANDRA ROM-IMAGE.
+  - Takeover = rikta om bas-pekarna (rom_decl_p/instr_p/str_p + counts) mot
+    FAILSAFE-skivan = EXAKT vad csp_load_rom redan gör (rebasar runtime på ROM).
+    Så FAILSAFE-segmentet blir en självständig image: egen rom_fs_header + str/
+    decl/instr + self-verify-trailrar. "Växla" = csp_load_rom(FAILSAFE) + rebuild.
+    NOLL eval-loop-ändringar. ALL ROM-maskineri (verify/recovery/version) återanvänds
+    rekursivt.
+  - Implicit SINGLETON: instansieras ej som objekt; runtime REBASAR på den (som på
+    ROM). Dess #in INIT kör setup.
+  - CONSTRAINT (möjliggöraren): FAILSAFE får INTE referera globala/andra-objekt-
+    fält -> kompiletids-fel. Rebasen är giltig bara om skivan är självförsörjande.
+  - FAILSAFE re-deklarerar sina egna pinnar (egen decl, samma fysiska pinne; main+
+    FAILSAFE kör aldrig samtidigt). Pin-konflikt-check måste tillåta det / ej
+    cross-checka (FAILSAFE kompileras som egen enhet).
+
   NYTT JOBB (under ytan):
-  1. AKTIVERINGS-MODELL: moduler kör varje cykel; FAILSAFE ska köra BARA vid fel
-     med huvudprogrammet tystat -> global "FAILSAFE tar över"-omkopplare (ersätter
-     sticky State=FAILSAFE).
-  2. LOKALISERA modulen vid korruption: namnet "FAILSAFE" ligger i str -> korrupt
-     str = kan ej matcha namn. Behövs reserverad modul-markör/flagga på
-     DECL_MODULE eller strukturell skanning.
-  KONSEKVENS: crc_failsafe-över-#in-block, FAILSAFE_INIT-som-state, eget segment
-  -> kollapsar till "FAILSAFE-modul + slice-crc + takeover". str+state self-verify
-  är fortfarande nyttig grund (modulen bor där; str låser upp FAILSAFE-print).
-  Steg 2-4 i trappan nedan omtolkas i modul-termer.
+  1. RUNTIME-REBAS-PRIMITIV: csp_load_rom på en GIVEN image-pekare (ej bara den
+     länkade rom_header). Förbereder BÅDE FAILSAFE-växling OCH ROM-recovery-fuzzning
+     (peka på korrupt kopia). Oberoende värdefullt -> gör detta först.
+  2. AKTIVERINGS-MODELL: main kör normalt, FAILSAFE vilande/redo; vid fel/Panic/
+     watchdog -> växla (repoint+rebuild). Boot: main failar verify -> boota FAILSAFE.
+  3. LOKALISERA FAILSAFE vid korruption: namnet ligger i str. Reserverad modul-
+     markör/flagga på DECL_MODULE (eller: FAILSAFE är en egen image -> hittas via
+     sin egen rom_fs_header, ingen namn-matchning behövs).
+  4. KOMPILERING (kan vänta): csp -C riktad på BARA #module FAILSAFE -> rom_
+     failsafe.c (egen strängtabell, egna decl-index, eget pin-space). Återanvänder
+     generatorn. Syntax/semantik oförändrad.
+  KONSEKVENS: crc_failsafe, FAILSAFE_INIT, eget segment -> allt kollapsar till
+  "FAILSAFE = andra ROM-image + rebas-primitiv". str+state self-verify KLART.
 
 ## FAILSAFE-som-recovery-target: hela trappan (2026-07-26)
   MÅL: vid korrupt ROM (header/kod/decls) hoppa till en verifierad FAILSAFE
@@ -190,7 +208,16 @@
       csp_process_line + csp_parse, ~288 byte -- linjen ar redan tokeniserad en
       gang, andra passet ar redundant).
 
-## Fälttypen läses aldrig -- `integer` ger inget tecken (2026-07-22)
+## Fälttypen läses aldrig -- `integer` ger inget tecken (2026-07-22) -- KLART 2026-07-27
+  Löst: csp_heap_get teckenutvidgar när vw->vt == V_INTEGER (bit-vägen). endian
+  fungerade redan (setup_field kopierade ca.endian -> vw->endian, csp_heap_get
+  greppar E_BIG). Syntaxen fanns redan: #field tar integer/unsigned/big/little
+  via P_OPTS. make_buf_view (Buf[a..b]-slices) förblir unsigned/native med FLIT --
+  det är rätt default för en anonym byte-slice, och unpack.csp förlitar sig på det;
+  signed/BE uttrycks via NAMNGIVET #field. Default för typlös #variable är signed
+  (Tonys beslut) -- adder3/half_adder deklarerar nu bit-vars `unsigned`. Nytt test
+  field_signed (LE+BE signed + unsigned-kontrast). test+san 52/52. Se DONE.md.
+
   Deklarationen bär `vt`, läsvägen struntar i den:
 
       #buffer F:8 out can 0x123
@@ -208,7 +235,9 @@
   Hittades när #can/#field vägdes mot variabler+pack: det HÄR var argumentet
   för att behålla mekanismen, och det visade sig inte finnas i koden.
 
-## Float-literal över 2^31 overflowar i parsern (2026-07-22)
+## Float-literal över 2^31 overflowar i parsern (2026-07-22) -- KLART 2026-07-27
+  Löst: uint64-ackumulering + range-check per måltyp, ERR_NUMBER_RANGE. Se DONE.md.
+
   `d = 2500000000.0 * 4.0` ger `-7168`. UBSan pekar på csp_rt.c:3095:
 
       runtime error: signed integer overflow: 250000000 * 10 cannot be

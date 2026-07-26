@@ -92,6 +92,7 @@ rochar s_err_arg_mismatch[] RODATA = "function %s/%d argument %d type mismatch";
 rochar s_err_name_long[] RODATA = "identifier name too long %d, max %d";
 rochar s_err_rule_range[] RODATA = "bad rule range, rules are numbered 1..%d";
 rochar s_err_no_rule[] RODATA = "no rule %d, the program has %d";
+rochar s_err_num_range[] RODATA = "number out of range";
 rochar s_err_unknown[] RODATA = "unknown error";
 rochar s_cmd_help[] RODATA = "help";
 rochar s_cmd_query[] RODATA = "?";

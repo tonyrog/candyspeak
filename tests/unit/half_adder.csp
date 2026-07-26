@@ -1,8 +1,10 @@
+// 1-bit values are unsigned: a set bit reads back 1, not -1 (a 1-bit *signed*
+// integer holds only 0 or -1). Signedness is the variable's declared type.
 #module HalfAdd
-#variable A:1 in = 0
-#variable B:1 in = 0
-#variable S:1 out = 0
-#variable C:1 out = 0
+#variable A:1 unsigned in = 0
+#variable B:1 unsigned in = 0
+#variable S:1 unsigned out = 0
+#variable C:1 unsigned out = 0
 
 S = A ^ B ? 1
 C = A & B ? 1

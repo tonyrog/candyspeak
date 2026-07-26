@@ -1,0 +1,10 @@
+%% Signedness is a property of the field's declared type, not its bits: sn and
+%% un cover the same nibble but read back -1 vs 15. seq only -- unguarded `=`
+%% rules have no reactive trigger (see can_pack.expect for the rationale).
+{modes, [seq]}.
+{checks, [
+  {final_var, "rs", -1},
+  {final_var, "ru", 15},
+  {final_var, "rb", -128},
+  {final_var, "rbe", -2}
+]}.
