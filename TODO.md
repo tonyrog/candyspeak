@@ -1,5 +1,60 @@
 # FIXES
 
+## FAILSAFE = ett #module (INSIKT, Tony 2026-07-26) -- omformar trappan nedan
+  Gör FAILSAFE till en `#module FAILSAFE` istället för ett `#in FAILSAFE`-block.
+  En modul ÄR den självförsörjande enheten: egna decls, egen kod (ENTER..LEAVE),
+  egna states, egen #in INIT, per-instans-lagring.
+  GRATIS:
+  - FAILSAFE_INIT = modulens #in INIT (starta timer där). Ingen entry-flagga.
+  - Självdelimiterande: DECL_MODULE.n + OP_ENTER.num avgränsar redan modulens
+    range -> inbyggda "END-markörer" för modulen.
+  - "Segmentet" = modulen (kontiguös). crc_failsafe = CRC över modulens decl-
+    range + instr-range + refererade strängar (modul-SLICE-crc).
+  - Flera kopior / EEPROM-patch = re-instansiera / module-patch.
+  NYTT JOBB (under ytan):
+  1. AKTIVERINGS-MODELL: moduler kör varje cykel; FAILSAFE ska köra BARA vid fel
+     med huvudprogrammet tystat -> global "FAILSAFE tar över"-omkopplare (ersätter
+     sticky State=FAILSAFE).
+  2. LOKALISERA modulen vid korruption: namnet "FAILSAFE" ligger i str -> korrupt
+     str = kan ej matcha namn. Behövs reserverad modul-markör/flagga på
+     DECL_MODULE eller strukturell skanning.
+  KONSEKVENS: crc_failsafe-över-#in-block, FAILSAFE_INIT-som-state, eget segment
+  -> kollapsar till "FAILSAFE-modul + slice-crc + takeover". str+state self-verify
+  är fortfarande nyttig grund (modulen bor där; str låser upp FAILSAFE-print).
+  Steg 2-4 i trappan nedan omtolkas i modul-termer.
+
+## FAILSAFE-som-recovery-target: hela trappan (2026-07-26)
+  MÅL: vid korrupt ROM (header/kod/decls) hoppa till en verifierad FAILSAFE
+  istället för dead/park. FAILSAFE måste kunna köra ISOLERAT -- den behöver sin
+  EGEN skiva av instr + decls + str (inte bara koden). Segmentering är slut-
+  svaret; per-sektions self-verify är substratet vi bygger först.
+
+  INSIKT (Tony): om str-arean är OK kan FAILSAFE PRINTA en diagnostik ("FAILSAFE:
+  sensor X fault") -- slår en tyst blink. Ger en extra degraderings-pinne: str OK
+  men kod korrupt -> skriv ut vad du kan innan park (Erlang: logga + reboota).
+
+  Trappan:
+    header OK, sektioner OK          -> kör normalt
+    header-crc rutten, END-markörer  -> kör normalt              KLART
+    sektion korrupt, FAILSAFE-seg OK -> hoppa FAILSAFE           (kräver segment)
+    ROM-FAILSAFE korrupt, EEPROM-patch OK -> den                (framtid)
+    allt korrupt                     -> park (UART + watchdog)
+
+  Steg (ordnade):
+  1. Per-sektion self-verify KLART för ALLA FYRA sektioner (se DONE 2026-07-26):
+     decl/instr END-markörer + str 0xFF-sentinel-trailer + state sentinel-state.
+     Recovery header-oberoende. Substratet klart.  -- KLART
+  2. crc_failsafe -> OMTOLKAT som MODUL-slice-crc (se insikten ovan): CRC över
+     FAILSAFE-modulens decl-range (DECL_MODULE.n) + instr-range (OP_ENTER.num) +
+     refererade strängar. Modulen är självdelimiterande -> inga nya markörer.
+  3. FAILSAFE_INIT -- STRUKET. Modulens egna #in INIT tar det (gratis).
+  4. FAILSAFE-modulens aktiverings-omkopplare ("takeover") + lokaliserings-markör
+     (reserverad flagga på DECL_MODULE, eftersom namnet ligger i str). Se insikten.
+  5. EEPROM-FAILSAFE-patch (andra kopian; max ETT ROM men en patch tillåts),
+     park-fallback (UART + watchdog reboot).
+  Se DONE: END-markörer, crc_failsafe-noten. Max-ett-#in-FAILSAFE finns redan
+  nedan.
+
 ## Baka rule_ip/rule_state i ROM/EEPROM? (2026-07-26)
   IDÉ (Tony). Idag räknas rule_ip (ordinal->ip) och rule_state (ordinal->State-
   mask) om vid boot i csp_csr (number_rules / number_rule_states) -- RAM-only,

@@ -6192,6 +6192,38 @@ NOINLINE static int rom_scan_instr(void)
     return -1;
 }
 
+// Recover rom_str's byte count via its 0xFF sentinel trailer (0xFF is never a
+// valid length byte or ASCII char), then verify the 2-byte CRC after it. -1 if
+// not intact. Bound by the name-position range.
+NOINLINE static int rom_scan_str(void)
+{
+    int p;
+    for (p = 0; p < (1 << NAMEPOS_BITS); p++) {
+	if ((uint8_t)ro_byte((const uint8_t*)&rom_str[p]) == 0xFF) {
+	    uint16_t stored = (uint8_t)ro_byte((const uint8_t*)&rom_str[p+1]) |
+			      ((uint16_t)(uint8_t)ro_byte((const uint8_t*)&rom_str[p+2]) << 8);
+	    return (csp_crc16(0xFFFF, rom_str, p, 1) == stored) ? p : -1;
+	}
+    }
+    return -1;
+}
+
+// Recover rom_states' entry count via its sentinel state (snum 0x7f), then verify
+// the CRC packed in the following state_t (name(9)|snum(7)<<9). -1 if not intact.
+NOINLINE static int rom_scan_state(void)
+{
+    int p;
+    for (p = 0; p <= MAX_STATES + 1; p++) {
+	if (ro_state(&rom_states[p]).snum == 0x7f) {
+	    state_t c = ro_state(&rom_states[p+1]);
+	    uint16_t stored = (uint16_t)(c.name | ((uint16_t)c.snum << 9));
+	    return (csp_crc16(0xFFFF, rom_states, (size_t)p * sizeof(state_t), 1)
+		    == stored) ? p : -1;
+	}
+    }
+    return -1;
+}
+
 // Activate the linked firmware ROM: run it in place from flash by setting the
 // RAM base offsets to the ROM sizes. No copy -- csp_get_decl/instr read flash
 // for logical indices below the base. The parse_file DECL_END terminator at the
@@ -6225,19 +6257,22 @@ NOINLINE void csp_load_rom(csp_rt_t* st)
 	// back to the header's (thereby cross-checked) crc. A DATA corruption
 	// (a section CRC failing with crc_hdr intact) is NOT recoverable -- the
 	// marker folds the same bad bytes -- so those still reject.
-	int rnd = -1, rnn = -1;
+	int rnd = -1, rnn = -1, rns = -1, rnstate = -1;
 	if (bad == ros_hdr) {
-	    rnd = rom_scan_decl();
-	    rnn = rom_scan_instr();
+	    rnd     = rom_scan_decl();
+	    rnn     = rom_scan_instr();
+	    rns     = rom_scan_str();
+	    rnstate = rom_scan_state();
 	}
-	if ((rnd >= 0) && (rnn >= 0) &&
-	    (csp_crc16(0xFFFF, rom_str, h.n_str, 1) == h.crc_str) &&
-	    (csp_crc16(0xFFFF, rom_states,
-		       (size_t)h.n_state * sizeof(state_t), 1) == h.crc_state)) {
-	    h.n_decl  = (uint16_t)rnd;    // marker-recovered counts are authoritative
+	if ((rnd >= 0) && (rnn >= 0) && (rns >= 0) && (rnstate >= 0)) {
+	    // All four sections self-verified via their own markers/trailers --
+	    // fully independent of the (rotten) header. Use the recovered counts.
+	    h.n_decl  = (uint16_t)rnd;
 	    h.n_instr = (uint16_t)rnn;
+	    h.n_str   = (uint16_t)rns;
+	    h.n_state = (uint16_t)rnstate;
 	    nd = h.n_decl;
-	    csp_print_line("ROM header CRC bad -- sections verified via END markers");
+	    csp_print_line("ROM header CRC bad -- sections verified via markers");
 	}
 	else {
 	    csp_print_lit("ROM rejected: CRC mismatch in ");

@@ -106,7 +106,8 @@ typedef unsigned bool_t;
 //   v5: OP_NINSTATE + INSTATE.nxt 14->13 with implicit bit (multi-state #in)
 //   v6: DECL_END_MARK / OP_END_MARK self-CRC terminators (header-corruption
 //       recovery: each of rom_decl/rom_instr self-verifies without the header)
-#define ROM_FORMAT_VERSION 6
+//   v7: str + state self-CRC trailers (all four sections self-verify)
+#define ROM_FORMAT_VERSION 7
 
 // One header for the whole ROM image, baked by `csp -C` as `rom_header`, so the
 // counts and integrity live in ONE symbol instead of seven loose globals. Per-

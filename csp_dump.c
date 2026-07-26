@@ -801,6 +801,7 @@ const char* csp_cfmt_endian(vendian_t et)
 void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 {
     int i;
+    uint16_t crc_str_data = 0xFFFF, crc_state_data = 0xFFFF;
     uint16_t crc_decl_data = 0xFFFF, crc_instr_data = 0xFFFF;
     uint16_t decl_mark_crc = 0, instr_mark_crc = 0;
 
@@ -833,7 +834,12 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     // int, not char: matches the `extern const int rom_str_len` in csp_rt.c so
     // the read is 4-byte aligned (a char at an odd address read as int HardFaults
     // on Cortex-M0), and avoids signed-char overflow for tables > 127 bytes.
-    fprintf(f, "const char rom_str[%d] RODATA = {\n", st->ps.strp);
+    // CRC over the string DATA (used for the header AND the self-CRC trailer).
+    crc_str_data = csp_crc16(0xFFFF, st->ram_str, st->ps.strp, 0);
+    // 3 extra bytes: a 0xFF sentinel (never a valid length or ASCII char, so it
+    // marks the section end for header-free recovery) + the 2-byte CRC. See
+    // rom_scan_str.
+    fprintf(f, "const char rom_str[%d] RODATA = {\n", st->ps.strp + 3);
     i = 0;
     while (i < st->ps.strp) {
 	uint8_t n = st->ram_str[i]; // length of next string
@@ -854,6 +860,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 		fprintf(f, "\n");
 	}
     }
+    fprintf(f, "\n(char)0xff,%u,%u,", crc_str_data & 0xff, (crc_str_data >> 8) & 0xff);
     fprintf(f, "};\n");
 
     // Canonical CRC over the decl DATA (normalization mirrors the header note
@@ -1055,11 +1062,18 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 
     // State table (name offset -> state number). csp_load_rom copies this back
     // into st->states so baked user states resolve. Name offsets index rom_str.
-    fprintf(f, "const state_t rom_states[%d] RODATA = {", st->ps.ns ? st->ps.ns : 1);
+    crc_state_data = csp_crc16(0xFFFF, st->states,
+			       (size_t)st->ps.ns * sizeof(state_t), 0);
+    // state self-CRC trailer: a sentinel (snum 0x7f -- never a real state, snums
+    // are 0..MAX_STATES-1) marks the section end for header-free recovery, and the
+    // next state_t packs the 16-bit CRC across its name(9)+snum(7). rom_scan_state.
+    fprintf(f, "const state_t rom_states[%d] RODATA = {", st->ps.ns + 2);
     for (i = 0; i < st->ps.ns; i++)
 	fprintf(f, "{.name=%u,.snum=%u},",
 		st->states[i].name, st->states[i].snum);
-    if (!st->ps.ns) fprintf(f, "{0}");   // avoid a zero-length array
+    fprintf(f, "{.name=0,.snum=0x7f},");                       // sentinel
+    fprintf(f, "{.name=%u,.snum=%u},",                         // crc: name|snum<<9
+	    crc_state_data & 0x1ff, (crc_state_data >> 9) & 0x7f);
     fprintf(f, "};\n");
 
     // The image header LAST: counts + per-section CRCs, so csp_load_rom can
@@ -1077,13 +1091,12 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	h.n_str = st->ps.strp; h.n_decl = st->ps.nd; h.n_instr = st->ps.nn;
 	h.n_edg = nedg;        h.n_state = st->ps.ns;
 
-	h.crc_str = csp_crc16(0xFFFF, st->ram_str, st->ps.strp, 0);
-	// crc over the decl/instr DATA -- precomputed above (same fold that seeds
-	// the END_MARK self-CRCs), so header and marker never disagree.
+	// crc over the str/decl/instr DATA -- precomputed above (same folds that
+	// seed the section self-CRCs), so header and section never disagree.
+	h.crc_str = crc_str_data;
 	h.crc_decl = crc_decl_data;
 	h.crc_instr = crc_instr_data;
-	h.crc_state = csp_crc16(0xFFFF, st->states,
-				(size_t)st->ps.ns * sizeof(state_t), 0);
+	h.crc_state = crc_state_data;   // precomputed above (seeds the trailer too)
 	// Graph CRC folds the same three arrays rom_verify reads back, in the same
 	// order and with the same sizes the emission above used: idg[nd], ofs[nd+1],
 	// edg[nedg]. Only when a graph exists (nedg > 0); else baked 0 and skipped.
