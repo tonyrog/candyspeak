@@ -1,5 +1,24 @@
 # FIXES
 
+## Baka rule_ip/rule_state i ROM/EEPROM? (2026-07-26)
+  IDÉ (Tony). Idag räknas rule_ip (ordinal->ip) och rule_state (ordinal->State-
+  mask) om vid boot i csp_csr (number_rules / number_rule_states) -- RAM-only,
+  reaktiv-only. Man SKULLE kunna baka dem i ROM (bredvid rom_idg/ofs/edg) och/
+  eller EEPROM.
+  AVVÄGNING (min lutning: behåll compute-at-boot):
+  - De är HÄRLEDDA ur instruktionsströmmen, deterministiskt, EN pass -> boot-
+    vinsten mikroskopisk även på AVR.
+  - RAM-besparing: reaktivt är AV default på AVR (allokeras ej där); bara
+    reaktiva kort (mkrzero, mer RAM) berörs. Svag.
+  - CRC: instruktionerna är redan CRC-skyddade -> korrupt instr fångas FÖRE
+    omräkning; baka ip/state = redundant CRC-yta.
+  KOHERENS-ARGUMENTET (det starkaste): grafens KANTER (rom_idg/ofs/edg) är redan
+  bakade -- varför baka kanterna men räkna om ip/state? Om man bakar allt blir
+  hela reaktiva strukturen en bakad+verifierad enhet. Värt det OM: RAM-kritiskt
+  reaktivt kort, ELLER man vill ha hela reaktiv-strukturen som en CRC-enhet.
+  (Notera: rule_ip pekar redan förbi block-gaten via skip_gate -- en bakad
+  rule_ip måste bakas med samma skip, annars NINSTATE-return-buggen igen.)
+
 ## Korrupt #disable-set i EEPROM => FAILSAFE i st f ROM? (2026-07-24)
   Idag: crc_dis-miss vid load -> avvisa HELA saven, fall tillbaka till ROM-
   baslinjen (se DONE + doc/DISABLE.md). Rimligt default (ROM = betrodd), MEN:
