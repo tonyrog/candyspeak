@@ -1878,6 +1878,18 @@ again:
 	st->arg[instr(st,n,i.imm)] = st->reg[instr(st,n,i.x)];
 	break;
     case OP_RULE:
+	// Bare NORMAL+ rule (implicit): it has no block gate, so gate it on
+	// State in {INIT, NORMAL} HERE. Sequential needs this (no gate walked);
+	// reactive already gated via rule_state but re-checking is harmless. This
+	// replaces the folded State==INIT||State==NORMAL that used to sit in the
+	// condition -- so a bare rule quiesces in FAILSAFE/user states.
+	if (instr(st,n,r.implicit)) {
+	    int sv = csp_value(st, st->sx).i;
+	    if ((sv != STATE_INIT) && (sv != STATE_NORMAL)) {
+		n = n + instr(st,n,r.nxt);
+		goto again;
+	    }
+	}
 	// #disable. Keyed by the OP_RULE's OWN ip: it is the one instruction
 	// every rule has exactly one of, and both dispatch paths run through it
 	// (csp_react enters at rule_ip[ord], which is the condition, and falls
@@ -2569,10 +2581,15 @@ NOINLINE static bool_t asm_memi(csp_rt_t* st, opcode_t op, reg_t x,
     return 0;
 }
 
+// Unused since State gating left the rule body (rule_state / dispatch). Kept for
+// the planned `<var> == <tiny const>` -> OP_EQI peephole. OP_EQI itself is still
+// evaluated, listed and graphed -- just no longer emitted.
+#if 0
 NOINLINE static bool_t asm_EQI(csp_rt_t* st, reg_t x, index_t mem, int8_t imm)
 {
     return asm_memi(st, OP_EQI, x, mem, imm);
 }
+#endif
 
 // STI: store a small immediate to memory in one instruction (mirror of EQI).
 // x is the register the rule's NEXT points at -- STI never writes it at runtime,
@@ -2768,20 +2785,18 @@ static bool_t asm_AND(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
     return asm_bop(st, OP_AND, x, y, z);
 }
 
-// compare equal ==
+#if 0
+// Unused since State gating moved out of the rule body (rule_state / dispatch).
+// Kept for the planned `<var> == <tiny const>` -> EQI peephole, which will want
+// these register-form compares again.
 static bool_t asm_EQEQ(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
 {
     return asm_bop(st, OP_EQEQ, x, y, z);
 }
-
-// OR two boolean registers -- used to build the multi-state `#in A B C` reactive
-// condition (State==A || State==B || ...). See asm_rule.
 static bool_t asm_OR(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
 {
     return asm_bop(st, OP_OR, x, y, z);
 }
-
-#if 0
 NOINLINE static bool_t asm_NOP(csp_rt_t* st)
 {
     return (alloc_instr_ptr(st, NULL, OP_NOP) != NULL);
@@ -2853,6 +2868,28 @@ NOINLINE static int skip_gate(csp_rt_t* st, int ip, int hi)
 	return j;
     }
     return ip;
+}
+
+// True if instruction i is a #in block gate's LD State (LD st->sx immediately
+// before an INSTATE/NINSTATE). That LD belongs to the gate, not to a rule's data
+// dependencies -- csp_csr adds the State edge per gated rule from rule_state.
+NOINLINE static int is_gate_ld(csp_rt_t* st, int i)
+{
+    return (instr(st, i, op) == OP_LD) && (instr(st, i, m.mem) == st->sx) &&
+	   (i + 1 < (int)st->ps.nn) &&
+	   ((instr(st, i+1, op) == OP_INSTATE) ||
+	    (instr(st, i+1, op) == OP_NINSTATE));
+}
+
+// csp_csr pass 3: add the State -> `ord` edge for a State-gated rule, with the
+// same consecutive-duplicate dedup the instruction fills use. Paired with the
+// per-gated-ordinal count in pass 1.
+NOINLINE static void add_state_edge(csp_rt_t* st, index_t* wr, int ord)
+{
+    index_t sd = INDEX(st->sx);
+    if (st->rule_state[ord] && (sd < st->ps.nd) &&
+	((wr[sd] == st->ofs[sd]) || (st->edg[wr[sd]-1] != (index_t)ord)))
+	st->edg[wr[sd]++] = (index_t)ord;
 }
 
 // Number the rule bodies of instruction range [lo,hi) in scan order, continuing
@@ -3046,7 +3083,7 @@ void csp_csr(csp_rt_t* st)
 	    break;
 	case OP_LD:
 	case OP_CHG:
-	    if (current_rule >= 0) {
+	    if ((current_rule >= 0) && !is_gate_ld(st, i)) {
 		index_t mem = INDEX(instr(st,i,m.mem));
 		if (mem < st->ps.nd) {
 		    st->idg[mem]++;
@@ -3091,6 +3128,17 @@ void csp_csr(csp_rt_t* st)
 	    break;
 	}
     }
+    // State dependency for every State-gated RAM rule -- replaces the folded EQI's
+    // edge (gate LD skipped above). One per gated ordinal; over-counting is fine,
+    // pass 3 leaves holes (see below).
+    {
+	index_t sd = INDEX(st->sx);
+	int o;
+	if (sd < st->ps.nd)
+	    for (o = r_rom; o < (int)st->n_rule; o++)
+		if (st->rule_state[o])
+		    st->idg[sd]++;
+    }
 
     // Pass 2: Calculate offsets into edge array
     st->ofs[0] = 0;
@@ -3124,6 +3172,7 @@ void csp_csr(csp_rt_t* st)
     current_rule = st->rom_nn;
     ord = r_rom;
     next_ord = r_rom + 1;
+    add_state_edge(st, wr, ord);        // the implicit body at the RAM base
     for (i = st->rom_nn; i < st->ps.nn; i++) {
 	switch (instr(st,i,op)) {
 	case OP_RULE:
@@ -3132,10 +3181,11 @@ void csp_csr(csp_rt_t* st)
 	case OP_NEXT:
 	    current_rule = i+1;
 	    ord = next_ord++;
-	    break;
+	    add_state_edge(st, wr, ord);    // State edge first, so a user State
+	    break;                          // read in the condition dedups against it
 	case OP_LD:
 	case OP_CHG:
-	    if (current_rule >= 0) {
+	    if ((current_rule >= 0) && !is_gate_ld(st, i)) {
 		index_t mem = INDEX(instr(st,i,m.mem));
 		if (mem < st->ps.nd &&
 		    (wr[mem] == st->ofs[mem] || st->edg[wr[mem]-1] != ord))
@@ -5155,37 +5205,13 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
     if (cond)
 	DBG("cond.len=%d, cond.pos=%d\n", cond->len, cond->pos);
 #endif
-    if (st->sdef >= 0) {  // we are in one or more states (reactive per-rule gate)
-	// cnd = (State==s0) || (State==s1) || ... over the block's state list.
-	// A plain `#in <s>` (n_sdef==1) emits exactly one EQI, as before; a
-	// multi-state `#in A B C` ORs the terms. The sequential path is gated by
-	// the OP_INSTATE/NINSTATE chain (open_in_block); this is for reactive.
-	int ns = st->n_sdef ? st->n_sdef : 1;
-	int si;
-	cnd = alloc_reg(st);
-	for (si = 0; si < ns; si++) {
-	    int s = st->n_sdef ? st->sdefv[si] : st->sdef;
-	    reg_t t = (si == 0) ? cnd : alloc_reg(st);
-	    if (s <= TINY_MAX)
-		asm_EQI(st, t, st->sx, s);
-	    else {
-		reg_t sr;
-		if (!asm_mem(st, OP_LD, t, st->sx)) // load state into t
-		    return -1;
-		sr = alloc_reg(st);
-		if (!asm_LI(st, sr, s))
-		    return -1;
-		if (!asm_EQEQ(st, t, t, sr))
-		    return -1;
-		free_reg(st, sr);
-	    }
-	    if (si > 0) {                       // OR this term into cnd
-		if (!asm_OR(st, cnd, cnd, t))
-		    return -1;
-		free_reg(st, t);
-	    }
-	}
-    }
+    // No per-rule State test is emitted anymore. A State-scoped rule (#in /
+    // NORMAL+) is gated OUTSIDE its body: sequentially by the OP_INSTATE/NINSTATE
+    // block gate (and, for a bare NORMAL+ rule, an OP_RULE.implicit check in
+    // csp_eval_rule), and reactively at dispatch by rule_state[ord] (csp_react).
+    // csp_csr gives each such rule a State dependency edge from rule_state, so a
+    // State change still wakes it -- no folded "secret" EQI in the condition.
+    // cnd stays -1 here (no State condition); the changed/user condition follows.
 
     // dry run (get nvar) union over all <- parts
     st->nvar = 0;
