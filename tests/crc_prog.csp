@@ -1,0 +1,36 @@
+// Target program for the CRC destroyer harness -- deliberately exercises every
+// section: strings (names), declarations (variable/digital/timer), instructions
+// (rules), and states including the reserved sticky FAILSAFE. Saved to EEPROM;
+// the harness then flips bits across the whole image and confirms every load
+// either succeeds, rejects cleanly, or (for ROM) recovers -- but never crashes.
+#digital Red    out 2
+#digital Yellow out 3
+#digital Green  out 4
+#digital Panic  in pulldown 5
+#timer   Phase  1000 = 1
+#states  red green
+#variable Blink = 0
+
+#in INIT
+    State = red
+#end
+
+#in red
+    Red = 1, Yellow = 0, Green = 0
+    State = green ? timeout(Phase)
+#end
+
+#in green
+    Red = 0, Yellow = 0, Green = 1
+    State = red ? timeout(Phase)
+#end
+
+#in FAILSAFE
+    Red = 0, Green = 0, Blink = !Blink, Yellow = Blink ? timeout(Phase)
+    Phase = 1 ? timeout(Phase)
+#end
+
+#in red green
+    State = FAILSAFE ? Panic
+    Phase = 1 ? timeout(Phase)
+#end

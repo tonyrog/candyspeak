@@ -6149,6 +6149,49 @@ static int rom_graph_ok(const csp_image_header_t* h)
     return crc == h->crc_graph;
 }
 
+// --- header-corruption recovery: self-verifying section END markers ---------
+// When crc_hdr fails, the header's counts and section CRCs are all suspect. But
+// rom_decl and rom_instr each end with a self-verifying marker (DECL_END_MARK /
+// OP_END_MARK, see csp_dump_code): its crc covers the section data + itself with
+// the crc field zeroed. Scanning for the marker recovers the entry count (its
+// position) AND confirms integrity, INDEPENDENT of the header. The scan is bound
+// by the array's compile-time max, so a missing/corrupt marker cannot read
+// unboundedly -- on flash it only ever touches the rom_* image.
+
+// Recover rom_decl's entry count via its END marker; -1 if not intact.
+NOINLINE static int rom_scan_decl(void)
+{
+    int p;
+    for (p = 0; p <= MAX_DECLS; p++) {
+	if (ro_decl(&rom_decl[p]).type == DECL_END_MARK) {
+	    csp_decl_t m = ro_decl(&rom_decl[p]);
+	    uint16_t stored = m.em.crc, crc;
+	    m.em.crc = 0;                          // the crc field reads 0 in the fold
+	    crc = csp_crc16(0xFFFF, rom_decl, (size_t)p * sizeof(csp_decl_t), 1);
+	    crc = csp_crc16(crc, &m, sizeof(m), 0);   // marker copy is in RAM
+	    return (crc == stored) ? p : -1;
+	}
+    }
+    return -1;
+}
+
+// Recover rom_instr's entry count via its END marker; -1 if not intact.
+NOINLINE static int rom_scan_instr(void)
+{
+    int p;
+    for (p = 0; p <= MAX_INSTRS; p++) {
+	if (ro_instr(&rom_instr[p]).op == OP_END_MARK) {
+	    csp_instr_t m = ro_instr(&rom_instr[p]);
+	    uint16_t stored = m.em.crc, crc;
+	    m.em.crc = 0;
+	    crc = csp_crc16(0xFFFF, rom_instr, (size_t)p * sizeof(csp_instr_t), 1);
+	    crc = csp_crc16(crc, &m, sizeof(m), 0);
+	    return (crc == stored) ? p : -1;
+	}
+    }
+    return -1;
+}
+
 // Activate the linked firmware ROM: run it in place from flash by setting the
 // RAM base offsets to the ROM sizes. No copy -- csp_get_decl/instr read flash
 // for logical indices below the base. The parse_file DECL_END terminator at the
@@ -6176,10 +6219,32 @@ NOINLINE void csp_load_rom(csp_rt_t* st)
 	return;
     }
     if ((bad = rom_verify(&h)) != NULL) {
-	csp_print_lit("ROM rejected: CRC mismatch in ");
-	csp_print_rostr(bad);
-	csp_print_line(" section (corrupt flash image)");
-	return;
+	// Recover ONLY when the header itself (crc_hdr) is the casualty: then its
+	// counts/CRCs are suspect but the sections may be whole. decl+instr carry
+	// self-verifying END markers -- confirm them independently; str+state fall
+	// back to the header's (thereby cross-checked) crc. A DATA corruption
+	// (a section CRC failing with crc_hdr intact) is NOT recoverable -- the
+	// marker folds the same bad bytes -- so those still reject.
+	int rnd = -1, rnn = -1;
+	if (bad == ros_hdr) {
+	    rnd = rom_scan_decl();
+	    rnn = rom_scan_instr();
+	}
+	if ((rnd >= 0) && (rnn >= 0) &&
+	    (csp_crc16(0xFFFF, rom_str, h.n_str, 1) == h.crc_str) &&
+	    (csp_crc16(0xFFFF, rom_states,
+		       (size_t)h.n_state * sizeof(state_t), 1) == h.crc_state)) {
+	    h.n_decl  = (uint16_t)rnd;    // marker-recovered counts are authoritative
+	    h.n_instr = (uint16_t)rnn;
+	    nd = h.n_decl;
+	    csp_print_line("ROM header CRC bad -- sections verified via END markers");
+	}
+	else {
+	    csp_print_lit("ROM rejected: CRC mismatch in ");
+	    csp_print_rostr(bad);
+	    csp_print_line(" section (corrupt flash image)");
+	    return;
+	}
     }
     st->rom_decl_p  = rom_decl;
     st->rom_instr_p = rom_instr;

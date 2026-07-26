@@ -104,7 +104,9 @@ typedef unsigned bool_t;
 //   v3: crc_graph covers the reactive graph (rom_idg/rom_ofs/rom_edg)
 //   v4: #buffer size is bytes -- csp_bufdecl_t.nbits became nbytes
 //   v5: OP_NINSTATE + INSTATE.nxt 14->13 with implicit bit (multi-state #in)
-#define ROM_FORMAT_VERSION 5
+//   v6: DECL_END_MARK / OP_END_MARK self-CRC terminators (header-corruption
+//       recovery: each of rom_decl/rom_instr self-verifies without the header)
+#define ROM_FORMAT_VERSION 6
 
 // One header for the whole ROM image, baked by `csp -C` as `rom_header`, so the
 // counts and integrity live in ONE symbol instead of seven loose globals. Per-
@@ -819,6 +821,17 @@ typedef struct PACKED {
     unsigned avt:16;         // argument value types 4 bit per argument
 } csp_instr_call_t;
 
+// OP_END_MARK: a self-verifying terminator appended after rom_instr's data. Its
+// crc is a CRC-16 over [the section's data + this marker with crc zeroed], so the
+// instruction section can be verified WITHOUT the header -- scan for OP_END_MARK,
+// its position is the section length, its crc confirms integrity. _res pads so
+// crc lands byte-aligned at bytes 2-3 (INSTR_COMMON is op:6). See rom_scan_end.
+typedef struct PACKED {
+    INSTR_COMMON;            // op == OP_END_MARK (0x3f)
+    unsigned _res:10;        // pad to a 2-byte boundary
+    uint16_t crc;            // section self-CRC (bytes 2-3)
+} csp_instr_end_t;
+
 typedef union {
     // uint32 need on arduino uno (unsigned is 16 bit?)
     struct PACKED { INSTR_COMMON; uint32_t rest:26; };
@@ -833,6 +846,7 @@ typedef union {
     csp_instr_next_t x;
     csp_instr_instate_t in;
     csp_instr_alu_t a;
+    csp_instr_end_t em;
 } csp_instr_t;
 
 // The instruction word must stay a clean 4 bytes: every format has to fit
@@ -922,7 +936,15 @@ typedef struct PACKED {
     unsigned init:1;         // one bit value 1 = start, 0 = stop
 } csp_timer_t;
 
-    
+// DECL_END_MARK: self-verifying terminator appended after rom_decl's data (the
+// counterpart to csp_instr_end_t for the decl section). DECL_COMMON is exactly 4
+// bytes, so crc lands byte-aligned at bytes 4-5. See rom_scan_end.
+typedef struct PACKED {
+    DECL_COMMON;             // type == DECL_END_MARK (0x3f)
+    uint16_t crc;            // section self-CRC (bytes 4-5)
+    uint16_t _res;           // pad to 8 bytes
+} csp_decl_end_t;
+
 typedef union {
     struct PACKED { DECL_COMMON; };
     csp_module_t   md;
@@ -934,6 +956,7 @@ typedef union {
     csp_field_t    ca;
     csp_bufdecl_t  bf;
     csp_timer_t    tm;
+    csp_decl_end_t em;
 } csp_decl_t;
 
 typedef enum {

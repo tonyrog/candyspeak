@@ -72,6 +72,15 @@ test-examples: csp
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript examples
 
+# CRC destroyer: flip bits across a saved EEPROM image under ASan/UBSan and prove
+# every corrupted load is handled gracefully (restore / reject / recover) and
+# NEVER crashes. Slow (rebuilds sanitized, forks per corruption) -- NOT part of
+# `make test`. 1-bit is exhaustive; multi-bit sampled. Tune with:
+#   CRC_MAX1=<n> CRC_MULTI=<n> make test_crc_destroyer
+test_crc_destroyer:
+	@chmod +x tests/crc_destroyer.sh
+	@bash tests/crc_destroyer.sh
+
 %.o:	%.c
 	$(CC) $(CFLAGS) -c -fPIC $<
 
@@ -79,7 +88,7 @@ test-examples: csp
 
 -include .*.d
 
-.PHONY: all clean test test-examples debug ubsan san
+.PHONY: all clean test test-examples test_crc_destroyer debug ubsan san
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

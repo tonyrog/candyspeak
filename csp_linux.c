@@ -628,6 +628,7 @@ static struct option long_options[] = {
     {"ram-used",     required_argument, 0,  'U'},
     {"board",        required_argument, 0,  1000},
     {"can",          required_argument, 0,  1001},
+    {"no-eeprom",    no_argument,       0,  1002},
     {"memory",       required_argument, 0,  'm'},
     {"pause",        no_argument,       0,  'b'},
     {0,              0,                 0,  0 }
@@ -654,6 +655,7 @@ void usage(const char* prog)
     fprintf(stderr, "  -s, --state-file=F   State file (Erlang format)\n");
     fprintf(stderr, "  -p, --parse-file=F   Parsed structure file\n");
     fprintf(stderr, "  -e, --eeprom=F       EEPROM file for save/load (default: eeprom.db)\n");
+    fprintf(stderr, "      --no-eeprom      Do not overlay the saved EEPROM patches at boot\n");
     fprintf(stderr, "  -I, --input-file=F   Data input file\n");
     fprintf(stderr, "      --board=NAME     Simulate a board: mega, mkrzero (measured;\n");
     fprintf(stderr, "                       sets --ram/--ram-used/--eeprom-size)\n");
@@ -769,6 +771,7 @@ int main(int argc, char** argv)
     FILE* input_file = NULL;
     int execute = 1;
     int interactive = 0;
+    int no_eeprom = 0;   // --no-eeprom: skip the boot-time EEPROM overlay
     uint32_t max_cycles = 0;
     uint32_t max_time_ms = 0;
     size_t   mem_limit = 0;   // -m: usable code-memory budget (0 = full arena)
@@ -802,6 +805,7 @@ int main(int argc, char** argv)
 	case 'b': pause_start = 1; interactive = 1; break;  // pause needs the REPL
 	case 'e': eeprom_file = optarg; break;
 	case 1001: can_iface = optarg; break;
+	case 1002: no_eeprom = 1; break;
 	case 'r': reactive =  atoi(optarg); break;
 	case 't': break;
 	case 'n': execute = 0; break;
@@ -975,17 +979,20 @@ int main(int argc, char** argv)
 	}
     }
 
-    // No program was handed to us -> restore whatever was last /saved. Never when
-    // firmware is linked in, or it would clobber the preloaded ROM.
+    // Overlay the saved EEPROM patches on top of the ROM baseline -- ALWAYS, the
+    // way the Arduino boot does (csp_load_rom then csp_eeprom_load): the patches
+    // LIVE in EEPROM and layer on the firmware, so gating this on "no firmware"
+    // was wrong -- a board with baked firmware would never see its own patches.
+    // csp_eeprom_load re-runs csp_load_rom internally, so it does NOT clobber the
+    // ROM; on a bad/absent save it returns before touching ROM. --no-eeprom skips
+    // it (testing, or a clean boot). Still skipped when a program was handed to us
+    // on the command line: that is an explicit "run THIS", and the load re-inits
+    // from scratch, which would discard the given program.
     //
-    // This asks "was a program given?", NOT "did any instructions appear?" -- the
-    // old test compared the instruction count, so a declarations-only program (a
-    // data model, or one still being built at the prompt) looked like "nothing to
-    // run" and was silently replaced by eeprom.db, since csp_eeprom_load re-inits
-    // from scratch. Deriving it from the decl count would work only by accident:
-    // parse_file always appends a DECL_END, so the count moves even for an empty
-    // file.
-    if (!given && !csp_has_firmware()) {
+    // `given` asks "was a program given?", NOT "did any instructions appear?" -- a
+    // declarations-only program (a data model, or one still being built at the
+    // prompt) must not look like "nothing to run" and get replaced by eeprom.db.
+    if (!given && !no_eeprom) {
 	if (csp_eeprom_load(&state) == 0)
 	    printf("Restored %d decls, %d instrs from %s\n",
 		   state.ps.nd - state.rom_nd, state.ps.nn - state.rom_nn,

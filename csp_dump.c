@@ -801,6 +801,8 @@ const char* csp_cfmt_endian(vendian_t et)
 void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 {
     int i;
+    uint16_t crc_decl_data = 0xFFFF, crc_instr_data = 0xFFFF;
+    uint16_t decl_mark_crc = 0, instr_mark_crc = 0;
 
     // Provenance banner: what this ROM is, where it came from, how big. The
     // counts are what actually goes into flash, so a glance at the top of rom.c
@@ -854,8 +856,30 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     }
     fprintf(f, "};\n");
 
-    // now dump declatrations
-    fprintf(f, "const csp_decl_t rom_decl[%d] RODATA = {\n", st->ps.nd);
+    // Canonical CRC over the decl DATA (normalization mirrors the header note
+    // below: zero the runtime-scratch fields the emitter does not write). Used
+    // BOTH for the header's crc_decl and to seed the DECL_END_MARK self-CRC, so
+    // the fold lives in one place.
+    crc_decl_data = 0xFFFF;
+    {
+	index_t di;
+	for (di = 0; di < st->ps.nd; di++) {
+	    csp_decl_t d = csp_get_decl(st, di);
+	    d.is_mapped = 0; d.bound = 0; d.reg = 0;
+	    if (d.type == DECL_TIMER) { d.tm.fired=0; d.tm.running=0; d.tm._res=0; }
+	    crc_decl_data = csp_crc16(crc_decl_data, &d, sizeof(d), 0);
+	}
+    }
+    // DECL_END_MARK self-CRC = over [data + this marker with crc zeroed], so the
+    // section verifies without the header (rom_scan_end).
+    {
+	csp_decl_t dm = {0};
+	dm.type = DECL_END_MARK;
+	decl_mark_crc = csp_crc16(crc_decl_data, &dm, sizeof(dm), 0);
+    }
+
+    // now dump declarations -- one extra entry: the DECL_END_MARK terminator.
+    fprintf(f, "const csp_decl_t rom_decl[%d] RODATA = {\n", st->ps.nd + 1);
     for (i = 0; i < st->ps.nd; i++) {
 	// csp_decl_t is a UNION whose every arm begins with DECL_COMMON, so the
 	// common fields MUST be written inside the same arm designator as the
@@ -915,10 +939,21 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    break;
 	}
     }
+    fprintf(f, "  {.em={.type=DECL_END_MARK,.crc=%u,._res=0}},\n", decl_mark_crc);
     fprintf(f, "};\n");
 
-    // and then dump instructions
-    fprintf(f, "const csp_instr_t rom_instr[%d] RODATA = {\n", st->ps.nn);
+    // Instruction section CRC + OP_END_MARK self-CRC (no canonicalization -- the
+    // emitted instrs are byte-for-byte st->ram_instr).
+    crc_instr_data = csp_crc16(0xFFFF, st->ram_instr,
+			       (size_t)st->ps.nn * sizeof(csp_instr_t), 0);
+    {
+	csp_instr_t im = {0};
+	im.op = OP_END_MARK;
+	instr_mark_crc = csp_crc16(crc_instr_data, &im, sizeof(im), 0);
+    }
+
+    // and then dump instructions -- one extra entry: the OP_END_MARK terminator.
+    fprintf(f, "const csp_instr_t rom_instr[%d] RODATA = {\n", st->ps.nn + 1);
     for (i = 0; i < st->ps.nn; i++) {
 	// csp_instr_t is a UNION whose every arm begins with INSTR_COMMON (op),
 	// so .op MUST be written inside the same arm designator -- a leading
@@ -985,6 +1020,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    break;
 	}
     }
+    fprintf(f, "  {.em={.op=OP_END_MARK,.crc=%u,._res=0}},\n", instr_mark_crc);
     fprintf(f, "};\n");
 
     // Reactive dependency graph: maps each ROM decl -> the ROM rules that read
@@ -1033,7 +1069,6 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     // header up to itself.
     {
 	csp_image_header_t h;
-	index_t di;
 	int nedg = 0;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 	if (st->reactive) nedg = st->ofs[st->ps.nd];
@@ -1043,23 +1078,10 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	h.n_edg = nedg;        h.n_state = st->ps.ns;
 
 	h.crc_str = csp_crc16(0xFFFF, st->ram_str, st->ps.strp, 0);
-	h.crc_decl = 0xFFFF;
-	for (di = 0; di < st->ps.nd; di++) {
-	    // Fold the CANONICAL decl -- the bytes rom_decl[] will actually hold.
-	    // The emitted initializer sets only the persistent fields and zero-
-	    // fills the rest, so a live decl's runtime-scratch bytes (set during
-	    // parse/codegen, recomputed at boot) must be cleared here to match.
-	    // This MUST track the emitter switch above: whatever a case does NOT
-	    // write, zero it here.
-	    csp_decl_t d = csp_get_decl(st, di);
-	    d.is_mapped = 0; d.bound = 0; d.reg = 0;   // DECL_COMMON runtime state
-	    if (d.type == DECL_TIMER) {                // period,init emitted; rest not
-		d.tm.fired = 0; d.tm.running = 0; d.tm._res = 0;
-	    }
-	    h.crc_decl = csp_crc16(h.crc_decl, &d, sizeof(d), 0);
-	}
-	h.crc_instr = csp_crc16(0xFFFF, st->ram_instr,
-				(size_t)st->ps.nn * sizeof(csp_instr_t), 0);
+	// crc over the decl/instr DATA -- precomputed above (same fold that seeds
+	// the END_MARK self-CRCs), so header and marker never disagree.
+	h.crc_decl = crc_decl_data;
+	h.crc_instr = crc_instr_data;
 	h.crc_state = csp_crc16(0xFFFF, st->states,
 				(size_t)st->ps.ns * sizeof(state_t), 0);
 	// Graph CRC folds the same three arrays rom_verify reads back, in the same
