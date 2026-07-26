@@ -1269,6 +1269,9 @@ typedef struct _csp_rt_t
     // ROM graph for free: dumping ran the same walk with rom_nn == 0, so rescanning
     // [0,rom_nn) reproduces exactly the ordinals rom_edg was baked with.
     index_t* rule_ip;          // ordinal -> instruction index (own alloc, n_rule)
+    uint16_t* rule_state;      // ordinal -> State membership mask (0 = ungated);
+			       // csp_react gates a rule by this instead of walking
+			       // a per-rule State test (own alloc, n_rule)
     index_t  n_rule;           // rule bodies (ROM + RAM); 0 until csr has run
     // Pending work is a BIT SET over (ord,obj) keys, not a queue. The set already
     // is the pending state -- a queue would only add an order, and the order it

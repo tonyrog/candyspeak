@@ -1,8 +1,9 @@
-% seq-only: the shared block counts with a self-referential `hit = hit + 1`,
-% which has no external reactive trigger (see failsafe.csp). Sequential fully
-% exercises the new OP_NINSTATE OR-chain block gate.
+% The shared block advances a -> b -> c, so it counts (hit) in a and b then
+% stops. Runs in BOTH modes: sequential walks the OP_NINSTATE OR-chain gate;
+% reactive enters each rule past the gate (rule_ip skips it) and is driven by the
+% State transitions -- proving the multi-state block fires reactively too.
 {cycles, 6}.
-{modes, [seq]}.
+{modes, [seq, reactive]}.
 {checks, [
   {final_var, "hit", 2}
 ]}.

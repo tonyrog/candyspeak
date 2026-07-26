@@ -2085,8 +2085,19 @@ index_t csp_react(csp_rt_t* st)
 		uint32_t b = (uint32_t)__builtin_ctz(bits);
 		index_t  e = (index_t)(w * BITSET_GROUP_BITS + b);
 		uint8_t  obj = QENTRY_OBJ(st, e);
-		index_t  ip  = st->rule_ip[QENTRY_ORD(st, e)];
+		index_t  ord = QENTRY_ORD(st, e);
+		index_t  ip  = st->rule_ip[ord];
+		uint16_t sm  = st->rule_state[ord];
 		bits &= (bits - 1);              // drop the bit we just took
+		// State gate at DISPATCH, not in the rule: skip a State-scoped rule
+		// (#in / NORMAL+) whose block does not include the current State.
+		// sm == 0 is ungated (module bodies) and always runs. This replaces
+		// the per-rule State test that used to live in every rule's condition.
+		if (sm) {
+		    int sv = csp_value(st, st->sx).i;
+		    if ((sv < 0) || (sv >= MAX_STATES) || !((1u << sv) & sm))
+			continue;
+		}
 		// Restore the object context so a module rule's CURRENT-relative
 		// field access hits the right instance (sequential does this via
 		// OP_NEW; reactive skips NEW). obj 0 = global (offs[0] == 0),
@@ -2818,11 +2829,38 @@ NOINLINE void* csp_mid_alloc(csp_rt_t* st, size_t n)
 }
 
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
+// If `ip` is a #in block gate -- LD State ; NINSTATE* ; INSTATE (open_in_block)
+// -- return the ip just PAST it (the block's first real instruction); else `ip`
+// unchanged. The reactive entry point must skip the gate: csp_react runs a rule
+// with ONE csp_eval_rule call, but a gate jumps by `return n+nxt` (INSTATE skips,
+// NINSTATE enters), which would END the call before the body ran. The block's
+// State membership is enforced at dispatch instead (see csp_react); sequential
+// still walks the gate linearly.
+NOINLINE static int skip_gate(csp_rt_t* st, int ip, int hi)
+{
+    // Only a GLOBAL-State gate (LD reads st->sx). A module's own #in gates on the
+    // object's per-instance State (a different decl); those keep their gate at the
+    // reactive entry and are handled the old way (their INSTATE falls through).
+    if ((ip + 1 < hi) && (instr(st, ip, op) == OP_LD) &&
+	(instr(st, ip, m.mem) == st->sx) &&
+	((instr(st, ip+1, op) == OP_NINSTATE) ||
+	 (instr(st, ip+1, op) == OP_INSTATE))) {
+	int j = ip + 1;
+	while ((j < hi) && (instr(st, j, op) == OP_NINSTATE))
+	    j++;
+	if ((j < hi) && (instr(st, j, op) == OP_INSTATE))
+	    j++;
+	return j;
+    }
+    return ip;
+}
+
 // Number the rule bodies of instruction range [lo,hi) in scan order, continuing
 // from ordinal `ord`. A body starts at the range base (code before any NEXT/ENTER
 // belongs to it -- csp_csr seeds current_rule with the base for exactly that
 // reason) and again after every NEXT/ENTER. Fills rule_ip[ord] = ip when given a
-// table, otherwise just counts. Returns the next free ordinal.
+// table, otherwise just counts. Returns the next free ordinal. rule_ip is the
+// reactive entry point, so it points PAST any block gate at the body start.
 //
 // Calling this on [0,rom_nn) reproduces the ordinals a baked rom_edg holds: the
 // dump ran this same walk over the same instructions with rom_nn == 0.
@@ -2830,12 +2868,81 @@ NOINLINE static int number_rules(csp_rt_t* st, int lo, int hi,
 				 index_t* rule_ip, int ord)
 {
     int i;
-    if (rule_ip != NULL) rule_ip[ord] = lo;
+    if (rule_ip != NULL) rule_ip[ord] = skip_gate(st, lo, hi);
     ord++;                              // the implicit body at the range base
     for (i = lo; i < hi; i++) {
 	opcode_t o = instr(st, i, op);
 	if ((o == OP_NEXT) || (o == OP_ENTER)) {
-	    if (rule_ip != NULL) rule_ip[ord] = i+1;
+	    if (rule_ip != NULL) rule_ip[ord] = skip_gate(st, i+1, hi);
+	    ord++;
+	}
+    }
+    return ord;
+}
+
+// If `ip` is a #in block gate, return the OR of its states as a bitmask (bit
+// snum) and set *bend to the ip past the block; else return 0 (and leave *bend).
+NOINLINE static uint16_t gate_mask(csp_rt_t* st, int ip, int hi, int* bend)
+{
+    // Global-State gates only (see skip_gate): an object's own #in gates on its
+    // per-instance State, which this global-State mask cannot represent.
+    if ((ip + 1 < hi) && (instr(st, ip, op) == OP_LD) &&
+	(instr(st, ip, m.mem) == st->sx) &&
+	((instr(st, ip+1, op) == OP_NINSTATE) ||
+	 (instr(st, ip+1, op) == OP_INSTATE))) {
+	uint16_t m = 0;
+	int j = ip + 1;
+	while ((j < hi) && (instr(st, j, op) == OP_NINSTATE)) {
+	    m |= (uint16_t)(1u << instr(st, j, in.imm));
+	    j++;
+	}
+	if ((j < hi) && (instr(st, j, op) == OP_INSTATE)) {
+	    m |= (uint16_t)(1u << instr(st, j, in.imm));
+	    *bend = j + instr(st, j, in.nxt);
+	}
+	return m;
+    }
+    return 0;
+}
+
+// True if the body starting at `ip` is a bare NORMAL+ rule (its OP_RULE carries
+// the implicit flag). Scans only within the body (up to the closing NEXT).
+NOINLINE static int body_implicit(csp_rt_t* st, int ip, int hi)
+{
+    int i;
+    for (i = ip; i < hi; i++) {
+	opcode_t o = instr(st, i, op);
+	if (o == OP_RULE) return instr(st, i, r.implicit);
+	if ((o == OP_NEXT) || (o == OP_ENTER)) break;
+    }
+    return 0;
+}
+
+// Fill rule_state[ord] with each rule body's State membership mask, mirroring
+// number_rules' ordinal walk. The mask is the enclosing #in block's states
+// (gate_mask), or {INIT,NORMAL} for a bare NORMAL+ rule (body_implicit), or 0
+// for an ungated rule (module bodies, run whenever their object is active). This
+// is what csp_react gates on -- so no per-rule State test lives in the stream.
+NOINLINE static int number_rule_states(csp_rt_t* st, int lo, int hi,
+				       uint16_t* rs, int ord)
+{
+    const uint16_t normal_plus =
+	(uint16_t)((1u << STATE_INIT) | (1u << STATE_NORMAL));
+    uint16_t mask = 0;
+    int bend = -1, i;
+
+    mask = gate_mask(st, lo, hi, &bend);
+    rs[ord] = body_implicit(st, lo, hi) ? normal_plus : mask;
+    ord++;
+    for (i = lo; i < hi; i++) {
+	opcode_t o = instr(st, i, op);
+	if ((o == OP_NEXT) || (o == OP_ENTER)) {
+	    int p = i + 1;
+	    uint16_t gm;
+	    if ((bend >= 0) && (p >= bend)) { mask = 0; bend = -1; }
+	    gm = gate_mask(st, p, hi, &bend);
+	    if (gm) mask = gm;
+	    rs[ord] = body_implicit(st, p, hi) ? normal_plus : mask;
 	    ord++;
 	}
     }
@@ -2874,6 +2981,7 @@ void csp_csr(csp_rt_t* st)
     // Number every rule body 0..n_rule-1 and build the ordinal -> ip map. ROM
     // first (so its ordinals match what rom_edg was baked with), then RAM.
     st->rule_ip = NULL;
+    st->rule_state = NULL;
     st->n_rule = 0;
     {
 	int nr;
@@ -2885,6 +2993,12 @@ void csp_csr(csp_rt_t* st)
 	if (st->rom_nn > 0)
 	    number_rules(st, 0, st->rom_nn, st->rule_ip, 0);
 	number_rules(st, st->rom_nn, st->ps.nn, st->rule_ip, r_rom);
+	// Parallel: each ordinal's State membership mask (gates reactive dispatch).
+	st->rule_state = (uint16_t*)csp_mid_alloc(st, (size_t)nr * sizeof(uint16_t));
+	if (st->rule_state == NULL) { st->ofs = NULL; return; }  // middle full
+	if (st->rom_nn > 0)
+	    number_rule_states(st, 0, st->rom_nn, st->rule_state, 0);
+	number_rule_states(st, st->rom_nn, st->ps.nn, st->rule_state, r_rom);
 	st->n_rule = (index_t)nr;
     }
 
@@ -6190,6 +6304,7 @@ int csp_mem_init(csp_rt_t* st, size_t size)
     st->obj_shift = 0;
     st->gen = 0;
     st->rule_ip = NULL;
+    st->rule_state = NULL;
     st->n_rule = 0;
     st->idg = st->ofs = st->edg = NULL;
 #endif
