@@ -1,0 +1,60 @@
+// Ain -- analogue input reporting, after CiA DS-401.
+//
+// Decides WHEN a measured value is worth sending. It knows nothing about the
+// transport: wire `Out` into a CAN field, an SMS body or a println, and use
+// `changed(Out)` as the trigger. `Out` IS the last reported value, so the
+// change of it and the value to send are the same fact -- no separate pulse
+// to keep in phase.
+//
+// Two independent reasons to report:
+//
+//   Delta / DeltaDown -- the value moved far enough to be worth an update.
+//     The reference is the last value we REPORTED, not the last sample. That
+//     is the whole point: the receiver's copy is then never more than Delta
+//     wrong, however slowly the input drifts. Comparing against the last
+//     sample instead gives a rate trigger, and a slow ramp never fires.
+//     Separate up and down deltas because urgency is often asymmetric --
+//     report a falling temperature finely and a rising one coarsely.
+//
+//   Upper / Lower -- the value crossed out of its normal band. This is an
+//     event, not a measurement, so it fires once on the way out and not again
+//     until the value has come back inside.
+//
+// Combined with an inhibit time on the transport you get the full DS-401
+// contract per signal: accuracy (Delta), liveness (a cyclic send by the
+// caller) and a bound on bus load (inhibit).
+//
+//   #Ain temp  In <- Temp  Delta=5 DeltaDown=1  Lower=200 Upper=800
+//   F.tx = 1 ? changed(temp.Out)
+//
+#module Ain
+#variable In        in  = 0     // raw value -- wire it with `In <- Sensor`
+#variable Out       out = 0     // last REPORTED value; changed(Out) = send it
+#variable Delta         = 0     // report on a rise of this much since Out (0 = off)
+#variable DeltaDown     = 0     // report on a fall of this much since Out (0 = off)
+#variable Upper         = 0     // report when In leaves the band upwards
+#variable Lower         = 0     // ... or downwards (Upper == Lower = limits off)
+#variable Hyst          = 0     // how far back inside the band before it can fire again
+#variable Enable:1 unsigned = 1 // the DS-401 global interrupt enable
+#variable Above:1 unsigned  = 0 // latch: In is currently out of band, high side
+#variable Below:1 unsigned  = 0 // latch: ... low side
+
+// Deadband. Note this also gives the FIRST report for free: Out starts at 0,
+// so the opening sample is a large enough move to be sent.
+Out = In ? Enable && Delta > 0     && In - Out >= Delta
+Out = In ? Enable && DeltaDown > 0 && Out - In >= DeltaDown
+
+// Limit crossings. The latches make it an edge, so sitting outside the band
+// reports once rather than every cycle.
+Out = In ? Enable && Upper != Lower && In > Upper && !Above
+Out = In ? Enable && Upper != Lower && In < Lower && !Below
+
+// The latches release only Hyst back INSIDE the limit. That margin is what
+// keeps a value resting on the threshold from chattering. Hyst is its own
+// parameter and not Delta: a pure alarm wants hysteresis with the deadband
+// switched off, and a pure telemetry channel wants the opposite.
+Above = 1 ? Upper != Lower && In > Upper
+Above = 0 ? Upper != Lower && In < Upper - Hyst
+Below = 1 ? Upper != Lower && In < Lower
+Below = 0 ? Upper != Lower && In > Lower + Hyst
+#end

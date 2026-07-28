@@ -66,8 +66,16 @@ eval_test(File, Opts, Mode) ->
     Cycles = proplists:get_value(cycles, Opts, 20),
     TmpState = tmp_file("state"),
     RFlag = case Mode of reactive -> "-r "; _ -> "" end,
-    Cmd = io_lib:format("~s ~s-c ~p -s ~s -R ~s 2>&1",
-                        [?CSP, RFlag, Cycles, TmpState, File]),
+    %% {lib, ["lib/foo.csp"]} loads modules ahead of the test file, so a test
+    %% exercises the library module ITSELF rather than a copy of it that
+    %% quietly drifts. csp takes several files and parses them in order.
+    Libs = proplists:get_value(lib, Opts, []),
+    LibStr = case Libs of
+                 [] -> "";
+                 _  -> string:join(Libs, " ") ++ " "
+             end,
+    Cmd = io_lib:format("~s ~s-c ~p -s ~s -R ~s~s 2>&1",
+                        [?CSP, RFlag, Cycles, TmpState, LibStr, File]),
     _Output = os:cmd(lists:flatten(Cmd)),
     StateResult = file:consult(TmpState),
     file:delete(TmpState),

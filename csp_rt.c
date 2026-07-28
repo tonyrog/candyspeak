@@ -1610,6 +1610,12 @@ NOINLINE void csp_dio_set_part(csp_rt_t* st, index_t ix, value_t v,
 	// shadowed and does not go through the dirty set.
 	else if (part == PART_DIR)
 	    st->buf[vw->buf].dir = v.i;
+	// Endian lives in the view, like the position and the width -- config,
+	// not a shadowed value. Anything outside vendian_t is ignored.
+	else if (part == PART_ENDIAN) {
+	    if ((v.i >= E_NATIVE) && (v.i <= E_BIG))
+		vw->endian = v.i;
+	}
 	else if (st->buf[vw->buf].transport == TR_CAN) {
 	    csp_buf_t* bp = &st->buf[vw->buf];
 	    if (part == PART_TX) {
@@ -1689,6 +1695,10 @@ NOINLINE void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp,
 	// #buffer as well as a CAN frame -- and for a #field,  which reads
 	// its frame's direction.
 	case PART_DIR: vp->i = bp->dir; break;
+	// Endianness is a property of the VIEW (a bound field / #field decides
+	// how its bits are laid out), so it answers from there and not from a
+	// value slot -- a heap view has none.
+	case PART_ENDIAN: vp->i = vw->endian; break;
 	// Frame state, read off the buffer. A #field answers for its frame
 	// too: `A.rx` and `F201.rx` are the same fact.
 	case PART_RX:
@@ -4578,6 +4588,19 @@ static const uint8_t pat_res[] = {
     P_END
 };
 
+// ':' <size> for anything that is a scalar (#variable, #constant, #analog,
+// #field). The width has to fit DECL_COMMON.res, which is 5 bits holding
+// bits-1: `#variable X:40` used to wrap to 8 and give a silently wrong field.
+// (#buffer does NOT come here -- its size is bytes and lives in bf.nbytes.)
+NOINLINE static int check_res(csp_rt_t* st, ivalue_t res)
+{
+    if ((res < 1) || (res > MAX_RES_BITS)) {
+	csp_set_error(st, ERR_NUMBER_RANGE);
+	return -1;
+    }
+    return 0;
+}
+
 typedef struct {
     ivalue_t port;
     ivalue_t pin;
@@ -4731,6 +4754,8 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
+    if (check_res(st, d.r.res) < 0)
+	return -1;
     if ((ix = csp_new_udecl(st, &d.name, DECL_VARIABLE)) == BAD_INDEX)
 	return -1;
     i = INDEX(ix);
@@ -4767,6 +4792,14 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	}
 	if ((j >= (int)n) || (tv[j].t != RB)) {
 	    csp_set_error(st, ERR_SYNTAX); return -1;
+	}
+	// The range is in BITS and nothing downstream re-checks it: ca.bit/ca.len
+	// would wrap, and the heap access trusts the view -- a bind past the end
+	// of the buffer wrote outside it. The buffer is the bound.
+	if ((b0 < 0) || (b1 < b0) || (b0 > MAX_VIEW_BIT) ||
+	    ((b1 - b0) + 1 > MAX_RES_BITS) ||
+	    (b1 >= (ivalue_t)decl(st, INDEX(bx), bf.nbytes) * 8)) {
+	    csp_set_error(st, ERR_NUMBER_RANGE); return -1;
 	}
 	ram_decl_at(st,i)->bound  = 1;
 	ram_decl_at(st,i)->ca.id  = INDEX(bx);
@@ -4811,6 +4844,8 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
+    if (check_res(st, d.r.res) < 0)
+	return -1;
     if ((ix = csp_new_udecl(st, &d.name, DECL_CONSTANT)) == BAD_INDEX)
 	return -1;
     i = INDEX(ix);
@@ -4889,7 +4924,8 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	return -1;
     }
     if (d.opts.dir == 0) d.opts.dir = DIR_IN;
-
+    if (check_res(st, d.r.res) < 0)
+	return -1;
     if ((ix = csp_new_udecl(st, &d.name, DECL_ANALOG)) == BAD_INDEX)
 	return -1;
     i = INDEX(ix);
@@ -5019,6 +5055,13 @@ NOINLINE int csp_parse_field(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	len = d.r.res;
     else {
 	csp_set_error(st, ERR_SYNTAX);
+	return -1;
+    }
+    // ca.bit is 9 bits and ca.len 5, so a wider field or a higher start bit
+    // wrapped instead of being refused. setup_field then checks the range
+    // against the frame it views.
+    if ((d.bit0 > MAX_VIEW_BIT) || (len > MAX_RES_BITS)) {
+	csp_set_error(st, ERR_NUMBER_RANGE);
 	return -1;
     }
 
@@ -5869,6 +5912,15 @@ NOINLINE index_t make_buf_view(csp_rt_t* st, index_t parent,
     index_t pi = INDEX(parent);
     const tstr_t name = { .ptr = NULL, .len = 0 };
 
+    // Both call sites hand us raw byte indices scaled to bits, so this is where
+    // Buf[a..b] is bounds-checked: against the buffer, and against what ca.bit
+    // and ca.len can hold. Otherwise the slice wrapped and read past the heap.
+    if ((b0 < 0) || (b1 < b0) || (b0 > MAX_VIEW_BIT) ||
+	((b1 - b0) + 1 > MAX_RES_BITS) ||
+	(b1 >= (ivalue_t)decl(st, pi, bf.nbytes) * 8)) {
+	csp_set_error(st, ERR_NUMBER_RANGE);
+	return BAD_INDEX;
+    }
     for (i = 0; i < st->ps.nd; i++) {  // dedup
 	if ((ram_decl_at(st,i)->type == DECL_VIEW) &&
 	    (ram_decl_at(st,i)->ca.id == pi) &&
@@ -6678,13 +6730,8 @@ NOINLINE static int setup_field(csp_rt_t* st, index_t ix)
     csp_view_t* pv = &st->view[parent_leaf(st, ix)];
     csp_view_t* vw;
 
-    // The declaration can name any bit of a 64-byte FD frame, but csp_view_t.pos
-    // is a byte -- so only the first 32 bytes are addressable at runtime. Refuse
-    // rather than silently wrap to a wrong field.
-    if (pos > 255) {
-	csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
-	return -1;
-    }
+    // ca.bit is 9 bits and csp_view_t.pos is 16, so every bit of a 64-byte FD
+    // frame (0..511) is addressable. The frame itself is the only bound.
     if (pos + decl(st,i,ca.len) + 1 > decl(st, fx, bf.nbytes)*8) {
 	csp_set_error(st, ERR_SYNTAX);          // field reaches past the frame
 	return -1;
@@ -6693,7 +6740,7 @@ NOINLINE static int setup_field(csp_rt_t* st, index_t ix)
     vw->kind   = VIEW_HEAP;
     vw->vt     = decl(st, i, vt);
     vw->buf    = pv->buf;                       // share the frame's buffer
-    vw->pos    = (uint8_t)pos;
+    vw->pos    = pos;
     vw->len    = decl(st, i, ca.len);
     vw->endian = decl(st, i, ca.endian);
     vw->flags  = 0;

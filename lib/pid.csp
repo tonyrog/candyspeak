@@ -1,0 +1,77 @@
+// Pid -- PID controller with a ramped set point and integral anti-windup.
+//
+// Wire it up with plain rules, not `<-`, when the plant feeds back into the
+// controller (see the ORDER note at the bottom):
+//
+//   #Pid p0 target=10.0
+//   p0.feed = Sensor
+//   Drive   = p0.ctl
+//
+// THE CLOCK. Every rule is gated on the module's own timer, so the loop runs
+// exactly once per `dt` no matter how fast the cycle turns. Without that gate
+// `dt` is a lie: the I term integrates once per CYCLE and the D term divides
+// by a dt that never happened, so the tuning changes whenever the program
+// grows. `Tk` (ms) and `dt` (s) must describe the same interval.
+//
+// ONE EXPRESSION PER STATE VARIABLE. Reads see the previous commit, so every
+// intermediate variable costs a whole cycle of delay. Splitting the output
+// into temp1 -> temp2 -> ctl does not compute a sum, it builds a pipeline:
+// the P, I and D terms end up sampled at different times and the phase
+// relationship that makes a PID stable is gone.
+//
+// NO clip()/min()/max() HERE ON PURPOSE. They are integer-only builtins --
+// clip(0.5, -1.0, 1.0) returns 0 and silently kills the integrator. The
+// anti-windup below is three guarded rules instead, which also clamps exactly
+// rather than one step late: each condition tests the same candidate value
+// that its assignment stores.
+//
+#module Pid
+#constant kp    float = 0.75
+#constant ki    float = 0.25
+#constant kd    float = 0.2
+#constant dt    float = 0.01     // seconds -- must match Tk below
+#constant i_min float = -1.0
+#constant i_max float = 1.0
+#constant rate  float = 200.0    // set-point ramp, units per second
+#timer    Tk 10 = 1              // milliseconds -- must match dt above
+
+#variable target float in  = 0.0 // where we want to end up
+#variable feed   float in  = 0.0 // measured value
+#variable ctl    float out = 0.0 // controller output
+
+#variable sp       float = 0.0   // the ramped set point actually being chased
+#variable err      float = 0.0
+#variable err0     float = 0.0
+#variable integral float = 0.0
+
+Tk = 1 ? timeout(Tk)
+
+// Set-point ramp: step toward target by at most rate*dt, and land on it
+// exactly when the remainder is smaller than a step. MULTIPLY by dt -- a step
+// is rate*dt. Dividing by dt is the derivative formula and turns the ramp into
+// a 100x amplifier that overshoots on the first tick.
+sp = sp + rate*dt ? timeout(Tk) && target - sp > rate*dt
+sp = sp - rate*dt ? timeout(Tk) && sp - target > rate*dt
+sp = target       ? timeout(Tk) && fabs(target - sp) <= rate*dt
+
+err = sp - feed ? timeout(Tk)
+
+// Anti-windup. The candidate is integral + err*dt; store it if it fits,
+// otherwise store the limit it ran into.
+integral = integral + err*dt ? timeout(Tk) && integral + err*dt <  i_max && integral + err*dt >  i_min
+integral = i_max             ? timeout(Tk) && integral + err*dt >= i_max
+integral = i_min             ? timeout(Tk) && integral + err*dt <= i_min
+
+ctl  = kp*err + ki*integral + kd*(err - err0)/dt ? timeout(Tk)
+err0 = err ? timeout(Tk)
+#end
+
+// ORDER. An object's `<-` initialiser only tracks its source if the rules that
+// drive that source appear BEFORE the instantiation. A control loop is
+// circular -- the plant rule needs p0.ctl, so it cannot come first -- which
+// makes `feed <- Sensor` unusable here. Assigning `p0.feed = Sensor` from a
+// plain rule works regardless of order, so use that in a loop.
+//
+// TUNING. kd/dt is the real derivative gain: kd=0.2 with dt=0.01 amplifies
+// one sample of noise 20x. Filter the measurement, or expect to reduce kd
+// substantially once a real sensor is attached.

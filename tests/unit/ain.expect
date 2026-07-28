@@ -1,0 +1,13 @@
+%% Deadband: slow reports in steps of Delta, so with Src at ~58 the last
+%% reported value is 50 -- the receiver is never more than Delta behind.
+%% Limits: alarm is silent for the whole 10..50 band and reports exactly once,
+%% at the crossing (51). seq only -- `Src = Src + 1` is unguarded and so has no
+%% reactive trigger (see can_pack.expect for the rationale).
+{modes, [seq]}.
+{cycles, 60}.
+{lib, ["lib/ain.csp"]}.
+{checks, [
+  {object_var, 30, "Ain.alarm", "alarm.Out", 0},
+  {final_object_var, "Ain.slow",  "slow.Out",  50},
+  {final_object_var, "Ain.alarm", "alarm.Out", 51}
+]}.

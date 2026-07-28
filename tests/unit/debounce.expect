@@ -1,0 +1,11 @@
+%% Out stays 0 through the whole ringing phase and only picks up the settled
+%% value afterwards. seq only -- `n = n + 1` is unguarded and so has no
+%% reactive trigger (see can_pack.expect for the rationale).
+{modes, [seq]}.
+{cycles, 60}.
+{lib, ["lib/debounce.csp"]}.
+{checks, [
+  {object_var, 20, "Debounce.d", "d.Out", 0},
+  {object_var, 28, "Debounce.d", "d.Out", 0},
+  {final_object_var, "Debounce.d", "d.Out", 1}
+]}.

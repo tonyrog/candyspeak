@@ -1,7 +1,7 @@
 ---
 title: "CandySpeak Manual"
 author: "Tony Rogvall"
-date: 2026-07-18
+date: 2026-07-27
 geometry: margin=2.5cm
 fontsize: 11pt
 documentclass: article
@@ -47,6 +47,20 @@ Examples:
 #variable Temperature float = 20.0
 #variable Flag = 0
 ```
+
+The width is in **bits, 1..32** (32 when omitted); anything else is refused, as
+is a literal that does not fit the type — a wrong width is far more expensive to
+find later than at the declaration.
+
+> **A width without a type is SIGNED.** `#variable c:4` is a 4-bit *signed*
+> value, so it counts `-8..7` and `c = 15` reads back as `-1`. That follows the
+> rule that a typeless variable is `integer`, and it applies to `#field` and
+> `bind` in exactly the same way. When you want the plain `0..2^N-1` range —
+> flags, bit quantities, raw signals — say so:
+>
+> ```
+> #variable c:4 unsigned = 15      // 15, not -1
+> ```
 
 ### Constants
 
@@ -167,6 +181,10 @@ Speed = 50             // writes into Frame's bits 0..7
 > (`Frame[1]`), while a `bind` range is in **bits** (`Frame[8..17]`). Direct
 > indexing is for convenient whole-byte access; `bind` is for packing
 > sub-byte bit-fields.
+
+Either way the range must stay **inside the buffer** and cover at most **32
+bits** — a bound field or a `Buf[a..b]` slice that reaches past the end, or asks
+for more than 32 bits, is refused at declaration time.
 
 ### CAN frames
 
@@ -320,9 +338,11 @@ transceiver).
 See `examples/can_input.csp`, `examples/can_output.csp` and
 `examples/can_pack.csp` for worked programs.
 
-> **Limits today.** Field bit positions above 255 are rejected, so only the
-> first 32 bytes of a 64-byte FD frame are addressable at runtime. RTR frames
-> are not supported.
+> **Limits today.** A field may start at any bit of a 64-byte FD frame
+> (`0..511`) and may be **1..32 bits** wide — the value it produces is a 32-bit
+> container, so a wider signal has to be split into two fields. A declaration
+> outside those bounds, or one that reaches past the end of its frame, is
+> refused rather than wrapped. RTR frames are not supported.
 
 ### Packing and Unpacking Frames
 
@@ -616,9 +636,10 @@ readable and lets the runtime skip whole blocks of rules that are not active.
 #states A B C
 ```
 
-Two states always exist implicitly: **INIT** (entered at start-up, for one-time
-initialisation) and **NORMAL** (the default running state). Your own states are
-added on top; you can list more at any time with another `#states` line.
+Three states always exist implicitly: **INIT** (entered at start-up, for
+one-time initialisation), **NORMAL** (the default running state) and
+**FAILSAFE** (see below). Your own states are added on top; you can list more at
+any time with another `#states` line.
 
 Rules are attached to a state with an `#in <state> ... #end` block:
 
@@ -689,6 +710,20 @@ rules **quiesce** instead of leaking into it. That is what keeps FAILSAFE an
 island: only `#in FAILSAFE` (and blocks that explicitly list it) run there. To
 run a global rule in a special state too, name that state with `#in`.
 
+**FAILSAFE is sticky.** It is the designated safe state, and once `State` holds
+it **no rule can leave it** — only a reset does. A rule that assigns something
+else is simply ignored, so a flaky guard cannot bounce the device back out of a
+safe configuration. Together with the quiescing rule above, that is what keeps
+FAILSAFE an island: loose global rules stop running there, and only
+`#in FAILSAFE` (plus blocks that name it) has any say over the outputs.
+
+> This is the shape FAILSAFE has today, and it is deliberately thin. The
+> intended form is a `#module FAILSAFE`, compiled as its **own ROM image** with
+> its own declarations, its own `#in INIT` and its own EEPROM bank — so a device
+> can carry several banks, one of them the safe one, and switching is a rebase
+> rather than a state transition. Write safe-state logic as a self-contained
+> block now and it will move over cleanly.
+
 **States in modules.** A module can declare its own local states. Each instance
 carries its own `State`, so instances step through the machine independently:
 
@@ -731,7 +766,7 @@ written by a rule.
 | `.port` | digital / analog | port number |
 | `.dir` | digital / analog / buffer | direction (in/out) |
 | `.pwm` | analog | PWM flag |
-| `.endian` | bound field | big/little endian |
+| `.endian` | bound field / `#field` | byte order (`0` native, `1` little, `2` big) |
 | `.pullup` | digital | pull-up enable |
 | `.pulldown` | digital | pull-down enable |
 | `.period` | timer | timer period in ms |
@@ -877,7 +912,7 @@ make
 | `-C` | Show compiled C code |
 | `-c N` | Max number of cycles |
 | `-T MS` | Max runtime in milliseconds |
-| `-r[=0\|1]` | Reactive mode (default off) |
+| `-r` | Reactive mode (off unless given) |
 | `-Q` | Trace variable values |
 | `-P` | Debug parser |
 | `-R` | Debug result |
@@ -887,7 +922,8 @@ make
 | `-s <file>` | Write a per-cycle state trace (Erlang format) to a file |
 | `-p <file>` | Write parser debug output to a file |
 | `-O <file>` | Write an object dump to a file |
-| `-e <file>` | EEPROM (persisted state) file to use |
+| `-e <file>` | EEPROM (persisted state) file to use (default `eeprom.db`) |
+| `--no-eeprom` | Do not overlay the saved EEPROM patches at boot |
 | `-I <file>` | Feed inputs from a file (real time, cycle-stamped rows) |
 | `-F <file>` | Feed inputs with **simulated time** (see below) |
 | `-b` | Start paused; inspect, then `/resume` (implies `-i`) |
@@ -911,6 +947,15 @@ reports numbers that mean something before you flash anything:
 `--board` fills in `-M`, `-U` and `-E` from figures measured on real firmware
 builds (regenerate them with `make boards`). `/memory` then shows how much of
 that board's RAM the program would actually claim.
+
+### The EEPROM Is Read at Start-up
+
+Started **without a program file**, `./csp` behaves like a board coming out of
+reset: it loads the baked-in ROM program and then overlays whatever `/save`
+wrote to the EEPROM file (`eeprom.db` unless `-e` says otherwise), so the
+declarations, rules and disables you saved last time are back. Give it a program
+file and the overlay is skipped — naming a file means "run *this*". `--no-eeprom`
+skips it too, for a deliberately clean boot or a repeatable test.
 
 ### Examples
 
@@ -990,7 +1035,7 @@ evaluation order does not matter.
 
 ### Reactive Mode (`-r`)
 
-**Default: OFF** (`-r0`)
+**Default: OFF** — pass `-r` to turn it on.
 
 In reactive mode, only rules whose inputs have changed are evaluated. This is more efficient when:
 
@@ -1016,8 +1061,8 @@ Rule order is honoured in both: when two rules write the same field, the one
 written last wins — which is what makes patching a running system predictable.
 
 ```bash
-./csp -r1 program.csp    # reactive mode
-./csp -r0 program.csp    # evaluate all rules (default)
+./csp -r program.csp     # reactive mode
+./csp program.csp        # evaluate all rules (default)
 ```
 
 ## Api
@@ -1504,16 +1549,16 @@ pandoc doc/manual_en.md -o doc/manual_en.pdf \
 
 ## Declarations
 ```
-#variable <name>[:<bits>] [type] [= value]
-#variable <name>:<bits> [big] bind <buffer>[<a>..<b>]   // bit-field view
+#variable <name>[:<bits>] [type] [= value]              // bits 1..32, typeless = signed
+#variable <name>:<bits> [big|little] bind <buffer>[<a>..<b>]   // bit-field view
 #digital <name> [in|out|inout] [pullup|pulldown] [<port>:]<pin>
 #analog <name>[:<resolution>] [in|out] [pwm] [<port>:]<pin>
 #timer <name> <period_ms> [= 1]
 #constant <name> = <value>
-#buffer <name>:<bits> [type]            // shared storage / frame layout
+#buffer <name>:<bytes> [type]           // shared storage (size in BYTES)
 #buffer <name>:<bytes> [in|out] can <id>  // CAN frame (size in BYTES)
-#field <name>:<bits> [type] <frame>[<a>..<b>]  // field of a frame
-#states <name> ...                      // enumerate states (INIT/NORMAL implicit)
+#field <name>:<bits> [type] [big|little] <frame>[<a>..<b>]  // field of a frame
+#states <name> ...                      // INIT/NORMAL/FAILSAFE implicit
 #module <name> ... #end
 ```
 
@@ -1585,11 +1630,15 @@ falling(x)    // 1 -> 0
 
 ## States
 ```
-#states A B C                 // INIT and NORMAL always exist implicitly
+#states A B C                 // INIT, NORMAL and FAILSAFE always exist
 
 #in A                         // rules active only while State == A
     ...
     State = B ? cond          // transition
+#end
+
+#in FAILSAFE                  // the safe island: entered once, never left
+    ...                       // (only a reset releases it)
 #end
 ```
 

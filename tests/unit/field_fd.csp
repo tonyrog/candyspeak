@@ -1,0 +1,21 @@
+// CAN FD: a 64-byte frame is 512 bits, and every one of them must be
+// addressable. csp_view_t.pos used to be a byte, so fields past bit 255 were
+// refused; it is 16 bits now and ca.bit holds 0..511, so the frame itself is
+// the only bound. Write and read the last bits of the last byte.
+#buffer Fbig:64 out can 0x300
+#field lo:16   unsigned Fbig[0..15]      // first bytes, the easy case
+#field hi:16   unsigned Fbig[496..511]   // bytes 62..63, past the old limit
+#field hibe:16 unsigned big Fbig[464..479]  // big-endian, also past it
+#field w32:32  unsigned Fbig[400..431]   // the widest a view may be (ca.len is 5 bits)
+#variable rlo = 0
+#variable rhi = 0
+#variable rbe = 0
+#variable rw  = 0
+lo   = 0x1234
+hi   = 0xBEEF
+hibe = 0xCAFE
+w32  = 0x12345678
+rlo = lo
+rhi = hi
+rbe = hibe
+rw  = w32

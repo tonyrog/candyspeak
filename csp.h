@@ -701,6 +701,13 @@ typedef enum {
 #define MAKE_CAN_LEN(len) ((len)-1)
 #define GET_CAN_LEN(len) ((len)+1)
 
+// A scalar width lives in DECL_COMMON.res and in csp_field_t.len -- both 5 bits
+// holding bits-1 -- and a view start bit lives in csp_field_t.bit, 9 bits. Any
+// declaration past these wrapped silently and produced a field of the wrong
+// width at the wrong place, so the parser refuses instead.
+#define MAX_RES_BITS  32    // widest scalar / view a declaration may ask for
+#define MAX_VIEW_BIT  511   // highest start bit: the last bit of a 64-byte frame
+
 #define NOTIMEOUT 0xffffffff
 
 typedef struct {

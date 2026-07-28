@@ -1,0 +1,9 @@
+%% Fields high up in a CAN FD frame round-trip like any other. seq only --
+%% unguarded `=` rules have no reactive trigger (see can_pack.expect).
+{modes, [seq]}.
+{checks, [
+  {final_var, "rlo", 16#1234},
+  {final_var, "rhi", 16#BEEF},
+  {final_var, "rbe", 16#CAFE},
+  {final_var, "rw",  16#12345678}
+]}.

@@ -1,0 +1,9 @@
+// Module under test: lib/ain.csp, loaded by {lib, ...} in the .expect.
+// Src ramps 1 per cycle. `slow` reports every 10 counts (deadband); `alarm`
+// has no deadband and fires only when Src leaves the 10..50 band.
+#variable Src = 0
+#Ain slow  Delta=10 DeltaDown=3
+#Ain alarm Upper=50 Lower=10 Hyst=5
+slow.In  = Src
+alarm.In = Src
+Src = Src + 1

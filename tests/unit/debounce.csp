@@ -1,0 +1,10 @@
+// Module under test: lib/debounce.csp, loaded by {lib, ...} in the .expect.
+// A contact that rings every cycle for 30 cycles and then settles high; Out
+// must ignore every bounce and follow only after the settle period.
+#variable B:1 unsigned = 0
+#variable n = 0
+#Debounce d
+d.In = B
+n = n + 1
+B = n % 2 ? n < 30          // ring every cycle
+B = 1     ? n >= 30         // then hold high

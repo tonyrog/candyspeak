@@ -1,7 +1,7 @@
 ---
 title: "CandySpeak Manual"
 author: "Tony Rogvall"
-date: 2026-07-18
+date: 2026-07-27
 geometry: margin=2.5cm
 fontsize: 11pt
 documentclass: article
@@ -47,6 +47,20 @@ Exempel:
 #variable Temperature float = 20.0
 #variable Flag = 0
 ```
+
+Bredden anges i **bitar, 1..32** (32 om den utelämnas); allt annat avvisas, och
+likaså en literal som inte får plats i typen — en felaktig bredd är avsevärt
+dyrare att hitta senare än vid deklarationen.
+
+> **En bredd utan typ är TECKNAD.** `#variable c:4` är ett 4-bitars *tecknat*
+> värde, alltså intervallet `-8..7`, och `c = 15` läses tillbaka som `-1`. Det
+> följer regeln att en typlös variabel är `integer`, och gäller `#field` och
+> `bind` på precis samma sätt. Vill man ha det raka intervallet `0..2^N-1` —
+> flaggor, bitkvantiteter, råa signaler — får man säga det:
+>
+> ```
+> #variable c:4 unsigned = 15      // 15, inte -1
+> ```
 
 ### Konstanter
 
@@ -169,6 +183,10 @@ Speed = 50             // writes into Frame's bits 0..7
 > (`Frame[1]`), medan ett `bind`-intervall anges i **bitar** (`Frame[8..17]`).
 > Direktindexering är för bekväm helbyte-åtkomst; `bind` är för att packa
 > bitfält som är mindre än en byte.
+
+Hur som helst måste intervallet hålla sig **inne i bufferten** och täcka högst
+**32 bitar** — ett bundet fält eller en `Buf[a..b]`-skiva som sträcker sig förbi
+slutet, eller som begär mer än 32 bitar, avvisas vid deklarationen.
 
 ### CAN-ramar
 
@@ -322,9 +340,11 @@ transceiver).
 Se `examples/can_input.csp`, `examples/can_output.csp` och
 `examples/can_pack.csp` för färdiga program.
 
-> **Begränsningar idag.** Bitpositioner över 255 avvisas, så bara de första
-> 32 byten av en 64-bytes FD-ram är adresserbara vid körning. RTR-ramar stöds
-> inte.
+> **Begränsningar idag.** Ett fält får börja på vilken bit som helst i en
+> 64-bytes FD-ram (`0..511`) och vara **1..32 bitar** brett — värdet det ger är
+> en 32-bitars behållare, så en bredare signal måste delas i två fält. En
+> deklaration utanför de gränserna, eller en som sträcker sig förbi ramens slut,
+> avvisas istället för att wrappa. RTR-ramar stöds inte.
 
 ### Packa och packa upp ramar
 
@@ -616,10 +636,10 @@ som inte är aktiva.
 #states A B C
 ```
 
-Två tillstånd finns alltid implicit: **INIT** (som man går in i vid uppstart,
-för engångsinitiering) och **NORMAL** (default körläge). Dina egna tillstånd
-läggs till ovanpå; du kan räkna upp fler när som helst med en till
-`#states`-rad.
+Tre tillstånd finns alltid implicit: **INIT** (som man går in i vid uppstart,
+för engångsinitiering), **NORMAL** (default körläge) och **FAILSAFE** (se
+nedan). Dina egna tillstånd läggs till ovanpå; du kan räkna upp fler när som
+helst med en till `#states`-rad.
 
 Regler knyts till ett tillstånd med ett `#in <state> ... #end`-block:
 
@@ -691,6 +711,21 @@ det. Det är vad som håller FAILSAFE till en ö: bara `#in FAILSAFE` (och block
 uttryckligen listar det) kör där. Vill du köra en global regel i ett speciellt
 tillstånd också, namnge det tillståndet med `#in`.
 
+**FAILSAFE är klibbigt.** Det är det utpekade säkra tillståndet, och när `State`
+väl håller det kan **ingen regel lämna det** — bara en reset gör det. En regel
+som tilldelar något annat ignoreras helt enkelt, så en skakig vaktregel kan inte
+studsa ut enheten ur en säker konfiguration. Tillsammans med tystnadsregeln ovan
+är det vad som håller FAILSAFE till en ö: lösa globala regler slutar köra där,
+och bara `#in FAILSAFE` (plus block som namnger det) har något att säga till om
+över utgångarna.
+
+> Så ser FAILSAFE ut idag, och det är med flit tunt. Den tänkta formen är en
+> `#module FAILSAFE`, kompilerad som en **egen ROM-image** med egna
+> deklarationer, eget `#in INIT` och egen EEPROM-bank — så att en enhet kan bära
+> flera banker, varav en är den säkra, och växlingen blir en rebase istället för
+> en tillståndsövergång. Skriver du din säkerhetslogik som ett självförsörjande
+> block redan nu flyttar den över rent.
+
 **States i moduler.** En modul kan deklarera sina egna lokala tillstånd. Varje
 instans bär sitt eget `State`, så instanserna stegar genom maskinen oberoende
 av varandra:
@@ -734,7 +769,7 @@ skrivas av en regel.
 | `.port` | digital / analog | portnummer |
 | `.dir` | digital / analog / buffert | riktning (in/out) |
 | `.pwm` | analog | PWM-flagga |
-| `.endian` | bundet fält | big/little endian |
+| `.endian` | bundet fält / `#field` | byteordning (`0` native, `1` little, `2` big) |
 | `.pullup` | digital | pull-up på |
 | `.pulldown` | digital | pull-down på |
 | `.period` | timer | timerperiod i ms |
@@ -882,7 +917,7 @@ make
 | `-C` | Visa kompilerad C-kod |
 | `-c N` | Max antal cykler |
 | `-T MS` | Max körtid i millisekunder |
-| `-r[=0\|1]` | Reaktivt läge (default av) |
+| `-r` | Reaktivt läge (av om den inte anges) |
 | `-Q` | Spåra variabelvärden |
 | `-P` | Debug parser |
 | `-R` | Debug resultat |
@@ -892,7 +927,8 @@ make
 | `-s <fil>` | Skriv en tillståndsspårning per cykel (Erlang-format) till fil |
 | `-p <fil>` | Skriv parser-debug till fil |
 | `-O <fil>` | Skriv en objektdump till fil |
-| `-e <fil>` | EEPROM-fil (persistent tillstånd) att använda |
+| `-e <fil>` | EEPROM-fil (persistent tillstånd) att använda (default `eeprom.db`) |
+| `--no-eeprom` | Lägg inte på de sparade EEPROM-patcharna vid boot |
 | `-I <fil>` | Mata ingångar från fil (realtid, cykelstämplade rader) |
 | `-F <fil>` | Mata ingångar med **simulerad tid** (se nedan) |
 | `-b` | Starta pausad; inspektera, sedan `/resume` (implicerar `-i`) |
@@ -916,6 +952,16 @@ siffror som betyder något innan man flashat något:
 `--board` fyller i `-M`, `-U` och `-E` från siffror uppmätta på riktiga
 firmware-byggen (generera om dem med `make boards`). `/memory` visar sedan hur
 mycket av den brädans RAM programmet faktiskt skulle ta.
+
+### EEPROM läses vid uppstart
+
+Startad **utan programfil** beter sig `./csp` som ett kort som kommer ur reset:
+det laddar det inbakade ROM-programmet och lägger sedan på det som `/save`
+skrev till EEPROM-filen (`eeprom.db` om inte `-e` säger annat), så de
+deklarationer, regler och disables du sparade förra gången är tillbaka. Ger du
+det en programfil hoppas överlagringen över — att namnge en fil betyder "kör
+*den här*". `--no-eeprom` hoppar över den också, för en medvetet ren boot eller
+ett upprepbart test.
 
 ### Exempel
 
@@ -996,7 +1042,7 @@ evalueringsordningen spelar ingen roll.
 
 ### Reaktivt läge (`-r`)
 
-**Default: AV** (`-r0`)
+**Default: AV** — ange `-r` för att slå på det.
 
 I reaktivt läge evalueras bara regler vars ingångar har ändrats. Detta är
 effektivare när:
@@ -1024,8 +1070,8 @@ vinner den som står sist — vilket är det som gör det förutsägbart att pat
 körande system.
 
 ```bash
-./csp -r1 program.csp    # reactive mode
-./csp -r0 program.csp    # evaluate all rules (default)
+./csp -r program.csp     # reaktivt läge
+./csp program.csp        # evaluera alla regler (default)
 ```
 
 ## Api
@@ -1514,16 +1560,16 @@ pandoc doc/manual_sv.md -o doc/manual_sv.pdf \
 
 ## Deklarationer
 ```
-#variable <name>[:<bits>] [type] [= value]
-#variable <name>:<bits> [big] bind <buffer>[<a>..<b>]   // bit-field view
+#variable <name>[:<bits>] [type] [= value]              // bits 1..32, typlös = tecknad
+#variable <name>:<bits> [big|little] bind <buffer>[<a>..<b>]   // bit-field view
 #digital <name> [in|out|inout] [pullup|pulldown] [<port>:]<pin>
 #analog <name>[:<resolution>] [in|out] [pwm] [<port>:]<pin>
 #timer <name> <period_ms> [= 1]
 #constant <name> = <value>
-#buffer <name>:<bits> [type]            // shared storage / frame layout
+#buffer <name>:<bytes> [type]           // shared storage (size in BYTES)
 #buffer <name>:<bytes> [in|out] can <id>  // CAN frame (size in BYTES)
-#field <name>:<bits> [type] <frame>[<a>..<b>]  // field of a frame
-#states <name> ...                      // enumerate states (INIT/NORMAL implicit)
+#field <name>:<bits> [type] [big|little] <frame>[<a>..<b>]  // field of a frame
+#states <name> ...                      // INIT/NORMAL/FAILSAFE implicit
 #module <name> ... #end
 ```
 
@@ -1595,11 +1641,15 @@ falling(x)    // 1 -> 0
 
 ## States
 ```
-#states A B C                 // INIT and NORMAL always exist implicitly
+#states A B C                 // INIT, NORMAL och FAILSAFE finns alltid
 
 #in A                         // rules active only while State == A
     ...
     State = B ? cond          // transition
+#end
+
+#in FAILSAFE                  // den säkra ön: dit en gång, aldrig därifrån
+    ...                       // (bara en reset släpper den)
 #end
 ```
 
