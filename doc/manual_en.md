@@ -860,12 +860,13 @@ storage as its buffer, so it is correct immediately.
 | `falling(x)` | True on 1→0 transition in digital input |
 | `cycle()` | Current cycle number |
 | `tick()` | Current time in milliseconds |
-| `abs(x)` | Absolute value (integer) |
-| `fabs(x)` | Absolute value (float) |
+| `abs(x)` | Absolute value (integer or float, follows the argument) |
 | `sign(x)` | Sign of x: -1, 0 or 1 |
-| `min(a,b)` | Minimum value |
-| `max(a,b)` | Maximum value |
-| `clip(x,lo,hi)` | Clamp x to the range lo..hi |
+| `min(a,b)` | Minimum value (integer or float, follows the arguments) |
+| `max(a,b)` | Maximum value (integer or float, follows the arguments) |
+| `clip(x,lo,hi)` | Clamp x to the range lo..hi (integer or float) |
+| `trunc(x)` | Float to integer, toward zero |
+| `round(x)` | Float to integer, nearest (halves away from zero) |
 | `print(x)` | Print value (up to 4 arguments) |
 | `println(x)` | Print with newline (0 to 4 arguments) |
 | `latch(b)` | Hold outputs (1) or release (0) |

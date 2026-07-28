@@ -189,7 +189,6 @@ NOP NOP
 min min
 max max
 abs abs
-fabs fabs
 sign sign
 clip clip
 timeout timeout
@@ -252,3 +251,7 @@ name name
 # /latch argument, and the value it prints back in /state
 on on
 off off
+
+# explicit float -> int narrowing
+trunc trunc
+round round

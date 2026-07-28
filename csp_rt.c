@@ -958,11 +958,40 @@ void print_rentry(csp_rt_t* st, char* name, rentry_t* rp)
 #endif
 
 // Built-in function implementations - args are pre-evaluated
+// fvalue_t is a signed scalar in both builds -- int32_t for Q16.16, float
+// otherwise -- and the fixpoint encoding is monotonic, so a plain comparison
+// orders values correctly either way. No op_ wrapper needed for min/max/clip.
+
+// float -> int, toward zero, and to the nearest with halves away from zero.
+// Both builds must agree, so the fixpoint side goes through fix_trunc/fix_round
+// in csp_fixpoint.h -- the same pair FIX_TO_INT and op_CVTFI now use, so an
+// explicit trunc() and an implicit narrowing can no longer disagree.
+static ivalue_t fv_trunc(fvalue_t v)
+{
+#if FVALUE_IS_FIXPOINT
+    return (ivalue_t) fix_trunc(v);
+#else
+    return (ivalue_t)v;                  // a C cast already truncates
+#endif
+}
+
+static ivalue_t fv_round(fvalue_t v)
+{
+#if FVALUE_IS_FIXPOINT
+    return (ivalue_t) fix_round(v);
+#else
+    return (v < 0) ? -(ivalue_t)((fvalue_t)0.5 - v) : (ivalue_t)(v + (fvalue_t)0.5);
+#endif
+}
+
 static value_t fn_min(csp_rt_t* st,uint16_t type,value_t* args,uint8_t nargs)
 {
     value_t ret;
     (void)st; (void)nargs;
-    ret.i = imin(args[0].i, args[1].i);
+    if ((type & 0xf) == V_FLOAT)
+	ret.f = (args[0].f < args[1].f) ? args[0].f : args[1].f;
+    else
+	ret.i = imin(args[0].i, args[1].i);
     return ret;
 }
 
@@ -970,24 +999,44 @@ static value_t fn_max(csp_rt_t* st,uint16_t type,value_t* args,uint8_t nargs)
 {
     value_t ret;
     (void)st; (void)nargs;
-    ret.i = imax(args[0].i, args[1].i);
+    if ((type & 0xf) == V_FLOAT)
+	ret.f = (args[0].f > args[1].f) ? args[0].f : args[1].f;
+    else
+	ret.i = imax(args[0].i, args[1].i);
     return ret;
 }
 
+static value_t fn_trunc(csp_rt_t* st,uint16_t type,value_t* args,uint8_t nargs)
+{
+    value_t ret;
+    (void)st; (void)nargs;
+    // An integer argument is already whole -- pass it through so generic code
+    // does not have to know which it got.
+    ret.i = ((type & 0xf) == V_FLOAT) ? fv_trunc(args[0].f) : args[0].i;
+    return ret;
+}
+
+static value_t fn_round(csp_rt_t* st,uint16_t type,value_t* args,uint8_t nargs)
+{
+    value_t ret;
+    (void)st; (void)nargs;
+    ret.i = ((type & 0xf) == V_FLOAT) ? fv_round(args[0].f) : args[0].i;
+    return ret;
+}
+
+// V_NUMBER argument: no coercion happens on the way in, so the argument still
+// carries its own representation and `type` (the call's argcode) says which.
+// Dispatch on it the way fn_sign does.
 static value_t fn_abs(csp_rt_t* st,uint16_t type,value_t* args,uint8_t nargs)
 {
     value_t ret;
     (void)st; (void)nargs;
-    ret.i = iabs(args[0].i);
-    return ret;
-}
-
-static value_t fn_fabs(csp_rt_t* st,uint16_t type,value_t* args,uint8_t nargs)
-{
-    value_t ret;
-    fvalue_t arg = args[0].f;
-    (void)st; (void)nargs;
-    ret.f = (arg < 0) ? op_FNEG(arg) : arg;
+    if ((type & 0xf) == V_FLOAT) {
+	fvalue_t arg = args[0].f;
+	ret.f = (arg < 0) ? op_FNEG(arg) : arg;
+    }
+    else
+	ret.i = iabs(args[0].i);
     return ret;
 }
 
@@ -995,7 +1044,12 @@ static value_t fn_clip(csp_rt_t* st,uint16_t type,value_t* args, uint8_t nargs)
 {
     value_t ret;
     (void)st; (void)nargs;
-    ret.i = iclip(args[0].i, args[1].i, args[2].i);
+    if ((type & 0xf) == V_FLOAT) {
+	fvalue_t x = args[0].f, lo = args[1].f, hi = args[2].f;
+	ret.f = (x < lo) ? lo : ((x > hi) ? hi : x);
+    }
+    else
+	ret.i = iclip(args[0].i, args[1].i, args[2].i);
     return ret;
 }
 
@@ -1150,12 +1204,22 @@ static value_t fn_latch(csp_rt_t* st,uint16_t type,value_t* args, uint8_t nargs)
 // { name, namelen, nargs, rtype, argtypes, fn }
 const csp_func_t csp_builtin_funcs[] RODATA = {
     // match functions
-    CSP_FUNC_ENT(s_min,     2, 1, V_INTEGER, MAKE_TYPE2(V_INTEGER,V_INTEGER), fn_min ),
-    CSP_FUNC_ENT(s_max,     2, 1, V_INTEGER, MAKE_TYPE2(V_INTEGER,V_INTEGER), fn_max ),
-    CSP_FUNC_ENT(s_abs,     1, 1, V_INTEGER, MAKE_TYPE1(V_INTEGER), fn_abs ),
-    CSP_FUNC_ENT(s_fabs,    1, 1, V_FLOAT,   MAKE_TYPE1(V_FLOAT),   fn_fabs ),
+    // V_NUMBER in and out -- see fn_abs. A float anywhere makes the whole call
+    // float, and process_fcall promotes the other arguments to match so the
+    // callee never compares an integer against a fixpoint word.
+    CSP_FUNC_ENT(s_min,     2, 1, V_NUMBER,  MAKE_TYPE2(V_NUMBER,V_NUMBER), fn_min ),
+    CSP_FUNC_ENT(s_max,     2, 1, V_NUMBER,  MAKE_TYPE2(V_NUMBER,V_NUMBER), fn_max ),
+    // V_NUMBER in and V_NUMBER out: abs(int) is an int, abs(float) a float.
+    // One entry, no overload -- the function-index field is 5 bits and the
+    // call instruction is exactly 32, so entries are not cheap.
+    CSP_FUNC_ENT(s_abs,     1, 1, V_NUMBER,  MAKE_TYPE1(V_NUMBER),  fn_abs ),
     CSP_FUNC_ENT(s_sign,    1, 1, V_INTEGER, MAKE_TYPE1(V_NUMBER),  fn_sign ),
-    CSP_FUNC_ENT(s_clip,    3, 1, V_INTEGER, MAKE_TYPE3(V_INTEGER,V_INTEGER,V_INTEGER), fn_clip),
+    CSP_FUNC_ENT(s_clip,    3, 1, V_NUMBER,  MAKE_TYPE3(V_NUMBER,V_NUMBER,V_NUMBER), fn_clip),
+    // Explicit narrowing. Needed once an implicit float->int in an argument
+    // position stops being silently accepted -- and they differ: trunc goes
+    // toward zero, round to the nearest with halves away from zero.
+    CSP_FUNC_ENT(s_trunc,   1, 1, V_INTEGER, MAKE_TYPE1(V_NUMBER),  fn_trunc),
+    CSP_FUNC_ENT(s_round,   1, 1, V_INTEGER, MAKE_TYPE1(V_NUMBER),  fn_round),
     // timer functions
     CSP_FUNC_ENT(s_timeout, 1, 0, V_INTEGER, MAKE_TYPE1(V_TIMER), fn_timeout),
     CSP_FUNC_ENT(s_elapsed,  1, 0, V_INTEGER, MAKE_TYPE1(V_TIMER), fn_elapsed),
@@ -1225,6 +1289,28 @@ static uint8_t func_flags(const csp_func_t* fn, int i, int rom)
 static uint8_t func_namelen(const csp_func_t* fn,int i, int rom)
 {
     return rd8(&fn[i].namelen, rom);
+}
+
+static uint8_t func_rtype(const csp_func_t* fn, int i, int rom)
+{
+    return rd8(&fn[i].rtype, rom);
+}
+
+// What a call actually returns. A fixed rtype answers for itself; V_NUMBER
+// means "the same kind the arguments were", so a single float argument makes
+// the whole call float and everything else stays integer. argcode holds the
+// ORIGINAL argument types, 4 bits each -- V_NUMBER parameters are not coerced
+// on the way in, which is exactly what makes this readable here.
+static vtype_t call_rtype(uint8_t rtype, uint16_t argcode, int arity)
+{
+    int j;
+    if (rtype != V_NUMBER)
+	return (vtype_t) rtype;
+    for (j = 0; j < arity; j++) {
+	if (((argcode >> 4*j) & 0xf) == V_FLOAT)
+	    return V_FLOAT;
+    }
+    return V_INTEGER;
 }
 
 static const char* func_name(const csp_func_t* fn, int i, int rom)
@@ -4158,6 +4244,7 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
     uint8_t argimm = 0;
     // int func_res;
     int is_user;
+    int numflt = 0;                     // any V_NUMBER argument is float
     int func_idx;
     int from;                           // func table in ROM?
     rentry_t* rarg = &rstack[ep-arity]; // first arg
@@ -4168,12 +4255,26 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
 			       rarg, &is_user, &func_idx)) == NULL)
 	return -1;
     from = is_user ? st->ufuncs_rom : BUILTIN_ROM;
-    // FIXME: handle, changed(x), timeout(t) whith ops
+    // FIXME: handle, changed(x), timeout(t) with ops
     n = arity;
+    // A V_NUMBER parameter is NOT coerced -- the argument keeps its own
+    // representation and avt tells the callee which it got. With more than one
+    // such parameter they must still agree, or fn_min would compare a plain
+    // integer against a fixpoint word. So settle the common type first: one
+    // float argument makes every V_NUMBER position float.
+    for (j = 0; j < n; j++) {
+	if ((fn_type(func, j, from) == V_NUMBER) && (rarg[j].vt == V_FLOAT)) {
+	    numflt = 1;
+	    break;
+	}
+    }
     for (j = 0; j < n; j++) {
 	rentry_t arg = rarg[j];
 	vtype_t argvt = arg.vt;
 	vtype_t argtype = fn_type(func, j, from); // read RO data!
+
+	if ((argtype == V_NUMBER) && numflt)
+	    argvt = V_FLOAT;              // what the callee will actually see
 
 	argcode |= (argvt << 4*j);
 	argimm  |= (arg.I << j);
@@ -4183,7 +4284,9 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
 	case V_ANY:
 	    break;  // OK
 	case V_NUMBER:
-	    if (!((argvt == V_INTEGER) || (argvt == V_FLOAT)))
+	    if (!((arg.vt == V_INTEGER) || (arg.vt == V_FLOAT)))
+		goto type_mismatch;
+	    if (numflt && (arg.vt == V_INTEGER) && !coerce_to_float(st, &arg))
 		goto type_mismatch;
 	    break;
 	case V_INTEGER:
@@ -4216,6 +4319,10 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
 		goto type_mismatch;
 	    break;
 	}
+	// Hand the COERCED value back to the stack entry: the constant fold
+	// below reads rarg[j].val, so without this an int promoted to float
+	// would be folded as a raw integer bit pattern.
+	rarg[j].val = arg.val;
 	if (csp_load(st, &arg) < 0) {
 	    csp_set_error(st, ERR_INTERNAL_ERROR);
 	    return -1;
@@ -4256,7 +4363,9 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
     dst = alloc_reg(st);
     if (!asm_CALL(st, dst, func_idx, is_user, argcode))
 	return -1;
-    return push_reg(rstack, ep, dst, func->rtype, dval, imm);
+    return push_reg(rstack, ep, dst,
+		    call_rtype(func_rtype(func, 0, from), argcode, arity),
+		    dval, imm);
 
 type_mismatch:
     if (csp_set_error(st, ERR_FUNCTION_ARGUMENT_TYPE_MISMATCH)) {

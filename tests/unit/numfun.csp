@@ -1,0 +1,34 @@
+// min/max/clip/abs take V_NUMBER and keep the argument's own kind, so the
+// integer and the float path have to be checked side by side. clip on floats
+// is the one that used to return 0 for every fractional value.
+#variable f float = 0.0
+#variable g float = 0.0
+#variable i = 2
+#variable ci float = 0.0
+#variable mn float = 0.0
+#variable mx float = 0.0
+#variable ab float = 0.0
+#variable mix float = 0.0
+#variable ii = 0
+#variable ai = 0
+#variable tr = 0
+#variable rn = 0
+f = 0.0 - 2.5
+g = 1.25
+ci  = clip(f, 0.0 - 1.0, 1.0)   // -1.0, not 0
+mn  = min(f, g)                 // -2.5
+mx  = max(f, g)                 // 1.25
+ab  = abs(f)                    // 2.5
+mix = min(i, g)                 // int promoted -> 1.25
+ii  = min(3, 7)                 // integer path intact
+ai  = abs(0 - 5)                // 5
+tr  = trunc(f)                  // -2, toward zero
+rn  = round(f)                  // -3, halves away from zero
+
+// Implicit float -> int must agree with the explicit trunc(): FIX_TO_INT goes
+// through fix_trunc now, so the fixpoint build no longer floors where the
+// float build truncates.
+#variable ni = 0
+#variable pi = 0
+ni = f                          // -2.5 -> -2, toward zero (not -3)
+pi = g                          //  1.25 ->  1

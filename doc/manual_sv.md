@@ -865,12 +865,13 @@ variabel är samma lagring som sin buffert och är därför korrekt omedelbart.
 | `falling(x)` | Sant vid 1→0 övergång på digital ingång |
 | `cycle()` | Nuvarande cykelnummer |
 | `tick()` | Nuvarande tid i millisekunder |
-| `abs(x)` | Absolutvärde (heltal) |
-| `fabs(x)` | Absolutvärde (flyttal) |
+| `abs(x)` | Absolutvärde (heltal eller flyttal, följer argumentet) |
 | `sign(x)` | Tecknet på x: -1, 0 eller 1 |
-| `min(a,b)` | Minsta värdet |
-| `max(a,b)` | Största värdet |
-| `clip(x,lo,hi)` | Klam x till intervallet lo..hi |
+| `min(a,b)` | Minsta värdet (heltal eller flyttal, följer argumenten) |
+| `max(a,b)` | Största värdet (heltal eller flyttal, följer argumenten) |
+| `clip(x,lo,hi)` | Klam x till intervallet lo..hi (heltal eller flyttal) |
+| `trunc(x)` | Flyttal till heltal, mot noll |
+| `round(x)` | Flyttal till heltal, närmaste (halva bort från noll) |
 | `print(x)` | Skriv ut värde (upp till 4 argument) |
 | `println(x)` | Skriv ut med radbrytning (0 till 4 argument) |
 | `latch(b)` | Håll utgångar (1) eller släpp igenom (0) |

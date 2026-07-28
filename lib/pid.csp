@@ -52,7 +52,7 @@ Tk = 1 ? timeout(Tk)
 // a 100x amplifier that overshoots on the first tick.
 sp = sp + rate*dt ? timeout(Tk) && target - sp > rate*dt
 sp = sp - rate*dt ? timeout(Tk) && sp - target > rate*dt
-sp = target       ? timeout(Tk) && fabs(target - sp) <= rate*dt
+sp = target       ? timeout(Tk) && abs(target - sp) <= rate*dt
 
 err = sp - feed ? timeout(Tk)
 

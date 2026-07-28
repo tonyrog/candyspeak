@@ -12,5 +12,5 @@ F = G - H,  S=2  ? S==1
 F = G * H,  S=3  ? S==2
 F = G / H,  S=4  ? S==3
 F = -G,     S=5  ? S==4
-F = fabs(G), S=6 ? S==5
+F = abs(G), S=6 ? S==5
 A = sign(G), S=7 ? S==6

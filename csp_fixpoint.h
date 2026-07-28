@@ -17,11 +17,35 @@ typedef int32_t fixpoint_t;
 // Convert integer to fixed-point
 #define FIX_FROM_INT(i)   ((fixpoint_t)(i) << FIX_SHIFT)
 
+// Fixed-point to integer, toward zero -- what "truncate" has always claimed to
+// mean here. A bare `>> FIX_SHIFT` is an arithmetic shift and therefore FLOOR,
+// which sends -2.5 to -3 while a C cast (the float build's conversion) sends it
+// to -2. Working from the magnitude makes the two builds agree, and negating
+// through uint32_t keeps INT32_MIN out of undefined behaviour.
+static inline int32_t fix_trunc(fixpoint_t f)
+{
+    int neg = (f < 0);
+    uint32_t a = neg ? -(uint32_t)f : (uint32_t)f;
+    int32_t  r = (int32_t)(a >> FIX_SHIFT);
+    return neg ? -r : r;
+}
+
+// Fixed-point to integer, nearest, halves rounded AWAY from zero -- what C's
+// round() does. Adding half before an arithmetic shift would instead round
+// halves toward +infinity, so -2.5 and 2.5 would not be mirror images.
+static inline int32_t fix_round(fixpoint_t f)
+{
+    int neg = (f < 0);
+    uint32_t a = neg ? -(uint32_t)f : (uint32_t)f;
+    int32_t  r = (int32_t)((a + (FIX_SCALE/2)) >> FIX_SHIFT);
+    return neg ? -r : r;
+}
+
 // Convert fixed-point to integer (truncate)
-#define FIX_TO_INT(f)     ((int32_t)(f) >> FIX_SHIFT)
+#define FIX_TO_INT(f)     fix_trunc(f)
 
 // Convert fixed-point to integer (round)
-#define FIX_TO_INT_RND(f) (((f) + (FIX_SCALE/2)) >> FIX_SHIFT)
+#define FIX_TO_INT_RND(f) fix_round(f)
 
 // Convert float literal to fixed-point at compile time
 #define FIX_CONST(x)      ((fixpoint_t)((x) * FIX_SCALE + ((x) >= 0 ? 0.5 : -0.5)))

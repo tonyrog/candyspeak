@@ -373,8 +373,6 @@ extern rochar s_max[4] RODATA;
 #define ros_max ((rostring_t) s_max)
 extern rochar s_abs[4] RODATA;
 #define ros_abs ((rostring_t) s_abs)
-extern rochar s_fabs[5] RODATA;
-#define ros_fabs ((rostring_t) s_fabs)
 extern rochar s_sign[5] RODATA;
 #define ros_sign ((rostring_t) s_sign)
 extern rochar s_clip[5] RODATA;
@@ -489,5 +487,9 @@ extern rochar s_on[3] RODATA;
 #define ros_on ((rostring_t) s_on)
 extern rochar s_off[4] RODATA;
 #define ros_off ((rostring_t) s_off)
+extern rochar s_trunc[6] RODATA;
+#define ros_trunc ((rostring_t) s_trunc)
+extern rochar s_round[6] RODATA;
+#define ros_round ((rostring_t) s_round)
 
 #endif

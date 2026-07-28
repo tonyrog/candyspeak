@@ -15,14 +15,19 @@ extern const op_info_t op_info[];
 static void fprint_fvalue(FILE* f, fvalue_t v)
 {
 #if FVALUE_IS_FIXPOINT
-    int32_t intpart = FIX_TO_INT(v);
-    uint32_t fracpart = (v >= 0 ? v : -v) & FIX_MASK;
+    // Take BOTH halves from the magnitude and put the sign back by hand.
+    // FIX_TO_INT is an arithmetic shift, so for a negative value it is FLOOR,
+    // not truncation -- pairing that integer part with a fraction taken from
+    // the magnitude printed -2.5 as "-3.500000", a whole unit out. Negating
+    // through uint32_t also keeps INT32_MIN out of undefined behaviour.
+    // Same shape as csp_print_fixpoint, which had it right all along.
+    int neg = (v < 0);
+    uint32_t absv = neg ? -(uint32_t)v : (uint32_t)v;
+    uint32_t intpart = absv >> FIX_SHIFT;
+    uint32_t fracpart = absv & FIX_MASK;
     // Use 64-bit to avoid overflow: fracpart * 1000000 can exceed 32 bits
     fracpart = (uint32_t)(((uint64_t)fracpart * 1000000) >> FIX_SHIFT);
-    if (v < 0 && intpart == 0)
-	fprintf(f, "-0.%06u", fracpart);
-    else
-	fprintf(f, "%d.%06u", intpart, fracpart);
+    fprintf(f, "%s%u.%06u", neg ? "-" : "", intpart, fracpart);
 #else
     fprintf(f, "%f", v);
 #endif
