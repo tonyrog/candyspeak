@@ -1,0 +1,13 @@
+// Module under test: lib/filter.csp, loaded by {lib, ...} in the .expect.
+// A steady 10.0 with one single-sample spike of 99.0. Med must never show the
+// spike -- one bad sample out of three can never be the middle one. `s` adds
+// smoothing on top and must converge on the same value.
+#variable n = 0
+#variable Src float = 0.0
+#Filter f T.period=5
+#Filter s T.period=5 Alpha=0.5
+n = n + 1
+Src = 10.0 ? n != 5
+Src = 99.0 ? n == 5
+f.In = Src
+s.In = Src

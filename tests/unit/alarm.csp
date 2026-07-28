@@ -1,0 +1,18 @@
+// Module under test: lib/alarm.csp, loaded by {lib, ...} in the .expect.
+// Two instances on two different signals:
+//   a  a condition that stands for a long time and then goes away
+//   g  a two-cycle glitch, which must be ignored completely
+#variable n = 0
+#variable Cond:1 unsigned = 0
+#variable Blip:1 unsigned = 0
+#Alarm a Tk.period=5 OnDelay=20 OffDelay=30 Repeat=50
+#Alarm g Tk.period=5 OnDelay=20 OffDelay=30 Repeat=50
+n = n + 1
+Cond = 1 ? n >= 5 && n < 25
+Cond = 0 ? n < 5
+Cond = 0 ? n >= 25
+Blip = 1 ? n >= 5 && n < 7
+Blip = 0 ? n < 5
+Blip = 0 ? n >= 7
+a.In = Cond
+g.In = Blip

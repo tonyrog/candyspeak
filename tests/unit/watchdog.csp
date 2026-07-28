@@ -1,0 +1,10 @@
+// Module under test: lib/watchdog.csp, loaded by {lib, ...} in the .expect.
+// Src ticks along for the first ten cycles and then goes quiet for good. Lost
+// must stay down while the signal is alive and come up one deadline after the
+// last sign of life -- and Age must stop at the deadline rather than run on.
+#variable Src = 0
+#variable n = 0
+#Watchdog wt Tk.period=5 Deadline=30
+n = n + 1
+Src = Src + 1 ? n < 10
+wt.In = Src

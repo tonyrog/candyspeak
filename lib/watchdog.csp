@@ -1,0 +1,56 @@
+// Watchdog -- notice when a signal stops arriving.
+//
+// Silence is the one fault that never announces itself: a sensor that has
+// stopped answering looks exactly like a sensor reading a steady value, and a
+// CAN node that has fallen off the bus leaves its last frame sitting in the
+// buffer forever. The watchdog turns that absence into a signal you can act on.
+//
+//   #Watchdog wt  Deadline=2000
+//   wt.In = Temp                    // any change counts as a sign of life
+//   Heater = 0 ? wt.Lost            // fail safe while we are blind
+//
+// The clock runs from boot, so a source that never says anything at all is
+// caught the same way as one that goes quiet later -- there is no grace period
+// hiding a device that was dead from the start.
+//
+// IF YOUR EVENT CARRIES NO VALUE, count it. A frame that arrives with an
+// unchanged payload is still proof of life, but `In` would not move and the
+// watchdog would trip on a working link:
+//
+//   wt.In = wt.In + 1 ? F.rx
+//
+// The counter wraps eventually and that is fine -- only the change is read,
+// never the value.
+//
+// WHY A TICK AND A COUNTER rather than one timer held restarted: a running
+// timer cannot be restarted. `T = 1` only arms a timer that has stopped, so
+// the familiar "keep kicking it" idiom silently does nothing here. Tk free-runs
+// instead and Age accumulates milliseconds, which costs one variable and works.
+// Tk.period is therefore the resolution: Lost can be up to one tick late.
+//
+#module Watchdog
+#timer    Tk 100 = 1                  // resolution in ms -- also the tick
+#variable In              in  = 0     // the signal being watched
+#variable Lost:1 unsigned out = 0     // 1 = nothing heard within the deadline
+#variable Deadline            = 1000  // ms of silence that counts as a fault
+#variable Age                 = 0     // ms since the last sign of life
+#variable Prev                = 0     // the value we last saw
+
+Tk = 1 ? timeout(Tk)
+
+// Age stops at the deadline instead of counting forever: nothing above it means
+// anything different, and a device left dead for a month would otherwise walk
+// its way to integer overflow and report itself healthy again.
+Age = Age + Tk.period ? timeout(Tk)
+Age = Deadline ? timeout(Tk) && Age >= Deadline
+
+// A sign of life resets the clock. This rule comes last so it wins the cycle
+// where a signal returns exactly as the deadline runs out.
+Age = 0, Prev = In ? In != Prev
+
+// `In == Prev` is "nothing arrived this cycle". Without it, a signal returning
+// after the deadline had already passed would raise Lost for one cycle on the
+// very cycle it came back, because Age is not reset until the commit.
+Lost = 1 ? Age >= Deadline && In == Prev
+Lost = 0 ? Age <  Deadline
+#end

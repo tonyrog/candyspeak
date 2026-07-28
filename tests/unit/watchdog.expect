@@ -1,0 +1,13 @@
+%% Age counts Tk.period per tick and a timer fires at most once per cycle, so
+%% the counters advance in step with the cycle number and the check points are
+%% not at the mercy of the wall clock. seq only -- `n = n + 1` is unguarded and
+%% so has no reactive trigger (see can_pack.expect for the rationale).
+{modes, [seq]}.
+{cycles, 26}.
+{lib, ["lib/watchdog.csp"]}.
+{checks, [
+  {object_var, 8, "Watchdog.wt", "wt.Lost", 0},
+  {object_var, 8, "Watchdog.wt", "wt.Age", 0},
+  {final_object_var, "Watchdog.wt", "wt.Lost", 1},
+  {final_object_var, "Watchdog.wt", "wt.Age", 30}
+]}.

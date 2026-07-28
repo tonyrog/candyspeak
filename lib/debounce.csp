@@ -4,24 +4,44 @@
 // and a rule that reads the pin directly sees every one of those edges. This
 // makes the signal usable:
 //
-//   #Debounce btn  T.period=20
+//   #Debounce btn  Settle=20
 //   btn.In = !Button
 //   Led = btn.Out
 //
-// The settle time is the timer's period, so it is set with the `.part` form
-// at instantiation -- and it stays patchable in the field, which is what you
-// want when a switch turns out to be worse than the datasheet claimed.
+// Settle is in milliseconds and is an ordinary variable, so it stays patchable
+// in the field -- which is what you want when a switch turns out to be worse
+// than the datasheet claimed. It is counted on Tk, so Tk.period is the
+// resolution and the accepted value can be up to one tick late.
+//
+// WHY A TICK AND A COUNTER rather than one timer held restarted: a running
+// timer cannot be restarted. `T = 1` only arms a timer that has stopped, so
+// "keep pushing the deadline away while the contact rings" cannot be written
+// that way -- the timer runs its full period regardless and then samples
+// whatever the input happens to read at that instant. That is a weaker filter
+// (it is the manual's version), and if the ringing period lines up with the
+// timer it can sample the same wrong edge every time. Counting milliseconds of
+// stillness has no such phase to lock on to.
 //
 #module Debounce
-#timer    T 50                    // settle time in ms; override with T.period=
-#variable In:1   unsigned in  = 0 // raw, bouncing
-#variable Out:1  unsigned out = 0 // settled value
-#variable Prev:1 unsigned     = 0 // the value we last accepted
+#timer    Tk 10 = 1                 // resolution in ms -- also the tick
+#variable In:1   unsigned in  = 0   // raw, bouncing
+#variable Out:1  unsigned out = 0   // settled value
+#variable Settle              = 50  // ms the input must hold still
+#variable Hold                = 0   // ms In has kept its present value
+#variable Was:1  unsigned     = 0   // In as of its last change
 
-// Hold the settle timer restarted for as long as the raw signal disagrees
-// with what we have accepted. It can only run out once the input has stopped
-// moving for a whole period, so every extra bounce pushes the decision
-// further away and a ringing contact simply never gets a verdict.
-T = 1 ? In != Prev
-Prev = In, Out = In ? timeout(T)
+Tk = 1 ? timeout(Tk)
+
+// Hold stops at Settle: nothing above it means anything different, and a
+// button left alone for a month would otherwise reach integer overflow and
+// come back around looking like a signal that had just moved.
+Hold = Hold + Tk.period ? timeout(Tk)
+Hold = Settle ? timeout(Tk) && Hold >= Settle
+Hold = 0, Was = In ? In != Was
+
+// `In == Was` is what makes the settle time real. On the cycle In moves, the
+// reset above has not been committed yet, so Hold still holds the age of the
+// PREVIOUS value -- which is normally well past Settle. Accepting on that would
+// take every bounce edge immediately and the whole module would be decoration.
+Out = In ? In == Was && Hold >= Settle
 #end

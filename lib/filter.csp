@@ -1,0 +1,56 @@
+// Filter -- median-of-three spike rejection, then optional smoothing.
+//
+// An ADC reading picks up occasional single-sample garbage: a switching load,
+// a bad connector, a converter still settling. An average spreads that garbage
+// over the whole window; a median throws it away entirely, because one wrong
+// sample out of three can never be the middle one. That makes it the right
+// first stage in front of a controller, where a single spike differentiates
+// into a large and completely fictional D term.
+//
+//   #Filter f  T.period=10 Alpha=0.2
+//   f.In  <- Ain0
+//   p0.feed = f.Out
+//
+// TWO OUTPUTS, one tick apart. `Med` is the spike-free sample as of this tick.
+// `Out` adds a first-order lag on top of it and is therefore one tick behind.
+// Read `Med` when you cannot afford the delay, `Out` when noise matters more
+// than phase. With the default `Alpha = 1.0` there is no smoothing at all and
+// `Out` is simply `Med`, one tick later.
+//
+// ALPHA is the weight given to each new sample: small is smooth and slow,
+// 1.0 is off. The time constant is roughly T/Alpha, so T=10 Alpha=0.2 settles
+// in about 50 ms. In the fixpoint build it never settles all the way: once the
+// remaining difference is small enough that Alpha times it rounds to zero, Out
+// stops moving an LSB or two short of Med. Compare with a tolerance, or use
+// Alpha = 1.0 where the last bit has to be exact.
+//
+// THE CLOCK. Every rule is gated on the module's timer so the filter has a
+// real sample rate rather than "however fast the program happens to loop".
+// Alpha means nothing without it -- ungated, the smoothing constant would
+// change whenever the program grew.
+//
+#module Filter
+#timer    T 10 = 1                // sample period in ms
+#variable In    float in  = 0.0   // raw sample
+#variable Out   float out = 0.0   // smoothed, one tick behind Med
+#variable Med   float     = 0.0   // median of the three most recent samples
+#variable Alpha float     = 1.0   // weight of a new sample; 1.0 = smoothing off
+#variable Prev  float     = 0.0   // sample before this one
+#variable Prev2 float     = 0.0   // and the one before that
+
+T = 1 ? timeout(T)
+
+// Median of three without a branch: the middle value is the largest of the two
+// smallest. min/max take either type, so this works in both the float and the
+// fixpoint build.
+Med = max(min(Prev, Prev2), min(max(Prev, Prev2), In)) ? timeout(T)
+
+// Exponential smoothing, written as a step toward the target rather than
+// Alpha*Med + (1-Alpha)*Out: same result, but it holds still exactly when
+// Med == Out instead of creeping on rounding error in the fixpoint build.
+Out = Out + Alpha*(Med - Out) ? timeout(T)
+
+// The shift register. Both reads see the previous commit, so this really is a
+// shift and not two copies of the same value.
+Prev2 = Prev, Prev = In ? timeout(T)
+#end

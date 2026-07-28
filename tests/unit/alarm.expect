@@ -1,0 +1,20 @@
+%% Hold and Age count Tk.period per tick and a timer fires at most once per
+%% cycle, so the delays land on fixed cycle numbers rather than on the wall
+%% clock. `a` raises after OnDelay, announces once, and releases after OffDelay;
+%% `g` never raises at all, which is the property that matters -- an alarm that
+%% fires on a two-cycle glitch is worse than no alarm. seq only -- `n = n + 1`
+%% is unguarded and so has no reactive trigger (see can_pack.expect).
+{modes, [seq]}.
+{cycles, 44}.
+{lib, ["lib/alarm.csp"]}.
+{checks, [
+  {object_var, 10, "Alarm.a", "a.Active", 0},
+  {object_var, 20, "Alarm.a", "a.Active", 1},
+  {object_var, 30, "Alarm.a", "a.Active", 1},
+  {object_var, 10, "Alarm.g", "g.Active", 0},
+  {object_var, 20, "Alarm.g", "g.Active", 0},
+  {final_object_var, "Alarm.g", "g.Active", 0},
+  {final_object_var, "Alarm.g", "g.Sent",   0},
+  {final_object_var, "Alarm.a", "a.Active", 0},
+  {final_object_var, "Alarm.a", "a.Sent",   0}
+]}.

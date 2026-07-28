@@ -1,0 +1,17 @@
+%% The spike passes through In at cycle 6 and never reaches any output -- one
+%% bad sample out of three cannot be the middle one. With Alpha halving the
+%% error each tick, s.Out steps 5.0, 7.5, 9.375: exact in both builds, which is
+%% why the checks sit there. The tail is NOT checked -- in the fixpoint build
+%% Alpha*(Med - Out) rounds to zero while the difference is still an LSB or two,
+%% so s.Out rests just short of 10.0 forever. seq only -- `n = n + 1` is
+%% unguarded and so has no reactive trigger (see can_pack.expect).
+{modes, [seq]}.
+{cycles, 20}.
+{lib, ["lib/filter.csp"]}.
+{checks, [
+  {object_var, 8, "Filter.f", "f.Med", 10.0},
+  {object_var, 6, "Filter.s", "s.Out", 7.5},
+  {object_var, 8, "Filter.s", "s.Out", 9.375},
+  {final_object_var, "Filter.f", "f.Med", 10.0},
+  {final_object_var, "Filter.f", "f.Out", 10.0}
+]}.

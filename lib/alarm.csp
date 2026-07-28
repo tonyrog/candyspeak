@@ -1,0 +1,99 @@
+// Alarm -- turn a condition into at most one message, and a way to stop asking.
+//
+// The hard part of an alarm is never noticing the fault. It is the three ways
+// of getting it wrong afterwards: firing on a glitch, firing again every cycle
+// for a week, or firing once into a lost message and never again. This module
+// answers all three and knows nothing about the transport -- wire `Send` to an
+// SMS, a CAN frame or a println.
+//
+//   #Alarm frost  OnDelay=30000 OffDelay=60000 Repeat=3600000
+//   frost.In  = Temp < FrostLimit
+//   frost.Ack = Replied
+//   println("FROST ", Temp) ? frost.Send
+//   println("frost over")   ? frost.Clear
+//
+// OnDelay / OffDelay -- the condition must HOLD for OnDelay before it counts,
+//   and must be gone for OffDelay before the alarm releases. A thermometer
+//   sitting on the threshold crosses it hundreds of times an hour; without both
+//   delays that is hundreds of messages. Make OffDelay the longer of the two:
+//   it costs nothing to release late, and it is what stops the alarm flapping.
+//
+// Repeat -- how often to say it again while nobody has acknowledged. This is
+//   the only thing bounding how much work the transport is asked to do, so it
+//   is the number to raise when the bill arrives. Sending once and hoping is
+//   not an option over a radio link; repeating without a limit is not either.
+//
+// Ack -- the receiver said it heard. That stops the repeats but does NOT clear
+//   the alarm, because whether the fault is over is a question about the world,
+//   not about the operator. A LATER episode still sends even if Ack is still
+//   standing: a new fault is news regardless of what was acknowledged about the
+//   last one.
+//
+// Send and Clear are one-cycle requests, in the same style as `.tx` -- they go
+// high for exactly the cycle after the decision and clear themselves.
+//
+// ALL TIMES ARE IN MILLISECONDS and are ordinary variables, so they can be set
+// per instance and patched in the field. They are counted on Tk, which sets the
+// resolution: every deadline can be up to one tick late. Raise Tk.period on a
+// slow board -- an alarm that answers within a second of a half-minute delay is
+// still an alarm.
+//
+// STILL OPEN: none of this survives a reboot. A device that power-cycles during
+// a fault forgets that it has already sent, and says it again. The plan is to
+// persist the repeat LEVEL rather than a timestamp, so that no clock has to
+// survive with it -- but the EEPROM side of that is not built yet.
+//
+#module Alarm
+#timer    Tk 100 = 1                   // resolution in ms -- also the tick
+#variable In:1     unsigned in  = 0    // the raw condition
+#variable Ack:1    unsigned in  = 0    // the receiver acknowledged
+#variable Active:1 unsigned out = 0    // the condition is real, not a glitch
+#variable Send:1   unsigned out = 0    // one cycle: transmit the alarm now
+#variable Clear:1  unsigned out = 0    // one cycle: transmit the all-clear
+#variable OnDelay              = 1000  // ms the condition must hold to count
+#variable OffDelay             = 1000  // ms it must be gone to release
+#variable Repeat               = 60000 // ms between re-sends while unacknowledged
+#variable Hold                 = 0     // ms In has kept its present value
+#variable Age                  = 0     // ms since the last transmission
+#variable Was:1    unsigned    = 0     // In as of its last change
+#variable Sent:1   unsigned    = 0     // this episode has been announced
+
+// Clear the one-shots first so any rule below still wins its own cycle.
+Send  = 0 ? Send
+Clear = 0 ? Clear
+
+Tk = 1 ? timeout(Tk)
+
+// How long the raw condition has held still. Both counters stop at the largest
+// value that still means something, so a fault left standing for a month cannot
+// walk its way to integer overflow and look fresh again.
+Hold = Hold + Tk.period ? timeout(Tk)
+Hold = OnDelay + OffDelay ? timeout(Tk) && Hold >= OnDelay + OffDelay
+Hold = 0, Was = In ? In != Was
+
+// The verdict. A condition that keeps flickering resets Hold on every flicker
+// and so never reaches either delay -- which is exactly the point.
+//
+// `In == Was` is what makes that true. On the cycle In moves, the reset above
+// has not been committed yet, so Hold still holds the OLD state's age -- which
+// is almost always past the delay. Judging on it would fire on the transition
+// itself and both delays would be dead code. Waiting for Was to catch up costs
+// one cycle and is the whole guarantee.
+Active = 1 ?  In && In == Was && !Active && Hold >= OnDelay
+Active = 0 ? !In && In == Was &&  Active && Hold >= OffDelay
+
+// Time since we last asked the transport to do something.
+Age = Age + Tk.period ? timeout(Tk)
+Age = Repeat ? timeout(Tk) && Age >= Repeat
+
+// First announcement of an episode, and the repeat clock starts with it.
+Send = 1, Sent = 1, Age = 0 ? Active && !Sent
+
+// Say it again until someone admits hearing it.
+Send = 1, Age = 0 ? Active && !Ack && Age >= Repeat
+
+// All clear, once, on the way down -- and rearm for the next episode. Only if
+// we announced this one: an alarm nobody was told about needs no retraction.
+Clear = 1 ? !Active && Sent
+Sent  = 0 ? !Active
+#end
