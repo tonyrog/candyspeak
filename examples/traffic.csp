@@ -9,20 +9,33 @@
 #digital Yellow out 5
 #digital Green  out 9
 #timer   Phase  1000 = 1
-#states  red redyellow green yellow OUT_OF_ORDER
+#digital Panic in pulldown 16  // panic button
+#states  red redyellow green yellow fail
 
-// fail safe panic stuff
-#digital Panic in pulldown 16
-#timer   Blink  500
-#variable Y = 0
+#module Failsafe
+  #digital P1  1
+  #digital P5  5
+  #digital P9  9
+  #timer   T   500
+  #variable V = 0
+
+  #in INIT
+    P1.dir = out, P1 = 0
+    P5.dir = out, P5 = 0
+    P9.dir = out, P9 = 0
+    V=1
+  #end
+
+  P5=V, V=!V ? timeout(T)
+  T=1 ? timeout(T)
+#end
+
+#Failsafe safe  // this must not be done with real FAILSAFE
 
 #in INIT
     State = red
 #end
-#in OUT_OF_ORDER
-    Yellow=Y, Red=0, Green=0, Y=!Y ? timeout(Blink)
-    Blink = 1 ? timeout(Blink)
-#end
+
 #in red
     Red=1, Yellow=0, Green=0
     State = redyellow ? timeout(Phase)
@@ -41,5 +54,8 @@
 #end
 #in red redyellow green yellow
     Phase = 1 ? timeout(Phase)      // restart the timer each phase
-    State = OUT_OF_ORDER, Blink=1 ? Panic
+    State = fail, safe.State = INIT ? Panic // State = FAILSAFE?
+#end
+#in fail
+    // Do nothing, not needed in real FAILSAFE mode
 #end

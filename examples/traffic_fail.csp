@@ -1,0 +1,19 @@
+// separate FAILSAFE mode for traffic
+
+#module FAILSAFE
+  #digital P1 out 1
+  #digital P5 out 5
+  #digital P9 out 9
+  #timer   T   500
+  #variable V = 0
+
+  #in INIT
+    P1 = 0
+    P5 = 0
+    P9 = 0
+    V=1
+  #end
+
+  P5=V, V=!V ? timeout(T)
+  T=1 ? timeout(T)
+#end

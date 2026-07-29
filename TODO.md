@@ -4,6 +4,7 @@
   Gör FAILSAFE till en `#module FAILSAFE` istället för ett `#in FAILSAFE`-block.
   En modul ÄR den självförsörjande enheten: egna decls, egen kod (ENTER..LEAVE),
   egna states, egen #in INIT, per-instans-lagring.
+  (FAILSAFE INIT state måste köras vi fail, pinnar kan behöva defineras om!)
   GRATIS:
   - FAILSAFE_INIT = modulens #in INIT (starta timer där). Ingen entry-flagga.
   - Självdelimiterande: DECL_MODULE.n + OP_ENTER.num avgränsar redan modulens
@@ -73,24 +74,6 @@
   Se DONE: END-markörer, crc_failsafe-noten. Max-ett-#in-FAILSAFE finns redan
   nedan.
 
-## Baka rule_ip/rule_state i ROM/EEPROM? (2026-07-26)
-  IDÉ (Tony). Idag räknas rule_ip (ordinal->ip) och rule_state (ordinal->State-
-  mask) om vid boot i csp_csr (number_rules / number_rule_states) -- RAM-only,
-  reaktiv-only. Man SKULLE kunna baka dem i ROM (bredvid rom_idg/ofs/edg) och/
-  eller EEPROM.
-  AVVÄGNING (min lutning: behåll compute-at-boot):
-  - De är HÄRLEDDA ur instruktionsströmmen, deterministiskt, EN pass -> boot-
-    vinsten mikroskopisk även på AVR.
-  - RAM-besparing: reaktivt är AV default på AVR (allokeras ej där); bara
-    reaktiva kort (mkrzero, mer RAM) berörs. Svag.
-  - CRC: instruktionerna är redan CRC-skyddade -> korrupt instr fångas FÖRE
-    omräkning; baka ip/state = redundant CRC-yta.
-  KOHERENS-ARGUMENTET (det starkaste): grafens KANTER (rom_idg/ofs/edg) är redan
-  bakade -- varför baka kanterna men räkna om ip/state? Om man bakar allt blir
-  hela reaktiva strukturen en bakad+verifierad enhet. Värt det OM: RAM-kritiskt
-  reaktivt kort, ELLER man vill ha hela reaktiv-strukturen som en CRC-enhet.
-  (Notera: rule_ip pekar redan förbi block-gaten via skip_gate -- en bakad
-  rule_ip måste bakas med samma skip, annars NINSTATE-return-buggen igen.)
 
 ## Korrupt #disable-set i EEPROM => FAILSAFE i st f ROM? (2026-07-24)
   Idag: crc_dis-miss vid load -> avvisa HELA saven, fall tillbaka till ROM-
@@ -139,12 +122,6 @@
     ROM/flash betyder korrupt header oftast trasig flash eller fel version --
     överlappar version-avvisningen, mindre att vinna. Börja med EEPROM.
 
-## Max ETT #in FAILSAFE block (2026-07-24)
-  FAILSAFE-mekaniken finns (reserverat sticky state, #in FAILSAFE-block, se
-  DONE). Kvar: parsern tillater flera #in FAILSAFE. Ska vara max ETT sa det ar
-  entydigt utpekbart och verifierbart. csp_parse_in: om state==FAILSAFE och ett
-  FAILSAFE-block redan finns -> fel. (Del av failsafe-arbetet; crc_failsafe och
-  park-fallback aterstar ocksa -- se DONE-noten.)
 
 ## CRC: kvarvarande luckor + emitter-buggar (2026-07-23)
   Full ROM-CRC + EEPROM data_crc KLART (se DONE). Graf-CRC, rom_states-CRC
@@ -189,12 +166,6 @@
   variabler i både Expr och Cond i kanterna. tests/unit/can_pack är seq-only av
   just det skälet: den använder vanliga `=`-regler.
 
-## Villkor droppas TYST vid parse-fel i guarden.
-  `Q = 1 ? undefinedname` och `Q = 2 ? A &&` svarar båda "OK" och lagras som
-  OVILLKORLIGA regler (`Q=1`, `Q=2` i /list). En stavfel i en guard gör alltså
-  en villkorad regel alltid-på -- tyst. Troligen samma rot som [ROM]/[RAM]-
-  listningsbuggen överst: guard-delen tappas någonstans mellan parse och
-  emission istället för att sätta ERR_SYNTAX.
 
 ## Stack/arena-marginalen: overvaka, ev. varna (2026-07-23)
   LOST: CSP_STACK_RESERVE 512 -> 2048 (se DONE). margin ar nu +617 med cpx.csp.
@@ -207,76 +178,6 @@
       krymp djup-vagen (nasta kandidat: de tva nastlade token_t tv[24] i
       csp_process_line + csp_parse, ~288 byte -- linjen ar redan tokeniserad en
       gang, andra passet ar redundant).
-
-## Fälttypen läses aldrig -- `integer` ger inget tecken (2026-07-22) -- KLART 2026-07-27
-  Löst: csp_heap_get teckenutvidgar när vw->vt == V_INTEGER (bit-vägen). endian
-  fungerade redan (setup_field kopierade ca.endian -> vw->endian, csp_heap_get
-  greppar E_BIG). Syntaxen fanns redan: #field tar integer/unsigned/big/little
-  via P_OPTS. make_buf_view (Buf[a..b]-slices) förblir unsigned/native med FLIT --
-  det är rätt default för en anonym byte-slice, och unpack.csp förlitar sig på det;
-  signed/BE uttrycks via NAMNGIVET #field. Default för typlös #variable är signed
-  (Tonys beslut) -- adder3/half_adder deklarerar nu bit-vars `unsigned`. Nytt test
-  field_signed (LE+BE signed + unsigned-kontrast). test+san 52/52. Se DONE.md.
-
-  Deklarationen bär `vt`, läsvägen struntar i den:
-
-      #buffer F:8 out can 0x123
-      #field S:16 out integer F[0..15]
-      v = 0 - 300
-      S = v
-      -> S = 65236, inte -300
-
-  Vyn är 16 bitar; att läsa ut den ska teckenutvidga när `vt` är V_INTEGER.
-  Samma sak för `endian`: `make_buf_view` (som `<<=`/`>>=` bygger) hårdkodar
-  dessutom V_UNSIGNED och E_NATIVE, så pack/unpack kan inte ens UTTRYCKA ett
-  signed eller big-endian fält. Automotive-signaler är rutinmässigt båda.
-  Två arbeten: (a) låt läsvägen respektera vt/endian, (b) ge pack-syntaxen ett
-  sätt att ange dem.
-  Hittades när #can/#field vägdes mot variabler+pack: det HÄR var argumentet
-  för att behålla mekanismen, och det visade sig inte finnas i koden.
-
-## Float-literal över 2^31 overflowar i parsern (2026-07-22) -- KLART 2026-07-27
-  Löst: uint64-ackumulering + range-check per måltyp, ERR_NUMBER_RANGE. Se DONE.md.
-
-  `d = 2500000000.0 * 4.0` ger `-7168`. UBSan pekar på csp_rt.c:3095:
-
-      runtime error: signed integer overflow: 250000000 * 10 cannot be
-      represented in type 'int'
-      csp_rt.c:3111: left shift of negative value -1794967296
-
-  Literalen byggs upp i en `int` och skiftas sedan till Q16.16. Både
-  ackumuleringen och skiftet spiller. Bör antingen räknas i uint32/int64 eller
-  avvisas med ett fel -- ett tyst fel värde är det sämsta utfallet.
-  Verifierat pre-existerande (ren HEAD-build ger samma UBSan-utskrift).
-
-## `-r <fil>` slukar filnamnet, och bart `-r` är atoi(NULL) (2026-07-22)
-  Två fel i samma optionsrad. `case 'r': reactive = atoi(optarg);`
-
-      ./csp -r prog.csp -i     # prog.csp blir ARGUMENT till -r, inte en fil
-                               # -> tomt program, /list visar bara State
-      ./csp -r -i              # optarg == NULL -> atoi(NULL), segfault
-
-  Optionssträngen har `r:` (obligatoriskt argument) medan usage-texten lovar
-  `-r, --reactive[=B]` (valfritt). Antingen `r::` + NULL-koll, eller ta bort
-  det valfria ur hjälptexten. Fungerande form idag: `-r1`.
-  Samma mönster värt att kolla på `-t/--transaction[=B]`.
-  Verifierat pre-existerande (ren HEAD-build beter sig likadant).
-
-## Oaligned pekarläsning i disassemblern -- M0-risk (2026-07-22)
-  `csp_print.c:706`, `ro_ptr(&tok_table[t].name)`. UBSan:
-
-      runtime error: load of misaligned address ... for type 'const void *',
-      which requires 8 byte alignment
-
-  Fyras av vilket `/list` som helst på ett program med regler, i alla exempel.
-  Ofarligt på x86, men det här är EXAKT familjen som HardFaultade projektet
-  förut (PACKED csp_func_t på Cortex-M0) -- en pekarmedlem i en packad struct
-  som läses som pekare. Trolig fix densamma: ta bort PACKED från tok_table-
-  posten, eller läs den via en byte-vis accessor.
-  `make san` fångar det INTE, för escript-harnessen kör aldrig `/list`.
-  Verifierat pre-existerande (ren HEAD-build ger samma).
-
-## exit csp_linux after -d and -n or no program / no interaction
 
 ## .stdin-stödet sitter i test.sh, men `make test` kör run_tests.escript.
   test.sh fick `<test>.csp.stdin` (pipas in i REPL:en), men den harnessen körs
@@ -306,51 +207,8 @@
   och slår upp föräldern med rått decl-index. Misstänkt trasigt per instans,
   på samma sätt som #buffer var. EJ verifierat -- konstruera ett test först.
 
-## csp_buf_t: bitfält sparar NOLL. Mätt 2026-07-18, fyra layouter.
-    nuvarande (allt uint8_t)              12 byte
-    A: små fält hopslagna till ett u16    12
-    B: xref:29 + resten inpackat          12
-    C: allt i två u32-ord + en u8         12
-    D: som C men PACKED                    9
-  uint32 xref tvingar 4-bytes-alignment, så allt utom PACKED landar på 12
-  oavsett hur bitarna arrangeras. Bitfält är alltså rent bortkastad möda här.
-  PACKED ger 9 byte (25%), på cpx_m 70 buffertar = 210 byte. MEN: PACKED-array
-  => oalignade multibyte-accesser på Cortex-M0, vilket är exakt fällan som
-  HardFaultade projektet förut (packad csp_func_t). Rekommenderar INTE.
-  För att nå 8 byte med naturlig alignment krävs <= 64 bitar; behovet är 71:
-    hp 16 + nbytes 8 + dlc 8 + xref 29 + transport 2 + dir 2 + flags 4
-  Alltså måste något verkligt offras: extended CAN-id (xref -> 24 bitar) eller
-  hp -> 12-13 bitar. Ingetdera gratis.
-
-  `loc` (RAM/ROM/IO) SKRIVS men LÄSES ALDRIG -- ta bort den. Krymper inte
-  structen (alignment), men det är ett dött fält.
-
-  STÖRRE FISK: nbuf ~= antal leafs, för varje konstant/timer/digital/variabel
-  får en EGEN buffert via setup_slot/auto-buffer. cpx_m: 70 buffertar för ett
-  program med en handfull riktiga buffertar. Alltså 12 byte metadata för att
-  beskriva 4 byte value_t. Om VIEW_SLOT-leafs slapp csp_buf_t helt (vyn pekar
-  rakt på en heap-offset) skulle buf-tabellen krympa till de riktiga
-  buffertarna -- storleksordningen 700+ byte på cpx_m, ~3x mer än PACKED ger,
-  utan alignment-risk. Verifiera antagandet först.
-
 ## CAN, kvar att göra
-  - view.pos är en byte => bara de första 32 byten av en frame är adresserbara.
-    Deklarationen klarar hela 64 (ca.bit är 9 bitar); setup_can vägrar nu
-    explicit i stället för att wrappa tyst. Full CAN FD kräver uint16 pos,
-    vilket kostar en byte per LEAF i csp_view_t -- mät innan.
-  - Cyklisk TPDO som skickar ÄVEN när värdet är oförändrat går inte att uttrycka
-    (dirty sätts bara vid ändring). Behövs en period på #can, eller ett sätt
-    att tvinga fram en sändning.
-  - Objektinstanser med #can-fält: alla instanser binder mot SAMMA #buffer, så
-    de delar frame. Rimligt? Eller ska varje instans ha sin egen frame/id?
-  - Buffert-parts (.dlc/.tx/.rx/.id) är INTE DIN/DOUT-skuggade -- de ligger på
-    csp_buf_t, inte i en value-slot. Följd: `F.dlc = 3` följt av `x = F.dlc` i
-    SAMMA cykel ger 3, medan `.period` på en timer (som ligger i value-sloten)
-    hade gett det gamla värdet. Pinnat i tests/unit/can_parts (d1 == 3).
-    För `.tx` är det rätt -- det är ett kommando, inte ett värde. För `.dlc`,
-    som är konfiguration, är det en inkonsekvens mot `.period`. Avgör om det
-    ska enhetliggöras eller dokumenteras som avsiktligt.
-  - `.ext` (extended id) -- Tony förklarar varför senare. RTR medvetet utelämnat.
+
   - CAN FD har diskreta DLC-värden (0-8,12,16,20,24,32,48,64). `.dlc` klampas
     bara till nbytes, den rundar inte upp till nästa giltiga FD-längd. Spelar
     ingen roll så länge Linux-backenden kör classic can_frame (max 8).
@@ -424,11 +282,7 @@ Semantik view (expanded)
 
 ## Interrupt
 
-Can we run CandySpeek rules during interrupt,
-is it possibel / feasible. At least have rules
-that trigger on digital state change, analog sample compleation...
-
-What about using states?
+Using state syntax for serving interrupts.
 
 #in ISR
   Buffer[I] = CREG
@@ -436,17 +290,12 @@ What about using states?
   State = RTI
 #end
 
-"We could queue interrupts (when possible) serv som interrupts
-when needed in real isr, but queue the facr. Then schedule to
-run ISR rules in ISR state until interrupt stack is empty!
-(could work) then we would have minor troubles without running
-runtime during interrupt time."
-
-- atomic keyword
 
 ## Other
 
 - How to combine ROM + RAM => new ROM base?
 
-- ROM disable flag to kill off REAL firmware.
+- ROM disable flag, do not load rom code.
+- EEPROM disable flag, do not load eeprom code.
 
+Flags stored in EEPROM.

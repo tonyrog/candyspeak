@@ -612,7 +612,6 @@ static struct option long_options[] = {
     {"debug-result", no_argument,       0,  'R'},
     {"help",         no_argument,       0,  'h'},
     {"interactive",  no_argument,       0,  'i'},
-    {"transaction",  no_argument,       0,  't'},
     {"reactive",     no_argument,       0,  'r'},
     {"verbose",      no_argument,       0,  'v'},
     {"no-execute",   no_argument,       0,  'n'},
@@ -641,7 +640,6 @@ void usage(const char* prog)
     fprintf(stderr, "  -h, --help           Show this help\n");
     fprintf(stderr, "  -i, --interactive    Interactive mode\n");
     fprintf(stderr, "  -d, --debug          Enable debug output\n");
-    fprintf(stderr, "  -t, --transaction[=B] Enable transaction mode\n");
     fprintf(stderr, "  -r, --reactive       Enable reactive mode\n");
     fprintf(stderr, "  -n, --no-execute     Parse only, don't execute\n");
     fprintf(stderr, "  -c, --cycles=N       Max cycles (0=unlimited)\n");
@@ -807,7 +805,6 @@ int main(int argc, char** argv)
 	case 1001: can_iface = optarg; break;
 	case 1002: no_eeprom = 1; break;
 	case 'r': reactive = 1; break;   // -r: enable reactive mode (no argument)
-	case 't': break;                 // -t: reserved (transaction), no-op flag
 	case 'n': execute = 0; break;
 	case 'C': compile = 1; break;
 	case 'c': max_cycles = atoi(optarg); break;
@@ -930,7 +927,11 @@ int main(int argc, char** argv)
     if (debug) {
 	print_defines();
 	printf("reactive=%d\n", reactive);
-	printf("execute=%d\n", execute);	
+	printf("execute=%d\n", execute);
+	printf("interactive=%d\n", interactive);
+	printf("#arguments=%d\n", argc-optind);
+	if (!execute && !compile && (optind >= argc) && !interactive)
+	    exit(0);
     }
 #if !defined(SUPPORT_REACTIVE) || (SUPPORT_REACTIVE==0)
     if (reactive) {
