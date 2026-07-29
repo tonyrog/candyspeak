@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <stddef.h>   // offsetof, used by CSP_IMAGE_CHECK
 
 #include "csp_config.h"
 
@@ -107,29 +108,111 @@ typedef unsigned bool_t;
 //   v6: DECL_END_MARK / OP_END_MARK self-CRC terminators (header-corruption
 //       recovery: each of rom_decl/rom_instr self-verifies without the header)
 //   v7: str + state self-CRC trailers (all four sections self-verify)
-#define ROM_FORMAT_VERSION 7
+//   v8: ONE contiguous image object -- magic/size/role/generation in the header,
+//       sections reached by offset instead of by symbol, and a tagged prologue
+//       in front of each so the whole thing can be walked with no header at all
+#define ROM_FORMAT_VERSION 8
 
-// One header for the whole ROM image, baked by `csp -C` as `rom_header`, so the
-// counts and integrity live in ONE symbol instead of seven loose globals. Per-
-// section CRCs let csp_load_rom say WHICH section is corrupt, not just that
-// something is. crc_hdr covers every field ABOVE it (counts + section CRCs), so
-// a flipped count is caught too. All uint16 + PACKED -> byte-identical on the
-// host generator and a little-endian target (see the CSP_STATIC_ASSERT at
-// csp_crc16), so a byte-CRC baked on the host matches the flash.
+// Free as in beer.
+#define CSP_IMAGE_MAGIC0 'J'
+#define CSP_IMAGE_MAGIC1 'A'
+#define CSP_IMAGE_MAGIC2 'M'
+#define CSP_IMAGE_MAGIC3 '\n'
+
+// What an image is FOR. A scan groups by role and picks one per role, which is
+// what makes redundant copies and A/B versions fall out of the same rule
+// instead of each being a special case.
+#define CSP_ROLE_ROM      0   // the program
+#define CSP_ROLE_FAILSAFE 1   // the one that runs when the program cannot
+
+// Section tags: four ASCII characters, IFF/BEAM style. Four bytes cost nothing
+// here (the prologue was carrying 16 unused bits either way) and buy two things:
+// a tag is findable in a hex dump or with grep over the binary, and a scan can
+// match one with a single 32-bit compare instead of a table lookup.
+//
+// Written as four chars so they compose into an initializer: `.tag = { CSP_SECT_DECL }`.
+// Not a string literal -- `char[4] = "DECL"` is legal C but not C++, and these
+// headers are included from a .ino.
+#define CSP_SECT_STR     'S','T','R','S'
+#define CSP_SECT_DECL    'D','E','C','L'
+#define CSP_SECT_INSTR   'C','O','D','E'
+#define CSP_SECT_IDG     'G','I','D','G'
+#define CSP_SECT_OFS     'G','O','F','S'
+#define CSP_SECT_EDG     'G','E','D','G'
+#define CSP_SECT_STATES  'S','T','A','T'
+
+// Compare a prologue tag against one of the above:  csp_tag_is(sc.tag, CSP_SECT_DECL)
+// Two levels: a macro argument is split on commas BEFORE it is expanded, so the
+// four-character tag has to arrive as __VA_ARGS__ and be re-expanded.
+#define csp_tag_is(t, ...) csp_tag_is_(t, __VA_ARGS__)
+#define csp_tag_is_(t,a,b,c,d) \
+    (((t)[0]==(a)) && ((t)[1]==(b)) && ((t)[2]==(c)) && ((t)[3]==(d)))
+
+// One header per image, at offset 0 of the image object, baked by `csp -C`.
+//
+// Everything the loader needs to reach a section is IN here, as a byte offset
+// from the image base -- not as a pointer. Offsets survive being copied to
+// another flash page or into RAM; pointers do not, and pointers cannot be
+// checked against anything. `magic` lets a scan recognise an image it was never
+// told about; `size` lets it step to the next one.
+//
+// crc_hdr is LAST and covers every byte above it -- magic, size, role,
+// generation, the counts, the section CRCs AND the offsets. An offset that
+// rotted would otherwise send the loader to a garbage address with nothing
+// objecting, which is the wrong failure mode for the part of the system whose
+// job is to notice failure. All fields are byte-stable and PACKED, so a CRC
+// baked on the host matches a little-endian target (see the CSP_STATIC_ASSERT
+// at csp_crc16).
 typedef struct PACKED {
+    uint8_t  magic[4];   // JAM\n -- start of an image
+    uint32_t size;       // total bytes of the image object
     uint16_t version;    // ROM_FORMAT_VERSION at generation
-    uint16_t n_str;      // rom_str bytes
-    uint16_t n_decl;     // rom_decl entries (incl. the trailing DECL_END)
-    uint16_t n_instr;    // rom_instr entries
-    uint16_t n_edg;      // rom_edg entries (0 = no reactive graph)
-    uint16_t n_state;    // rom_states entries
+    uint16_t role;       // CSP_ROLE_*: what this image is for
+    uint16_t generation; // higher is newer; orders A against B
+    uint16_t n_str;      // str bytes (excl. sentinel + trailer)
+    uint16_t n_decl;     // decl entries (excl. DECL_END_MARK)
+    uint16_t n_instr;    // instr entries (excl. OP_END_MARK)
+    uint16_t n_edg;      // edg entries (0 = no reactive graph)
+    uint16_t n_state;    // state entries (excl. sentinel + crc)
     uint16_t crc_str;    // CRC-16/CCITT per section
     uint16_t crc_decl;
     uint16_t crc_instr;
     uint16_t crc_state;
-    uint16_t crc_graph;  // over rom_idg + rom_ofs + rom_edg (0 when n_edg == 0)
-    uint16_t crc_hdr;    // over all fields ABOVE this one -- MUST stay last
+    uint16_t crc_graph;  // over idg + ofs + edg (0 when n_edg == 0)
+    uint32_t ofs_str;    // section DATA starts, bytes from the image base
+    uint32_t ofs_decl;   // (each section's prologue sits just before its data)
+    uint32_t ofs_instr;
+    uint32_t ofs_idg;
+    uint32_t ofs_ofs;
+    uint32_t ofs_edg;
+    uint32_t ofs_states;
+    uint16_t crc_hdr;    // over all bytes ABOVE this one -- MUST stay last
 } csp_image_header_t;
+
+// The prologue in front of each section. Two jobs the header cannot do:
+//
+//   - it says what the section IS, locally, so a walker that lands on an offset
+//     can identify it with no header and a tool can dump an image it only half
+//     understands;
+//   - `len` is in BYTES, not entries, so a reader can skip a section whose tag
+//     it does not know. That is what keeps a v8 image walkable by a later
+//     reader; with fixed header fields alone, every added section would break
+//     the walk.
+//
+// No CRC here: the header carries one per section and the sections carry their
+// own end markers. A third copy would only give three things to disagree.
+typedef struct PACKED {
+    char     tag[4];     // CSP_SECT_*: four ASCII, readable in a hex dump
+    uint32_t len;        // bytes of data after this prologue (trailers included)
+} csp_sect_t;
+
+// Bytes to add after a section of n bytes so the next one starts 4-aligned.
+// Every element type is 8, 4 or 2 bytes, so a 4-aligned start satisfies all of
+// them -- and index_t genuinely needs 2 (an unaligned 16-bit load faults on
+// Cortex-M0). The packed decl/instr types claim alignment 1 and would otherwise
+// be placed at any odd offset, costing byte-wise access for nothing.
+#define CSP_PAD4(n)  ((4 - ((n) & 3)) & 3)
+
 
 typedef const char rochar;                // PROGMEM string character type
 typedef const struct rostr* rostring_t;  // PROGMEM string object type
@@ -1098,6 +1181,62 @@ typedef struct PACKED
     unsigned snum:NUM_BITS;        // state number (0..MAX_STATES-1)
 } state_t;
 
+// The image type for ONE program. The generator knows every count, so it stamps
+// them in here and the COMPILER does the layout -- which is what keeps the
+// byte-CRC honest. Sizes are the emitted lengths, trailers included:
+//   NSTR   = n_str + 3     (0xFF sentinel + 2-byte crc)
+//   NDECL  = n_decl + 1    (DECL_END_MARK)
+//   NINSTR = n_instr + 1   (OP_END_MARK)
+//   NSTATE = n_state + 2   (sentinel + crc)
+//
+// aligned(4) on the object matters: the header is PACKED, so without it the
+// struct's own alignment would come from index_t (2) and every section start
+// could land on a 2-boundary.
+#define CSP_IMAGE_TYPE(tname,NSTR,NDECL,NINSTR,NIDG,NOFS,NEDG,NSTATE)   \
+    typedef struct {                                                    \
+        csp_image_header_t hdr;                                         \
+        csp_sect_t  s_str;                                              \
+        char        str[NSTR];                                          \
+        uint8_t     _pad_str[CSP_PAD4(NSTR)];                           \
+        csp_sect_t  s_decl;                                             \
+        csp_decl_t  decl[NDECL];                                        \
+        csp_sect_t  s_instr;                                            \
+        csp_instr_t instr[NINSTR];                                      \
+        csp_sect_t  s_idg;                                              \
+        index_t     idg[NIDG];                                          \
+        uint8_t     _pad_idg[CSP_PAD4(2*(NIDG))];                       \
+        csp_sect_t  s_ofs;                                              \
+        index_t     ofs[NOFS];                                          \
+        uint8_t     _pad_ofs[CSP_PAD4(2*(NOFS))];                       \
+        csp_sect_t  s_edg;                                              \
+        index_t     edg[NEDG];                                          \
+        uint8_t     _pad_edg[CSP_PAD4(2*(NEDG))];                       \
+        csp_sect_t  s_states;                                           \
+        state_t     states[NSTATE];                                     \
+        uint8_t     _pad_sta[CSP_PAD4(2*(NSTATE))];                     \
+    } __attribute__((aligned(4))) tname
+
+// The generator computes the offsets ITSELF -- it must, because crc_hdr covers
+// them and a CRC cannot be taken over values only the C compiler knows. These
+// assert that the compiler agrees with that arithmetic. If the two ever diverge
+// the BUILD fails instead of the image being quietly wrong.
+#define CSP_IMAGE_CHECK(tname,OSTR,ODECL,OINSTR,OIDG,OOFS,OEDG,OSTATES,SZ) \
+    CSP_STATIC_ASSERT(offsetof(tname,str)    == (OSTR),   "ofs_str");      \
+    CSP_STATIC_ASSERT(offsetof(tname,decl)   == (ODECL),  "ofs_decl");     \
+    CSP_STATIC_ASSERT(offsetof(tname,instr)  == (OINSTR), "ofs_instr");    \
+    CSP_STATIC_ASSERT(offsetof(tname,idg)    == (OIDG),   "ofs_idg");      \
+    CSP_STATIC_ASSERT(offsetof(tname,ofs)    == (OOFS),   "ofs_ofs");      \
+    CSP_STATIC_ASSERT(offsetof(tname,edg)    == (OEDG),   "ofs_edg");      \
+    CSP_STATIC_ASSERT(offsetof(tname,states) == (OSTATES),"ofs_states");   \
+    CSP_STATIC_ASSERT(sizeof(tname)          == (SZ),     "image size")
+
+// A fixed-type handle on an image whose struct type the runtime cannot name --
+// every image has its own type, because the counts differ. The runtime does not
+// care what that type is: it takes the base and works in offsets from there.
+typedef struct {
+    const uint8_t* base;
+} csp_image_ref_t;
+
 // One RAM arena holds everything that used to be fixed struct arrays: the parse-
 // time code (instr[]/decl[]) plus the rt_start-derived tables (heap, view, buf,
 // dset/inq bitsets, reactive graph). Moving them off the struct keeps sizeof
@@ -1241,6 +1380,13 @@ typedef struct _csp_rt_t
     const csp_decl_t*  rom_decl_p;  // ROM decl table (flash), or NULL
     const csp_instr_t* rom_instr_p; // ROM instr table (flash), or NULL
     const char*        rom_str_p;   // ROM string table (flash), or NULL
+    // The baked reactive graph, held the same way -- csp_enq_elist used to read
+    // the rom_idg/rom_ofs/rom_edg globals directly, which tied the runtime to
+    // ONE image. Only the loader names an image now; everything downstream goes
+    // through these. NULL when rom_nedg == 0.
+    const index_t*     rom_idg_p;
+    const index_t*     rom_ofs_p;
+    const index_t*     rom_edg_p;
     index_t rom_nd;              // # ROM decls   (RAM decl base)
     index_t rom_nn;              // # ROM instrs  (RAM instr base)
     index_t rom_strp;            // # ROM string bytes (RAM string base)
@@ -1391,11 +1537,20 @@ static inline state_t     ro_state(const state_t* p)
 { state_t s; memcpy_P(&s, p, sizeof(s)); return s; }
 static inline csp_image_header_t ro_header(const csp_image_header_t* p)
 { csp_image_header_t h; memcpy_P(&h, p, sizeof(h)); return h; }
+// The descriptor lives in PROGMEM like everything else it names -- eight
+// pointers is 16 bytes of RAM per image on AVR, and images are meant to come in
+// threes (a program, a FAILSAFE, a spare). Copied out once per load.
+static inline csp_image_ref_t ro_ref(const csp_image_ref_t* p)
+{ csp_image_ref_t v; memcpy_P(&v, p, sizeof(v)); return v; }
+static inline csp_sect_t ro_sect(const csp_sect_t* p)
+{ csp_sect_t v; memcpy_P(&v, p, sizeof(v)); return v; }
 #else
 #define ro_decl(p)  (*(p))
 #define ro_instr(p) (*(p))
 #define ro_state(p) (*(p))
 #define ro_header(p) (*(p))
+#define ro_ref(p)  (*(p))
+#define ro_sect(p) (*(p))
 #endif
 
 // Segment-aware read by logical index: a firmware ROM index reads flash (via the
@@ -1569,7 +1724,13 @@ extern void    csp_estimate(csp_rt_t* st, csp_estimate_t* e);
 // on any target, no heap); a backend selects malloc with CSP_ARENA_MALLOC or
 // provides its own definition with CSP_ARENA_CUSTOM (e.g. claim free RAM).
 extern uint8_t* csp_arena_mem(size_t want, size_t* got);
+// Load the firmware's default image (rom_image). Thin wrapper over
+// csp_load_image, kept because every backend calls it by this name.
 extern void    csp_load_rom(csp_rt_t*);
+// Load a NAMED image. Verifies it (version, per-section CRC, header-free
+// recovery via the end markers) and rebases the parse state onto it.
+extern void    csp_load_image(csp_rt_t*, const uint8_t* base);
+extern const csp_image_ref_t rom_image;
 extern uint16_t csp_crc16(uint16_t crc, const void* data, size_t n, int is_rom);
 extern int     csp_has_firmware(void);
 extern int     csp_rt_start(csp_rt_t*);

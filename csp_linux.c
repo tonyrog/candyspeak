@@ -629,6 +629,8 @@ static struct option long_options[] = {
     {"can",          required_argument, 0,  1001},
     {"no-eeprom",    no_argument,       0,  1002},
     {"prefix",       required_argument, 0,  1003},
+    {"role",         required_argument, 0,  1004},
+    {"generation",   required_argument, 0,  1005},
     {"memory",       required_argument, 0,  'm'},
     {"pause",        no_argument,       0,  'b'},
     {0,              0,                 0,  0 }
@@ -648,6 +650,8 @@ void usage(const char* prog)
     fprintf(stderr, "  -C, --compile        Compile to object code\n");
     fprintf(stderr, "  -O, --object-file=F  Compiled result file (C code format)\n");
     fprintf(stderr, "      --prefix=NAME    Symbol prefix for -C (default rom)\n");
+    fprintf(stderr, "      --role=ROLE      Image role: rom|failsafe (default rom)\n");
+    fprintf(stderr, "      --generation=N   Image generation, higher is newer\n");
     fprintf(stderr, "  -P, --debug-parse    Enable parser debugging\n");
     fprintf(stderr, "  -S, --debug-scan     Enable tokenizer debugging\n");
     fprintf(stderr, "  -Q, --debug-trace    Enable variable tracing\n");
@@ -783,6 +787,8 @@ int main(int argc, char** argv)
     // -C emits <prefix>_str/_decl/_instr/... Default rom, so an unadorned
     // `csp -C` still produces the rom.c every build links.
     const char* rom_prefix = "rom";
+    unsigned rom_role = CSP_ROLE_ROM;
+    unsigned rom_generation = 0;
     struct pollfd pfd[2];
     nfds_t nfds = 0;
     int can_slot = 0;   // index of the CAN socket in pfd (0 = not polled)
@@ -810,6 +816,11 @@ int main(int argc, char** argv)
 	case 1001: can_iface = optarg; break;
 	case 1002: no_eeprom = 1; break;
 	case 1003: rom_prefix = optarg; break;   // --prefix: symbol prefix for -C
+	case 1004:                               // --role: what the image is for
+	    rom_role = (strcmp(optarg, "failsafe") == 0) ? CSP_ROLE_FAILSAFE
+							 : CSP_ROLE_ROM;
+	    break;
+	case 1005: rom_generation = atoi(optarg); break;
 	case 'r': reactive = 1; break;   // -r: enable reactive mode (no argument)
 	case 'n': execute = 0; break;
 	case 'C': compile = 1; break;
@@ -1040,6 +1051,8 @@ int main(int argc, char** argv)
 	meta.version = CSP_VERSION;
 	meta.date    = __DATE__ " " __TIME__;
 	meta.prefix  = rom_prefix;
+	meta.role    = rom_role;
+	meta.generation = rom_generation;
 	csp_dump_code(objf, &state, &meta);
     }
 

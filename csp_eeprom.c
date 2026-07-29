@@ -6,7 +6,14 @@
 
 // The firmware ROM image header, so a load can identify the firmware the patches
 // were saved against (see rom_fp below). Declared here the same way csp_rt.c does.
-extern const csp_image_header_t rom_header;
+// The firmware's identity for the patch log: crc_hdr of the linked image. Read
+// through the ref, because the image's struct type is generated per program and
+// cannot be named here.
+static uint16_t rom_fingerprint(void)
+{
+    const uint8_t* base = ro_ref(&rom_image).base;
+    return ro_header((const csp_image_header_t*)base).crc_hdr;
+}
 
 // Binary eeprom format. Only the RAM patch area is persisted -- ROM runs from
 // flash. The layout mirrors the ROM image: a csp_image_header_t describes the RAM
@@ -124,7 +131,7 @@ int csp_eeprom_save(csp_rt_t* st)
     memset(&hdr, 0, sizeof(hdr));
     ro_memcpy(hdr.magic, EEPROM_MAGIC, 4);
     hdr.version = EEPROM_VERSION;
-    hdr.rom_fp  = ro_header(&rom_header).crc_hdr;
+    hdr.rom_fp  = rom_fingerprint();
     hdr.nq      = st->ps.nq;
     ram_image(st, &hdr.ram, ram_strp, ram_nd, ram_nn, ram_ns);
     hdr.n_dis   = (uint16_t)csp_n_rules(st);
@@ -206,7 +213,7 @@ int csp_eeprom_load(csp_rt_t* st)
     // flash program -- size OR content -- shows up here. The RAM patches reference
     // ROM decls by index; a different program makes those indices mean something
     // else, so the whole save must go, not just the disable set.
-    if (hdr.rom_fp != ro_header(&rom_header).crc_hdr)
+    if (hdr.rom_fp != rom_fingerprint())
 	goto error;
 
     // Read the RAM patch area into the RAM-local slots (counts from the header,

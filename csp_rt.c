@@ -440,18 +440,13 @@ NOINLINE int ro_strcpy(char* dst, rostring_t src, int max)
 // would boot with an empty ROM. rom_n_edg > 0 means the ROM carries its own
 // precomputed reactive graph (ROM decl -> ROM rules), consumed by
 // csp_enq_elist alongside the runtime RAM graph. Emitted by csp -C -r.
-extern const char        rom_str[];
-extern const csp_decl_t  rom_decl[];
-extern const csp_instr_t rom_instr[];
-extern const index_t     rom_idg[];
-extern const index_t     rom_ofs[];
-extern const index_t     rom_edg[];
-extern const state_t     rom_states[];
-// The counts and integrity, in ONE header (see csp_image_header_t). rom_header.
-// n_edg > 0 means the ROM carries its own precomputed reactive graph (emitted by
-// csp -C -r). Present in the empty rom.c too (all zero). Read via ro_header so a
-// PROGMEM header on AVR is copied out, never dereferenced in place.
-extern const csp_image_header_t rom_header;
+// The firmware's default image, as one descriptor (csp_image_t). The seven
+// tables are still separate symbols in rom.c -- rom_image just names them
+// together, so nothing below the loader has to know what an image is called.
+// The counts and integrity live in the image's header (see csp_image_header_t).
+// n_edg > 0 means the image carries its own precomputed reactive graph (emitted
+// by csp -C -r). Present in the empty rom.c too (all zero). Read via ro_header
+// so a PROGMEM header on AVR is copied out, never dereferenced in place.
 
 // The ROM CRC is a byte-CRC over the RAW flash image (str, decls, instrs,
 // states, sizes). That is only reproducible between the host generator and the
@@ -1522,10 +1517,10 @@ NOINLINE void csp_enq_elist(csp_rt_t* st, index_t x)
 	obj = st->cur;
     // baked ROM graph in flash: ROM decl -> ROM rules that read it
     if (st->rom_nedg && (ix < st->rom_nd)) {
-	index_t base = ro_word(&rom_ofs[ix]);
-	index_t n    = ro_word(&rom_idg[ix]);
+	index_t base = ro_word(&st->rom_ofs_p[ix]);
+	index_t n    = ro_word(&st->rom_idg_p[ix]);
 	for (i = 0; i < (int)n; i++)
-	    csp_enq(st, obj, ro_word(&rom_edg[base+i]));
+	    csp_enq(st, obj, ro_word(&st->rom_edg_p[base+i]));
     }
     // runtime RAM graph: any decl -> RAM rules that read it. Only decls the graph
     // was built for have edges; one added since (ix >= graph_n) has none yet.
@@ -6351,33 +6346,103 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
     return n;
 }
 
+// The section pointers of one image, derived from its base. The runtime never
+// names an image's struct type -- it takes the base and works in offsets, so
+// the same code loads rom, a FAILSAFE, or a copy someone flashed onto a spare
+// page. Two ways to fill it in: from the header (fast) or by walking the
+// section prologues (when the header is the casualty).
+typedef struct {
+    const char*        str;
+    const csp_decl_t*  decl;
+    const csp_instr_t* instr;
+    const index_t*     idg;
+    const index_t*     ofs;
+    const index_t*     edg;
+    const state_t*     states;
+} img_p_t;
+
+static void img_from_hdr(const uint8_t* base, const csp_image_header_t* h,
+			 img_p_t* p)
+{
+    p->str    = (const char*)      (base + h->ofs_str);
+    p->decl   = (const csp_decl_t*)(base + h->ofs_decl);
+    p->instr  = (const csp_instr_t*)(base + h->ofs_instr);
+    p->idg    = (const index_t*)   (base + h->ofs_idg);
+    p->ofs    = (const index_t*)   (base + h->ofs_ofs);
+    p->edg    = (const index_t*)   (base + h->ofs_edg);
+    p->states = (const state_t*)   (base + h->ofs_states);
+}
+
+// Walk the section prologues and fill in what is found. Touches NOTHING in the
+// header -- the first section starts at sizeof(csp_image_header_t), each
+// prologue says what follows and how many bytes it is, and the next prologue is
+// right after. This is what makes a rotten header survivable: the offsets it
+// carries are the fast path, not the only path.
+//
+// An UNKNOWN tag is skipped, not fatal -- `len` is in bytes precisely so a
+// reader can step over a section it does not understand. That is what lets this
+// walk survive an image written by a later generator.
+//
+// Bounded by CSP_SECT_MAXWALK prologues and by a length that has to advance, so
+// a corrupt prologue stops the walk instead of running away through flash.
+#define CSP_SECT_MAXWALK 16
+#define CSP_SECT_NEEDED   7
+
+static int img_from_walk(const uint8_t* base, img_p_t* p)
+{
+    uint32_t off = (uint32_t)sizeof(csp_image_header_t);
+    int seen = 0;
+    int i;
+
+    memset(p, 0, sizeof(*p));
+    for (i = 0; i < CSP_SECT_MAXWALK; i++) {
+	csp_sect_t sc = ro_sect((const csp_sect_t*)(base + off));
+	const uint8_t* data = base + off + sizeof(csp_sect_t);
+	if (sc.len == 0 || sc.len > (uint32_t)MAX_INSTRS * sizeof(csp_instr_t))
+	    break;                             // nonsense length: stop here
+	if      (csp_tag_is(sc.tag, CSP_SECT_STR))    { p->str    = (const char*)data;        seen++; }
+	else if (csp_tag_is(sc.tag, CSP_SECT_DECL))   { p->decl   = (const csp_decl_t*)data;  seen++; }
+	else if (csp_tag_is(sc.tag, CSP_SECT_INSTR))  { p->instr  = (const csp_instr_t*)data; seen++; }
+	else if (csp_tag_is(sc.tag, CSP_SECT_IDG))    { p->idg    = (const index_t*)data;     seen++; }
+	else if (csp_tag_is(sc.tag, CSP_SECT_OFS))    { p->ofs    = (const index_t*)data;     seen++; }
+	else if (csp_tag_is(sc.tag, CSP_SECT_EDG))    { p->edg    = (const index_t*)data;     seen++; }
+	else if (csp_tag_is(sc.tag, CSP_SECT_STATES)) { p->states = (const state_t*)data;     seen++; }
+	/* else: a section this build does not know -- step over it */
+	off += (uint32_t)sizeof(csp_sect_t) + sc.len;
+	if (seen == CSP_SECT_NEEDED)
+	    return 1;
+    }
+    return 0;
+}
+
 // True when firmware with executable rules is linked in (rom.c).
 int csp_has_firmware(void)
 {
-    return ro_header(&rom_header).n_instr > 0;
+    const uint8_t* base = ro_ref(&rom_image).base;
+    return ro_header((const csp_image_header_t*)base).n_instr > 0;
 }
 
-// Verify the ROM image against its baked header, section by section. Returns 0
-// on success, or a rostring naming the corrupt section for the caller to print.
+// Verify the image against its baked header, section by section. Returns 0 on
+// success, or a rostring naming the corrupt section for the caller to print.
 // Per-section so a flipped flash cell is PINPOINTED, not just "corrupt". The
-// header itself is checked first (crc_hdr over every field above it), so a
-// corrupt count cannot mislead the section checks. Byte-CRC is valid because
-// host and target are both little-endian and str/decl/instr/state are all
-// byte-stable (see the CSP_STATIC_ASSERT at csp_crc16).
-static rostring_t rom_verify(const csp_image_header_t* h)
+// header itself is checked first (crc_hdr over every byte above it -- magic,
+// size, role, generation, counts, section CRCs and the offsets), so neither a
+// corrupt count nor a corrupt offset can mislead the section checks. Byte-CRC
+// is valid because host and target are both little-endian and str/decl/instr/
+// state are all byte-stable (see the CSP_STATIC_ASSERT at csp_crc16).
+static rostring_t rom_verify(const img_p_t* p, const csp_image_header_t* h)
 {
-    // crc_hdr covers the fields before it -- everything but the trailing crc_hdr.
     if (csp_crc16(0xFFFF, h, sizeof(*h) - sizeof(uint16_t), 0) != h->crc_hdr)
 	return ros_hdr;
-    if (csp_crc16(0xFFFF, rom_str, h->n_str, 1) != h->crc_str)
+    if (csp_crc16(0xFFFF, p->str, h->n_str, 1) != h->crc_str)
 	return ros_str;
-    if (csp_crc16(0xFFFF, rom_decl, (size_t)h->n_decl * sizeof(csp_decl_t), 1)
+    if (csp_crc16(0xFFFF, p->decl, (size_t)h->n_decl * sizeof(csp_decl_t), 1)
 	!= h->crc_decl)
 	return ros_decl;
-    if (csp_crc16(0xFFFF, rom_instr, (size_t)h->n_instr * sizeof(csp_instr_t), 1)
+    if (csp_crc16(0xFFFF, p->instr, (size_t)h->n_instr * sizeof(csp_instr_t), 1)
 	!= h->crc_instr)
 	return ros_instr;
-    if (csp_crc16(0xFFFF, rom_states, (size_t)h->n_state * sizeof(state_t), 1)
+    if (csp_crc16(0xFFFF, p->states, (size_t)h->n_state * sizeof(state_t), 1)
 	!= h->crc_state)
 	return ros_states;
     // NOTE: the reactive graph is checked SEPARATELY (rom_graph_ok), not here --
@@ -6390,41 +6455,44 @@ static rostring_t rom_verify(const csp_image_header_t* h)
 // 0 if corrupt. Separate from rom_verify because a bad graph is NOT fatal: the
 // graph only tells the reactive scheduler which rules a change wakes -- pure
 // optimization. If just it is corrupt the instructions and decls are still
-// trustworthy, so csp_load_rom drops the graph (rom_nedg = 0) and the program
+// trustworthy, so csp_load_image drops the graph (rom_nedg = 0) and the program
 // runs full sequential (csp_cycle -> csp_eval), which the transaction model
 // guarantees yields the same committed state. Degrade toward running, not dead.
 // The three arrays are folded in the same order and sizes the generator used:
-// rom_idg[n_decl], rom_ofs[n_decl+1], rom_edg[n_edg].
-static int rom_graph_ok(const csp_image_header_t* h)
+// idg[n_decl], ofs[n_decl+1], edg[n_edg].
+static int rom_graph_ok(const img_p_t* p, const csp_image_header_t* h)
 {
     uint16_t crc;
     if (h->n_edg == 0)
-	return 1;   // no graph: link stubs, never read -- nothing to verify
-    crc = csp_crc16(0xFFFF, rom_idg, (size_t)h->n_decl * sizeof(index_t), 1);
-    crc = csp_crc16(crc, rom_ofs, (size_t)(h->n_decl + 1) * sizeof(index_t), 1);
-    crc = csp_crc16(crc, rom_edg, (size_t)h->n_edg * sizeof(index_t), 1);
+	return 1;   // no graph: stub sections, never read -- nothing to verify
+    crc = csp_crc16(0xFFFF, p->idg, (size_t)h->n_decl * sizeof(index_t), 1);
+    crc = csp_crc16(crc, p->ofs, (size_t)(h->n_decl + 1) * sizeof(index_t), 1);
+    crc = csp_crc16(crc, p->edg, (size_t)h->n_edg * sizeof(index_t), 1);
     return crc == h->crc_graph;
 }
 
 // --- header-corruption recovery: self-verifying section END markers ---------
-// When crc_hdr fails, the header's counts and section CRCs are all suspect. But
-// rom_decl and rom_instr each end with a self-verifying marker (DECL_END_MARK /
-// OP_END_MARK, see csp_dump_code): its crc covers the section data + itself with
-// the crc field zeroed. Scanning for the marker recovers the entry count (its
-// position) AND confirms integrity, INDEPENDENT of the header. The scan is bound
-// by the array's compile-time max, so a missing/corrupt marker cannot read
-// unboundedly -- on flash it only ever touches the rom_* image.
+// When crc_hdr fails, the header's counts, CRCs and OFFSETS are all suspect. The
+// offsets are recovered by walking the prologues (img_from_walk); the counts and
+// the integrity come from the sections themselves. decl and instr each end with
+// a self-verifying marker (DECL_END_MARK / OP_END_MARK, see csp_dump_code) whose
+// crc covers the section data + itself with the crc field zeroed, and str/state
+// carry the same idea as a sentinel plus trailer. Scanning for the marker
+// recovers the entry count (its position) AND confirms integrity, INDEPENDENT of
+// the header. Each scan is bound by the array's compile-time max, so a missing
+// or corrupt marker cannot read unboundedly.
 
-// Recover rom_decl's entry count via its END marker; -1 if not intact.
-NOINLINE static int rom_scan_decl(void)
+// Recover the decl entry count via its END marker; -1 if not intact.
+NOINLINE static int rom_scan_decl(const csp_decl_t* decl)
 {
     int p;
+    if (decl == NULL) return -1;
     for (p = 0; p <= MAX_DECLS; p++) {
-	if (ro_decl(&rom_decl[p]).type == DECL_END_MARK) {
-	    csp_decl_t m = ro_decl(&rom_decl[p]);
+	if (ro_decl(&decl[p]).type == DECL_END_MARK) {
+	    csp_decl_t m = ro_decl(&decl[p]);
 	    uint16_t stored = m.em.crc, crc;
 	    m.em.crc = 0;                          // the crc field reads 0 in the fold
-	    crc = csp_crc16(0xFFFF, rom_decl, (size_t)p * sizeof(csp_decl_t), 1);
+	    crc = csp_crc16(0xFFFF, decl, (size_t)p * sizeof(csp_decl_t), 1);
 	    crc = csp_crc16(crc, &m, sizeof(m), 0);   // marker copy is in RAM
 	    return (crc == stored) ? p : -1;
 	}
@@ -6432,16 +6500,17 @@ NOINLINE static int rom_scan_decl(void)
     return -1;
 }
 
-// Recover rom_instr's entry count via its END marker; -1 if not intact.
-NOINLINE static int rom_scan_instr(void)
+// Recover the instr entry count via its END marker; -1 if not intact.
+NOINLINE static int rom_scan_instr(const csp_instr_t* instr)
 {
     int p;
+    if (instr == NULL) return -1;
     for (p = 0; p <= MAX_INSTRS; p++) {
-	if (ro_instr(&rom_instr[p]).op == OP_END_MARK) {
-	    csp_instr_t m = ro_instr(&rom_instr[p]);
+	if (ro_instr(&instr[p]).op == OP_END_MARK) {
+	    csp_instr_t m = ro_instr(&instr[p]);
 	    uint16_t stored = m.em.crc, crc;
 	    m.em.crc = 0;
-	    crc = csp_crc16(0xFFFF, rom_instr, (size_t)p * sizeof(csp_instr_t), 1);
+	    crc = csp_crc16(0xFFFF, instr, (size_t)p * sizeof(csp_instr_t), 1);
 	    crc = csp_crc16(crc, &m, sizeof(m), 0);
 	    return (crc == stored) ? p : -1;
 	}
@@ -6449,52 +6518,64 @@ NOINLINE static int rom_scan_instr(void)
     return -1;
 }
 
-// Recover rom_str's byte count via its 0xFF sentinel trailer (0xFF is never a
+// Recover the str byte count via its 0xFF sentinel trailer (0xFF is never a
 // valid length byte or ASCII char), then verify the 2-byte CRC after it. -1 if
 // not intact. Bound by the name-position range.
-NOINLINE static int rom_scan_str(void)
+NOINLINE static int rom_scan_str(const char* str)
 {
     int p;
+    if (str == NULL) return -1;
     for (p = 0; p < (1 << NAMEPOS_BITS); p++) {
-	if ((uint8_t)ro_byte((const uint8_t*)&rom_str[p]) == 0xFF) {
-	    uint16_t stored = (uint8_t)ro_byte((const uint8_t*)&rom_str[p+1]) |
-			      ((uint16_t)(uint8_t)ro_byte((const uint8_t*)&rom_str[p+2]) << 8);
-	    return (csp_crc16(0xFFFF, rom_str, p, 1) == stored) ? p : -1;
+	if ((uint8_t)ro_byte((const uint8_t*)&str[p]) == 0xFF) {
+	    uint16_t stored = (uint8_t)ro_byte((const uint8_t*)&str[p+1]) |
+			      ((uint16_t)(uint8_t)ro_byte((const uint8_t*)&str[p+2]) << 8);
+	    return (csp_crc16(0xFFFF, str, p, 1) == stored) ? p : -1;
 	}
     }
     return -1;
 }
 
-// Recover rom_states' entry count via its sentinel state (snum 0x7f), then verify
+// Recover the state entry count via its sentinel state (snum 0x7f), then verify
 // the CRC packed in the following state_t (name(9)|snum(7)<<9). -1 if not intact.
-NOINLINE static int rom_scan_state(void)
+NOINLINE static int rom_scan_state(const state_t* states)
 {
     int p;
+    if (states == NULL) return -1;
     for (p = 0; p <= MAX_STATES + 1; p++) {
-	if (ro_state(&rom_states[p]).snum == 0x7f) {
-	    state_t c = ro_state(&rom_states[p+1]);
+	if (ro_state(&states[p]).snum == 0x7f) {
+	    state_t c = ro_state(&states[p+1]);
 	    uint16_t stored = (uint16_t)(c.name | ((uint16_t)c.snum << 9));
-	    return (csp_crc16(0xFFFF, rom_states, (size_t)p * sizeof(state_t), 1)
+	    return (csp_crc16(0xFFFF, states, (size_t)p * sizeof(state_t), 1)
 		    == stored) ? p : -1;
 	}
     }
     return -1;
 }
 
-// Activate the linked firmware ROM: run it in place from flash by setting the
-// RAM base offsets to the ROM sizes. No copy -- csp_get_decl/instr read flash
-// for logical indices below the base. The parse_file DECL_END terminator at the
-// end of the ROM image is dropped so RAM decls append seamlessly.
-NOINLINE void csp_load_rom(csp_rt_t* st)
+// Activate an image: run it in place from flash by setting the RAM base offsets
+// to the image's sizes. No copy -- csp_get_decl/instr read flash for logical
+// indices below the base. The parse_file DECL_END terminator at the end of the
+// image is dropped so RAM decls append seamlessly.
+//
+// `base` is the first byte of the image object; everything else is reached by
+// offset from it, so this is the same code for the linked rom, a FAILSAFE bank
+// or a copy found by scanning flash.
+NOINLINE void csp_load_image(csp_rt_t* st, const uint8_t* base)
 {
-    csp_image_header_t h = ro_header(&rom_header);
+    csp_image_header_t h = ro_header((const csp_image_header_t*)base);
+    img_p_t p;
     rostring_t bad;
-    index_t nd = h.n_decl;
+    index_t nd;
 
+    if ((h.magic[0] != CSP_IMAGE_MAGIC0) || (h.magic[1] != CSP_IMAGE_MAGIC1) ||
+	(h.magic[2] != CSP_IMAGE_MAGIC2) || (h.magic[3] != CSP_IMAGE_MAGIC3))
+	return;                   // not an image at all
     if (h.n_decl == 0)            // no firmware linked
 	return;
+    nd = h.n_decl;
+    img_from_hdr(base, &h, &p);
     // Reject a stale or corrupt generate before touching ps.*: an incompatible
-    // rom.c would otherwise be read as garbage decls/instructions. Version
+    // image would otherwise be read as garbage decls/instructions. Version
     // catches "generated by an older csp" (layout changed); the per-section CRC
     // catches a damaged flash image and names the section. Either way run EMPTY
     // (return before rom_* are set) with a message, so the board is usable and
@@ -6504,32 +6585,37 @@ NOINLINE void csp_load_rom(csp_rt_t* st)
 	csp_print_uint(h.version);
 	csp_print_lit(", firmware expects ");
 	csp_print_uint(ROM_FORMAT_VERSION);
-	csp_print_line(" -- regenerate rom.c");
+	csp_print_line(" -- regenerate the image");
 	return;
     }
-    if ((bad = rom_verify(&h)) != NULL) {
+    if ((bad = rom_verify(&p, &h)) != NULL) {
 	// Recover ONLY when the header itself (crc_hdr) is the casualty: then its
-	// counts/CRCs are suspect but the sections may be whole. decl+instr carry
-	// self-verifying END markers -- confirm them independently; str+state fall
-	// back to the header's (thereby cross-checked) crc. A DATA corruption
-	// (a section CRC failing with crc_hdr intact) is NOT recoverable -- the
-	// marker folds the same bad bytes -- so those still reject.
+	// counts, CRCs and offsets are all suspect, but the sections may be whole.
+	// Walk the prologues for the offsets, then let each section prove itself
+	// through its own marker. A DATA corruption (a section CRC failing with
+	// crc_hdr intact) is NOT recoverable -- the marker folds the same bad
+	// bytes -- so those still reject.
 	int rnd = -1, rnn = -1, rns = -1, rnstate = -1;
 	if (bad == ros_hdr) {
-	    rnd     = rom_scan_decl();
-	    rnn     = rom_scan_instr();
-	    rns     = rom_scan_str();
-	    rnstate = rom_scan_state();
+	    img_p_t w;
+	    if (img_from_walk(base, &w)) {
+		p = w;
+		rnd     = rom_scan_decl(p.decl);
+		rnn     = rom_scan_instr(p.instr);
+		rns     = rom_scan_str(p.str);
+		rnstate = rom_scan_state(p.states);
+	    }
 	}
 	if ((rnd >= 0) && (rnn >= 0) && (rns >= 0) && (rnstate >= 0)) {
-	    // All four sections self-verified via their own markers/trailers --
-	    // fully independent of the (rotten) header. Use the recovered counts.
+	    // Every section self-verified via its own marker, and the prologues
+	    // gave their positions -- fully independent of the rotten header.
 	    h.n_decl  = (uint16_t)rnd;
 	    h.n_instr = (uint16_t)rnn;
 	    h.n_str   = (uint16_t)rns;
 	    h.n_state = (uint16_t)rnstate;
+	    h.n_edg   = 0;            // the graph has no marker: drop it, run seq
 	    nd = h.n_decl;
-	    csp_print_line("ROM header CRC bad -- sections verified via markers");
+	    csp_print_line("ROM header CRC bad -- sections verified by walk");
 	}
 	else {
 	    csp_print_lit("ROM rejected: CRC mismatch in ");
@@ -6538,10 +6624,13 @@ NOINLINE void csp_load_rom(csp_rt_t* st)
 	    return;
 	}
     }
-    st->rom_decl_p  = rom_decl;
-    st->rom_instr_p = rom_instr;
-    st->rom_str_p   = rom_str;
-    if ((nd > 0) && (ro_decl(&rom_decl[nd-1]).type == DECL_END))
+    st->rom_decl_p  = p.decl;
+    st->rom_instr_p = p.instr;
+    st->rom_str_p   = p.str;
+    st->rom_idg_p   = p.idg;
+    st->rom_ofs_p   = p.ofs;
+    st->rom_edg_p   = p.edg;
+    if ((nd > 0) && (ro_decl(&p.decl[nd-1]).type == DECL_END))
 	nd--;                     // drop the trailing terminator
     st->rom_nd   = nd;
     st->rom_nn   = h.n_instr;
@@ -6551,7 +6640,7 @@ NOINLINE void csp_load_rom(csp_rt_t* st)
     // the baked graph and let csp_cycle fall back to full sequential (rom_nedg
     // == 0 -> csp_eval). The program still runs -- reactive is just an
     // optimization -- so warn instead of rejecting. (See rom_graph_ok.)
-    if (!rom_graph_ok(&h)) {
+    if (!rom_graph_ok(&p, &h)) {
 	st->rom_nedg = 0;
 	csp_print_line("ROM graph corrupt -- running sequential");
     }
@@ -6563,17 +6652,23 @@ NOINLINE void csp_load_rom(csp_rt_t* st)
     st->ps.nn   = st->rom_nn;
     st->ps.strp = st->rom_strp;
     st->sx = 0;                   // State is ROM decl 0
-    // Restore the baked state table (name offsets index rom_str, which we just
-    // pointed at). Overwrites the INIT/NORMAL seed from csp_rt_init with the
-    // program's full table so ON/OFF/... resolve in listing and lookup.
+    // Restore the baked state table (name offsets index the str section, which
+    // we just pointed at). Overwrites the INIT/NORMAL seed from csp_rt_init with
+    // the program's full table so ON/OFF/... resolve in listing and lookup.
     {
 	int i, ns = h.n_state;
 	if (ns > MAX_STATES) ns = MAX_STATES;
 	for (i = 0; i < ns; i++)
-	    st->states[i] = ro_state(&rom_states[i]);
+	    st->states[i] = ro_state(&p.states[i]);
 	st->ps.ns = ns;
 	st->rom_ns = ns;   // baseline; EEPROM persists only additions above this
     }
+}
+
+// The firmware's own image, by the name every backend already calls.
+NOINLINE void csp_load_rom(csp_rt_t* st)
+{
+    csp_load_image(st, ro_ref(&rom_image).base);
 }
 
 // Backend hook: hand out the raw RAM for the code arena. The memory source is a

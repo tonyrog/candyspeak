@@ -160,6 +160,70 @@ Avklarade punkter, flyttade hit från TODO.md. Nyast överst.
 
 ## 1.0 (efter release)
 
+### Image-format v8: ett sammanhangande objekt med offsets (2026-07-29)
+
+  - **Ett objekt per image** i stallet for sju losa arrayer. `CSP_IMAGE_TYPE`
+    (makro med alla langder) genererar structtypen; kompilatorn gor layouten,
+    vilket ar det som haller byte-CRC:n arlig. `aligned(4)` pa typen -- headern
+    ar PACKED, sa utan den arver structen alignment 2 fran `index_t`.
+  - **Sektioner nas via offset, inte pekare.** Offsets overlever att imaget
+    kopieras till en annan flashsida eller till RAM; pekare gor det inte, och
+    pekare gar inte att kontrollera mot nagot.
+  - **`crc_hdr` sist och over ALLT ovanfor** -- magic, size, role, generation,
+    antalen, sektions-CRC:erna OCH offseten. En rutten offset hade annars
+    skickat laddaren till en skrappadress utan att nagot protesterade.
+  - **Generatorn raknar ut offseten sjalv** -- den maste, eftersom crc_hdr
+    tacker dem och en CRC inte kan tas over varden bara C-kompilatorn kanner.
+    `CSP_IMAGE_CHECK` later kompilatorn bekrafta varje offset med static
+    asserts, sa bygget faller om de nagonsin skiljer sig at.
+  - **Taggad prolog fore varje sektion** (`csp_sect_t`: tag + len i BYTE). Ger
+    en cursor som gar igenom hela imaget utan att rora headern, och gor att en
+    senare lasare kan hoppa over en sektion vars tagg den inte kanner.
+    Verifierat: 7 sektioner, landar exakt pa `size`.
+  - `magic` = `JAM\n`, plus `role` och `generation` -- falten som gor redundanta
+    FAILSAFE-kopior och A/B till samma regel i stallet for tva specialfall.
+    `--role` och `--generation` pa kommandoraden.
+  - Laddaren tar en `const uint8_t* base`. `csp_image_ref_t` (en pekare) ar
+    handtaget, eftersom varje image har sin egen genererade structtyp.
+  - **Header-fri atervinning blev battre.** Forr atervanns antalen men positionerna
+    kom fran linkerns pekare. Nu gar `img_from_walk` prologerna och atervinner
+    positionerna ocksa. Mätt, tre fall:
+      * trasig crc_hdr -> "sections verified by walk", programmet kor
+      * trasig crc_hdr OCH forstorda offsets -> samma, offseten anvands inte alls
+      * en andrad instruktion med intakt header -> "CRC mismatch in instr
+        section", avvisas (data-korruption ar inte atervinningsbar)
+  - Mega: flash 96.4k -> 97.4k, RAM oforandrat 1967. test + san 59/59, mega och
+    mkrzero bygger. Sekventiellt och reaktivt image kompilerar, tva image lankar
+    ihop utan kollision.
+
+
+### `csp -C --prefix` -- flera image i samma firmware (2026-07-29)
+
+  - `csp_rom_meta_t` fick `prefix`; `csp_dump_code` emitterar `<px>_str`,
+    `<px>_decl`, `<px>_instr`, `<px>_idg/_ofs/_edg`, `<px>_states`,
+    `<px>_header`. NULL/utelämnad = `rom`, så ett omodifierat `csp -C` ger
+    exakt samma rom.c som förut (verifierat symbol för symbol).
+  - `--prefix NAME` på kommandoraden. `-h` uppdaterad.
+  - Stale-guarden i den genererade filen säger nu `<prefix>.c is stale`.
+  - Verifierat: `csp -C -n --prefix failsafe examples/traffic_fail.csp` och ett
+    vanligt `csp -C` kompilerar var för sig OCH länkar ihop utan
+    symbolkollision (`ld -r`).
+  - **Deskriptorn (`csp_image_t`)**: `hdr/str/decl/instr/idg/ofs/edg/states` i en
+    struct. `csp_load_image(st, img)` gör jobbet, `csp_load_rom(st)` är en
+    wrapper som skickar `&rom_image`. `rom_verify`, `rom_graph_ok` och alla fyra
+    `rom_scan_*` tar imaget. Ingenting under laddaren känner längre ett image vid
+    namn -- reaktiva grafen läste `rom_idg/ofs/edg` som globaler, går nu via
+    pekare i `csp_rt_t`.
+  - Deskriptorn är `RODATA` och läses via nya `ro_image()`. Åtta pekare = 16 byte
+    RAM per image på AVR, och image är tänkta att komma i tretal. Mätt på mega:
+    flash i stället för RAM gav de 16 tillbaka; hela steget kostar +6 byte RAM
+    (de tre grafpekarna i `csp_rt_t`).
+  - Rökt av med ett riktigt bakat ROM: `traffic.csp` -> rom.c -> länkat och kört,
+    tillståndsmaskinen går som förut genom nya laddaren.
+  - Plan för steg 2-4 (sammanhängande image, sektionstabell med offsets, magic/
+    role/generation + flash-scan, sidplacering) i **doc/IMAGES.md**.
+  - test + san 59/59, mega bygger.
+
 ### Pin-konfiguration blir ett API, `.dir` konfigurerar om på riktigt (2026-07-29)
 
   - **`csp_board_digital_config()`** är nu enda stället som vet vad en digital

@@ -819,6 +819,10 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     // Every symbol this file emits is <px>_something. One image format, told
     // apart from another only by the name it answers to -- see csp_rom_meta_t.
     const char* px = (meta && meta->prefix) ? meta->prefix : "rom";
+    // Section lengths as emitted, and the offsets derived from them.
+    unsigned n_str_b, n_decl_b, n_instr_b, n_state_b;
+    unsigned n_idg = 1, n_ofs = 1, n_edg = 1;    // stubs unless -r bakes a graph
+    uint32_t SP, o_str, o_decl, o_instr, o_idg, o_ofs, o_edg, o_states, img_size;
 
     // Provenance banner: what this ROM is, where it came from, how big. The
     // counts are what actually goes into flash, so a glance at the top of rom.c
@@ -845,6 +849,38 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	       "csp.h is newer -- regenerate with 'csp -C'\"\n",
 	    px, (unsigned)ROM_FORMAT_VERSION);
     fprintf(f, "#endif\n");
+
+    // Section byte lengths as EMITTED (trailers included), then the offsets.
+    // The generator must compute these itself: crc_hdr covers them, and a CRC
+    // cannot be taken over values only the C compiler knows. CSP_IMAGE_CHECK
+    // below makes the compiler confirm every one of them.
+    n_str_b   = st->ps.strp + 3;              // data + 0xFF sentinel + crc16
+    n_decl_b  = st->ps.nd + 1;                // + DECL_END_MARK
+    n_instr_b = st->ps.nn + 1;                // + OP_END_MARK
+    n_state_b = st->ps.ns + 2;                // + sentinel + crc
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
+    if (st->reactive) {
+	n_idg = st->ps.nd;
+	n_ofs = st->ps.nd + 1;
+	n_edg = st->ofs[st->ps.nd] ? st->ofs[st->ps.nd] : 1;
+    }
+#endif
+    SP       = (uint32_t)sizeof(csp_sect_t);
+    o_str    = (uint32_t)sizeof(csp_image_header_t) + SP;
+    o_decl   = o_str   + n_str_b   + CSP_PAD4(n_str_b)   + SP;
+    o_instr  = o_decl  + n_decl_b  * 8                   + SP;
+    o_idg    = o_instr + n_instr_b * 4                   + SP;
+    o_ofs    = o_idg   + n_idg*2   + CSP_PAD4(2*n_idg)   + SP;
+    o_edg    = o_ofs   + n_ofs*2   + CSP_PAD4(2*n_ofs)   + SP;
+    o_states = o_edg   + n_edg*2   + CSP_PAD4(2*n_edg)   + SP;
+    img_size = o_states+ n_state_b*2 + CSP_PAD4(2*n_state_b);
+
+    fprintf(f, "\nCSP_IMAGE_TYPE(%s_image_t, %u,%u,%u,%u,%u,%u,%u);\n",
+	    px, n_str_b, n_decl_b, n_instr_b, n_idg, n_ofs, n_edg, n_state_b);
+    fprintf(f, "CSP_IMAGE_CHECK(%s_image_t, %u,%u,%u,%u,%u,%u,%u,%u);\n\n",
+	    px, o_str, o_decl, o_instr, o_idg, o_ofs, o_edg, o_states, img_size);
+    fprintf(f, "static const %s_image_t %s_image_data RODATA = {\n", px, px);
+
     // first dump string table
     // int, not char: matches the `extern const int rom_str_len` in csp_rt.c so
     // the read is 4-byte aligned (a char at an odd address read as int HardFaults
@@ -854,7 +890,8 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     // 3 extra bytes: a 0xFF sentinel (never a valid length or ASCII char, so it
     // marks the section end for header-free recovery) + the 2-byte CRC. See
     // rom_scan_str.
-    fprintf(f, "const char %s_str[%d] RODATA = {\n", px, st->ps.strp + 3);
+    fprintf(f, "  .s_str = { { CSP_SECT_STR }, %u },\n  .str = {\n",
+	    n_str_b + CSP_PAD4(n_str_b));
     i = 0;
     while (i < st->ps.strp) {
 	uint8_t n = st->ram_str[i]; // length of next string
@@ -876,7 +913,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	}
     }
     fprintf(f, "\n(char)0xff,%u,%u,", crc_str_data & 0xff, (crc_str_data >> 8) & 0xff);
-    fprintf(f, "};\n");
+    fprintf(f, "},\n");
 
     // Canonical CRC over the decl DATA (normalization mirrors the header note
     // below: zero the runtime-scratch fields the emitter does not write). Used
@@ -901,7 +938,8 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     }
 
     // now dump declarations -- one extra entry: the DECL_END_MARK terminator.
-    fprintf(f, "const csp_decl_t %s_decl[%d] RODATA = {\n", px, st->ps.nd + 1);
+    fprintf(f, "  .s_decl = { { CSP_SECT_DECL }, %u },\n  .decl = {\n",
+	    n_decl_b * 8);
     for (i = 0; i < st->ps.nd; i++) {
 	// csp_decl_t is a UNION whose every arm begins with DECL_COMMON, so the
 	// common fields MUST be written inside the same arm designator as the
@@ -962,7 +1000,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	}
     }
     fprintf(f, "  {.em={.type=DECL_END_MARK,.crc=%u,._res=0}},\n", decl_mark_crc);
-    fprintf(f, "};\n");
+    fprintf(f, "  },\n");
 
     // Instruction section CRC + OP_END_MARK self-CRC (no canonicalization -- the
     // emitted instrs are byte-for-byte st->ram_instr).
@@ -975,7 +1013,8 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     }
 
     // and then dump instructions -- one extra entry: the OP_END_MARK terminator.
-    fprintf(f, "const csp_instr_t %s_instr[%d] RODATA = {\n", px, st->ps.nn + 1);
+    fprintf(f, "  .s_instr = { { CSP_SECT_INSTR }, %u },\n  .instr = {\n",
+	    n_instr_b * 4);
     for (i = 0; i < st->ps.nn; i++) {
 	// csp_instr_t is a UNION whose every arm begins with INSTR_COMMON (op),
 	// so .op MUST be written inside the same arm designator -- a leading
@@ -1043,53 +1082,59 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	}
     }
     fprintf(f, "  {.em={.op=OP_END_MARK,.crc=%u,._res=0}},\n", instr_mark_crc);
-    fprintf(f, "};\n");
+    fprintf(f, "  },\n");
 
     // Reactive dependency graph: maps each ROM decl -> the ROM rules that read
     // it, so firmware runs reactively without rebuilding its graph in RAM
     // (compiled with -r). Indices match the ROM segment 1:1 (compiled at base
-    // 0). These four symbols are ALWAYS emitted -- csp_rt references them
-    // unconditionally -- with rom_n_edg=0 and stub arrays when there is no
-    // graph, so every generated rom.c links without a weak fallback.
+    // 0). The three sections are ALWAYS present -- the image type has a slot for
+    // each -- with n_edg=0 and stub arrays when there is no graph.
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     if (st->reactive) {
 	int nd = st->ps.nd;
 	int nedg = st->ofs[nd];
-	fprintf(f, "const index_t %s_idg[%d] RODATA = {", px, nd);
+	fprintf(f, "  .s_idg = { { CSP_SECT_IDG }, %u },\n  .idg = {",
+		n_idg*2 + CSP_PAD4(2*n_idg));
 	for (i = 0; i < nd; i++) fprintf(f, "%u,", st->idg[i]);
-	fprintf(f, "};\n");
-	fprintf(f, "const index_t %s_ofs[%d] RODATA = {", px, nd+1);
+	fprintf(f, "},\n");
+	fprintf(f, "  .s_ofs = { { CSP_SECT_OFS }, %u },\n  .ofs = {",
+		n_ofs*2 + CSP_PAD4(2*n_ofs));
 	for (i = 0; i <= nd; i++) fprintf(f, "%u,", st->ofs[i]);
-	fprintf(f, "};\n");
-	fprintf(f, "const index_t %s_edg[%d] RODATA = {", px, nedg ? nedg : 1);
+	fprintf(f, "},\n");
+	fprintf(f, "  .s_edg = { { CSP_SECT_EDG }, %u },\n  .edg = {",
+		n_edg*2 + CSP_PAD4(2*n_edg));
 	for (i = 0; i < nedg; i++) fprintf(f, "%u,", st->edg[i]);
 	if (!nedg) fprintf(f, "0");   // avoid a zero-length array
-	fprintf(f, "};\n");
+	fprintf(f, "},\n");
     }
     else
 #endif
     {
-	// No graph: stub symbols so rom.c links (all reads gated by rom_n_edg==0).
-	fprintf(f, "const index_t %s_idg[1] RODATA = {0};\n", px);
-	fprintf(f, "const index_t %s_ofs[1] RODATA = {0};\n", px);
-	fprintf(f, "const index_t %s_edg[1] RODATA = {0};\n", px);
+	// No graph: stub sections (all reads gated by n_edg == 0).
+	fprintf(f, "  .s_idg = { { CSP_SECT_IDG }, %u },\n  .idg = {0},\n",
+		n_idg*2 + CSP_PAD4(2*n_idg));
+	fprintf(f, "  .s_ofs = { { CSP_SECT_OFS }, %u },\n  .ofs = {0},\n",
+		n_ofs*2 + CSP_PAD4(2*n_ofs));
+	fprintf(f, "  .s_edg = { { CSP_SECT_EDG }, %u },\n  .edg = {0},\n",
+		n_edg*2 + CSP_PAD4(2*n_edg));
     }
 
-    // State table (name offset -> state number). csp_load_rom copies this back
-    // into st->states so baked user states resolve. Name offsets index rom_str.
+    // State table (name offset -> state number). csp_load_image copies this back
+    // into st->states so baked user states resolve. Name offsets index str.
     crc_state_data = csp_crc16(0xFFFF, st->states,
 			       (size_t)st->ps.ns * sizeof(state_t), 0);
     // state self-CRC trailer: a sentinel (snum 0x7f -- never a real state, snums
     // are 0..MAX_STATES-1) marks the section end for header-free recovery, and the
     // next state_t packs the 16-bit CRC across its name(9)+snum(7). rom_scan_state.
-    fprintf(f, "const state_t %s_states[%d] RODATA = {", px, st->ps.ns + 2);
+    fprintf(f, "  .s_states = { { CSP_SECT_STATES }, %u },\n  .states = {",
+	    n_state_b*2 + CSP_PAD4(2*n_state_b));
     for (i = 0; i < st->ps.ns; i++)
 	fprintf(f, "{.name=%u,.snum=%u},",
 		st->states[i].name, st->states[i].snum);
     fprintf(f, "{.name=0,.snum=0x7f},");                       // sentinel
     fprintf(f, "{.name=%u,.snum=%u},",                         // crc: name|snum<<9
 	    crc_state_data & 0x1ff, (crc_state_data >> 9) & 0x7f);
-    fprintf(f, "};\n");
+    fprintf(f, "},\n");
 
     // The image header LAST: counts + per-section CRCs, so csp_load_rom can
     // reject a stale or corrupt generate and name the bad section. Each section
@@ -1126,15 +1171,43 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	}
 	h.crc_hdr = csp_crc16(0xFFFF, &h, sizeof(h) - sizeof(uint16_t), 0);
 
-	fprintf(f, "const csp_image_header_t %s_header RODATA = {\n"
-		   "  .version=%u, .n_str=%u, .n_decl=%u, .n_instr=%u,"
-		   " .n_edg=%u, .n_state=%u,\n"
-		   "  .crc_str=%u, .crc_decl=%u, .crc_instr=%u, .crc_state=%u,"
-		   " .crc_graph=%u, .crc_hdr=%u };\n",
-		px,
-		h.version, h.n_str, h.n_decl, h.n_instr, h.n_edg, h.n_state,
-		h.crc_str, h.crc_decl, h.crc_instr, h.crc_state,
-		h.crc_graph, h.crc_hdr);
+	h.magic[0] = CSP_IMAGE_MAGIC0; h.magic[1] = CSP_IMAGE_MAGIC1;
+	h.magic[2] = CSP_IMAGE_MAGIC2; h.magic[3] = CSP_IMAGE_MAGIC3;
+	h.size = img_size;
+	h.role = (meta && meta->role) ? meta->role : CSP_ROLE_ROM;
+	h.generation = (meta) ? meta->generation : 0;
+	h.ofs_str = o_str;   h.ofs_decl = o_decl; h.ofs_instr = o_instr;
+	h.ofs_idg = o_idg;   h.ofs_ofs = o_ofs;   h.ofs_edg = o_edg;
+	h.ofs_states = o_states;
+	// LAST, and over every byte above it -- magic, size, role, generation,
+	// counts, section CRCs AND the offsets. Computed after all of them.
+	h.crc_hdr = csp_crc16(0xFFFF, &h, sizeof(h) - sizeof(uint16_t), 0);
+
+	// Designated initializers may appear in any order, so the header is
+	// emitted last (it needs every section CRC) but lands first in the object.
+	fprintf(f, "  .hdr = {\n"
+		   "    .magic = { CSP_IMAGE_MAGIC0, CSP_IMAGE_MAGIC1,"
+		   " CSP_IMAGE_MAGIC2, CSP_IMAGE_MAGIC3 },\n"
+		   "    .size=%u, .version=%u, .role=%u, .generation=%u,\n"
+		   "    .n_str=%u, .n_decl=%u, .n_instr=%u, .n_edg=%u,"
+		   " .n_state=%u,\n"
+		   "    .crc_str=%u, .crc_decl=%u, .crc_instr=%u,"
+		   " .crc_state=%u, .crc_graph=%u,\n"
+		   "    .ofs_str=%u, .ofs_decl=%u, .ofs_instr=%u,"
+		   " .ofs_idg=%u,\n"
+		   "    .ofs_ofs=%u, .ofs_edg=%u, .ofs_states=%u,\n"
+		   "    .crc_hdr=%u }\n};\n",
+		h.size, h.version, h.role, h.generation,
+		h.n_str, h.n_decl, h.n_instr, h.n_edg, h.n_state,
+		h.crc_str, h.crc_decl, h.crc_instr, h.crc_state, h.crc_graph,
+		h.ofs_str, h.ofs_decl, h.ofs_instr, h.ofs_idg,
+		h.ofs_ofs, h.ofs_edg, h.ofs_states, h.crc_hdr);
+
+	// The handle the runtime takes: just the base. It never names the image's
+	// struct type -- that type is generated per program -- it works in offsets
+	// from here.
+	fprintf(f, "const csp_image_ref_t %s_image RODATA = "
+		   "{ (const uint8_t*)&%s_image_data };\n", px, px);
     }
 }
 

@@ -32,6 +32,11 @@ typedef struct {
     // format and the same generator, told apart only by the name they answer
     // to. The generated file guards itself with <prefix>.c in its messages.
     const char* prefix;
+    // What the image is for and which revision of it this is. role picks the
+    // slot a boot-time scan will fill from; generation orders two images with
+    // the same role (higher is newer), which is how an A/B pair is told apart.
+    unsigned role;
+    unsigned generation;
 } csp_rom_meta_t;
 extern void    csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta);
 extern void    csp_dump_tokens(FILE* f,token_t* tv, int n);
