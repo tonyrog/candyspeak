@@ -370,7 +370,72 @@ void csp_board_digital_output(csp_rt_t* st, value_t* vptr)
     }
     else { // plain out
 	digitalWrite(vptr->d.pin, (vptr->d.val & 1));
-    }    
+    }
+}
+
+// The single description of what a digital slot's configuration MEANS in
+// hardware. Setup, a rule that writes .dir/.pullup/.pulldown, and anything that
+// has to force pins into a known state all come here, so those paths cannot
+// drift apart -- which is how a pin ends up configured one way and driven
+// another.
+//
+// An inout pin RESTS as an input: csp_board_digital_output above borrows it for
+// the length of one write and hands it straight back. A pin with no direction
+// at all is left untouched; the program said nothing about it, and asserting a
+// mode on a pin someone else owns is worse than leaving it alone.
+void csp_board_digital_config(value_t* vptr)
+{
+    if (vptr->d.dir & DIR_IN) {
+	if (vptr->d.pullup)
+	    pinMode(vptr->d.pin, INPUT_PULLUP);
+	else if (vptr->d.pulldown)
+	    pinMode(vptr->d.pin, INPUT_PULLDOWN);
+	else
+	    pinMode(vptr->d.pin, INPUT);
+    }
+    else if (vptr->d.dir & DIR_OUT)
+	pinMode(vptr->d.pin, OUTPUT);
+}
+
+// The analog counterpart. Only a PWM output owns its pin in a way that has to be
+// asserted -- analogRead needs no mode at all -- so an input direction puts the
+// pin back to INPUT and nothing else is touched.
+//
+// This runs ONLY when a rule wrote a configuration part, never at setup. That
+// matters on a board where an #analog names a sensor through its port rather
+// than a pin (CPX: port 8 is the accelerometer, port 9 the NeoPixel ring):
+// asserting a mode on those at boot would reach pins nobody asked about, while
+// a program that writes .dir on one has asked for exactly this.
+void csp_board_analog_config(value_t* vptr)
+{
+    if ((vptr->a.dir & DIR_OUT) && vptr->a.pwm)
+	pinMode(vptr->a.pin, OUTPUT);
+    else if (vptr->a.dir & DIR_IN)
+	pinMode(vptr->a.pin, INPUT);
+}
+
+// Apply a configuration a rule asked for, and take the request down in BOTH
+// slots. The DIN/DOUT pair is copied on commit, so clearing one leaves a stale
+// request in the other that would spend a pinMode on some later cycle. Same
+// shape as csp_output_timer's handling of running/fired.
+//
+// d.cfg and a.cfg do NOT land on the same bit -- digital has pullup and
+// pulldown ahead of it, analog only pwm -- so the flag is cleared through the
+// member that was set. Clearing the wrong one leaves the request standing.
+static void csp_apply_config(csp_rt_t* st, index_t ix, value_t* vptr, int analog)
+{
+    value_t* iptr;
+    value_t* optr;
+
+    csp_dio_slots(st, ix, &iptr, &optr);
+    if (analog) {
+	csp_board_analog_config(vptr);
+	iptr->a.cfg = optr->a.cfg = 0;
+    }
+    else {
+	csp_board_digital_config(vptr);
+	iptr->d.cfg = optr->d.cfg = 0;
+    }
 }
 
 
@@ -382,24 +447,29 @@ void csp_setup(csp_rt_t* st)
     csp_board_setup(st);
     csp_can_init(st);
 
-    // setup in and inout (inout startup as input)
-    for (i = 0; i < st->ni; i++) {
-	index_t ix = st->input[i];
+    // One pass over the device list. Configuration is read from the value SLOT,
+    // not from the declaration, so this is the same source of truth the runtime
+    // gates on -- setup_digital has already copied the declaration in by now.
+    //
+    // If the same physical pin is declared twice under two names, the LAST
+    // declaration decides its mode, because it configures last. That is the
+    // same "last one wins" the rest of the language patches by; it used to be
+    // decided by which phase ran second, which was an accident.
+    for (i = 0; i < st->nio; i++) {
+	index_t ix = st->io[i];
 	int j = INDEX(ix);
+	value_t* vptr = csp_dio_slot(st, ix, DOUT);
 	switch(decl(st,j,type)) {
 	case DECL_DIGITAL:
-            if (decl(st,j,dir) & DIR_IN) {
-		if (decl(st,j,di.pullup))
-		    pinMode(decl(st,j,di.pin), INPUT_PULLUP);
-		else if (decl(st,j,di.pulldown))
-		    pinMode(decl(st,j,di.pin), INPUT_PULLDOWN);
-		else
-		    pinMode(decl(st,j,di.pin), INPUT);
-	    }
+	    csp_board_digital_config(vptr);
 	    break;
 	case DECL_ANALOG:
-	    if ((decl(st,j,dir) & DIR_IN) && decl(st,j,res))
+	    if ((vptr->a.dir & DIR_IN) && decl(st,j,res))
 		res = max(res, decl(st,j,res));
+	    // A PWM output needs the pin driven; an analog input does not need
+	    // any mode at all, so nothing is asserted for it.
+	    if ((vptr->a.dir & DIR_OUT) && !(vptr->a.dir & DIR_IN) && vptr->a.pwm)
+		pinMode(vptr->a.pin, OUTPUT);
 	    break;
 	default:
 	    break;
@@ -408,26 +478,6 @@ void csp_setup(csp_rt_t* st)
 
 //    if (res)
 //	analogReadResolution(res);
-
-
-    // setup output (that is NOT inout)
-    for (i = 0; i < st->no; i++) {
-	index_t ix = st->output[i];
-	int j = INDEX(ix);
-	if (decl(st,j,dir) & DIR_IN) continue;
-	switch(decl(st,j,type)) {
-	case DECL_DIGITAL:
-	    if (decl(st,j,dir) & DIR_OUT)
-		pinMode(decl(st,j,di.pin), OUTPUT);
-	    break;
-	case DECL_ANALOG:
-	    if ((decl(st,j,dir) & DIR_OUT) && decl(st,j,an.pwm))
-		pinMode(decl(st,j,an.pin), OUTPUT);
-	    break;
-	default:
-	    break;
-	}
-    }
 }
 
 void csp_input(csp_rt_t* st)
@@ -436,22 +486,26 @@ void csp_input(csp_rt_t* st)
 
     csp_board_start_input(st);
 
-    for (i = 0; i < st->ni; i++) {
-	index_t ix = st->input[i];
+    for (i = 0; i < st->nio; i++) {
+	index_t ix = st->io[i];
 	int di = INDEX(ix);
 	value_t* vptr;	
 	int vi = st_index(st, ix);
 	switch(decl(st,di,type)) {
 	case DECL_DIGITAL:
 	    vptr = csp_dio_slot(st, ix, DOUT);
-	    if (vptr->d.dir & DIR_IN) {
+	    // A rule may have turned this pin round since we last looked. Do it
+	    // before reading, or the first sample after a flip comes off the old
+	    // mode. Both loops check: whichever list the pin is in, it is served.
+	    if (vptr->d.cfg)
+		csp_apply_config(st, ix, vptr, 0);
+	    if (vptr->d.dir & DIR_IN)
 		csp_board_digital_input(st, ix, vptr);
-		int value = digitalRead(vptr->d.pin);
-		csp_set_ivalue(st, ix, value);
-	    }
 	    break;
 	case DECL_ANALOG:
 	    vptr = csp_dio_slot(st, ix, DOUT);
+	    if (vptr->a.cfg)
+		csp_apply_config(st, ix, vptr, 1);
 	    if (vptr->a.dir & DIR_IN) {
 		csp_board_analog_input(st, ix, vptr);
 	    }
@@ -531,19 +585,23 @@ void csp_output(csp_rt_t* st)
     if (!st->latch) {  // allow output
 	csp_board_start_output(st);
 
-	for (i = 0; i < st->no; ++i) {
-	    index_t ix = st->output[i];
+	for (i = 0; i < st->nio; ++i) {
+	    index_t ix = st->io[i];
 	    int di = INDEX(ix);
 	    value_t* vptr;
 	    switch(decl(st,di,type)) {
 	    case DECL_DIGITAL:
 		vptr = csp_dio_slot(st, ix, DOUT);
+		if (vptr->d.cfg)
+		    csp_apply_config(st, ix, vptr, 0);
 		if (vptr->d.dir & DIR_OUT) {
 		    csp_board_digital_output(st, vptr);
 		}
 		break;
 	    case DECL_ANALOG:
 		vptr = csp_dio_slot(st, ix, DOUT);
+		if (vptr->a.cfg)
+		    csp_apply_config(st, ix, vptr, 1);
 		if (vptr->a.dir & DIR_OUT)
 		    csp_board_analog_output(st, di, vptr);
 		break;

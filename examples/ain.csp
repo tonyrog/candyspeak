@@ -1,0 +1,36 @@
+// Usage of lib/ain.csp -- run it as:
+//
+//   ./csp -c 40 -Q lib/ain.csp examples/ain.csp
+//
+// A simulated sensor ramps up, sits still, then falls off a cliff. Watch
+// `slow.Out` step in units of 10 while `Src` moves by 1 -- that is the
+// deadband -- and watch `alarm.Out` stay quiet until Src leaves the band.
+#variable Src = 0
+#variable Dir = 1
+#timer   Tick 10 = 1
+
+Tick = 1 ? timeout(Tick)
+Src = Src + Dir ? timeout(Tick)
+Dir = 0 -  4    ? Src >= 60          // turn around and fall fast
+Dir = 1         ? Src <= 0
+
+// Telemetry: report every 10 counts up, every 3 down. Asymmetric on purpose.
+#Ain slow  In <- Src  Delta=10 DeltaDown=3
+
+// Alarm: no deadband at all (Delta=0), quiet inside 10..50, one report on
+// each way out. Hyst=5 means it has to come 5 back inside before it can fire
+// again, so a value resting on the threshold does not chatter.
+#Ain alarm In <- Src  Upper=50 Lower=10 Hyst=5
+
+// changed(Out) fires in the cycle where the new value is still in the shadow
+// copy, so printing (or packing a frame) directly off it shows the PREVIOUS
+// value. Route the trigger through a variable and the two line up again --
+// see *Execution Model* in the manual. This is the same reason a real sender
+// writes the frame field from Out and pulls .tx from the routed trigger.
+#variable tele:1 unsigned = 0
+#variable lim:1  unsigned = 0
+tele = changed(slow.Out)
+lim  = changed(alarm.Out)
+
+println("send ", slow.Out, " @", cycle())   ? tele
+println("LIMIT ", alarm.Out, " @", cycle()) ? lim

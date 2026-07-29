@@ -3,3 +3,12 @@
 .*.d
 csp
 tmp/
+CandySpeak/build/
+CandySpeak/doc/
+design/
+eeprom.db
+tests/actual/
+tests/csp_test.beam
+tests/expected/
+
+

@@ -1602,8 +1602,17 @@ NOINLINE void csp_dio_set_pin_part(csp_rt_t* st, value_t* vslot,
 				   vtype_t vt, value_t v)
 {
     switch(vt) {
-    case V_DIGITAL: vslot->d.pin = v.i; break;
-    case V_ANALOG:  vslot->a.pin = v.i; break;
+    // Which pin this slot drives is part of what its configuration IS --
+    // csp_board_digital_config reads d.pin -- so moving it needs the same
+    // request to the board as turning it round.
+    //
+    // Note what this does NOT do: the pin left behind keeps whatever mode and
+    // level it was last given. A slot that was driving pin 4 high and is moved
+    // to pin 7 leaves pin 4 high, with no name left in the program that refers
+    // to it. Put a pin back where it belongs before moving on, or leave it
+    // alone -- there is no owner to ask afterwards.
+    case V_DIGITAL: vslot->d.pin = v.i; vslot->d.cfg = 1; break;
+    case V_ANALOG:  vslot->a.pin = v.i; vslot->a.cfg = 1; break;
     default: break;
     }
 }
@@ -1612,8 +1621,12 @@ NOINLINE void csp_dio_set_port_part(csp_rt_t* st, value_t* vslot,
 				    vtype_t vt, value_t v)
 {
     switch(vt) {
-    case V_DIGITAL: vslot->d.port = v.i; break;
-    case V_ANALOG:  vslot->a.port = v.i; break;
+    // Same as .pin: on a board that addresses pins per port this picks out a
+    // different piece of hardware, so it has to be applied. The Arduino layer
+    // does not read port for digital, which only means the reconfiguration is
+    // redundant there -- not that it is wrong to ask for it.
+    case V_DIGITAL: vslot->d.port = v.i; vslot->d.cfg = 1; break;
+    case V_ANALOG:  vslot->a.port = v.i; vslot->a.cfg = 1; break;
     default: break;
     }
 }
@@ -1622,8 +1635,12 @@ NOINLINE void csp_dio_set_dir_part(csp_rt_t* st, value_t* vslot,
 				   vtype_t vt, value_t v)
 {
     switch(vt) {
-    case V_DIGITAL: vslot->d.dir = v.i; break;
-    case V_ANALOG:  vslot->a.dir = v.i; break;
+    // A direction is only half a change: the pin itself has to be told. cfg
+    // carries that request to the board layer, which owns pinMode. An analog
+    // slot has no room for the flag (see dvalue_t/avalue_t), so an analog
+    // direction still only gates the runtime, it does not reconfigure.
+    case V_DIGITAL: vslot->d.dir = v.i; vslot->d.cfg = 1; break;
+    case V_ANALOG:  vslot->a.dir = v.i; vslot->a.cfg = 1; break;
     default: break;
     }
 }
@@ -1736,20 +1753,27 @@ NOINLINE void csp_dio_set_part(csp_rt_t* st, index_t ix, value_t v,
 	csp_dio_set_dir_part(st, vslot, cvt, v);
 	break;
     case PART_PWM:      // V_ANALOG
-	if (cvt == V_ANALOG)
+	if (cvt == V_ANALOG) {
 	    vslot->a.pwm = v.i;
+	    vslot->a.cfg = 1;   // pwm decides whether the pin is driven at all
+	}
 	break;
-    case PART_ENDIAN:   // V_ANALOG/V_FIELD
-	if (cvt == V_ANALOG)
-	    vslot->a.endian = v.i;
+    case PART_ENDIAN:   // V_FIELD only
+	// An analog slot has no endian to write. It never had one that did
+	// anything: the declaration carries it and .endian reads from there.
+	(void)0;
 	break;
     case PART_PULLUP:   // V_DIGITAL
-	if (cvt == V_DIGITAL)
+	if (cvt == V_DIGITAL) {
 	    vslot->d.pullup = v.i;
+	    vslot->d.cfg = 1;
+	}
 	break;
     case PART_PULLDOWN: // V_DIGITAL
-	if (cvt == V_DIGITAL)
+	if (cvt == V_DIGITAL) {
 	    vslot->d.pulldown = v.i;
+	    vslot->d.cfg = 1;
+	}
 	break;
     case PART_PERIOD:   // V_TIMER
 	if (cvt == V_TIMER)
@@ -1824,8 +1848,8 @@ NOINLINE void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp,
     case PART_PWM:      // V_ANALOG
 	vp->i = (cvt == V_ANALOG) ? vslot->a.pwm : 0;
 	break;
-    case PART_ENDIAN:   // V_ANALOG/V_FIELD
-	vp->i = (cvt == V_ANALOG) ? vslot->a.endian : 0;
+    case PART_ENDIAN:   // V_ANALOG: answered from the declaration, not the slot
+	vp->i = (cvt == V_ANALOG) ? decl(st, INDEX(ix), an.endian) : 0;
 	break;
     case PART_PULLUP:   // V_DIGITAL
 	vp->i = (cvt == V_DIGITAL) ? vslot->d.pullup : 0;
@@ -6653,8 +6677,7 @@ int csp_mem_init(csp_rt_t* st, size_t size)
     st->buf_cap = 0;
     st->heap_cap = 0;
     // input/output/timer are sized to the estimate in csp_rt_start too.
-    st->input = NULL;  st->in_cap = 0;
-    st->output = NULL; st->out_cap = 0;
+    st->io = NULL;     st->io_cap = 0;
     st->timer = NULL;  st->timer_cap = 0;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     // pending sets, rule_ip and idg/ofs/edg are all sized to actual in csp_csr.
@@ -6715,8 +6738,7 @@ int csp_rt_init(csp_rt_t* st, int reactive)
     st->ps.line = 0;
 
     st->nt = 0;
-    st->ni = 0;
-    st->no = 0;
+    st->nio = 0;
     st->nm = 0;
     st->cur = 0;      // current module = global
     st->mdef = BAD_INDEX;  // no module being defined
@@ -6805,7 +6827,9 @@ NOINLINE static void setup_analog(csp_rt_t* st, index_t ix)
     iptr->a.pin  = optr->a.pin     = d.an.pin;
     iptr->a.port = optr->a.port    = d.an.port;
     iptr->a.pwm  = optr->a.pwm     = d.an.pwm;
-    iptr->a.endian = optr->a.endian = d.an.endian;
+    // No endian: it stays in the declaration, where .endian reads it from.
+    // csp_setup applies this configuration itself, so nothing is pending.
+    iptr->a.cfg  = optr->a.cfg     = 0;
 }
 
 // copy config data to value slot config
@@ -6821,6 +6845,11 @@ NOINLINE static void setup_digital(csp_rt_t* st, index_t ix)
     iptr->d.port = optr->d.port = d.di.port;
     iptr->d.pullup = optr->d.pullup = d.di.pullup;
     iptr->d.pulldown = optr->d.pulldown = d.di.pulldown;
+    // csp_setup applies this configuration itself, so nothing is pending. Left
+    // set, it would spend a pinMode on the first cycle saying what setup just
+    // said -- and on a slot that was never zeroed it would be whatever was
+    // there before.
+    iptr->d.cfg = optr->d.cfg = 0;
 }
 
 NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint16_t nbytes,
@@ -6904,8 +6933,8 @@ NOINLINE static void can_mark_fields(csp_rt_t* st, index_t b)
     }
     // Then per-field, so changed() has real granularity and only the fields
     // that moved wake their rules.
-    for (i = 0; i < st->ni; i++) {
-	index_t ix = st->input[i];
+    for (i = 0; i < st->nio; i++) {
+	index_t ix = st->io[i];
 	int leaf;
 	csp_view_t* vw;
 	if (decl(st, INDEX(ix), type) != DECL_FIELD)
@@ -7112,17 +7141,17 @@ NOINLINE static int setup_slot(csp_rt_t* st, index_t ix)
     return 0;
 }
 
+// A device leaf is listed ONCE, whatever direction it was declared with. A pin
+// filed by its declared direction is missing from the other phase the moment a
+// rule turns it round, and "every pin can change direction" is the whole point.
+// A #field with no direction is not device I/O at all and stays out.
 NOINLINE static void add_io(csp_rt_t* st, index_t ix)
 {
     int i = INDEX(ix);
-    if (decl(st,i,dir) & DIR_IN) {
-	if (st->ni < st->in_cap)  // sized to csp_estimate.ni; guard is belt+braces
-	    st->input[st->ni++] = ix;
-    }
-    if (decl(st,i,dir) & DIR_OUT) {
-	if (st->no < st->out_cap)
-	    st->output[st->no++] = ix;
-    }
+    if ((decl(st,i,type) == DECL_FIELD) && !(decl(st,i,dir) & DIR_INOUT))
+	return;
+    if (st->nio < st->io_cap)  // sized to csp_estimate.nio; guard is belt+braces
+	st->io[st->nio++] = ix;
 }
 
 // Count the buffer/heap/io a single value-leaf decl `j` needs, mirroring the
@@ -7150,14 +7179,12 @@ NOINLINE static void est_leaf(csp_rt_t* st, int j, csp_estimate_t* e)
     case DECL_DIGITAL:
     case DECL_ANALOG:
 	nbytes = sizeof(value_t);
-	if (decl(st,j,dir) & DIR_IN)  e->ni++;
-	if (decl(st,j,dir) & DIR_OUT) e->no++;
+	e->nio++;                             // listed whatever the direction
 	break;
     case DECL_FIELD:
 	// A field is a view into its #buffer, which is counted as a buffer in
 	// its own right. Only the I/O list entry belongs here.
-	if (decl(st,j,dir) & DIR_IN)  e->ni++;
-	if (decl(st,j,dir) & DIR_OUT) e->no++;
+	if (decl(st,j,dir) & DIR_INOUT) e->nio++;
 	return;
     default:
 	return;                               // module/end/object/view: no buffer
@@ -7176,7 +7203,7 @@ void csp_estimate(csp_rt_t* st, csp_estimate_t* e)
     int offs = nd;                            // object storage base (== rt_start)
 
     e->nleaf = nd;                            // globals occupy leaves [0, nd)
-    e->nbuf = e->ni = e->no = e->nt = 0;
+    e->nbuf = e->nio = e->nt = 0;
     e->heap = 0;
 
     for (i = 0; i < (int)nd; i++) {           // globals
@@ -7315,14 +7342,13 @@ int csp_rt_start(csp_rt_t* st)
 		     (size_t)BITSET_GROUPS(e.nleaf ? e.nleaf : 1) * sizeof(set_group_t));
 	st->buf   = (csp_buf_t*)csp_mid_alloc(st, (size_t)e.nbuf * sizeof(csp_buf_t));
 	st->heap[DIN] = (uint8_t*)csp_mid_alloc(st, 2 * hbytes);
-	st->input  = (index_t*)csp_mid_alloc(st, (size_t)e.ni * sizeof(index_t));
-	st->output = (index_t*)csp_mid_alloc(st, (size_t)e.no * sizeof(index_t));
+	st->io     = (index_t*)csp_mid_alloc(st, (size_t)e.nio * sizeof(index_t));
 	st->timer  = (index_t*)csp_mid_alloc(st, (size_t)e.nt * sizeof(index_t));
 	if (!st->view || !st->dset || !st->buf || !st->heap[DIN] ||
-	    !st->input || !st->output || !st->timer) {
+	    !st->io || !st->timer) {
 	    st->heap[DOUT] = NULL;
 	    st->view_cap = 0; st->buf_cap = 0; st->heap_cap = 0;
-	    st->in_cap = 0; st->out_cap = 0; st->timer_cap = 0;
+	    st->io_cap = 0; st->timer_cap = 0;
 	    csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
 	    return -1;
 	}
@@ -7330,8 +7356,7 @@ int csp_rt_start(csp_rt_t* st)
 	st->view_cap = e.nleaf;
 	st->buf_cap  = e.nbuf;
 	st->heap_cap = e.heap;
-	st->in_cap   = e.ni;
-	st->out_cap  = e.no;
+	st->io_cap   = e.nio;
 	st->timer_cap = e.nt;
     }
 
@@ -7349,8 +7374,7 @@ int csp_rt_start(csp_rt_t* st)
     st->cur = 0;              // back to the global module
     memset(st->dset, 0, BITSET_GROUPS(st->view_cap) * sizeof(set_group_t));    // no stale dirty leaves survive into the rebuild
     st->nt = 0;
-    st->ni = 0;
-    st->no = 0;
+    st->nio = 0;
     st->nm = 0;
     st->nbuf = 0;
     st->ps.nq = 0;   // rebuilt from DECL_OBJECT below (parse-time table is not
@@ -8714,8 +8738,7 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
     mem_row(ros_objects, st->ps.nq,  MAX_OBJECTS, 0);                  csp_println();
     mem_row(ros_modules, st->nm,     MAX_MODULES, 0);                  csp_println();
     mem_row(ros_states,  st->ps.ns,  MAX_STATES,  0);                  csp_println();
-    mem_row(ros_in,      st->ni,   -1, 0);                             csp_println();
-    mem_row(ros_out,     st->no,   -1, 0);                             csp_println();
+    mem_row(ros_io,      st->nio,  -1, 0);                             csp_println();
     mem_row(ros_timers,  st->nt,   -1, 0);                             csp_println();
     mem_row(ros_buffers, st->nbuf, -1, 0);                             csp_println();
     return CSP_CMD_OK;

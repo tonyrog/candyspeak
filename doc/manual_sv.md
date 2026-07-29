@@ -793,6 +793,17 @@ Per      = T.period        // read it back
 Ready    = 1 ? T.fired     // use a timer part in a condition
 ```
 
+Att skriva `.pin`, `.port`, `.dir`, `.pullup` eller `.pulldown` konfigurerar om
+hårdvaran — pinnen ställs i sitt nya läge vid cykelns slut, så nästa läsning
+eller skrivning använder det.
+
+**`.pin` lämnar inte tillbaka pinnen den flyttar ifrån.** En digital som drev
+pinne 4 hög och flyttas till pinne 7 konfigurerar pinne 7 och lämnar pinne 4 som
+utgång, fortfarande hög — och inget namn i programmet pekar på den längre, så
+ingenting kan rätta till det. Sätt den gamla pinnen till en säker nivå före
+flytten, eller låt bli att flytta. Detsamma gäller `.port` på ett kort som
+adresserar pinnar per port.
+
 Att sätta en part i objektinit är det idiomatiska sättet att konfigurera en
 instans:
 
@@ -1657,7 +1668,7 @@ falling(x)    // 1 -> 0
 ## Parts
 ```
 <resource>.<part>             // read or write an attribute
-D.pin = 17                    // .val .pin .port .dir .pwm .endian
+D.pin = 17                    // .val .pin .port .dir .pwm
 T.period = 500                // .pullup .pulldown .period .fired
 Ready = 1 ? T.fired
 F.id  F.rx  F.tx  F.dlc       // CAN frame parts (also via any of its fields)

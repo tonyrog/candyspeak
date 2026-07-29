@@ -790,6 +790,16 @@ Per      = T.period        // read it back
 Ready    = 1 ? T.fired     // use a timer part in a condition
 ```
 
+Writing `.pin`, `.port`, `.dir`, `.pullup` or `.pulldown` reconfigures the
+hardware — the pin is put into its new mode at the end of the cycle, so the next
+read or write uses it.
+
+**`.pin` does not release the pin it leaves.** A digital that was driving pin 4
+high and is then moved to pin 7 configures pin 7 and leaves pin 4 an output,
+still high — and no name in the program refers to it any more, so nothing can
+put it right. Set the old pin to a safe level before moving, or do not move it.
+The same applies to `.port` on a board that addresses pins per port.
+
 Setting a part in object-init is the idiomatic way to configure an instance:
 
 ```
@@ -1646,7 +1656,7 @@ falling(x)    // 1 -> 0
 ## Parts
 ```
 <resource>.<part>             // read or write an attribute
-D.pin = 17                    // .val .pin .port .dir .pwm .endian
+D.pin = 17                    // .val .pin .port .dir .pwm
 T.period = 500                // .pullup .pulldown .period .fired
 Ready = 1 ? T.fired
 F.id  F.rx  F.tx  F.dlc       // CAN frame parts (also via any of its fields)

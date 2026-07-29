@@ -255,3 +255,7 @@ off off
 # explicit float -> int narrowing
 trunc trunc
 round round
+
+# /memory row: the device list. One list, not in+out -- direction is a runtime
+# property now, so a pin cannot be filed under the direction it was declared with.
+io io

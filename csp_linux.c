@@ -485,8 +485,8 @@ void csp_input(csp_rt_t* st)
 {
     int i;
     
-    for (i = 0; i < st->ni; i++) {
-	index_t ix = st->input[i];
+    for (i = 0; i < st->nio; i++) {
+	index_t ix = st->io[i];
 	switch(decl(st, INDEX(ix), type)) {
 	case DECL_DIGITAL: break;
 	case DECL_ANALOG: break;
@@ -502,8 +502,8 @@ void csp_output(csp_rt_t* st)
     int i;
 
     if (!st->latch) {  // allow output
-	for (i = 0; i < st->no; ++i) {
-	    index_t ix = st->output[i];
+	for (i = 0; i < st->nio; ++i) {
+	    index_t ix = st->io[i];
 	    switch(decl(st, INDEX(ix), type)) {
 	    case DECL_DIGITAL: break;
 	    case DECL_ANALOG: break;
@@ -628,6 +628,7 @@ static struct option long_options[] = {
     {"board",        required_argument, 0,  1000},
     {"can",          required_argument, 0,  1001},
     {"no-eeprom",    no_argument,       0,  1002},
+    {"prefix",       required_argument, 0,  1003},
     {"memory",       required_argument, 0,  'm'},
     {"pause",        no_argument,       0,  'b'},
     {0,              0,                 0,  0 }
@@ -646,6 +647,7 @@ void usage(const char* prog)
     fprintf(stderr, "  -T, --timeout=MS     Max runtime in ms (0=unlimited)\n");
     fprintf(stderr, "  -C, --compile        Compile to object code\n");
     fprintf(stderr, "  -O, --object-file=F  Compiled result file (C code format)\n");
+    fprintf(stderr, "      --prefix=NAME    Symbol prefix for -C (default rom)\n");
     fprintf(stderr, "  -P, --debug-parse    Enable parser debugging\n");
     fprintf(stderr, "  -S, --debug-scan     Enable tokenizer debugging\n");
     fprintf(stderr, "  -Q, --debug-trace    Enable variable tracing\n");
@@ -778,6 +780,9 @@ int main(int argc, char** argv)
     int c;
     int reactive = REACTIVE_DEFAULT;
     int compile = 0;
+    // -C emits <prefix>_str/_decl/_instr/... Default rom, so an unadorned
+    // `csp -C` still produces the rom.c every build links.
+    const char* rom_prefix = "rom";
     struct pollfd pfd[2];
     nfds_t nfds = 0;
     int can_slot = 0;   // index of the CAN socket in pfd (0 = not polled)
@@ -804,6 +809,7 @@ int main(int argc, char** argv)
 	case 'e': eeprom_file = optarg; break;
 	case 1001: can_iface = optarg; break;
 	case 1002: no_eeprom = 1; break;
+	case 1003: rom_prefix = optarg; break;   // --prefix: symbol prefix for -C
 	case 'r': reactive = 1; break;   // -r: enable reactive mode (no argument)
 	case 'n': execute = 0; break;
 	case 'C': compile = 1; break;
@@ -1033,6 +1039,7 @@ int main(int argc, char** argv)
 	meta.src     = src_file;
 	meta.version = CSP_VERSION;
 	meta.date    = __DATE__ " " __TIME__;
+	meta.prefix  = rom_prefix;
 	csp_dump_code(objf, &state, &meta);
     }
 

@@ -650,6 +650,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 void csp_dump(FILE* f, csp_rt_t* st)
 {
     int i;
+    int n;
 
     i = 0;
     while(i < st->ps.nd) 
@@ -672,17 +673,23 @@ void csp_dump(FILE* f, csp_rt_t* st)
     fprintf(f, "]}.\n");
     
     
+    // One device list, printed as the two roles it is currently serving --
+    // read off the DECLARED direction, which is what a listing should show. The
+    // live direction can differ (a rule may have written .dir); /state answers
+    // that question, this one answers what the program said.
     fprintf(f, "{input,[");
-    for (i = 0; i < st->ni; i++) {
-	if (i > 0) fputc(',', f);	
-	csp_fprint_tag(f, st, st->input[i]);
+    for (i = 0, n = 0; i < st->nio; i++) {
+	if (!(decl(st, INDEX(st->io[i]), dir) & DIR_IN)) continue;
+	if (n++ > 0) fputc(',', f);
+	csp_fprint_tag(f, st, st->io[i]);
     }
     fprintf(f, "]}.\n");
 
     fprintf(f, "{output,[");
-    for (i = 0; i < st->no; i++) {
-	if (i > 0) fputc(',', f);
-	csp_fprint_tag(f, st, st->output[i]);
+    for (i = 0, n = 0; i < st->nio; i++) {
+	if (!(decl(st, INDEX(st->io[i]), dir) & DIR_OUT)) continue;
+	if (n++ > 0) fputc(',', f);
+	csp_fprint_tag(f, st, st->io[i]);
     }
     fprintf(f, "]}.\n");
 
@@ -809,11 +816,14 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     uint16_t crc_str_data = 0xFFFF, crc_state_data = 0xFFFF;
     uint16_t crc_decl_data = 0xFFFF, crc_instr_data = 0xFFFF;
     uint16_t decl_mark_crc = 0, instr_mark_crc = 0;
+    // Every symbol this file emits is <px>_something. One image format, told
+    // apart from another only by the name it answers to -- see csp_rom_meta_t.
+    const char* px = (meta && meta->prefix) ? meta->prefix : "rom";
 
     // Provenance banner: what this ROM is, where it came from, how big. The
     // counts are what actually goes into flash, so a glance at the top of rom.c
     // tells you the program AND its size without reading the tables.
-    fprintf(f, "// Generated CandySpeak ROM -- do not edit.\n");
+    fprintf(f, "// Generated CandySpeak image (%s_*) -- do not edit.\n", px);
     if (meta) {
 	if (meta->src)     fprintf(f, "//   source:  %s\n", meta->src);
 	if (meta->version) fprintf(f, "//   version: %s\n", meta->version);
@@ -831,9 +841,9 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     // matched flash image; this catches the far more common "forgot to
     // regenerate" at the earliest possible point.
     fprintf(f, "#if ROM_FORMAT_VERSION != %u\n", (unsigned)ROM_FORMAT_VERSION);
-    fprintf(f, "#error \"rom.c is stale: generated for ROM format %u, "
+    fprintf(f, "#error \"%s.c is stale: generated for ROM format %u, "
 	       "csp.h is newer -- regenerate with 'csp -C'\"\n",
-	    (unsigned)ROM_FORMAT_VERSION);
+	    px, (unsigned)ROM_FORMAT_VERSION);
     fprintf(f, "#endif\n");
     // first dump string table
     // int, not char: matches the `extern const int rom_str_len` in csp_rt.c so
@@ -844,7 +854,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     // 3 extra bytes: a 0xFF sentinel (never a valid length or ASCII char, so it
     // marks the section end for header-free recovery) + the 2-byte CRC. See
     // rom_scan_str.
-    fprintf(f, "const char rom_str[%d] RODATA = {\n", st->ps.strp + 3);
+    fprintf(f, "const char %s_str[%d] RODATA = {\n", px, st->ps.strp + 3);
     i = 0;
     while (i < st->ps.strp) {
 	uint8_t n = st->ram_str[i]; // length of next string
@@ -891,7 +901,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     }
 
     // now dump declarations -- one extra entry: the DECL_END_MARK terminator.
-    fprintf(f, "const csp_decl_t rom_decl[%d] RODATA = {\n", st->ps.nd + 1);
+    fprintf(f, "const csp_decl_t %s_decl[%d] RODATA = {\n", px, st->ps.nd + 1);
     for (i = 0; i < st->ps.nd; i++) {
 	// csp_decl_t is a UNION whose every arm begins with DECL_COMMON, so the
 	// common fields MUST be written inside the same arm designator as the
@@ -965,7 +975,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     }
 
     // and then dump instructions -- one extra entry: the OP_END_MARK terminator.
-    fprintf(f, "const csp_instr_t rom_instr[%d] RODATA = {\n", st->ps.nn + 1);
+    fprintf(f, "const csp_instr_t %s_instr[%d] RODATA = {\n", px, st->ps.nn + 1);
     for (i = 0; i < st->ps.nn; i++) {
 	// csp_instr_t is a UNION whose every arm begins with INSTR_COMMON (op),
 	// so .op MUST be written inside the same arm designator -- a leading
@@ -1045,13 +1055,13 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     if (st->reactive) {
 	int nd = st->ps.nd;
 	int nedg = st->ofs[nd];
-	fprintf(f, "const index_t rom_idg[%d] RODATA = {", nd);
+	fprintf(f, "const index_t %s_idg[%d] RODATA = {", px, nd);
 	for (i = 0; i < nd; i++) fprintf(f, "%u,", st->idg[i]);
 	fprintf(f, "};\n");
-	fprintf(f, "const index_t rom_ofs[%d] RODATA = {", nd+1);
+	fprintf(f, "const index_t %s_ofs[%d] RODATA = {", px, nd+1);
 	for (i = 0; i <= nd; i++) fprintf(f, "%u,", st->ofs[i]);
 	fprintf(f, "};\n");
-	fprintf(f, "const index_t rom_edg[%d] RODATA = {", nedg ? nedg : 1);
+	fprintf(f, "const index_t %s_edg[%d] RODATA = {", px, nedg ? nedg : 1);
 	for (i = 0; i < nedg; i++) fprintf(f, "%u,", st->edg[i]);
 	if (!nedg) fprintf(f, "0");   // avoid a zero-length array
 	fprintf(f, "};\n");
@@ -1060,9 +1070,9 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 #endif
     {
 	// No graph: stub symbols so rom.c links (all reads gated by rom_n_edg==0).
-	fprintf(f, "const index_t rom_idg[1] RODATA = {0};\n");
-	fprintf(f, "const index_t rom_ofs[1] RODATA = {0};\n");
-	fprintf(f, "const index_t rom_edg[1] RODATA = {0};\n");
+	fprintf(f, "const index_t %s_idg[1] RODATA = {0};\n", px);
+	fprintf(f, "const index_t %s_ofs[1] RODATA = {0};\n", px);
+	fprintf(f, "const index_t %s_edg[1] RODATA = {0};\n", px);
     }
 
     // State table (name offset -> state number). csp_load_rom copies this back
@@ -1072,7 +1082,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     // state self-CRC trailer: a sentinel (snum 0x7f -- never a real state, snums
     // are 0..MAX_STATES-1) marks the section end for header-free recovery, and the
     // next state_t packs the 16-bit CRC across its name(9)+snum(7). rom_scan_state.
-    fprintf(f, "const state_t rom_states[%d] RODATA = {", st->ps.ns + 2);
+    fprintf(f, "const state_t %s_states[%d] RODATA = {", px, st->ps.ns + 2);
     for (i = 0; i < st->ps.ns; i++)
 	fprintf(f, "{.name=%u,.snum=%u},",
 		st->states[i].name, st->states[i].snum);
@@ -1116,11 +1126,12 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	}
 	h.crc_hdr = csp_crc16(0xFFFF, &h, sizeof(h) - sizeof(uint16_t), 0);
 
-	fprintf(f, "const csp_image_header_t rom_header RODATA = {\n"
+	fprintf(f, "const csp_image_header_t %s_header RODATA = {\n"
 		   "  .version=%u, .n_str=%u, .n_decl=%u, .n_instr=%u,"
 		   " .n_edg=%u, .n_state=%u,\n"
 		   "  .crc_str=%u, .crc_decl=%u, .crc_instr=%u, .crc_state=%u,"
 		   " .crc_graph=%u, .crc_hdr=%u };\n",
+		px,
 		h.version, h.n_str, h.n_decl, h.n_instr, h.n_edg, h.n_state,
 		h.crc_str, h.crc_decl, h.crc_instr, h.crc_state,
 		h.crc_graph, h.crc_hdr);

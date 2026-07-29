@@ -26,6 +26,12 @@ typedef struct {
     const char* src;      // the .csp file this was compiled from
     const char* version;  // CandySpeak version (git describe / short hash)
     const char* date;     // build date/time
+    // Symbol prefix for the emitted image: `rom` gives rom_str/rom_decl/...,
+    // `failsafe` gives failsafe_str/failsafe_decl/... NULL means "rom". This is
+    // what lets a firmware carry more than one image -- they are the same
+    // format and the same generator, told apart only by the name they answer
+    // to. The generated file guards itself with <prefix>.c in its messages.
+    const char* prefix;
 } csp_rom_meta_t;
 extern void    csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta);
 extern void    csp_dump_tokens(FILE* f,token_t* tv, int n);

@@ -491,5 +491,7 @@ extern rochar s_trunc[6] RODATA;
 #define ros_trunc ((rostring_t) s_trunc)
 extern rochar s_round[6] RODATA;
 #define ros_round ((rostring_t) s_round)
+extern rochar s_io[3] RODATA;
+#define ros_io ((rostring_t) s_io)
 
 #endif

@@ -1,0 +1,26 @@
+// Array notation
+//
+//  #variable Acc[3]
+//  #analog A[3]:10 in 0:1..3
+//  #variable INDEX = 0
+//  #timer Td 1000
+//  Acc[INDEX] <- Acc[INDEX] + A[INDEX]
+//  INDEX <- (INDEX + 1) % 3 ? timeout(Td)
+
+// Semantik view (expanded)
+
+#variable Acc0
+#variable Acc1
+#variable Acc2
+#analog A0 in 0:1
+#analog A1 in 0:2
+#analog A2 in 0:3
+#variable INDEX = 0
+#timer Td 1000
+
+Acc0 <- Acc0 + A0 ? INDEX==0
+Acc1 <- Acc1 + A1 ? INDEX==1
+Acc2 <- Acc2 + A2 ? INDEX==2
+INDEX = (INDEX + 1) ? timeout(Td)
+
+

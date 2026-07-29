@@ -299,21 +299,32 @@ typedef struct PACKED {
     unsigned val:1;          // one bit value 1 = start, 0 = stop
 } tvalue_t;
 
+// cfg is the request "this pin's configuration changed, apply it to the
+// hardware". A rule writing .pin/.port/.dir/.pullup/.pulldown only moves bits in
+// the value slot; pinMode is called from the board layer, which needs to be
+// told. Both slots below are exactly the 32 bits of a value_t with it.
 typedef struct PACKED {
     unsigned pin:PIN_BITS;
     unsigned port:PORT_BITS;
     unsigned dir:DIR_BITS;
     unsigned pullup:1;
     unsigned pulldown:1;
+    unsigned cfg:1;     // configuration changed, board must re-apply it
     unsigned val:16;    // we may shift in bits...?
 } dvalue_t;
 
+// No endian here, unlike csp_analog_t further down. The declaration keeps it and
+// .endian answers from there; the copy that used to sit in this slot was written
+// by setup, echoed back by .endian and read by nothing else -- byte order that
+// MEANS something lives in csp_view_t.endian, which is what a bound field lays
+// itself out with. Those two bits pay for cfg and leave one spare.
 typedef struct PACKED {
     unsigned pin:PIN_BITS;
     unsigned port:PORT_BITS;
-    unsigned dir:DIR_BITS;    
+    unsigned dir:DIR_BITS;
     unsigned pwm:1;
-    unsigned endian:2; // |little|big interpretation    
+    unsigned cfg:1;    // configuration changed, board must re-apply it
+    unsigned _res:1;   // spare
     unsigned val:16;
 } avalue_t;
 
@@ -1266,16 +1277,20 @@ typedef struct _csp_rt_t
 
     // calculated by csp_rt_start
     index_t nt;                  // number of timers
-    index_t ni;                  // number of input
-    index_t no;                  // number of output
+    index_t nio;                 // number of device entries
     index_t nm;                  // number of modules
-    // input/output/timer are sized to the actual program (csp_estimate) and
-    // allocated in csp_rt_start -- not MAX_* reserved -- so a program may have as
-    // many as it declares (bounded only by RAM). *_cap is the allocated length.
-    index_t* input;              // list of inputs (digital/analog ...), in_cap slots
-    index_t  in_cap;
-    index_t* output;             // list of outputs (digital/analog ...), out_cap slots
-    index_t  out_cap;
+    // io/timer are sized to the actual program (csp_estimate) and allocated in
+    // csp_rt_start -- not MAX_* reserved -- so a program may have as many as it
+    // declares (bounded only by RAM). *_cap is the allocated length.
+    //
+    // ONE list, not an input list and an output list. Direction is a runtime
+    // property (a rule may write .dir), so a pin cannot be filed under the
+    // direction it was declared with -- it would be missing from the other list
+    // the moment it turned round. Both phases walk this list and gate on the
+    // slot's CURRENT dir. It is also smaller than the two it replaces: an inout
+    // entry used to be stored twice.
+    index_t* io;                 // digital/analog/field entries, io_cap slots
+    index_t  io_cap;
     index_t* timer;              // list of timers, timer_cap slots
     index_t  timer_cap;
     // module[] and object[] are bounded by the encoding: a module/object index is
@@ -1545,7 +1560,7 @@ typedef struct {
     index_t  nleaf;   // view[]/dset span = max leaf (st_index) + 1
     index_t  nbuf;    // buffers allocated
     uint32_t heap;    // heap bytes (per DIN/DOUT half)
-    index_t  ni, no;  // inputs, outputs
+    index_t  nio;     // device entries (digital/analog/field)
     index_t  nt;      // timers (global + per-object)
 } csp_estimate_t;
 extern void    csp_estimate(csp_rt_t* st, csp_estimate_t* e);

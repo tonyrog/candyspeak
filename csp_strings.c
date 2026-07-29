@@ -245,3 +245,4 @@ rochar s_on[] RODATA = "on";
 rochar s_off[] RODATA = "off";
 rochar s_trunc[] RODATA = "trunc";
 rochar s_round[] RODATA = "round";
+rochar s_io[] RODATA = "io";
