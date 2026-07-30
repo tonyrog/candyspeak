@@ -782,7 +782,8 @@ int csp_print_rule(csp_rt_t* st, int i)
 		csp_print_lit(" ? ");
 		exprbuf_print(&buf, buf.reg[ip->r.cnd]);
 	    }
-	    csp_println();
+	    // NO newline here: the caller closes the line, so /list can put its
+	    // R/F tag there as a trailing comment instead of a leading column.
 	    return i + instr(st,i,r.nxt) + 1;
 	}
 	i++;

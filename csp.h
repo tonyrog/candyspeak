@@ -761,7 +761,7 @@ typedef enum {
 struct _csp_rt_t;
 struct csp_instr;
 
-// 6 bits may be used to describe declaration type
+// 5 bits may be used to describe declaration type
 // but decl type from 8-15 are also used as object types
 typedef enum {
     DECL_NONE=0,            // emtpy declaration
@@ -782,7 +782,7 @@ typedef enum {
     DECL_VIEW=13,           // synthetic bit/byte view into a buffer (Buf[a..b])
 
     DECL_AVAIL,
-    DECL_END_MARK = 0x3f
+    DECL_END_MARK = 0x1f
 } decl_t;
 
 #define DECL_TYPE(s,i) (decl((s),(i),type))
@@ -968,6 +968,10 @@ typedef enum {
     DIR_INOUT = 0x03
 } pindir_t;
 
+// we may mark declarations as system created using
+//   type:6;
+//   unsigned sys:1
+//
 #define DECL_COMMON \
     decl_t type:6; \
     pindir_t dir:DIR_BITS; \
@@ -1414,6 +1418,17 @@ typedef struct _csp_rt_t
     index_t rom_ns;              // # baseline states (INIT/NORMAL + ROM states);
 				 // EEPROM persists only the runtime additions above
     index_t rom_nedg;            // # ROM reactive-graph edges (0 = no baked graph)
+    // Where the RUNTIME ends and a program begins. csp_rt_init creates the
+    // implicit State variable and its name before any program exists; with no
+    // firmware image linked those sit at index 0, exactly where rom_* says a
+    // program starts. Anything that resets "back to the ROM baseline" must floor
+    // at these instead, or it deletes State -- and then the State gate in
+    // csp_eval reads a slot that is not State's and every ungated rule quiesces.
+    // Persistence must use the SAME floor on the save and the load side, or the
+    // counts disagree and a restore lands one decl out.
+    index_t sys_nd;
+    index_t sys_nn;
+    index_t sys_strp;
 
     csp_pstate_t ps;             // parse state
     reg_allocator_t* ap;
@@ -1545,6 +1560,19 @@ typedef struct _csp_rt_t
     // user hook to lookup platform constants
     csp_const_fn uconst;
 } csp_rt_t;
+
+// The floor every "reset back to the baseline" must respect: the ROM image if
+// one is linked, otherwise what csp_rt_init created. Save and load MUST use the
+// same one, or the patch counts disagree and a restore lands a decl out.
+#define CSP_BASE_ND(st)   (((st)->rom_nd   > (st)->sys_nd)   ? (st)->rom_nd   : (st)->sys_nd)
+#define CSP_BASE_NN(st)   (((st)->rom_nn   > (st)->sys_nn)   ? (st)->rom_nn   : (st)->sys_nn)
+#define CSP_BASE_STRP(st) (((st)->rom_strp > (st)->sys_strp) ? (st)->rom_strp : (st)->sys_strp)
+// ram_str[] and ram_instr[] are indexed RELATIVE to the ROM sizes -- ram_str[0]
+// is logical position rom_strp. So a logical floor has to be turned back into a
+// buffer offset before it can slice those arrays. Zero whenever the floor is
+// the ROM baseline, non-zero only when the runtime's own decls sit below it.
+#define CSP_RAM_STR_OFF(st) (CSP_BASE_STRP(st) - (st)->rom_strp)
+#define CSP_RAM_NN_OFF(st)  (CSP_BASE_NN(st)   - (st)->rom_nn)
 
 // Read a whole RO record by value. On AVR the ROM segment is in PROGMEM, so we
 // copy it into a RAM temporary -- then bit-field access works as usual. (The
@@ -1816,7 +1844,7 @@ extern int csp_parse_expr(csp_rt_t* st, const token_t* tv, size_t* num_toks,
 extern int csp_parse_const_expr(csp_rt_t* st, const token_t* tv, size_t* num_toks,
 				rentry_t* result);
 //
-extern index_t csp_new_decl(csp_rt_t* st, const tstr_t* name, decl_t op);
+extern index_t csp_new_decl(csp_rt_t* st,const tstr_t* name, decl_t op,int sys);
 extern index_t csp_lookup_decl(csp_rt_t* st, const tstr_t* name);
 
 // backend port (linux/arduino/LPCopen/FreeRTOS)

@@ -1,0 +1,20 @@
+// neo.csp -- the NeoPixel as a feature, not a board.
+//
+// An #analog on port 9 IS a pixel: the pin is its index in the strip and the
+// value is RGB565, which is exactly the 16 bits a.val holds. Same rules on a
+// Feather with one pixel and on a Circuit Playground with ten -- only the
+// board Makefile differs (-DCSP_NEO, and the pin comes from the variant).
+//
+//   make -f Makefile.feather_can compile upload
+//
+#analog Px:16 out 9:0        // port 9 = NeoPixel, pin 0 = first pixel
+#timer  T 500 = 1
+#variable n = 0
+
+T = 1 ? timeout(T)
+n = n + 1 ? timeout(T)
+
+// RGB565: red 0xF800, green 0x07E0, blue 0x001F.
+Px = 0xF800 ? timeout(T) && n % 3 == 0
+Px = 0x07E0 ? timeout(T) && n % 3 == 1
+Px = 0x001F ? timeout(T) && n % 3 == 2

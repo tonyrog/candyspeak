@@ -2483,7 +2483,8 @@ NOINLINE static index_t next_decl_index(csp_rt_t* st)
 
 // install a new decl (default to INTEGER 32 bit
 
-NOINLINE index_t csp_new_decl(csp_rt_t* st, const tstr_t* name, decl_t type)
+NOINLINE index_t csp_new_decl(csp_rt_t* st, const tstr_t* name, decl_t type,
+			      int sys)
 {
     index_t ix;
     int i, pos;
@@ -2497,6 +2498,7 @@ NOINLINE index_t csp_new_decl(csp_rt_t* st, const tstr_t* name, decl_t type)
     }
     i = INDEX(ix);
     ram_decl_at(st,i)->type = type;
+    // ram_decl_at(st,i)->sys = sys;    
     ram_decl_at(st,i)->name = pos;
     ram_decl_at(st,i)->res = MAKE_RES(8*sizeof(value_t));
     ram_decl_at(st,i)->vt = V_INTEGER;
@@ -2518,7 +2520,7 @@ NOINLINE index_t csp_new_udecl(csp_rt_t* st, const tstr_t* name, decl_t type)
 	}
 	return BAD_INDEX;
     }
-    return csp_new_decl(st, name, type);
+    return csp_new_decl(st, name, type, 0);
 }
 
 // Map a name after '.' to a part selector, PART_LAST if it is not a part.
@@ -2558,7 +2560,7 @@ NOINLINE index_t new_signed_const(csp_rt_t* st, ivalue_t v)
     index_t ix;
     int i;
     const tstr_t empty = { .ptr = NULL, .len = 0};
-    if ((ix = csp_new_decl(st,&empty,DECL_CONSTANT)) == BAD_INDEX)
+    if ((ix = csp_new_decl(st,&empty,DECL_CONSTANT,0)) == BAD_INDEX)
 	return BAD_INDEX;
     i = INDEX(ix);
     ram_decl_at(st,i)->cn.init.i = v;
@@ -2570,7 +2572,7 @@ NOINLINE index_t new_float_const(csp_rt_t* st, fvalue_t v)
     index_t ix;
     int i;
     const tstr_t empty = { .ptr = NULL, .len = 0};    
-    if ((ix = csp_new_decl(st,&empty,DECL_CONSTANT)) == BAD_INDEX)
+    if ((ix = csp_new_decl(st,&empty,DECL_CONSTANT,0)) == BAD_INDEX)
 	return BAD_INDEX;
     i = INDEX(ix);
     ram_decl_at(st,i)->vt = V_FLOAT;
@@ -2583,7 +2585,7 @@ NOINLINE index_t new_string_const(csp_rt_t* st, char* str, int len)
     index_t ix;
     int pos, i;
     const tstr_t empty = { .ptr = NULL, .len = 0};
-    if ((ix = csp_new_decl(st,&empty,DECL_CONSTANT)) == BAD_INDEX)
+    if ((ix = csp_new_decl(st,&empty,DECL_CONSTANT,0)) == BAD_INDEX)
 	return BAD_INDEX;
     if ((pos = new_string(st, str, len)) < 0)
 	return BAD_INDEX;
@@ -4773,7 +4775,7 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
     }
     // Mark before anything is emitted: this is where an aborted module rewinds to.
     csp_pstate_save(st, &st->mod_mark);
-    if ((ix = csp_new_udecl(st, &d.name, DECL_MODULE)) == BAD_INDEX)
+    if ((ix = csp_new_udecl(st,&d.name,DECL_MODULE)) == BAD_INDEX)
 	return -1;
     {
 	// create a local state variable (if states are supported)
@@ -4781,7 +4783,7 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	RO_TSTR(State, ros_State);
 	index_t ix;
 	st->save_sx = st->sx;
-	ix = csp_new_decl(st, &State, DECL_VARIABLE);
+	ix = csp_new_decl(st,&State,DECL_VARIABLE,1);
 	st->sx = MAKE_INDEX(CURRENT, INDEX(ix));
     }
 
@@ -4825,7 +4827,7 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	csp_set_error(st, ERR_END_MISMATCH);
 	return -1;  // no module
     }
-    if ((ex = csp_new_decl(st, &empty, DECL_END)) == BAD_INDEX)
+    if ((ex = csp_new_decl(st,&empty,DECL_END,0)) == BAD_INDEX)
 	return -1;
     ram_decl_at(st, INDEX(mx))->md.n = (INDEX(ex) - INDEX(mx)) - 1;
     if (!asm_LEAVE(st, &lx, 0, 0))
@@ -4884,7 +4886,7 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
     }
     if (check_res(st, d.r.res) < 0)
 	return -1;
-    if ((ix = csp_new_udecl(st, &d.name, DECL_VARIABLE)) == BAD_INDEX)
+    if ((ix = csp_new_udecl(st,&d.name,DECL_VARIABLE)) == BAD_INDEX)
 	return -1;
     i = INDEX(ix);
     ram_decl_at(st,i)->vt = d.opts.vt;
@@ -4974,7 +4976,7 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n)
     }
     if (check_res(st, d.r.res) < 0)
 	return -1;
-    if ((ix = csp_new_udecl(st, &d.name, DECL_CONSTANT)) == BAD_INDEX)
+    if ((ix = csp_new_udecl(st,&d.name,DECL_CONSTANT)) == BAD_INDEX)
 	return -1;
     i = INDEX(ix);
     ram_decl_at(st,i)->vt = d.opts.vt;
@@ -5010,7 +5012,7 @@ NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, int ti, size_t n)
     }
     if (d.opts.dir == 0) d.opts.dir = DIR_IN;
 
-    if ((ix = csp_new_udecl(st, &d.name, DECL_DIGITAL)) == BAD_INDEX)
+    if ((ix = csp_new_udecl(st, &d.name,DECL_DIGITAL)) == BAD_INDEX)
 	return -1;    
     i = INDEX(ix);
     ram_decl_at(st,i)->res = MAKE_RES(1);
@@ -5054,7 +5056,7 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, int ti, size_t n)
     if (d.opts.dir == 0) d.opts.dir = DIR_IN;
     if (check_res(st, d.r.res) < 0)
 	return -1;
-    if ((ix = csp_new_udecl(st, &d.name, DECL_ANALOG)) == BAD_INDEX)
+    if ((ix = csp_new_udecl(st,&d.name,DECL_ANALOG)) == BAD_INDEX)
 	return -1;
     i = INDEX(ix);
     ram_decl_at(st,i)->vt = d.opts.vt;
@@ -5095,9 +5097,9 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    if ((tm = csp_new_udecl(st, &d.name, DECL_TIMER)) == BAD_INDEX)
+    if ((tm = csp_new_udecl(st,&d.name,DECL_TIMER)) == BAD_INDEX)
 	return -1;
-    tx = csp_new_decl(st, &empty, DECL_VARIABLE);
+    tx = csp_new_decl(st,&empty,DECL_VARIABLE,0);
     if (tx != tm+1) {
 	csp_set_error(st, ERR_INTERNAL_ERROR);
 	return -1;
@@ -6056,7 +6058,7 @@ NOINLINE index_t make_buf_view(csp_rt_t* st, index_t parent,
 	    (ram_decl_at(st,i)->ca.len == MAKE_CAN_LEN((b1-b0)+1)))
 	    return MAKE_INDEX(0, i);
     }
-    if ((ix = csp_new_decl(st, &name, DECL_VIEW)) == BAD_INDEX)
+    if ((ix = csp_new_decl(st,&name,DECL_VIEW,0)) == BAD_INDEX)
 	return BAD_INDEX;
     i = INDEX(ix);
     ram_decl_at(st,i)->vt     = V_UNSIGNED;
@@ -6911,7 +6913,7 @@ int csp_rt_init(csp_rt_t* st, int reactive)
 	RO_TSTR(NORMAL, ros_NORMAL);
 	RO_TSTR(FAILSAFE, ros_FAILSAFE);
 	st->ps.ns = 0;  // install INIT (cycle()==0), NORMAL, FAILSAFE
-	st->sx = csp_new_decl(st, &State, DECL_VARIABLE);
+	st->sx = csp_new_decl(st,&State,DECL_VARIABLE,1);
 	st->sdef = -1;
 	st->n_sdef = 0;
 	st->rule_implicit = 0;
@@ -6932,6 +6934,11 @@ int csp_rt_init(csp_rt_t* st, int reactive)
 	    return -1;
 	}
 	st->rom_ns = st->ps.ns;  // baseline (3); raised by csp_load_rom if firmware
+	// The runtime/program boundary -- see csp_rt_t. States already have one
+	// (rom_ns above); these are the decl/instr/string equivalents.
+	st->sys_nd   = st->ps.nd;
+	st->sys_nn   = st->ps.nn;
+	st->sys_strp = st->ps.strp;
     }
     st->list_state = -1;         // no #in block being listed
     return 0;
@@ -7894,19 +7901,37 @@ static int is_fvar(index_t ix, int cnd, filter_var_t* fv, int nf)
 // into RAM -- which is what tagged RAM rules as [ROM].
 //
 // R = RAM (editable), F = flash/ROM (baked in, survives a reset).
+//
+// The tag used to be printed as a LEADING column, which made every line
+// unpasteable: you had to strip "  1 R  " by hand before it was source again.
+// It is now remembered here and emitted by list_eol() as a trailing comment, so
+// a listing can be selected in one terminal and pasted straight into another --
+// which is how a program actually gets copied off a board in the field.
+static int list_no, list_rom, list_off, list_pending;
+
 static void list_column(int no, int is_rom, int off)
 {
-    if (no <= 0)
-	csp_print_lit("   ");
-    else {
-	if (no < 100) csp_print_blank();
-	if (no < 10)  csp_print_blank();
-	csp_print_uint(no);
+    list_no = no; list_rom = is_rom; list_off = off;
+    list_pending = 1;
+}
+
+// End a listing line: the trailing tag comment, then the newline. With nothing
+// pending it is a plain newline, so it is safe to use as the line terminator
+// everywhere in the listing -- a line that never set a tag simply gets none.
+static void list_eol(void)
+{
+    if (list_pending) {
+	csp_print_lit("  // ");
+	if (list_no > 0) {
+	    csp_print_uint(list_no);
+	    csp_print_blank();
+	}
+	csp_print_char(list_rom ? 'F' : 'R');
+	if (list_off)
+	    csp_print_char('!');
+	list_pending = 0;
     }
-    csp_print_blank();
-    csp_print_char(is_rom ? 'F' : 'R');
-    csp_print_char(off ? '!' : ' ');
-    csp_print_blank();
+    csp_println();
 }
 
 // find a #module declaration by name (for /list <Module> scoping)
@@ -7951,9 +7976,14 @@ static void print_decl(decl_t d)
 
 // print a leaf name (by logical string position), qualified as Mod.name when
 // inside a module. mod == 0 means global. Segment-aware (ROM flash or RAM).
+// A member is printed with its BARE name. The enclosing "#module M" line
+// already says which module it belongs to, and "M.A" is a display convention
+// that is not valid input -- with it, a module body could be read but never
+// pasted back. mod is kept in the signature because the caller knows the
+// context and a future format may want it again.
 static void list_name(csp_rt_t* st, sindex_t mod, sindex_t name)
 {
-    if (mod) { csp_print_str_at(st, mod); csp_print_char('.'); }
+    (void)mod;
     csp_print_str_at(st, name);
 }
 
@@ -8031,19 +8061,24 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	 int is_rom = (i < st->rom_nd);
 	 if (t == DECL_MODULE) {
 	     cur_mod = decl(st, i, name);
-	     if (!scope) {
+	     // Print the wrapper when it is in scope: /list M then yields a
+	     // complete "#module M ... #end" block, which is the only form that
+	     // can be pasted back as a module.
+	     if (!scope || csp_str_eq(st, cur_mod, scope, strlen(scope))) {
 		 list_column(0, is_rom, 0);
 		 print_decl(DECL_MODULE);
 		 csp_print_str_at(st, cur_mod);
-		 csp_println();
+		 list_eol();
 	     }
 	     continue;
 	 }
 	if (t == DECL_END) {         // module end or top-level terminator
 	    if (cur_mod) {
-		list_column(0, is_rom, 0);
-		print_decl(DECL_END);
-		csp_println();	    
+		if (!scope || csp_str_eq(st, cur_mod, scope, strlen(scope))) {
+		    list_column(0, is_rom, 0);
+		    print_decl(DECL_END);
+		    list_eol();
+		}
 		cur_mod = 0;
 	    }
 	    continue;
@@ -8052,6 +8087,13 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    if (!(cur_mod && csp_str_eq(st, cur_mod, scope, strlen(scope))))
 		continue;                // only this module's members
 	}
+	// The implicit State variable -- the global one and the per-object copy
+	// inside every module -- is runtime machinery, not something the user
+	// wrote. A source listing that shows it cannot be pasted back: the
+	// declaration would collide with the one the runtime makes itself. Its
+	// VALUE is /state's business, which is where to look for it.
+	if (state_is_state_var(st, i))
+	    continue;
 	npos = decl(st, i, name);
 	if ((npos == 0) || (csp_str_byte(st, npos-1) == 0))
 	    continue;                // no / empty name
@@ -8084,7 +8126,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 		csp_print_uint(decl(st,i,ca.bit) + decl(st,i,ca.len));
 		csp_print_char(']');
 	    }
-	    csp_println();
+	    list_eol();
 	    break;
 	case DECL_CONSTANT:
 	    print_decl_and_name(st, t, cur_mod, npos);
@@ -8092,14 +8134,14 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    csp_print_rostr(csp_fmt_vtype(decl(st,i,vt)));
 	    csp_print_lit(" = ");
 	    csp_print_value(st, decl(st,i,vt), decl(st,i,cn.init));
-	    csp_println();
+	    list_eol();
 	    break;
 	case DECL_OBJECT:
 	    csp_print_char('#');
 	    csp_print_str_at(st, decl_name_pos(st, decl(st,i,mq.mx)));
 	    csp_print_blank();
 	    csp_print_str_at(st, npos);
-	    csp_println();
+	    list_eol();
 	    break;
 	case DECL_TIMER:
 	    print_decl_and_name(st, t, cur_mod, npos);
@@ -8110,7 +8152,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    // out of a board came home with a timer that never runs.
 	    if (decl(st,i,tm.init))
 		csp_print_lit(" = 1");
-	    csp_println();
+	    list_eol();
 	    break;
 	case DECL_DIGITAL:
 	    print_decl_and_name(st, t, cur_mod, npos);
@@ -8128,7 +8170,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    csp_print_uint(decl(st,i,di.port));
 	    csp_print_char(':');
 	    csp_print_uint(decl(st,i,di.pin));
-	    csp_println();
+	    list_eol();
 	    break;
 	case DECL_ANALOG:
 	    print_decl_and_name(st, t, cur_mod, npos);	    
@@ -8144,7 +8186,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    csp_print_uint(decl(st,i,an.port));
 	    csp_print_char(':');
 	    csp_print_uint(decl(st,i,an.pin));
-	    csp_println();
+	    list_eol();
 	    break;
 	case DECL_BUFFER:
 	    // #buffer <name>:<size> <dir> [can 0x<id>]. Size is BYTES (bf.nbytes)
@@ -8160,7 +8202,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 		csp_print_lit(" can ");   // csp_print_hex emits the 0x itself
 		csp_print_hex((uvalue_t)decl(st, decl(st,i,bf.id), cn.init).i);
 	    }
-	    csp_println();
+	    list_eol();
 	    break;
 	case DECL_FIELD:
 	    // #field <name>:<width> <dir> <type> <frame>[<lo>..<hi>].ca.id is the
@@ -8179,10 +8221,11 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    csp_print_uint(decl(st,i,ca.bit));
 	    csp_print_lit("..");
 	    csp_print_uint(decl(st,i,ca.bit) + decl(st,i,ca.len));
-	    csp_print_line("]");
+	    csp_print_char(']');
+	    list_eol();
 	    break;
 	default:
-	    csp_println();
+	    list_eol();
 	    break;
 	}
     }
@@ -8203,7 +8246,8 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	// Close a finished #in block: print `#end` (no number), leave the state.
 	if ((block_end >= 0) && (i >= block_end)) {
 	    list_column(0, i < (int)st->rom_nn, 0);
-	    csp_print_line("#end");
+	    print_decl(DECL_END);
+	    list_eol();
 	    block_end = -1;
 	    st->list_nstate = 0;
 	}
@@ -8234,7 +8278,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 			break;
 		    }
 	    }
-	    csp_println();
+	    list_eol();
 	    i = j + 1;                  // resume after the whole gate
 	    rule = i;
 	    continue;
@@ -8272,6 +8316,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 			csp_print_lit(": ");
 		    }
 		    csp_print_rule(st, rule);
+		    list_eol();
 		}
 	    }
 	    fbits = 0;
@@ -8409,7 +8454,7 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
 	}
 	if (v->t.fired)
 	    csp_print_lit("  FIRED");
-	csp_println();
+	list_eol();
 	return;
     }
 
@@ -8441,7 +8486,7 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
     csp_print_lit("= ");
     if (!is_state || !state_print_state(st, csp_value(st, ix).i))
 	csp_print_value(st, decl(st,di,vt), csp_value(st, ix));
-    csp_println();
+    list_eol();
 }
 
 typedef enum {
@@ -8731,15 +8776,18 @@ static int cmd_clear(csp_rt_t* st, int argc, char* argv[])
     // Drop the disable bits of the rules that are about to disappear, or a rule
     // added later inherits a disable it never asked for. ROM rules keep theirs:
     // they are numbered 1..rom_rules and survive the clear.
-    st->ps.nn   = st->rom_nn;
+    st->ps.nn   = CSP_BASE_NN(st);
     rom_rules = csp_n_rules(st);
     // bitset_clr expands its index twice -- no side effects in the argument.
     while (rom_rules < MAX_DIS_RULES) {
 	bitset_clr(st->dis_rule, rom_rules);
 	rom_rules++;
     }
-    st->ps.nd   = st->rom_nd;
-    st->ps.strp = st->rom_strp;
+    // Floor at the runtime boundary, not at rom_*: with no firmware image
+    // rom_nd is 0 and State lives at decl 0, so a plain truncate dropped the
+    // State variable and left the board unable to run any ungated rule.
+    st->ps.nd   = CSP_BASE_ND(st);
+    st->ps.strp = CSP_BASE_STRP(st);
     st->ps.nq   = 0;
     csp_rebuild(st);
     csp_setup(st);

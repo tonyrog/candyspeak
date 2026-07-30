@@ -47,6 +47,31 @@
 #endif
 #endif
 
+// --- NeoPixel, as a FEATURE and not a board ---------------------------------
+// CSP_NEO says "this board has a NeoPixel strip", nothing about which board.
+// Two backends: CPX drives its ring through the CircuitPlayground library that
+// already owns it, everything else through Adafruit_NeoPixel on a pin. A board
+// Makefile says -DCSP_NEO and, if the variant does not name them, the pin and
+// the count.
+#if defined(CSP_CPX) && !defined(CSP_NEO)
+#define CSP_NEO     1
+#define CSP_NEO_CPX 1          // the ring belongs to the CircuitPlayground lib
+#endif
+
+#if defined(CSP_NEO) && !defined(CSP_NEO_CPX)
+#include <Adafruit_NeoPixel.h>
+#ifndef CSP_NEO_PIN
+#if defined(PIN_NEOPIXEL)
+#define CSP_NEO_PIN PIN_NEOPIXEL      // named by the board variant
+#else
+#error "CSP_NEO needs CSP_NEO_PIN (the variant does not define PIN_NEOPIXEL)"
+#endif
+#endif
+#ifndef CSP_NEO_COUNT
+#define CSP_NEO_COUNT 1               // a Feather has one; a ring says otherwise
+#endif
+#endif
+
 #define CSP_EMBEDDED 1
 #include "csp.h"
 #include "csp_print.h"
@@ -63,18 +88,62 @@
 #ifdef CSP_CPX
 // (Adafruit_CircuitPlayground.h is included above, before csp.h's float poison)
 #define PORT_ACCEL 8
-#define PORT_NEO   9
-// RGB565 -> 0x00RRGGBB for the NeoPixels
-static uint32_t cpx_565(uint16_t c) {
+#endif
+
+// --- the NeoPixel feature ---------------------------------------------------
+// An #analog on CSP_NEO_PORT is a pixel: `pin` is the index in the strip and
+// the value is RGB565, a 16-bit colour that fits a.val exactly. Writes are
+// buffered and pushed once per cycle -- show() is a blocking bit-banged burst,
+// so doing it per pixel would cost the cycle time of the whole program.
+#if defined(CSP_NEO)
+#ifndef CSP_NEO_PORT
+#define CSP_NEO_PORT 9
+#endif
+#define MINLEV 2
+#define MAXLEV 50
+uint16_t lev = MAXLEV;                 // brightness, patchable from a rule
+
+static int csp_neo_dirty = 0;          // show() once per cycle if a pixel moved
+
+// RGB565 -> 0x00RRGGBB
+static uint32_t csp_neo_565(uint16_t c) {
     uint8_t r = (c >> 11) & 0x1f, g = (c >> 5) & 0x3f, b = c & 0x1f;
     return ((uint32_t)(r << 3) << 16) | ((uint32_t)(g << 2) << 8) | (b << 3);
 }
-static int cpx_neo_dirty = 0;   // strip.show() once per cycle if a pixel changed
-#define MINLEV 2
-#define MAXLEV 50
 
-uint16_t lev = MAXLEV;
+#if defined(CSP_NEO_CPX)
+#define csp_neo_pixel(i,v) CircuitPlayground.strip.setPixelColor((i), (v))
+#define csp_neo_push()     do { CircuitPlayground.strip.setBrightness(lev); \
+				CircuitPlayground.strip.show(); } while (0)
+#define csp_neo_begin()    ((void)0)   // CircuitPlayground.begin() did it
+#else
+static Adafruit_NeoPixel csp_neo(CSP_NEO_COUNT, CSP_NEO_PIN, NEO_GRB + NEO_KHZ800);
+#define csp_neo_pixel(i,v) csp_neo.setPixelColor((i), (v))
+#define csp_neo_push()     do { csp_neo.setBrightness(lev); csp_neo.show(); } while (0)
+static void csp_neo_begin(void)
+{
+    // Several Adafruit boards gate the pixel's supply so it draws nothing when
+    // unused -- the Feather RP2040 family names it NEOPIXEL_POWER. Without this
+    // the pixel is simply dark and every other sign says the code ran.
+#if defined(NEOPIXEL_POWER)
+    pinMode(NEOPIXEL_POWER, OUTPUT);
+    digitalWrite(NEOPIXEL_POWER, HIGH);
+#endif
+    csp_neo.begin();
+    csp_neo.setBrightness(lev);
+    csp_neo.show();                    // all off, and the line driven low
+}
+#endif
 
+// Called from csp_board_analog_output in both board branches.
+static int csp_neo_write(value_t* vptr)
+{
+    if (vptr->a.port != CSP_NEO_PORT)
+	return 0;
+    csp_neo_pixel(vptr->a.pin, csp_neo_565(vptr->a.val));
+    csp_neo_dirty = 1;
+    return 1;
+}
 #endif
 
 csp_rt_t state;
@@ -283,8 +352,7 @@ int csp_uconst(csp_rt_t* st, const char* name, int len, ivalue_t* ret)
 void csp_board_setup(csp_rt_t* st)
 {
     CircuitPlayground.begin();   // owns NeoPixels, accelerometer, sensors
-    CircuitPlayground.strip.setBrightness(lev);
-    CircuitPlayground.strip.show();
+    csp_neo_begin();
 }
 
 // Base sampling period (ms). Bounds the loop's idle sleep so continuous inputs
@@ -302,15 +370,15 @@ void csp_board_start_input(csp_rt_t* st)
 
 void csp_board_start_output(csp_rt_t* st)
 {
-    cpx_neo_dirty = 0;    
+    csp_neo_dirty = 0;
 }
 
 // push the frame once per cycle (dirty is only set while not latched)
 void csp_board_stop_output(csp_rt_t* st)
 {
-    if (cpx_neo_dirty) {
-	CircuitPlayground.strip.setBrightness(lev);
-	CircuitPlayground.strip.show();
+    if (csp_neo_dirty) {
+	csp_neo_push();
+	csp_neo_dirty = 0;
     }
 }
 
@@ -346,11 +414,8 @@ void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
 
 void csp_board_analog_output(csp_rt_t* st, int di, value_t* vptr)
 {
-    if (vptr->a.port == PORT_NEO) {   // NeoPixel: RGB565 -> pixel
-	CircuitPlayground.strip.setPixelColor(vptr->a.pin,
-					      cpx_565(vptr->a.val));
-	cpx_neo_dirty = 1; // need update
-    }
+    if (csp_neo_write(vptr))
+	;                             // an #analog on the NeoPixel port
     else if (vptr->a.pwm) {
 	int val = map(vptr->a.val, 0, (1<<decl(st,di,res))-1, 0, 255);
 	analogWrite(vptr->a.pin, val);
@@ -361,19 +426,33 @@ void csp_board_analog_output(csp_rt_t* st, int di, value_t* vptr)
 
 void csp_board_setup(csp_rt_t* st)
 {
+    (void)st;
+#if defined(CSP_NEO)
+    csp_neo_begin();
+#endif
 }
 
 void csp_board_start_input(csp_rt_t* st)
 {
+    (void)st;
 }
 
 void csp_board_start_output(csp_rt_t* st)
 {
+    (void)st;
 }
 
-// push the frame once per cycle (dirty is only set while not latched)
+// push the strip once per cycle: show() is a blocking bit-banged burst, so one
+// per changed pixel would dominate the cycle time.
 void csp_board_stop_output(csp_rt_t* st)
 {
+    (void)st;
+#if defined(CSP_NEO)
+    if (csp_neo_dirty) {
+	csp_neo_push();
+	csp_neo_dirty = 0;
+    }
+#endif
 }
 
 void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
@@ -384,6 +463,10 @@ void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
 // handle type! accept float as well
 void csp_board_analog_output(csp_rt_t* st, int di, value_t* vptr)
 {
+#if defined(CSP_NEO)
+    if (csp_neo_write(vptr))
+	return;                       // an #analog on the NeoPixel port
+#endif
     if (vptr->a.pwm) {
 	int val = map(vptr->a.val, 0, (1<<decl(st,di,res))-1, 0, 255);
 	analogWrite(vptr->a.pin, val);

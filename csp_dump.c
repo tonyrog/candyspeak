@@ -1322,7 +1322,7 @@ void csp_list_declarations(FILE* f, csp_rt_t* st)
 
 int csp_list_rule(csp_rt_t* st, int i)
 {
-    return csp_print_rule(st, i);
+    { int r = csp_print_rule(st, i); csp_println(); return r; }
 }
 
 // Name string position of the state numbered snum (0 if none).
@@ -1397,6 +1397,7 @@ void csp_list_rules(FILE* f, csp_rt_t* st)
 	}
 	fprintf(f, "%s", indent(lev));   // a rule starts here
 	i = csp_print_rule(st, i);
+	csp_println();
     }
     if (block_end >= 0) {   // block runs to the very end
 	if (lev > 0) lev--;

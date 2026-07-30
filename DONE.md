@@ -160,6 +160,87 @@ Avklarade punkter, flyttade hit från TODO.md. Nyast överst.
 
 ## 1.0 (efter release)
 
+### NeoPixel blev en feature, inte ett kort (2026-07-30)
+
+  - `CSP_NEO` sager "det har kortet har en NeoPixel-strip" och ingenting om
+    VILKET kort. Forr lag alltihop inne i `CSP_CPX` tillsammans med
+    accelerometern, sa en Feather med en enda pixel kunde inte na den utan att
+    lasas som en Circuit Playground.
+  - Tva backends bakom samma feature: `CSP_NEO_CPX` gar via
+    CircuitPlayground-biblioteket som redan ager ringen, allt annat via
+    `Adafruit_NeoPixel` pa en pinne. `CSP_CPX` definierar bada automatiskt, sa
+    CPX-bygget ar oforandrat (95 224 byte, samma som forut).
+  - Pinnen kommer fran board-varianten (`PIN_NEOPIXEL`), inte fran Makefilen.
+    Saknas den blir det ett `#error` i stallet for en tyst nolla.
+  - **`NEOPIXEL_POWER` dras hog i `csp_neo_begin`.** Flera Adafruit-kort grindar
+    pixelns matning sa den drar noll nar den inte anvands; utan det ar pixeln
+    bara mork medan varje annat tecken sager att koden kort. Samma familj som
+    CAN-standbyn.
+  - `csp_neo_write()` anropas fran BADA board-grenarnas
+    `csp_board_analog_output`, och strippen pushas en gang per cykel i
+    `stop_output` -- `show()` ar en blockerande bit-bangad skur, en per andrad
+    pixel hade dominerat cykeltiden.
+  - `examples/neo.csp`. Feather bygger med `-DCSP_NEO` (123 508 byte, 12
+    NeoPixel-symboler i ELF:en). mega/mkrzero/CPX oforandrade, test + san 59/59.
+  - OVERIFIERAT PA HARDVARA: att `NEOPIXEL_POWER` ska vara HOG ar antagandet.
+    Ar pixeln mork ar det forsta stallet att titta.
+
+
+### /list blev pasteable (2026-07-30)
+
+  - R/F-taggen och regelnumret lag som en LEDANDE kolumn ("  1 R  "), sa varje
+    rad matte handstadas innan den var kallkod igen. De ligger nu sist, som en
+    `//`-kommentar: raden borjar med det man faktiskt vill klistra.
+  - `list_column()` sparar taggen i stallet for att skriva den; `list_eol()`
+    skriver kommentaren och radslutet. Utan vantande tagg ar den ett rent
+    radslut, sa den gar att anvanda som radavslutare overallt i listningen --
+    en rad som aldrig satt en tagg far helt enkelt ingen.
+  - `csp_print_rule` slutade skriva sitt eget radslut; anroparen stanger raden
+    (tva stallen i csp_dump.c, ett i csp_rt.c). Det var enda vagen att fa
+    kommentaren pa regelrader alls.
+  - Disable-market foljer med: `// 2 R!`.
+  - `-P`/fil-listningen oforandrad. test + san 59/59, mega och feather_can
+    bygger.
+  - **Modulmedlemmar**: bart namn i stallet for `M.A` -- den omslutande
+    `#module M`-raden sager redan vilken modul det ar, och prefixet var inte
+    giltig indata. `/list M` skriver nu ocksa `#module`/`#end` runt medlemmarna,
+    sa en scopad listning ar ett komplett block.
+  - **Implicita State doljs** -- den globala och per-objekt-kopian i varje modul.
+    Det ar runtime-maskineri som anvandaren aldrig skrivit; en listning som visar
+    den gar inte att klistra tillbaka (deklarationen krockar med den runtime
+    sjalv gor). Vardet ar `/state`s sak.
+  - KVAR: en moduls REGLER listas efter allt annat med ett `M: `-prefix, utanfor
+    sitt `#module`-block. Regellistningen ar ett eget svep over instruktionerna,
+    sa att fla in dem i blocket kraver att cmd_list byggs om -- deklarationerna
+    ar kompletta, reglerna ar det inte.
+
+
+### State forsvann sa fort EEPROM var pasl.aget (2026-07-30)
+
+  - Repro: `./csp --no-eeprom -i` -> `/list` visar `#variable State integer = 0`.
+    `./csp -e nyfil.bin -i` -> State saknas helt. Tom fil racker.
+  - Foljd: grinden i `csp_eval` (`csp_rt.c:2013`) laser `csp_value(st, st->sx)`
+    pa en slot som inte langre ar State. Ar talet nagot annat an INIT/NORMAL
+    hoppas VARENDA ogrindad regel over -- timers rearmas aldrig, variabler
+    fryser, men immediate-kommandon fungerar (de gar utanfor regelmotorn).
+    Precis det som satte kortet i "Beat stopped" hela kvallen.
+  - **Roten var inte baslinjearitmetiken.** `csp_eeprom_load`s `error:`-vag kors
+    aven nar `did_init == 0` -- en tom eller frammande EEPROM faller pa
+    header-kontrollen LANGT fore `csp_rt_init` -- och satte anda
+    `st->ps.nd = st->rom_nd`, alltsa 0 utan firmware-image. Den raderade State
+    som ANROPAREN just skapat. Vi aterstallde en baslinje vi aldrig rubbat.
+  - Fix: hela aterstallningen villkorad pa `did_init`, och nar den kors ar
+    golvet `max(rom_*, det csp_rt_init lamnade)`. Ingen `.sys`-flagga och ingen
+    index-mappning behovs -- den hoppar aldrig over en systemdecl, den slutar
+    bara kapa under den.
+  - Verifierat i tre steg SAMTIDIGT (forra forsoket lagade State men torrlade
+    save/load, for det rorde spar-rakningen ocksa):
+      1. State finns med tom EEPROM
+      2. `/save` + omstart aterstaller programmet (4 decls, 10 instrs)
+      3. reglerna KOR efter omstart -- fri timer, Seq 15 -> 24
+  - test + san 59/59, mega och feather_can bygger.
+
+
 ### RP2040 foll igenom varje #elif (2026-07-30)
 
   - **`/save` gav "cannot save eeprom"** och `/memory` sa `EEPROM 93 0 (NONE)`.

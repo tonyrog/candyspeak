@@ -18,8 +18,15 @@ BPATH="./build/rp2040.rp2040.adafruit_feather_can"
 # 500 kbit is the CANopen/DS-401 default. The MCP2515 crystal on this board is
 # 16 MHz, which is what the library assumes, so no CSP_CAN_CLOCK is needed.
 CAN=-DCSP_HAS_CAN -DCSP_CAN_MCP2515 -DCSP_CAN_BITRATE=500E3
-OPTS=--build-property "compiler.c.extra_flags=-Os $(CAN)" \
-     --build-property "compiler.cpp.extra_flags=-Os $(CAN)"
+
+# One NeoPixel on this board. CSP_NEO is a FEATURE, not a board: the pin comes
+# from the variant (PIN_NEOPIXEL 21) and NEOPIXEL_POWER 20 is driven high by
+# csp_neo_begin, so nothing board-specific is repeated here.
+#   #analog Px:16 out 9:0      -- port 9 = NeoPixel, pin = index in the strip
+#   Px = 0xF800                -- RGB565, red
+NEO=-DCSP_NEO
+OPTS=--build-property "compiler.c.extra_flags=-Os $(CAN) $(NEO)" \
+     --build-property "compiler.cpp.extra_flags=-Os $(CAN) $(NEO)"
 
 compile:
 	arduino-cli compile -e --fqbn $(FQBN) $(OPTS) --build-path $(BPATH)

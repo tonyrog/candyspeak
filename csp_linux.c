@@ -539,7 +539,7 @@ int parse_file(csp_rt_t* st, FILE* fin)
 	    return -1;
 	}
     }
-    csp_new_decl(st, &empty, DECL_END);
+    csp_new_decl(st, &empty, DECL_END, 0);
     return 0;
 }
 
