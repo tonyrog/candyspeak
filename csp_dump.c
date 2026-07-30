@@ -1208,6 +1208,9 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	// from here.
 	fprintf(f, "const csp_image_ref_t %s_image RODATA = "
 		   "{ (const uint8_t*)&%s_image_data };\n", px, px);
+	// Announce it to the linker, so a firmware carrying several images can
+	// enumerate them without knowing any of their names.
+	fprintf(f, "CSP_REGISTER_IMAGE(%s_image_data);\n", px);
     }
 }
 

@@ -1,0 +1,39 @@
+// can_link.csp -- the smallest thing that proves a frame crossed the wire.
+//
+// Run this FIRST, before anything with two directions in it. If it does not
+// work, a ping/pong tells you nothing you did not already know, and it hides
+// which half is broken.
+//
+// Same file on both boards. Swap the two ids on the second one:
+//   board A: out 0x200, in 0x201
+//   board B: out 0x201, in 0x200
+//
+//   make -f Makefile.feather_can compile && make -f Makefile.feather_can upload
+//
+// Watch: the LED on the RECEIVING board blinks. Driving it from the arriving
+// frame rather than from a local timer is the whole point -- a blink you can
+// see across the room means the bus is alive, and it goes dark the moment it
+// is not.
+
+#buffer Tx:8 out can 0x200
+#buffer Rx:8 in  can 0x201
+
+#field  TxSeq:16 unsigned Tx[0..15]
+
+#digital Led out 13
+#timer   Beat 500 = 1
+
+#variable Seq = 0
+
+// Free-run the timer: `Beat = 1` only arms a STOPPED timer, so this is how a
+// periodic tick is written -- rearm it on the cycle it fires.
+Beat = 1 ? timeout(Beat)
+
+// Writing a field IS the send. An out-frame goes at the end of any cycle where
+// one of its fields changed, so there is no .tx here -- the assignment is the
+// trigger (event PDO).
+Seq = Seq + 1 ? timeout(Beat)
+TxSeq = Seq   ? timeout(Beat)
+
+// Toggle on every frame that arrives. `.rx` is true for exactly one cycle.
+Led = !Led ? Rx.rx

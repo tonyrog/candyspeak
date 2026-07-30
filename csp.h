@@ -626,20 +626,20 @@ typedef enum {
     QUEST,   // "?"
     WORD,       // abc
     // option keywords
-    PULLUP,     // 'pullup'
-    PULLDOWN,   // 'pulldown'
-    RESOLUTION, // 'resolution'
-    IN,         // 'in'
-    OUT,        // 'out'
-    INOUT,      // 'inout'
+    T_PULLUP,   // 'pullup'
+    T_PULLDOWN, // 'pulldown'
+    T_RESOLUTION, // 'resolution'
+    T_IN,         // 'in'
+    T_OUT,        // 'out'
+    T_INOUT,      // 'inout'
     T_PWM,        // 'pwm'
-    FLOAT,      // 'float'
-    INTEGER,    // 'integer'
-    UNSIGNED,   // 'unsigned'
-    STRING,     // 'string'
-    NATIVE,     // 'native'
-    LITTLE,     // 'little'
-    BIG,        // 'big'
+    T_FLOAT,      // 'float'
+    T_INTEGER,    // 'integer'
+    T_UNSIGNED,   // 'unsigned'
+    T_STRING,     // 'string'
+    T_NATIVE,     // 'native'
+    T_LITTLE,     // 'little'
+    T_BIG,        // 'big'
     T_CAN,      // 'can' -- transport option on #buffer: `#buffer F:8 in can 0x201`
     // Reserved so the '#' dispatch can branch on them: it looks for a WORD after
     // '#' and would otherwise read "disable" as a module name.
@@ -1230,6 +1230,27 @@ typedef struct PACKED
     CSP_STATIC_ASSERT(offsetof(tname,states) == (OSTATES),"ofs_states");   \
     CSP_STATIC_ASSERT(sizeof(tname)          == (SZ),     "image size")
 
+// Register an image with the LINKER, so a firmware that carries several can
+// enumerate them. The section name has no leading dot, which is what makes GNU
+// ld generate __start_/__stop_ symbols for it -- no linker script needed.
+// Verified on host gcc, avr-gcc 4.8.1 and arm-none-eabi 7.2.1, all surviving
+// Arduino's -ffunction-sections -fdata-sections -Wl,--gc-sections.
+//
+// The entries are ADDRESSES of image objects, and the array is deliberately
+// NOT const-qualified as a whole. On AVR that puts it in .data -- RAM, two bytes
+// per image -- and a plain read works. Made read-only it would be an orphan
+// section placed after all the code: measured at 0x17d30 on a 98 kB mega
+// firmware, which is past the 64 kB that memcpy_P/pgm_read_byte can reach, so
+// every entry would read back as garbage. Six bytes of RAM for three images is
+// the cheaper problem.
+#define CSP_REGISTER_IMAGE(base_sym)                                    \
+    static const uint8_t* base_sym##_reg                                \
+	__attribute__((section("csp_images"), used)) =                  \
+	    (const uint8_t*)&base_sym
+
+extern const uint8_t* __start_csp_images[];
+extern const uint8_t* __stop_csp_images[];
+
 // A fixed-type handle on an image whose struct type the runtime cannot name --
 // every image has its own type, because the counts differ. The runtime does not
 // care what that type is: it takes the base and works in offsets from there.
@@ -1544,6 +1565,7 @@ static inline csp_image_ref_t ro_ref(const csp_image_ref_t* p)
 { csp_image_ref_t v; memcpy_P(&v, p, sizeof(v)); return v; }
 static inline csp_sect_t ro_sect(const csp_sect_t* p)
 { csp_sect_t v; memcpy_P(&v, p, sizeof(v)); return v; }
+
 #else
 #define ro_decl(p)  (*(p))
 #define ro_instr(p) (*(p))
@@ -1731,6 +1753,12 @@ extern void    csp_load_rom(csp_rt_t*);
 // recovery via the end markers) and rebases the parse state onto it.
 extern void    csp_load_image(csp_rt_t*, const uint8_t* base);
 extern const csp_image_ref_t rom_image;
+// How many images this firmware linked in, and the base of the i:th one.
+extern int            csp_image_count(void);
+extern const uint8_t* csp_image_at(int i);
+// The best linked image for a role: highest generation whose header verifies.
+// NULL when the firmware carries none for that role.
+extern const uint8_t* csp_find_image(unsigned role);
 extern uint16_t csp_crc16(uint16_t crc, const void* data, size_t n, int is_rom);
 extern int     csp_has_firmware(void);
 extern int     csp_rt_start(csp_rt_t*);

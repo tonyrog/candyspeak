@@ -45,7 +45,7 @@ static const rom_image_t rom_image_data RODATA = {
     .ofs_str = R_O_STR, .ofs_decl = R_O_DECL, .ofs_instr = R_O_INSTR,
     .ofs_idg = R_O_IDG, .ofs_ofs = R_O_OFS, .ofs_edg = R_O_EDG,
     .ofs_states = R_O_STATES,
-    .crc_hdr = 0
+    .crc_hdr = 37420   /* computed over the header above; /images reports it clean */
   },
   .s_str    = { { CSP_SECT_STR }, R_NSTR + CSP_PAD4(R_NSTR) },
   .str      = { 0 },
@@ -66,3 +66,7 @@ static const rom_image_t rom_image_data RODATA = {
 // The handle the runtime takes. It never names rom_image_t -- it works from the
 // base and the offsets in the header.
 const csp_image_ref_t rom_image RODATA = { (const uint8_t*)&rom_image_data };
+
+// Announce it to the linker so a firmware carrying several images can find them
+// all. Costs one pointer in flash.
+CSP_REGISTER_IMAGE(rom_image_data);

@@ -95,20 +95,20 @@ const op_entry_t tok_table[] RODATA = {
     INSTR_ENT(COMMA,OP_COMMA,s_COMMA,2,2,RIGHT),
     INSTR_ENT(QUEST,OP_RULE,s_QUEST,-1,-1,NO),
 
-    TOK_ENT(PULLUP,OP_NOP,s_pullup),
-    TOK_ENT(PULLDOWN,OP_NOP,s_pulldown),
-    TOK_ENT(RESOLUTION,OP_NOP,s_resolution),
-    TOK_ENT(IN,OP_NOP,s_in),
-    TOK_ENT(OUT,OP_NOP,s_out),
-    TOK_ENT(INOUT,OP_NOP,s_inout),
+    TOK_ENT(T_PULLUP,OP_NOP,s_pullup),
+    TOK_ENT(T_PULLDOWN,OP_NOP,s_pulldown),
+    TOK_ENT(T_RESOLUTION,OP_NOP,s_resolution),
+    TOK_ENT(T_IN,OP_NOP,s_in),
+    TOK_ENT(T_OUT,OP_NOP,s_out),
+    TOK_ENT(T_INOUT,OP_NOP,s_inout),
     TOK_ENT(T_PWM,OP_NOP,s_pwm),
-    TOK_ENT(FLOAT,OP_NOP,s_float),
-    TOK_ENT(INTEGER,OP_NOP,s_integer),
-    TOK_ENT(UNSIGNED,OP_NOP,s_unsigned),
-    TOK_ENT(STRING,OP_NOP,s_string),
-    TOK_ENT(NATIVE,OP_NOP,s_native),    
-    TOK_ENT(LITTLE,OP_NOP,s_little),
-    TOK_ENT(BIG,OP_NOP,s_big),
+    TOK_ENT(T_FLOAT,OP_NOP,s_float),
+    TOK_ENT(T_INTEGER,OP_NOP,s_integer),
+    TOK_ENT(T_UNSIGNED,OP_NOP,s_unsigned),
+    TOK_ENT(T_STRING,OP_NOP,s_string),
+    TOK_ENT(T_NATIVE,OP_NOP,s_native),    
+    TOK_ENT(T_LITTLE,OP_NOP,s_little),
+    TOK_ENT(T_BIG,OP_NOP,s_big),
     TOK_ENT(T_CAN,OP_NOP,s_can),   // the #buffer TRANSPORT, not a declaration
     TOK_ENT(T_DISABLE,OP_NOP,s_disable),
     TOK_ENT(T_ENABLE,OP_NOP,s_enable),
@@ -2811,7 +2811,7 @@ NOINLINE static bool_t csp_load_float(csp_rt_t* st, reg_t x, fvalue_t val)
     if (v.u == 0) {
 	return asm_LI(st, x, 0);  // 0.0
     }
-    if (!asm_LIu(st, x, (uint16_t)(v.u & 0xFFFF)))
+    if (!asm_LIU(st, x, (uint16_t)(v.u & 0xFFFF)))
 	return 0;
     return asm_LIH(st, x, (uint16_t)(v.u >> 16));
 #endif
@@ -4502,12 +4502,12 @@ next:
 	    return 0;
 	ptok = STR;
 	goto after_primary;
-    case IN:  case OUT:  case INOUT:       // dir keyword as int  (Led.dir=out)
-    case NATIVE: case LITTLE: case BIG: {  // endian keyword as int
+    case T_IN:  case T_OUT:  case T_INOUT: // dir keyword as int  (Led.dir=out)
+    case T_NATIVE: case T_LITTLE: case T_BIG: {  // endian keyword as int
 	value_t kv;
-	kv.i = (tok==IN)    ? DIR_IN  : (tok==OUT)    ? DIR_OUT   :
-	       (tok==INOUT) ? DIR_INOUT :
-	       (tok==NATIVE) ? E_NATIVE : (tok==LITTLE) ? E_LITTLE : E_BIG;
+	kv.i = (tok==T_IN)    ? DIR_IN  : (tok==T_OUT)    ? DIR_OUT   :
+	       (tok==T_INOUT) ? DIR_INOUT :
+	       (tok==T_NATIVE) ? E_NATIVE : (tok==T_LITTLE) ? E_LITTLE : E_BIG;
 	if ((ep = push_imm(st, rstack, ep, V_INTEGER, kv)) < 0)
 	    return 0;
 	ptok = INT;
@@ -6272,7 +6272,7 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 
 	if (tv[0].t == NEWLINE)
 	    r = 0;
-	else if ((tv[0].t == HASH) && (tv[1].t == IN)) {
+	else if ((tv[0].t == HASH) && (tv[1].t == T_IN)) {
 	    r = csp_parse_in(st, tv, 2, num);
 	}
 	// #field needs no branch of its own: 'field' is not a reserved token, so
@@ -6665,10 +6665,69 @@ NOINLINE void csp_load_image(csp_rt_t* st, const uint8_t* base)
     }
 }
 
+// --- the linked-image registry -----------------------------------------------
+// csp -C emits a CSP_REGISTER_IMAGE for every image, so the linker collects
+// their addresses into one array. This answers "what did this build link in",
+// which is a different question from "what is on the chip" -- the latter needs a
+// flash scan, and finds images nobody linked (a FAILSAFE flashed on its own, an
+// A/B slot updated in the field). Same loader either way; only discovery
+// differs.
+
+int csp_image_count(void)
+{
+    return (int)(__stop_csp_images - __start_csp_images);
+}
+
+const uint8_t* csp_image_at(int i)
+{
+    if ((i < 0) || (i >= csp_image_count()))
+	return NULL;
+    return __start_csp_images[i];
+}
+
+// Pick the best linked image for a role: the highest generation whose header
+// verifies. Header only -- the section CRCs are csp_load_image's business, and
+// checking them twice would double the boot cost for no new information.
+const uint8_t* csp_find_image(unsigned role)
+{
+    const uint8_t* best = NULL;
+    unsigned best_gen = 0;
+    int n = csp_image_count();
+    int i;
+
+    for (i = 0; i < n; i++) {
+	const uint8_t* base = csp_image_at(i);
+	csp_image_header_t h;
+	if (base == NULL)
+	    continue;
+	h = ro_header((const csp_image_header_t*)base);
+	if ((h.magic[0] != CSP_IMAGE_MAGIC0) || (h.magic[1] != CSP_IMAGE_MAGIC1) ||
+	    (h.magic[2] != CSP_IMAGE_MAGIC2) || (h.magic[3] != CSP_IMAGE_MAGIC3))
+	    continue;
+	if (h.role != role)
+	    continue;
+	if (csp_crc16(0xFFFF, &h, sizeof(h) - sizeof(uint16_t), 0) != h.crc_hdr)
+	    continue;             // a rotten header cannot be ranked; skip it
+	if ((best == NULL) || (h.generation >= best_gen)) {
+	    best = base;
+	    best_gen = h.generation;
+	}
+    }
+    return best;
+}
+
 // The firmware's own image, by the name every backend already calls.
 NOINLINE void csp_load_rom(csp_rt_t* st)
 {
-    csp_load_image(st, ro_ref(&rom_image).base);
+    // Ask the registry for the best ROM-role image, so linking a second one with
+    // a higher generation takes precedence -- A/B without touching the build.
+    // Falling back to rom_image directly is deliberate: if --gc-sections ever
+    // does collect the registry on some toolchain, the board still boots with
+    // the image it was built with instead of nothing at all.
+    const uint8_t* base = csp_find_image(CSP_ROLE_ROM);
+    if (base == NULL)
+	base = ro_ref(&rom_image).base;
+    csp_load_image(st, base);
 }
 
 // Backend hook: hand out the raw RAM for the code arena. The memory source is a
@@ -7680,6 +7739,41 @@ int csp_set_latch(csp_rt_t* st, int onoff)
 static int cmd_help(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_list(csp_rt_t* st, int argc, char* arg[]);
 static int cmd_state(csp_rt_t* st, int argc, char* argv[]);
+// /images -- what this firmware linked in. The registry answers that; it does
+// NOT answer what is on the chip (a FAILSAFE flashed on its own, an A/B slot
+// updated in the field), which needs a flash scan.
+static int cmd_images(csp_rt_t* st, int argc, char* argv[])
+{
+    int n = csp_image_count();
+    int i;
+    (void)argc; (void)argv; (void)st;
+
+    for (i = 0; i < n; i++) {
+	const uint8_t* base = csp_image_at(i);
+	csp_image_header_t h = ro_header((const csp_image_header_t*)base);
+	int ok = (csp_crc16(0xFFFF, &h, sizeof(h) - sizeof(uint16_t), 0)
+		  == h.crc_hdr);
+	csp_print_uint(i);
+	csp_print_lit(": ");
+	csp_print_rostr((h.role == CSP_ROLE_FAILSAFE) ? ros_FAILSAFE : ros_ROM);
+	csp_print_lit(" gen=");
+	csp_print_uint(h.generation);
+	csp_print_lit(" size=");
+	csp_print_uint(h.size);
+	csp_print_lit(" rules=");
+	csp_print_uint(h.n_instr);
+	// csp_print_line stashes its argument as a static flash literal, so it
+	// takes a literal and not an expression.
+	if (ok)
+	    csp_print_line("");
+	else
+	    csp_print_line("  (header CRC BAD)");
+    }
+    if (n == 0)
+	csp_print_line("no images registered");
+    return CSP_CMD_OK;
+}
+
 static int cmd_reset(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_clear(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_memory(csp_rt_t* st, int argc, char* argv[]);
@@ -7688,6 +7782,7 @@ static int cmd_quit(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_latch(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_save(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_load(csp_rt_t* st, int argc, char* argv[]);
+static int cmd_images(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_pause(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_live(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_resume(csp_rt_t* st, int argc, char* argv[]);
@@ -7703,6 +7798,7 @@ static const csp_cmd_t builtin_cmds[] = {
     { ros_cmd_list,   ros_h_list,    cmd_list },
     { ros_cmd_state,  ros_h_state,   cmd_state },
     { ros_cmd_memory, ros_h_memory,  cmd_memory },
+    { ros_cmd_images, ros_h_images,  cmd_images },
     { ros_cmd_pause,  ros_h_pause,   cmd_pause },
     { ros_cmd_live,   ros_h_live,    cmd_live },
     { ros_cmd_resume, ros_h_resume,  cmd_resume },
@@ -8008,7 +8104,12 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	case DECL_TIMER:
 	    print_decl_and_name(st, t, cur_mod, npos);
 	    csp_print_blank();
-	    csp_print_uint(decl(st,i,tm.period));	    
+	    csp_print_uint(decl(st,i,tm.period));
+	    // `= 1` is part of the declaration, not decoration: it is what starts
+	    // the timer at boot. Dropped from the listing, a program copied back
+	    // out of a board came home with a timer that never runs.
+	    if (decl(st,i,tm.init))
+		csp_print_lit(" = 1");
 	    csp_println();
 	    break;
 	case DECL_DIGITAL:
@@ -8541,8 +8642,24 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 static int cmd_reset(csp_rt_t* st, int argc, char* argv[])
 {
     (void)argv;
+    (void)argc;
     csp_rebuild(st);
     csp_setup(st);
+    // Leave FAILSAFE. The sticky guard in OP_STI stops a RULE from bouncing the
+    // device out of its safe configuration, which is exactly what it is for --
+    // but the operator at the console is not a rule, and /reset is the escape
+    // hatch that guard's own comment promises. Without this the only ways back
+    // were /clear, which throws the program away, and a power cycle.
+    // Both slots directly, not csp_set_value: a normal store lands in the
+    // shadow copy and the guard above sits on the path that would commit it, so
+    // the write would be politely ignored -- which is what the guard is FOR.
+    // Same shape as csp_output_timer clearing running/fired in both halves.
+    {
+	value_t* iptr;
+	value_t* optr;
+	if (csp_dio_slots(st, st->sx, &iptr, &optr) == 0)
+	    iptr->i = optr->i = STATE_INIT;
+    }
     csp_print_line("Reset");
     return CSP_CMD_OK;
 }

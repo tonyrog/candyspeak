@@ -10,7 +10,11 @@
 #include <string.h>
 
 // EEPROM support - not all boards have it
-#if defined(__AVR__) || defined(ESP32) || defined(ESP8266)
+// AVR has real EEPROM. ESP and RP2040 emulate one in flash through a library
+// with the same shape -- begin/read/write/commit, and no update(). See the shim
+// at csp_eeprom_open_read.
+#if defined(__AVR__) || defined(ESP32) || defined(ESP8266) || \
+    defined(ARDUINO_ARCH_RP2040)
 #define CSP_HAS_EEPROM 1
 #include <EEPROM.h>
 #elif defined(ARDUINO_ARCH_SAMD)
@@ -28,7 +32,16 @@
 // Expects Sandeep Mistry's arduino-CAN API (CAN.begin/parsePacket/beginPacket),
 // which covers the MCP2515 shields and the SAMD/ESP32 built-in controllers.
 #if defined(CSP_HAS_CAN)
+// Two shapes of controller. CSP_CAN_MCP2515 is one hanging off SPI (the Adafruit
+// Feather RP2040 CAN, MCP2515 + TJA1051): it has to be constructed with its chip
+// select, so it is an object we own rather than a library global. Everything else
+// -- SAMD/ESP32 with the controller on-die -- keeps arduino-CAN's global `CAN`.
+// The recv/send bodies are identical either way; only CSP_CANDEV differs.
+#if defined(CSP_CAN_MCP2515)
+#include <Adafruit_MCP2515.h>
+#else
 #include <CAN.h>
+#endif
 #ifndef CSP_CAN_BITRATE
 #define CSP_CAN_BITRATE 500E3
 #endif
@@ -77,14 +90,23 @@ int stack_used(void)
 // raw_free(): the actual free RAM right now, heap-top..stack. It EXCLUDES the
 // .bss struct AND (with the static-arena backend) the static arena, since both
 // are .bss below the heap.
-#ifdef __arm__
+// Free RAM right now, heap-top..stack. Selected by target EXPLICITLY: the AVR
+// branch reads avr-libc's __heap_start/__brkval, and it used to be the `#else`,
+// which quietly claimed every non-ARM target -- an ESP32 build reached the
+// linker before anyone found out.
+#if defined(ESP32) || defined(ESP8266)
+static uint32_t raw_free()
+{
+    return (uint32_t)ESP.getFreeHeap();   // the SDK already tracks this
+}
+#elif defined(__arm__)
 extern "C" char* sbrk(int incr);
 static uint32_t raw_free()
 {
     char top;
     return (uint32_t)(&top - reinterpret_cast<char*>(sbrk(0)));
 }
-#else
+#elif defined(__AVR__)
 extern unsigned int __heap_start, *__brkval;
 static uint32_t raw_free()
 {
@@ -95,6 +117,10 @@ static uint32_t raw_free()
 	free_memory = ((int)&free_memory) - ((int)__brkval);
     return (uint32_t)free_memory;
 }
+#else
+// Unknown target: say nothing rather than something wrong. The arena falls back
+// to its static size and /memory reports 0 free, which is visibly a non-answer.
+static uint32_t raw_free() { return 0; }
 #endif
 
 EXTERN_C_BEGIN
@@ -109,6 +135,12 @@ uint32_t csp_system_ram_avail()
     return raw_free() + sizeof(csp_rt_t);
 }
 
+// A board we have no figure for. Kept as a distinct value rather than 0 so
+// callers can tell "no idea" from "none", and so the arithmetic below refuses
+// to produce a number instead of producing a wrong one -- /memory printed
+// "RAM 4294967295 total, system -254872" before this was handled.
+#define CSP_RAM_UNKNOWN 0xFFFFFFFFu
+
 uint32_t csp_system_ram_capacity()
 {
 #if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega168__)
@@ -119,8 +151,12 @@ uint32_t csp_system_ram_capacity()
     return 2560; // Arduino Leonardo, Micro
 #elif defined(ARDUINO_ARCH_SAMD)
     return 32768; // Arduino Zero / M0 (32KB)
+#elif defined(ESP32) || defined(ESP8266)
+    return (uint32_t)ESP.getHeapSize();   // varies by chip and partition table
+#elif defined(ARDUINO_ARCH_RP2040)
+    return 264*1024;  // RP2040: 264 KB SRAM (six banks, contiguous)
 #else
-    return -1; // Unknown board
+    return CSP_RAM_UNKNOWN;
 #endif
 }
 
@@ -129,9 +165,15 @@ uint32_t csp_system_ram_capacity()
 // .bss and so is excluded from raw_free(), from being double-counted as system.
 uint32_t csp_system_ram_used()
 {
-    uint32_t total = csp_system_ram_capacity() - raw_free();  // all statics + stack used
-    uint32_t ours  = (uint32_t)state.mem_limit + (uint32_t)sizeof(csp_rt_t);
-    return (total > ours) ? (total - ours) : 0;
+    uint32_t cap = csp_system_ram_capacity();
+    uint32_t total;
+    if (cap == CSP_RAM_UNKNOWN)
+	return 0;                     // no capacity, no meaningful "used"
+    total = cap - raw_free();         // all statics + stack used
+    {
+	uint32_t ours = (uint32_t)state.mem_limit + (uint32_t)sizeof(csp_rt_t);
+	return (total > ours) ? (total - ours) : 0;
+    }
 }
 
 uint32_t csp_time_ms(void)
@@ -523,13 +565,52 @@ void csp_input(csp_rt_t* st)
 
 #if defined(CSP_HAS_CAN)
 
+#if defined(CSP_CAN_MCP2515)
+// Pin defaults come from the board variant when it names them -- the Adafruit
+// Feather RP2040 CAN defines PIN_CAN_CS/PIN_CAN_STANDBY -- so a board Makefile
+// only has to say CSP_CAN_MCP2515. Override with -DCSP_CAN_CS=n for a shield on
+// a board that knows nothing about CAN.
+#ifndef CSP_CAN_CS
+#if defined(PIN_CAN_CS)
+#define CSP_CAN_CS PIN_CAN_CS
+#else
+#define CSP_CAN_CS 10           // arduino-CAN's historical default
+#endif
+#endif
+#if !defined(CSP_CAN_STANDBY) && defined(PIN_CAN_STANDBY)
+#define CSP_CAN_STANDBY PIN_CAN_STANDBY
+#endif
+
+static Adafruit_MCP2515 csp_mcp2515(CSP_CAN_CS);
+#define CSP_CANDEV csp_mcp2515
+#else
+#define CSP_CANDEV CAN
+#endif
+
 int csp_can_init(csp_rt_t* st)
 {
     (void)st;
-    if (!CAN.begin(CSP_CAN_BITRATE)) {
+#if defined(CSP_CAN_MCP2515) && defined(CSP_CAN_STANDBY)
+    // The transceiver sleeps until STANDBY is pulled low. Miss this and the bus
+    // is silent while every other symptom says the controller came up fine --
+    // begin() succeeds, frames get queued, nothing ever appears on the wire.
+    pinMode(CSP_CAN_STANDBY, OUTPUT);
+    digitalWrite(CSP_CAN_STANDBY, LOW);
+#endif
+    // PIN_CAN_RESET is deliberately left alone. begin() issues the MCP2515's
+    // software reset over SPI, so the hardware line is not needed -- and driving
+    // it with the polarity guessed wrong would hold the chip in reset, which
+    // looks exactly like the standby mistake above.
+    if (!CSP_CANDEV.begin(CSP_CAN_BITRATE)) {
 	csp_print_line("can: init failed");
 	return -1;
     }
+    // No setClockFrequency call: the library's default is 16 MHz and that is
+    // what the Feather RP2040 CAN has. A board with an 8 MHz crystal needs
+    // -DCSP_CAN_CLOCK=8000000 and a call here, or every bitrate is half.
+#if defined(CSP_CAN_MCP2515) && defined(CSP_CAN_CLOCK)
+    csp_mcp2515.setClockFrequency(CSP_CAN_CLOCK);
+#endif
     return 0;
 }
 
@@ -538,14 +619,14 @@ int csp_can_recv(csp_rt_t* st, uint32_t* id, uint8_t* data, uint8_t* len)
     int n, i;
     (void)st;
 
-    if ((n = CAN.parsePacket()) <= 0)
+    if ((n = CSP_CANDEV.parsePacket()) <= 0)
 	return 0;
-    if (CAN.packetRtr())            // remote request carries no data
+    if (CSP_CANDEV.packetRtr())            // remote request carries no data
 	return 0;
     if (n > 8) n = 8;               // classic CAN
-    *id = (uint32_t)CAN.packetId();
+    *id = (uint32_t)CSP_CANDEV.packetId();
     for (i = 0; i < n; i++)
-	data[i] = (uint8_t)CAN.read();
+	data[i] = (uint8_t)CSP_CANDEV.read();
     *len = (uint8_t)n;
     return 1;
 }
@@ -556,11 +637,11 @@ int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
     if (len > 8) len = 8;
     // Anything past the 11-bit standard id range goes out extended.
     if (id > 0x7FF)
-	CAN.beginExtendedPacket(id);
+	CSP_CANDEV.beginExtendedPacket(id);
     else
-	CAN.beginPacket((int)id);
-    CAN.write(data, len);
-    return CAN.endPacket() ? 0 : -1;
+	CSP_CANDEV.beginPacket((int)id);
+    CSP_CANDEV.write(data, len);
+    return CSP_CANDEV.endPacket() ? 0 : -1;
 }
 
 #else   /* no CAN on this board: stubs, so CAN still parses and runs dry */
@@ -624,20 +705,76 @@ void csp_output(csp_rt_t* st)
 
 int eeprom_addr = -1;
 
+#if defined(ESP32) || defined(ESP8266) || defined(ARDUINO_ARCH_RP2040)
+// A flash-emulated EEPROM (ESP, and RP2040 through the Philhower core, which
+// uses the last flash sector). Three things follow that do not apply to AVR:
+//
+//   begin(size)  must be called before ANYTHING works -- length() is 0 until it
+//                has run, so an un-begun EEPROM reports zero capacity and every
+//                write is refused as "too big".
+//   commit()     is what actually reaches flash. Writes land in a RAM buffer,
+//                so without it a save looks perfect and is gone after a reboot.
+//   update()     does not exist on EEPROMClass. It is read-compare-write, and
+//                on a flash-emulated EEPROM it matters MORE than on real
+//                EEPROM: commit() rewrites a whole sector, so a byte that did
+//                not change is a sector erase nobody asked for.
+// One flash sector on RP2040, and a sane default on ESP. begin() allocates a
+// RAM buffer of this size, so it is not free -- but it is also the whole
+// persistent store, so undersizing it costs saves.
+#ifndef CSP_EEPROM_SIZE
+#define CSP_EEPROM_SIZE 4096
+#endif
+
+static int ee_ready = 0;
+static int ee_dirty = 0;
+
+static void ee_begin_once(void)
+{
+    if (!ee_ready) {
+	EEPROM.begin(CSP_EEPROM_SIZE);
+	ee_ready = 1;
+    }
+}
+
+static void ee_update(int addr, uint8_t v)
+{
+    if (EEPROM.read(addr) != v) {
+	EEPROM.write(addr, v);
+	ee_dirty = 1;
+    }
+}
+
+static void ee_flush(void)
+{
+    if (ee_dirty) {
+	EEPROM.commit();
+	ee_dirty = 0;
+    }
+}
+#else
+// AVR writes straight through and its library already has update().
+#define ee_begin_once() ((void)0)
+#define ee_flush()      ((void)0)
+static void ee_update(int addr, uint8_t v) { EEPROM.update(addr, v); }
+#endif
+
 int csp_eeprom_open_read(void)
 {
-    eeprom_addr = 0;    
+    ee_begin_once();
+    eeprom_addr = 0;
     return 0;
 }
 
 int csp_eeprom_open_write(void)
 {
+    ee_begin_once();
     eeprom_addr = 0;
     return 0;
 }
 
 void csp_eeprom_close(void)
 {
+    ee_flush();               // no-op unless something actually changed
     eeprom_addr = -1;
 }
 
@@ -655,6 +792,7 @@ int csp_eeprom_read(void* buf, size_t len)
 
 uint32_t csp_eeprom_capacity(void)
 {
+    ee_begin_once();                     // ESP: length() is 0 until begin() ran
     return (uint32_t) EEPROM.length();   // AVR: E2END+1 (uno 1K, mega 4K)
 }
 
@@ -663,12 +801,12 @@ int csp_eeprom_write(const void* buf, size_t len)
     uint8_t* ptr = (uint8_t*) buf;
     if (eeprom_addr < 0)
 	return -1;
-    // Refuse to run off the end: EEPROM.update() past the last cell wraps or
-    // corrupts, so a program too big to persist would half-save silently.
+    // Refuse to run off the end: a write past the last cell wraps or corrupts,
+    // so a program too big to persist would half-save silently.
     if ((uint32_t)eeprom_addr + len > csp_eeprom_capacity())
 	return -1;
     while(len--) {
-	EEPROM.update(eeprom_addr, *ptr++);
+	ee_update(eeprom_addr, *ptr++);
 	eeprom_addr++;
     }
     return 0;

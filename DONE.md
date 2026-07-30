@@ -160,6 +160,137 @@ Avklarade punkter, flyttade hit från TODO.md. Nyast överst.
 
 ## 1.0 (efter release)
 
+### RP2040 foll igenom varje #elif (2026-07-30)
+
+  - **`/save` gav "cannot save eeprom"** och `/memory` sa `EEPROM 93 0 (NONE)`.
+    `CSP_HAS_EEPROM` tackte AVR/ESP, `CSP_HAS_FLASH_EEPROM` tackte SAMD -- RP2040
+    hade ingen alls. Philhower-coren har ett EEPROM-bibliotek med EXAKT samma
+    form som ESP:s (begin/read/write/commit, ingen update()), sa shimen fran
+    igar racker: villkoret vidgat, ingen ny kod.
+    CSP_EEPROM_SIZE 4096 ar dessutom precis ratt dar -- coren emulerar i sista
+    flashsektorn.
+  - **`/memory` sa "RAM 4294967295 total, system -254872".**
+    `csp_system_ram_capacity()` foll pa `#else return -1;` eftersom RP2040 varken
+    ar AVR, SAMD eller ESP. Lade till 264 KB, och gjorde okand-fallet till en
+    namngiven `CSP_RAM_UNKNOWN` som `csp_system_ram_used()` vagrar rakna pa --
+    hellre inget svar an ett felaktigt.
+  - Tredje gangen samma monster den har veckan: en villkorskedja som rakade vara
+    ratt for de mal nagon faktiskt byggde (`#ifdef USE_FIXPOINT && ...`,
+    `#else`-grenen i raw_free, och nu den har).
+  - Alla fyra bygger: mega 98,6k / mkrzero 73,8k / feather_can 121k /
+    lilygo_t3s3 373k. test + san 59/59.
+
+### ESP32/S3 bygger -- EEPROM-shim och RAM-prob per target (2026-07-30)
+
+  - **`EEPROMClass` har ingen `update()`.** Men det var det minsta av tre:
+      * `begin(size)` MASTE koras forst -- `length()` ar 0 innan dess, sa en
+        obegunnad EEPROM rapporterar noll kapacitet och varje skrivning avvisas
+        som "for stor".
+      * `commit()` ar det som nar flashen. Skrivningar hamnar i en RAM-buffert,
+        sa utan den ser en save perfekt ut och ar borta efter omstart.
+      * `update()` = read-compare-write. Pa en flash-emulerad EEPROM spelar den
+        STORRE roll an pa riktig: `commit()` skriver om en hel sektor, sa en
+        byte som inte andrats ar en sektorradering ingen bett om.
+    `ee_begin_once`/`ee_update`/`ee_flush` doljer skillnaden; AVR-grenen ar
+    oforandrad (skriver rakt igenom och har redan update()).
+  - **RAM-proben valdes med `#else`.** AVR-grenen laser avr-libcs
+    `__heap_start`/`__brkval` och tog tyst varje icke-ARM-target -- ESP32 nadde
+    linkaren innan nagon markte det. Nu explicit per target, med ESP32 pa
+    `ESP.getFreeHeap()` och en okand-target-gren som sager 0 i stallet for nagot
+    fel.
+  - LilyGO T3-S3 bygger: 373 kB flash, 36,8 kB RAM. Mega och feather_can
+    oforandrade, test + san 59/59.
+
+### Float-vagen provbyggd -- rota som giftet dolde (2026-07-30)
+
+  - **`asm_LIu` -> `asm_LIU`** (csp_rt.c:2814). Ligger i `#else`-grenen av
+    `#if FVALUE_IS_FIXPOINT`, alltsa float-vagen, som ingen byggt -- typot har
+    legat dar sedan raden skrevs. Ratt fel, fel skiftlage, en bokstav.
+  - **Varden byggd med `-DUSE_FIXPOINT=0`: hela sviten 59/59.** Och samma svar
+    som fixpoint-bygget: `abs(-2.5)=2.5`, `trunc(-2.5)=-2`. Overenskommelsen
+    mellan byggena (FIX_TO_INT-fixen) ar nu verifierad pa den faktiska
+    float-vagen, inte bara resonerad.
+  - **ESP32 stupar pa tok_t-enumet, som vantat.** Coren gor `#define PULLUP 0x04`
+    och `#define PULLDOWN 0x08` i esp32-hal-gpio.h; csp.h har `PULLUP,` och
+    `PULLDOWN,` som enum-medlemmar (csp.h:629-630). Medlemmen blir `0x04,` ->
+    "expected identifier before numeric constant" -> hela `tok_t` faller -> allt
+    darefter kaskadar. Det ar exakt skalet till T_-prefixet som redan star pa
+    listan; nu finns beviset.
+  - ESP32 behover ocksa en `update()`-shim: dess `EEPROMClass` har ingen.
+
+### Float-giftet var ovillkorligt (2026-07-30)
+
+  - `#ifdef USE_FIXPOINT && USE_FIXPOINT == 0` i CandySpeak/csp_config.h:
+    `#ifdef` tar EN identifierare och slanger tyst resten, och USE_FIXPOINT ar
+    alltid definierad vid den punkten -- alltsa var float-giftet alltid pa, aven
+    pa float-malen (ESP32/ESP8266 har USE_FIXPOINT 0).
+  - Bevisat, inte teoretiserat: `gcc -DESP32` pa `typedef float fvalue_t`
+    (csp.h:502) gav `error: float not allowed`. Ingen har markt det for ingen har
+    byggt ESP32 pa ett tag.
+  - Fix: `#if defined(USE_FIXPOINT) && (USE_FIXPOINT == 1)`. Dessutom flyttat UT
+    ur det omslutande `#ifndef USE_FIXPOINT` -- forr fick ett `-DUSE_FIXPOINT=1`
+    fran en board-Makefile inget skydd alls, eftersom hela blocket hoppades over.
+  - Verifierat i bada riktningarna: ESP32 kompilerar nu, SAMD21 avvisar
+    fortfarande en struken `float`, och `extra tokens`-varningen ar borta ur
+    mega-bygget (0 forekomster).
+
+### CAN pa Adafruit Feather RP2040 CAN (2026-07-30)
+
+  - `CSP_HAS_CAN` var inte satt i NAGON board-Makefile -- backenden fanns men var
+    avstangd overallt.
+  - **Ny `CSP_CAN_MCP2515`-gren.** En SPI-hangd controller maste konstrueras med
+    sin chip select, alltsa ett eget objekt i stallet for arduino-CANs globala
+    `CAN`. `CSP_CANDEV` doljer skillnaden sa recv/send har EN kodvag.
+  - **Pinnarna kommer fran board-varianten**, inte fran Makefilen:
+    `PIN_CAN_CS` 19, `PIN_CAN_STANDBY` 16 (aven RESET 18, INTERRUPT 22,
+    TX0_RTS 17, RX0_BF 23). Inget att halla i synk nar varianten ar auktoritet.
+  - **STANDBY dras lag i `csp_can_init`.** TJA1051 sover annars, och varje annat
+    symtom sager att allt ar bra: `begin()` lyckas, ramar kas, ingenting nar
+    tradarna.
+  - **PIN_CAN_RESET lamnas orord** -- `begin()` gor mjukvaruaterstallning over
+    SPI, och att gissa polariteten fel hade hallit chippet i reset, vilket ser
+    exakt ut som standby-misstaget ovan.
+  - Kristallen ar 16 MHz = bibliotekets default, sa ingen `setClockFrequency`.
+    `-DCSP_CAN_CLOCK=8000000` finns for kort med 8 MHz (annars halveras varje
+    bitrate).
+  - Kravde Earle Philhowers rp2040-core (Arduinos egen har bara Pico) och
+    `Adafruit MCP2515`. `Makefile.feather_can`, FQBN
+    `rp2040:rp2040:adafruit_feather_can`.
+  - Byggt: 120 kB flash, 24,6 kB RAM. Verifierat att MCP2515-koden lankas in
+    (`csp_mcp2515`-objektet och `Adafruit_MCP2515::parsePacket` finns i ELF:en).
+
+### Image-registret + ASCII-taggar (2026-07-30)
+
+  - **Sektionstaggar blev 4 byte ASCII** (IFF/BEAM-stil): `STRS`, `DECL`, `CODE`,
+    `GIDG`, `GOFS`, `GEDG`, `STAT`. Prologen bar 16 oanvanda bitar anda. Nu gar de
+    att hitta med en bytesokning i binaren -- verifierat pa .o-filen.
+    Jamforelsemakrot behover tva nivaer (`csp_tag_is` -> `csp_tag_is_`) eftersom
+    makroargument delas pa komma FORE expansion.
+  - **`CSP_REGISTER_IMAGE`**: sektionsnamn utan inledande punkt ger `__start_`/
+    `__stop_`-symboler gratis av GNU ld, inget linkerskript. Verifierat pa host
+    gcc, avr-gcc 4.8.1 (mega2560) och arm-none-eabi 7.2.1, alla med Arduinos
+    `-ffunction-sections -fdata-sections -Wl,--gc-sections`.
+  - **Registret ligger i RAM, medvetet.** Gjort helt `const` blir det en
+    orphan-sektion placerad efter all kod: matt till **0x17d30** pa en 98 kB
+    mega-firmware, alltsa forbi de 64 kB `memcpy_P`/`pgm_read_byte` racker till,
+    sa varje post hade lasts tillbaka som skrap. Utan yttre `const` hamnar
+    arrayen i `.data` (matt: VMA 0x80042a, LMA i flash) och en vanlig lasning
+    fungerar. Tva byte per image pa AVR ar det billigare problemet.
+  - `csp_find_image(role)` valjer hogsta generation vars header verifierar;
+    `csp_load_rom` gar via den med fallback pa `rom_image` direkt -- skulle
+    `--gc-sections` nagon gang stada bort registret bootar kortet med imaget det
+    byggdes med i stallet for ingenting.
+  - Nytt `/images`-kommando. Tva image inlankade, host:
+    `0: ROM gen=0 size=152 rules=0` / `1: FAILSAFE gen=2 size=472 rules=38`.
+  - Tomma rom.c fick sin riktiga `crc_hdr` (37420) sa `/images` rapporterar rent.
+  - 4k-alignment testat pa riktiga toolchains: avr-gcc `2**12`, sektionerna blir
+    4096 byte var -- **minsta image blir en hel flashsida automatiskt**, ingen
+    paddning behovs i structen. ARM likasa (0x9000/0xa000). Bada overlever
+    `--gc-sections`. Adresserna valjs av linkern; fasta adresser kraver
+    `--section-start` eller att verktyget laser dem ur ELF:en.
+  - Mega: flash 97.4k -> 98.6k med TVA image inlankade, RAM 1967 -> 1973.
+    test + san 59/59.
+
 ### Image-format v8: ett sammanhangande objekt med offsets (2026-07-29)
 
   - **Ett objekt per image** i stallet for sju losa arrayer. `CSP_IMAGE_TYPE`

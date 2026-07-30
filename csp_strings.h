@@ -199,6 +199,8 @@ extern rochar s_cmd_state[6] RODATA;
 #define ros_cmd_state ((rostring_t) s_cmd_state)
 extern rochar s_cmd_memory[7] RODATA;
 #define ros_cmd_memory ((rostring_t) s_cmd_memory)
+extern rochar s_cmd_images[7] RODATA;
+#define ros_cmd_images ((rostring_t) s_cmd_images)
 extern rochar s_cmd_pause[6] RODATA;
 #define ros_cmd_pause ((rostring_t) s_cmd_pause)
 extern rochar s_cmd_live[5] RODATA;
@@ -229,6 +231,8 @@ extern rochar s_h_state[20] RODATA;
 #define ros_h_state ((rostring_t) s_h_state)
 extern rochar s_h_memory[20] RODATA;
 #define ros_h_memory ((rostring_t) s_h_memory)
+extern rochar s_h_images[42] RODATA;
+#define ros_h_images ((rostring_t) s_h_images)
 extern rochar s_h_pause[30] RODATA;
 #define ros_h_pause ((rostring_t) s_h_pause)
 extern rochar s_h_live[39] RODATA;

@@ -1,0 +1,78 @@
+// can_ping.csp -- round trip between two Feather RP2040 CAN boards, with the
+// numbers that actually tell you something about the bus.
+//
+// Same file on both boards; swap the two ids on the second one:
+//   board A: out 0x200, in 0x201        board B: out 0x201, in 0x200
+//
+// WHAT IT MEASURES. Each board stamps its own send counter into every frame.
+// The receiver counts what it actually got. The difference is what went
+// missing -- one subtraction, no bookkeeping:
+//
+//     Lost = PeerSeq - (Rcv + 1)
+//
+// A blink tells you the bus is alive. A gap counter tells you whether it is
+// any good, which is the question a first bring-up is really asking.
+
+#buffer Tx:8 out can 0x200
+#buffer Rx:8 in  can 0x201
+
+#field TxSeq:16  unsigned Tx[0..15]
+#field TxEcho:16 unsigned Tx[16..31]   // the last sequence we heard back
+#field RxSeq:16  unsigned Rx[0..15]
+#field RxEcho:16 unsigned Rx[16..31]
+
+#digital Led out 13
+
+#timer Beat 500 = 1                    // send rate; patch Beat.period live
+#timer Log  1000 = 1                   // UART heartbeat, deliberately slower
+
+#variable Seq  = 0                     // frames we have sent
+#variable Rcv  = 0                     // frames we have received
+#variable Lost = 0                     // what the peer sent and we never saw
+#variable Trip = 0                     // our seq minus the one echoed back
+#variable Got:1 unsigned = 0
+
+Beat = 1 ? timeout(Beat)
+Log  = 1 ? timeout(Log)
+
+// --- send ------------------------------------------------------------------
+// Assigning a field is the send. Both fields are written in the same cycle so
+// the frame goes out once, not twice.
+Seq = Seq + 1 ? timeout(Beat)
+TxSeq = Seq, TxEcho = RxSeq ? timeout(Beat)
+
+// --- receive ---------------------------------------------------------------
+// THE ONE-CYCLE TRAP, and the only subtle thing in this file. `.rx` fires while
+// the new payload is still in the shadow copy, so reading RxSeq in the same
+// cycle gives the PREVIOUS frame. Route the trigger through a variable: Got is
+// set on the .rx cycle and read on the next one, by which time the payload has
+// committed.
+Got = 1 ? Rx.rx
+Got = 0 ? Got
+
+Rcv  = Rcv + 1 ? Got
+// Rcv + 1, not Rcv: both rules read the value committed last cycle, so at this
+// instant Rcv has not yet counted the frame we are looking at. Without the +1
+// every board reports one lost frame forever.
+Lost = RxSeq - (Rcv + 1) ? Got         // peer's count minus ours
+Trip = Seq - RxEcho ? Got              // how far behind our echo is
+Led  = !Led ? Got
+
+// --- report ----------------------------------------------------------------
+// Once a second, not once a frame: printing per frame chokes the UART and
+// changes the timing you are trying to measure.
+println("seq=", Seq, " rcv=", Rcv) ? timeout(Log)
+println("  lost=", Lost, " trip=", Trip) ? timeout(Log)
+
+// --- rate ramp (leave OFF for the first run) --------------------------------
+// Sweeps the send period between fast and slow so a marginal bus shows up as a
+// stumble instead of a flat pass. Enable once the fixed rate is clean --
+// otherwise a failure has two candidate causes and you learn nothing.
+//
+// #timer Ramp 2000 = 1
+// #variable Down:1 unsigned = 1
+// Ramp = 1 ? timeout(Ramp)
+// Beat.period = Beat.period - 20 ? timeout(Ramp) && Down && Beat.period > 40
+// Down = 0 ? timeout(Ramp) && Down && Beat.period <= 40
+// Beat.period = Beat.period + 20 ? timeout(Ramp) && !Down && Beat.period < 500
+// Down = 1 ? timeout(Ramp) && !Down && Beat.period >= 500

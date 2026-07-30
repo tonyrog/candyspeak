@@ -102,6 +102,7 @@ cmd_query ?
 cmd_list list
 cmd_state state
 cmd_memory memory
+cmd_images images
 cmd_pause pause
 cmd_live live
 cmd_resume resume
@@ -117,6 +118,7 @@ h_help Show this help
 h_list List rules
 h_state Show current values
 h_memory Show code/RAM usage
+h_images List the images linked into this firmware
 h_pause Stop execution (inspect/edit)
 h_live Freeze rules, keep I/O (poke hardware)
 h_resume Resume execution (rebuild if edited)

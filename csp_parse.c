@@ -380,18 +380,18 @@ void init_stop_sets(void)
     stop_toks[stop_toks_len++] = NONE;
     // Add OPTS tokens as a special set
     stop_pos[STOP_OPTS] = stop_toks_len; // options token set
-    stop_toks[stop_toks_len++] = UNSIGNED;
-    stop_toks[stop_toks_len++] = INTEGER;
-    stop_toks[stop_toks_len++] = FLOAT;
+    stop_toks[stop_toks_len++] = T_UNSIGNED;
+    stop_toks[stop_toks_len++] = T_INTEGER;
+    stop_toks[stop_toks_len++] = T_FLOAT;
     stop_toks[stop_toks_len++] = T_PWM;
-    stop_toks[stop_toks_len++] = IN;
-    stop_toks[stop_toks_len++] = OUT;
-    stop_toks[stop_toks_len++] = INOUT;
-    stop_toks[stop_toks_len++] = NATIVE;    
-    stop_toks[stop_toks_len++] = LITTLE;
-    stop_toks[stop_toks_len++] = BIG;
-    stop_toks[stop_toks_len++] = PULLUP;
-    stop_toks[stop_toks_len++] = PULLDOWN;
+    stop_toks[stop_toks_len++] = T_IN;
+    stop_toks[stop_toks_len++] = T_OUT;
+    stop_toks[stop_toks_len++] = T_INOUT;
+    stop_toks[stop_toks_len++] = T_NATIVE;    
+    stop_toks[stop_toks_len++] = T_LITTLE;
+    stop_toks[stop_toks_len++] = T_BIG;
+    stop_toks[stop_toks_len++] = T_PULLUP;
+    stop_toks[stop_toks_len++] = T_PULLDOWN;
     stop_toks[stop_toks_len++] = NONE;
     num_stop_sets = 2;
 }
@@ -467,18 +467,18 @@ NOINLINE decl_opts_t parse_opts(csp_rt_t* st, const token_t* tv,
 
     while(i < (int)n) {
 	switch(tv[i].t) {
-	case UNSIGNED: opts.vt=V_UNSIGNED; DBG("UNSIGNED,"); break;
-	case INTEGER:  opts.vt=V_INTEGER; DBG("INTEGER,"); break;
-	case FLOAT:    opts.vt=V_FLOAT; DBG("FLOAT,"); break;
+	case T_UNSIGNED: opts.vt=V_UNSIGNED; DBG("UNSIGNED,"); break;
+	case T_INTEGER:  opts.vt=V_INTEGER; DBG("INTEGER,"); break;
+	case T_FLOAT:    opts.vt=V_FLOAT; DBG("FLOAT,"); break;
 	case T_PWM:      opts.pwm = 1; DBG("T_PWM,"); break;
-	case IN:       opts.dir |= DIR_IN; DBG("IN,"); break;
-	case OUT:      opts.dir |= DIR_OUT; DBG("OUT,"); break;
-	case INOUT:    opts.dir |= DIR_INOUT; DBG("INOUT,"); break;
-	case NATIVE:   opts.endian=E_NATIVE; DBG("NATIVE,"); break;	    
-	case LITTLE:   opts.endian=E_LITTLE; DBG("LITTLE,"); break;
-	case BIG:      opts.endian=E_BIG; DBG("BIG,"); break;	    
-	case PULLUP:   opts.pullup=1; DBG("PULLUP,"); break;
-	case PULLDOWN: opts.pulldown=1; DBG("PULLDOWN,"); break;
+	case T_IN:       opts.dir |= DIR_IN; DBG("IN,"); break;
+	case T_OUT:      opts.dir |= DIR_OUT; DBG("OUT,"); break;
+	case T_INOUT:    opts.dir |= DIR_INOUT; DBG("INOUT,"); break;
+	case T_NATIVE:   opts.endian=E_NATIVE; DBG("NATIVE,"); break;	    
+	case T_LITTLE:   opts.endian=E_LITTLE; DBG("LITTLE,"); break;
+	case T_BIG:      opts.endian=E_BIG; DBG("BIG,"); break;	    
+	case T_PULLUP:   opts.pullup=1; DBG("PULLUP,"); break;
+	case T_PULLDOWN: opts.pulldown=1; DBG("PULLDOWN,"); break;
 	default: goto done;
 	}
 	i++;
