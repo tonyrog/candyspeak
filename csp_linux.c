@@ -318,13 +318,23 @@ static int quit_flag = 0;
 static void serial_poll(csp_rt_t* st, struct pollfd* fds, nfds_t nfds)
 {
     if (nfds > 0 && (fds[0].revents & POLLIN)) {
+	struct pollfd more = { STDIN_FILENO, POLLIN, 0 };
 	char c;
-	while (!st->line_ready && read(STDIN_FILENO, &c, 1) == 1) {
+	// Drain everything waiting, the same way a board drains its port -- past
+	// a completed line and on into the queue behind it. The terminal is in
+	// raw mode with VMIN=1, so read() BLOCKS; a zero-timeout poll each turn
+	// is what keeps "take what is there" from becoming "wait for more".
+	while (csp_line_space(st)) {
+	    if (read(STDIN_FILENO, &c, 1) != 1)
+		break;
 	    if (c == 4) { // Ctrl-D
 		quit_flag = 1;
 		return;
 	    }
 	    csp_line_input(st, c);
+	    more.revents = 0;
+	    if (poll(&more, 1, 0) <= 0)
+		break;
 	}
     }
 }
@@ -1129,21 +1139,32 @@ loop:
     if (nfds > 0) {
 	int timeout_ms;
 	
-	if (interactive)
+	// Not while a line is already pending: the prompt means "waiting for
+	// you", and we are not. Printing it here consumed the need_prompt that
+	// the queue re-feed was going to use, so the OK of one line landed after
+	// a prompt and the next pasted line echoed with nothing in front of it.
+	if (interactive && !state.line_ready)
 	    csp_line_prompt(&state);
-	timeout_ms = interactive ? 100 : 0;
-	// Wait for timer if needed (non-interactive mode)
-	if (state.wait_ms != NOTIMEOUT) {
-	    if (timeout_ms == 0 || state.wait_ms < (uint32_t)timeout_ms)
-		timeout_ms = state.wait_ms;
+	// Never sleep on a line that is already in hand. With the input queue a
+	// whole paste can be waiting, and any wait EACH time turns a pasted file
+	// into a minute of watching it trickle in. This has to short-circuit the
+	// timer branch too -- a declared timer put wait_ms back in and undid it.
+	if (state.line_ready)
+	    timeout_ms = 0;
+	else {
+	    timeout_ms = interactive ? 100 : 0;
+	    // Wait for timer if needed (non-interactive mode)
+	    if (state.wait_ms != NOTIMEOUT) {
+		if (timeout_ms == 0 || state.wait_ms < (uint32_t)timeout_ms)
+		    timeout_ms = state.wait_ms;
+	    }
 	}
 	poll(pfd, nfds, timeout_ms);
 	serial_poll(&state, pfd, nfds);
 
 	if (state.line_ready) {
 	    process_serial_line(&state, state.line_buf);
-	    state.line_ready = 0;
-	    state.line_pos = 0;
+	    csp_line_done(&state);
 	    if (quit_flag) goto done;
 	}
     }

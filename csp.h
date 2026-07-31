@@ -1361,10 +1361,16 @@ typedef struct _csp_rt_t
     // the arena in csp_mem_init (see there for why not csp_mid_alloc), so how
     // long a line may be is a property of the BOARD rather than a compile-time
     // guess -- a mega and a Feather no longer have to agree on 64.
+    // It doubles as the input QUEUE: while a completed line is being run, what
+    // keeps arriving is stored raw behind it and re-fed afterwards, so a paste
+    // does not have to wait on the driver's FIFO alone. Hence two cursors.
     char*    line_buf;
     uint16_t line_size;      // capacity in bytes, terminator included
-    uint16_t line_pos;       // characters held so far
-    uint8_t  line_ready;     // a complete line is waiting in line_buf
+    uint16_t line_pos;       // cursor of the line being assembled (NUL position
+			     // once it is ready)
+    uint16_t line_fill;      // bytes held in total; == line_pos unless a ready
+			     // line has raw bytes queued behind it
+    uint8_t  line_ready;     // a complete line is waiting at the front
     uint8_t  line_ovf;       // a character was dropped -> refuse the whole line
     uint8_t  need_prompt;    // print "> " before the next read
 
@@ -1467,7 +1473,13 @@ typedef struct _csp_rt_t
     uint8_t list_states[MAX_IN_STATES]; // during /list: states of the #in block
     uint8_t list_nstate;         // being rendered -- suppress State==<any of them>
     index_t save_sx;             // save sx during module parse
-    index_t sx;                  // runtime state, state variable    
+    index_t sx;                  // runtime state, state variable
+    // The GLOBAL State, fixed once the runtime has one. `sx` is a parse-time
+    // cursor -- between #module and #end it points at the module's own State,
+    // CURRENT-relative -- so anything that runs on a CYCLE, while a module may
+    // be half typed at the prompt, has to use this instead. Deliberately not in
+    // csp_pmark_t: a parse rollback must not move it.
+    index_t gsx;    
     state_t states[MAX_STATES];  // declared states
     index_t mdef;                // module being defined
     csp_pmark_t mod_mark;        // parse mark taken at #module: a failure before
@@ -1976,6 +1988,13 @@ extern int csp_process_line(csp_rt_t* st, char* line);
 extern void csp_line_init(csp_rt_t* st);
 extern void csp_line_input(csp_rt_t* st, char c);
 extern void csp_line_prompt(csp_rt_t* st);
+// Room for one more byte. A reader keeps draining its port while this is true,
+// INCLUDING while a line is waiting to run -- that spare room is what absorbs a
+// paste. When it goes false the driver's FIFO takes over.
+extern int  csp_line_space(csp_rt_t* st);
+// Finished with the line at the front: drop it and bring anything queued behind
+// it down to the start. MUST be called instead of clearing line_ready by hand.
+extern void csp_line_done(csp_rt_t* st);
 
 // eeprom api
 // What to CALL the backing store in /save and /load output ("eeprom.db" on the

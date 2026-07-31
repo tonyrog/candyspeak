@@ -177,6 +177,92 @@ Avklarade punkter, flyttade hit från TODO.md. Nyast överst.
   - `/clear` sager nu ocksa att eeprom-kopian ligger kvar. "Cleared" ensamt laser
     som att programmet ar borta.
 
+### Kortet skrev aldrig nagon prompt (2026-07-31)
+
+  - `csp_line_prompt` anropades bara fran host-loopen; `csp_arduino.c` har aldrig
+    anropat den, inte heller fore den har sessionen. Att den dok upp nar man
+    borjade skriva var den nya anropet inne i `csp_line_input` (som finns for att
+    en aterinmatning ur kon ligger flera ramar under loopen).
+  - `loop()` anropar den nu ocksa, med samma villkor som hosten: inte medan en
+    rad redan ar pa gang -- prompten betyder "vantar pa dig", och koaterinmatn-
+    ingen behover det `need_prompt` den annars ater upp.
+
+### XOFF/XON pa "kan jag ta emot", inte pa fyllnadsniva (2026-07-31)
+
+  - Forsta forsoket var hog-/lagvattenmarke med hysteres. Det kunde LASA SIG: en
+    paste som slutar mitt i en rad lamnar en partiell rad i kon, och lag den
+    over lagmarket stod XOFF kvar -- terminalen tystad, resten av raden kom
+    aldrig, ingen rad blev klar, ingenting slappte. Hysteres ar fel modell for en
+    buffert som kan halla nagot oavslutat: nivan sager inget om huruvida vi
+    vantar pa motparten.
+  - Nu: XOFF medan vi inte kan ta emot (kon full, eller vi ar pa vag in i en
+    lang bearbetning), XON sa fort vi kan igen. `serial_release()` anropas efter
+    varje mottaget tecken och efter att kon komprimerats, sa det finns inget
+    lage dar vi kan ta emot och motparten fortfarande halls tillbaka.
+  - `serial_hold()` fore radbearbetningen -- Tonys punkt, och den ar ratt: en
+    fyllnadsniva kan inte se fonstret komma, for `line_fill` ror sig inte medan
+    `csp_process_line` kor. Det biter hardast pa paste-ens FORSTA rad, dar
+    bufferten ar nastan tom: raden blir klar efter tjugo tecken, available() blir
+    falskt medan avsandaren fortfarande skickar, och vi gar in i en rebuild med
+    64 byte UART-ring bakom oss. 5,6 ms vid 115200; en rebuild ar langre.
+  - Full buffert UTAN hel rad kan inte intraffa, vilket ar det som gor den enkla
+    regeln saker: `csp_line_input` slutar lagra vid `line_size - 1` och satter
+    `line_ovf` i stallet, sa `line_fill` nar aldrig `line_size` medan en rad
+    byggs. Lasaren fortsatter dranera och kasta till nasta newline -- dar kommer
+    felet och omstarten. Tva testfall bevisar det.
+  - Tillstandet ligger i en fil-statisk, inte en lokal: en lokal nollstalls varje
+    loop()-varv och parar da XON med ett XOFF som aldrig skickades.
+  - Bara en riktig UART behover det. Over USB CDC NAK:as varden nar
+    endpoint-FIFO:n fylls och blockerar av sig sjalv.
+  - EJ VERIFIERAT PA HARDVARA: bygger for alla tre malen, men sjalva
+    flodesbeteendet syns bara pa ett kort med UART.
+
+### Radbufferten ar ocksa en inko (2026-07-31)
+
+  - Tonys design: fortsatt fylla sa lange det finns plats, aven forbi en
+    fardig rad; kor raden; flytta svansen till borjan. Det som anlander medan en
+    rad kor koas alltsa BAKOM den i stallet for att lamnas at drivrutinens FIFO.
+    Poangen ar raderna som LAGGER TILL nagot -- var och en triggar en rebuild,
+    och det ar det langa fonstret en paste maste overleva.
+  - Tva markorer: `line_pos` (raden som byggs) och `line_fill` (allt som halls).
+    `csp_line_space()` styr draneringen, `csp_line_done()` slapper raden och
+    matar tillbaka svansen genom samma vag som ett skrivet tecken -- darfor
+    behalls eko/redigering och interfolieringen med svaren.
+  - Flytten sker pa plats: skrivmarkoren startar pa 0, lasmarkoren pa src >= 2
+    (en tom rad blir aldrig ready), och ett tecken flyttar skrivmarkoren hogst
+    ett steg. Skrivningen hinner darfor aldrig ifatt lasningen.
+  - Forutsattningen Tony pekade pa -- att `line_buf` inte far flytta -- holl
+    redan: fast adress i toppen av arenan, och memset stannar vid `mem_limit`.
+  - Prompten flyttades in i `csp_line_input`: den ar det enda stallet som vet
+    att en rad borjar, och under en aterinmatning ur kon ar huvudloopen flera
+    ramar bort. Hosten slutade ocksa skriva prompt nar en rad redan var i hand
+    (den at upp `need_prompt`) och sover inte langre pa en kod rad -- 100 ms per
+    rad gjorde en inklistrad fil till en minutlang rannil.
+
+### En cykel over en halvdefinierad modul (2026-07-31)
+
+  - Hittades nar hela traffic.csp klistrades in: REPL:en hangde mitt i modulen.
+    `#module` lagger en OP_ENTER vars langd patchas vid dess `#end`, och `#in` en
+    OP_INSTATE vars hopp patchas likadant -- daremellan ar offseten noll eller
+    inaktuell och ett svep gar rakt in i dem. Aldre an sessionen: det galler
+    lika mycket nar man skriver en modul rad for rad for hand.
+  - `csp_cycle` utvarderar nu ingenting medan `mdef` eller `sdef` ar oppen.
+  - Men EFTER rebuilden, inte fore. Forsta forsoket hoppade over bada, och da
+    lag heapen kvar dar den var medan kodpoolen vaxte mot den -- nasta
+    leaf-skrivning landade inne i modulkroppen och nollade en instruktion.
+    `timeout(T)` i sista regeln blev en NOP, och /list tappade regeln (numren
+    hoppade 5 -> 7). Hittad genom att jamfora opkodstrommen fran fil mot
+    inklistrad, och bekraftad med `-b` (pausad = ingen cykel = korrekt CALL).
+
+### Kommentarsrader dispatchades som kommandon (2026-07-31)
+
+  - `//` matchade `*line == '/'`-testet, sa varje kommentarsrad i en inklistrad
+    .csp-fil kom tillbaka som "Unknown command: // This example ...". Att
+    klistra in en kallkodsfil i prompten ar precis vad prompten ar till for, och
+    de flesta filer inleds med ett kommentarshuvud.
+  - En rad som bara ar en kommentar gor nu ingenting, tyst. Efterhangande
+    kommentarer behovde ingen atgard -- tokenizern slanger dem redan.
+
 ### INIT kors EN gang (2026-07-31)
 
   - Ingenting flyttade State ur INIT, sa ett `#in INIT`-block korde varje cykel.

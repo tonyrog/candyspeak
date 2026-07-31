@@ -233,6 +233,106 @@ ck "module rules list inside the block, indented" \
 #Blink b  // R
 Led=1 ? 1  // 3 R' "$got"
 
+# --- 12. pasting a source file -----------------------------------------------
+# Every comment line came back as "Unknown command: // ...": `//` matched the
+# leading-'/' command test. Pasting a .csp file into the prompt is what the
+# prompt is FOR, and most files open with a comment header.
+echo "paste source:"
+got=$(printf '// a header comment\n//\n   // indented, after blanks\n#digital Led out 0:13\nLed = 1 ? 1\n/list\n/quit\n' |
+	  repl ./csp "$D/t15.db" --no-eeprom | grep -v '^OK$')
+ck "comment lines are quietly ignored" \
+'#digital Led out 0:13  // R
+Led=1 ? 1  // 1 R' "$got"
+
+# --- 13. a burst larger than one line ----------------------------------------
+# The buffer doubles as the input QUEUE: what arrives while a line is running is
+# stored behind it and re-fed afterwards, instead of being left to back up in the
+# driver's FIFO. The lines that matter here are the ones that ADD something --
+# each triggers a rebuild, which is the slow window a paste has to survive.
+#
+# All of it goes in as one write, so the reader really does drain past several
+# newlines in a single pass. Every line must still be seen, in order, once.
+echo "burst:"
+burst='#variable A = 0
+#variable B = 0
+#variable C = 0
+A = 1 ? 1
+B = 2 ? 1
+C = 3 ? 1
+/list
+/quit'
+got=$(printf '%s\n' "$burst" | repl ./csp "$D/t16.db" --no-eeprom | grep -v '^OK$')
+ck "a multi-line burst arrives whole and in order" \
+'#variable A integer = 0  // R
+#variable B integer = 0  // R
+#variable C integer = 0  // R
+A=1 ? 1  // 1 R
+B=2 ? 1  // 2 R
+C=3 ? 1  // 3 R' "$got"
+
+# The same burst on a board whose line buffer is small: the queue fills, the
+# reader stops draining, and the rest waits in the port. Nothing may be lost.
+got=$(printf '%s\n' "$burst" | repl ./csp "$D/t17.db" --no-eeprom --board mega |
+	  grep -v '^OK$')
+ck "and again with a 96-byte buffer" \
+'#variable A integer = 0  // R
+#variable B integer = 0  // R
+#variable C integer = 0  // R
+A=1 ? 1  // 1 R
+B=2 ? 1  // 2 R
+C=3 ? 1  // 3 R' "$got"
+
+# --- 14. pasting a whole program, module and all -----------------------------
+# A definition being typed is not runnable: `#module` emits an OP_ENTER whose
+# length is patched at its `#end`, and `#in` an OP_INSTATE whose skip is patched
+# the same way. Running a cycle in between walked into unpatched offsets and hung
+# the REPL part-way through -- which is exactly what pasting a .csp file does.
+# `timeout` in repl() turns a hang into a failure rather than a stuck suite.
+echo "paste a program:"
+got=$(printf '%s\n/list\n/quit\n' "$(cat examples/traffic.csp)" |
+	  repl ./csp "$D/t18.db" --no-eeprom | grep -v '^OK$' |
+	  sed -n '/^#module/,/^#end/p')
+ck "a pasted module survives and lists back" \
+'#module Failsafe  // R
+  #digital P1 in 0:1  // R
+  #digital P5 in 0:5  // R
+  #digital P9 in 0:9  // R
+  #timer T 500  // R
+  #variable V integer = 0  // R
+  #in INIT  // R
+    P1.dir=out,P1=0  // 1 R
+    P5.dir=out,P5=0  // 2 R
+    P9.dir=out,P9=0  // 3 R
+    V=1  // 4 R
+  #end   // R
+  P5=V,V=!V ? timeout(T)  // 5 R
+  T=1 ? timeout(T)  // 6 R
+#end   // R' "$got"
+
+# --- 15. an over-long line does not strand the reader ------------------------
+# The queue must never reach "full with no complete line in it": that is the one
+# state where the reader stops draining and nothing can make it start again --
+# and on a UART it would leave XOFF asserted with no way to release it.
+# csp_line_input stops storing at line_size - 1 and raises line_ovf instead, so
+# the reader keeps draining and discarding until the newline. Proof: a line far
+# past the limit, then ordinary work, in one burst.
+echo "overflow recovery:"
+over=$(printf 'y%.0s' $(seq 1 400))
+got=$(printf '#variable Before = 1\n%s\n#variable After = 2\n/list\n/quit\n' "$over" |
+	  repl ./csp "$D/t19.db" --no-eeprom --board mega |
+	  tr -d '\a' | grep -v '^OK$')
+ck "the REPL keeps working after an over-long line" \
+'Error: line too long, max 95 characters -- line ignored
+#variable Before integer = 1  // R
+#variable After integer = 2  // R' "$got"
+
+# The same with no trailing newline on the long line until much later: the
+# discard has to survive being interrupted by the reader running out of input.
+got=$(printf '#variable A = 1\n%s' "$over" |
+	  repl ./csp "$D/t20.db" --no-eeprom --board mega |
+	  tr -d '\a' | grep -c 'A integer = 1')
+ck "an unterminated over-long line strands nothing" "0" "$got"
+
 echo "================================================"
 echo "repl: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

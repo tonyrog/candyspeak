@@ -1128,6 +1128,57 @@ void setup()
     csp_print_line("CandySpeak ready");
 }
 
+// --- software flow control ---------------------------------------------------
+// Two states, and the condition is the one that actually gates the reader:
+// can we accept another byte? XOFF while we cannot -- the queue is full, or we
+// are about to spend a long time not reading it at all -- and XON the moment we
+// can again.
+//
+// It was a high/low-water mark with hysteresis first, and that could WEDGE. A
+// paste ending mid-line leaves a partial line queued; if it sat above the low
+// mark the XOFF stayed asserted, so the peer never sent the rest of the line, so
+// no line ever completed, so nothing ever released it. Hysteresis is the wrong
+// model for a buffer that may be holding something unfinished: the level says
+// nothing about whether we are waiting on the peer.
+//
+// The buffer FULL with no complete line in it cannot happen, which is what makes
+// the simple rule safe: csp_line_input stops storing at line_size - 1 and raises
+// line_ovf instead, so line_fill never reaches line_size while a line is being
+// assembled. The reader keeps draining and discarding to the next newline, and
+// that is where the "line too long" error and the restart come from.
+//
+// Only a real UART needs any of this. On USB CDC the host is NAKed once the
+// endpoint FIFO fills and blocks by itself.
+static uint8_t serial_xoff = 0;
+
+static void serial_xoff_set(uint8_t on)
+{
+    if (on == serial_xoff)
+	return;
+    Serial.write(on ? 0x13 : 0x11);
+    serial_xoff = on;
+}
+
+// About to stop reading the port for a while: parsing a line, and any rebuild it
+// triggers, takes longer than the driver's FIFO holds. A fill-level test cannot
+// see that coming -- line_fill does not move while csp_process_line runs -- and
+// it bites hardest on the FIRST line of a paste, where the buffer is nearly
+// empty: the line completes after twenty characters, available() goes false
+// while the sender is still transmitting, and we walk into a rebuild with 64
+// bytes of UART ring behind us. That is 5.6 ms at 115200; a rebuild is longer.
+static void serial_hold(void)
+{
+    serial_xoff_set(1);
+}
+
+// Room again -- let the peer talk. Called after every byte taken in and after
+// the queue is compacted, so there is no state in which we are able to receive
+// and the peer is still held off.
+static void serial_release(csp_rt_t* st)
+{
+    serial_xoff_set(csp_line_space(st) ? 0 : 1);
+}
+
 void loop()
 {
     static int first_cycle = 1;
@@ -1145,20 +1196,29 @@ void loop()
     // through to csp_cycle and read NULL view/heap, faulting the board into an
     // unresponsive state right after "setup failed". Now the user can /memory,
     // /clear, or edit their way out instead.
-    // STOP at a completed line. line_pos is not reset until the line below
-    // has been processed, so every byte read past the newline is appended to the
-    // line already marked ready -- it overwrites the command we are about to
-    // run. Typing never showed it (one line per pass); a PASTE is several lines
-    // in one burst, which is exactly when it bites. XOFF cannot help here: the
-    // damage happens after the bytes have arrived, not on the wire.
-    while (Serial.available() && !state.line_ready)
+    // Keep draining while the buffer has room -- INCLUDING past a completed
+    // line, which is queued behind it rather than written over it. The spare
+    // room is the point: a line that adds a rule stops to rebuild, and the burst
+    // still coming in has somewhere to go besides the driver's FIFO. That FIFO
+    // is 64 bytes on a mega and drops silently when it fills, so every byte of
+    // slack ahead of it counts.
+    // The prompt for the NEXT line. csp_line_input prints one when a line starts
+    // arriving, which covers a paste, but an idle board has nothing coming --
+    // so without this the prompt only appeared once you began typing, and the
+    // board sat there looking like it had not finished the previous line. Not
+    // while a line is already pending: the prompt means "waiting for you", and
+    // the queue re-feed still needs the need_prompt it would consume.
+    if (!state.line_ready)
+	csp_line_prompt(&state);
+    while (Serial.available() && csp_line_space(&state)) {
 	csp_line_input(&state, Serial.read());
+	serial_release(&state);
+    }
     if (state.line_ready) {
-	Serial.write(0x13);   // XOFF -- pace pasted input (see below)
+	serial_hold();          // about to stop reading for a while
 	csp_process_line(&state, state.line_buf);
-	Serial.write(0x11);   // XON
-	state.line_ready = 0;
-	state.line_pos = 0;
+	csp_line_done(&state);  // drop it, bring the queue down to the front
+	serial_release(&state); // the queue just shrank -- let the peer talk
     }
     // No leaves/tables: skip all execution but keep looping (serial handled above).
     if (!state.started)
@@ -1171,10 +1231,12 @@ void loop()
     else if (!state.paused)     // frozen while /pause is in effect
 	state.cycle++;
 
-    // Pasted input pacing note: parsing a line (and any rt_start) is slow enough
-    // to overflow the UART RX buffer, so csp_process_line above brackets itself
-    // with XOFF/XON. Enable "software flow control" in the terminal (minicom:
-    // Ctrl-A O -> Serial port setup -> G = Yes).
+    // Pasted input pacing note: parsing a line (and any rebuild) is slow enough
+    // to overflow a UART RX buffer, so the input queue absorbs the burst and
+    // serial_hold/serial_release pace the peer around it. On a UART, enable
+    // "software flow control" in the terminal (minicom: Ctrl-A O -> Serial port
+    // setup -> G = Yes); over USB CDC the host blocks by itself and the setting
+    // makes no difference.
 
     // /pause freezes execution: serial was already handled at the top so /resume
     // and edits still work; run no input/cycle/commit/output.
@@ -1202,9 +1264,9 @@ void loop()
 	    uint32_t chunk = min(remaining, (uint32_t)10);
 	    delay(chunk);
 	    remaining -= chunk;
-	    // Same rule as the drain at the top of loop(): read ahead freely, but
-	    // never past the newline that completed a line.
-	    while (Serial.available() && !state.line_ready)
+	    // Same rule as the drain at the top of loop(): take everything the
+	    // port has for as long as there is room to put it.
+	    while (Serial.available() && csp_line_space(&state))
 		csp_line_input(&state, Serial.read());
 	}
     }

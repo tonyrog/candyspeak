@@ -2289,10 +2289,16 @@ static void state_advance(csp_rt_t* st, index_t sx)
 // to be one-shot for the same reason the global one is. A module's State is the
 // first declaration inside it -- see csp_parse_module, which creates it before
 // anything the user wrote.
+//
+// The global one comes from gsx, NOT sx. This runs on every cycle, and a module
+// being typed at the prompt leaves sx pointing at that module's own State,
+// CURRENT-relative, until its #end. Reading -- and worse, WRITING -- through it
+// mid-definition hit whatever offs[CURRENT] happened to be, which showed up as
+// the REPL wedging part-way through a pasted module.
 static void states_advance(csp_rt_t* st)
 {
     int m;
-    state_advance(st, st->sx);
+    state_advance(st, st->gsx);
     for (m = 1; m <= (int)st->ps.nq; m++) {
 	index_t ix = st->object[m];
 	index_t mx = decl(st, INDEX(ix), mq.mx);
@@ -2309,6 +2315,23 @@ index_t csp_cycle(csp_rt_t* st)
     // only safe point: mid_reset moves every derived table.
     if (st->started && (st->edited || (st->n_rule_emit != st->graph_rules)))
 	csp_rebuild(st);
+
+    // A definition still being typed is not a runnable program. `#module` emits
+    // an OP_ENTER whose length is patched at its `#end`, and `#in` an OP_INSTATE
+    // whose skip is patched the same way; until then those offsets are zero or
+    // stale and a sweep walks straight into them. Feeding a module in line by
+    // line -- which is what pasting a .csp file IS -- hung the REPL part-way
+    // through, on the host and on a board alike. Evaluate nothing until it
+    // closes.
+    //
+    // AFTER the rebuild above, not before: the derived tables (heap included)
+    // are laid out just past the end of instr[], so every line that emits more
+    // instructions grows the code pool towards them. Skipping the rebuild as
+    // well left the heap where it was, and the next leaf write landed inside the
+    // module body -- one instruction came out zeroed, which /list then rendered
+    // as a NOP where a call belonged.
+    if ((st->mdef != BAD_INDEX) || (st->sdef >= 0))
+	return BAD_INDEX;
 
     // First cycle: force OP_CHG true so every <- binding fires once and seeds
     // its initial value. Same boundary as the reactive seed sweep below.
@@ -6698,7 +6721,7 @@ NOINLINE void csp_load_image(csp_rt_t* st, const uint8_t* base)
     st->ps.nd   = st->rom_nd;
     st->ps.nn   = st->rom_nn;
     st->ps.strp = st->rom_strp;
-    st->sx = 0;                   // State is ROM decl 0
+    st->sx = st->gsx = 0;         // State is ROM decl 0
     // Restore the baked state table (name offsets index the str section, which
     // we just pointed at). Overwrites the INIT/NORMAL seed from csp_rt_init with
     // the program's full table so ON/OFF/... resolve in listing and lookup.
@@ -6986,7 +7009,7 @@ int csp_rt_init(csp_rt_t* st, int reactive)
 	RO_TSTR(NORMAL, ros_NORMAL);
 	RO_TSTR(FAILSAFE, ros_FAILSAFE);
 	st->ps.ns = 0;  // install INIT (cycle()==0), NORMAL, FAILSAFE
-	st->sx = csp_new_decl(st,&State,DECL_VARIABLE,1);
+	st->sx = st->gsx = csp_new_decl(st,&State,DECL_VARIABLE,1);
 	st->sdef = -1;
 	st->n_sdef = 0;
 	st->rule_implicit = 0;
@@ -9453,6 +9476,14 @@ int csp_process_line(csp_rt_t* st, char* line)
     len = strlen(line);
     if (len > 0 && line[len-1] == '\n') line[len-1] = '\0';
 
+    // A comment line is source, not a command -- `//` matched the '/' test below
+    // and every header line of a pasted .csp file came back as "Unknown command:
+    // // This example ...". Pasting a source file is the whole point of the
+    // prompt, so a line that is nothing but a comment does nothing, quietly.
+    // Trailing comments need no help: the tokenizer already drops them.
+    if ((line[0] == '/') && (line[1] == '/'))
+	return CSP_CMD_OK;
+
     if (*line == '/') {
 	// Command
 	int r = csp_cmd_dispatch(st, line + 1);
@@ -9498,6 +9529,7 @@ int csp_process_line(csp_rt_t* st, char* line)
 void csp_line_init(csp_rt_t* st)
 {
     st->line_pos = 0;
+    st->line_fill = 0;
     st->line_ready = 0;
     st->line_ovf = 0;
     st->need_prompt = 1;
@@ -9512,8 +9544,52 @@ void csp_line_prompt(csp_rt_t* st)
     }
 }
 
+int csp_line_space(csp_rt_t* st)
+{
+    return st->line_fill < st->line_size;
+}
+
+// Done with the line at the front. Anything that arrived while it ran was stored
+// raw behind it; move that down to the start and put it back through the normal
+// path, so it is echoed and edited exactly as if it had just come in. That is
+// what keeps the echo interleaved with the results during a paste instead of
+// showing the whole file and then a wall of OK.
+//
+// The move is done in place by re-feeding: the write cursor starts at 0 and the
+// read cursor at src, and one character advances the write cursor by at most
+// one, so the write never overtakes the read. src >= 2 always -- an empty line
+// never becomes ready -- which keeps the two apart even on the first byte.
+void csp_line_done(csp_rt_t* st)
+{
+    uint16_t src = st->line_pos + 1;    // past the line and its terminator
+    uint16_t n   = (st->line_fill > src) ? (uint16_t)(st->line_fill - src) : 0;
+    uint16_t k;
+
+    st->line_pos = 0;
+    st->line_fill = 0;
+    st->line_ready = 0;
+    for (k = 0; k < n; k++)
+	csp_line_input(st, st->line_buf[src + k]);
+}
+
 void csp_line_input(csp_rt_t* st, char c)
 {
+    // A complete line is already waiting to run, so this byte belongs to a LATER
+    // line: queue it raw -- no echo, no editing -- and let csp_line_done deal
+    // with it. Editing a line you have not seen run yet is not a thing anyone
+    // does, and appending it to the ready line is the bug this replaced.
+    if (st->line_ready) {
+	if (st->line_fill < st->line_size)
+	    st->line_buf[st->line_fill++] = c;
+	return;
+    }
+    // The prompt belongs immediately before the first character of a line, and
+    // this is the only place that knows one is starting. The caller's own
+    // csp_line_prompt covers the idle case, but it never runs during a re-feed
+    // out of the queue -- that happens inside csp_line_done, several frames
+    // below the loop -- so every pasted line after the first echoed bare.
+    csp_line_prompt(st);
+
     if (c == '\n' || c == '\r') {
 	// line_ovf: a character had to be dropped because the buffer was full, so
 	// the line is REFUSED rather than run short. A truncated command is not a
@@ -9521,6 +9597,7 @@ void csp_line_input(csp_rt_t* st, char c)
 	// `#disable 1` disables the wrong rule and says nothing.
 	if (st->line_ovf) {
 	    st->line_pos = 0;
+	    st->line_fill = 0;
 	    st->line_ovf = 0;
 	    csp_println();     // the echoed line has no newline yet -- without this
 			       // the complaint lands on the end of the input itself
@@ -9538,6 +9615,7 @@ void csp_line_input(csp_rt_t* st, char c)
 	else if (st->line_pos > 0) {
 	    st->line_buf[st->line_pos] = '\0';
 	    st->line_ready = 1;
+	    st->line_fill = st->line_pos + 1;   // the queue starts after the NUL
 	}
 	csp_println();
 	csp_flush();
@@ -9548,6 +9626,7 @@ void csp_line_input(csp_rt_t* st, char c)
 	    csp_print_char('\a');
 	} else {
 	    st->line_pos--;
+	    st->line_fill = st->line_pos;
 	    csp_print_lit("\b \b");
 	}
 	csp_flush();
@@ -9557,11 +9636,13 @@ void csp_line_input(csp_rt_t* st, char c)
 	    st->line_pos--;
 	    csp_print_lit("\b \b");
 	}
+	st->line_fill = 0;
 	csp_flush();
     }
     else if (c >= 32 && c < 127) {
 	if (st->line_pos < st->line_size - 1) {
 	    st->line_buf[st->line_pos++] = c;
+	    st->line_fill = st->line_pos;
 	    csp_print_char(c);
 	}
 	else {
