@@ -417,8 +417,8 @@ Avklarade punkter, flyttade hit från TODO.md. Nyast överst.
     pixel hade dominerat cykeltiden.
   - `examples/neo.csp`. Feather bygger med `-DCSP_NEO` (123 508 byte, 12
     NeoPixel-symboler i ELF:en). mega/mkrzero/CPX oforandrade, test + san 59/59.
-  - OVERIFIERAT PA HARDVARA: att `NEOPIXEL_POWER` ska vara HOG ar antagandet.
-    Ar pixeln mork ar det forsta stallet att titta.
+  - VERIFIERAT PA HARDVARA (2026-07-31): `NEOPIXEL_POWER` HOG ar ratt pa Feather
+    RP2040 CAN (GPIO 20; pixeln sitter pa GPIO 21).
 
 
 ### /list blev pasteable (2026-07-30)
