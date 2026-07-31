@@ -136,7 +136,18 @@
     utover common is_mapped/bound/reg som redan nollas, sa den var safe, men
     monstret ar fortfarande sprott.)
 
-## Listing of RAM rule, list as [ROM]
+## Listing of declarations/rules
+
+Rules and declarations are printed as candy speak and are appended
+by a comment that describe where rule or declaration is stored
+
+  ROM		   F  // Firmware
+  RAM 		   R  // Ram only, temporary
+  EEPROM backed	   E  // Eeprom backed Ram rule
+  #disabled rule   !  // prefix of above stored in eeprom
+
+RAM rules may be compacted when !R | !E are present, rules are
+deleted. and if saved permanetly gone.
 
 ## `<-` och changed() fastnar på FÖRE-värdet när källan ändras exakt en gång.
   De fyrar på ändring, men regler läser den committade sidan -- alltså värdet
@@ -299,3 +310,33 @@ Using state syntax for serving interrupts.
 - EEPROM disable flag, do not load eeprom code.
 
 Flags stored in EEPROM.
+
+## CAN
+
+- Configure CAN bus speed, this is a new beast?
+  What is a CAN bus anyway ;-)
+  Maybe use #can speed 250000 ...
+- Set extended addresses 0x80000000 address bit
+  extended addreses are 29 bits so 0x40000000 could signal rtr
+  and 0x20000000 could signal error frame
+  need a bus options 1..4?
+
+## UART
+
+  send strings and characters on UART object
+  #uart Tx 0:5
+  Tx.send = 'X'
+  Tx.send = "Hello"
+
+## UDP/SOCKET
+
+  send messages over UDP/IP
+  #buffer Udp:128 inout udp 192.168.2.1  // interface address
+  Udp = "Hello world\n"
+  Udp.tx = 1
+
+## System variables, configurables
+
+  Name = "Node1"
+  ID   = 123
+  IP   = 192.168.2.100

@@ -1357,6 +1357,17 @@ typedef struct _csp_rt_t
     csp_instr_t  imm_scratch;            // dummy slot for immediate `> expr` eval fold
     char        ram_str[MAX_STR_BUF];    // store variable names
 
+    // The REPL line being typed or pasted. The buffer is carved off the TOP of
+    // the arena in csp_mem_init (see there for why not csp_mid_alloc), so how
+    // long a line may be is a property of the BOARD rather than a compile-time
+    // guess -- a mega and a Feather no longer have to agree on 64.
+    char*    line_buf;
+    uint16_t line_size;      // capacity in bytes, terminator included
+    uint16_t line_pos;       // characters held so far
+    uint8_t  line_ready;     // a complete line is waiting in line_buf
+    uint8_t  line_ovf;       // a character was dropped -> refuse the whole line
+    uint8_t  need_prompt;    // print "> " before the next read
+
     // All leaf values live in the buffer heap (see doc/DESCRIPTORS.md). Each of
     // these is its own allocation, sized to csp_estimate in csp_rt_start.
     csp_view_t* view;             // per-leaf view (own alloc, sized to estimate)
@@ -1429,6 +1440,15 @@ typedef struct _csp_rt_t
     index_t sys_nd;
     index_t sys_nn;
     index_t sys_strp;
+    // How much of the RAM patch eeprom currently holds a copy of, counted from
+    // CSP_BASE_ND/CSP_BASE_NN. Set by a successful save (everything in RAM is now
+    // in eeprom) and by a successful load (what came back), zeroed by /clear and
+    // by an eeprom erase. /list turns it into the E tag: a RAM line inside the
+    // watermark is recoverable, one past it is lost for good when RAM is dropped.
+    // It counts, it does not compare -- a #disable after a save leaves the tag in
+    // place, because the DECLARATION is still the one eeprom holds.
+    index_t ee_nd;
+    index_t ee_nn;
 
     csp_pstate_t ps;             // parse state
     reg_allocator_t* ap;
@@ -1945,19 +1965,17 @@ extern int csp_cmd_dispatch(csp_rt_t* st, char* cmd);
 extern void csp_cmd_help(void);
 extern int csp_process_line(csp_rt_t* st, char* line);
 
-// Line input handling (shared between platforms)
-#if defined(__AVR__)
-#define CSP_LINE_BUF_SIZE 64
-#else
-#define CSP_LINE_BUF_SIZE 128
-#endif
-extern char csp_line_buf[CSP_LINE_BUF_SIZE];
-extern uint8_t csp_line_pos;
-extern uint8_t csp_line_ready;
+// Line input handling (shared between platforms). The buffer is sized from the
+// arena at boot, between these two bounds: never less than the old fixed AVR
+// size, never more than a line anyone types by hand. A 32nd of the pool, so a
+// board with room gets a longer line and a small one is not squeezed for it.
+#define CSP_LINE_MIN   64
+#define CSP_LINE_MAX  512
+#define CSP_LINE_SHARE 32
 
-extern void csp_line_init(void);
-extern void csp_line_input(char c);
-extern void csp_line_prompt(void);
+extern void csp_line_init(csp_rt_t* st);
+extern void csp_line_input(csp_rt_t* st, char c);
+extern void csp_line_prompt(csp_rt_t* st);
 
 // eeprom api
 // What to CALL the backing store in /save and /load output ("eeprom.db" on the

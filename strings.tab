@@ -115,7 +115,7 @@ cmd_load load
 cmd_quit quit
 cmd_exit exit
 h_help Show this help
-h_list List rules
+h_list List rules (F=flash E=eeprom-backed R=ram only)
 h_state Show current values
 h_memory Show code/RAM usage
 h_images List the images linked into this firmware
@@ -261,3 +261,6 @@ round round
 # /memory row: the device list. One list, not in+out -- direction is a runtime
 # property now, so a pin cannot be filed under the direction it was declared with.
 io io
+
+# /memory row: the REPL line buffer, carved off the top of the arena
+line line

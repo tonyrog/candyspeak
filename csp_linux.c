@@ -315,16 +315,16 @@ uint32_t csp_eeprom_capacity(void)
 // Platform-specific input polling
 static int quit_flag = 0;
 
-static void serial_poll(struct pollfd* fds, nfds_t nfds)
+static void serial_poll(csp_rt_t* st, struct pollfd* fds, nfds_t nfds)
 {
     if (nfds > 0 && (fds[0].revents & POLLIN)) {
 	char c;
-	while (!csp_line_ready && read(STDIN_FILENO, &c, 1) == 1) {
+	while (!st->line_ready && read(STDIN_FILENO, &c, 1) == 1) {
 	    if (c == 4) { // Ctrl-D
 		quit_flag = 1;
 		return;
 	    }
-	    csp_line_input(c);
+	    csp_line_input(st, c);
 	}
     }
 }
@@ -959,9 +959,13 @@ int main(int argc, char** argv)
 
     csp_rt_init(&state, reactive);
     // -m shrinks the usable code-memory budget to exercise the out-of-memory
-    // path. Clamp to the physical arena; the field is a byte cap, not a re-alloc.
-    if (mem_limit > 0)
-	state.mem_limit = (mem_limit < state.mem_size) ? mem_limit : state.mem_size;
+    // path. Clamp to what csp_mem_init left for the pool, NOT to mem_size: the
+    // line buffer sits in the gap between the two, and raising mem_limit back to
+    // the physical size would let decl[] grow down into it.
+    if (mem_limit > 0) {
+	size_t pool = state.mem_size - state.line_size;
+	state.mem_limit = (mem_limit < pool) ? mem_limit : pool;
+    }
     csp_set_uconst(&state, csp_uconst);
 
     // Activate flash-resident firmware: run ROM in place from flash, RAM holds
@@ -1126,7 +1130,7 @@ loop:
 	int timeout_ms;
 	
 	if (interactive)
-	    csp_line_prompt();
+	    csp_line_prompt(&state);
 	timeout_ms = interactive ? 100 : 0;
 	// Wait for timer if needed (non-interactive mode)
 	if (state.wait_ms != NOTIMEOUT) {
@@ -1134,12 +1138,12 @@ loop:
 		timeout_ms = state.wait_ms;
 	}
 	poll(pfd, nfds, timeout_ms);
-	serial_poll(pfd, nfds);
+	serial_poll(&state, pfd, nfds);
 
-	if (csp_line_ready) {
-	    process_serial_line(&state, csp_line_buf);
-	    csp_line_ready = 0;
-	    csp_line_pos = 0;
+	if (state.line_ready) {
+	    process_serial_line(&state, state.line_buf);
+	    state.line_ready = 0;
+	    state.line_pos = 0;
 	    if (quit_flag) goto done;
 	}
     }

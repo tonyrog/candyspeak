@@ -1,0 +1,8 @@
+{modes, [seq, reactive]}.
+{cycles, 6}.
+{checks, [
+  %% 3 = `go`. INIT/NORMAL/FAILSAFE take 0..2, so the first user state is 3.
+  %% The point is that it is NOT 1 (NORMAL): an explicit assignment in INIT
+  %% wins over the automatic step out of it.
+  {final_var, "State", 3}
+]}.

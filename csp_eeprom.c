@@ -111,6 +111,7 @@ int csp_eeprom_clear(csp_rt_t* st)
     if (csp_eeprom_write(invalid, 2) < 0)
 	return -1;
     csp_eeprom_close();
+    st->ee_nd = st->ee_nn = 0;    // nothing is backed any more
     return 0;
 }
 
@@ -169,6 +170,11 @@ int csp_eeprom_save(csp_rt_t* st)
 	goto error;
 
     csp_eeprom_close();
+    // Everything in the RAM patch is now also in eeprom -- /list tags it E from
+    // here on. Set only after the last write succeeded: a save that failed
+    // half-way must not claim coverage it does not have.
+    st->ee_nd = ram_nd;
+    st->ee_nn = ram_nn;
     return 0;
 
 error:
@@ -284,6 +290,12 @@ int csp_eeprom_load(csp_rt_t* st)
     }
 
     csp_eeprom_close();
+    // What came back from eeprom -- /list tags exactly this much of the RAM patch
+    // E. csp_rt_init above zeroed the watermark, so on any failure path it stays
+    // zero and nothing claims to be backed. Set before csp_rebuild, which can
+    // fail on a full pool without making the eeprom copy any less real.
+    st->ee_nd = hdr.ram.n_decl;
+    st->ee_nn = hdr.ram.n_instr;
     // csp_rebuild, NOT csp_rt_start. rebuild resets the middle bump allocator
     // (csp_mid_reset) that view/buf/heap/input/output/timer are all carved
     // from; csp_rt_init above zeroed mid_base and mid_end, so calling rt_start

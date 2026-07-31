@@ -1,0 +1,10 @@
+// INIT runs EXACTLY once, then State steps to NORMAL by itself. N counts how
+// many cycles the block ran in: without the step it would count every cycle.
+#variable N = 0
+#variable C = 0
+
+#in INIT
+  N = N + 1
+#end
+
+C = C + 1

@@ -1,0 +1,12 @@
+// An explicit assignment in INIT WINS over the automatic step to NORMAL: the
+// step is the default for an INIT that says nothing about where to go next.
+#states go
+#variable N = 0
+
+#in INIT
+  State = go
+#end
+
+#in go
+  N = N + 1
+#end

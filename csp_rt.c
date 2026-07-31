@@ -2261,6 +2261,45 @@ index_t csp_react(csp_rt_t* st)
 // Hence reactive runs only when the whole program can: no ROM (everything is
 // RAM) or the ROM carries its own precomputed graph (rom_n_edg > 0). Otherwise
 // fall back to full sequential, which keeps override consistent.
+// INIT is a ONE-CYCLE state. At the end of a cycle spent in it, State steps to
+// NORMAL by itself, so an `#in INIT` block is setup and not a loop that re-runs
+// forever -- which is what it was when nothing moved State along.
+//
+// A rule that assigned State this cycle WINS: the step is the default for the
+// case where INIT said nothing about where to go next, so `#in INIT State = red`
+// still lands in red. The dirty set is what tells the two apart -- it already
+// marks every leaf written this cycle, and the write is still in the DOUT shadow
+// (uncommitted), so reading the committed value here cannot see it.
+//
+// Written through csp_set_value rather than poked into the slot, so the reactive
+// graph and the dirty set stay in step and a rule watching State still wakes.
+static void state_advance(csp_rt_t* st, index_t sx)
+{
+    value_t v;
+    if (csp_value(st, sx).i != STATE_INIT)
+	return;
+    if (bitset_tst(st->dset, st_index(st, sx)))
+	return;
+    v.i = STATE_NORMAL;
+    csp_set_value(st, sx, v);
+}
+
+// Every State in the program: the global one and each object's own. An object
+// re-enters INIT on its own (`safe.State = INIT ? Panic`), so its INIT block has
+// to be one-shot for the same reason the global one is. A module's State is the
+// first declaration inside it -- see csp_parse_module, which creates it before
+// anything the user wrote.
+static void states_advance(csp_rt_t* st)
+{
+    int m;
+    state_advance(st, st->sx);
+    for (m = 1; m <= (int)st->ps.nq; m++) {
+	index_t ix = st->object[m];
+	index_t mx = decl(st, INDEX(ix), mq.mx);
+	state_advance(st, MAKE_INDEX(m, INDEX(mx) + 1));
+    }
+}
+
 index_t csp_cycle(csp_rt_t* st)
 {
     // Pick up anything added since the last rebuild. Two signals: `edited` is
@@ -2274,17 +2313,23 @@ index_t csp_cycle(csp_rt_t* st)
     // First cycle: force OP_CHG true so every <- binding fires once and seeds
     // its initial value. Same boundary as the reactive seed sweep below.
     st->seed_all = (st->cycle <= 1);
+    {
+	index_t x;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-    if (st->reactive && ((st->rom_nn == 0) || st->rom_nedg)) {
-	// The reactive queue is change-driven, so it starts empty. Seed it with
-	// a full sequential first cycle (csp_set_value enqueues each dependent
-	// for the next cycle); run reactively thereafter.
-	if (st->cycle <= 1)
-	    return csp_eval(st);
-	return csp_react(st);
-    }
+	if (st->reactive && ((st->rom_nn == 0) || st->rom_nedg)) {
+	    // The reactive queue is change-driven, so it starts empty. Seed it
+	    // with a full sequential first cycle (csp_set_value enqueues each
+	    // dependent for the next cycle); run reactively thereafter.
+	    x = (st->cycle <= 1) ? csp_eval(st) : csp_react(st);
+	}
+	else
 #endif
-    return csp_eval(st);   // sequential ROM + RAM (override stays consistent)
+	    x = csp_eval(st);  // sequential ROM + RAM (override stays consistent)
+	// After the rules, before the commit: the step out of INIT rides the same
+	// commit as whatever INIT itself wrote, so the two are never half applied.
+	states_advance(st);
+	return x;
+    }
 }
 
 NOINLINE int lookup_state(csp_rt_t* st, const tstr_t* name)
@@ -6809,12 +6854,36 @@ int csp_mem_init(csp_rt_t* st, size_t size)
     if ((st->mem == NULL) || (st->mem_size < 16))
 	return -1;
     st->mem_size &= ~(size_t)7;          // keep the decl anchor 8-aligned
-    st->mem_limit = st->mem_size;
-    memset(st->mem, 0, st->mem_size);
+
+    // The REPL line buffer, carved off the TOP of the pool before anything else
+    // is laid out. NOT from csp_mid_alloc: a rebuild resets that allocator, and a
+    // rebuild happens inside csp_process_line -- which is running out of this
+    // very buffer, so it would be handed to something else mid-command. Taking it
+    // off the top and lowering mem_limit makes it permanent for the life of the
+    // arena, and both the decl anchor and the middle allocator stay below it
+    // without needing to know it is there.
+    {
+	size_t want_line = st->mem_size / CSP_LINE_SHARE;
+	if (want_line < CSP_LINE_MIN) want_line = CSP_LINE_MIN;
+	if (want_line > CSP_LINE_MAX) want_line = CSP_LINE_MAX;
+	want_line = CSP_A8(want_line);
+	// A pool too small to hold both a line and a program is not a pool. Keep
+	// the arena valid and let the caller's own size checks report it.
+	if (st->mem_size <= want_line + 16)
+	    return -1;
+	st->mem_limit  = st->mem_size - want_line;
+	st->line_buf   = (char*)st->mem + st->mem_limit;
+	st->line_size  = (uint16_t)want_line;
+    }
+    // Clear the POOL, not the whole block: /load re-runs csp_rt_init from inside
+    // csp_process_line, which is reading the line out of the buffer above the
+    // limit. Wiping it there pulled the command out from under its own handler.
+    memset(st->mem, 0, st->mem_limit);
 #ifdef CSP_STACK_WATCH
-    // Top of the pool = where RAM declarations start growing down from, and the
-    // address the stack must never reach. csp_stack_mark measures against it.
-    csp_arena_top = (char*)st->mem + st->mem_limit;
+    // Top of the pool = the address the stack must never reach. mem_SIZE, not
+    // mem_limit: the line buffer sits in the gap above the limit and the stack
+    // must not reach that either.
+    csp_arena_top = (char*)st->mem + st->mem_size;
 #endif
 
     // Double-ended pool: instr[] grows up from the base, decl[] grows down from
@@ -6853,9 +6922,13 @@ int csp_rt_init(csp_rt_t* st, int reactive)
 {
     memset(st, 0x00, sizeof(csp_rt_t));
 
-    // Allocate the RAM code arena (instr[]/decl[]) before anything parses.
+    // Allocate the RAM code arena (instr[]/decl[]) before anything parses. The
+    // line buffer comes off the top of it, so the line state can only be set up
+    // afterwards -- and must be, because the memset above cleared need_prompt,
+    // which used to be a global initialized to 1.
     if (csp_mem_init(st, 0) < 0)
 	return -1;
+    csp_line_init(st);
 
     // Initialize stop-sets for P_EXPR_S patterns
     init_stop_sets();       // creates STOP_NONE (index 0)
@@ -7900,19 +7973,51 @@ static int is_fvar(index_t ix, int cnd, filter_var_t* fv, int nf)
 // happen to end on one, it stays below rom_nn while the walk has already moved
 // into RAM -- which is what tagged RAM rules as [ROM].
 //
-// R = RAM (editable), F = flash/ROM (baked in, survives a reset).
+// F = flash/ROM (baked into the firmware, survives everything).
+// E = RAM, and eeprom holds a copy -- /clear drops it from RAM, the next boot or
+//     a /load brings it straight back.
+// R = RAM only. Nothing else holds a copy: /clear or a power cut loses it.
+//
+// E vs R is the question you actually want answered before typing /clear, and it
+// cannot be read off the segment alone -- both live in the same RAM patch. The
+// watermark in st->ee_* is what separates them.
 //
 // The tag used to be printed as a LEADING column, which made every line
 // unpasteable: you had to strip "  1 R  " by hand before it was source again.
 // It is now remembered here and emitted by list_eol() as a trailing comment, so
 // a listing can be selected in one terminal and pasted straight into another --
 // which is how a program actually gets copied off a board in the field.
-static int list_no, list_rom, list_off, list_pending;
+static int list_no, list_seg, list_off, list_pending;
 
-static void list_column(int no, int is_rom, int off)
+static void list_column(int no, int seg, int off)
 {
-    list_no = no; list_rom = is_rom; list_off = off;
+    list_no = no; list_seg = seg; list_off = off;
     list_pending = 1;
+}
+
+// Segment tag for a DECLARATION at logical index i, and for an INSTRUCTION at
+// logical position n. Both take the same shape: below the ROM count it is flash,
+// otherwise its distance above the RAM base decides whether the eeprom copy
+// reaches it. Signed throughout -- the sys area (the implicit State) sits between
+// rom_nd and the RAM base, so the subtraction can legitimately go negative.
+static int decl_seg(csp_rt_t* st, sindex_t i)
+{
+    sindex_t ram;
+    if (i < (sindex_t)st->rom_nd)
+	return 'F';
+    if ((ram = i - (sindex_t)CSP_BASE_ND(st)) < 0)
+	return 'R';                  // runtime-internal, never actually listed
+    return (ram < (sindex_t)st->ee_nd) ? 'E' : 'R';
+}
+
+static int instr_seg(csp_rt_t* st, sindex_t n)
+{
+    sindex_t ram;
+    if (n < (sindex_t)st->rom_nn)
+	return 'F';
+    if ((ram = n - (sindex_t)CSP_BASE_NN(st)) < 0)
+	return 'R';
+    return (ram < (sindex_t)st->ee_nn) ? 'E' : 'R';
 }
 
 // End a listing line: the trailing tag comment, then the newline. With nothing
@@ -7926,7 +8031,7 @@ static void list_eol(void)
 	    csp_print_uint(list_no);
 	    csp_print_blank();
 	}
-	csp_print_char(list_rom ? 'F' : 'R');
+	csp_print_char(list_seg);
 	if (list_off)
 	    csp_print_char('!');
 	list_pending = 0;
@@ -7993,6 +8098,192 @@ static void print_decl_and_name(csp_rt_t* st, decl_t d, sindex_t mod, sindex_t n
     list_name(st, mod, name);
 }
 
+// Two spaces per nesting level. A module's members and its rules share it, so a
+// block reads as the unit it is instead of a flat list with a "Mod: " prefix on
+// half the lines -- and the prefix was not source you could paste back.
+static void list_indent(int n)
+{
+    while (n-- > 0) { csp_print_blank(); csp_print_blank(); }
+}
+
+// The filter set /list was given, so the rule walk can be run over a RANGE
+// instead of only over the whole program -- which is what lets a module's rules
+// be listed inside its own block.
+typedef struct {
+    filter_var_t* filt;
+    int           nf;
+    uint32_t      cmask;    // condition-filter variables (filter index bitmask)
+    uint32_t      bmask;    // body-filter variables
+    const char*   scope;    // restrict to this module, NULL for everything
+} list_ctx_t;
+
+// List the rules in instructions [from, to), numbering them from `first`, and
+// return the number the next rule would get. Segment and number come from the
+// OP_RULE -- see list_column.
+//
+// `skip_modules`: at the top level a module's body is walked only to COUNT its
+// rules, because they were already printed inside the `#module ... #end` block.
+// The numbers stay absolute either way, so #disable means the same thing.
+// `indent`: two spaces per level, so a module's rules line up with its members.
+static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
+		      int indent, int skip_modules)
+{
+    int i, f;
+    int cnd;         // in condition part
+    int rule;        // rule start index (in condition part)
+    int rule_pos;    // ip of this body's OP_RULE, -1 if it has none
+    int rule_no;     // user-facing rule number, 1-based
+    int block_end;   // ip past the current #in block, -1 if not in one
+    uint32_t fbits;  // variables/states present in this rule (by filter index)
+    sindex_t cur_mod = 0;
+
+    rule = from;
+    i  = rule;
+    cnd = 1;
+    rule_pos = -1;
+    rule_no = 0;
+    fbits = 0;
+    block_end = -1;
+    st->list_nstate = 0;
+    // Rules are numbered by absolute position, so a range starting part-way in
+    // has to know how many came before it.
+    for (f = 0; f < from; f++)
+	if (instr(st,f,op) == OP_RULE)
+	    rule_no++;
+    while (i < to) {
+	// Close a finished #in block: print `#end` (no number), leave the state.
+	if ((block_end >= 0) && (i >= block_end)) {
+	    list_column(0, instr_seg(st, i), 0);
+	    list_indent(indent);
+	    print_decl(DECL_END);
+	    list_eol();
+	    block_end = -1;
+	    st->list_nstate = 0;
+	}
+	// A block gate is `LD State ; NINSTATE* ; INSTATE` (open_in_block). Emit
+	// `#in <states>` from the chain, arm block_end, and let list_states drop
+	// the per-rule State guard. The whole gate is consumed here, never listed.
+	if ((instr(st,i,op) == OP_LD) && (i+1 < to) &&
+	    ((instr(st,i+1,op) == OP_NINSTATE) ||
+	     (instr(st,i+1,op) == OP_INSTATE))) {
+	    int j = i + 1;
+	    int ns = 0, k;
+	    while ((j < to) && (instr(st,j,op) == OP_NINSTATE)) {
+		if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st,j,in.imm);
+		j++;
+	    }
+	    // terminating INSTATE
+	    if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st,j,in.imm);
+	    block_end = j + instr(st,j,in.nxt);
+	    st->list_nstate = ns;
+	    list_column(0, instr_seg(st, i), 0);
+	    list_indent(indent);
+	    csp_print_lit("#in");
+	    for (k = 0; k < ns; k++) {
+		int s;
+		csp_print_blank();
+		for (s = 0; s < st->ps.ns; s++)
+		    if (st->states[s].snum == st->list_states[k]) {
+			csp_print_str_at(st, st->states[s].name);
+			break;
+		    }
+	    }
+	    list_eol();
+	    i = j + 1;                  // resume after the whole gate
+	    rule = i;
+	    continue;
+	}
+	switch(instr(st,i,op)) {
+	case OP_ENTER:
+	    if (skip_modules) {
+		// Already listed inside its own block. Count past it so the
+		// numbering of what follows is unchanged, and resume after the
+		// matching OP_LEAVE (e.num = instructions between the two).
+		int body_n = instr(st,i,e.num);
+		int j;
+		for (j = i+1; j < i+1+body_n; j++)
+		    if (instr(st,j,op) == OP_RULE)
+			rule_no++;
+		i = i + body_n + 2;
+	    }
+	    else {
+		cur_mod = decl_name_pos(st, MAKE_INDEX(0, instr(st,i,e.mx)));
+		i++;
+	    }
+	    rule = i;
+	    break;
+	case OP_LEAVE:
+	    cur_mod = 0;
+	    i++; rule = i;
+	    break;
+	case OP_RULE:
+	    cnd=0; rule_pos = i; rule_no++; i++;
+	    break;
+	case OP_NEXT:
+	    cnd=1; i++;
+	    {
+		// Guard each mask: a zero mask must NOT vacuously pass (the old
+		// `(fbits&0)==0` bug made a bare filter list every rule). Only-":"
+		// state filters (cmask==bmask==0) keep the legacy show-all.
+		int show = (c->nf==0)
+		    || (c->cmask && ((fbits&c->cmask)==c->cmask))
+		    || (c->bmask && ((fbits&c->bmask)!=0))
+		    || (c->cmask==0 && c->bmask==0);
+		if (c->scope && !(cur_mod && csp_str_eq(st, cur_mod, c->scope, strlen(c->scope))))
+		    show = 0;
+		if (show && (rule_pos >= 0)) {
+		    list_column(rule_no, instr_seg(st, rule_pos),
+				(rule_no <= MAX_DIS_RULES) &&
+				bitset_tst(st->dis_rule, rule_no-1));
+		    // One level deeper inside an #in block, so a listing nests the
+		    // way the source does instead of running flat under the gate.
+		    list_indent(indent + ((block_end >= 0) ? 1 : 0));
+		    csp_print_rule(st, rule);
+		    list_eol();
+		}
+	    }
+	    fbits = 0;
+	    rule = i;  // start new rule
+	    rule_pos = -1;
+	    break;
+	case OP_LD:
+	case OP_LDP:
+	    if (c->nf) {
+		if ((f = lookup_filter(instr(st,i,m.mem), cnd, c->filt, c->nf)) >= 0)
+		    fbits |= (1 << f);
+	    }
+	    i++;
+	    break;
+	case OP_STIMP:
+	case OP_ST:
+	case OP_STP:
+	    if (c->nf) {
+		if ((f = lookup_filter(instr(st,i,m.mem), cnd, c->filt, c->nf)) >= 0)
+		    fbits |= (1 << f);
+	    }
+	    i++;
+	    break;
+	case OP_STI:  // immediate store: memory index in the .mi arm
+	    if (c->nf) {
+		if ((f = lookup_filter(instr(st,i,mi.mem), cnd, c->filt, c->nf)) >= 0)
+		    fbits |= (1 << f);
+	    }
+	    i++;
+	    break;
+	default: i++; break;
+	}
+    }
+    if (block_end >= 0) {           // a #in block ran to the end of the range
+	list_column(0, instr_seg(st, to - 1), 0);
+	list_indent(indent);
+	print_decl(DECL_END);
+	list_eol();                 // csp_print_line here left the tag pending
+    }
+    st->list_nstate = 0;
+    return rule_no;
+}
+
+
 static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 {
     int i;
@@ -8002,12 +8293,8 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
     int f;
     uint32_t cmask;  // condition filter variables (filter index bitmask)
     uint32_t bmask;  // body filter variables (filter index bitmask)
-    uint32_t fbits;  // currently present variables / states (by filter index)
-    int cnd;         // in condition part
-    int rule;        // rule start index (in condition part)
-    int rule_pos;    // ip of this body's OP_RULE, -1 if it has none
-    int rule_no;     // user-facing rule number, 1-based (see rule_column)
-    int block_end;   // ip past the current #in block, -1 if not in one
+    list_ctx_t ctx;  // what list_rules needs to honour the same filters
+    int mod_decl = 0;// decl index of the module block being listed
     const char* name;
     sindex_t cur_mod = 0;        // module name pos being listed (0 = global)
     sindex_t npos;               // current decl's name position
@@ -8058,14 +8345,15 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
      for (i = 0; i < st->ps.nd; i++) {
 	 index_t ix = MAKE_INDEX(0, i);
 	 decl_t t = decl(st,i,type);
-	 int is_rom = (i < st->rom_nd);
+	 int seg = decl_seg(st, i);
 	 if (t == DECL_MODULE) {
 	     cur_mod = decl(st, i, name);
+	     mod_decl = i;
 	     // Print the wrapper when it is in scope: /list M then yields a
 	     // complete "#module M ... #end" block, which is the only form that
 	     // can be pasted back as a module.
 	     if (!scope || csp_str_eq(st, cur_mod, scope, strlen(scope))) {
-		 list_column(0, is_rom, 0);
+		 list_column(0, seg, 0);
 		 print_decl(DECL_MODULE);
 		 csp_print_str_at(st, cur_mod);
 		 list_eol();
@@ -8075,11 +8363,23 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	if (t == DECL_END) {         // module end or top-level terminator
 	    if (cur_mod) {
 		if (!scope || csp_str_eq(st, cur_mod, scope, strlen(scope))) {
-		    list_column(0, is_rom, 0);
+		    // The module's RULES, before its #end -- that is where they
+		    // are in the source, and a listing that puts them after the
+		    // block (prefixed "Mod: ") is not source at all. The body is
+		    // the instructions between the module's OP_ENTER and its
+		    // OP_LEAVE; e.num is how many.
+		    index_t ent = decl(st, mod_decl, md.ent);
+		    int body_n  = instr(st, ent, e.num);
+		    ctx.filt = filt; ctx.nf = nf;
+		    ctx.cmask = cmask; ctx.bmask = bmask;
+		    ctx.scope = NULL;    // inside the block: no further narrowing
+		    list_rules(st, &ctx, ent + 1, ent + 1 + body_n, 1, 0);
+		    list_column(0, seg, 0);
 		    print_decl(DECL_END);
 		    list_eol();
 		}
 		cur_mod = 0;
+		mod_decl = 0;
 	    }
 	    continue;
 	}
@@ -8099,7 +8399,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    continue;                // no / empty name
 	if (nf && !is_fvar(ix, 2, filt, nf))
 	    continue;
-	list_column(0, is_rom, 0);
+	list_column(0, seg, 0);
 	if (cur_mod) {
 	    csp_print_blank(); csp_print_blank();
 	}
@@ -8230,130 +8530,13 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	}
     }
 
-    // now list all rules that match the filter. OP_ENTER/OP_LEAVE track the
-    // module a rule belongs to (module bodies are inline but skipped during
-    // linear eval). Segment and number come from the OP_RULE -- see rule_column.
-    rule = 0;  // condition index
-    i  = rule;
-    cnd = 1;
-    rule_pos = -1;
-    rule_no = 0;
-    fbits = 0;
-    cur_mod = 0;
-    block_end = -1;
-    st->list_nstate = 0;
-    while(i < st->ps.nn) {
-	// Close a finished #in block: print `#end` (no number), leave the state.
-	if ((block_end >= 0) && (i >= block_end)) {
-	    list_column(0, i < (int)st->rom_nn, 0);
-	    print_decl(DECL_END);
-	    list_eol();
-	    block_end = -1;
-	    st->list_nstate = 0;
-	}
-	// A block gate is `LD State ; NINSTATE* ; INSTATE` (open_in_block). Emit
-	// `#in <states>` from the chain, arm block_end, and let list_states drop
-	// the per-rule State guard. The whole gate is consumed here, never listed.
-	if ((instr(st,i,op) == OP_LD) && (i+1 < (int)st->ps.nn) &&
-	    ((instr(st,i+1,op) == OP_NINSTATE) ||
-	     (instr(st,i+1,op) == OP_INSTATE))) {
-	    int j = i + 1;
-	    int ns = 0, k;
-	    while ((j < (int)st->ps.nn) && (instr(st,j,op) == OP_NINSTATE)) {
-		if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st,j,in.imm);
-		j++;
-	    }
-	    // terminating INSTATE
-	    if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st,j,in.imm);
-	    block_end = j + instr(st,j,in.nxt);
-	    st->list_nstate = ns;
-	    list_column(0, i < (int)st->rom_nn, 0);
-	    csp_print_lit("#in");
-	    for (k = 0; k < ns; k++) {
-		int s;
-		csp_print_blank();
-		for (s = 0; s < st->ps.ns; s++)
-		    if (st->states[s].snum == st->list_states[k]) {
-			csp_print_str_at(st, st->states[s].name);
-			break;
-		    }
-	    }
-	    list_eol();
-	    i = j + 1;                  // resume after the whole gate
-	    rule = i;
-	    continue;
-	}
-	switch(instr(st,i,op)) {
-	case OP_ENTER:
-	    cur_mod = decl_name_pos(st, MAKE_INDEX(0, instr(st,i,e.mx)));
-	    i++; rule = i;
-	    break;
-	case OP_LEAVE:
-	    cur_mod = 0;
-	    i++; rule = i;
-	    break;
-	case OP_RULE:
-	    cnd=0; rule_pos = i; rule_no++; i++;
-	    break;
-	case OP_NEXT:
-	    cnd=1; i++;
-	    {
-		// Guard each mask: a zero mask must NOT vacuously pass (the old
-		// `(fbits&0)==0` bug made a bare filter list every rule). Only-":"
-		// state filters (cmask==bmask==0) keep the legacy show-all.
-		int show = (nf==0)
-		    || (cmask && ((fbits&cmask)==cmask))
-		    || (bmask && ((fbits&bmask)!=0))
-		    || (cmask==0 && bmask==0);
-		if (scope && !(cur_mod && csp_str_eq(st, cur_mod, scope, strlen(scope))))
-		    show = 0;
-		if (show && (rule_pos >= 0)) {
-		    list_column(rule_no, rule_pos < (int)st->rom_nn,
-				(rule_no <= MAX_DIS_RULES) &&
-				bitset_tst(st->dis_rule, rule_no-1));
-		    if (cur_mod) {
-			csp_print_str_at(st, cur_mod);
-			csp_print_lit(": ");
-		    }
-		    csp_print_rule(st, rule);
-		    list_eol();
-		}
-	    }
-	    fbits = 0;
-	    rule = i;  // start new rule
-	    rule_pos = -1;
-	    break;
-	case OP_LD:
-	case OP_LDP:
-	    if (nf) {
-		if ((f = lookup_filter(instr(st,i,m.mem), cnd, filt, nf)) >= 0)
-		    fbits |= (1 << f);
-	    }
-	    i++;
-	    break;
-	case OP_STIMP:
-	case OP_ST:
-	case OP_STP:
-	    if (nf) {
-		if ((f = lookup_filter(instr(st,i,m.mem), cnd, filt, nf)) >= 0)
-		    fbits |= (1 << f);
-	    }
-	    i++;
-	    break;
-	case OP_STI:  // immediate store: memory index in the .mi arm
-	    if (nf) {
-		if ((f = lookup_filter(instr(st,i,mi.mem), cnd, filt, nf)) >= 0)
-		    fbits |= (1 << f);
-	    }
-	    i++;
-	    break;
-	default: i++; break;
-	}
-    }
-    if (block_end >= 0) {           // a #in block ran to the end of the program
-	list_column(0, 1, 0);
-	csp_print_line("#end");
-    }
+    // Rules at the top level. A module's rules are NOT listed here -- they were
+    // emitted inside their own `#module ... #end` block above, which is the only
+    // arrangement that can be pasted back as source. The walk still counts them,
+    // so rule numbers stay absolute and agree with #disable.
+    ctx.filt = filt; ctx.nf = nf;
+    ctx.cmask = cmask; ctx.bmask = bmask; ctx.scope = scope;
+    list_rules(st, &ctx, 0, (int)st->ps.nn, 0, 1);
     st->list_nstate = 0;
     return CSP_CMD_OK;
 }
@@ -8454,6 +8637,65 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
 	}
 	if (v->t.fired)
 	    csp_print_lit("  FIRED");
+	list_eol();
+	return;
+    }
+
+    // A buffer is not a pin. Falling through to the digital/analog branch read
+    // port/pin/dir off a union arm that holds a heap offset and a transport, so
+    // /state printed "analog 13:68" -- a pin pair assembled out of the frame's
+    // own bytes. What a buffer HAS is a direction, a transport id and a length,
+    // so those are what the columns carry: id/dlc where a timer shows
+    // period/remaining, and the bytes themselves as the value.
+    if ((t == DECL_BUFFER) || (t == DECL_FIELD)) {
+	csp_view_t* vw = csp_view(st, ix);
+	csp_buf_t*  b  = &st->buf[vw->buf];
+	int n = 0;
+	// Direction belongs to the BUFFER: a field is a window into it and cannot
+	// be read one way while the frame goes the other.
+	csp_print_rojust(csp_fmt_pindir(b->dir), LJUST, STATE_W_DIR);
+	csp_print_rojust((t == DECL_BUFFER) ? ros_buffer : ros_field,
+			 LJUST, STATE_W_KIND);
+	if (t == DECL_FIELD) {
+	    // The bit window, named the same way /list writes it. The parent frame
+	    // is not repeated -- /list has it, and the column is 8 wide.
+	    index_t lo = decl(st, di, ca.bit);
+	    index_t hi = lo + decl(st, di, ca.len);
+	    csp_print_char('[');
+	    csp_print_uint(lo);
+	    csp_print_lit("..");
+	    csp_print_uint(hi);
+	    csp_print_char(']');
+	    n = 4 + state_udigits(lo) + state_udigits(hi);
+	}
+	else if (b->transport == TR_CAN) {
+	    n  = csp_print_hex(b->xref);
+	    csp_print_char('/');
+	    csp_print_uint(b->dlc);
+	    n += 1 + state_udigits(b->dlc);
+	}
+	state_pad(n, STATE_W_PIN);
+	csp_print_lit("= ");
+	if (t == DECL_FIELD)
+	    csp_print_value(st, decl(st, di, vt), csp_value(st, ix));
+	else {
+	    // The frame itself, byte by byte. A buffer has no scalar value to
+	    // print: csp_value would hand back the first sizeof(value_t) bytes and
+	    // call it a number, which is how Tx and TxSeq came to show the same
+	    // thing. Committed side (DIN), like every other row.
+	    const uint8_t* p = st->heap[DIN] + b->hp;
+	    uint16_t k;
+	    for (k = 0; k < b->nbytes; k++) {
+		if (k) csp_print_blank();
+		csp_print_hex2(p[k]);
+	    }
+	    // Pending traffic, in the same place a timer says FIRED: RX means a
+	    // frame landed this cycle, TX that one goes out at the end of it.
+	    if (b->flags & BUF_F_RX)
+		csp_print_lit("  RX");
+	    if (b->flags & (BUF_F_DIRTY|BUF_F_TX))
+		csp_print_lit("  TX");
+	}
 	list_eol();
 	return;
     }
@@ -8791,7 +9033,14 @@ static int cmd_clear(csp_rt_t* st, int argc, char* argv[])
     st->ps.nq   = 0;
     csp_rebuild(st);
     csp_setup(st);
-    csp_print_line("Cleared RAM patches -- ROM restored");
+    csp_print_lit("Cleared RAM patches -- ROM restored");
+    // The eeprom copy is untouched by a clear, so an E line is not gone, only
+    // unloaded -- say so, because "cleared" reads like it is. The watermark drops
+    // to zero either way: it measures what RAM holds, and RAM now holds nothing.
+    if (st->ee_nn || st->ee_nd)
+	csp_print_lit(" (eeprom copy kept, /load restores it)");
+    csp_println();
+    st->ee_nd = st->ee_nn = 0;
     return CSP_CMD_OK;
 }
 
@@ -8930,7 +9179,7 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 	uint32_t cap     = csp_system_ram_capacity();
 	uint32_t sys     = csp_system_ram_used();
 	uint32_t buffers = csp_derived_bytes(st);
-	uint32_t acc     = sys + model_state() + buffers
+	uint32_t acc     = sys + model_state() + buffers + st->line_size
 			 + CSP_STACK_RESERVE + (uint32_t)used;
 	uint32_t freeram = (cap > acc) ? (cap - acc) : 0;
 	csp_print_lit("RAM ");
@@ -8941,6 +9190,9 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 	mem_roname(ros_buffers); mem_int_r((int)buffers, 8);
 	if (!st->started) csp_print_lit("   (allocated on /resume)");
 	csp_println();
+	// The REPL line buffer. Its own row because it is the one allocation whose
+	// size is a user-visible LIMIT -- it says how long a line may be pasted.
+	mem_val(ros_line,    st->line_size);
 	mem_val(ros_stack,   CSP_STACK_RESERVE);
 #ifdef CSP_STACK_WATCH
 	// Measured, not reserved: the closest the stack has come to the arena.
@@ -9243,57 +9495,79 @@ int csp_process_line(csp_rt_t* st, char* line)
 // Line input handling (shared between platforms)
 // ============================================================
 
-char csp_line_buf[CSP_LINE_BUF_SIZE];
-uint8_t csp_line_pos = 0;
-uint8_t csp_line_ready = 0;
-static uint8_t need_prompt = 1;
-
-void csp_line_init(void)
+void csp_line_init(csp_rt_t* st)
 {
-    csp_line_pos = 0;
-    csp_line_ready = 0;
-    need_prompt = 1;
+    st->line_pos = 0;
+    st->line_ready = 0;
+    st->line_ovf = 0;
+    st->need_prompt = 1;
 }
 
-void csp_line_prompt(void)
+void csp_line_prompt(csp_rt_t* st)
 {
-    if (need_prompt) {
+    if (st->need_prompt) {
 	csp_print_lit("> ");
 	csp_flush();
-	need_prompt = 0;
+	st->need_prompt = 0;
     }
 }
 
-void csp_line_input(char c)
+void csp_line_input(csp_rt_t* st, char c)
 {
     if (c == '\n' || c == '\r') {
-	if (csp_line_pos > 0) {
-	    csp_line_buf[csp_line_pos] = '\0';
-	    csp_line_ready = 1;
+	// line_ovf: a character had to be dropped because the buffer was full, so
+	// the line is REFUSED rather than run short. A truncated command is not a
+	// harmless partial, it is a different command -- `#disable 12` cut to
+	// `#disable 1` disables the wrong rule and says nothing.
+	if (st->line_ovf) {
+	    st->line_pos = 0;
+	    st->line_ovf = 0;
+	    csp_println();     // the echoed line has no newline yet -- without this
+			       // the complaint lands on the end of the input itself
+	    csp_print_lit("Error: line too long, max ");
+	    csp_print_uint(st->line_size - 1);
+	    csp_print_line(" characters -- line ignored");
+	    csp_flush();
+	    // Print the next prompt here and return: no line was made ready, so
+	    // the caller never gets back to the point where it would print one,
+	    // and the following line would be echoed with nothing in front of it.
+	    st->need_prompt = 1;
+	    csp_line_prompt(st);
+	    return;
+	}
+	else if (st->line_pos > 0) {
+	    st->line_buf[st->line_pos] = '\0';
+	    st->line_ready = 1;
 	}
 	csp_println();
 	csp_flush();
-	need_prompt = 1;
+	st->need_prompt = 1;
     }
     else if (c == '\b' || c == 127) {
-	if (csp_line_pos == 0) {
+	if (st->line_pos == 0) {
 	    csp_print_char('\a');
 	} else {
-	    csp_line_pos--;
+	    st->line_pos--;
 	    csp_print_lit("\b \b");
 	}
 	csp_flush();
     }
     else if (c == 21) { // Ctrl-U: clear line
-	while (csp_line_pos > 0) {
-	    csp_line_pos--;
+	while (st->line_pos > 0) {
+	    st->line_pos--;
 	    csp_print_lit("\b \b");
 	}
 	csp_flush();
     }
-    else if (c >= 32 && c < 127 && csp_line_pos < CSP_LINE_BUF_SIZE - 1) {
-	csp_line_buf[csp_line_pos++] = c;
-	csp_print_char(c);
+    else if (c >= 32 && c < 127) {
+	if (st->line_pos < st->line_size - 1) {
+	    st->line_buf[st->line_pos++] = c;
+	    csp_print_char(c);
+	}
+	else {
+	    st->line_ovf = 1;
+	    csp_print_char('\a');   // audible while typing, not just at the end
+	}
 	csp_flush();
     }
 }

@@ -654,14 +654,28 @@ Rules are attached to a state with an `#in <state> ... #end` block:
 #end
 ```
 
-A transition is just an assignment to the reserved field `State`. Entering INIT
-code, doing initial setup, and moving on is the common shape:
+A transition is just an assignment to the reserved field `State`.
+
+**INIT runs exactly once.** At the end of a cycle spent in INIT, `State` steps to
+NORMAL by itself, so an `#in INIT` block is setup and not a loop:
 
 ```
 #in INIT
-    Count = 0, State = NORMAL
+    Count = 0              // runs on the first cycle, and only then
 #end
 ```
+
+An explicit assignment wins — the automatic step is the default for an INIT that
+says nothing about where to go next:
+
+```
+#in INIT
+    Count = 0, State = Red   // lands in Red, not NORMAL
+#end
+```
+
+Assigning `State = INIT` runs the block again, once. Every object gets its own
+`State`, so `obj.State = INIT` re-initialises that instance on its own.
 
 **Mental model.** To reason about behaviour, read `#in S` as adding
 `&& State == S` to every rule in the block. The two forms below behave the
@@ -1120,7 +1134,7 @@ Start interactive mode with `-i`:
 | Command | Description |
 |---------|-------------|
 | `/help` | Show commands |
-| `/list` | List declarations and rules, tagged `[ROM]`/`[RAM]` |
+| `/list` | List declarations and rules, each tagged `F`/`E`/`R` |
 | `/state` | Show current values, grouped per object |
 | `/memory` | Show RAM usage per category (how much space is left) |
 | `/reset` | Reset to initial values |
@@ -1142,6 +1156,69 @@ cycle 214   latch on   running
 ```
 
 The last field is the run mode — `running`, `paused` or `live`.
+
+Each row is `NAME  DIR  KIND  WHERE  = VALUE`, and what `WHERE` holds depends on
+the kind — a timer has no pin, a buffer has no pin either:
+
+```
+Led          out     digital  0:13    = 1
+Beat         running timer    500/174
+Tx           out     buffer   0x201/8 = 07 00 00 00 00 00 00 00  TX
+Rx           in      buffer   0x200/8 = 0C 00 00 00 00 00 00 00  RX
+TxSeq        out     field    [0..15] = 7
+```
+
+- a **pin** shows `port:pin`
+- a **timer** shows `period/remaining`, and `FIRED` on the cycle it fires
+- a **buffer** shows `id/dlc` for a CAN frame (nothing for a plain RAM buffer)
+  and its value is the frame itself, byte by byte. `RX` means a frame landed
+  this cycle, `TX` that one goes out at the end of it.
+- a **field** shows the bit window it is a view into
+
+### How long a line may be
+
+The line buffer is carved from the same pool as the program, sized to a 32nd of
+it (never below 64 characters, never above 512). So the limit is a property of
+the board, not of the build: a mega takes 95 characters, a board with room takes
+511. `/memory` has a `line` row showing the current size.
+
+A line past the limit is **refused**, not truncated:
+
+```
+Error: line too long, max 95 characters -- line ignored
+```
+
+Running a shortened line would be worse than refusing it — `#disable 12` cut to
+`#disable 1` is not a partial command, it is a different one.
+
+### Reading a listing
+
+Every `/list` line ends in a comment carrying the rule number and one letter
+saying **where that line lives**:
+
+```
+> /list
+#digital Led out 0:13  // F
+#timer Beat 500 = 1  // E
+#variable Seq integer = 0  // R
+Beat=1 ? timeout(Beat)  // 1 E
+Seq=Seq+1 ? timeout(Beat)  // 2 R
+```
+
+| Tag | Where it lives | What `/clear` costs you |
+|-----|----------------|-------------------------|
+| `F` | Firmware flash — the ROM image | nothing; it is not a patch |
+| `E` | RAM, and EEPROM holds a copy | nothing permanent — `/load` or the next boot brings it back |
+| `R` | RAM only | **the line is gone** |
+
+`E` and `R` are both RAM patches and look identical everywhere else; the letter
+is the only place the difference shows. It is the answer to "what do I lose if I
+type `/clear`" — and to "did my `/save` actually take", since a successful save
+turns every `R` into an `E`.
+
+The tag is a trailing **comment**, so a listing pastes straight back in as
+source: select it in one terminal, paste into another, and the tags are ignored
+along with everything else after `//`.
 
 ### Pause and Live
 
@@ -1180,17 +1257,18 @@ closed.
 `#disable` turns a single rule **off** by its number; `#enable` turns it back
 on. A disabled rule is skipped every cycle — nothing else changes.
 
-`/list` numbers the rules in its left column and marks a disabled one with `!`:
+`/list` numbers the rules in the trailing comment and marks a disabled one with
+`!`:
 
 ```
 > /list
-  1 R   Btn ? Led = 1
-  2 R   Temp > 30 ? Fan = 1
+Led=1 ? Btn  // 1 R
+Fan=1 ? Temp>30  // 2 R
 > #disable 2
 > /list
-  1 R   Btn ? Led = 1
-  2 R!  Temp > 30 ? Fan = 1     # off
-> #enable 2                     # back on
+Led=1 ? Btn  // 1 R
+Fan=1 ? Temp>30  // 2 R!      <- off
+> #enable 2                   <- back on
 ```
 
 You can name a list or a range, and sweep with a range:

@@ -52,6 +52,7 @@ int csp_print_rojust(rostring_t s, just_t j, int w);
 int csp_print_uintw(uvalue_t v, int nw);
 int csp_print_float(fvalue_t v);
 int csp_print_hex(uvalue_t v);
+int csp_print_hex2(uint8_t v);
 int csp_println(void);
 int csp_print_blank(void);
 void csp_flush(void);

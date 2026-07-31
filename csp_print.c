@@ -466,7 +466,15 @@ static void exprbuf_store_part(csp_rt_t* st,
     exprbuf_char(bp, '.');
     exprbuf_rostr(bp, part_name((csp_part_t)ip->m.y));
     exprbuf_char(bp, '=');
-    exprbuf_strref(bp, bp->reg[ip->m.x]);
+    // A direction is written `out` in the source, so list it that way instead of
+    // the 2 it compiles to -- otherwise the line reads like a magic number and
+    // says nothing about which way the pin turned. Only for a LITERAL right-hand
+    // side (prio 110 is what OP_LI/OP_LIU leave behind); an expression that
+    // computes a direction has no name to print and stays as written.
+    if (((csp_part_t)ip->m.y == PART_DIR) && (bp->prio[ip->m.x] == 110))
+	exprbuf_rostr(bp, csp_fmt_pindir((uint8_t)bp->regi[ip->m.x]));
+    else
+	exprbuf_strref(bp, bp->reg[ip->m.x]);
 
     bp->reg[ip->m.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
     bp->prio[ip->m.x] = 5;
@@ -827,19 +835,34 @@ int csp_print_int(ivalue_t v)
     return csp_print_uint((uvalue_t)v);
 }
 
+static rochar hex_digits[] RODATA = "0123456789abcdef";
+
+static char hex_digit(uint8_t v)
+{
+    return (char)ro_byte((rochar*)hex_digits + (v & 0xf));
+}
+
 int csp_print_hex(uvalue_t v)
 {
-    static rochar digits[] RODATA = "0123456789abcdef";
     char b[8];
     int n = 0, i;
     csp_print_lit("0x");
     do {
-	b[n++] = (char)ro_byte((rochar*)digits + (v & 0xf));
+	b[n++] = hex_digit((uint8_t)v);
 	v >>= 4;
     } while (v);
     for (i = n; i > 0; i--)
 	csp_print_char(b[i-1]);
     return n + 2;
+}
+
+// One byte as exactly two digits, no 0x. For dumping raw bytes (a #buffer's
+// frame) where the columns have to line up and a leading 0 must not vanish.
+int csp_print_hex2(uint8_t v)
+{
+    csp_print_char(hex_digit(v >> 4));
+    csp_print_char(hex_digit(v));
+    return 2;
 }
 
 // Print s padded to `w` columns. Returns the number of characters written.

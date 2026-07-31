@@ -64,9 +64,16 @@ csp_rt.o csp_strings.o: csp_strings.h
 clean:
 	rm -f $(OBJS) strtab csp_strings.c csp_strings.h
 
-test:	csp
+test:	csp test_repl
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
+
+# REPL/persistence level: /list segment tags, what a /clear keeps, and whether a
+# generated ROM image loads back into the firmware that links it. None of that is
+# reachable from the unit suite, which only reads variables out of a state dump.
+# Fast, so it runs as part of `make test` -- unlike test_crc_destroyer.
+test_repl: csp
+	@bash tests/repl.sh
 
 test-examples: csp
 	@chmod +x tests/run_tests.escript
@@ -88,7 +95,7 @@ test_crc_destroyer:
 
 -include .*.d
 
-.PHONY: all clean test test-examples test_crc_destroyer debug ubsan san
+.PHONY: all clean test test-examples test_repl test_crc_destroyer debug ubsan san
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

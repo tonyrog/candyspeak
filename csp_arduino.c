@@ -1145,14 +1145,20 @@ void loop()
     // through to csp_cycle and read NULL view/heap, faulting the board into an
     // unresponsive state right after "setup failed". Now the user can /memory,
     // /clear, or edit their way out instead.
-    while (Serial.available())
-	csp_line_input(Serial.read());
-    if (csp_line_ready) {
+    // STOP at a completed line. line_pos is not reset until the line below
+    // has been processed, so every byte read past the newline is appended to the
+    // line already marked ready -- it overwrites the command we are about to
+    // run. Typing never showed it (one line per pass); a PASTE is several lines
+    // in one burst, which is exactly when it bites. XOFF cannot help here: the
+    // damage happens after the bytes have arrived, not on the wire.
+    while (Serial.available() && !state.line_ready)
+	csp_line_input(&state, Serial.read());
+    if (state.line_ready) {
 	Serial.write(0x13);   // XOFF -- pace pasted input (see below)
-	csp_process_line(&state, csp_line_buf);
+	csp_process_line(&state, state.line_buf);
 	Serial.write(0x11);   // XON
-	csp_line_ready = 0;
-	csp_line_pos = 0;
+	state.line_ready = 0;
+	state.line_pos = 0;
     }
     // No leaves/tables: skip all execution but keep looping (serial handled above).
     if (!state.started)
@@ -1192,12 +1198,14 @@ void loop()
 	uint32_t remaining = (state.wait_ms != NOTIMEOUT) ? state.wait_ms : SAMPLE_MS;
 	if (remaining > SAMPLE_MS)
 	    remaining = SAMPLE_MS;   // cap: sample rate wins over timer wait
-	while ((remaining > 0) && !csp_line_ready) {
+	while ((remaining > 0) && !state.line_ready) {
 	    uint32_t chunk = min(remaining, (uint32_t)10);
 	    delay(chunk);
 	    remaining -= chunk;
-	    while (Serial.available())   // drain fully, not one byte per chunk
-		csp_line_input(Serial.read());
+	    // Same rule as the drain at the top of loop(): read ahead freely, but
+	    // never past the newline that completed a line.
+	    while (Serial.available() && !state.line_ready)
+		csp_line_input(&state, Serial.read());
 	}
     }
 }

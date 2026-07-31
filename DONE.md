@@ -160,6 +160,155 @@ Avklarade punkter, flyttade hit från TODO.md. Nyast överst.
 
 ## 1.0 (efter release)
 
+### E-taggen: vad du faktiskt tappar pa /clear (2026-07-31)
+
+  - `/list` sa forut bara R eller F. Men R tackte tva helt olika saker: en rad
+    som eeprom har en kopia av (borta ur RAM vid /clear, tillbaka vid nasta boot)
+    och en som ingen annan halller i (borta for gott). Bada bor i samma
+    RAM-patch och ser likadana ut overallt annars.
+  - Tre taggar nu: **F** = flash/ROM, **E** = RAM med eeprom-kopia, **R** =
+    bara RAM. Ett lyckat /save gor varje R till ett E, vilket ocksa svarar pa
+    "tog min /save?".
+  - Vattenmarke, inte jamforelse: `st->ee_nd`/`ee_nn` raknar hur mycket av
+    RAM-patchen eeprom hall vid senaste save/load. Satts EFTER sista skrivningen
+    (en halvfardig save far inte pasta tackning), nollas av /clear och
+    csp_eeprom_clear, och `csp_rt_init` memsettar den. Ett `#disable` efter en
+    save behaller taggen -- DEKLARATIONEN ar fortfarande den eeprom har.
+  - `/clear` sager nu ocksa att eeprom-kopian ligger kvar. "Cleared" ensamt laser
+    som att programmet ar borta.
+
+### INIT kors EN gang (2026-07-31)
+
+  - Ingenting flyttade State ur INIT, sa ett `#in INIT`-block korde varje cykel.
+    Ett init-block som ar en loop ar inte ett init-block.
+  - `state_advance`: efter reglerna, fore commit, stegar State till NORMAL om den
+    star i INIT OCH ingen regel skrev den under cykeln. Dirty-setet ar det som
+    skiljer de tva fallen -- det markerar redan varje skriven leaf, och skrivning
+    ligger kvar i DOUT-skuggan sa det committade vardet inte kan se den.
+  - En explicit tilldelning VINNER: `#in INIT State = red` hamnar i red. Det
+    automatiska steget ar defaulten for ett INIT som inte sager vart det ska.
+  - Galler varje State, inte bara den globala: ett objekt gar in i INIT sjalv
+    (`safe.State = INIT ? Panic`), sa dess block maste vara one-shot av samma
+    skal. Modulens State ar forsta deklarationen i den (csp_parse_module).
+  - Skrivs via `csp_set_value`, inte direkt i sloten, sa reaktiva grafen och
+    dirty-setet foljer med och en regel som lyssnar pa State vaknar.
+  - Manualen BESKREV redan detta ("then the object transitions to NORMAL") --
+    koden gjorde det bara inte. tests/unit/state.expect kodade gamla beteendet
+    (State kvar pa 0); den var testet, inte semantiken, som hade fel.
+  - Nya tester: init_once (N raknar INIT-korningar, blir 1) och init_state
+    (explicit tilldelning vinner).
+
+### /list: modulens regler ligger i modulens block (2026-07-31)
+
+  - Medlemmarna lag inne i `#module ... #end` men REGLERNA kom efter blocket med
+    "Mod: "-prefix. Det ar inte kallkod, sa den enda listning man faktiskt vill
+    klistra tillbaka var den som inte gick att klistra tillbaka.
+  - Regelvandringen ar utbruten till `list_rules(st, ctx, from, to, indent,
+    skip_modules)` sa den kan koras over ett INTERVALL. Modulens kropp ar
+    instruktionerna mellan dess OP_ENTER och OP_LEAVE (`e.num` sager hur manga),
+    och den listas nu precis fore modulens `#end`.
+  - Numreringen ar fortfarande ABSOLUT: toppnivavandringen gar igenom
+    modulkroppen enbart for att RAKNA dess regler, sa `#disable N` betyder samma
+    regel som forut.
+  - Indentering tva blanksteg per niva, och en till inuti ett `#in`-block, sa en
+    listning nastlar som kallkoden.
+  - `P1.dir=2` blev `P1.dir=out`. Bara for en LITERAL hogersida (prio 110 =
+    OP_LI/OP_LIU); ett uttryck som raknar fram en riktning har inget namn att
+    skriva ut och star kvar som det ar.
+
+### Radbufferten carvas ur arenan (2026-07-31)
+
+  - `csp_line_buf` / `csp_line_pos` / `csp_line_ready` / `need_prompt` var
+    globaler; nu falt i `csp_rt_t` och `csp_line_init/input/prompt` tar `st`.
+  - Bufferten tas av TOPPEN av poolen i `csp_mem_init` och `mem_limit` sanks.
+    INTE `csp_mid_alloc`: en rebuild nollstaller den allokatorn, och en rebuild
+    sker INUTI `csp_process_line` -- som lases ur just den har bufferten. Den
+    hade delats ut till nagot annat mitt i ett kommando.
+  - Av samma skal nollar `memset` nu bara `mem_limit` bytes, inte hela blocket:
+    `/load` kor `csp_rt_init` inifran `csp_process_line`, och att sudda
+    bufferten dar drog kommandot undan fotterna pa dess egen hanterare.
+  - Storleken ar en 32-del av poolen, klamd till 64..512. Det gor
+    `CSP_LINE_BUF_SIZE` (64 pa AVR, 128 annars) overflodig: mega far 96 tecken
+    dar den forr hade 63, ett kort med utrymme far 511.
+  - `-m` klampar nu mot poolen, inte mot `mem_size` -- annars hade den kunnat
+    hojas tillbaka sa decl[] vaxte ned i radbufferten. `csp_arena_top`
+    (CSP_STACK_WATCH) pekar pa `mem_size`, for stacken far inte na bufferten
+    heller.
+  - Egen rad i `/memory`: det ar den enda allokeringen vars storlek ar en
+    ANVANDARSYNLIG grans -- den sager hur lang rad man kan klistra in.
+
+### "XON/XOFF funkar inte" var inte flodeskontroll (2026-07-31)
+
+  - Draneringen i `loop()` var `while (Serial.available()) csp_line_input(...)`
+    -- den laste FORBI radslutet. `csp_line_pos` nollstalls inte forran raden
+    ar behandlad, sa varje byte efter '\n' skrevs in i `csp_line_buf` OVANPA
+    den rad som just markerats klar. Att skriva for hand visade det aldrig (en
+    rad per varv); en PASTE ar flera rader i samma skur, och da forstors rad 1
+    av borjan pa rad 2.
+  - XOFF kan inte hjalpa mot det: skadan sker EFTER att bytesen kommit fram,
+    inte pa tradet. Darfor "hjalpte" XON/XOFF ibland -- det gjorde bara att
+    nasta rad hann komma i en senare drarening.
+  - Fix: `while (Serial.available() && !csp_line_ready)`, pa bada stallena.
+    Hosten hade redan ratt villkor (`while (!csp_line_ready && read(...))`),
+    vilket ar precis darfor sviten aldrig sett det.
+  - USB CDC behover foresten ingen XON/XOFF: `tu_edpt_stream_read_xfer` armar
+    bara en ny OUT-transfer nar FIFO:n har minst ett helt paket ledigt (mps),
+    annars slapper den endpointen och varden NAK:as. Backtrycket ar redan
+    hardvara. `CFG_TUD_CDC_RX_BUFSIZE` ar 256 pa rp2040-coren.
+  - For lang rad: tecknen tappades TYST och raden kordes anda. En avhuggen rad
+    ar inte ett ofullstandigt kommando utan ETT ANNAT -- `#disable 12` klippt
+    till `#disable 1` slar av fel regel. Nu: bell medan man skriver, och vid
+    radslut ett "line too long, max N -- line ignored" och raden slangs.
+
+### Buffertar lastes som analoga i /state (2026-07-31)
+
+  - `state_row` hade en gren for "digital / analog" som ocksa fangade
+    DECL_BUFFER och DECL_FIELD. Den las `v->a.port`/`v->a.pin` ur en union-arm
+    som i sjalva verket haller heap-offset och transport, sa en CAN-buffert kom
+    ut som `analog 13:68` -- ett pin-par hopsatt av ramens forsta bytes. Och
+    `= 5828` var forsta ordet av ramen presenterat som ett tal, darfor visade
+    Tx och TxSeq samma vardelost varde.
+  - Egen gren nu, med det en buffert FAKTISKT har: riktning fran bufferten
+    (ett falt ar ett fonster in i den och kan inte ga at andra hallet),
+    `id/dlc` dar en timer visar `period/remaining`, och ramen byte for byte som
+    varde. `RX`/`TX` i slutet dar timern har `FIRED`. Ett falt visar sitt
+    bit-fonster `[0..15]`.
+  - En vanlig RAM-buffert (ingen transport) far tom id-kolumn i stallet for ett
+    pahittat varde.
+  - `csp_print_hex2` for raa bytes (tva siffror, ingen 0x -- kolumnerna maste
+    linjera och en inledande nolla far inte falla bort).
+  - Sidofynd, INTE fixat: `#field Bf:8 unsigned B[0..7]` mot en buffert utan
+    transport ger "word  not a module". Antingen ska det fungera eller ge ett
+    begripligt fel.
+
+### Genererade ROM-bilder underkande sig sjalva (2026-07-31)
+
+  - Hittades av det nya repl-testet: en firmware som lankar in en bild med
+    REGLER skrev "ROM rejected: CRC mismatch in instr section" vid boot och kom
+    upp tom. Aldrig sett pa hardvara for bada rom.c i tradet ar tomma bilder --
+    Tonys noder kor helt fran eeprom.
+  - Sektions-CRC:n falls over de RAA instruktionsorden, men emittern skrev
+    designated initializers som utelamnade falt: `.y` pa ST/LD/STIMP/CHG, `.z`
+    pa arity-1-ALU, och `.implicit` pa BADE OP_RULE och OP_INSTATE/NINSTATE.
+    Allt som inte namns nollstalls av C:n, alltsa andra bytes an de som CRC:ades.
+  - `.implicit` var mer an en CRC-miss: den markerar den automatiska
+    NORMAL+-wrappen runt en bar toppregel. Tappad hade en listning fran ROM
+    vuxit ett `#in NORMAL ... #end` runt regler som skrevs bara.
+  - Fixen ar att alltid emittera hela armen, sa bilden blir byte-for-byte
+    `st->ram_instr` -- vilket ar precis vad CRC-kommentaren redan pastod.
+
+### tests/repl.sh -- REPL-nivan har nu en svit (2026-07-31)
+
+  - Unit-sviten laser VARDEN ur en state-dump; den nar aldrig en /list-rad, en
+    eeprom-rundtur eller en inlankad ROM-bild. Det gjorde att allt sant testades
+    ad hoc, en snutt i taget, utan minne mellan gangerna.
+  - 9 fall: taggarna i alla tre lagen, /clear-beskedet, att kopian verkligen
+    ligger kvar, och ROM-rundturen (genererar en bild, lankar en host-binar med
+    den, och kraver att den bootar utan att underkanna sig sjalv). Det sista
+    fallet ar det som hittade CRC-buggen ovan.
+  - `make test_repl`, och ingar i `make test` -- snabb, till skillnad fran
+    test_crc_destroyer. Gron under `make san`.
+
 ### NeoPixel blev en feature, inte ett kort (2026-07-30)
 
   - `CSP_NEO` sager "det har kortet har en NeoPixel-strip" och ingenting om

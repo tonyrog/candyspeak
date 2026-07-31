@@ -1043,10 +1043,13 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	case OP_STIMP:
 	case OP_CHG:
 	case OP_LD:
-	    fprintf(f, "  {.m={%s,.x=%u,.mem=%u}},\n", op, ip->m.x, ip->m.mem);
-	    break;
 	case OP_STP:
 	case OP_LDP:
+	    // .y goes out for the plain forms too. It carries a part index only for
+	    // STP/LDP, but the section CRC is folded over the RAW instruction words,
+	    // so a field the emitter drops has to be zero in RAM or the image fails
+	    // its own check at boot. Emitting the whole arm is what makes the image
+	    // byte-for-byte st->ram_instr, which is what the CRC assumes.
 	    fprintf(f, "  {.m={%s,.x=%u,.mem=%u,.y=%u}},\n",
 		    op, ip->m.x, ip->m.mem, ip->m.y);
 	    break;
@@ -1062,22 +1065,23 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	case OP_NEXT:
 	    fprintf(f, "  {.x={%s,.x=%u}},\n", op, ip->x.x);
 	    break;
-	case OP_NINSTATE:	    
+	case OP_NINSTATE:
 	case OP_INSTATE:
-	    fprintf(f, "  {.in={%s,.x=%u,.imm=%d,.nxt=%d}},\n",
-		    op, ip->in.x, ip->in.imm, ip->in.nxt);
+	    // .implicit marks the auto NORMAL+ wrap around a bare top-level rule.
+	    // Dropped here it did more than break the CRC: a listing off a ROM would
+	    // have grown an `#in NORMAL ... #end` around rules the user wrote bare.
+	    fprintf(f, "  {.in={%s,.x=%u,.imm=%d,.nxt=%d,.implicit=%u}},\n",
+		    op, ip->in.x, ip->in.imm, ip->in.nxt, ip->in.implicit);
 	    break;
 	case OP_RULE:
-	    fprintf(f, "  {.r={%s,.cnd=%u,.nxt=%d}},\n", op, ip->r.cnd, ip->r.nxt);
+	    fprintf(f, "  {.r={%s,.cnd=%u,.nxt=%d,.implicit=%u}},\n",
+		    op, ip->r.cnd, ip->r.nxt, ip->r.implicit);
 	    break;
 	default: // two/three-address-instruction
-	    if (op_info[ip->op].arity == 1)
-		fprintf(f, "  {.a={%s,.x=%u,.y=%u}},\n", op, ip->a.x, ip->a.y);
-	    else if (op_info[ip->op].arity == 2)
-		fprintf(f, "  {.a={%s,.x=%u,.y=%u,.z=%u}},\n",
-			op, ip->a.x, ip->a.y, ip->a.z);
-	    else
-		fprintf(f, "  {%s},\n", op);  // no operands (NOP etc)
+	    // All three registers regardless of arity: the unused ones are zero in
+	    // RAM, and naming them keeps the emitted word equal to the folded one.
+	    fprintf(f, "  {.a={%s,.x=%u,.y=%u,.z=%u}},\n",
+		    op, ip->a.x, ip->a.y, ip->a.z);
 	    break;
 	}
     }

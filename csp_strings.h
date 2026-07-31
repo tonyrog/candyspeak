@@ -225,7 +225,7 @@ extern rochar s_cmd_exit[5] RODATA;
 #define ros_cmd_exit ((rostring_t) s_cmd_exit)
 extern rochar s_h_help[15] RODATA;
 #define ros_h_help ((rostring_t) s_h_help)
-extern rochar s_h_list[11] RODATA;
+extern rochar s_h_list[48] RODATA;
 #define ros_h_list ((rostring_t) s_h_list)
 extern rochar s_h_state[20] RODATA;
 #define ros_h_state ((rostring_t) s_h_state)
@@ -497,5 +497,7 @@ extern rochar s_round[6] RODATA;
 #define ros_round ((rostring_t) s_round)
 extern rochar s_io[3] RODATA;
 #define ros_io ((rostring_t) s_io)
+extern rochar s_line[5] RODATA;
+#define ros_line ((rostring_t) s_line)
 
 #endif
