@@ -13,8 +13,11 @@
 // AVR has real EEPROM. ESP and RP2040 emulate one in flash through a library
 // with the same shape -- begin/read/write/commit, and no update(). See the shim
 // at csp_eeprom_open_read.
-#if defined(__AVR__) || defined(ESP32) || defined(ESP8266) || \
-    defined(ARDUINO_ARCH_RP2040)
+// CSP_NO_EEPROM drops the patch layer entirely: a node that only ever runs its
+// flashed ROM has nothing to save, and on a 1 kB-EEPROM part the layer costs
+// more flash than the patching is worth.
+#if (defined(__AVR__) || defined(ESP32) || defined(ESP8266) || \
+     defined(ARDUINO_ARCH_RP2040)) && !defined(CSP_NO_EEPROM)
 #define CSP_HAS_EEPROM 1
 #include <EEPROM.h>
 #elif defined(ARDUINO_ARCH_SAMD)
@@ -1219,6 +1222,7 @@ void loop()
     // still coming in has somewhere to go besides the driver's FIFO. That FIFO
     // is 64 bytes on a mega and drops silently when it fills, so every byte of
     // slack ahead of it counts.
+#if !defined(CSP_EXEC_ONLY)
     // The prompt for the NEXT line. csp_line_input prints one when a line starts
     // arriving, which covers a paste, but an idle board has nothing coming --
     // so without this the prompt only appeared once you began typing, and the
@@ -1237,6 +1241,7 @@ void loop()
 	csp_line_done(&state);  // drop it, bring the queue down to the front
 	serial_release(&state); // the queue just shrank -- let the peer talk
     }
+#endif
     // No leaves/tables: skip all execution but keep looping (serial handled above).
     if (!state.started)
 	return;
@@ -1277,14 +1282,16 @@ void loop()
 	uint32_t remaining = (state.wait_ms != NOTIMEOUT) ? state.wait_ms : SAMPLE_MS;
 	if (remaining > SAMPLE_MS)
 	    remaining = SAMPLE_MS;   // cap: sample rate wins over timer wait
-	while ((remaining > 0) && !state.line_ready) {
+	while ((remaining > 0) && !state.line_ready) {   /* line_ready: always 0 exec-only */
 	    uint32_t chunk = min(remaining, (uint32_t)10);
 	    delay(chunk);
 	    remaining -= chunk;
+#if !defined(CSP_EXEC_ONLY)
 	    // Same rule as the drain at the top of loop(): take everything the
 	    // port has for as long as there is room to put it.
 	    while (Serial.available() && csp_line_space(&state))
 		csp_line_input(&state, Serial.read());
+#endif
 	}
     }
 }

@@ -177,6 +177,75 @@ Avklarade punkter, flyttade hit från TODO.md. Nyast överst.
   - `/clear` sager nu ocksa att eeprom-kopian ligger kvar. "Cleared" ensamt laser
     som att programmet ar borta.
 
+### csp_compile.c + csp_cstate_t (2026-07-31)
+
+  - Andra snittet: tokenizer, uttryckskompilator, deklarationsparsers OCH
+    instruktionsemittern (`asm_*`) ut i `csp_compile.c`. 3 349 rader.
+    csp_rt.c ar nu 4 798 (fran 9 806 fore uppdelningarna).
+  - Gransen ar ENKELRIKTAD, och det ar poangen: 17 symboler gar rt -> compile,
+    0 at andra hallet. Matte det fore flytten genom att lista statics pa bada
+    sidor och rakna anrop. `add_state` var enda undantaget och flyttades
+    tillbaka -- csp_rt_init skapar INIT/NORMAL innan nagot program finns, sa en
+    exec-only-build behover den.
+  - Att ta med `asm_*` var det som gav enkelriktningen: med bara scan/parse
+    korsade 26 symboler inat. Emittern ar kompilatorns baksida, inte runtime.
+  - `csp_compile.h` ar sommen: 17 externs + ctype-makrona + funktionstabellens
+    accessorer. Inget annat.
+  - `csp_cstate_t st->cs`: alla tokenize/parse-falt ur csp_rt_t i egen struct
+    (ap, ev, sdef/sdefv/n_sdef, rule_implicit, in_marker, save_sx, sx, mdef,
+    mod_mark, ent, var/var_buf/nvar, rimp). ~120 stallen, nastan alla i
+    csp_rt.c. Den ligger KVAR inuti csp_rt_t: parsern emitterar in i samma
+    arena som runtimen exekverar ur, sa en pekare till bara den racker inte
+    for att parsa. Vad den ger ar en grans man kan SE.
+  - Och den gjorde genast nytta: sju runtime-/rebuild-vagar las `st->sx`, som
+    ar en PARSE-markor -- den pekar pa modulens egen State mellan #module och
+    #end. De pekar nu pa `st->gsx`. Samma koppling som orsakade NOP-buggen.
+  - `csp_compile_init()` ager monstertabellerna nu; `csp_rt_init` anropar den
+    bakom `#if !defined(CSP_EXEC_ONLY)`. Det ar den enda ankaren kvar.
+  - Storlekar: mega 102 530 / 38 542 exec-only, mkrzero 76 236, feather 125 500.
+
+### csp_repl.c brutet ur csp_rt.c (2026-07-31)
+
+  - Forsta snittet i REPL-uppdelningen. Valdes for att det var det MATBART
+    renaste: kommandolagret refererade exakt EN static ur runtimen
+    (`model_state`) -- allt annat det behover var redan publikt i csp.h.
+    Uppmatt genom att lista alla 132 statics fore blocket och rakna traffar i
+    blocket; tre av de fem traffarna var kommentarer.
+  - csp_rt.c 9806 -> 8114 rader, csp_repl.c 1723. Filen ar guardad SOM HELHET
+    med `#if !defined(CSP_EXEC_ONLY)`: Arduino kompilerar varje .c i
+    sketch-katalogen, sa en tom translation unit ar hur man valjer bort dar.
+  - Tva saker lag pa fel sida och flyttades tillbaka -- de lag efter
+    "Interactive command handling"-bannern i den gamla filen, inget mer:
+    `csp_input_timer`/`csp_output_timer` (timers ar runtime) och hela
+    radeditorn (`csp_line_*`). Bufferten carvas ur arenan i csp_mem_init och
+    initieras av csp_rt_init, sa en exec-only-build HAR en radbuffert -- och en
+    binar/IAP-front skulle lasa in i samma.
+  - `state_is_state_var` flyttades ocksa tillbaka: den sticky FAILSAFE-grinden i
+    csp_eval fragar, listningen rakar ocksa gora det.
+  - Storlekar oforandrade: mega 102 546 / 38 542 exec-only, mkrzero 75 980,
+    feather 125 100. Snittet ar strukturellt, inte en optimering.
+
+### CSP_EXEC_ONLY: 102 532 -> 38 542 byte (2026-07-31)
+
+  - Tonys ide: dela koden sa exekveringen kan byggas utan scanner/parser/REPL.
+    Men det behovdes ingen filuppdelning: Arduino-bygget kor redan
+    `-ffunction-sections -Wl,--gc-sections`, sa parsern ligger i imagen enbart
+    for att den ar NABAR. Kapa kanten sa faller kedjan bort av sig sjalv.
+  - Tva ankare, tva `#if`:
+    1. `scan_pattern(PAT_*)` i `csp_rt_init` -- monstertabellerna ar det som gor
+       pmatch och varje `csp_parse_*` nabar.
+    2. REPL-blocket i `loop()` -- `csp_process_line` -> `csp_parse`.
+  - Mega: 102 532 -> 38 542 byte (-62 %), statiskt RAM 1276 -> 780.
+    Uppmatt fordelning fore: REPL/listning 23 108, parser/kodgen 27 230,
+    resten 52 552 av 102 890 byte text.
+  - En ROM-only-nod behover ingen parser ALLS: ROM-bilden kompileras pa hosten
+    och en EEPROM-patch lagras redan kompilerad. Det ar det som gor snittet rent.
+  - `CSP_NO_EEPROM` ocksa: -2 344 byte. En nod som bara kor sin flashade ROM har
+    inget att spara, och pa en 1 kB-del kostar lagret mer an patchandet ar vart.
+  - Arduino Micro (28 672 byte anvandbart) ar INTE i mal: 36 892 med bada
+    flaggorna, 8,2 kB over. Storsta kvarvarande posten ar `main` (8 152, dvs
+    setup+loop inlinat: boot-utskrifter, csp_setup, rapportering).
+
 ### Host-loopen sov over sitt eget arbete (2026-07-31)
 
   - `examples/string.csp`: ett `#in NORMAL`-block med en println skrev ingenting

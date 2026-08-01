@@ -10,7 +10,7 @@ CSP_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo 
 # (-M/-U/--board), instead of a fixed static array -- so the host can model a
 # board with more RAM than the compile-time CSP_CODE_BUDGET.
 CFLAGS=-MMD -MP -MF .$<.d -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC
-OBJS = csp_linux.o csp_rt.o csp_dump.o csp_eeprom.o \
+OBJS = csp_linux.o csp_rt.o csp_repl.o csp_compile.o csp_dump.o csp_eeprom.o \
 	csp_parse.o csp_print.o csp_strings.o rom.o
 
 LIBS =
@@ -59,7 +59,7 @@ csp_strings.c csp_strings.h: strings.tab strtab
 	./strtab strings.tab csp_strings.c csp_strings.h
 
 # sources that use the shared RODATA strings need the generated header first
-csp_rt.o csp_strings.o: csp_strings.h
+csp_rt.o csp_repl.o csp_compile.o csp_strings.o: csp_strings.h
 
 clean:
 	rm -f $(OBJS) strtab csp_strings.c csp_strings.h

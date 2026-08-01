@@ -47,8 +47,8 @@ build_rom() {
     local src="$1" out="$2"
     ./csp -n -C -O "$D/rom_gen.c" "$src" >/dev/null 2>&1 || return 1
     gcc -g -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -I. -o "$out" \
-	csp_linux.c csp_rt.c csp_dump.c csp_eeprom.c csp_parse.c csp_print.c \
-	csp_strings.c "$D/rom_gen.c" >/dev/null 2>&1
+	csp_linux.c csp_rt.c csp_repl.c csp_compile.c csp_dump.c csp_eeprom.c \
+	csp_parse.c csp_print.c csp_strings.c "$D/rom_gen.c" >/dev/null 2>&1
 }
 
 cat > "$D/prog.csp" <<'EOF'

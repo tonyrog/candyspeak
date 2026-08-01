@@ -1174,6 +1174,34 @@ typedef struct
     int pin_top;
 } reg_allocator_t;
 
+// Tokenizer + parser state. See csp_rt_t.cs for why it lives inside the runtime
+// struct rather than beside it.
+typedef struct {
+    reg_allocator_t* ap;         // register allocator
+    int ev;                      // eval variables when ev=1
+    int sdef;                    // current state (compile time); sdefv[0], -1=none
+    uint8_t sdefv[MAX_IN_STATES];// states of the current #in block (OR-list)
+    uint8_t n_sdef;              // number of states in sdefv (1 = plain #in <s>)
+    uint8_t rule_implicit;       // next OP_RULE is a bare NORMAL+ rule (list bare)
+    index_t in_marker;           // instr index of the pending OP_INSTATE block
+                                 // gate (the terminating INSTATE of the OR-chain;
+                                 // patched with the skip distance at #end)
+    index_t save_sx;             // save sx during module parse
+    index_t sx;                  // state variable being parsed against; inside a
+                                 // module it is that module's own State
+    index_t mdef;                // module being defined
+    csp_pmark_t mod_mark;        // parse mark taken at #module: a failure before
+                                 // #end rewinds the whole module, so the lines
+                                 // after it are not silently absorbed into a
+                                 // module that can never be closed
+    int     ent;                 // entry op of module in st->instr
+    // temp var list during <- parsing (own scratch, set by csp_rt_init)
+    index_t  var_buf[MAX_VARREFS];
+    index_t* var;
+    index_t  nvar;
+    int      rimp;               // 1 if parse_expr is in RHS in <-
+} csp_cstate_t;
+
 typedef enum { DIN = 0, DOUT = 1 } dio_t;
 
 // name is a LOGICAL string position, so it needs NAMEPOS_BITS just like a
@@ -1463,30 +1491,33 @@ typedef struct _csp_rt_t
     index_t ee_nd;
     index_t ee_nn;
 
-    csp_pstate_t ps;             // parse state
-    reg_allocator_t* ap;
-    int ev;                      // eval variables when ev=1
-    int sdef;                    // current state (compile time); sdefv[0], -1=none
-    uint8_t sdefv[MAX_IN_STATES];// states of the current #in block (OR-list)
-    uint8_t n_sdef;              // number of states in sdefv (1 = plain #in <s>)
-    uint8_t rule_implicit;       // next OP_RULE is a bare NORMAL+ rule (list bare)
-    index_t in_marker;           // instr index of the pending OP_INSTATE block
-				 // gate (the terminating INSTATE of the OR-chain;
-				 // patched with the skip distance at #end)
+    csp_pstate_t ps;             // parse state (counts, error, line)
+
+    // Everything the TOKENIZER and PARSER need and nothing else does. Grouped so
+    // the compiler half has a named surface instead of a dozen loose fields
+    // sharing a struct with the runtime -- and so it is obvious when a runtime
+    // path reaches into parse state, which is a bug waiting to happen (see gsx:
+    // `sx` moves while a module is being typed, so anything running on a CYCLE
+    // must not read it).
+    //
+    // It stays INSIDE csp_rt_t rather than being passed on its own: the parser
+    // emits into the same arena the runtime executes from -- decls, strings and
+    // instructions are all reached through st -- so a pointer to just this would
+    // not be enough to parse with. What it buys is a boundary you can see.
+    csp_cstate_t cs;
+
     int list_state;              // during listing: state of the #in block being
-				 // rendered (-1 = none), suppresses State==S in cond
+                                 // rendered (-1 = none), suppresses State==S in cond
     int list_implicit;           // during listing: this rule is a bare NORMAL+
-				 // rule -- suppress its State==INIT||State==NORMAL
+                                 // rule -- suppress its State==INIT||State==NORMAL
     uint8_t list_states[MAX_IN_STATES]; // during /list: states of the #in block
     uint8_t list_nstate;         // being rendered -- suppress State==<any of them>
-    index_t save_sx;             // save sx during module parse
-    index_t sx;                  // runtime state, state variable
-    // The GLOBAL State, fixed once the runtime has one. `sx` is a parse-time
+    // The GLOBAL State, fixed once the runtime has one. cs.sx is a parse-time
     // cursor -- between #module and #end it points at the module's own State,
     // CURRENT-relative -- so anything that runs on a CYCLE, while a module may
     // be half typed at the prompt, has to use this instead. Deliberately not in
     // csp_pmark_t: a parse rollback must not move it.
-    index_t gsx;    
+    index_t gsx;
     state_t states[MAX_STATES];  // declared states
     index_t mdef;                // module being defined
     csp_pmark_t mod_mark;        // parse mark taken at #module: a failure before
@@ -1519,11 +1550,6 @@ typedef struct _csp_rt_t
     // max (object[] is also filled incrementally during parse). Kept struct-fixed.
     index_t module[MAX_MODULES];   // list of modules
     index_t object[MAX_OBJECTS];   // list of objects
-    // temp var list during <- parsing (own scratch, set by csp_rt_init)
-    index_t  var_buf[MAX_VARREFS];
-    index_t* var;
-    index_t nvar;
-    int     rimp;                // 1 if parse_expr is in RHS in <- 
     // during eval
     uint32_t update;             // update counter
     uint32_t wait_ms;            // sleep time or NOTIMEOUT
@@ -1983,6 +2009,17 @@ typedef struct {
 extern int csp_cmd_dispatch(csp_rt_t* st, char* cmd);
 extern void csp_cmd_help(void);
 extern int csp_process_line(csp_rt_t* st, char* line);
+// Bytes the csp_rt_t struct itself takes -- /memory reports it as `struct`.
+extern void csp_set_err_arg_int(csp_rt_t* st, int i, int ival);
+extern uint32_t model_state(void);
+// True when decl `di` is the implicit State variable -- the runtime's sticky
+// FAILSAFE gate asks, and so does the listing (which must not print it).
+extern int state_is_state_var(csp_rt_t* st, int di);
+extern int lookup_state(csp_rt_t* st, const tstr_t* name);
+// Shared by the tokenizer and the command splitter.
+#ifndef ISBLANK
+#define ISBLANK(c) (((c) == ' ') || ((c) == '\t'))
+#endif
 
 // Line input handling (shared between platforms). The buffer is sized from the
 // arena at boot, between these two bounds: never less than the old fixed AVR
