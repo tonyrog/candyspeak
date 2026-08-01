@@ -365,6 +365,83 @@ NOINLINE static bool_t asm_NOP(csp_rt_t* st)
 
 
 
+// Returns the RODATA name as-is. It used to hand back a tstr_t pointing at the
+// same flash bytes, which csp_set_err_arg_tstr then memcpy'd -- the wrong
+// address space on AVR. Flash names go through csp_set_err_arg_rostr instead.
+static rostring_t decl_type_name(decl_t type)
+{
+    switch(type) {
+    case DECL_VARIABLE: return ros_variable;
+    case DECL_CONSTANT: return ros_constant;
+    case DECL_MODULE:   return ros_module;
+    case DECL_END:      return ros_end;
+    case DECL_OBJECT:   return ros_object;
+    case DECL_TIMER:    return ros_timer;
+    case DECL_DIGITAL:  return ros_digital;
+    case DECL_ANALOG:   return ros_analog;
+    case DECL_FIELD:      return ros_field;
+    case DECL_BUFFER:   return ros_buffer;
+    default:            return ros_undefined;
+    }
+}
+
+// Symbol-table helpers that only the compiler uses. They lived in csp_rt.c
+// because that is where everything lived; nothing in the runtime calls them.
+NOINLINE index_t lookup_const(csp_rt_t* st, vtype_t vt, value_t v)
+{
+    index_t i;
+    for (i = 0; i < st->ps.nd; i++) {
+	if (IS_CONST(st, i) && (vt == decl(st,i,vt))) {
+	    if (decl(st,i,cn.init.u) == v.u)  // binary compare!
+		return MAKE_INDEX(0,i);
+	}
+    }
+    return BAD_INDEX;
+}
+NOINLINE index_t new_signed_const(csp_rt_t* st, ivalue_t v)
+{
+    index_t ix;
+    int i;
+    const tstr_t empty = { .ptr = NULL, .len = 0};
+    if ((ix = csp_new_decl(st,&empty,DECL_CONSTANT,0)) == BAD_INDEX)
+	return BAD_INDEX;
+    i = INDEX(ix);
+    ram_decl_at(st,i)->cn.init.i = v;
+    return ix;
+}
+// Lookup for DECLARING a name: only the scope the new decl lands in. A module
+// member may shadow a global -- otherwise adding a global later would break
+// every module that happens to use that name.
+NOINLINE index_t csp_lookup_decl_local(csp_rt_t* st, const tstr_t* name)
+{
+    int start = (st->cs.mdef != BAD_INDEX) ? INDEX(st->cs.mdef)+1 : 0;
+    return lookup_decl_in(st, name, start, st->ps.nd);
+}
+// new uniq declaration
+NOINLINE index_t csp_new_udecl(csp_rt_t* st, const tstr_t* name, decl_t type)
+{
+    index_t ix;
+    
+    if ((ix = csp_lookup_decl_local(st, name)) != BAD_INDEX) {
+	if (csp_set_error(st, ERR_ALREADY_DEFINED)) {
+	    rostring_t typ = ros_name;
+	    if (decl(st,ix,type) == type)
+		typ = decl_type_name(type);
+	    csp_set_err_arg_rostr(st, 0, typ);
+	    csp_set_err_arg_tstr(st, 1, name);
+	}
+	return BAD_INDEX;
+    }
+    return csp_new_decl(st, name, type, 0);
+}
+// True when decl `di` belongs to the module body currently being parsed. Used
+// to decide whether a name resolves to a per-instance member (which has to be
+// addressed CURRENT-relative) or to a global (which must NOT be).
+NOINLINE int is_module_local(csp_rt_t* st, index_t di)
+{
+    return (st->cs.mdef != BAD_INDEX) && ((int)INDEX(di) > (int)INDEX(st->cs.mdef));
+}
+
 NOINLINE static int dec(int c)
 {
     if ((c >= '0') && (c <= '9'))
@@ -1057,7 +1134,7 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
 	    if (lhs.part != PART_VAL) {  // <var> '.' <part> = imm  (config write)
 		csp_dio_set_part(st, lhs.ix, rhs.val, lhs.part, DOUT);
 		bitset_set(st->dset, st_index(st, lhs.ix)); // must commit
-		st->anyd = CSP_TRUE;
+		st->es.anyd = CSP_TRUE;
 	    }
 	    else
 		csp_set_value(st, lhs.ix, rhs.val);

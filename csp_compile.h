@@ -51,11 +51,7 @@ extern csp_part_t part_from_tstr(const tstr_t* s);
 
 extern void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp, csp_part_t part, dio_t dir);
 extern void csp_dio_set_part(csp_rt_t* st, index_t ix, value_t v, csp_part_t part, dio_t dir);
-extern index_t csp_new_udecl(csp_rt_t* st, const tstr_t* name, decl_t type);
-extern int is_module_local(csp_rt_t* st, index_t di);
-extern index_t lookup_const(csp_rt_t* st, vtype_t vt, value_t v);
 extern int lookup_string(csp_rt_t* st, char* name, int name_len);
-extern index_t new_signed_const(csp_rt_t* st, ivalue_t v);
 extern int new_string(csp_rt_t* st, char* name, int len);
 
 // Shared with the compiler: the function-table accessors and the operator

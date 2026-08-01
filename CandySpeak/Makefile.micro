@@ -8,11 +8,40 @@ BPATH="./build/tmp.arduino.avr.micro"
 # core and every linked library took theirs, decided at runtime rather than by a
 # per-board CSP_CODE_BUDGET constant. Model it on the host with: ./csp --board mega
 ARENA=-DCSP_ARENA_MALLOC
-OPTS=--build-property "compiler.c.extra_flags=-Os $(ARENA)" \
-     --build-property "compiler.cpp.extra_flags=-Os $(ARENA)"
+OPTS=--build-property "compiler.c.extra_flags=-Os $(ARENA) $(EXTRA)" \
+     --build-property "compiler.cpp.extra_flags=-Os $(ARENA) $(EXTRA)"
 
 compile:
 	arduino-cli compile -e --fqbn $(FQBN) $(OPTS) --build-path $(BPATH)
+
+# --- exec-only ---------------------------------------------------------------
+# The Micro has 28 672 usable bytes (32K minus the bootloader), so the full
+# build does not fit and never will. These two drop what a node that only RUNS
+# a flashed ROM has no use for:
+#
+#   CSP_EXEC_ONLY  no scanner, no parser, no REPL commands. A ROM image is
+#                  compiled on the host and an EEPROM patch is stored already
+#                  compiled, so nothing on the board parses text.
+#   CSP_NO_EEPROM  no patch layer at all. On a 1 kB part it costs more flash
+#                  than the patching is worth.
+#
+# `size` prints where it lands without flashing anything.
+exec:
+	$(MAKE) -f Makefile.micro compile EXTRA="-DCSP_EXEC_ONLY"
+
+min:
+	$(MAKE) -f Makefile.micro compile EXTRA="-DCSP_EXEC_ONLY -DCSP_NO_EEPROM"
+
+# Text size per symbol, largest first -- the list to read when it does not fit.
+size:
+	@avr-nm --size-sort -S -C $(BPATH)/CandySpeak.ino.elf | \
+	  awk '$$3=="T"||$$3=="t"{n=strtonum("0x"$$2); t+=n; printf "%6d  %s\n", n, $$4}' | \
+	  sort -rn | head -25
+	@avr-nm --size-sort -S -C $(BPATH)/CandySpeak.ino.elf | \
+	  awk '$$3=="T"||$$3=="t"{n=strtonum("0x"$$2); t+=n; \
+	    if ($$4 ~ /^(csp_|setup_|eval[0-9]|est_|fn_|add_|op_info|tok_table|decl_table|build_dis_ip|can_mark_fields|main$$)/) ours+=n; \
+	    else core+=n } \
+	    END {printf "\n%6d  CandySpeak (main = setup+loop, inlined)\n%6d  core/libc/USB\n%6d  TOTAL text\n", ours, core, t}'
 
 # --- stack watch -----------------------------------------------------------
 # Diagnose the stack/arena collision (blank decls, reboot loops). Two layers,

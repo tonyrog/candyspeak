@@ -341,9 +341,16 @@ static void serial_poll(csp_rt_t* st, struct pollfd* fds, nfds_t nfds)
 
 void process_serial_line(csp_rt_t* st, char* line)
 {
+#if defined(CSP_EXEC_ONLY)
+    // No command layer in this build (csp_repl.c compiles to nothing), so a
+    // line has nowhere to go. The reader above still runs -- it is what notices
+    // Ctrl-D -- it just has nothing to hand the line to.
+    (void)st; (void)line;
+#else
     int r = csp_process_line(st, line);
     if (r == CSP_CMD_QUIT)
 	quit_flag = 1;
+#endif
 }
 
 int csp_uconst(csp_rt_t* st, const char* name, int len,
@@ -1164,9 +1171,9 @@ loop:
 	else {
 	    timeout_ms = interactive ? 100 : 0;
 	    // Wait for timer if needed (non-interactive mode)
-	    if (state.wait_ms != NOTIMEOUT) {
-		if (timeout_ms == 0 || state.wait_ms < (uint32_t)timeout_ms)
-		    timeout_ms = state.wait_ms;
+	    if (state.es.wait_ms != NOTIMEOUT) {
+		if (timeout_ms == 0 || state.es.wait_ms < (uint32_t)timeout_ms)
+		    timeout_ms = state.es.wait_ms;
 	    }
 	}
 	poll(pfd, nfds, timeout_ms);
@@ -1193,7 +1200,7 @@ loop:
     // /live freezes the rules but keeps I/O running (poke outputs, watch inputs).
     x = state.live ? BAD_INDEX : csp_cycle(&state);  // ROM (seq) + RAM, one model
 
-    anyd = state.anyd;  // save before commit clears it
+    anyd = state.es.anyd;  // save before commit clears it
 
     csp_commit(&state);
 
@@ -1209,7 +1216,7 @@ loop:
     if (virtual_time) {
 	// jump to the nearest pending event (next timer or next input row),
 	// but always advance at least one tick so time never stands still.
-	uint32_t adv = (state.wait_ms == NOTIMEOUT) ? 0xFFFFFFFFu : state.wait_ms;
+	uint32_t adv = (state.es.wait_ms == NOTIMEOUT) ? 0xFFFFFFFFu : state.es.wait_ms;
 	if (!input_done && !input_applied && (input_cycle > vclock)) {
 	    uint32_t inp = input_cycle - vclock;
 	    if (inp < adv) adv = inp;
@@ -1226,7 +1233,7 @@ loop:
 	// sleep -- a program whose only timer was 2 s printed nothing for two
 	// seconds and then everything at once. anyd is already computed for the
 	// continue-test below; this is the same question asked earlier.
-	int tmo = (state.wait_ms != NOTIMEOUT) ? (int)state.wait_ms : -1;
+	int tmo = (state.es.wait_ms != NOTIMEOUT) ? (int)state.es.wait_ms : -1;
 	if (csp_can_active(&state) && (nfds > 0)) {
 	    // Bounded even when a frame would wake us, so -T still expires
 	    // while the bus is quiet.
@@ -1241,7 +1248,7 @@ loop:
     if (interactive) goto loop;
     if (virtual_time && !input_done) goto loop;  // more input rows to feed
     if (anyd) goto loop;
-    if (state.wait_ms != NOTIMEOUT) goto loop;
+    if (state.es.wait_ms != NOTIMEOUT) goto loop;
     if (csp_can_active(&state)) goto loop;   // a frame may still arrive
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     if (state.reactive && csp_pending(&state)) goto loop;

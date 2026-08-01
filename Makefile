@@ -51,6 +51,30 @@ san:
 csp:	$(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) $(LIBS) -o $@
 
+# --- exec-only host builds ---------------------------------------------------
+# The same two tiers the boards use, built here so the guards can be checked
+# without an AVR toolchain -- a missing #if shows up as a link error in seconds.
+#
+#   exec  CSP_EXEC_ONLY   no scanner, no parser, no REPL commands. What is left
+#                         runs a linked ROM image and nothing else.
+#   min   + CSP_NO_EEPROM on the HOST this changes nothing (csp_linux.c always
+#                         provides the file backend); it is the board tier, kept
+#                         here so both spellings compile.
+#
+# Separate binaries, not a rebuild of ./csp -- you want both around to compare.
+# Point them at a real program with:  ./csp -n -C -O rom.c prog.csp && make exec
+EXEC_SRC = csp_linux.c csp_rt.c csp_repl.c csp_compile.c csp_dump.c \
+	   csp_eeprom.c csp_parse.c csp_print.c csp_strings.c rom.c
+EXEC_FLAGS = -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC -Wall -g $(SAN)
+
+exec:	csp_strings.h
+	$(CC) $(EXEC_FLAGS) -DCSP_EXEC_ONLY $(EXEC_SRC) $(LIBS) -o csp-exec
+	@size csp-exec 2>/dev/null | tail -1 || true
+
+min:	csp_strings.h
+	$(CC) $(EXEC_FLAGS) -DCSP_EXEC_ONLY -DCSP_NO_EEPROM $(EXEC_SRC) $(LIBS) -o csp-min
+	@size csp-min 2>/dev/null | tail -1 || true
+
 # String table: a small C tool generates csp_strings.{c,h} from strings.tab.
 strtab: strtab.c
 	$(CC) -Wall -o $@ strtab.c
@@ -62,7 +86,7 @@ csp_strings.c csp_strings.h: strings.tab strtab
 csp_rt.o csp_repl.o csp_compile.o csp_strings.o: csp_strings.h
 
 clean:
-	rm -f $(OBJS) strtab csp_strings.c csp_strings.h
+	rm -f $(OBJS) strtab csp_strings.c csp_strings.h csp-exec csp-min
 
 test:	csp test_repl
 	@chmod +x tests/run_tests.escript
@@ -95,7 +119,7 @@ test_crc_destroyer:
 
 -include .*.d
 
-.PHONY: all clean test test-examples test_repl test_crc_destroyer debug ubsan san
+.PHONY: all clean test test-examples test_repl test_crc_destroyer debug ubsan san exec min
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

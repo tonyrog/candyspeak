@@ -12,3 +12,5 @@ tests/csp_test.beam
 tests/expected/
 
 
+csp-exec
+csp-min

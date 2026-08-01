@@ -177,6 +177,52 @@ Avklarade punkter, flyttade hit från TODO.md. Nyast överst.
   - `/clear` sager nu ocksa att eeprom-kopian ligger kvar. "Cleared" ensamt laser
     som att programmet ar borta.
 
+### Kompilator-rester ur csp_rt.c + strangtabellerna matta (2026-07-31)
+
+  - Flyttat till csp_compile.c: `lookup_const`, `new_signed_const`,
+    `csp_new_udecl`, `is_module_local`, `csp_lookup_decl_local`,
+    `decl_type_name`. Alla definierade i runtimen, anropade bara darifran
+    kompilatorn -- de lag dar for att allt lag dar. Sex externs foll bort ur
+    csp_compile.h; sommen ar smalare an fore.
+  - DOD KOD borttagen: `lookup_string_const`, `new_float_const`,
+    `new_string_const` (1 113 byte kalla). De blev overflodiga nar en
+    strangliteral slutade mynta en dummy DECL_CONSTANT och positionen blev
+    vardet. Ingen refererade dem langre.
+  - csp_rt.c 4 687 rader, csp_compile.c 3 426.
+  - STORLEKEN ANDRADES INTE (mega 102 294, micro min 36 644). --gc-sections tog
+    redan bort dem. Vardet ar strukturellt: koden ligger dar den hor hemma och
+    sommen sager sanningen om vem som beror pa vem.
+  - STRANGTABELLERNA: att dela strings.tab i flera filer koper NOLL byte.
+    Varje strang ar redan ett eget symbol (`rochar s_x[] RODATA`), sa
+    --gc-sections slapper dem en och en -- matt: mega behaller 342 s_*-symboler,
+    micro exec-only 94. Ett organisatoriskt argument kan finnas, men inte ett
+    storleksargument.
+
+### csp_estate_t + boot-utskrifterna (2026-07-31)
+
+  - `csp_estate_t st->es`: allt som bara betyder nagot medan en CYKEL kor --
+    evaluatorns register (reg/arg), settle-flaggorna looparna laser (anyd,
+    wait_ms, update, seed_all, sweep) och hela den reaktiva schemalaggaren
+    (rule_ip, rule_state, n_rule, pending, pending_cap, obj_shift, gen,
+    graph_n, idg, ofs, edg). ~130 stallen. Samma monster som cs, samma skal:
+    de tva halvorna av runtimen delade ett platt namnrum.
+  - Boot-utskrifterna i setup() bakom `#if !defined(CSP_EXEC_ONLY)`. En
+    exec-only-build har ingen prompt, sa den har ingen som laser en banner.
+    FELraderna star kvar i varje build -- de ar vad en UART fortfarande ar vard
+    att koppla in for.
+  - VARDE: 234 byte. Jag gissade "ett par kB i strangar" och det var fel.
+    `main`s ~6 kB ar nastan allt INLINAD kod fran csp_setup/csp_rebuild/
+    csp_load_rom, inte utskrifter. Literalerna lag redan i flash via RODATA.
+  - Tabellerna ligger RATT: `op_info`/`tok_table` refereras fran csp_rt.c,
+    csp_print.c och csp_dump.c men INTE fran csp_compile.c -- kompilatorn nar
+    dem bara genom accessorerna (`op_table_*`, `find_tok_entry`) som redan gick
+    over sommen. Ingen flytt behovs.
+  - Micro: 36 644 av 28 672 (128 %). RAM ar inget problem (791 av 2 560).
+    Det som ar kvar ar 27 7xx byte VAR kod mot ~9 8xx core/USB, och de storsta
+    posterna ar genuint runtime: csp_rebuild 2 732, heap_get+set 2 698,
+    dio_get+set_part 1 860, load_image 1 592, setup_* ~2 260.
+    `make -f Makefile.micro exec|min|size` finns nu som targets.
+
 ### csp_compile.c + csp_cstate_t (2026-07-31)
 
   - Andra snittet: tokenizer, uttryckskompilator, deklarationsparsers OCH

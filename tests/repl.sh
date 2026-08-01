@@ -410,6 +410,25 @@ got=$(./csp -c 4 -s /dev/stdout "$D/str.csp" 2>&1 | tail -1 |
 ck "string == compares positions, .len reads the length byte" \
 '"Same",1 "Cross",1 "Diff",0 "Lc",6 "Lv",3 "Le",0 "Ln",0 ' "$got"
 
+# --- 18. the exec-only build still runs -------------------------------------
+# CSP_EXEC_ONLY drops the scanner, the parser and the command layer. What is
+# left has to still run a linked ROM image -- which is the whole point of the
+# tier, and exactly the kind of thing that rots silently because no normal build
+# exercises it. Link one against a generated image and check it computes.
+echo "exec-only:"
+printf '#digital Led out 0:13\n#timer T 500 = 1\n#variable N = 0\nT = 1 ? timeout(T)\nN = N + 1 ? timeout(T)\n' > "$D/eo.csp"
+if ./csp -n -C -O "$D/eo_rom.c" "$D/eo.csp" >/dev/null 2>&1 &&
+   gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -DCSP_EXEC_ONLY -I. \
+       csp_linux.c csp_rt.c csp_repl.c csp_compile.c csp_dump.c csp_eeprom.c \
+       csp_parse.c csp_print.c csp_strings.c "$D/eo_rom.c" -o "$D/csp_exec" \
+       >/dev/null 2>&1; then
+    got=$("$D/csp_exec" -c 6 --no-eeprom -s /dev/stdout 2>&1 | tail -1 |
+	      grep -o '"State",[0-9]*\|"N",[0-9]*' | tr '\n' ' ')
+    ck "an exec-only build runs its ROM" '"State",1 "N",2 ' "$got"
+else
+    echo "  FAIL exec-only build did not link"; fail=$((fail+1))
+fi
+
 echo "================================================"
 echo "repl: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

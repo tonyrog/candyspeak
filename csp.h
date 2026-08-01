@@ -299,13 +299,13 @@ extern int ro_strcpy(char* dst, rostring_t src, int max);
 // running program gets patched. Keying obj-major instead would run a late global
 // patch before the object rules it is meant to override.
 //
-// The object field is st->obj_shift wide -- sized to the objects that EXIST, not
+// The object field is st->es.obj_shift wide -- sized to the objects that EXIST, not
 // to OBJ_BITS. A program with no objects gets a 0-bit field (one slot per rule);
 // one with 10 objects gets 4 bits, not 5. A shift, not a multiply by nq+1, so the
 // decode stays a mask and the set can still be walked a word at a time.
-#define MAKE_QENTRY(st, obj, ord) (((ord) << (st)->obj_shift) | (obj))
-#define QENTRY_OBJ(st, e)         ((e) & ((1u << (st)->obj_shift) - 1))
-#define QENTRY_ORD(st, e)         ((e) >> (st)->obj_shift)
+#define MAKE_QENTRY(st, obj, ord) (((ord) << (st)->es.obj_shift) | (obj))
+#define QENTRY_OBJ(st, e)         ((e) & ((1u << (st)->es.obj_shift) - 1))
+#define QENTRY_ORD(st, e)         ((e) >> (st)->es.obj_shift)
 #define MAX_STACK_DEPTH 4
 #define NAME_BITS    5
 #define MAX_STR_BUF  (1 << STRING_BITS) // total number of char in var names
@@ -1202,6 +1202,39 @@ typedef struct {
     int      rimp;               // 1 if parse_expr is in RHS in <-
 } csp_cstate_t;
 
+// Everything that only matters while a CYCLE runs: the evaluator's registers,
+// the settle/quiesce flags the loops read, and the reactive scheduler. Grouped
+// for the same reason csp_cstate_t is -- so it is visible when the compiler or
+// the command layer reaches into exec state, and so the two halves of the
+// runtime stop sharing one flat namespace.
+//
+// Like cs it stays INSIDE csp_rt_t: the evaluator reads decls and writes the
+// heap, both reached through st. The struct is a named surface, not a boundary
+// you can pass on its own.
+typedef struct {
+    value_t reg[MAX_REGS];       // register area
+    value_t arg[MAX_ARGS];       // loaded before call
+    uint32_t update;             // update counter
+    uint32_t wait_ms;            // sleep time or NOTIMEOUT
+    int8_t   anyd;               // CSP_TRUE|CSP_FALSE: the cycle changed something
+    unsigned seed_all:1;         // 1 during the first cycle: OP_CHG reads true so
+                                 // every <- binding fires once and seeds a value
+    unsigned sweep:1;            // full sequential sweep (OP_NEW/LEAVE enter/leave)
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
+    index_t* rule_ip;            // ordinal -> instruction index (own alloc, n_rule)
+    uint16_t* rule_state;        // ordinal -> State membership mask (0 = ungated)
+    index_t  n_rule;             // rule bodies (ROM + RAM); 0 until csr has run
+    set_group_t* pending[2];     // own allocation, pending_cap bits each
+    uint32_t pending_cap;        // key space in bits = n_rule << obj_shift
+    uint8_t  obj_shift;          // object field width: ceil(log2(nq+1))
+    uint8_t  gen;                // which set csp_enq fills (the other is running)
+    index_t  graph_n;            // node count the graph currently covers
+    index_t* idg;                // in-degree per decl                   [graph_n]
+    index_t* ofs;                // edge offset per decl                 [graph_n+1]
+    index_t* edg;                // back edges (decl -> rules)           [ofs[graph_n]]
+#endif
+} csp_estate_t;
+
 typedef enum { DIN = 0, DOUT = 1 } dio_t;
 
 // name is a LOGICAL string position, so it needs NAMEPOS_BITS just like a
@@ -1359,8 +1392,6 @@ typedef struct {
 
 typedef struct _csp_rt_t
 {
-    value_t reg[MAX_REGS];         // register area
-    value_t arg[MAX_ARGS];         // loaded before call
 
     // RAM code arena (allocated once in csp_rt_init via csp_mem_init). instr[] and
     // decl[] share ONE double-ended pool of CSP_CODE_BUDGET bytes: instructions
@@ -1505,6 +1536,7 @@ typedef struct _csp_rt_t
     // instructions are all reached through st -- so a pointer to just this would
     // not be enough to parse with. What it buys is a boundary you can see.
     csp_cstate_t cs;
+    csp_estate_t es;
 
     int list_state;              // during listing: state of the #in block being
                                  // rendered (-1 = none), suppresses State==S in cond
@@ -1550,9 +1582,6 @@ typedef struct _csp_rt_t
     // max (object[] is also filled incrementally during parse). Kept struct-fixed.
     index_t module[MAX_MODULES];   // list of modules
     index_t object[MAX_OBJECTS];   // list of objects
-    // during eval
-    uint32_t update;             // update counter
-    uint32_t wait_ms;            // sleep time or NOTIMEOUT
     // Rule bodies counted at EMIT time (alloc_instr_ptr), no scan. csp_rebuild
     // snapshots the counter into graph_rules, so n_rule_emit != graph_rules
     // means "code was added since the last rebuild" -- the cheap staleness test
@@ -1567,11 +1596,6 @@ typedef struct _csp_rt_t
     // is dense. rule_ip maps back on dequeue. The numbering composes with a baked
     // ROM graph for free: dumping ran the same walk with rom_nn == 0, so rescanning
     // [0,rom_nn) reproduces exactly the ordinals rom_edg was baked with.
-    index_t* rule_ip;          // ordinal -> instruction index (own alloc, n_rule)
-    uint16_t* rule_state;      // ordinal -> State membership mask (0 = ungated);
-			       // csp_react gates a rule by this instead of walking
-			       // a per-rule State test (own alloc, n_rule)
-    index_t  n_rule;           // rule bodies (ROM + RAM); 0 until csr has run
     // Pending work is a BIT SET over (ord,obj) keys, not a queue. The set already
     // is the pending state -- a queue would only add an order, and the order it
     // adds is the wrong one: fed in change order it runs rules in whatever
@@ -1585,18 +1609,10 @@ typedef struct _csp_rt_t
     // turn -- the same generation split the old cycle_end snapshot gave.
     // Dedup is inherent (a bit is set or it is not) and a bit set CANNOT overflow,
     // so the silent drop a full queue used to cause is gone by construction.
-    set_group_t* pending[2];   // own allocation, pending_cap bits each
-    uint32_t pending_cap;      // key space in bits = n_rule << obj_shift; 0 = not built
-    uint8_t  obj_shift;        // object field width: ceil(log2(nq+1)), <= OBJ_BITS
-    uint8_t  gen;              // which set csp_enq fills (the other is running)
     // back references
     // Reactive graph, sized to the actual node/edge counts in csp_csr (own
     // allocation, not the arena). graph_n = nodes it was built for; a decl added
     // after the last csr is >= graph_n and simply has no edges (enq skips it).
-    index_t  graph_n;          // node count the graph currently covers
-    index_t* idg;              // in-degree per decl                       [graph_n]
-    index_t* ofs;              // edge offset per decl                     [graph_n+1]
-    index_t* edg;              // back edges (decl -> rules)               [ofs[graph_n]]
 #endif
     // #disable / #enable. Two representations, on purpose:
     //
@@ -1750,17 +1766,17 @@ static inline csp_view_t* csp_view(csp_rt_t* st, index_t n)
 static inline void csp_enq(csp_rt_t* st, uint8_t obj, uint16_t ord)
 {
     index_t e = MAKE_QENTRY(st, obj, ord);
-    if (e < st->pending_cap)
-	bitset_set(st->pending[st->gen], e);
+    if (e < st->es.pending_cap)
+	bitset_set(st->es.pending[st->es.gen], e);
 }
 
 // Is any rule waiting for the next cycle? The driver's idle test -- it used to
 // ask whether the queue was non-empty.
 static inline int csp_pending(csp_rt_t* st)
 {
-    uint32_t w, n = BITSET_GROUPS(st->pending_cap);
+    uint32_t w, n = BITSET_GROUPS(st->es.pending_cap);
     for (w = 0; w < n; w++)
-	if (st->pending[st->gen][w])
+	if (st->es.pending[st->es.gen][w])
 	    return 1;
     return 0;
 }

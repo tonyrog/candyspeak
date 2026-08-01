@@ -557,25 +557,6 @@ rostring_t csp_fmt_endian(vendian_t et)
     return endian_tab[et&0x3];
 }
 
-// Returns the RODATA name as-is. It used to hand back a tstr_t pointing at the
-// same flash bytes, which csp_set_err_arg_tstr then memcpy'd -- the wrong
-// address space on AVR. Flash names go through csp_set_err_arg_rostr instead.
-static rostring_t decl_type_name(decl_t type)
-{
-    switch(type) {
-    case DECL_VARIABLE: return ros_variable;
-    case DECL_CONSTANT: return ros_constant;
-    case DECL_MODULE:   return ros_module;
-    case DECL_END:      return ros_end;
-    case DECL_OBJECT:   return ros_object;
-    case DECL_TIMER:    return ros_timer;
-    case DECL_DIGITAL:  return ros_digital;
-    case DECL_ANALOG:   return ros_analog;
-    case DECL_FIELD:      return ros_field;
-    case DECL_BUFFER:   return ros_buffer;
-    default:            return ros_undefined;
-    }
-}
 
 #define ify(x) #x
 #define stringify(x) ify(x)
@@ -1525,10 +1506,10 @@ NOINLINE void csp_enq_elist(csp_rt_t* st, index_t x)
     }
     // runtime RAM graph: any decl -> RAM rules that read it. Only decls the graph
     // was built for have edges; one added since (ix >= graph_n) has none yet.
-    if (ix < st->graph_n) {
-	index_t base = st->ofs[ix];
-	for (i = 0; i < st->idg[ix]; i++)
-	    csp_enq(st, obj, st->edg[base+i]);  // rule instruction index
+    if (ix < st->es.graph_n) {
+	index_t base = st->es.ofs[ix];
+	for (i = 0; i < st->es.idg[ix]; i++)
+	    csp_enq(st, obj, st->es.edg[base+i]);  // rule instruction index
     }
 #endif
 }
@@ -1915,13 +1896,13 @@ NOINLINE void csp_set_value(csp_rt_t* st, index_t n, value_t v)
     if (v.u != cv.u) {
 	int i = st_index(st, n);
 	bitset_set(st->dset, i);
-	st->anyd = CSP_TRUE;
+	st->es.anyd = CSP_TRUE;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 	if (st->reactive)
 	    csp_enq_elist(st,n);
 #endif
 	csp_dio_set(st, n, v, DOUT);
-	st->update++;
+	st->es.update++;
     }
 }
 
@@ -1976,14 +1957,14 @@ again:
     case OP_NOP:
 	break;
     case OP_LD:
-	st->reg[instr(st,n,m.x)] = csp_value(st, instr(st,n,m.mem));
+	st->es.reg[instr(st,n,m.x)] = csp_value(st, instr(st,n,m.mem));
 	break;
     case OP_LDP:
-	csp_dio_get_part(st, instr(st,n,m.mem), &st->reg[instr(st,n,m.x)],
+	csp_dio_get_part(st, instr(st,n,m.mem), &st->es.reg[instr(st,n,m.x)],
 			 instr(st,n,m.y), DIN);
 	break;
     case OP_EQI:
-	st->reg[instr(st,n,mi.x)].i =
+	st->es.reg[instr(st,n,mi.x)].i =
 	    csp_value(st, instr(st,n,mi.mem)).i == instr(st,n,mi.imm);
 	break;
     case OP_STI: {  // store immediate to memory (mirror of EQI)
@@ -2004,33 +1985,33 @@ again:
     }
     case OP_STIMP:  // same as ST, but marks reactive assignment
     case OP_ST:
-	csp_set_value(st, instr(st,n,m.mem), st->reg[instr(st,n,m.x)]);
+	csp_set_value(st, instr(st,n,m.mem), st->es.reg[instr(st,n,m.x)]);
 	break;
     case OP_STP: {
 	index_t mm = instr(st,n,m.mem);
-	csp_dio_set_part(st, mm, st->reg[instr(st,n,m.x)],
+	csp_dio_set_part(st, mm, st->es.reg[instr(st,n,m.x)],
 			 instr(st,n,m.y), DOUT);
 	bitset_set(st->dset, st_index(st, mm));  // config change must commit
-	st->anyd = CSP_TRUE;
+	st->es.anyd = CSP_TRUE;
 	break;
     }
     case OP_CHG: {  // r |= dset[ix]  (force-true on the seed cycle)
 	int i = st_index(st, instr(st, n, m.mem));
-	st->reg[instr(st,n,m.x)].i |=
-	    (st->seed_all || bitset_tst(st->dset, i)) ? 1 : 0;
+	st->es.reg[instr(st,n,m.x)].i |=
+	    (st->es.seed_all || bitset_tst(st->dset, i)) ? 1 : 0;
 	break;
     }
     case OP_LI:
-	st->reg[instr(st,n,i.x)].i = instr(st,n,i.imm);  // sign extend
+	st->es.reg[instr(st,n,i.x)].i = instr(st,n,i.imm);  // sign extend
 	break;
     case OP_LIU:
-	st->reg[instr(st,n,i.x)].u = (uint16_t)instr(st,n,i.imm); // zero extend
+	st->es.reg[instr(st,n,i.x)].u = (uint16_t)instr(st,n,i.imm); // zero extend
 	break;
     case OP_LIH:
-	st->reg[instr(st,n,i.x)].u |= ((uint32_t)(uint16_t)instr(st,n,i.imm)) << 16;
+	st->es.reg[instr(st,n,i.x)].u |= ((uint32_t)(uint16_t)instr(st,n,i.imm)) << 16;
 	break;
     case OP_ARG:
-	st->arg[instr(st,n,i.imm)] = st->reg[instr(st,n,i.x)];
+	st->es.arg[instr(st,n,i.imm)] = st->es.reg[instr(st,n,i.x)];
 	break;
     case OP_RULE:
 	// Bare NORMAL+ rule (implicit): it has no block gate, so gate it on
@@ -2052,18 +2033,18 @@ again:
 	// false-guard body is exactly the skip a disabled rule needs, so
 	// disabling costs nothing but the test.
 	if (((st->dis_ip == NULL) || !bitset_tst(st->dis_ip, n)) &&
-	    st->reg[instr(st,n,r.cnd)].i)
+	    st->es.reg[instr(st,n,r.cnd)].i)
 	    n = n+1;
 	else
 	    n = n+instr(st,n,r.nxt);  // relative jump
 	goto again;
     case OP_INSTATE:  // #in block gate: skip the whole block if State != imm
-	if (st->reg[instr(st,n,in.x)].i != instr(st,n,in.imm))
+	if (st->es.reg[instr(st,n,in.x)].i != instr(st,n,in.imm))
 	    return n + instr(st,n,in.nxt);
 	n = n+1;
 	goto again;
     case OP_NINSTATE: // OR-chain gate: jump INTO the block if State == imm
-	if (st->reg[instr(st,n,in.x)].i == instr(st,n,in.imm))
+	if (st->es.reg[instr(st,n,in.x)].i == instr(st,n,in.imm))
 	    return n + instr(st,n,in.nxt);
 	n = n+1;
 	goto again;
@@ -2076,7 +2057,7 @@ again:
 	// non-reactive execution and the reactive SEED). csp_react dispatches
 	// single rules by ip; if one reaches OP_NEW it must be a no-op, else esp
 	// grows unboundedly and corrupts the struct.
-	if (st->sweep) {
+	if (st->es.sweep) {
 	    index_t ent = instr(st,n,n.ent);
 	    index_t obj = instr(st,n,n.obj);
 	    st->stack[st->esp].ix = n+1;      // return address
@@ -2088,7 +2069,7 @@ again:
 	}
 	break;
     case OP_LEAVE:
-	if (st->sweep) {
+	if (st->es.sweep) {
 	    if (st->esp == 0)
 		return st->ps.nn; // make it stop
 	    st->esp--;
@@ -2119,8 +2100,8 @@ again:
 	    }
 	}
 	if (fn) {
-	    value_t val = fn(st, instr(st,n,f.avt), st->arg, arity);
-	    st->reg[instr(st,n,f.x)] = val;
+	    value_t val = fn(st, instr(st,n,f.avt), st->es.arg, arity);
+	    st->es.reg[instr(st,n,f.x)] = val;
 	}
 	break;
     }
@@ -2132,16 +2113,16 @@ again:
 	    xv = eval0(op);
 	    break;
 	case 1:
-	    yv = st->reg[instr(st,n,a.y)];
+	    yv = st->es.reg[instr(st,n,a.y)];
 	    xv = eval1(op, yv);
 	    break;
 	case 2:
-	    yv = st->reg[instr(st,n,a.y)];
-	    zv = st->reg[instr(st,n,a.z)];
+	    yv = st->es.reg[instr(st,n,a.y)];
+	    zv = st->es.reg[instr(st,n,a.z)];
 	    xv = eval2(op, yv, zv); //eval_tab2[op](yv,zv);
 	    break;
 	}
-	st->reg[instr(st,n,a.x)] = xv;
+	st->es.reg[instr(st,n,a.x)] = xv;
 	break;
     }
     }
@@ -2177,9 +2158,9 @@ NOINLINE static void heap_dset_copy(csp_rt_t* st, dio_t to, dio_t from)
 // undo all values (revert dirty out slots to committed values)
 void csp_undo(csp_rt_t* st)
 {
-    if (st->anyd)
+    if (st->es.anyd)
 	heap_dset_copy(st, DOUT, DIN);
-    st->anyd = CSP_FALSE;
+    st->es.anyd = CSP_FALSE;
     memset(st->dset, 0, BITSET_GROUPS(st->view_cap) * sizeof(set_group_t));
 }
 
@@ -2187,7 +2168,7 @@ void csp_undo(csp_rt_t* st)
 void csp_commit(csp_rt_t* st)
 {
     index_t b;
-    if (st->anyd)
+    if (st->es.anyd)
 	heap_dset_copy(st, DIN, DOUT);
     // Promote arrival flags across the commit. A frame received during
     // csp_input landed in the DOUT shadow, so it becomes readable only now --
@@ -2202,7 +2183,7 @@ void csp_commit(csp_rt_t* st)
 	    bp->flags = (bp->flags & ~BUF_F_RXPEND) | BUF_F_RX;
     }
     memset(st->dset, 0, BITSET_GROUPS(st->view_cap) * sizeof(set_group_t));
-    st->anyd = CSP_FALSE;
+    st->es.anyd = CSP_FALSE;
 }
 
 // run eval_rule sequentially over an instruction range [start, stop)
@@ -2210,12 +2191,12 @@ index_t csp_eval_range(csp_rt_t* st, index_t start, index_t stop)
 {
     index_t n = start;
     index_t x = BAD_INDEX;
-    st->sweep = 1;   // full sweep: OP_NEW/LEAVE enter/leave objects
+    st->es.sweep = 1;   // full sweep: OP_NEW/LEAVE enter/leave objects
     while(n < stop) {
 	n = csp_eval_rule(st, n);
 	x = n;
     }
-    st->sweep = 0;
+    st->es.sweep = 0;
     return x;
 }
 
@@ -2230,15 +2211,15 @@ index_t csp_react(csp_rt_t* st)
 {
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     index_t x1 = BAD_INDEX;
-    if (st->reactive && st->pending_cap) {
-	set_group_t* cur = st->pending[st->gen];
-	uint32_t ngrp = BITSET_GROUPS(st->pending_cap);
+    if (st->reactive && st->es.pending_cap) {
+	set_group_t* cur = st->es.pending[st->es.gen];
+	uint32_t ngrp = BITSET_GROUPS(st->es.pending_cap);
 	uint32_t w;
 	// Swap generations FIRST: whatever a rule enqueues while we run belongs to
 	// the next cycle, so it must land in the other set. (The old code took a
 	// snapshot of the queue tail for the same reason.)
-	st->gen ^= 1;
-	memset(st->pending[st->gen], 0, ngrp * sizeof(set_group_t));
+	st->es.gen ^= 1;
+	memset(st->es.pending[st->es.gen], 0, ngrp * sizeof(set_group_t));
 
 	// Walk the set UPWARDS. A key is (ordinal << obj_shift) | obj and ordinals
 	// are handed out in instruction order, so this evaluates rules in the order
@@ -2253,8 +2234,8 @@ index_t csp_react(csp_rt_t* st)
 		index_t  e = (index_t)(w * BITSET_GROUP_BITS + b);
 		uint8_t  obj = QENTRY_OBJ(st, e);
 		index_t  ord = QENTRY_ORD(st, e);
-		index_t  ip  = st->rule_ip[ord];
-		uint16_t sm  = st->rule_state[ord];
+		index_t  ip  = st->es.rule_ip[ord];
+		uint16_t sm  = st->es.rule_state[ord];
 		bits &= (bits - 1);              // drop the bit we just took
 		// State gate at DISPATCH, not in the rule: skip a State-scoped rule
 		// (#in / NORMAL+) whose block does not include the current State.
@@ -2364,7 +2345,7 @@ index_t csp_cycle(csp_rt_t* st)
 
     // First cycle: force OP_CHG true so every <- binding fires once and seeds
     // its initial value. Same boundary as the reactive seed sweep below.
-    st->seed_all = (st->cycle <= 1);
+    st->es.seed_all = (st->cycle <= 1);
     {
 	index_t x;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
@@ -2454,22 +2435,7 @@ NOINLINE index_t lookup_decl_in(csp_rt_t* st, const tstr_t* name,
     return BAD_INDEX;
 }
 
-// True when decl `di` belongs to the module body currently being parsed. Used
-// to decide whether a name resolves to a per-instance member (which has to be
-// addressed CURRENT-relative) or to a global (which must NOT be).
-NOINLINE int is_module_local(csp_rt_t* st, index_t di)
-{
-    return (st->cs.mdef != BAD_INDEX) && ((int)INDEX(di) > (int)INDEX(st->cs.mdef));
-}
 
-// Lookup for DECLARING a name: only the scope the new decl lands in. A module
-// member may shadow a global -- otherwise adding a global later would break
-// every module that happens to use that name.
-NOINLINE index_t csp_lookup_decl_local(csp_rt_t* st, const tstr_t* name)
-{
-    int start = (st->cs.mdef != BAD_INDEX) ? INDEX(st->cs.mdef)+1 : 0;
-    return lookup_decl_in(st, name, start, st->ps.nd);
-}
 
 // Lookup for REFERENCING a name.
 NOINLINE index_t csp_lookup_decl(csp_rt_t* st, const tstr_t* name)
@@ -2489,29 +2455,7 @@ NOINLINE index_t csp_lookup_decl(csp_rt_t* st, const tstr_t* name)
     return lookup_decl_in(st, name, 0, st->ps.nd);
 }
 
-NOINLINE index_t lookup_const(csp_rt_t* st, vtype_t vt, value_t v)
-{
-    index_t i;
-    for (i = 0; i < st->ps.nd; i++) {
-	if (IS_CONST(st, i) && (vt == decl(st,i,vt))) {
-	    if (decl(st,i,cn.init.u) == v.u)  // binary compare!
-		return MAKE_INDEX(0,i);
-	}
-    }
-    return BAD_INDEX;
-}
 
-NOINLINE index_t lookup_string_const(csp_rt_t* st, char* str, int slen)
-{
-    index_t i;
-    for (i = 0; i < st->ps.nd; i++) {
-	if (IS_CONST(st, i) && (decl(st,i,vt) == V_STRING)) {
-	    if (csp_str_eq(st, decl(st,i,cn.init.s), str, slen))
-		return MAKE_INDEX(0,i);
-	}
-    }
-    return BAD_INDEX;
-}
 
 // each string is installed like
 //  [3] 'a' 'b' 'c' '\0'
@@ -2602,23 +2546,6 @@ NOINLINE index_t csp_new_decl(csp_rt_t* st, const tstr_t* name, decl_t type,
     return i;
 }
 
-// new uniq declaration
-NOINLINE index_t csp_new_udecl(csp_rt_t* st, const tstr_t* name, decl_t type)
-{
-    index_t ix;
-    
-    if ((ix = csp_lookup_decl_local(st, name)) != BAD_INDEX) {
-	if (csp_set_error(st, ERR_ALREADY_DEFINED)) {
-	    rostring_t typ = ros_name;
-	    if (decl(st,ix,type) == type)
-		typ = decl_type_name(type);
-	    csp_set_err_arg_rostr(st, 0, typ);
-	    csp_set_err_arg_tstr(st, 1, name);
-	}
-	return BAD_INDEX;
-    }
-    return csp_new_decl(st, name, type, 0);
-}
 
 // Map a name after '.' to a part selector, PART_LAST if it is not a part.
 // Parts are ordinary words disambiguated by position (obj.field wins in code).
@@ -2653,46 +2580,8 @@ NOINLINE csp_part_t part_from_tstr(const tstr_t* s)
     return PART_LAST;
 }
 
-NOINLINE index_t new_signed_const(csp_rt_t* st, ivalue_t v)
-{
-    index_t ix;
-    int i;
-    const tstr_t empty = { .ptr = NULL, .len = 0};
-    if ((ix = csp_new_decl(st,&empty,DECL_CONSTANT,0)) == BAD_INDEX)
-	return BAD_INDEX;
-    i = INDEX(ix);
-    ram_decl_at(st,i)->cn.init.i = v;
-    return ix;
-}
 
-NOINLINE index_t new_float_const(csp_rt_t* st, fvalue_t v)
-{
-    index_t ix;
-    int i;
-    const tstr_t empty = { .ptr = NULL, .len = 0};    
-    if ((ix = csp_new_decl(st,&empty,DECL_CONSTANT,0)) == BAD_INDEX)
-	return BAD_INDEX;
-    i = INDEX(ix);
-    ram_decl_at(st,i)->vt = V_FLOAT;
-    ram_decl_at(st,i)->cn.init.f = v;
-    return ix;
-}
 
-NOINLINE index_t new_string_const(csp_rt_t* st, char* str, int len)
-{
-    index_t ix;
-    int pos, i;
-    const tstr_t empty = { .ptr = NULL, .len = 0};
-    if ((ix = csp_new_decl(st,&empty,DECL_CONSTANT,0)) == BAD_INDEX)
-	return BAD_INDEX;
-    if ((pos = new_string(st, str, len)) < 0)
-	return BAD_INDEX;
-    i = INDEX(ix);
-    ram_decl_at(st,i)->res = MAKE_RES(STRING_BITS);
-    ram_decl_at(st,i)->vt = V_STRING;
-    ram_decl_at(st,i)->cn.init.s = pos;
-    return ix;
-}
 
 // Build reactive dependency graph: declaration -> rules that depend on it
 // When a declaration changes, we enqueue all rules that read from it (via LD)
@@ -2778,9 +2667,9 @@ NOINLINE static int is_gate_ld(csp_rt_t* st, int i)
 NOINLINE static void add_state_edge(csp_rt_t* st, index_t* wr, int ord)
 {
     index_t sd = INDEX(st->gsx);
-    if (st->rule_state[ord] && (sd < st->ps.nd) &&
-	((wr[sd] == st->ofs[sd]) || (st->edg[wr[sd]-1] != (index_t)ord)))
-	st->edg[wr[sd]++] = (index_t)ord;
+    if (st->es.rule_state[ord] && (sd < st->ps.nd) &&
+	((wr[sd] == st->es.ofs[sd]) || (st->es.edg[wr[sd]-1] != (index_t)ord)))
+	st->es.edg[wr[sd]++] = (index_t)ord;
 }
 
 // Number the rule bodies of instruction range [lo,hi) in scan order, continuing
@@ -2899,35 +2788,35 @@ void csp_csr(csp_rt_t* st)
     // sized after the counting pass. Nothing is freed -- csp_rebuild resets the
     // middle. wr used to be an index_t[MAX_DECLS] local -- 4K of stack at
     // DECL_BITS=11, and the last thing dimensioned by that width.
-    st->edg = NULL;
-    st->graph_n = 0;               // enq skips the graph until it is fully built
-    st->idg = (index_t*)csp_mid_alloc(st, (size_t)(n + (n+1) + n) * sizeof(index_t));
-    if (st->idg == NULL) { st->ofs = NULL; return; }  // middle full: no graph
-    st->ofs = st->idg + n;
-    wr      = st->ofs + (n+1);
+    st->es.edg = NULL;
+    st->es.graph_n = 0;               // enq skips the graph until it is fully built
+    st->es.idg = (index_t*)csp_mid_alloc(st, (size_t)(n + (n+1) + n) * sizeof(index_t));
+    if (st->es.idg == NULL) { st->es.ofs = NULL; return; }  // middle full: no graph
+    st->es.ofs = st->es.idg + n;
+    wr      = st->es.ofs + (n+1);
 
     // Number every rule body 0..n_rule-1 and build the ordinal -> ip map. ROM
     // first (so its ordinals match what rom_edg was baked with), then RAM.
-    st->rule_ip = NULL;
-    st->rule_state = NULL;
-    st->n_rule = 0;
+    st->es.rule_ip = NULL;
+    st->es.rule_state = NULL;
+    st->es.n_rule = 0;
     {
 	int nr;
 	if (st->rom_nn > 0)
 	    r_rom = number_rules(st, 0, st->rom_nn, NULL, 0);
 	nr = number_rules(st, st->rom_nn, st->ps.nn, NULL, r_rom);
-	st->rule_ip = (index_t*)csp_mid_alloc(st, (size_t)nr * sizeof(index_t));
-	if (st->rule_ip == NULL) { st->ofs = NULL; return; }  // middle full
+	st->es.rule_ip = (index_t*)csp_mid_alloc(st, (size_t)nr * sizeof(index_t));
+	if (st->es.rule_ip == NULL) { st->es.ofs = NULL; return; }  // middle full
 	if (st->rom_nn > 0)
-	    number_rules(st, 0, st->rom_nn, st->rule_ip, 0);
-	number_rules(st, st->rom_nn, st->ps.nn, st->rule_ip, r_rom);
+	    number_rules(st, 0, st->rom_nn, st->es.rule_ip, 0);
+	number_rules(st, st->rom_nn, st->ps.nn, st->es.rule_ip, r_rom);
 	// Parallel: each ordinal's State membership mask (gates reactive dispatch).
-	st->rule_state = (uint16_t*)csp_mid_alloc(st, (size_t)nr * sizeof(uint16_t));
-	if (st->rule_state == NULL) { st->ofs = NULL; return; }  // middle full
+	st->es.rule_state = (uint16_t*)csp_mid_alloc(st, (size_t)nr * sizeof(uint16_t));
+	if (st->es.rule_state == NULL) { st->es.ofs = NULL; return; }  // middle full
 	if (st->rom_nn > 0)
-	    number_rule_states(st, 0, st->rom_nn, st->rule_state, 0);
-	number_rule_states(st, st->rom_nn, st->ps.nn, st->rule_state, r_rom);
-	st->n_rule = (index_t)nr;
+	    number_rule_states(st, 0, st->rom_nn, st->es.rule_state, 0);
+	number_rule_states(st, st->rom_nn, st->ps.nn, st->es.rule_state, r_rom);
+	st->es.n_rule = (index_t)nr;
     }
 
     // Size the two pending sets to the (ordinal, object) key space. Two things
@@ -2940,22 +2829,22 @@ void csp_csr(csp_rt_t* st)
     // does nothing, which is visible rather than silently wrong.
     {
 	size_t bits, grp;
-	st->obj_shift = 0;
-	while ((1u << st->obj_shift) < (unsigned)(st->ps.nq + 1))
-	    st->obj_shift++;
-	bits = (size_t)st->n_rule << st->obj_shift;
+	st->es.obj_shift = 0;
+	while ((1u << st->es.obj_shift) < (unsigned)(st->ps.nq + 1))
+	    st->es.obj_shift++;
+	bits = (size_t)st->es.n_rule << st->es.obj_shift;
 	grp  = BITSET_GROUPS(bits);
-	st->pending[0] = (set_group_t*)csp_mid_alloc(st, grp * sizeof(set_group_t));
-	st->pending[1] = (set_group_t*)csp_mid_alloc(st, grp * sizeof(set_group_t));
-	if (!st->pending[0] || !st->pending[1])
-	    st->pending_cap = 0;
+	st->es.pending[0] = (set_group_t*)csp_mid_alloc(st, grp * sizeof(set_group_t));
+	st->es.pending[1] = (set_group_t*)csp_mid_alloc(st, grp * sizeof(set_group_t));
+	if (!st->es.pending[0] || !st->es.pending[1])
+	    st->es.pending_cap = 0;
 	else
-	    st->pending_cap = (uint32_t)bits;
-	st->gen = 0;
+	    st->es.pending_cap = (uint32_t)bits;
+	st->es.gen = 0;
     }
 
     // Clear in-degree counts
-    memset(st->idg, 0, n * sizeof(index_t));
+    memset(st->es.idg, 0, n * sizeof(index_t));
     memset(reg_imm, 0, sizeof(reg_imm));
     memset(arg_imm, 0, sizeof(arg_imm));
 
@@ -2977,7 +2866,7 @@ void csp_csr(csp_rt_t* st)
 	    if ((current_rule >= 0) && !is_gate_ld(st, i)) {
 		index_t mem = INDEX(instr(st,i,m.mem));
 		if (mem < st->ps.nd) {
-		    st->idg[mem]++;
+		    st->es.idg[mem]++;
 		}
 	    }
 	    break;
@@ -2985,7 +2874,7 @@ void csp_csr(csp_rt_t* st)
 	    if (current_rule >= 0) {
 		index_t mem = INDEX(instr(st,i,mi.mem));
 		if (mem < st->ps.nd) {
-		    st->idg[mem]++;
+		    st->es.idg[mem]++;
 		}
 	    }
 	    break;
@@ -3004,7 +2893,7 @@ void csp_csr(csp_rt_t* st)
 		    if (((avt >> (a*4)) & 0xf) == V_TIMER) {
 			index_t mem = INDEX(arg_imm[a]);
 			if (mem < st->ps.nd)
-			    st->idg[mem]++;
+			    st->es.idg[mem]++;
 		    }
 		}
 	    }
@@ -3026,15 +2915,15 @@ void csp_csr(csp_rt_t* st)
 	index_t sd = INDEX(st->gsx);
 	int o;
 	if (sd < st->ps.nd)
-	    for (o = r_rom; o < (int)st->n_rule; o++)
-		if (st->rule_state[o])
-		    st->idg[sd]++;
+	    for (o = r_rom; o < (int)st->es.n_rule; o++)
+		if (st->es.rule_state[o])
+		    st->es.idg[sd]++;
     }
 
     // Pass 2: Calculate offsets into edge array
-    st->ofs[0] = 0;
+    st->es.ofs[0] = 0;
     for (i = 0; i < st->ps.nd; i++) {
-	st->ofs[i+1] = st->ofs[i] + st->idg[i];
+	st->es.ofs[i+1] = st->es.ofs[i] + st->es.idg[i];
     }
 
     // Now the total edge count is known -> size edg exactly. It comes out zeroed
@@ -3044,9 +2933,9 @@ void csp_csr(csp_rt_t* st)
     // enq_elist reads only the filled part, but csp_dump_code bakes the whole
     // array into rom_edg -- leaving it uninitialised put heap garbage in flash.
     {
-	size_t edges = st->ofs[st->ps.nd];
-	st->edg = (index_t*)csp_mid_alloc(st, (edges ? edges : 1) * sizeof(index_t));
-	if (st->edg == NULL) return;   // middle full: leave idg/ofs, no edges
+	size_t edges = st->es.ofs[st->ps.nd];
+	st->es.edg = (index_t*)csp_mid_alloc(st, (edges ? edges : 1) * sizeof(index_t));
+	if (st->es.edg == NULL) return;   // middle full: leave idg/ofs, no edges
     }
 
     // Pass 3: Fill in rule ORDINALS for each declaration. edg stores the ordinal,
@@ -3054,7 +2943,7 @@ void csp_csr(csp_rt_t* st)
     // same numbering). `ord` walks in lockstep with current_rule, matching the
     // order number_rules handed ordinals out in: the implicit body at the RAM
     // base first (r_rom), then one per NEXT/ENTER.
-    memcpy(wr, st->ofs, st->ps.nd * sizeof(index_t));
+    memcpy(wr, st->es.ofs, st->ps.nd * sizeof(index_t));
     memset(reg_imm, 0, sizeof(reg_imm));
     memset(arg_imm, 0, sizeof(arg_imm));
 
@@ -3079,16 +2968,16 @@ void csp_csr(csp_rt_t* st)
 	    if ((current_rule >= 0) && !is_gate_ld(st, i)) {
 		index_t mem = INDEX(instr(st,i,m.mem));
 		if (mem < st->ps.nd &&
-		    (wr[mem] == st->ofs[mem] || st->edg[wr[mem]-1] != ord))
-		    st->edg[wr[mem]++] = ord;
+		    (wr[mem] == st->es.ofs[mem] || st->es.edg[wr[mem]-1] != ord))
+		    st->es.edg[wr[mem]++] = ord;
 	    }
 	    break;
 	case OP_EQI:
 	    if (current_rule >= 0) {
 		index_t mem = INDEX(instr(st,i,mi.mem));
 		if (mem < st->ps.nd &&
-		    (wr[mem] == st->ofs[mem] || st->edg[wr[mem]-1] != ord))
-		    st->edg[wr[mem]++] = ord;
+		    (wr[mem] == st->es.ofs[mem] || st->es.edg[wr[mem]-1] != ord))
+		    st->es.edg[wr[mem]++] = ord;
 	    }
 	    break;
 	case OP_LI:
@@ -3106,8 +2995,8 @@ void csp_csr(csp_rt_t* st)
 		    if (((avt >> (a*4)) & 0xf) == V_TIMER) {
 			index_t mem = INDEX(arg_imm[a]);
 			if (mem < st->ps.nd &&
-			    (wr[mem] == st->ofs[mem] || st->edg[wr[mem]-1] != ord))
-			    st->edg[wr[mem]++] = ord;
+			    (wr[mem] == st->es.ofs[mem] || st->es.edg[wr[mem]-1] != ord))
+			    st->es.edg[wr[mem]++] = ord;
 		    }
 		}
 	    }
@@ -3133,20 +3022,20 @@ void csp_csr(csp_rt_t* st)
     {
 	index_t w = 0;
 	for (i = 0; i < st->ps.nd; i++) {
-	    index_t base = st->ofs[i];             // read BEFORE overwriting it
+	    index_t base = st->es.ofs[i];             // read BEFORE overwriting it
 	    index_t cnt  = wr[i] - base;           // edges pass 3 actually wrote
 	    index_t j;
-	    st->ofs[i] = w;
+	    st->es.ofs[i] = w;
 	    for (j = 0; j < cnt; j++)
-		st->edg[w++] = st->edg[base+j];
-	    st->idg[i] = cnt;
+		st->es.edg[w++] = st->es.edg[base+j];
+	    st->es.idg[i] = cnt;
 	}
-	st->ofs[st->ps.nd] = w;
+	st->es.ofs[st->ps.nd] = w;
 	// Give the holes back. edg is the last thing bumped so far, so the cursor
 	// can simply be rewound over them -- a bump allocator can free its top.
-	st->mid = (size_t)((uint8_t*)st->edg - st->mem) + CSP_A8((size_t)w * sizeof(index_t));
+	st->mid = (size_t)((uint8_t*)st->es.edg - st->mem) + CSP_A8((size_t)w * sizeof(index_t));
     }
-    st->graph_n = n;   // graph is complete: enq may now read it for ix < n
+    st->es.graph_n = n;   // graph is complete: enq may now read it for ix < n
 
 #endif
 }
@@ -3666,14 +3555,14 @@ int csp_mem_init(csp_rt_t* st, size_t size)
     st->timer = NULL;  st->timer_cap = 0;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     // pending sets, rule_ip and idg/ofs/edg are all sized to actual in csp_csr.
-    st->pending[0] = st->pending[1] = NULL;
-    st->pending_cap = 0;
-    st->obj_shift = 0;
-    st->gen = 0;
-    st->rule_ip = NULL;
-    st->rule_state = NULL;
-    st->n_rule = 0;
-    st->idg = st->ofs = st->edg = NULL;
+    st->es.pending[0] = st->es.pending[1] = NULL;
+    st->es.pending_cap = 0;
+    st->es.obj_shift = 0;
+    st->es.gen = 0;
+    st->es.rule_ip = NULL;
+    st->es.rule_state = NULL;
+    st->es.n_rule = 0;
+    st->es.idg = st->es.ofs = st->es.edg = NULL;
 #endif
     return 0;
 }
@@ -3928,7 +3817,7 @@ NOINLINE static void can_mark_fields(csp_rt_t* st, index_t b)
 	// so there is no single value to compare. Granularity comes from the
 	// per-field pass below; this mark only has to make the copy happen.
 	bitset_set(st->dset, i);
-	st->anyd = CSP_TRUE;
+	st->es.anyd = CSP_TRUE;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 	if (st->reactive)
 	    csp_enq_elist(st, MAKE_INDEX(0, i));
@@ -3950,12 +3839,12 @@ NOINLINE static void can_mark_fields(csp_rt_t* st, index_t b)
 	if (csp_heap_get(st, vw, DOUT).u == csp_heap_get(st, vw, DIN).u)
 	    continue;                     // this field of the frame is unchanged
 	bitset_set(st->dset, leaf);
-	st->anyd = CSP_TRUE;
+	st->es.anyd = CSP_TRUE;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 	if (st->reactive)
 	    csp_enq_elist(st, ix);
 #endif
-	st->update++;
+	st->es.update++;
     }
 }
 
@@ -4365,11 +4254,11 @@ int csp_rt_start(csp_rt_t* st)
     }
 
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-    if (st->pending_cap) {          // drop any work left from a previous build
-	uint32_t g = BITSET_GROUPS(st->pending_cap) * sizeof(set_group_t);
-	memset(st->pending[0], 0, g);
-	memset(st->pending[1], 0, g);
-	st->gen = 0;
+    if (st->es.pending_cap) {          // drop any work left from a previous build
+	uint32_t g = BITSET_GROUPS(st->es.pending_cap) * sizeof(set_group_t);
+	memset(st->es.pending[0], 0, g);
+	memset(st->es.pending[1], 0, g);
+	st->es.gen = 0;
     }
 #endif
     // SAFE state: unwind any runtime accumulators so /clear, /reset and a
@@ -4794,5 +4683,5 @@ void csp_output_timer(csp_rt_t* st)
 	    }
 	}
     }
-    st->wait_ms = wait_ms;
+    st->es.wait_ms = wait_ms;
 }

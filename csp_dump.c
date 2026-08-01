@@ -111,11 +111,11 @@ void dump_edge_list(FILE* f, csp_rt_t* st, index_t ix)
     int n;
     int i = INDEX(ix);
     fprintf(f, "[");
-    if ((n = st->idg[i])) {
+    if ((n = st->es.idg[i])) {
 	int j;
-	int base = st->ofs[i];
+	int base = st->es.ofs[i];
 	for (j = 0; j < n; j++) {
-	    index_t rule = st->edg[base+j];  // parent node
+	    index_t rule = st->es.edg[base+j];  // parent node
 	    if (j > 0) fputc(',', f);
 	    fprintf(f, "%d", rule);
 	}
@@ -862,7 +862,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     if (st->reactive) {
 	n_idg = st->ps.nd;
 	n_ofs = st->ps.nd + 1;
-	n_edg = st->ofs[st->ps.nd] ? st->ofs[st->ps.nd] : 1;
+	n_edg = st->es.ofs[st->ps.nd] ? st->es.ofs[st->ps.nd] : 1;
     }
 #endif
     SP       = (uint32_t)sizeof(csp_sect_t);
@@ -1096,18 +1096,18 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     if (st->reactive) {
 	int nd = st->ps.nd;
-	int nedg = st->ofs[nd];
+	int nedg = st->es.ofs[nd];
 	fprintf(f, "  .s_idg = { { CSP_SECT_IDG }, %u },\n  .idg = {",
 		n_idg*2 + CSP_PAD4(2*n_idg));
-	for (i = 0; i < nd; i++) fprintf(f, "%u,", st->idg[i]);
+	for (i = 0; i < nd; i++) fprintf(f, "%u,", st->es.idg[i]);
 	fprintf(f, "},\n");
 	fprintf(f, "  .s_ofs = { { CSP_SECT_OFS }, %u },\n  .ofs = {",
 		n_ofs*2 + CSP_PAD4(2*n_ofs));
-	for (i = 0; i <= nd; i++) fprintf(f, "%u,", st->ofs[i]);
+	for (i = 0; i <= nd; i++) fprintf(f, "%u,", st->es.ofs[i]);
 	fprintf(f, "},\n");
 	fprintf(f, "  .s_edg = { { CSP_SECT_EDG }, %u },\n  .edg = {",
 		n_edg*2 + CSP_PAD4(2*n_edg));
-	for (i = 0; i < nedg; i++) fprintf(f, "%u,", st->edg[i]);
+	for (i = 0; i < nedg; i++) fprintf(f, "%u,", st->es.edg[i]);
 	if (!nedg) fprintf(f, "0");   // avoid a zero-length array
 	fprintf(f, "},\n");
     }
@@ -1149,7 +1149,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	csp_image_header_t h;
 	int nedg = 0;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
-	if (st->reactive) nedg = st->ofs[st->ps.nd];
+	if (st->reactive) nedg = st->es.ofs[st->ps.nd];
 #endif
 	h.version = ROM_FORMAT_VERSION;
 	h.n_str = st->ps.strp; h.n_decl = st->ps.nd; h.n_instr = st->ps.nn;
@@ -1166,11 +1166,11 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	// edg[nedg]. Only when a graph exists (nedg > 0); else baked 0 and skipped.
 	h.crc_graph = 0;
 	if (nedg > 0) {
-	    h.crc_graph = csp_crc16(0xFFFF, st->idg,
+	    h.crc_graph = csp_crc16(0xFFFF, st->es.idg,
 				    (size_t)st->ps.nd * sizeof(index_t), 0);
-	    h.crc_graph = csp_crc16(h.crc_graph, st->ofs,
+	    h.crc_graph = csp_crc16(h.crc_graph, st->es.ofs,
 				    (size_t)(st->ps.nd + 1) * sizeof(index_t), 0);
-	    h.crc_graph = csp_crc16(h.crc_graph, st->edg,
+	    h.crc_graph = csp_crc16(h.crc_graph, st->es.edg,
 				    (size_t)nedg * sizeof(index_t), 0);
 	}
 	h.crc_hdr = csp_crc16(0xFFFF, &h, sizeof(h) - sizeof(uint16_t), 0);

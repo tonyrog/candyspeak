@@ -1104,10 +1104,17 @@ void setup()
 
     // Report the real memory picture on the board -- the numbers we can only
     // model on the host. free is what csp_mem_init claims the pool from.
+    //
+    // Boot chatter is for a human at a prompt, and an exec-only build has no
+    // prompt: nothing on it reads a command, so nothing on it reads a banner
+    // either. The FAILURE lines below stay in every build -- those are what a
+    // UART is still worth attaching for.
+#if !defined(CSP_EXEC_ONLY)
     csp_print_lit("boot: RAM "); csp_print_uint(csp_system_ram_capacity());
     csp_print_lit(", free ");    csp_print_uint(csp_system_ram_avail());
     csp_print_lit(", struct ");  csp_print_uint((uint32_t)sizeof(csp_rt_t));
     csp_println();
+#endif
 
     // A failed init leaves a half-set-up state; say so instead of running into a
     // fault. This is where an over-eager claim (freeRam - reserve too tight)
@@ -1116,8 +1123,10 @@ void setup()
 	csp_print_line("FATAL: csp_rt_init failed (out of memory)");
 	return;   // leave loop() a no-op rather than crash
     }
+#if !defined(CSP_EXEC_ONLY)
     csp_print_lit("pool "); csp_print_uint((uint32_t)state.mem_limit);
     csp_println();
+#endif
 
     // Wire up the ROM firmware (rom.c) first, so the program runs even when
     // there is no valid save. csp_eeprom_load re-does this on its success path,
@@ -1127,12 +1136,16 @@ void setup()
 
     // Overlay any saved RAM patches on top of the ROM. Returns 0 on success.
     if (csp_eeprom_load(&state) == 0) {
+#if !defined(CSP_EXEC_ONLY)
         csp_print_line("Loaded from EEPROM");
+#endif
     }
     else {
 	csp_clr_error(&state);   // "no saved state" is the normal case at boot,
 				 // not an error to carry into the first command
+#if !defined(CSP_EXEC_ONLY)
         csp_print_line("No saved state, running ROM");
+#endif
     }
 
     // Lay out the whole program: reactive graph + leaf/device setup. MUST be
@@ -1146,7 +1159,9 @@ void setup()
     // initialize input/output/timers ...
     csp_setup(&state);
 
+#if !defined(CSP_EXEC_ONLY)
     csp_print_line("CandySpeak ready");
+#endif
 }
 
 // --- software flow control ---------------------------------------------------
@@ -1269,7 +1284,7 @@ void loop()
     // running, so immediate commands drive outputs and inputs keep sampling.
     csp_input(&state);
     x = state.live ? BAD_INDEX : csp_cycle(&state);   // ROM (seq) + RAM, one model
-    anyd = state.anyd;  // save before commit clears it
+    anyd = state.es.anyd;  // save before commit clears it
     csp_commit(&state);
     csp_output(&state);
 
@@ -1279,7 +1294,7 @@ void loop()
     // SAMPLE_MS in one pass -- timers still fire on time because csp_input_timer
     // checks wall-clock every cycle. wait_ms only bounds how long we may idle.
     {
-	uint32_t remaining = (state.wait_ms != NOTIMEOUT) ? state.wait_ms : SAMPLE_MS;
+	uint32_t remaining = (state.es.wait_ms != NOTIMEOUT) ? state.es.wait_ms : SAMPLE_MS;
 	if (remaining > SAMPLE_MS)
 	    remaining = SAMPLE_MS;   // cap: sample rate wins over timer wait
 	while ((remaining > 0) && !state.line_ready) {   /* line_ready: always 0 exec-only */
