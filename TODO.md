@@ -1,5 +1,8 @@
 # TODO
 
+Hur ska vi hantera skillnaden mellan constanter och parametrar,
+dvs constanter man sätter vi t.ex instansiering av objekt.
+
 Prio-ordning, inte kronologisk. Grovt: först det som kan gå sönder ute på ett
 kort, sedan det som låser upp resten, sedan FAILSAFE-trappan, sedan bekvämlighet
 -- och de coola grejorna sist.
@@ -42,13 +45,6 @@ Klart-markerat flyttas till DONE.md, inte hit.
     State och ändmarkörer räknas med. Kosmetiskt, men det är samma räkning.
 
   Detta är den enda posten på listan som kan låsa ett kort i fält.
-
-## #field mot en buffert utan transport ger nonsens (2026-07-31)
-    #buffer B:4 out
-    #field Bf:8 unsigned B[0..7]     -> Error: word  not a module
-  Antingen ska det fungera (en vanlig RAM-buffert är en lika giltig vy-bas som
-  en CAN-ram) eller ge ett begripligt fel. Felet som kommer nu är från en helt
-  annan del av parsern.
 
 ## Buf[a..b] inne i en modul -- DECL_VIEW som modulmedlem?
   `make_buf_view` anropas från uttrycksparsningen och gör `csp_new_decl`, som
@@ -245,6 +241,23 @@ Inte buggar -- saker som byggts men inte setts fungera på järn.
 
 # DOKUMENTERADE KONSEKVENSER (inte åtgärder)
 
+## En #constant listas som sitt VÄRDE, inte sitt namn
+  `println(A, " ", B)` med `#constant B string = "World"` listas som
+  `println(A," ","World")`. Konstanten viks bort vid parsning: `A = B` och
+  `A = "World"` ger BYTE-IDENTISK kod (`OP_LI .imm=<strängposition>`), och för
+  strängar delar de dessutom position eftersom `lookup_string` deduplicerar.
+  Namnet finns alltså inte i instruktionsströmmen att hitta.
+
+  En omvänd uppslagning vore en GISSNING som döper om äkta literaler:
+  `println("World")` skulle listas som `println(B)` så fort någon deklarerat en
+  konstant med det värdet, och `N = 5` som `N = Five`. Sämre än att tappa namnet.
+
+  Att göra det på riktigt = inte vika konstanter (en instruktion + en
+  minnesläsning per referens, plus ROM-storlek) eller en sidotabell över
+  källform. AVGJORT (Tony 2026-07-31): inte värt det. Listningen är korrekt och
+  klistras tillbaka med samma betydelse; bara namnet är borta, och namnet fanns
+  aldrig i koden.
+
 ## `<-` och changed() fastnar på FÖRE-värdet när källan ändras exakt en gång
   De fyrar på ändring, men regler läser den committade sidan -- alltså värdet
   från före den ändring de fyrade på.
@@ -352,9 +365,21 @@ Inte buggar -- saker som byggts men inte setts fungera på järn.
   Udp.tx = 1
 
 ## Systemvariabler, konfigurerbara
-  Name = "Node1"
-  ID   = 123
-  IP   = 192.168.2.100
+
+  System objekt
+  
+#module Sys
+  #variable NodeName string         = "Node1"
+  #variable NodeID:32 unsigned      = 123
+  #variable NodeIP:32 inet          = 192.168.2.100
+  #constant NodeVersion:32 version  = 1.0.25
+#endif
+#Sys sys
+
+sys.NodeName = "office"
+sys.NodeName = "home"
+...
+sys.NodeID kan användas som CAN node id, där det används.
 
 ## Övrigt
   - Hur kombinerar man ROM + RAM => ny ROM-bas?

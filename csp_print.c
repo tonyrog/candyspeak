@@ -383,7 +383,8 @@ static rostring_t part_name(csp_part_t part)
     case PART_ID:       return ros_id;
     case PART_RX:       return ros_rx;
     case PART_TX:       return ros_tx;
-    case PART_DLC:      return ros_dlc;		
+    case PART_DLC:      return ros_dlc;
+    case PART_LEN:      return ros_len;
     case PART_VAL:
     default:            return ros_value;
     }
@@ -444,7 +445,21 @@ static void exprbuf_store(csp_rt_t* st,
     exprbuf_strref(bp, var);
     if (rimp) exprbuf_str(bp, "<-");
     else exprbuf_char(bp, '=');
-    exprbuf_strref(bp, bp->reg[ip->m.x]);
+    // A string literal compiles to an OP_LI carrying a POSITION in the string
+    // table, and the instruction stream keeps no type -- so on its own the
+    // disassembler renders `A = 54`. The destination decl knows better: when it
+    // is V_STRING and the source is a literal (prio 110, what OP_LI/OP_LIU leave
+    // behind), print the string it points at instead of the index. Without this
+    // a listing with a string in it cannot be pasted back.
+    if ((decl(st, INDEX(ip->m.mem), vt) == V_STRING) &&
+	(bp->prio[ip->m.x] == 110)) {
+	exprbuf_char(bp, '"');
+	if (bp->regi[ip->m.x] > 0)
+	    exprbuf_str_at(st, bp, (sindex_t)bp->regi[ip->m.x]);
+	exprbuf_char(bp, '"');
+    }
+    else
+	exprbuf_strref(bp, bp->reg[ip->m.x]);
 
     bp->reg[ip->m.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
     bp->prio[ip->m.x] = 5;

@@ -177,6 +177,82 @@ Avklarade punkter, flyttade hit från TODO.md. Nyast överst.
   - `/clear` sager nu ocksa att eeprom-kopian ligger kvar. "Cleared" ensamt laser
     som att programmet ar borta.
 
+### Host-loopen sov over sitt eget arbete (2026-07-31)
+
+  - `examples/string.csp`: ett `#in NORMAL`-block med en println skrev ingenting
+    pa tva sekunder, och sedan allt pa en gang -- fast bara EN av raderna hangde
+    pa timern.
+  - Orsak: `#in NORMAL` blir korbart forst i cykel 2, for State stegar
+    INIT -> NORMAL i slutet av cykel 1. Loopen sov da `wait_ms` (timerns
+    deadline, 2000 ms) INNAN cykel 2, trots att det fanns arbete att gora
+    omedelbart. `anyd` fanns redan och anvandes for fortsatt-testet langre ner --
+    men inte for sovbeslutet.
+  - Fix: `else if (!interactive && !anyd)`. Sov bara nar cykeln SATT SIG.
+  - Foljd for testerna: fyra timer-tester foll, och det var ratt att de foll.
+    De byggde pa att hosten sov OVILLKORLIGT, vilket kopplade "en cykel" till
+    "en timerperiod". Ett program som aldrig satter sig (`n = n + 1` obevakat)
+    svalter da klockan helt -- 26 cykler pa 5 ms och timern fyrade aldrig.
+  - Riktig fix for dem: `--virtual-time` utan `-F`. Klockan hoppar till nasta
+    deadline i stallet for att sova, sa en korning ar deterministisk och
+    ogonblicklig OAVSETT sovpolicy. `{virtual_time, true}` i .expect,
+    `csp_test.erl` skickar flaggan. alarm/debounce/filter/watchdog anvander den.
+  - Boardens loop hade aldrig problemet: den kappar sin somn till SAMPLE_MS.
+
+### Strangar: == och .len (2026-07-31)
+
+  - `==` behovde INGENTING. Positionsjamforelse racker eftersom `lookup_string`
+    dedupliserar: samma text hamnar alltid pa samma position, vem som an skriver
+    den, och sokningen ar segmentmedveten sa en ROM-strang aterbrukas av en
+    REPL-rad. Verifierat over literal, over variabler och for `!=`.
+  - `.len` = langdbyten framfor texten. PART_LEN infort; Tonys static assert pa
+    `PART_LAST <= (1 << PART_BITS)` gav en plats over (14 av 16 anvanda).
+    Skrivskyddad: en strangvariabel haller en POSITION, och langden ar en
+    egenskap hos det den pekar pa.
+  - Fallan: den behovde ligga i BADA switcharna i `csp_dio_get_part`. En vanlig
+    `#variable` far en auto-buffert (`setup_variable` -> `setup_buffer`) och ar
+    darfor en VIEW_HEAP, medan en `#constant` ar en value-slot. Forsta forsoket
+    lag bara i slot-grenen och gav tyst 0 -- den tidiga heap-grenen returnerar
+    innan man kommer dit.
+  - Position 0 ("ingen strang") svarar 0 i stallet for att lasa langdbyten
+    utanfor tabellen. `.len` pa nagot som inte ar en strang ar 0, som ovriga
+    delar gor for fel typ.
+
+### Strangvariabler: literalen var flaggad som decl-referens (2026-07-31)
+
+  - Tonys modell: ett `#variable A string = "World"` haller en POSITION i
+    strangtabellen, och tilldelning flyttar bara positionen. Inget kopieras,
+    inget muteras, ingen heap -- darav att den bara kan peka pa en annan
+    konstant. Halva vagen var redan lagd: `csp_load_value` gor
+    `asm_LI(x, val.s)` for V_STRING, dvs laddar en position som IMMEDIATE.
+  - `push_str` byggde dock entryn med `.X=1` (ix ar ett DECL-index) i stallet
+    for `.I=1`. Det ar vad den behovde nar en literal blev en dummy
+    DECL_CONSTANT; efter omlaggningen till "positionen ar vardet" var flaggan
+    kvar. Foljd: `pmatch_const_s` foll pa sitt `if (!result.I)` och `= "World"`
+    forsvann tyst ur deklarationen.
+  - Andra felet: en strang utan initierare har position 0. `csp_print_value`
+    gick da till pos-1 for langdbyten och las utanfor tabellen -- SEGFAULT pa
+    hosten, och vad som nu ligger dar pa ett kort. Nu: tom strang.
+  - `/list` citerar strangar, i BADE deklarationer och regler. Utan citat lyder
+    `= World` som en referens till nagot som heter World, och listningen gick
+    inte att klistra tillbaka. Regelsidan behovde hjalp: instruktionsstrommen
+    bar ingen typ, sa `A = "hi"` renderades som `A=54`. Destinationens decl vet
+    battre -- ar den V_STRING och kallan en literal (prio 110) skrivs strangen
+    ut. Samma monster som `.dir=out`.
+
+### #field krav TR_CAN (2026-07-31)
+
+  - `csp_parse_field` vagrade varje falt vars buffert inte var en CAN-ram, och
+    gjorde det genom `ERR_NOT_A_MODULE` utan argument satt -- darav "word  not a
+    module", ett fel fran en helt annan del av parsern.
+  - Ett falt ar ett BIT-FONSTER in i lagring. Transporten sager hur lagringen nar
+    omvarlden, vilket inte ar fonstrets sak. Allt som verkligen ar CAN-specifikt
+    (ankomstflaggor, sandning vid andring, .id/.dlc/.rx/.tx) ar redan grindat pa
+    transport dar det hander, sa kravet fyllde ingen funktion.
+  - Nu: vilken `#buffer` som helst. Nytt fel `ERR_NOT_A_BUFFER` ("%s is not a
+    buffer") med namnet satt, for fallet nagon pekar ett falt pa en variabel.
+  - Foljden ar att `#buffer` blir anvandbar som delad lagring: `#buffer S:32 out`
+    + `#field` ger byte-atkomst med fast index redan idag.
+
 ### Kortet skrev aldrig nagon prompt (2026-07-31)
 
   - `csp_line_prompt` anropades bara fran host-loopen; `csp_arduino.c` har aldrig

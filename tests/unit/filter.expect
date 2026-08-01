@@ -6,6 +6,12 @@
 %% so s.Out rests just short of 10.0 forever. seq only -- `n = n + 1` is
 %% unguarded and so has no reactive trigger (see can_pack.expect).
 {modes, [seq]}.
+%% The values here are driven by timeout(), so the clock has to be the thing
+%% that advances -- not the host's sleep policy. --virtual-time jumps to the next
+%% timer deadline each cycle: deterministic, instant, and unaffected by whether
+%% the program happens to settle. (It did not use to need saying: the loop slept
+%% unconditionally, which made one cycle equal one timer period by accident.)
+{virtual_time, true}.
 {cycles, 20}.
 {lib, ["lib/filter.csp"]}.
 {checks, [

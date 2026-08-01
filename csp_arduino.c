@@ -714,15 +714,33 @@ int csp_can_recv(csp_rt_t* st, uint32_t* id, uint8_t* data, uint8_t* len)
     return 1;
 }
 
+// FIXME id & 0x80000000 should be used as Extended address flag
+// note that event small addreses could be marked as extended addressing
+// id & 0x40000000 should serv as RTR flag
+// id & 0x20000000 mark a error frame
+
+#define CAN_EFF_FLAG 0x80000000U // EFF/SFF is set in the MSB
+#define CAN_RTR_FLAG 0x40000000U // remote transmission request
+#define CAN_ERR_FLAG 0x20000000U // error frame
+
+#define CAN_SFF_MASK 0x000007FFU // standard frame format (SFF)
+#define CAN_EFF_MASK 0x1FFFFFFFU // extended frame format (EFF)
+#define CAN_ERR_MASK 0x1FFFFFFFU // omit EFF, RTR, ERR flags
+
+#define is_can_id_eff(id) (((id) & CAN_EFF_FLAG) != 0)
+#define is_can_id_sff(id) (((id) & CAN_EFF_FLAG) == 0)
+#define is_can_id_rtr(id) (((id) & CAN_RTR_FLAG) != 0)
+#define is_can_id_err(id) (((id) & CAN_ERR_FLAG) != 0)
+
 int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
 {
     (void)st;
     if (len > 8) len = 8;
     // Anything past the 11-bit standard id range goes out extended.
-    if (id > 0x7FF)
-	CSP_CANDEV.beginExtendedPacket(id);
+    if (is_can_id_eff(id) || (id > 0x7FF))
+	CSP_CANDEV.beginExtendedPacket(id & CAN_EFF_MASK);
     else
-	CSP_CANDEV.beginPacket((int)id);
+	CSP_CANDEV.beginPacket((int) (id & CAN_SFF_MASK));
     CSP_CANDEV.write(data, len);
     return CSP_CANDEV.endPacket() ? 0 : -1;
 }
@@ -1149,14 +1167,13 @@ void setup()
 //
 // Only a real UART needs any of this. On USB CDC the host is NAKed once the
 // endpoint FIFO fills and blocks by itself.
-static uint8_t serial_xoff = 0;
 
-static void serial_xoff_set(uint8_t on)
+static void serial_xoff_set(csp_rt_t* st, uint8_t on)
 {
-    if (on == serial_xoff)
+    if (on == st->serial_xoff)
 	return;
     Serial.write(on ? 0x13 : 0x11);
-    serial_xoff = on;
+    st->serial_xoff = on;
 }
 
 // About to stop reading the port for a while: parsing a line, and any rebuild it
@@ -1166,9 +1183,9 @@ static void serial_xoff_set(uint8_t on)
 // empty: the line completes after twenty characters, available() goes false
 // while the sender is still transmitting, and we walk into a rebuild with 64
 // bytes of UART ring behind us. That is 5.6 ms at 115200; a rebuild is longer.
-static void serial_hold(void)
+static void serial_hold(csp_rt_t* st)
 {
-    serial_xoff_set(1);
+    serial_xoff_set(st, 1);
 }
 
 // Room again -- let the peer talk. Called after every byte taken in and after
@@ -1176,7 +1193,7 @@ static void serial_hold(void)
 // and the peer is still held off.
 static void serial_release(csp_rt_t* st)
 {
-    serial_xoff_set(csp_line_space(st) ? 0 : 1);
+    serial_xoff_set(st, csp_line_space(st) ? 0 : 1);
 }
 
 void loop()
@@ -1215,7 +1232,7 @@ void loop()
 	serial_release(&state);
     }
     if (state.line_ready) {
-	serial_hold();          // about to stop reading for a while
+	serial_hold(&state);          // about to stop reading for a while
 	csp_process_line(&state, state.line_buf);
 	csp_line_done(&state);  // drop it, bring the queue down to the front
 	serial_release(&state); // the queue just shrank -- let the peer talk

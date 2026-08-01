@@ -42,7 +42,7 @@ enum {
     
     P_INTEGER_S,  // parse int expr, store: P_INTEGER, <offset> <set>
     P_FLOAT_S,    // parse float expr, store: P_FLOAT, <offset> <set>
-    P_NUMBER_S,   // parse num expr, store: P_NUMBER,<opt-offset>,<offset> <set>
+    P_CONST_S,    // parse num expr / string, store: P_CONST_S,<opt-offset>,<offset> <set>
     P_EXPR_S,     // capture expr with stop-set: P_EXPR_S, <offset>, <set>
     P_OPTS,       // parse options: P_OPTS, <offset>
     P_OPT,        // optional: P_OPT, <len>, ...pattern...
@@ -77,6 +77,7 @@ enum {
     STOP_TIMER_TMO,
     STOP_TIMER_INIT,
     STOP_CAN_FRAMEID,
+    STOP_BUFFER_CAN_ID,     // frame id after 'can' in pat_buffer    
     STOP_CAN_BIT0,
     STOP_CAN_BIT1,
     STOP_CAN_BIT00,
@@ -90,7 +91,7 @@ enum {
     STOP_ANALOG_PP_CONT,    // PAT_PORT_PIN in pat_analog
     STOP_CAN_RES_CONT,      // PAT_RES in pat_can
     STOP_BUFFER_RES_CONT,   // PAT_RES in pat_buffer
-    STOP_BUFFER_CAN_ID,     // frame id after 'can' in pat_buffer
+
     STOP_BODY_IDX0,         // first index in body lhs  Buf[idx0 ..]
     STOP_BODY_IDX1,         // second index in body lhs Buf[.. idx1]
     STOP_OBJECT_INIT_CONT,
@@ -104,7 +105,7 @@ enum {
     PAT_MODULE,
     PAT_END,
     PAT_RES,
-    PAT_PORT_PIN,    
+    PAT_PORT_PIN,
     PAT_VARIABLE,
     PAT_CONSTANT,
     PAT_DIGITAL,

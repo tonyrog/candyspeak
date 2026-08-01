@@ -605,6 +605,7 @@ static rostring_t csp_format_error(csp_err_t err)
     case ERR_TOO_MANY_STATES:     return ros_err_many_states;
     case ERR_STATE_NOT_DECLARED:  return ros_err_no_state;
     case ERR_NOT_A_MODULE:        return ros_err_not_module;
+    case ERR_NOT_A_BUFFER:        return ros_err_not_buffer;
     case ERR_END_MISMATCH:        return ros_err_end_mismatch;
     case ERR_OBJECT_NOT_DECLARED: return ros_err_no_object;
     case ERR_VARIABLE_NOT_DECLARED: return ros_err_no_variable;
@@ -928,7 +929,14 @@ int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val)
     case V_INTEGER: return csp_print_int(val.i);
     case V_UNSIGNED: return csp_print_uint(val.u);
     case V_FLOAT: return csp_print_float(val.f);
-    case V_STRING: csp_print_str_at(st, val.s); return 1;
+    // Position 0 is "no string": a string variable that was declared without an
+    // initialiser holds it. Printing it walked to pos-1 for the length byte and
+    // read outside the table -- a segfault on the host, and whatever a board
+    // has at that address otherwise. An empty string is the honest rendering.
+    case V_STRING:
+	if (val.s > 0)
+	    csp_print_str_at(st, val.s);
+	return 1;
     case V_TIMER: return csp_print_int(val.t.val);
     // csp_print_lit is a statement, so it cannot sit in a return expression
     default: csp_print_lit("???"); return 3;
@@ -1161,6 +1169,7 @@ static value_t fn_println(csp_rt_t* st, uint16_t type,
     value_t ret;    
     ret = fn_print(st, type, args, nargs);
     ret.i += csp_println();
+    csp_flush();
     return ret;
 }
 
@@ -1647,6 +1656,8 @@ NOINLINE void csp_dio_set_val_part(csp_rt_t* st, value_t* vslot,
     case V_TIMER:   vslot->t.val = v.i; break;
     case V_DIGITAL: vslot->d.val = v.i; break;
     case V_ANALOG:  vslot->a.val = v.i; break;
+	//case V_STRING:  vslot->s = v.i; break;
+    case V_STRING:  vslot->s = v.s; break;		
     default: *vslot = v; break;
     }
 }
@@ -1658,6 +1669,7 @@ NOINLINE void csp_dio_get_val_part(csp_rt_t* st, value_t* vslot,
     case V_TIMER:   vp->i = vslot->t.val; break;
     case V_DIGITAL: vp->i = vslot->d.val & 1; break;
     case V_ANALOG:  vp->i = vslot->a.val; break;
+    case V_STRING:  vp->i = vslot->s; break;
     default: *vp = *vslot; break;
     }
 }
@@ -1822,6 +1834,16 @@ NOINLINE void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp,
 	    if (bp->transport == TR_CAN)
 		vp->i = bp->dlc;
 	    break;
+	// A plain #variable gets an auto-buffer (setup_variable -> setup_buffer),
+	// so a string variable is a HEAP view and lands HERE, not in the value-slot
+	// switch below -- which is for the config+value leaves (digital, analog,
+	// timer, constant). A string CONSTANT does take that path, so both need it.
+	case PART_LEN: {
+	    value_t sv = csp_heap_get(st, vw, dir);
+	    if ((vt == V_STRING) && (sv.s > 0))
+		vp->i = csp_str_byte(st, sv.s - 1);
+	    break;
+	}
 	default: break;
 	}
 	return;
@@ -1857,6 +1879,12 @@ NOINLINE void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp,
 	break;
     case PART_FIRED:    // V_TIMER
 	vp->i = (cvt == V_TIMER) ? vslot->t.fired : 0;
+	break;
+    case PART_LEN:      // V_STRING: the length byte that precedes the text.
+	// Position 0 is "no string" and has no length byte in front of it, so
+	// it answers 0 rather than reading outside the table.
+	vp->i = ((vt == V_STRING) && (vslot->s > 0))
+	    ? csp_str_byte(st, vslot->s - 1) : 0;
 	break;
     default:
 	vp->i = 0;
@@ -2605,6 +2633,7 @@ NOINLINE static csp_part_t part_from_tstr(const tstr_t* s)
 	if (ro_memcmp(s->ptr, s_pin, 3) == 0)    return PART_PIN;
 	if (ro_memcmp(s->ptr, s_dir, 3) == 0)    return PART_DIR;
 	if (ro_memcmp(s->ptr, s_dlc, 3) == 0)    return PART_DLC;
+	if (ro_memcmp(s->ptr, s_len, 3) == 0)    return PART_LEN;
 	break;
     case 4:
 	if (ro_memcmp(s->ptr, s_port, 4) == 0)   return PART_PORT;
@@ -3929,17 +3958,28 @@ NOINLINE static int push_imm(csp_rt_t* st, rentry_t* rstack, int ep,
     return ep+1;
 }
 
-// Push string constant
+// Push string constant. A literal is an IMMEDIATE whose value is a POSITION in
+// the string table -- not a reference to a declaration. It used to mint a dummy
+// DECL_CONSTANT to hang the position on; now the position is the value itself,
+// which is what the rest of the machinery already assumed: csp_load_value does
+// `asm_LI(x, val.s)` for V_STRING, i.e. it loads a position as an immediate.
+//
+// So the entry has to be flagged .I (immediate), not .X (ix is a decl index).
+// Left as .X it failed pmatch_const_s's `if (!result.I)` test, so
+// `#variable A string = "World"` quietly lost its initialiser -- and anything
+// downstream that trusted .X would have read a string position as a decl index.
 NOINLINE static int push_str(csp_rt_t* st, rentry_t* rstack, int ep,
 		    char* ptr, int len)
 {
-    index_t ix;
+    value_t v;
+    int pos;
 
-    ix = lookup_string_const(st, ptr, len);
-    if (ix == BAD_INDEX) ix = new_string_const(st, ptr, len);
-    if (ix == BAD_INDEX) return -1;
-    rstack[ep] = (rentry_t){ .L=0, .X=1, .reg=0, .ix=ix, .vt=V_STRING };
-    return ep+1;
+    if ((pos = lookup_string(st, ptr, len)) < 0) {
+	if ((pos = new_string(st, ptr, len)) < 0)
+	    return -1;
+    }
+    v.s = pos;
+    return push_imm(st, rstack, ep, V_STRING, v);
 }
 
 // Push variable/declaration reference
@@ -4911,7 +4951,7 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
     return 0;
 }
 
-// '#' 'variable' <name>[':' <size>] [<opt>+] ['=' <num>]
+// '#' 'variable' <name>[':' <size>] [<opt>+] ['=' <num> | <string>]
 // <opt> := 'in'|'out'|'inout'|  -- when use as argument in module
 //          'signed'|'unsigned'|'float'
 // Note that in is used for input arguments in objects
@@ -4929,7 +4969,7 @@ static const uint8_t pat_variable[] = {
     P_PAT, PAT_RES, csp_offsetof(variable_param_t, r), STOP_VAR_RES_CONT,
     P_OPTS, csp_offsetof(variable_param_t, opts),
     P_OPT, 6, P_TOK, EQ,
-    P_NUMBER_S,
+    P_CONST_S,
       csp_offsetof(variable_param_t, opts), // pick up vt here
       csp_offsetof(variable_param_t, init),
       STOP_VAR_INIT,
@@ -5008,7 +5048,7 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
     return 0;
 }
 
-// '#' 'constant' <name>[':' <size>] [<opt>+] '=' <num>
+// '#' 'constant' <name>[':' <size>] [<opt>+] '=' <num> | <string>
 typedef struct {
     tstr_t name;
     res_param_t r;
@@ -5021,7 +5061,7 @@ static const uint8_t pat_constant[] = {
     P_PAT, PAT_RES, csp_offsetof(constant_param_t, r), STOP_CONST_RES_CONT,
     P_OPTS, csp_offsetof(constant_param_t, opts),
     P_TOK, EQ,
-    P_NUMBER_S,
+    P_CONST_S,
     csp_offsetof(constant_param_t, opts), // pick up vt here
     csp_offsetof(constant_param_t, init),
     STOP_CONST_INIT,
@@ -5240,9 +5280,16 @@ NOINLINE int csp_parse_field(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	csp_set_error(st, ERR_VARIABLE_NOT_DECLARED);
 	return -1;
     }
-    if ((decl(st, INDEX(idx), type) != DECL_BUFFER) ||
-	(decl(st, INDEX(idx), bf.transport) != TR_CAN)) {
-	csp_set_error(st, ERR_NOT_A_MODULE);   // "not a can buffer"
+    // Any buffer will do. A field is a bit window into storage, and the
+    // transport says how that storage reaches the outside world -- which is
+    // none of the window's business. Requiring TR_CAN here refused every field
+    // over a plain RAM buffer, and did it through ERR_NOT_A_MODULE with no
+    // argument set, so the message read "word  not a module". Everything that
+    // is actually CAN-specific (arrival flags, sending on change) is already
+    // guarded on transport where it happens.
+    if (decl(st, INDEX(idx), type) != DECL_BUFFER) {
+	if (csp_set_error(st, ERR_NOT_A_BUFFER))
+	    csp_set_err_arg_tstr(st, 0, &d.frame);
 	return -1;
     }
     if ((ix = csp_new_udecl(st, &d.name, DECL_FIELD)) == BAD_INDEX)
@@ -6896,7 +6943,7 @@ int csp_mem_init(csp_rt_t* st, size_t size)
 	    return -1;
 	st->mem_limit  = st->mem_size - want_line;
 	st->line_buf   = (char*)st->mem + st->mem_limit;
-	st->line_size  = (uint16_t)want_line;
+	st->line_buf_size  = (uint16_t)want_line;
     }
     // Clear the POOL, not the whole block: /load re-runs csp_rt_init from inside
     // csp_process_line, which is reading the line out of the buffer above the
@@ -8307,6 +8354,22 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 }
 
 
+// A value as it would be WRITTEN in source. Only strings differ from
+// csp_print_value: a listing has to be pasteable, and `= World` reads as a
+// reference to something named World. /state leaves them bare -- that is a value
+// column, not source.
+static void list_value(csp_rt_t* st, vtype_t vt, value_t val)
+{
+    if (vt == V_STRING) {
+	csp_print_char('"');
+	if (val.s > 0)
+	    csp_print_str_at(st, val.s);
+	csp_print_char('"');
+	return;
+    }
+    csp_print_value(st, vt, val);
+}
+
 static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 {
     int i;
@@ -8435,7 +8498,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    // below); reading a value here would touch leaf storage /list must not.
 	    if (!decl(st,i,bound)) {
 		csp_print_lit(" = ");
-		csp_print_value(st, decl(st,i,vt), decl(st,i,va.init));
+		list_value(st, decl(st,i,vt), decl(st,i,va.init));
 	    }
 	    else {
 		// bind <buffer>[<lo>..<hi>] -- a bit-field view, so there is no
@@ -8456,7 +8519,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_vtype(decl(st,i,vt)));
 	    csp_print_lit(" = ");
-	    csp_print_value(st, decl(st,i,vt), decl(st,i,cn.init));
+	    list_value(st, decl(st,i,vt), decl(st,i,cn.init));
 	    list_eol();
 	    break;
 	case DECL_OBJECT:
@@ -9202,7 +9265,7 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 	uint32_t cap     = csp_system_ram_capacity();
 	uint32_t sys     = csp_system_ram_used();
 	uint32_t buffers = csp_derived_bytes(st);
-	uint32_t acc     = sys + model_state() + buffers + st->line_size
+	uint32_t acc     = sys + model_state() + buffers + st->line_buf_size
 			 + CSP_STACK_RESERVE + (uint32_t)used;
 	uint32_t freeram = (cap > acc) ? (cap - acc) : 0;
 	csp_print_lit("RAM ");
@@ -9215,7 +9278,7 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 	csp_println();
 	// The REPL line buffer. Its own row because it is the one allocation whose
 	// size is a user-visible LIMIT -- it says how long a line may be pasted.
-	mem_val(ros_line,    st->line_size);
+	mem_val(ros_line,    st->line_buf_size);
 	mem_val(ros_stack,   CSP_STACK_RESERVE);
 #ifdef CSP_STACK_WATCH
 	// Measured, not reserved: the closest the stack has come to the arena.
@@ -9546,7 +9609,7 @@ void csp_line_prompt(csp_rt_t* st)
 
 int csp_line_space(csp_rt_t* st)
 {
-    return st->line_fill < st->line_size;
+    return st->line_fill < st->line_buf_size;
 }
 
 // Done with the line at the front. Anything that arrived while it ran was stored
@@ -9579,7 +9642,7 @@ void csp_line_input(csp_rt_t* st, char c)
     // with it. Editing a line you have not seen run yet is not a thing anyone
     // does, and appending it to the ready line is the bug this replaced.
     if (st->line_ready) {
-	if (st->line_fill < st->line_size)
+	if (st->line_fill < st->line_buf_size)
 	    st->line_buf[st->line_fill++] = c;
 	return;
     }
@@ -9602,7 +9665,7 @@ void csp_line_input(csp_rt_t* st, char c)
 	    csp_println();     // the echoed line has no newline yet -- without this
 			       // the complaint lands on the end of the input itself
 	    csp_print_lit("Error: line too long, max ");
-	    csp_print_uint(st->line_size - 1);
+	    csp_print_uint(st->line_buf_size - 1);
 	    csp_print_line(" characters -- line ignored");
 	    csp_flush();
 	    // Print the next prompt here and return: no line was made ready, so
@@ -9640,7 +9703,7 @@ void csp_line_input(csp_rt_t* st, char c)
 	csp_flush();
     }
     else if (c >= 32 && c < 127) {
-	if (st->line_pos < st->line_size - 1) {
+	if (st->line_pos < st->line_buf_size - 1) {
 	    st->line_buf[st->line_pos++] = c;
 	    st->line_fill = st->line_pos;
 	    csp_print_char(c);

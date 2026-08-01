@@ -641,6 +641,7 @@ static struct option long_options[] = {
     {"prefix",       required_argument, 0,  1003},
     {"role",         required_argument, 0,  1004},
     {"generation",   required_argument, 0,  1005},
+    {"virtual-time", no_argument,       0,  1006},
     {"memory",       required_argument, 0,  'm'},
     {"pause",        no_argument,       0,  'b'},
     {0,              0,                 0,  0 }
@@ -662,6 +663,7 @@ void usage(const char* prog)
     fprintf(stderr, "      --prefix=NAME    Symbol prefix for -C (default rom)\n");
     fprintf(stderr, "      --role=ROLE      Image role: rom|failsafe (default rom)\n");
     fprintf(stderr, "      --generation=N   Image generation, higher is newer\n");
+    fprintf(stderr, "      --virtual-time   Jump the clock to the next timer instead of sleeping\n");
     fprintf(stderr, "  -P, --debug-parse    Enable parser debugging\n");
     fprintf(stderr, "  -S, --debug-scan     Enable tokenizer debugging\n");
     fprintf(stderr, "  -Q, --debug-trace    Enable variable tracing\n");
@@ -876,6 +878,14 @@ int main(int argc, char** argv)
 	    }
 	    virtual_time = 1;
 	    break;
+	case 1006:  // virtual time WITHOUT an -F input file. The clock jumps to
+		    // the next timer deadline instead of sleeping, so a run is
+		    // deterministic and instant -- which is what a timer test
+		    // needs. Without it such a test is at the mercy of the
+		    // loop's sleep policy, and a program that never settles
+		    // (a free-running counter) starves the clock entirely.
+	    virtual_time = 1;
+	    break;
 	case 'm': {   // usable code-memory budget; accepts a trailing k/K = KiB
 	    char* end = NULL;
 	    unsigned long v = strtoul(optarg, &end, 0);
@@ -973,7 +983,7 @@ int main(int argc, char** argv)
     // line buffer sits in the gap between the two, and raising mem_limit back to
     // the physical size would let decl[] grow down into it.
     if (mem_limit > 0) {
-	size_t pool = state.mem_size - state.line_size;
+	size_t pool = state.mem_size - state.line_buf_size;
 	state.mem_limit = (mem_limit < pool) ? mem_limit : pool;
     }
     csp_set_uconst(&state, csp_uconst);
@@ -1207,8 +1217,15 @@ loop:
 	if ((adv == 0xFFFFFFFFu) || (adv < 1)) adv = 1;
 	vclock += adv;
     }
-    else if (!interactive) {
+    else if (!interactive && !anyd) {
 	// Wait for the next event: a timer deadline, or a frame on the bus.
+	// Only once the cycle SETTLED. A cycle that changed something has left
+	// work that is runnable right now, and sleeping through it delays output
+	// that has nothing to do with any timer: the step out of INIT is such a
+	// change, so `#in NORMAL` first became eligible on the cycle AFTER the
+	// sleep -- a program whose only timer was 2 s printed nothing for two
+	// seconds and then everything at once. anyd is already computed for the
+	// continue-test below; this is the same question asked earlier.
 	int tmo = (state.wait_ms != NOTIMEOUT) ? (int)state.wait_ms : -1;
 	if (csp_can_active(&state) && (nfds > 0)) {
 	    // Bounded even when a frame would wake us, so -T still expires

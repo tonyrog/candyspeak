@@ -27,7 +27,7 @@ static char* stop_set_name(uint8_t sid)
     STRCASE(STOP_CONST_INIT);
     STRCASE(STOP_TIMER_TMO);
     STRCASE(STOP_TIMER_INIT);
-    STRCASE(STOP_CAN_FRAMEID);
+    STRCASE(STOP_CAN_FRAMEID);    
     STRCASE(STOP_BUFFER_CAN_ID);
     STRCASE(STOP_CAN_BIT0);
     STRCASE(STOP_CAN_BIT1);
@@ -40,7 +40,13 @@ static char* stop_set_name(uint8_t sid)
     STRCASE(STOP_ANALOG_RES_CONT);
     STRCASE(STOP_ANALOG_PP_CONT);
     STRCASE(STOP_CAN_RES_CONT);
+    STRCASE(STOP_BUFFER_RES_CONT);
+    STRCASE(STOP_BODY_IDX0);
+    STRCASE(STOP_BODY_IDX1);    	
     STRCASE(STOP_OBJECT_INIT_CONT);
+    STRCASE(STOP_PACK_VAL);
+    STRCASE(STOP_PACK_BITS);
+    STRCASE(STOP_PACK_FIELD_CONT);
     default: return "???";
     }
 }
@@ -56,7 +62,7 @@ static char* dtok_name(uint8_t dtok)
     STRCASE(D_DIGITAL);
     STRCASE(D_ANALOG);
     STRCASE(D_TIMER);
-    STRCASE(D_CAN);
+    // STRCASE(D_CAN);
     STRCASE(D_UART);
     STRCASE(D_SOCKET);
     STRCASE(D_MOD);
@@ -71,6 +77,17 @@ static char* tok_name(uint8_t tok)
 {
     switch(tok) {
     STRCASE(NONE);
+    STRCASE(NEWLINE);    
+    STRCASE(LP);
+    STRCASE(RP);
+    STRCASE(COLON);
+    STRCASE(HASH);
+    STRCASE(DOT);
+    STRCASE(LB);
+    STRCASE(RB);
+    STRCASE(INT);
+    STRCASE(FLT);
+    STRCASE(STR);
     STRCASE(EXCLAMATION);
     STRCASE(TILDE);
     STRCASE(MINUS1);
@@ -97,32 +114,24 @@ static char* tok_name(uint8_t tok)
     STRCASE(RIMP);
     STRCASE(COMMA);
     STRCASE(QUEST);
-    STRCASE(PULLUP);
-    STRCASE(PULLDOWN);
-    STRCASE(RESOLUTION);
-    STRCASE(IN);
-    STRCASE(OUT);
-    STRCASE(INOUT);
+    STRCASE(WORD);    
+    STRCASE(T_PULLUP);
+    STRCASE(T_PULLDOWN);
+    STRCASE(T_RESOLUTION);
+    STRCASE(T_IN);
+    STRCASE(T_OUT);
+    STRCASE(T_INOUT);
     STRCASE(T_PWM);
-    STRCASE(FLOAT);
-    STRCASE(INTEGER);
-    STRCASE(UNSIGNED);
-    STRCASE(STRING);
-    STRCASE(NATIVE);
-    STRCASE(LITTLE);
-    STRCASE(BIG);
-    STRCASE(LP);
-    STRCASE(RP);
-    STRCASE(COLON);
-    STRCASE(HASH);
-    STRCASE(DOT);
-    STRCASE(LB);
-    STRCASE(RB);
-    STRCASE(INT);
-    STRCASE(FLT);
-    STRCASE(STR);
-    STRCASE(WORD);
-    STRCASE(NEWLINE);
+    STRCASE(T_FLOAT);
+    STRCASE(T_INTEGER);
+    STRCASE(T_UNSIGNED);
+    STRCASE(T_STRING);
+    STRCASE(T_NATIVE);
+    STRCASE(T_LITTLE);
+    STRCASE(T_BIG);
+    STRCASE(T_CAN);
+    STRCASE(T_DISABLE);
+    STRCASE(T_ENABLE);    
     default: return "???";
     }
 }
@@ -202,7 +211,7 @@ next:
 	return;
     case P_INTEGER_S:
     case P_FLOAT_S:	
-    case P_NUMBER_S:
+    case P_CONST_S:
     case P_EXPR_S:
 	return;
     case P_ALT:  // BUG? choice should skip!
@@ -253,7 +262,7 @@ next:
 }
 
 // Scan entire pattern,
-// build stop-sets for all P_NUMBER_S, P_INTEGER_S, P_FLOAT_S, P_EXPR_S
+// build stop-sets for all P_CONST_S, P_INTEGER_S, P_FLOAT_S, P_EXPR_S
 static void scan_pattern_(const uint8_t* pat)
 {
     int pi = 0;
@@ -276,7 +285,7 @@ next:
     case P_TOK_W:	// cmd, tok, offset
 	pi += 3;
 	break;
-    case P_NUMBER_S:
+    case P_CONST_S:
 	n = 3;
 	goto p_scan_s;
     case P_INTEGER_S:
@@ -392,6 +401,7 @@ void init_stop_sets(void)
     stop_toks[stop_toks_len++] = T_BIG;
     stop_toks[stop_toks_len++] = T_PULLUP;
     stop_toks[stop_toks_len++] = T_PULLDOWN;
+    stop_toks[stop_toks_len++] = T_STRING;    
     stop_toks[stop_toks_len++] = NONE;
     num_stop_sets = 2;
 }
@@ -470,6 +480,7 @@ NOINLINE decl_opts_t parse_opts(csp_rt_t* st, const token_t* tv,
 	case T_UNSIGNED: opts.vt=V_UNSIGNED; DBG("UNSIGNED,"); break;
 	case T_INTEGER:  opts.vt=V_INTEGER; DBG("INTEGER,"); break;
 	case T_FLOAT:    opts.vt=V_FLOAT; DBG("FLOAT,"); break;
+	case T_STRING:   opts.vt=V_STRING; DBG("STRING,"); break;	    
 	case T_PWM:      opts.pwm = 1; DBG("T_PWM,"); break;
 	case T_IN:       opts.dir |= DIR_IN; DBG("IN,"); break;
 	case T_OUT:      opts.dir |= DIR_OUT; DBG("OUT,"); break;
@@ -601,6 +612,9 @@ static int pmatch_const_s(pmatch_st_t* pst, const token_t* tv, int ti,
 	    break;
 	}
 	return -1;
+    case V_STRING:
+	if (result.vt == V_STRING) break;
+	return -1;
     default:
 	return -1;
     }
@@ -682,12 +696,12 @@ next:
 	    return -1;
 	break;
     }
-    case P_NUMBER_S: {
+    case P_CONST_S: {
 	uint8_t opts_off = pat[pi++];
 	uint8_t val_off  = pat[pi++];
 	uint8_t sid      = pat[pi++];
 	decl_opts_t opts = fetch_opts(pst->data, pst->eo+opts_off);
-	DBG("%sP_NUMBER: (%d) opts_off=%d, val_off=%d, vt=%d\n", indent(l), ti,
+	DBG("%sP_CONST_S: (%d) opts_off=%d, val_off=%d, vt=%d\n",indent(l),ti,
 	    opts_off, val_off, opts.vt);
 	if ((ti = pmatch_const_s(pst,tv,ti,n,opts.vt,val_off,sid)) < 0)
 	    return -1;

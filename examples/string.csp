@@ -1,0 +1,8 @@
+#variable A string = "Hello"
+#constant B string = "World"
+#timer T 2000 = 1
+#in NORMAL
+    println(A, " ", B)
+    A = "Goodbye"
+    A = "Brutal" ? timeout(T)
+#end

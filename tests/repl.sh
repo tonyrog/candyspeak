@@ -162,12 +162,24 @@ Rx           in      buffer   0x200/8 = 00 00 00 00 00 00 00 00
 TxSeq        out     field    [0..15] = 7' "$got"
 
 # A plain RAM buffer has no frame id -- the column stays empty rather than
-# inventing one out of the transport union.
-printf '#buffer B:4 out\n' > "$D/ram.csp"
-got=$(printf '/state\n/quit\n' | repl ./csp "$D/t10.db" --no-eeprom "$D/ram.csp" |
-	  sed -n '/^B /p')
-ck "a plain RAM buffer has no id column" \
-'B            out     buffer           = 00 00 00 00' "$got"
+# inventing one out of the transport union. And it takes FIELDS: a field is a bit
+# window into storage, and the transport says how that storage reaches the
+# outside world, which is none of the window's business. #field used to demand
+# TR_CAN and refuse this with "word  not a module".
+printf '#buffer B:4 out\n#field Lo:8 unsigned B[0..7]\n#field Hi:8 unsigned B[8..15]\n' \
+    > "$D/ram.csp"
+got=$(printf 'Lo = 9\nHi = 255\n/state\n/quit\n' |
+	  repl ./csp "$D/t10.db" --no-eeprom "$D/ram.csp" |
+	  sed -n '/^B \|^Lo\|^Hi/p')
+ck "a plain RAM buffer takes fields and has no id column" \
+'B            out     buffer           = 09 ff 00 00
+Lo           out     field    [0..7]  = 9
+Hi           out     field    [8..15] = 255' "$got"
+
+# ...and a field over something that is not a buffer says so, by name.
+got=$(printf '#variable X = 0\n#field Bad:8 unsigned X[0..7]\n/quit\n' |
+	  repl ./csp "$D/t10b.db" --no-eeprom | grep -v '^OK$')
+ck "a field over a non-buffer names it" "Error: X is not a buffer" "$got"
 
 # --- 10. an over-long line is refused, not truncated -------------------------
 # A line past the buffer used to lose its tail silently and run anyway. That is
@@ -332,6 +344,71 @@ got=$(printf '#variable A = 1\n%s' "$over" |
 	  repl ./csp "$D/t20.db" --no-eeprom --board mega |
 	  tr -d '\a' | grep -c 'A integer = 1')
 ck "an unterminated over-long line strands nothing" "0" "$got"
+
+# --- 16. string variables ----------------------------------------------------
+# A string variable holds a POSITION in the string table, and assignment moves
+# the position -- no copying, no heap. So it can only ever be another constant,
+# which is the whole point: nothing mutates, so nothing needs allocating.
+#
+# Quoting matters as much as the value: a listing has to paste back, and
+# `= World` reads as a reference to something named World.
+echo "strings:"
+got=$(printf '#variable A string = "World"\n#constant Y string = "Foo"\nA = "hello there" ? 1\n/list\n/quit\n' |
+	  repl ./csp "$D/t21.db" --no-eeprom | grep -v '^OK$')
+ck "strings list quoted, in decls and in rules" \
+'#variable A string = "World"  // R
+#constant Y string = "Foo"  // R
+A="hello there" ? 1  // 1 R' "$got"
+
+# Assign from another string constant, and print it.
+got=$(printf '#variable A string = "World"\n#constant Y string = "Foo"\nA = Y\nprintln(A)\n/quit\n' |
+	  repl ./csp "$D/t22.db" --no-eeprom | grep -v '^OK$' | grep -v '^[0-9]*$')
+ck "a string variable takes another constant" "Foo" "$got"
+
+# A string declared without an initialiser holds position 0. Printing it walked
+# to pos-1 for the length byte and read outside the table -- a segfault here,
+# and whatever a board has at that address otherwise.
+got=$(printf '#variable S string\n/list\n/state\n/quit\n' |
+	  repl ./csp "$D/t23.db" --no-eeprom | grep -v '^OK$' | grep '^#variable S\|^S ')
+ck "an uninitialised string is empty, not a crash" \
+'#variable S string = ""  // R
+S                                     = ' "$got"
+
+# --- 17. string equality and .len --------------------------------------------
+# Equality is POSITION equality, which works because lookup_string deduplicates:
+# the same text always lands at the same position, whoever writes it. So `==`
+# needed nothing -- this case exists to keep it that way.
+#
+# .len reads the length byte in front of the text. It has to answer from BOTH
+# view kinds: a plain #variable gets an auto-buffer and is a HEAP view, while a
+# #constant is a value slot.
+echo "string ops:"
+cat > "$D/str.csp" <<'EOF'
+#constant Y string = "Hello!"
+#variable A string = "Foo"
+#variable B string = "Bar"
+#variable Empty string
+#variable N = 9
+#variable Same = 0
+#variable Cross = 0
+#variable Diff = 0
+#variable Lc = 0
+#variable Lv = 0
+#variable Le = 0
+#variable Ln = 0
+B = "Foo"
+Same  = 1 ? A == "Foo"
+Cross = 1 ? A == B
+Diff  = 1 ? A == "Bar"
+Lc = Y.len ? 1
+Lv = A.len ? 1
+Le = Empty.len ? 1
+Ln = N.len ? 1
+EOF
+got=$(./csp -c 4 -s /dev/stdout "$D/str.csp" 2>&1 | tail -1 |
+	  grep -o '"\(Same\|Cross\|Diff\|Lc\|Lv\|Le\|Ln\)",[0-9]*' | tr '\n' ' ')
+ck "string == compares positions, .len reads the length byte" \
+'"Same",1 "Cross",1 "Diff",0 "Lc",6 "Lv",3 "Le",0 "Ln",0 ' "$got"
 
 echo "================================================"
 echo "repl: $pass passed, $fail failed"

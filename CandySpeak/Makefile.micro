@@ -1,9 +1,8 @@
 # Simply use arduino-cli
 #
-FQBN=arduino:avr:mega
-#DEV=/dev/serial/by-id/usb-Arduino_Srl_Arduino_mega_55431313038351C04281-if00
+FQBN=arduino:avr:micro
 DEV=/dev/ttyACM0
-BPATH="./build/tmp.arduino.avr.mega"
+BPATH="./build/tmp.arduino.avr.micro"
 # CSP_ARENA_MALLOC: claim the pool from the heap at boot, sized to freeRam() minus
 # the stack reserve -- so the arena is however much RAM is actually free after the
 # core and every linked library took theirs, decided at runtime rather than by a
@@ -26,7 +25,7 @@ compile:
 #                            not by hand-placed probes. Costs ~4.5K flash.
 #
 # Read the margin row: `margin  -NNN  at 0xADDR`. Negative = the stack has been
-# inside the declarations. Resolve ADDR with:  make -f Makefile.mega whichfn ADDR=0xADDR
+# inside the declarations. Resolve ADDR with:  make -f Makefile.micro whichfn ADDR=0xADDR
 #
 # The margin row itself (without the fn address) is ALWAYS present -- csp_stack_mark
 # samples the known-deep points (csp_eval_rule, csp_parse, csp_parse_expr, pmatch)
@@ -42,9 +41,9 @@ watch:
 # Resolve a `margin ... at 0xADDR` value to a function. AVR function pointers on
 # a 256K part are WORD addresses, so the real byte address is ADDR*2 -- this
 # prints the symbol at both interpretations so you can't pick the wrong one.
-#   usage: make -f Makefile.mega whichfn ADDR=0x17e1
+#   usage: make -f Makefile.micro whichfn ADDR=0x17e1
 whichfn:
-	@test -n "$(ADDR)" || { echo "usage: make -f Makefile.mega whichfn ADDR=0x17e1"; exit 1; }
+	@test -n "$(ADDR)" || { echo "usage: make -f Makefile.micro whichfn ADDR=0x17e1"; exit 1; }
 	@elf=$(BPATH)/CandySpeak.ino.elf; \
 	 for scale in 1 2; do \
 	   b=$$(( $(ADDR) * scale )); \
@@ -60,5 +59,5 @@ upload:
 	arduino-cli upload -p $(DEV) --fqbn $(FQBN)
 
 strings:
-	avr-objcopy -O binary --only-section=.data build/arduino.avr.mega/CandySpeak.ino.elf mega_data.bin
+	avr-objcopy -O binary --only-section=.data build/arduino.avr.micro/CandySpeak.ino.elf mega_data.bin
 	strings -n 4 mega_data.bin

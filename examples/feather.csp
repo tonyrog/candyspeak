@@ -1,0 +1,6 @@
+
+#analog Px:16 out 9:0
+#digital Pwr out 20     // 1 pixel(s) on, 0 pixel(s) off
+#digital Led out 13
+
+Px = 0xF800

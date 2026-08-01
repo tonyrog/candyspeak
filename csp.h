@@ -426,8 +426,13 @@ typedef enum  {
     PART_RX,     // TR_CAN buffer: a frame arrived and is now readable (1 cycle)
     PART_TX,     // TR_CAN buffer: write 1 to force a send this cycle
     PART_DLC,    // TR_CAN buffer: bytes to send / bytes last received
+    PART_LEN,    // V_STRING: characters in the string. Read-only -- a string
+		 // variable holds a POSITION, and lengths are a property of
+		 // what it points at, not of the variable.
     PART_LAST,
 } csp_part_t;
+
+CSP_STATIC_ASSERT(PART_LAST <= (1 << PART_BITS), "too many parts");
 
 // How to reach a leaf's value. Everything lives in the buffer heap.
 // See doc/DESCRIPTORS.md.
@@ -1083,6 +1088,7 @@ typedef enum {
     ERR_STATE_NOT_DECLARED,
     ERR_END_MISMATCH,
     ERR_NOT_A_MODULE,
+    ERR_NOT_A_BUFFER,
     ERR_OBJECT_NOT_DECLARED,
     ERR_VARIABLE_NOT_DECLARED,
     ERR_FIELD_NOT_FOUND,
@@ -1365,7 +1371,7 @@ typedef struct _csp_rt_t
     // keeps arriving is stored raw behind it and re-fed afterwards, so a paste
     // does not have to wait on the driver's FIFO alone. Hence two cursors.
     char*    line_buf;
-    uint16_t line_size;      // capacity in bytes, terminator included
+    uint16_t line_buf_size;  // capacity in bytes, terminator included
     uint16_t line_pos;       // cursor of the line being assembled (NUL position
 			     // once it is ready)
     uint16_t line_fill;      // bytes held in total; == line_pos unless a ready
@@ -1373,6 +1379,7 @@ typedef struct _csp_rt_t
     uint8_t  line_ready;     // a complete line is waiting at the front
     uint8_t  line_ovf;       // a character was dropped -> refuse the whole line
     uint8_t  need_prompt;    // print "> " before the next read
+    uint8_t  serial_xoff;    // status of soft flow control
 
     // All leaf values live in the buffer heap (see doc/DESCRIPTORS.md). Each of
     // these is its own allocation, sized to csp_estimate in csp_rt_start.

@@ -74,8 +74,17 @@ eval_test(File, Opts, Mode) ->
                  [] -> "";
                  _  -> string:join(Libs, " ") ++ " "
              end,
-    Cmd = io_lib:format("~s ~s-c ~p -s ~s -R ~s~s 2>&1",
-                        [?CSP, RFlag, Cycles, TmpState, LibStr, File]),
+    %% {virtual_time, true} makes the clock JUMP to the next timer deadline
+    %% instead of sleeping. A test whose values are driven by timeout() is
+    %% otherwise at the mercy of the loop's sleep policy -- and a program that
+    %% never settles (an unguarded counter) starves the clock completely, so the
+    %% timer never fires at all. With it, a run is deterministic and instant.
+    VFlag = case proplists:get_value(virtual_time, Opts, false) of
+                true -> "--virtual-time ";
+                _    -> ""
+            end,
+    Cmd = io_lib:format("~s ~s~s-c ~p -s ~s -R ~s~s 2>&1",
+                        [?CSP, RFlag, VFlag, Cycles, TmpState, LibStr, File]),
     _Output = os:cmd(lists:flatten(Cmd)),
     StateResult = file:consult(TmpState),
     file:delete(TmpState),

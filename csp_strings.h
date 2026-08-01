@@ -143,6 +143,8 @@ extern rochar s_tx[3] RODATA;
 #define ros_tx ((rostring_t) s_tx)
 extern rochar s_dlc[4] RODATA;
 #define ros_dlc ((rostring_t) s_dlc)
+extern rochar s_len[4] RODATA;
+#define ros_len ((rostring_t) s_len)
 extern rochar s_err_ok[3] RODATA;
 #define ros_err_ok ((rostring_t) s_err_ok)
 extern rochar s_err_syntax[13] RODATA;
@@ -163,6 +165,8 @@ extern rochar s_err_no_state[22] RODATA;
 #define ros_err_no_state ((rostring_t) s_err_no_state)
 extern rochar s_err_not_module[21] RODATA;
 #define ros_err_not_module ((rostring_t) s_err_not_module)
+extern rochar s_err_not_buffer[19] RODATA;
+#define ros_err_not_buffer ((rostring_t) s_err_not_buffer)
 extern rochar s_err_end_mismatch[13] RODATA;
 #define ros_err_end_mismatch ((rostring_t) s_err_end_mismatch)
 extern rochar s_err_no_object[26] RODATA;

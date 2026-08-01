@@ -68,6 +68,7 @@ fired fired
 rx rx
 tx tx
 dlc dlc
+len len
 # error texts -- here rather than as literals in csp_format_error so they land
 # in flash like every other string in this table. Printed by csp_print_error,
 # which substitutes %s and %d.
@@ -81,6 +82,7 @@ err_no_module module %s not declared
 err_many_states too many states
 err_no_state state %s not declared
 err_not_module word %s not a module
+err_not_buffer %s is not a buffer
 err_end_mismatch end mismatch
 err_no_object object %s is not declared
 err_no_variable variable %s is not declared
