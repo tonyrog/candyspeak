@@ -21,6 +21,15 @@
 #include "csp_print.h"
 #include "csp_compile.h"
 #include "bitpack.h"
+
+// An exec-only build has no compiler: a ROM image is produced on the host and
+// an EEPROM patch is stored already compiled, so nothing on the target turns
+// text into instructions. Guarded as a WHOLE rather than per-function -- the
+// Arduino build compiles every .c in the sketch directory, and an empty
+// translation unit is how you opt out there. It also means a call that should
+// not exist becomes a LINK ERROR instead of a jump into unscanned pattern
+// tables, which is exactly how ./csp-exec used to segfault on a source file.
+#if !defined(CSP_EXEC_ONLY)
 #ifdef DEBUG
 #include "csp_dump.h"
 #include <stdio.h>
@@ -3424,3 +3433,5 @@ void csp_compile_init(void)
     scan_pattern(PAT_PACK,     pat_pack);
     scan_pattern(PAT_OBJECT,   pat_object);
 }
+
+#endif /* !CSP_EXEC_ONLY */

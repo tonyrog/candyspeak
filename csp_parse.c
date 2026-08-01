@@ -1,6 +1,12 @@
 #include "csp_parse.h"
 #include <string.h>
 
+// The pmatch engine is part of the compiler: it exists to turn a token stream
+// into declarations. An exec-only build has no compiler, so this whole
+// translation unit goes with it -- same reasoning and same shape as
+// csp_compile.c.
+#if !defined(CSP_EXEC_ONLY)
+
 // Stop-set storage: all tokens in one array, NONE-terminated sets
 static uint8_t stop_toks[MAX_STOP_TOKENS];
 static uint8_t stop_pos[NUM_STOP_SETS];
@@ -891,3 +897,5 @@ int pmatch(csp_rt_t* st, const token_t* tv, int ti, size_t n,
     pst.cont_sp = 0;  // continuation stack empty
     return pmatch_(&pst, tv, ti, n, 0, pat);
 }
+
+#endif /* !CSP_EXEC_ONLY */

@@ -65,6 +65,9 @@ csp:	$(OBJS)
 # Point them at a real program with:  ./csp -n -C -O rom.c prog.csp && make exec
 EXEC_SRC = csp_linux.c csp_rt.c csp_repl.c csp_compile.c csp_dump.c \
 	   csp_eeprom.c csp_parse.c csp_print.c csp_strings.c rom.c
+# csp_repl.c, csp_compile.c and csp_dump.c are still LISTED: each guards itself
+# to an empty translation unit, so the file list stays the same as ./csp and a
+# missing guard shows up as a link error rather than a silent divergence.
 EXEC_FLAGS = -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC -Wall -g $(SAN)
 
 exec:	csp_strings.h

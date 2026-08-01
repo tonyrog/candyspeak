@@ -177,6 +177,35 @@ Avklarade punkter, flyttade hit från TODO.md. Nyast överst.
   - `/clear` sager nu ocksa att eeprom-kopian ligger kvar. "Cleared" ensamt laser
     som att programmet ar borta.
 
+### csp-exec stadad: en sak, och den kraschar inte (2026-07-31)
+
+  - `./csp-exec examples/string.csp` gav en core dump. Orsaken var inte att
+    parsern saknades utan att den fanns KVAR och var TRASIG: `csp_compile.c` var
+    inte grindad, bara `csp_repl.c` och anropet till `csp_compile_init()`. Sa
+    monstertabellerna var oskannade och `csp_linux.c` korde rakt in i
+    oinitierad pmatch-state. Pa Arduino markes det aldrig -- dar ar den onabar
+    och --gc-sections slanger den.
+  - Nu grindade som HELHET, som csp_repl.c: `csp_compile.c` och `csp_parse.c`
+    (pmatch-motorn ar ocksa kompilator). Da blir en felaktig anropsvag ett
+    LANKFEL, och det var precis vad som hande -- grinden pekade ut fem stallen
+    i csp_linux.c som fortfarande anropade kompilatorn: `parse_file`,
+    `cycle_input` (-I parsar sina rader med tokenizern) och tre i main.
+  - `csp_dump.c` grindades FORST, och det var fel: den innehaller bade
+    -C-generatorn och `csp_dump_state` som `-s`/`-Q` behover. Den ar dessutom
+    host-only (ingen symlank i sketchen), sa den nar aldrig ett kort. Aterstalld.
+  - `-h` har nu tva texter. Exec-only listar bara det som finns och sager vad
+    den ar: "Runs the ROM image linked into this binary, plus any EEPROM patch."
+  - Kompilatorflaggor AVVISAS i stallet for att accepteras och ignoreras
+    (-C -O -p -n -i -b -S -P --prefix/--role/--generation), och ett filargument
+    ger "this build runs its linked ROM image and cannot read source (use ./csp)".
+  - Filerna star kvar i EXEC_SRC. Var och en grindar sig sjalv till en tom
+    translation unit, sa fillistan ar densamma som for ./csp och en glomd grind
+    blir ett lankfel i stallet for en tyst avvikelse.
+  - SVAR pa var eval anvander tok_table: INGENSTANS. I csp_rt.c forekommer den
+    bara i `find_tok_entry` och de fem `op_table_*`-accessorerna, alla
+    exporterade till kompilatorn, plus ra atkomst fran disassemblern i
+    csp_print.c. Den ar redan borta ur exec-only-bilden.
+
 ### Kompilator-rester ur csp_rt.c + strangtabellerna matta (2026-07-31)
 
   - Flyttat till csp_compile.c: `lookup_const`, `new_signed_const`,

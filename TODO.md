@@ -65,27 +65,49 @@ Klart-markerat flyttas till DONE.md, inte hit.
 
 # 2. INFRASTRUKTUR SOM LÅSER UPP RESTEN
 
-## T_-prefix på tok_t (Tonys)
-  Blockerar ESP32-bygget: `PULLUP`/`PULLDOWN` krockar med esp32-hal-gpio.h.
-  Options är gjorda (`T_xyz`), resten kvar. Fälla att minnas: token-pasting
-  (`op_##`, `f_##`) -- makron måste följa med i omdöpningen.
+## ihex-kommandokanal: binär styrning av en nod utan parser (IDÉ, 2026-07-31)
+  En exec-only-nod har ingen parser -- den kan alltså inte ta emot CandySpeak
+  som text. Men den behöver ändå konfigureras, patchas och inspekteras. Kanalen
+  för det är binär.
 
-## Rebas-primitiv: csp_load_rom mot en GIVEN image-pekare
-  Idag rebasar `csp_load_rom` runtime på den LÄNKADE `rom_image`. Gör den till en
-  primitiv som tar vilken image som helst. Oberoende värdefull -- gör den först:
-  - förbereder FAILSAFE-växlingen (steg 1 i trappan nedan),
-  - gör ROM-recovery FUZZBAR (peka på en avsiktligt korrupt kopia och se att
-    degraderingen faktiskt sker), vilket idag inte går att testa alls.
+  RAMFORMAT: Intel-HEX-poster, `:LLAAAATTDD..CC`. Inte APDU:s byte-ström
+  (CLA INS P1 P2 Lc), trots att det var namnet idén föddes med -- kanalen är en
+  DELAD UART med en människa på, och radorienterad ASCII vinner där:
+  - går genom radläsaren oförändrad (kö, XOFF, för lång rad -- allt redan gjort),
+  - `:` kan inte inleda en CandySpeak-rad, så diskrimineringen är gratis och
+    hex kan blandas med vanlig prompt,
+  - går att klistra in, och varje inbyggnadsverktyg spottar redan ur sig det,
+  - längd + checksumma finns i formatet.
+  APDU:s SEMANTIK (INS + parametrar) läggs i typbyten. Strukturen utan egen ram.
 
-## En harness, inte två
-  `.stdin`-stödet (`<test>.csp.stdin`, pipas in i REPL:en) sitter i `test.sh`,
-  men `make test` kör `run_tests.escript` som inte matar stdin. Så
-  `tests/unit/module_abort` bevisar ingenting under `make test`.
-  Att göra: flytta `.stdin`-stödet till `csp_test.erl`.
-  OBS: `tests/repl.sh` täcker numera EEPROM-rundturen (/save + /load), listnings-
-  taggar, ROM-bilder och paste-vägen -- så det som faktiskt återstår är
-  `module_abort`s stdin-fall.
+  BÖRJA MED IDENTIFIERA + LÄSA, inte skriva:
+  1. ID -- svara med bildens `crc_hdr` (= `rom_fp`, det csp_eeprom redan
+     använder), version och räknare. Utan det vet man inte att indexen betyder
+     vad man tror, och då får man inte patcha. Säkerhet före funktion.
+  2. LÄS -- dumpa decls/instrs/strängar binärt. Gör skrivvägen testbar (skriv,
+     läs tillbaka, jämför) och låter ramformatet mogna på ofarlig trafik.
+  3. SKRIV -- lägg till decl / instruktioner / sträng. Sedan commit/rebuild.
+  4. Spara/ladda/rensa -- återanvänder eeprom-vägarna rakt av.
 
+  POÄNGEN med läs-först: en nod kan inspekteras HELT med bara läskommandon,
+  för disassemblern behöver inte finnas på kortet. Noden dumpar binärt, HOSTEN
+  renderar `/list`. Det är exec-only-tänket taget hela vägen.
+
+  SAMMA BYTES SOM EEPROM: en EEPROM-patch ÄR redan binära decls och
+  instruktioner. Att skriva en decl över tråden och att skriva en till EEPROM är
+  samma format -- ett format, två transporter. Designa kommandona så att de
+  producerar det eeprom lagrar, inte något parallellt.
+
+  UTVECKLAS PÅ HOSTEN: `make exec` ger en csp-exec att köra kommandona mot, så
+  hela kommandouppsättningen kan byggas och testas i tests/repl.sh utan
+  hårdvara. csp-exec-städningen är gjord (se DONE 2026-07-31).
+
+  BEROENDE (Tony 2026-07-31): EEPROM och IAP är BÅDA nödvändiga på en riktig
+  nod, och de löser olika halvor. EEPROM = litet, per nod, skrivs ofta,
+  överlever omflashning -> konfiguration och små regelpatchar. IAP = hel bild,
+  skrivs sällan -> byta ROM:en själv, eller en andra plats (= FAILSAFE-som-
+  andra-image, grupp 3). Därför är `CSP_EXEC_ONLY` och `CSP_NO_EEPROM`
+  oberoende flaggor: en riktig nod vill ha den första men inte den andra.
 
 # 3. FAILSAFE-TRAPPAN
 

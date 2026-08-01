@@ -532,6 +532,7 @@ void csp_output(csp_rt_t* st)
     csp_output_timer(st);
 }
 
+#if !defined(CSP_EXEC_ONLY)
 int parse_file(csp_rt_t* st, FILE* fin)
 {
     char buf[MAX_LINE_SIZE];
@@ -559,6 +560,7 @@ int parse_file(csp_rt_t* st, FILE* fin)
     csp_new_decl(st, &empty, DECL_END, 0);
     return 0;
 }
+#endif
 
 void print_defines()
 {
@@ -656,6 +658,34 @@ static struct option long_options[] = {
 
 void usage(const char* prog)
 {
+#if defined(CSP_EXEC_ONLY)
+    // An exec-only build has no compiler and no command layer, so it takes no
+    // source and no compiler flags. Listing them would be an offer it cannot
+    // keep -- and worse, they used to be ACCEPTED and then walk into an
+    // uninitialised parser.
+    fprintf(stderr, "Usage: %s [options]\n", prog);
+    fprintf(stderr, "Runs the ROM image linked into this binary, plus any\n");
+    fprintf(stderr, "EEPROM patch. No compiler, no prompt: use ./csp for those.\n");
+    fprintf(stderr, "Options:\n");
+    fprintf(stderr, "  -h, --help           Show this help\n");
+    fprintf(stderr, "  -r, --reactive       Enable reactive mode\n");
+    fprintf(stderr, "  -c, --cycles=N       Max cycles (0=unlimited)\n");
+    fprintf(stderr, "  -T, --timeout=MS     Max runtime in ms (0=unlimited)\n");
+    fprintf(stderr, "      --virtual-time   Jump the clock to the next timer instead of sleeping\n");
+    fprintf(stderr, "  -Q, --debug-trace    Enable variable tracing\n");
+    fprintf(stderr, "  -R, --debug-result   Add result to tracing (Erl)\n");
+    fprintf(stderr, "  -s, --state-file=F   State file (Erlang format)\n");
+    fprintf(stderr, "  -e, --eeprom=F       EEPROM file for save/load (default: eeprom.db)\n");
+    fprintf(stderr, "      --no-eeprom      Do not overlay the saved EEPROM patches at boot\n");
+    fprintf(stderr, "  -I, --input-file=F   Data input file\n");
+    fprintf(stderr, "      --board=NAME     Simulate a board: mega, mkrzero\n");
+    fprintf(stderr, "      --can=IFACE      SocketCAN interface for CAN frames\n");
+    fprintf(stderr, "  -M, --ram=N[k]       Total RAM the board has (or Nk KiB)\n");
+    fprintf(stderr, "  -U, --ram-used=N[k]  RAM the system/linked libraries take\n");
+    fprintf(stderr, "  -m, --memory=N[k]    Usable code memory budget in bytes (or Nk KiB)\n");
+    fprintf(stderr, "  -E, --eeprom-size=N[k] Simulated EEPROM capacity (0=unbounded)\n");
+    fprintf(stderr, "  -L[erlang|erl|text|txt]  Trace output language\n");
+#else
     fprintf(stderr, "Usage: %s [options] [file...]\n", prog);
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "  -h, --help           Show this help\n");
@@ -694,6 +724,7 @@ void usage(const char* prog)
     fprintf(stderr, "\n");
     fprintf(stderr, "If no file is given, reads from stdin.\n");
     fprintf(stderr, "In interactive mode (-i), type /help for commands.\n");
+#endif
 }
 
 char    input_buf[MAX_LINE_SIZE];
@@ -727,6 +758,12 @@ void cycle_input_values(csp_rt_t* st, token_t* tv, size_t num)
 int input_applied = 1;   // virtual mode: has the loaded row been applied?
 int input_done = 0;      // virtual mode: input file exhausted
 
+#if defined(CSP_EXEC_ONLY)
+// -I feeds rows of `<time_ms> <var>=<val>` and parses them with the TOKENIZER,
+// which this build does not have. Refuse the option rather than link half a
+// compiler back in for a test harness.
+int cycle_input(csp_rt_t* st, FILE* fin) { (void)st; (void)fin; return -1; }
+#else
 // read <cycle> <delay> <var1> '=' <value1>  <var2> '=' <value2> ...
 // In virtual mode the first field is an absolute virtual time (ms); a row is
 // applied once vclock reaches it, then the next row is loaded.
@@ -780,6 +817,7 @@ int cycle_input(csp_rt_t* st, FILE* fin)
     cycle_input_values(st, input_tv, input_num);
     return 0;
 }
+#endif
 
 
 int main(int argc, char** argv)
@@ -829,27 +867,38 @@ int main(int argc, char** argv)
 	case 'h':
 	    usage(argv[0]);
 	    exit(0);
+#if defined(CSP_EXEC_ONLY)
+	// Accepted-and-ignored is the worst answer: -C would print nothing, -i
+	// would give a prompt with no commands behind it, and a source file used
+	// to reach an uninitialised parser and segfault. Say what is missing.
+	case 'i': case 'b': case 'n': case 'C': case 'P': case 'S':
+	case 'p': case 'O': case 1003: case 1004: case 1005:
+	    fprintf(stderr, "%s: that option needs the compiler; "
+		    "this build has none (use ./csp)\n", argv[0]);
+	    exit(1);
+#else
 	case 'i': interactive = 1; break;
 	case 'b': pause_start = 1; interactive = 1; break;  // pause needs the REPL
-	case 'e': eeprom_file = optarg; break;
-	case 1001: can_iface = optarg; break;
-	case 1002: no_eeprom = 1; break;
+	case 'n': execute = 0; break;
+	case 'C': compile = 1; break;
+	case 'P': debug_parse = 1; break;
+	case 'S': debug_scan = 1; break;
 	case 1003: rom_prefix = optarg; break;   // --prefix: symbol prefix for -C
 	case 1004:                               // --role: what the image is for
 	    rom_role = (strcmp(optarg, "failsafe") == 0) ? CSP_ROLE_FAILSAFE
 							 : CSP_ROLE_ROM;
 	    break;
 	case 1005: rom_generation = atoi(optarg); break;
+#endif
+	case 'e': eeprom_file = optarg; break;
+	case 1001: can_iface = optarg; break;
+	case 1002: no_eeprom = 1; break;
 	case 'r': reactive = 1; break;   // -r: enable reactive mode (no argument)
-	case 'n': execute = 0; break;
-	case 'C': compile = 1; break;
 	case 'c': max_cycles = atoi(optarg); break;
 	case 'T': max_time_ms = atoi(optarg); break;
 	case 'd': debug = 1; break;
-	case 'P': debug_parse = 1; break;
 	case 'R': debug_result = 1; break;
 	case 'Q': debug_trace = 1; break;
-	case 'S': debug_scan = 1; break;
 	case 's':
 	    lang = ERLANG;
 	    debug_trace = 1;
@@ -858,6 +907,7 @@ int main(int argc, char** argv)
 		exit(1);
 	    }
 	    break;
+#if !defined(CSP_EXEC_ONLY)
 	case 'p':
 	    debug_parse = 1;
 	    if ((parse_out = fopen(optarg, "w")) == NULL) {
@@ -871,6 +921,7 @@ int main(int argc, char** argv)
 		exit(1);
 	    }
 	    break;
+#endif
 	case 'I':
 	    // FIXME: multiple input files?
 	    if ((input_file = fopen(optarg, "r")) == NULL) {
@@ -1001,6 +1052,18 @@ int main(int argc, char** argv)
 	csp_load_rom(&state);
 
     // Parse input files (if any)
+#if defined(CSP_EXEC_ONLY)
+    // THE CRASH. This build links csp_compile.c only as an empty translation
+    // unit, and even when it did not, csp_compile_init() is never called -- so
+    // the pattern tables are unscanned and csp_parse walked straight into
+    // uninitialised pmatch state. A source file is not something this binary can
+    // be given; say so instead of dying on it.
+    if (optind < argc) {
+	fprintf(stderr, "%s: '%s': this build runs its linked ROM image and "
+		"cannot read source (use ./csp)\n", argv[0], argv[optind]);
+	exit(1);
+    }
+#else
     if (optind < argc) {
 	src_file = argv[optind];   // first one, for the ROM provenance banner
 	while (optind < argc) {
@@ -1027,6 +1090,7 @@ int main(int argc, char** argv)
 	    exit(1);
 	}
     }
+#endif
 
     // Overlay the saved EEPROM patches on top of the ROM baseline -- ALWAYS, the
     // way the Arduino boot does (csp_load_rom then csp_eeprom_load): the patches

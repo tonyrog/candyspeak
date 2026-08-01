@@ -7,6 +7,7 @@
 #include "csp_dump.h"
 #include "csp_print.h"
 
+
 extern const op_entry_t decl_table[];
 extern const op_entry_t tok_table[];
 extern const op_info_t op_info[];
@@ -1410,3 +1411,4 @@ void csp_list_rules(FILE* f, csp_rt_t* st)
     st->list_state = -1;
     csp_set_file_output(savef);
 }
+
