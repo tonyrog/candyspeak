@@ -2,14 +2,31 @@
 #
 FQBN=arduino:samd:adafruit_circuitplayground_m0
 DEV=/dev/ttyACM0
-OPTS=--build-property "compiler.c.extra_flags=-Os -DCSP_CPX" \
-     --build-property "compiler.cpp.extra_flags=-Os -DCSP_CPX"
+BPATH="./build/arduino.samd.adafruit_circuitplayground_m0"
+OPTS=--build-property "compiler.c.extra_flags=-Os -DCSP_CPX $(EXTRA)" \
+     --build-property "compiler.cpp.extra_flags=-Os -DCSP_CPX $(EXTRA)"
 
 compile:
-	arduino-cli compile -e --fqbn $(FQBN) $(OPTS)
+	arduino-cli compile -e --fqbn $(FQBN) $(OPTS) --build-path $(BPATH)
 
 clean:
 	arduino-cli compile --clean --fqbn $(FQBN) .
 
 upload:
 	arduino-cli upload -p $(DEV) --fqbn $(FQBN)
+
+# --- exec-only ---------------------------------------------------------------
+# No scanner, no parser, no REPL: runs the linked ROM image plus any EEPROM
+# patch. `size` lists what is actually left, largest first.
+exec:
+	$(MAKE) -f Makefile.play compile EXTRA="-DCSP_EXEC_ONLY"
+
+size:
+	@arm-none-eabi-nm --size-sort -S -C $(BPATH)/CandySpeak.ino.elf | \
+	  awk '$$3=="T"||$$3=="t"{n=strtonum("0x"$$2); t+=n; printf "%6d  %s\n", n, $$4}' | \
+	  sort -rn | head -30
+	@arm-none-eabi-nm --size-sort -S -C $(BPATH)/CandySpeak.ino.elf | \
+	  awk '$$3=="T"||$$3=="t"{n=strtonum("0x"$$2); t+=n; \
+	    if ($$4 ~ /^(csp_|setup_|eval[0-9]|est_|fn_|add_|op_info|tok_table|build_dis_ip|can_mark_fields|main$$|loop$$)/) ours+=n; \
+	    else core+=n } \
+	    END {printf "\n%6d  CandySpeak\n%6d  core/libs\n%6d  TOTAL text\n", ours, core, t}'

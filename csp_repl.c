@@ -18,7 +18,6 @@
 #include "csp_parse.h"
 #include "csp_compile.h"
 #include "csp_print.h"
-#include "bitpack.h"
 
 #if !defined(CSP_EXEC_ONLY)
 

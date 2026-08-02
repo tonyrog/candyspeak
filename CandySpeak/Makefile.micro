@@ -8,8 +8,15 @@ BPATH="./build/tmp.arduino.avr.micro"
 # core and every linked library took theirs, decided at runtime rather than by a
 # per-board CSP_CODE_BUDGET constant. Model it on the host with: ./csp --board mega
 ARENA=-DCSP_ARENA_MALLOC
-OPTS=--build-property "compiler.c.extra_flags=-Os $(ARENA) $(EXTRA)" \
-     --build-property "compiler.cpp.extra_flags=-Os $(ARENA) $(EXTRA)"
+# -fno-inline-functions-called-once: gcc folds every single-call function into
+# its caller, which buried csp_eval_rule and csp_rt_start inside main and made
+# the size listing useless (main showed 5 966 bytes of "something"). Turning it
+# off costs NOTHING here -- it is 148 bytes SMALLER, because the folding only
+# duplicated code -- and the per-function sizes become the truth.
+INLINE=-fno-inline-functions-called-once -fno-inline -fno-ipa-cp-clone -fno-ipa-sra -fno-partial-inlining -fno-ipa-icf
+
+OPTS=--build-property "compiler.c.extra_flags=-Os $(ARENA) $(INLINE) $(EXTRA)" \
+     --build-property "compiler.cpp.extra_flags=-Os $(ARENA) $(INLINE) $(EXTRA)"
 
 compile:
 	arduino-cli compile -e --fqbn $(FQBN) $(OPTS) --build-path $(BPATH)
@@ -36,7 +43,7 @@ min:
 size:
 	@avr-nm --size-sort -S -C $(BPATH)/CandySpeak.ino.elf | \
 	  awk '$$3=="T"||$$3=="t"{n=strtonum("0x"$$2); t+=n; printf "%6d  %s\n", n, $$4}' | \
-	  sort -rn | head -25
+	  sort -rn | head -100
 	@avr-nm --size-sort -S -C $(BPATH)/CandySpeak.ino.elf | \
 	  awk '$$3=="T"||$$3=="t"{n=strtonum("0x"$$2); t+=n; \
 	    if ($$4 ~ /^(csp_|setup_|eval[0-9]|est_|fn_|add_|op_info|tok_table|decl_table|build_dis_ip|can_mark_fields|main$$)/) ours+=n; \

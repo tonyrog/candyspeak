@@ -4,6 +4,7 @@
 
 #include "csp_print.h"
 #include "csp_strings.h"
+#include "csp_tok.h"   // the operator table, through its accessors
 
 #define MAX_STRPTRS 64
 #define MAX_BODY 16
@@ -614,7 +615,7 @@ static int reg_consumed(csp_rt_t* st, int i, int reg)
 	    break;
 	default:
 	    t = ro_byte(&op_info[ip->op].tok);
-	    if ((int8_t)ro_byte(&tok_table[t].arity) >= 0) {
+	    if (op_table_arity(t) >= 0) {
 		if (ip->a.y == reg || ip->a.z == reg) return 1;
 		if (ip->a.x == reg) return 0;  // redefined
 	    }
@@ -745,10 +746,9 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	}
 	default:
 	    t = ro_byte(&op_info[ip->op].tok);
-	    if ((int8_t)ro_byte(&tok_table[t].arity) >= 0) {
-		exprbuf_alu(bp, ip, (rostring_t)ro_ptr(&tok_table[t].name),
-			    (int8_t)ro_byte(&tok_table[t].arity),
-			    (int8_t)ro_byte(&tok_table[t].prec));
+	    if (op_table_arity(t) >= 0) {
+		exprbuf_alu(bp, ip, op_table_name(t),
+			    op_table_arity(t), op_table_prec(t));
 	    }
 	    break;
 	}

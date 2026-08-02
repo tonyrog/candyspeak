@@ -624,7 +624,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		(char*)csp_fmt_pindir(decl(st,i,dir)),
 		csp_ivalue(st, decl(st,i,ca.id)),
 		decl(st,i,ca.bit),
-		GET_CAN_LEN(decl(st,i,ca.len)), eot);
+		GET_FIELD_LEN(decl(st,i,ca.len)), eot);
 	break;
     case DECL_BUFFER:
 	vt = decl(st,i,vt);
@@ -1292,7 +1292,7 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 		(char*)csp_fmt_pindir(decl(st,i,dir)),
 		csp_ivalue(st, decl(st,i,ca.id)),
 		decl(st,i,ca.bit),
-		decl(st,i,ca.bit) + GET_CAN_LEN(decl(st,i,ca.len)));
+		decl(st,i,ca.bit) + GET_FIELD_LEN(decl(st,i,ca.len)));
 	break;
     case DECL_BUFFER:
 	// #buffer <name>:<size> [dir] [can 0x<id>]. Size is BYTES (bf.nbytes)

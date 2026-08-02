@@ -47,8 +47,8 @@ build_rom() {
     local src="$1" out="$2"
     ./csp -n -C -O "$D/rom_gen.c" "$src" >/dev/null 2>&1 || return 1
     gcc -g -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -I. -o "$out" \
-	csp_linux.c csp_rt.c csp_repl.c csp_compile.c csp_dump.c csp_eeprom.c \
-	csp_parse.c csp_print.c csp_strings.c "$D/rom_gen.c" >/dev/null 2>&1
+	csp_linux.c csp_rt.c csp_repl.c csp_compile.c csp_tok.c csp_dump.c \
+	csp_eeprom.c csp_parse.c csp_print.c csp_strings.c "$D/rom_gen.c" >/dev/null 2>&1
 }
 
 cat > "$D/prog.csp" <<'EOF'
@@ -419,14 +419,27 @@ echo "exec-only:"
 printf '#digital Led out 0:13\n#timer T 500 = 1\n#variable N = 0\nT = 1 ? timeout(T)\nN = N + 1 ? timeout(T)\n' > "$D/eo.csp"
 if ./csp -n -C -O "$D/eo_rom.c" "$D/eo.csp" >/dev/null 2>&1 &&
    gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -DCSP_EXEC_ONLY -I. \
-       csp_linux.c csp_rt.c csp_repl.c csp_compile.c csp_dump.c csp_eeprom.c \
-       csp_parse.c csp_print.c csp_strings.c "$D/eo_rom.c" -o "$D/csp_exec" \
+       csp_linux.c csp_rt.c csp_repl.c csp_compile.c csp_tok.c csp_dump.c \
+       csp_eeprom.c csp_parse.c csp_print.c csp_strings.c "$D/eo_rom.c" -o "$D/csp_exec" \
        >/dev/null 2>&1; then
     got=$("$D/csp_exec" -c 6 --no-eeprom -s /dev/stdout 2>&1 | tail -1 |
 	      grep -o '"State",[0-9]*\|"N",[0-9]*' | tr '\n' ' ')
     ck "an exec-only build runs its ROM" '"State",1 "N",2 ' "$got"
 else
     echo "  FAIL exec-only build did not link"; fail=$((fail+1))
+fi
+
+# --- 19. the bit engine ------------------------------------------------------
+# csp_bits.h replaced bitpack.h under csp_heap_get/set (2 698 -> 804 bytes on
+# AVR). Nothing in tests/unit reaches this far down -- a wrong bit order would
+# show up as a corrupted CAN field, not a failed rule -- so the equivalence with
+# the old implementation is proven directly: every position and width the view
+# encoding allows, both orders, against a buffer that already has content.
+echo "bit engine:"
+if gcc -I. -O2 -o "$D/bits_cmp" tests/bits_cmp.c >/dev/null 2>&1; then
+    ck "csp_bits matches bitpack bit for bit" "ok, identical" "$("$D/bits_cmp")"
+else
+    echo "  FAIL bits_cmp did not build"; fail=$((fail+1))
 fi
 
 echo "================================================"

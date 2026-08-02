@@ -9,11 +9,30 @@ BPATH="./build/tmp.arduino.avr.mega"
 # core and every linked library took theirs, decided at runtime rather than by a
 # per-board CSP_CODE_BUDGET constant. Model it on the host with: ./csp --board mega
 ARENA=-DCSP_ARENA_MALLOC
-OPTS=--build-property "compiler.c.extra_flags=-Os $(ARENA)" \
-     --build-property "compiler.cpp.extra_flags=-Os $(ARENA)"
+INLINE=-fno-inline-functions-called-once
+OPTS=--build-property "compiler.c.extra_flags=-Os $(ARENA) $(INLINE)" \
+     --build-property "compiler.cpp.extra_flags=-Os $(ARENA) $(INLINE)"
 
 compile:
 	arduino-cli compile -e --fqbn $(FQBN) $(OPTS) --build-path $(BPATH)
+
+
+exec:
+	$(MAKE) -f Makefile.micro compile EXTRA="-DCSP_EXEC_ONLY"
+
+min:
+	$(MAKE) -f Makefile.micro compile EXTRA="-DCSP_EXEC_ONLY -DCSP_NO_EEPROM"
+
+# Text size per symbol, largest first -- the list to read when it does not fit.
+size:
+	@avr-nm --size-sort -S -C $(BPATH)/CandySpeak.ino.elf | \
+	  awk '$$3=="T"||$$3=="t"{n=strtonum("0x"$$2); t+=n; printf "%6d  %s\n", n, $$4}' | \
+	  sort -rn | head -25
+	@avr-nm --size-sort -S -C $(BPATH)/CandySpeak.ino.elf | \
+	  awk '$$3=="T"||$$3=="t"{n=strtonum("0x"$$2); t+=n; \
+	    if ($$4 ~ /^(csp_|setup_|eval[0-9]|est_|fn_|add_|op_info|tok_table|decl_table|build_dis_ip|can_mark_fields|main$$)/) ours+=n; \
+	    else core+=n } \
+	    END {printf "\n%6d  CandySpeak (main = setup+loop, inlined)\n%6d  core/libc/USB\n%6d  TOTAL text\n", ours, core, t}'
 
 # --- stack watch -----------------------------------------------------------
 # Diagnose the stack/arena collision (blank decls, reboot loops). Two layers,

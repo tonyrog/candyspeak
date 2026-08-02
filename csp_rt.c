@@ -6,9 +6,10 @@
 #include "csp.h"
 #include "csp_strings.h"   // shared RODATA strings (generated from strings.tab)
 #include "csp_parse.h"
+#include "csp_tok.h"
 #include "csp_compile.h"
 #include "csp_print.h"
-#include "bitpack.h"
+#include "csp_bits.h"
 #ifdef DEBUG
 #include "csp_dump.h"
 #include <stdio.h>
@@ -21,104 +22,10 @@ extern int debug;
 // convert integer to -1 if y != 0  0 otherwise
 #define BOOL(y) (-((y)!=0))
 
-// assoc
-#define LEFT -1
-#define RIGHT 1
-#define NO    0
 
 // string length for constant strings "foo" => 3
-#define CSTRLEN(str) (sizeof((str))-1)
 
-#define TOK_ENT(o,c,n) \
-    [(o)] = { .tok=(o),.code=(c),.name=(rostring_t)(n),.namelen=CSTRLEN((n)),.arity=-1,.prec=-1,.assoc=NO }
 
-#define INSTR_ENT(o,c,n,a,p,s) \
-    [(o)] = { .tok=(o),.code=(c),.name=(rostring_t)(n),.namelen=CSTRLEN((n)),.arity=(a),.prec=(p),.assoc=(s) }
-
-#define DECL_ENT(o,c,n) \
-    [(o)] = { .tok=(o),.code=(c),.name=(rostring_t)(n),.namelen=CSTRLEN((n)),.arity=-1,.prec=-1,.assoc=NO }
-
-const op_entry_t decl_table[] RODATA = {
-    DECL_ENT(D_NONE,DECL_NONE,s_none),
-    DECL_ENT(D_MODULE,DECL_MODULE,s_module),
-    DECL_ENT(D_END,DECL_END, s_end),
-    DECL_ENT(D_STATES,DECL_STATES,s_states),
-    DECL_ENT(D_IN,DECL_IN,s_in),       // 'in' FIXME? used as option keyword!
-    DECL_ENT(D_CONSTANT,DECL_CONSTANT,s_constant),
-    DECL_ENT(D_VARIABLE,DECL_VARIABLE,s_variable),
-    DECL_ENT(D_DIGITAL,DECL_DIGITAL,s_digital),
-    DECL_ENT(D_ANALOG,DECL_ANALOG,s_analog),
-    DECL_ENT(D_TIMER,DECL_TIMER,s_timer),
-    DECL_ENT(D_FIELD,DECL_FIELD,s_field),
-    DECL_ENT(D_BUFFER,DECL_BUFFER,s_buffer),
-    DECL_ENT(D_LAST,DECL_NONE,s_null),
-};
-
-const op_entry_t tok_table[] RODATA = {
-    INSTR_ENT(NONE,OP_NOP,s_NOP,-1,0,NO),
-    INSTR_ENT(EXCLAMATION,OP_NOT,s_EXCLAMATION,1,105,RIGHT),
-    INSTR_ENT(TILDE,OP_BNOT,s_TILDE,1,105,RIGHT),
-    INSTR_ENT(MINUS1,OP_NEG,s_MINUS,1,105,RIGHT),
-    INSTR_ENT(PLUS1,OP_MOV,s_MOV,1,105,RIGHT),
-    // node - binary
-    INSTR_ENT(PLUS,OP_ADD,s_PLUS,2,90,LEFT),
-    INSTR_ENT(MINUS,OP_SUB,s_MINUS,2,90,LEFT),
-    INSTR_ENT(ASTERISK,OP_MUL,s_ASTERISK,2,100,LEFT),
-    INSTR_ENT(SLASH,OP_DIV,s_SLASH,2,100,LEFT),
-    INSTR_ENT(PERCENT,OP_REM,s_PERCENT,2,100,LEFT),
-    INSTR_ENT(LTLT,OP_SLA,s_LTLT,2,80,LEFT),
-    INSTR_ENT(GTGT,OP_SRA,s_GTGT,2,80,LEFT),
-    INSTR_ENT(LT,OP_LT,s_LT,2,70,LEFT),
-    INSTR_ENT(LTEQ,OP_LTE,s_LTEQ,2,70,LEFT),
-    INSTR_ENT(GT,OP_GT,s_GT,2,70,LEFT),
-    INSTR_ENT(GTEQ,OP_GTE,s_GTEQ,2,70,LEFT),
-    INSTR_ENT(EQEQ,OP_EQEQ,s_EQEQ,2,60,LEFT),
-    INSTR_ENT(NEQ,OP_NEQ,s_NEQ,2,60,LEFT),
-    INSTR_ENT(AMP,OP_BAND,s_AMP,2,50,LEFT),
-    INSTR_ENT(CIRC,OP_BXOR,s_CIRC,2,40,LEFT),
-    INSTR_ENT(BAR,OP_BOR,s_BAR,2,30,LEFT),
-    INSTR_ENT(AMPAMP,OP_AND,s_AMPAMP,2,20,LEFT),
-    INSTR_ENT(BARBAR,OP_OR,s_BARBAR,2,10,LEFT),
-    // EQ/RIMP are shunted as low-precedence right-assoc operators so that the
-    // expression parser handles `var = expr` -- needed for immediate `> T1=1`
-    // (one-shot assignment / timer start). Rules use asm_rule, not this path.
-    INSTR_ENT(EQ,OP_EQ,s_EQ,2,5,RIGHT),       // assign_expr
-    INSTR_ENT(RIMP,OP_RIMP,s_RIMP,2,4,RIGHT), // assign_expr
-    INSTR_ENT(COMMA,OP_COMMA,s_COMMA,2,2,RIGHT),
-    INSTR_ENT(QUEST,OP_RULE,s_QUEST,-1,-1,NO),
-
-    TOK_ENT(T_PULLUP,OP_NOP,s_pullup),
-    TOK_ENT(T_PULLDOWN,OP_NOP,s_pulldown),
-    TOK_ENT(T_RESOLUTION,OP_NOP,s_resolution),
-    TOK_ENT(T_IN,OP_NOP,s_in),
-    TOK_ENT(T_OUT,OP_NOP,s_out),
-    TOK_ENT(T_INOUT,OP_NOP,s_inout),
-    TOK_ENT(T_PWM,OP_NOP,s_pwm),
-    TOK_ENT(T_FLOAT,OP_NOP,s_float),
-    TOK_ENT(T_INTEGER,OP_NOP,s_integer),
-    TOK_ENT(T_UNSIGNED,OP_NOP,s_unsigned),
-    TOK_ENT(T_STRING,OP_NOP,s_string),
-    TOK_ENT(T_NATIVE,OP_NOP,s_native),    
-    TOK_ENT(T_LITTLE,OP_NOP,s_little),
-    TOK_ENT(T_BIG,OP_NOP,s_big),
-    TOK_ENT(T_CAN,OP_NOP,s_can),   // the #buffer TRANSPORT, not a declaration
-    TOK_ENT(T_DISABLE,OP_NOP,s_disable),
-    TOK_ENT(T_ENABLE,OP_NOP,s_enable),
-
-    TOK_ENT(LP,OP_NOP,s_LP),
-    TOK_ENT(RP,OP_NOP,s_RP),
-    TOK_ENT(HASH,OP_NOP,s_HASH),
-    TOK_ENT(DOT,OP_NOP,s_DOT),
-    TOK_ENT(COLON,OP_NOP,s_COLON),
-    TOK_ENT(LB,OP_NOP,s_LB),
-    TOK_ENT(RB,OP_NOP,s_RB),
-    TOK_ENT(INT,OP_NOP,s_null),
-    TOK_ENT(FLT,OP_NOP,s_null),
-    TOK_ENT(WORD,OP_NOP,s_null),
-    TOK_ENT(NEWLINE,OP_NOP,s_null),
-    // eot
-    TOK_ENT(T_LAST,OP_NOP,s_null)
-};
 
 // Function calls are stored in ostack as (LAST + 1 + func_index)
 // func_index encodes: (index << 1) | is_user
@@ -279,27 +186,27 @@ const op_info_t op_info[] RODATA = {
     [OP_COMMA] = {ros_OCOMMA,NONE,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
 
     // other operations for name
-    [OP_ENTER] = {ros_ENTER,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_LEAVE] = {ros_LEAVE,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_NEW]   = {ros_NEW,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_LI]    = {ros_LI,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_LIU]   = {ros_LIU,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_LIH]   = {ros_LIH,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_ARG]   = {ros_ARG,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_ST]    = {ros_ST,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_STP]   = {ros_STP,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_STIMP] = {ros_STIMP,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_CHG]   = {ros_CHG,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_EQI]   = {ros_EQI,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_STI]   = {ros_STI,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_INSTATE] = {ros_INSTATE,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_NINSTATE] = {ros_NINSTATE,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_LD]    = {ros_LD,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_LDP]   = {ros_LDP,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_CALL]  = {ros_CALL,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_RULE]  = {ros_RULE,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_NEXT]  = {ros_NEXT,NONE,-1,V_VOID,MAKE_TYPE0()},
-    [OP_NOP]   = {ros_NOP,NONE,-1,V_VOID,MAKE_TYPE0()},
+    [OP_ENTER] = {ros_ENTER,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_LEAVE] = {ros_LEAVE,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_NEW]   = {ros_NEW,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_LI]    = {ros_LI,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_LIU]   = {ros_LIU,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_LIH]   = {ros_LIH,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_ARG]   = {ros_ARG,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_ST]    = {ros_ST,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_STP]   = {ros_STP,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_STIMP] = {ros_STIMP,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_CHG]   = {ros_CHG,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_EQI]   = {ros_EQI,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_STI]   = {ros_STI,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_INSTATE] = {ros_INSTATE,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_NINSTATE] = {ros_NINSTATE,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_LD]    = {ros_LD,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_LDP]   = {ros_LDP,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_CALL]  = {ros_CALL,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_RULE]  = {ros_RULE,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_NEXT]  = {ros_NEXT,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_NOP]   = {ros_NOP,NONE,3,V_VOID,MAKE_TYPE0()},
 };
 
 static const char tag_tab[] RODATA = {
@@ -509,9 +416,10 @@ rostring_t csp_fmt_pindir(uint8_t dir)
 
 rostring_t csp_fmt_pull(csp_rt_t* st, int ix)
 {
-    if (decl(st,ix,di.pullup))
+    csp_decl_t d = csp_get_decl(st, ix);
+    if (d.di.pullup)
 	return ros_pullup;
-    else if (decl(st,ix,di.pulldown))
+    else if (d.di.pulldown)
 	return ros_pulldown;
     else
 	return ros_undefined;  // floating
@@ -639,77 +547,6 @@ void csp_print_error(csp_rt_t* st)
     }
 }
 
-static NOINLINE value_t eval0(opcode_t op)
-{
-    switch(op) {
-    default: {
-	value_t x = {.i = 0 };
-	// emit error signal somehow ?
-	return x;
-    }
-    }
-}
-
-NOINLINE value_t eval1(opcode_t op, value_t y)
-{
-    switch(op) {
-    case OP_BNOT: return f_BNOT(y);
-    case OP_NEG:  return f_NEG(y);
-    case OP_MOV:  return f_MOV(y);
-    case OP_NOT:  return f_NOT(y);
-    case OP_CVTIF: return f_CVTIF(y);
-    case OP_CVTFI: return f_CVTFI(y);
-    case OP_FNEG:  return f_FNEG(y);
-    case OP_FMOV:  return f_FMOV(y);
-    default: {
-	value_t x = {.i = 0 };
-	// emit error signal somehow ?
-	return x;
-    }
-    }
-}
-
-NOINLINE value_t eval2(opcode_t op, value_t y, value_t z)
-{
-    switch(op) {
-    case OP_ADD: return f_ADD(y, z);
-    case OP_SUB: return f_SUB(y, z);
-    case OP_MUL: return f_MUL(y, z);
-    case OP_DIV: return f_DIV(y, z);
-    case OP_REM: return f_REM(y, z);
-    case OP_SLA: return f_SLA(y, z);
-    case OP_SRA: return f_SRA(y, z);
-    case OP_BAND: return f_BAND(y, z);
-    case OP_BOR: return f_BOR(y, z);
-    case OP_BXOR: return f_BXOR(y, z);
-    case OP_AND: return f_AND(y, z);
-    case OP_OR: return f_OR(y, z);
-    case OP_LT: return f_LT(y, z);
-    case OP_LTE: return f_LTE(y, z);
-    case OP_GT: return f_GT(y, z);
-    case OP_GTE: return f_GTE(y, z);
-    case OP_EQEQ: return f_EQEQ(y, z);
-    case OP_NEQ: return f_NEQ(y, z);
-
-    case OP_FADD: return f_FADD(y, z);
-    case OP_FSUB: return f_FSUB(y, z);
-    case OP_FMUL: return f_FMUL(y, z);
-    case OP_FDIV: return f_FDIV(y, z);
-
-    case OP_FLT: return f_FLT(y, z);
-    case OP_FLTE: return f_FLTE(y, z);
-    case OP_FGT: return f_FGT(y, z);
-    case OP_FGTE: return f_FGTE(y, z);
-    case OP_FEQEQ: return f_FEQEQ(y, z);
-    case OP_FNEQ: return f_FNEQ(y, z);
-    case OP_COMMA: return f_COMMA(y, z);
-    default: {
-	value_t x = {.i = 0 };
-	// emit error signal somehow ?
-	return x;
-    }
-    }
-}
 
 uint8_t csp_opcode_rtype(opcode_t op)
 {
@@ -898,7 +735,7 @@ int csp_print_fixpoint(fvalue_t v)
 
 int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val)
 {
-    switch(vt) {
+    switch(CSP_MASK(vt, TYPE_BITS)) {
     case V_INTEGER: return csp_print_int(val.i);
     case V_UNSIGNED: return csp_print_uint(val.u);
     case V_FLOAT: return csp_print_float(val.f);
@@ -1224,267 +1061,6 @@ const csp_func_t csp_builtin_funcs[] RODATA = {
 
 const uint8_t csp_num_builtin_funcs = sizeof(csp_builtin_funcs)/sizeof(csp_builtin_funcs[0]);
 
-// rom-aware scalar reads: on the host both branches are identical (ro_*==plain);
-// on AVR the rom branch uses PROGMEM. One code path serves RAM and ROM tables.
-static inline uint8_t  rd8 (const void* p, int rom)
-{
-    return rom ? ro_byte((const uint8_t*)p): *(const uint8_t*)p;
-}
-
-static inline uint16_t rd16(const void* p, int rom)
-{
-    return rom ? ro_word((const uint16_t*)p): *(const uint16_t*)p;
-}
-
-static inline void* rdvp(const void* p, int rom)
-{
-    void* v;
-#if defined(__AVR__)
-    if (rom)
-	return ro_ptr((void* const*)p);   // PROGMEM: byte-wise read
-#endif
-    // fn sits at a misaligned offset in the PACKED csp_func_t table; a direct
-    // deref HardFaults on Cortex-M0 (no unaligned access). memcpy is byte-wise
-    // and alignment-safe -- and the compiler folds it to a plain load where the
-    // address happens to be aligned.
-    memcpy((void*) &v, p, sizeof(v)); return v;
-}
-
-static uint8_t func_arity(const csp_func_t* fn, int i, int rom)
-{
-    return rd8(&fn[i].arity, rom);
-}
-
-// function flags (FUNC_PURE | FUNC_RONAME)
-uint8_t func_flags(const csp_func_t* fn, int i, int rom)
-{
-    return rd8(&fn[i].flags, rom);
-}
-#define func_pure(fn,i,rom)   (func_flags((fn),(i),(rom)) & FUNC_PURE)
-#define func_roname(fn,i,rom) (func_flags((fn),(i),(rom)) & FUNC_RONAME)
-
-static uint8_t func_namelen(const csp_func_t* fn,int i, int rom)
-{
-    return rd8(&fn[i].namelen, rom);
-}
-
-uint8_t func_rtype(const csp_func_t* fn, int i, int rom)
-{
-    return rd8(&fn[i].rtype, rom);
-}
-
-// What a call actually returns. A fixed rtype answers for itself; V_NUMBER
-// means "the same kind the arguments were", so a single float argument makes
-// the whole call float and everything else stays integer. argcode holds the
-// ORIGINAL argument types, 4 bits each -- V_NUMBER parameters are not coerced
-// on the way in, which is exactly what makes this readable here.
-vtype_t call_rtype(uint8_t rtype, uint16_t argcode, int arity)
-{
-    int j;
-    if (rtype != V_NUMBER)
-	return (vtype_t) rtype;
-    for (j = 0; j < arity; j++) {
-	if (((argcode >> 4*j) & 0xf) == V_FLOAT)
-	    return V_FLOAT;
-    }
-    return V_INTEGER;
-}
-
-static const char* func_name(const csp_func_t* fn, int i, int rom)
-{
-    return (const char*) rdvp(&fn[i].name, rom);
-}
-
-csp_func_fn func_fn(const csp_func_t* fn, int i, int rom)
-{
-    return (csp_func_fn) rdvp(&fn[i].fn, rom);
-}
-
-uint8_t fn_type(const csp_func_t* fn, int j, int rom)
-{
-    uint16_t argtypes = rd16(&fn->argtypes, rom);
-    return (argtypes >> 4*j) & 0xf;
-}
-
-// match function template this code assumes type coerce int->flt
-// flt->int. the goal is to match BEST? function to use
-// return 0 on match
-// return argument number 1...n on mismatch
-int csp_match_args(csp_rt_t* st, const csp_func_t* fn, int arity, rentry_t* rarg,
-		   int rom)
-{
-    int j;
-    for (j = 0; j < arity; j++) {
-	rentry_t arg = rarg[j];
-	vtype_t argvt = arg.vt;
-	uint8_t ftype = fn_type(fn, j, rom);
-	switch(ftype) {
-	case V_ANY:
-	    break;
-	case V_NUMBER:
-	    if (argvt == V_INTEGER) break;
-	    if (argvt == V_FLOAT) break;
-	    goto mismatch;
-	case V_INTEGER:
-	    if (argvt == V_INTEGER) break;
-	    if (argvt == V_FLOAT) break;    // coerce!
-	    goto mismatch;
-	case V_FLOAT:
-	    if (argvt == V_FLOAT) break;
-	    if (argvt == V_INTEGER) break;  // coerce!
-	    goto mismatch;
-	case V_STRING:
-	    if (argvt == V_STRING) break;
-	    goto mismatch;
-	case V_INDEX:
-	    if (arg.X) break;
-	    goto mismatch;
-	case V_TIMER:
-	    if (arg.X && (decl(st,INDEX(arg.ix),type) == DECL_TIMER)) break;
-	    goto mismatch;
-	case V_DIGITAL:
-	    if (arg.X && (decl(st,INDEX(arg.ix),type) == DECL_DIGITAL)) break;
-	    goto mismatch;
-	case V_ANALOG:
-	    if (arg.X && (decl(st,INDEX(arg.ix),type) == DECL_ANALOG)) break;
-	    goto mismatch;
-	case V_FIELD:
-	    if (arg.X && (decl(st,INDEX(arg.ix),type) == DECL_FIELD)) break;
-	    goto mismatch;
-	default:
-	    goto mismatch;
-	}
-    }
-    return 0;
-mismatch:
-    return j+1;
-}
-
-static int csp_match_fn(csp_rt_t* st,
-			const csp_func_t* fn, int num, int rom,
-			const tstr_t* name,
-			uint8_t arity, rentry_t* rarg)
-{
-    int i;
-    int a, f = -1;
-    for (i = 0; i < num; i++) {
-	if ((func_arity(fn,i,rom) == arity) &&
-	    (func_namelen(fn,i,rom) == name->len)) {
-	    const char* fnm = func_name(fn, i, rom);
-	    int eq = func_roname(fn,i,rom)
-		? (ro_memcmp(name->ptr, fnm, name->len) == 0)   // name in ROM
-		: (memcmp(name->ptr, fnm, name->len) == 0);     // name in RAM
-	    if (eq) {
-		int j;
-		if ((j=csp_match_args(st, &fn[i], arity, rarg, rom)) == 0) // ok
-		    return i;
-		f = i;  // last name match
-		a = j;  // and argument poistion that failed
-	    }
-	}
-    }
-    if (f >= 0) {
-	if (csp_set_error(st, ERR_FUNCTION_ARGUMENT_TYPE_MISMATCH)) {
-	    csp_set_err_arg_tstr(st, 0, name);
-	    csp_set_err_arg_int(st, 1, arity);
-	    csp_set_err_arg_int(st, 2, a);
-	}
-    }
-    return -1;
-}
-
-const csp_func_t* csp_match_func(csp_rt_t* st,
-				 const tstr_t* name,
-				 uint8_t arity, rentry_t* rarg,
-				 int* is_user, int* func_idx)
-{
-    int idx;
-
-    if (st->ufuncs) {
-	if ((idx = csp_match_fn(st, st->ufuncs, st->num_ufuncs, st->ufuncs_rom,
-				name, arity, rarg)) >= 0) {
-	    *is_user = 1;
-	    *func_idx = idx;
-	    return &st->ufuncs[idx];
-	}
-    }
-    if ((idx = csp_match_fn(st, csp_builtin_funcs, csp_num_builtin_funcs, BUILTIN_ROM,
-			    name, arity, rarg)) >= 0) {
-	*is_user = 0;
-	*func_idx = idx;
-	return &csp_builtin_funcs[idx];
-    }
-    if (csp_set_error(st, ERR_FUNCTION_DOES_NOT_EXIST)) {
-	csp_set_err_arg_tstr(st, 0, name);
-	csp_set_err_arg_int(st, 1, arity);
-    }
-    return NULL;
-}
-
-static int find_op_entry(const op_entry_t* tab, int size,
-			 const char* name, int namelen)
-{
-    int i;
-    for (i = 1; i < size; i++) { // assume none entry in slot 0
-	uint8_t ronamelen = ro_byte(&tab[i].namelen);
-	if (ronamelen == namelen) {
-	    const char* roname = ro_ptr(&tab[i].name);
-	    if (ro_memcmp(name, roname, ronamelen) == 0)
-		return i;
-	}
-    }
-    return -1;
-}
-
-int find_tok_entry(const char* name, int namelen)
-{
-    return find_op_entry(tok_table, sizeof(tok_table)/sizeof(tok_table[0]),
-			 name, namelen);
-}
-
-int find_decl_entry(const char* name, int namelen)
-{
-    return find_op_entry(decl_table, sizeof(decl_table)/sizeof(decl_table[0]),
-			 name, namelen);
-}
-
-// decl_table lives in RODATA. On AVR that is PROGMEM, so `decl_table[i].code`
-// does NOT read the table -- it reads DATA space at the table's flash address,
-// which on a mega lands inside CandySpeak's own arena. The byte found there
-// changes with the program, the pool layout and every size change, so the
-// dispatch worked or failed by luck. Every other reader of these tables already
-// goes through ro_byte (op_table_tok, op_table_arity, ...); this one did not.
-inline int8_t decl_table_code(int i)
-{
-    return (int8_t)ro_byte(&decl_table[i].code);
-}
-
-inline int8_t op_table_tok(int i)
-{
-    return ro_byte(&tok_table[i].tok);
-}
-
-inline int8_t op_table_arity(int i)
-{
-    return ro_byte(&tok_table[i].arity);
-}
-
-inline int8_t op_table_code(int i)
-{
-    return ro_byte(&tok_table[i].code);
-}
-
-inline int8_t op_table_prec(int i)
-{
-    return ro_byte(&tok_table[i].prec);
-}
-
-inline int8_t op_table_assoc(int i)
-{
-    return ro_byte(&tok_table[i].assoc);
-}
-
-
 // enq all rules that depend on declaration x
 NOINLINE void csp_enq_elist(csp_rt_t* st, index_t x)
 {
@@ -1529,10 +1105,7 @@ NOINLINE static value_t csp_heap_get(csp_rt_t* st, csp_view_t* vw, dio_t dir)
 	memcpy(&v, p, n);
     }
     else {
-	if (vw->endian == E_BIG)
-	    get_bits_be(p, &v.u, vw->pos, vw->len + 1);
-	else
-	    get_bits_le(p, &v.u, vw->pos, vw->len + 1);
+	csp_bits_get(p, &v.u, vw->pos, vw->len + 1, vw->endian == E_BIG);
 	// Sign-extend a signed field from its own width up to the container, so a
 	// negative CAN signal reads back negative. get_bits zero-extends; unsigned
 	// fields keep that, as do 32-bit-wide ones (no spare high bits to fill).
@@ -1555,10 +1128,8 @@ NOINLINE static void csp_heap_set(csp_rt_t* st, csp_view_t* vw, dio_t dir,
 	if (n > sizeof(value_t)) n = sizeof(value_t);
 	memcpy(p, &v, n);
     }
-    else if (vw->endian == E_BIG)
-	set_bits_be(p, v.u, vw->pos, vw->len + 1);
     else
-	set_bits_le(p, v.u, vw->pos, vw->len + 1);
+	csp_bits_set(p, v.u, vw->pos, vw->len + 1, vw->endian == E_BIG);
 }
 
 // A digital/analog/timer decl carries vt=V_INTEGER (its value type); the
@@ -1566,66 +1137,132 @@ NOINLINE static void csp_heap_set(csp_rt_t* st, csp_view_t* vw, dio_t dir,
 // vtype the pin/port/dir/... helpers switch on. Plain vars keep their vt.
 NOINLINE static vtype_t decl_cfg_vt(decl_t dt, vtype_t vt)
 {
-    switch (dt) {
+    switch (CSP_MASK(dt,CSP_DECL_TYPE_BITS)) {
     case DECL_DIGITAL: return V_DIGITAL;
     case DECL_ANALOG:  return V_ANALOG;
     case DECL_TIMER:   return V_TIMER;
-    case DECL_FIELD:     return V_FIELD;
+    case DECL_FIELD:   return V_FIELD;
     default:           return vt;
     }
 }
 
-NOINLINE void csp_dio_set_pin_part(csp_rt_t* st, value_t* vslot,
-				   vtype_t vt, value_t v)
+// The type a leaf's value SLOT is laid out with. Four callers used to write
+// decl_cfg_vt(decl(st,i,type), decl(st,i,vt)) -- two csp_get_decl calls, each
+// spilling the whole decl to the stack (see setup_buffer). One read serves both
+// fields.
+NOINLINE static vtype_t leaf_cfg_vt(csp_rt_t* st, index_t ix)
 {
-    switch(vt) {
-    // Which pin this slot drives is part of what its configuration IS --
-    // csp_board_digital_config reads d.pin -- so moving it needs the same
-    // request to the board as turning it round.
-    //
-    // Note what this does NOT do: the pin left behind keeps whatever mode and
-    // level it was last given. A slot that was driving pin 4 high and is moved
-    // to pin 7 leaves pin 4 high, with no name left in the program that refers
-    // to it. Put a pin back where it belongs before moving on, or leave it
-    // alone -- there is no owner to ask afterwards.
-    case V_DIGITAL: vslot->d.pin = v.i; vslot->d.cfg = 1; break;
-    case V_ANALOG:  vslot->a.pin = v.i; vslot->a.cfg = 1; break;
+    csp_decl_t d = csp_get_decl(st, INDEX(ix));
+    return decl_cfg_vt(d.type, d.vt);
+}
+
+NOINLINE void csp_digital_set_part(csp_rt_t* st, dvalue_t* vslot,
+				  csp_part_t part, value_t v)
+{
+    switch(CSP_MASK(part, PART_BITS)) {
+    case PART_VAL:      vslot->val = v.i; return;
+    case PART_PIN:      vslot->pin = v.i; break;
+    case PART_PORT:     vslot->port = v.i; break;
+    case PART_DIR:      vslot->dir = v.i;  break;
+    case PART_PULLUP:   vslot->pullup = v.i; break;
+    case PART_PULLDOWN: vslot->pulldown = v.i; break;
+    default: return;
+    }
+    vslot->cfg = 1;    
+}
+
+NOINLINE void csp_analog_set_part(csp_rt_t* st, avalue_t* vslot,
+				  csp_part_t part, value_t v)
+{
+    switch(CSP_MASK(part, PART_BITS)) {
+    case PART_VAL:      vslot->val = v.i; return;
+    case PART_PIN:      vslot->pin = v.i; break;
+    case PART_PORT:     vslot->port = v.i; break;
+    case PART_DIR:      vslot->dir = v.i; break;
+    case PART_PWM:      vslot->pwm = v.i; break;
+    default: return;
+    }
+    vslot->cfg = 1;        
+}
+
+NOINLINE void csp_timer_set_part(csp_rt_t* st, tvalue_t* vslot,
+				 csp_part_t part, value_t v)
+{
+    switch(CSP_MASK(part, PART_BITS)) {
+    case PART_VAL:     vslot->val = v.i; break;
+    case PART_PERIOD:  vslot->period = v.i; break;
+    case PART_FIRED:   vslot->fired = v.i; break;
     default: break;
     }
 }
 
-NOINLINE void csp_dio_set_port_part(csp_rt_t* st, value_t* vslot,
-				    vtype_t vt, value_t v)
+NOINLINE void csp_string_set_part(csp_rt_t* st, value_t* vslot,
+				  csp_part_t part, value_t v)
 {
-    switch(vt) {
-    // Same as .pin: on a board that addresses pins per port this picks out a
-    // different piece of hardware, so it has to be applied. The Arduino layer
-    // does not read port for digital, which only means the reconfiguration is
-    // redundant there -- not that it is wrong to ask for it.
-    case V_DIGITAL: vslot->d.port = v.i; vslot->d.cfg = 1; break;
-    case V_ANALOG:  vslot->a.port = v.i; vslot->a.cfg = 1; break;
-    default: break;
+    if (part == PART_VAL)
+	vslot->s = v.s;
+}
+
+NOINLINE void csp_view_set_part(csp_rt_t* st, csp_view_t* vw,
+				value_t v, csp_part_t part, dio_t dir)
+{
+    if (part == PART_VAL)
+	csp_heap_set(st, vw, dir, v);
+    // A frame's transport state lives on the BUFFER, not in a value slot,
+    // and is a command rather than a value -- so it is not DIN/DOUT
+    // shadowed and does not go through the dirty set.
+    else if (part == PART_DIR)
+	st->buf[vw->buf].dir = v.i;
+    // Endian lives in the view, like the position and the width -- config,
+    // not a shadowed value. Anything outside vendian_t is ignored.
+    else if (part == PART_ENDIAN) {
+	if ((v.i >= E_NATIVE) && (v.i <= E_BIG))
+	    vw->endian = v.i;
+    }
+    else if (st->buf[vw->buf].transport == TR_CAN) {
+	csp_buf_t* bp = &st->buf[vw->buf];
+	if (part == PART_TX) {
+	    if (v.i)
+		bp->flags |= BUF_F_TX;
+	    else
+		bp->flags &= ~BUF_F_TX;
+	}
+	else if (part == PART_DLC) {
+	    // Clamped, not rejected: the heap holds nbytes and no more, so
+	    // a longer frame would read past the buffer.
+	    ivalue_t n = v.i;
+	    if (n < 0) n = 0;
+	    if (n > bp->nbytes) n = bp->nbytes;
+	    bp->dlc = (uint8_t)n;
+	}
     }
 }
 
-NOINLINE void csp_dio_set_dir_part(csp_rt_t* st, value_t* vslot,
-				   vtype_t vt, value_t v)
+// Set value part in dio (config data & value)
+NOINLINE void csp_dio_set_part(csp_rt_t* st, index_t ix, value_t v,
+			       csp_part_t part, dio_t dir)
 {
-    switch(vt) {
-    // A direction is only half a change: the pin itself has to be told. cfg
-    // carries that request to the board layer, which owns pinMode. An analog
-    // slot has no room for the flag (see dvalue_t/avalue_t), so an analog
-    // direction still only gates the runtime, it does not reconfigure.
-    case V_DIGITAL: vslot->d.dir = v.i; vslot->d.cfg = 1; break;
-    case V_ANALOG:  vslot->a.dir = v.i; vslot->a.cfg = 1; break;
-    default: break;
+    csp_view_t* vw = csp_view(st, ix);
+    if (vw->kind == VIEW_HEAP) {  // bit-fields only carry a value, no pin/port
+	csp_view_set_part(st, vw, v, part, dir);
+	return;
+    }
+    else {
+	value_t* vslot = csp_slot(st, vw, dir);
+	switch(leaf_cfg_vt(st, ix)) {   // read the decl only on the path using it
+	case V_DIGITAL: csp_digital_set_part(st, &vslot->d, part, v); break;
+	case V_ANALOG: csp_analog_set_part(st, &vslot->a, part, v); break;
+	case V_TIMER: csp_timer_set_part(st, &vslot->t, part, v); break;
+	case V_STRING: csp_string_set_part(st, vslot, part, v); break;
+	default: break;
+	}
     }
 }
 
 NOINLINE void csp_dio_set_val_part(csp_rt_t* st, value_t* vslot,
 				   vtype_t vt, value_t v)
 {
-    switch(vt) {
+    switch(CSP_MASK(vt, TYPE_BITS)) {
     case V_TIMER:   vslot->t.val = v.i; break;
     case V_DIGITAL: vslot->d.val = v.i; break;
     case V_ANALOG:  vslot->a.val = v.i; break;
@@ -1635,10 +1272,65 @@ NOINLINE void csp_dio_set_val_part(csp_rt_t* st, value_t* vslot,
     }
 }
 
+NOINLINE void csp_digital_get_part(csp_rt_t* st, dvalue_t* vslot,
+				   csp_part_t part, value_t* vp)
+{
+    switch(CSP_MASK(part, PART_BITS)) {
+    case PART_VAL:      vp->i = vslot->val & 1; return;
+    case PART_PIN:      vp->i = vslot->pin; break;
+    case PART_PORT:     vp->i = vslot->port; break;
+    case PART_DIR:      vp->i = vslot->dir;  break;
+    case PART_PULLUP:   vp->i = vslot->pullup; break;
+    case PART_PULLDOWN: vp->i = vslot->pulldown; break;
+    default: break;
+    }    
+}
+
+NOINLINE void csp_analog_get_part(csp_rt_t* st, avalue_t* vslot,
+				  csp_part_t part, value_t* vp)
+{
+    switch(CSP_MASK(part, PART_BITS)) {
+    case PART_VAL:      vp->i = vslot->val; return;
+    case PART_PIN:      vp->i = vslot->pin; break;
+    case PART_PORT:     vp->i = vslot->port; break;
+    case PART_DIR:      vp->i = vslot->dir; break;
+    case PART_PWM:      vp->i = vslot->pwm; break;
+	// PART_ENDIAN: FIXME get from declaration
+    default: break;
+    }    
+}
+
+NOINLINE void csp_timer_get_part(csp_rt_t* st, tvalue_t* vslot,
+				 csp_part_t part, value_t* vp)
+{
+    switch(CSP_MASK(part, PART_BITS)) {
+    case PART_VAL:     vp->i = vslot->val; break;
+    case PART_PERIOD:  vp->i = vslot->period; break;
+    case PART_FIRED:   vp->i = vslot->fired; break;
+    default: break;
+    }
+}
+
+// The VALUE-SLOT string (a #constant): the position is the whole slot, so read
+// it as one -- like csp_string_set_part and every other slot helper here.
+// It must NOT go through csp_heap_get: setup_slot fills in kind/vt/buf and
+// leaves pos/len/endian zero, so the bit path would read len+1 == ONE bit of
+// the position and answer 0 or 1. A string VARIABLE is a heap view with a real
+// pos/len and answers from csp_view_get_part instead.
+NOINLINE void csp_string_get_part(csp_rt_t* st, value_t* vslot, value_t* vp,
+				  csp_part_t part)
+{
+    sindex_t s = vslot->s;
+    if (part == PART_VAL)
+	vp->i = s;
+    else if (part == PART_LEN)
+	vp->i = (s == 0) ? 0 : csp_str_byte(st, s - 1);
+}
+
 NOINLINE void csp_dio_get_val_part(csp_rt_t* st, value_t* vslot,
 				   vtype_t vt, value_t* vp)
 {
-    switch(vt) {
+    switch(CSP_MASK(vt, TYPE_BITS)) {
     case V_TIMER:   vp->i = vslot->t.val; break;
     case V_DIGITAL: vp->i = vslot->d.val & 1; break;
     case V_ANALOG:  vp->i = vslot->a.val; break;
@@ -1647,221 +1339,70 @@ NOINLINE void csp_dio_get_val_part(csp_rt_t* st, value_t* vslot,
     }
 }
 
-NOINLINE void csp_dio_get_pin_part(csp_rt_t* st, value_t* vslot,
-				   vtype_t vt, value_t* vp)
+NOINLINE void csp_view_get_part(csp_rt_t* st, csp_view_t* vw, value_t* vp,
+				csp_part_t part, dio_t dir)
 {
-    switch(vt) {
-    case V_DIGITAL: vp->i = vslot->d.pin; break;
-    case V_ANALOG:  vp->i = vslot->a.pin; break;
-    default: vp->i = 0; break;
-    }
-}
-
-NOINLINE void csp_dio_get_port_part(csp_rt_t* st, value_t* vslot,
-				    vtype_t vt, value_t* vp)
-{
-    switch(vt) {
-    case V_DIGITAL: vp->i = vslot->d.port; break;
-    case V_ANALOG:  vp->i = vslot->a.port; break;
-    default: vp->i = 0; break;
-    }
-}
-
-NOINLINE void csp_dio_get_dir_part(csp_rt_t* st, value_t* vslot,
-				   vtype_t vt, value_t* vp)
-{
-    switch(vt) {
-    case V_DIGITAL: vp->i = vslot->d.dir; break;
-    case V_ANALOG:  vp->i = vslot->a.dir; break;
-    default: vp->i = 0; break;
-    }
-}
-
-// Set value part in dio (config data & value)
-NOINLINE void csp_dio_set_part(csp_rt_t* st, index_t ix, value_t v,
-			       csp_part_t part, dio_t dir)
-{
-    csp_view_t* vw = csp_view(st, ix);
-    value_t* vslot;
-    vtype_t vt = decl(st,INDEX(ix),vt);
-    vtype_t cvt = decl_cfg_vt(decl(st,INDEX(ix),type), vt);
-    if (vw->kind == VIEW_HEAP) {  // bit-fields only carry a value, no pin/port
-	if (part == PART_VAL)
-	    csp_heap_set(st, vw, dir, v);
-	// A frame's transport state lives on the BUFFER, not in a value slot,
-	// and is a command rather than a value -- so it is not DIN/DOUT
-	// shadowed and does not go through the dirty set.
-	else if (part == PART_DIR)
-	    st->buf[vw->buf].dir = v.i;
-	// Endian lives in the view, like the position and the width -- config,
-	// not a shadowed value. Anything outside vendian_t is ignored.
-	else if (part == PART_ENDIAN) {
-	    if ((v.i >= E_NATIVE) && (v.i <= E_BIG))
-		vw->endian = v.i;
-	}
-	else if (st->buf[vw->buf].transport == TR_CAN) {
-	    csp_buf_t* bp = &st->buf[vw->buf];
-	    if (part == PART_TX) {
-		if (v.i)
-		    bp->flags |= BUF_F_TX;
-		else
-		    bp->flags &= ~BUF_F_TX;
-	    }
-	    else if (part == PART_DLC) {
-		// Clamped, not rejected: the heap holds nbytes and no more, so
-		// a longer frame would read past the buffer.
-		ivalue_t n = v.i;
-		if (n < 0) n = 0;
-		if (n > bp->nbytes) n = bp->nbytes;
-		bp->dlc = (uint8_t)n;
-	    }
-	}
-	return;
-    }
-    vslot = csp_slot(st, vw, dir);
-    switch(part) {
-    case PART_VAL:
-	csp_dio_set_val_part(st, vslot, vt, v);
-	break;
-    case PART_PIN:
-	csp_dio_set_pin_part(st, vslot, cvt, v);
-	break;
-    case PART_PORT:
-	csp_dio_set_port_part(st, vslot, cvt, v);
-	break;
-    case PART_DIR:      // V_DIGITAL/V_ANALOG/V_FIELD
-	csp_dio_set_dir_part(st, vslot, cvt, v);
-	break;
-    case PART_PWM:      // V_ANALOG
-	if (cvt == V_ANALOG) {
-	    vslot->a.pwm = v.i;
-	    vslot->a.cfg = 1;   // pwm decides whether the pin is driven at all
-	}
-	break;
-    case PART_ENDIAN:   // V_FIELD only
-	// An analog slot has no endian to write. It never had one that did
-	// anything: the declaration carries it and .endian reads from there.
-	(void)0;
-	break;
-    case PART_PULLUP:   // V_DIGITAL
-	if (cvt == V_DIGITAL) {
-	    vslot->d.pullup = v.i;
-	    vslot->d.cfg = 1;
-	}
-	break;
-    case PART_PULLDOWN: // V_DIGITAL
-	if (cvt == V_DIGITAL) {
-	    vslot->d.pulldown = v.i;
-	    vslot->d.cfg = 1;
-	}
-	break;
-    case PART_PERIOD:   // V_TIMER
-	if (cvt == V_TIMER)
-	    vslot->t.period = v.i;
-	break;
-    case PART_FIRED:    // V_TIMER
-	if (cvt == V_TIMER)
-	    vslot->t.fired = v.i;
-	break;
-    default:
-	break;
-    }
-}
-
-// Get value part from dio (config data & value)
-NOINLINE void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp,
-			       csp_part_t part, dio_t dir)
-{
-    csp_view_t* vw = csp_view(st, ix);
-    value_t* vslot;
-    vtype_t vt = decl(st,INDEX(ix),vt);
-    vtype_t cvt = decl_cfg_vt(decl(st,INDEX(ix),type), vt);
-    if (vw->kind == VIEW_HEAP) {  // bit-fields only carry a value, no pin/port
-	csp_buf_t* bp = &st->buf[vw->buf];
-	vp->u = 0;
-	switch (part) {
-	case PART_VAL: *vp = csp_heap_get(st, vw, dir); break;
+    csp_buf_t* bp = &st->buf[vw->buf];
+    vp->u = 0;
+    switch (CSP_MASK(part, PART_BITS)) {
+    case PART_VAL: *vp = csp_heap_get(st, vw, dir); break;
 	// Direction is a property of the buffer, so it answers for a plain
 	// #buffer as well as a CAN frame -- and for a #field,  which reads
 	// its frame's direction.
-	case PART_DIR: vp->i = bp->dir; break;
+    case PART_DIR: vp->i = bp->dir; break;
 	// Endianness is a property of the VIEW (a bound field / #field decides
 	// how its bits are laid out), so it answers from there and not from a
 	// value slot -- a heap view has none.
-	case PART_ENDIAN: vp->i = vw->endian; break;
+    case PART_ENDIAN: vp->i = vw->endian; break;
 	// Frame state, read off the buffer. A #field answers for its frame
 	// too: `A.rx` and `F201.rx` are the same fact.
-	case PART_RX:
-	    if (bp->transport == TR_CAN)
-		vp->i = BOOL(bp->flags & BUF_F_RX);
-	    break;
-	case PART_TX:
-	    if (bp->transport == TR_CAN)
-		vp->i = BOOL(bp->flags & BUF_F_TX);
-	    break;
-	case PART_ID:
-	    if (bp->transport == TR_CAN)
-		vp->i = (ivalue_t)bp->xref;
-	    break;
-	case PART_DLC:
-	    if (bp->transport == TR_CAN)
-		vp->i = bp->dlc;
-	    break;
+    case PART_RX:
+	if (bp->transport == TR_CAN)
+	    vp->i = BOOL(bp->flags & BUF_F_RX);
+	break;
+    case PART_TX:
+	if (bp->transport == TR_CAN)
+	    vp->i = BOOL(bp->flags & BUF_F_TX);
+	break;
+    case PART_ID:
+	if (bp->transport == TR_CAN)
+	    vp->i = (ivalue_t)bp->xref;
+	break;
+    case PART_DLC:
+	if (bp->transport == TR_CAN)
+	    vp->i = bp->dlc;
+	break;
 	// A plain #variable gets an auto-buffer (setup_variable -> setup_buffer),
 	// so a string variable is a HEAP view and lands HERE, not in the value-slot
 	// switch below -- which is for the config+value leaves (digital, analog,
 	// timer, constant). A string CONSTANT does take that path, so both need it.
-	case PART_LEN: {
-	    value_t sv = csp_heap_get(st, vw, dir);
-	    if ((vt == V_STRING) && (sv.s > 0))
-		vp->i = csp_str_byte(st, sv.s - 1);
-	    break;
-	}
-	default: break;
-	}
-	return;
+    case PART_LEN: {
+	value_t sv = csp_heap_get(st, vw, dir);
+	if ((vw->vt == V_STRING) && (sv.s > 0))
+	    vp->i = csp_str_byte(st, sv.s - 1);
+	break;	
     }
-    vslot = csp_slot(st, vw, dir);
-    switch(part) {
-    case PART_VAL:
-	csp_dio_get_val_part(st, vslot, vt, vp);
-	break;
-    case PART_PIN:
-	csp_dio_get_pin_part(st, vslot, cvt, vp);
-	break;
-    case PART_PORT:
-	csp_dio_get_port_part(st, vslot, cvt, vp);
-	break;
-    case PART_DIR:      // V_DIGITAL/V_ANALOG/V_FIELD
-	csp_dio_get_dir_part(st, vslot, cvt, vp);
-	break;
-    case PART_PWM:      // V_ANALOG
-	vp->i = (cvt == V_ANALOG) ? vslot->a.pwm : 0;
-	break;
-    case PART_ENDIAN:   // V_ANALOG: answered from the declaration, not the slot
-	vp->i = (cvt == V_ANALOG) ? decl(st, INDEX(ix), an.endian) : 0;
-	break;
-    case PART_PULLUP:   // V_DIGITAL
-	vp->i = (cvt == V_DIGITAL) ? vslot->d.pullup : 0;
-	break;
-    case PART_PULLDOWN: // V_DIGITAL
-	vp->i = (cvt == V_DIGITAL) ? vslot->d.pulldown : 0;
-	break;
-    case PART_PERIOD:   // V_TIMER
-	vp->i = (cvt == V_TIMER) ? vslot->t.period : 0;
-	break;
-    case PART_FIRED:    // V_TIMER
-	vp->i = (cvt == V_TIMER) ? vslot->t.fired : 0;
-	break;
-    case PART_LEN:      // V_STRING: the length byte that precedes the text.
-	// Position 0 is "no string" and has no length byte in front of it, so
-	// it answers 0 rather than reading outside the table.
-	vp->i = ((vt == V_STRING) && (vslot->s > 0))
-	    ? csp_str_byte(st, vslot->s - 1) : 0;
-	break;
-    default:
-	vp->i = 0;
-	break;
+    default: break;
+    }
+}
+
+NOINLINE void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp,
+			       csp_part_t part, dio_t dir)
+{
+    csp_view_t* vw = csp_view(st, ix);
+    if (vw->kind == VIEW_HEAP) {  // bit-fields only carry a value, no pin/port
+	vp->u = 0;
+	csp_view_get_part(st, vw, vp, part, dir);
+    }
+    else {
+	value_t* vslot = csp_slot(st, vw, dir);
+	switch(leaf_cfg_vt(st, ix)) {   // read the decl only on the path using it
+	case V_DIGITAL: csp_digital_get_part(st, &vslot->d, part, vp); break;
+	case V_ANALOG: csp_analog_get_part(st, &vslot->a, part, vp); break;
+	case V_TIMER: csp_timer_get_part(st, &vslot->t, part, vp); break;
+	case V_STRING: csp_string_get_part(st, vslot, vp, part); break;
+	default: break;
+	}	
     }
 }
 
@@ -1872,9 +1413,7 @@ NOINLINE void csp_dio_set(csp_rt_t* st, index_t ix, value_t v, dio_t dir)
 	csp_heap_set(st, vw, dir, v);
 	return;
     }
-    csp_dio_set_val_part(st, csp_slot(st, vw, dir),
-			 decl_cfg_vt(decl(st, INDEX(ix), type),
-				     decl(st, INDEX(ix), vt)), v);
+    csp_dio_set_val_part(st, csp_slot(st, vw, dir), leaf_cfg_vt(st, ix), v);
 }
 
 NOINLINE void csp_dio_get(csp_rt_t* st, index_t ix, value_t* vp, dio_t dir)
@@ -1884,9 +1423,7 @@ NOINLINE void csp_dio_get(csp_rt_t* st, index_t ix, value_t* vp, dio_t dir)
 	*vp = csp_heap_get(st, vw, dir);
 	return;
     }
-    csp_dio_get_val_part(st, csp_slot(st, vw, dir),
-			 decl_cfg_vt(decl(st, INDEX(ix), type),
-				     decl(st, INDEX(ix), vt)), vp);
+    csp_dio_get_val_part(st, csp_slot(st, vw, dir), leaf_cfg_vt(st, ix), vp);
 }
 
 NOINLINE void csp_set_value(csp_rt_t* st, index_t n, value_t v)
@@ -1909,13 +1446,12 @@ NOINLINE void csp_set_value(csp_rt_t* st, index_t n, value_t v)
 // A DECL_VARIABLE named "State" holds a state NUMBER; show it symbolically, the
 // way /list does, so "ON" does not read as "3". Same rule as the disassembler's
 // is_state_var: only that name, so a plain "T=1" is never mistaken for a state.
-int state_is_state_var(csp_rt_t* st, int di)
+NOINLINE int state_is_state_var(csp_rt_t* st, int di)
 {
     if (decl(st, di, type) != DECL_VARIABLE)
 	return 0;
     return csp_str_eq_ro(st, decl_name_pos(st, MAKE_INDEX(0, di)), ros_State, 5);
 }
-
 
 NOINLINE value_t csp_value(csp_rt_t* st, index_t n)
 {
@@ -1938,80 +1474,165 @@ NOINLINE void csp_set_fvalue(csp_rt_t* st, index_t n, fvalue_t v)
     csp_set_value(st, n, vv);
 }
 
-// eval until NEXT!
-int csp_eval_rule(csp_rt_t* st, int n)
+NOINLINE csp_func_fn func_fn(const csp_func_t* fn, int i, int rom)
 {
-    opcode_t op;
-    csp_stack_mark();
-#if defined(USE_STATISTICS) && (USE_STATISTICS==1)
-    st->num_eval_rule++;
-#endif
-again:
-    if (n >= (int)st->ps.nn)   // never walk past the last instruction into garbage
-	return n;
-#if defined(USE_STATISTICS) && (USE_STATISTICS==1)
-    st->num_eval0++;
-#endif
-    op = instr(st, n, op);
-    switch(op) {
+    return (csp_func_fn) rdvp(&fn[i].fn, rom);
+}
+
+NOINLINE uint8_t func_arity(const csp_func_t* fn, int i, int rom)
+{
+    return rd8(&fn[i].arity, rom);
+}
+
+// Maybe used for special opcode without registers
+NOINLINE value_t eval0(opcode_t op)
+{
+    switch(CSP_MASK(op, CSP_OPCODE_BITS)) {
+    default: {
+	value_t x = {.i = 0 };
+	// emit error signal somehow ?
+	return x;
+    }
+    }
+}
+
+// opcodes using only y register return x
+NOINLINE value_t eval1(opcode_t op, value_t y)
+{
+    switch(CSP_MASK(op, CSP_OPCODE_BITS)) {
+    case OP_BNOT: return f_BNOT(y);
+    case OP_NEG:  return f_NEG(y);
+    case OP_MOV:  return f_MOV(y);
+    case OP_NOT:  return f_NOT(y);
+    case OP_CVTIF: return f_CVTIF(y);
+    case OP_CVTFI: return f_CVTFI(y);
+    case OP_FNEG:  return f_FNEG(y);
+    case OP_FMOV:  return f_FMOV(y);
+    default: {
+	value_t x = {.i = 0 };
+	// emit error signal somehow ?
+	return x;
+    }
+    }
+}
+
+// opcodes using only y and z register return x
+NOINLINE value_t eval2(opcode_t op, value_t y, value_t z)
+{
+    switch(CSP_MASK(op, CSP_OPCODE_BITS)) {
+    case OP_ADD: return f_ADD(y, z);
+    case OP_SUB: return f_SUB(y, z);
+    case OP_MUL: return f_MUL(y, z);
+    case OP_DIV: return f_DIV(y, z);
+    case OP_REM: return f_REM(y, z);
+    case OP_SLA: return f_SLA(y, z);
+    case OP_SRA: return f_SRA(y, z);
+    case OP_BAND: return f_BAND(y, z);
+    case OP_BOR: return f_BOR(y, z);
+    case OP_BXOR: return f_BXOR(y, z);
+    case OP_AND: return f_AND(y, z);
+    case OP_OR: return f_OR(y, z);
+    case OP_LT: return f_LT(y, z);
+    case OP_LTE: return f_LTE(y, z);
+    case OP_GT: return f_GT(y, z);
+    case OP_GTE: return f_GTE(y, z);
+    case OP_EQEQ: return f_EQEQ(y, z);
+    case OP_NEQ: return f_NEQ(y, z);
+
+    case OP_FADD: return f_FADD(y, z);
+    case OP_FSUB: return f_FSUB(y, z);
+    case OP_FMUL: return f_FMUL(y, z);
+    case OP_FDIV: return f_FDIV(y, z);
+
+    case OP_FLT: return f_FLT(y, z);
+    case OP_FLTE: return f_FLTE(y, z);
+    case OP_FGT: return f_FGT(y, z);
+    case OP_FGTE: return f_FGTE(y, z);
+    case OP_FEQEQ: return f_FEQEQ(y, z);
+    case OP_FNEQ: return f_FNEQ(y, z);
+    case OP_COMMA: return f_COMMA(y, z);
+    default: {
+	value_t x = {.i = 0 };
+	// emit error signal somehow ?
+	return x;
+    }
+    }
+}
+
+// opcodes that do not return x register, return
+// return 0: stop
+// return 1: continue with next istruction
+// return n: jump relative, continue with n+x
+// set *leave=1 for leaving again loop
+//
+// `ci` is the instruction word at n, read ONCE by the caller. csp_get_instr is
+// NOINLINE and returns csp_instr_t by value, so every instr(st,n,fld) in here
+// used to be its own call plus a spill (same trap as decl() -- see
+// setup_buffer). There were thirty-five of them, all on the same n, in the
+// largest function in the image. csp_eval_rule has already read the word to get
+// the opcode, so passing it costs nothing and saves a re-read per instruction.
+// Named ci (current instruction) and not `in`: that name is the OP_INSTATE arm.
+NOINLINE int evalx(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
+{
+    switch(CSP_MASK(ci.op, CSP_OPCODE_BITS)) {
     case OP_NOP:
 	break;
     case OP_LD:
-	st->es.reg[instr(st,n,m.x)] = csp_value(st, instr(st,n,m.mem));
+	st->es.reg[ci.m.x] = csp_value(st, ci.m.mem);
 	break;
     case OP_LDP:
-	csp_dio_get_part(st, instr(st,n,m.mem), &st->es.reg[instr(st,n,m.x)],
-			 instr(st,n,m.y), DIN);
+	csp_dio_get_part(st, ci.m.mem, &st->es.reg[ci.m.x],
+			 ci.m.y, DIN);
 	break;
     case OP_EQI:
-	st->es.reg[instr(st,n,mi.x)].i =
-	    csp_value(st, instr(st,n,mi.mem)).i == instr(st,n,mi.imm);
-	break;
+	st->es.reg[ci.mi.x].i =
+	    csp_value(st, ci.mi.mem).i == ci.mi.imm;
+	break;	
     case OP_STI: {  // store immediate to memory (mirror of EQI)
-	index_t sm = instr(st,n,mi.mem);
+	index_t sm = ci.mi.mem;
 	value_t v;
-	v.i = instr(st,n,mi.imm);
+	v.i = ci.mi.imm;
 	// Sticky FAILSAFE: once the State variable holds it, only a reset leaves
 	// it -- a rule that tries to set State to anything else is ignored, so a
 	// flaky guard cannot bounce the device out of its safe configuration.
 	// Cheap guard: the name check runs only when the slot already reads
 	// FAILSAFE (rare) and the write is not re-asserting it.
-	if (v.i != STATE_FAILSAFE &&
-	    csp_value(st, sm).i == STATE_FAILSAFE &&
+	if ((v.i != STATE_FAILSAFE) &&
+	    (csp_value(st, sm).i == STATE_FAILSAFE) &&
 	    state_is_state_var(st, INDEX(sm)))
 	    break;
 	csp_set_value(st, sm, v);
-	break;
+	break;	
     }
     case OP_STIMP:  // same as ST, but marks reactive assignment
     case OP_ST:
-	csp_set_value(st, instr(st,n,m.mem), st->es.reg[instr(st,n,m.x)]);
+	csp_set_value(st, ci.m.mem, st->es.reg[ci.m.x]);
 	break;
     case OP_STP: {
-	index_t mm = instr(st,n,m.mem);
-	csp_dio_set_part(st, mm, st->es.reg[instr(st,n,m.x)],
-			 instr(st,n,m.y), DOUT);
+	index_t mm = ci.m.mem;
+	csp_dio_set_part(st, mm, st->es.reg[ci.m.x],
+			 ci.m.y, DOUT);
 	bitset_set(st->dset, st_index(st, mm));  // config change must commit
 	st->es.anyd = CSP_TRUE;
-	break;
+	break;	
     }
     case OP_CHG: {  // r |= dset[ix]  (force-true on the seed cycle)
-	int i = st_index(st, instr(st, n, m.mem));
-	st->es.reg[instr(st,n,m.x)].i |=
+	int i = st_index(st, ci.m.mem);
+	st->es.reg[ci.m.x].i |=
 	    (st->es.seed_all || bitset_tst(st->dset, i)) ? 1 : 0;
 	break;
     }
     case OP_LI:
-	st->es.reg[instr(st,n,i.x)].i = instr(st,n,i.imm);  // sign extend
+	st->es.reg[ci.i.x].i = ci.i.imm;  // sign extend
 	break;
     case OP_LIU:
-	st->es.reg[instr(st,n,i.x)].u = (uint16_t)instr(st,n,i.imm); // zero extend
+	st->es.reg[ci.i.x].u = (uint16_t)ci.i.imm; // zero extend
 	break;
     case OP_LIH:
-	st->es.reg[instr(st,n,i.x)].u |= ((uint32_t)(uint16_t)instr(st,n,i.imm)) << 16;
+	st->es.reg[ci.i.x].u |= ((uint32_t)(uint16_t)ci.i.imm) << 16;
 	break;
     case OP_ARG:
-	st->es.arg[instr(st,n,i.imm)] = st->es.reg[instr(st,n,i.x)];
+	st->es.arg[ci.i.imm] = st->es.reg[ci.i.x];
 	break;
     case OP_RULE:
 	// Bare NORMAL+ rule (implicit): it has no block gate, so gate it on
@@ -2019,11 +1640,10 @@ again:
 	// reactive already gated via rule_state but re-checking is harmless. This
 	// replaces the folded State==INIT||State==NORMAL that used to sit in the
 	// condition -- so a bare rule quiesces in FAILSAFE/user states.
-	if (instr(st,n,r.implicit)) {
+	if (ci.r.implicit) {
 	    int sv = csp_value(st, st->gsx).i;
 	    if ((sv != STATE_INIT) && (sv != STATE_NORMAL)) {
-		n = n + instr(st,n,r.nxt);
-		goto again;
+		return n + ci.r.nxt;
 	    }
 	}
 	// #disable. Keyed by the OP_RULE's OWN ip: it is the one instruction
@@ -2033,38 +1653,41 @@ again:
 	// false-guard body is exactly the skip a disabled rule needs, so
 	// disabling costs nothing but the test.
 	if (((st->dis_ip == NULL) || !bitset_tst(st->dis_ip, n)) &&
-	    st->es.reg[instr(st,n,r.cnd)].i)
-	    n = n+1;
-	else
-	    n = n+instr(st,n,r.nxt);  // relative jump
-	goto again;
+	    st->es.reg[ci.r.cnd].i)
+	    break;
+	return n+ci.r.nxt;
     case OP_INSTATE:  // #in block gate: skip the whole block if State != imm
-	if (st->es.reg[instr(st,n,in.x)].i != instr(st,n,in.imm))
-	    return n + instr(st,n,in.nxt);
-	n = n+1;
-	goto again;
+	if (st->es.reg[ci.in.x].i != ci.in.imm) {
+	    *leave = 1;
+	    return n + ci.in.nxt;
+	}
+	break;
     case OP_NINSTATE: // OR-chain gate: jump INTO the block if State == imm
-	if (st->es.reg[instr(st,n,in.x)].i == instr(st,n,in.imm))
-	    return n + instr(st,n,in.nxt);
-	n = n+1;
-	goto again;
+	if (st->es.reg[ci.in.x].i == ci.in.imm) {
+	    *leave = 1;
+	    return n + ci.in.nxt;
+	}
+	break;
     case OP_NEXT: // rule is done executing
+	*leave = 1;
 	return n+1;
     case OP_ENTER: // skip y + 2
-	return n + instr(st,n,e.num) + 2;
+	*leave = 1;
+	return n+ci.e.num+2;
     case OP_NEW:
 	// Enter the object like a call -- but only during a full sweep (csp_eval:
 	// non-reactive execution and the reactive SEED). csp_react dispatches
 	// single rules by ip; if one reaches OP_NEW it must be a no-op, else esp
 	// grows unboundedly and corrupts the struct.
 	if (st->es.sweep) {
-	    index_t ent = instr(st,n,n.ent);
-	    index_t obj = instr(st,n,n.obj);
+	    index_t ent = ci.n.ent;
+	    index_t obj = ci.n.obj;
 	    st->stack[st->esp].ix = n+1;      // return address
 	    st->stack[st->esp].cur = st->cur;  // store current module
 	    st->esp++;
 	    st->cur = decl(st, INDEX(obj), mq.m);    // set current module
 	    st->offs[CURRENT] = st->offs[st->cur];  // setup locals
+	    *leave = 1;
 	    return INDEX(ent)+1; // first instruction
 	}
 	break;
@@ -2076,18 +1699,19 @@ again:
 	    st->cur = st->stack[st->esp].cur;
 	    n = st->stack[st->esp].ix;
 	    st->offs[CURRENT] = st->offs[st->cur];
+	    *leave = 1;
 	    return n;
 	}
 	break;
     case OP_CALL: {
 	// y: function index (low bit: 0=builtin, 1=user), index >> 1
 	// z: argument (0/1 arg) or OP_COMMA instruction (2+ args)
-	index_t idx = instr(st,n,f.idx);
+	index_t idx = ci.f.idx;
 	uint8_t arity;
 	csp_func_fn fn = NULL;
 
 	// Get function pointer
-	if (instr(st,n,f.usr)) {
+	if (ci.f.usr) {
 	    if (st->ufuncs && (idx < st->num_ufuncs)) {
 		arity = func_arity(st->ufuncs, idx, st->ufuncs_rom);
 		fn    = func_fn(st->ufuncs, idx, st->ufuncs_rom);
@@ -2100,34 +1724,66 @@ again:
 	    }
 	}
 	if (fn) {
-	    value_t val = fn(st, instr(st,n,f.avt), st->es.arg, arity);
-	    st->es.reg[instr(st,n,f.x)] = val;
+	    value_t val = fn(st, ci.f.avt, st->es.arg, arity);
+	    st->es.reg[ci.f.x] = val;
 	}
 	break;
     }
-    default: {
-	value_t xv, yv, zv;
+    default:
+	*leave = 1;
+	return n;
+    }
+    return n+1;
+}
 
-	switch(csp_opcode_arity(op)) {
+// eval until NEXT!
+int csp_eval_rule(csp_rt_t* st, int n)
+{
+    int leave = 0;
+    
+    csp_stack_mark();
+#if defined(USE_STATISTICS) && (USE_STATISTICS==1)
+    st->num_eval_rule++;
+#endif
+    while(!leave) {
+	csp_instr_t ci; // the instruction word: ONE read serves op and a.x/y/z
+	opcode_t op;
+	value_t xv, yv, zv;
+	uint8_t a;
+	
+        // never walk past the last instruction into garbage
+	if (n >= (int)st->ps.nn) 
+	    return n;
+#if defined(USE_STATISTICS) && (USE_STATISTICS==1)
+	st->num_eval0++;
+#endif
+	ci = csp_get_instr(st, n);
+	op = ci.op;
+	a = csp_opcode_arity(op);
+	switch(CSP_MASK(a, CSP_OPCODE_ARITY_BITS)) {
 	case 0:
 	    xv = eval0(op);
+	    n = n+1;
 	    break;
 	case 1:
-	    yv = st->es.reg[instr(st,n,a.y)];
+	    yv = st->es.reg[ci.a.y];
 	    xv = eval1(op, yv);
+	    st->es.reg[ci.a.x] = xv;
+	    n = n+1;
 	    break;
 	case 2:
-	    yv = st->es.reg[instr(st,n,a.y)];
-	    zv = st->es.reg[instr(st,n,a.z)];
-	    xv = eval2(op, yv, zv); //eval_tab2[op](yv,zv);
+	    yv = st->es.reg[ci.a.y];
+	    zv = st->es.reg[ci.a.z];
+	    xv = eval2(op, yv, zv);
+	    st->es.reg[ci.a.x] = xv;
+	    n = n+1;
+	    break;
+	case 3:
+	    n = evalx(st, n, ci, &leave);
 	    break;
 	}
-	st->es.reg[instr(st,n,a.x)] = xv;
-	break;
     }
-    }
-    n = n+1;
-    goto again;
+    return n;
 }
 
 // mirror dirty leaf buffers between the two heaps (everything lives in the heap)
@@ -2425,11 +2081,11 @@ NOINLINE index_t lookup_decl_in(csp_rt_t* st, const tstr_t* name,
 {
     int i = start;
     while(i < stop) {
-	int pos = decl(st, i, name);
-	if ((pos > 0) && csp_str_eq(st, pos, name->ptr, name->len))
+	csp_decl_t d = csp_get_decl(st, i);   // one read per node, not three
+	if ((d.name > 0) && csp_str_eq(st, d.name, name->ptr, name->len))
 	    return MAKE_INDEX(0,i);
-	if (decl(st, i, type) == DECL_MODULE) // skip module def
-	    i += (decl(st, i, md.n)+1); // skip elements and END
+	if (d.type == DECL_MODULE)            // skip module def
+	    i += (d.md.n+1);                  // skip elements and END
 	i++;
     }
     return BAD_INDEX;
@@ -2546,43 +2202,6 @@ NOINLINE index_t csp_new_decl(csp_rt_t* st, const tstr_t* name, decl_t type,
     return i;
 }
 
-
-// Map a name after '.' to a part selector, PART_LAST if it is not a part.
-// Parts are ordinary words disambiguated by position (obj.field wins in code).
-NOINLINE csp_part_t part_from_tstr(const tstr_t* s)
-{
-    switch (s->len) {
-    case 2:
-	if (ro_memcmp(s->ptr, s_id, 2) == 0)     return PART_ID;
-	if (ro_memcmp(s->ptr, s_rx, 2) == 0)     return PART_RX;
-	if (ro_memcmp(s->ptr, s_tx, 2) == 0)     return PART_TX;
-	break;
-    case 3:
-	if (ro_memcmp(s->ptr, s_pin, 3) == 0)    return PART_PIN;
-	if (ro_memcmp(s->ptr, s_dir, 3) == 0)    return PART_DIR;
-	if (ro_memcmp(s->ptr, s_dlc, 3) == 0)    return PART_DLC;
-	if (ro_memcmp(s->ptr, s_len, 3) == 0)    return PART_LEN;
-	break;
-    case 4:
-	if (ro_memcmp(s->ptr, s_port, 4) == 0)   return PART_PORT;
-	break;
-    case 5:
-	if (ro_memcmp(s->ptr, s_value, 5) == 0)  return PART_VAL;
-	if (ro_memcmp(s->ptr, s_fired, 5) == 0)  return PART_FIRED;
-	break;
-    case 6:
-	if (ro_memcmp(s->ptr, s_endian, 6) == 0) return PART_ENDIAN;
-	if (ro_memcmp(s->ptr, s_period, 6) == 0) return PART_PERIOD;
-	break;
-    default:
-	break;
-    }
-    return PART_LAST;
-}
-
-
-
-
 // Build reactive dependency graph: declaration -> rules that depend on it
 // When a declaration changes, we enqueue all rules that read from it (via LD)
 // --- middle-region bump allocator ------------------------------------------
@@ -2636,15 +2255,21 @@ NOINLINE static int skip_gate(csp_rt_t* st, int ip, int hi)
     // Only a GLOBAL-State gate (LD reads st->gsx). A module's own #in gates on the
     // object's per-instance State (a different decl); those keep their gate at the
     // reactive entry and are handled the old way (their INSTATE falls through).
-    if ((ip + 1 < hi) && (instr(st, ip, op) == OP_LD) &&
-	(instr(st, ip, m.mem) == st->gsx) &&
-	((instr(st, ip+1, op) == OP_NINSTATE) ||
-	 (instr(st, ip+1, op) == OP_INSTATE))) {
+    csp_instr_t g, g1;
+
+    if (ip + 1 >= hi)                   // keeps the original short-circuit: no
+	return ip;                      // instruction read when the range is short
+    g  = csp_get_instr(st, ip);
+    g1 = csp_get_instr(st, ip+1);
+    if ((g.op == OP_LD) && (g.m.mem == st->gsx) &&
+	((g1.op == OP_NINSTATE) || (g1.op == OP_INSTATE))) {
 	int j = ip + 1;
-	while ((j < hi) && (instr(st, j, op) == OP_NINSTATE))
-	    j++;
-	if ((j < hi) && (instr(st, j, op) == OP_INSTATE))
-	    j++;
+	while (j < hi) {                      // one read per instruction: the old
+	    opcode_t o = csp_get_instr(st, j).op;  // form re-read the word the loop
+	    if (o == OP_NINSTATE) { j++; continue; }   // had just looked at
+	    if (o == OP_INSTATE) j++;
+	    break;
+	}
 	return j;
     }
     return ip;
@@ -2655,10 +2280,13 @@ NOINLINE static int skip_gate(csp_rt_t* st, int ip, int hi)
 // dependencies -- csp_csr adds the State edge per gated rule from rule_state.
 NOINLINE static int is_gate_ld(csp_rt_t* st, int i)
 {
-    return (instr(st, i, op) == OP_LD) && (instr(st, i, m.mem) == st->gsx) &&
-	   (i + 1 < (int)st->ps.nn) &&
-	   ((instr(st, i+1, op) == OP_INSTATE) ||
-	    (instr(st, i+1, op) == OP_NINSTATE));
+    csp_instr_t g = csp_get_instr(st, i);
+    csp_instr_t g1;
+
+    if ((g.op != OP_LD) || (g.m.mem != st->gsx) || (i + 1 >= (int)st->ps.nn))
+	return 0;
+    g1 = csp_get_instr(st, i+1);
+    return (g1.op == OP_INSTATE) || (g1.op == OP_NINSTATE);
 }
 
 // csp_csr pass 3: add the State -> `ord` edge for a State-gated rule, with the
@@ -2703,19 +2331,29 @@ NOINLINE static uint16_t gate_mask(csp_rt_t* st, int ip, int hi, int* bend)
 {
     // Global-State gates only (see skip_gate): an object's own #in gates on its
     // per-instance State, which this global-State mask cannot represent.
-    if ((ip + 1 < hi) && (instr(st, ip, op) == OP_LD) &&
-	(instr(st, ip, m.mem) == st->gsx) &&
-	((instr(st, ip+1, op) == OP_NINSTATE) ||
-	 (instr(st, ip+1, op) == OP_INSTATE))) {
+    csp_instr_t g, g1;
+
+    if (ip + 1 >= hi)                   // as in skip_gate: short range, no read
+	return 0;
+    g  = csp_get_instr(st, ip);
+    g1 = csp_get_instr(st, ip+1);
+    if ((g.op == OP_LD) && (g.m.mem == st->gsx) &&
+	((g1.op == OP_NINSTATE) || (g1.op == OP_INSTATE))) {
 	uint16_t m = 0;
 	int j = ip + 1;
-	while ((j < hi) && (instr(st, j, op) == OP_NINSTATE)) {
-	    m |= (uint16_t)(1u << instr(st, j, in.imm));
+	while (j < hi) {
+	    csp_instr_t gj = csp_get_instr(st, j);
+	    if (gj.op != OP_NINSTATE)
+		break;
+	    m |= (uint16_t)(1u << gj.in.imm);
 	    j++;
 	}
-	if ((j < hi) && (instr(st, j, op) == OP_INSTATE)) {
-	    m |= (uint16_t)(1u << instr(st, j, in.imm));
-	    *bend = j + instr(st, j, in.nxt);
+	if (j < hi) {
+	    csp_instr_t gj = csp_get_instr(st, j);
+	    if (gj.op == OP_INSTATE) {
+		m |= (uint16_t)(1u << gj.in.imm);
+		*bend = j + gj.in.nxt;
+	    }
 	}
 	return m;
     }
@@ -2728,9 +2366,9 @@ NOINLINE static int body_implicit(csp_rt_t* st, int ip, int hi)
 {
     int i;
     for (i = ip; i < hi; i++) {
-	opcode_t o = instr(st, i, op);
-	if (o == OP_RULE) return instr(st, i, r.implicit);
-	if ((o == OP_NEXT) || (o == OP_ENTER)) break;
+	csp_instr_t ci = csp_get_instr(st, i);
+	if (ci.op == OP_RULE) return ci.r.implicit;
+	if ((ci.op == OP_NEXT) || (ci.op == OP_ENTER)) break;
     }
     return 0;
 }
@@ -2854,7 +2492,8 @@ void csp_csr(csp_rt_t* st)
     // from their own baked graph). Scan from the RAM instruction base.
     current_rule = st->rom_nn;
     for (i = st->rom_nn; i < st->ps.nn; i++) {
-	switch (instr(st,i,op)) {
+	csp_instr_t ci = csp_get_instr(st, i);   // one read per instruction
+	switch (ci.op) {
 	case OP_RULE:
 	    current_rule = -1;
 	    break;
@@ -2864,7 +2503,7 @@ void csp_csr(csp_rt_t* st)
 	case OP_LD:
 	case OP_CHG:
 	    if ((current_rule >= 0) && !is_gate_ld(st, i)) {
-		index_t mem = INDEX(instr(st,i,m.mem));
+		index_t mem = INDEX(ci.m.mem);
 		if (mem < st->ps.nd) {
 		    st->es.idg[mem]++;
 		}
@@ -2872,7 +2511,7 @@ void csp_csr(csp_rt_t* st)
 	    break;
 	case OP_EQI:
 	    if (current_rule >= 0) {
-		index_t mem = INDEX(instr(st,i,mi.mem));
+		index_t mem = INDEX(ci.mi.mem);
 		if (mem < st->ps.nd) {
 		    st->es.idg[mem]++;
 		}
@@ -2880,14 +2519,14 @@ void csp_csr(csp_rt_t* st)
 	    break;
 	case OP_LI:
 	case OP_LIU:
-	    reg_imm[instr(st,i,i.x)] = (index_t)instr(st,i,i.imm);
+	    reg_imm[ci.i.x] = (index_t)ci.i.imm;
 	    break;
 	case OP_ARG:
-	    arg_imm[instr(st,i,i.imm)] = reg_imm[instr(st,i,i.x)];
+	    arg_imm[ci.i.imm] = reg_imm[ci.i.x];
 	    break;
 	case OP_CALL:   // timer args (timeout(T), ...) become timer -> rule edges
 	    if (current_rule >= 0) {
-		uint16_t avt = instr(st,i,f.avt);
+		uint16_t avt = ci.f.avt;
 		int a;
 		for (a = 0; a < MAX_ARGS; a++) {
 		    if (((avt >> (a*4)) & 0xf) == V_TIMER) {
@@ -2954,7 +2593,8 @@ void csp_csr(csp_rt_t* st)
     next_ord = r_rom + 1;
     add_state_edge(st, wr, ord);        // the implicit body at the RAM base
     for (i = st->rom_nn; i < st->ps.nn; i++) {
-	switch (instr(st,i,op)) {
+	csp_instr_t ci = csp_get_instr(st, i);   // one read per instruction
+	switch (ci.op) {
 	case OP_RULE:
 	    current_rule = -1;
 	    break;
@@ -2966,7 +2606,7 @@ void csp_csr(csp_rt_t* st)
 	case OP_LD:
 	case OP_CHG:
 	    if ((current_rule >= 0) && !is_gate_ld(st, i)) {
-		index_t mem = INDEX(instr(st,i,m.mem));
+		index_t mem = INDEX(ci.m.mem);
 		if (mem < st->ps.nd &&
 		    (wr[mem] == st->es.ofs[mem] || st->es.edg[wr[mem]-1] != ord))
 		    st->es.edg[wr[mem]++] = ord;
@@ -2974,7 +2614,7 @@ void csp_csr(csp_rt_t* st)
 	    break;
 	case OP_EQI:
 	    if (current_rule >= 0) {
-		index_t mem = INDEX(instr(st,i,mi.mem));
+		index_t mem = INDEX(ci.mi.mem);
 		if (mem < st->ps.nd &&
 		    (wr[mem] == st->es.ofs[mem] || st->es.edg[wr[mem]-1] != ord))
 		    st->es.edg[wr[mem]++] = ord;
@@ -2982,14 +2622,14 @@ void csp_csr(csp_rt_t* st)
 	    break;
 	case OP_LI:
 	case OP_LIU:
-	    reg_imm[instr(st,i,i.x)] = (index_t)instr(st,i,i.imm);
+	    reg_imm[ci.i.x] = (index_t)ci.i.imm;
 	    break;
 	case OP_ARG:
-	    arg_imm[instr(st,i,i.imm)] = reg_imm[instr(st,i,i.x)];
+	    arg_imm[ci.i.imm] = reg_imm[ci.i.x];
 	    break;
 	case OP_CALL:   // timer args (timeout(T), ...) become timer -> rule edges
 	    if (current_rule >= 0) {
-		uint16_t avt = instr(st,i,f.avt);
+		uint16_t avt = ci.f.avt;
 		int a;
 		for (a = 0; a < MAX_ARGS; a++) {
 		    if (((avt >> (a*4)) & 0xf) == V_TIMER) {
@@ -3755,25 +3395,25 @@ NOINLINE static int parent_leaf(csp_rt_t* st, index_t ix);
 // must be declared before a field can view it), so this is purely a view.
 NOINLINE static int setup_field(csp_rt_t* st, index_t ix)
 {
-    int i = INDEX(ix);
-    index_t fx = decl(st, i, ca.id);            // the #buffer (decl index)
-    uint16_t pos = decl(st, i, ca.bit);         // ca.bit is 9 bits: 0..511
+    csp_decl_t d = csp_get_decl(st, INDEX(ix));  // read ONCE -- see setup_buffer
+    uint16_t pos = d.ca.bit;                     // ca.bit is 9 bits: 0..511
     csp_view_t* pv = &st->view[parent_leaf(st, ix)];
     csp_view_t* vw;
 
     // ca.bit is 9 bits and csp_view_t.pos is 16, so every bit of a 64-byte FD
     // frame (0..511) is addressable. The frame itself is the only bound.
-    if (pos + decl(st,i,ca.len) + 1 > decl(st, fx, bf.nbytes)*8) {
+    // d.ca.id is the #buffer this field views, a DIFFERENT decl.
+    if (pos + d.ca.len + 1 > decl(st, d.ca.id, bf.nbytes)*8) {
 	csp_set_error(st, ERR_SYNTAX);          // field reaches past the frame
 	return -1;
     }
     vw = &st->view[st_index(st, ix)];
     vw->kind   = VIEW_HEAP;
-    vw->vt     = decl(st, i, vt);
+    vw->vt     = d.vt;
     vw->buf    = pv->buf;                       // share the frame's buffer
     vw->pos    = pos;
-    vw->len    = decl(st, i, ca.len);
-    vw->endian = decl(st, i, ca.endian);
+    vw->len    = d.ca.len;
+    vw->endian = d.ca.endian;
     vw->flags  = 0;
     return 0;
 }
@@ -3837,7 +3477,7 @@ NOINLINE static void can_mark_fields(csp_rt_t* st, index_t b)
 	if (vw->buf != b)
 	    continue;
 	if (csp_heap_get(st, vw, DOUT).u == csp_heap_get(st, vw, DIN).u)
-	    continue;                     // this field of the frame is unchanged
+	    continue;  // this field of the frame is unchanged
 	bitset_set(st->dset, leaf);
 	st->es.anyd = CSP_TRUE;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
@@ -3939,27 +3579,35 @@ NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint16_t nbytes,
 }
 
 // allocate storage for a #buffer and point its own view at the whole buffer
+//
+// READ THE DECL ONCE. `decl(st,i,fld)` is csp_get_decl(st,i).fld, and
+// csp_get_decl is NOINLINE and returns the whole csp_decl_t by value -- so
+// every field access is a call plus a full 8-byte spill to a fresh stack slot
+// (gcc cannot scalarise it: the union's bitfield arms need the temporary to
+// have an address, and a non-pure call cannot be CSE'd). This function used to
+// have eight of them, seven on the SAME decl: 628 bytes and a 64-byte stack
+// frame for what is a handful of field copies. One local copy is the fix, and
+// it applies to every setup_* here.
 NOINLINE static int setup_buffer(csp_rt_t* st, index_t ix)
 {
-    int i = INDEX(ix);
+    csp_decl_t d = csp_get_decl(st, INDEX(ix));
     // Only a real #buffer carries bf.nbytes. This function is shared with the
     // auto-buffer a plain #variable gets, and there the size lives in res.
-    int is_buf = (decl(st,i,type) == DECL_BUFFER);
-    uint16_t res = is_buf ? decl(st,i,bf.nbytes)*8 : GET_RES(decl(st,i,res));
+    int is_buf = (d.type == DECL_BUFFER);
+    uint16_t res = is_buf ? d.bf.nbytes*8 : GET_RES(d.res);
     uint16_t nbytes = (res + 7) >> 3;
-    uint8_t transport = is_buf ? decl(st,i,bf.transport) : TR_NONE;
+    uint8_t transport = is_buf ? d.bf.transport : TR_NONE;
     uint32_t xref = 0;
     index_t b;
     csp_view_t* vw;
 
     if (transport == TR_CAN)                 // the frame id, out of its constant
-	xref = (uint32_t)decl(st, decl(st,i,bf.id), cn.init).i;
-    if ((b = csp_buf_alloc(st, nbytes, transport, xref, decl(st,i,dir)))
-	== BAD_INDEX)
+	xref = (uint32_t)decl(st, d.bf.id, cn.init).i;
+    if ((b = csp_buf_alloc(st, nbytes, transport, xref, d.dir)) == BAD_INDEX)
 	return -1;
     vw = &st->view[st_index(st, ix)];
     vw->kind     = VIEW_HEAP;
-    vw->vt       = decl(st,i,vt);
+    vw->vt       = d.vt;
     vw->buf    = b;
     vw->pos    = 0;
     // A whole-frame view would need len up to 511, but len is 8 bits. Cap it:
@@ -3996,24 +3644,24 @@ NOINLINE static int parent_leaf(csp_rt_t* st, index_t ix)
 
 NOINLINE static int setup_variable(csp_rt_t* st, index_t ix)
 {
-    int i = INDEX(ix);
+    csp_decl_t d = csp_get_decl(st, INDEX(ix));
     csp_view_t* vw = &st->view[st_index(st, ix)];
 
-    if (decl(st,i,bound)) {                   // bit-field view into a buffer
+    if (d.bound) {                            // bit-field view into a buffer
 	csp_view_t* pv = &st->view[parent_leaf(st, ix)];
 	vw->kind     = VIEW_HEAP;
-	vw->vt       = decl(st,i,vt);
+	vw->vt       = d.vt;
 	vw->buf    = pv->buf;
-	vw->pos    = decl(st,i,ca.bit);
-	vw->len    = decl(st,i,ca.len);
-	vw->endian = decl(st,i,ca.endian);
+	vw->pos    = d.ca.bit;
+	vw->len    = d.ca.len;
+	vw->endian = d.ca.endian;
 	vw->flags  = 0;
 	return 0;
     }
     if (setup_buffer(st, ix) < 0)         // auto-buffer
 	return -1;
-    csp_heap_set(st, vw, DIN,  decl(st,i,va.init));
-    csp_heap_set(st, vw, DOUT, decl(st,i,va.init));
+    csp_heap_set(st, vw, DIN,  d.va.init);
+    csp_heap_set(st, vw, DOUT, d.va.init);
     return 0;
 }
 
@@ -4022,14 +3670,14 @@ NOINLINE static int setup_variable(csp_rt_t* st, index_t ix)
 // then fills it through the normal csp_dio_slot(s)/PART path (now -> heap).
 NOINLINE static int setup_slot(csp_rt_t* st, index_t ix)
 {
-    int i = INDEX(ix);
-    index_t b = csp_buf_alloc(st, sizeof(value_t), 0, 0, decl(st,i,dir));
+    csp_decl_t d = csp_get_decl(st, INDEX(ix));
+    index_t b = csp_buf_alloc(st, sizeof(value_t), 0, 0, d.dir);
     csp_view_t* vw;
     if (b == BAD_INDEX)
 	return -1;
     vw = &st->view[st_index(st, ix)];
     vw->kind = VIEW_SLOT;
-    vw->vt   = decl(st,i,vt);
+    vw->vt   = d.vt;
     vw->buf  = b;
     return 0;
 }
@@ -4040,27 +3688,80 @@ NOINLINE static int setup_slot(csp_rt_t* st, index_t ix)
 // A #field with no direction is not device I/O at all and stays out.
 NOINLINE static void add_io(csp_rt_t* st, index_t ix)
 {
-    int i = INDEX(ix);
-    if ((decl(st,i,type) == DECL_FIELD) && !(decl(st,i,dir) & DIR_INOUT))
+    csp_decl_t d = csp_get_decl(st, INDEX(ix));
+    if ((d.type == DECL_FIELD) && !(d.dir & DIR_INOUT))
 	return;
     if (st->nio < st->io_cap)  // sized to csp_estimate.nio; guard is belt+braces
 	st->io[st->nio++] = ix;
 }
+
+
+NOINLINE static int setup_decl(csp_rt_t* st, index_t ix, csp_decl_t d)
+{
+    switch(d.type) {
+    case DECL_VARIABLE:
+	if (setup_variable(st, ix) < 0)
+	    return -1;	
+	break;
+    case DECL_CONSTANT: {
+	value_t* iptr;
+	value_t* optr;
+	if (setup_slot(st, ix) < 0)
+	    return -1;		
+	csp_dio_slots(st, ix, &iptr, &optr);
+	*iptr = *optr = d.cn.init;
+	break;
+    }
+    case DECL_TIMER:
+	if (setup_slot(st, ix) < 0)
+	    return -1;
+	setup_timer(st, ix);
+	if (st->nt < st->timer_cap)
+	    st->timer[st->nt++] = ix;
+	break;
+    case DECL_DIGITAL:
+	if (setup_slot(st, ix) < 0)
+	    return -1;
+	setup_digital(st, ix);
+	add_io(st, ix);
+	break;
+    case DECL_ANALOG:
+	if (setup_slot(st, ix) < 0)
+	    return -1;
+	setup_analog(st, ix);
+	add_io(st, ix);	
+	break;
+    case DECL_FIELD:
+	if (setup_field(st, ix) < 0)
+	    return -1;
+	add_io(st, ix);
+	break;
+    case DECL_BUFFER:
+	if (setup_buffer(st, ix) < 0)
+	    return -1;	
+	break;
+    default:
+	return -1;	
+    }
+    return 0;
+}
+
 
 // Count the buffer/heap/io a single value-leaf decl `j` needs, mirroring the
 // setup_* functions (which decls get a buffer, its byte size, and whether it is
 // device I/O). Used by csp_estimate; must track those functions to stay exact.
 NOINLINE static void est_leaf(csp_rt_t* st, int j, csp_estimate_t* e)
 {
+    csp_decl_t d = csp_get_decl(st, j);
     uint32_t nbytes;
-    switch (decl(st,j,type)) {
+    switch (d.type) {
     case DECL_VARIABLE:
-	if (decl(st,j,bound))                 // bit-field view: shares a buffer
+	if (d.bound)                          // bit-field view: shares a buffer
 	    return;
-	nbytes = (GET_RES(decl(st,j,res)) + 7) >> 3;
+	nbytes = (GET_RES(d.res) + 7) >> 3;
 	break;
     case DECL_BUFFER:
-	nbytes = decl(st,j,bf.nbytes);       // #buffer: size is in bf.nbytes
+	nbytes = d.bf.nbytes;                // #buffer: size is in bf.nbytes
 	break;
     case DECL_TIMER:
 	e->nt++;                              // timer list entry (setup_timer)
@@ -4077,7 +3778,7 @@ NOINLINE static void est_leaf(csp_rt_t* st, int j, csp_estimate_t* e)
     case DECL_FIELD:
 	// A field is a view into its #buffer, which is counted as a buffer in
 	// its own right. Only the I/O list entry belongs here.
-	if (decl(st,j,dir) & DIR_INOUT) e->nio++;
+	if (d.dir & DIR_INOUT) e->nio++;
 	return;
     default:
 	return;                               // module/end/object/view: no buffer
@@ -4089,7 +3790,7 @@ NOINLINE static void est_leaf(csp_rt_t* st, int j, csp_estimate_t* e)
 // Memory an already-parsed program needs, WITHOUT running csp_rt_start: the same
 // global + per-object walk (offs build included), counting only. nleaf must be
 // exact (it sizes view[]/dset); nbuf/heap/ni/no match the setup_* allocations.
-void csp_estimate(csp_rt_t* st, csp_estimate_t* e)
+NOINLINE void csp_estimate(csp_rt_t* st, csp_estimate_t* e)
 {
     int i, in_module = 0;
     index_t nd = st->ps.nd;
@@ -4112,9 +3813,10 @@ void csp_estimate(csp_rt_t* st, csp_estimate_t* e)
     for (i = 0; i < (int)nd; i++) {           // objects: offs build + members
 	index_t mx;
 	int dn, base, j, top;
-	if (decl(st,i,type) != DECL_OBJECT)
+	csp_decl_t od = csp_get_decl(st, i);
+	if (od.type != DECL_OBJECT)
 	    continue;
-	mx = decl(st, i, mq.mx);
+	mx = od.mq.mx;
 	dn = decl(st, INDEX(mx), md.n);
 	base = INDEX(mx) + 1;                  // members' decl indices: base..base+dn-1
 	top = offs + base + dn;               // one past this object's last leaf
@@ -4204,6 +3906,19 @@ int csp_rebuild(csp_rt_t* st)
     return csp_rt_start(st);
 }
 
+// given an object index get index of module def
+NOINLINE static index_t get_mq_m(csp_rt_t* st, index_t ix)
+{
+    index_t mx = decl(st, INDEX(ix), mq.mx);  // module def
+    return mx;
+}
+
+// given a module def index return number of elements
+NOINLINE static ivalue_t get_md_n(csp_rt_t* st, index_t mx)
+{
+    return decl(st, INDEX(mx), md.n);
+}
+
 // copy constant and init values
 // setup input, output and timer lists
 //
@@ -4212,8 +3927,8 @@ int csp_rt_start(csp_rt_t* st)
     int i;
     int offs;
     int in_module = 0;
-    value_t* iptr;
-    value_t* optr;
+    // value_t* iptr;
+    // value_t* optr;
     csp_estimate_t e;
 
     // Size every derived table to what this program actually declares
@@ -4277,7 +3992,8 @@ int csp_rt_start(csp_rt_t* st)
 
     for (i = 0; i < st->ps.nd; i++) {
 	index_t ix = MAKE_INDEX(0,i);
-	switch(decl(st,i,type)) {
+	csp_decl_t d = csp_get_decl(st, i);   // one read per declaration
+	switch(d.type) {
 	case DECL_MODULE:
 	    in_module=1;
 	    if (st->nm < MAX_MODULES)
@@ -4293,76 +4009,33 @@ int csp_rt_start(csp_rt_t* st)
 	    if (st->ps.nq < MAX_OBJECTS-1)
 		st->object[++st->ps.nq] = ix;
 	    break;
-	case DECL_CONSTANT:
-	    if (!in_module) {               // global; templates set up per-object
-		if (setup_slot(st, ix) < 0)
-		    return -1;
-		csp_dio_slots(st, ix, &iptr, &optr);
-		*iptr = *optr = decl(st,i,cn.init);
-	    }
-	    break;
-	case DECL_VARIABLE:
-	    if (!in_module) {               // global; templates set up per-object
-		if (setup_variable(st, ix) < 0)
-		    return -1;
-	    }
-	    break;
-	case DECL_TIMER:
-	    if (!in_module) {
-		if (setup_slot(st, ix) < 0)
-		    return -1;
-		setup_timer(st, ix);
-		if (st->nt < st->timer_cap)
-		    st->timer[st->nt++] = ix;
-	    }
-	    break;
-
-	case DECL_DIGITAL:
-	    if (!in_module) {
-		if (setup_slot(st, ix) < 0)
-		    return -1;
-		setup_digital(st, ix);
-		add_io(st, ix);
-	    }
-	    break;
-
-	case DECL_ANALOG:
-	    if (!in_module) {
-		if (setup_slot(st, ix) < 0)
-		    return -1;
-		setup_analog(st, ix);
-		add_io(st, ix);
-	    }
-	    break;
-	    
-	case DECL_FIELD:
-	    if (!in_module) {
-		if (setup_field(st, ix) < 0)
-		    return -1;
-		add_io(st, ix);
-	    }
-	    break;
-	case DECL_BUFFER:
-	    if (!in_module) {
-		if (setup_buffer(st, ix) < 0)
-		    return -1;
-	    }
-	    break;
 	case DECL_VIEW: {
 	    // synthetic Buf[a..b] view: translate to a HEAP view into the
 	    // parent buffer (already set up, since it has a lower index)
-	    index_t parent = decl(st,i,ca.id);
+	    index_t parent = d.ca.id;
 	    csp_view_t* pv = &st->view[parent];
 	    csp_view_t* vw = &st->view[st_index(st, ix)];
 	    vw->kind     = VIEW_HEAP;
-	    vw->vt       = decl(st,i,vt);
+	    vw->vt       = d.vt;
 	    vw->buf    = pv->buf;
-	    vw->pos    = decl(st,i,ca.bit);
-	    vw->len    = decl(st,i,ca.len);     // already len-1
-	    vw->endian = decl(st,i,ca.endian);
+	    vw->pos    = d.ca.bit;
+	    vw->len    = d.ca.len;     // already len-1
+	    vw->endian = d.ca.endian;
 	    vw->flags  = 0;                       // sub-view -> generic bit path
 	    break;
 	}
+	case DECL_VARIABLE:
+	case DECL_CONSTANT:
+	case DECL_TIMER:
+	case DECL_DIGITAL:
+	case DECL_ANALOG:
+	case DECL_FIELD:
+	case DECL_BUFFER:
+	    if (!in_module) {
+		if (setup_decl(st, ix, d) < 0)
+		    return -1;
+	    }
+	    break;
 	default:
 	    break;
 	}
@@ -4372,8 +4045,8 @@ int csp_rt_start(csp_rt_t* st)
     for (i = 0; i < st->ps.nq; i++) {
 	int m = i+1;
 	index_t ix = st->object[m];
-	index_t mx = decl(st, INDEX(ix), mq.mx);  // module def
-	ivalue_t dn = decl(st, INDEX(mx), md.n);  // number of decl elements
+	index_t mx = get_mq_m(st, ix);   // get module
+	ivalue_t dn = get_md_n(st, mx);  // number of decl elements
 	st->offs[m] = offs;
 	offs += dn;
 	if (offs > MAX_DECLS) {
@@ -4387,62 +4060,31 @@ int csp_rt_start(csp_rt_t* st)
 	int m = i+1;
 	int j;
 	index_t ix = st->object[m];
-	index_t mx = decl(st, INDEX(ix), mq.mx); // module def
-	ivalue_t dn = decl(st, INDEX(mx), md.n);  // number of decl elements
-
+	index_t mx = get_mq_m(st, ix);   // get module
+	ivalue_t dn = get_md_n(st, mx);  // number of decl elements
 	int base = INDEX(mx)+1;
+	
 	for (j = 0; j < dn; j++) {
 	    int dj = base + j;         // decl index
 	    index_t fx = MAKE_INDEX(m,dj); // field index
+	    csp_decl_t d = csp_get_decl(st, dj);   // one read per member
 #ifdef DEBUG
 	    DBG("init OBJECT %s, FIELD %s[%d]\n",
 		decl_name(st, ix), decl_name(st, fx), dj);
 #endif
-	    switch (decl(st, dj, type)) {
-	    case DECL_CONSTANT:
-		if (setup_slot(st, fx) < 0)
-		    return -1;
-		csp_dio_slots(st, fx, &iptr, &optr);
-		*iptr = *optr = decl(st, dj, cn.init);
-		break;
+	    switch (d.type) {
+		// VIEW?
 	    case DECL_VARIABLE:
-		if (setup_variable(st, fx) < 0)
-		    return -1;
-		break;
+	    case DECL_CONSTANT:
 	    case DECL_TIMER:
-		if (setup_slot(st, fx) < 0)
-		    return -1;
-		setup_timer(st, fx);
-		if (st->nt < st->timer_cap)
-		    st->timer[st->nt++] = fx;
-		break;
 	    case DECL_DIGITAL:
-		if (setup_slot(st, fx) < 0)
-		    return -1;
-		setup_digital(st, fx);
-		add_io(st, fx);
-		break;
 	    case DECL_ANALOG:
-		if (setup_slot(st, fx) < 0)
-		    return -1;
-		setup_analog(st, fx);
-		add_io(st, fx);
-		break;
 	    case DECL_BUFFER:
-		// Each instance gets its own storage, like every other member.
-		// This case was simply missing: a #buffer inside a module parsed
-		// fine and was then never allocated, and a member bound to it
-		// aliased an uninitialised view.
-		if (setup_buffer(st, fx) < 0)
-		    return -1;
-		break;
 	    case DECL_FIELD:
-		// fx, not ix: this object's field, not the object itself. And an
-		// explicit break -- it used to fall through to default.
-		if (setup_field(st, fx) < 0)
+		if (setup_decl(st, fx, d) < 0)
 		    return -1;
-		add_io(st, fx);
 		break;
+		
 	    default:
 		break;
 	    }

@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stddef.h>   // offsetof, used by CSP_IMAGE_CHECK
+#include <string.h>
 
 #include "csp_config.h"
 
@@ -74,6 +75,32 @@ typedef unsigned bool_t;
 #define OBJ_BITS     5
 #define STRING_BITS  9
 #endif
+
+// rom-aware scalar reads: on the host both branches are identical (ro_*==plain);
+// on AVR the rom branch uses PROGMEM. One code path serves RAM and ROM tables.
+static inline uint8_t rd8(const void* p, int rom)
+{
+    return rom ? ro_byte((const uint8_t*)p): *(const uint8_t*)p;
+}
+
+static inline uint16_t rd16(const void* p, int rom)
+{
+    return rom ? ro_word((const uint16_t*)p): *(const uint16_t*)p;
+}
+
+static inline void* rdvp(const void* p, int rom)
+{
+    void* v;
+#if defined(__AVR__)
+    if (rom)
+	return ro_ptr((void* const*)p);   // PROGMEM: byte-wise read
+#endif
+    // fn sits at a misaligned offset in the PACKED csp_func_t table; a direct
+    // deref HardFaults on Cortex-M0 (no unaligned access). memcpy is byte-wise
+    // and alignment-safe -- and the compiler folds it to a plain load where the
+    // address happens to be aligned.
+    memcpy((void*) &v, p, sizeof(v)); return v;
+}
 
 // Shared by every target: nothing is dimensioned from these any more, so a wider
 // index costs no RAM. They are pure ceilings on how many decls/instructions can
@@ -212,7 +239,7 @@ typedef struct PACKED {
 // Cortex-M0). The packed decl/instr types claim alignment 1 and would otherwise
 // be placed at any odd offset, costing byte-wise access for nothing.
 #define CSP_PAD4(n)  ((4 - ((n) & 3)) & 3)
-
+#define CSP_MASK(n, bn) ((n) & ((1 << (bn))-1))
 
 typedef const char rochar;                // PROGMEM string character type
 typedef const struct rostr* rostring_t;  // PROGMEM string object type
@@ -353,7 +380,7 @@ typedef enum {
     V_TIMER    = 8,
     V_DIGITAL  = 9,
     V_ANALOG   = 10,
-    V_FIELD      = 11,    
+    V_FIELD    = 11,    
 } vtype_t;
 
 // create argument type bitmask
@@ -761,12 +788,14 @@ typedef enum {
     OP_END_MARK = 0x3f
 } opcode_t;
 
+#define CSP_OPCODE_BITS       6
+#define CSP_OPCODE_ARITY_BITS 2 // 0
 
 // Forward declarations
 struct _csp_rt_t;
 struct csp_instr;
 
-// 5 bits may be used to describe declaration type
+// 4 bits may be used to describe declaration type
 // but decl type from 8-15 are also used as object types
 typedef enum {
     DECL_NONE=0,            // emtpy declaration
@@ -787,18 +816,16 @@ typedef enum {
     DECL_VIEW=13,           // synthetic bit/byte view into a buffer (Buf[a..b])
 
     DECL_AVAIL,
-    DECL_END_MARK = 0x1f
+    DECL_END_MARK = 0xf
 } decl_t;
 
-#define DECL_TYPE(s,i) (decl((s),(i),type))
-#define IS_CONST(s,i)  (DECL_TYPE((s),(i))==DECL_CONSTANT)
-#define IS_CAN(s,i)    (DECL_TYPE((s),(i))==DECL_FIELD)
+#define CSP_DECL_TYPE_BITS 4
 
 #define MAKE_RES(r) ((r)-1)
 #define GET_RES(rr) ((rr)+1)
 
-#define MAKE_CAN_LEN(len) ((len)-1)
-#define GET_CAN_LEN(len) ((len)+1)
+#define MAKE_FIELD_LEN(len) ((len)-1)
+#define GET_FIELD_LEN(len) ((len)+1)
 
 // A scalar width lives in DECL_COMMON.res and in csp_field_t.len -- both 5 bits
 // holding bits-1 -- and a view start bit lives in csp_field_t.bit, 9 bits. Any
@@ -823,9 +850,9 @@ extern const op_entry_t tok_table[] RODATA;
 extern const op_entry_t decl_table[] RODATA;
 
 typedef struct PACKED {
-    rostring_t name;    // opcode name (RODATA)
+    rostring_t name;   // opcode name (RODATA)
     uint8_t  tok;      // token that match the op
-    int8_t arity;      // number of args
+    uint8_t arity;     // number of args
     uint8_t rtype;     // return type
     uint8_t _res;      // reserved
     uint16_t argtypes; // instruction argument types
@@ -838,7 +865,7 @@ extern const op_info_t op_info[] RODATA;
 // general operations OP_ADD ...
 
 #define INSTR_COMMON \
-        opcode_t op:6
+    opcode_t op:CSP_OPCODE_BITS
 
 typedef struct PACKED {
     INSTR_COMMON;
@@ -974,11 +1001,12 @@ typedef enum {
 } pindir_t;
 
 // we may mark declarations as system created using
-//   type:6;
+//   type:CSP_DECL_TYPE_BITS;
 //   unsigned sys:1
 //
 #define DECL_COMMON \
-    decl_t type:6; \
+    decl_t type:CSP_DECL_TYPE_BITS; \
+    unsigned _reserved:2; \
     pindir_t dir:DIR_BITS; \
     unsigned name:NAMEPOS_BITS; \
     unsigned vt:TYPE_BITS; \
@@ -1741,6 +1769,9 @@ typedef struct PACKED {
 // Built-in function table (defined in csp_rt.c)
 extern const csp_func_t csp_builtin_funcs[];
 extern const uint8_t csp_num_builtin_funcs;
+
+extern csp_func_fn func_fn(const csp_func_t* fn, int i, int rom);
+extern uint8_t func_arity(const csp_func_t* fn, int i, int rom);
 
 static inline int st_index(csp_rt_t* st, index_t n)
 {

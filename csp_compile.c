@@ -20,7 +20,7 @@
 #include "csp_parse.h"
 #include "csp_print.h"
 #include "csp_compile.h"
-#include "bitpack.h"
+#include "csp_tok.h"
 
 // An exec-only build has no compiler: a ROM image is produced on the host and
 // an EEPROM patch is stored already compiled, so nothing on the target turns
@@ -371,7 +371,38 @@ NOINLINE static bool_t asm_NOP(csp_rt_t* st)
 }
 #endif
 
-
+// Map a name after '.' to a part selector, PART_LAST if it is not a part.
+// Parts are ordinary words disambiguated by position (obj.field wins in code).
+NOINLINE csp_part_t part_from_tstr(const tstr_t* s)
+{
+    switch(s->len) {
+    case 2:
+	if (ro_memcmp(s->ptr, s_id, 2) == 0)     return PART_ID;
+	if (ro_memcmp(s->ptr, s_rx, 2) == 0)     return PART_RX;
+	if (ro_memcmp(s->ptr, s_tx, 2) == 0)     return PART_TX;
+	break;
+    case 3:
+	if (ro_memcmp(s->ptr, s_pin, 3) == 0)    return PART_PIN;
+	if (ro_memcmp(s->ptr, s_dir, 3) == 0)    return PART_DIR;
+	if (ro_memcmp(s->ptr, s_dlc, 3) == 0)    return PART_DLC;
+	if (ro_memcmp(s->ptr, s_len, 3) == 0)    return PART_LEN;
+	break;
+    case 4:
+	if (ro_memcmp(s->ptr, s_port, 4) == 0)   return PART_PORT;
+	break;
+    case 5:
+	if (ro_memcmp(s->ptr, s_value, 5) == 0)  return PART_VAL;
+	if (ro_memcmp(s->ptr, s_fired, 5) == 0)  return PART_FIRED;
+	break;
+    case 6:
+	if (ro_memcmp(s->ptr, s_endian, 6) == 0) return PART_ENDIAN;
+	if (ro_memcmp(s->ptr, s_period, 6) == 0) return PART_PERIOD;
+	break;
+    default:
+	break;
+    }
+    return PART_LAST;
+}
 
 
 // Returns the RODATA name as-is. It used to hand back a tstr_t pointing at the
@@ -400,7 +431,8 @@ NOINLINE index_t lookup_const(csp_rt_t* st, vtype_t vt, value_t v)
 {
     index_t i;
     for (i = 0; i < st->ps.nd; i++) {
-	if (IS_CONST(st, i) && (vt == decl(st,i,vt))) {
+	csp_decl_t d = csp_get_decl(st, i);
+	if ((d.type == DECL_CONSTANT) && (vt == d.vt)) {
 	    if (decl(st,i,cn.init.u) == v.u)  // binary compare!
 		return MAKE_INDEX(0,i);
 	}
@@ -449,6 +481,41 @@ NOINLINE index_t csp_new_udecl(csp_rt_t* st, const tstr_t* name, decl_t type)
 NOINLINE int is_module_local(csp_rt_t* st, index_t di)
 {
     return (st->cs.mdef != BAD_INDEX) && ((int)INDEX(di) > (int)INDEX(st->cs.mdef));
+}
+
+// The declaration keyword table. Compiler-only: nothing else looks a
+// declaration name up.
+const op_entry_t decl_table[] RODATA = {
+    DECL_ENT(D_NONE,DECL_NONE,s_none),
+    DECL_ENT(D_MODULE,DECL_MODULE,s_module),
+    DECL_ENT(D_END,DECL_END, s_end),
+    DECL_ENT(D_STATES,DECL_STATES,s_states),
+    DECL_ENT(D_IN,DECL_IN,s_in),       // 'in' FIXME? used as option keyword!
+    DECL_ENT(D_CONSTANT,DECL_CONSTANT,s_constant),
+    DECL_ENT(D_VARIABLE,DECL_VARIABLE,s_variable),
+    DECL_ENT(D_DIGITAL,DECL_DIGITAL,s_digital),
+    DECL_ENT(D_ANALOG,DECL_ANALOG,s_analog),
+    DECL_ENT(D_TIMER,DECL_TIMER,s_timer),
+    DECL_ENT(D_FIELD,DECL_FIELD,s_field),
+    DECL_ENT(D_BUFFER,DECL_BUFFER,s_buffer),
+    DECL_ENT(D_LAST,DECL_NONE,s_null),
+};
+
+static int find_decl_entry(const char* name, int namelen)
+{
+    return find_op_entry(decl_table, sizeof(decl_table)/sizeof(decl_table[0]),
+			 name, namelen);
+}
+
+// decl_table lives in RODATA. On AVR that is PROGMEM, so `decl_table[i].code`
+// does NOT read the table -- it reads DATA space at the table's flash address,
+// which on a mega lands inside CandySpeak's own arena. The byte found there
+// changes with the program, the pool layout and every size change, so the
+// dispatch worked or failed by luck. Every other reader of these tables already
+// goes through ro_byte (op_table_tok, op_table_arity, ...); this one did not.
+static int8_t decl_table_code(int i)
+{
+    return (int8_t)ro_byte(&decl_table[i].code);
 }
 
 NOINLINE static int dec(int c)
@@ -1323,6 +1390,169 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
     return ep;
 }
 
+// function flags (FUNC_PURE | FUNC_RONAME)
+uint8_t func_flags(const csp_func_t* fn, int i, int rom)
+{
+    return rd8(&fn[i].flags, rom);
+}
+
+#define func_pure(fn,i,rom)   (func_flags((fn),(i),(rom)) & FUNC_PURE)
+#define func_roname(fn,i,rom) (func_flags((fn),(i),(rom)) & FUNC_RONAME)
+
+uint8_t fn_type(const csp_func_t* fn, int j, int rom)
+{
+    uint16_t argtypes = rd16(&fn->argtypes, rom);
+    return (argtypes >> 4*j) & 0xf;
+}
+
+static uint8_t func_namelen(const csp_func_t* fn,int i, int rom)
+{
+    return rd8(&fn[i].namelen, rom);
+}
+
+uint8_t func_rtype(const csp_func_t* fn, int i, int rom)
+{
+    return rd8(&fn[i].rtype, rom);
+}
+
+// What a call actually returns. A fixed rtype answers for itself; V_NUMBER
+// means "the same kind the arguments were", so a single float argument makes
+// the whole call float and everything else stays integer. argcode holds the
+// ORIGINAL argument types, 4 bits each -- V_NUMBER parameters are not coerced
+// on the way in, which is exactly what makes this readable here.
+vtype_t call_rtype(uint8_t rtype, uint16_t argcode, int arity)
+{
+    int j;
+    if (rtype != V_NUMBER)
+	return (vtype_t) rtype;
+    for (j = 0; j < arity; j++) {
+	if (((argcode >> 4*j) & 0xf) == V_FLOAT)
+	    return V_FLOAT;
+    }
+    return V_INTEGER;
+}
+
+// match function template this code assumes type coerce int->flt
+// flt->int. the goal is to match BEST? function to use
+// return 0 on match
+// return argument number 1...n on mismatch
+int csp_match_args(csp_rt_t* st, const csp_func_t* fn, int arity, rentry_t* rarg,
+		   int rom)
+{
+    int j;
+    for (j = 0; j < arity; j++) {
+	rentry_t arg = rarg[j];
+	vtype_t argvt = arg.vt;
+	uint8_t ftype = fn_type(fn, j, rom);
+	switch(ftype) {
+	case V_ANY:
+	    break;
+	case V_NUMBER:
+	    if (argvt == V_INTEGER) break;
+	    if (argvt == V_FLOAT) break;
+	    goto mismatch;
+	case V_INTEGER:
+	    if (argvt == V_INTEGER) break;
+	    if (argvt == V_FLOAT) break;    // coerce!
+	    goto mismatch;
+	case V_FLOAT:
+	    if (argvt == V_FLOAT) break;
+	    if (argvt == V_INTEGER) break;  // coerce!
+	    goto mismatch;
+	case V_STRING:
+	    if (argvt == V_STRING) break;
+	    goto mismatch;
+	case V_INDEX:
+	    if (arg.X) break;
+	    goto mismatch;
+	case V_TIMER:
+	    if (arg.X && (decl(st,INDEX(arg.ix),type) == DECL_TIMER)) break;
+	    goto mismatch;
+	case V_DIGITAL:
+	    if (arg.X && (decl(st,INDEX(arg.ix),type) == DECL_DIGITAL)) break;
+	    goto mismatch;
+	case V_ANALOG:
+	    if (arg.X && (decl(st,INDEX(arg.ix),type) == DECL_ANALOG)) break;
+	    goto mismatch;
+	case V_FIELD:
+	    if (arg.X && (decl(st,INDEX(arg.ix),type) == DECL_FIELD)) break;
+	    goto mismatch;
+	default:
+	    goto mismatch;
+	}
+    }
+    return 0;
+mismatch:
+    return j+1;
+}
+
+static const char* func_name(const csp_func_t* fn, int i, int rom)
+{
+    return (const char*) rdvp(&fn[i].name, rom);
+}
+
+
+static int csp_match_fn(csp_rt_t* st,
+			const csp_func_t* fn, int num, int rom,
+			const tstr_t* name,
+			uint8_t arity, rentry_t* rarg)
+{
+    int i;
+    int a, f = -1;
+    for (i = 0; i < num; i++) {
+	if ((func_arity(fn,i,rom) == arity) &&
+	    (func_namelen(fn,i,rom) == name->len)) {
+	    const char* fnm = func_name(fn, i, rom);
+	    int eq = func_roname(fn,i,rom)
+		? (ro_memcmp(name->ptr, fnm, name->len) == 0)   // name in ROM
+		: (memcmp(name->ptr, fnm, name->len) == 0);     // name in RAM
+	    if (eq) {
+		int j;
+		if ((j=csp_match_args(st, &fn[i], arity, rarg, rom)) == 0) // ok
+		    return i;
+		f = i;  // last name match
+		a = j;  // and argument poistion that failed
+	    }
+	}
+    }
+    if (f >= 0) {
+	if (csp_set_error(st, ERR_FUNCTION_ARGUMENT_TYPE_MISMATCH)) {
+	    csp_set_err_arg_tstr(st, 0, name);
+	    csp_set_err_arg_int(st, 1, arity);
+	    csp_set_err_arg_int(st, 2, a);
+	}
+    }
+    return -1;
+}
+
+const csp_func_t* csp_match_func(csp_rt_t* st,
+				 const tstr_t* name,
+				 uint8_t arity, rentry_t* rarg,
+				 int* is_user, int* func_idx)
+{
+    int idx;
+
+    if (st->ufuncs) {
+	if ((idx = csp_match_fn(st, st->ufuncs, st->num_ufuncs, st->ufuncs_rom,
+				name, arity, rarg)) >= 0) {
+	    *is_user = 1;
+	    *func_idx = idx;
+	    return &st->ufuncs[idx];
+	}
+    }
+    if ((idx = csp_match_fn(st, csp_builtin_funcs, csp_num_builtin_funcs, BUILTIN_ROM,
+			    name, arity, rarg)) >= 0) {
+	*is_user = 0;
+	*func_idx = idx;
+	return &csp_builtin_funcs[idx];
+    }
+    if (csp_set_error(st, ERR_FUNCTION_DOES_NOT_EXIST)) {
+	csp_set_err_arg_tstr(st, 0, name);
+	csp_set_err_arg_int(st, 1, arity);
+    }
+    return NULL;
+}
+
 //       rstack
 //  0    arg0   ep-(4-0)
 //  1    arg1   ep-(4-1)
@@ -2008,7 +2238,7 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	ram_decl_at(st,i)->bound  = 1;
 	ram_decl_at(st,i)->ca.id  = INDEX(bx);
 	ram_decl_at(st,i)->ca.bit = b0;
-	ram_decl_at(st,i)->ca.len = MAKE_CAN_LEN((b1-b0)+1);
+	ram_decl_at(st,i)->ca.len = MAKE_FIELD_LEN((b1-b0)+1);
 	ram_decl_at(st,i)->ca.endian = d.opts.endian;
     }
     return 0;
@@ -2282,7 +2512,7 @@ NOINLINE int csp_parse_field(csp_rt_t* st, token_t* tv, int ti, size_t n)
     ram_decl_at(st,i)->dir = d.opts.dir;
     ram_decl_at(st,i)->ca.id = INDEX(idx);   // the #buffer decl
     ram_decl_at(st,i)->ca.bit = d.bit0;
-    ram_decl_at(st,i)->ca.len = MAKE_CAN_LEN(len);
+    ram_decl_at(st,i)->ca.len = MAKE_FIELD_LEN(len);
     ram_decl_at(st,i)->ca.endian = d.opts.endian;
     // The field inherits its direction from the frame unless it says otherwise:
     // a frame is read or written as a whole, so per-field dir is rarely wanted.
@@ -3136,7 +3366,7 @@ NOINLINE index_t make_buf_view(csp_rt_t* st, index_t parent,
 	if ((ram_decl_at(st,i)->type == DECL_VIEW) &&
 	    (ram_decl_at(st,i)->ca.id == pi) &&
 	    (ram_decl_at(st,i)->ca.bit == b0) &&
-	    (ram_decl_at(st,i)->ca.len == MAKE_CAN_LEN((b1-b0)+1)))
+	    (ram_decl_at(st,i)->ca.len == MAKE_FIELD_LEN((b1-b0)+1)))
 	    return MAKE_INDEX(0, i);
     }
     if ((ix = csp_new_decl(st,&name,DECL_VIEW,0)) == BAD_INDEX)
@@ -3147,7 +3377,7 @@ NOINLINE index_t make_buf_view(csp_rt_t* st, index_t parent,
     ram_decl_at(st,i)->res    = MAKE_RES((b1-b0)+1);
     ram_decl_at(st,i)->ca.id  = pi;
     ram_decl_at(st,i)->ca.bit = b0;
-    ram_decl_at(st,i)->ca.len = MAKE_CAN_LEN((b1-b0)+1);
+    ram_decl_at(st,i)->ca.len = MAKE_FIELD_LEN((b1-b0)+1);
     ram_decl_at(st,i)->ca.endian = E_NATIVE;
     return ix;
 }

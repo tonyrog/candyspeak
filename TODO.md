@@ -263,6 +263,36 @@ Inte buggar -- saker som byggts men inte setts fungera på järn.
 
 # DOKUMENTERADE KONSEKVENSER (inte åtgärder)
 
+## csp_dio_get_part/set_part är stora, och den enkla fixen kostar mer (2026-07-31)
+  1 012 + 848 = 1 860 byte på AVR, ~5 % av en exec-only-bild. Mätt och
+  undersökt; slutsatsen är att låta dem vara.
+
+  VAR BYTESEN LIGGER: `csp_dio_get_part` är 489 instruktioner men bara 8 anrop
+  -- och **80 `pop` mot 16 `push`**. Funktionen är stor nog att gcc sparar undan
+  halva registerbanken, och VARJE return-väg (inklusive den tidiga heap-grenen)
+  bär en full återställning. Det är prolog/epilog-duplicering, inte
+  switch-logiken. De små hjälparna (`csp_dio_get_pin_part` m.fl.) är 46-82 byte
+  styck och är inte problemet.
+
+  PROVAT OCH FÖRKASTAT: dela heap-grenen och slot-grenen i egna NOINLINE-
+  funktioner, så var och en får liten registerbudget och en epilog. Halvorna
+  krympte som väntat (1 012 -> 372 + 520) men TOTALEN blev 132 byte STÖRRE:
+  omslagsfunktionen inlinades vid varje anropsställe och duplicerade
+  vy-uppslaget i stället. `noinline` på omslaget ändrade ingenting. Återställt.
+
+  DET SOM SKULLE FUNGERA, och varför det inte gjordes: ta bort switcharna helt
+  med tabelldriven dispatch -- (offset, skift, bredd) per (del, cvt). Men
+  delarna är BITFÄLT i olika union-armar av `value_t`, så offsets går inte att
+  ta adressen till; tabellen skulle bli handskriven. Det är exakt samma
+  buggklass som emitter/CRC-normaliseringen i grupp 1: en tabell som tyst måste
+  följa med när en struct ändras, och som felar som korrupt data i stället för
+  som ett kompileringsfel. Inte värt 1,8 kB.
+
+  Om någon återkommer hit: mät FÖRST att posten fortfarande är stor, och läs
+  `pop`-antalet -- det är den siffran som säger om det är dispatch eller
+  registertryck.
+
+
 ## En #constant listas som sitt VÄRDE, inte sitt namn
   `println(A, " ", B)` med `#constant B string = "World"` listas som
   `println(A," ","World")`. Konstanten viks bort vid parsning: `A = B` och

@@ -177,6 +177,58 @@ Avklarade punkter, flyttade hit från TODO.md. Nyast överst.
   - `/clear` sager nu ocksa att eeprom-kopian ligger kvar. "Cleared" ensamt laser
     som att programmet ar borta.
 
+### csp_bits.h ersatte bitpack under heapen (2026-07-31)
+
+  - Tonys iakttagelse: bitpack.h skrevs for SEKVENTIELLA bitmonster med
+    KONSTANTA offsets, dar always_inline + utrullad byte-switch later kompilatorn
+    vika bort varje mask. Har kommer `pos` och `len` fran en vy vid KORNING --
+    de ar data, inte literaler -- sa ingenting viks bort och utrullningen ar ren
+    duplicering. Den passade helt enkelt inte hit.
+  - Vardre: FYRA motorer. `csp_heap_get` innehall en komplett little-endian-motor
+    OCH en komplett big-endian, `csp_heap_set` spegelparet. Endianness ar en
+    runtime-egenskap hos vyn, sa bada kompileras alltid in.
+  - `csp_bits.h`: en bit i taget, och de tva ordningarna hopvikta i EN funktion
+    var genom att lagga endianness i bitindexet. Inga makron.
+  - MATT pa micro exec-only:
+        csp_heap_get  1 476 -> 482
+        csp_heap_set  1 222 -> 322
+        totalt        36 496 -> 34 602   (-1 894)
+    mega 102 296 -> 100 402. Gapet till Micro:ns 28 672 gick fran 7 824 till
+    5 930.
+  - Langsammare: n varv i stallet for n/8 byte-flyttar. Ett falt lases en gang
+    per regel och cykel; 16 bitar ar i storleksordningen tio mikrosekunder pa en
+    16 MHz AVR. Storlek ar den knappa resursen har, inte det.
+  - Bitordningen faststalldes genom att MATA den gamla implementationen, inte
+    genom att lasa dess makron -- fel ordning hade blivit en tyst korrupt
+    CAN-ram, inte ett trasigt test.
+  - `tests/bits_cmp.c` bevisar likvardigheten: varje position och bredd
+    vy-kodningen tillater, bada ordningarna, mot en buffert som redan har
+    innehall. 76 800 fall, identiskt. Kort av tests/repl.sh.
+  - En hypotes som var FEL pa vagen: att `always_inline` var orsaken. Matte det
+    -- gcc gor samma val anda pa -Os.
+
+### tok_table fick eget hem: csp_tok.c (2026-07-31)
+
+  - Tre tabeller, tre agare, efter vem som faktiskt LASER dem:
+    * `tok_table` -> nytt `csp_tok.c`. Tva anvandare som inte ar varandras
+      beroenden: kompilatorn (text -> instruktioner) och disassemblern
+      (instruktioner -> text). Ingen av dem ager den.
+    * `decl_table` + `find_decl_entry` + `decl_table_code` -> `csp_compile.c`.
+      Bara kompilatorn slar upp ett deklarationsnyckelord. Bada blev static.
+    * `op_info` STANNAR i csp_rt.c -- `csp_eval_rule` laser dess arity i
+      ALU-dispatchen (rad 2111). Den ar aldrig text-sida.
+  - Beroendena blev som Tony ville: exec/rt beror pa VARKEN compile, print eller
+    tok. compile -> tok, print -> tok. Ingen cykel, och print -> compile behovdes
+    aldrig.
+  - Ra atkomsten i csp_print.c ar borta. Ny accessor `op_table_name()`, sa
+    disassemblern gar samma ro_ptr-vag som allt annat -- det var den bugg-klassen
+    som en gang lat `decl_table[i].code` lasa DATA-rymden pa AVR, alltsa inne i
+    CandySpeaks egen arena.
+  - Sommen `csp_compile.h` gick fran 24 till 16 externs: atta flyttade till
+    csp_tok.h dar de hor hemma.
+  - Storlekar praktiskt oforandrade (mega 102 296, micro min 36 644) --
+    --gc-sections gjorde redan ratt. Vinsten ar att strukturen sager det.
+
 ### csp-exec stadad: en sak, och den kraschar inte (2026-07-31)
 
   - `./csp-exec examples/string.csp` gav en core dump. Orsaken var inte att

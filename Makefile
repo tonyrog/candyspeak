@@ -10,7 +10,7 @@ CSP_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo 
 # (-M/-U/--board), instead of a fixed static array -- so the host can model a
 # board with more RAM than the compile-time CSP_CODE_BUDGET.
 CFLAGS=-MMD -MP -MF .$<.d -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC
-OBJS = csp_linux.o csp_rt.o csp_repl.o csp_compile.o csp_dump.o csp_eeprom.o \
+OBJS = csp_linux.o csp_rt.o csp_repl.o csp_compile.o csp_tok.o csp_dump.o csp_eeprom.o \
 	csp_parse.o csp_print.o csp_strings.o rom.o
 
 LIBS =
@@ -63,7 +63,7 @@ csp:	$(OBJS)
 #
 # Separate binaries, not a rebuild of ./csp -- you want both around to compare.
 # Point them at a real program with:  ./csp -n -C -O rom.c prog.csp && make exec
-EXEC_SRC = csp_linux.c csp_rt.c csp_repl.c csp_compile.c csp_dump.c \
+EXEC_SRC = csp_linux.c csp_rt.c csp_repl.c csp_compile.c csp_tok.c csp_dump.c \
 	   csp_eeprom.c csp_parse.c csp_print.c csp_strings.c rom.c
 # csp_repl.c, csp_compile.c and csp_dump.c are still LISTED: each guards itself
 # to an empty translation unit, so the file list stays the same as ./csp and a
@@ -86,7 +86,7 @@ csp_strings.c csp_strings.h: strings.tab strtab
 	./strtab strings.tab csp_strings.c csp_strings.h
 
 # sources that use the shared RODATA strings need the generated header first
-csp_rt.o csp_repl.o csp_compile.o csp_strings.o: csp_strings.h
+csp_rt.o csp_repl.o csp_compile.o csp_tok.o csp_strings.o: csp_strings.h
 
 clean:
 	rm -f $(OBJS) strtab csp_strings.c csp_strings.h csp-exec csp-min
