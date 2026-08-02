@@ -442,6 +442,19 @@ else
     echo "  FAIL bits_cmp did not build"; fail=$((fail+1))
 fi
 
+# --- 20. the part layout -----------------------------------------------------
+# csp_part.h hand-writes the bit position of every .part inside value_t. Those
+# are bitfields in different union arms, so a wrong number corrupts data instead
+# of failing to compile. This probes the real structs (all-ones into one field,
+# read the word back) and checks every row against the probe, then round-trips
+# the engine. It is the reason the table is allowed to be hand-written at all.
+echo "part layout:"
+if gcc -I. -O2 -o "$D/part_layout" tests/part_layout.c >/dev/null 2>&1; then
+    ck "csp_part table matches the value_t structs" "ok, identical" "$("$D/part_layout")"
+else
+    echo "  FAIL part_layout did not build"; fail=$((fail+1))
+fi
+
 echo "================================================"
 echo "repl: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

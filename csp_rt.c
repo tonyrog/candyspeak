@@ -10,6 +10,7 @@
 #include "csp_compile.h"
 #include "csp_print.h"
 #include "csp_bits.h"
+#include "csp_part.h"    // .part bit layout inside a value slot (see tests/part_layout.c)
 #ifdef DEBUG
 #include "csp_dump.h"
 #include <stdio.h>
@@ -1156,46 +1157,6 @@ NOINLINE static vtype_t leaf_cfg_vt(csp_rt_t* st, index_t ix)
     return decl_cfg_vt(d.type, d.vt);
 }
 
-NOINLINE void csp_digital_set_part(csp_rt_t* st, dvalue_t* vslot,
-				  csp_part_t part, value_t v)
-{
-    switch(CSP_MASK(part, PART_BITS)) {
-    case PART_VAL:      vslot->val = v.i; return;
-    case PART_PIN:      vslot->pin = v.i; break;
-    case PART_PORT:     vslot->port = v.i; break;
-    case PART_DIR:      vslot->dir = v.i;  break;
-    case PART_PULLUP:   vslot->pullup = v.i; break;
-    case PART_PULLDOWN: vslot->pulldown = v.i; break;
-    default: return;
-    }
-    vslot->cfg = 1;    
-}
-
-NOINLINE void csp_analog_set_part(csp_rt_t* st, avalue_t* vslot,
-				  csp_part_t part, value_t v)
-{
-    switch(CSP_MASK(part, PART_BITS)) {
-    case PART_VAL:      vslot->val = v.i; return;
-    case PART_PIN:      vslot->pin = v.i; break;
-    case PART_PORT:     vslot->port = v.i; break;
-    case PART_DIR:      vslot->dir = v.i; break;
-    case PART_PWM:      vslot->pwm = v.i; break;
-    default: return;
-    }
-    vslot->cfg = 1;        
-}
-
-NOINLINE void csp_timer_set_part(csp_rt_t* st, tvalue_t* vslot,
-				 csp_part_t part, value_t v)
-{
-    switch(CSP_MASK(part, PART_BITS)) {
-    case PART_VAL:     vslot->val = v.i; break;
-    case PART_PERIOD:  vslot->period = v.i; break;
-    case PART_FIRED:   vslot->fired = v.i; break;
-    default: break;
-    }
-}
-
 NOINLINE void csp_string_set_part(csp_rt_t* st, value_t* vslot,
 				  csp_part_t part, value_t v)
 {
@@ -1249,13 +1210,14 @@ NOINLINE void csp_dio_set_part(csp_rt_t* st, index_t ix, value_t v,
     }
     else {
 	value_t* vslot = csp_slot(st, vw, dir);
-	switch(leaf_cfg_vt(st, ix)) {   // read the decl only on the path using it
-	case V_DIGITAL: csp_digital_set_part(st, &vslot->d, part, v); break;
-	case V_ANALOG: csp_analog_set_part(st, &vslot->a, part, v); break;
-	case V_TIMER: csp_timer_set_part(st, &vslot->t, part, v); break;
-	case V_STRING: csp_string_set_part(st, vslot, part, v); break;
-	default: break;
-	}
+	vtype_t cvt = leaf_cfg_vt(st, ix);  // read the decl only on this path
+	// A string slot holds a whole position, not bitfields -- it is the one
+	// value type csp_part.h does not describe. Everything else is a row in
+	// the layout table (and a type with no rows writes nothing).
+	if (cvt == V_STRING)
+	    csp_string_set_part(st, vslot, part, v);
+	else
+	    csp_part_set(vslot, cvt, part, v);
     }
 }
 
@@ -1269,45 +1231,6 @@ NOINLINE void csp_dio_set_val_part(csp_rt_t* st, value_t* vslot,
 	//case V_STRING:  vslot->s = v.i; break;
     case V_STRING:  vslot->s = v.s; break;		
     default: *vslot = v; break;
-    }
-}
-
-NOINLINE void csp_digital_get_part(csp_rt_t* st, dvalue_t* vslot,
-				   csp_part_t part, value_t* vp)
-{
-    switch(CSP_MASK(part, PART_BITS)) {
-    case PART_VAL:      vp->i = vslot->val & 1; return;
-    case PART_PIN:      vp->i = vslot->pin; break;
-    case PART_PORT:     vp->i = vslot->port; break;
-    case PART_DIR:      vp->i = vslot->dir;  break;
-    case PART_PULLUP:   vp->i = vslot->pullup; break;
-    case PART_PULLDOWN: vp->i = vslot->pulldown; break;
-    default: break;
-    }    
-}
-
-NOINLINE void csp_analog_get_part(csp_rt_t* st, avalue_t* vslot,
-				  csp_part_t part, value_t* vp)
-{
-    switch(CSP_MASK(part, PART_BITS)) {
-    case PART_VAL:      vp->i = vslot->val; return;
-    case PART_PIN:      vp->i = vslot->pin; break;
-    case PART_PORT:     vp->i = vslot->port; break;
-    case PART_DIR:      vp->i = vslot->dir; break;
-    case PART_PWM:      vp->i = vslot->pwm; break;
-	// PART_ENDIAN: FIXME get from declaration
-    default: break;
-    }    
-}
-
-NOINLINE void csp_timer_get_part(csp_rt_t* st, tvalue_t* vslot,
-				 csp_part_t part, value_t* vp)
-{
-    switch(CSP_MASK(part, PART_BITS)) {
-    case PART_VAL:     vp->i = vslot->val; break;
-    case PART_PERIOD:  vp->i = vslot->period; break;
-    case PART_FIRED:   vp->i = vslot->fired; break;
-    default: break;
     }
 }
 
@@ -1396,13 +1319,11 @@ NOINLINE void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp,
     }
     else {
 	value_t* vslot = csp_slot(st, vw, dir);
-	switch(leaf_cfg_vt(st, ix)) {   // read the decl only on the path using it
-	case V_DIGITAL: csp_digital_get_part(st, &vslot->d, part, vp); break;
-	case V_ANALOG: csp_analog_get_part(st, &vslot->a, part, vp); break;
-	case V_TIMER: csp_timer_get_part(st, &vslot->t, part, vp); break;
-	case V_STRING: csp_string_get_part(st, vslot, vp, part); break;
-	default: break;
-	}	
+	vtype_t cvt = leaf_cfg_vt(st, ix);  // read the decl only on this path
+	if (cvt == V_STRING)                // see csp_dio_set_part
+	    csp_string_get_part(st, vslot, vp, part);
+	else
+	    csp_part_get(vslot, cvt, part, vp);
     }
 }
 

@@ -56,6 +56,7 @@ typedef unsigned bool_t;
 #define RODATA          PROGMEM
 #define ro_byte(p)      pgm_read_byte((p))
 #define ro_word(p)      pgm_read_word((p))
+#define ro_dword(p)     pgm_read_dword((p))
 #define ro_ptr(p)       (void *)pgm_read_word((p))
 #define ro_memcmp(a,b,n) memcmp_P((a), (b), (n))
 #define ro_memcpy(d,s,n) memcpy_P((d), (s), (n))
@@ -69,6 +70,7 @@ typedef unsigned bool_t;
 #define RODATA
 #define ro_byte(p)      (*(p))
 #define ro_word(p)      (*(p))
+#define ro_dword(p)     (*(p))
 #define ro_ptr(p)       (*((const void**)(p)))
 #define ro_memcmp(a,b,n) memcmp((a), (b), (n))
 #define ro_memcpy(d,s,n) memcpy((d), (s), (n))
@@ -489,7 +491,7 @@ typedef struct {
     uint8_t vt:TYPE_BITS;        // value type (vtype_t 0..11); SLOT reads it from decl
     uint8_t endian:ENDIAN_BITS;  // VIEW_HEAP: vendian_t (native/little/big)
     uint8_t flags:VIEW_F_BITS;   // VIEW_HEAP: VIEW_F_*
-    uint8_t len:VIEW_LEN_BITS;   // VIEW_HEAP: number of bits - 1    
+    uint8_t len:VIEW_LEN_BITS;   // VIEW_HEAP: number of bits - 1
     uint16_t pos;                // VIEW_HEAP: start bit in buffer
     uint16_t buf;                // buffer id (both kinds)    
 } csp_view_t;
