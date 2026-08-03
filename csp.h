@@ -514,6 +514,15 @@ typedef struct {
 			// at nbytes (the declared frame size) and is never
 			// allowed past it -- the heap has room for no more.
     uint32_t xref;      // pin-number / can-id
+    index_t  owner;     // the decl (with object) whose leaf IS this buffer, or
+			// BAD_INDEX. Set by setup_buffer, which is the only
+			// place that knows both ends. can_mark_fields used to
+			// find it by scanning every declaration -- a flash read
+			// per decl, per received CAN frame -- and that scan
+			// could only ever match a GLOBAL, since it compared a
+			// decl index against a leaf index. Those agree only
+			// when offs is 0, so a #buffer inside a module was
+			// never marked at all.
 } csp_buf_t;
 
 // csp_buf_t.flags
@@ -1689,19 +1698,34 @@ typedef struct _csp_rt_t
 // copy it into a RAM temporary -- then bit-field access works as usual. (The
 // "clever" bit: never deref a PROGMEM struct directly.)
 #if defined(__AVR__)
+/*
 static inline csp_decl_t  ro_decl(const csp_decl_t* p)
 { csp_decl_t d;  memcpy_P(&d, p, sizeof(d)); return d; }
+*/
+static NOINLINE csp_decl_t  ro_decl(const csp_decl_t* p)
+{
+    csp_decl_t d;
+    // assert sizeof(d) == 8
+    ((uint32_t*)&d)[0] = ro_dword(((uint32_t*)p)[0]);
+    ((uint32_t*)&d)[1] = ro_dword(((uint32_t*)p)[1]);
+    return d;
+}
+
 static inline csp_instr_t ro_instr(const csp_instr_t* p)
 { csp_instr_t v; memcpy_P(&v, p, sizeof(v)); return v; }
 static inline state_t     ro_state(const state_t* p)
 { state_t s; memcpy_P(&s, p, sizeof(s)); return s; }
-static inline csp_image_header_t ro_header(const csp_image_header_t* p)
-{ csp_image_header_t h; memcpy_P(&h, p, sizeof(h)); return h; }
+// NOT static inline, unlike its neighbours: the image header is 60 bytes, so
+// gcc never actually inlines the copy -- it emits an out-of-line body in EVERY
+// translation unit that mentions it, and the linker cannot merge them because
+// each is TU-private. That showed up in the map as ro_header.lto_priv.109 AND
+// .110, 82 bytes each. One definition, in csp_rt.c (same reasoning as
+// csp_get_decl below). The small records above really do inline and stay here.
+extern csp_image_header_t ro_header(const csp_image_header_t* p);
 // The descriptor lives in PROGMEM like everything else it names -- eight
 // pointers is 16 bytes of RAM per image on AVR, and images are meant to come in
 // threes (a program, a FAILSAFE, a spare). Copied out once per load.
-static inline csp_image_ref_t ro_ref(const csp_image_ref_t* p)
-{ csp_image_ref_t v; memcpy_P(&v, p, sizeof(v)); return v; }
+extern csp_image_ref_t ro_ref(const csp_image_ref_t* p);   // ditto: 16 bytes
 static inline csp_sect_t ro_sect(const csp_sect_t* p)
 { csp_sect_t v; memcpy_P(&v, p, sizeof(v)); return v; }
 

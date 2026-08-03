@@ -68,6 +68,9 @@ static void ram_image(csp_rt_t* st, csp_image_header_t* im,
 		      uint16_t n_instr, uint16_t n_state)
 {
     uint16_t i;
+    // Read once, not per declaration: CSP_BASE_ND is a max() over two fields
+    // (see the note in csp_eeprom_load), and it sat inside the crc loop.
+    index_t base_nd = CSP_BASE_ND(st);
 
     im->version = ROM_FORMAT_VERSION;
     im->n_str = n_str; im->n_decl = n_decl; im->n_instr = n_instr;
@@ -76,7 +79,7 @@ static void ram_image(csp_rt_t* st, csp_image_header_t* im,
     im->crc_str  = csp_crc16(0xFFFF, st->ram_str + CSP_RAM_STR_OFF(st), n_str, 0);
     im->crc_decl = 0xFFFF;
     for (i = 0; i < n_decl; i++)
-	im->crc_decl = csp_crc16(im->crc_decl, ram_decl_at(st, CSP_BASE_ND(st) + i),
+	im->crc_decl = csp_crc16(im->crc_decl, ram_decl_at(st, base_nd + i),
 				 sizeof(csp_decl_t), 0);
     im->crc_instr = csp_crc16(0xFFFF, st->ram_instr + CSP_RAM_NN_OFF(st),
 			      (size_t)n_instr * sizeof(csp_instr_t), 0);
@@ -119,10 +122,14 @@ int csp_eeprom_clear(csp_rt_t* st)
 int csp_eeprom_save(csp_rt_t* st)
 {
     eeprom_header_t hdr;
-    uint16_t ram_nd   = st->ps.nd   - CSP_BASE_ND(st);
-  // RAM patch counts
-    uint16_t ram_nn   = st->ps.nn   - CSP_BASE_NN(st);
-    uint16_t ram_strp = st->ps.strp - CSP_BASE_STRP(st);
+    // The RAM base, read once -- see csp_eeprom_load. Every use below was a
+    // separate max() over two struct fields, including one inside the decl loop.
+    index_t  base_nd   = CSP_BASE_ND(st);
+    index_t  base_nn   = CSP_BASE_NN(st);
+    index_t  base_strp = CSP_BASE_STRP(st);
+    uint16_t ram_nd   = st->ps.nd   - base_nd;      // RAM patch counts
+    uint16_t ram_nn   = st->ps.nn   - base_nn;
+    uint16_t ram_strp = st->ps.strp - base_strp;
     uint16_t ram_ns   = st->ps.ns   - st->rom_ns;
 
     if (csp_eeprom_open_write() < 0)
@@ -143,7 +150,7 @@ int csp_eeprom_save(csp_rt_t* st)
     if (csp_eeprom_write(&hdr, sizeof(hdr)) < 0)
 	goto error;
     // Only the RAM patch area (ram_*[0..delta)); ROM stays in flash.
-    if (csp_eeprom_write(st->ram_str + CSP_RAM_STR_OFF(st), ram_strp) < 0)
+    if (csp_eeprom_write(st->ram_str + (base_strp - st->rom_strp), ram_strp) < 0)
 	goto error;
     // decl[] grows DOWN from the pool top, so the RAM decls are not contiguous in
     // save order -- walk them through the accessor. The stored format is unchanged
@@ -152,11 +159,11 @@ int csp_eeprom_save(csp_rt_t* st)
     {
 	uint16_t i;
 	for (i = 0; i < ram_nd; i++)
-	    if (csp_eeprom_write(ram_decl_at(st, CSP_BASE_ND(st) + i),
+	    if (csp_eeprom_write(ram_decl_at(st, base_nd + i),
 				 sizeof(csp_decl_t)) < 0)
 		goto error;
     }
-    if (csp_eeprom_write(st->ram_instr + CSP_RAM_NN_OFF(st), sizeof(csp_instr_t) * ram_nn) < 0)
+    if (csp_eeprom_write(st->ram_instr + (base_nn - st->rom_nn), sizeof(csp_instr_t) * ram_nn) < 0)
 	goto error;
     // Runtime state-table additions (name offsets already covered by ram_str).
     if (ram_ns &&
@@ -190,6 +197,16 @@ int csp_eeprom_load(csp_rt_t* st)
     rostring_t bad;
     int reactive;
     int did_init = 0;   // csp_rt_init has run -> a failure must leave rebuilt state
+    // The RAM base, read once. CSP_BASE_* LOOK like field accesses but each is a
+    // max() over two struct fields -- two loads, a compare and a select, every
+    // time. There were nine expansions here, one of them INSIDE the decl loop
+    // where the same maximum was recomputed per declaration.
+    //
+    // They are assigned after csp_load_rom, which is what sets rom_*: computing
+    // them at the top would capture the pre-rom values. Everything that reads
+    // them (including the error path, which only touches them when did_init is
+    // set, and did_init implies csp_load_rom ran) comes after that point.
+    index_t base_nd = 0, base_nn = 0, base_strp = 0;
 
     if (csp_eeprom_open_read() < 0)
 	goto error;
@@ -214,6 +231,9 @@ int csp_eeprom_load(csp_rt_t* st)
     csp_rt_init(st, reactive);
     did_init = 1;       // from here a failure has torn down view/heap/tables
     csp_load_rom(st);   // rebase ps.* to the ROM sizes (no-op if no firmware)
+    base_nd   = CSP_BASE_ND(st);
+    base_nn   = CSP_BASE_NN(st);
+    base_strp = CSP_BASE_STRP(st);
 
     // Reject patches saved against a different firmware ROM. rom_header.crc_hdr is
     // a complete fingerprint (counts + every section CRC), so any change to the
@@ -225,18 +245,18 @@ int csp_eeprom_load(csp_rt_t* st)
 
     // Read the RAM patch area into the RAM-local slots (counts from the header,
     // now trusted -- crc_hdr passed).
-    if (csp_eeprom_read(st->ram_str + CSP_RAM_STR_OFF(st), hdr.ram.n_str) < 0)
+    if (csp_eeprom_read(st->ram_str + (base_strp - st->rom_strp), hdr.ram.n_str) < 0)
 	goto error;
     // decl[] grows DOWN (see csp_eeprom_save): place them one at a time, or a
     // block read would write straight past the top of the pool.
     {
 	uint16_t i;
 	for (i = 0; i < hdr.ram.n_decl; i++)
-	    if (csp_eeprom_read(ram_decl_at(st, CSP_BASE_ND(st) + i),
+	    if (csp_eeprom_read(ram_decl_at(st, base_nd + i),
 				sizeof(csp_decl_t)) < 0)
 		goto error;
     }
-    if (csp_eeprom_read(st->ram_instr + CSP_RAM_NN_OFF(st), sizeof(csp_instr_t) * hdr.ram.n_instr) < 0)
+    if (csp_eeprom_read(st->ram_instr + (base_nn - st->rom_nn), sizeof(csp_instr_t) * hdr.ram.n_instr) < 0)
 	goto error;
     // Runtime state additions land above the baseline (rom_ns = INIT/NORMAL or
     // the restored ROM table); their name strings came in with ram_str above.
@@ -257,9 +277,9 @@ int csp_eeprom_load(csp_rt_t* st)
     }
 
     // Logical counts = ROM base + RAM patch
-    st->ps.strp = CSP_BASE_STRP(st) + hdr.ram.n_str;
-    st->ps.nd   = CSP_BASE_ND(st)   + hdr.ram.n_decl;
-    st->ps.nn   = CSP_BASE_NN(st)   + hdr.ram.n_instr;
+    st->ps.strp = base_strp + hdr.ram.n_str;
+    st->ps.nd   = base_nd   + hdr.ram.n_decl;
+    st->ps.nn   = base_nn   + hdr.ram.n_instr;
     st->ps.ns   = st->rom_ns   + hdr.ram.n_state;
     st->ps.nq   = hdr.nq;
 
@@ -334,9 +354,9 @@ error:
 	// a firmware image csp_load_rom raised ps.* to the ROM sizes and State is
 	// ROM decl 0, so rom_* wins; with no image rom_nd is 0 and the init
 	// baseline is what keeps State alive.
-	st->ps.nd   = CSP_BASE_ND(st);
-	st->ps.nn   = CSP_BASE_NN(st);
-	st->ps.strp = CSP_BASE_STRP(st);
+	st->ps.nd   = base_nd;
+	st->ps.nn   = base_nn;
+	st->ps.strp = base_strp;
 	st->ps.ns   = st->rom_ns;
 	st->ps.nq   = 0;
 	// csp_rt_init tore down view/heap/the derived tables (NULL until a

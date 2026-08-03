@@ -127,17 +127,23 @@ MAKE_II(NOT);
 MAKE_IF(CVTIF);
 MAKE_FI(CVTFI);
 
-MAKE_FFF(FADD);
-MAKE_FFF(FSUB);
-MAKE_FFF(FMUL);
+MAKE_FFF(FMUL);   // the only two that scale (int64 under Q16.16)
 MAKE_FFF(FDIV);
 
+// The rest of the F-forms exist only when fvalue_t is a real float. Under
+// Q16.16 they are the integer wrappers bit for bit, and eval2 shares those
+// arms -- see the note there. Generating them anyway left eleven wrappers that
+// nothing called.
+#if !FVALUE_IS_FIXPOINT
+MAKE_FFF(FADD);
+MAKE_FFF(FSUB);
 MAKE_IFF(FLT);
 MAKE_IFF(FLTE);
 MAKE_IFF(FGT);
 MAKE_IFF(FGTE);
 MAKE_IFF(FEQEQ);
 MAKE_IFF(FNEQ);
+#endif
 
 // opcode => opcode type info
 const op_info_t op_info[] RODATA = {
@@ -366,7 +372,7 @@ CSP_STATIC_ASSERT(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
 // caller can chain several regions (str, then decls, then instrs, ...). is_rom
 // selects ro_byte, which is memcpy_P on AVR (the region is PROGMEM) and a plain
 // read on the host; pass 0 for ordinary RAM. Table-free. Seed with 0xFFFF.
-uint16_t csp_crc16(uint16_t crc, const void* data, size_t n, int is_rom)
+NOINLINE uint16_t csp_crc16(uint16_t crc, const void* data, size_t n, int is_rom)
 {
     const uint8_t* p = (const uint8_t*)data;
     size_t k;
@@ -381,6 +387,24 @@ uint16_t csp_crc16(uint16_t crc, const void* data, size_t n, int is_rom)
     }
     return crc;
 }
+
+#if defined(__AVR__)
+// The one definition -- see the declaration in csp.h for why this is not a
+// static inline like the other ro_* record readers.
+csp_image_header_t ro_header(const csp_image_header_t* p)
+{
+    csp_image_header_t h;
+    memcpy_P(&h, p, sizeof(h));
+    return h;
+}
+
+csp_image_ref_t ro_ref(const csp_image_ref_t* p)
+{
+    csp_image_ref_t v;
+    memcpy_P(&v, p, sizeof(v));
+    return v;
+}
+#endif
 
 // Segment-aware reads (see csp.h). NOINLINE keeps the flash-copy in one place
 // instead of expanding it at every decl()/instr() call site.
@@ -1438,46 +1462,97 @@ NOINLINE value_t eval1(opcode_t op, value_t y)
 }
 
 // opcodes using only y and z register return x
+// ONE exit, not one per arm. Each `return f_X(y, z)` used to carry its own
+// epilogue: gcc cannot cross-jump them because the value being returned differs,
+// so twenty-two arms meant twenty-two copies of the same six pops. The
+// disassembly said it plainly -- 132 `pop` against 6 `push`, about half the
+// function. Assigning and falling out through a single return costs one
+// register held across the switch and deletes the other twenty-one epilogues.
 NOINLINE value_t eval2(opcode_t op, value_t y, value_t z)
 {
+    value_t x;
+
+    // WHY THE F-FORMS SHARE ARMS. With Q16.16 (USE_FIXPOINT, the default)
+    // fvalue_t IS int32_t, so FIX_ADD/FIX_SUB are a plain + and -, and the six
+    // FIX comparisons are plain signed compares -- Q16.16 is monotonic, so the
+    // ordering of the raw integers IS the ordering of the values. f_FADD writes
+    // x.f where f_ADD writes x.i, but both are the same int32 at offset 0 of
+    // the union, so the two arms were emitting identical code.
+    //
+    // FMUL and FDIV are NOT in this group: they scale through int64 and are
+    // genuinely different operations. And with real floats (USE_FIXPOINT 0)
+    // none of it holds, so the sharing is conditional, not a simplification.
     switch(CSP_MASK(op, CSP_OPCODE_BITS)) {
-    case OP_ADD: return f_ADD(y, z);
-    case OP_SUB: return f_SUB(y, z);
-    case OP_MUL: return f_MUL(y, z);
-    case OP_DIV: return f_DIV(y, z);
-    case OP_REM: return f_REM(y, z);
-    case OP_SLA: return f_SLA(y, z);
-    case OP_SRA: return f_SRA(y, z);
-    case OP_BAND: return f_BAND(y, z);
-    case OP_BOR: return f_BOR(y, z);
-    case OP_BXOR: return f_BXOR(y, z);
-    case OP_AND: return f_AND(y, z);
-    case OP_OR: return f_OR(y, z);
-    case OP_LT: return f_LT(y, z);
-    case OP_LTE: return f_LTE(y, z);
-    case OP_GT: return f_GT(y, z);
-    case OP_GTE: return f_GTE(y, z);
-    case OP_EQEQ: return f_EQEQ(y, z);
-    case OP_NEQ: return f_NEQ(y, z);
+    case OP_ADD:
+#if FVALUE_IS_FIXPOINT
+    case OP_FADD:
+#endif
+	x = f_ADD(y, z); break;
+    case OP_SUB:
+#if FVALUE_IS_FIXPOINT
+    case OP_FSUB:
+#endif
+	x = f_SUB(y, z); break;
+    case OP_MUL: x = f_MUL(y, z); break;
+    case OP_DIV: x = f_DIV(y, z); break;
+    case OP_REM: x = f_REM(y, z); break;
+    case OP_SLA: x = f_SLA(y, z); break;
+    case OP_SRA: x = f_SRA(y, z); break;
+    case OP_BAND: x = f_BAND(y, z); break;
+    case OP_BOR: x = f_BOR(y, z); break;
+    case OP_BXOR: x = f_BXOR(y, z); break;
+    case OP_AND: x = f_AND(y, z); break;
+    case OP_OR: x = f_OR(y, z); break;
+    case OP_LT:
+#if FVALUE_IS_FIXPOINT
+    case OP_FLT:
+#endif
+	x = f_LT(y, z); break;
+    case OP_LTE:
+#if FVALUE_IS_FIXPOINT
+    case OP_FLTE:
+#endif
+	x = f_LTE(y, z); break;
+    case OP_GT:
+#if FVALUE_IS_FIXPOINT
+    case OP_FGT:
+#endif
+	x = f_GT(y, z); break;
+    case OP_GTE:
+#if FVALUE_IS_FIXPOINT
+    case OP_FGTE:
+#endif
+	x = f_GTE(y, z); break;
+    case OP_EQEQ:
+#if FVALUE_IS_FIXPOINT
+    case OP_FEQEQ:
+#endif
+	x = f_EQEQ(y, z); break;
+    case OP_NEQ:
+#if FVALUE_IS_FIXPOINT
+    case OP_FNEQ:
+#endif
+	x = f_NEQ(y, z); break;
 
-    case OP_FADD: return f_FADD(y, z);
-    case OP_FSUB: return f_FSUB(y, z);
-    case OP_FMUL: return f_FMUL(y, z);
-    case OP_FDIV: return f_FDIV(y, z);
-
-    case OP_FLT: return f_FLT(y, z);
-    case OP_FLTE: return f_FLTE(y, z);
-    case OP_FGT: return f_FGT(y, z);
-    case OP_FGTE: return f_FGTE(y, z);
-    case OP_FEQEQ: return f_FEQEQ(y, z);
-    case OP_FNEQ: return f_FNEQ(y, z);
-    case OP_COMMA: return f_COMMA(y, z);
-    default: {
-	value_t x = {.i = 0 };
+    case OP_FMUL: x = f_FMUL(y, z); break;
+    case OP_FDIV: x = f_FDIV(y, z); break;
+#if !FVALUE_IS_FIXPOINT
+    case OP_FADD: x = f_FADD(y, z); break;
+    case OP_FSUB: x = f_FSUB(y, z); break;
+    case OP_FLT: x = f_FLT(y, z); break;
+    case OP_FLTE: x = f_FLTE(y, z); break;
+    case OP_FGT: x = f_FGT(y, z); break;
+    case OP_FGTE: x = f_FGTE(y, z); break;
+    case OP_FEQEQ: x = f_FEQEQ(y, z); break;
+    case OP_FNEQ: x = f_FNEQ(y, z); break;
+#endif
+    case OP_COMMA: x = f_COMMA(y, z); break;
+    default:
 	// emit error signal somehow ?
-	return x;
+	x.i = 0;
+	break;
     }
-    }
+    return x;
 }
 
 // opcodes that do not return x register, return
@@ -2655,7 +2730,7 @@ static int img_from_walk(const uint8_t* base, img_p_t* p)
 	const uint8_t* data = base + off + sizeof(csp_sect_t);
 	if (sc.len == 0 || sc.len > (uint32_t)MAX_INSTRS * sizeof(csp_instr_t))
 	    break;                             // nonsense length: stop here
-	if      (csp_tag_is(sc.tag, CSP_SECT_STR))    { p->str    = (const char*)data;        seen++; }
+	if (csp_tag_is(sc.tag, CSP_SECT_DECL))    { p->str    = (const char*)data;        seen++; }
 	else if (csp_tag_is(sc.tag, CSP_SECT_DECL))   { p->decl   = (const csp_decl_t*)data;  seen++; }
 	else if (csp_tag_is(sc.tag, CSP_SECT_INSTR))  { p->instr  = (const csp_instr_t*)data; seen++; }
 	else if (csp_tag_is(sc.tag, CSP_SECT_IDG))    { p->idg    = (const index_t*)data;     seen++; }
@@ -2743,8 +2818,9 @@ NOINLINE static int rom_scan_decl(const csp_decl_t* decl)
     int p;
     if (decl == NULL) return -1;
     for (p = 0; p <= MAX_DECLS; p++) {
-	if (ro_decl(&decl[p]).type == DECL_END_MARK) {
-	    csp_decl_t m = ro_decl(&decl[p]);
+	csp_decl_t m = ro_decl(&decl[p]);
+	if (m.type == DECL_END_MARK) {
+	    // csp_decl_t m = ro_decl(&decl[p]);
 	    uint16_t stored = m.em.crc, crc;
 	    m.em.crc = 0;                          // the crc field reads 0 in the fold
 	    crc = csp_crc16(0xFFFF, decl, (size_t)p * sizeof(csp_decl_t), 1);
@@ -2761,8 +2837,8 @@ NOINLINE static int rom_scan_instr(const csp_instr_t* instr)
     int p;
     if (instr == NULL) return -1;
     for (p = 0; p <= MAX_INSTRS; p++) {
-	if (ro_instr(&instr[p]).op == OP_END_MARK) {
-	    csp_instr_t m = ro_instr(&instr[p]);
+	csp_instr_t m = ro_instr(&instr[p]);
+	if (m.op == OP_END_MARK) {
 	    uint16_t stored = m.em.crc, crc;
 	    m.em.crc = 0;
 	    crc = csp_crc16(0xFFFF, instr, (size_t)p * sizeof(csp_instr_t), 1);
@@ -3175,42 +3251,31 @@ int csp_rt_init(csp_rt_t* st, int reactive)
     if (debug) // or precompile!
 	dump_stop_sets();       // debugging
 #endif
-    st->nbuf = 0;   // heap[]/tables already point into the arena (csp_mem_init)
+    // ONLY the fields whose initial value is not zero. The memset above cleared
+    // the whole struct, so nbuf, ps.nn/nd/nq/ns/line, ps.err (ERR_OK == 0),
+    // ps.err_args, nt, nio, nm, cur, cs.nvar/rimp/n_sdef/rule_implicit,
+    // list_nstate, ram_str[0] (an in-struct array), ufuncs, num_ufuncs and
+    // uconst are already what they need to be.
+    //
+    // Writing them anyway was not free the way it looks: csp_mem_init and
+    // csp_line_init sit between the memset and this point and both take `st`,
+    // so gcc must assume they wrote anywhere in the struct. That kills what it
+    // knew about the memset, and every redundant `= 0` came back as a real
+    // 4-byte absolute store. Twenty-one of them, ~84 bytes of nothing.
     st->reactive = reactive;
-    st->ps.nn = 0;
-    st->ps.nd = 0;
-    st->ps.nq = 0;
     st->ps.strp = 1;
     st->ps.err_strp = MAX_STR_BUF;
-    st->ps.err  = ERR_OK;
-    st->ps.err_args[0] = st->ps.err_args[1] = st->ps.err_args[2] = 0;
-    st->ps.line = 0;
-
-    st->nt = 0;
-    st->nio = 0;
-    st->nm = 0;
-    st->cur = 0;      // current module = global
     st->cs.mdef = BAD_INDEX;  // no module being defined
     st->n_rule_emit = 1;   // the implicit rule body at the RAM range base
     st->cs.var = st->cs.var_buf;  // dedicated scratch for var list during <- parse
-    st->cs.nvar = 0;
-    st->cs.rimp = 0;
-
-    st->ram_str[0] = 0;  // reserved 0 and nil
-    st->ufuncs = NULL;
-    st->num_ufuncs = 0;
-    st->uconst = NULL;
     {
 	RO_TSTR(State, ros_State);
 	RO_TSTR(INIT, ros_INIT);
 	RO_TSTR(NORMAL, ros_NORMAL);
 	RO_TSTR(FAILSAFE, ros_FAILSAFE);
-	st->ps.ns = 0;  // install INIT (cycle()==0), NORMAL, FAILSAFE
+	// ps.ns is 0 from the memset: install INIT (cycle()==0), NORMAL, FAILSAFE
 	st->cs.sx = st->gsx = csp_new_decl(st,&State,DECL_VARIABLE,1);
 	st->cs.sdef = -1;
-	st->cs.n_sdef = 0;
-	st->cs.rule_implicit = 0;
-	st->list_nstate = 0;
 	// Reserved states in fixed order: INIT=0, NORMAL=1, FAILSAFE=2 (sticky
 	// safe state). User states follow from 3. The numbers are contract --
 	// STATE_* in csp.h and the sticky check depend on them.
@@ -3364,26 +3429,25 @@ NOINLINE static int setup_field(csp_rt_t* st, index_t ix)
 NOINLINE static void can_mark_fields(csp_rt_t* st, index_t b)
 {
     int i;
+    index_t own = st->buf[b].owner;
     // The frame's own leaf first. A frame declared as a plain #buffer (no #field
     // at all -- read with >>= or with bound variables) has nothing in
     // the input list, so without this nothing would be marked, commit would
     // copy nothing, and the received bytes would never reach the committed
     // half. heap_dset_copy moves the WHOLE buffer for any dirty leaf of it, so
     // this one mark is what actually lands the frame.
-    for (i = 0; i < (int)st->ps.nd; i++) {
-	if ((decl(st,i,type) != DECL_BUFFER) ||
-	    (st->view[i].buf != b))
-	    continue;
+    //
+    // Read off the buffer, not searched for: see csp_buf_t.owner.
+    if (own != BAD_INDEX) {
 	// Marked unconditionally, not diffed: a frame is wider than a value_t,
 	// so there is no single value to compare. Granularity comes from the
 	// per-field pass below; this mark only has to make the copy happen.
-	bitset_set(st->dset, i);
+	bitset_set(st->dset, st_index(st, own));
 	st->es.anyd = CSP_TRUE;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 	if (st->reactive)
-	    csp_enq_elist(st, MAKE_INDEX(0, i));
+	    csp_enq_elist(st, own);
 #endif
-	break;
     }
     // Then per-field, so changed() has real granularity and only the fields
     // that moved wake their rules.
@@ -3495,6 +3559,8 @@ NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint16_t nbytes,
     st->buf[b].dir       = dir;
     st->buf[b].flags     = 0;
     st->buf[b].dlc       = nbytes;     // send the whole frame unless told less
+    st->buf[b].owner     = BAD_INDEX;  // setup_buffer fills this in; setup_slot
+				       // has no leaf of its own to record
     st->nbuf++;
     return b;
 }
@@ -3526,6 +3592,8 @@ NOINLINE static int setup_buffer(csp_rt_t* st, index_t ix)
 	xref = (uint32_t)decl(st, d.bf.id, cn.init).i;
     if ((b = csp_buf_alloc(st, nbytes, transport, xref, d.dir)) == BAD_INDEX)
 	return -1;
+    st->buf[b].owner = ix;             // ix, not the leaf: csp_enq_elist wants
+				       // the object-qualified index
     vw = &st->view[st_index(st, ix)];
     vw->kind     = VIEW_HEAP;
     vw->vt       = d.vt;
