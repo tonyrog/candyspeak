@@ -40,111 +40,6 @@ extern int debug;
 #define FUNC_MARKER_TIX(op)  (((op) >> 16) & 0xff)
 #define FUNC_MARKER_EP(op)   (((op) >> 8) & 0x0ff)
 
-
-#define MAKE_III(name)						\
-    static value_t CAT2(f_,name)(value_t y, value_t z)		\
-    {								\
-	value_t x;						\
-	x.i = CAT2(op_,name)(y.i, z.i);				\
-	return x;						\
-    }
-
-#define MAKE_IFF(name)						\
-    static value_t CAT2(f_,name)(value_t y, value_t z)		\
-    {								\
-	value_t x;						\
-	x.i = CAT2(op_,name)(y.f, z.f);				\
-	return x;						\
-    }
-
-#define MAKE_FFF(name)						\
-    static value_t CAT2(f_,name)(value_t y, value_t z)		\
-    {								\
-	value_t x;						\
-	x.f = CAT2(op_,name)(y.f, z.f);				\
-	return x;						\
-    }
-
-#define MAKE_II(name)						\
-    static value_t CAT2(f_,name)(value_t y)			\
-    {								\
-	value_t x;						\
-	x.i = CAT2(op_,name)(y.i);				\
-	return x;						\
-    }
-
-#define MAKE_FF(name)						\
-    static value_t CAT2(f_,name)(value_t y)			\
-    {								\
-	value_t x;						\
-	x.f = CAT2(op_,name)(y.f);				\
-	return x;						\
-    }
-
-#define MAKE_IF(name)						\
-    static value_t CAT2(f_,name)(value_t y)			\
-    {								\
-	value_t x;						\
-	x.f = CAT2(op_,name)(y.i);				\
-	return x;						\
-    }
-
-#define MAKE_FI(name)						\
-    static value_t CAT2(f_,name)(value_t y)			\
-    {								\
-	value_t x;						\
-	x.i = CAT2(op_,name)(y.f);				\
-	return x;						\
-    }
-
-MAKE_FF(FNEG);
-MAKE_FF(FMOV);
-
-MAKE_III(ADD);
-MAKE_III(SUB);
-MAKE_III(MUL);
-MAKE_III(DIV);
-MAKE_III(REM);
-MAKE_III(BAND);
-MAKE_III(BOR);
-MAKE_III(BXOR);
-MAKE_III(AND);
-MAKE_III(OR);
-MAKE_III(LT);
-MAKE_III(LTE);
-MAKE_III(GT);
-MAKE_III(GTE);
-MAKE_III(EQEQ);
-MAKE_III(NEQ);
-MAKE_III(SLA);
-MAKE_III(SRA);
-MAKE_III(COMMA);
-
-MAKE_II(BNOT);
-MAKE_II(NEG);
-MAKE_II(MOV);
-MAKE_II(NOT);
-MAKE_IF(CVTIF);
-MAKE_FI(CVTFI);
-
-MAKE_FFF(FMUL);   // the only two that scale (int64 under Q16.16)
-MAKE_FFF(FDIV);
-
-// The rest of the F-forms exist only when fvalue_t is a real float. Under
-// Q16.16 they are the integer wrappers bit for bit, and eval2 shares those
-// arms -- see the note there. Generating them anyway left eleven wrappers that
-// nothing called.
-#if !FVALUE_IS_FIXPOINT
-MAKE_FFF(FADD);
-MAKE_FFF(FSUB);
-MAKE_IFF(FLT);
-MAKE_IFF(FLTE);
-MAKE_IFF(FGT);
-MAKE_IFF(FGTE);
-MAKE_IFF(FEQEQ);
-MAKE_IFF(FNEQ);
-#endif
-
 // opcode => opcode type info
 const op_info_t op_info[] RODATA = {
     [OP_ADD] = {ros_ADD,PLUS,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
@@ -1432,34 +1327,31 @@ NOINLINE uint8_t func_arity(const csp_func_t* fn, int i, int rom)
 // Maybe used for special opcode without registers
 NOINLINE value_t eval0(opcode_t op)
 {
+    value_t x;    
     switch(CSP_MASK(op, CSP_OPCODE_BITS)) {
-    default: {
-	value_t x = {.i = 0 };
-	// emit error signal somehow ?
-	return x;
+    default: x.i = 0; break;
     }
-    }
+    return x;
 }
 
 // opcodes using only y register return x
 NOINLINE value_t eval1(opcode_t op, value_t y)
 {
+    value_t x;    
     switch(CSP_MASK(op, CSP_OPCODE_BITS)) {
-    case OP_BNOT: return f_BNOT(y);
-    case OP_NEG:  return f_NEG(y);
-    case OP_MOV:  return f_MOV(y);
-    case OP_NOT:  return f_NOT(y);
-    case OP_CVTIF: return f_CVTIF(y);
-    case OP_CVTFI: return f_CVTFI(y);
-    case OP_FNEG:  return f_FNEG(y);
-    case OP_FMOV:  return f_FMOV(y);
-    default: {
-	value_t x = {.i = 0 };
-	// emit error signal somehow ?
-	return x;
+    case OP_BNOT: x.i = op_BNOT(y.i);  break;
+    case OP_NEG:  x.i = op_NEG(y.i);  break;
+    case OP_MOV:  x.i = op_MOV(y.i); break;
+    case OP_NOT:  x.i = op_NOT(y.i); break;
+    case OP_CVTIF: x.f = op_CVTIF(y.i); break;
+    case OP_CVTFI: x.i = op_CVTFI(y.f); break;
+    case OP_FNEG:  x.f = op_FNEG(y.f); break;
+    case OP_FMOV:  x.f = op_FMOV(y.f); break;
+    default: x.i = 0; break;
     }
-    }
+    return x;
 }
+
 
 // opcodes using only y and z register return x
 // ONE exit, not one per arm. Each `return f_X(y, z)` used to carry its own
@@ -1468,89 +1360,40 @@ NOINLINE value_t eval1(opcode_t op, value_t y)
 // disassembly said it plainly -- 132 `pop` against 6 `push`, about half the
 // function. Assigning and falling out through a single return costs one
 // register held across the switch and deletes the other twenty-one epilogues.
+
 NOINLINE value_t eval2(opcode_t op, value_t y, value_t z)
 {
     value_t x;
-
-    // WHY THE F-FORMS SHARE ARMS. With Q16.16 (USE_FIXPOINT, the default)
-    // fvalue_t IS int32_t, so FIX_ADD/FIX_SUB are a plain + and -, and the six
-    // FIX comparisons are plain signed compares -- Q16.16 is monotonic, so the
-    // ordering of the raw integers IS the ordering of the values. f_FADD writes
-    // x.f where f_ADD writes x.i, but both are the same int32 at offset 0 of
-    // the union, so the two arms were emitting identical code.
-    //
-    // FMUL and FDIV are NOT in this group: they scale through int64 and are
-    // genuinely different operations. And with real floats (USE_FIXPOINT 0)
-    // none of it holds, so the sharing is conditional, not a simplification.
     switch(CSP_MASK(op, CSP_OPCODE_BITS)) {
-    case OP_ADD:
-#if FVALUE_IS_FIXPOINT
-    case OP_FADD:
-#endif
-	x = f_ADD(y, z); break;
-    case OP_SUB:
-#if FVALUE_IS_FIXPOINT
-    case OP_FSUB:
-#endif
-	x = f_SUB(y, z); break;
-    case OP_MUL: x = f_MUL(y, z); break;
-    case OP_DIV: x = f_DIV(y, z); break;
-    case OP_REM: x = f_REM(y, z); break;
-    case OP_SLA: x = f_SLA(y, z); break;
-    case OP_SRA: x = f_SRA(y, z); break;
-    case OP_BAND: x = f_BAND(y, z); break;
-    case OP_BOR: x = f_BOR(y, z); break;
-    case OP_BXOR: x = f_BXOR(y, z); break;
-    case OP_AND: x = f_AND(y, z); break;
-    case OP_OR: x = f_OR(y, z); break;
-    case OP_LT:
-#if FVALUE_IS_FIXPOINT
-    case OP_FLT:
-#endif
-	x = f_LT(y, z); break;
-    case OP_LTE:
-#if FVALUE_IS_FIXPOINT
-    case OP_FLTE:
-#endif
-	x = f_LTE(y, z); break;
-    case OP_GT:
-#if FVALUE_IS_FIXPOINT
-    case OP_FGT:
-#endif
-	x = f_GT(y, z); break;
-    case OP_GTE:
-#if FVALUE_IS_FIXPOINT
-    case OP_FGTE:
-#endif
-	x = f_GTE(y, z); break;
-    case OP_EQEQ:
-#if FVALUE_IS_FIXPOINT
-    case OP_FEQEQ:
-#endif
-	x = f_EQEQ(y, z); break;
-    case OP_NEQ:
-#if FVALUE_IS_FIXPOINT
-    case OP_FNEQ:
-#endif
-	x = f_NEQ(y, z); break;
-
-    case OP_FMUL: x = f_FMUL(y, z); break;
-    case OP_FDIV: x = f_FDIV(y, z); break;
-#if !FVALUE_IS_FIXPOINT
-    case OP_FADD: x = f_FADD(y, z); break;
-    case OP_FSUB: x = f_FSUB(y, z); break;
-    case OP_FLT: x = f_FLT(y, z); break;
-    case OP_FLTE: x = f_FLTE(y, z); break;
-    case OP_FGT: x = f_FGT(y, z); break;
-    case OP_FGTE: x = f_FGTE(y, z); break;
-    case OP_FEQEQ: x = f_FEQEQ(y, z); break;
-    case OP_FNEQ: x = f_FNEQ(y, z); break;
-#endif
-    case OP_COMMA: x = f_COMMA(y, z); break;
-    default:
-	// emit error signal somehow ?
-	x.i = 0;
-	break;
+    case OP_ADD: x.i = op_ADD(y.i, z.i); break;
+    case OP_SUB: x.i = op_SUB(y.i, z.i); break;
+    case OP_MUL: x.i = op_MUL(y.i, z.i); break;
+    case OP_DIV: x.i = op_DIV(y.i, z.i); break;
+    case OP_REM: x.i = op_REM(y.i, z.i); break;
+    case OP_SLA: x.i = op_SLA(y.i, z.i); break;
+    case OP_SRA: x.i = op_SRA(y.i, z.i); break;
+    case OP_BAND: x.i = op_BAND(y.i, z.i); break;
+    case OP_BOR: x.i = op_BOR(y.i, z.i); break;
+    case OP_BXOR: x.i = op_BXOR(y.i, z.i); break;
+    case OP_AND:  x.i = op_AND(y.i, z.i); break;
+    case OP_OR:   x.i = op_OR(y.i, z.i); break;
+    case OP_LT:   x.i = op_LT(y.i, z.i); break;
+    case OP_LTE:  x.i = op_LTE(y.i, z.i); break;
+    case OP_GT:	  x.i = op_GT(y.i, z.i); break;
+    case OP_GTE:  x.i = op_GTE(y.i, z.i); break;
+    case OP_EQEQ: x.i = op_EQEQ(y.i, z.i); break;
+    case OP_NEQ:  x.i = op_NEQ(y.i, z.i); break;
+    case OP_FADD: x.f = op_FADD(y.f, z.f); break;
+    case OP_FSUB: x.f = op_FSUB(y.f, z.f); break;
+    case OP_FMUL: x.f = op_FMUL(y.f, z.f); break;
+    case OP_FDIV: x.f = op_FDIV(y.f, z.f); break;
+    case OP_FLT:   x.i = op_FLT(y.f, z.f); break;
+    case OP_FLTE:  x.i = op_FLTE(y.f, z.f); break;
+    case OP_FGT:   x.i = op_FGT(y.f, z.f); break;
+    case OP_FGTE:  x.i = op_FGTE(y.f, z.f); break;
+    case OP_FEQEQ: x.i = op_FEQEQ(y.f, z.f); break;
+    case OP_FNEQ:  x.i = op_FNEQ(y.f, z.f); break;	
+    case OP_COMMA: x.i = op_COMMA(y.i, z.i); break;
     }
     return x;
 }
