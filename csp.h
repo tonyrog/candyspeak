@@ -1493,7 +1493,7 @@ typedef struct _csp_rt_t
     // ONE allocation holds both halves: heap[DOUT] points at its second half, so
     // only heap[DIN] is owned (freed). heap_cap is the usable bytes per half.
     uint8_t*   heap[2];           // heap[DIN] = block base, heap[DOUT] = base + half
-    uint32_t   heap_cap;          // heap bytes per half (csp_estimate.heap)
+    uint16_t   heap_cap;          // heap bytes per half (csp_estimate.heap)
     // allow device output latch=0 or disallow latch=1
     uint8_t latch;
     // check if any node has been set: anyx|anyd == CSP_TRUE
@@ -1902,7 +1902,13 @@ extern int     csp_mem_init(csp_rt_t*, size_t size);
 typedef struct {
     index_t  nleaf;   // view[]/dset span = max leaf (st_index) + 1
     index_t  nbuf;    // buffers allocated
-    uint32_t heap;    // heap bytes (per DIN/DOUT half)
+    uint16_t heap;    // heap bytes (per DIN/DOUT half). NOT uint32: csp_buf_t.hp
+		      // is uint16_t, so a heap past 64K is unrepresentable
+		      // anyway -- and on an 8-bit target every arithmetic op on
+		      // this value cost twice what it needed to. An oversized
+		      // program now fails in csp_buf_alloc (hp + nbytes >
+		      // heap_cap -> ERR_TOO_MANY_DECLARATIONS), which is the
+		      // same door it would have hit through hp.
     index_t  nio;     // device entries (digital/analog/field)
     index_t  nt;      // timers (global + per-object)
 } csp_estimate_t;

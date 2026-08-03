@@ -1361,12 +1361,27 @@ NOINLINE value_t eval1(opcode_t op, value_t y)
 // function. Assigning and falling out through a single return costs one
 // register held across the switch and deletes the other twenty-one epilogues.
 
+// The F-arms share with the integer ones under Q16.16 (the default): fvalue_t
+// IS int32_t there, FIX_ADD/FIX_SUB are a plain + and -, and the six FIX
+// comparisons are plain signed compares -- Q16.16 is monotonic, so the order of
+// the raw integers IS the order of the values. x.f and x.i are the same int32
+// at offset 0 of the union, so the separate arms were emitting identical code.
+// FMUL/FDIV stay apart: they scale through int64. With real floats none of it
+// holds, so the sharing is conditional.
 NOINLINE value_t eval2(opcode_t op, value_t y, value_t z)
 {
     value_t x;
     switch(CSP_MASK(op, CSP_OPCODE_BITS)) {
-    case OP_ADD: x.i = op_ADD(y.i, z.i); break;
-    case OP_SUB: x.i = op_SUB(y.i, z.i); break;
+    case OP_ADD:
+#if FVALUE_IS_FIXPOINT
+    case OP_FADD:
+#endif
+        x.i = op_ADD(y.i, z.i); break;
+    case OP_SUB:
+#if FVALUE_IS_FIXPOINT
+    case OP_FSUB:
+#endif
+        x.i = op_SUB(y.i, z.i); break;
     case OP_MUL: x.i = op_MUL(y.i, z.i); break;
     case OP_DIV: x.i = op_DIV(y.i, z.i); break;
     case OP_REM: x.i = op_REM(y.i, z.i); break;
@@ -1377,23 +1392,50 @@ NOINLINE value_t eval2(opcode_t op, value_t y, value_t z)
     case OP_BXOR: x.i = op_BXOR(y.i, z.i); break;
     case OP_AND:  x.i = op_AND(y.i, z.i); break;
     case OP_OR:   x.i = op_OR(y.i, z.i); break;
-    case OP_LT:   x.i = op_LT(y.i, z.i); break;
-    case OP_LTE:  x.i = op_LTE(y.i, z.i); break;
-    case OP_GT:	  x.i = op_GT(y.i, z.i); break;
-    case OP_GTE:  x.i = op_GTE(y.i, z.i); break;
-    case OP_EQEQ: x.i = op_EQEQ(y.i, z.i); break;
-    case OP_NEQ:  x.i = op_NEQ(y.i, z.i); break;
-    case OP_FADD: x.f = op_FADD(y.f, z.f); break;
-    case OP_FSUB: x.f = op_FSUB(y.f, z.f); break;
+    case OP_LT:
+#if FVALUE_IS_FIXPOINT
+    case OP_FLT:
+#endif
+        x.i = op_LT(y.i, z.i); break;
+    case OP_LTE:
+#if FVALUE_IS_FIXPOINT
+    case OP_FLTE:
+#endif
+        x.i = op_LTE(y.i, z.i); break;
+    case OP_GT:
+#if FVALUE_IS_FIXPOINT
+    case OP_FGT:
+#endif
+        x.i = op_GT(y.i, z.i); break;
+    case OP_GTE:
+#if FVALUE_IS_FIXPOINT
+    case OP_FGTE:
+#endif
+        x.i = op_GTE(y.i, z.i); break;
+    case OP_EQEQ:
+#if FVALUE_IS_FIXPOINT
+    case OP_FEQEQ:
+#endif
+        x.i = op_EQEQ(y.i, z.i); break;
+    case OP_NEQ:
+#if FVALUE_IS_FIXPOINT
+    case OP_FNEQ:
+#endif
+        x.i = op_NEQ(y.i, z.i); break;
     case OP_FMUL: x.f = op_FMUL(y.f, z.f); break;
     case OP_FDIV: x.f = op_FDIV(y.f, z.f); break;
+    case OP_COMMA: x.i = op_COMMA(y.i, z.i); break;
+#if !FVALUE_IS_FIXPOINT
+    case OP_FADD: x.f = op_FADD(y.f, z.f); break;
+    case OP_FSUB: x.f = op_FSUB(y.f, z.f); break;
     case OP_FLT:   x.i = op_FLT(y.f, z.f); break;
     case OP_FLTE:  x.i = op_FLTE(y.f, z.f); break;
     case OP_FGT:   x.i = op_FGT(y.f, z.f); break;
     case OP_FGTE:  x.i = op_FGTE(y.f, z.f); break;
     case OP_FEQEQ: x.i = op_FEQEQ(y.f, z.f); break;
-    case OP_FNEQ:  x.i = op_FNEQ(y.f, z.f); break;	
-    case OP_COMMA: x.i = op_COMMA(y.i, z.i); break;
+    case OP_FNEQ:  x.i = op_FNEQ(y.f, z.f); break;
+#endif
+    default: x.i = 0; break;   // corrupt opcode: a defined value, not the register
     }
     return x;
 }
@@ -3585,7 +3627,7 @@ NOINLINE static int setup_decl(csp_rt_t* st, index_t ix, csp_decl_t d)
 NOINLINE static void est_leaf(csp_rt_t* st, int j, csp_estimate_t* e)
 {
     csp_decl_t d = csp_get_decl(st, j);
-    uint32_t nbytes;
+    uint16_t nbytes;              // matches csp_buf_t.nbytes; see csp_estimate_t.heap
     switch (d.type) {
     case DECL_VARIABLE:
 	if (d.bound)                          // bit-field view: shares a buffer
@@ -3616,7 +3658,7 @@ NOINLINE static void est_leaf(csp_rt_t* st, int j, csp_estimate_t* e)
 	return;                               // module/end/object/view: no buffer
     }
     e->nbuf++;
-    e->heap += (nbytes + 3) & ~3u;            // 4-aligned like csp_buf_alloc
+    e->heap += (uint16_t)((nbytes + 3) & ~3u);   // 4-aligned like csp_buf_alloc
 }
 
 // Memory an already-parsed program needs, WITHOUT running csp_rt_start: the same
