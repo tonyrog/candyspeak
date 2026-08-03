@@ -1291,6 +1291,22 @@ typedef struct PACKED
     unsigned snum:NUM_BITS;        // state number (0..MAX_STATES-1)
 } state_t;
 
+// The section pointers of one image, derived from its base. The runtime never
+// names an image's struct type -- it takes the base and works in offsets, so
+// the same code loads rom, a FAILSAFE, or a copy someone flashed onto a spare
+// page. Two ways to fill it in: from the header (fast) or by walking the
+// section prologues (when the header is the casualty).
+typedef struct {
+    const char*        str;
+    const csp_decl_t*  decl;
+    const csp_instr_t* instr;
+    const index_t*     idg;
+    const index_t*     ofs;
+    const index_t*     edg;
+    const state_t*     states;
+} img_p_t;
+
+
 // The image type for ONE program. The generator knows every count, so it stamps
 // them in here and the COMPILER does the layout -- which is what keeps the
 // byte-CRC honest. Sizes are the emitted lengths, trailers included:
@@ -1524,16 +1540,15 @@ typedef struct _csp_rt_t
     // patches. The logical index space is [0,rom_n*) = ROM (read via the pointers
     // below), [rom_n*, .) = RAM (ram_*[logical - rom_n*]). rom_n*==0 => no ROM
     // active, everything is RAM. Also the ROM/RAM boundary /list tags against.
-    const csp_decl_t*  rom_decl_p;  // ROM decl table (flash), or NULL
-    const csp_instr_t* rom_instr_p; // ROM instr table (flash), or NULL
-    const char*        rom_str_p;   // ROM string table (flash), or NULL
-    // The baked reactive graph, held the same way -- csp_enq_elist used to read
-    // the rom_idg/rom_ofs/rom_edg globals directly, which tied the runtime to
-    // ONE image. Only the loader names an image now; everything downstream goes
-    // through these. NULL when rom_nedg == 0.
-    const index_t*     rom_idg_p;
-    const index_t*     rom_ofs_p;
-    const index_t*     rom_edg_p;
+    // ONE descriptor, not six fields. These are the section pointers of a single
+    // image and img_p_t already names exactly that, so the loader commits them
+    // with one struct assignment instead of six stores -- and it stays one
+    // assignment if a section is ever added. csp_enq_elist used to read the
+    // rom_idg/rom_ofs/rom_edg globals directly, which tied the runtime to ONE
+    // image; only the loader names an image now, everything downstream goes
+    // through here. All NULL (rt_init's memset) when no ROM is active, and .idg
+    // /.ofs/.edg are NULL when rom_nedg == 0.
+    img_p_t rom_p;
     index_t rom_nd;              // # ROM decls   (RAM decl base)
     index_t rom_nn;              // # ROM instrs  (RAM instr base)
     index_t rom_strp;            // # ROM string bytes (RAM string base)
@@ -1751,7 +1766,7 @@ extern csp_instr_t csp_get_instr(csp_rt_t* st, index_t n);
 static inline uint8_t csp_str_byte(csp_rt_t* st, sindex_t pos)
 {
     if (pos < (sindex_t)st->rom_strp)
-	return ro_byte(&st->rom_str_p[pos]);
+	return ro_byte(&st->rom_p.str[pos]);
     return (uint8_t)st->ram_str[pos - st->rom_strp];
 }
 
@@ -1760,7 +1775,7 @@ static inline uint8_t csp_str_byte(csp_rt_t* st, sindex_t pos)
 static inline char* csp_str_at(csp_rt_t* st, sindex_t pos)
 {
     if (pos < (sindex_t)st->rom_strp)
-	return (char*)&st->rom_str_p[pos];
+	return (char*)&st->rom_p.str[pos];
     return &st->ram_str[pos - st->rom_strp];
 }
 

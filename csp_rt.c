@@ -306,14 +306,14 @@ csp_image_ref_t ro_ref(const csp_image_ref_t* p)
 NOINLINE csp_decl_t csp_get_decl(csp_rt_t* st, index_t i)
 {
     if (i < st->rom_nd)
-	return ro_decl(&st->rom_decl_p[i]);
+	return ro_decl(&st->rom_p.decl[i]);
     return st->ram_decl[st->rom_nd - i];   // RAM decls grow down (see ram_decl_at)
 }
 
 NOINLINE csp_instr_t csp_get_instr(csp_rt_t* st, index_t n)
 {
     if (n < st->rom_nn)
-	return ro_instr(&st->rom_instr_p[n]);
+	return ro_instr(&st->rom_p.instr[n]);
     return st->ram_instr[n - st->rom_nn];
 }
 
@@ -995,10 +995,10 @@ NOINLINE void csp_enq_elist(csp_rt_t* st, index_t x)
 	obj = st->cur;
     // baked ROM graph in flash: ROM decl -> ROM rules that read it
     if (st->rom_nedg && (ix < st->rom_nd)) {
-	index_t base = ro_word(&st->rom_ofs_p[ix]);
-	index_t n    = ro_word(&st->rom_idg_p[ix]);
+	index_t base = ro_word(&st->rom_p.ofs[ix]);
+	index_t n    = ro_word(&st->rom_p.idg[ix]);
 	for (i = 0; i < (int)n; i++)
-	    csp_enq(st, obj, ro_word(&st->rom_edg_p[base+i]));
+	    csp_enq(st, obj, ro_word(&st->rom_p.edg[base+i]));
     }
     // runtime RAM graph: any decl -> RAM rules that read it. Only decls the graph
     // was built for have edges; one added since (ix >= graph_n) has none yet.
@@ -1334,115 +1334,6 @@ NOINLINE value_t eval0(opcode_t op)
     return x;
 }
 
-// opcodes using only y register return x
-#ifdef not_used
-NOINLINE value_t eval1(opcode_t op, value_t y)
-{
-    value_t x;    
-    switch(CSP_MASK(op, CSP_OPCODE_BITS)) {
-    case OP_BNOT: x.i = op_BNOT(y.i);  break;
-    case OP_NEG:  x.i = op_NEG(y.i);  break;
-    case OP_MOV:  x.i = op_MOV(y.i); break;
-    case OP_NOT:  x.i = op_NOT(y.i); break;
-    case OP_CVTIF: x.f = op_CVTIF(y.i); break;
-    case OP_CVTFI: x.i = op_CVTFI(y.f); break;
-    case OP_FNEG:  x.f = op_FNEG(y.f); break;
-    case OP_FMOV:  x.f = op_FMOV(y.f); break;
-    default: x.i = 0; break;
-    }
-    return x;
-}
-#endif
-
-// opcodes using only y and z register return x
-// ONE exit, not one per arm. Each `return f_X(y, z)` used to carry its own
-// epilogue: gcc cannot cross-jump them because the value being returned differs,
-// so twenty-two arms meant twenty-two copies of the same six pops. The
-// disassembly said it plainly -- 132 `pop` against 6 `push`, about half the
-// function. Assigning and falling out through a single return costs one
-// register held across the switch and deletes the other twenty-one epilogues.
-
-// The F-arms share with the integer ones under Q16.16 (the default): fvalue_t
-// IS int32_t there, FIX_ADD/FIX_SUB are a plain + and -, and the six FIX
-// comparisons are plain signed compares -- Q16.16 is monotonic, so the order of
-// the raw integers IS the order of the values. x.f and x.i are the same int32
-// at offset 0 of the union, so the separate arms were emitting identical code.
-// FMUL/FDIV stay apart: they scale through int64. With real floats none of it
-// holds, so the sharing is conditional.
-#ifdef not_used
-NOINLINE value_t eval2(opcode_t op, value_t y, value_t z)
-{
-    value_t x;
-    switch(CSP_MASK(op, CSP_OPCODE_BITS)) {
-    case OP_ADD:
-#if FVALUE_IS_FIXPOINT
-    case OP_FADD:
-#endif
-        x.i = op_ADD(y.i, z.i); break;
-    case OP_SUB:
-#if FVALUE_IS_FIXPOINT
-    case OP_FSUB:
-#endif
-        x.i = op_SUB(y.i, z.i); break;
-    case OP_MUL: x.i = op_MUL(y.i, z.i); break;
-    case OP_DIV: x.i = op_DIV(y.i, z.i); break;
-    case OP_REM: x.i = op_REM(y.i, z.i); break;
-    case OP_SLA: x.i = op_SLA(y.i, z.i); break;
-    case OP_SRA: x.i = op_SRA(y.i, z.i); break;
-    case OP_BAND: x.i = op_BAND(y.i, z.i); break;
-    case OP_BOR: x.i = op_BOR(y.i, z.i); break;
-    case OP_BXOR: x.i = op_BXOR(y.i, z.i); break;
-    case OP_AND:  x.i = op_AND(y.i, z.i); break;
-    case OP_OR:   x.i = op_OR(y.i, z.i); break;
-    case OP_LT:
-#if FVALUE_IS_FIXPOINT
-    case OP_FLT:
-#endif
-        x.i = op_LT(y.i, z.i); break;
-    case OP_LTE:
-#if FVALUE_IS_FIXPOINT
-    case OP_FLTE:
-#endif
-        x.i = op_LTE(y.i, z.i); break;
-    case OP_GT:
-#if FVALUE_IS_FIXPOINT
-    case OP_FGT:
-#endif
-        x.i = op_GT(y.i, z.i); break;
-    case OP_GTE:
-#if FVALUE_IS_FIXPOINT
-    case OP_FGTE:
-#endif
-        x.i = op_GTE(y.i, z.i); break;
-    case OP_EQEQ:
-#if FVALUE_IS_FIXPOINT
-    case OP_FEQEQ:
-#endif
-        x.i = op_EQEQ(y.i, z.i); break;
-    case OP_NEQ:
-#if FVALUE_IS_FIXPOINT
-    case OP_FNEQ:
-#endif
-        x.i = op_NEQ(y.i, z.i); break;
-    case OP_FMUL: x.f = op_FMUL(y.f, z.f); break;
-    case OP_FDIV: x.f = op_FDIV(y.f, z.f); break;
-    case OP_COMMA: x.i = op_COMMA(y.i, z.i); break;
-#if !FVALUE_IS_FIXPOINT
-    case OP_FADD: x.f = op_FADD(y.f, z.f); break;
-    case OP_FSUB: x.f = op_FSUB(y.f, z.f); break;
-    case OP_FLT:   x.i = op_FLT(y.f, z.f); break;
-    case OP_FLTE:  x.i = op_FLTE(y.f, z.f); break;
-    case OP_FGT:   x.i = op_FGT(y.f, z.f); break;
-    case OP_FGTE:  x.i = op_FGTE(y.f, z.f); break;
-    case OP_FEQEQ: x.i = op_FEQEQ(y.f, z.f); break;
-    case OP_FNEQ:  x.i = op_FNEQ(y.f, z.f); break;
-#endif
-    default: x.i = 0; break;   // corrupt opcode: a defined value, not the register
-    }
-    return x;
-}
-#endif
-
 // opcodes that do not return x register, return
 // return 0: stop
 // return 1: continue with next istruction
@@ -1705,35 +1596,6 @@ store:
     // One store site for every ALU arm, instead of one per arm.
     st->es.reg[ci.a.x] = x;
     return n + 1;
-}
-
-NOINLINE value_t eval1(csp_rt_t* st, opcode_t op, value_t y)
-{
-    value_t sx, sy, x;
-    int leave;
-    csp_instr_t ci = { .a = { .op=op,.x=0,.y=1,.z=2 }};
-    
-    sx = st->es.reg[0]; sy = st->es.reg[1];
-    st->es.reg[1] = y;
-    eval_op(st, 0, ci, &leave);
-    x = st->es.reg[0];
-    st->es.reg[0] = sx; st->es.reg[1] = sy;
-    return x;
-}
-
-
-NOINLINE value_t eval2(csp_rt_t* st, opcode_t op, value_t y, value_t z)
-{
-    value_t sx, sy, sz, x;
-    int leave;
-    csp_instr_t ci = { .a = { .op=op,.x=0,.y=1,.z=2 }};    
-    
-    sx = st->es.reg[0]; sy = st->es.reg[1]; sz = st->es.reg[2];
-    st->es.reg[1] = y; st->es.reg[2] = z;
-    eval_op(st, 0, ci, &leave);
-    x = st->es.reg[0];
-    st->es.reg[0] = sx; st->es.reg[1] = sy; st->es.reg[2] = sz;    
-    return x;
 }
 
 
@@ -2659,15 +2521,7 @@ void csp_csr(csp_rt_t* st)
 // the same code loads rom, a FAILSAFE, or a copy someone flashed onto a spare
 // page. Two ways to fill it in: from the header (fast) or by walking the
 // section prologues (when the header is the casualty).
-typedef struct {
-    const char*        str;
-    const csp_decl_t*  decl;
-    const csp_instr_t* instr;
-    const index_t*     idg;
-    const index_t*     ofs;
-    const index_t*     edg;
-    const state_t*     states;
-} img_p_t;
+/* img_p_t now lives in csp.h -- csp_rt_t holds one (rom_p). */
 
 static void img_from_hdr(const uint8_t* base, const csp_image_header_t* h,
 			 img_p_t* p)
@@ -2933,12 +2787,10 @@ NOINLINE void csp_load_image(csp_rt_t* st, const uint8_t* base)
 	    return;
 	}
     }
-    st->rom_decl_p  = p.decl;
-    st->rom_instr_p = p.instr;
-    st->rom_str_p   = p.str;
-    st->rom_idg_p   = p.idg;
-    st->rom_ofs_p   = p.ofs;
-    st->rom_edg_p   = p.edg;
+    // Committed as one descriptor, and only now -- everything above may still
+    // reject the image, and a half-set st would leave the runtime pointing into
+    // flash it has not verified.
+    st->rom_p = p;
     if ((nd > 0) && (ro_decl(&p.decl[nd-1]).type == DECL_END))
 	nd--;                     // drop the trailing terminator
     st->rom_nd   = nd;

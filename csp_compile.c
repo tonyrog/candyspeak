@@ -1249,6 +1249,36 @@ NOINLINE static opcode_t float_op(opcode_t op)
     }
 }
 
+NOINLINE value_t eval1(csp_rt_t* st, opcode_t op, value_t y)
+{
+    value_t sx, sy, x;
+    int leave;
+    csp_instr_t ci = { .a = { .op=op,.x=0,.y=1,.z=2 }};
+    
+    sx = st->es.reg[0]; sy = st->es.reg[1];
+    st->es.reg[1] = y;
+    eval_op(st, 0, ci, &leave);
+    x = st->es.reg[0];
+    st->es.reg[0] = sx; st->es.reg[1] = sy;
+    return x;
+}
+
+
+NOINLINE value_t eval2(csp_rt_t* st, opcode_t op, value_t y, value_t z)
+{
+    value_t sx, sy, sz, x;
+    int leave;
+    csp_instr_t ci = { .a = { .op=op,.x=0,.y=1,.z=2 }};    
+    
+    sx = st->es.reg[0]; sy = st->es.reg[1]; sz = st->es.reg[2];
+    st->es.reg[1] = y; st->es.reg[2] = z;
+    eval_op(st, 0, ci, &leave);
+    x = st->es.reg[0];
+    st->es.reg[0] = sx; st->es.reg[1] = sy; st->es.reg[2] = sz;    
+    return x;
+}
+
+
 NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep)
 {
     int dst;
