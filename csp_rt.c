@@ -1453,9 +1453,93 @@ NOINLINE value_t eval2(opcode_t op, value_t y, value_t z)
 // largest function in the image. csp_eval_rule has already read the word to get
 // the opcode, so passing it costs nothing and saves a re-read per instruction.
 // Named ci (current instruction) and not `in`: that name is the OP_INSTATE arm.
-NOINLINE int evalx(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
+NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
 {
+    // The ALU operands, loaded ONCE for every opcode instead of once per arm.
+    // ci.a.y/ci.a.z are REG_BITS wide and MAX_REGS is 1 << REG_BITS, so the
+    // index is in range whatever instruction format the word really holds -- a
+    // load or a store just reads a register it will never look at.
+    value_t y = st->es.reg[ci.a.y];
+    value_t z = st->es.reg[ci.a.z];
+    value_t x;
+
     switch(CSP_MASK(ci.op, CSP_OPCODE_BITS)) {
+    case OP_MOV: x.i = op_MOV(y.i); goto store;
+    case OP_NOT: x.i = op_NOT(y.i); goto store;
+    case OP_CVTIF: x.f = op_CVTIF(y.i); goto store;
+    case OP_CVTFI: x.i = op_CVTFI(y.f); goto store;
+    case OP_FNEG: x.f = op_FNEG(y.f); goto store;
+    case OP_FMOV: x.f = op_FMOV(y.f); goto store;
+    case OP_ADD:
+#if FVALUE_IS_FIXPOINT
+    case OP_FADD:
+#endif
+        x.i = op_ADD(y.i, z.i); goto store;
+    case OP_SUB:
+#if FVALUE_IS_FIXPOINT
+    case OP_FSUB:
+#endif
+        x.i = op_SUB(y.i, z.i); goto store;
+    case OP_MUL: x.i = op_MUL(y.i, z.i); goto store;
+    case OP_DIV: x.i = op_DIV(y.i, z.i); goto store;
+    case OP_REM: x.i = op_REM(y.i, z.i); goto store;
+    case OP_SLA: x.i = op_SLA(y.i, z.i); goto store;
+    case OP_SRA: x.i = op_SRA(y.i, z.i); goto store;
+    case OP_BAND: x.i = op_BAND(y.i, z.i); goto store;
+    case OP_BOR: x.i = op_BOR(y.i, z.i); goto store;
+    case OP_BXOR: x.i = op_BXOR(y.i, z.i); goto store;
+    case OP_AND:  x.i = op_AND(y.i, z.i); goto store;
+    case OP_OR:   x.i = op_OR(y.i, z.i); goto store;
+    case OP_LT:
+#if FVALUE_IS_FIXPOINT
+    case OP_FLT:
+#endif
+        x.i = op_LT(y.i, z.i); goto store;
+    case OP_LTE:
+#if FVALUE_IS_FIXPOINT
+    case OP_FLTE:
+#endif
+        x.i = op_LTE(y.i, z.i); goto store;
+    case OP_GT:
+#if FVALUE_IS_FIXPOINT
+    case OP_FGT:
+#endif
+        x.i = op_GT(y.i, z.i); goto store;
+    case OP_GTE:
+#if FVALUE_IS_FIXPOINT
+    case OP_FGTE:
+#endif
+        x.i = op_GTE(y.i, z.i); goto store;
+    case OP_EQEQ:
+#if FVALUE_IS_FIXPOINT
+    case OP_FEQEQ:
+#endif
+        x.i = op_EQEQ(y.i, z.i); goto store;
+    case OP_NEQ:
+#if FVALUE_IS_FIXPOINT
+    case OP_FNEQ:
+#endif
+        x.i = op_NEQ(y.i, z.i); goto store;
+    case OP_FMUL: x.f = op_FMUL(y.f, z.f); goto store;
+    case OP_FDIV: x.f = op_FDIV(y.f, z.f); goto store;
+    case OP_COMMA: x.i = op_COMMA(y.i, z.i); goto store;
+#if !FVALUE_IS_FIXPOINT
+    case OP_FADD: x.f = op_FADD(y.f, z.f); goto store;
+    case OP_FSUB: x.f = op_FSUB(y.f, z.f); goto store;
+    case OP_FLT:   x.i = op_FLT(y.f, z.f); goto store;
+    case OP_FLTE:  x.i = op_FLTE(y.f, z.f); goto store;
+    case OP_FGT:   x.i = op_FGT(y.f, z.f); goto store;
+    case OP_FGTE:  x.i = op_FGTE(y.f, z.f); goto store;
+    case OP_FEQEQ: x.i = op_FEQEQ(y.f, z.f); goto store;
+    case OP_FNEQ:  x.i = op_FNEQ(y.f, z.f); goto store;
+#endif
+    default:
+	// No arm: yield 0 through the store, which is what the arity-2 default
+	// did. evalx's old `*leave = 1` default was unreachable -- op_info gives
+	// arity 3 to exactly the opcodes evalx handled, so anything unlisted read
+	// arity 0 and was skipped.
+	x.i = 0;
+	goto store;
     case OP_NOP:
 	break;
     case OP_LD:
@@ -1610,11 +1694,12 @@ NOINLINE int evalx(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
 	}
 	break;
     }
-    default:
-	*leave = 1;
-	return n;
     }
     return n+1;
+store:
+    // One store site for every ALU arm, instead of one per arm.
+    st->es.reg[ci.a.x] = x;
+    return n + 1;
 }
 
 // eval until NEXT!
@@ -1627,42 +1712,15 @@ int csp_eval_rule(csp_rt_t* st, int n)
     st->num_eval_rule++;
 #endif
     while(!leave) {
-	csp_instr_t ci; // the instruction word: ONE read serves op and a.x/y/z
-	opcode_t op;
-	value_t xv, yv, zv;
-	uint8_t a;
-	
         // never walk past the last instruction into garbage
 	if (n >= (int)st->ps.nn) 
 	    return n;
 #if defined(USE_STATISTICS) && (USE_STATISTICS==1)
 	st->num_eval0++;
 #endif
-	ci = csp_get_instr(st, n);
-	op = ci.op;
-	a = csp_opcode_arity(op);
-	switch(CSP_MASK(a, CSP_OPCODE_ARITY_BITS)) {
-	case 0:
-	    xv = eval0(op);
-	    n = n+1;
-	    break;
-	case 1:
-	    yv = st->es.reg[ci.a.y];
-	    xv = eval1(op, yv);
-	    st->es.reg[ci.a.x] = xv;
-	    n = n+1;
-	    break;
-	case 2:
-	    yv = st->es.reg[ci.a.y];
-	    zv = st->es.reg[ci.a.z];
-	    xv = eval2(op, yv, zv);
-	    st->es.reg[ci.a.x] = xv;
-	    n = n+1;
-	    break;
-	case 3:
-	    n = evalx(st, n, ci, &leave);
-	    break;
-	}
+	// One switch over the opcode: no csp_opcode_arity (a PROGMEM read of
+	// op_info[op] per executed instruction) and no four-way arity dispatch.
+	n = eval_op(st, n, csp_get_instr(st, n), &leave);
     }
     return n;
 }
