@@ -32,8 +32,8 @@ extern void csp_compile_init(void);
 extern int  add_state(csp_rt_t* st, const tstr_t* name);
 
 extern vtype_t call_rtype(uint8_t rtype, uint16_t argcode, int arity);
-extern value_t eval1(opcode_t op, value_t y);
-extern value_t eval2(opcode_t op, value_t y, value_t z);
+extern value_t eval1(csp_rt_t* st, opcode_t op, value_t y);
+extern value_t eval2(csp_rt_t* st, opcode_t op, value_t y, value_t z);
 extern uint8_t fn_type(const csp_func_t* fn, int j, int rom);
 extern csp_func_fn func_fn(const csp_func_t* fn, int i, int rom);
 extern uint8_t func_rtype(const csp_func_t* fn, int i, int rom);

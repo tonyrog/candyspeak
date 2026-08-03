@@ -1335,6 +1335,7 @@ NOINLINE value_t eval0(opcode_t op)
 }
 
 // opcodes using only y register return x
+#ifdef not_used
 NOINLINE value_t eval1(opcode_t op, value_t y)
 {
     value_t x;    
@@ -1351,7 +1352,7 @@ NOINLINE value_t eval1(opcode_t op, value_t y)
     }
     return x;
 }
-
+#endif
 
 // opcodes using only y and z register return x
 // ONE exit, not one per arm. Each `return f_X(y, z)` used to carry its own
@@ -1368,6 +1369,7 @@ NOINLINE value_t eval1(opcode_t op, value_t y)
 // at offset 0 of the union, so the separate arms were emitting identical code.
 // FMUL/FDIV stay apart: they scale through int64. With real floats none of it
 // holds, so the sharing is conditional.
+#ifdef not_used
 NOINLINE value_t eval2(opcode_t op, value_t y, value_t z)
 {
     value_t x;
@@ -1439,6 +1441,7 @@ NOINLINE value_t eval2(opcode_t op, value_t y, value_t z)
     }
     return x;
 }
+#endif
 
 // opcodes that do not return x register, return
 // return 0: stop
@@ -1464,6 +1467,8 @@ NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
     value_t x;
 
     switch(CSP_MASK(ci.op, CSP_OPCODE_BITS)) {
+    case OP_BNOT: x.i = op_BNOT(y.i); goto store;
+    case OP_NEG: x.i = op_NEG(y.i); goto store;
     case OP_MOV: x.i = op_MOV(y.i); goto store;
     case OP_NOT: x.i = op_NOT(y.i); goto store;
     case OP_CVTIF: x.f = op_CVTIF(y.i); goto store;
@@ -1701,6 +1706,36 @@ store:
     st->es.reg[ci.a.x] = x;
     return n + 1;
 }
+
+NOINLINE value_t eval1(csp_rt_t* st, opcode_t op, value_t y)
+{
+    value_t sx, sy, x;
+    int leave;
+    csp_instr_t ci = { .a = { .op=op,.x=0,.y=1,.z=2 }};
+    
+    sx = st->es.reg[0]; sy = st->es.reg[1];
+    st->es.reg[1] = y;
+    eval_op(st, 0, ci, &leave);
+    x = st->es.reg[0];
+    st->es.reg[0] = sx; st->es.reg[1] = sy;
+    return x;
+}
+
+
+NOINLINE value_t eval2(csp_rt_t* st, opcode_t op, value_t y, value_t z)
+{
+    value_t sx, sy, sz, x;
+    int leave;
+    csp_instr_t ci = { .a = { .op=op,.x=0,.y=1,.z=2 }};    
+    
+    sx = st->es.reg[0]; sy = st->es.reg[1]; sz = st->es.reg[2];
+    st->es.reg[1] = y; st->es.reg[2] = z;
+    eval_op(st, 0, ci, &leave);
+    x = st->es.reg[0];
+    st->es.reg[0] = sx; st->es.reg[1] = sy; st->es.reg[2] = sz;    
+    return x;
+}
+
 
 // eval until NEXT!
 int csp_eval_rule(csp_rt_t* st, int n)
@@ -3875,6 +3910,18 @@ int csp_rt_start(csp_rt_t* st)
 	// second half. 8-aligned so a buffer at the same hp offset is equally
 	// aligned in both halves.
 	hbytes = CSP_A8(e.heap ? e.heap : 8);
+	// Caps cleared BEFORE the allocations, not in the failure path. Any exit
+	// from here on then leaves cap and pointer agreeing, and the five stores
+	// exist once instead of once per path.
+	st->heap[DOUT] = NULL;
+	st->view_cap = 0; st->buf_cap = 0; st->heap_cap = 0;
+	st->io_cap = 0; st->timer_cap = 0;
+	// csp_mid_alloc already records a failed request in mid_full, so the six
+	// pointers do not each need testing -- one flag answers for all of them.
+	// Cleared here rather than trusted from csp_mid_reset: rt_start can be
+	// called on its own (see csp_eeprom_load), and then the flag would be
+	// whatever the previous layout left behind.
+	st->mid_full = 0;
 	// All of these come out of the middle, already zeroed. Nothing to free: the
 	// next csp_rebuild resets the cursor and lays the region out again.
 	st->view  = (csp_view_t*)csp_mid_alloc(st, (size_t)e.nleaf * sizeof(csp_view_t));
@@ -3884,13 +3931,9 @@ int csp_rt_start(csp_rt_t* st)
 	st->heap[DIN] = (uint8_t*)csp_mid_alloc(st, 2 * hbytes);
 	st->io     = (index_t*)csp_mid_alloc(st, (size_t)e.nio * sizeof(index_t));
 	st->timer  = (index_t*)csp_mid_alloc(st, (size_t)e.nt * sizeof(index_t));
-	if (!st->view || !st->dset || !st->buf || !st->heap[DIN] ||
-	    !st->io || !st->timer) {
-	    st->heap[DOUT] = NULL;
-	    st->view_cap = 0; st->buf_cap = 0; st->heap_cap = 0;
-	    st->io_cap = 0; st->timer_cap = 0;
+	if (st->mid_full) {
 	    csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
-	    return -1;
+	    return -1;              // caps are already zero -- see above
 	}
 	st->heap[DOUT] = st->heap[DIN] + hbytes;   // second half of the same block
 	st->view_cap = e.nleaf;

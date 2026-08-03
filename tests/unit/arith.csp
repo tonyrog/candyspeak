@@ -1,31 +1,58 @@
-// generate and execute all arithmetic operators
+// Generate and execute every arithmetic operator -- AND check what each one
+// produced. The old version reused a single X, so twenty-one operators ran but
+// only six results were ever looked at: -Y and ~Y executed and their answers
+// were discarded. eval_op lost its OP_NEG and OP_BNOT arms in a refactor and
+// this test did not notice, because nothing read X on those cycles.
+//
+// One result variable per operator, all checked at the end. Y and Z are
+// variables, not constants, so these run through the RUNTIME evaluator -- the
+// compiler cannot fold them away. (Folding has its own coverage: field_signed
+// writes negative constants, which only exist if OP_NEG folds correctly.)
+//
+// True is -1 in CandySpeak: BOOL(y) = -(y != 0).
 
-#variable X integer
 #variable Y integer = 7
 #variable Z integer = 5
 #variable S integer = 0
 
-// binary operators supported
-X = Y + Z,  S=1  ? S==0
-X = Y - Z,  S=2  ? S==1
-X = Y * Z,  S=3  ? S==2
-X = Y / Z,  S=4  ? S==3
-X = Y % Z,  S=5  ? S==4
-X = Y << Z, S=6  ? S==5
-X = Y >> Z, S=7  ? S==6
-X = Y & Z,  S=8 ? S==7
-X = Y | Z,  S=9 ? S==8
-X = Y ^ Z,  S=10 ? S==9
-X = Y && Z, S=11 ? S==10
-X = Y || Z, S=12 ? S==11
-X = -Y,     S=13 ? S==12
-X = -Y,     S=14 ? S==13
-X = !Y,     S=15 ? S==14
-X = ~Y,     S=16 ? S==15
-X = min(Y,Z), S=17 ? S==16
-X = max(Y,Z), S=18 ? S==17
-X = abs(Y),   S=19 ? S==18
-X = sign(Y),  S=20 ? S==19
-X = clip(Y,1,10), S=21 ? S==20
-// X = tick(),    S=22, S==21
-// X = cycle(),   S=23, S==22
+#variable Radd  integer = 0
+#variable Rsub  integer = 0
+#variable Rmul  integer = 0
+#variable Rdiv  integer = 0
+#variable Rrem  integer = 0
+#variable Rsla  integer = 0
+#variable Rsra  integer = 0
+#variable Rband integer = 0
+#variable Rbor  integer = 0
+#variable Rbxor integer = 0
+#variable Rand  integer = 0
+#variable Ror   integer = 0
+#variable Rneg  integer = 0
+#variable Rnot  integer = 0
+#variable Rbnot integer = 0
+#variable Rmin  integer = 0
+#variable Rmax  integer = 0
+#variable Rabs  integer = 0
+#variable Rsign integer = 0
+#variable Rclip integer = 0
+
+Radd  = Y + Z,   S=1  ? S==0
+Rsub  = Y - Z,   S=2  ? S==1
+Rmul  = Y * Z,   S=3  ? S==2
+Rdiv  = Y / Z,   S=4  ? S==3
+Rrem  = Y % Z,   S=5  ? S==4
+Rsla  = Y << Z,  S=6  ? S==5
+Rsra  = Y >> Z,  S=7  ? S==6
+Rband = Y & Z,   S=8  ? S==7
+Rbor  = Y | Z,   S=9  ? S==8
+Rbxor = Y ^ Z,   S=10 ? S==9
+Rand  = Y && Z,  S=11 ? S==10
+Ror   = Y || Z,  S=12 ? S==11
+Rneg  = -Y,      S=13 ? S==12
+Rnot  = !Y,      S=14 ? S==13
+Rbnot = ~Y,      S=15 ? S==14
+Rmin  = min(Y,Z),      S=16 ? S==15
+Rmax  = max(Y,Z),      S=17 ? S==16
+Rabs  = abs(-Y),       S=18 ? S==17
+Rsign = sign(-Y),      S=19 ? S==18
+Rclip = clip(Y,1,10),  S=20 ? S==19

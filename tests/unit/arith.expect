@@ -1,10 +1,30 @@
-{cycles, 23}.
+%% Every operator's RESULT is checked, not just that it ran. The old expect
+%% looked at six of twenty-one, which is how a missing OP_NEG/OP_BNOT arm in
+%% eval_op stayed invisible.
+%%
+%% Y = 7, Z = 5. Logical true is -1 (BOOL(y) = -(y != 0)), so && and || yield
+%% -1, and !7 is ~BOOL(7) = ~(-1) = 0.
+{cycles, 22}.
 {checks, [
-  {var, 1, "X", 12},
-  {var, 4, "X", 1},
-  {var, 5, "X", 2},
-  {var, 6, "X", 224},
-  {var, 17, "X", 5},
-  {final_var, "X", 7},
-  {final_var, "S", 21}
+  {final_var, "Radd",   12},
+  {final_var, "Rsub",    2},
+  {final_var, "Rmul",   35},
+  {final_var, "Rdiv",    1},
+  {final_var, "Rrem",    2},
+  {final_var, "Rsla",  224},
+  {final_var, "Rsra",    0},
+  {final_var, "Rband",   5},
+  {final_var, "Rbor",    7},
+  {final_var, "Rbxor",   2},
+  {final_var, "Rand",   -1},
+  {final_var, "Ror",    -1},
+  {final_var, "Rneg",   -7},
+  {final_var, "Rnot",    0},
+  {final_var, "Rbnot",  -8},
+  {final_var, "Rmin",    5},
+  {final_var, "Rmax",    7},
+  {final_var, "Rabs",    7},
+  {final_var, "Rsign",  -1},
+  {final_var, "Rclip",   7},
+  {final_var, "S",      20}
 ]}.

@@ -1302,7 +1302,7 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 	    if ((!st->cs.ap || ( !a->X && !b->X ))
 		&& a->I && b->I && (csp_opcode_arity(op) == 2)) {
 		// constant fold
-		value_t result = eval2(op, a->val, b->val);
+		value_t result = eval2(st, op, a->val, b->val);
 		if (a->L) free_reg(st, a->reg);
 		if (b->L && (a->reg != b->reg)) free_reg(st, b->reg);
 		a->X = a->L = 0;
@@ -1357,7 +1357,7 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 	}
 #endif
 	if (!a->X && a->I && (csp_opcode_arity(op) == 1)) { // constant fold
-	    value_t result = eval1(op, a->val);
+	    value_t result = eval1(st, op, a->val);
 	    if (a->L) free_reg(st, a->reg);
 	    a->val = result;
 	    a->X = a->L = 0;
