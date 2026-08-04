@@ -80,7 +80,14 @@ static uint8_t csp_bit_mask(uint16_t b, int be)
 }
 
 // Read n bits at `pos` into *out, zero-extended.
-static void csp_bits_get(const uint8_t* p, uint32_t* out,
+//
+// always_inline, not plain static: each of these has exactly ONE caller
+// (csp_heap_get / csp_heap_set), and the build carries
+// -fno-inline-functions-called-once -- which exists to keep the size listing
+// honest, but here it forces a call and stops the caller being a LEAF. On AVR a
+// leaf pays no prologue at all, so the flag was buying readability with flash.
+static inline __attribute__((always_inline))
+void csp_bits_get(const uint8_t* p, uint32_t* out,
 			 uint16_t pos, uint8_t n, int be)
 {
     uint32_t v = 0;
@@ -108,7 +115,9 @@ static void csp_bits_get(const uint8_t* p, uint32_t* out,
 }
 
 // Write the low n bits of v at `pos`, leaving the surrounding bits alone.
-static void csp_bits_set(uint8_t* p, uint32_t v,
+// always_inline for the same reason as csp_bits_get above.
+static inline __attribute__((always_inline))
+void csp_bits_set(uint8_t* p, uint32_t v,
 			 uint16_t pos, uint8_t n, int be)
 {
     uint8_t k;

@@ -4152,12 +4152,14 @@ void csp_output_timer(csp_rt_t* st)
     now_ms = csp_time_ms();
     for (i = 0; i < st->nt; ++i) {
 	index_t ix = st->timer[i];
-	int obj = OBJ(ix);
+	// The timer's start-time slot: an ordinary variable at the next decl
+	// index, in the same object. Computed once -- the stopped branch used to
+	// declare a second `tx` that shadowed this one with the same expression.
+	index_t tx = MAKE_INDEX(OBJ(ix), INDEX(ix+1));
 	value_t* iptr;
 	value_t* optr;
-	index_t tx = MAKE_INDEX(obj, INDEX(ix+1));
-	
-	csp_dio_slots(st, ix, &iptr, &optr);	
+
+	csp_dio_slots(st, ix, &iptr, &optr);
 
 	if (iptr->t.running) {
 	    // running - calculate wait time (take minimum)
@@ -4168,22 +4170,17 @@ void csp_output_timer(csp_rt_t* st)
 	    if (w < wait_ms)
 		wait_ms = w;
 	}
-	else {
-	    // stopped - check if start requested
-	    if (iptr->t.val) {
-		index_t tx = MAKE_INDEX(obj, INDEX(ix+1));
-		uvalue_t period = iptr->t.period;
-		uint32_t dt = period;
-		
-		iptr->t.running = optr->t.running = 1;
-		iptr->t.fired = optr->t.fired = 0;
+	else if (iptr->t.val) {
+	    // stopped, and a start was requested
+	    uvalue_t period = iptr->t.period;
 
-		csp_dio_slots(st, tx, &iptr, &optr);
-		iptr->u = optr->u = now_ms;
+	    iptr->t.running = optr->t.running = 1;
+	    iptr->t.fired = optr->t.fired = 0;
+	    csp_dio_slots(st, tx, &iptr, &optr);
+	    iptr->u = optr->u = now_ms;
 
-		if (dt < wait_ms)
-		    wait_ms = dt;
-	    }
+	    if (period < wait_ms)
+		wait_ms = period;
 	}
     }
     st->es.wait_ms = wait_ms;

@@ -19,9 +19,25 @@ BOARD=-DCSP_BOARD=boards/uno.h
 # leans on. The one flag that IS worth keeping stops gcc folding every
 # single-call function into its caller, which buries csp_eval_rule and
 # csp_rt_start inside main and makes `make size` useless. It costs nothing.
-INLINE=-fno-inline-functions-called-once
+INLINE=-fno-inline-functions-called-once $(PROLOGUES)
+
+# -mcall-prologues: 30 414 -> 28 446 on this target. AVR's ABI makes r2-r17 and
+# r28-r29 call-saved, so every value a function keeps alive across a call has to
+# be pushed in the prologue and popped in the epilogue -- and a 32-bit value is
+# four registers. Our big functions carry 16-18 push/pop each because of it.
+# This flag replaces those sequences with a call to __prologue_saves__ /
+# __epilogue_restores__ in libgcc: one shared copy for the whole image. It costs
+# cycles per call, so it is a variable -- PROLOGUES= trades it back.
+PROLOGUES=-mcall-prologues
+
+# Linker relaxation: call/jmp (4 bytes) becomes rcall/rjmp (2) wherever the
+# target is within +/-2K. This belongs on the LINK step -- -mrelax in
+# compiler.c.extra_flags does nothing, because arduino-cli links separately.
+RELAX=--build-property "compiler.c.elf.extra_flags=-Wl,--relax"
+
 OPTS=--build-property "compiler.c.extra_flags=-Os $(BOARD) $(INLINE) $(EXTRA)" \
-     --build-property "compiler.cpp.extra_flags=-Os $(BOARD) $(INLINE) $(EXTRA)"
+     --build-property "compiler.cpp.extra_flags=-Os $(BOARD) $(INLINE) $(EXTRA)" \
+     $(RELAX)
 
 compile:
 	arduino-cli compile -e --fqbn $(FQBN) $(OPTS) --build-path $(BPATH)

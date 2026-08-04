@@ -96,14 +96,21 @@ static const uint8_t csp_part_cfg[PL_COUNT] RODATA = {
     [PL_TIMER] = 0, [PL_DIGITAL] = 15, [PL_ANALOG] = 14
 };
 
-// Row for (vt, part); 0 when this type has no such part. *lay is the layout id,
-// which the setter needs for the cfg bit.
-static uint8_t csp_part_row(vtype_t vt, csp_part_t part, uint8_t* lay)
+// The layout id for a value type, or PL_COUNT (no rows) if it has none.
+// A macro rather than a function on purpose: it is one subtraction, and the two
+// users need it as a plain value -- csp_part_row used to hand it back through
+// an out-parameter, which forces the caller to give it a stack address and read
+// it back, and stops both callers from being LEAF functions. On AVR a leaf pays
+// no prologue at all (it may use the call-clobbered registers freely), so the
+// out-parameter was costing far more than the subtraction it saved.
+#define CSP_PART_LAY(vt)  ((uint8_t)((vt) - V_TIMER))
+
+// Row for (vt, part); 0 when this type has no such part.
+static uint8_t csp_part_row(vtype_t vt, csp_part_t part)
 {
-    uint8_t l = (uint8_t)(vt - V_TIMER);
+    uint8_t l = CSP_PART_LAY(vt);
     if (l >= PL_COUNT)
 	return 0;
-    *lay = l;
     return ro_byte(&csp_part_loc[((uint16_t)l << PART_BITS) |
 				 CSP_MASK(part, PART_BITS)]);
 }
@@ -115,8 +122,7 @@ static uint8_t csp_part_row(vtype_t vt, csp_part_t part, uint8_t* lay)
 static void csp_part_get(const value_t* slot, vtype_t vt, csp_part_t part,
 			 value_t* vp)
 {
-    uint8_t lay = 0;
-    uint8_t r = csp_part_row(vt, part, &lay);
+    uint8_t r = csp_part_row(vt, part);
 
     if (r == 0) {
 	vp->u = 0;
@@ -131,8 +137,7 @@ static void csp_part_get(const value_t* slot, vtype_t vt, csp_part_t part,
 // this type does not have is ignored, as before.
 static void csp_part_set(value_t* slot, vtype_t vt, csp_part_t part, value_t v)
 {
-    uint8_t lay = 0;
-    uint8_t r = csp_part_row(vt, part, &lay);
+    uint8_t r = csp_part_row(vt, part);
     uint8_t pos, cfg;
     uint32_t m;
 
@@ -142,7 +147,7 @@ static void csp_part_set(value_t* slot, vtype_t vt, csp_part_t part, value_t v)
     m = ro_dword(&csp_pl_mask[r >> 5]) << pos;
     slot->u = (slot->u & ~m) | ((v.u << pos) & m);
     if (CSP_MASK(part, PART_BITS) != PART_VAL) {
-	cfg = ro_byte(&csp_part_cfg[lay]);
+	cfg = ro_byte(&csp_part_cfg[CSP_PART_LAY(vt)]);
 	if (cfg)
 	    slot->u |= ((uint32_t)1 << cfg);
     }

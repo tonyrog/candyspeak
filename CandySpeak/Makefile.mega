@@ -9,9 +9,20 @@ BPATH="./build/tmp.arduino.avr.mega"
 # core and every linked library took theirs, decided at runtime rather than by a
 # per-board CSP_CODE_BUDGET constant. Model it on the host with: ./csp --board mega
 BOARD=-DCSP_BOARD=boards/mega.h
-INLINE=-fno-inline-functions-called-once
-OPTS=--build-property "compiler.c.extra_flags=-Os $(BOARD) $(INLINE)" \
-     --build-property "compiler.cpp.extra_flags=-Os $(BOARD) $(INLINE)"
+INLINE=-fno-inline-functions-called-once $(PROLOGUES)
+# See Makefile.micro for why this is worth kilobytes on AVR: prologue and
+# epilogue register saving becomes two calls into libgcc instead of up to 64
+# bytes of push/pop per function. Set PROLOGUES= to trade the flash back for
+# cycles.
+PROLOGUES=-mcall-prologues
+
+# Linker relaxation -- see Makefile.micro. Must be a LINK flag; -mrelax in
+# extra_flags is silently ignored because arduino-cli links separately.
+RELAX=--build-property "compiler.c.elf.extra_flags=-Wl,--relax"
+
+OPTS=--build-property "compiler.c.extra_flags=-Os $(BOARD) $(INLINE) $(EXTRA)" \
+     --build-property "compiler.cpp.extra_flags=-Os $(BOARD) $(INLINE) $(EXTRA)" \
+     $(RELAX)
 
 compile:
 	arduino-cli compile -e --fqbn $(FQBN) $(OPTS) --build-path $(BPATH)

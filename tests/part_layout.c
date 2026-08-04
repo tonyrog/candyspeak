@@ -61,8 +61,7 @@ static const char* lay_name(int lay)
 // so the probe is not consulted).
 static void check(int lay, csp_part_t part, uint32_t probe, int want_len)
 {
-    uint8_t l = 0;
-    uint8_t r = csp_part_row((vtype_t)(V_TIMER + lay), part, &l);
+    uint8_t r = csp_part_row((vtype_t)(V_TIMER + lay), part);
     int ppos, plen;
     int tpos = r & 31;
     int tlen = 0;
@@ -148,16 +147,15 @@ static void roundtrip(int lay, csp_part_t part, uint32_t v)
 {
     vtype_t vt = (vtype_t)(V_TIMER + lay);
     value_t slot, got, other, other2;
-    uint8_t l = 0;
     csp_part_t p2;
 
-    if (csp_part_row(vt, part, &l) == 0)
+    if (csp_part_row(vt, part) == 0)
 	return;
     memset(&slot, 0, sizeof(slot));
     slot.u = 0x5A5A5A5Au;                // surrounding bits must be preserved
     for (p2 = 0; p2 < PART_LAST; p2++) { // snapshot every OTHER part first
 	value_t before, after;
-	if ((p2 == part) || (csp_part_row(vt, p2, &l) == 0))
+	if ((p2 == part) || (csp_part_row(vt, p2) == 0))
 	    continue;
 	csp_part_get(&slot, vt, p2, &before);
 	other = slot;
@@ -176,7 +174,7 @@ static void roundtrip(int lay, csp_part_t part, uint32_t v)
     csp_part_set(&other2, vt, part, (value_t){ .u = v });
     csp_part_get(&other2, vt, part, &got);
     {   // the value must come back truncated to the part's width, not mangled
-	uint8_t r = csp_part_row(vt, part, &l);
+	uint8_t r = csp_part_row(vt, part);
 	static const int code_len[8] = { 0, 1, 2, 4, 7, 16, 28, 32 };
 	int len = code_len[r >> 5];
 	uint32_t want = (len >= 32) ? v : (v & ((1u << len) - 1));
@@ -244,9 +242,8 @@ int main(void)
 	uint8_t cfg = ro_byte(&csp_part_cfg[lay]);
 	for (p = 0; p < PART_LAST; p++) {
 	    value_t slot;
-	    uint8_t l = 0;
 	    int want;
-	    if (csp_part_row(vt, p, &l) == 0)
+	    if (csp_part_row(vt, p) == 0)
 		continue;
 	    slot.u = 0;
 	    csp_part_set(&slot, vt, p, (value_t){ .u = 1 });
