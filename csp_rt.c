@@ -310,6 +310,15 @@ NOINLINE csp_decl_t csp_get_decl(csp_rt_t* st, index_t i)
     return st->ram_decl[st->rom_nd - i];   // RAM decls grow down (see ram_decl_at)
 }
 
+NOINLINE void csp_copy_decl(csp_rt_t* st, index_t i, csp_decl_t* dst)
+{
+    if (i < st->rom_nd)
+	ro_copy_decl(&st->rom_p.decl[i], dst);
+    else
+	// RAM decls grow down (see ram_decl_at)
+	*dst = st->ram_decl[st->rom_nd - i];
+}
+
 NOINLINE csp_instr_t csp_get_instr(csp_rt_t* st, index_t n)
 {
     if (n < st->rom_nn)
@@ -790,10 +799,10 @@ static value_t fn_sign(csp_rt_t* st,uint16_t type, value_t* args, uint8_t nargs)
 {
     value_t ret;
     (void)st; (void)nargs;
-    switch(type & 0xf) {
-    case V_INTEGER: ret.i = isign(args[0].i); break;
-    case V_FLOAT:   ret.i = fsign(args[0].f); break;
-    }
+    if ((type&0xf) == V_INTEGER)
+	ret.i = isign(args[0].i);
+    else
+	ret.i = fsign(args[0].f);
     return ret;
 }
 
@@ -3174,39 +3183,76 @@ void csp_set_uconst(csp_rt_t* st, csp_const_fn uconst)
     st->uconst = uconst;
 }
 
+static void setup_timer_values(value_t* ptr, csp_timer_t tm)
+{
+    ptr->t.fired   = 0;
+    ptr->t.val     = tm.init;
+    ptr->t.running = tm.init;
+    ptr->t.period  = tm.period;
+}
+
 // copy config data to value slot config
 NOINLINE static void setup_timer(csp_rt_t* st, index_t ix)
 {
     value_t* iptr;
     value_t* optr;
-    csp_decl_t d = csp_get_decl(st, INDEX(ix));  // ROM or RAM decl, by value
+    csp_decl_t d;
+    csp_view_t* v;
 
+    csp_copy_decl(st, INDEX(ix), &d);
+    v = csp_view(st, ix);    
     // clear timeout flag and load config into the timer's value_t buffer.
     // The start-time slot (tx = ix+1) is an ordinary variable, initialised to 0
     // by its own setup_variable; the timer arms it at runtime.
-    csp_dio_slots(st, ix, &iptr, &optr);
-    iptr->t.fired = optr->t.fired = 0;
-    iptr->t.val = optr->t.val = d.tm.init;
-    iptr->t.running = optr->t.running = d.tm.init;
-    iptr->t.period = optr->t.period = d.tm.period;
+    // csp_dio_slots(st, ix, &iptr, &optr);
+    optr = csp_slot(st, v, DOUT);
+    setup_timer_values(optr, d.tm);
+    
+    iptr = csp_slot(st, v, DIN);
+    setup_timer_values(iptr, d.tm);    
 }
 
+static void setup_analog_values(value_t* ptr, csp_analog_t an)
+{
+    ptr->a.dir  = an.dir;
+    ptr->a.pin  = an.pin;
+    ptr->a.port = an.port;
+    ptr->a.pwm  = an.pwm;
+    // No endian: it stays in the declaration, where .endian reads it from.
+    // csp_setup applies this configuration itself, so nothing is pending.    
+    ptr->a.cfg = 0;
+}
 
 // copy config data to value slot config
 NOINLINE static void setup_analog(csp_rt_t* st, index_t ix)
 {
     value_t* iptr;
     value_t* optr;
-    csp_decl_t d = csp_get_decl(st, INDEX(ix));
+    csp_decl_t d;
+    csp_view_t* v;
 
-    csp_dio_slots(st, ix, &iptr, &optr);
-    iptr->a.dir  = optr->a.dir     = d.dir;
-    iptr->a.pin  = optr->a.pin     = d.an.pin;
-    iptr->a.port = optr->a.port    = d.an.port;
-    iptr->a.pwm  = optr->a.pwm     = d.an.pwm;
-    // No endian: it stays in the declaration, where .endian reads it from.
-    // csp_setup applies this configuration itself, so nothing is pending.
-    iptr->a.cfg  = optr->a.cfg     = 0;
+    csp_copy_decl(st, INDEX(ix), &d);
+    v = csp_view(st, ix);    
+    
+    optr = csp_slot(st, v, DOUT);
+    setup_analog_values(optr, d.an);
+
+    iptr = csp_slot(st, v, DIN);
+    setup_analog_values(iptr, d.an);
+}
+
+static void setup_digital_values(value_t* ptr, csp_digital_t di)
+{
+    ptr->d.dir  = di.dir;
+    ptr->d.pin  = di.pin;
+    ptr->d.port = di.port;
+    ptr->d.pullup = di.pullup;
+    ptr->d.pulldown = di.pulldown;
+    // csp_setup applies this configuration itself, so nothing is pending. Left
+    // set, it would spend a pinMode on the first cycle saying what setup just
+    // said -- and on a slot that was never zeroed it would be whatever was
+    // there before.    
+    ptr->d.cfg = 0;
 }
 
 // copy config data to value slot config
@@ -3214,19 +3260,17 @@ NOINLINE static void setup_digital(csp_rt_t* st, index_t ix)
 {
     value_t* iptr;
     value_t* optr;
-    csp_decl_t d = csp_get_decl(st, INDEX(ix));
+    csp_decl_t d;
+    csp_view_t* v;
 
-    csp_dio_slots(st, ix, &iptr, &optr);
-    iptr->d.dir  = optr->d.dir = d.dir;
-    iptr->d.pin  = optr->d.pin = d.di.pin;
-    iptr->d.port = optr->d.port = d.di.port;
-    iptr->d.pullup = optr->d.pullup = d.di.pullup;
-    iptr->d.pulldown = optr->d.pulldown = d.di.pulldown;
-    // csp_setup applies this configuration itself, so nothing is pending. Left
-    // set, it would spend a pinMode on the first cycle saying what setup just
-    // said -- and on a slot that was never zeroed it would be whatever was
-    // there before.
-    iptr->d.cfg = optr->d.cfg = 0;
+    csp_copy_decl(st, INDEX(ix), &d);
+    v = csp_view(st, ix);    
+
+    optr = csp_slot(st, v, DOUT);
+    setup_digital_values(optr, d.di);
+
+    iptr = csp_slot(st, v, DIN);
+    setup_digital_values(iptr, d.di);
 }
 
 NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint16_t nbytes,
@@ -3234,31 +3278,51 @@ NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint16_t nbytes,
 				      pindir_t dir);
 NOINLINE static int parent_leaf(csp_rt_t* st, index_t ix);
 
+// A bit view into someone else's buffer. Three callers fill exactly these seven
+// fields from exactly the same places -- setup_field, setup_variable's bound
+// branch, and the DECL_VIEW arm of csp_rt_start -- so the writes live here once,
+// the same way setup_digital_values holds the digital slot fill.
+//
+// `ca` comes in BY VALUE, like the config arms do: it is four bytes, it arrives
+// in registers, and it means the caller's whole csp_decl_t does not have to stay
+// alive across the call.
+static void setup_view_values(csp_view_t* vw, vtype_t vt, index_t buf,
+			      csp_field_t ca)
+{
+    vw->kind   = VIEW_HEAP;
+    vw->vt     = vt;
+    vw->buf    = buf;
+    vw->pos    = ca.bit;
+    vw->len    = ca.len;      // already len-1
+    vw->endian = ca.endian;
+    vw->flags  = 0;           // sub-view -> generic bit path
+}
+
 // Bind a #field to its frame. ca.id is the #buffer decl; that buffer was
 // already allocated by setup_buffer (it has a lower decl index, since the frame
 // must be declared before a field can view it), so this is purely a view.
 NOINLINE static int setup_field(csp_rt_t* st, index_t ix)
 {
-    csp_decl_t d = csp_get_decl(st, INDEX(ix));  // read ONCE -- see setup_buffer
-    uint16_t pos = d.ca.bit;                     // ca.bit is 9 bits: 0..511
+    csp_decl_t d; // = csp_get_decl(st, INDEX(ix));  // read ONCE -- see setup_buffer
+    csp_decl_t dt;
+    uint16_t pos; // = d.ca.bit;                     // ca.bit is 9 bits: 0..511
     csp_view_t* pv = &st->view[parent_leaf(st, ix)];
     csp_view_t* vw;
+
+    csp_copy_decl(st, INDEX(ix), &d);
+    pos = d.ca.bit;
 
     // ca.bit is 9 bits and csp_view_t.pos is 16, so every bit of a 64-byte FD
     // frame (0..511) is addressable. The frame itself is the only bound.
     // d.ca.id is the #buffer this field views, a DIFFERENT decl.
-    if (pos + d.ca.len + 1 > decl(st, d.ca.id, bf.nbytes)*8) {
+    csp_copy_decl(st, INDEX(d.ca.id), &dt);    
+//    if (pos + d.ca.len + 1 > decl(st, d.ca.id, bf.nbytes)*8) {
+    if (pos + d.ca.len + 1 > dt.bf.nbytes*8) {
 	csp_set_error(st, ERR_SYNTAX);          // field reaches past the frame
 	return -1;
     }
     vw = &st->view[st_index(st, ix)];
-    vw->kind   = VIEW_HEAP;
-    vw->vt     = d.vt;
-    vw->buf    = pv->buf;                       // share the frame's buffer
-    vw->pos    = pos;
-    vw->len    = d.ca.len;
-    vw->endian = d.ca.endian;
-    vw->flags  = 0;
+    setup_view_values(vw, d.vt, pv->buf, d.ca);  // shares the frame's buffer
     return 0;
 }
 
@@ -3441,19 +3505,27 @@ NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint16_t nbytes,
 // it applies to every setup_* here.
 NOINLINE static int setup_buffer(csp_rt_t* st, index_t ix)
 {
-    csp_decl_t d = csp_get_decl(st, INDEX(ix));
+    csp_decl_t d;
     // Only a real #buffer carries bf.nbytes. This function is shared with the
     // auto-buffer a plain #variable gets, and there the size lives in res.
-    int is_buf = (d.type == DECL_BUFFER);
-    uint16_t res = is_buf ? d.bf.nbytes*8 : GET_RES(d.res);
-    uint16_t nbytes = (res + 7) >> 3;
-    uint8_t transport = is_buf ? d.bf.transport : TR_NONE;
+    int is_buf;
+    uint16_t res, nbytes;
+    uint8_t transport;
     uint32_t xref = 0;
     index_t b;
     csp_view_t* vw;
 
-    if (transport == TR_CAN)                 // the frame id, out of its constant
-	xref = (uint32_t)decl(st, d.bf.id, cn.init).i;
+    csp_copy_decl(st, INDEX(ix), &d);
+    is_buf    = (d.type == DECL_BUFFER);
+    res       = is_buf ? d.bf.nbytes*8 : GET_RES(d.res);
+    nbytes    = (res + 7) >> 3;
+    transport = is_buf ? d.bf.transport : TR_NONE;
+
+    if (transport == TR_CAN) {               // the frame id, out of its constant
+	csp_decl_t id;
+	csp_copy_decl(st, INDEX(d.bf.id), &id);
+	xref = (uint32_t)id.cn.init.i;
+    }
     if ((b = csp_buf_alloc(st, nbytes, transport, xref, d.dir)) == BAD_INDEX)
 	return -1;
     st->buf[b].owner = ix;             // ix, not the leaf: csp_enq_elist wants
@@ -3497,18 +3569,13 @@ NOINLINE static int parent_leaf(csp_rt_t* st, index_t ix)
 
 NOINLINE static int setup_variable(csp_rt_t* st, index_t ix)
 {
-    csp_decl_t d = csp_get_decl(st, INDEX(ix));
+    csp_decl_t d;
     csp_view_t* vw = &st->view[st_index(st, ix)];
 
+    csp_copy_decl(st, INDEX(ix), &d);
     if (d.bound) {                            // bit-field view into a buffer
 	csp_view_t* pv = &st->view[parent_leaf(st, ix)];
-	vw->kind     = VIEW_HEAP;
-	vw->vt       = d.vt;
-	vw->buf    = pv->buf;
-	vw->pos    = d.ca.bit;
-	vw->len    = d.ca.len;
-	vw->endian = d.ca.endian;
-	vw->flags  = 0;
+	setup_view_values(vw, d.vt, pv->buf, d.ca);
 	return 0;
     }
     if (setup_buffer(st, ix) < 0)         // auto-buffer
@@ -3523,10 +3590,12 @@ NOINLINE static int setup_variable(csp_rt_t* st, index_t ix)
 // then fills it through the normal csp_dio_slot(s)/PART path (now -> heap).
 NOINLINE static int setup_slot(csp_rt_t* st, index_t ix)
 {
-    csp_decl_t d = csp_get_decl(st, INDEX(ix));
-    index_t b = csp_buf_alloc(st, sizeof(value_t), 0, 0, d.dir);
+    csp_decl_t d;
+    index_t b;
     csp_view_t* vw;
-    if (b == BAD_INDEX)
+
+    csp_copy_decl(st, INDEX(ix), &d);
+    if ((b = csp_buf_alloc(st, sizeof(value_t), 0, 0, d.dir)) == BAD_INDEX)
 	return -1;
     vw = &st->view[st_index(st, ix)];
     vw->kind = VIEW_SLOT;
@@ -3873,16 +3942,8 @@ int csp_rt_start(csp_rt_t* st)
 	case DECL_VIEW: {
 	    // synthetic Buf[a..b] view: translate to a HEAP view into the
 	    // parent buffer (already set up, since it has a lower index)
-	    index_t parent = d.ca.id;
-	    csp_view_t* pv = &st->view[parent];
-	    csp_view_t* vw = &st->view[st_index(st, ix)];
-	    vw->kind     = VIEW_HEAP;
-	    vw->vt       = d.vt;
-	    vw->buf    = pv->buf;
-	    vw->pos    = d.ca.bit;
-	    vw->len    = d.ca.len;     // already len-1
-	    vw->endian = d.ca.endian;
-	    vw->flags  = 0;                       // sub-view -> generic bit path
+	    csp_view_t* pv = &st->view[d.ca.id];
+	    setup_view_values(&st->view[st_index(st, ix)], d.vt, pv->buf, d.ca);
 	    break;
 	}
 	case DECL_VARIABLE:

@@ -1713,17 +1713,15 @@ typedef struct _csp_rt_t
 // copy it into a RAM temporary -- then bit-field access works as usual. (The
 // "clever" bit: never deref a PROGMEM struct directly.)
 #if defined(__AVR__)
-/*
+
 static inline csp_decl_t  ro_decl(const csp_decl_t* p)
 { csp_decl_t d;  memcpy_P(&d, p, sizeof(d)); return d; }
-*/
-static NOINLINE csp_decl_t  ro_decl(const csp_decl_t* p)
+
+static NOINLINE void ro_copy_decl(const csp_decl_t* p, csp_decl_t* dst)
 {
-    csp_decl_t d;
-    // assert sizeof(d) == 8
-    ((uint32_t*)&d)[0] = ro_dword(((uint32_t*)p)[0]);
-    ((uint32_t*)&d)[1] = ro_dword(((uint32_t*)p)[1]);
-    return d;
+    memcpy_P(dst, p, sizeof(csp_decl_t));
+//    ((uint32_t*)dst)[0] = ro_dword(((uint32_t*)p)[0]);
+//    ((uint32_t*)dst)[1] = ro_dword(((uint32_t*)p)[1]);
 }
 
 static inline csp_instr_t ro_instr(const csp_instr_t* p)
@@ -1746,6 +1744,7 @@ static inline csp_sect_t ro_sect(const csp_sect_t* p)
 
 #else
 #define ro_decl(p)  (*(p))
+#define ro_copy_decl(p,d) (*(d)) = (*(p))
 #define ro_instr(p) (*(p))
 #define ro_state(p) (*(p))
 #define ro_header(p) (*(p))
