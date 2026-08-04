@@ -8,10 +8,10 @@ BPATH="./build/tmp.arduino.avr.mega"
 # the stack reserve -- so the arena is however much RAM is actually free after the
 # core and every linked library took theirs, decided at runtime rather than by a
 # per-board CSP_CODE_BUDGET constant. Model it on the host with: ./csp --board mega
-ARENA=-DCSP_ARENA_MALLOC
+BOARD=-DCSP_BOARD=boards/mega.h
 INLINE=-fno-inline-functions-called-once
-OPTS=--build-property "compiler.c.extra_flags=-Os $(ARENA) $(INLINE)" \
-     --build-property "compiler.cpp.extra_flags=-Os $(ARENA) $(INLINE)"
+OPTS=--build-property "compiler.c.extra_flags=-Os $(BOARD) $(INLINE)" \
+     --build-property "compiler.cpp.extra_flags=-Os $(BOARD) $(INLINE)"
 
 compile:
 	arduino-cli compile -e --fqbn $(FQBN) $(OPTS) --build-path $(BPATH)
@@ -50,7 +50,7 @@ size:
 # The margin row itself (without the fn address) is ALWAYS present -- csp_stack_mark
 # samples the known-deep points (csp_eval_rule, csp_parse, csp_parse_expr, pmatch)
 # in every build. This target adds the address and full coverage.
-WATCH_FLAGS=$(ARENA) -DCSP_STACK_WATCH -finstrument-functions
+WATCH_FLAGS=$(BOARD) -DCSP_STACK_WATCH -finstrument-functions
 
 watch:
 	arduino-cli compile -e --fqbn $(FQBN) \

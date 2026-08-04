@@ -2,8 +2,9 @@
 #
 FQBN=arduino:mbed_rp2040:pico
 DEV=/dev/ttyACM0
-OPTS=--build-property "compiler.c.extra_flags=-Os" \
-     --build-property "compiler.cpp.extra_flags=-Os"
+BOARD=-DCSP_BOARD=boards/rp2040.h
+OPTS=--build-property "compiler.c.extra_flags=-Os $(BOARD)" \
+     --build-property "compiler.cpp.extra_flags=-Os $(BOARD)"
 
 compile:
 	arduino-cli compile -e --fqbn $(FQBN) $(OPTS)

@@ -3,8 +3,9 @@
 FQBN=arduino:samd:adafruit_circuitplayground_m0
 DEV=/dev/ttyACM0
 BPATH="./build/arduino.samd.adafruit_circuitplayground_m0"
-OPTS=--build-property "compiler.c.extra_flags=-Os -DCSP_CPX $(EXTRA)" \
-     --build-property "compiler.cpp.extra_flags=-Os -DCSP_CPX $(EXTRA)"
+BOARD=-DCSP_BOARD=boards/play.h
+OPTS=--build-property "compiler.c.extra_flags=-Os $(BOARD) $(EXTRA)" \
+     --build-property "compiler.cpp.extra_flags=-Os $(BOARD) $(EXTRA)"
 
 compile:
 	arduino-cli compile -e --fqbn $(FQBN) $(OPTS) --build-path $(BPATH)

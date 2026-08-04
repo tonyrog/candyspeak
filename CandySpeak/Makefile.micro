@@ -7,7 +7,7 @@ BPATH="./build/tmp.arduino.avr.micro"
 # the stack reserve -- so the arena is however much RAM is actually free after the
 # core and every linked library took theirs, decided at runtime rather than by a
 # per-board CSP_CODE_BUDGET constant. Model it on the host with: ./csp --board mega
-ARENA=-DCSP_ARENA_MALLOC
+BOARD=-DCSP_BOARD=boards/micro.h
 # -fno-inline-functions-called-once: gcc folds every single-call function into
 # its caller, which buried csp_eval_rule and csp_rt_start inside main and made
 # the size listing useless (main showed 5 966 bytes of "something"). Turning it
@@ -15,8 +15,8 @@ ARENA=-DCSP_ARENA_MALLOC
 # duplicated code -- and the per-function sizes become the truth.
 INLINE=-fno-inline-functions-called-once -fno-inline -fno-ipa-cp-clone -fno-ipa-sra -fno-partial-inlining -fno-ipa-icf
 
-OPTS=--build-property "compiler.c.extra_flags=-Os $(ARENA) $(INLINE) $(EXTRA)" \
-     --build-property "compiler.cpp.extra_flags=-Os $(ARENA) $(INLINE) $(EXTRA)"
+OPTS=--build-property "compiler.c.extra_flags=-Os $(BOARD) $(INLINE) $(EXTRA)" \
+     --build-property "compiler.cpp.extra_flags=-Os $(BOARD) $(INLINE) $(EXTRA)"
 
 compile:
 	arduino-cli compile -e --fqbn $(FQBN) $(OPTS) --build-path $(BPATH)
@@ -35,9 +35,6 @@ compile:
 # `size` prints where it lands without flashing anything.
 exec:
 	$(MAKE) -f Makefile.micro compile EXTRA="-DCSP_EXEC_ONLY"
-
-min:
-	$(MAKE) -f Makefile.micro compile EXTRA="-DCSP_EXEC_ONLY -DCSP_NO_EEPROM"
 
 # Text size per symbol, largest first -- the list to read when it does not fit.
 size:
@@ -66,7 +63,7 @@ size:
 # The margin row itself (without the fn address) is ALWAYS present -- csp_stack_mark
 # samples the known-deep points (csp_eval_rule, csp_parse, csp_parse_expr, pmatch)
 # in every build. This target adds the address and full coverage.
-WATCH_FLAGS=$(ARENA) -DCSP_STACK_WATCH -finstrument-functions
+WATCH_FLAGS=$(BOARD) -DCSP_STACK_WATCH -finstrument-functions
 
 watch:
 	arduino-cli compile -e --fqbn $(FQBN) \

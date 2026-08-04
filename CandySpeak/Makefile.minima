@@ -2,12 +2,17 @@
 #
 FQBN=arduino:renesas_uno:minima
 
+BOARD=-DCSP_BOARD=boards/minima.h
+INLINE=-fno-inline-functions-called-once -fno-inline -fno-ipa-cp-clone -fno-ipa-sra -fno-partial-inlining -fno-ipa-icf
 DEV=/dev/ttyACM0
-OPTS=--build-property "compiler.c.extra_flags=-Os" \
-     --build-property "compiler.cpp.extra_flags=-Os"
+OPTS=--build-property "compiler.c.extra_flags=-Os $(BOARD) $(INLINE) $(EXTRA)" \
+     --build-property "compiler.cpp.extra_flags=-Os $(BOARD) $(INLINE) $(EXTRA)"
      
 compile:
 	arduino-cli compile -e --fqbn $(FQBN) $(OPTS)
 
 upload:
 	arduino-cli upload -p $(DEV) --fqbn $(FQBN)
+
+exec:
+	$(MAKE) -f Makefile.minima compile EXTRA="-DCSP_EXEC_ONLY"
