@@ -2547,6 +2547,25 @@ static void img_from_hdr(const uint8_t* base, const csp_image_header_t* h,
 //
 // Bounded by CSP_SECT_MAXWALK prologues and by a length that has to advance, so
 // a corrupt prologue stops the walk instead of running away through flash.
+// ---------------------------------------------------------------------------
+// ROM HEADER RECOVERY -- optional, see CSP_ROM_RECOVER in csp_config.h.
+//
+// Everything down to the end of rom_scan_state exists for ONE case: crc_hdr is
+// damaged but the sections themselves are whole. Then the header's counts, CRCs
+// and offsets are all suspect, so the offsets are recovered by walking the
+// section prologues and each section proves itself through its own end marker.
+//
+// A damaged SECTION is not recoverable and never was -- the marker folds the
+// same bad bytes -- so that case rejects with or without this code.
+//
+// It costs about 1 040 bytes: img_from_walk plus four scanners. On a part where
+// that is 3 % of the flash it is cheap insurance; on one where it is 19 % of
+// what you are short, it is a choice. Turning it off leaves the reject path,
+// which is what a damaged section already takes: say so and run empty, and let
+// the FAILSAFE ladder take over.
+// ---------------------------------------------------------------------------
+#if defined(CSP_ROM_RECOVER) && (CSP_ROM_RECOVER==1)
+
 #define CSP_SECT_MAXWALK 16
 #define CSP_SECT_NEEDED   7
 
@@ -2578,6 +2597,8 @@ static int img_from_walk(const uint8_t* base, img_p_t* p)
 }
 
 // True when firmware with executable rules is linked in (rom.c).
+#endif /* CSP_ROM_RECOVER -- rom_verify/rom_graph_ok below are NOT optional */
+
 int csp_has_firmware(void)
 {
     const uint8_t* base = ro_ref(&rom_image).base;
@@ -2644,6 +2665,7 @@ static int rom_graph_ok(const img_p_t* p, const csp_image_header_t* h)
 // the header. Each scan is bound by the array's compile-time max, so a missing
 // or corrupt marker cannot read unboundedly.
 
+#if defined(CSP_ROM_RECOVER) && (CSP_ROM_RECOVER==1)
 // Recover the decl entry count via its END marker; -1 if not intact.
 NOINLINE static int rom_scan_decl(const csp_decl_t* decl)
 {
@@ -2715,6 +2737,8 @@ NOINLINE static int rom_scan_state(const state_t* states)
     return -1;
 }
 
+#endif /* CSP_ROM_RECOVER */
+
 // Activate an image: run it in place from flash by setting the RAM base offsets
 // to the image's sizes. No copy -- csp_get_decl/instr read flash for logical
 // indices below the base. The parse_file DECL_END terminator at the end of the
@@ -2759,6 +2783,7 @@ NOINLINE void csp_load_image(csp_rt_t* st, const uint8_t* base)
 	// crc_hdr intact) is NOT recoverable -- the marker folds the same bad
 	// bytes -- so those still reject.
 	int rnd = -1, rnn = -1, rns = -1, rnstate = -1;
+#if defined(CSP_ROM_RECOVER) && (CSP_ROM_RECOVER==1)	
 	if (bad == ros_hdr) {
 	    img_p_t w;
 	    if (img_from_walk(base, &w)) {
@@ -2769,6 +2794,9 @@ NOINLINE void csp_load_image(csp_rt_t* st, const uint8_t* base)
 		rnstate = rom_scan_state(p.states);
 	    }
 	}
+#endif
+	// With recovery off the four stay -1, so this is dead and the reject
+	// below is the only outcome -- exactly what a damaged section gets.
 	if ((rnd >= 0) && (rnn >= 0) && (rns >= 0) && (rnstate >= 0)) {
 	    // Every section self-verified via its own marker, and the prologues
 	    // gave their positions -- fully independent of the rotten header.

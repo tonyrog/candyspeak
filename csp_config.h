@@ -58,6 +58,16 @@
 #define USE_STATISTICS  1    // need some accounting
 #endif
 
+// Recover a ROM image whose header CRC is damaged by walking the section
+// prologues instead (csp_load_image). Costs ~1 040 bytes of flash and covers
+// exactly one failure: a bad crc_hdr with the sections intact. Off, that image
+// is rejected with a message and the node runs empty -- the same path a damaged
+// SECTION already takes, recovery or not. A board that is short on flash and
+// has a FAILSAFE bank to fall back on can afford to say no.
+#ifndef CSP_ROM_RECOVER
+#define CSP_ROM_RECOVER 1
+#endif
+
 // Q16.16 fixed point instead of float (saves ~4KB on AVR). Keyed on the
 // ARCHITECTURE, not on the board: it follows from what the target's FPU and
 // libgcc look like, so it belongs here rather than repeated in board files.

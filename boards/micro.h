@@ -5,3 +5,4 @@
 #include "embedded.h"
 
 #define CSP_ARENA_MALLOC 1
+#define CSP_ROM_RECOVER  0
