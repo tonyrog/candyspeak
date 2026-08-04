@@ -18,6 +18,13 @@
 // A quoted path has to survive make, then arduino-cli --build-property, then
 // the shell that invokes the compiler. That is three chances to lose a quote;
 // passing a bare token has none.
+// NOTE: settings ONLY. No float poisoning here -- see the end of csp.h. This
+// file has to be safe to include as the very first thing a sketch does, before
+// any board library header, because a board file may decide WHICH libraries the
+// sketch includes (CSP_CPX picks Adafruit_CircuitPlayground, CSP_NEO picks
+// Adafruit_NeoPixel). The poison must land AFTER those headers are parsed --
+// they have float members -- so it belongs with csp.h, which the sketch
+// includes once its library choices are made.
 #define CSP_STR_(x) #x
 #define CSP_STR(x)  CSP_STR_(x)
 #ifdef CSP_BOARD
@@ -68,23 +75,6 @@
 #else
 #define USE_FIXPOINT        1  // 0=float, 1=Q16.16 fixpoint
 #endif
-#endif
-
-// Poison float on a FIXPOINT build, so a stray float in the firmware fails at
-// the line that wrote it instead of dragging in soft-float. Outside the #ifndef
-// above on purpose: the guard tracks the VALUE, however it was arrived at, so
-// -DUSE_FIXPOINT=1 from a board Makefile is protected the same as the default.
-// And `#if defined(X) && (X == 1)`, not `#ifdef X && ...` -- #ifdef takes one
-// identifier and silently discards the rest, which made this unconditional and
-// poisoned the float targets (ESP32/ESP8266 have USE_FIXPOINT 0) as well.
-//
-// Only for a BOARD build. The host tools print with printf and the poison would
-// fail them at the first %f -- and a host that drags in soft-float costs
-// nothing anyway. That is why this lived in the sketch's own csp_config.h
-// before the two files were merged.
-#if defined(CSP_BOARD) && defined(USE_FIXPOINT) && (USE_FIXPOINT == 1)
-#define float   _Pragma("GCC error \"float not allowed\"") float
-#define double  _Pragma("GCC error \"double not allowed\"") double
 #endif
 
 #endif

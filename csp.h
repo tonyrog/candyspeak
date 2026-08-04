@@ -2161,4 +2161,21 @@ extern uint32_t csp_system_ram_avail(void);
 EXTERN_C_END
 #endif
 
+// Poison float on a FIXPOINT build, so a stray float in the firmware fails at
+// the line that wrote it instead of dragging in soft-float. Outside the #ifndef
+// above on purpose: the guard tracks the VALUE, however it was arrived at, so
+// -DUSE_FIXPOINT=1 from a board Makefile is protected the same as the default.
+// And `#if defined(X) && (X == 1)`, not `#ifdef X && ...` -- #ifdef takes one
+// identifier and silently discards the rest, which made this unconditional and
+// poisoned the float targets (ESP32/ESP8266 have USE_FIXPOINT 0) as well.
+//
+// Only for a BOARD build. The host tools print with printf and the poison would
+// fail them at the first %f -- and a host that drags in soft-float costs
+// nothing anyway. That is why this lived in the sketch's own csp_config.h
+// before the two files were merged.
+#if defined(CSP_BOARD) && defined(USE_FIXPOINT) && (USE_FIXPOINT == 1)
+#define float   _Pragma("GCC error \"float not allowed\"") float
+#define double  _Pragma("GCC error \"double not allowed\"") double
+#endif
+
 #endif

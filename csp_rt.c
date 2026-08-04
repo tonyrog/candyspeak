@@ -3283,13 +3283,19 @@ NOINLINE static void can_mark_fields(csp_rt_t* st, index_t b)
     // that moved wake their rules.
     for (i = 0; i < st->nio; i++) {
 	index_t ix = st->io[i];
-	int leaf;
-	csp_view_t* vw;
-	if (decl(st, INDEX(ix), type) != DECL_FIELD)
-	    continue;
-	leaf = st_index(st, ix);
-	vw = &st->view[leaf];
-	if (vw->buf != b)
+	int leaf = st_index(st, ix);
+	csp_view_t* vw = &st->view[leaf];
+	// The VIEW answers this, not the declaration. io[] holds exactly three
+	// kinds of leaf -- digital, analog and #field -- and the first two are
+	// value slots (setup_slot) while a field is a bit view into its frame
+	// (setup_field). So VIEW_HEAP identifies a field here, and the buffer id
+	// then says whether it is a field of THIS frame.
+	//
+	// It used to ask decl(st, INDEX(ix), type), which is a csp_get_decl --
+	// a flash copy of the whole declaration -- run for every entry in the I/O
+	// list, on every received CAN frame. Two bytes of RAM answer the same
+	// question, and the cheap test now comes first.
+	if ((vw->kind != VIEW_HEAP) || (vw->buf != b))
 	    continue;
 	if (csp_heap_get(st, vw, DOUT).u == csp_heap_get(st, vw, DIN).u)
 	    continue;  // this field of the frame is unchanged

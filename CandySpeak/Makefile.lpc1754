@@ -1,0 +1,9 @@
+# Type number     
+# LPC1754FBD80
+# -------------
+#	Speed Mhz	Flash	SRAM	Ethernet
+#	100 MHz		128kB	32kB	no
+# -------------
+#	USB		CAN	I2S	DAC	Package
+#	Device/Host/OTG	1	no	yes	80 pin
+#

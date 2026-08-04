@@ -1,8 +1,18 @@
 #include <Arduino.h>
-// Include the Adafruit CPX library BEFORE csp.h: csp_config.h poisons the
-// `float` keyword (fixpoint-only firmware), and the library's sensor headers
-// have float members. Parsed here (before the poison) they are fine; our own
-// CPX code below stays float-free so the poison still guards the firmware.
+// The build configuration FIRST, because it decides which libraries this sketch
+// includes: a board file (boards/play.h, boards/feather_can.h) is what defines
+// CSP_CPX, CSP_NEO and the CAN selection, and those are read a few lines below.
+// Before boards/ existed they arrived as -D on the command line and were
+// therefore always present; now they come from a header, and a header has to be
+// included before it can be tested.
+//
+// Settings only -- csp_config.h no longer poisons `float`. That moved to the
+// end of csp.h, which is included further down, precisely so the Adafruit
+// headers below (whose sensor structs have float members) are parsed while the
+// keyword still works. Our own code after csp.h stays float-free and the poison
+// still guards the firmware.
+#include "csp_config.h"
+
 #ifdef CSP_CPX
 #include <Adafruit_CircuitPlayground.h>
 #endif
@@ -16,8 +26,13 @@
 // CSP_NO_EEPROM drops the patch layer entirely: a node that only ever runs its
 // flashed ROM has nothing to save, and on a 1 kB-EEPROM part the layer costs
 // more flash than the patching is worth.
+// ARDUINO_ARCH_RP2040 is not enough on its own: earlephilhower's core ships an
+// EEPROM library, arduino:mbed_rp2040 does not, and BOTH define that macro. The
+// mbed core failed at `#include <EEPROM.h>` -- so exclude it and let the board
+// run with no patch layer rather than not build at all.
 #if (defined(__AVR__) || defined(ESP32) || defined(ESP8266) || \
-     defined(ARDUINO_ARCH_RP2040)) && !defined(CSP_NO_EEPROM)
+     (defined(ARDUINO_ARCH_RP2040) && !defined(ARDUINO_ARCH_MBED))) && \
+    !defined(CSP_NO_EEPROM)
 #define CSP_HAS_EEPROM 1
 #include <EEPROM.h>
 #elif defined(ARDUINO_ARCH_SAMD)
