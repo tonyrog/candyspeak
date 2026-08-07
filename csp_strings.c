@@ -184,6 +184,7 @@ rochar s_EQI[] RODATA = "EQI";
 rochar s_STI[] RODATA = "STI";
 rochar s_INSTATE[] RODATA = "INSTATE";
 rochar s_NINSTATE[] RODATA = "NINSTATE";
+rochar s_SETO[] RODATA = "SETO";
 rochar s_RULE[] RODATA = "RULE";
 rochar s_NEXT[] RODATA = "NEXT";
 rochar s_NOP[] RODATA = "NOP";

@@ -123,27 +123,81 @@ NOINLINE static bool_t open_in_block(csp_rt_t* st, const uint8_t* states, int ns
 				     int implicit);
 NOINLINE static void close_in_block(csp_rt_t* st);
 
-NOINLINE static bool_t asm_mem_part(csp_rt_t* st, opcode_t op, reg_t x,
-				 index_t mem, csp_part_t part)
+// Narrow a compiler xindex_t to the index_t a memory instruction carries, and
+// emit the OP_SETO in front of it when the reference names an object.
+//
+// This is the ONLY place the two representations meet. An xindex_t knows which
+// object it means; an index_t has a single selector bit and can only say "global"
+// or "the object running". Every instruction with a mem field goes through
+// asm_mem_part or asm_memi, which is what makes one funnel enough.
+//
+// OP_SETO is emitted IMMEDIATELY before its access and is consumed by it, so the
+// two are always adjacent and there is no window for a jump to land between them.
+NOINLINE static bool_t asm_seto(csp_rt_t* st, xindex_t mem, index_t* out)
 {
-    csp_instr_t* ip = alloc_instr_ptr(st, NULL, op);
+    unsigned m = XOBJ(mem);
+    *out = MAKE_INDEX(m ? CURRENT : GLOBAL, XIDX(mem));
+    if ((m == XOBJ_GLOBAL) || (m == XOBJ_CURRENT))
+	return 1;
+    {
+	csp_instr_t* ip = alloc_instr_ptr(st, NULL, OP_SETO);
+	if (ip == NULL)
+	    return 0;
+	ip->o.obj = m;
+    }
+    return 1;
+}
+
+// Immediate mode (`> expr` at the prompt, and the ev fold) EXECUTES instead of
+// emitting, so there is no instruction stream to put an OP_SETO into. Bind the
+// object exactly as OP_SETO would, run the value op, put the context back.
+typedef struct { uint8_t cur; index_t cbase; } ctx_save_t;
+
+static index_t ctx_enter(csp_rt_t* st, xindex_t ix, ctx_save_t* sv)
+{
+    unsigned m = XOBJ(ix);
+    sv->cur   = st->cur;
+    sv->cbase = st->cbase;
+    if ((m != XOBJ_GLOBAL) && (m != XOBJ_CURRENT))
+	csp_ctx_set(st, m);
+    return MAKE_INDEX(m ? CURRENT : GLOBAL, XIDX(ix));
+}
+
+static void ctx_leave(csp_rt_t* st, const ctx_save_t* sv)
+{
+    st->cur   = sv->cur;
+    st->cbase = sv->cbase;
+}
+
+NOINLINE static bool_t asm_mem_part(csp_rt_t* st, opcode_t op, reg_t x,
+				 xindex_t mem, csp_part_t part)
+{
+    csp_instr_t* ip;
+    index_t m;
+    if (!asm_seto(st, mem, &m))
+	return 0;
+    ip = alloc_instr_ptr(st, NULL, op);
     if (ip != NULL) {
 	ip->m.y = part;
 	ip->m.x = x;
-	ip->m.mem = mem;
+	ip->m.mem = m;
 	return 1;
     }
     return 0;
 }
 
 NOINLINE static bool_t asm_memi(csp_rt_t* st, opcode_t op, reg_t x,
-				index_t mem, int8_t imm)
+				xindex_t mem, int8_t imm)
 {
-    csp_instr_t* ip = alloc_instr_ptr(st, NULL, op);
+    csp_instr_t* ip;
+    index_t m;
+    if (!asm_seto(st, mem, &m))
+	return 0;
+    ip = alloc_instr_ptr(st, NULL, op);
     if (ip != NULL) {
 	ip->mi.x = x;
 	ip->mi.imm = imm;
-	ip->mi.mem = mem;
+	ip->mi.mem = m;
 	return 1;
     }
     return 0;
@@ -162,7 +216,7 @@ NOINLINE static bool_t asm_EQI(csp_rt_t* st, reg_t x, index_t mem, int8_t imm)
 // STI: store a small immediate to memory in one instruction (mirror of EQI).
 // x is the register the rule's NEXT points at -- STI never writes it at runtime,
 // so it stays a dead slot used only to render the rule body in disassembly.
-NOINLINE static bool_t asm_STI(csp_rt_t* st, reg_t x, index_t mem, int8_t imm)
+NOINLINE static bool_t asm_STI(csp_rt_t* st, reg_t x, xindex_t mem, int8_t imm)
 {
     return asm_memi(st, OP_STI, x, mem, imm);
 }
@@ -176,7 +230,7 @@ static int fits_sti(opcode_t op, const rentry_t* r)
 	(r->val.i >= TINY_MIN) && (r->val.i <= TINY_MAX);
 }
 
-NOINLINE static bool_t asm_mem(csp_rt_t* st, opcode_t op, reg_t x, index_t mem)
+NOINLINE static bool_t asm_mem(csp_rt_t* st, opcode_t op, reg_t x, xindex_t mem)
 {
     return asm_mem_part(st, op, x, mem, PART_VAL);
 }
@@ -478,9 +532,9 @@ NOINLINE index_t csp_new_udecl(csp_rt_t* st, const tstr_t* name, decl_t type)
 // True when decl `di` belongs to the module body currently being parsed. Used
 // to decide whether a name resolves to a per-instance member (which has to be
 // addressed CURRENT-relative) or to a global (which must NOT be).
-NOINLINE int is_module_local(csp_rt_t* st, index_t di)
+NOINLINE int is_module_local(csp_rt_t* st, xindex_t di)
 {
-    return (st->cs.mdef != BAD_INDEX) && ((int)INDEX(di) > (int)INDEX(st->cs.mdef));
+    return (st->cs.mdef != BAD_INDEX) && ((int)XIDX(di) > (int)INDEX(st->cs.mdef));
 }
 
 // The declaration keyword table. Compiler-only: nothing else looks a
@@ -904,7 +958,7 @@ NOINLINE static bool_t csp_load_value(csp_rt_t* st, reg_t x, vtype_t vt, value_t
 }
 
 // Add unique variable to var list (for <- parsing)
-NOINLINE static void add_var(csp_rt_t* st, index_t ix)
+NOINLINE static void add_var(csp_rt_t* st, xindex_t ix)
 {
     if (st->cs.rimp) {  // only when in RHS in expression x <- a+b+c
 	int i;
@@ -916,32 +970,39 @@ NOINLINE static void add_var(csp_rt_t* st, index_t ix)
 }
 
 // Map declaration (variable/constant/digital...)
-NOINLINE int map_reg(csp_rt_t* st, index_t ix)
+NOINLINE int map_reg(csp_rt_t* st, xindex_t ix)
 {
     reg_allocator_t* ap;
     int dst;
     // The is_mapped/reg register cache lives in the decl, so it is only usable
     // for RAM decls; a ROM decl (read-only flash) simply allocates a fresh reg.
-    int rom = (INDEX(ix) < st->rom_nd);
+    int rom = (XIDX(ix) < st->rom_nd);
+    // A reference to a NAMED object is never cached. The cache keys on the decl,
+    // which is the module TEMPLATE and is shared by every instance -- so caching
+    // `safe.a` would hand its register to `other.a`. The rmap[] check used to
+    // catch that, because an index carried its object number; it cannot now, and
+    // widening rmap to xindex_t would cost RAM on every target to serve a case
+    // that costs one extra LD to get right. See asm_seto.
+    int named = (XOBJ(ix) != XOBJ_GLOBAL) && (XOBJ(ix) != XOBJ_CURRENT);
 
     if ((ap = st->cs.ap) != NULL) {
 	// Check if already mapped AND mapping is still valid
-	if (!rom && decl(st,INDEX(ix),is_mapped)) {
-	    reg_t r = decl(st,INDEX(ix),reg);
-	    if (st->cs.ap->rmap[r] == ix)
+	if (!rom && !named && decl(st,XIDX(ix),is_mapped)) {
+	    reg_t r = decl(st,XIDX(ix),reg);
+	    if (st->cs.ap->rmap[r] == XIDX(ix))
 		return r;  // mapping still valid
 	    // Stale mapping - clear it
-	    ram_decl_at(st,INDEX(ix))->is_mapped = 0;
+	    ram_decl_at(st,XIDX(ix))->is_mapped = 0;
 	}
 	dst = alloc_reg(st);
-	if (!rom) {
-	    ram_decl_at(st,INDEX(ix))->is_mapped = 1;
-	    ram_decl_at(st,INDEX(ix))->reg = dst;
+	if (!rom && !named) {
+	    ram_decl_at(st,XIDX(ix))->is_mapped = 1;
+	    ram_decl_at(st,XIDX(ix))->reg = dst;
+	    ap->rmap[dst] = XIDX(ix);
 	}
-	ap->rmap[dst] = ix;
-	if (decl(st,INDEX(ix),type) == DECL_CONSTANT) {
-	    value_t val = decl(st,INDEX(ix),cn.init);
-	    vtype_t vt = decl(st,INDEX(ix),vt);
+	if (decl(st,XIDX(ix),type) == DECL_CONSTANT) {
+	    value_t val = decl(st,XIDX(ix),cn.init);
+	    vtype_t vt = decl(st,XIDX(ix),vt);
 	    if (!csp_load_value(st, dst, vt, val))
 		return -1;
 	    return dst;
@@ -1017,7 +1078,7 @@ NOINLINE static int push_str(csp_rt_t* st, rentry_t* rstack, int ep,
 
 // Push variable/declaration reference
 NOINLINE static int push_var(csp_rt_t* st, rentry_t* rstack, int ep,
-			     index_t ix, vtype_t vt)
+			     xindex_t ix, vtype_t vt)
 {
     value_t val;
     int I = 0;
@@ -1029,8 +1090,11 @@ NOINLINE static int push_var(csp_rt_t* st, rentry_t* rstack, int ep,
     else if (decl(st,INDEX(ix),type) == DECL_VARIABLE) {
 	add_var(st, ix);
 	if (st->cs.ev) {
+	    ctx_save_t sv;
+	    index_t rx = ctx_enter(st, ix, &sv);
 	    I = 1;
-	    val = csp_value(st, ix);
+	    val = csp_value(st, rx);
+	    ctx_leave(st, &sv);
 	}
     }
     else {
@@ -1041,7 +1105,7 @@ NOINLINE static int push_var(csp_rt_t* st, rentry_t* rstack, int ep,
 }
 
 // Push L-value (assignment target, index only, no load)
-NOINLINE static int push_lval(rentry_t* rstack, int ep, index_t ix, vtype_t vt)
+NOINLINE static int push_lval(rentry_t* rstack, int ep, xindex_t ix, vtype_t vt)
 {
     rstack[ep] = (rentry_t) { .ix=ix,.X=1,.L=0,.I=0,.vt=vt };
     return ep+1;
@@ -1050,7 +1114,7 @@ NOINLINE static int push_lval(rentry_t* rstack, int ep, index_t ix, vtype_t vt)
 // Push a config-part L-value (<var> '.' <part> '='): defer to the store, don't
 // fold to a read the way push_part does -- process_assign turns it into an STP
 // (or a direct csp_dio_set_part in immediate mode).
-NOINLINE static int push_lval_part(rentry_t* rstack, int ep, index_t ix,
+NOINLINE static int push_lval_part(rentry_t* rstack, int ep, xindex_t ix,
 				   csp_part_t part, vtype_t vt)
 {
     rstack[ep] = (rentry_t) { .ix=ix,.X=1,.L=0,.I=0,.part=part,.vt=vt };
@@ -1060,11 +1124,14 @@ NOINLINE static int push_lval_part(rentry_t* rstack, int ep, index_t ix,
 // Push a config-part read (<var> '.' <part>), e.g. Led.pin, Frame.endian.
 // During eval fold it to the current part value; otherwise defer to an LDP.
 NOINLINE static int push_part(csp_rt_t* st, rentry_t* rstack, int ep,
-			      index_t ix, csp_part_t part)
+			      xindex_t ix, csp_part_t part)
 {
     if (st->cs.ev) {
+	ctx_save_t sv;
 	value_t pv;
-	csp_dio_get_part(st, ix, &pv, part, DIN);
+	index_t rx = ctx_enter(st, ix, &sv);
+	csp_dio_get_part(st, rx, &pv, part, DIN);
+	ctx_leave(st, &sv);
 	return push_imm(st, rstack, ep, V_INTEGER, pv);
     }
     rstack[ep] = (rentry_t){ .ix=ix, .L=0, .I=0, .X=1, .part=part,
@@ -1147,9 +1214,9 @@ NOINLINE static bool_t coerce_to_int(csp_rt_t* st, rentry_t* e)
 }
 
 // Coerce rhs value to the declared type of assignment target ix
-NOINLINE static bool_t coerce_assign(csp_rt_t* st, index_t ix, rentry_t* e)
+NOINLINE static bool_t coerce_assign(csp_rt_t* st, xindex_t ix, rentry_t* e)
 {
-    vtype_t lt = decl(st,INDEX(ix),vt);
+    vtype_t lt = decl(st,XIDX(ix),vt);
 
     if (e->vt == V_UNSIGNED)  // same representation as int
 	e->vt = V_INTEGER;
@@ -1207,13 +1274,16 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
 
     if (!st->cs.ap) {
 	if (rhs.I) {
+	    ctx_save_t sv;
+	    index_t lx = ctx_enter(st, lhs.ix, &sv);
 	    if (lhs.part != PART_VAL) {  // <var> '.' <part> = imm  (config write)
-		csp_dio_set_part(st, lhs.ix, rhs.val, lhs.part, DOUT);
-		bitset_set(st->dset, st_index(st, lhs.ix)); // must commit
+		csp_dio_set_part(st, lx, rhs.val, lhs.part, DOUT);
+		bitset_set(st->dset, st_index(st, lx)); // must commit
 		st->es.anyd = CSP_TRUE;
 	    }
 	    else
-		csp_set_value(st, lhs.ix, rhs.val);
+		csp_set_value(st, lx, rhs.val);
+	    ctx_leave(st, &sv);
 	}
     }
     else { // Generate store instruction
@@ -1597,6 +1667,7 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
     const csp_func_t* func = NULL;
     uint16_t argcode = 0;
     uint8_t argimm = 0;
+    unsigned call_obj = XOBJ_GLOBAL;    // object an index argument named, if any
     // int func_res;
     int is_user;
     int numflt = 0;                     // any V_NUMBER argument is float
@@ -1667,7 +1738,25 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
 	    }
 	    arg.X = 0;
 	    arg.I = 1;
-	    arg.val.u = arg.ix;
+	    // An index passed BY VALUE -- timeout(T), changed(X) -- has to be a
+	    // narrow ENCODED index: the callee resolves it with st_index. So it
+	    // is narrowed here, and if it names an object the OP_SETO goes in
+	    // front of the CALL instead of in front of a memory instruction. The
+	    // callee then resolves CURRENT-relative inside that object, and
+	    // eval_op's tail puts the context back afterwards.
+	    {
+		unsigned m = XOBJ(arg.ix);
+		if ((m != XOBJ_GLOBAL) && (m != XOBJ_CURRENT)) {
+		    // One OP_SETO can only point at one object, and it is
+		    // consumed by the single instruction after it.
+		    if ((call_obj != XOBJ_GLOBAL) && (call_obj != m)) {
+			csp_set_error(st, ERR_SYNTAX);
+			return -1;
+		    }
+		    call_obj = m;
+		}
+		arg.val.u = MAKE_INDEX(m ? CURRENT : GLOBAL, XIDX(arg.ix));
+	    }
 	    break;
 	default:
 	    if (argtype != argvt)
@@ -1716,6 +1805,13 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
 	ep -= n;
     }
     dst = alloc_reg(st);
+    // An index argument named an object: bind it for the CALL itself.
+    if (call_obj != XOBJ_GLOBAL) {
+	csp_instr_t* sp = alloc_instr_ptr(st, NULL, OP_SETO);
+	if (sp == NULL)
+	    return -1;
+	sp->o.obj = call_obj;
+    }
     if (!asm_CALL(st, dst, func_idx, is_user, argcode))
 	return -1;
     return push_reg(rstack, ep, dst,
@@ -1742,7 +1838,7 @@ void print_stack_used()
 // num_toks is number of tokens on input, consumed on output
 // result receives the expression result (reg, immediate flag, value, type)
 // returns: 1=ok, 0=error
-NOINLINE index_t make_buf_view(csp_rt_t* st, index_t parent,
+NOINLINE index_t make_buf_view(csp_rt_t* st, xindex_t parent,
 			       ivalue_t b0, ivalue_t b1);
 
 NOINLINE int csp_parse_expr(csp_rt_t* st, const token_t* tv, size_t* num_toks,
@@ -1755,7 +1851,7 @@ NOINLINE int csp_parse_expr(csp_rt_t* st, const token_t* tv, size_t* num_toks,
     int ep = 0;         // expression stack pointer
     uint32_t ostack[MAX_PARSE_STACK_DEPTH];  // stack of operators
     rentry_t rstack[MAX_PARSE_STACK_DEPTH];  // stack of {reg, index}
-    index_t ix;
+    xindex_t ix;   // may name an object until asm_* narrows it
     int i = 0;
     size_t n = *num_toks;
     int in_func = 0;
@@ -1889,12 +1985,15 @@ next:
 		    }
 		    return 0;
 		}
-		ix = MAKE_INDEX(decl(st,INDEX(ix),mq.m),INDEX(jx));
+		// A NAMED object. asm_mem_part/asm_memi turn this into an OP_SETO
+		// in front of the access; until then the object rides in the high
+		// half of the xindex.
+		ix = MAKE_XINDEX(decl(st,INDEX(ix),mq.m), XIDX(jx));
 		i += 2;
 	    }
 	    // Apply module context
-	    if ((OBJ(ix) == 0) && is_module_local(st, ix))
-		ix = MAKE_INDEX(CURRENT, INDEX(ix));
+	    if ((XOBJ(ix) == XOBJ_GLOBAL) && is_module_local(st, ix))
+		ix = MAKE_XINDEX(XOBJ_CURRENT, XIDX(ix));
 
 	    // Buf[pos] / Buf[pos0..pos1] -- byte access on a buffer
 	    if ((i < n) && (tv[i].t == LB) &&
@@ -2118,7 +2217,7 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	index_t ix;
 	st->cs.save_sx = st->cs.sx;
 	ix = csp_new_decl(st,&State,DECL_VARIABLE,1);
-	st->cs.sx = MAKE_INDEX(CURRENT, INDEX(ix));
+	st->cs.sx = MAKE_XINDEX(XOBJ_CURRENT, XIDX(ix));
     }
 
     st->cs.mdef = ix;  // current module being defined
@@ -2633,10 +2732,10 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 // FIXME: add part 
 //      <var> '.' <part>   part = 'port'|'pin'|'period'...
 //
-NOINLINE index_t lookup_lhs(csp_rt_t* st, const token_t* tv,
-			    index_t oix, const pexpr_t* lhs)
+NOINLINE xindex_t lookup_lhs(csp_rt_t* st, const token_t* tv,
+			     index_t oix, const pexpr_t* lhs)
 {
-    index_t ix;
+    xindex_t ix;
     const tstr_t* name;
     index_t mx;
     ivalue_t dn;
@@ -2650,7 +2749,7 @@ NOINLINE index_t lookup_lhs(csp_rt_t* st, const token_t* tv,
 	    // Only a member of THIS module is per-instance; a global resolved
 	    // from inside the body stays global.
 	    if (is_module_local(st, ix))
-		ix = MAKE_INDEX(CURRENT, INDEX(ix));
+		ix = MAKE_XINDEX(XOBJ_CURRENT, XIDX(ix));
 	}
 	else if (lhs->len == 3) {  // obj.field
 	    name = &tv[lhs->pos].v.str;
@@ -2710,7 +2809,7 @@ field:
 	}
 	return BAD_INDEX;
     }
-    ix = MAKE_INDEX(decl(st,INDEX(oix),mq.m),INDEX(jx));
+    ix = MAKE_XINDEX(decl(st,INDEX(oix),mq.m), XIDX(jx));  // named object
     return ix;
 }
 
@@ -2831,18 +2930,18 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
     free_reg(st, cnd);
     for (k = 0; k < np; k++) {
 	rentry_t rbody;
-	index_t ix = BAD_INDEX;
+	xindex_t ix = BAD_INDEX;   // may still name an object
 	csp_part_t lpart = PART_VAL;
 	pexpr_t lhs;
 
 	if (part[k].is_unpack) {          // <var> = <buffer>[bits]   (unpack)
-	    index_t lx = csp_lookup_decl(st, &part[k].obj);
+	    xindex_t lx = csp_lookup_decl(st, &part[k].obj);
 	    if (lx == BAD_INDEX) {
 		csp_set_error(st, ERR_SYNTAX);
 		return -1;
 	    }
-	    if ((OBJ(lx) == 0) && is_module_local(st, lx))
-		lx = MAKE_INDEX(CURRENT, INDEX(lx));
+	    if ((XOBJ(lx) == XOBJ_GLOBAL) && is_module_local(st, lx))
+		lx = MAKE_XINDEX(XOBJ_CURRENT, XIDX(lx));
 	    if (dst >= 0) { free_reg(st, dst); dst = -1; }
 	    memset(&rbody, 0, sizeof(rbody));
 	    rbody.ix = part[k].src_view;  // load from the source sub-view
@@ -2928,8 +3027,8 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 				csp_set_err_arg_tstr(st, 0, &part[k].obj);
 			    return -1;
 			}
-			if ((OBJ(ix) == 0) && is_module_local(st, ix))
-			    ix = MAKE_INDEX(CURRENT, INDEX(ix));
+			if ((XOBJ(ix) == XOBJ_GLOBAL) && is_module_local(st, ix))
+			    ix = MAKE_XINDEX(XOBJ_CURRENT, XIDX(ix));
 		    }
 		    lpart = pt;
 		}
@@ -3010,7 +3109,7 @@ static const uint8_t pat_object[] = {
 
 // Emit an always-true rule "state_ix = snum" (RULE/body/NEXT shape, like
 // asm_rule). Used for the object-init INIT auto-transition to NORMAL.
-NOINLINE static int asm_state_set(csp_rt_t* st, index_t state_ix, int snum)
+NOINLINE static int asm_state_set(csp_rt_t* st, xindex_t state_ix, int snum)
 {
     reg_t cnd, dst;
     int rpos;
@@ -3083,7 +3182,7 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
     //    lands in DOUT after this one, and last-writer wins at commit).
     {
 	// obj.State: State is always the module's first member (module decl + 1).
-	index_t state_ix = MAKE_INDEX(m, INDEX(mx) + 1);
+	xindex_t state_ix = MAKE_XINDEX(m, INDEX(mx) + 1);
 	int nstatic = 0;
 	int mk = -1;
 	reg_t cnd;
@@ -3375,12 +3474,12 @@ NOINLINE int csp_parse_pack(csp_rt_t* st, token_t* tv, size_t n)
 // bits [b0 .. b1]. Used for Buf[pos]/Buf[pos0..pos1]. Parent decl index, start
 // bit and length are stashed in the can fields and translated to a VIEW_HEAP
 // entry in csp_rt_start (after the parent buffer has been allocated).
-NOINLINE index_t make_buf_view(csp_rt_t* st, index_t parent,
+NOINLINE index_t make_buf_view(csp_rt_t* st, xindex_t parent,
 			       ivalue_t b0, ivalue_t b1)
 {
     index_t ix;
     int i;
-    index_t pi = INDEX(parent);
+    index_t pi = XIDX(parent);
     const tstr_t name = { .ptr = NULL, .len = 0 };
 
     // Both call sites hand us raw byte indices scaled to bits, so this is where

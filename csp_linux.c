@@ -579,7 +579,7 @@ void print_defines()
     printf("DECL_BITS=%d\n", DECL_BITS);
     printf("INDEX_BITS=%d\n", INDEX_BITS);
     printf("STRING_BITS=%d\n", STRING_BITS);
-    printf("MAX_INDICES=%d\n", MAX_INDICES);
+    printf("MAX_INDICES=%lu\n", (unsigned long)MAX_INDICES);
     printf("MAX_INSTRS=%d\n", MAX_INSTRS);
     printf("MAX_DECLS=%d\n", MAX_DECLS);
     printf("MAX_MODULES=%d\n", MAX_MODULES);

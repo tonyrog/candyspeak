@@ -60,11 +60,12 @@ typedef unsigned bool_t;
 #define ro_ptr(p)       (void *)pgm_read_word((p))
 #define ro_memcmp(a,b,n) memcmp_P((a), (b), (n))
 #define ro_memcpy(d,s,n) memcpy_P((d), (s), (n))
-// These two still buy RAM directly, so they stay per-target: OBJ_BITS sizes the
-// fixed offs/object/module arrays (3 x 1<<OBJ_BITS), and STRING_BITS sizes
-// ram_str plus the exprbuf scratch (2 x 1<<STRING_BITS). On a 2K part that is
-// the difference between fitting and not.
-#define OBJ_BITS     3
+// STRING_BITS still buys RAM directly and stays per-target: it sizes ram_str
+// plus the exprbuf scratch (2 x 1<<STRING_BITS), and it appears in no struct,
+// so a program compiled on the host runs from an image on a board that has a
+// smaller string table. On a 2K part that is the difference between fitting and
+// not. OBJ_BITS used to be per-target too -- see the note at its definition for
+// why it cannot be.
 #define STRING_BITS  7
 #else
 #define RODATA
@@ -74,9 +75,39 @@ typedef unsigned bool_t;
 #define ro_ptr(p)       (*((const void**)(p)))
 #define ro_memcmp(a,b,n) memcmp((a), (b), (n))
 #define ro_memcpy(d,s,n) memcpy((d), (s), (n))
-#define OBJ_BITS     5
 #define STRING_BITS  9
 #endif
+
+// OBJ_BITS is 1, and that is not a tuning knob any more -- it is a SELECTOR.
+//
+// An encoded index (index_t, 16 bits) is  sel:1 | index:15  where sel picks the
+// base the index is relative to:
+//
+//   GLOBAL  (0)   base 0          -- a top-level declaration
+//   CURRENT (1)   base st->cbase  -- a member of the object being executed
+//
+// It used to be obj:5 | index:11, where obj was a real object number: 0 global,
+// 31 (CURRENT) "my own", and 1..30 a NAMED object (`safe.State`). Only that
+// third case needed more than one bit, it is emitted from three places in the
+// compiler, and it made EVERY memory instruction pay four bits for it. It now
+// costs one OP_SETO instruction at the reference instead, which buys:
+//
+//   - objects bounded by RAM instead of by 32
+//   - 32768 indices instead of 2048, globally and per object
+//   - offs[] as the object->base table only, no longer indexed by an encoding
+//
+// and, mainly, it takes the width OUT of the image format. It used to reach
+// into the bytes of a ROM in three separate ways -- INDEX_BITS is the width of
+// csp_instr_mem_t.mem, csp_instr_memi_t.mem, csp_field_t.id and
+// csp_buffer_t.id; CURRENT is baked into every module-local reference; and
+// csp_decl_t's mq arm had an OBJ_BITS-wide member. With 3 on AVR and 5 on the
+// host, the generator CRC'd bytes the target laid out differently, and an image
+// built on the host was rejected on AVR as corrupt -- while running correctly,
+// because CURRENT truncated back to the right value. The only clue was a
+// -Woverflow warning that the Arduino build (-w) hid.
+//
+// Do not "tune" this. A different value is a different image format.
+#define OBJ_BITS     1
 
 // rom-aware scalar reads: on the host both branches are identical (ro_*==plain);
 // on AVR the rom branch uses PROGMEM. One code path serves RAM and ROM tables.
@@ -110,7 +141,10 @@ static inline void* rdvp(const void* p, int rom)
 // and, for the reactive tables, the rule count (they key on a rule ordinal, not a
 // raw ip). The last holdout was csp_csr's index_t wr[MAX_DECLS] stack array,
 // which now lives in the idg block sized to the actual decl count.
-#define DECL_BITS    11
+// DECL_BITS is what is LEFT of index_t after the 1-bit selector, so an index is
+// relative to a base and 15 bits is the ceiling on globals AND on members per
+// object -- not on the two together. It was 11 while obj took the other five.
+#define DECL_BITS    15
 #define INSTR_BITS   11
 
 // Width of a decl's `name` field: a LOGICAL string position (rom_strp + RAM
@@ -140,7 +174,10 @@ static inline void* rdvp(const void* p, int rom)
 //   v8: ONE contiguous image object -- magic/size/role/generation in the header,
 //       sections reached by offset instead of by symbol, and a tagged prologue
 //       in front of each so the whole thing can be walked with no header at all
-#define ROM_FORMAT_VERSION 8
+//   v9: OBJ_BITS 5->1. An encoded index is sel:1|index:15 (global / current
+//       object) and a NAMED object is reached with OP_SETO instead of a 5-bit
+//       object number in every memory instruction. See the OBJ_BITS note below.
+#define ROM_FORMAT_VERSION 9
 
 // Free as in beer.
 #define CSP_IMAGE_MAGIC0 'J'
@@ -290,9 +327,12 @@ extern int ro_strcpy(char* dst, rostring_t src, int max);
 #define REG_BITS     4   // r0..r15
 #define FUNC_BITS    5   // 0..31 (need more!)
 #define PART_BITS    4
+// The two values the 1-bit selector of an encoded index can take. Not object
+// numbers: GLOBAL means "base 0" and CURRENT means "base st->cbase". A NAMED
+// object is reached by pointing cbase at it with OP_SETO first.
 #define GLOBAL       0                       // global level
 #define CURRENT      ((1 << OBJ_BITS)-1)     // current obj
-#define MAX_INDICES  (1 << INDEX_BITS)
+#define MAX_INDICES  (1UL << INDEX_BITS)   // 1<<16: needs the long on a 16-bit int
 #define MAX_REGS     (1 << REG_BITS)
 #define MAX_INSTRS   (1 << INSTR_BITS)
 #define MAX_DECLS    (1 << DECL_BITS)
@@ -307,8 +347,16 @@ extern int ro_strcpy(char* dst, rostring_t src, int max);
 #else
 #define MAX_VARREFS  16
 #endif
-#define MAX_MODULES  (1 << OBJ_BITS)
-#define MAX_OBJECTS  (1 << OBJ_BITS)
+// Objects (and module definitions) a program may hold. This is NO LONGER an
+// encoding limit -- an index does not carry an object number any more -- it is
+// only the length of three fixed tables on csp_rt_t: offs/object/module, 2 bytes
+// per entry each. Raise it where RAM allows (boards/<target>.h is the place);
+// nothing in a ROM image changes when you do.
+#ifndef CSP_MAX_OBJECTS
+#define CSP_MAX_OBJECTS 32
+#endif
+#define MAX_MODULES  CSP_MAX_OBJECTS
+#define MAX_OBJECTS  CSP_MAX_OBJECTS
 // (buffers need no MAX_*: csp_view_t.buf is as wide as the nbuf counter feeding it)
 #define MAX_QUEUE    (MAX_INSTRS)      // ceiling csp_csr clamps the queue to
 // Highest rule number #disable can address. A fixed bitset on csp_rt_t (it has
@@ -351,12 +399,37 @@ extern int ro_strcpy(char* dst, rostring_t src, int max);
 #define STATE_NORMAL   1
 #define STATE_FAILSAFE 2
 
-#define BAD_INDEX   (MAX_INDICES-1)
+// Also the sentinel for an xindex_t: it is XOBJ_GLOBAL with an impossible decl
+// index, so `x == BAD_INDEX` reads the same on both types.
+#define BAD_INDEX   ((index_t)(MAX_INDICES-1))
 #define PARSE_ERROR -1
 
-#define INDEX(n)  ((n) & ((1 << DECL_BITS)-1))
-#define OBJ(n)    ((n) >> DECL_BITS)
-#define MAKE_INDEX(obj,x) (((obj)<<DECL_BITS) | (x))
+// Decode/encode an index_t. `u` suffixes throughout: DECL_BITS is 15, and on a
+// 16-bit int (AVR) a plain `1 << 15` is undefined.
+#define INDEX(n)  ((index_t)((n) & ((1u << DECL_BITS)-1u)))
+#define OBJ(n)    ((unsigned)((n) >> DECL_BITS))
+#define MAKE_INDEX(obj,x) ((index_t)(((unsigned)(obj) << DECL_BITS) | \
+				     ((unsigned)(x) & ((1u << DECL_BITS)-1u))))
+
+// --- xindex_t: what the COMPILER carries -------------------------------------
+// An index_t has ONE selector bit, so it can say "global" or "this object" and
+// nothing else. The compiler needs a third thing -- "object 7", from `safe.State`
+// -- for as long as the reference is travelling from the parser to the emitter.
+// xindex_t is that: obj:16 | index:16, narrowed to an index_t by asm_mem_part /
+// asm_memi, which emit OP_SETO when the object turns out to be a named one.
+//
+// Object in the HIGH half on purpose. A xindex_t accidentally assigned to an
+// index_t loses the object and reads back as GLOBAL -- wrong object, visibly, in
+// a test -- rather than landing on some other object's storage.
+typedef uint32_t xindex_t;
+#define XOBJ_GLOBAL   0u
+#define XOBJ_CURRENT  0xffffu             // "the object being executed"
+#define XIDX(n)       ((index_t)((n) & 0xffffu))
+#define XOBJ(n)       ((unsigned)(((n) >> 16) & 0xffffu))
+#define MAKE_XINDEX(obj,x) (((xindex_t)(unsigned)(obj) << 16) | (index_t)(x))
+// A global xindex is its bare decl index (XOBJ_GLOBAL == 0), so a plain index
+// widens for free -- but say so where it happens.
+#define XGLOBAL(x)    ((xindex_t)(index_t)(x))
 
 #define MAX_PARSE_STACK_DEPTH 10
 #ifdef CSP_EMBEDDED
@@ -772,7 +845,7 @@ typedef enum {
     
     OP_EQ,      // "="
     OP_RIMP,    // "<-"    
-    OP_COMMA,   // ","
+    // OP_COMMA,   // ","
     // rule
     OP_RULE,    // "?"
     OP_NEXT,    // "next"
@@ -791,11 +864,14 @@ typedef enum {
     OP_LIH,     // load high 16-bit (OR into high bits)
     OP_ARG,     // load argument from register
     OP_CALL,    // function call:
-    OP_EQI,     // compare memory with 8 bit value, result in x
+//    OP_EQI,     // compare memory with 8 bit value, result in x
     OP_STI,     // store immediate value to memory (mirror of EQI)
     OP_INSTATE, // #in <state> block gate: if reg != state, skip block (nxt)
     OP_NINSTATE,// #in A B C OR-chain gate: if reg == state, jump INTO block (nxt)
-    OP_AVAIL,
+    OP_SETO,    // point CURRENT at a NAMED object for the next memory access
+    OP_AVAIL,   // SENTINEL, not an opcode: the next free number, i.e. how many
+		// opcodes are in use. Printed by print_defines and asserted
+		// against OP_END_MARK below. Keep it last.
     OP_END_MARK = 0x3f
 } opcode_t;
 
@@ -826,11 +902,13 @@ typedef enum {
     DECL_BUFFER=12,         // 'buffer' (heap-backed storage)
     DECL_VIEW=13,           // synthetic bit/byte view into a buffer (Buf[a..b])
 
-    DECL_AVAIL,
+    DECL_AVAIL,   // SENTINEL, not a decl type: see OP_AVAIL.
     DECL_END_MARK = 0xf
 } decl_t;
 
 #define CSP_DECL_TYPE_BITS 4
+CSP_STATIC_ASSERT(DECL_AVAIL <= DECL_END_MARK, "out of decl types");
+CSP_STATIC_ASSERT(DECL_END_MARK < (1 << CSP_DECL_TYPE_BITS), "decl field too narrow");
 
 #define MAKE_RES(r) ((r)-1)
 #define GET_RES(rr) ((rr)+1)
@@ -971,6 +1049,23 @@ typedef struct PACKED {
     unsigned avt:16;         // argument value types 4 bit per argument
 } csp_instr_call_t;
 
+// OP_SETO - point CURRENT at a NAMED object (`safe.State`), for ONE access.
+//
+// An encoded index has a single selector bit -- global or current object -- so a
+// reference to a named object cannot say which one. This instruction says it, and
+// the memory instruction that FOLLOWS reads CURRENT-relative.
+//
+// One-shot: the next memory op consumes it and the runtime puts the object
+// context back (see eval_op). That is what makes it safe to place anywhere. A
+// sticky base register would have to be paired with a restore, and a rule's
+// conditional jump (csp_instr_rule_t.nxt) can skip forward over instructions --
+// so a taken jump could leave the base pointing at the wrong object for whatever
+// ran next. There is nothing to leave stale here.
+typedef struct PACKED {
+    INSTR_COMMON;
+    unsigned obj:16;         // object table index (1..MAX_OBJECTS-1)
+} csp_instr_seto_t;
+
 // OP_END_MARK: a self-verifying terminator appended after rom_instr's data. Its
 // crc is a CRC-16 over [the section's data + this marker with crc zeroed], so the
 // instruction section can be verified WITHOUT the header -- scan for OP_END_MARK,
@@ -996,6 +1091,7 @@ typedef union {
     csp_instr_next_t x;
     csp_instr_instate_t in;
     csp_instr_alu_t a;
+    csp_instr_seto_t o;
     csp_instr_end_t em;
 } csp_instr_t;
 
@@ -1003,6 +1099,14 @@ typedef union {
 // INSTR_COMMON(6) + a full index_t(16) leaves 10 bits (BODY_BITS) for any packed
 // index. If this fails after a bit-width change, a format overflowed 32 bits.
 CSP_STATIC_ASSERT(sizeof(csp_instr_t) == 4, "csp_instr_t must be 4 bytes");
+// The opcode field is CSP_OPCODE_BITS wide and OP_END_MARK reserves the top
+// value, so the sentinel has to stay below it. Adding one opcode past this is a
+// silent overlap with the section terminator -- exactly the kind of thing the
+// -w Arduino build would hide.
+CSP_STATIC_ASSERT(OP_AVAIL <= OP_END_MARK, "out of opcodes");
+CSP_STATIC_ASSERT(OP_END_MARK < (1 << CSP_OPCODE_BITS), "opcode field too narrow");
+// csp_object_t.m is 8 bits wide, and OP_SETO carries an object number in 16.
+CSP_STATIC_ASSERT(MAX_OBJECTS <= 256, "CSP_MAX_OBJECTS must fit csp_object_t.m");
 
 typedef enum {
     DIR_NONE  = 0x00,
@@ -1035,7 +1139,7 @@ typedef struct PACKED {
 typedef struct PACKED {
     DECL_COMMON;    
     index_t  mx;           // module declaration index
-    unsigned m:OBJ_BITS;   // index in object table
+    unsigned m:8;          // index in object table (1..MAX_OBJECTS-1)
 } csp_object_t;
 
 typedef struct PACKED  {
@@ -1095,7 +1199,7 @@ typedef struct PACKED {
 // counterpart to csp_instr_end_t for the decl section). DECL_COMMON is exactly 4
 // bytes, so crc lands byte-aligned at bytes 4-5. See rom_scan_end.
 typedef struct PACKED {
-    DECL_COMMON;             // type == DECL_END_MARK (0x3f)
+    DECL_COMMON;             // type == DECL_END_MARK (0xf)
     uint16_t crc;            // section self-CRC (bytes 4-5)
     uint16_t _res;           // pad to 8 bytes
 } csp_decl_end_t;
@@ -1167,8 +1271,8 @@ typedef struct {
     int      ent;                // entry op of that module
     int      sdef;               // state being defined
     index_t  in_marker;          // pending OP_INSTATE gate
-    index_t  save_sx;            // sx saved across the module body
-    index_t  sx;                 // state variable
+    xindex_t save_sx;            // sx saved across the module body
+    xindex_t sx;                 // state variable
     index_t  cur;                // current module index
     index_t  n_rule_emit;        // rules emitted so far
 } csp_pmark_t;
@@ -1225,8 +1329,10 @@ typedef struct {
     index_t in_marker;           // instr index of the pending OP_INSTATE block
                                  // gate (the terminating INSTATE of the OR-chain;
                                  // patched with the skip distance at #end)
-    index_t save_sx;             // save sx during module parse
-    index_t sx;                  // state variable being parsed against; inside a
+    // xindex_t: inside a module body this is that module's own State, which is
+    // CURRENT-relative -- an index_t would drop the selector on assignment.
+    xindex_t save_sx;            // save sx during module parse
+    xindex_t sx;                 // state variable being parsed against; inside a
                                  // module it is that module's own State
     index_t mdef;                // module being defined
     csp_pmark_t mod_mark;        // parse mark taken at #module: a failure before
@@ -1234,10 +1340,12 @@ typedef struct {
                                  // after it are not silently absorbed into a
                                  // module that can never be closed
     int     ent;                 // entry op of module in st->instr
-    // temp var list during <- parsing (own scratch, set by csp_rt_init)
-    index_t  var_buf[MAX_VARREFS];
-    index_t* var;
-    index_t  nvar;
+    // temp var list during <- parsing (own scratch, set by csp_rt_init).
+    // xindex_t: an entry becomes an OP_CHG on the variable, and `x <- safe.a`
+    // has to watch safe's field, not the module template's.
+    xindex_t  var_buf[MAX_VARREFS];
+    xindex_t* var;
+    index_t   nvar;
     int      rimp;               // 1 if parse_expr is in RHS in <-
 } csp_cstate_t;
 
@@ -1259,6 +1367,10 @@ typedef struct {
     unsigned seed_all:1;         // 1 during the first cycle: OP_CHG reads true so
                                  // every <- binding fires once and seeds a value
     unsigned sweep:1;            // full sequential sweep (OP_NEW/LEAVE enter/leave)
+    // Pending one-shot OP_SETO: the executing object number PLUS ONE, so 0 means
+    // nothing is pending. The next instruction runs with cur/cbase pointed at the
+    // named object, and eval_op's tail puts this back.
+    uint8_t  sobj;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     index_t* rule_ip;            // ordinal -> instruction index (own alloc, n_rule)
     uint16_t* rule_state;        // ordinal -> State membership mask (0 = ungated)
@@ -1393,8 +1505,16 @@ typedef struct {
 // csp_mem_init and the static-buffer backend default.
 #define CSP_A8(n) (((size_t)(n) + 7) & ~(size_t)7)
 
+// How many decls a host build PROVISIONS for, which is not the same thing as how
+// many the encoding can address. MAX_DECLS is 32768 since the index lost its
+// object field, and reserving that many csp_decl_t is a quarter of a megabyte of
+// static buffer for a ceiling no program approaches. The encoding still allows
+// 32768 -- a malloc/claim arena (CSP_ARENA_MALLOC, which every build in this tree
+// uses) is bounded by the claim, not by this.
+#define CSP_PROVISION_DECLS 2048
+
 #define CSP_ARENA_INSTR_BYTES CSP_A8(MAX_INSTRS * sizeof(csp_instr_t))
-#define CSP_ARENA_DECL_BYTES  CSP_A8(MAX_DECLS * sizeof(csp_decl_t))
+#define CSP_ARENA_DECL_BYTES  CSP_A8(CSP_PROVISION_DECLS * sizeof(csp_decl_t))
 // The worst case: every instruction AND every declaration index in use at once.
 #define CSP_ARENA_CODE_BYTES  (CSP_ARENA_INSTR_BYTES + CSP_ARENA_DECL_BYTES)
 
@@ -1516,10 +1636,19 @@ typedef struct _csp_rt_t
     int8_t  anyd;  // CSP_TRUE|CSP_FALSE
     set_group_t* dset;            // mark decl updated during cycle (own alloc, view_cap bits)
     
+    // Object number -> where that object's members start in the decl index
+    // space. Filled by csp_rt_start. Indexed by a REAL object number (1..nq),
+    // never by the selector in an encoded index -- those two used to be the same
+    // number space and are not any more.
     index_t offs[MAX_OBJECTS];     // offset to object locals
+    // The base a CURRENT-relative index resolves against: offs[cur], kept in step
+    // by OP_NEW/OP_LEAVE, by the reactive dispatcher, and one-shot by OP_SETO.
+    // Its own field rather than offs[CURRENT], which is what it was while CURRENT
+    // was a spare slot in an object-numbered array.
+    index_t cbase;
     // stack used during eval
     int esp;                       // eval stack pointer
-    struct PACKED { index_t ix; unsigned cur:OBJ_BITS; }
+    struct PACKED { index_t ix; uint8_t cur; }
 	stack[MAX_STACK_DEPTH];
     unsigned reactive:1;         // 1 if push backedges to queue
     unsigned sweep:1;            // 1 during a full sequential sweep (csp_eval /
@@ -1611,7 +1740,7 @@ typedef struct _csp_rt_t
 				 // after it are not silently absorbed into a
 				 // module that can never be closed
     int     ent;                 // entry op of module in st->instr
-    unsigned cur:OBJ_BITS;       // current module index
+    uint8_t cur;                 // current object number (0 = global)
 
     // calculated by csp_rt_start
     index_t nt;                  // number of timers
@@ -1627,9 +1756,16 @@ typedef struct _csp_rt_t
     // the moment it turned round. Both phases walk this list and gate on the
     // slot's CURRENT dir. It is also smaller than the two it replaces: an inout
     // entry used to be stored twice.
+    // These lists are walked OUTSIDE any object -- csp_input, csp_output, the CAN
+    // mark pass, the board's pin sync -- so each entry has to say which instance
+    // it belongs to. The index itself cannot: it carries a one-bit selector, not
+    // an object number. Hence the parallel *_obj byte per entry, and csp_io_at /
+    // csp_timer_at, which bind the context before handing the index back.
     index_t* io;                 // digital/analog/field entries, io_cap slots
+    uint8_t* io_obj;             // owning object per io[] entry (0 = global)
     index_t  io_cap;
     index_t* timer;              // list of timers, timer_cap slots
+    uint8_t* timer_obj;          // owning object per timer[] entry (0 = global)
     index_t  timer_cap;
     // module[] and object[] are bounded by the encoding: a module/object index is
     // OBJ_BITS wide and CURRENT reserves the top slot, so 1<<OBJ_BITS is their true
@@ -1791,7 +1927,11 @@ static inline char* csp_str_at(csp_rt_t* st, sindex_t pos)
 // Parser stack entry - tracks both register and declaration index
 typedef struct PACKED {
     value_t val;     // if constant then the actual value is loaded here
-    index_t ix;      // declaration index (valid for variables)    
+    // xindex_t, not index_t: while an expression is being compiled a reference
+    // may still name an object (`safe.State`), which an encoded index cannot say.
+    // asm_mem_part/asm_memi narrow it and emit the OP_SETO. Costs two bytes per
+    // stack entry, on a stack MAX_PARSE_STACK_DEPTH deep.
+    xindex_t ix;     // declaration index (valid for variables)
     reg_t reg;       // register number (valid if loaded)
     union {
 	// uint8_t vtf;     // vt + flags(soon)
@@ -1813,9 +1953,52 @@ extern const uint8_t csp_num_builtin_funcs;
 extern csp_func_fn func_fn(const csp_func_t* fn, int i, int rom);
 extern uint8_t func_arity(const csp_func_t* fn, int i, int rom);
 
+// Resolve an encoded index to a flat decl index. OBJ(n) is a one-bit selector:
+// 0 = global (base 0), 1 = CURRENT (base cbase). It is not an object number and
+// does not index offs[].
 static inline int st_index(csp_rt_t* st, index_t n)
 {
-    return st->offs[OBJ(n)] + INDEX(n);
+    return (OBJ(n) ? st->cbase : 0) + INDEX(n);
+}
+
+// The same thing for a NAMED object, where the caller has the object number in
+// hand. Used off the execution path -- setup, per-object init, listing -- which
+// is where an object other than "global" or "the one running" gets addressed
+// without an OP_SETO to say so.
+static inline int st_index_obj(csp_rt_t* st, unsigned m, index_t ix)
+{
+    return st->offs[m] + ix;
+}
+
+// Point the object context at `m`, the way OP_NEW does. For the passes that walk
+// per-object data from OUTSIDE a rule: setup, the I/O and timer lists, the
+// per-object State step, listing.
+static inline void csp_ctx_set(csp_rt_t* st, unsigned m)
+{
+    st->cur   = (uint8_t)m;
+    st->cbase = st->offs[m];
+}
+
+// Back to global. Every loop that used csp_ctx_set ends with this, so nothing
+// downstream inherits a base belonging to whichever object happened to be last.
+static inline void csp_ctx_reset(csp_rt_t* st)
+{
+    st->cur   = 0;
+    st->cbase = 0;
+}
+
+// Entry i of the I/O / timer list, with its object bound. See the io/io_obj
+// declaration for why the entry alone is not enough.
+static inline index_t csp_io_at(csp_rt_t* st, int i)
+{
+    csp_ctx_set(st, st->io_obj[i]);
+    return st->io[i];
+}
+
+static inline index_t csp_timer_at(csp_rt_t* st, int i)
+{
+    csp_ctx_set(st, st->timer_obj[i]);
+    return st->timer[i];
 }
 
 // Resolve a leaf index to its view descriptor (see doc/DESCRIPTORS.md).

@@ -799,9 +799,11 @@ static int state_udigits(uvalue_t v)
 // name for a global.
 static void state_name(csp_rt_t* st, index_t ix)
 {
-    int m = OBJ(ix);
+    // OBJ(ix) is a one-bit selector; the object number comes from the context
+    // the caller bound (csp_ctx_set), exactly as it does at runtime.
+    int m = OBJ(ix) ? st->cur : 0;
     int n = 0;
-    if ((m != GLOBAL) && (m != CURRENT)) {
+    if (m != 0) {
 	index_t ox = st->object[m];
 	csp_print_str_at(st, decl_name_pos(st, ox));
 	csp_print_char('.');
@@ -837,7 +839,7 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
 	uint32_t left = 0;
 	if (v->t.running) {
 	    // t0 lives in the slot right after the timer
-	    index_t tx = MAKE_INDEX(OBJ(ix), INDEX(ix)+1);
+	    index_t tx = ix + 1;   // same object: the selector rides along
 	    uint32_t dt = csp_time_ms() - csp_dio_slot(st, tx, DIN)->u;
 	    left = (dt >= v->t.period) ? 0 : (v->t.period - dt);
 	}
@@ -1121,6 +1123,11 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 	m    = decl(st, i, mq.m);
 	dn   = decl(st, INDEX(mx), md.n);
 	base = INDEX(mx) + 1;
+	// Bind the instance for the whole row block: an encoded index carries a
+	// selector, not an object number, so a member only resolves to THIS
+	// object's storage while the context points at it. Listing runs outside
+	// any rule, so there is no OP_NEW/OP_SETO to have done it.
+	csp_ctx_set(st, m);
 	for (j = 0; j < dn; j++) {
 	    int dj = base + j;
 	    decl_t t = decl(st, dj, type);
@@ -1134,11 +1141,12 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 		    csp_println();
 		    shown = 1;
 		}
-		state_row(st, MAKE_INDEX(m, dj), dj);
+		state_row(st, MAKE_INDEX(CURRENT, dj), dj);
 	    }
 	    if (t == DECL_TIMER)   // a timer owns the next slot too (its t0)
 		j++;
 	}
+	csp_ctx_reset(st);
     }
     return CSP_CMD_OK;
 }
@@ -1161,7 +1169,11 @@ static int cmd_reset(csp_rt_t* st, int argc, char* argv[])
     {
 	value_t* iptr;
 	value_t* optr;
-	if (csp_dio_slots(st, st->cs.sx, &iptr, &optr) == 0)
+	// gsx, not cs.sx: /reset means the GLOBAL State. cs.sx is a parse-time
+	// cursor that points at a module's own State between #module and #end,
+	// so a /reset typed mid-definition used to poke that module's State
+	// instead -- the same trap csp_rt_t.gsx exists for.
+	if (csp_dio_slots(st, st->gsx, &iptr, &optr) == 0)
 	    iptr->i = optr->i = STATE_INIT;
     }
     csp_print_line("Reset");
@@ -1574,8 +1586,20 @@ static int csp_process_immediate(csp_rt_t* st, char* line)
 
     if (result.I)
 	csp_print_value(st, result.vt, result.val);
-    else if (result.ix != BAD_INDEX)
-	csp_print_value(st, result.vt, csp_value(st, result.ix));
+    else if (result.ix != BAD_INDEX) {
+	// result.ix may still name an object (`> safe.State`). Nothing was
+	// emitted, so there is no OP_SETO to do this -- bind it here instead.
+	unsigned m = XOBJ(result.ix);
+	uint8_t  save_cur   = st->cur;
+	index_t  save_cbase = st->cbase;
+	if ((m != XOBJ_GLOBAL) && (m != XOBJ_CURRENT))
+	    csp_ctx_set(st, m);
+	csp_print_value(st, result.vt,
+			csp_value(st, MAKE_INDEX(m ? CURRENT : GLOBAL,
+						 XIDX(result.ix))));
+	st->cur   = save_cur;
+	st->cbase = save_cbase;
+    }
     else
 	csp_print_lit("NONE");
     csp_println();

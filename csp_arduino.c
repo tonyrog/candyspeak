@@ -599,7 +599,7 @@ void csp_setup(csp_rt_t* st)
     // same "last one wins" the rest of the language patches by; it used to be
     // decided by which phase ran second, which was an accident.
     for (i = 0; i < st->nio; i++) {
-	index_t ix = st->io[i];
+	index_t ix = csp_io_at(st, i);   // binds the entry's object
 	int j = INDEX(ix);
 	value_t* vptr = csp_dio_slot(st, ix, DOUT);
 	switch(decl(st,j,type)) {
@@ -618,6 +618,7 @@ void csp_setup(csp_rt_t* st)
 	    break;
 	}
     }
+    csp_ctx_reset(st);
 
 //    if (res)
 //	analogReadResolution(res);
@@ -630,9 +631,9 @@ void csp_input(csp_rt_t* st)
     csp_board_start_input(st);
 
     for (i = 0; i < st->nio; i++) {
-	index_t ix = st->io[i];
+	index_t ix = csp_io_at(st, i);   // binds the entry's object
 	int di = INDEX(ix);
-	value_t* vptr;	
+	value_t* vptr;
 	int vi = st_index(st, ix);
 	switch(decl(st,di,type)) {
 	case DECL_DIGITAL:
@@ -656,6 +657,7 @@ void csp_input(csp_rt_t* st)
 	default: break;
 	}
     }
+    csp_ctx_reset(st);
     csp_can_input(st);
     csp_input_timer(st);
 }
@@ -786,7 +788,7 @@ void csp_output(csp_rt_t* st)
 	csp_board_start_output(st);
 
 	for (i = 0; i < st->nio; ++i) {
-	    index_t ix = st->io[i];
+	    index_t ix = csp_io_at(st, i);   // binds the entry's object
 	    int di = INDEX(ix);
 	    value_t* vptr;
 	    switch(decl(st,di,type)) {
@@ -809,6 +811,7 @@ void csp_output(csp_rt_t* st)
 		break;
 	    }
 	}
+	csp_ctx_reset(st);
 	csp_can_output(st);
 	csp_board_stop_output(st);
     }

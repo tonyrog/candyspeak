@@ -46,14 +46,16 @@ static const char* indent(int lev)
 
 void csp_fprint_tag(FILE* f, csp_rt_t* st, index_t n)
 {
-    int m = OBJ(n);
     int i = INDEX(n);
-    if (m == GLOBAL) // global
+    // OBJ(n) is the selector, so "which object" is whatever context the caller
+    // bound. A list walked with csp_io_at/csp_timer_at has st->cur pointing at
+    // the entry's owner; everything else is global or the module being listed.
+    if (OBJ(n) == GLOBAL)
 	fprintf(f, "{%c,%d}", csp_tag(st,n), i);
-    else if (m == CURRENT) // match
+    else if (st->cur == 0)
 	fprintf(f, "{cur,%c,%d}", csp_tag(st,n), i);
     else
-	fprintf(f, "{%d,%c,%d}", m, csp_tag(st,n), i);
+	fprintf(f, "{%d,%c,%d}", st->cur, csp_tag(st,n), i);
 }
 
 void csp_print_tag(csp_rt_t* st, index_t n)
@@ -148,8 +150,19 @@ index_t csp_dump_rule(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 
 index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 {
+    // Track OP_SETO the way the runtime does: it names the object for the ONE
+    // instruction after it, and csp_fprint_tag reads st->cur to render that. A
+    // dump runs outside execution, so borrowing st->cur is safe as long as the
+    // one-shot is cleared again -- which is what the reset below the switch is.
+    int seto = (instr(st,i,op) == OP_SETO);
+
     fprintf(f, "%s", indent(lev));
     switch(instr(st,i,op)) {
+    case OP_SETO:
+	fprintf(f, "{instr,%d,'SETO',[%d]}%s\n",
+		i, instr(st,i,o.obj), eot);
+	st->cur = (uint8_t)instr(st,i,o.obj);
+	break;
     case OP_NOP:
 	fprintf(f, "{instr,%d,'NOP'}%s\n",
 		i, eot);
@@ -216,6 +229,7 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		(uint16_t)instr(st,i,i.imm),
 		eot);
 	break;
+/*	
     case OP_EQI:
 	fprintf(f, "{instr,%d,'EQI',[r%d,",
 		i,
@@ -224,6 +238,7 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	fprintf(f, ",%d", instr(st,i,mi.imm));
 	fprintf(f, "]}%s\n", eot);
 	break;
+*/
     case OP_STI:  // store immediate to memory (no result register)
 	fprintf(f, "{instr,%d,'STI',[", i);
 	csp_fprint_tag(f, st, instr(st,i,mi.mem));
@@ -312,17 +327,20 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	    break;
 	}
     }
+    if (!seto)
+	st->cur = 0;    // one-shot consumed (or none was armed)
     return i+1;
 }
 
-void csp_dump_var_name(FILE* f, csp_rt_t* st, index_t ix)
+// `m` is a REAL object number (0 = global), not the selector bit of an encoded
+// index -- the index cannot carry one any more, so the caller passes it.
+void csp_dump_var_name(FILE* f, csp_rt_t* st, int m, index_t di)
 {
-    int m = OBJ(ix);
-    if ((m == GLOBAL) || (m == CURRENT)) // global    
-	fprintf(f, "%s", decl_name(st, ix));
+    if (m == GLOBAL)
+	fprintf(f, "%s", decl_name(st, di));
     else {
 	index_t obj = st->object[m];
-	fprintf(f, "%s.%s", decl_name(st, obj), decl_name(st, ix));
+	fprintf(f, "%s.%s", decl_name(st, obj), decl_name(st, di));
     }
 }
 
@@ -331,25 +349,32 @@ void csp_dump_var(FILE* f,csp_rt_t* st,
 		  int m, int di,
 		  int fv, csp_lang_t lang)
 {
-    index_t ix = MAKE_INDEX(m, di);
+    // Bind the object so `di` reads out of THIS instance's storage. Listing
+    // walks objects from outside any of them, so there is no OP_SETO and no
+    // OP_NEW to have done it.
+    index_t ix = MAKE_INDEX(m ? CURRENT : GLOBAL, di);
+    if (m)
+	csp_ctx_set(st, m);
 
     switch(lang) {
     case ERLANG:
 	if (!fv) fprintf(f, ",");
 	fprintf(f, "{%s,\"", dtype);
-	csp_dump_var_name(f, st, ix);
+	csp_dump_var_name(f, st, m, di);
 	fprintf(f, "%s\",", suffix);
 	csp_fprint_value(f, st, decl(st,di,vt), csp_value(st, ix));
 	fprintf(f, "}");
 	break;
     case TEXT:
 	fprintf(f, " ");
-	csp_dump_var_name(f, st, ix);
+	csp_dump_var_name(f, st, m, di);
 	fprintf(f, "%s=", suffix);
 	csp_fprint_value(f, st, decl(st,di,vt),  csp_value(st, ix));
 	if (m == 0) fprintf(f, "\n");
 	break;
     }
+    if (m)
+	csp_ctx_reset(st);
 }
 
 void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
@@ -669,8 +694,9 @@ void csp_dump(FILE* f, csp_rt_t* st)
     fprintf(f, "{timer,[");
     for (i = 0; i < st->nt; i++) {
 	if (i > 0) fputc(',', f);	
-	csp_fprint_tag(f, st, st->timer[i]);
+	csp_fprint_tag(f, st, csp_timer_at(st, i));
     }
+    csp_ctx_reset(st);
     fprintf(f, "]}.\n");
     
     
@@ -682,16 +708,18 @@ void csp_dump(FILE* f, csp_rt_t* st)
     for (i = 0, n = 0; i < st->nio; i++) {
 	if (!(decl(st, INDEX(st->io[i]), dir) & DIR_IN)) continue;
 	if (n++ > 0) fputc(',', f);
-	csp_fprint_tag(f, st, st->io[i]);
+	csp_fprint_tag(f, st, csp_io_at(st, i));
     }
+    csp_ctx_reset(st);
     fprintf(f, "]}.\n");
 
     fprintf(f, "{output,[");
     for (i = 0, n = 0; i < st->nio; i++) {
 	if (!(decl(st, INDEX(st->io[i]), dir) & DIR_OUT)) continue;
 	if (n++ > 0) fputc(',', f);
-	csp_fprint_tag(f, st, st->io[i]);
+	csp_fprint_tag(f, st, csp_io_at(st, i));
     }
+    csp_ctx_reset(st);
     fprintf(f, "]}.\n");
 
     fprintf(f, "{module,[");    
@@ -1054,8 +1082,8 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    fprintf(f, "  {.m={%s,.x=%u,.mem=%u,.y=%u}},\n",
 		    op, ip->m.x, ip->m.mem, ip->m.y);
 	    break;
-	case OP_STI:
-	case OP_EQI:
+	    // case OP_EQI:
+	case OP_STI:	    
 	    fprintf(f, "  {.mi={%s,.x=%u,.mem=%u,.imm=%d}},\n",
 		    op, ip->mi.x, ip->mi.mem, ip->mi.imm);
 	    break;
@@ -1065,6 +1093,13 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    break;
 	case OP_NEXT:
 	    fprintf(f, "  {.x={%s,.x=%u}},\n", op, ip->x.x);
+	    break;
+	case OP_SETO:
+	    // Its own arm, not the ALU default: obj is 16 bits and the default
+	    // would write it as x/y/z (4 bits each). Objects 1..15 happen to come
+	    // out right through .a.x, which is exactly the kind of coincidence
+	    // that holds until a program has sixteen of them.
+	    fprintf(f, "  {.o={%s,.obj=%u}},\n", op, ip->o.obj);
 	    break;
 	case OP_NINSTATE:
 	case OP_INSTATE:

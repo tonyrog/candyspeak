@@ -35,6 +35,11 @@ typedef struct {
     // body side-effects list
     uint8_t nbody;
     uint8_t body[MAX_BODY];   // strptrs indices
+    // Object named by a preceding OP_SETO, consumed by the next variable the
+    // walk renders -- the same one-shot the runtime uses. 0 = none, so a
+    // CURRENT-relative index lists bare (it is a member of the module body
+    // being listed) and only a NAMED object gets its `obj.` prefix back.
+    uint8_t seto;
 } csp_exprbuf_t;
 
 static void exprbuf_init(csp_exprbuf_t* bp)
@@ -42,6 +47,7 @@ static void exprbuf_init(csp_exprbuf_t* bp)
     bp->pos = 0;
     bp->nstrptrs = 0;
     bp->nbody = 0;
+    bp->seto = 0;
 }
 
 // return current pointer
@@ -156,9 +162,10 @@ static void exprbuf_str_at(csp_rt_t* st, csp_exprbuf_t* bp, sindex_t pos)
 static uint8_t exprbuf_var(csp_rt_t* st, csp_exprbuf_t* bp, uint16_t ix)
 {
     uint8_t *start = exprbuf_ptr(bp);
-    int m = OBJ(ix);
+    int m = bp->seto;      // set by the OP_SETO in front of this access
+    bp->seto = 0;
 
-    if ((m != GLOBAL) && (m != CURRENT)) {
+    if (m != 0) {
 	exprbuf_str_at(st, bp, decl_name_pos(st, st->object[m]));
 	exprbuf_char(bp, '.');
     }
@@ -596,9 +603,9 @@ static int reg_consumed(csp_rt_t* st, int i, int reg)
 	case OP_LDP:
 	    if (ip->m.x == reg) return 0;  // redefined
 	    break;
-	case OP_EQI:
-	    if (ip->mi.x == reg) return 0; // redefined
-	    break;
+//	case OP_EQI:
+//	    if (ip->mi.x == reg) return 0; // redefined
+//	    break;
 	case OP_LI:
 	case OP_LIU:
 	case OP_LIH:
@@ -637,6 +644,12 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	csp_instr_t ipv = csp_get_instr(st, i);
 	csp_instr_t* ip = &ipv;
 	switch(ip->op) {
+	case OP_SETO:
+	    // Names the object for the NEXT variable rendered. Mirrors the
+	    // runtime's one-shot exactly, so the listing cannot disagree with
+	    // what the instruction stream actually does.
+	    bp->seto = (uint8_t)ip->o.obj;
+	    break;
 	case OP_RULE:
 	    exprbuf_rule(st, bp, ip);
 	    return i+1;
@@ -687,6 +700,7 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
             bp->prio[ip->i.x] = 110;
             break;
 	}
+	    /*
 	case OP_EQI: {
 	    uint8_t *start = exprbuf_ptr(bp);
 	    // Inside a listed #in <S> block, the per-rule State==S gate is implied
@@ -713,6 +727,7 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	    bp->prio[ip->a.x] = 60;
 	    break;
 	}
+	    */
         case OP_LIH: {
             uint8_t *start = exprbuf_ptr(bp);
 	    uint8_t ih;

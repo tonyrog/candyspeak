@@ -51,7 +51,8 @@ const op_entry_t tok_table[] RODATA = {
     // (one-shot assignment / timer start). Rules use asm_rule, not this path.
     INSTR_ENT(EQ,OP_EQ,s_EQ,2,5,RIGHT),       // assign_expr
     INSTR_ENT(RIMP,OP_RIMP,s_RIMP,2,4,RIGHT), // assign_expr
-    INSTR_ENT(COMMA,OP_COMMA,s_COMMA,2,2,RIGHT),
+    // INSTR_ENT(COMMA,OP_COMMA,s_COMMA,2,2,RIGHT),
+    INSTR_ENT(COMMA,OP_NOP,s_COMMA,2,2,RIGHT),    
     INSTR_ENT(QUEST,OP_RULE,s_QUEST,-1,-1,NO),
 
     TOK_ENT(T_PULLUP,OP_NOP,s_pullup),

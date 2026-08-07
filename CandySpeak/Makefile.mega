@@ -29,10 +29,10 @@ compile:
 
 
 exec:
-	$(MAKE) -f Makefile.micro compile EXTRA="-DCSP_EXEC_ONLY"
+	$(MAKE) -f Makefile.mega compile EXTRA="-DCSP_EXEC_ONLY"
 
 min:
-	$(MAKE) -f Makefile.micro compile EXTRA="-DCSP_EXEC_ONLY -DCSP_NO_EEPROM"
+	$(MAKE) -f Makefile.mega compile EXTRA="-DCSP_EXEC_ONLY -DCSP_NO_EEPROM"
 
 # Text size per symbol, largest first -- the list to read when it does not fit.
 size:

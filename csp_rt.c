@@ -85,7 +85,7 @@ const op_info_t op_info[] RODATA = {
     [OP_FNEQ] = {ros_FNEQ,NEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
 
     // comman may not be needed?
-    [OP_COMMA] = {ros_OCOMMA,NONE,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    //[OP_COMMA] = {ros_OCOMMA,NONE,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
 
     // other operations for name
     [OP_ENTER] = {ros_ENTER,NONE,3,V_VOID,MAKE_TYPE0()},
@@ -99,10 +99,11 @@ const op_info_t op_info[] RODATA = {
     [OP_STP]   = {ros_STP,NONE,3,V_VOID,MAKE_TYPE0()},
     [OP_STIMP] = {ros_STIMP,NONE,3,V_VOID,MAKE_TYPE0()},
     [OP_CHG]   = {ros_CHG,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_EQI]   = {ros_EQI,NONE,3,V_VOID,MAKE_TYPE0()},
+//    [OP_EQI]   = {ros_EQI,NONE,3,V_VOID,MAKE_TYPE0()},
     [OP_STI]   = {ros_STI,NONE,3,V_VOID,MAKE_TYPE0()},
     [OP_INSTATE] = {ros_INSTATE,NONE,3,V_VOID,MAKE_TYPE0()},
     [OP_NINSTATE] = {ros_NINSTATE,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_SETO] = {ros_SETO,NONE,3,V_VOID,MAKE_TYPE0()},
     [OP_LD]    = {ros_LD,NONE,3,V_VOID,MAKE_TYPE0()},
     [OP_LDP]   = {ros_LDP,NONE,3,V_VOID,MAKE_TYPE0()},
     [OP_CALL]  = {ros_CALL,NONE,3,V_VOID,MAKE_TYPE0()},
@@ -110,6 +111,8 @@ const op_info_t op_info[] RODATA = {
     [OP_NEXT]  = {ros_NEXT,NONE,3,V_VOID,MAKE_TYPE0()},
     [OP_NOP]   = {ros_NOP,NONE,3,V_VOID,MAKE_TYPE0()},
 };
+
+CSP_STATIC_ASSERT(OP_AVAIL <= ((1 << CSP_OPCODE_BITS)-1), "too many opcodes");
 
 static const char tag_tab[] RODATA = {
     [DECL_OBJECT] = 'q',
@@ -121,6 +124,8 @@ static const char tag_tab[] RODATA = {
     [DECL_TIMER] = 't',
     [DECL_FIELD] = 'f',
 };
+
+CSP_STATIC_ASSERT(DECL_AVAIL <= ((1 << CSP_DECL_TYPE_BITS)-1), "too many types");
 
 // --- stack watch ------------------------------------------------------------
 // Declarations grow DOWN from the arena top; the stack grows DOWN from RAMEND
@@ -405,32 +410,32 @@ rostring_t csp_fmt_endian(vendian_t et)
 static rostring_t csp_format_error(csp_err_t err)
 {
     switch(err) {
-    case ERR_OK:                  return ros_err_ok;
-    case ERR_SYNTAX:              return ros_err_syntax;
+    case ERR_OK:                    return ros_err_ok;
+    case ERR_SYNTAX:                return ros_err_syntax;
     case ERR_STRING_SPACE_EXHUSTED: return ros_err_string_space;
     case ERR_TOO_MANY_DECLARATIONS: return ros_err_many_decls;
     case ERR_TOO_MANY_INSTRUCTIONS: return ros_err_many_instrs;
-    case ERR_TOO_MANY_OBJECTS:    return ros_err_many_objects;
-    case ERR_MODULE_NOT_DECLARED: return ros_err_no_module;
-    case ERR_TOO_MANY_STATES:     return ros_err_many_states;
-    case ERR_STATE_NOT_DECLARED:  return ros_err_no_state;
-    case ERR_NOT_A_MODULE:        return ros_err_not_module;
-    case ERR_NOT_A_BUFFER:        return ros_err_not_buffer;
-    case ERR_END_MISMATCH:        return ros_err_end_mismatch;
-    case ERR_OBJECT_NOT_DECLARED: return ros_err_no_object;
+    case ERR_TOO_MANY_OBJECTS:      return ros_err_many_objects;
+    case ERR_MODULE_NOT_DECLARED:   return ros_err_no_module;
+    case ERR_TOO_MANY_STATES:       return ros_err_many_states;
+    case ERR_STATE_NOT_DECLARED:    return ros_err_no_state;
+    case ERR_NOT_A_MODULE:          return ros_err_not_module;
+    case ERR_NOT_A_BUFFER:          return ros_err_not_buffer;
+    case ERR_END_MISMATCH:          return ros_err_end_mismatch;
+    case ERR_OBJECT_NOT_DECLARED:   return ros_err_no_object;
     case ERR_VARIABLE_NOT_DECLARED: return ros_err_no_variable;
-    case ERR_FIELD_NOT_FOUND:     return ros_err_no_field;
+    case ERR_FIELD_NOT_FOUND:       return ros_err_no_field;
     case ERR_FUNCTION_DOES_NOT_EXIST: return ros_err_no_function;
-    case ERR_ALREADY_DEFINED:     return ros_err_defined;
-    case ERR_INTERNAL_ERROR:      return ros_err_internal;
+    case ERR_ALREADY_DEFINED:       return ros_err_defined;
+    case ERR_INTERNAL_ERROR:        return ros_err_internal;
     case ERR_FUNCTION_ARGUMENT_TYPE_MISMATCH: return ros_err_arg_mismatch;
-    case ERR_NAME_TOO_LONG:       return ros_err_name_long;
-    case ERR_BAD_RULE_RANGE:      return ros_err_rule_range;
-    case ERR_NO_SUCH_RULE:        return ros_err_no_rule;
-    case ERR_CANNOT_SAVE:         return ros_err_cannot_save;
-    case ERR_CANNOT_LOAD:         return ros_err_cannot_load;
-    case ERR_NUMBER_RANGE:        return ros_err_num_range;
-    default:                      return ros_err_unknown;
+    case ERR_NAME_TOO_LONG:         return ros_err_name_long;
+    case ERR_BAD_RULE_RANGE:        return ros_err_rule_range;
+    case ERR_NO_SUCH_RULE:          return ros_err_no_rule;
+    case ERR_CANNOT_SAVE:           return ros_err_cannot_save;
+    case ERR_CANNOT_LOAD:           return ros_err_cannot_load;
+    case ERR_NUMBER_RANGE:          return ros_err_num_range;
+    default:                        return ros_err_unknown;
     }
 }
 
@@ -1427,7 +1432,7 @@ NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
         x.i = op_NEQ(y.i, z.i); goto store;
     case OP_FMUL: x.f = op_FMUL(y.f, z.f); goto store;
     case OP_FDIV: x.f = op_FDIV(y.f, z.f); goto store;
-    case OP_COMMA: x.i = op_COMMA(y.i, z.i); goto store;
+	//case OP_COMMA: x.i = op_COMMA(y.i, z.i); goto store;
 #if !FVALUE_IS_FIXPOINT
     case OP_FADD: x.f = op_FADD(y.f, z.f); goto store;
     case OP_FSUB: x.f = op_FSUB(y.f, z.f); goto store;
@@ -1454,10 +1459,10 @@ NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
 	csp_dio_get_part(st, ci.m.mem, &st->es.reg[ci.m.x],
 			 ci.m.y, DIN);
 	break;
-    case OP_EQI:
-	st->es.reg[ci.mi.x].i =
-	    csp_value(st, ci.mi.mem).i == ci.mi.imm;
-	break;	
+//    case OP_EQI:
+//	st->es.reg[ci.mi.x].i =
+//	    csp_value(st, ci.mi.mem).i == ci.mi.imm;
+//	break;	
     case OP_STI: {  // store immediate to memory (mirror of EQI)
 	index_t sm = ci.mi.mem;
 	value_t v;
@@ -1538,6 +1543,14 @@ NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
 	    return n + ci.in.nxt;
 	}
 	break;
+    case OP_SETO:
+	// Point CURRENT at a NAMED object (`safe.State`) for the ONE memory
+	// instruction that follows. Returns straight out rather than breaking: the
+	// restore in the tail below must not fire on the instruction that armed it.
+	st->es.sobj = st->cur + 1;         // remember who we were (0 = nothing armed)
+	st->cur     = ci.o.obj;
+	st->cbase   = st->offs[ci.o.obj];
+	return n+1;
     case OP_NEXT: // rule is done executing
 	*leave = 1;
 	return n+1;
@@ -1556,7 +1569,7 @@ NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
 	    st->stack[st->esp].cur = st->cur;  // store current module
 	    st->esp++;
 	    st->cur = decl(st, INDEX(obj), mq.m);    // set current module
-	    st->offs[CURRENT] = st->offs[st->cur];  // setup locals
+	    st->cbase = st->offs[st->cur];          // setup locals
 	    *leave = 1;
 	    return INDEX(ent)+1; // first instruction
 	}
@@ -1568,14 +1581,12 @@ NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
 	    st->esp--;
 	    st->cur = st->stack[st->esp].cur;
 	    n = st->stack[st->esp].ix;
-	    st->offs[CURRENT] = st->offs[st->cur];
+	    st->cbase = st->offs[st->cur];
 	    *leave = 1;
 	    return n;
 	}
 	break;
     case OP_CALL: {
-	// y: function index (low bit: 0=builtin, 1=user), index >> 1
-	// z: argument (0/1 arg) or OP_COMMA instruction (2+ args)
 	index_t idx = ci.f.idx;
 	uint8_t arity;
 	csp_func_fn fn = NULL;
@@ -1599,6 +1610,17 @@ NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
 	}
 	break;
     }
+    }
+    // Consume a one-shot OP_SETO: the memory instruction above has had its named
+    // object, so put the executing object back. A load and a branch on every
+    // instruction that reaches here, which buys OP_SETO not needing a paired
+    // restore instruction -- and a pair can be split by the forward jump that
+    // skips a rule body (csp_instr_rule_t.nxt), leaving the base on the wrong
+    // object for whatever ran next.
+    if (st->es.sobj) {
+	st->cur     = st->es.sobj - 1;
+	st->cbase   = st->offs[st->cur];
+	st->es.sobj = 0;
     }
     return n+1;
 store:
@@ -1752,7 +1774,7 @@ index_t csp_react(csp_rt_t* st)
 		// OP_NEW; reactive skips NEW). obj 0 = global (offs[0] == 0),
 		// leaving global rules unchanged.
 		st->cur = obj;
-		st->offs[CURRENT] = st->offs[obj];
+		st->cbase = st->offs[obj];
 		csp_eval_rule(st, ip);
 		x1 = ip;
 	    }
@@ -1809,12 +1831,23 @@ static void state_advance(csp_rt_t* st, index_t sx)
 static void states_advance(csp_rt_t* st)
 {
     int m;
+    uint8_t save_cur   = st->cur;
+    index_t save_cbase = st->cbase;
+
     state_advance(st, st->gsx);
+    // Each object's State is addressed CURRENT-relative, so walk the objects by
+    // pointing the context at them in turn -- an encoded index cannot name one.
+    // Safe here and nowhere near a rule: this runs at a cycle boundary, where
+    // nothing is mid-execution with a base of its own.
     for (m = 1; m <= (int)st->ps.nq; m++) {
 	index_t ix = st->object[m];
 	index_t mx = decl(st, INDEX(ix), mq.mx);
-	state_advance(st, MAKE_INDEX(m, INDEX(mx) + 1));
+	st->cur   = m;
+	st->cbase = st->offs[m];
+	state_advance(st, MAKE_INDEX(CURRENT, INDEX(mx) + 1));
     }
+    st->cur   = save_cur;
+    st->cbase = save_cbase;
 }
 
 index_t csp_cycle(csp_rt_t* st)
@@ -2354,14 +2387,14 @@ void csp_csr(csp_rt_t* st)
 		}
 	    }
 	    break;
-	case OP_EQI:
-	    if (current_rule >= 0) {
-		index_t mem = INDEX(ci.mi.mem);
-		if (mem < st->ps.nd) {
-		    st->es.idg[mem]++;
-		}
-	    }
-	    break;
+//	case OP_EQI:
+//	    if (current_rule >= 0) {
+//		index_t mem = INDEX(ci.mi.mem);
+//		if (mem < st->ps.nd) {
+//		    st->es.idg[mem]++;
+//		}
+//	    }
+//	    break;
 	case OP_LI:
 	case OP_LIU:
 	    reg_imm[ci.i.x] = (index_t)ci.i.imm;
@@ -2457,14 +2490,14 @@ void csp_csr(csp_rt_t* st)
 		    st->es.edg[wr[mem]++] = ord;
 	    }
 	    break;
-	case OP_EQI:
-	    if (current_rule >= 0) {
-		index_t mem = INDEX(ci.mi.mem);
-		if (mem < st->ps.nd &&
-		    (wr[mem] == st->es.ofs[mem] || st->es.edg[wr[mem]-1] != ord))
-		    st->es.edg[wr[mem]++] = ord;
-	    }
-	    break;
+//	case OP_EQI:
+//	    if (current_rule >= 0) {
+//		index_t mem = INDEX(ci.mi.mem);
+//		if (mem < st->ps.nd &&
+//		    (wr[mem] == st->es.ofs[mem] || st->es.edg[wr[mem]-1] != ord))
+//		    st->es.edg[wr[mem]++] = ord;
+//	    }
+//	    break;
 	case OP_LI:
 	case OP_LIU:
 	    reg_imm[ci.i.x] = (index_t)ci.i.imm;
@@ -2680,7 +2713,11 @@ NOINLINE static int rom_scan_decl(const csp_decl_t* decl)
 {
     int p;
     if (decl == NULL) return -1;
-    for (p = 0; p <= MAX_DECLS; p++) {
+    // CSP_PROVISION_DECLS, not MAX_DECLS: the encoding ceiling is 32768 entries
+    // now, and a header-less scan that walks that far past a corrupt marker reads
+    // 256K of flash that no target has. The bound is "no image is bigger than
+    // this", which is what MAX_DECLS happened to mean when the scan was written.
+    for (p = 0; p <= CSP_PROVISION_DECLS; p++) {
 	csp_decl_t m = ro_decl(&decl[p]);
 	if (m.type == DECL_END_MARK) {
 	    // csp_decl_t m = ro_decl(&decl[p]);
@@ -3055,8 +3092,8 @@ int csp_mem_init(csp_rt_t* st, size_t size)
     st->buf_cap = 0;
     st->heap_cap = 0;
     // input/output/timer are sized to the estimate in csp_rt_start too.
-    st->io = NULL;     st->io_cap = 0;
-    st->timer = NULL;  st->timer_cap = 0;
+    st->io = NULL;     st->io_obj = NULL;    st->io_cap = 0;
+    st->timer = NULL;  st->timer_obj = NULL; st->timer_cap = 0;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     // pending sets, rule_ip and idg/ofs/edg are all sized to actual in csp_csr.
     st->es.pending[0] = st->es.pending[1] = NULL;
@@ -3374,7 +3411,7 @@ NOINLINE static void can_mark_fields(csp_rt_t* st, index_t b)
     // Then per-field, so changed() has real granularity and only the fields
     // that moved wake their rules.
     for (i = 0; i < st->nio; i++) {
-	index_t ix = st->io[i];
+	index_t ix = csp_io_at(st, i);
 	int leaf = st_index(st, ix);
 	csp_view_t* vw = &st->view[leaf];
 	// The VIEW answers this, not the declaration. io[] holds exactly three
@@ -3399,6 +3436,7 @@ NOINLINE static void can_mark_fields(csp_rt_t* st, index_t b)
 #endif
 	st->es.update++;
     }
+    csp_ctx_reset(st);
 }
 
 // Does this program listen to the bus? A driver loop has to keep running for a
@@ -3555,16 +3593,19 @@ NOINLINE static int setup_buffer(csp_rt_t* st, index_t ix)
 NOINLINE static int parent_leaf(csp_rt_t* st, index_t ix)
 {
     index_t p = decl(st, INDEX(ix), ca.id);
-    int m = OBJ(ix);
-    if ((m != 0) && (m != CURRENT)) {
+    // OBJ(ix) is a one-bit selector, so the object number comes from st->cur --
+    // which the per-object setup loop points at the instance being built, exactly
+    // as OP_NEW does during execution.
+    int m = OBJ(ix) ? st->cur : 0;
+    if (m != 0) {
 	index_t ox = st->object[m];
 	index_t mx = decl(st, INDEX(ox), mq.mx);
 	int base = INDEX(mx) + 1;
 	int dn = decl(st, INDEX(mx), md.n);
 	if (((int)p >= base) && ((int)p < base + dn))
-	    return st_index(st, MAKE_INDEX(m, p));   // this instance's parent
+	    return st_index_obj(st, m, p);   // this instance's parent
     }
-    return st_index(st, MAKE_INDEX(0, p));           // a global parent
+    return p;                                // a global parent (base 0)
 }
 
 NOINLINE static int setup_variable(csp_rt_t* st, index_t ix)
@@ -3613,8 +3654,10 @@ NOINLINE static void add_io(csp_rt_t* st, index_t ix)
     csp_decl_t d = csp_get_decl(st, INDEX(ix));
     if ((d.type == DECL_FIELD) && !(d.dir & DIR_INOUT))
 	return;
-    if (st->nio < st->io_cap)  // sized to csp_estimate.nio; guard is belt+braces
+    if (st->nio < st->io_cap) {  // sized to csp_estimate.nio; guard is belt+braces
+	st->io_obj[st->nio] = st->cur;   // the instance setup is currently building
 	st->io[st->nio++] = ix;
+    }
 }
 
 
@@ -3638,8 +3681,10 @@ NOINLINE static int setup_decl(csp_rt_t* st, index_t ix, csp_decl_t d)
 	if (setup_slot(st, ix) < 0)
 	    return -1;
 	setup_timer(st, ix);
-	if (st->nt < st->timer_cap)
+	if (st->nt < st->timer_cap) {
+	    st->timer_obj[st->nt] = st->cur;
 	    st->timer[st->nt++] = ix;
+	}
 	break;
     case DECL_DIGITAL:
 	if (setup_slot(st, ix) < 0)
@@ -3885,7 +3930,9 @@ int csp_rt_start(csp_rt_t* st)
 	st->buf   = (csp_buf_t*)csp_mid_alloc(st, (size_t)e.nbuf * sizeof(csp_buf_t));
 	st->heap[DIN] = (uint8_t*)csp_mid_alloc(st, 2 * hbytes);
 	st->io     = (index_t*)csp_mid_alloc(st, (size_t)e.nio * sizeof(index_t));
+	st->io_obj = (uint8_t*)csp_mid_alloc(st, (size_t)e.nio);
 	st->timer  = (index_t*)csp_mid_alloc(st, (size_t)e.nt * sizeof(index_t));
+	st->timer_obj = (uint8_t*)csp_mid_alloc(st, (size_t)e.nt);
 	if (st->mid_full) {
 	    csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
 	    return -1;              // caps are already zero -- see above
@@ -3985,10 +4032,17 @@ int csp_rt_start(csp_rt_t* st)
 	index_t mx = get_mq_m(st, ix);   // get module
 	ivalue_t dn = get_md_n(st, mx);  // number of decl elements
 	int base = INDEX(mx)+1;
-	
+
+	// Set up the object context the way OP_NEW would, so a member is
+	// addressed CURRENT-relative: an encoded index carries a selector, not an
+	// object number, and setup_decl/parent_leaf read st->cur to learn which
+	// instance they are building.
+	st->cur   = m;
+	st->cbase = st->offs[m];
+
 	for (j = 0; j < dn; j++) {
 	    int dj = base + j;         // decl index
-	    index_t fx = MAKE_INDEX(m,dj); // field index
+	    index_t fx = MAKE_INDEX(CURRENT, dj); // field index
 	    csp_decl_t d = csp_get_decl(st, dj);   // one read per member
 #ifdef DEBUG
 	    DBG("init OBJECT %s, FIELD %s[%d]\n",
@@ -4012,6 +4066,8 @@ int csp_rt_start(csp_rt_t* st)
 	    }
 	}
     }
+    st->cur   = 0;     // back to global before anything executes
+    st->cbase = 0;
     st->cycle = 0;  // init trace shows cycle 0
     st->started = 1;   // leaves allocated + set up; value ops are now valid
     return 0;
@@ -4176,17 +4232,19 @@ void csp_input_timer(csp_rt_t* st)
 
     now_ms = csp_time_ms();
     for (i = 0; i < st->nt; i++) {
-	index_t ix = st->timer[i];
-	int obj = OBJ(ix);
-	// Replace CURRENT with actual object
+	index_t ix = csp_timer_at(st, i);
 	value_t* iptr;
-	value_t* optr;	
+	value_t* optr;
 
 	csp_dio_slots(st, ix, &iptr, &optr);
 	iptr->t.fired = optr->t.fired = 0;
 	// tx value: 0=stopped, >0=running (start_time+1)
 	if (iptr->t.running) {
-	    index_t tx = MAKE_INDEX(obj, INDEX(ix+1));
+	    // The start-time slot is the next declaration, in the same object --
+	    // and "same object" is now just the selector bit riding along, so
+	    // plain +1 says it. It used to need MAKE_INDEX(OBJ(ix), INDEX(ix+1))
+	    // to keep the object field from being carried into by the increment.
+	    index_t tx = ix + 1;
 	    value_t* txptr = csp_dio_slot(st, tx, DIN);
 	    uvalue_t t0 = txptr->u;
 	    if ((now_ms - t0) >= iptr->t.period) {
@@ -4201,6 +4259,7 @@ void csp_input_timer(csp_rt_t* st)
 	    }
 	}
     }
+    csp_ctx_reset(st);
 }
 
 // Expect current value to be in din (after commit)
@@ -4212,11 +4271,11 @@ void csp_output_timer(csp_rt_t* st)
 
     now_ms = csp_time_ms();
     for (i = 0; i < st->nt; ++i) {
-	index_t ix = st->timer[i];
+	index_t ix = csp_timer_at(st, i);
 	// The timer's start-time slot: an ordinary variable at the next decl
 	// index, in the same object. Computed once -- the stopped branch used to
 	// declare a second `tx` that shadowed this one with the same expression.
-	index_t tx = MAKE_INDEX(OBJ(ix), INDEX(ix+1));
+	index_t tx = ix + 1;
 	value_t* iptr;
 	value_t* optr;
 
@@ -4244,5 +4303,6 @@ void csp_output_timer(csp_rt_t* st)
 		wait_ms = period;
 	}
     }
+    csp_ctx_reset(st);
     st->es.wait_ms = wait_ms;
 }

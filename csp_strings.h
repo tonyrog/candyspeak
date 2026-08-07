@@ -369,6 +369,8 @@ extern rochar s_INSTATE[8] RODATA;
 #define ros_INSTATE ((rostring_t) s_INSTATE)
 extern rochar s_NINSTATE[9] RODATA;
 #define ros_NINSTATE ((rostring_t) s_NINSTATE)
+extern rochar s_SETO[5] RODATA;
+#define ros_SETO ((rostring_t) s_SETO)
 extern rochar s_RULE[5] RODATA;
 #define ros_RULE ((rostring_t) s_RULE)
 extern rochar s_NEXT[5] RODATA;
