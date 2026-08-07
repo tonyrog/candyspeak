@@ -582,8 +582,7 @@ void print_defines()
     printf("MAX_INDICES=%lu\n", (unsigned long)MAX_INDICES);
     printf("MAX_INSTRS=%d\n", MAX_INSTRS);
     printf("MAX_DECLS=%d\n", MAX_DECLS);
-    printf("MAX_MODULES=%d\n", MAX_MODULES);
-    printf("MAX_OBJECTS=%d\n", MAX_OBJECTS);
+    printf("MAX_OBJECT_NUM=%u\n", MAX_OBJECT_NUM);
     printf("MAX_STR_BUF=%d\n", MAX_STR_BUF);
     printf("MAX_STACK_DEPTH=%d\n", MAX_STACK_DEPTH);
 

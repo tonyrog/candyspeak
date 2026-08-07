@@ -3155,18 +3155,22 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	}
 	return -1;
     }
-    if (st->ps.nq >= MAX_OBJECTS-1) {
+    if (st->ps.nq >= MAX_OBJECT_NUM) {
 	csp_set_error(st, ERR_TOO_MANY_OBJECTS);
 	return -1;
     }
     if ((ix = csp_new_udecl(st, &d.obj_name, DECL_OBJECT)) == BAD_INDEX)
 	return -1;
 
-    // Set up object slot
+    // Set up object slot. The DECLARATION carries the object number (mq.m); that
+    // is the durable record. object[] is a reverse-map cache that csp_rt_start
+    // rebuilds, and it does not exist yet -- it is laid out with the other
+    // derived tables, which happens after parsing. csp_object_decl covers the
+    // gap for anything that runs in between (listing while /pause defers the
+    // rebuild).
     ram_decl_at(st, INDEX(ix))->mq.mx = mx;
     m = st->ps.nq + 1;
     ram_decl_at(st, INDEX(ix))->mq.m = m;
-    st->object[m] = ix;
     st->ps.nq++;
 
     DBG("object %s.%s\n", decl_name(st, mx), decl_name(st, ix));    

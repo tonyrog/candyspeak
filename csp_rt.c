@@ -112,7 +112,6 @@ const op_info_t op_info[] RODATA = {
     [OP_NOP]   = {ros_NOP,NONE,3,V_VOID,MAKE_TYPE0()},
 };
 
-CSP_STATIC_ASSERT(OP_AVAIL <= ((1 << CSP_OPCODE_BITS)-1), "too many opcodes");
 
 static const char tag_tab[] RODATA = {
     [DECL_OBJECT] = 'q',
@@ -124,8 +123,6 @@ static const char tag_tab[] RODATA = {
     [DECL_TIMER] = 't',
     [DECL_FIELD] = 'f',
 };
-
-CSP_STATIC_ASSERT(DECL_AVAIL <= ((1 << CSP_DECL_TYPE_BITS)-1), "too many types");
 
 // --- stack watch ------------------------------------------------------------
 // Declarations grow DOWN from the arena top; the stack grows DOWN from RAMEND
@@ -407,36 +404,38 @@ rostring_t csp_fmt_endian(vendian_t et)
 // other string in that table instead of being RAM literals. static on purpose:
 // the returned format is only meaningful to csp_print_error, and handing it to
 // printf/csp_print_str reads the wrong address space on AVR.
+
+static rostring_t  const err_tab[] RODATA = {
+    [ERR_OK] =                     ros_err_ok,
+    [ERR_SYNTAX] =                 ros_err_syntax,
+    [ERR_STRING_SPACE_EXHUSTED] =  ros_err_string_space,
+    [ERR_TOO_MANY_DECLARATIONS] =  ros_err_many_decls,
+    [ERR_TOO_MANY_INSTRUCTIONS] =  ros_err_many_instrs,
+    [ERR_TOO_MANY_OBJECTS] =       ros_err_many_objects,
+    [ERR_MODULE_NOT_DECLARED] =    ros_err_no_module,
+    [ERR_TOO_MANY_STATES] =        ros_err_many_states,
+    [ERR_STATE_NOT_DECLARED] =     ros_err_no_state,
+    [ERR_NOT_A_MODULE] =           ros_err_not_module,
+    [ERR_NOT_A_BUFFER] =           ros_err_not_buffer,
+    [ERR_END_MISMATCH] =           ros_err_end_mismatch,
+    [ERR_OBJECT_NOT_DECLARED] =    ros_err_no_object,
+    [ERR_VARIABLE_NOT_DECLARED] =  ros_err_no_variable,
+    [ERR_FIELD_NOT_FOUND] =        ros_err_no_field,
+    [ERR_FUNCTION_DOES_NOT_EXIST] =  ros_err_no_function,
+    [ERR_ALREADY_DEFINED] =        ros_err_defined,
+    [ERR_INTERNAL_ERROR] =         ros_err_internal,
+    [ERR_FUNCTION_ARGUMENT_TYPE_MISMATCH] =  ros_err_arg_mismatch,
+    [ERR_NAME_TOO_LONG] =          ros_err_name_long,
+    [ERR_BAD_RULE_RANGE] =         ros_err_rule_range,
+    [ERR_NO_SUCH_RULE] =           ros_err_no_rule,
+    [ERR_CANNOT_SAVE] =            ros_err_cannot_save,
+    [ERR_CANNOT_LOAD] =            ros_err_cannot_load,
+    [ERR_NUMBER_RANGE] =           ros_err_num_range,
+};
+
 static rostring_t csp_format_error(csp_err_t err)
 {
-    switch(err) {
-    case ERR_OK:                    return ros_err_ok;
-    case ERR_SYNTAX:                return ros_err_syntax;
-    case ERR_STRING_SPACE_EXHUSTED: return ros_err_string_space;
-    case ERR_TOO_MANY_DECLARATIONS: return ros_err_many_decls;
-    case ERR_TOO_MANY_INSTRUCTIONS: return ros_err_many_instrs;
-    case ERR_TOO_MANY_OBJECTS:      return ros_err_many_objects;
-    case ERR_MODULE_NOT_DECLARED:   return ros_err_no_module;
-    case ERR_TOO_MANY_STATES:       return ros_err_many_states;
-    case ERR_STATE_NOT_DECLARED:    return ros_err_no_state;
-    case ERR_NOT_A_MODULE:          return ros_err_not_module;
-    case ERR_NOT_A_BUFFER:          return ros_err_not_buffer;
-    case ERR_END_MISMATCH:          return ros_err_end_mismatch;
-    case ERR_OBJECT_NOT_DECLARED:   return ros_err_no_object;
-    case ERR_VARIABLE_NOT_DECLARED: return ros_err_no_variable;
-    case ERR_FIELD_NOT_FOUND:       return ros_err_no_field;
-    case ERR_FUNCTION_DOES_NOT_EXIST: return ros_err_no_function;
-    case ERR_ALREADY_DEFINED:       return ros_err_defined;
-    case ERR_INTERNAL_ERROR:        return ros_err_internal;
-    case ERR_FUNCTION_ARGUMENT_TYPE_MISMATCH: return ros_err_arg_mismatch;
-    case ERR_NAME_TOO_LONG:         return ros_err_name_long;
-    case ERR_BAD_RULE_RANGE:        return ros_err_rule_range;
-    case ERR_NO_SUCH_RULE:          return ros_err_no_rule;
-    case ERR_CANNOT_SAVE:           return ros_err_cannot_save;
-    case ERR_CANNOT_LOAD:           return ros_err_cannot_load;
-    case ERR_NUMBER_RANGE:          return ros_err_num_range;
-    default:                        return ros_err_unknown;
-    }
+    return err_tab[err];
 }
 
 // Print the current error with its arguments substituted. A light printf:
@@ -994,6 +993,29 @@ const csp_func_t csp_builtin_funcs[] RODATA = {
 };
 
 const uint8_t csp_num_builtin_funcs = sizeof(csp_builtin_funcs)/sizeof(csp_builtin_funcs[0]);
+
+// Declaration index of object number `m`.
+//
+// object[] is a cache that csp_rt_start rebuilds, and it lives with the other
+// derived tables in the middle of the arena -- so between a `#Module inst` line
+// and the next rebuild it does not cover the new object at all. That window is
+// real: /pause defers the rebuild, and /list reads object names through here.
+//
+// The durable record is in the declaration itself (mq.m), so fall back to a scan
+// when the cache cannot answer. The scan is O(nd) and only listing ever takes
+// it; everything on a cycle runs after a rebuild and hits the table.
+index_t csp_object_decl(csp_rt_t* st, unsigned m)
+{
+    index_t i;
+    if (st->object && (m < st->obj_cap))
+	return st->object[m];
+    for (i = 0; i < st->ps.nd; i++) {
+	csp_decl_t d = csp_get_decl(st, i);
+	if ((d.type == DECL_OBJECT) && (d.mq.m == m))
+	    return i;
+    }
+    return BAD_INDEX;
+}
 
 // enq all rules that depend on declaration x
 NOINLINE void csp_enq_elist(csp_rt_t* st, index_t x)
@@ -1839,11 +1861,13 @@ static void states_advance(csp_rt_t* st)
     // pointing the context at them in turn -- an encoded index cannot name one.
     // Safe here and nowhere near a rule: this runs at a cycle boundary, where
     // nothing is mid-execution with a base of its own.
-    for (m = 1; m <= (int)st->ps.nq; m++) {
+    // ps.nq counts what the PARSER has seen; object[]/offs[] cover what the last
+    // rebuild laid out. Those agree on a cycle (csp_cycle rebuilds first), and
+    // the bound keeps a half-parsed program from reading past the tables.
+    for (m = 1; (m < (int)st->obj_cap) && (m <= (int)st->ps.nq); m++) {
 	index_t ix = st->object[m];
 	index_t mx = decl(st, INDEX(ix), mq.mx);
-	st->cur   = m;
-	st->cbase = st->offs[m];
+	csp_ctx_set(st, m);
 	state_advance(st, MAKE_INDEX(CURRENT, INDEX(mx) + 1));
     }
     st->cur   = save_cur;
@@ -3092,6 +3116,8 @@ int csp_mem_init(csp_rt_t* st, size_t size)
     st->buf_cap = 0;
     st->heap_cap = 0;
     // input/output/timer are sized to the estimate in csp_rt_start too.
+    st->offs = NULL;   st->object = NULL;    st->obj_cap = 0;
+    st->module = NULL; st->mod_cap = 0;
     st->io = NULL;     st->io_obj = NULL;    st->io_cap = 0;
     st->timer = NULL;  st->timer_obj = NULL; st->timer_cap = 0;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
@@ -3765,13 +3791,14 @@ NOINLINE void csp_estimate(csp_rt_t* st, csp_estimate_t* e)
 
     e->nleaf = nd;                            // globals occupy leaves [0, nd)
     e->nbuf = e->nio = e->nt = 0;
+    e->nobj = e->nm = 0;
     e->heap = 0;
 
     for (i = 0; i < (int)nd; i++) {           // globals
 	switch (decl(st,i,type)) {
-	case DECL_MODULE: in_module = 1; break;
+	case DECL_MODULE: in_module = 1; e->nm++; break;
 	case DECL_END:    in_module = 0; break;
-	case DECL_OBJECT: break;                  // handled in the object pass
+	case DECL_OBJECT: e->nobj++; break;       // handled in the object pass
 	default:
 	    if (!in_module) est_leaf(st, i, e);
 	    break;
@@ -3916,6 +3943,7 @@ int csp_rt_start(csp_rt_t* st)
 	st->heap[DOUT] = NULL;
 	st->view_cap = 0; st->buf_cap = 0; st->heap_cap = 0;
 	st->io_cap = 0; st->timer_cap = 0;
+	st->obj_cap = 0; st->mod_cap = 0;
 	// csp_mid_alloc already records a failed request in mid_full, so the six
 	// pointers do not each need testing -- one flag answers for all of them.
 	// Cleared here rather than trusted from csp_mid_reset: rt_start can be
@@ -3933,6 +3961,10 @@ int csp_rt_start(csp_rt_t* st)
 	st->io_obj = (uint8_t*)csp_mid_alloc(st, (size_t)e.nio);
 	st->timer  = (index_t*)csp_mid_alloc(st, (size_t)e.nt * sizeof(index_t));
 	st->timer_obj = (uint8_t*)csp_mid_alloc(st, (size_t)e.nt);
+	// +1: object numbers are 1-based, slot 0 is the global base (offs[0] == 0).
+	st->offs   = (index_t*)csp_mid_alloc(st, (size_t)(e.nobj+1) * sizeof(index_t));
+	st->object = (index_t*)csp_mid_alloc(st, (size_t)(e.nobj+1) * sizeof(index_t));
+	st->module = (index_t*)csp_mid_alloc(st, (size_t)e.nm * sizeof(index_t));
 	if (st->mid_full) {
 	    csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
 	    return -1;              // caps are already zero -- see above
@@ -3943,6 +3975,8 @@ int csp_rt_start(csp_rt_t* st)
 	st->heap_cap = e.heap;
 	st->io_cap   = e.nio;
 	st->timer_cap = e.nt;
+	st->obj_cap  = e.nobj + 1;
+	st->mod_cap  = e.nm;
     }
 
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
@@ -3973,7 +4007,7 @@ int csp_rt_start(csp_rt_t* st)
 	switch(d.type) {
 	case DECL_MODULE:
 	    in_module=1;
-	    if (st->nm < MAX_MODULES)
+	    if (st->nm < st->mod_cap)
 		st->module[st->nm++] = ix;
 	    break;
 	case DECL_END:
@@ -3983,7 +4017,11 @@ int csp_rt_start(csp_rt_t* st)
 	    // Rebuild the object slot table (1-based, decl order == parse order),
 	    // so ROM-baked objects get per-object storage and list with their real
 	    // names. Per-object value init still happens after offs[] is allocated.
-	    if (st->ps.nq < MAX_OBJECTS-1)
+	    // Numbered here, NOT read from the declaration's mq.m: this walk visits
+	    // the objects in the same order the parser created them, so the two
+	    // agree -- and this is the side that also has to work for a ROM image,
+	    // where no parser ever ran.
+	    if (st->ps.nq + 1 < st->obj_cap)
 		st->object[++st->ps.nq] = ix;
 	    break;
 	case DECL_VIEW: {

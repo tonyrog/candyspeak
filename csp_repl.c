@@ -804,7 +804,7 @@ static void state_name(csp_rt_t* st, index_t ix)
     int m = OBJ(ix) ? st->cur : 0;
     int n = 0;
     if (m != 0) {
-	index_t ox = st->object[m];
+	index_t ox = csp_object_decl(st, m);
 	csp_print_str_at(st, decl_name_pos(st, ox));
 	csp_print_char('.');
 	n = decl_name_len(st, ox) + 1;
@@ -1476,8 +1476,10 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
     mem_row(ros_instr,   st->ps.nn   - st->rom_nn,   MAX_INSTRS, 0);   csp_println();
     mem_row(ros_decl,    st->ps.nd   - st->rom_nd,   MAX_DECLS,  0);   csp_println();
     mem_row(ros_string,  st->ps.strp - st->rom_strp, MAX_STR_BUF, 0);  csp_println();
-    mem_row(ros_objects, st->ps.nq,  MAX_OBJECTS, 0);                  csp_println();
-    mem_row(ros_modules, st->nm,     MAX_MODULES, 0);                  csp_println();
+    // -1 = no fixed ceiling: both tables are sized to the program (csp_estimate)
+    // and come out of the arena, so what limits them is the `pool` row below.
+    mem_row(ros_objects, st->ps.nq,  -1, 0);                           csp_println();
+    mem_row(ros_modules, st->nm,     -1, 0);                           csp_println();
     mem_row(ros_states,  st->ps.ns,  MAX_STATES,  0);                  csp_println();
     mem_row(ros_io,      st->nio,  -1, 0);                             csp_println();
     mem_row(ros_timers,  st->nt,   -1, 0);                             csp_println();

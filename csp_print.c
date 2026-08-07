@@ -166,7 +166,7 @@ static uint8_t exprbuf_var(csp_rt_t* st, csp_exprbuf_t* bp, uint16_t ix)
     bp->seto = 0;
 
     if (m != 0) {
-	exprbuf_str_at(st, bp, decl_name_pos(st, st->object[m]));
+	exprbuf_str_at(st, bp, decl_name_pos(st, csp_object_decl(st, m)));
 	exprbuf_char(bp, '.');
     }
     exprbuf_str_at(st, bp, decl_name_pos(st, ix));

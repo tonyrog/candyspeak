@@ -347,16 +347,13 @@ extern int ro_strcpy(char* dst, rostring_t src, int max);
 #else
 #define MAX_VARREFS  16
 #endif
-// Objects (and module definitions) a program may hold. This is NO LONGER an
-// encoding limit -- an index does not carry an object number any more -- it is
-// only the length of three fixed tables on csp_rt_t: offs/object/module, 2 bytes
-// per entry each. Raise it where RAM allows (boards/<target>.h is the place);
-// nothing in a ROM image changes when you do.
-#ifndef CSP_MAX_OBJECTS
-#define CSP_MAX_OBJECTS 32
-#endif
-#define MAX_MODULES  CSP_MAX_OBJECTS
-#define MAX_OBJECTS  CSP_MAX_OBJECTS
+// The highest object number the ENCODING can carry: csp_object_t.m and
+// csp_instr_seto_t.obj are both 16 bits, and 0 is reserved for the global base.
+// This is not a reservation -- offs[]/object[]/module[] are sized to what a
+// program actually declares (csp_estimate) and laid out with the other derived
+// tables. What binds in practice is the arena, and that fails at rebuild with
+// ERR_TOO_MANY_DECLARATIONS. This only refuses a number that cannot be stored.
+#define MAX_OBJECT_NUM 0xffffu
 // (buffers need no MAX_*: csp_view_t.buf is as wide as the nbuf counter feeding it)
 #define MAX_QUEUE    (MAX_INSTRS)      // ceiling csp_csr clamps the queue to
 // Highest rule number #disable can address. A fixed bitset on csp_rt_t (it has
@@ -877,6 +874,7 @@ typedef enum {
 
 #define CSP_OPCODE_BITS       6
 #define CSP_OPCODE_ARITY_BITS 2 // 0
+CSP_STATIC_ASSERT(OP_AVAIL <= ((1 << CSP_OPCODE_BITS)-1), "too many opcodes");
 
 // Forward declarations
 struct _csp_rt_t;
@@ -907,8 +905,7 @@ typedef enum {
 } decl_t;
 
 #define CSP_DECL_TYPE_BITS 4
-CSP_STATIC_ASSERT(DECL_AVAIL <= DECL_END_MARK, "out of decl types");
-CSP_STATIC_ASSERT(DECL_END_MARK < (1 << CSP_DECL_TYPE_BITS), "decl field too narrow");
+CSP_STATIC_ASSERT(DECL_AVAIL <= ((1 << CSP_DECL_TYPE_BITS)-1), "too many types");
 
 #define MAKE_RES(r) ((r)-1)
 #define GET_RES(rr) ((rr)+1)
@@ -1063,7 +1060,7 @@ typedef struct PACKED {
 // ran next. There is nothing to leave stale here.
 typedef struct PACKED {
     INSTR_COMMON;
-    unsigned obj:16;         // object table index (1..MAX_OBJECTS-1)
+    unsigned obj:16;         // object table index (1..MAX_OBJECT_NUM)
 } csp_instr_seto_t;
 
 // OP_END_MARK: a self-verifying terminator appended after rom_instr's data. Its
@@ -1105,8 +1102,6 @@ CSP_STATIC_ASSERT(sizeof(csp_instr_t) == 4, "csp_instr_t must be 4 bytes");
 // -w Arduino build would hide.
 CSP_STATIC_ASSERT(OP_AVAIL <= OP_END_MARK, "out of opcodes");
 CSP_STATIC_ASSERT(OP_END_MARK < (1 << CSP_OPCODE_BITS), "opcode field too narrow");
-// csp_object_t.m is 8 bits wide, and OP_SETO carries an object number in 16.
-CSP_STATIC_ASSERT(MAX_OBJECTS <= 256, "CSP_MAX_OBJECTS must fit csp_object_t.m");
 
 typedef enum {
     DIR_NONE  = 0x00,
@@ -1139,7 +1134,7 @@ typedef struct PACKED {
 typedef struct PACKED {
     DECL_COMMON;    
     index_t  mx;           // module declaration index
-    unsigned m:8;          // index in object table (1..MAX_OBJECTS-1)
+    unsigned m:16;         // index in object table (1..MAX_OBJECT_NUM)
 } csp_object_t;
 
 typedef struct PACKED  {
@@ -1637,10 +1632,18 @@ typedef struct _csp_rt_t
     set_group_t* dset;            // mark decl updated during cycle (own alloc, view_cap bits)
     
     // Object number -> where that object's members start in the decl index
-    // space. Filled by csp_rt_start. Indexed by a REAL object number (1..nq),
-    // never by the selector in an encoded index -- those two used to be the same
-    // number space and are not any more.
-    index_t offs[MAX_OBJECTS];     // offset to object locals
+    // space. Indexed by a REAL object number (1..nq), never by the selector in
+    // an encoded index -- those two used to be the same number space and are not
+    // any more. Slot 0 is the global base and is always 0.
+    //
+    // Sized to the objects the program HAS (csp_estimate.nobj) and laid out with
+    // the other derived tables in csp_rt_start, not reserved at a MAX_OBJECTS
+    // worst case. object[] is the reverse map, decl index of object m; both are
+    // rebuild-time caches -- the durable record of which object a declaration is
+    // lives in the declaration itself (mq.m). See csp_object_decl.
+    index_t* offs;                 // offset to object locals, obj_cap slots
+    index_t* object;               // decl index per object, obj_cap slots
+    index_t  obj_cap;              // slots allocated (== nobj + 1, for the 1-base)
     // The base a CURRENT-relative index resolves against: offs[cur], kept in step
     // by OP_NEW/OP_LEAVE, by the reactive dispatcher, and one-shot by OP_SETO.
     // Its own field rather than offs[CURRENT], which is what it was while CURRENT
@@ -1767,11 +1770,8 @@ typedef struct _csp_rt_t
     index_t* timer;              // list of timers, timer_cap slots
     uint8_t* timer_obj;          // owning object per timer[] entry (0 = global)
     index_t  timer_cap;
-    // module[] and object[] are bounded by the encoding: a module/object index is
-    // OBJ_BITS wide and CURRENT reserves the top slot, so 1<<OBJ_BITS is their true
-    // max (object[] is also filled incrementally during parse). Kept struct-fixed.
-    index_t module[MAX_MODULES];   // list of modules
-    index_t object[MAX_OBJECTS];   // list of objects
+    index_t* module;             // list of modules, mod_cap slots
+    index_t  mod_cap;
     // Rule bodies counted at EMIT time (alloc_instr_ptr), no scan. csp_rebuild
     // snapshots the counter into graph_rules, so n_rule_emit != graph_rules
     // means "code was added since the last rebuild" -- the cheap staleness test
@@ -2108,6 +2108,8 @@ typedef struct {
 		      // same door it would have hit through hp.
     index_t  nio;     // device entries (digital/analog/field)
     index_t  nt;      // timers (global + per-object)
+    index_t  nobj;    // objects (DECL_OBJECT), sizes offs[]/object[]
+    index_t  nm;      // module definitions (DECL_MODULE), sizes module[]
 } csp_estimate_t;
 extern void    csp_estimate(csp_rt_t* st, csp_estimate_t* e);
 // Backend hook: return >= `need` bytes of RAM for the code arena (called once at
@@ -2130,6 +2132,9 @@ extern const uint8_t* csp_image_at(int i);
 extern const uint8_t* csp_find_image(unsigned role);
 extern uint16_t csp_crc16(uint16_t crc, const void* data, size_t n, int is_rom);
 extern int     csp_has_firmware(void);
+// Declaration index of object number m, valid even before a rebuild has built
+// the object[] cache (see the definition).
+extern index_t csp_object_decl(csp_rt_t*, unsigned m);
 extern int     csp_rt_start(csp_rt_t*);
 // Re-lay the whole program out (graph + leaf/device setup). Use this rather than
 // calling csp_csr/csp_rt_start separately: they share one bump-allocated region.

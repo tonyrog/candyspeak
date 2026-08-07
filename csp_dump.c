@@ -339,7 +339,7 @@ void csp_dump_var_name(FILE* f, csp_rt_t* st, int m, index_t di)
     if (m == GLOBAL)
 	fprintf(f, "%s", decl_name(st, di));
     else {
-	index_t obj = st->object[m];
+	index_t obj = csp_object_decl(st, m);
 	fprintf(f, "%s.%s", decl_name(st, obj), decl_name(st, di));
     }
 }
@@ -380,7 +380,7 @@ void csp_dump_var(FILE* f,csp_rt_t* st,
 void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
 {
     int fv, j;
-    index_t obj = st->object[m];
+    index_t obj = csp_object_decl(st, m);
     index_t mx  = decl(st,INDEX(obj),mq.mx);
     int     n   = decl(st,INDEX(mx),md.n);    
     
@@ -732,7 +732,9 @@ void csp_dump(FILE* f, csp_rt_t* st)
     fprintf(f, "{object,[global");
     for (i = 0; i < st->ps.nq; i++) {
 	int m = i+1;
-	index_t ix = st->object[m];
+	index_t ix = csp_object_decl(st, m);
+	if ((ix == BAD_INDEX) || (m >= (int)st->obj_cap))
+	    continue;              // declared, but not laid out yet
 	fputc(',', f);
 	fprintf(f, "{'%s',%d,",
 		decl_name(st, decl(st,INDEX(ix),mq.mx)),
