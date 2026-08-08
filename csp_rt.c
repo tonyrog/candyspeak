@@ -686,23 +686,6 @@ int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val)
     }
 }
 
-#ifdef DEBUG
-void print_rentry(csp_rt_t* st, char* name, rentry_t* rp)
-{
-    DBG("%s={", name);
-    if (rp->X) DBG("name=%s,", decl_name(st, rp->ix));
-    DBG("flags=");
-    if (rp->I) DBG("im ");
-    if (rp->L) DBG("ld ");
-    if (rp->X) DBG("ix ");
-    DBG(",vt=%s", (char*)csp_fmt_vtype(rp->vt));
-    if (rp->L) DBG(",reg=%d", rp->reg);
-    if (rp->X) DBG(",ix=0x%04x", rp->ix);
-    if (rp->I) { DBG(",val="); csp_print_value(st, rp->vt, rp->val); }
-    DBG("}");
-}
-#endif
-
 // Built-in function implementations - args are pre-evaluated
 // fvalue_t is a signed scalar in both builds -- int32_t for Q16.16, float
 // otherwise -- and the fixpoint encoding is monotonic, so a plain comparison
@@ -1780,7 +1763,7 @@ index_t csp_react(csp_rt_t* st)
 		uint8_t  obj = QENTRY_OBJ(st, e);
 		index_t  ord = QENTRY_ORD(st, e);
 		index_t  ip  = st->es.rule_ip[ord];
-		uint16_t sm  = st->es.rule_state[ord];
+		csp_gate_mask_t sm = st->es.rule_state[ord];
 		bits &= (bits - 1);              // drop the bit we just took
 		// State gate at DISPATCH, not in the rule: skip a State-scoped rule
 		// (#in / NORMAL+) whose block does not include the current State.
@@ -1788,7 +1771,8 @@ index_t csp_react(csp_rt_t* st)
 		// the per-rule State test that used to live in every rule's condition.
 		if (sm) {
 		    int sv = csp_value(st, st->gsx).i;
-		    if ((sv < 0) || (sv >= MAX_STATES) || !((1u << sv) & sm))
+		    if ((sv < 0) || (sv >= MAX_GATE_STATES) ||
+			!((csp_gate_mask_t)(1u << sv) & sm))
 			continue;
 		}
 		// Restore the object context so a module rule's CURRENT-relative
@@ -1923,16 +1907,99 @@ index_t csp_cycle(csp_rt_t* st)
     }
 }
 
-NOINLINE int lookup_state(csp_rt_t* st, const tstr_t* name)
+// Walk every state slot in declaration order, newest last, calling back with
+// (number, name position). States are packed CSP_STATES_PER_DECL to a block and
+// filled front to back, so the running count IS the state number -- the same
+// derivation state_count uses, kept in one place so the two cannot drift.
+// Returns the number of states visited when the walk runs to the end.
+typedef int (*state_visit_fn)(csp_rt_t*, int snum, sindex_t pos, void* arg);
+
+NOINLINE static int state_walk(csp_rt_t* st, state_visit_fn fn, void* arg)
 {
-    int i;
-    for (i = 0; i < st->ps.ns; i++) {
-	if (csp_str_eq(st, st->states[i].name, name->ptr, name->len))
-	    return i;
+    index_t i;
+    int n = 0;
+    for (i = 0; i < st->ps.nd; i++) {
+	csp_decl_t d = csp_get_decl(st, i);
+	int k;
+	if (d.type != DECL_STATES)
+	    continue;
+	for (k = 0; k < CSP_STATES_PER_DECL; k++) {
+	    sindex_t np = csp_states_name(&d, k);
+	    if (np == 0)
+		continue;                  // padding at the end of a block
+	    if (fn && fn(st, n, np, arg))
+		return n;                  // visitor claimed this one
+	    n++;
+	}
     }
-    return -1;
+    return n;
 }
 
+struct state_find { const tstr_t* name; sindex_t pos; int snum; };
+
+static int state_by_name(csp_rt_t* st, int snum, sindex_t pos, void* arg)
+{
+    struct state_find* f = (struct state_find*)arg;
+    if (!csp_str_eq(st, pos, f->name->ptr, f->name->len))
+	return 0;
+    f->snum = snum;
+    return 1;
+}
+
+static int state_by_num(csp_rt_t* st, int snum, sindex_t pos, void* arg)
+{
+    struct state_find* f = (struct state_find*)arg;
+    (void)st;
+    if (snum != f->snum)
+	return 0;
+    f->pos = pos;
+    return 1;
+}
+
+// State number for `name`, or -1.
+NOINLINE int lookup_state(csp_rt_t* st, const tstr_t* name)
+{
+    struct state_find f;
+    f.name = name; f.pos = 0; f.snum = -1;
+    state_walk(st, state_by_name, &f);
+    return f.snum;
+}
+
+// Name position of state `snum`, or 0. The reverse, for listing.
+NOINLINE sindex_t state_name_pos(csp_rt_t* st, int snum)
+{
+    struct state_find f;
+    f.name = NULL; f.pos = 0; f.snum = snum;
+    state_walk(st, state_by_num, &f);
+    return f.pos;
+}
+
+static int state_by_pos(csp_rt_t* st, int snum, sindex_t pos, void* arg)
+{
+    struct state_find* f = (struct state_find*)arg;
+    (void)st; (void)snum;
+    if (pos != f->pos)
+	return 0;
+    f->snum = snum;
+    return 1;
+}
+
+// State number of the state whose NAME is at `pos`. For a listing that is
+// walking the slots of a block and needs each slot's number without searching
+// by text.
+NOINLINE int lookup_state_pos(csp_rt_t* st, sindex_t pos)
+{
+    struct state_find f;
+    f.name = NULL; f.pos = pos; f.snum = -1;
+    state_walk(st, state_by_pos, &f);
+    return f.snum;
+}
+
+// How many states are declared.
+NOINLINE int csp_num_states(csp_rt_t* st)
+{
+    return state_walk(st, NULL, NULL);
+}
 // Compare n bytes at a logical string position against a RAM string (memcmp-
 // like: 0 == equal). Segment-aware per byte, so it is PROGMEM-safe on AVR where
 // the ROM half of the string table lives in flash.
@@ -1978,13 +2045,34 @@ NOINLINE void csp_print_str_at(csp_rt_t* st, sindex_t pos)
 }
 
 // look for symbol among nodes in range [start, stop)
+// A states block holds up to CSP_STATES_PER_DECL names, so a name search has to
+// look at every slot -- `d.name` is only the first of them. This is what makes
+// ONE namespace real: a `#states` name and a `#variable` name collide here and
+// csp_new_udecl reports it, instead of both existing and the meaning of the
+// token depending on which lookup a call site happens to try first.
+NOINLINE static int states_block_has(csp_rt_t* st, const csp_decl_t* d,
+				     const tstr_t* name)
+{
+    int k;
+    for (k = 0; k < CSP_STATES_PER_DECL; k++) {
+	sindex_t np = csp_states_name(d, k);
+	if ((np > 0) && csp_str_eq(st, np, name->ptr, name->len))
+	    return k;
+    }
+    return -1;
+}
+
 NOINLINE index_t lookup_decl_in(csp_rt_t* st, const tstr_t* name,
 				       int start, int stop)
 {
     int i = start;
     while(i < stop) {
 	csp_decl_t d = csp_get_decl(st, i);   // one read per node, not three
-	if ((d.name > 0) && csp_str_eq(st, d.name, name->ptr, name->len))
+	if (d.type == DECL_STATES) {
+	    if (states_block_has(st, &d, name) >= 0)
+		return MAKE_INDEX(0,i);
+	}
+	else if ((d.name > 0) && csp_str_eq(st, d.name, name->ptr, name->len))
 	    return MAKE_INDEX(0,i);
 	if (d.type == DECL_MODULE)            // skip module def
 	    i += (d.md.n+1);                  // skip elements and END
@@ -2096,8 +2184,20 @@ NOINLINE index_t csp_new_decl(csp_rt_t* st, const tstr_t* name, decl_t type,
 	    return BAD_INDEX;
     }
     i = INDEX(ix);
+    // Clear the slot before filling it. The pool is REUSED -- a /clear, a ROM
+    // load or a parse rollback rewinds ps.nd and the next declaration lands on
+    // physical storage the previous one wrote -- and this only sets four of the
+    // common fields, so every other bit was inherited from whatever was there.
+    //
+    // That was harmless while every arm wrote all of its own fields. It stopped
+    // being harmless with DECL_STATES, which uses bits 26..31 as the low six of
+    // name3: a states block holding FAILSAFE (string position 23 == 0b010111)
+    // left bound = 1 behind, and the next variable to take that slot was set up
+    // as a bit-field view into a buffer instead of getting storage of its own.
+    // It read 0 whatever its initialiser said.
+    memset(ram_decl_at(st,i), 0, sizeof(csp_decl_t));
     ram_decl_at(st,i)->type = type;
-    // ram_decl_at(st,i)->sys = sys;    
+    // ram_decl_at(st,i)->sys = sys;
     ram_decl_at(st,i)->name = pos;
     ram_decl_at(st,i)->res = MAKE_RES(8*sizeof(value_t));
     ram_decl_at(st,i)->vt = V_INTEGER;
@@ -2229,7 +2329,7 @@ NOINLINE static int number_rules(csp_rt_t* st, int lo, int hi,
 
 // If `ip` is a #in block gate, return the OR of its states as a bitmask (bit
 // snum) and set *bend to the ip past the block; else return 0 (and leave *bend).
-NOINLINE static uint16_t gate_mask(csp_rt_t* st, int ip, int hi, int* bend)
+NOINLINE static csp_gate_mask_t gate_mask(csp_rt_t* st, int ip, int hi, int* bend)
 {
     // Global-State gates only (see skip_gate): an object's own #in gates on its
     // per-instance State, which this global-State mask cannot represent.
@@ -2241,19 +2341,19 @@ NOINLINE static uint16_t gate_mask(csp_rt_t* st, int ip, int hi, int* bend)
     g1 = csp_get_instr(st, ip+1);
     if ((g.op == OP_LD) && (g.m.mem == st->gsx) &&
 	((g1.op == OP_NINSTATE) || (g1.op == OP_INSTATE))) {
-	uint16_t m = 0;
+	csp_gate_mask_t m = 0;
 	int j = ip + 1;
 	while (j < hi) {
 	    csp_instr_t gj = csp_get_instr(st, j);
 	    if (gj.op != OP_NINSTATE)
 		break;
-	    m |= (uint16_t)(1u << gj.in.imm);
+	    m |= (csp_gate_mask_t)(1u << gj.in.imm);
 	    j++;
 	}
 	if (j < hi) {
 	    csp_instr_t gj = csp_get_instr(st, j);
 	    if (gj.op == OP_INSTATE) {
-		m |= (uint16_t)(1u << gj.in.imm);
+		m |= (csp_gate_mask_t)(1u << gj.in.imm);
 		*bend = j + gj.in.nxt;
 	    }
 	}
@@ -2281,7 +2381,7 @@ NOINLINE static int body_implicit(csp_rt_t* st, int ip, int hi)
 // for an ungated rule (module bodies, run whenever their object is active). This
 // is what csp_react gates on -- so no per-rule State test lives in the stream.
 NOINLINE static int number_rule_states(csp_rt_t* st, int lo, int hi,
-				       uint16_t* rs, int ord)
+				       csp_gate_mask_t* rs, int ord)
 {
     const uint16_t normal_plus =
 	(uint16_t)((1u << STATE_INIT) | (1u << STATE_NORMAL));
@@ -2598,7 +2698,6 @@ static void img_from_hdr(const uint8_t* base, const csp_image_header_t* h,
     p->idg    = (const index_t*)   (base + h->ofs_idg);
     p->ofs    = (const index_t*)   (base + h->ofs_ofs);
     p->edg    = (const index_t*)   (base + h->ofs_edg);
-    p->states = (const state_t*)   (base + h->ofs_states);
 }
 
 // Walk the section prologues and fill in what is found. Touches NOTHING in the
@@ -2653,8 +2752,8 @@ static int img_from_walk(const uint8_t* base, img_p_t* p)
 	else if (csp_tag_is(sc.tag, CSP_SECT_IDG))    { p->idg    = (const index_t*)data;     seen++; }
 	else if (csp_tag_is(sc.tag, CSP_SECT_OFS))    { p->ofs    = (const index_t*)data;     seen++; }
 	else if (csp_tag_is(sc.tag, CSP_SECT_EDG))    { p->edg    = (const index_t*)data;     seen++; }
-	else if (csp_tag_is(sc.tag, CSP_SECT_STATES)) { p->states = (const state_t*)data;     seen++; }
-	/* else: a section this build does not know -- step over it */
+	/* else: a section this build does not know -- step over it. A v9 image
+	   still carries a 'STAT' section and lands in exactly this arm. */
 	off += (uint32_t)sizeof(csp_sect_t) + sc.len;
 	if (seen == CSP_SECT_NEEDED)
 	    return 1;
@@ -2691,9 +2790,6 @@ static rostring_t rom_verify(const img_p_t* p, const csp_image_header_t* h)
     if (csp_crc16(0xFFFF, p->instr, (size_t)h->n_instr * sizeof(csp_instr_t), 1)
 	!= h->crc_instr)
 	return ros_instr;
-    if (csp_crc16(0xFFFF, p->states, (size_t)h->n_state * sizeof(state_t), 1)
-	!= h->crc_state)
-	return ros_states;
     // NOTE: the reactive graph is checked SEPARATELY (rom_graph_ok), not here --
     // a corrupt graph is recoverable (run sequential), a corrupt anything-else is
     // not. Keeping it out of rom_verify keeps this function "fatal sections only".
@@ -2790,23 +2886,6 @@ NOINLINE static int rom_scan_str(const char* str)
     return -1;
 }
 
-// Recover the state entry count via its sentinel state (snum 0x7f), then verify
-// the CRC packed in the following state_t (name(9)|snum(7)<<9). -1 if not intact.
-NOINLINE static int rom_scan_state(const state_t* states)
-{
-    int p;
-    if (states == NULL) return -1;
-    for (p = 0; p <= MAX_STATES + 1; p++) {
-	if (ro_state(&states[p]).snum == 0x7f) {
-	    state_t c = ro_state(&states[p+1]);
-	    uint16_t stored = (uint16_t)(c.name | ((uint16_t)c.snum << 9));
-	    return (csp_crc16(0xFFFF, states, (size_t)p * sizeof(state_t), 1)
-		    == stored) ? p : -1;
-	}
-    }
-    return -1;
-}
-
 #endif /* CSP_ROM_RECOVER */
 
 // Activate an image: run it in place from flash by setting the RAM base offsets
@@ -2852,8 +2931,8 @@ NOINLINE void csp_load_image(csp_rt_t* st, const uint8_t* base)
 	// through its own marker. A DATA corruption (a section CRC failing with
 	// crc_hdr intact) is NOT recoverable -- the marker folds the same bad
 	// bytes -- so those still reject.
-	int rnd = -1, rnn = -1, rns = -1, rnstate = -1;
-#if defined(CSP_ROM_RECOVER) && (CSP_ROM_RECOVER==1)	
+	int rnd = -1, rnn = -1, rns = -1;
+#if defined(CSP_ROM_RECOVER) && (CSP_ROM_RECOVER==1)
 	if (bad == ros_hdr) {
 	    img_p_t w;
 	    if (img_from_walk(base, &w)) {
@@ -2861,19 +2940,19 @@ NOINLINE void csp_load_image(csp_rt_t* st, const uint8_t* base)
 		rnd     = rom_scan_decl(p.decl);
 		rnn     = rom_scan_instr(p.instr);
 		rns     = rom_scan_str(p.str);
-		rnstate = rom_scan_state(p.states);
 	    }
 	}
 #endif
-	// With recovery off the four stay -1, so this is dead and the reject
+	// With recovery off the three stay -1, so this is dead and the reject
 	// below is the only outcome -- exactly what a damaged section gets.
-	if ((rnd >= 0) && (rnn >= 0) && (rns >= 0) && (rnstate >= 0)) {
+	if ((rnd >= 0) && (rnn >= 0) && (rns >= 0)) {
 	    // Every section self-verified via its own marker, and the prologues
 	    // gave their positions -- fully independent of the rotten header.
+	    // States need no recovery of their own: they are declarations, so
+	    // rom_scan_decl covers them.
 	    h.n_decl  = (uint16_t)rnd;
 	    h.n_instr = (uint16_t)rnn;
 	    h.n_str   = (uint16_t)rns;
-	    h.n_state = (uint16_t)rnstate;
 	    h.n_edg   = 0;            // the graph has no marker: drop it, run seq
 	    nd = h.n_decl;
 	    csp_print_line("ROM header CRC bad -- sections verified by walk");
@@ -2911,17 +2990,10 @@ NOINLINE void csp_load_image(csp_rt_t* st, const uint8_t* base)
     st->ps.nn   = st->rom_nn;
     st->ps.strp = st->rom_strp;
     st->cs.sx = st->gsx = 0;         // State is ROM decl 0
-    // Restore the baked state table (name offsets index the str section, which
-    // we just pointed at). Overwrites the INIT/NORMAL seed from csp_rt_init with
-    // the program's full table so ON/OFF/... resolve in listing and lookup.
-    {
-	int i, ns = h.n_state;
-	if (ns > MAX_STATES) ns = MAX_STATES;
-	for (i = 0; i < ns; i++)
-	    st->states[i] = ro_state(&p.states[i]);
-	st->ps.ns = ns;
-	st->rom_ns = ns;   // baseline; EEPROM persists only additions above this
-    }
+    // Nothing to restore: the program's states came back with its DECLARATIONS,
+    // as DECL_STATES blocks, which the rebase above already pointed at. The
+    // image's state section is empty (see csp_dump_code) and this loop used to
+    // be the only thing that read it.
 }
 
 // --- the linked-image registry -----------------------------------------------
@@ -3137,27 +3209,65 @@ int csp_mem_init(csp_rt_t* st, size_t size)
 // Not the compiler's: csp_rt_init creates INIT and NORMAL before any program
 // exists, so an exec-only build needs it too. It is a symbol-table operation
 // that the parser also happens to call.
-NOINLINE int add_state(csp_rt_t* st, const tstr_t* name)
+// How many states are declared so far. States live in DECL_STATES blocks of up
+// to CSP_STATES_PER_DECL names each, filled front to back and never reordered,
+// so counting the non-empty slots in declaration order gives both the total and
+// -- since add_state only ever appends -- the number the next one gets.
+//
+// Derived rather than stored: ROM declarations come before RAM ones, a parse
+// rollback rewinds the declaration count and takes the states with it, and
+// nothing renumbers declarations. So the scan is the same answer every time,
+// which is what lets the number a rule baked into OP_INSTATE stay valid.
+#define state_count(st) csp_num_states(st)
+
+// Not the compiler's: csp_rt_init creates INIT and NORMAL before any program
+// exists, so an exec-only build needs it too. It is a symbol-table operation
+// that the parser also happens to call.
+//
+// `blk` is the caller's cursor over the block being filled -- BAD_INDEX to open
+// a new one. It is a LOCAL of the statement doing the adding, deliberately not
+// state on csp_rt_t: packing forward inside one `#states` is safe because a
+// rollback that rewinds the declaration count un-creates those blocks whole,
+// while reaching back into a block an EARLIER line created would survive the
+// rewind and leave the name behind.
+NOINLINE int add_state(csp_rt_t* st, const tstr_t* name, index_t* blk)
 {
-    int i;
-    if ((i = lookup_string(st, name->ptr, name->len)) < 0) {
-	if ((i = new_string(st, name->ptr, name->len)) < 0)
+    int pos, s, k = -1;
+    csp_decl_t* dp;
+
+    if ((pos = lookup_string(st, name->ptr, name->len)) < 0) {
+	if ((pos = new_string(st, name->ptr, name->len)) < 0)
 	    return -1;
     }
-    if (st->ps.ns < MAX_STATES) {
-	int s = st->ps.ns;
-	st->states[s].name = i;
-	st->states[s].snum = s;
-	st->ps.ns++;
-#ifdef DEBUG
-	DBG("added state %d %.*s\n", s, csp_str_byte(st,i-1), csp_str_at(st,i));
-#endif
-	return s;
+    s = state_count(st);
+    // OP_INSTATE carries the number in a signed 8-bit immediate.
+    if (s > 127) {
+	csp_set_error(st, ERR_TOO_MANY_STATES);
+	return -1;
     }
-    csp_set_error(st, ERR_TOO_MANY_STATES);
-    return -1;
+    if (*blk != BAD_INDEX) {              // room left in the open block?
+	csp_decl_t d = csp_get_decl(st, INDEX(*blk));
+	for (k = 0; k < CSP_STATES_PER_DECL; k++)
+	    if (csp_states_name(&d, k) == 0)
+		break;
+	if (k == CSP_STATES_PER_DECL)
+	    k = -1;                       // full, open another
+    }
+    if (k < 0) {
+	index_t ix;
+	if ((ix = next_decl_index(st)) == BAD_INDEX)
+	    return -1;
+	dp = ram_decl_at(st, INDEX(ix));
+	memset(dp, 0, sizeof(*dp));
+	dp->type = DECL_STATES;
+	*blk = ix;
+	k = 0;
+    }
+    dp = ram_decl_at(st, INDEX(*blk));
+    csp_states_set_name(dp, k, pos);
+    DBG("added state %d slot %d\n", s, k);
+    return s;
 }
-
 int csp_rt_init(csp_rt_t* st, int reactive)
 {
     memset(st, 0x00, sizeof(csp_rt_t));
@@ -3203,27 +3313,29 @@ int csp_rt_init(csp_rt_t* st, int reactive)
 	RO_TSTR(INIT, ros_INIT);
 	RO_TSTR(NORMAL, ros_NORMAL);
 	RO_TSTR(FAILSAFE, ros_FAILSAFE);
-	// ps.ns is 0 from the memset: install INIT (cycle()==0), NORMAL, FAILSAFE
 	st->cs.sx = st->gsx = csp_new_decl(st,&State,DECL_VARIABLE,1);
 	st->cs.sdef = -1;
 	// Reserved states in fixed order: INIT=0, NORMAL=1, FAILSAFE=2 (sticky
 	// safe state). User states follow from 3. The numbers are contract --
-	// STATE_* in csp.h and the sticky check depend on them.
-	if (add_state(st, &INIT) != STATE_INIT) {
-	    DBG("unable to add INIT state\n");
-	    return -1;
+	// STATE_* in csp.h and the sticky check depend on them. One cursor for
+	// all three, so they share a single block.
+	{
+	    index_t blk = BAD_INDEX;
+	    if (add_state(st, &INIT, &blk) != STATE_INIT) {
+		DBG("unable to add INIT state\n");
+		return -1;
+	    }
+	    if (add_state(st, &NORMAL, &blk) != STATE_NORMAL) {
+		DBG("unable to add NORMAL state\n");
+		return -1;
+	    }
+	    if (add_state(st, &FAILSAFE, &blk) != STATE_FAILSAFE) {
+		DBG("unable to add FAILSAFE state\n");
+		return -1;
+	    }
 	}
-	if (add_state(st, &NORMAL) != STATE_NORMAL) {
-	    DBG("unable to add NORMAL state\n");
-	    return -1;
-	}
-	if (add_state(st, &FAILSAFE) != STATE_FAILSAFE) {
-	    DBG("unable to add FAILSAFE state\n");
-	    return -1;
-	}
-	st->rom_ns = st->ps.ns;  // baseline (3); raised by csp_load_rom if firmware
-	// The runtime/program boundary -- see csp_rt_t. States already have one
-	// (rom_ns above); these are the decl/instr/string equivalents.
+	// The runtime/program boundary -- see csp_rt_t. States need no separate
+	// one any more: they are declarations, so sys_nd covers them too.
 	st->sys_nd   = st->ps.nd;
 	st->sys_nn   = st->ps.nn;
 	st->sys_strp = st->ps.strp;

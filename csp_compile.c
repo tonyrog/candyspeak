@@ -36,6 +36,25 @@
 extern int debug;
 #endif
 
+#ifdef DEBUG
+extern void print_rentry(csp_rt_t* st, char* name, rentry_t* rp);
+
+void print_rentry(csp_rt_t* st, char* name, rentry_t* rp)
+{
+    DBG("%s={", name);
+    if (rp->X) DBG("name=%s,", decl_name(st, rp->ix));
+    DBG("flags=");
+    if (rp->I) DBG("im ");
+    if (rp->L) DBG("ld ");
+    if (rp->X) DBG("ix ");
+    DBG(",vt=%s", (char*)csp_fmt_vtype(rp->vt));
+    if (rp->L) DBG(",reg=%d", rp->reg);
+    if (rp->X) DBG(",ix=0x%04x", rp->ix);
+    if (rp->I) { DBG(",val="); csp_print_value(st, rp->vt, rp->val); }
+    DBG("}");
+}
+#endif
+
 NOINLINE static csp_instr_t* alloc_instr_ptr(csp_rt_t* st,int* pos,opcode_t op)
 {
     int i;                        // logical instr index (or the dummy slot)
@@ -473,8 +492,9 @@ static rostring_t decl_type_name(decl_t type)
     case DECL_TIMER:    return ros_timer;
     case DECL_DIGITAL:  return ros_digital;
     case DECL_ANALOG:   return ros_analog;
-    case DECL_FIELD:      return ros_field;
+    case DECL_FIELD:    return ros_field;
     case DECL_BUFFER:   return ros_buffer;
+    case DECL_STATES:   return ros_states;	
     default:            return ros_undefined;
     }
 }
@@ -1955,12 +1975,25 @@ next:
 	}
 	else {
 	    vtype_t vt;
-	    // Not a function - regular variable/decl/state lookup
-	    if ((ix = csp_lookup_decl(st,&tval.str)) == BAD_INDEX) {
+	    // Not a function - regular variable/decl/state lookup.
+	    //
+	    // A state name resolves through csp_lookup_decl too now: states are
+	    // DECL_STATES declarations and share the one namespace. So the type
+	    // decides what it IS, rather than a fallback deciding it after the
+	    // first lookup came up empty -- which is what makes `x = red` and
+	    // `State = red` mean the same thing about `red`.
+	    //
+	    // Falling through here as if a block were a variable is not merely
+	    // wrong, it CORRUPTS: map_reg caches a register by writing is_mapped
+	    // and reg through DECL_COMMON, and those bits are the low six of
+	    // name3. `State = c` used to overwrite the third state's name.
+	    ix = csp_lookup_decl(st,&tval.str);
+	    if ((ix == BAD_INDEX) ||
+		(decl(st,XIDX(ix),type) == DECL_STATES)) {
 		int s = lookup_state(st, &tval.str);
 		if (s >= 0) {
 		    value_t sv;
-		    sv.i = st->states[s].snum;
+		    sv.i = s;   // lookup_state returns the number
 		    if ((ep = push_imm(st, rstack, ep, V_INTEGER, sv)) < 0)
 			return 0;
 		    ptok = INT;
@@ -3656,7 +3689,7 @@ NOINLINE int csp_parse_in(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	    csp_set_error(st, ERR_STATE_NOT_DECLARED);
 	    return -1;
 	}
-	states[ns++] = (uint8_t)st->states[s].snum;
+	states[ns++] = (uint8_t)s;
     }
     if (!open_in_block(st, states, ns, 0)) {
 	csp_set_error(st, ERR_SYNTAX);
@@ -3668,13 +3701,17 @@ NOINLINE int csp_parse_in(csp_rt_t* st, token_t* tv, int ti, size_t n)
 // no need to use pattern parser here, yet too simple
 NOINLINE int csp_parse_states(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
+    // One cursor for the whole statement, so `#states a b c` packs into a
+    // single block. Local on purpose -- see add_state for why it must not reach
+    // back into a block an earlier line created.
+    index_t blk = BAD_INDEX;
     int i;
     for (i = ti; i < n; i++) {
 	int j;
 	if (tv[i].t != WORD) return -1;
 	if ((j = lookup_state(st, &tv[i].v.str)) >= 0)
 	    continue; // already installed (no error maybe warning?)
-	if (add_state(st, &tv[i].v.str) < 0)
+	if (add_state(st, &tv[i].v.str, &blk) < 0)
 	    return -1;
     }
     return 0;

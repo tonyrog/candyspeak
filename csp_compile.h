@@ -29,7 +29,9 @@
 
 // Compiler-side one-time init (stop-sets + declaration patterns).
 extern void csp_compile_init(void);
-extern int  add_state(csp_rt_t* st, const tstr_t* name);
+// `blk` is the caller's cursor over the states block being filled; set it to
+// BAD_INDEX before the first name of a statement. See the definition.
+extern int  add_state(csp_rt_t* st, const tstr_t* name, index_t* blk);
 
 extern vtype_t call_rtype(uint8_t rtype, uint16_t argcode, int arity);
 NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave);

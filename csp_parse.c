@@ -57,6 +57,7 @@ static char* stop_set_name(uint8_t sid)
     }
 }
 
+#if 0
 static char* dtok_name(uint8_t dtok)
 {
     switch(dtok) {
@@ -77,7 +78,7 @@ static char* dtok_name(uint8_t dtok)
     default: return "???";    
     }
 }
-
+#endif
 
 static char* tok_name(uint8_t tok)
 {

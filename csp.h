@@ -177,7 +177,11 @@ static inline void* rdvp(const void* p, int rom)
 //   v9: OBJ_BITS 5->1. An encoded index is sel:1|index:15 (global / current
 //       object) and a NAMED object is reached with OP_SETO instead of a 5-bit
 //       object number in every memory instruction. See the OBJ_BITS note below.
-#define ROM_FORMAT_VERSION 9
+//  v10: no state section. A state is a DECL_STATES declaration (six names per
+//       block, csp_states_t), so it is stored, CRC'd, baked and persisted by the
+//       declaration machinery -- and the header loses n_state/crc_state/
+//       ofs_states, the image loses s_states, and state_t is gone.
+#define ROM_FORMAT_VERSION 10
 
 // Free as in beer.
 #define CSP_IMAGE_MAGIC0 'J'
@@ -205,7 +209,8 @@ static inline void* rdvp(const void* p, int rom)
 #define CSP_SECT_IDG     'G','I','D','G'
 #define CSP_SECT_OFS     'G','O','F','S'
 #define CSP_SECT_EDG     'G','E','D','G'
-#define CSP_SECT_STATES  'S','T','A','T'
+// ('STAT' is retired: format v10 dropped the state section. Do not reuse the
+//  tag -- a v9 image walked by a v10 loader would land on it.)
 
 // Compare a prologue tag against one of the above:  csp_tag_is(sc.tag, CSP_SECT_DECL)
 // Two levels: a macro argument is split on commas BEFORE it is expanded, so the
@@ -239,11 +244,9 @@ typedef struct PACKED {
     uint16_t n_decl;     // decl entries (excl. DECL_END_MARK)
     uint16_t n_instr;    // instr entries (excl. OP_END_MARK)
     uint16_t n_edg;      // edg entries (0 = no reactive graph)
-    uint16_t n_state;    // state entries (excl. sentinel + crc)
     uint16_t crc_str;    // CRC-16/CCITT per section
     uint16_t crc_decl;
     uint16_t crc_instr;
-    uint16_t crc_state;
     uint16_t crc_graph;  // over idg + ofs + edg (0 when n_edg == 0)
     uint32_t ofs_str;    // section DATA starts, bytes from the image base
     uint32_t ofs_decl;   // (each section's prologue sits just before its data)
@@ -251,7 +254,6 @@ typedef struct PACKED {
     uint32_t ofs_idg;
     uint32_t ofs_ofs;
     uint32_t ofs_edg;
-    uint32_t ofs_states;
     uint16_t crc_hdr;    // over all bytes ABOVE this one -- MUST stay last
 } csp_image_header_t;
 
@@ -889,6 +891,14 @@ typedef enum {
     DECL_MODULE=3,          // 'module'
     DECL_END=4,             // 'end'
     DECL_OBJECT=5,          // module instance
+    // Was only the `#states` KEYWORD code (like DECL_IN), never stored. It is
+    // now also the stored type: one declaration per state NAME. As a declaration
+    // it is SCOPED like one -- a state named inside a module body belongs to
+    // that module and numbers from its own base, which is what lets many small
+    // objects each carry a state machine without sharing one budget -- and it is
+    // stored, rolled back, ROM-baked and EEPROM-persisted by the machinery that
+    // already does all four for declarations. No separate state table, no
+    // separate image section.
     DECL_STATES=6,
     DECL_IN=7,
     
@@ -1114,16 +1124,37 @@ typedef enum {
 //   type:CSP_DECL_TYPE_BITS;
 //   unsigned sys:1
 //
-#define DECL_COMMON \
+// Declarations come in two shapes, and the split matters because csp_states_t
+// packs six name positions across the whole 8-byte declaration -- so whatever is
+// NOT in the shared part sits on top of a state name.
+//
+// DECL_HEADER is what EVERY declaration has: what it is, which way it faces, and
+// what it is called. 17 bits. csp_states_t begins with it, which is what makes
+// slot 0 and `name` the same bits BY CONSTRUCTION rather than by two field lists
+// that happen to line up -- the first of the three bugs this aliasing has cost.
+//
+// DECL_TYPE_HEADER adds what a VALUED declaration needs: its value type, its
+// width, and the register cache. Those five fields are exactly the ones that
+// overlap a states block's name2 and name3, and tests/states_layout.c pins down
+// which slot each one lands in. Anything added here takes bits from a state
+// name; anything added to DECL_HEADER takes them from all six.
+#define DECL_HEADER \
     decl_t type:CSP_DECL_TYPE_BITS; \
     unsigned _reserved:2; \
     pindir_t dir:DIR_BITS; \
-    unsigned name:NAMEPOS_BITS; \
+    unsigned name:NAMEPOS_BITS
+
+#define DECL_TYPE_HEADER \
+    DECL_HEADER; \
     unsigned vt:TYPE_BITS; \
     unsigned res:5; \
     unsigned is_mapped:1; \
     unsigned bound:1; \
     unsigned reg:REG_BITS
+
+// The old name, for the arms that carry a value. Kept because it reads well at
+// the top of every one of them and there are a dozen.
+#define DECL_COMMON DECL_TYPE_HEADER
 
 typedef struct PACKED {
     DECL_COMMON;
@@ -1136,6 +1167,39 @@ typedef struct PACKED {
     index_t  mx;           // module declaration index
     unsigned m:16;         // index in object table (1..MAX_OBJECT_NUM)
 } csp_object_t;
+
+// A `#states` name. The name itself is in DECL_COMMON; snum is the value the
+// State variable takes and the number OP_INSTATE compares against, so it has to
+// match csp_instr_instate_t.imm -- 8 bits, signed there, and 0..2 are the
+// reserved INIT/NORMAL/FAILSAFE. Numbered per SCOPE: global states from 3, and
+// each module's own states from 3 again, independently.
+/*
+typedef struct PACKED {
+    DECL_COMMON;
+    unsigned snum:8;       // state number within its scope
+} csp_statedecl_t;
+*/
+
+// Up to 6 state names per declaration: DECL_HEADER (17) + 5 x 9 = 62 of 64 bits.
+//
+// DECL_HEADER, not a hand-copied prefix: `name` is slot 0, so a states block IS
+// a declaration with a name -- the one every other reader already knows how to
+// look at -- and the alias cannot drift, because there is only one definition of
+// it now. What DECL_TYPE_HEADER adds on top (vt, res, is_mapped, bound, reg)
+// lands on name2 and name3; see tests/states_layout.c.
+typedef struct PACKED {
+    DECL_HEADER;                  // type, dir, and slot 0 as `name`
+    unsigned name2:NAMEPOS_BITS;
+    unsigned name3:NAMEPOS_BITS;
+    unsigned name4:NAMEPOS_BITS;
+    unsigned name5:NAMEPOS_BITS;
+    unsigned name6:NAMEPOS_BITS;
+} csp_states_t;
+
+// Slots in one states block. Bit fields cannot be indexed, so reading slot k
+// goes through the switch below rather than an array -- which is also why the
+// count lives here and not as a bare 6 in the loops.
+#define CSP_STATES_PER_DECL 6
 
 typedef struct PACKED  {
     DECL_COMMON;    
@@ -1210,8 +1274,43 @@ typedef union {
     csp_field_t    ca;
     csp_bufdecl_t  bf;
     csp_timer_t    tm;
+    // csp_statedecl_t sd;
+    csp_states_t   s6;
     csp_decl_end_t em;
 } csp_decl_t;
+
+// Name position of slot k in a states block, 0 when the slot is padding. Slot 0
+// is DECL_COMMON's `name` -- csp_states_t lines its first three fields up with
+// DECL_COMMON on purpose -- so anything reading `d.name` sees the block's first
+// state and nothing has to special-case it.
+static inline sindex_t csp_states_name(const csp_decl_t* d, int k)
+{
+    switch (k) {
+    case 0: return d->s6.name;
+    case 1: return d->s6.name2;
+    case 2: return d->s6.name3;
+    case 3: return d->s6.name4;
+    case 4: return d->s6.name5;
+    case 5: return d->s6.name6;
+    default: return 0;
+    }
+}
+
+// Write slot k. The counterpart to the reader above, and the only place a slot
+// is assigned -- a states block must never be filled through DECL_COMMON, whose
+// `vt` and `res` fields sit on top of name2 and name3.
+static inline void csp_states_set_name(csp_decl_t* d, int k, sindex_t pos)
+{
+    switch (k) {
+    case 0: d->s6.name  = pos; break;
+    case 1: d->s6.name2 = pos; break;
+    case 2: d->s6.name3 = pos; break;
+    case 3: d->s6.name4 = pos; break;
+    case 4: d->s6.name5 = pos; break;
+    case 5: d->s6.name6 = pos; break;
+    default: break;
+    }
+}
 
 typedef enum {
     ERR_OK = 0,
@@ -1368,7 +1467,10 @@ typedef struct {
     uint8_t  sobj;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     index_t* rule_ip;            // ordinal -> instruction index (own alloc, n_rule)
-    uint16_t* rule_state;        // ordinal -> State membership mask (0 = ungated)
+    // ordinal -> State membership mask (0 = ungated). The mask's WIDTH is the
+    // only cap on how many States a `#in` gate can tell apart -- see
+    // csp_gate_mask_t / MAX_GATE_STATES.
+    csp_gate_mask_t* rule_state;
     index_t  n_rule;             // rule bodies (ROM + RAM); 0 until csr has run
     set_group_t* pending[2];     // own allocation, pending_cap bits each
     uint32_t pending_cap;        // key space in bits = n_rule << obj_shift
@@ -1383,20 +1485,9 @@ typedef struct {
 
 typedef enum { DIN = 0, DOUT = 1 } dio_t;
 
-// name is a LOGICAL string position, so it needs NAMEPOS_BITS just like a
-// decl's -- the same STRING_BITS coupling bug bit runtime-added #states on a
-// board with a ROM string table >=128 bytes. snum takes the rest of the 16-bit
-// word: 7 bits, max 127, versus MAX_STATES 16, so state_t stays 2 bytes.
-#define NUM_BITS (16-NAMEPOS_BITS)
-// PACKED so it is exactly 2 bytes on BOTH host and AVR (a bare bitfield struct
-// is 4 bytes on the host, where the storage unit is a 32-bit int). That makes
-// rom_states byte-stable across the generator and the target, so it can go in
-// the ROM CRC like decls and instrs.
-typedef struct PACKED
-{
-    unsigned name:NAMEPOS_BITS;    // logical string position
-    unsigned snum:NUM_BITS;        // state number (0..MAX_STATES-1)
-} state_t;
+// (state_t and the image's state section are gone as of format v10: a state is a
+// DECL_STATES declaration, so it is stored, CRC'd, ROM-baked and EEPROM-
+// persisted by the declaration machinery. See add_state.)
 
 // The section pointers of one image, derived from its base. The runtime never
 // names an image's struct type -- it takes the base and works in offsets, so
@@ -1410,7 +1501,6 @@ typedef struct {
     const index_t*     idg;
     const index_t*     ofs;
     const index_t*     edg;
-    const state_t*     states;
 } img_p_t;
 
 
@@ -1420,12 +1510,11 @@ typedef struct {
 //   NSTR   = n_str + 3     (0xFF sentinel + 2-byte crc)
 //   NDECL  = n_decl + 1    (DECL_END_MARK)
 //   NINSTR = n_instr + 1   (OP_END_MARK)
-//   NSTATE = n_state + 2   (sentinel + crc)
 //
 // aligned(4) on the object matters: the header is PACKED, so without it the
 // struct's own alignment would come from index_t (2) and every section start
 // could land on a 2-boundary.
-#define CSP_IMAGE_TYPE(tname,NSTR,NDECL,NINSTR,NIDG,NOFS,NEDG,NSTATE)   \
+#define CSP_IMAGE_TYPE(tname,NSTR,NDECL,NINSTR,NIDG,NOFS,NEDG)          \
     typedef struct {                                                    \
         csp_image_header_t hdr;                                         \
         csp_sect_t  s_str;                                              \
@@ -1444,23 +1533,19 @@ typedef struct {
         csp_sect_t  s_edg;                                              \
         index_t     edg[NEDG];                                          \
         uint8_t     _pad_edg[CSP_PAD4(2*(NEDG))];                       \
-        csp_sect_t  s_states;                                           \
-        state_t     states[NSTATE];                                     \
-        uint8_t     _pad_sta[CSP_PAD4(2*(NSTATE))];                     \
     } __attribute__((aligned(4))) tname
 
 // The generator computes the offsets ITSELF -- it must, because crc_hdr covers
 // them and a CRC cannot be taken over values only the C compiler knows. These
 // assert that the compiler agrees with that arithmetic. If the two ever diverge
 // the BUILD fails instead of the image being quietly wrong.
-#define CSP_IMAGE_CHECK(tname,OSTR,ODECL,OINSTR,OIDG,OOFS,OEDG,OSTATES,SZ) \
+#define CSP_IMAGE_CHECK(tname,OSTR,ODECL,OINSTR,OIDG,OOFS,OEDG,SZ)         \
     CSP_STATIC_ASSERT(offsetof(tname,str)    == (OSTR),   "ofs_str");      \
     CSP_STATIC_ASSERT(offsetof(tname,decl)   == (ODECL),  "ofs_decl");     \
     CSP_STATIC_ASSERT(offsetof(tname,instr)  == (OINSTR), "ofs_instr");    \
     CSP_STATIC_ASSERT(offsetof(tname,idg)    == (OIDG),   "ofs_idg");      \
     CSP_STATIC_ASSERT(offsetof(tname,ofs)    == (OOFS),   "ofs_ofs");      \
     CSP_STATIC_ASSERT(offsetof(tname,edg)    == (OEDG),   "ofs_edg");      \
-    CSP_STATIC_ASSERT(offsetof(tname,states) == (OSTATES),"ofs_states");   \
     CSP_STATIC_ASSERT(sizeof(tname)          == (SZ),     "image size")
 
 // Register an image with the LINKER, so a firmware that carries several can
@@ -1736,7 +1821,7 @@ typedef struct _csp_rt_t
     // be half typed at the prompt, has to use this instead. Deliberately not in
     // csp_pmark_t: a parse rollback must not move it.
     index_t gsx;
-    state_t states[MAX_STATES];  // declared states
+    // (no state table: states are DECL_STATES declarations, see add_state)
     index_t mdef;                // module being defined
     csp_pmark_t mod_mark;        // parse mark taken at #module: a failure before
 				 // #end rewinds the whole module, so the lines
@@ -1862,8 +1947,6 @@ static NOINLINE void ro_copy_decl(const csp_decl_t* p, csp_decl_t* dst)
 
 static inline csp_instr_t ro_instr(const csp_instr_t* p)
 { csp_instr_t v; memcpy_P(&v, p, sizeof(v)); return v; }
-static inline state_t     ro_state(const state_t* p)
-{ state_t s; memcpy_P(&s, p, sizeof(s)); return s; }
 // NOT static inline, unlike its neighbours: the image header is 60 bytes, so
 // gcc never actually inlines the copy -- it emits an out-of-line body in EVERY
 // translation unit that mentions it, and the linker cannot merge them because
@@ -1882,7 +1965,6 @@ static inline csp_sect_t ro_sect(const csp_sect_t* p)
 #define ro_decl(p)  (*(p))
 #define ro_copy_decl(p,d) (*(d)) = (*(p))
 #define ro_instr(p) (*(p))
-#define ro_state(p) (*(p))
 #define ro_header(p) (*(p))
 #define ro_ref(p)  (*(p))
 #define ro_sect(p) (*(p))
@@ -2135,6 +2217,12 @@ extern int     csp_has_firmware(void);
 // Declaration index of object number m, valid even before a rebuild has built
 // the object[] cache (see the definition).
 extern index_t csp_object_decl(csp_rt_t*, unsigned m);
+// Name position of state `snum`, 0 if there is none; and how many states are
+// declared. Both derive from the DECL_STATES blocks -- there is no state table.
+extern sindex_t state_name_pos(csp_rt_t*, int snum);
+extern int      csp_num_states(csp_rt_t*);
+// State number of the state named at string position `pos`, -1 if none.
+extern int      lookup_state_pos(csp_rt_t*, sindex_t pos);
 extern int     csp_rt_start(csp_rt_t*);
 // Re-lay the whole program out (graph + leaf/device setup). Use this rather than
 // calling csp_csr/csp_rt_start separately: they share one bump-allocated region.

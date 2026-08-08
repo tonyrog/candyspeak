@@ -455,6 +455,18 @@ else
     echo "  FAIL part_layout did not build"; fail=$((fail+1))
 fi
 
+# csp_states_t packs six state names into one declaration, and the whole design
+# rests on slot 0 aliasing DECL_COMMON's `name` -- an alignment nothing would
+# fail to compile over. This probes the real struct instead of restating the
+# numbers, so reordering the fields or changing NAMEPOS_BITS is caught here
+# rather than as first-state-of-every-block lookups quietly missing.
+echo "states layout:"
+if gcc -I. -O2 -o "$D/states_layout" tests/states_layout.c >/dev/null 2>&1; then
+    ck "csp_states_t packs six names, slot 0 aliases name" "ok, identical" "$("$D/states_layout")"
+else
+    echo "  FAIL states_layout did not build"; fail=$((fail+1))
+fi
+
 echo "================================================"
 echo "repl: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

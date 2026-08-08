@@ -38,9 +38,18 @@
 #define SYSTEM_RAM_CAPACITY (256*1024)
 #endif
 
-#ifndef MAX_STATES
-#define MAX_STATES 16
-#endif
+// Was MAX_STATES, and it was never a count of states -- it is the WIDTH of the
+// reactive gate mask. csp_estate_t.rule_state holds, per rule body, the set of
+// States its `#in` block covers, and csp_react tests it with `(1u << sv) & sm`.
+// So a state number the mask cannot represent is a state whose block never
+// matches in reactive mode. Nothing about storage: states are declarations and
+// are bounded by the declaration pool.
+//
+// Derived from the type so widening is one edit. uint32_t doubles it to 32 and
+// costs 2 bytes per RULE BODY in the reactive tables -- weigh that against the
+// program, not against a fixed table.
+typedef uint16_t csp_gate_mask_t;
+#define MAX_GATE_STATES ((int)(8 * sizeof(csp_gate_mask_t)))
 
 #ifndef MAX_IN_STATES
 #define MAX_IN_STATES 8   // max states in one `#in A B C ...` OR-list

@@ -65,7 +65,7 @@ static rochar eeprom_magic[4] RODATA = "CSP";
 // state additions. crc_hdr closes the sub-header (kept for symmetry with ROM).
 static void ram_image(csp_rt_t* st, csp_image_header_t* im,
 		      uint16_t n_str, uint16_t n_decl,
-		      uint16_t n_instr, uint16_t n_state)
+		      uint16_t n_instr)
 {
     uint16_t i;
     // Read once, not per declaration: CSP_BASE_ND is a max() over two fields
@@ -74,7 +74,7 @@ static void ram_image(csp_rt_t* st, csp_image_header_t* im,
 
     im->version = ROM_FORMAT_VERSION;
     im->n_str = n_str; im->n_decl = n_decl; im->n_instr = n_instr;
-    im->n_edg = 0;     im->n_state = n_state;
+    im->n_edg = 0;
 
     im->crc_str  = csp_crc16(0xFFFF, st->ram_str + CSP_RAM_STR_OFF(st), n_str, 0);
     im->crc_decl = 0xFFFF;
@@ -83,8 +83,8 @@ static void ram_image(csp_rt_t* st, csp_image_header_t* im,
 				 sizeof(csp_decl_t), 0);
     im->crc_instr = csp_crc16(0xFFFF, st->ram_instr + CSP_RAM_NN_OFF(st),
 			      (size_t)n_instr * sizeof(csp_instr_t), 0);
-    im->crc_state = csp_crc16(0xFFFF, &st->states[st->rom_ns],
-			      (size_t)n_state * sizeof(state_t), 0);
+    // No state fold: a state added at the prompt is a DECL_STATES declaration
+    // and rides in the decl fold above, like every other declaration.
     im->crc_graph = 0;
     im->crc_hdr = csp_crc16(0xFFFF, im, sizeof(*im) - sizeof(uint16_t), 0);
 }
@@ -98,11 +98,10 @@ static rostring_t ram_verify(csp_rt_t* st, const csp_image_header_t* im)
 {
     csp_image_header_t chk;
 
-    ram_image(st, &chk, im->n_str, im->n_decl, im->n_instr, im->n_state);
+    ram_image(st, &chk, im->n_str, im->n_decl, im->n_instr);
     if (chk.crc_str   != im->crc_str)   return ros_str;
     if (chk.crc_decl  != im->crc_decl)  return ros_decl;
     if (chk.crc_instr != im->crc_instr) return ros_instr;
-    if (chk.crc_state != im->crc_state) return ros_states;
     return NULL;
 }
 
@@ -130,7 +129,7 @@ int csp_eeprom_save(csp_rt_t* st)
     uint16_t ram_nd   = st->ps.nd   - base_nd;      // RAM patch counts
     uint16_t ram_nn   = st->ps.nn   - base_nn;
     uint16_t ram_strp = st->ps.strp - base_strp;
-    uint16_t ram_ns   = st->ps.ns   - st->rom_ns;
+    // (No state block: states are declarations and are saved with them.)
 
     if (csp_eeprom_open_write() < 0)
 	goto error;
@@ -142,7 +141,7 @@ int csp_eeprom_save(csp_rt_t* st)
     hdr.version = EEPROM_VERSION;
     hdr.rom_fp  = rom_fingerprint();
     hdr.nq      = st->ps.nq;
-    ram_image(st, &hdr.ram, ram_strp, ram_nd, ram_nn, ram_ns);
+    ram_image(st, &hdr.ram, ram_strp, ram_nd, ram_nn);
     hdr.n_dis   = (uint16_t)csp_n_rules(st);
     hdr.crc_dis = csp_crc16(0xFFFF, st->dis_rule, DIS_BYTES(hdr.n_dis), 0);
     hdr.crc_hdr = csp_crc16(0xFFFF, &hdr, sizeof(hdr) - sizeof(uint16_t), 0);
@@ -165,10 +164,7 @@ int csp_eeprom_save(csp_rt_t* st)
     }
     if (csp_eeprom_write(st->ram_instr + (base_nn - st->rom_nn), sizeof(csp_instr_t) * ram_nn) < 0)
 	goto error;
-    // Runtime state-table additions (name offsets already covered by ram_str).
-    if (ram_ns &&
-	csp_eeprom_write(&st->states[st->rom_ns], sizeof(state_t) * ram_ns) < 0)
-	goto error;
+    // (No state block -- ram_ns is 0. States went out with the declarations.)
     // The #disable set, last: one bitset over rule numbers covering ROM and RAM
     // alike (numbers run 1..r_rom through the ROM rules and on into the RAM
     // ones), so there is nothing to split by segment.
@@ -258,12 +254,8 @@ int csp_eeprom_load(csp_rt_t* st)
     }
     if (csp_eeprom_read(st->ram_instr + (base_nn - st->rom_nn), sizeof(csp_instr_t) * hdr.ram.n_instr) < 0)
 	goto error;
-    // Runtime state additions land above the baseline (rom_ns = INIT/NORMAL or
-    // the restored ROM table); their name strings came in with ram_str above.
-    if (hdr.ram.n_state &&
-	csp_eeprom_read(&st->states[st->rom_ns],
-			sizeof(state_t) * hdr.ram.n_state) < 0)
-	goto error;
+    // (No state block: a save made by this firmware has n_state == 0, and states
+    // came back with the declarations above.)
 
     // Payload integrity, per section: recompute each section CRC over what we just
     // read and compare to the header. Catches a flipped storage cell independently
@@ -280,7 +272,6 @@ int csp_eeprom_load(csp_rt_t* st)
     st->ps.strp = base_strp + hdr.ram.n_str;
     st->ps.nd   = base_nd   + hdr.ram.n_decl;
     st->ps.nn   = base_nn   + hdr.ram.n_instr;
-    st->ps.ns   = st->rom_ns   + hdr.ram.n_state;
     st->ps.nq   = hdr.nq;
 
     // The #disable set, with its own count+CRC descriptor. csp_rt_init above
@@ -357,7 +348,6 @@ error:
 	st->ps.nd   = base_nd;
 	st->ps.nn   = base_nn;
 	st->ps.strp = base_strp;
-	st->ps.ns   = st->rom_ns;
 	st->ps.nq   = 0;
 	// csp_rt_init tore down view/heap/the derived tables (NULL until a
 	// rebuild). A caller that just runs the next cycle -- the host main loop
@@ -377,6 +367,5 @@ int csp_eeprom_size(csp_rt_t* st)
 	   (st->ps.strp - CSP_BASE_STRP(st)) +
 	   sizeof(csp_decl_t) * (st->ps.nd - CSP_BASE_ND(st)) +
 	   sizeof(csp_instr_t) * (st->ps.nn - CSP_BASE_NN(st)) +
-	   sizeof(state_t) * (st->ps.ns - st->rom_ns) +
-	   (nr ? DIS_BYTES(nr) : 0);
+	   (nr ? DIS_BYTES(nr) : 0);   // states ride in the decl count above
 }

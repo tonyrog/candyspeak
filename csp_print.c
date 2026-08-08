@@ -414,6 +414,7 @@ static int is_state_var(csp_rt_t* st, uint16_t mem)
 // True if `snum` is one of the states of the #in block currently being listed --
 // used to drop its State==<s> term from a rule's condition (the #in header shows
 // the states). See the multi-state block reconstruction in cmd_list.
+#if 0
 static int in_list_states(csp_rt_t* st, int snum)
 {
     int k;
@@ -422,6 +423,7 @@ static int in_list_states(csp_rt_t* st, int snum)
 	    return 1;
     return 0;
 }
+#endif
 
 // If mem is the state variable and imm names a declared state, append that
 // state's name and return 1; otherwise leave the buffer untouched, return 0.
@@ -429,12 +431,12 @@ static int in_list_states(csp_rt_t* st, int snum)
 static int exprbuf_state_name(csp_rt_t* st, csp_exprbuf_t* bp,
 			      uint16_t mem, int imm)
 {
-    int s;
     if (!is_state_var(st, mem))
 	return 0;
-    for (s = 0; s < st->ps.ns; s++) {
-	if (st->states[s].snum == imm) {
-	    exprbuf_str_at(st, bp, st->states[s].name);
+    {
+	sindex_t np = state_name_pos(st, imm);
+	if (np > 0) {
+	    exprbuf_str_at(st, bp, np);
 	    return 1;
 	}
     }

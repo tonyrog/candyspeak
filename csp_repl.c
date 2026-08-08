@@ -391,13 +391,10 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	    list_indent(indent);
 	    csp_print_lit("#in");
 	    for (k = 0; k < ns; k++) {
-		int s;
+		sindex_t np = state_name_pos(st, st->list_states[k]);
 		csp_print_blank();
-		for (s = 0; s < st->ps.ns; s++)
-		    if (st->states[s].snum == st->list_states[k]) {
-			csp_print_str_at(st, st->states[s].name);
-			break;
-		    }
+		if (np > 0)
+		    csp_print_str_at(st, np);
 	    }
 	    list_eol();
 	    i = j + 1;                  // resume after the whole gate
@@ -631,6 +628,31 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    csp_print_blank(); csp_print_blank();
 	}
 	switch (t) {
+	case DECL_STATES: {
+	    // One block, up to CSP_STATES_PER_DECL names, listed as the single
+	    // `#states a b c` line it was written as. print_decl_and_name would
+	    // show only the first -- `npos` above is slot 0, which is DECL_COMMON's
+	    // name and therefore just the block's first state.
+	    csp_decl_t sb = csp_get_decl(st, i);
+	    int k, shown = 0;
+	    // INIT/NORMAL/FAILSAFE are runtime machinery, like the implicit State
+	    // variable filtered above: a listing that shows them cannot be pasted
+	    // back, because the runtime declares them itself. They occupy the
+	    // first block, so a block with nothing above FAILSAFE prints nothing.
+	    for (k = 0; k < CSP_STATES_PER_DECL; k++) {
+		sindex_t np = csp_states_name(&sb, k);
+		if (np == 0)
+		    continue;
+		if (lookup_state_pos(st, np) <= STATE_FAILSAFE)
+		    continue;
+		if (!shown) { print_decl(t); shown = 1; }
+		else csp_print_blank();
+		csp_print_str_at(st, np);
+	    }
+	    if (shown)
+		list_eol();
+	    break;
+	}
 	case DECL_VARIABLE:
 	    print_decl_and_name(st, t, cur_mod, npos);
 	    csp_print_blank();
@@ -816,14 +838,11 @@ static void state_name(csp_rt_t* st, index_t ix)
 // Print the declared state numbered `v`; 0 if no state has that number.
 static int state_print_state(csp_rt_t* st, ivalue_t v)
 {
-    int s;
-    for (s = 0; s < st->ps.ns; s++) {
-	if (st->states[s].snum == v) {
-	    csp_print_str_at(st, st->states[s].name);
-	    return 1;
-	}
-    }
-    return 0;
+    sindex_t np = state_name_pos(st, (int)v);
+    if (np == 0)
+	return 0;
+    csp_print_str_at(st, np);
+    return 1;
 }
 
 // One leaf row. ix is the object-qualified leaf, di its declaration index.
@@ -1480,7 +1499,9 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
     // and come out of the arena, so what limits them is the `pool` row below.
     mem_row(ros_objects, st->ps.nq,  -1, 0);                           csp_println();
     mem_row(ros_modules, st->nm,     -1, 0);                           csp_println();
-    mem_row(ros_states,  st->ps.ns,  MAX_STATES,  0);                  csp_println();
+    // Counted from the DECL_STATES blocks; no ceiling of its own -- what binds
+    // is the declaration pool, which the rows above already report.
+    mem_row(ros_states,  csp_num_states(st), -1, 0);                   csp_println();
     mem_row(ros_io,      st->nio,  -1, 0);                             csp_println();
     mem_row(ros_timers,  st->nt,   -1, 0);                             csp_println();
     mem_row(ros_buffers, st->nbuf, -1, 0);                             csp_println();

@@ -399,6 +399,32 @@ void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
     while(j <= n) {
 	int k = INDEX(mx)+j;
 	switch(decl(st,k,type)) {
+	case DECL_STATES: {
+	    // A `#states` inside a module body is a member like any other, but it
+	    // holds no per-instance VALUE -- so it is listed by name and number,
+	    // not through csp_dump_var, which would read a leaf that is not there.
+	    csp_decl_t sb = csp_get_decl(st, k);
+	    int q;
+	    for (q = 0; q < CSP_STATES_PER_DECL; q++) {
+		sindex_t np = csp_states_name(&sb, q);
+		if (np == 0)
+		    continue;
+		if (lang == ERLANG) {
+		    if (!fv) fprintf(f, ",");
+		    fprintf(f, "{state,\"%.*s\",%d}",
+			    (int)csp_str_byte(st, np-1), csp_str_at(st, np),
+			    lookup_state_pos(st, np));
+		}
+		else {
+		    fprintf(f, " state %.*s=%d\n",
+			    (int)csp_str_byte(st, np-1), csp_str_at(st, np),
+			    lookup_state_pos(st, np));
+		}
+		fv = 0;
+	    }
+	    j++;
+	    break;
+	}
 	case DECL_VARIABLE:
 	    csp_dump_var(f,st,"var","",m,k,fv,lang);
 	    fv = 0;
@@ -576,6 +602,26 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     case DECL_END:
 	fprintf(f, "{decl,%d,'end'}%s\n", i, eot);
 	break;
+    case DECL_STATES: {
+	// A block, not a single name: `decl_name(st, ix)` would show slot 0 and
+	// silently hide the other five. The number is what a rule's OP_INSTATE
+	// compares against, so print both -- that is what makes this readable
+	// when a `#in` gate does not match.
+	csp_decl_t sb = csp_get_decl(st, i);
+	int k, first = 1;
+	fprintf(f, "{decl,%d,states,[", i);
+	for (k = 0; k < CSP_STATES_PER_DECL; k++) {
+	    sindex_t np = csp_states_name(&sb, k);
+	    if (np == 0)
+		continue;
+	    if (!first) fputc(',', f);
+	    first = 0;
+	    fprintf(f, "{%d,\"%.*s\"}", lookup_state_pos(st, np),
+		    (int)csp_str_byte(st, np-1), csp_str_at(st, np));
+	}
+	fprintf(f, "]}%s\n", eot);
+	break;
+    }
     case DECL_OBJECT:
 	fprintf(f, "{decl,%d,object,'%s','%s'}%s\n",
 		i,
@@ -825,6 +871,7 @@ const char* csp_cfmt_dtype(decl_t dt)
     case DECL_FIELD: return "DECL_FIELD";
     case DECL_BUFFER: return "DECL_BUFFER";
     case DECL_VIEW: return "DECL_VIEW";
+    case DECL_STATES: return "DECL_STATES";
     default: return "?";
     }
 }
@@ -844,16 +891,16 @@ const char* csp_cfmt_endian(vendian_t et)
 void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 {
     int i;
-    uint16_t crc_str_data = 0xFFFF, crc_state_data = 0xFFFF;
+    uint16_t crc_str_data = 0xFFFF;
     uint16_t crc_decl_data = 0xFFFF, crc_instr_data = 0xFFFF;
     uint16_t decl_mark_crc = 0, instr_mark_crc = 0;
     // Every symbol this file emits is <px>_something. One image format, told
     // apart from another only by the name it answers to -- see csp_rom_meta_t.
     const char* px = (meta && meta->prefix) ? meta->prefix : "rom";
     // Section lengths as emitted, and the offsets derived from them.
-    unsigned n_str_b, n_decl_b, n_instr_b, n_state_b;
+    unsigned n_str_b, n_decl_b, n_instr_b;
     unsigned n_idg = 1, n_ofs = 1, n_edg = 1;    // stubs unless -r bakes a graph
-    uint32_t SP, o_str, o_decl, o_instr, o_idg, o_ofs, o_edg, o_states, img_size;
+    uint32_t SP, o_str, o_decl, o_instr, o_idg, o_ofs, o_edg, img_size;
 
     // Provenance banner: what this ROM is, where it came from, how big. The
     // counts are what actually goes into flash, so a glance at the top of rom.c
@@ -865,7 +912,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	if (meta->date)    fprintf(f, "//   built:   %s\n", meta->date);
     }
     fprintf(f, "//   size:    %d instr, %d decl, %d str, %d states\n",
-	    st->ps.nn, st->ps.nd, st->ps.strp, st->ps.ns);
+	    st->ps.nn, st->ps.nd, st->ps.strp, csp_num_states(st));
     fprintf(f, "\n");
 
     fprintf(f, "#include \"csp.h\"\n");
@@ -888,7 +935,6 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     n_str_b   = st->ps.strp + 3;              // data + 0xFF sentinel + crc16
     n_decl_b  = st->ps.nd + 1;                // + DECL_END_MARK
     n_instr_b = st->ps.nn + 1;                // + OP_END_MARK
-    n_state_b = st->ps.ns + 2;                // + sentinel + crc
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     if (st->reactive) {
 	n_idg = st->ps.nd;
@@ -903,13 +949,12 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     o_idg    = o_instr + n_instr_b * 4                   + SP;
     o_ofs    = o_idg   + n_idg*2   + CSP_PAD4(2*n_idg)   + SP;
     o_edg    = o_ofs   + n_ofs*2   + CSP_PAD4(2*n_ofs)   + SP;
-    o_states = o_edg   + n_edg*2   + CSP_PAD4(2*n_edg)   + SP;
-    img_size = o_states+ n_state_b*2 + CSP_PAD4(2*n_state_b);
+    img_size = o_edg   + n_edg*2   + CSP_PAD4(2*n_edg);
 
-    fprintf(f, "\nCSP_IMAGE_TYPE(%s_image_t, %u,%u,%u,%u,%u,%u,%u);\n",
-	    px, n_str_b, n_decl_b, n_instr_b, n_idg, n_ofs, n_edg, n_state_b);
-    fprintf(f, "CSP_IMAGE_CHECK(%s_image_t, %u,%u,%u,%u,%u,%u,%u,%u);\n\n",
-	    px, o_str, o_decl, o_instr, o_idg, o_ofs, o_edg, o_states, img_size);
+    fprintf(f, "\nCSP_IMAGE_TYPE(%s_image_t, %u,%u,%u,%u,%u,%u);\n",
+	    px, n_str_b, n_decl_b, n_instr_b, n_idg, n_ofs, n_edg);
+    fprintf(f, "CSP_IMAGE_CHECK(%s_image_t, %u,%u,%u,%u,%u,%u,%u);\n\n",
+	    px, o_str, o_decl, o_instr, o_idg, o_ofs, o_edg, img_size);
     fprintf(f, "static const %s_image_t %s_image_data RODATA = {\n", px, px);
 
     // first dump string table
@@ -955,7 +1000,14 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	index_t di;
 	for (di = 0; di < st->ps.nd; di++) {
 	    csp_decl_t d = csp_get_decl(st, di);
-	    d.is_mapped = 0; d.bound = 0; d.reg = 0;
+	    // Normalise the runtime-scratch bits -- but NOT on a states block:
+	    // is_mapped/bound/reg are bits 26..31, which that arm uses as the low
+	    // six of name3. Zeroing them here folded a different third state than
+	    // the one the image actually carries, and the target rejected its own
+	    // decl section. Same aliasing that let `State = c` corrupt a name.
+	    if (d.type != DECL_STATES) {
+		d.is_mapped = 0; d.bound = 0; d.reg = 0;
+	    }
 	    if (d.type == DECL_TIMER) { d.tm.fired=0; d.tm.running=0; d.tm._res=0; }
 	    crc_decl_data = csp_crc16(crc_decl_data, &d, sizeof(d), 0);
 	}
@@ -1020,9 +1072,21 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    fprintf(f, "  {.bf={%s,.nbytes=%u,.transport=%u,.id=%u}},\n",
 		    cmn, dp->bf.nbytes, dp->bf.transport, dp->bf.id);
 	    break;
+	case DECL_STATES:
+	    // NOT `cmn`, and not the default arm. A states block packs six name
+	    // positions across the whole declaration, and DECL_COMMON's .vt and
+	    // .res sit on top of name2 and name3 -- emitting them would overwrite
+	    // two states with a type and a width. The section CRC is folded over
+	    // the raw bytes, so an image written through the wrong arm fails its
+	    // own check at boot (or, worse, loads with two states quietly wrong).
+	    fprintf(f, "  {.s6={.type=%s,.dir=%u,.name=%u,.name2=%u,.name3=%u,"
+		    ".name4=%u,.name5=%u,.name6=%u}},\n",
+		    csp_cfmt_dtype(dp->type), dp->dir,
+		    dp->s6.name, dp->s6.name2, dp->s6.name3,
+		    dp->s6.name4, dp->s6.name5, dp->s6.name6);
+	    break;
 	case DECL_END:    // common fields only (anonymous union arm)
 	case DECL_VIEW:   // synthetic; emitted as common only
-	case DECL_STATES:
 	case DECL_IN:
 	case DECL_NONE:
 	default:
@@ -1161,22 +1225,8 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 		n_edg*2 + CSP_PAD4(2*n_edg));
     }
 
-    // State table (name offset -> state number). csp_load_image copies this back
-    // into st->states so baked user states resolve. Name offsets index str.
-    crc_state_data = csp_crc16(0xFFFF, st->states,
-			       (size_t)st->ps.ns * sizeof(state_t), 0);
-    // state self-CRC trailer: a sentinel (snum 0x7f -- never a real state, snums
-    // are 0..MAX_STATES-1) marks the section end for header-free recovery, and the
-    // next state_t packs the 16-bit CRC across its name(9)+snum(7). rom_scan_state.
-    fprintf(f, "  .s_states = { { CSP_SECT_STATES }, %u },\n  .states = {",
-	    n_state_b*2 + CSP_PAD4(2*n_state_b));
-    for (i = 0; i < st->ps.ns; i++)
-	fprintf(f, "{.name=%u,.snum=%u},",
-		st->states[i].name, st->states[i].snum);
-    fprintf(f, "{.name=0,.snum=0x7f},");                       // sentinel
-    fprintf(f, "{.name=%u,.snum=%u},",                         // crc: name|snum<<9
-	    crc_state_data & 0x1ff, (crc_state_data >> 9) & 0x7f);
-    fprintf(f, "},\n");
+    // (No state section as of v10: a state is a DECL_STATES declaration and went
+    // out with the declarations above, under crc_decl.)
 
     // The image header LAST: counts + per-section CRCs, so csp_load_rom can
     // reject a stale or corrupt generate and name the bad section. Each section
@@ -1191,14 +1241,13 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 #endif
 	h.version = ROM_FORMAT_VERSION;
 	h.n_str = st->ps.strp; h.n_decl = st->ps.nd; h.n_instr = st->ps.nn;
-	h.n_edg = nedg;        h.n_state = st->ps.ns;
+	h.n_edg = nedg;
 
 	// crc over the str/decl/instr DATA -- precomputed above (same folds that
 	// seed the section self-CRCs), so header and section never disagree.
 	h.crc_str = crc_str_data;
 	h.crc_decl = crc_decl_data;
 	h.crc_instr = crc_instr_data;
-	h.crc_state = crc_state_data;   // precomputed above (seeds the trailer too)
 	// Graph CRC folds the same three arrays rom_verify reads back, in the same
 	// order and with the same sizes the emission above used: idg[nd], ofs[nd+1],
 	// edg[nedg]. Only when a graph exists (nedg > 0); else baked 0 and skipped.
@@ -1220,7 +1269,6 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	h.generation = (meta) ? meta->generation : 0;
 	h.ofs_str = o_str;   h.ofs_decl = o_decl; h.ofs_instr = o_instr;
 	h.ofs_idg = o_idg;   h.ofs_ofs = o_ofs;   h.ofs_edg = o_edg;
-	h.ofs_states = o_states;
 	// LAST, and over every byte above it -- magic, size, role, generation,
 	// counts, section CRCs AND the offsets. Computed after all of them.
 	h.crc_hdr = csp_crc16(0xFFFF, &h, sizeof(h) - sizeof(uint16_t), 0);
@@ -1231,19 +1279,18 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 		   "    .magic = { CSP_IMAGE_MAGIC0, CSP_IMAGE_MAGIC1,"
 		   " CSP_IMAGE_MAGIC2, CSP_IMAGE_MAGIC3 },\n"
 		   "    .size=%u, .version=%u, .role=%u, .generation=%u,\n"
-		   "    .n_str=%u, .n_decl=%u, .n_instr=%u, .n_edg=%u,"
-		   " .n_state=%u,\n"
+		   "    .n_str=%u, .n_decl=%u, .n_instr=%u, .n_edg=%u,\n"
 		   "    .crc_str=%u, .crc_decl=%u, .crc_instr=%u,"
-		   " .crc_state=%u, .crc_graph=%u,\n"
+		   " .crc_graph=%u,\n"
 		   "    .ofs_str=%u, .ofs_decl=%u, .ofs_instr=%u,"
 		   " .ofs_idg=%u,\n"
-		   "    .ofs_ofs=%u, .ofs_edg=%u, .ofs_states=%u,\n"
+		   "    .ofs_ofs=%u, .ofs_edg=%u,\n"
 		   "    .crc_hdr=%u }\n};\n",
 		h.size, h.version, h.role, h.generation,
-		h.n_str, h.n_decl, h.n_instr, h.n_edg, h.n_state,
-		h.crc_str, h.crc_decl, h.crc_instr, h.crc_state, h.crc_graph,
+		h.n_str, h.n_decl, h.n_instr, h.n_edg,
+		h.crc_str, h.crc_decl, h.crc_instr, h.crc_graph,
 		h.ofs_str, h.ofs_decl, h.ofs_instr, h.ofs_idg,
-		h.ofs_ofs, h.ofs_edg, h.ofs_states, h.crc_hdr);
+		h.ofs_ofs, h.ofs_edg, h.crc_hdr);
 
 	// The handle the runtime takes: just the base. It never names the image's
 	// struct type -- that type is generated per program -- it works in offsets
@@ -1270,6 +1317,23 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
     case DECL_END:
 	fprintf(f, "#end\n");
 	break;
+    case DECL_STATES: {
+	// One block lists as the single `#states a b c` line it was written as.
+	// Unlike the REPL's /list this keeps the reserved INIT/NORMAL/FAILSAFE:
+	// this dump is for reading the program the runtime actually holds, not
+	// for producing source you paste back.
+	csp_decl_t sb = csp_get_decl(st, i);
+	int k;
+	fprintf(f, "#states");
+	for (k = 0; k < CSP_STATES_PER_DECL; k++) {
+	    sindex_t np = csp_states_name(&sb, k);
+	    if (np == 0)
+		continue;
+	    fprintf(f, " %.*s", (int)csp_str_byte(st, np-1), csp_str_at(st, np));
+	}
+	fputc('\n', f);
+	break;
+    }
     case DECL_OBJECT:
 	fprintf(f, "#%s %s\n",
 		decl_name(st, decl(st,i,mq.mx)),
@@ -1367,15 +1431,11 @@ int csp_list_rule(csp_rt_t* st, int i)
     { int r = csp_print_rule(st, i); csp_println(); return r; }
 }
 
-// Name string position of the state numbered snum (0 if none).
-static sindex_t list_state_name_pos(csp_rt_t* st, int snum)
-{
-    int s;
-    for (s = 0; s < st->ps.ns; s++)
-	if (st->states[s].snum == snum)
-	    return st->states[s].name;
-    return 0;
-}
+// Name string position of the state numbered snum (0 if none). The last reader
+// of the old flat state table -- states are DECL_STATES blocks now, so it goes
+// through the shared walk like every other lookup. Missing this one is what
+// rendered every `#in` gate as `#in ?`.
+#define list_state_name_pos(st, snum) state_name_pos((st), (snum))
 
 // Reconstruct source-shaped output: #module/#in blocks are recovered from the
 // OP_ENTER/OP_LEAVE and OP_INSTATE markers, rules are indented within them, and
