@@ -269,6 +269,50 @@ ck "module rules list inside the block, indented" \
 #Blink b  // R
 Led=1 ? 1  // 3 R' "$got"
 
+# --- 11b. a filtered listing shows no empty scaffolding ----------------------
+# `#in` headers and the `#module` wrapper were printed as the walk passed them,
+# before knowing whether anything inside would survive the filter. `/list Led`
+# on this program answered with more lines of empty block than of matching rule.
+# They are held back now and go out with the first line under them.
+echo "list filters:"
+got=$(printf '/list Led\n/quit\n' | repl ./csp "$D/t14b.db" --no-eeprom "$D/mod.csp")
+ck "a filtered listing drops blocks nothing survived in" \
+'#digital Led out 0:13  // R
+Led=1 ? 1  // 3 R' "$got"
+
+# ...but an UNFILTERED listing stays faithful: `#in INIT` with an empty body is
+# something the source says, and a listing you can paste back has to keep it.
+printf '#digital L out 0:13\n#in INIT\n#end\nL = 1 ? 1\n' > "$D/empty_in.csp"
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/t14c.db" --no-eeprom "$D/empty_in.csp")
+ck "an unfiltered listing keeps a block that is empty in the source" \
+'#digital L out 0:13  // R
+#in INIT  // R
+#end   // R
+L=1 ? 1  // 1 R' "$got"
+
+# `:S` asks which rules RUN in S. It registered the state and then tested nothing,
+# so it listed the whole program. A rule matches when its `#in` block covers S.
+printf '#variable X = 0\n#states one two\n#in one\n  X = 1\n#end\n#in two\n  X = 2\n#end\n' \
+    > "$D/twost.csp"
+got=$(printf '/list :one\n/quit\n' | repl ./csp "$D/t14d.db" --no-eeprom "$D/twost.csp")
+ck "a :state filter keeps only the block that covers it" \
+'#variable X:32 integer = 0  // R
+#states one two  // R
+#in one  // R
+  X=1  // 1 R
+#end   // R' "$got"
+
+# A bare top-level rule is NOT ungated: the implicit NORMAL+ wrap gives it a real
+# gate over INIT and NORMAL, so it answers to those two states and no others.
+printf '#variable Y = 0\n#states three\nY = 9 ? 1\n' > "$D/bare.csp"
+got=$(printf '/list :NORMAL\n/quit\n' | repl ./csp "$D/t14e.db" --no-eeprom "$D/bare.csp" |
+	  grep -c 'Y=9')
+ck "a bare rule answers to NORMAL" "1" "$got"
+
+got=$(printf '/list :three\n/quit\n' | repl ./csp "$D/t14f.db" --no-eeprom "$D/bare.csp" |
+	  grep -c 'Y=9')
+ck "and not to a user state" "0" "$got"
+
 # --- 12. pasting a source file -----------------------------------------------
 # Every comment line came back as "Unknown command: // ...": `//` matched the
 # leading-'/' command test. Pasting a .csp file into the prompt is what the

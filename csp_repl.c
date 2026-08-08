@@ -325,8 +325,35 @@ typedef struct {
     int           nf;
     uint32_t      cmask;    // condition-filter variables (filter index bitmask)
     uint32_t      bmask;    // body-filter variables
+    // States named with `:S`, as a bitmask over state NUMBERS. A rule matches
+    // when its `#in` block covers one of them -- that is what "runs in S" means.
+    // Separate from filt[], which is keyed on declaration index: a state number
+    // is not one, and squeezing it in there is why the ':' filter never worked.
+    uint32_t      smask;
     const char*   scope;    // restrict to this module, NULL for everything
+    // Called before the FIRST line this walk prints, or not at all. The module
+    // wrapper is held back the same way an `#in` header is -- and its rules are
+    // printed from in here, so the walk has to be able to flush it.
+    void (*flush)(csp_rt_t*, void*);
+    void*         flush_arg;
 } list_ctx_t;
+
+// The `#in <states>` line itself, from st->list_states. The caller has already
+// emitted the tag column and the indent -- this is only the text, so the eager
+// and the deferred paths cannot render it differently.
+static void list_in_header(csp_rt_t* st, int indent)
+{
+    int k;
+    (void)indent;
+    csp_print_lit("#in");
+    for (k = 0; k < st->list_nstate; k++) {
+	sindex_t np = state_name_pos(st, st->list_states[k]);
+	csp_print_blank();
+	if (np > 0)
+	    csp_print_str_at(st, np);
+    }
+    list_eol();
+}
 
 // List the rules in instructions [from, to), numbering them from `first`, and
 // return the number the next rule would get. Segment and number come from the
@@ -345,6 +372,13 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
     int rule_pos;    // ip of this body's OP_RULE, -1 if it has none
     int rule_no;     // user-facing rule number, 1-based
     int block_end;   // ip past the current #in block, -1 if not in one
+    // A `#in` header is printed LAZILY -- when the first rule inside it actually
+    // survives the filter -- and the matching `#end` only if the header went out.
+    // Printed eagerly, a filtered listing was mostly scaffolding: `/list Red` on
+    // the traffic example gave eight `#in X` / `#end` pairs with nothing between
+    // them, more lines of empty block than of matching rule.
+    int block_gate;  // ip of the gate whose `#in` is still unprinted, -1 if none
+    int block_shown; // 1 once this block's `#in` has been printed
     uint32_t fbits;  // variables/states present in this rule (by filter index)
     sindex_t cur_mod = 0;
 
@@ -355,6 +389,8 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
     rule_no = 0;
     fbits = 0;
     block_end = -1;
+    block_gate = -1;
+    block_shown = 0;
     st->list_nstate = 0;
     // Rules are numbered by absolute position, so a range starting part-way in
     // has to know how many came before it.
@@ -363,12 +399,17 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	    rule_no++;
     while (i < to) {
 	// Close a finished #in block: print `#end` (no number), leave the state.
+	// Only when its `#in` was printed -- an empty block writes neither half.
 	if ((block_end >= 0) && (i >= block_end)) {
-	    list_column(0, instr_seg(st, i), 0);
-	    list_indent(indent);
-	    print_decl(DECL_END);
-	    list_eol();
+	    if (block_shown) {
+		list_column(0, instr_seg(st, i), 0);
+		list_indent(indent);
+		print_decl(DECL_END);
+		list_eol();
+	    }
 	    block_end = -1;
+	    block_gate = -1;
+	    block_shown = 0;
 	    st->list_nstate = 0;
 	}
 	// A block gate is `LD State ; NINSTATE* ; INSTATE` (open_in_block). Emit
@@ -378,7 +419,7 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	    ((instr(st,i+1,op) == OP_NINSTATE) ||
 	     (instr(st,i+1,op) == OP_INSTATE))) {
 	    int j = i + 1;
-	    int ns = 0, k;
+	    int ns = 0;
 	    while ((j < to) && (instr(st,j,op) == OP_NINSTATE)) {
 		if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st,j,in.imm);
 		j++;
@@ -387,16 +428,23 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	    if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st,j,in.imm);
 	    block_end = j + instr(st,j,in.nxt);
 	    st->list_nstate = ns;
-	    list_column(0, instr_seg(st, i), 0);
-	    list_indent(indent);
-	    csp_print_lit("#in");
-	    for (k = 0; k < ns; k++) {
-		sindex_t np = state_name_pos(st, st->list_states[k]);
-		csp_print_blank();
-		if (np > 0)
-		    csp_print_str_at(st, np);
+	    // With a filter: remembered, not printed -- the header goes out with
+	    // the first rule inside it that survives. Without one: printed now,
+	    // because an unfiltered listing is a faithful rendering of the program
+	    // and `#in fail` with nothing in it is something the source SAYS.
+	    // Empty blocks are noise when they are empty because of the filter,
+	    // not when they are empty in the program.
+	    //
+	    // list_states/list_nstate are set either way: the rule renderer reads
+	    // them to drop the per-rule State guard.
+	    block_gate = i;
+	    block_shown = 0;
+	    if (!c->nf && !c->scope && !c->smask) {
+		list_column(0, instr_seg(st, i), 0);
+		list_indent(indent);
+		list_in_header(st, indent);
+		block_shown = 1;
 	    }
-	    list_eol();
 	    i = j + 1;                  // resume after the whole gate
 	    rule = i;
 	    continue;
@@ -439,7 +487,42 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 		    || (c->cmask==0 && c->bmask==0);
 		if (c->scope && !(cur_mod && csp_str_eq(st, cur_mod, c->scope, strlen(c->scope))))
 		    show = 0;
+		// `:S` -- does this rule RUN in S? Its enclosing block's states
+		// answer that, and they are already collected for the renderer.
+		// A rule with no block is the implicit NORMAL+ one, which runs
+		// in INIT and NORMAL and nowhere else.
+		// Which States does this rule RUN in? Three cases, and the listing
+		// cannot tell the last two apart from the block list alone -- both
+		// have none -- so the OP_RULE's `implicit` flag decides.
+		if (c->smask && (rule_pos >= 0)) {
+		    uint32_t rs;
+		    if (st->list_nstate) {          // inside an #in block
+			int k;
+			rs = 0;
+			for (k = 0; k < st->list_nstate; k++)
+			    rs |= (1u << (st->list_states[k] & 31));
+		    }
+		    else if (instr(st, rule_pos, r.implicit))
+			rs = (1u<<STATE_INIT) | (1u<<STATE_NORMAL);  // bare NORMAL+
+		    else
+			rs = 0xffffffffu;           // module body: ungated, any State
+		    if (!(rs & c->smask))
+			show = 0;
+		}
 		if (show && (rule_pos >= 0)) {
+		    // Anything above us that is still pending -- the enclosing
+		    // `#module` wrapper -- goes out first. One call site: an `#in`
+		    // header only ever prints from here too.
+		    if (c->flush)
+			c->flush(st, c->flush_arg);
+		    // First surviving rule of a block: its `#in` header, held back
+		    // until now, goes out immediately above it.
+		    if ((block_gate >= 0) && !block_shown) {
+			list_column(0, instr_seg(st, block_gate), 0);
+			list_indent(indent);
+			list_in_header(st, indent);
+			block_shown = 1;
+		    }
 		    list_column(rule_no, instr_seg(st, rule_pos),
 				(rule_no <= MAX_DIS_RULES) &&
 				bitset_tst(st->dis_rule, rule_no-1));
@@ -481,7 +564,9 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	default: i++; break;
 	}
     }
-    if (block_end >= 0) {           // a #in block ran to the end of the range
+    // A #in block that ran to the end of the range still needs its `#end` -- but
+    // again only if its header was printed.
+    if ((block_end >= 0) && block_shown) {
 	list_column(0, instr_seg(st, to - 1), 0);
 	list_indent(indent);
 	print_decl(DECL_END);
@@ -508,8 +593,29 @@ static void list_value(csp_rt_t* st, vtype_t vt, value_t val)
     csp_print_value(st, vt, val);
 }
 
+// The `#module M` wrapper, held back until something inside it prints. See the
+// DECL_MODULE arm in cmd_list.
+typedef struct {
+    sindex_t st_name;   // module name position
+    int      seg;       // its segment, for the tag column
+    int      pending;   // 1 = seen, not yet printed
+} mod_pending_t;
+
+static void mod_flush(csp_rt_t* st, void* arg)
+{
+    mod_pending_t* mp = (mod_pending_t*)arg;
+    if (!mp->pending)
+	return;
+    mp->pending = 0;
+    list_column(0, mp->seg, 0);
+    print_decl(DECL_MODULE);
+    csp_print_str_at(st, mp->st_name);
+    list_eol();
+}
+
 static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 {
+    mod_pending_t mp = { 0, 0, 0 };
     int i;
     index_t ix;
     int nf = 0;   // number of filters
@@ -517,6 +623,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
     int f;
     uint32_t cmask;  // condition filter variables (filter index bitmask)
     uint32_t bmask;  // body filter variables (filter index bitmask)
+    uint32_t smask;  // states named with :S (bitmask over state numbers)
     list_ctx_t ctx;  // what list_rules needs to honour the same filters
     int mod_decl = 0;// decl index of the module block being listed
     const char* name;
@@ -526,6 +633,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 
     cmask = 0;
     bmask = 0;
+    smask = 0;
     // register the filter variables and types
     for (i = 0; i < argc; i++) {
 	char typ = ' ';
@@ -536,12 +644,14 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	if (typ==':') {
 	    const tstr_t sname = { (char*)name, strlen(name) };
 	    int s;
-	    if ((s=lookup_state(st, &sname)) >=0) {
-		if ((f = lookup_filter(ix, 3, filt, nf)) < 0) {
-		    if (nf >= MAX_FILTER) goto match;
-		    filt[nf].typ = typ;
-		    filt[nf++].ix = s;
-		}
+	    // Its own mask, not a filt[] entry. filt[] is keyed on DECLARATION
+	    // index and matched against the memory operand of a load or store; a
+	    // state number is neither, and the old code passed an uninitialised
+	    // `ix` to lookup_filter to find out. Nothing then tested the entry
+	    // against a rule, so `/list :green` listed the whole program.
+	    if ((s = lookup_state(st, &sname)) >= 0) {
+		if (s < 32)             // the mask is 32 wide; higher states cannot be asked for
+		    smask |= (1u << s);
 	    }
 	}
 	else if ((typ == ' ') && (find_module(st, name) != BAD_INDEX)) {
@@ -573,14 +683,18 @@ match:
 	if (d.type == DECL_MODULE) {
 	    cur_mod = d.name;
 	    mod_decl = i;
-	    // Print the wrapper when it is in scope: /list M then yields a
-	    // complete "#module M ... #end" block, which is the only form that
-	    // can be pasted back as a module.
+	    // Held back, not printed. A module whose members and rules were all
+	    // filtered out contributes nothing, and an empty `#module M` / `#end`
+	    // pair is scaffolding around a hole. mod_flush puts it out the moment
+	    // something inside it does print -- from here for members, through
+	    // ctx.flush for rules -- so a listing that shows the block is still the
+	    // complete, pasteable form.
 	    if (!scope || csp_str_eq(st, cur_mod, scope, strlen(scope))) {
-		list_column(0, seg, 0);
-		print_decl(DECL_MODULE);
-		csp_print_str_at(st, cur_mod);
-		list_eol();
+		mp.st_name = cur_mod;
+		mp.seg     = seg;
+		mp.pending = 1;
+		if (!nf && !scope && !smask)  // unfiltered: faithful, so print now
+		    mod_flush(st, &mp);
 	    }
 	    continue;
 	}
@@ -595,12 +709,19 @@ match:
 		    index_t ent = decl(st, mod_decl, md.ent);
 		    int body_n  = instr(st, ent, e.num);
 		    ctx.filt = filt; ctx.nf = nf;
-		    ctx.cmask = cmask; ctx.bmask = bmask;
+		    ctx.cmask = cmask; ctx.bmask = bmask; ctx.smask = smask;
 		    ctx.scope = NULL;    // inside the block: no further narrowing
+		    ctx.flush = mod_flush; ctx.flush_arg = &mp;
 		    list_rules(st, &ctx, ent + 1, ent + 1 + body_n, 1, 0);
-		    list_column(0, seg, 0);
-		    print_decl(DECL_END);
-		    list_eol();
+		    // `#end` only if the wrapper went out: still pending means the
+		    // whole module was filtered away. Unfiltered it was flushed at
+		    // the `#module`, so an empty module still lists as a block.
+		    if (!mp.pending) {
+			list_column(0, seg, 0);
+			print_decl(DECL_END);
+			list_eol();
+		    }
+		    mp.pending = 0;
 		}
 		cur_mod = 0;
 		mod_decl = 0;
@@ -624,6 +745,7 @@ match:
 	    continue;                // no / empty name
 	if (nf && !is_fvar(ix, 2, filt, nf))
 	    continue;
+	mod_flush(st, &mp);        // this member is printing: the wrapper first
 	list_column(0, seg, 0);
 	if (cur_mod) {
 	    csp_print_blank(); csp_print_blank();
@@ -789,7 +911,8 @@ match:
     // arrangement that can be pasted back as source. The walk still counts them,
     // so rule numbers stay absolute and agree with #disable.
     ctx.filt = filt; ctx.nf = nf;
-    ctx.cmask = cmask; ctx.bmask = bmask; ctx.scope = scope;
+    ctx.cmask = cmask; ctx.bmask = bmask; ctx.scope = scope; ctx.smask = smask;
+    ctx.flush = NULL; ctx.flush_arg = NULL;   // top level: no wrapper to hold back
     list_rules(st, &ctx, 0, (int)st->ps.nn, 0, 1);
     st->list_nstate = 0;
     return CSP_CMD_OK;
