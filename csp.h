@@ -1339,6 +1339,11 @@ typedef enum {
     ERR_CANNOT_SAVE,
     ERR_CANNOT_LOAD,
     ERR_NUMBER_RANGE,
+    // The arena could not hold the program's derived tables (view, heap, buffer
+    // table, reactive graph). Distinct from ERR_TOO_MANY_DECLARATIONS, which is
+    // about a COUNT hitting an encoding limit: this one is about bytes, and it
+    // is what a `#buffer` too large for the board reports.
+    ERR_OUT_OF_MEMORY,
 } csp_err_t;
 
 // parser state, save state before parse

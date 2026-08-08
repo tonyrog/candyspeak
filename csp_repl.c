@@ -544,47 +544,47 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 		}
 	    }
 	}
-	 else if ((typ == ' ') && (find_module(st, name) != BAD_INDEX)) {
-	     scope = name;   // restrict listing to this module's members
-	 }
-	 else {
-	     const tstr_t sname = { (char*)name, strlen(name) };
-	     if ((ix = csp_lookup_decl(st, &sname)) != BAD_INDEX) {
-		 if ((f = lookup_filter(ix, (typ == '?'), filt, nf)) < 0) {
-		     if (nf >= MAX_FILTER) goto match;
-		     if (typ == '?') cmask |= (1 << nf);
-		     else if (typ == ' ') bmask |= (1 << nf);
-		     filt[nf].typ = typ;
-		     filt[nf++].ix = ix;
-		 }
-	     }
-	 }
-     }
+	else if ((typ == ' ') && (find_module(st, name) != BAD_INDEX)) {
+	    scope = name;   // restrict listing to this module's members
+	}
+	else {
+	    const tstr_t sname = { (char*)name, strlen(name) };
+	    if ((ix = csp_lookup_decl(st, &sname)) != BAD_INDEX) {
+		if ((f = lookup_filter(ix, (typ == '?'), filt, nf)) < 0) {
+		    if (nf >= MAX_FILTER) goto match;
+		    if (typ == '?') cmask |= (1 << nf);
+		    else if (typ == ' ') bmask |= (1 << nf);
+		    filt[nf].typ = typ;
+		    filt[nf++].ix = ix;
+		}
+	    }
+	}
+    }
 
- match:
-     // list declarations that match the filter. Iterate ALL decls (do not stop
-     // at the first DECL_END -- module ends and the terminator are ENDs too).
-     // Each line is tagged [ROM]/[RAM] by segment; module members are shown with
-     // a Mod. prefix. scope != NULL restricts to that module's members.
-     for (i = 0; i < st->ps.nd; i++) {
-	 index_t ix = MAKE_INDEX(0, i);
-	 decl_t t = decl(st,i,type);
-	 int seg = decl_seg(st, i);
-	 if (t == DECL_MODULE) {
-	     cur_mod = decl(st, i, name);
-	     mod_decl = i;
-	     // Print the wrapper when it is in scope: /list M then yields a
-	     // complete "#module M ... #end" block, which is the only form that
-	     // can be pasted back as a module.
-	     if (!scope || csp_str_eq(st, cur_mod, scope, strlen(scope))) {
-		 list_column(0, seg, 0);
-		 print_decl(DECL_MODULE);
-		 csp_print_str_at(st, cur_mod);
-		 list_eol();
-	     }
-	     continue;
-	 }
-	if (t == DECL_END) {         // module end or top-level terminator
+match:
+    // list declarations that match the filter. Iterate ALL decls (do not stop
+    // at the first DECL_END -- module ends and the terminator are ENDs too).
+    // Each line is tagged [ROM]/[RAM] by segment; module members are shown with
+    // a Mod. prefix. scope != NULL restricts to that module's members.
+    for (i = 0; i < st->ps.nd; i++) {
+	index_t ix = MAKE_INDEX(0, i);
+	csp_decl_t d = csp_get_decl(st, i);	
+	int seg = decl_seg(st, i);
+	if (d.type == DECL_MODULE) {
+	    cur_mod = d.name;
+	    mod_decl = i;
+	    // Print the wrapper when it is in scope: /list M then yields a
+	    // complete "#module M ... #end" block, which is the only form that
+	    // can be pasted back as a module.
+	    if (!scope || csp_str_eq(st, cur_mod, scope, strlen(scope))) {
+		list_column(0, seg, 0);
+		print_decl(DECL_MODULE);
+		csp_print_str_at(st, cur_mod);
+		list_eol();
+	    }
+	    continue;
+	}
+	if (d.type == DECL_END) {         // module end or top-level terminator
 	    if (cur_mod) {
 		if (!scope || csp_str_eq(st, cur_mod, scope, strlen(scope))) {
 		    // The module's RULES, before its #end -- that is where they
@@ -618,7 +618,8 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	// VALUE is /state's business, which is where to look for it.
 	if (state_is_state_var(st, i))
 	    continue;
-	npos = decl(st, i, name);
+	
+	npos = d.name; // decl(st, i, name);
 	if ((npos == 0) || (csp_str_byte(st, npos-1) == 0))
 	    continue;                // no / empty name
 	if (nf && !is_fvar(ix, 2, filt, nf))
@@ -627,25 +628,25 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	if (cur_mod) {
 	    csp_print_blank(); csp_print_blank();
 	}
-	switch (t) {
+	switch (d.type) {
 	case DECL_STATES: {
 	    // One block, up to CSP_STATES_PER_DECL names, listed as the single
 	    // `#states a b c` line it was written as. print_decl_and_name would
 	    // show only the first -- `npos` above is slot 0, which is DECL_COMMON's
 	    // name and therefore just the block's first state.
-	    csp_decl_t sb = csp_get_decl(st, i);
+	    // csp_decl_t sb = csp_get_decl(st, i);
 	    int k, shown = 0;
 	    // INIT/NORMAL/FAILSAFE are runtime machinery, like the implicit State
 	    // variable filtered above: a listing that shows them cannot be pasted
 	    // back, because the runtime declares them itself. They occupy the
 	    // first block, so a block with nothing above FAILSAFE prints nothing.
 	    for (k = 0; k < CSP_STATES_PER_DECL; k++) {
-		sindex_t np = csp_states_name(&sb, k);
+		sindex_t np = csp_states_name(&d, k);
 		if (np == 0)
 		    continue;
 		if (lookup_state_pos(st, np) <= STATE_FAILSAFE)
 		    continue;
-		if (!shown) { print_decl(t); shown = 1; }
+		if (!shown) { print_decl(d.type); shown = 1; }
 		else csp_print_blank();
 		csp_print_str_at(st, np);
 	    }
@@ -654,31 +655,35 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    break;
 	}
 	case DECL_VARIABLE:
-	    print_decl_and_name(st, t, cur_mod, npos);
+	    print_decl_and_name(st, d.type, cur_mod, npos);
+	    csp_print_char(':'); 
+	    csp_print_uint(GET_RES(d.res));
 	    csp_print_blank();
-	    csp_print_rostr(csp_fmt_vtype(decl(st,i,vt)));
+	    csp_print_rostr(csp_fmt_vtype(d.vt));
 	    // list the declaration's init value, not the live state (like #constant
 	    // below); reading a value here would touch leaf storage /list must not.
-	    if (!decl(st,i,bound)) {
+	    if (!d.bound) {
 		csp_print_lit(" = ");
-		list_value(st, decl(st,i,vt), decl(st,i,va.init));
+		list_value(st, d.vt, d.va.init);
 	    }
 	    else {
 		// bind <buffer>[<lo>..<hi>] -- a bit-field view, so there is no
 		// init value to show; without this the bind vanished from /list
 		// and the output could not be pasted back.
 		csp_print_lit(" bind ");
-		csp_print_str_at(st, decl_name_pos(st, decl(st,i,ca.id)));
+		csp_print_str_at(st, decl_name_pos(st, d.ca.id));
 		csp_print_char('[');
-		csp_print_uint(decl(st,i,ca.bit));
+		csp_print_uint(d.ca.bit);
 		csp_print_lit("..");
-		csp_print_uint(decl(st,i,ca.bit) + decl(st,i,ca.len));
+		csp_print_uint(d.ca.bit + d.ca.len);
 		csp_print_char(']');
 	    }
 	    list_eol();
 	    break;
 	case DECL_CONSTANT:
-	    print_decl_and_name(st, t, cur_mod, npos);
+	    print_decl_and_name(st, d.type, cur_mod, npos);
+	    csp_print_char(':');
+	    csp_print_uint(GET_RES(d.res));	    
 	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_vtype(decl(st,i,vt)));
 	    csp_print_lit(" = ");
@@ -693,7 +698,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    list_eol();
 	    break;
 	case DECL_TIMER:
-	    print_decl_and_name(st, t, cur_mod, npos);
+	    print_decl_and_name(st, d.type, cur_mod, npos);
 	    csp_print_blank();
 	    csp_print_uint(decl(st,i,tm.period));
 	    // `= 1` is part of the declaration, not decoration: it is what starts
@@ -704,52 +709,52 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    list_eol();
 	    break;
 	case DECL_DIGITAL:
-	    print_decl_and_name(st, t, cur_mod, npos);
+	    print_decl_and_name(st, d.type, cur_mod, npos);
 	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
-	    if (decl(st,i,di.pullup)) {
+	    if (d.di.pullup) {
 		csp_print_blank();		
 		csp_print_rostr(ros_pullup);
 	    }
-	    else if (decl(st,i,di.pulldown)) {
+	    else if (d.di.pulldown) {
 		csp_print_blank();
 		csp_print_rostr(ros_pulldown);
 	    }
 	    csp_print_blank();  // port:pin (needed to mod/rewire)
-	    csp_print_uint(decl(st,i,di.port));
+	    csp_print_uint(d.di.port);
 	    csp_print_char(':');
-	    csp_print_uint(decl(st,i,di.pin));
+	    csp_print_uint(d.di.pin);
 	    list_eol();
 	    break;
 	case DECL_ANALOG:
-	    print_decl_and_name(st, t, cur_mod, npos);	    
+	    print_decl_and_name(st, d.type, cur_mod, npos);	    
 	    csp_print_char(':');              // :width (res stored as bits-1)
-	    csp_print_uint(decl(st,i,an.res)+1);
+	    csp_print_uint(GET_RES(d.an.res));
 	    csp_print_blank();
-	    csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
-	    if (decl(st,i,an.pwm)) {
+	    csp_print_rostr(csp_fmt_pindir(d.dir));
+	    if (d.an.pwm) {
 		csp_print_blank();
 		csp_print_rostr(ros_pwm);
-	    }	    
+	    }
 	    csp_print_blank();              // port:pin
-	    csp_print_uint(decl(st,i,an.port));
+	    csp_print_uint(d.an.port);
 	    csp_print_char(':');
-	    csp_print_uint(decl(st,i,an.pin));
+	    csp_print_uint(d.an.pin);
 	    list_eol();
 	    break;
 	case DECL_BUFFER:
 	    // #buffer <name>:<size> <dir> [can 0x<id>]. Size is BYTES (bf.nbytes)
 	    // -- see csp_parse_buffer.
-	    print_decl_and_name(st, t, cur_mod, npos);
+	    print_decl_and_name(st, d.type, cur_mod, npos);
 	    csp_print_char(':');
-	    csp_print_uint(decl(st,i,bf.nbytes));
+	    csp_print_uint(d.bf.nbytes);
 	    if (decl(st,i,dir)) {
 		csp_print_blank();
-		csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
+		csp_print_rostr(csp_fmt_pindir(d.dir));
 	    }
 	    if (decl(st,i,bf.transport) == TR_CAN) {
 		csp_print_lit(" can ");   // csp_print_hex emits the 0x itself
-		csp_print_hex((uvalue_t)decl(st, decl(st,i,bf.id), cn.init).i);
+		csp_print_hex((uvalue_t)decl(st, d.bf.id, cn.init).i);
 	    }
 	    list_eol();
 	    break;
@@ -757,19 +762,19 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 	    // #field <name>:<width> <dir> <type> <frame>[<lo>..<hi>].ca.id is the
 	    // #buffer decl the field is a view into, so the frame is named, not
 	    // repeated as a raw id.
-	    print_decl_and_name(st, t, cur_mod, npos);
+	    print_decl_and_name(st, d.type, cur_mod, npos);
 	    csp_print_char(':');
-	    csp_print_uint(decl(st,i,ca.len)+1);
+	    csp_print_uint(d.ca.len+1);
 	    csp_print_blank();
-	    csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
+	    csp_print_rostr(csp_fmt_pindir(d.dir));
 	    csp_print_blank();
-	    csp_print_rostr(csp_fmt_vtype(decl(st,i,vt)));
+	    csp_print_rostr(csp_fmt_vtype(d.vt));
 	    csp_print_blank();
-	    csp_print_str_at(st, decl_name_pos(st, decl(st,i,ca.id)));
+	    csp_print_str_at(st, decl_name_pos(st, d.ca.id));
 	    csp_print_char('[');
-	    csp_print_uint(decl(st,i,ca.bit));
+	    csp_print_uint(d.ca.bit);
 	    csp_print_lit("..");
-	    csp_print_uint(decl(st,i,ca.bit) + decl(st,i,ca.len));
+	    csp_print_uint(d.ca.bit + d.ca.len);
 	    csp_print_char(']');
 	    list_eol();
 	    break;
@@ -1657,7 +1662,24 @@ static int csp_process_persistent(csp_rt_t* st, char* line)
     // view would be read out of bounds). Values re-init as they always do on a
     // declaration.
     if ((st->ps.nd != nd0) && st->started && !st->paused) {
-	csp_rebuild(st);            // clears edited
+	// The rebuild is where a declaration that does not FIT shows up: parsing
+	// only writes the declaration, and whether the derived tables still go in
+	// the arena is not known until they are laid out. So its result has to be
+	// checked here -- it used to be discarded, and the line was answered "OK"
+	// while the runtime was left with no tables at all.
+	if (csp_rebuild(st) < 0) {
+	    csp_print_lit("Error: ");
+	    csp_print_error(st);
+	    csp_println();
+	    csp_clr_error(st);
+	    // Put the program back the way it was and lay it out again, so the
+	    // declaration that did not fit costs nothing: the previous layout is
+	    // known to have fitted, so this rebuild is the one that just worked.
+	    csp_pstate_restore(st, &pm);
+	    csp_rebuild(st);
+	    csp_setup(st);
+	    return -1;
+	}
 	csp_setup(st);
     }
     else {

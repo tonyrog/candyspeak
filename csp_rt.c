@@ -431,6 +431,7 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_CANNOT_SAVE] =            ros_err_cannot_save,
     [ERR_CANNOT_LOAD] =            ros_err_cannot_load,
     [ERR_NUMBER_RANGE] =           ros_err_num_range,
+    [ERR_OUT_OF_MEMORY] =          ros_err_out_of_memory,
 };
 
 static rostring_t csp_format_error(csp_err_t err)
@@ -1867,6 +1868,13 @@ index_t csp_cycle(csp_rt_t* st)
     // only safe point: mid_reset moves every derived table.
     if (st->started && (st->edited || (st->n_rule_emit != st->graph_rules)))
 	csp_rebuild(st);
+    // A rebuild that ran out of arena left every derived table NULL and cleared
+    // `started`. Evaluating anyway read a null heap slot -- a segfault two
+    // frames into states_advance, with nothing on screen to say the program had
+    // outgrown the board. Refuse the cycle instead; the error is already set and
+    // the driver reports it.
+    if (!st->started)
+	return BAD_INDEX;
 
     // A definition still being typed is not a runnable program. `#module` emits
     // an OP_ENTER whose length is patched at its `#end`, and `#in` an OP_INSTATE
@@ -4037,6 +4045,13 @@ int csp_rt_start(csp_rt_t* st)
     // value_t* optr;
     csp_estimate_t e;
 
+    // Not started until the tables below exist. Cleared HERE, not only in the
+    // failure path: a rebuild that runs out of arena used to leave `started` at
+    // 1 from the previous successful layout, and csp_cycle's guard then let the
+    // next cycle run against NULL view/heap pointers. `#buffer B:1023` twice on
+    // a mega segfaulted in state_advance for exactly that reason.
+    st->started = 0;
+
     // Size every derived table to what this program actually declares
     // (csp_estimate, no prior setup) -- nothing here is a MAX_* reservation.
     // Freed+reallocated on every rebuild; the fill below stays within these.
@@ -4078,7 +4093,8 @@ int csp_rt_start(csp_rt_t* st)
 	st->object = (index_t*)csp_mid_alloc(st, (size_t)(e.nobj+1) * sizeof(index_t));
 	st->module = (index_t*)csp_mid_alloc(st, (size_t)e.nm * sizeof(index_t));
 	if (st->mid_full) {
-	    csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
+	    // Bytes, not counts: the arena could not hold the derived tables.
+	    csp_set_error(st, ERR_OUT_OF_MEMORY);
 	    return -1;              // caps are already zero -- see above
 	}
 	st->heap[DOUT] = st->heap[DIN] + hbytes;   // second half of the same block

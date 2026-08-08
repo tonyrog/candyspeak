@@ -483,6 +483,8 @@ extern rochar s_err_cannot_save[19] RODATA;
 #define ros_err_cannot_save ((rostring_t) s_err_cannot_save)
 extern rochar s_err_cannot_load[24] RODATA;
 #define ros_err_cannot_load ((rostring_t) s_err_cannot_load)
+extern rochar s_err_out_of_memory[38] RODATA;
+#define ros_err_out_of_memory ((rostring_t) s_err_out_of_memory)
 extern rochar s_State[6] RODATA;
 #define ros_State ((rostring_t) s_State)
 extern rochar s_INIT[5] RODATA;

@@ -67,7 +67,7 @@ got=$(printf '/list\n/quit\n' | repl ./csp "$D/t1.db" "$D/prog.csp")
 ck "fresh RAM program is all R" \
 '#digital Led out 0:13  // R
 #timer Beat 500 = 1  // R
-#variable Seq integer = 0  // R
+#variable Seq:32 integer = 0  // R
 Beat=1 ? timeout(Beat)  // 1 R
 Seq=Seq+1 ? timeout(Beat)  // 2 R' "$got"
 
@@ -77,7 +77,7 @@ got=$(printf '/save\n/list\n/quit\n' | repl ./csp "$D/t2.db" "$D/prog.csp" | gre
 ck "after /save every line is E" \
 '#digital Led out 0:13  // E
 #timer Beat 500 = 1  // E
-#variable Seq integer = 0  // E
+#variable Seq:32 integer = 0  // E
 Beat=1 ? timeout(Beat)  // 1 E
 Seq=Seq+1 ? timeout(Beat)  // 2 E' "$got"
 
@@ -89,8 +89,8 @@ got=$(printf '#variable Extra = 0\nExtra = Extra + 2 ? timeout(Beat)\n/list\n/qu
 ck "a patch added after /load lists R among E" \
 '#digital Led out 0:13  // E
 #timer Beat 500 = 1  // E
-#variable Seq integer = 0  // E
-#variable Extra integer = 0  // R
+#variable Seq:32 integer = 0  // E
+#variable Extra:32 integer = 0  // R
 Beat=1 ? timeout(Beat)  // 1 E
 Seq=Seq+1 ? timeout(Beat)  // 2 E
 Extra=Extra+2 ? timeout(Beat)  // 3 R' "$got"
@@ -99,7 +99,7 @@ Extra=Extra+2 ? timeout(Beat)  // 3 R' "$got"
 got=$(printf '#variable Extra = 0\n/save\n/list\n/quit\n' |
 	  repl ./csp "$D/t2.db" | grep -v '^Restored' | grep -v '^OK$' |
 	  grep -v '^Saved' | grep Extra)
-ck "a second /save promotes R to E" '#variable Extra integer = 0  // E' "$got"
+ck "a second /save promotes R to E" '#variable Extra:32 integer = 0  // E' "$got"
 
 # --- 5. /clear says the eeprom copy survives --------------------------------
 # "Cleared" on its own reads like the program is gone; it is not, and the next
@@ -129,7 +129,7 @@ else
     ck "ROM lines list F" \
 '#digital Led out 0:13  // F
 #timer Beat 500 = 1  // F
-#variable Seq integer = 0  // F
+#variable Seq:32 integer = 0  // F
 Beat=1 ? timeout(Beat)  // 1 F
 Seq=Seq+1 ? timeout(Beat)  // 2 F' "$got"
 
@@ -137,7 +137,7 @@ Seq=Seq+1 ? timeout(Beat)  // 2 F' "$got"
     got=$(printf '#variable Extra = 0\n/list\n/quit\n' |
 	      repl "$D/csprom" "$D/t8.db" | grep -v '^ROM rejected' |
 	      grep -v '^OK$' | grep Extra)
-    ck "a RAM patch on top of ROM lists R" '#variable Extra integer = 0  // R' "$got"
+    ck "a RAM patch on top of ROM lists R" '#variable Extra:32 integer = 0  // R' "$got"
 fi
 
 # --- 8. buffers and fields in /state ----------------------------------------
@@ -209,6 +209,30 @@ got=$(printf '%s\n/list\n/quit\n' "$long" | repl ./csp "$D/t13.db" --no-eeprom |
 	  tr -d '\a' | grep -c 'Wide')
 ck "a board with room accepts the same line" "1" "$got"
 
+# --- 10b. a declaration that does not FIT is refused, not fatal --------------
+# Whether a declaration fits is not known at parse time: it is the derived tables
+# (view, heap, buffer table) that run out of arena, and those are laid out by the
+# rebuild AFTER the line parses. That result used to be discarded -- the line was
+# answered "OK", the runtime was left with every table NULL, and the next cycle
+# read a null heap slot. A segfault two frames into states_advance, with nothing
+# on screen to say the program had outgrown the board.
+echo "out of memory:"
+oom=$(printf '#buffer B1:1023\n#buffer B2:1023\n/quit\n' |
+	  repl ./csp "$D/t10c.db" --no-eeprom --board mega | grep -v '^OK$')
+ck "a declaration too big for the board is refused with a reason" \
+"Error: out of memory -- program does not fit" "$oom"
+
+# ...and the refused line costs nothing: the program is what it was before it,
+# and the REPL still runs. Both matter -- the rollback has to put the tables
+# back, or everything after this is talking to a runtime with no storage.
+got=$(printf '#buffer B1:1023\n#buffer B2:1023\n#variable V = 42\n> V\n/quit\n' |
+	  repl ./csp "$D/t10d.db" --no-eeprom --board mega | tail -1)
+ck "and the REPL still evaluates after the refusal" "42" "$got"
+
+got=$(printf '#buffer B1:1023\n#buffer B2:1023\n/list\n/quit\n' |
+	  repl ./csp "$D/t10e.db" --no-eeprom --board mega | grep -c 'B2')
+ck "and nothing from the refused line was declared" "0" "$got"
+
 # --- 11. a module lists as a block ------------------------------------------
 # The members were inside `#module ... #end`, but the RULES came after it with a
 # "Mod: " prefix -- which is not source, so the one listing you would actually
@@ -236,7 +260,7 @@ ck "module rules list inside the block, indented" \
 #module Blink  // R
   #digital P in 0:1  // R
   #timer T 500  // R
-  #variable V integer = 0  // R
+  #variable V:32 integer = 0  // R
   #in INIT  // R
     P.dir=out  // 1 R
   #end   // R
@@ -275,9 +299,9 @@ C = 3 ? 1
 /quit'
 got=$(printf '%s\n' "$burst" | repl ./csp "$D/t16.db" --no-eeprom | grep -v '^OK$')
 ck "a multi-line burst arrives whole and in order" \
-'#variable A integer = 0  // R
-#variable B integer = 0  // R
-#variable C integer = 0  // R
+'#variable A:32 integer = 0  // R
+#variable B:32 integer = 0  // R
+#variable C:32 integer = 0  // R
 A=1 ? 1  // 1 R
 B=2 ? 1  // 2 R
 C=3 ? 1  // 3 R' "$got"
@@ -287,9 +311,9 @@ C=3 ? 1  // 3 R' "$got"
 got=$(printf '%s\n' "$burst" | repl ./csp "$D/t17.db" --no-eeprom --board mega |
 	  grep -v '^OK$')
 ck "and again with a 96-byte buffer" \
-'#variable A integer = 0  // R
-#variable B integer = 0  // R
-#variable C integer = 0  // R
+'#variable A:32 integer = 0  // R
+#variable B:32 integer = 0  // R
+#variable C:32 integer = 0  // R
 A=1 ? 1  // 1 R
 B=2 ? 1  // 2 R
 C=3 ? 1  // 3 R' "$got"
@@ -310,7 +334,7 @@ ck "a pasted module survives and lists back" \
   #digital P5 in 0:5  // R
   #digital P9 in 0:9  // R
   #timer T 500  // R
-  #variable V integer = 0  // R
+  #variable V:32 integer = 0  // R
   #in INIT  // R
     P1.dir=out,P1=0  // 1 R
     P5.dir=out,P5=0  // 2 R
@@ -335,8 +359,8 @@ got=$(printf '#variable Before = 1\n%s\n#variable After = 2\n/list\n/quit\n' "$o
 	  tr -d '\a' | grep -v '^OK$')
 ck "the REPL keeps working after an over-long line" \
 'Error: line too long, max 95 characters -- line ignored
-#variable Before integer = 1  // R
-#variable After integer = 2  // R' "$got"
+#variable Before:32 integer = 1  // R
+#variable After:32 integer = 2  // R' "$got"
 
 # The same with no trailing newline on the long line until much later: the
 # discard has to survive being interrupted by the reader running out of input.
@@ -356,8 +380,8 @@ echo "strings:"
 got=$(printf '#variable A string = "World"\n#constant Y string = "Foo"\nA = "hello there" ? 1\n/list\n/quit\n' |
 	  repl ./csp "$D/t21.db" --no-eeprom | grep -v '^OK$')
 ck "strings list quoted, in decls and in rules" \
-'#variable A string = "World"  // R
-#constant Y string = "Foo"  // R
+'#variable A:32 string = "World"  // R
+#constant Y:32 string = "Foo"  // R
 A="hello there" ? 1  // 1 R' "$got"
 
 # Assign from another string constant, and print it.
@@ -371,7 +395,7 @@ ck "a string variable takes another constant" "Foo" "$got"
 got=$(printf '#variable S string\n/list\n/state\n/quit\n' |
 	  repl ./csp "$D/t23.db" --no-eeprom | grep -v '^OK$' | grep '^#variable S\|^S ')
 ck "an uninitialised string is empty, not a crash" \
-'#variable S string = ""  // R
+'#variable S:32 string = ""  // R
 S                                     = ' "$got"
 
 # --- 17. string equality and .len --------------------------------------------

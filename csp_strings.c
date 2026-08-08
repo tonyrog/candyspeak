@@ -241,6 +241,7 @@ rochar s_code[] RODATA = "code";
 rochar s_free[] RODATA = "free";
 rochar s_err_cannot_save[] RODATA = "cannot save eeprom";
 rochar s_err_cannot_load[] RODATA = "cannot load from eeprom";
+rochar s_err_out_of_memory[] RODATA = "out of memory -- program does not fit";
 rochar s_State[] RODATA = "State";
 rochar s_INIT[] RODATA = "INIT";
 rochar s_NORMAL[] RODATA = "NORMAL";

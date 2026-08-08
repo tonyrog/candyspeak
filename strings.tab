@@ -244,6 +244,7 @@ code code
 free free
 err_cannot_save cannot save eeprom
 err_cannot_load cannot load from eeprom
+err_out_of_memory out of memory -- program does not fit
 # Names the runtime creates itself: the implicit State variable and the two
 # built-in states. Distinct from the lowercase 'state' entry above, which is a
 # keyword. Materialized as a tstr_t with RO_TSTR where a declaration name is
