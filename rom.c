@@ -1,72 +1,203 @@
+// Generated CandySpeak image (rom_*) -- do not edit.
+//   source:  examples/traffic.csp
+//   version: 1.0-31-g4f21e9b-dirty
+//   built:   Aug  8 2026 14:16:05
+//   size:    132 instr, 20 decl, 152 str, 8 states
+
 #include "csp.h"
-// Empty default image -- linked when no program is baked into the firmware.
-// Every build links exactly one rom.c; this is the fallback with no program.
-// Bake a program by overwriting this file:
-//     csp -C -n prog.csp > rom.c      (sequential)
-//     csp -C -r prog.csp > rom.c      (reactive: also carries its own graph)
-//     csp -C -n --prefix failsafe f.csp > failsafe.c   (a second image)
+#if ROM_FORMAT_VERSION != 10
+#error "rom.c is stale: generated for ROM format 10, csp.h is newer -- regenerate with 'csp -C'"
+#endif
 
-#define R_NSTR   1
-#define R_NDECL  1
-#define R_NINSTR 1
-#define R_NIDG   1
-#define R_NOFS   1
-#define R_NEDG   1
-#define R_NSTATE 1
+CSP_IMAGE_TYPE(rom_image_t, 155,21,133,1,1,1);
+CSP_IMAGE_CHECK(rom_image_t, 64,228,404,944,956,968,972);
 
-CSP_IMAGE_TYPE(rom_image_t, R_NSTR, R_NDECL, R_NINSTR, R_NIDG, R_NOFS, R_NEDG,
-	       R_NSTATE);
-
-#define R_SP       ((uint32_t)sizeof(csp_sect_t))
-#define R_O_STR    ((uint32_t)sizeof(csp_image_header_t) + R_SP)
-#define R_O_DECL   (R_O_STR   + R_NSTR     + CSP_PAD4(R_NSTR)   + R_SP)
-#define R_O_INSTR  (R_O_DECL  + R_NDECL*8                       + R_SP)
-#define R_O_IDG    (R_O_INSTR + R_NINSTR*4                      + R_SP)
-#define R_O_OFS    (R_O_IDG   + R_NIDG*2   + CSP_PAD4(2*R_NIDG) + R_SP)
-#define R_O_EDG    (R_O_OFS   + R_NOFS*2   + CSP_PAD4(2*R_NOFS) + R_SP)
-#define R_O_STATES (R_O_EDG   + R_NEDG*2   + CSP_PAD4(2*R_NEDG) + R_SP)
-#define R_SIZE     (R_O_STATES+ R_NSTATE*2 + CSP_PAD4(2*R_NSTATE))
-
-CSP_IMAGE_CHECK(rom_image_t, R_O_STR, R_O_DECL, R_O_INSTR, R_O_IDG, R_O_OFS,
-		R_O_EDG, R_O_STATES, R_SIZE);
-
-// csp_load_image returns as soon as n_decl is 0, so an empty image is never
-// rejected and never read past its header. The magic and the offsets are still
-// well-formed, so a flash scan finds it and reports it as what it is: a ROM
-// with nothing in it.
 static const rom_image_t rom_image_data RODATA = {
-  .hdr = {
-    .magic = { CSP_IMAGE_MAGIC0, CSP_IMAGE_MAGIC1, CSP_IMAGE_MAGIC2,
-	       CSP_IMAGE_MAGIC3 },
-    .size = R_SIZE, .version = ROM_FORMAT_VERSION,
-    .role = CSP_ROLE_ROM, .generation = 0,
-    .n_str = 0, .n_decl = 0, .n_instr = 0, .n_edg = 0, .n_state = 0,
-    .crc_str = 0, .crc_decl = 0, .crc_instr = 0, .crc_state = 0, .crc_graph = 0,
-    .ofs_str = R_O_STR, .ofs_decl = R_O_DECL, .ofs_instr = R_O_INSTR,
-    .ofs_idg = R_O_IDG, .ofs_ofs = R_O_OFS, .ofs_edg = R_O_EDG,
-    .ofs_states = R_O_STATES,
-    .crc_hdr = 37420   /* computed over the header above; /images reports it clean */
+  .s_str = { { CSP_SECT_STR }, 156 },
+  .str = {
+0,5,'S','t','a','t','e',0,4,'I','N','I','T',0,6,'N',
+'O','R','M','A','L',0,8,'F','A','I','L','S','A','F','E',0,3,'R','e','d',0,6,'Y','e','l','l','o','w',0,5,'G','r',
+'e','e','n',0,5,'P','h','a','s','e',0,0,0,5,'P','a',
+'n','i','c',0,3,'r','e','d',0,9,'r','e','d','y','e','l',
+'l','o','w',0,5,'g','r','e','e','n',0,6,'y','e','l','l',
+'o','w',0,4,'f','a','i','l',0,8,'F','a','i','l','s','a',
+'f','e',0,5,'S','t','a','t','e',0,2,'P','1',0,2,'P',
+'5',0,2,'P','9',0,1,'T',0,0,0,1,'V',0,0,0,4,'s','a','f','e',0,0,0,
+(char)0xff,80,5,},
+  .s_decl = { { CSP_SECT_DECL }, 168 },
+  .decl = {
+  {.va={.type=DECL_VARIABLE,.dir=0,.name=2,.vt=V_INTEGER,.res=31,.init={.u=0}}},
+  {.s6={.type=DECL_STATES,.dir=0,.name=9,.name2=15,.name3=23,.name4=0,.name5=0,.name6=0}},
+  {.di={.type=DECL_DIGITAL,.dir=2,.name=33,.vt=V_INTEGER,.res=0,.pin=1,.port=0,.pullup=0,.pulldown=0}},
+  {.di={.type=DECL_DIGITAL,.dir=2,.name=38,.vt=V_INTEGER,.res=0,.pin=5,.port=0,.pullup=0,.pulldown=0}},
+  {.di={.type=DECL_DIGITAL,.dir=2,.name=46,.vt=V_INTEGER,.res=0,.pin=9,.port=0,.pullup=0,.pulldown=0}},
+  {.tm={.type=DECL_TIMER,.dir=0,.name=53,.vt=V_TIMER,.res=31,.period=1000,.init=1}},
+  {.va={.type=DECL_VARIABLE,.dir=0,.name=60,.vt=V_UNSIGNED,.res=31,.init={.u=0}}},
+  {.di={.type=DECL_DIGITAL,.dir=1,.name=62,.vt=V_INTEGER,.res=0,.pin=16,.port=0,.pullup=0,.pulldown=1}},
+  {.s6={.type=DECL_STATES,.dir=0,.name=69,.name2=74,.name3=85,.name4=92,.name5=100,.name6=0}},
+  {.md={.type=DECL_MODULE,.dir=0,.name=106,.vt=V_INTEGER,.res=31,.n=7,.ent=0}},
+  {.va={.type=DECL_VARIABLE,.dir=0,.name=116,.vt=V_INTEGER,.res=31,.init={.u=0}}},
+  {.di={.type=DECL_DIGITAL,.dir=1,.name=123,.vt=V_INTEGER,.res=0,.pin=1,.port=0,.pullup=0,.pulldown=0}},
+  {.di={.type=DECL_DIGITAL,.dir=1,.name=127,.vt=V_INTEGER,.res=0,.pin=5,.port=0,.pullup=0,.pulldown=0}},
+  {.di={.type=DECL_DIGITAL,.dir=1,.name=131,.vt=V_INTEGER,.res=0,.pin=9,.port=0,.pullup=0,.pulldown=0}},
+  {.tm={.type=DECL_TIMER,.dir=0,.name=135,.vt=V_TIMER,.res=31,.period=500,.init=0}},
+  {.va={.type=DECL_VARIABLE,.dir=0,.name=138,.vt=V_UNSIGNED,.res=31,.init={.u=0}}},
+  {.va={.type=DECL_VARIABLE,.dir=0,.name=140,.vt=V_INTEGER,.res=31,.init={.u=0}}},
+  {.type=DECL_END,.dir=0,.name=143,.vt=V_INTEGER,.res=31},
+  {.mq={.type=DECL_OBJECT,.dir=0,.name=145,.vt=V_INTEGER,.res=31,.mx=9,.m=1}},
+  {.type=DECL_END,.dir=0,.name=151,.vt=V_INTEGER,.res=31},
+  {.em={.type=DECL_END_MARK,.crc=24540,._res=0}},
   },
-  .s_str    = { { CSP_SECT_STR }, R_NSTR + CSP_PAD4(R_NSTR) },
-  .str      = { 0 },
-  .s_decl   = { { CSP_SECT_DECL }, R_NDECL*8 },
-  .decl     = { {{0}} },
-  .s_instr  = { { CSP_SECT_INSTR }, R_NINSTR*4 },
-  .instr    = { {{0}} },
-  .s_idg    = { { CSP_SECT_IDG }, R_NIDG*2 + CSP_PAD4(2*R_NIDG) },
-  .idg      = { 0 },
-  .s_ofs    = { { CSP_SECT_OFS }, R_NOFS*2 + CSP_PAD4(2*R_NOFS) },
-  .ofs      = { 0 },
-  .s_edg    = { { CSP_SECT_EDG }, R_NEDG*2 + CSP_PAD4(2*R_NEDG) },
-  .edg      = { 0 },
-  .s_states = { { CSP_SECT_STATES }, R_NSTATE*2 + CSP_PAD4(2*R_NSTATE) },
-  .states   = { {0} }
+  .s_instr = { { CSP_SECT_INSTR }, 532 },
+  .instr = {
+  {.e={.op=OP_ENTER,.num=42,.mx=9}},
+  {.m={.op=OP_LD,.x=0,.mem=32778,.y=0}},
+  {.in={.op=OP_INSTATE,.x=0,.imm=0,.nxt=23,.implicit=0}},
+  {.i={.op=OP_LI,.x=0,.imm=-1}},
+  {.r={.op=OP_RULE,.cnd=0,.nxt=4,.implicit=0}},
+  {.i={.op=OP_LI,.x=0,.imm=2}},
+  {.m={.op=OP_STP,.x=0,.mem=32779,.y=3}},
+  {.mi={.op=OP_STI,.x=0,.mem=32779,.imm=0}},
+  {.x={.op=OP_NEXT,.x=0}},
+  {.i={.op=OP_LI,.x=0,.imm=-1}},
+  {.r={.op=OP_RULE,.cnd=0,.nxt=4,.implicit=0}},
+  {.i={.op=OP_LI,.x=0,.imm=2}},
+  {.m={.op=OP_STP,.x=0,.mem=32780,.y=3}},
+  {.mi={.op=OP_STI,.x=0,.mem=32780,.imm=0}},
+  {.x={.op=OP_NEXT,.x=0}},
+  {.i={.op=OP_LI,.x=0,.imm=-1}},
+  {.r={.op=OP_RULE,.cnd=0,.nxt=4,.implicit=0}},
+  {.i={.op=OP_LI,.x=0,.imm=2}},
+  {.m={.op=OP_STP,.x=0,.mem=32781,.y=3}},
+  {.mi={.op=OP_STI,.x=0,.mem=32781,.imm=0}},
+  {.x={.op=OP_NEXT,.x=0}},
+  {.i={.op=OP_LI,.x=0,.imm=-1}},
+  {.r={.op=OP_RULE,.cnd=0,.nxt=2,.implicit=0}},
+  {.mi={.op=OP_STI,.x=0,.mem=32784,.imm=1}},
+  {.x={.op=OP_NEXT,.x=0}},
+  {.i={.op=OP_LIU,.x=0,.imm=-32754}},
+  {.i={.op=OP_ARG,.x=0,.imm=0}},
+  {.f={.op=OP_CALL,.x=0,.idx=7,.usr=0,.avt=0x0008}},
+  {.a={.op=OP_MOV,.x=1,.y=0,.z=0}},
+  {.r={.op=OP_RULE,.cnd=1,.nxt=6,.implicit=0}},
+  {.m={.op=OP_LD,.x=1,.mem=32784,.y=0}},
+  {.m={.op=OP_ST,.x=1,.mem=32780,.y=0}},
+  {.m={.op=OP_LD,.x=1,.mem=32784,.y=0}},
+  {.a={.op=OP_NOT,.x=0,.y=1,.z=0}},
+  {.m={.op=OP_ST,.x=0,.mem=32784,.y=0}},
+  {.x={.op=OP_NEXT,.x=0}},
+  {.i={.op=OP_LIU,.x=0,.imm=-32754}},
+  {.i={.op=OP_ARG,.x=0,.imm=0}},
+  {.f={.op=OP_CALL,.x=0,.idx=7,.usr=0,.avt=0x0008}},
+  {.a={.op=OP_MOV,.x=1,.y=0,.z=0}},
+  {.r={.op=OP_RULE,.cnd=1,.nxt=2,.implicit=0}},
+  {.mi={.op=OP_STI,.x=1,.mem=32782,.imm=1}},
+  {.x={.op=OP_NEXT,.x=1}},
+  {.v={.op=OP_LEAVE,.num=42,.mx=9}},
+  {.n={.op=OP_NEW,.ent=0,.obj=18}},
+  {.m={.op=OP_LD,.x=0,.mem=0,.y=0}},
+  {.in={.op=OP_INSTATE,.x=0,.imm=0,.nxt=5,.implicit=0}},
+  {.i={.op=OP_LI,.x=0,.imm=-1}},
+  {.r={.op=OP_RULE,.cnd=0,.nxt=2,.implicit=0}},
+  {.mi={.op=OP_STI,.x=0,.mem=0,.imm=3}},
+  {.x={.op=OP_NEXT,.x=0}},
+  {.m={.op=OP_LD,.x=0,.mem=0,.y=0}},
+  {.in={.op=OP_INSTATE,.x=0,.imm=3,.nxt=14,.implicit=0}},
+  {.i={.op=OP_LI,.x=0,.imm=-1}},
+  {.r={.op=OP_RULE,.cnd=0,.nxt=4,.implicit=0}},
+  {.mi={.op=OP_STI,.x=0,.mem=2,.imm=1}},
+  {.mi={.op=OP_STI,.x=0,.mem=3,.imm=0}},
+  {.mi={.op=OP_STI,.x=0,.mem=4,.imm=0}},
+  {.x={.op=OP_NEXT,.x=0}},
+  {.i={.op=OP_LI,.x=0,.imm=5}},
+  {.i={.op=OP_ARG,.x=0,.imm=0}},
+  {.f={.op=OP_CALL,.x=0,.idx=7,.usr=0,.avt=0x0008}},
+  {.a={.op=OP_MOV,.x=1,.y=0,.z=0}},
+  {.r={.op=OP_RULE,.cnd=1,.nxt=2,.implicit=0}},
+  {.mi={.op=OP_STI,.x=1,.mem=0,.imm=4}},
+  {.x={.op=OP_NEXT,.x=1}},
+  {.m={.op=OP_LD,.x=0,.mem=0,.y=0}},
+  {.in={.op=OP_INSTATE,.x=0,.imm=4,.nxt=14,.implicit=0}},
+  {.i={.op=OP_LI,.x=0,.imm=-1}},
+  {.r={.op=OP_RULE,.cnd=0,.nxt=4,.implicit=0}},
+  {.mi={.op=OP_STI,.x=0,.mem=2,.imm=1}},
+  {.mi={.op=OP_STI,.x=0,.mem=3,.imm=1}},
+  {.mi={.op=OP_STI,.x=0,.mem=4,.imm=0}},
+  {.x={.op=OP_NEXT,.x=0}},
+  {.i={.op=OP_LI,.x=0,.imm=5}},
+  {.i={.op=OP_ARG,.x=0,.imm=0}},
+  {.f={.op=OP_CALL,.x=0,.idx=7,.usr=0,.avt=0x0008}},
+  {.a={.op=OP_MOV,.x=1,.y=0,.z=0}},
+  {.r={.op=OP_RULE,.cnd=1,.nxt=2,.implicit=0}},
+  {.mi={.op=OP_STI,.x=1,.mem=0,.imm=5}},
+  {.x={.op=OP_NEXT,.x=1}},
+  {.m={.op=OP_LD,.x=0,.mem=0,.y=0}},
+  {.in={.op=OP_INSTATE,.x=0,.imm=5,.nxt=14,.implicit=0}},
+  {.i={.op=OP_LI,.x=0,.imm=-1}},
+  {.r={.op=OP_RULE,.cnd=0,.nxt=4,.implicit=0}},
+  {.mi={.op=OP_STI,.x=0,.mem=2,.imm=0}},
+  {.mi={.op=OP_STI,.x=0,.mem=3,.imm=0}},
+  {.mi={.op=OP_STI,.x=0,.mem=4,.imm=1}},
+  {.x={.op=OP_NEXT,.x=0}},
+  {.i={.op=OP_LI,.x=0,.imm=5}},
+  {.i={.op=OP_ARG,.x=0,.imm=0}},
+  {.f={.op=OP_CALL,.x=0,.idx=7,.usr=0,.avt=0x0008}},
+  {.a={.op=OP_MOV,.x=1,.y=0,.z=0}},
+  {.r={.op=OP_RULE,.cnd=1,.nxt=2,.implicit=0}},
+  {.mi={.op=OP_STI,.x=1,.mem=0,.imm=6}},
+  {.x={.op=OP_NEXT,.x=1}},
+  {.m={.op=OP_LD,.x=0,.mem=0,.y=0}},
+  {.in={.op=OP_INSTATE,.x=0,.imm=6,.nxt=14,.implicit=0}},
+  {.i={.op=OP_LI,.x=0,.imm=-1}},
+  {.r={.op=OP_RULE,.cnd=0,.nxt=4,.implicit=0}},
+  {.mi={.op=OP_STI,.x=0,.mem=2,.imm=0}},
+  {.mi={.op=OP_STI,.x=0,.mem=3,.imm=1}},
+  {.mi={.op=OP_STI,.x=0,.mem=4,.imm=0}},
+  {.x={.op=OP_NEXT,.x=0}},
+  {.i={.op=OP_LI,.x=0,.imm=5}},
+  {.i={.op=OP_ARG,.x=0,.imm=0}},
+  {.f={.op=OP_CALL,.x=0,.idx=7,.usr=0,.avt=0x0008}},
+  {.a={.op=OP_MOV,.x=1,.y=0,.z=0}},
+  {.r={.op=OP_RULE,.cnd=1,.nxt=2,.implicit=0}},
+  {.mi={.op=OP_STI,.x=1,.mem=0,.imm=3}},
+  {.x={.op=OP_NEXT,.x=1}},
+  {.m={.op=OP_LD,.x=0,.mem=0,.y=0}},
+  {.in={.op=OP_NINSTATE,.x=0,.imm=3,.nxt=4,.implicit=0}},
+  {.in={.op=OP_NINSTATE,.x=0,.imm=4,.nxt=3,.implicit=0}},
+  {.in={.op=OP_NINSTATE,.x=0,.imm=5,.nxt=2,.implicit=0}},
+  {.in={.op=OP_INSTATE,.x=0,.imm=6,.nxt=15,.implicit=0}},
+  {.i={.op=OP_LI,.x=0,.imm=5}},
+  {.i={.op=OP_ARG,.x=0,.imm=0}},
+  {.f={.op=OP_CALL,.x=0,.idx=7,.usr=0,.avt=0x0008}},
+  {.a={.op=OP_MOV,.x=1,.y=0,.z=0}},
+  {.r={.op=OP_RULE,.cnd=1,.nxt=2,.implicit=0}},
+  {.mi={.op=OP_STI,.x=1,.mem=5,.imm=1}},
+  {.x={.op=OP_NEXT,.x=1}},
+  {.m={.op=OP_LD,.x=0,.mem=7,.y=0}},
+  {.a={.op=OP_MOV,.x=1,.y=0,.z=0}},
+  {.r={.op=OP_RULE,.cnd=1,.nxt=4,.implicit=0}},
+  {.mi={.op=OP_STI,.x=1,.mem=0,.imm=7}},
+  {.o={.op=OP_SETO,.obj=1}},
+  {.mi={.op=OP_STI,.x=1,.mem=32778,.imm=0}},
+  {.x={.op=OP_NEXT,.x=1}},
+  {.m={.op=OP_LD,.x=0,.mem=0,.y=0}},
+  {.in={.op=OP_INSTATE,.x=0,.imm=7,.nxt=1,.implicit=0}},
+  {.em={.op=OP_END_MARK,.crc=21910,._res=0}},
+  },
+  .s_idg = { { CSP_SECT_IDG }, 4 },
+  .idg = {0},
+  .s_ofs = { { CSP_SECT_OFS }, 4 },
+  .ofs = {0},
+  .s_edg = { { CSP_SECT_EDG }, 4 },
+  .edg = {0},
+  .hdr = {
+    .magic = { CSP_IMAGE_MAGIC0, CSP_IMAGE_MAGIC1, CSP_IMAGE_MAGIC2, CSP_IMAGE_MAGIC3 },
+    .size=972, .version=10, .role=0, .generation=0,
+    .n_str=152, .n_decl=20, .n_instr=132, .n_edg=0,
+    .crc_str=1360, .crc_decl=49961, .crc_instr=54527, .crc_graph=0,
+    .ofs_str=64, .ofs_decl=228, .ofs_instr=404, .ofs_idg=944,
+    .ofs_ofs=956, .ofs_edg=968,
+    .crc_hdr=33349 }
 };
-
-// The handle the runtime takes. It never names rom_image_t -- it works from the
-// base and the offsets in the header.
 const csp_image_ref_t rom_image RODATA = { (const uint8_t*)&rom_image_data };
-
-// Announce it to the linker so a firmware carrying several images can find them
-// all. Costs one pointer in flash.
 CSP_REGISTER_IMAGE(rom_image_data);
