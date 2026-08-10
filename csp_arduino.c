@@ -119,7 +119,8 @@
 #endif
 #define MINLEV 2
 #define MAXLEV 50
-uint16_t lev = MAXLEV;                 // brightness, patchable from a rule
+#define LEVEL MAXLEV
+//uint16_t lev = MAXLEV;                 // brightness, patchable from a rule
 
 static int csp_neo_dirty = 0;          // show() once per cycle if a pixel moved
 
@@ -130,14 +131,56 @@ static uint32_t csp_neo_565(uint16_t c) {
 }
 
 #if defined(CSP_NEO_CPX)
+// OUR OWN strip object, not CircuitPlayground.strip.
+//
+// The ring would not light through the library's instance on a Circuit
+// Playground Express: a bare sketch doing CircuitPlayground.begin() plus
+// setPixelColor left it dark, while a plain Adafruit_NeoPixel on the same pin
+// lit it immediately. So begin() is not leaving its strip in a state that
+// show() can use, and there is nothing on our side of that call to fix.
+//
+// It has to be the library's OWN class, though -- Adafruit_Circuit_Playground
+// bundles a fork, utility/Adafruit_CPlay_NeoPixel.h, which is a copy of
+// Adafruit_NeoPixel.h with a different include guard and the SAME static table
+// names. Pulling in the stock header alongside it is a redefinition of
+// _NeoPixelSineTable, so the two cannot share a translation unit. Using the
+// bundled class costs nothing and avoids the collision entirely.
+//
+// CPLAY_NEOPIXELPIN and the count come from the library's own board section, so
+// this follows it across CPX variants (pin 17 on Classic, 8 on Express).
+#ifndef CSP_NEO_CPX_COUNT
+#define CSP_NEO_CPX_COUNT 10
+#endif
+
+#ifndef CSP_NEO_PIN
+#define CSP_NEO_PIN  CPLAY_NEOPIXELPIN
+#endif
+
+#if defined(CSP_CPX_OWNSTRIP)
+static Adafruit_CPlay_NeoPixel csp_neo(CSP_NEO_CPX_COUNT, CSP_NEO_PIN,
+				       NEO_GRB + NEO_KHZ800);
+#define csp_neo_pixel(i,v) csp_neo.setPixelColor((i), (v))
+#define csp_neo_push()     do { csp_neo.show(); } while (0)
+static void csp_neo_begin(void)
+{
+    csp_neo.begin();
+    csp_neo.show();                    // all off, and the line driven low    
+    csp_neo.setBrightness(LEVEL);
+}
+#else
 #define csp_neo_pixel(i,v) CircuitPlayground.strip.setPixelColor((i), (v))
-#define csp_neo_push()     do { CircuitPlayground.strip.setBrightness(lev); \
-				CircuitPlayground.strip.show(); } while (0)
-#define csp_neo_begin()    ((void)0)   // CircuitPlayground.begin() did it
+#define csp_neo_push()     do { CircuitPlayground.strip.show(); } while (0)
+static void csp_neo_begin(void)
+{
+    CircuitPlayground.strip.show(); // all off, and the line driven low    
+    CircuitPlayground.strip.setBrightness(LEVEL);
+}
+#endif
+
 #else
 static Adafruit_NeoPixel csp_neo(CSP_NEO_COUNT, CSP_NEO_PIN, NEO_GRB + NEO_KHZ800);
 #define csp_neo_pixel(i,v) csp_neo.setPixelColor((i), (v))
-#define csp_neo_push()     do { csp_neo.setBrightness(lev); csp_neo.show(); } while (0)
+#define csp_neo_push()     do { csp_neo.show(); } while (0)
 static void csp_neo_begin(void)
 {
     // Several Adafruit boards gate the pixel's supply so it draws nothing when
@@ -148,8 +191,8 @@ static void csp_neo_begin(void)
     digitalWrite(NEOPIXEL_POWER, HIGH);
 #endif
     csp_neo.begin();
-    csp_neo.setBrightness(lev);
-    csp_neo.show();                    // all off, and the line driven low
+    csp_neo.show();                    // all off, and the line driven low    
+    csp_neo.setBrightness(LEVEL);
 }
 #endif
 
@@ -347,30 +390,22 @@ void csp_flush(void)
 EXTERN_C_END
 
 
-int csp_uconst(csp_rt_t* st, const char* name, int len, ivalue_t* ret)
+#ifdef CSP_CPX
+
+// before csp has memory
+void csp_board_init()
 {
-    // handle constants D0..D9
-    if ((len == 2) && (name[0]=='D') &&
-	(name[1]>='0') && (name[1]<='9')) {
-	int d = name[1]-'0';
-	*ret = d;
-	return 1;
-    }
-    else if ((len == 3) && (name[0]=='D') &&
-	     (name[1]>='0') && (name[1]<='9') &&
-	     (name[2]>='0') && (name[2]<='9')) {
-	int d = (name[1]-'0')*10 + (name[2]-'0');
-	*ret = d;
-	return 1;
-    }
-    return 0;
+#if defined(CSP_CPX_OWNSTRIP)
+    csp_neo_begin();    
+#else
+    CircuitPlayground.begin();   // owns NeoPixels, accelerometer, sensors
+#endif
 }
 
-#ifdef CSP_CPX
+
 void csp_board_setup(csp_rt_t* st)
 {
-    CircuitPlayground.begin();   // owns NeoPixels, accelerometer, sensors
-    csp_neo_begin();
+    (void)st;    
 }
 
 // Base sampling period (ms). Bounds the loop's idle sleep so continuous inputs
@@ -402,7 +437,6 @@ void csp_board_stop_output(csp_rt_t* st)
 
 // float-free reads (soft-float is big/slow on the M0+, and the
 // core is built fixpoint): use the raw LIS3DH ints and analogRead.
-
 void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
 {
     int value;
@@ -442,12 +476,16 @@ void csp_board_analog_output(csp_rt_t* st, int di, value_t* vptr)
 
 #else
 
-void csp_board_setup(csp_rt_t* st)
+void csp_board_init()
 {
-    (void)st;
 #if defined(CSP_NEO)
     csp_neo_begin();
 #endif
+}
+
+void csp_board_setup(csp_rt_t* st)
+{
+    (void)st;
 }
 
 void csp_board_start_input(csp_rt_t* st)
@@ -475,7 +513,7 @@ void csp_board_stop_output(csp_rt_t* st)
 
 void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
 {
-    csp_set_ivalue(st, ix, analogRead(vptr->a.pin));    
+    csp_set_ivalue(st, ix, analogRead(vptr->a.pin));
 }
 
 // handle type! accept float as well
@@ -1108,17 +1146,47 @@ const char* csp_eeprom_name(void)
 #define SAMPLE_MS 10
 #endif
 
+// Boot progress on the LED, for a board that will not give you a serial port.
+// Build with -DCSP_BOOT_BLINK and count the flashes: the number is how far setup
+// got, so the last one you see names the step that hung or faulted.
+//
+//   1  entered setup (before Serial)     4  ROM loaded
+//   2  Serial.begin returned             5  EEPROM attempted
+//   3  runtime initialised               6  program laid out (csp_rebuild)
+//                                        7  devices configured -- setup complete
+//
+// Deliberately not using csp_print: the whole point is that there is nothing to
+// print to. Pin 13 is the red LED on every board here.
+#if defined(CSP_BOOT_BLINK)
+static void boot_mark(int n)
+{
+    int i;
+    pinMode(13, OUTPUT);
+    for (i = 0; i < n; i++) {
+	digitalWrite(13, HIGH); delay(120);
+	digitalWrite(13, LOW);  delay(180);
+    }
+    delay(700);                    // gap, so the count is readable
+}
+#else
+#define boot_mark(n) ((void)0)
+#endif
+
 void setup()
 {
     uint32_t t0;
 
+    boot_mark(1);
     Serial.begin(115200);
     // Bounded wait: never hang forever if the USB port is never opened.
     t0 = millis();
     while (!Serial && (millis() - t0) < 3000)
 	;
+    boot_mark(2);
 
     serial_output = 1;
+
+    csp_board_init(); // can not use state it's mem zeroed in rt_init
 
     // Report the real memory picture on the board -- the numbers we can only
     // model on the host. free is what csp_mem_init claims the pool from.
@@ -1141,6 +1209,7 @@ void setup()
 	csp_print_line("FATAL: csp_rt_init failed (out of memory)");
 	return;   // leave loop() a no-op rather than crash
     }
+    boot_mark(3);
 #if !defined(CSP_EXEC_ONLY)
     csp_print_lit("pool "); csp_print_uint((uint32_t)state.mem_limit);
     csp_println();
@@ -1151,6 +1220,7 @@ void setup()
     // but on failure (no save / wrong version / wrong firmware) it returns
     // before touching ROM -- so we must load it here.
     csp_load_rom(&state);
+    boot_mark(4);
 
     // Overlay any saved RAM patches on top of the ROM. Returns 0 on success.
     if (csp_eeprom_load(&state) == 0) {
@@ -1171,11 +1241,14 @@ void setup()
     // allocator (csp_mid_reset) that every derived table is carved from. Calling
     // rt_start directly leaves mid_end = 0, so every table allocation fails and
     // the first cycle faults on null view/heap pointers.
+    boot_mark(5);
     if (csp_rebuild(&state) < 0)
 	csp_print_line("setup failed: out of memory");
+    boot_mark(6);
 
     // initialize input/output/timers ...
     csp_setup(&state);
+    boot_mark(7);
 
 #if !defined(CSP_EXEC_ONLY)
     csp_print_line("CandySpeak ready");

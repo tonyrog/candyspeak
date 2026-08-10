@@ -14,7 +14,13 @@ clean:
 	arduino-cli compile --clean --fqbn $(FQBN) .
 
 upload:
-	arduino-cli upload -p $(DEV) --fqbn $(FQBN)
+	arduino-cli compile --clean --upload -p $(DEV)  --fqbn $(FQBN) $(OPTS) --build-path $(BPATH)
+
+#
+# UF2 experminent
+#
+# uf2conv.py -c -b 0x0000 -f 0x68ED2B88 -o play.uf2 $(BPATH)/CandySpeak.ino.bin
+#
 
 # --- exec-only ---------------------------------------------------------------
 # No scanner, no parser, no REPL: runs the linked ROM image plus any EEPROM

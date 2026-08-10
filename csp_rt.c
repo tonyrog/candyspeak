@@ -3012,6 +3012,12 @@ NOINLINE void csp_load_image(csp_rt_t* st, const uint8_t* base)
 // A/B slot updated in the field). Same loader either way; only discovery
 // differs.
 
+#if defined(CSP_NO_IMAGE_REGISTRY)
+// No section, so nothing to enumerate. csp_load_rom does not come through here
+// -- it takes rom_image directly -- so the firmware still runs its own image.
+int csp_image_count(void) { return 0; }
+const uint8_t* csp_image_at(int i) { (void)i; return NULL; }
+#else
 int csp_image_count(void)
 {
     return (int)(__stop_csp_images - __start_csp_images);
@@ -3023,6 +3029,7 @@ const uint8_t* csp_image_at(int i)
 	return NULL;
     return __start_csp_images[i];
 }
+#endif
 
 // Pick the best linked image for a role: the highest generation whose header
 // verifies. Header only -- the section CRCs are csp_load_image's business, and
@@ -3136,7 +3143,7 @@ int csp_mem_init(csp_rt_t* st, size_t size)
 	want = size;
     else {
 	uint32_t avail = csp_system_ram_avail();
-	uint32_t over  = model_state() + CSP_STACK_RESERVE;
+	uint32_t over  = model_state() + CSP_RAM_RESERVE + CSP_STACK_RESERVE;
 	want = (avail > over) ? (avail - over) : 0;
     }
     want = CSP_A8(want);

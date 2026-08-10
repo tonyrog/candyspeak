@@ -1566,13 +1566,38 @@ typedef struct {
 // firmware, which is past the 64 kB that memcpy_P/pgm_read_byte can reach, so
 // every entry would read back as garbage. Six bytes of RAM for three images is
 // the cheaper problem.
+// The POINTER is const too, not just what it points at. Without the second
+// const the object is writable, so gcc emits `csp_images` as a writable section
+// and the linker -- which has no entry for this name in any of the platform
+// scripts, so it places it as an orphan -- puts it in RAM right after .data.
+// It then falls OUTSIDE __data_start__/__data_end__, so the startup copy never
+// initialises it, and outside .bss, so nothing zeroes it either: the entry read
+// back whatever was in RAM at power-on. It also pushed .bss along, which is
+// where "changing start of section .bss by 4 bytes" came from.
+//
+// Const all the way makes it read-only, so it lands in flash with the rest of
+// the image it names -- initialised, and costing no RAM.
+// CSP_NO_IMAGE_REGISTRY drops the custom section entirely. The registry answers
+// "what did this build LINK", which only /images and csp_find_image ask -- the
+// firmware's own image is reached through `rom_image`, so a board without the
+// registry still loads and runs its ROM exactly as before.
+//
+// It exists because `csp_images` is an ORPHAN section: no linker script on any
+// of these platforms names it, so where it lands is a heuristic that differs by
+// ld version and by script. That is a lot of link-time behaviour to depend on
+// for a convenience, and this is the switch that takes it out of the picture
+// when a board will not boot.
+#if defined(CSP_NO_IMAGE_REGISTRY)
+#define CSP_REGISTER_IMAGE(base_sym) extern int base_sym##_no_registry
+#else
 #define CSP_REGISTER_IMAGE(base_sym)                                    \
-    static const uint8_t* base_sym##_reg                                \
+    static const uint8_t* const base_sym##_reg                          \
 	__attribute__((section("csp_images"), used)) =                  \
 	    (const uint8_t*)&base_sym
 
-extern const uint8_t* __start_csp_images[];
-extern const uint8_t* __stop_csp_images[];
+extern const uint8_t* const __start_csp_images[];
+extern const uint8_t* const __stop_csp_images[];
+#endif
 
 // A fixed-type handle on an image whose struct type the runtime cannot name --
 // every image has its own type, because the counts differ. The runtime does not
@@ -1636,6 +1661,10 @@ typedef struct {
 // the live check that 2048 still holds. Override with -DCSP_STACK_RESERVE=<n>.
 #ifndef CSP_STACK_RESERVE
 #define CSP_STACK_RESERVE 2048
+#endif
+
+#ifndef CSP_RAM_RESERVE
+#define CSP_RAM_RESERVE 0
 #endif
 
 // Gap left between the code growing in from each end and the derived tables in

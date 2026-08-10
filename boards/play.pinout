@@ -1,0 +1,22 @@
+
+https://github.com/adafruit/Adafruit-Circuit-Playground-Express-PCB/blob/master/CPX.pdf
+
+    D4 - Left Button A
+    D5 - Right Button B
+    D7 - Slide Switch
+    D8 - Built-in 10 NeoPixels
+    D13 - Red LED
+    D27 - Accelerometer interrupt
+    D25 - IR Transmitter
+    D26 - IR Receiver
+    A0 - Speaker analog output
+    A8 - Light Sensor
+    A9 - Temperature Sensor
+    A10 - IR Proximity Sensor
+
+    D28 - Internal I2C SDA (access with Wire1)
+    D29 - Internal I2C SCL (access with Wire1)
+    D30 (PIN_SPI_MISO) - SPI FLASH MISO
+    D31 (PIN_SPI_SCK) - SPI FLASH SCK
+    D32 (PIN_SPI_MOSI) - SPI FLASH MOSI
+    D33 - SPI FLASH Chip Select

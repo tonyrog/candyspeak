@@ -11,7 +11,7 @@
 #digital BtnA   in pulldown 0:4      // button A (pressed = 1)
 #digital BtnB   in pulldown 0:5      // button B
 #digital Switch in pullup   0:7      // slide switch
-#digital Led    out 0:13             // onboard red LED
+#digital Led    out         0:13     // onboard red LED
 
 // --- analog sensors ---
 #analog Light:10 in 0:8      // light sensor  (A8)

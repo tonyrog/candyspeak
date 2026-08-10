@@ -1562,7 +1562,9 @@ state, and a transition is one assignment to `State`:
     State = red ? timeout(Phase)
 #end
 
-Phase = 1 ? timeout(Phase)      // restart the timer each phase
+#in red redyellow green yellow
+    Phase = 1 ? timeout(Phase)     // restart the timer in every driving phase
+#end
 ```
 
 Each state drives the three lamps and, on `timeout(Phase)`, hands over to the
