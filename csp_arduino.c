@@ -1211,7 +1211,15 @@ void setup()
     }
     boot_mark(3);
 #if !defined(CSP_EXEC_ONLY)
+    // Pool, and what is STILL free after claiming it. The second number is the
+    // one CSP_RAM_RESERVE buys: everything that allocates after us -- a USB
+    // buffer on first use, a library that inits lazily -- comes out of it, and
+    // the stack grows down into it too. Reading it beats guessing the reserve:
+    // if it sits near zero the board is one late malloc from failing, and if it
+    // is comfortable the reserve can come down and the program gets the room.
     csp_print_lit("pool "); csp_print_uint((uint32_t)state.mem_limit);
+    csp_print_lit(", heap left "); csp_print_uint(csp_system_ram_avail());
+    csp_print_lit(", reserve "); csp_print_uint((uint32_t)CSP_RAM_RESERVE);
     csp_println();
 #endif
 

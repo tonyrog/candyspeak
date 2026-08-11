@@ -652,6 +652,17 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	    // what the instruction stream actually does.
 	    bp->seto = (uint8_t)ip->o.obj;
 	    break;
+	case OP_SETOX:
+	    // A runtime object number, so there is no name to prefix with. Leaving
+	    // seto at 0 lists the access that follows bare, which is wrong-but-safe
+	    // rather than a wrong NAME: it renders the array's base declaration.
+	    // Nothing emits this yet.
+	    // WHEN ARRAYS LAND: this is where `P[Idx]` gets its subscript back --
+	    // the index expression is already interned in bp->reg[ip->ox.x] by the
+	    // instructions above, so it is the register's rendered string that goes
+	    // between the brackets. Wire it together with the array declaration, or
+	    // a `/list` of an array program will not paste back.
+	    break;
 	case OP_RULE:
 	    exprbuf_rule(st, bp, ip);
 	    return i+1;

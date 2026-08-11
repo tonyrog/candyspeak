@@ -7,8 +7,27 @@ BOARD=-DCSP_BOARD=boards/play.h
 OPTS=--build-property "compiler.c.extra_flags=-Os $(BOARD) $(EXTRA)" \
      --build-property "compiler.cpp.extra_flags=-Os $(BOARD) $(EXTRA)"
 
+# arduino-cli decides what to rebuild from SOURCE contents -- it does not key the
+# cache on the --build-property flags it was invoked with. So flipping a -D
+# (EXTRA=, or editing which one BOARD points at) silently relinks objects that
+# were compiled with the OLD flags, and the board runs something that matches
+# neither what you wrote nor what you asked for. That is the "I changed it and
+# nothing happened" trap, and it costs an evening every time.
+#
+# Stamp the flags next to the objects and force one clean build when they move.
+# A rebuild after an ordinary source edit is still incremental.
+FLAGS_KEY=$(BOARD) $(EXTRA)
+
+# The stamp is written AFTER the build, never before: --clean wipes the build
+# path, so a stamp laid down first goes with it.
 compile:
-	arduino-cli compile -e --fqbn $(FQBN) $(OPTS) --build-path $(BPATH)
+	@if [ "$$(cat $(BPATH)/.cspflags 2>/dev/null)" = '$(FLAGS_KEY)' ]; then \
+	    arduino-cli compile -e --fqbn $(FQBN) $(OPTS) --build-path $(BPATH); \
+	else \
+	    echo "build flags changed -> clean build"; \
+	    arduino-cli compile -e --clean --fqbn $(FQBN) $(OPTS) --build-path $(BPATH); \
+	fi
+	@mkdir -p $(BPATH) && printf '%s\n' '$(FLAGS_KEY)' > $(BPATH)/.cspflags
 
 clean:
 	arduino-cli compile --clean --fqbn $(FQBN) .

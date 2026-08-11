@@ -94,6 +94,7 @@ enum {
 
     STOP_BODY_IDX0,         // first index in body lhs  Buf[idx0 ..]
     STOP_BODY_IDX1,         // second index in body lhs Buf[.. idx1]
+    STOP_BODY_IDXE,         // A[<expr>] on the lhs -- stops at ']'
     STOP_OBJECT_INIT_CONT,
     STOP_PACK_VAL,          // pack field value expr (stops at ':' or next field)
     STOP_PACK_BITS,         // pack field width int

@@ -163,6 +163,15 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		i, instr(st,i,o.obj), eot);
 	st->cur = (uint8_t)instr(st,i,o.obj);
 	break;
+    case OP_SETOX:
+	// No st->cur to borrow: the object is in a register and is not known
+	// until the program runs. `seto` stays false above, so the access that
+	// follows renders against the global base -- the honest rendering of
+	// "which element depends on the run".
+	fprintf(f, "{instr,%d,'SETOX',[r%d,{len,%u},{stride,%u}]}%s\n",
+		i, instr(st,i,ox.x), instr(st,i,ox.len),
+		instr(st,i,ox.stride), eot);
+	break;
     case OP_NOP:
 	fprintf(f, "{instr,%d,'NOP'}%s\n",
 		i, eot);
@@ -1031,9 +1040,17 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	csp_decl_t dv = csp_get_decl(st, i);  // RAM decls grow down: use the accessor
 	csp_decl_t* dp = &dv;
 	char cmn[128];
-	snprintf(cmn, sizeof(cmn), ".type=%s,.dir=%u,.name=%u,.vt=%s,.res=%u",
-		 csp_cfmt_dtype(dp->type), dp->dir, dp->name,
-		 csp_cfmt_vtype(dp->vt), dp->res);
+	// .cont is EMITTED. It is real data -- an array's length is recovered by
+	// scanning for it -- so dropping it would put the image one bit away from
+	// the RAM the CRC was folded over AND silently unmake every array in a
+	// baked program. ._reserved goes out too, for the same discipline that
+	// this switch exists for: an arm writes EVERY field of its format, so the
+	// day that bit means something it is already carried.
+	snprintf(cmn, sizeof(cmn),
+		 ".type=%s,.cont=%u,._reserved=%u,.dir=%u,.name=%u,"
+		 ".vt=%s,.res=%u",
+		 csp_cfmt_dtype(dp->type), dp->cont, dp->_reserved,
+		 dp->dir, dp->name, csp_cfmt_vtype(dp->vt), dp->res);
 	switch(dp->type) {
 	case DECL_MODULE:
 	    fprintf(f, "  {.md={%s,.n=%u,.ent=%u}},\n",
@@ -1058,6 +1075,14 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 		    cmn, dp->an.pin, dp->an.port, dp->an.pwm, dp->an.endian);
 	    break;
 	case DECL_FIELD:
+	case DECL_VIEW:
+	    // A VIEW carries the same arm as a field: both are a bit window into
+	    // a buffer, and ca holds the parent, the bit position and the length.
+	    // It used to be emitted as common-fields-only ("synthetic"), which is
+	    // true of how it is CREATED -- make_buf_view invents it for Buf[a..b]
+	    // -- but not of what it stores. Dropping ca baked a view onto buffer
+	    // 0 at bit 0 with length 1 AND made crc_decl mismatch, exactly as
+	    // omitting nbytes once did for the buffer below.
 	    fprintf(f, "  {.ca={%s,.id=%u,.endian=%u,.bit=%u,.len=%u}},\n",
 		    cmn, dp->ca.id, dp->ca.endian, dp->ca.bit, dp->ca.len);
 	    break;
@@ -1079,14 +1104,14 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    // two states with a type and a width. The section CRC is folded over
 	    // the raw bytes, so an image written through the wrong arm fails its
 	    // own check at boot (or, worse, loads with two states quietly wrong).
-	    fprintf(f, "  {.s6={.type=%s,.dir=%u,.name=%u,.name2=%u,.name3=%u,"
+	    fprintf(f, "  {.s6={.type=%s,.cont=%u,._reserved=%u,.dir=%u,"
+		    ".name=%u,.name2=%u,.name3=%u,"
 		    ".name4=%u,.name5=%u,.name6=%u}},\n",
-		    csp_cfmt_dtype(dp->type), dp->dir,
+		    csp_cfmt_dtype(dp->type), dp->cont, dp->_reserved, dp->dir,
 		    dp->s6.name, dp->s6.name2, dp->s6.name3,
 		    dp->s6.name4, dp->s6.name5, dp->s6.name6);
 	    break;
 	case DECL_END:    // common fields only (anonymous union arm)
-	case DECL_VIEW:   // synthetic; emitted as common only
 	case DECL_IN:
 	case DECL_NONE:
 	default:
@@ -1166,6 +1191,15 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    // out right through .a.x, which is exactly the kind of coincidence
 	    // that holds until a program has sixteen of them.
 	    fprintf(f, "  {.o={%s,.obj=%u}},\n", op, ip->o.obj);
+	    break;
+	case OP_SETOX:
+	    // Its own arm for the opposite reason to OP_SETO: the ALU default
+	    // would write x/y/z and drop len and stride entirely, which is the
+	    // same shape as the three CRC mismatches this project has had -- a
+	    // payload the generic arm does not carry. len is the bounds check, so
+	    // dropping it would also have turned every array access unchecked.
+	    fprintf(f, "  {.ox={%s,.x=%u,.len=%u,.stride=%u}},\n",
+		    op, ip->ox.x, ip->ox.len, ip->ox.stride);
 	    break;
 	case OP_NINSTATE:
 	case OP_INSTATE:
@@ -1309,7 +1343,13 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 {
     index_t ix = MAKE_INDEX(0,i);
     int vt = V_INTEGER;
-    
+
+    // An array's tail elements are real declarations but not their own source
+    // line -- the head already listed them as `A[N]`. Printing them would emit
+    // N-1 nameless variables that paste back as garbage.
+    if (decl(st,i,cont))
+	return i+1;
+
     switch(decl(st,i,type)) {
     case DECL_MODULE:
 	fprintf(f, "#module %s\n", decl_name(st, ix));
@@ -1339,16 +1379,25 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 		decl_name(st, decl(st,i,mq.mx)),
 		decl_name(st, ix));
 	break;
-    case DECL_VARIABLE:
+    case DECL_VARIABLE: {
+	// An array lists as its head with the length back on, so the listing
+	// pastes back as the same array. Without the `[N]` it would come back a
+	// scalar and the elements above it would be gone.
+	uint16_t alen = csp_array_len(st, i);
+	char abuf[10];
+	abuf[0] = '\0';
+	if (alen > 1)
+	    snprintf(abuf, sizeof(abuf), "[%u]", alen);
 	vt = decl(st,i,vt);
-	fprintf(f, "#variable %s:%d %s %s = ", // show init value
-		decl_name(st, ix),
+	fprintf(f, "#variable %s%s:%d %s %s = ", // show init value
+		decl_name(st, ix), abuf,
 		GET_RES(decl(st,i,res)),
 		(char*)csp_fmt_pindir(decl(st,i,dir)),
 		(char*)csp_fmt_vtype(vt));
 	csp_fprint_value(f, st, vt, decl(st,i,va.init));
 	fprintf(f, "\n");
 	break;
+    }
     case DECL_CONSTANT:
 	vt = decl(st,i,vt);	    
 	fprintf(f, "#constant %s:%d %s = ",

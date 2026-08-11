@@ -28,17 +28,11 @@ extern int debug;
 
 
 
-// Function calls are stored in ostack as (LAST + 1 + func_index)
-// func_index encodes: (index << 1) | is_user
-// Note: must use LAST (not LAST_NODE) to avoid overlap with LP, RP, etc.
-// Fixme: (fname-token-index:8,ostack-depth:8,last:8)
-// make ostack uint32_t
-#define FUNC_MARKER_BASE (T_LAST + 1)
-#define IS_FUNC_MARKER(op) ((op) >= FUNC_MARKER_BASE)
-#define MAKE_FUNC_MARKER(tix, pp0) ((FUNC_MARKER_BASE) +  \
-				    ((tix)<<16) + ((pp0)<< 8))
-#define FUNC_MARKER_TIX(op)  (((op) >> 16) & 0xff)
-#define FUNC_MARKER_EP(op)   (((op) >> 8) & 0x0ff)
+// The operator stack's marker encoding lives in csp_compile.h, which this file
+// already includes. A second copy sat here and went stale the moment a second
+// marker kind (array subscripts) moved the tag into the low byte -- nothing in
+// this file uses them, and the duplicate only compiled because both definitions
+// happened to agree.
 
 // opcode => opcode type info
 const op_info_t op_info[] RODATA = {
@@ -104,6 +98,7 @@ const op_info_t op_info[] RODATA = {
     [OP_INSTATE] = {ros_INSTATE,NONE,3,V_VOID,MAKE_TYPE0()},
     [OP_NINSTATE] = {ros_NINSTATE,NONE,3,V_VOID,MAKE_TYPE0()},
     [OP_SETO] = {ros_SETO,NONE,3,V_VOID,MAKE_TYPE0()},
+    [OP_SETOX] = {ros_SETOX,NONE,3,V_VOID,MAKE_TYPE0()},
     [OP_LD]    = {ros_LD,NONE,3,V_VOID,MAKE_TYPE0()},
     [OP_LDP]   = {ros_LDP,NONE,3,V_VOID,MAKE_TYPE0()},
     [OP_CALL]  = {ros_CALL,NONE,3,V_VOID,MAKE_TYPE0()},
@@ -432,6 +427,7 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_CANNOT_LOAD] =            ros_err_cannot_load,
     [ERR_NUMBER_RANGE] =           ros_err_num_range,
     [ERR_OUT_OF_MEMORY] =          ros_err_out_of_memory,
+    [ERR_INDEX_RANGE] =            ros_err_index_range,
 };
 
 static rostring_t csp_format_error(csp_err_t err)
@@ -1557,6 +1553,31 @@ NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
 	st->cur     = ci.o.obj;
 	st->cbase   = st->offs[ci.o.obj];
 	return n+1;
+    case OP_SETOX: {
+	// Array element chosen at runtime (`P[Idx]`). Same one-shot as OP_SETO,
+	// but it shifts the base by an ELEMENT instead of naming an object.
+	//
+	// The register holds whatever the program computed, so this is the one
+	// place a wild value reaches the base. Out of range: DO NOT ARM. The
+	// access that follows then lands on element 0 of the array -- wrong data,
+	// but a defined read inside the arena instead of a base from beyond the
+	// tables, which on a small target is a fault or silent corruption spread
+	// over every later access. The error is sticky, so a bad index reports
+	// once and does not spam a 50 Hz loop.
+	ivalue_t ix = st->es.reg[ci.ox.x].i;
+
+	if ((ix < 0) || (ix >= (ivalue_t)ci.ox.len)) {
+	    csp_set_error(st, ERR_INDEX_RANGE);
+	    return n+1;
+	}
+	// offs[cur], not cbase: inside a module the array's index is
+	// module-relative, and reading offs makes this idempotent -- two SETOX in
+	// a row cannot compound the way `cbase +=` would. At global level
+	// offs[0] is 0, so the base is just the element offset.
+	st->es.sobj = st->cur + 1;         // arm; cur itself does not change
+	st->cbase   = st->offs[st->cur] + (index_t)(ix * ci.ox.stride);
+	return n+1;
+    }
     case OP_NEXT: // rule is done executing
 	*leave = 1;
 	return n+1;
@@ -2092,6 +2113,26 @@ NOINLINE index_t lookup_decl_in(csp_rt_t* st, const tstr_t* name,
 
 
 // Lookup for REFERENCING a name.
+// How many elements the array headed by declaration `i` has: the head plus every
+// declaration above it carrying `cont`. Recovering the length by a SCAN
+// is what saves storing it -- csp_variable_t has no room and there is exactly one
+// decl type left to spend. The runtime never calls this; it gets the count baked
+// into the SETOX. The compiler needs it to emit that count, and the listing needs
+// it to print `A[3]` instead of three declarations that all claim to be A.
+//
+// A plain variable answers 1, which is what makes `A` and `A[0]` the same thing.
+NOINLINE uint16_t csp_array_len(csp_rt_t* st, index_t i)
+{
+    int j = INDEX(i) + 1;
+    uint16_t k = 1;
+
+    while ((j < (int)st->ps.nd) && (k < 0xffff) && decl(st, j, cont)) {
+	k++;
+	j++;
+    }
+    return k;
+}
+
 NOINLINE index_t csp_lookup_decl(csp_rt_t* st, const tstr_t* name)
 {
     if (st->cs.mdef != BAD_INDEX) {
@@ -3143,7 +3184,18 @@ int csp_mem_init(csp_rt_t* st, size_t size)
 	want = size;
     else {
 	uint32_t avail = csp_system_ram_avail();
+	// Charge for the struct ONCE. On a board csp_system_ram_avail() is
+	// freeRam(), measured from the end of .bss -- which is where `state`
+	// already sits -- so subtracting model_state() again takes
+	// sizeof(csp_rt_t) away from the program for nothing. On the host it is a
+	// MODEL, capacity minus the board's system figure, with no .bss in it at
+	// all; there the struct has to come off or the simulation is optimistic
+	// by exactly its size.
+#if defined(ARDUINO)
+	uint32_t over  = CSP_RAM_RESERVE + CSP_STACK_RESERVE;
+#else
 	uint32_t over  = model_state() + CSP_RAM_RESERVE + CSP_STACK_RESERVE;
+#endif
 	want = (avail > over) ? (avail - over) : 0;
     }
     want = CSP_A8(want);

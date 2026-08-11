@@ -368,8 +368,39 @@ C=3 ? 1  // 3 R' "$got"
 # the same way. Running a cycle in between walked into unpatched offsets and hung
 # the REPL part-way through -- which is exactly what pasting a .csp file does.
 # `timeout` in repl() turns a hang into a failure rather than a stuck suite.
+#
+# Its OWN fixture, not examples/traffic.csp. The case pastes a program and
+# compares the listing line for line, so pointing it at a live example coupled a
+# REPL behaviour test to a demo that is meant to be edited: changing the demo
+# broke the test, which says nothing about the REPL. What is under test is that a
+# module survives being typed in a burst -- any module will do.
 echo "paste a program:"
-got=$(printf '%s\n/list\n/quit\n' "$(cat examples/traffic.csp)" |
+cat > "$D/paste.csp" <<'EOF'
+#digital Red    out 1
+#timer   Phase  500 = 1
+#states  red green
+
+#module Failsafe
+  #digital P1  1
+  #digital P5  5
+  #digital P9  9
+  #timer   T   500
+  #variable V = 0
+
+  #in INIT
+    P1.dir = out, P1 = 0
+    P5.dir = out, P5 = 0
+    P9.dir = out, P9 = 0
+    V=1
+  #end
+
+  P5=V, V=!V ? timeout(T)
+  T=1 ? timeout(T)
+#end
+
+#Failsafe safe
+EOF
+got=$(printf '%s\n/list\n/quit\n' "$(cat "$D/paste.csp")" |
 	  repl ./csp "$D/t18.db" --no-eeprom | grep -v '^OK$' |
 	  sed -n '/^#module/,/^#end/p')
 ck "a pasted module survives and lists back" \
@@ -533,6 +564,88 @@ if gcc -I. -O2 -o "$D/states_layout" tests/states_layout.c >/dev/null 2>&1; then
     ck "csp_states_t packs six names, slot 0 aliases name" "ok, identical" "$("$D/states_layout")"
 else
     echo "  FAIL states_layout did not build"; fail=$((fail+1))
+fi
+
+# --- arrays -----------------------------------------------------------------
+# `#variable A[3]` is three declarations: the head keeps the name, the tail two
+# carry `cont` and no name at all. A[<const>] folds to the element's own
+# declaration (no instruction, bounds checked here); A[<expr>] becomes an
+# OP_SETOX in front of the access, bounds checked every cycle against the length
+# baked into it.
+echo "arrays:"
+
+cat > "$D/arr.csp" <<'EOF'
+#variable A[3] = 0
+#variable I = 0
+#variable x = 0
+EOF
+
+# The declaration collapses back to one source line with its length on. Without
+# the `[3]` a /list pastes back a scalar and the other two elements are gone.
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/arr1.db" --no-eeprom "$D/arr.csp" |
+	  sed -n '/^#variable A/p')
+ck "an array lists as one line with its length" \
+   '#variable A[3]:32 integer = 0  // R' "$got"
+
+# Constant subscripts: distinct elements, and A with no subscript is element 0.
+got=$(printf 'A[0] = 10\nA[1] = 20\nA[2] = 30\n> A[0]\n> A[1]\n> A[2]\n/quit\n' |
+	  repl ./csp "$D/arr2.db" --no-eeprom "$D/arr.csp" | grep -v '^OK$')
+ck "constant subscripts address distinct elements" \
+   '10
+20
+30' "$got"
+
+# Out of range is caught at COMPILE time for a constant -- it costs nothing at
+# run time and the message arrives on the line that is wrong.
+got=$(printf 'A[3] = 1\n/quit\n' |
+	  repl ./csp "$D/arr3.db" --no-eeprom "$D/arr.csp" |
+	  sed -n '/^Error/p')
+ck "a constant subscript past the end is refused" \
+   'Error: index out of range' "$got"
+
+# The runtime subscript, read and write. Both go through OP_SETOX.
+got=$(printf 'I = 1\nx = A[I] ? 1\n/quit\n' |
+	  repl ./csp "$D/arr4.db" --no-eeprom "$D/arr.csp" |
+	  sed -n '/^Error/p')
+ck "a runtime subscript read compiles" '' "$got"
+
+# A runtime index past the end is caught every cycle by the length baked into
+# the SETOX. It cannot be caught at compile time, and reading outside the array
+# is exactly what the check exists to stop.
+cat > "$D/arrbad.csp" <<'EOF'
+#variable A[3] = 0
+#variable I = 9
+#variable x = 0
+x = A[I] ? 1
+EOF
+got=$(printf '/state\n/quit\n' | repl ./csp "$D/arr6.db" --no-eeprom "$D/arrbad.csp" |
+	  sed -n '/index out of range/p' | head -1)
+ck "a runtime subscript past the end is caught at run time" \
+   'index out of range' "$got"
+
+# NOT YET IMPLEMENTED, pinned so it stays a clean refusal rather than a crash.
+# `A[<expr>] = rhs` needs pat_body -- the LEFT of a rule body is matched by that
+# pattern, not by the expression parser, and its subscript is P_INTEGER_S. So the
+# whole optional backs off and the line is swallowed as an r-value expression,
+# which made the expression parser perform the store during the pass that only
+# VALIDATES, before the leaf tables exist. That was a segfault; process_assign
+# now refuses a store before st->started. See TODO.
+cat > "$D/arrwr.csp" <<'EOF'
+#variable A[3] = 0
+#variable I = 2
+A[I] = 99 ? 1
+EOF
+./csp -n -c 0 "$D/arrwr.csp" >/dev/null 2>&1
+ck "a runtime subscript WRITE is refused, not a crash" "1" "$?"
+
+# OP_SETO and OP_SETOX mean nearly the same thing and their payloads OVERLAP, so
+# emitting one through the other's arm compiles fine and produces a plausible
+# wrong word. That is the shape of all three CRC mismatches this project has had.
+echo "instr layout:"
+if gcc -I. -O2 -o "$D/instr_layout" tests/instr_layout.c >/dev/null 2>&1; then
+    ck "SETO/SETOX formats stay distinct" "ok, distinct" "$("$D/instr_layout")"
+else
+    echo "  FAIL instr_layout did not build"; fail=$((fail+1))
 fi
 
 echo "================================================"

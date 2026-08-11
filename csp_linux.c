@@ -973,6 +973,12 @@ int main(int argc, char** argv)
 		csp_sim_state       = CSP_BOARD_MKRZERO_STATE;
 		eeprom_cap          = CSP_BOARD_MKRZERO_EEPROM;
 	    }
+	    else if (strcmp(optarg, "play") == 0) {
+		system_ram_capacity = CSP_BOARD_PLAY_RAM;
+		system_ram_used     = CSP_BOARD_PLAY_SYSTEM;
+		csp_sim_state       = CSP_BOARD_PLAY_STATE;
+		eeprom_cap          = CSP_BOARD_PLAY_EEPROM;
+	    }	    
 	    else {
 		fprintf(stderr, "unknown board '%s' (mega, mkrzero)\n", optarg);
 		exit(1);
@@ -1262,6 +1268,17 @@ loop:
 
     // /live freezes the rules but keeps I/O running (poke outputs, watch inputs).
     x = state.live ? BAD_INDEX : csp_cycle(&state);  // ROM (seq) + RAM, one model
+
+    // A RUNTIME error (today: an array index outside its array) is set inside
+    // the eval loop, where no command is waiting to report it. Without this it
+    // stayed in st->ps.err and the machine just ran on with the access skipped
+    // -- a bounds check nobody can see is not a bounds check. Reported once and
+    // cleared: the rule fires every cycle, and one bad index must not turn into
+    // a stream at 50 Hz.
+    if (state.ps.err != ERR_OK) {
+	print_error(&state);
+	csp_clr_error(&state);
+    }
 
     anyd = state.es.anyd;  // save before commit clears it
 

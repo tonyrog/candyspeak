@@ -868,6 +868,7 @@ typedef enum {
     OP_INSTATE, // #in <state> block gate: if reg != state, skip block (nxt)
     OP_NINSTATE,// #in A B C OR-chain gate: if reg == state, jump INTO block (nxt)
     OP_SETO,    // point CURRENT at a NAMED object for the next memory access
+    OP_SETOX,   // same, but the object number comes from a register (arrays)
     OP_AVAIL,   // SENTINEL, not an opcode: the next free number, i.e. how many
 		// opcodes are in use. Printed by print_defines and asserted
 		// against OP_END_MARK below. Keep it last.
@@ -1073,6 +1074,42 @@ typedef struct PACKED {
     unsigned obj:16;         // object table index (1..MAX_OBJECT_NUM)
 } csp_instr_seto_t;
 
+// OP_SETOX - the same one-shot as OP_SETO, but for an ARRAY ELEMENT chosen at
+// runtime: `P[Idx]`.
+//
+// NOT an object number. OP_SETO names an object and looks up offs[]; this one
+// shifts the base by an ELEMENT, which is why an array costs no DECL_OBJECT, no
+// offs[] slot and no object[] slot per element:
+//
+//     cbase = offs[cur] + reg * stride
+//
+// and the memory instruction that follows adds the array's own index, so it
+// lands on element `reg`. offs[cur] keeps it correct inside a module, where the
+// array's index is module-relative; at global level offs[0] is 0 and the base
+// is just reg*stride.
+//
+// An array occupies `len` CONSECUTIVE declarations, one per element -- view[] is
+// indexed by declaration index (see st_index), so elements cannot share one
+// declaration without colliding with whatever is declared next. That is a cost
+// (8 bytes per element) and a feature: each element carries its OWN config, so
+// `#analog P[10] out 9:0..9` gives every element its own pin with no special
+// case in setup.
+//
+// stride is members per element: 1 for a scalar array, the module's member count
+// for an array of instances. 6 bits, so an arrayed module tops out at 63
+// members.
+//
+// UNLIKE OP_SETO the operand is not trusted -- a register holds whatever the
+// program computed. `len` is here so the check is the RIGHT one: `P[99]` fails
+// against the array's own length rather than merely staying inside the arena.
+typedef struct PACKED {
+    INSTR_COMMON;
+    unsigned x:REG_BITS;     // register holding the element index
+    unsigned len:16;         // element count, for the bounds check
+    unsigned stride:6;       // declarations per element (1 = scalar array)
+} csp_instr_setox_t;
+#define MAX_ARRAY_STRIDE ((1u << 6) - 1u)
+
 // OP_END_MARK: a self-verifying terminator appended after rom_instr's data. Its
 // crc is a CRC-16 over [the section's data + this marker with crc zeroed], so the
 // instruction section can be verified WITHOUT the header -- scan for OP_END_MARK,
@@ -1099,6 +1136,7 @@ typedef union {
     csp_instr_instate_t in;
     csp_instr_alu_t a;
     csp_instr_seto_t o;
+    csp_instr_setox_t ox;
     csp_instr_end_t em;
 } csp_instr_t;
 
@@ -1138,9 +1176,25 @@ typedef enum {
 // overlap a states block's name2 and name3, and tests/states_layout.c pins down
 // which slot each one lands in. Anything added here takes bits from a state
 // name; anything added to DECL_HEADER takes them from all six.
+// `cont`: this declaration CONTINUES the array declared just above it.
+//
+// An array occupies one declaration per element (view[] is indexed by
+// declaration index -- see st_index -- so elements cannot share one). Only the
+// head carries the name; the rest are unnamed copies with this bit set. That is
+// what lets the compiler recover an array's LENGTH at a use site without storing
+// it: scan forward from the head while the bit holds. One bit instead of a decl
+// type (there is exactly one left) or a field csp_variable_t has no room for.
+//
+// It also tells the listing to print `#variable A[3]` once instead of three
+// declarations that all claim to be called A.
+//
+// It is a NAMED field, not a mask into a `_reserved`: a bit with a meaning
+// should read as `d.cont` at every use, and the ROM emitter should write
+// `.cont=` so the arm says what it carries. One spare bit is left.
 #define DECL_HEADER \
     decl_t type:CSP_DECL_TYPE_BITS; \
-    unsigned _reserved:2; \
+    unsigned cont:1; \
+    unsigned _reserved:1; \
     pindir_t dir:DIR_BITS; \
     unsigned name:NAMEPOS_BITS
 
@@ -1344,6 +1398,11 @@ typedef enum {
     // about a COUNT hitting an encoding limit: this one is about bytes, and it
     // is what a `#buffer` too large for the board reports.
     ERR_OUT_OF_MEMORY,
+    // The only RUNTIME error in this enum: an array index evaluated outside the
+    // array (OP_SETOX). Every other entry is raised while parsing or rebuilding,
+    // where there is a line to blame; this one is raised mid-rule, so it is
+    // sticky (csp_set_error keeps the first) rather than reported per cycle.
+    ERR_INDEX_RANGE,
 } csp_err_t;
 
 // parser state, save state before parse
@@ -1446,6 +1505,21 @@ typedef struct {
     xindex_t* var;
     index_t   nvar;
     int      rimp;               // 1 if parse_expr is in RHS in <-
+    // Pending array subscript, the compile-time mirror of the runtime's one-shot.
+    // `A[expr]` evaluates the index into a register and then the ACCESS is
+    // emitted by the ordinary path, so the two facts the SETOX needs -- which
+    // register, how long the array is -- have to survive the gap. asm_seto is the
+    // single funnel every mem instruction passes through, so it is what consumes
+    // them, exactly where OP_SETO is emitted for a named object.
+    //
+    // NOTHING PENDING IS arr_len == 0, not a -1 in arr_reg: csp_rt_init memsets
+    // the struct and writes back only the fields whose default is non-zero, so a
+    // -1 sentinel would need its own store AND would be wrong for every path
+    // that rebuilds the state without going through that line. A declared array
+    // is at least one element (csp_parse_variable refuses 0), so a zero length
+    // cannot mean anything else.
+    uint8_t  arr_reg;            // register holding the element index
+    uint16_t arr_len;            // element count; 0 = no subscript pending
 } csp_cstate_t;
 
 // Everything that only matters while a CYCLE runs: the evaluator's registers,
@@ -2057,6 +2131,18 @@ typedef struct PACKED {
 	    unsigned I:1;    // == 1 when val is immediate value
 	    unsigned X:1;    // == 1 when ix is decl index
 	    unsigned part:PART_BITS; // csp_part_t, PART_VAL for the plain value
+	    // A[expr]: this entry is an ARRAY ELEMENT and areg holds its subscript.
+	    //
+	    // It rides on the ENTRY, not on a one-shot in cs, because the access is
+	    // DEFERRED -- an entry is pushed at `]` and only becomes an LD/ST when
+	    // csp_load or process_assign reaches it. `A[i] = B[j] + 1` has two
+	    // subscripts live at once, which a single pending slot cannot hold.
+	    //
+	    // Free: vt(4)+L+I+X+part(4) is 11 bits of the union's 16, and these two
+	    // are the remaining 5. The stack is MAX_PARSE_STACK_DEPTH deep, so a
+	    // byte here would have been ten.
+	    unsigned A:1;
+	    unsigned areg:REG_BITS;
 	};
     };
 } rentry_t;
@@ -2419,6 +2505,8 @@ extern uint32_t model_state(void);
 // FAILSAFE gate asks, and so does the listing (which must not print it).
 extern int state_is_state_var(csp_rt_t* st, int di);
 extern int lookup_state(csp_rt_t* st, const tstr_t* name);
+// Elements in the array headed by declaration `i` (1 for a plain variable).
+extern uint16_t csp_array_len(csp_rt_t* st, index_t i);
 // Shared by the tokenizer and the command splitter.
 #ifndef ISBLANK
 #define ISBLANK(c) (((c) == ' ') || ((c) == '\t'))

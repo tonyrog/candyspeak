@@ -49,8 +49,15 @@ extern int new_string(csp_rt_t* st, char* name, int len);
 
 // Shared with the compiler: the function-table accessors and the operator
 // stack's marker encoding.
+// Two marker kinds now, so the tag lives in the LOW BYTE and the payload above
+// it. IS_MARKER is the "acts like LP" test -- nothing reduces past either kind --
+// and the two IS_*_MARKER tests say which one closed. A plain token is < T_LAST,
+// so it can never look like a marker.
 #define FUNC_MARKER_BASE (T_LAST + 1)
-#define IS_FUNC_MARKER(op) ((op) >= FUNC_MARKER_BASE)
+#define ARR_MARKER_BASE  (T_LAST + 2)
+#define IS_MARKER(op)      ((op) >= FUNC_MARKER_BASE)
+#define IS_FUNC_MARKER(op) (((op) & 0xff) == FUNC_MARKER_BASE)
+#define IS_ARR_MARKER(op)  (((op) & 0xff) == ARR_MARKER_BASE)
 extern uint8_t func_flags(const csp_func_t* fn, int i, int rom);
 #define func_pure(fn,i,rom)   (func_flags((fn),(i),(rom)) & FUNC_PURE)
 
@@ -58,5 +65,16 @@ extern uint8_t func_flags(const csp_func_t* fn, int i, int rom);
 #define FUNC_MARKER_TIX(op)  (((op) >> 16) & 0xff)
 #define MAKE_FUNC_MARKER(tix, pp0) ((FUNC_MARKER_BASE) +  \
 				    ((tix)<<16) + ((pp0)<< 8))
+
+// An array marker carries the array itself, so no side stack is needed: bits
+// 16..30 are the declaration index (DECL_BITS is 15) and bit 31 is the
+// CURRENT/global selector. The LENGTH is not stored -- csp_array_len recovers it
+// at `]` for the price of a compile-time scan.
+#define ARR_MARKER_EP(op)   (((op) >> 8) & 0x0ff)
+#define ARR_MARKER_IX(op)   (((op) >> 16) & 0x7fff)
+#define ARR_MARKER_CUR(op)  (((op) >> 31) & 1)
+#define MAKE_ARR_MARKER(cur, ix, pp0) ((ARR_MARKER_BASE) +	\
+				       ((uint32_t)(cur)<<31) +		\
+				       ((uint32_t)(ix)<<16) + ((pp0)<<8))
 
 #endif

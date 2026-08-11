@@ -1,0 +1,33 @@
+// Arrays: `#variable A[3]` is three declarations, addressed by subscript.
+//
+// A constant subscript folds to the element's own declaration and costs no
+// instruction. A RUNTIME subscript becomes an OP_SETOX in front of the access,
+// which shifts the base by one element and is bounds checked against the length
+// baked into it.
+//
+// Reads lag one cycle -- the transaction model, not the arrays -- so the
+// expectations here are the settled values.
+
+#variable A[3] = 0
+#variable I = 0
+#variable J = 0
+#variable x = 0
+#variable y = 0
+#variable z = 0
+
+// Constant subscripts, one per element.
+A[0] = 10 ? 1
+A[1] = 20 ? 1
+A[2] = 30 ? 1
+
+// A with no subscript is element 0 -- the head IS the first element, which is
+// what makes a scalar and a one-element array the same thing.
+z = A ? 1
+
+// Runtime subscripts, reading two different elements through the same
+// declaration. If OP_SETOX were not applied per access, or if the register
+// cache in map_reg were allowed to serve an array, x and y would come out equal.
+I = 1 ? 1
+J = 2 ? 1
+x = A[I] ? 1
+y = A[J] ? 1

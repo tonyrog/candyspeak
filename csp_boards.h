@@ -17,4 +17,10 @@
 #define CSP_BOARD_MKRZERO_STATE   1136   /* target sizeof(csp_rt_t): 16/32-bit, smaller than the 64-bit host */
 #define CSP_BOARD_MKRZERO_EEPROM  2048
 
+/* play: statics 16552 = system 3128 + state 1136 + arena 12288 */
+#define CSP_BOARD_PLAY_RAM     32768
+#define CSP_BOARD_PLAY_SYSTEM  7325
+#define CSP_BOARD_PLAY_STATE   1152
+#define CSP_BOARD_PLAY_EEPROM  2048
+
 #endif

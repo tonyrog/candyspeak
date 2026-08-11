@@ -776,9 +776,18 @@ match:
 		list_eol();
 	    break;
 	}
-	case DECL_VARIABLE:
+	case DECL_VARIABLE: {
+	    // `A[3]` lists with its length back on, or it pastes back a scalar
+	    // and the elements above it are gone. The tail elements themselves
+	    // are skipped further up -- they are declarations, not source lines.
+	    uint16_t alen = csp_array_len(st, i);
 	    print_decl_and_name(st, d.type, cur_mod, npos);
-	    csp_print_char(':'); 
+	    if (alen > 1) {
+		csp_print_char('[');
+		csp_print_uint(alen);
+		csp_print_char(']');
+	    }
+	    csp_print_char(':');
 	    csp_print_uint(GET_RES(d.res));
 	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_vtype(d.vt));
@@ -802,10 +811,11 @@ match:
 	    }
 	    list_eol();
 	    break;
+	}
 	case DECL_CONSTANT:
 	    print_decl_and_name(st, d.type, cur_mod, npos);
 	    csp_print_char(':');
-	    csp_print_uint(GET_RES(d.res));	    
+	    csp_print_uint(GET_RES(d.res));
 	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_vtype(decl(st,i,vt)));
 	    csp_print_lit(" = ");

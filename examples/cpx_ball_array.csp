@@ -24,20 +24,13 @@
 #analog AccY:10  in 8:1
 #analog AccZ:10  in 8:2
 
-#analog P0:16 out 9:0
-#analog P1:16 out 9:1
-#analog P2:16 out 9:2
-#analog P3:16 out 9:3
-#analog P4:16 out 9:4
-#analog P5:16 out 9:5
-#analog P6:16 out 9:6
-#analog P7:16 out 9:7
-#analog P8:16 out 9:8
-#analog P9:16 out 9:9
+#analog P[10]:16 out 9:0-9
 
 // 50 Hz. Every rule below is gated on this, so one timeout is one physics step
 // and the whole state advances together.
-#timer Tick 20 = 1
+#timer Tick 20
+
+#states CALCULATE UPDATE
 
 // --- the ball -------------------------------------------------------------
 // TRACK is the way round in position units; PIXEL is how many of them one
@@ -46,6 +39,9 @@
 // rolling would be a dead zone instead of a crawl.
 #constant TRACK = 10000
 #constant PIXEL = 1000
+
+#constant Cos[10] = {100, 81, 31, -31, -81,-100, -81, -31,  31,  81}
+#constant Sin[10] = {0,   59, 95,  95,  59,   0, -59, -95, -95, -59}
 
 // Gravity does not care what the ball weighs -- a = F/m and F = m*g, so the
 // mass cancels and every ball rolls downhill the same. It only shows up where
@@ -77,8 +73,12 @@
 #field  Dg Dim[5..10]
 #field  Dr Dim[11..15]
 
-Tick = 1 ? timeout(Tick)
+#in INIT
+    State = CALCULATE
+    Tick = 1
+#end
 
+#in CALCULATE
 // --- gravity along the track ----------------------------------------------
 // Pixel k sits at 36*k degrees. The track's tangent there is (cos, -sin), so
 // the downhill push is (gx*cos - gy*sin). Both are scaled by 100 and divided
@@ -87,37 +87,31 @@ Tick = 1 ? timeout(Tick)
 // One rule per pixel because the coefficients depend on where the ball IS, and
 // a table indexed at runtime is not something the language can say yet. If the
 // ball rolls the wrong way round, negate this whole column.
-Acc = (-100*(512-AccX) + 0*(AccY-512)) / 100   ? Idx == 0 && timeout(Tick)
-Acc = (-81*(512-AccX) + 59*(AccY-512)) / 100   ? Idx == 1 && timeout(Tick)
-Acc = (-31*(512-AccX) + 95*(AccY-512)) / 100   ? Idx == 2 && timeout(Tick)
-Acc = (31*(512-AccX) + 95*(AccY-512)) / 100    ? Idx == 3 && timeout(Tick)
-Acc = (81*(512-AccX) + 59*(AccY-512)) / 100    ? Idx == 4 && timeout(Tick)
-Acc = (100*(512-AccX) + 0*(AccY-512)) / 100    ? Idx == 5 && timeout(Tick)
-Acc = (81*(512-AccX) - 59*(AccY-512)) / 100    ? Idx == 6 && timeout(Tick)
-Acc = (31*(512-AccX) - 95*(AccY-512)) / 100    ? Idx == 7 && timeout(Tick)
-Acc = (-31*(512-AccX) - 95*(AccY-512)) / 100   ? Idx == 8 && timeout(Tick)
-Acc = (-81*(512-AccX) - 59*(AccY-512)) / 100   ? Idx == 9 && timeout(Tick)
+#local LAcc = (Cos[Idx]*(AccX-512) + Sin[Idx]*(AccY-512))/100
+Acc = LAcc
 
 // --- integrate ------------------------------------------------------------
 // a -> v -> x, one tick apart each, which is what semi-implicit Euler does
 // anyway. Reads see the previous commit, so the lag is the integration.
 // Clipped so one tick can never carry the ball more than a fifth of the way
 // round -- past that the tangent it was pushed along is the wrong one.
-Vel = clip(Vel + (Acc*GAIN)/1000 - (Vel*DRAG)/1000, -2000, 2000) ? timeout(Tick)
+#local LVel = clip(Vel + (LAcc*GAIN)/1000 - (Vel*DRAG)/1000, -2000, 2000)
+Vel = LVel
 
 // +TRACK before the modulo: % keeps the sign of its left operand, so rolling
 // backwards past zero would otherwise land on a negative pixel.
-Pos = (Pos + Vel + TRACK) % TRACK ? timeout(Tick)
-Idx = Pos / PIXEL ? timeout(Tick)
+#local LPos = (Pos + LVel + TRACK) % TRACK
+Pos = LPos
+Idx = LPos / PIXEL
 
 // --- energy ---------------------------------------------------------------
 // Bleeds away every tick; a shake tops it up. Both rules write Energy and the
 // shake one is second, so on a tick where you shake it wins -- last writer at
 // commit. Squared because a hard shake should be worth much more than a soft
 // one, over MASS because a heavier ball takes more to excite.
-Sh = abs(AccZ-512) ? timeout(Tick)
-Energy = clip(Energy - EFADE, 0, EMAX) ? timeout(Tick)
-Energy = clip(Energy + (Sh*Sh)/MASS, 0, EMAX) ? Sh > SHAKE && timeout(Tick)
+#local Sh = abs(AccZ-512)
+#local E  = clip(Energy - EFADE, 0, EMAX)
+Energy = clip(E + (Sh*Sh)/MASS, 0, EMAX) ? Sh > SHAKE
 
 // --- colour ---------------------------------------------------------------
 // RGB565: red 5 bits at 11, green 6 at 5, blue 5 at 0. Cold and blue at rest,
@@ -129,50 +123,29 @@ Energy = clip(Energy + (Sh*Sh)/MASS, 0, EMAX) ? Sh > SHAKE && timeout(Tick)
 // the channels near full is what leaves the ring readable after that divide --
 // what carries the energy is then the COLOUR going blue -> white, more than the
 // absolute level, which is the right way round for something glowing anyway.
-R = (Energy*31)/EMAX ? timeout(Tick)
-G = (Energy*63)/EMAX ? timeout(Tick)
-B = 18 + (Energy*13)/EMAX ? timeout(Tick)
+R = (Energy*31)/EMAX
+G = (Energy*63)/EMAX
+B = 18 + (Energy*13)/EMAX
+Cr = R
+Cg = G
+Cb = B
+Dr = R / 3
+Dg = G / 3
+Db = B / 3
 
-Cr = R ? timeout(Tick)
-Cg = G ? timeout(Tick)
-Cb = B ? timeout(Tick)
+State = UPDATE ? timeout(Tick)
+#end // CALCULATE
 
-Dr = (R/3) ? timeout(Tick)
-Dg = (G/3) ? timeout(Tick)
-Db = (B/3) ? timeout(Tick)
-
+#in UPDATE
 // --- draw -----------------------------------------------------------------
 // The ball lights its own pixel and glows faintly on both sides, so it reads
 // as something with size rolling past rather than a dot hopping.
-P0 = Col ? Idx == 0
-P1 = Col ? Idx == 1
-P2 = Col ? Idx == 2
-P3 = Col ? Idx == 3
-P4 = Col ? Idx == 4
-P5 = Col ? Idx == 5
-P6 = Col ? Idx == 6
-P7 = Col ? Idx == 7
-P8 = Col ? Idx == 8
-P9 = Col ? Idx == 9
 
-P0 = Dim ? (Idx == 1) || (Idx == 9)
-P1 = Dim ? (Idx == 2) || (Idx == 0)
-P2 = Dim ? (Idx == 3) || (Idx == 1)
-P3 = Dim ? (Idx == 4) || (Idx == 2)
-P4 = Dim ? (Idx == 5) || (Idx == 3)
-P5 = Dim ? (Idx == 6) || (Idx == 4)
-P6 = Dim ? (Idx == 7) || (Idx == 5)
-P7 = Dim ? (Idx == 8) || (Idx == 6)
-P8 = Dim ? (Idx == 9) || (Idx == 7)
-P9 = Dim ? (Idx == 0) || (Idx == 8)
+P = 0                // clear all elements
+P[(Idx+1)%10] = Dim  // neighbour is dim
+P[Idx] = Col         // this is us with color Col
+P[(Idx-1)%10] = Dim  // neighbour is dim
 
-P0 = 0 ? (Idx != 0) && (Idx != 1) && (Idx != 9)
-P1 = 0 ? (Idx != 1) && (Idx != 2) && (Idx != 0)
-P2 = 0 ? (Idx != 2) && (Idx != 3) && (Idx != 1)
-P3 = 0 ? (Idx != 3) && (Idx != 4) && (Idx != 2)
-P4 = 0 ? (Idx != 4) && (Idx != 5) && (Idx != 3)
-P5 = 0 ? (Idx != 5) && (Idx != 6) && (Idx != 4)
-P6 = 0 ? (Idx != 6) && (Idx != 7) && (Idx != 5)
-P7 = 0 ? (Idx != 7) && (Idx != 8) && (Idx != 6)
-P8 = 0 ? (Idx != 8) && (Idx != 9) && (Idx != 7)
-P9 = 0 ? (Idx != 9) && (Idx != 0) && (Idx != 8)
+State = CALCULATE
+Tick = 1
+#end // UPDATE

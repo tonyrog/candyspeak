@@ -371,6 +371,8 @@ extern rochar s_NINSTATE[9] RODATA;
 #define ros_NINSTATE ((rostring_t) s_NINSTATE)
 extern rochar s_SETO[5] RODATA;
 #define ros_SETO ((rostring_t) s_SETO)
+extern rochar s_SETOX[6] RODATA;
+#define ros_SETOX ((rostring_t) s_SETOX)
 extern rochar s_RULE[5] RODATA;
 #define ros_RULE ((rostring_t) s_RULE)
 extern rochar s_NEXT[5] RODATA;
@@ -485,6 +487,8 @@ extern rochar s_err_cannot_load[24] RODATA;
 #define ros_err_cannot_load ((rostring_t) s_err_cannot_load)
 extern rochar s_err_out_of_memory[38] RODATA;
 #define ros_err_out_of_memory ((rostring_t) s_err_out_of_memory)
+extern rochar s_err_index_range[19] RODATA;
+#define ros_err_index_range ((rostring_t) s_err_index_range)
 extern rochar s_State[6] RODATA;
 #define ros_State ((rostring_t) s_State)
 extern rochar s_INIT[5] RODATA;

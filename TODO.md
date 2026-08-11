@@ -211,6 +211,70 @@ Klart-markerat flyttas till DONE.md, inte hit.
 
 # 4. BEKVÄMLIGHET
 
+## #local -- namngiven formel i ett scope (DESIGN AVGJORD, Tony 2026-08-11)
+  Mellanberäkningar utan att gå via transaktionen. En `#local` är INTE en variabel
+  man tilldelar -- den BINDER en formel, som ALISTER/erlister:s `def`.
+
+    #local gx:16 = 512 - AccX
+    #local a = (81*gx - 59*gy) / 100
+
+  Formeln får referera allt som är deklarerat FÖRE den i samma scope (globalt
+  eller objekt): variabler, inputs, andra `#local`. ALISTER begränsar `def` till
+  inparametrar; vi vidgar till hela scopet.
+
+  VARFÖR DEF OCH INTE EN TILLDELBAR TEMPORÄR: utan tilldelning finns ingen
+  läs-före-skriv, ingen ordningskänslighet, ingen nollning vid cykelstart. Och
+  eftersom formelns alla läsningar ser förra commiten är värdet KONSTANT genom
+  hela cykeln -- referentiellt transparent. Det är det som gör konstruktionen
+  billig att resonera om. Sigil-varianten (`$t`, kroppsskopad temporär) förkastad:
+  den kräver nytt token, ny läsregel i skannern, och den måste in i runtime och
+  disassemblering. En def gör inget av det.
+
+  Namnet: `#local`, inte `#temp`. Det är ingen temporär lagring, det är en skopad
+  definition -- och inuti en `#module` är "local" bokstavligt sant.
+
+  IMPLEMENTATION (alternativ A, valt): PROLOG + EN PLATS.
+  Formlerna kompileras i deklarationsordning till en prolog som körs före
+  reglerna varje cykel och skriver till en ENKELBUFFRAD plats. Varje användning
+  blir en vanlig laddning: noll ändringar i uttryckskompilatorn vid
+  användningsstället, ingen ny opcode, och disassembleringen visar prologen som
+  vanliga instruktioner.
+  - Kostar EN plats, inte två -- ingen skugga, ingen post i commit-passet. Det är
+    hela poängen med "passas inte över i transaktionen".
+  - Aldrig i `/state`, aldrig i EEPROM-patchen.
+  - I en `#module` kör prologen per objekt -> en plats per instans. Faller ut.
+  - Orena anrop i formeln körs exakt en gång per cykel. Väldefinierat.
+
+  Alternativ B (inline-expansion vid varje användning) har IDENTISK semantik och
+  kostar noll RAM, men kompilatorn måste behålla formeln i återemitterbar form
+  och sparar varken AST eller tokens idag. Dessutom dupliceras koden per
+  användning och orena anrop skulle köras en gång per användning. Förkastat.
+
+  BEHÖVER INGEN NY DECL-TYP. `DECL_AVAIL` står på 14 och `DECL_END_MARK` på 0xf --
+  det finns exakt EN ledig, och den ska inte gå hit. `DECL_HEADER` har fortfarande
+  sina `_reserved:2` oanvända: en local är en `DECL_VARIABLE` med `local:1` i en av
+  dem. Noll decl-typer, noll bytes, all befintlig variabelhantering oförändrad.
+
+  LÅS DESSA VID IMPLEMENTATION:
+  - FÖRBJUD FRAMÅTREFERENSER. En `#local` får bara referera det som redan
+    deklarerats. Då är cykler (`a = b+1` och `b = a+1`) omöjliga PER KONSTRUKTION
+    i stället för att kräva en cykeldetektor, och prologens ordning ÄR
+    källordningen. Gratis på två ställen.
+  - BEHÅLL `:res`. Inte pynt: `#local a:8 = x + y` är en avhuggning man annars
+    skriver för hand, och `GET_RES`-klippet finns redan.
+  - HOPPA ÖVER endian. Den hör hemma på vyer över bytes; en local är ett skalärt
+    värde. (Tony: "behöver egentligen inte :res och endian" -- res är ändå värd
+    den, endian inte.)
+  - `a = ...` där `a` är en `#local` behöver ETT EGET FEL, inte "unknown
+    variable". Det är misstaget alla gör en gång.
+  - `<-`-GRAFEN är enda stället A är mer jobb än B: kanterna ska vara FORMELNS
+    indata, inte platsen. Med inline hade det fallit ut automatiskt; med prolog
+    måste det kopplas explicit när localen expanderas. Missas det blir en regel
+    som beror på en local aldrig reaktivt väckt.
+
+  Motiverande fall: examples/cpx_ball2.csp räknar `512-AccX` och `AccY-512` i tio
+  regler.
+
 ## /compact
   RAM-regler kan komprimeras när `R` eller `E` är avstängda (`!`): reglerna tas
   bort helt. Sparas det efteråt är de permanent borta. Taggarna F/E/R och `!` i
@@ -365,15 +429,98 @@ Inte buggar -- saker som byggts men inte setts fungera på järn.
   styr staten genom att poka State också.
   Hooks finns: `csp_enq_elist`, `csp_react`, `rule_ip`, exprbuf, `st->live`.
 
-## Array notation (nästa release)
-  Kan återanvända OBJEKT-kodningen -- en array är nästan samma sak: `index_t` är
-  redan (obj, index) och `st_index()` gör `offs[OBJ(n)] + INDEX(n)`, dvs precis
-  "bas + element". Ett arrayelement är en objektinstans med en medlem.
-  Runtime-index (`Acc[INDEX]`) är då detsamma som att välja objekt vid körning,
-  vilket OP_NEW/CURRENT redan gör -- `st->cur` + `offs[CURRENT]` är mekaniken.
-  MEN det reaktiva måste fixas först: grafen har en kant per DEKLARATION, och
+## Array notation (PÅBÖRJAD 2026-08-11 -- se DONE för det som är klart)
+  OBJEKT-rutten nedan är ÖVERSPELAD (Tony 2026-08-11). Den byggdes inte, för två
+  fynd vid genomgången gjorde en billigare mekanik möjlig:
+  - `st_index()` indexerar `view[]`, inte deklarationer. Deklarationen läses på
+    `INDEX(ix)` ensamt (`leaf_cfg_vt`), utan `cbase`.
+  - Pinnen bor i LAGRINGEN, inte i deklarationen: `setup_analog` kopierar `d.an`
+    in i DIN/DOUT-sloten per instans.
+  Alltså: `OP_SETOX` sätter `cbase = offs[cur] + reg*stride` -- en ELEMENTOFFSET,
+  inget objektnummer. Noll DECL_OBJECT, noll offs[]-poster, noll object[]-poster
+  per element. Arrayen upptar en DEKLARATION per element (view[] indexeras av
+  deklarationsindex, så element kan inte dela en); huvudet bär namnet, svansen
+  har `cont=1` och namn 0. Längden återfinns med en scan (`csp_array_len`).
+
+  KLART OCH TESTAT: `A[uttryck]` LÄSNING, och skrivning med KONSTANT index.
+  `[` är en MARKÖR på operatorstacken (`IS_ARR_MARKER`, samma form som
+  `IS_FUNC_MARKER`) -- inte ett rekursivt `csp_parse_expr`, för `csp_stack_mark()`
+  sitter i just den funktionen med noteringen att marginalen bottnar där på AVR.
+  Markörens uint32 bär selektorn i bit 31 och declindex i 16..30, så ingen
+  sidostack behövs. Ett KONSTANT index viks till elementets egen deklaration:
+  noll instruktioner, bounds-check vid kompilering, och immediate-läge funkar av
+  samma anledning. Ett RUNTIME-index blir SETOX.
+  Tester: tests/unit/array_index + fem fall under "arrays:" i tests/repl.sh.
+
+  KVAR: `A[uttryck] = rhs` -- SKRIVNING med runtime-index.
+  ROTEN: VÄNSTERSIDAN av en regelkropp matchas av `pat_body`, inte av
+  uttrycksparsern, och dess `[...]` är `P_INTEGER_S`. Ett uttrycksindex matchar
+  alltså inte, hela det optionella blocket backar, och raden sväljs som ett
+  R-VÄRDESUTTRYCK -- varpå uttrycksparsern utför lagringen under det pass som
+  bara VALIDERAR, innan lövtabellerna finns. Det var en SEGFAULT; `process_assign`
+  vägrar nu en lagring före `st->started`, så det är ett rent fel i stället.
+  - HALVA JOBBET LIGGER KVAR OCH ÄR GJORT: `rule_body_part_t.idxe`,
+    `STOP_BODY_IDXE`, och grenen i `asm_rule` som kompilerar indexuttrycket och
+    armerar `cs.arr_reg/arr_len`. `idxe.len` är bara aldrig satt av grammatiken.
+    OBS armeringen MÅSTE ske efter att högersidan laddats -- dess egen LD går
+    också genom `asm_seto` och skulle annars konsumera engångsflaggan.
+  - FÄLLAN SOM STOPPADE MIG: att lägga `P_CHOICE`/`P_ALT` i `pat_body` gav 26
+    ORELATERADE fel i sviten. `collect_first` i csp_parse.c har en egen
+    `// BUG? choice should skip!` vid `P_ALT` -- FIRST-mängderna, och därmed
+    stop-mängderna för HELA parsern, räknas fel när ett val läggs in där.
+    Byte-längderna var rätt (P_OPT 32, P_ALT 15, kontrollräknade mot originalets
+    20). Fixa `collect_first` FÖRST, med ett test som visar att stop-mängderna är
+    oförändrade för de andra mönstren, och lägg sedan in grammatiken.
+  - `safe.A[i]` (array i ett NAMNGIVET objekt) avvisas medvetet: det skulle kräva
+    OP_SETO och OP_SETOX samtidigt, och båda är engångs som konsumeras av samma
+    åtkomst.
+
+  SIDOFYND, åtgärdat: ett RUNTIME-fel sattes men rapporterades aldrig -- det finns
+  inget kommando som väntar inne i eval-loopen. En bounds-check ingen ser är ingen
+  bounds-check. Host-loopen i csp_linux.c skriver nu ut och NOLLSTÄLLER felet per
+  cykel (regeln fyrar varje cykel; ett dåligt index får inte bli en ström i 50 Hz).
+  Arduino-loopen har INTE fått motsvarande -- gör det när samma väg behövs där.
+
+  GENERALISERING till #digital/#analog/#constant -- planera INNAN nästa typ
+  läggs till, annars kopieras splitsningen fyra gånger (Tony 2026-08-11).
+  Två delade hjälpare, båda typoberoende:
+  - `array_splice()` -- plocka ut `[N]` ur tokenvektorn FÖRE pmatch, så resten av
+    deklarationsgrammatiken är oförändrad. En array skiljer sig bara i HUR MÅNGA
+    deklarationer den gör, aldrig i vad de säger.
+  - `array_replicate()` -- kopiera det färdigbyggda huvudet N-1 gånger,
+    kontinuerligt från `i+1`, så varje parser kan peta sitt eget per-element-fält
+    med `ram_decl_at(st, i+k)` i en loop. INGEN funktionspekare: tre rader per typ
+    slår en callback-apparat, och är billigare på AVR.
+  Replikeringen kan alltså inte förbli en ren kopia:
+  - `#analog P[10] out 9:0..9` -- en PINNE per element. Och TODO:ns eget exempel
+    är en LISTA (`0:1..5,7,9,13,15,17`), vilket är precis vad `P_ARRAY` i pmatch
+    finns för.
+  - `#constant CT[10] = {...}` -- ett VÄRDE per element.
+
+  KONSTANTER ÄR INTE KOSMETIK. En `#constant` VIKS BORT vid referensen -- `A = B`
+  och `A = 5` ger byte-identisk kod (se "En #constant listas som sitt VÄRDE").
+  `CT[Idx]` KAN INTE vikas: vilket element som läses avgörs vid körning.
+  Lagringen finns redan (`setup_decl` allokerar en slot åt DECL_CONSTANT), så det
+  som krävs är att den INDEXERADE referensen hoppar över foldningen och lägger ut
+  en LD. En gren att planera in, inte en efterhandsfix -- och det är just den
+  konstruktionen examples/cpx_ball.csp behöver för sina cos/sin-tabeller.
+
+  Två beslut att ta när det byggs:
+  - Får `[N]` utelämnas när en lista anger längden? (`#digital D[] in 0:1..5,7`)
+  - `#analog P[10] out 9:0..3` (tio element, fyra pinnar) ska vara ett FEL, inte
+    en tyst nollfyllning.
+
+  DET REAKTIVA är fortfarande olöst: grafen har en kant per DEKLARATION, och
   `Acc[INDEX]` beror på ALLA element (vilket som läses avgörs vid körning).
   Antag antingen kant till hela arrayen (grovt men korrekt) eller enq per element.
+  Biter inte i examples/cpx_ball.csp -- varje regel där är gatead på
+  `timeout(Tick)`, så inget i programmet är reaktivt. Bra första mål av det
+  skälet: arrayer kan bevisas fungera utan att grafen rörs.
+
+  ÖVERSPELAT (kvar för spårbarhet): "Kan återanvända OBJEKT-kodningen -- ett
+  arrayelement är en objektinstans med en medlem, runtime-index = välja objekt
+  vid körning." Kostade en DECL_OBJECT + en offs[]-post + en object[]-post per
+  element, ~120 byte för P[10] på ett kort med 2675 byte kvar.
 
   #digital D[5] in 0:1..5,7,9,13,15,17
   #variable Acc[3]

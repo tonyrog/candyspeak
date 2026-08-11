@@ -155,6 +155,25 @@ NOINLINE static void close_in_block(csp_rt_t* st);
 NOINLINE static bool_t asm_seto(csp_rt_t* st, xindex_t mem, index_t* out)
 {
     unsigned m = XOBJ(mem);
+
+    // A pending `A[expr]` subscript, consumed here for the same reason OP_SETO
+    // is emitted here: the base-setting instruction has to sit IMMEDIATELY in
+    // front of its access, and this is the one funnel every mem instruction
+    // passes through. The access must read CURRENT-relative for the base to
+    // apply, whatever the reference's own selector said.
+    if (st->cs.arr_len > 0) {
+	csp_instr_t* ip;
+	uint8_t  r = st->cs.arr_reg;
+	uint16_t l = st->cs.arr_len;
+	st->cs.arr_len = 0;                // one-shot: cleared before we can fail
+	*out = MAKE_INDEX(CURRENT, XIDX(mem));
+	if ((ip = alloc_instr_ptr(st, NULL, OP_SETOX)) == NULL)
+	    return 0;
+	ip->ox.x      = r;
+	ip->ox.len    = l;
+	ip->ox.stride = 1;                 // scalar array; one decl per element
+	return 1;
+    }
     *out = MAKE_INDEX(m ? CURRENT : GLOBAL, XIDX(mem));
     if ((m == XOBJ_GLOBAL) || (m == XOBJ_CURRENT))
 	return 1;
@@ -166,6 +185,7 @@ NOINLINE static bool_t asm_seto(csp_rt_t* st, xindex_t mem, index_t* out)
     }
     return 1;
 }
+
 
 // Immediate mode (`> expr` at the prompt, and the ev fold) EXECUTES instead of
 // emitting, so there is no instruction stream to put an OP_SETO into. Bind the
@@ -1048,6 +1068,18 @@ NOINLINE int csp_load(csp_rt_t* st, rentry_t* rp)
 		if (!asm_mem_part(st, OP_LDP, r, rp->ix, rp->part))
 		    return -1;
 	    }
+	    else if (rp->A) {
+		// An array element must NOT go through map_reg. That cache keys
+		// on the DECLARATION, and every element of an array shares one
+		// -- so `A[j]` would be handed the register still holding
+		// `A[i]`. Fresh register, arm the subscript, emit the LD.
+		r = alloc_reg(st);
+		st->cs.arr_reg = rp->areg;
+		st->cs.arr_len = csp_array_len(st, XIDX(rp->ix));
+		if (!asm_mem(st, OP_LD, r, rp->ix))
+		    return -1;
+		free_reg(st, rp->areg);   // the SETOX consumed it
+	    }
 	    else if ((r = map_reg(st, rp->ix)) < 0)
 		return -1;
 	}
@@ -1277,8 +1309,17 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
     // Compiled path: collapse LI+ST into a single STI for a small immediate
     // plain-value store (mirror of EQI). Keeps e.g. State=OFF one instruction.
     if (st->cs.ap && (lhs.part == PART_VAL) && fits_sti(op, &rhs)) {
+	// asm_STI reaches asm_seto too, so an array lvalue arms here as well --
+	// `P[Idx] = 0` is exactly the shape this fast path exists for, and
+	// skipping it would cost an instruction per store in array-heavy code.
+	if (lhs.A) {
+	    st->cs.arr_reg = lhs.areg;
+	    st->cs.arr_len = csp_array_len(st, XIDX(lhs.ix));
+	}
 	if (!asm_STI(st, 0, lhs.ix, (int8_t)rhs.val.i))
 	    return -1;
+	if (lhs.A)
+	    free_reg(st, lhs.areg);
 	rstack[ep-2] = rhs;   // result is the rhs (for chaining A=B=1)
 	return ep - 1;
     }
@@ -1293,6 +1334,16 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
     }
 
     if (!st->cs.ap) {
+	// Immediate mode STORES, and a store needs leaf storage. This path is
+	// also reached with codegen off while pmatch merely VALIDATES an
+	// expression range -- before csp_rt_start has laid the view/heap tables
+	// out, csp_view() then indexes a null table. `st->started` is exactly
+	// "value ops are now valid" (see csp_rt_start), so an assignment that
+	// arrives before it is refused instead of taking the machine down.
+	if (!st->started) {
+	    csp_set_error(st, ERR_SYNTAX);
+	    return -1;
+	}
 	if (rhs.I) {
 	    ctx_save_t sv;
 	    index_t lx = ctx_enter(st, lhs.ix, &sv);
@@ -1311,8 +1362,18 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
 	    if (!asm_mem_part(st, OP_STP, rhs.reg, lhs.ix, lhs.part))
 		return -1;
 	}
-	else if (!asm_mem(st, op, rhs.reg, lhs.ix))
-	    return -1;
+	else {
+	    // `A[i] = rhs`: arm the subscript so asm_seto lays the SETOX down
+	    // in front of the store, exactly as the read path does.
+	    if (lhs.A) {
+		st->cs.arr_reg = lhs.areg;
+		st->cs.arr_len = csp_array_len(st, XIDX(lhs.ix));
+	    }
+	    if (!asm_mem(st, op, rhs.reg, lhs.ix))
+		return -1;
+	    if (lhs.A)
+		free_reg(st, lhs.areg);   // the SETOX consumed it
+	}
     }
     // Result is the rhs (for chaining A=B=1)
     rstack[ep-2] = rhs;
@@ -1899,6 +1960,83 @@ next:
 	goto operator;
     case LP:
 	ostack[pp++] = LP; ptok = LP; break;
+    case RB: {
+	// Close an array subscript: reduce the index expression, take the
+	// register it landed in, and push the ELEMENT as the primary the whole
+	// `A[...]` was. The register stays allocated -- it is read by the SETOX
+	// that asm_seto lays down when the access is finally emitted, which may
+	// be a long way from here (`A[i] = B[j] + 1` has two live at once).
+	uint32_t marker;
+	xindex_t aix;
+	int ep0;
+	uint16_t alen;
+	vtype_t avt;
+	reg_t r;
+
+	while (pp && !IS_MARKER(ostack[pp-1]) && (ostack[pp-1] != LP)) {
+	    if ((ep = process_op(st, ostack[pp-1], rstack, ep)) < 0)
+		return 0;
+	    pp--;
+	}
+	if (!pp || !IS_ARR_MARKER(ostack[pp-1])) {
+	    csp_set_error(st, ERR_SYNTAX);      // `]` with no `A[` open
+	    return 0;
+	}
+	marker = ostack[--pp];
+	ep0 = ARR_MARKER_EP(marker);
+	aix = MAKE_XINDEX(ARR_MARKER_CUR(marker) ? XOBJ_CURRENT : XOBJ_GLOBAL,
+			  ARR_MARKER_IX(marker));
+	// Exactly one value between the brackets: `A[]` leaves none, `A[i,j]`
+	// leaves two. Both are the user's mistake, not something to guess at.
+	if (ep != ep0 + 1) {
+	    csp_set_error(st, ERR_SYNTAX);
+	    return 0;
+	}
+	alen = csp_array_len(st, XIDX(aix));
+	avt  = decl(st,XIDX(aix),vt);
+
+	// A CONSTANT subscript needs no instruction at all: fold it into the
+	// element's own declaration index. `A[2]` then costs exactly what `A`
+	// costs, its bounds check happens HERE instead of every cycle, and
+	// immediate mode (`> A[1] = 5` at the prompt, where there is no
+	// instruction stream to put a SETOX in) works by the same path.
+	if (rstack[ep-1].I && !rstack[ep-1].L) {
+	    ivalue_t k = rstack[ep-1].val.i;
+	    if ((k < 0) || (k >= (ivalue_t)alen)) {
+		csp_set_error(st, ERR_INDEX_RANGE);
+		return 0;
+	    }
+	    ep--;
+	    aix = MAKE_XINDEX(XOBJ(aix), XIDX(aix) + (index_t)k);
+	    if ((i < n) && ((tv[i].t == EQ) || (tv[i].t == RIMP)))
+		ep = push_lval(rstack, ep, aix, avt);
+	    else if ((ep = push_var(st, rstack, ep, aix, avt)) < 0)
+		return 0;
+	    ptok = WORD;
+	    goto after_primary;
+	}
+	// A runtime subscript becomes a SETOX in front of the access. With
+	// codegen OFF nothing is emitted here either: pmatch validates an
+	// expression range with cs.ap NULL before asm_rule compiles it for real,
+	// so this runs twice and only the second pass lays instructions down.
+	// Erroring on the first pass rejected every runtime subscript there is.
+	if (st->cs.ap != NULL) {
+	    if (csp_load(st, &rstack[ep-1]) < 0)
+		return 0;
+	    r = rstack[ep-1].reg;
+	}
+	else
+	    r = 0;
+	ep--;                                   // subscript leaves the stack
+	if ((i < n) && ((tv[i].t == EQ) || (tv[i].t == RIMP)))
+	    ep = push_lval(rstack, ep, aix, avt);
+	else if ((ep = push_var(st, rstack, ep, aix, avt)) < 0)
+	    return 0;
+	rstack[ep-1].A    = 1;
+	rstack[ep-1].areg = r;
+	ptok = WORD;
+	goto after_primary;
+    }
     case RP:
 	if (pp == 0)
 	    return 0;
@@ -1906,10 +2044,15 @@ next:
 	// Check if we're inside a function call
 
 	for (int k = pp-1; k >= 0; k--) {
-	    if (IS_FUNC_MARKER(ostack[k])) { in_func = 1; break; }
+	    // Stop at the nearest marker of EITHER kind: an array subscript
+	    // between here and the call means the comma is not this call's.
+	    if (IS_MARKER(ostack[k])) {
+		in_func = IS_FUNC_MARKER(ostack[k]);
+		break;
+	    }
 	    if (ostack[k] == LP) break;
 	}
-	while(pp && ((tok = ostack[pp-1]) != LP) && !IS_FUNC_MARKER(tok)) {
+	while(pp && ((tok = ostack[pp-1]) != LP) && !IS_MARKER(tok)) {
 	    // COMMA inside function call: just pop it, don't combine args
 	    if (tok == COMMA && in_func) {
 		pp--;
@@ -2065,6 +2208,30 @@ next:
 		}
 	    }
 
+	    // A[expr] -- array element with a runtime index. The subscript is an
+	    // ordinary expression, so it is parsed by THIS loop: push a marker
+	    // that acts like LP (nothing reduces past it) and let RB close it.
+	    // No recursion into csp_parse_expr -- csp_stack_mark sits in this
+	    // function because it is where the margin bottoms out on AVR, and a
+	    // nested call would double the deepest path.
+	    if ((i < n) && (tv[i].t == LB) &&
+		(decl(st,INDEX(ix),type) == DECL_VARIABLE)) {
+		unsigned mo = XOBJ(ix);
+		// `safe.A[i]` would need OP_SETO and OP_SETOX at the same time,
+		// and both are one-shots consumed by the same access. Refusing
+		// beats emitting a pair where one silently wins.
+		if (((mo != XOBJ_GLOBAL) && (mo != XOBJ_CURRENT)) ||
+		    (pp >= MAX_PARSE_STACK_DEPTH)) {
+		    csp_set_error(st, ERR_SYNTAX);
+		    return 0;
+		}
+		ostack[pp++] = MAKE_ARR_MARKER(mo == XOBJ_CURRENT,
+					       XIDX(ix), ep);
+		i++;              // skip '['
+		ptok = LP;        // a subscript opens like a paren
+		goto next;
+	    }
+
 	    // Check if this is an l-value (assignment target)
 	    vt = decl(st,INDEX(ix),vt);
 	    if ((i < n) && ((tv[i].t == EQ)||(tv[i].t == RIMP))) {
@@ -2113,8 +2280,8 @@ operator:
 	else {
 	    tok_t tok2 = ostack[pp-1];
 	    int p2;
-	    // FUNC_MARKER acts like LP - don't process operators past it
-	    if (IS_FUNC_MARKER(tok2) || tok2 == LP) {
+	    // Either marker acts like LP - don't process operators past it
+	    if (IS_MARKER(tok2) || tok2 == LP) {
 		if (tok == RIMP) { st->cs.rimp = 1;  }
 		ostack[pp++] = tok;
 		ptok = tok;
@@ -2129,7 +2296,7 @@ operator:
 		pp--;
 		if (pp == 0) break;
 		tok2 = ostack[pp-1];
-		if (IS_FUNC_MARKER(tok2) || (tok2 == LP)) break;
+		if (IS_MARKER(tok2) || (tok2 == LP)) break;
 		p2 = op_table_prec(tok2);
 	    }
 	    if (tok == RIMP) { st->cs.rimp = 1; }
@@ -2340,11 +2507,31 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     variable_param_t d = {0};
     index_t ix;
-    int i, r;
+    int i, r, k;
+    ivalue_t alen = 1;
 
     // set default values
     d.r.res = 8*sizeof(ivalue_t);
     d.opts.vt = V_INTEGER;
+
+    // `#variable A[3]` -- an ARRAY. Detected and SPLICED OUT of the token vector
+    // before pmatch, so the rest of the declaration grammar (':res', options,
+    // '= init', 'bind') stays exactly as it was: an array differs only in how
+    // MANY declarations it makes, never in what they say.
+    if ((ti+3 < (int)n) && (tv[ti+1].t == LB) && (tv[ti+2].t == INT) &&
+	(tv[ti+3].t == RB)) {
+	alen = tv[ti+2].v.val.i;
+	// The upper bound is the SETOX len field, not a taste limit -- an array
+	// longer than it can express would be emitted with a wrapped bounds
+	// check, i.e. an unchecked one.
+	if ((alen < 1) || (alen > 0xffff) ||
+	    (st->ps.nd + alen > MAX_DECLS)) {
+	    csp_set_error(st, ERR_NUMBER_RANGE);
+	    return -1;
+	}
+	memmove(&tv[ti+1], &tv[ti+4], (n - (ti+4))*sizeof(token_t));
+	n -= 3;
+    }
 
     if ((r = pmatch(st, tv, ti, n, pat_variable, &d, sizeof(d))) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
@@ -2402,6 +2589,20 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	ram_decl_at(st,i)->ca.bit = b0;
 	ram_decl_at(st,i)->ca.len = MAKE_FIELD_LEN((b1-b0)+1);
 	ram_decl_at(st,i)->ca.endian = d.opts.endian;
+    }
+
+    // The remaining elements: copies of the fully-built head, made LAST so they
+    // inherit everything decided above (res, dir, init, and a bind). Only the
+    // head keeps the name -- a continuation with name 0 is invisible to
+    // lookup_decl_in (`d.name > 0`), so `A` resolves to the head and nothing
+    // else, with no special case in the lookup every reference goes through.
+    for (k = 1; k < (int)alen; k++) {
+	index_t jx;
+	if ((jx = csp_new_decl(st, NULL, DECL_VARIABLE, 0)) == BAD_INDEX)
+	    return -1;
+	*ram_decl_at(st, INDEX(jx)) = *ram_decl_at(st, i);
+	ram_decl_at(st, INDEX(jx))->name = 0;
+	ram_decl_at(st, INDEX(jx))->cont = 1;
     }
     return 0;
 }
@@ -2862,6 +3063,13 @@ typedef struct {
     index_t src_view; // the source sub-view decl (when is_unpack)
     ivalue_t idx0;  // Buf[idx0 ..]
     ivalue_t idx1;  // Buf[.. idx1]
+    // A[<expr>] on the LEFT of an assignment. The right side goes through the
+    // expression parser, which handles a subscript in its primary; the left side
+    // is matched HERE, so without this a runtime subscript did not match at all
+    // and the whole `A[I] = 99` fell through as an r-value expression -- which
+    // made the expression parser perform the store itself, during the pass that
+    // only validates, before the leaf tables exist. That was a segfault.
+    pexpr_t idxe;
     pexpr_t rhs;
 } rule_body_part_t;
 
@@ -2966,6 +3174,13 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 	xindex_t ix = BAD_INDEX;   // may still name an object
 	csp_part_t lpart = PART_VAL;
 	pexpr_t lhs;
+	// A[<expr>] target: the index register and the array's length, held from
+	// where the subscript is compiled to just before the STORE. Arming any
+	// earlier would be consumed by the RIGHT side's own load -- every mem
+	// instruction goes through asm_seto, and the one-shot belongs to the
+	// store. alen_a == 0 means this part has no runtime subscript.
+	int      aidx = -1;
+	uint16_t alen_a = 0;
 
 	if (part[k].is_unpack) {          // <var> = <buffer>[bits]   (unpack)
 	    xindex_t lx = csp_lookup_decl(st, &part[k].obj);
@@ -3006,6 +3221,45 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 		index_t bx = csp_lookup_decl(st, &part[k].obj);
 		ivalue_t lo, hi;
 		decl_t bt = (bx==BAD_INDEX)?DECL_NONE:decl(st,INDEX(bx),type);
+
+		// `A[k] = rhs` on an ARRAY. The LEFT side of a rule body is
+		// matched by pat_body, not by the expression parser, so a
+		// subscript arrives here as idx0 instead of going through the
+		// primary that handles it on the read side. A constant index
+		// folds to the element's own declaration: no SETOX, and the
+		// bounds check lands at compile time.
+		if ((bx != BAD_INDEX) && (bt == DECL_VARIABLE) &&
+		    !part[k].idx_bits && !part[k].has_range &&
+		    (csp_array_len(st, INDEX(bx)) > 1)) {
+		    ivalue_t alen = (ivalue_t)csp_array_len(st, INDEX(bx));
+
+		    ix = bx;
+		    if ((XOBJ(ix) == XOBJ_GLOBAL) && is_module_local(st, ix))
+			ix = MAKE_XINDEX(XOBJ_CURRENT, XIDX(ix));
+
+		    if (part[k].idxe.len > 0) {   // A[<expr>] -- runtime index
+			rentry_t rix;
+			size_t   nix = part[k].idxe.len;
+			if (!csp_parse_expr(st, &tv[part[k].idxe.pos], &nix, &rix))
+			    return -1;
+			if (csp_load(st, &rix) < 0)
+			    return -1;
+			aidx = rix.reg;
+			alen_a = (uint16_t)alen;
+		    }
+		    else {                        // A[<const>] -- fold to the element
+			if ((part[k].idx0 < 0) || (part[k].idx0 >= alen)) {
+			    csp_set_error(st, ERR_INDEX_RANGE);
+			    return -1;
+			}
+			ix = MAKE_XINDEX(XOBJ(ix),
+					 XIDX(ix) + (index_t)part[k].idx0);
+		    }
+		    if (!coerce_assign(st, ix, &rbody))
+			return -1;
+		    goto have_lhs;
+		}
+
 		// byte access targets a buffer; pack (idx_bits) also a variable
 		if ((bx == BAD_INDEX) || ((bt != DECL_BUFFER) &&
 		    !(part[k].idx_bits && (bt == DECL_VARIABLE)))) {
@@ -3081,6 +3335,7 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 	    if (!coerce_assign(st, ix, &rbody))
 		return -1;
 	}
+    have_lhs:
 	// <var> = <small-int-imm>  (plain value, not reactive) -> single STI,
 	// mirroring EQI so the rule lists cleanly (State=OFF, not State=3). dst is
 	// a dead register: STI never writes it, but NEXT points at it so the body
@@ -3088,8 +3343,14 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 	if ((ix != BAD_INDEX) && (lpart == PART_VAL) && !rbody.L &&
 	    fits_sti((part[k].assign == RIMP) ? OP_STIMP : OP_ST, &rbody)) {
 	    dst = alloc_reg(st);
+	    if (alen_a) {
+		st->cs.arr_reg = (uint8_t)aidx;
+		st->cs.arr_len = alen_a;
+	    }
 	    if (!asm_STI(st, dst, ix, (int8_t)rbody.val.i))
 		return -1;
+	    if (alen_a)
+		free_reg(st, aidx);
 	    continue;
 	}
 	if (!rbody.L)
@@ -3102,8 +3363,16 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 	    }
 	    else {
 		opcode_t op = (part[k].assign == RIMP) ? OP_STIMP : OP_ST;
+		// Armed HERE, after the right side has been loaded: its own LD
+		// would otherwise consume the one-shot meant for this store.
+		if (alen_a) {
+		    st->cs.arr_reg = (uint8_t)aidx;
+		    st->cs.arr_len = alen_a;
+		}
 		if (!asm_mem(st, op, dst, ix))
 		    return -1;
+		if (alen_a)
+		    free_reg(st, aidx);
 	    }
 	}
     }
