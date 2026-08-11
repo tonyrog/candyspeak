@@ -452,28 +452,29 @@ Inte buggar -- saker som byggts men inte setts fungera på järn.
   samma anledning. Ett RUNTIME-index blir SETOX.
   Tester: tests/unit/array_index + fem fall under "arrays:" i tests/repl.sh.
 
-  KVAR: `A[uttryck] = rhs` -- SKRIVNING med runtime-index.
-  ROTEN: VÄNSTERSIDAN av en regelkropp matchas av `pat_body`, inte av
-  uttrycksparsern, och dess `[...]` är `P_INTEGER_S`. Ett uttrycksindex matchar
-  alltså inte, hela det optionella blocket backar, och raden sväljs som ett
-  R-VÄRDESUTTRYCK -- varpå uttrycksparsern utför lagringen under det pass som
-  bara VALIDERAR, innan lövtabellerna finns. Det var en SEGFAULT; `process_assign`
-  vägrar nu en lagring före `st->started`, så det är ett rent fel i stället.
-  - HALVA JOBBET LIGGER KVAR OCH ÄR GJORT: `rule_body_part_t.idxe`,
-    `STOP_BODY_IDXE`, och grenen i `asm_rule` som kompilerar indexuttrycket och
-    armerar `cs.arr_reg/arr_len`. `idxe.len` är bara aldrig satt av grammatiken.
-    OBS armeringen MÅSTE ske efter att högersidan laddats -- dess egen LD går
-    också genom `asm_seto` och skulle annars konsumera engångsflaggan.
-  - FÄLLAN SOM STOPPADE MIG: att lägga `P_CHOICE`/`P_ALT` i `pat_body` gav 26
-    ORELATERADE fel i sviten. `collect_first` i csp_parse.c har en egen
-    `// BUG? choice should skip!` vid `P_ALT` -- FIRST-mängderna, och därmed
-    stop-mängderna för HELA parsern, räknas fel när ett val läggs in där.
-    Byte-längderna var rätt (P_OPT 32, P_ALT 15, kontrollräknade mot originalets
-    20). Fixa `collect_first` FÖRST, med ett test som visar att stop-mängderna är
-    oförändrade för de andra mönstren, och lägg sedan in grammatiken.
-  - `safe.A[i]` (array i ett NAMNGIVET objekt) avvisas medvetet: det skulle kräva
-    OP_SETO och OP_SETOX samtidigt, och båda är engångs som konsumeras av samma
-    åtkomst.
+  KLART OCH TESTAT: `A[uttryck] = rhs` -- SKRIVNING med runtime-index, och
+  `#constant CT[10] = { ... }` med init-listor.
+  Vänstersidan av en regelkropp matchas av `pat_body`, inte av uttrycksparsern,
+  så skrivning är en EGEN väg. Den fick ett ANDRA optionellt block för
+  `'[' <uttryck> ']'`, INTE ett `P_CHOICE` -- det första blocket backar ändå
+  komplett (inklusive `[`) när `P_INTEGER_S` möter något som inte är konstant,
+  vilket är precis det som förut lät `A[I] = 99` falla igenom som r-värde.
+  `Buf[0..3]` ligger därmed kvar på sin gamla väg. Armeringen sker EFTER att
+  högersidan laddats -- dess egen LD går också genom `asm_seto` och skulle annars
+  konsumera engångsflaggan.
+  `safe.A[i]` (array i ett NAMNGIVET objekt) avvisas medvetet: det skulle kräva
+  OP_SETO och OP_SETOX samtidigt, och båda konsumeras av samma åtkomst.
+
+  RÄTTELSE till en tidigare anteckning här: de 26 orelaterade sviten-felen berodde
+  INTE på `collect_first`/`P_ALT` och inte på stop-tabellens tak. De berodde på
+  att jag räknade det INRE blockets bytelängd men aldrig det OMSLUTANDE `P_OPT`
+  som innehåller det. `pat_body` bär nu sin uträkning i en kommentar.
+  Fällan är generell och värd att minnas: en fel längd i mönstret felar inte där
+  den står -- parsern hoppar till fel ställe och det syns som ett par dussin
+  syntaxfel på helt andra rader.
+
+  KVAR: `#analog`/`#digital A[N]` med pinnlista -- steg 3, det enda som återstår
+  innan examples/cpx_ball_array.csp går igenom (den stannar nu på rad 40).
 
   SIDOFYND, åtgärdat: ett RUNTIME-fel sattes men rapporterades aldrig -- det finns
   inget kommando som väntar inne i eval-loopen. En bounds-check ingen ser är ingen

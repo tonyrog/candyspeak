@@ -59,7 +59,16 @@ int pmatch(csp_rt_t* st, const token_t* tv, int ti, size_t n,
 	   const uint8_t* pat, void* data, size_t data_size);
 
 // Stop-set functions for P_EXPR_S
-#define MAX_STOP_TOKENS 128
+// Every stop set lives in one shared array, so this is the budget for ALL of
+// them together, not per set. Overflow used to be SILENT: add_stop_tok simply
+// dropped the token, the set it belonged to lost its terminator, and expression
+// scans ran past where they should stop -- which shows up as a couple of dozen
+// unrelated parse failures, nowhere near the pattern that was actually added.
+// csp_stop_overflow counts what was dropped and print_defines reports both, so
+// the next pattern that outgrows this says so instead of breaking the parser.
+#define MAX_STOP_TOKENS 192
+extern int csp_stop_overflow;
+extern int csp_stop_tokens_used(void);
 
 // Named stop-sets - used in xxx_pat definitions
 enum {

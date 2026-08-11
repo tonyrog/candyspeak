@@ -80,6 +80,8 @@ const op_entry_t tok_table[] RODATA = {
     TOK_ENT(COLON,OP_NOP,s_COLON),
     TOK_ENT(LB,OP_NOP,s_LB),
     TOK_ENT(RB,OP_NOP,s_RB),
+    TOK_ENT(LBRACE,OP_NOP,s_LBRACE),
+    TOK_ENT(RBRACE,OP_NOP,s_RBRACE),
     TOK_ENT(INT,OP_NOP,s_null),
     TOK_ENT(FLT,OP_NOP,s_null),
     TOK_ENT(WORD,OP_NOP,s_null),

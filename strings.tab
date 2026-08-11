@@ -138,6 +138,8 @@ DOT .
 COLON :
 LB [
 RB ]
+LBRACE {
+RBRACE }
 MOV mov
 ADD ADD
 SUB SUB

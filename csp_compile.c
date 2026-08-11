@@ -667,15 +667,22 @@ next:
     case '*': TOK(ASTERISK);
     case '/':
 	if (*str == '/') {
+	    // Skip to end of line and CONSUME the terminator, the way every other
+	    // token does -- `case '\n'` above is reached with the character
+	    // already past. Leaving it here returned a NEWLINE token without
+	    // eating the newline, so csp_parse's loop scanned the same line end a
+	    // second time and bumped ps.line twice. That is why a syntax error in
+	    // a commented file reported a line number one PER COMMENT too high.
 	    str++;
 	    while(*str) {
-		if (*str == '\n')
+		if (*str == '\n') {
+		    str++;
 		    TOK(NEWLINE);
+		}
 		if (*str == '\r') {
 		    str++;
-		    if (*str == '\n') {
-			TOK(NEWLINE);
-		    }
+		    if (*str == '\n')
+			str++;
 		    TOK(NEWLINE);
 		}
 		str++;
@@ -729,6 +736,8 @@ next:
 	break;
     case '[': TOK(LB);
     case ']': TOK(RB);
+    case '{': TOK(LBRACE);
+    case '}': TOK(RBRACE);
     case '(': TOK(LP);
     case ')': TOK(RP);
     case '"': {
@@ -2028,12 +2037,16 @@ next:
 	else
 	    r = 0;
 	ep--;                                   // subscript leaves the stack
-	if ((i < n) && ((tv[i].t == EQ) || (tv[i].t == RIMP)))
-	    ep = push_lval(rstack, ep, aix, avt);
-	else if ((ep = push_var(st, rstack, ep, aix, avt)) < 0)
-	    return 0;
-	rstack[ep-1].A    = 1;
-	rstack[ep-1].areg = r;
+	// The entry is built here rather than through push_var, which FOLDS a
+	// DECL_CONSTANT to its init value. That is right for a scalar -- `A = B`
+	// and `A = 5` are the same code -- and wrong for `CT[Idx]`, where the
+	// element is not known until the program runs: folding would bake
+	// element 0 into every reference. A deferred access is emitted instead,
+	// and the constant's own storage (setup_decl allocates it) is read.
+	rstack[ep] = (rentry_t) { .ix = aix, .vt = avt,
+				  .L = 0, .I = 0, .X = 1,
+				  .A = 1, .areg = r };
+	ep++;
 	ptok = WORD;
 	goto after_primary;
     }
@@ -2215,7 +2228,8 @@ next:
 	    // function because it is where the margin bottoms out on AVR, and a
 	    // nested call would double the deepest path.
 	    if ((i < n) && (tv[i].t == LB) &&
-		(decl(st,INDEX(ix),type) == DECL_VARIABLE)) {
+		((decl(st,INDEX(ix),type) == DECL_VARIABLE) ||
+		 (decl(st,INDEX(ix),type) == DECL_CONSTANT))) {
 		unsigned mo = XOBJ(ix);
 		// `safe.A[i]` would need OP_SETO and OP_SETOX at the same time,
 		// and both are one-shots consumed by the same access. Refusing
@@ -2476,6 +2490,62 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
     return 0;
 }
 
+// `<name>[N]` in a DECLARATION: read the length and splice the `[N]` out of the
+// token vector, so the rest of that declaration's grammar (':res', options,
+// '= init', 'bind', a port:pin) is matched exactly as it was. An array differs
+// only in how MANY declarations it makes, never in what they say -- which is
+// what lets one helper serve #variable, #constant and (next) the device types
+// instead of four copies of the same splice.
+//
+// alen is left alone when there is no subscript, so the caller initialises it
+// to 1 and a plain declaration flows through untouched.
+NOINLINE static int array_splice(csp_rt_t* st, token_t* tv, int ti,
+				 size_t* np, ivalue_t* alen)
+{
+    size_t n = *np;
+
+    if (!((ti+3 < (int)n) && (tv[ti+1].t == LB) && (tv[ti+2].t == INT) &&
+	  (tv[ti+3].t == RB)))
+	return 0;
+    *alen = tv[ti+2].v.val.i;
+    // The upper bound is the SETOX len field, not a taste limit -- an array
+    // longer than it can express would be emitted with a wrapped bounds check,
+    // i.e. an unchecked one.
+    if ((*alen < 1) || (*alen > 0xffff) ||
+	(st->ps.nd + *alen > MAX_DECLS)) {
+	csp_set_error(st, ERR_NUMBER_RANGE);
+	return -1;
+    }
+    memmove(&tv[ti+1], &tv[ti+4], (n - (ti+4))*sizeof(token_t));
+    *np = n - 3;
+    return 0;
+}
+
+// The elements after the head: copies of the FULLY BUILT head, so they inherit
+// everything its own grammar decided (width, direction, init, a bind). Only the
+// head keeps the name -- a continuation with name 0 is invisible to
+// lookup_decl_in (`d.name > 0`), so `A` resolves to the head and nothing else,
+// with no special case in the lookup every reference goes through.
+//
+// They land CONTIGUOUSLY above the head, so a caller that needs to vary one
+// field per element (a constant's value, next a device's pin) writes it with
+// ram_decl_at(st, head + k) instead of this taking a callback.
+NOINLINE static int array_replicate(csp_rt_t* st, int head, decl_t type,
+				    ivalue_t alen)
+{
+    int k;
+
+    for (k = 1; k < (int)alen; k++) {
+	index_t jx;
+	if ((jx = csp_new_decl(st, NULL, type, 0)) == BAD_INDEX)
+	    return -1;
+	*ram_decl_at(st, INDEX(jx)) = *ram_decl_at(st, head);
+	ram_decl_at(st, INDEX(jx))->name = 0;
+	ram_decl_at(st, INDEX(jx))->cont = 1;
+    }
+    return 0;
+}
+
 // '#' 'variable' <name>[':' <size>] [<opt>+] ['=' <num> | <string>]
 // <opt> := 'in'|'out'|'inout'|  -- when use as argument in module
 //          'signed'|'unsigned'|'float'
@@ -2507,31 +2577,15 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     variable_param_t d = {0};
     index_t ix;
-    int i, r, k;
+    int i, r;
     ivalue_t alen = 1;
 
     // set default values
     d.r.res = 8*sizeof(ivalue_t);
     d.opts.vt = V_INTEGER;
 
-    // `#variable A[3]` -- an ARRAY. Detected and SPLICED OUT of the token vector
-    // before pmatch, so the rest of the declaration grammar (':res', options,
-    // '= init', 'bind') stays exactly as it was: an array differs only in how
-    // MANY declarations it makes, never in what they say.
-    if ((ti+3 < (int)n) && (tv[ti+1].t == LB) && (tv[ti+2].t == INT) &&
-	(tv[ti+3].t == RB)) {
-	alen = tv[ti+2].v.val.i;
-	// The upper bound is the SETOX len field, not a taste limit -- an array
-	// longer than it can express would be emitted with a wrapped bounds
-	// check, i.e. an unchecked one.
-	if ((alen < 1) || (alen > 0xffff) ||
-	    (st->ps.nd + alen > MAX_DECLS)) {
-	    csp_set_error(st, ERR_NUMBER_RANGE);
-	    return -1;
-	}
-	memmove(&tv[ti+1], &tv[ti+4], (n - (ti+4))*sizeof(token_t));
-	n -= 3;
-    }
+    if (array_splice(st, tv, ti, &n, &alen) < 0)
+	return -1;
 
     if ((r = pmatch(st, tv, ti, n, pat_variable, &d, sizeof(d))) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
@@ -2591,20 +2645,8 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	ram_decl_at(st,i)->ca.endian = d.opts.endian;
     }
 
-    // The remaining elements: copies of the fully-built head, made LAST so they
-    // inherit everything decided above (res, dir, init, and a bind). Only the
-    // head keeps the name -- a continuation with name 0 is invisible to
-    // lookup_decl_in (`d.name > 0`), so `A` resolves to the head and nothing
-    // else, with no special case in the lookup every reference goes through.
-    for (k = 1; k < (int)alen; k++) {
-	index_t jx;
-	if ((jx = csp_new_decl(st, NULL, DECL_VARIABLE, 0)) == BAD_INDEX)
-	    return -1;
-	*ram_decl_at(st, INDEX(jx)) = *ram_decl_at(st, i);
-	ram_decl_at(st, INDEX(jx))->name = 0;
-	ram_decl_at(st, INDEX(jx))->cont = 1;
-    }
-    return 0;
+    // Made LAST so the copies inherit everything decided above.
+    return array_replicate(st, i, DECL_VARIABLE, alen);
 }
 
 // '#' 'constant' <name>[':' <size>] [<opt>+] '=' <num> | <string>
@@ -2631,11 +2673,77 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     constant_param_t d = {0};
     index_t ix;
-    int i;
+    int i, k, nv = 0;
+    ivalue_t alen = 1;
+    int vpos = -1;              // token index of the first list element
 
     // set default values
     d.r.res = 8*sizeof(ivalue_t);
     d.opts.vt = V_INTEGER;
+
+    if (array_splice(st, tv, ti, &n, &alen) < 0)
+	return -1;
+
+    // `= { v0, v1, ... }` -- an init LIST. Handled around pmatch rather than in
+    // the grammar, and WITHOUT rewriting the values away: the only edit is to
+    // delete the `{`, after which pmatch is given a range that ENDS after v0.
+    // It then matches the ordinary `= <const>` it always did and the head comes
+    // out holding element 0, while v1.. sit untouched further up the vector for
+    // the copies to read. Rewriting them in place was the obvious move and the
+    // wrong one -- the values are the thing that has to survive.
+    {
+	int b = -1, e = -1, j;
+	for (j = ti; j < (int)n; j++) {
+	    if (tv[j].t == LBRACE) { b = j; break; }
+	}
+	if (b >= 0) {
+	    for (j = b+1; j < (int)n; j++) {
+		if (tv[j].t == RBRACE) { e = j; break; }
+	    }
+	    if ((e < 0) || (b == 0) || (tv[b-1].t != EQ)) {
+		csp_set_error(st, ERR_SYNTAX);       // `{` with no `}`, or no `=`
+		return -1;
+	    }
+	    // Shape: v (',' v)*. A leading '-' is its own token, so fold it into
+	    // the value first and an element is one token from here on.
+	    for (j = b+1; j < e; j++) {
+		if ((j - (b+1)) & 1) {
+		    if (tv[j].t != COMMA) {
+			csp_set_error(st, ERR_SYNTAX);
+			return -1;
+		    }
+		    continue;
+		}
+		if ((tv[j].t == MINUS) || (tv[j].t == MINUS1)) {
+		    if ((j+1 >= e) ||
+			((tv[j+1].t != INT) && (tv[j+1].t != FLT))) {
+			csp_set_error(st, ERR_SYNTAX);
+			return -1;
+		    }
+		    tv[j+1].v.val.i = -tv[j+1].v.val.i;
+		    memmove(&tv[j], &tv[j+1], (n - (j+1))*sizeof(token_t));
+		    n--; e--;
+		}
+		else if ((tv[j].t != INT) && (tv[j].t != FLT)) {
+		    csp_set_error(st, ERR_SYNTAX);
+		    return -1;
+		}
+		nv++;
+	    }
+	    // A declared length and a list that disagree is a mistake, not
+	    // something to pad or truncate silently.
+	    if ((nv < 1) || ((alen > 1) && (nv != alen))) {
+		csp_set_error(st, ERR_NUMBER_RANGE);
+		return -1;
+	    }
+	    if (alen == 1)
+		alen = nv;              // `#constant A[] = {..}` -- list sets it
+	    memmove(&tv[b], &tv[b+1], (n - (b+1))*sizeof(token_t));
+	    n--;                        // '{' gone; values now at b, b+2, b+4...
+	    vpos = b;
+	    n = b + 1;                  // pmatch sees `... = v0` and stops
+	}
+    }
 
     if (pmatch(st, tv, ti, n, pat_constant, &d, sizeof(d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
@@ -2649,6 +2757,15 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n)
     ram_decl_at(st,i)->vt = d.opts.vt;
     ram_decl_at(st,i)->res = MAKE_RES(d.r.res);
     ram_decl_at(st,i)->cn.init = d.init;
+
+    if (array_replicate(st, i, DECL_CONSTANT, alen) < 0)
+	return -1;
+    // Element k's own value. The head already has element 0 (pmatch read it),
+    // and the copies inherited it -- overwrite each with its own.
+    if (vpos >= 0) {
+	for (k = 1; k < (int)alen; k++)
+	    ram_decl_at(st, i + k)->cn.init.i = tv[vpos + 2*k].v.val.i;
+    }
     return 0;
 }
 
@@ -3549,7 +3666,12 @@ typedef struct {
 
 // PAT_BODY: [<name> ['.' <name> ['.' <name>]] ['[' <idx0> ['..' <idx1>] ']'] (=|<-)] <expr>
 static const uint8_t pat_body[] = {
-    P_OPT, 54,
+    // 65 = P_STR(2) + dotted-name block(14) + int-index block(22) +
+    //      expr-index block(11) + assign choice(15) + P_OPT_END(1).
+    // Add a block INSIDE and this has to grow by the same amount. Getting it
+    // wrong does not fail here -- it makes the parser skip to the wrong place
+    // and shows up as a couple of dozen unrelated syntax errors elsewhere.
+    P_OPT, 65,
       P_STR, csp_offsetof(rule_body_part_t, obj),
       P_OPT, 12,
         P_TOK, DOT,
@@ -3559,6 +3681,7 @@ static const uint8_t pat_body[] = {
           P_STR, csp_offsetof(rule_body_part_t, pfld),
         P_OPT_END,
       P_OPT_END,
+      // '[' <int> ['..' <int>] ']' -- buffers and the bit-pack forms, unchanged.
       P_OPT, 20,
         P_TOK_W, LB, csp_offsetof(rule_body_part_t, has_idx),
         P_INTEGER_S, csp_offsetof(rule_body_part_t, idx0), STOP_BODY_IDX0,
@@ -3567,6 +3690,18 @@ static const uint8_t pat_body[] = {
           P_TOK, DOT,
           P_INTEGER_S, csp_offsetof(rule_body_part_t, idx1), STOP_BODY_IDX1,
         P_OPT_END,
+        P_TOK, RB,
+      P_OPT_END,
+      // '[' <expr> ']' -- an array's RUNTIME subscript, as a SECOND optional
+      // rather than an alternative inside the first. No P_CHOICE is needed: the
+      // block above backs off completely -- including the '[' it had already
+      // matched -- when P_INTEGER_S fails on a non-constant, which is exactly
+      // the behaviour that used to let `A[I] = 99` fall through as an r-value.
+      // So this one sees an untouched '[' and runs only when the integer form
+      // did not match, which also keeps `Buf[0..3]` on its old path.
+      P_OPT, 9,
+        P_TOK_W, LB, csp_offsetof(rule_body_part_t, has_idx),
+        P_EXPR_S, csp_offsetof(rule_body_part_t, idxe), STOP_BODY_IDXE,
         P_TOK, RB,
       P_OPT_END,
       P_CHOICE, 2,
@@ -4000,8 +4135,6 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 	str += n;
 	alloc_init(st->cs.ap);
 
-	st->ps.line++;
-
 	if (tv[0].t == NEWLINE)
 	    r = 0;
 	else if ((tv[0].t == HASH) && (tv[1].t == T_IN)) {
@@ -4073,6 +4206,11 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 	}
 	if (r < 0)
 	    return -1;
+	// AFTER the line, not before: parse_file starts the count at 1, so an
+	// error on line N has to leave ps.line at N, not N+1. Incrementing first
+	// made every reported line one too high -- the constant off-by-one under
+	// the per-comment drift above.
+	st->ps.line++;
 	num = MAX_LINE_TOKENS;
     }
     return n;

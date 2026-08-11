@@ -709,6 +709,8 @@ typedef enum {
     DOT,       // "."
     LB,        // "["
     RB,        // "]"
+    LBRACE,    // "{"  init list: #constant A[3] = { 1, 2, 3 }
+    RBRACE,    // "}"
     INT,       // 123 | 0x9ab
     FLT,       // 0.123
     STR,       // "abc"

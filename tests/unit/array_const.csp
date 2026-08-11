@@ -1,0 +1,26 @@
+// Constant arrays with an init list -- the cos/sin tables cpx_ball needs.
+//
+// A scalar #constant is FOLDED at the reference: `A = B` and `A = 5` compile to
+// byte-identical code. An element chosen at RUN TIME cannot be folded, so an
+// indexed reference has to emit a real load against the constant's own storage.
+// If the fold were left in, every CT[..] here would come back as CT[0].
+
+#constant CT[10] = { -100, -81, -31,  31,  81, 100,  81,  31, -31, -81 }
+#constant ST[10] = {    0,  59,  95,  95,  59,   0, -59, -95, -95, -59 }
+
+#variable I = 0
+#variable a = 0
+#variable b = 0
+#variable c = 0
+#variable d = 0
+
+// Constant subscript: folds to the element's own declaration.
+a = CT[0] ? 1
+b = ST[3] ? 1
+
+// Runtime subscript: one OP_SETOX per access. Reading two different elements
+// through the same declaration is the whole point -- if the register cache in
+// map_reg were allowed to serve an array, c and d would come out equal.
+I = 6 ? 1
+c = CT[I] ? 1
+d = ST[I] ? 1

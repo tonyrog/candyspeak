@@ -812,16 +812,37 @@ match:
 	    list_eol();
 	    break;
 	}
-	case DECL_CONSTANT:
+	case DECL_CONSTANT: {
+	    // An array of constants lists as `#constant CT[3]:32 = { a, b, c }`.
+	    // Each element is its own declaration holding its own value, so the
+	    // list is rebuilt by walking them -- and the head alone would paste
+	    // back as a scalar with the other elements gone.
+	    uint16_t alen = csp_array_len(st, i);
 	    print_decl_and_name(st, d.type, cur_mod, npos);
+	    if (alen > 1) {
+		csp_print_char('[');
+		csp_print_uint(alen);
+		csp_print_char(']');
+	    }
 	    csp_print_char(':');
 	    csp_print_uint(GET_RES(d.res));
 	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_vtype(decl(st,i,vt)));
 	    csp_print_lit(" = ");
-	    list_value(st, decl(st,i,vt), decl(st,i,cn.init));
+	    if (alen > 1) {
+		uint16_t e;
+		csp_print_lit("{ ");
+		for (e = 0; e < alen; e++) {
+		    if (e) csp_print_lit(", ");
+		    list_value(st, decl(st,i,vt), decl(st,i+e,cn.init));
+		}
+		csp_print_lit(" }");
+	    }
+	    else
+		list_value(st, decl(st,i,vt), decl(st,i,cn.init));
 	    list_eol();
 	    break;
+	}
 	case DECL_OBJECT:
 	    csp_print_char('#');
 	    csp_print_str_at(st, decl_name_pos(st, decl(st,i,mq.mx)));

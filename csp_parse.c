@@ -13,6 +13,12 @@ static uint8_t stop_pos[NUM_STOP_SETS];
 static const uint8_t*   pattern[NUM_PAT];
 static int stop_toks_len = 0;
 static int num_stop_sets = 0;
+// Tokens that did NOT fit. Any value but 0 means the patterns have outgrown
+// MAX_STOP_TOKENS and some stop set is short -- the parser is then wrong in ways
+// that look like unrelated syntax errors. Reported by print_defines.
+int csp_stop_overflow = 0;
+
+int csp_stop_tokens_used(void) { return stop_toks_len; }
 
 #ifdef DEBUG
 
@@ -191,6 +197,8 @@ static void add_stop_tok(uint8_t sid, uint8_t tok)
 	DBG("add token %s to stop_set %s\n", tok_name(tok), stop_set_name(sid));
     if (stop_toks_len < MAX_STOP_TOKENS)
         stop_toks[stop_toks_len++] = tok;
+    else
+	csp_stop_overflow++;   // never silent again -- see MAX_STOP_TOKENS
 }
 
 // Collect FIRST tokens from pattern position pi

@@ -623,20 +623,40 @@ got=$(printf '/state\n/quit\n' | repl ./csp "$D/arr6.db" --no-eeprom "$D/arrbad.
 ck "a runtime subscript past the end is caught at run time" \
    'index out of range' "$got"
 
-# NOT YET IMPLEMENTED, pinned so it stays a clean refusal rather than a crash.
-# `A[<expr>] = rhs` needs pat_body -- the LEFT of a rule body is matched by that
-# pattern, not by the expression parser, and its subscript is P_INTEGER_S. So the
-# whole optional backs off and the line is swallowed as an r-value expression,
-# which made the expression parser perform the store during the pass that only
-# VALIDATES, before the leaf tables exist. That was a segfault; process_assign
-# now refuses a store before st->started. See TODO.
+# A constant array lists its whole init list back. The head alone would paste
+# back as a scalar with the other elements gone.
+cat > "$D/arrc.csp" <<'EOF'
+#constant CT[4] = { -100, -81, 31, 100 }
+EOF
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/arr9.db" --no-eeprom "$D/arrc.csp" |
+	  sed -n '/^#constant/p')
+ck "a constant array lists its init list back" \
+   '#constant CT[4]:32 integer = { -100, -81, 31, 100 }  // R' "$got"
+
+# ...and survives being baked into a ROM image and loaded back. Every element is
+# its own declaration carrying `cont`, and that bit is real data now: an emitter
+# that dropped it would both unmake the array and fail the decl-section CRC.
+if build_rom "$D/arrc.csp" "$D/arrc_fw"; then
+    got=$(printf '/list\n/quit\n' | repl "$D/arrc_fw" "$D/arr10.db" --no-eeprom |
+	      sed -n '/^#constant/p')
+    ck "a constant array survives a ROM round trip" \
+       '#constant CT[4]:32 integer = { -100, -81, 31, 100 }  // F' "$got"
+else
+    echo "  FAIL constant-array ROM did not build"; fail=$((fail+1))
+fi
+
+# `A[<expr>] = rhs`. The LEFT of a rule body is matched by pat_body, not by the
+# expression parser, so this is a separate path from the reads -- it emits the
+# SETOX in front of the STORE, and the arming has to happen after the right side
+# is loaded or that load's own access consumes the one-shot.
 cat > "$D/arrwr.csp" <<'EOF'
 #variable A[3] = 0
 #variable I = 2
 A[I] = 99 ? 1
 EOF
-./csp -n -c 0 "$D/arrwr.csp" >/dev/null 2>&1
-ck "a runtime subscript WRITE is refused, not a crash" "1" "$?"
+got=$(./csp -n -P "$D/arrwr.csp" 2>&1 | sed -n "/SETOX/p")
+ck "a runtime subscript write emits a bounds-checked SETOX" \
+   "{instr,5,'SETOX',[r1,{len,3},{stride,1}]}." "$got"
 
 # OP_SETO and OP_SETOX mean nearly the same thing and their payloads OVERLAP, so
 # emitting one through the other's arm compiles fine and produces a plausible

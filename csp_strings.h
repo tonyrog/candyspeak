@@ -271,6 +271,10 @@ extern rochar s_LB[2] RODATA;
 #define ros_LB ((rostring_t) s_LB)
 extern rochar s_RB[2] RODATA;
 #define ros_RB ((rostring_t) s_RB)
+extern rochar s_LBRACE[2] RODATA;
+#define ros_LBRACE ((rostring_t) s_LBRACE)
+extern rochar s_RBRACE[2] RODATA;
+#define ros_RBRACE ((rostring_t) s_RBRACE)
 extern rochar s_MOV[4] RODATA;
 #define ros_MOV ((rostring_t) s_MOV)
 extern rochar s_ADD[4] RODATA;

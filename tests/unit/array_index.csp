@@ -31,3 +31,17 @@ I = 1 ? 1
 J = 2 ? 1
 x = A[I] ? 1
 y = A[J] ? 1
+
+// A runtime subscript on the LEFT. The left side of a rule body is matched by
+// pat_body, not by the expression parser, so this is a separate path from the
+// reads above -- and it used to be no path at all. Its own array, or the writes
+// would land on the elements the reads above are checking.
+// K is set in the DECLARATION, not by a rule: a rule would leave it 0 for the
+// first cycles and element 0 would collect the write before K settled.
+#variable B[3] = 0
+#variable K = 2
+#variable w = 0
+#variable v = 0
+B[K] = 77 ? 1
+w = B[2] ? 1     // the element K names got it
+v = B[0] ? 1     // and nothing else did

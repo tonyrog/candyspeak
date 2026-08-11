@@ -1,16 +1,25 @@
 // Circuit Playground Express -- a ball rolling in the NeoPixel ring.
 //
-// The ring is a circular track. The board's tilt (X, Y) gives a gravity vector
-// in the board plane; the ball feels the part of it that lies ALONG the track
-// at its current angle, so it accelerates downhill and swings past the bottom
-// like a marble in a bowl. Shaking (Z) pumps energy into it, which shows as
-// brightness and bleeds away over a second or two.
+// THE ARRAY VERSION OF cpx_ball.csp, AND THE ACCEPTANCE TEST FOR ARRAYS.
+// It does NOT compile yet. Three things are missing, and they are exactly the
+// three steps left on the array work (see TODO "Array notation"):
+//
+//   1. #constant CT[10] = { ... }   -- constant arrays with an init list
+//   2. P[<expr>] = <rhs>            -- a runtime subscript on the LEFT
+//   3. #analog P[10] out 9:0..9     -- device arrays over a pin range
+//
+// Runtime-index READS already work, so rule 1's tangent lookup is the part that
+// compiles today. Nothing here needs a broadcast (`P = 0`): see "draw" below.
+//
+// 50 rules become 7, and the physics gets easier to read rather than harder --
+// the coefficient table is visibly a circle, which is how the wrong pair at
+// index 0 was found in the unrolled version.
 //
 //   port 0 : GPIO by Arduino pin number, A8/A9 analog sensors
 //   port 8 : accelerometer (pin 0/1/2 = X/Y/Z), ~0..1023, 512 = flat
 //   port 9 : NeoPixel ring (pin = pixel index 0..9), 16-bit RGB565
 //
-// Run:  ./csp -n -C -O rom.c examples/cpx_ball.csp && make -f Makefile.play
+// Run:  ./csp -n -C -O rom.c examples/cpx_ball_array.csp && make -f Makefile.play
 
 #digital BtnA   in pulldown 0:4      // button A (pressed = 1)
 #digital BtnB   in pulldown 0:5      // button B
@@ -24,13 +33,15 @@
 #analog AccY:10  in 8:1
 #analog AccZ:10  in 8:2
 
-#analog P[10]:16 out 9:0-9
+// (3) The whole ring in one declaration. Ten elements, ten consecutive pins.
+// Each element carries its OWN pin: a pin lives in the per-element storage,
+// seeded from the declaration, which is what makes one declaration line able to
+// describe ten different outputs.
+#analog P[10]:16 out 9:0..9
 
 // 50 Hz. Every rule below is gated on this, so one timeout is one physics step
 // and the whole state advances together.
-#timer Tick 20
-
-#states CALCULATE UPDATE
+#timer Tick 20 = 1
 
 // --- the ball -------------------------------------------------------------
 // TRACK is the way round in position units; PIXEL is how many of them one
@@ -39,9 +50,6 @@
 // rolling would be a dead zone instead of a crawl.
 #constant TRACK = 10000
 #constant PIXEL = 1000
-
-#constant Cos[10] = {100, 81, 31, -31, -81,-100, -81, -31,  31,  81}
-#constant Sin[10] = {0,   59, 95,  95,  59,   0, -59, -95, -95, -59}
 
 // Gravity does not care what the ball weighs -- a = F/m and F = m*g, so the
 // mass cancels and every ball rolls downhill the same. It only shows up where
@@ -54,6 +62,13 @@
 #constant EMAX = 1000         // energy ceiling
 #constant EFADE = 12          // energy lost per tick (~1.7 s from full)
 #constant SHAKE = 120         // |Z - flat| that counts as a shake
+
+// (1) Pixel k sits at 36*k degrees; the track's tangent there is (-cos, sin).
+// In hundredths, so the divide by 100 below keeps it in integers. As a table
+// the shape is checkable at a glance -- CT is -cos, ST is sin, and both have to
+// come back to where they started after ten steps.
+#constant CT[10] = { -100, -81, -31,  31,  81, 100,  81,  31, -31, -81 }
+#constant ST[10] = {    0,  59,  95,  95,  59,   0, -59, -95, -95, -59 }
 
 #variable Acc = 0             // gravity along the track, this tick
 #variable Vel = 0             // position units per tick, signed
@@ -73,45 +88,37 @@
 #field  Dg Dim[5..10]
 #field  Dr Dim[11..15]
 
-#in INIT
-    State = CALCULATE
-    Tick = 1
-#end
+Tick = 1 ? timeout(Tick)
 
-#in CALCULATE
 // --- gravity along the track ----------------------------------------------
-// Pixel k sits at 36*k degrees. The track's tangent there is (cos, -sin), so
-// the downhill push is (gx*cos - gy*sin). Both are scaled by 100 and divided
-// out again, which keeps it in integers without losing the shape.
-//
-// One rule per pixel because the coefficients depend on where the ball IS, and
-// a table indexed at runtime is not something the language can say yet. If the
-// ball rolls the wrong way round, negate this whole column.
-#local LAcc = (Cos[Idx]*(AccX-512) + Sin[Idx]*(AccY-512))/100
-Acc = LAcc
+// The ball feels the part of the tilt vector that lies ALONG the track at its
+// current angle, so it accelerates downhill and swings past the bottom like a
+// marble in a bowl. Ten rules in the unrolled version; one here, because the
+// coefficients are now data indexed by where the ball IS.
+// If the ball rolls the wrong way round, negate CT and ST.
+Acc = (CT[Idx]*(512-AccX) + ST[Idx]*(AccY-512)) / 100 ? timeout(Tick)
 
 // --- integrate ------------------------------------------------------------
 // a -> v -> x, one tick apart each, which is what semi-implicit Euler does
 // anyway. Reads see the previous commit, so the lag is the integration.
 // Clipped so one tick can never carry the ball more than a fifth of the way
-// round -- past that the tangent it was pushed along is the wrong one.
-#local LVel = clip(Vel + (LAcc*GAIN)/1000 - (Vel*DRAG)/1000, -2000, 2000)
-Vel = LVel
+// round -- past that the tangent it was pushed along is the wrong one. The
+// draw rules below depend on this bound too.
+Vel = clip(Vel + (Acc*GAIN)/1000 - (Vel*DRAG)/1000, -2000, 2000) ? timeout(Tick)
 
 // +TRACK before the modulo: % keeps the sign of its left operand, so rolling
 // backwards past zero would otherwise land on a negative pixel.
-#local LPos = (Pos + LVel + TRACK) % TRACK
-Pos = LPos
-Idx = LPos / PIXEL
+Pos = (Pos + Vel + TRACK) % TRACK ? timeout(Tick)
+Idx = Pos / PIXEL ? timeout(Tick)
 
 // --- energy ---------------------------------------------------------------
 // Bleeds away every tick; a shake tops it up. Both rules write Energy and the
 // shake one is second, so on a tick where you shake it wins -- last writer at
 // commit. Squared because a hard shake should be worth much more than a soft
 // one, over MASS because a heavier ball takes more to excite.
-#local Sh = abs(AccZ-512)
-#local E  = clip(Energy - EFADE, 0, EMAX)
-Energy = clip(E + (Sh*Sh)/MASS, 0, EMAX) ? Sh > SHAKE
+Sh = abs(AccZ-512) ? timeout(Tick)
+Energy = clip(Energy - EFADE, 0, EMAX) ? timeout(Tick)
+Energy = clip(Energy + (Sh*Sh)/MASS, 0, EMAX) ? Sh > SHAKE && timeout(Tick)
 
 // --- colour ---------------------------------------------------------------
 // RGB565: red 5 bits at 11, green 6 at 5, blue 5 at 0. Cold and blue at rest,
@@ -123,29 +130,34 @@ Energy = clip(E + (Sh*Sh)/MASS, 0, EMAX) ? Sh > SHAKE
 // the channels near full is what leaves the ring readable after that divide --
 // what carries the energy is then the COLOUR going blue -> white, more than the
 // absolute level, which is the right way round for something glowing anyway.
-R = (Energy*31)/EMAX
-G = (Energy*63)/EMAX
-B = 18 + (Energy*13)/EMAX
-Cr = R
-Cg = G
-Cb = B
-Dr = R / 3
-Dg = G / 3
-Db = B / 3
+R = (Energy*31)/EMAX ? timeout(Tick)
+G = (Energy*63)/EMAX ? timeout(Tick)
+B = 18 + (Energy*13)/EMAX ? timeout(Tick)
 
-State = UPDATE ? timeout(Tick)
-#end // CALCULATE
+Cr = R ? timeout(Tick)
+Cg = G ? timeout(Tick)
+Cb = B ? timeout(Tick)
 
-#in UPDATE
+Dr = (R/3) ? timeout(Tick)
+Dg = (G/3) ? timeout(Tick)
+Db = (B/3) ? timeout(Tick)
+
 // --- draw -----------------------------------------------------------------
-// The ball lights its own pixel and glows faintly on both sides, so it reads
-// as something with size rolling past rather than a dot hopping.
-
-P = 0                // clear all elements
-P[(Idx+1)%10] = Dim  // neighbour is dim
-P[Idx] = Col         // this is us with color Col
-P[(Idx-1)%10] = Dim  // neighbour is dim
-
-State = CALCULATE
-Tick = 1
-#end // UPDATE
+// (2) The ball lights its own pixel and glows faintly on both sides, so it
+// reads as something with size rolling past rather than a dot hopping.
+//
+// NO BROADCAST NEEDED, and no thirty-rule clear: only the pixels the ball has
+// just VACATED have to go dark, and the clip on Vel bounds how far that can be.
+// At most two pixels per tick, so last tick's lit set {Idx-1, Idx, Idx+1} sits
+// within three of the new Idx -- clearing +/-2 and +/-3 covers every pixel that
+// can have been left behind, and nothing further out was ever lit.
+//
+// +10 before the modulo for the same reason Pos does it: % keeps the sign of
+// its left operand.
+P[(Idx + 8) % 10] = 0   ? timeout(Tick)
+P[(Idx + 7) % 10] = 0   ? timeout(Tick)
+P[(Idx + 2) % 10] = 0   ? timeout(Tick)
+P[(Idx + 3) % 10] = 0   ? timeout(Tick)
+P[(Idx + 9) % 10] = Dim ? timeout(Tick)
+P[(Idx + 1) % 10] = Dim ? timeout(Tick)
+P[Idx]            = Col ? timeout(Tick)
