@@ -18,14 +18,14 @@
 //
 // Run:  ./csp -n -C -O rom.c examples/cpx_ball_array.csp && make -f Makefile.play
 
-#digital BtnA   in pulldown 0:4      // button A (pressed = 1)
-#digital BtnB   in pulldown 0:5      // button B
-#digital Switch in pullup   0:7      // slide switch
-#digital Led    out         0:13     // onboard red LED
+//#digital BtnA   in pulldown 0:4      // button A (pressed = 1)
+//#digital BtnB   in pulldown 0:5      // button B
+//#digital Switch in pullup   0:7      // slide switch
+//#digital Led    out         0:13     // onboard red LED
 
 // --- analog sensors ---
-#analog Light:10 in 0:8      // light sensor  (A8)
-#analog Temp:10  in 0:9      // thermistor    (A9)
+//#analog Light:10 in 0:8      // light sensor  (A8)
+//#analog Temp:10  in 0:9      // thermistor    (A9)
 #analog AccX:10  in 8:0
 #analog AccY:10  in 8:1
 #analog AccZ:10  in 8:2
@@ -34,14 +34,12 @@
 // Each element carries its OWN pin: a pin lives in the per-element storage,
 // seeded from the declaration, which is what makes one declaration line able to
 // describe ten different outputs.
-// `unsigned` on purpose: a pixel is a packed RGB565 WORD, not a quantity, and
-// red at full sets bit 15. An #analog is signed by default -- right for a
-// sensor that swings both ways, wrong for a bit pattern.
-#analog P[10]:16 out unsigned 9:0..9
+#analog P[10]:16 out 9:0..9
 
 // 50 Hz. Every rule below is gated on this, so one timeout is one physics step
 // and the whole state advances together.
-#timer Tick 20 = 1
+#timer TCalc 10
+#timer TDraw 20
 
 // --- the ball -------------------------------------------------------------
 // TRACK is the way round in position units; PIXEL is how many of them one
@@ -57,31 +55,24 @@
 // to light up. Raise it for a sluggish ball, lower it for a jumpy one.
 #constant MASS = 100          // grams
 
-// Doubled with the signed reading: the sensor is configured for +/-2 g, so 1 g
-// of tilt now swings half as many counts as when the scale saturated at 1 g.
-#constant GAIN = 24           // tilt -> acceleration, /1000
+#constant GAIN = 12           // tilt -> acceleration, /1000
 #constant DRAG = 30           // rolling friction, /1000 of speed per tick
 #constant EMAX = 1000         // energy ceiling
-#constant EFADE = 12          // energy lost per tick (~1.7 s from full)
+#constant EFADE = 6           // energy lost per tick (~1.7 s from full)
 #constant SHAKE = 120         // |Z - flat| that counts as a shake
 
-// Pixel k sits at 36*k degrees; the track's tangent there is (cos, sin).
+// Pixel k sits at 36*k degrees; the track's tangent there is (-cos, sin).
 // In hundredths, so the divide by 100 below keeps it in integers. As a table
-// the shape is checkable at a glance -- CT is cos, ST is sin, and both have to
+// the shape is checkable at a glance -- CT is -cos, ST is sin, and both have to
 // come back to where they started after ten steps.
-#constant CT[10] = {  100,  81,  31, -31, -81, -100, -81, -31,  31,  81 }
-#constant ST[10] = {    0,  59,  95,  95,  59,    0, -59, -95, -95, -59 }
+#constant CT[10] = {  100,  81,  31,  -31,-81,-100, -81, -31,  31,  81 }
+#constant ST[10] = {    0,  59,  95,  95,  59,   0, -59, -95, -95, -59 }
 
-// 1 g in the reading's own units. An #analog is SIGNED by default, so 0 is
-// level and the sensor's full +/-2 g spans +/-2^(res-1) -- at :10 that puts 1 g
-// at a quarter of full scale. Nothing here subtracts a midpoint any more.
 #constant G1 = 256
-
 #variable Acc = 0             // gravity along the track, this tick
 #variable Vel = 0             // position units per tick, signed
 #variable Pos = 0             // 0..TRACK-1
 #variable Idx = 0             // pixel under the ball, 0..9
-#variable Sh = 0              // |Z - flat|, how hard it is being shaken
 #variable Energy = 0
 #variable R = 0
 #variable G = 0
@@ -95,7 +86,20 @@
 #field  Dg Dim[5..10]
 #field  Dr Dim[11..15]
 
-Tick = 1 ? timeout(Tick)
+#states CALCULATE DRAW WAIT
+
+#in INIT
+    State = WAIT
+    TCalc = 1
+    TDraw = 1
+#end
+
+#in WAIT
+    State = CALCULATE ? timeout(TCalc)
+    State = DRAW      ? timeout(TDraw)
+#end
+
+#in CALCULATE
 
 // --- gravity along the track ----------------------------------------------
 // The ball feels the part of the tilt vector that lies ALONG the track at its
@@ -103,7 +107,7 @@ Tick = 1 ? timeout(Tick)
 // marble in a bowl. Ten rules in the unrolled version; one here, because the
 // coefficients are now data indexed by where the ball IS.
 // If the ball rolls the wrong way round, negate CT and ST.
-Acc = (CT[Idx]*AccX + ST[Idx]*AccY) / 100 ? timeout(Tick)
+Acc = (CT[Idx]*AccX + ST[Idx]*AccY) / 100
 
 // --- integrate ------------------------------------------------------------
 // a -> v -> x, one tick apart each, which is what semi-implicit Euler does
@@ -111,21 +115,28 @@ Acc = (CT[Idx]*AccX + ST[Idx]*AccY) / 100 ? timeout(Tick)
 // Clipped so one tick can never carry the ball more than a fifth of the way
 // round -- past that the tangent it was pushed along is the wrong one. The
 // draw rules below depend on this bound too.
-Vel = clip(Vel + (Acc*GAIN)/1000 - (Vel*DRAG)/1000, -2000, 2000) ? timeout(Tick)
+Vel = clip(Vel + (Acc*GAIN)/1000 - (Vel*DRAG)/1000, -2000, 2000)
 
 // +TRACK before the modulo: % keeps the sign of its left operand, so rolling
 // backwards past zero would otherwise land on a negative pixel.
-Pos = (Pos + Vel + TRACK) % TRACK ? timeout(Tick)
-Idx = Pos / PIXEL ? timeout(Tick)
+Pos = (Pos + Vel + TRACK) % TRACK
+Idx = Pos / PIXEL
 
 // --- energy ---------------------------------------------------------------
 // Bleeds away every tick; a shake tops it up. Both rules write Energy and the
 // shake one is second, so on a tick where you shake it wins -- last writer at
 // commit. Squared because a hard shake should be worth much more than a soft
 // one, over MASS because a heavier ball takes more to excite.
-Sh = abs(AccZ - G1) ? timeout(Tick)
-Energy = clip(Energy - EFADE, 0, EMAX) ? timeout(Tick)
-Energy = clip(Energy + (Sh*Sh)/MASS, 0, EMAX) ? Sh > SHAKE && timeout(Tick)
+
+#local Sh = abs(AccZ - G1)   // |Z - flat|, how hard it is being shaken
+#local En = clip(Energy - EFADE, 0, EMAX)
+
+// TWO rules, and the first one has NO guard. En only computes the faded value;
+// something has to STORE it, or a cycle without a shake leaves Energy exactly
+// where it was -- and since a shake adds more than EFADE takes away, one shake
+// pins it at EMAX for good.
+Energy = En
+Energy = clip(En + (Sh*Sh)/MASS, 0, EMAX) ? Sh > SHAKE
 
 // --- colour ---------------------------------------------------------------
 // RGB565: red 5 bits at 11, green 6 at 5, blue 5 at 0. Cold and blue at rest,
@@ -137,18 +148,23 @@ Energy = clip(Energy + (Sh*Sh)/MASS, 0, EMAX) ? Sh > SHAKE && timeout(Tick)
 // the channels near full is what leaves the ring readable after that divide --
 // what carries the energy is then the COLOUR going blue -> white, more than the
 // absolute level, which is the right way round for something glowing anyway.
-R = (Energy*31)/EMAX ? timeout(Tick)
-G = (Energy*63)/EMAX ? timeout(Tick)
-B = 18 + (Energy*13)/EMAX ? timeout(Tick)
+R = (Energy*31)/EMAX
+G = (Energy*63)/EMAX
+B = 18 + (Energy*13)/EMAX
 
-Cr = R ? timeout(Tick)
-Cg = G ? timeout(Tick)
-Cb = B ? timeout(Tick)
+Cr = R/3
+Cg = G/3
+Cb = B/3
 
-Dr = (R/3) ? timeout(Tick)
-Dg = (G/3) ? timeout(Tick)
-Db = (B/3) ? timeout(Tick)
+Dr = (R/10)
+Dg = (G/10)
+Db = (B/10)
 
+State = WAIT
+State = DRAW ? timeout(TDraw)
+#end
+
+#in DRAW
 // --- draw -----------------------------------------------------------------
 // The ball lights its own pixel and glows faintly on both sides, so it
 // reads as something with size rolling past rather than a dot hopping.
@@ -161,10 +177,19 @@ Db = (B/3) ? timeout(Tick)
 //
 // +10 before the modulo for the same reason Pos does it: % keeps the sign of
 // its left operand.
-P[(Idx + 8) % 10] = 0   ? timeout(Tick)
-P[(Idx + 7) % 10] = 0   ? timeout(Tick)
-P[(Idx + 2) % 10] = 0   ? timeout(Tick)
-P[(Idx + 3) % 10] = 0   ? timeout(Tick)
-P[(Idx + 9) % 10] = Dim ? timeout(Tick)
-P[(Idx + 1) % 10] = Dim ? timeout(Tick)
-P[Idx]            = Col ? timeout(Tick)
+P[(Idx + 8) % 10] = 0
+P[(Idx + 7) % 10] = 0
+P[(Idx + 2) % 10] = 0
+P[(Idx + 3) % 10] = 0
+P[(Idx + 9) % 10] = Dim
+P[(Idx + 1) % 10] = Dim
+P[Idx]            = Col
+
+State = WAIT
+State = CALCULATE ? timeout(TCalc)
+#end
+
+#in WAIT DRAW CALCULATE
+    TCalc = 1 ? timeout(TCalc)
+    TDraw = 1 ? timeout(TDraw)    
+#end

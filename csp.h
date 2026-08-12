@@ -457,6 +457,15 @@ typedef enum {
     V_FIELD    = 11,    
 } vtype_t;
 
+// A flag on a CONFIG vtype (what decl_cfg_vt returns), above TYPE_BITS so the
+// switches that mask still see the plain type. Everything that indexes a table
+// by a cfg vtype must mask -- see CSP_PART_LAY.
+//
+// V_ANALOG says "this slot is laid out as an analog leaf"; it says nothing about
+// how to READ the 16-bit value in it. The declaration's own vt does, and it used
+// to be discarded here: `#analog X signed` parsed and meant nothing.
+#define CFG_SIGNED 0x10
+
 // create argument type bitmask
 #define MAKE_TYPE0()            0
 #define MAKE_TYPE1(t0)          (t0)
@@ -607,6 +616,17 @@ typedef struct {
 			   // is what makes `? F.rx` line up. Lives one cycle.
 #define BUF_F_TX     0x08  // a rule asked for a send (F.tx = 1), regardless of
 			   // whether any field changed -- cyclic PDO
+#define BUF_F_LOCAL  0x10  // a #local: SINGLE-BUFFERED. csp_slot forces dir=DIN
+			   // for it, so a read in the same cycle sees the write
+			   // -- which is the whole point of a #local, and cannot
+			   // be had by pointing two views at one place because
+			   // the DIN/DOUT split is a whole-heap offset.
+			   //
+			   // On the BUFFER, not on csp_view_t: the view table is
+			   // the biggest per-program table, and widening its
+			   // flags field would grow every leaf. csp_slot already
+			   // loads this buf entry to read .hp, so the test is
+			   // free of an extra memory access.
 
 #if defined(USE_FIXPOINT) && (USE_FIXPOINT == 1)
 #include "csp_fixpoint.h"
@@ -773,6 +793,7 @@ typedef enum {
     D_IN,       // 'in'
     D_CONSTANT, // 'constant'
     D_VARIABLE, // 'variable'
+    D_LOCAL,    // 'local'  -- a named formula, see DECL_HEADER.local
     D_DIGITAL,  // 'digital'
     D_ANALOG,   // 'analog'
     D_TIMER,    // 'timer'
@@ -1193,10 +1214,24 @@ typedef enum {
 // It is a NAMED field, not a mask into a `_reserved`: a bit with a meaning
 // should read as `d.cont` at every use, and the ROM emitter should write
 // `.cont=` so the arm says what it carries. One spare bit is left.
+// `local`: a #local -- a named FORMULA, not a variable you can assign.
+//
+// It is a DECL_VARIABLE with this bit rather than a declaration type of its own,
+// for safety as much as for space: a new type would need a new arm in every
+// switch over decl types (setup_decl, the ROM emitter, both listings, estimate),
+// and a missed arm is the bug this project keeps meeting. As a flag, all the
+// existing variable handling applies unchanged and only what cares looks.
+//
+// What it changes: the formula is evaluated once per cycle by a prologue before
+// the rules, its leaf is copied DOUT->DIN right after (so a read in the SAME
+// cycle sees it -- see csp_local_commit), it never reaches /state or EEPROM, and
+// assigning to it is an error.
+//
+// This was the last spare bit in the header. Nothing free after it.
 #define DECL_HEADER \
     decl_t type:CSP_DECL_TYPE_BITS; \
     unsigned cont:1; \
-    unsigned _reserved:1; \
+    unsigned local:1; \
     pindir_t dir:DIR_BITS; \
     unsigned name:NAMEPOS_BITS
 
@@ -1405,6 +1440,10 @@ typedef enum {
     // where there is a line to blame; this one is raised mid-rule, so it is
     // sticky (csp_set_error keeps the first) rather than reported per cycle.
     ERR_INDEX_RANGE,
+    // A rule tried to assign to a #local. The name resolves fine -- it is what
+    // it MEANS that is wrong -- so this cannot be reported as an unknown
+    // variable without sending the reader looking for a typo.
+    ERR_ASSIGN_TO_LOCAL,
 } csp_err_t;
 
 // parser state, save state before parse
@@ -1522,6 +1561,11 @@ typedef struct {
     // cannot mean anything else.
     uint8_t  arr_reg;            // register holding the element index
     uint16_t arr_len;            // element count; 0 = no subscript pending
+    // The #local whose OWN formula is being compiled, +1 so a zeroed struct
+    // means "none" (declaration index 0 is a real one). coerce_assign refuses an
+    // assignment to any other local; this is what lets the declaration emit the
+    // single assignment that defines it.
+    index_t  local_def;
 } csp_cstate_t;
 
 // Everything that only matters while a CYCLE runs: the evaluator's registers,
@@ -2015,6 +2059,13 @@ typedef struct _csp_rt_t
     set_group_t* dis_ip;       // ps.nn bits, or NULL when nothing is disabled
     index_t  n_rule_no;        // rules seen by the last numbering walk
     uint32_t cycle;
+    // Refresh rate, measured not estimated: cycles completed per second over the
+    // last full second. In sequential mode this is the number that matters --
+    // every rule runs every cycle, so it says directly how much headroom a
+    // program has left. Costs one compare per cycle and ten bytes.
+    uint32_t hz_t0;            // ms at the start of the window
+    uint32_t hz_c0;            // cycle count at the start of the window
+    uint16_t hz;               // cycles/s over the last completed window
 #if defined(USE_STATISTICS) && (USE_STATISTICS==1)
     uint32_t num_eval_rule;    
     uint32_t num_eval0;

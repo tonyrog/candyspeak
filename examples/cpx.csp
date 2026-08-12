@@ -46,7 +46,7 @@ Col = 0x07E0 ? BtnA & !BtnB     // green
 Col = 0x001F ? BtnB & !BtnA     // blue
 Col = 0xFD20 ? !BtnA & !BtnB    // amber (idle)
 
-// tilt ball: AccX is 0..1023 (512 = flat) -> ring position 0..9,
+// tilt ball: AccX is -512..511 (0 = flat) -> ring position 0..9,
 // then light exactly that pixel with Col, the rest off.
 Idx = AccX / 103
 

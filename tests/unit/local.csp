@@ -1,0 +1,32 @@
+// #local -- a named FORMULA, evaluated once per cycle before the rules below it.
+//
+// The point is that a local is readable in the SAME cycle it is written, unlike
+// every other leaf: its storage is single-buffered (BUF_F_LOCAL), so csp_slot
+// resolves both directions to the same bytes. A plain #variable in its place
+// would lag one cycle per step, and a chain of three would lag three.
+
+#variable a = 7
+#variable b = 3
+
+// Reads ordinary variables. Both operands see the previous commit, which is the
+// normal rule -- it is the LOCAL that is immediate, not its inputs.
+#local sum = a + b
+
+// A local reading another local, in the same cycle. This is the case a variable
+// cannot express without a cycle of delay per step.
+#local twice = sum * 2
+#local plus1 = twice + 1
+
+// :res truncates at the binding point, so a local is also a place to narrow a
+// value once instead of at every use.
+#local low:8 = 300
+
+#variable x = 0
+#variable y = 0
+#variable z = 0
+#variable w = 0
+
+x = sum ? 1
+y = twice ? 1
+z = plus1 ? 1
+w = low ? 1

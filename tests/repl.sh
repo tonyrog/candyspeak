@@ -658,6 +658,55 @@ got=$(./csp -n -P "$D/arrwr.csp" 2>&1 | sed -n "/SETOX/p")
 ck "a runtime subscript write emits a bounds-checked SETOX" \
    "{instr,5,'SETOX',[r1,{len,3},{stride,1}]}." "$got"
 
+# A rule that uses a subscript has to LIST with it. Without this an array
+# program pasted back out of a board came home reading element 0 everywhere:
+# the runtime index vanished, and a constant one folded to a continuation, which
+# has no name and printed nothing at all.
+cat > "$D/arrls.csp" <<'EOF'
+#variable A[3] = 0
+#variable I = 0
+#variable x = 0
+x = A[I] ? 1
+x = A[2] ? 1
+A[I] = 5 ? 1
+EOF
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/arr12.db" --no-eeprom "$D/arrls.csp" |
+	  grep -E '^(x=|A\[)')
+ck "rules list their subscripts back" \
+   'x=A[I] ? 1  // 1 R
+x=A[2] ? 1  // 2 R
+A[I]=5 ? 1  // 3 R' "$got"
+
+# --- device arrays ----------------------------------------------------------
+# One declaration line, one pin per element. Possible at all because the pin
+# lives in the per-element STORAGE, seeded from the declaration -- so ten
+# elements sharing one declaration still drive ten different outputs.
+cat > "$D/arrd.csp" <<'EOF'
+#analog P[10]:16 out 9:0..9
+#digital D[5] in 0:1..3,7,9
+EOF
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/arr11.db" --no-eeprom "$D/arrd.csp" |
+	  sed -n '/^#analog\|^#digital/p')
+ck "device arrays list their pin spec back" \
+   '#analog P[10]:16 out 9:0..9  // R
+#digital D[5] in 0:1..3,7,9  // R' "$got"
+
+# A length and a pin list that disagree is a typo. Silently padding would leave
+# the extra elements on pin 0, which is a real pin on every board here.
+cat > "$D/arrdbad.csp" <<'EOF'
+#analog P[10]:16 out 9:0..3
+EOF
+./csp -n -c 0 "$D/arrdbad.csp" >/dev/null 2>&1
+ck "too few pins for the declared length is refused" "1" "$?"
+
+# The flagship: the array rewrite of cpx_ball, which is what the whole feature
+# was for. 50 rules become 7 and it has to still compile as a ROM.
+if build_rom examples/cpx_ball_array.csp "$D/ball_fw"; then
+    ck "cpx_ball_array builds and its ROM loads" "0" "0"
+else
+    echo "  FAIL cpx_ball_array did not build"; fail=$((fail+1))
+fi
+
 # OP_SETO and OP_SETOX mean nearly the same thing and their payloads OVERLAP, so
 # emitting one through the other's arm compiles fine and produces a plausible
 # wrong word. That is the shape of all three CRC mismatches this project has had.
@@ -666,6 +715,44 @@ if gcc -I. -O2 -o "$D/instr_layout" tests/instr_layout.c >/dev/null 2>&1; then
     ck "SETO/SETOX formats stay distinct" "ok, distinct" "$("$D/instr_layout")"
 else
     echo "  FAIL instr_layout did not build"; fail=$((fail+1))
+fi
+
+# --- #local -----------------------------------------------------------------
+# A #local BINDS a formula. The mistake it invites is assigning to it later, and
+# "unknown variable" would be a lie -- the name resolves fine, it is what it
+# MEANS that is wrong.
+echo "local:"
+got=$(printf '#local q = 1\nq = 5\n/quit\n' | repl ./csp "$D/loc1.db" --no-eeprom |
+	  sed -n '/^Error/p')
+ck "assigning to a #local is refused by name" \
+   'Error: cannot assign to a #local -- it binds a formula' "$got"
+
+# It lists as #local, not as #variable: pasted back as a variable, every step of
+# a chain would lag a cycle instead of resolving in one.
+cat > "$D/loc.csp" <<'EOF'
+#variable a = 7
+#local sum = a + 1
+EOF
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/loc2.db" --no-eeprom "$D/loc.csp" |
+	  grep -E '^#local')
+ck "a #local lists as a #local" '#local sum:32 integer  // R' "$got"
+
+# Baked into a ROM and loaded back. `local` is REAL DATA -- it decides whether a
+# leaf is single-buffered -- so an emitter that dropped it would both fail the
+# decl-section CRC and, if it somehow loaded, turn every local into an ordinary
+# variable that lags a cycle. Checking the bit is in the generated C is not
+# enough: the image has to load and the chain has to still resolve in one cycle.
+if build_rom tests/unit/local.csp "$D/loc_fw"; then
+    # `sum` after ONE cycle: 10, not 0. That is the single-buffering surviving
+    # the round trip -- an ordinary variable would still read its init here,
+    # because a rule's write is not visible until the commit.
+    got=$(printf '/list\n/state\n/quit\n' | repl "$D/loc_fw" "$D/loc3.db" --no-eeprom |
+	      grep -E '^#local sum|^sum ')
+    ck "a #local survives a ROM round trip" \
+       '#local sum:32 integer  // F
+sum                                   = 10' "$got"
+else
+    echo "  FAIL #local ROM did not build"; fail=$((fail+1))
 fi
 
 echo "================================================"

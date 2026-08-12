@@ -309,6 +309,45 @@ static void print_decl_and_name(csp_rt_t* st, decl_t d, sindex_t mod, sindex_t n
     list_name(st, mod, name);
 }
 
+// `[N]` after the name of an array's head. Nothing for a plain declaration.
+static void list_array_len(csp_rt_t* st, int i)
+{
+    uint16_t alen = csp_array_len(st, i);
+    if (alen > 1) {
+	csp_print_char('[');
+	csp_print_uint(alen);
+	csp_print_char(']');
+    }
+}
+
+// `port:pin` for a device, or the whole spec for a device ARRAY -- consecutive
+// elements collapse back into `a..b` and a jump starts a new group, so
+// `9:0..9` and `0:1..5,7,9` come out as they went in. Each element holds its own
+// pin, so this reads them rather than assuming anything about the order.
+static void list_pin_spec(csp_rt_t* st, int i, int is_digital)
+{
+    uint16_t alen = csp_array_len(st, i);
+    unsigned start, last;
+    uint16_t k;
+
+    csp_print_uint(is_digital ? decl(st,i,di.port) : decl(st,i,an.port));
+    csp_print_char(':');
+    start = last = is_digital ? decl(st,i,di.pin) : decl(st,i,an.pin);
+    csp_print_uint(start);
+    for (k = 1; k < alen; k++) {
+	unsigned p = is_digital ? decl(st,i+k,di.pin) : decl(st,i+k,an.pin);
+	if (p == last + 1) {
+	    last = p;
+	    continue;
+	}
+	if (last != start) { csp_print_lit(".."); csp_print_uint(last); }
+	csp_print_char(',');
+	csp_print_uint(p);
+	start = last = p;
+    }
+    if (last != start) { csp_print_lit(".."); csp_print_uint(last); }
+}
+
 // Two spaces per nesting level. A module's members and its rules share it, so a
 // block reads as the unit it is instead of a flat list with a "Mod: " prefix on
 // half the lines -- and the prefix was not source you could paste back.
@@ -781,7 +820,19 @@ match:
 	    // and the elements above it are gone. The tail elements themselves
 	    // are skipped further up -- they are declarations, not source lines.
 	    uint16_t alen = csp_array_len(st, i);
-	    print_decl_and_name(st, d.type, cur_mod, npos);
+	    // A #local lists as `#local`, and its FORMULA lists as the rule it
+	    // compiled to -- which is where the formula actually lives. Printing
+	    // `#variable` would paste back a variable, and the rule below would
+	    // then be a plain assignment: same values, one cycle later at every
+	    // step of a chain.
+	    if (d.local) {
+		csp_print_char('#');
+		csp_print_rostr(ros_local);
+		csp_print_blank();
+		list_name(st, cur_mod, npos);
+	    }
+	    else
+		print_decl_and_name(st, d.type, cur_mod, npos);
 	    if (alen > 1) {
 		csp_print_char('[');
 		csp_print_uint(alen);
@@ -791,9 +842,17 @@ match:
 	    csp_print_uint(GET_RES(d.res));
 	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_vtype(d.vt));
+	    // A #local has no init value to show -- what defines it is its
+	    // FORMULA, and that lists as the rule it compiled to, further down.
+	    // Printing `= 0` here would be a lie: the 0 is just what the leaf
+	    // starts at, and pasting it back would bind the local to the constant
+	    // 0 and then refuse the real formula. See TODO: the listing should put
+	    // the formula on this line and suppress that rule.
+	    if (d.local)
+		;
 	    // list the declaration's init value, not the live state (like #constant
 	    // below); reading a value here would touch leaf storage /list must not.
-	    if (!d.bound) {
+	    else if (!d.bound) {
 		csp_print_lit(" = ");
 		list_value(st, d.vt, d.va.init);
 	    }
@@ -863,6 +922,7 @@ match:
 	    break;
 	case DECL_DIGITAL:
 	    print_decl_and_name(st, d.type, cur_mod, npos);
+	    list_array_len(st, i);
 	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
 	    if (d.di.pullup) {
@@ -874,13 +934,12 @@ match:
 		csp_print_rostr(ros_pulldown);
 	    }
 	    csp_print_blank();  // port:pin (needed to mod/rewire)
-	    csp_print_uint(d.di.port);
-	    csp_print_char(':');
-	    csp_print_uint(d.di.pin);
+	    list_pin_spec(st, i, 1);
 	    list_eol();
 	    break;
 	case DECL_ANALOG:
-	    print_decl_and_name(st, d.type, cur_mod, npos);	    
+	    print_decl_and_name(st, d.type, cur_mod, npos);
+	    list_array_len(st, i);
 	    csp_print_char(':');              // :width (res stored as bits-1)
 	    csp_print_uint(GET_RES(d.an.res));
 	    csp_print_blank();
@@ -890,9 +949,7 @@ match:
 		csp_print_rostr(ros_pwm);
 	    }
 	    csp_print_blank();              // port:pin
-	    csp_print_uint(d.an.port);
-	    csp_print_char(':');
-	    csp_print_uint(d.an.pin);
+	    list_pin_spec(st, i, 0);
 	    list_eol();
 	    break;
 	case DECL_BUFFER:
@@ -1262,6 +1319,13 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
     // three mutually exclusive run states (paused and live can't both be on).
     csp_print_lit("cycle ");
     csp_print_uint(st->cycle);
+    // Measured refresh rate. Blank until the first full second has passed --
+    // printing a 0 there would read as "stalled" rather than "not yet known".
+    if (st->hz) {
+	csp_print_lit("   ");
+	csp_print_uint(st->hz);
+	csp_print_lit(" Hz");
+    }
     csp_print_lit("   latch ");
     if (st->latch)
 	csp_print_lit("on");

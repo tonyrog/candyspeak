@@ -428,6 +428,7 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_NUMBER_RANGE] =           ros_err_num_range,
     [ERR_OUT_OF_MEMORY] =          ros_err_out_of_memory,
     [ERR_INDEX_RANGE] =            ros_err_index_range,
+    [ERR_ASSIGN_TO_LOCAL] =        ros_err_assign_local,
 };
 
 static rostring_t csp_format_error(csp_err_t err)
@@ -574,7 +575,13 @@ void csp_clr_error(csp_rt_t* st)
 // pointer to a VIEW_SLOT's value_t struct inside its buffer (in the heap)
 static inline value_t* csp_slot(csp_rt_t* st, csp_view_t* v, dio_t dir)
 {
-    return (value_t*)(st->heap[dir] + st->buf[v->buf].hp);
+    csp_buf_t* b = &st->buf[v->buf];
+    // A #local is single-buffered: both directions resolve to the DIN half, so
+    // the value a rule writes is readable by the rules after it in the SAME
+    // cycle. Everything else keeps the transaction -- read DIN, write DOUT.
+    if (b->flags & BUF_F_LOCAL)
+	dir = DIN;
+    return (value_t*)(st->heap[dir] + b->hp);
 }
 
 // return pointer to the object/field value slot (VIEW_SLOT only)
@@ -1075,7 +1082,15 @@ NOINLINE static vtype_t decl_cfg_vt(decl_t dt, vtype_t vt)
 {
     switch (CSP_MASK(dt,CSP_DECL_TYPE_BITS)) {
     case DECL_DIGITAL: return V_DIGITAL;
-    case DECL_ANALOG:  return V_ANALOG;
+	// An analog reading is SIGNED unless the declaration says otherwise --
+	// the same default a #variable has, and the right one for a sensor that
+	// swings both ways. `unsigned` is the opt-in, for a reading that is a
+	// magnitude or a packed word (an RGB565 pixel) rather than a quantity.
+	// The declaration's vt used to be dropped on this path entirely.
+    case DECL_ANALOG:
+	return (vtype_t)(V_ANALOG |
+			 ((CSP_MASK(vt,TYPE_BITS) == V_UNSIGNED) ? 0
+							         : CFG_SIGNED));
     case DECL_TIMER:   return V_TIMER;
     case DECL_FIELD:   return V_FIELD;
     default:           return vt;
@@ -1191,7 +1206,13 @@ NOINLINE void csp_dio_get_val_part(csp_rt_t* st, value_t* vslot,
     switch(CSP_MASK(vt, TYPE_BITS)) {
     case V_TIMER:   vp->i = vslot->t.val; break;
     case V_DIGITAL: vp->i = vslot->d.val & 1; break;
-    case V_ANALOG:  vp->i = vslot->a.val; break;
+	// a.val is unsigned:16 and cannot hold a negative, so a signed analog
+	// stores the low 16 bits and gets them sign-extended back here. That
+	// round-trips: csp_dio_set_val_part truncates the same 16 bits.
+    case V_ANALOG:
+	vp->i = (vt & CFG_SIGNED) ? (ivalue_t)(int16_t)vslot->a.val
+	                          : (ivalue_t)vslot->a.val;
+	break;
     case V_STRING:  vp->i = vslot->s; break;
     default: *vp = *vslot; break;
     }
@@ -1896,6 +1917,21 @@ index_t csp_cycle(csp_rt_t* st)
     // the driver reports it.
     if (!st->started)
 	return BAD_INDEX;
+
+    // Refresh rate, over a one-second window. Here rather than in a driver so
+    // the host and the board measure the same thing the same way. csp_time_ms is
+    // the clock the timers use -- with --virtual-time on the host that is
+    // SIMULATED time, so the number then means cycles per simulated second; on
+    // hardware it is wall clock and means what it says.
+    {
+	uint32_t now = csp_time_ms();
+	uint32_t dt  = now - st->hz_t0;
+	if (dt >= 1000) {
+	    st->hz = (uint16_t)(((st->cycle - st->hz_c0) * 1000UL) / dt);
+	    st->hz_t0 = now;
+	    st->hz_c0 = st->cycle;
+	}
+    }
 
     // A definition still being typed is not a runnable program. `#module` emits
     // an OP_ENTER whose length is patched at its `#end`, and `#in` an OP_INSTATE
@@ -3826,6 +3862,10 @@ NOINLINE static int setup_variable(csp_rt_t* st, index_t ix)
     }
     if (setup_buffer(st, ix) < 0)         // auto-buffer
 	return -1;
+    // A #local's auto-buffer is single-buffered -- see BUF_F_LOCAL. Marked here,
+    // where the buffer this leaf owns is in hand; csp_slot does the rest.
+    if (d.local)
+	st->buf[vw->buf].flags |= BUF_F_LOCAL;
     csp_heap_set(st, vw, DIN,  d.va.init);
     csp_heap_set(st, vw, DOUT, d.va.init);
     return 0;

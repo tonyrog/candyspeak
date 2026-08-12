@@ -40,6 +40,11 @@ typedef struct {
     // CURRENT-relative index lists bare (it is a member of the module body
     // being listed) and only a NAMED object gets its `obj.` prefix back.
     uint8_t seto;
+    // Subscript named by a preceding OP_SETOX, consumed the same way: the index
+    // expression is already interned by the instructions that computed it, so
+    // what goes between the brackets is that register's rendered string.
+    uint8_t has_setox;
+    uint8_t setox;            // strptr index of the subscript expression
 } csp_exprbuf_t;
 
 static void exprbuf_init(csp_exprbuf_t* bp)
@@ -48,6 +53,7 @@ static void exprbuf_init(csp_exprbuf_t* bp)
     bp->nstrptrs = 0;
     bp->nbody = 0;
     bp->seto = 0;
+    bp->has_setox = 0;
 }
 
 // return current pointer
@@ -159,17 +165,40 @@ static void exprbuf_str_at(csp_rt_t* st, csp_exprbuf_t* bp, sindex_t pos)
     for (i = 0; i < len; i++) exprbuf_char(bp, csp_str_byte(st, pos+i));
 }
 
+static void exprbuf_uint16(csp_exprbuf_t* bp, uint16_t v);
+
 static uint8_t exprbuf_var(csp_rt_t* st, csp_exprbuf_t* bp, uint16_t ix)
 {
     uint8_t *start = exprbuf_ptr(bp);
     int m = bp->seto;      // set by the OP_SETO in front of this access
+    int sx = bp->has_setox;
+    uint16_t elem = 0;     // constant element index, when ix is a continuation
     bp->seto = 0;
+    bp->has_setox = 0;
 
     if (m != 0) {
 	exprbuf_str_at(st, bp, decl_name_pos(st, csp_object_decl(st, m)));
 	exprbuf_char(bp, '.');
     }
+    // A CONSTANT subscript folded to the element's own declaration, and a
+    // continuation has no name -- rendering it printed nothing at all, so
+    // `x = A[1]` listed as `x = `. Walk back to the head (continuations are
+    // contiguous by construction) and put the index back.
+    while (decl(st, INDEX(ix), cont) && (INDEX(ix) > 0)) {
+	ix = INDEX(ix) - 1;
+	elem++;
+    }
     exprbuf_str_at(st, bp, decl_name_pos(st, ix));
+    if (sx) {                          // A[<expr>] -- runtime subscript
+	exprbuf_char(bp, '[');
+	exprbuf_strref(bp, bp->setox);
+	exprbuf_char(bp, ']');
+    }
+    else if (elem) {                   // A[<const>]
+	exprbuf_char(bp, '[');
+	exprbuf_uint16(bp, elem);
+	exprbuf_char(bp, ']');
+    }
     return exprbuf_intern(bp, start, exprbuf_len(bp, start));
 }
 
@@ -653,15 +682,12 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	    bp->seto = (uint8_t)ip->o.obj;
 	    break;
 	case OP_SETOX:
-	    // A runtime object number, so there is no name to prefix with. Leaving
-	    // seto at 0 lists the access that follows bare, which is wrong-but-safe
-	    // rather than a wrong NAME: it renders the array's base declaration.
-	    // Nothing emits this yet.
-	    // WHEN ARRAYS LAND: this is where `P[Idx]` gets its subscript back --
-	    // the index expression is already interned in bp->reg[ip->ox.x] by the
-	    // instructions above, so it is the register's rendered string that goes
-	    // between the brackets. Wire it together with the array declaration, or
-	    // a `/list` of an array program will not paste back.
+	    // The subscript for the NEXT variable rendered -- the one-shot the
+	    // runtime uses, mirrored. The index expression was computed by the
+	    // instructions above, so its rendered text is already interned in
+	    // this register; exprbuf_var puts it between the brackets.
+	    bp->has_setox = 1;
+	    bp->setox = bp->reg[ip->ox.x];
 	    break;
 	case OP_RULE:
 	    exprbuf_rule(st, bp, ip);

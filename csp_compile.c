@@ -152,6 +152,16 @@ NOINLINE static void close_in_block(csp_rt_t* st);
 //
 // OP_SETO is emitted IMMEDIATELY before its access and is consumed by it, so the
 // two are always adjacent and there is no window for a jump to land between them.
+// Can `X[i]` mean anything? Every type an array can be made of -- a subscript on
+// anything else is either the buffer byte-view (handled before this is asked) or
+// a mistake. One predicate so the read side and the write side, which are
+// separate paths through the parser, cannot drift apart on which types they take.
+static int is_subscriptable(decl_t t)
+{
+    return (t == DECL_VARIABLE) || (t == DECL_CONSTANT) ||
+	   (t == DECL_ANALOG)   || (t == DECL_DIGITAL);
+}
+
 NOINLINE static bool_t asm_seto(csp_rt_t* st, xindex_t mem, index_t* out)
 {
     unsigned m = XOBJ(mem);
@@ -587,6 +597,10 @@ const op_entry_t decl_table[] RODATA = {
     DECL_ENT(D_IN,DECL_IN,s_in),       // 'in' FIXME? used as option keyword!
     DECL_ENT(D_CONSTANT,DECL_CONSTANT,s_constant),
     DECL_ENT(D_VARIABLE,DECL_VARIABLE,s_variable),
+    // A #local IS a DECL_VARIABLE -- the `local` bit is what separates them, so
+    // both keywords map to the same declaration type here and csp_parse_local
+    // sets the bit.
+    DECL_ENT(D_LOCAL,DECL_VARIABLE,s_local),
     DECL_ENT(D_DIGITAL,DECL_DIGITAL,s_digital),
     DECL_ENT(D_ANALOG,DECL_ANALOG,s_analog),
     DECL_ENT(D_TIMER,DECL_TIMER,s_timer),
@@ -1278,6 +1292,22 @@ NOINLINE static bool_t coerce_to_int(csp_rt_t* st, rentry_t* e)
 NOINLINE static bool_t coerce_assign(csp_rt_t* st, xindex_t ix, rentry_t* e)
 {
     vtype_t lt = decl(st,XIDX(ix),vt);
+
+    // A #local BINDS a formula; assigning to it later is the one mistake this
+    // construct invites, and "unknown variable" would be a lie -- the name is
+    // perfectly well known. Every assignment target in the compiler passes
+    // through here, which is why the check lives in this function and not in
+    // the three places that build one.
+    //
+    // The exception is the declaration's OWN rule: csp_parse_local emits
+    // `name = <formula>` and marks the target here for the length of that
+    // parse (+1, so a zeroed struct means "none" -- decl index 0 is real).
+    if (decl(st,XIDX(ix),local) &&
+	(st->cs.local_def != (index_t)(XIDX(ix) + 1))) {
+	if (csp_set_error(st, ERR_ASSIGN_TO_LOCAL))
+	    csp_set_err_arg_int(st, 0, 0);
+	return 0;
+    }
 
     if (e->vt == V_UNSIGNED)  // same representation as int
 	e->vt = V_INTEGER;
@@ -2228,8 +2258,7 @@ next:
 	    // function because it is where the margin bottoms out on AVR, and a
 	    // nested call would double the deepest path.
 	    if ((i < n) && (tv[i].t == LB) &&
-		((decl(st,INDEX(ix),type) == DECL_VARIABLE) ||
-		 (decl(st,INDEX(ix),type) == DECL_CONSTANT))) {
+		is_subscriptable(decl(st,INDEX(ix),type))) {
 		unsigned mo = XOBJ(ix);
 		// `safe.A[i]` would need OP_SETO and OP_SETOX at the same time,
 		// and both are one-shots consumed by the same access. Refusing
@@ -2546,6 +2575,82 @@ NOINLINE static int array_replicate(csp_rt_t* st, int head, decl_t type,
     return 0;
 }
 
+// One element's pin. A device array shares ONE declaration's worth of config
+// with its copies, and the pin is the single field that has to differ -- which
+// is possible at all because the pin lives in the per-element STORAGE, seeded
+// from the declaration by setup_digital/setup_analog.
+NOINLINE static int set_elem_pin(csp_rt_t* st, int di, decl_t type, ivalue_t p)
+{
+    if ((p < 0) || (p >= (1 << PIN_BITS))) {
+	csp_set_error(st, ERR_NUMBER_RANGE);
+	return -1;
+    }
+    if (type == DECL_DIGITAL)
+	ram_decl_at(st, di)->di.pin = (unsigned)p;
+    else
+	ram_decl_at(st, di)->an.pin = (unsigned)p;
+    return 0;
+}
+
+// The pins for elements 1..alen-1 of a device array, from whatever follows the
+// `port:pin` the declaration already matched:
+//
+//   9:0..9              a range   -- element k gets pin 0+k
+//   0:1,4,7             a list    -- element k gets the k-th pin
+//   0:1..5,7,9          both, in any order
+//
+// Element 0 already has the first pin (pmatch read it); `last` tracks where a
+// range continues from. A count that does not match the declared length is an
+// ERROR -- ten elements over four pins is a typo, and padding or truncating it
+// silently would leave elements pointing at pin 0, which is a real pin.
+NOINLINE static int array_pins(csp_rt_t* st, const token_t* tv, int j, size_t n,
+			       int head, decl_t type, ivalue_t alen, ivalue_t p0)
+{
+    ivalue_t last = p0;
+    int k = 1;
+
+    while (j < (int)n) {
+	if ((j+2 < (int)n) && (tv[j].t == DOT) && (tv[j+1].t == DOT) &&
+	    (tv[j+2].t == INT)) {
+	    ivalue_t end = tv[j+2].v.val.i;
+	    ivalue_t p;
+	    if (end < last) {           // `9:5..2` -- descending is a typo
+		csp_set_error(st, ERR_NUMBER_RANGE);
+		return -1;
+	    }
+	    for (p = last+1; p <= end; p++) {
+		if (k >= (int)alen)
+		    goto too_many;
+		if (set_elem_pin(st, head + k, type, p) < 0)
+		    return -1;
+		k++;
+	    }
+	    last = end;
+	    j += 3;
+	}
+	else if ((j+1 < (int)n) && (tv[j].t == COMMA) && (tv[j+1].t == INT)) {
+	    if (k >= (int)alen)
+		goto too_many;
+	    if (set_elem_pin(st, head + k, type, tv[j+1].v.val.i) < 0)
+		return -1;
+	    last = tv[j+1].v.val.i;
+	    k++;
+	    j += 2;
+	}
+	else
+	    break;                      // not part of the pin spec
+    }
+    if (k != (int)alen) {
+	csp_set_error(st, ERR_NUMBER_RANGE);   // too few pins for the length
+	return -1;
+    }
+    return 0;
+
+too_many:
+    csp_set_error(st, ERR_NUMBER_RANGE);
+    return -1;
+}
+
 // '#' 'variable' <name>[':' <size>] [<opt>+] ['=' <num> | <string>]
 // <opt> := 'in'|'out'|'inout'|  -- when use as argument in module
 //          'signed'|'unsigned'|'float'
@@ -2647,6 +2752,69 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 
     // Made LAST so the copies inherit everything decided above.
     return array_replicate(st, i, DECL_VARIABLE, alen);
+}
+
+NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, int ti, size_t n);
+
+// '#' 'local' <name>[':' <size>] [<opt>+] '=' <expr>
+//
+// A #local BINDS a formula; it is not a variable you assign. So the head is the
+// ordinary variable grammar with the '= <const>' cut off, and what follows the
+// '=' is compiled as a RULE with an always-true condition, emitted right here.
+// That is the whole "prologue": locals must be declared before they are used
+// (a forward reference simply does not resolve), so declaration order IS
+// evaluation order, and no separate phase is needed.
+//
+// Its leaf is single-buffered (BUF_F_LOCAL), which is what lets the rules below
+// read the value this cycle instead of the previous one.
+NOINLINE int csp_parse_local(csp_rt_t* st, token_t* tv, int ti, size_t n)
+{
+    variable_param_t d = {0};
+    index_t ix;
+    int i, r, eq = -1, j;
+
+    d.r.res = 8*sizeof(ivalue_t);
+    d.opts.vt = V_INTEGER;
+
+    // Find the '=' and let pmatch see only the declaration head. The tail is an
+    // EXPRESSION, which P_CONST_S would refuse -- and refusing is right for a
+    // #variable, whose initialiser has to be a constant.
+    for (j = ti; j < (int)n; j++) {
+	if (tv[j].t == EQ) { eq = j; break; }
+    }
+    if ((eq < 0) || (eq + 1 >= (int)n)) {
+	csp_set_error(st, ERR_SYNTAX);      // a local with no formula is nothing
+	return -1;
+    }
+    if ((r = pmatch(st, tv, ti, eq, pat_variable, &d, sizeof(d))) < 0) {
+	csp_set_error(st, ERR_SYNTAX);
+	return -1;
+    }
+    if (check_res(st, d.r.res) < 0)
+	return -1;
+    if ((ix = csp_new_udecl(st,&d.name,DECL_VARIABLE)) == BAD_INDEX)
+	return -1;
+    i = INDEX(ix);
+    ram_decl_at(st,i)->vt = d.opts.vt;
+    ram_decl_at(st,i)->res = MAKE_RES(d.r.res);
+    ram_decl_at(st,i)->dir = d.opts.dir;
+    ram_decl_at(st,i)->local = 1;
+    ram_decl_at(st,i)->va.init.i = 0;
+
+    // The formula, as a rule -- but a rule body is `<name> = <expr>`, and what
+    // sits between the name and the '=' here is DECLARATION syntax (':8', an
+    // option) that pat_body has no grammar for. Move the name down against the
+    // '=' and parse from there; the head tokens have already been consumed by
+    // the pmatch above, so overwriting one costs nothing. When there is no
+    // ':res' the name is already in place and this is a self-assignment.
+    tv[eq-1] = tv[ti];
+    // The name is already declared, so a #local whose formula mentions ITSELF
+    // resolves -- and reads its own previous value, which is defined (if odd)
+    // rather than an error: it is the accumulator a plain variable can express.
+    st->cs.local_def = (index_t)(i + 1);   // allow the one assignment that defines it
+    r = csp_parse_rule(st, tv, eq-1, n);
+    st->cs.local_def = 0;
+    return r;
 }
 
 // '#' 'constant' <name>[':' <size>] [<opt>+] '=' <num> | <string>
@@ -2788,16 +2956,20 @@ NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     digital_param_t d = {0};
     index_t ix;
-    int i;
+    int i, r;
+    ivalue_t alen = 1;
 
-    if (pmatch(st, tv, ti, n, pat_digital, &d, sizeof(d)) < 0) {
+    if (array_splice(st, tv, ti, &n, &alen) < 0)
+	return -1;
+
+    if ((r = pmatch(st, tv, ti, n, pat_digital, &d, sizeof(d))) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
     if (d.opts.dir == 0) d.opts.dir = DIR_IN;
 
     if ((ix = csp_new_udecl(st, &d.name,DECL_DIGITAL)) == BAD_INDEX)
-	return -1;    
+	return -1;
     i = INDEX(ix);
     ram_decl_at(st,i)->res = MAKE_RES(1);
     ram_decl_at(st,i)->di.pin = d.port_pin.pin;
@@ -2805,6 +2977,14 @@ NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, int ti, size_t n)
     ram_decl_at(st,i)->dir = d.opts.dir;
     ram_decl_at(st,i)->di.pullup = d.opts.pullup;
     ram_decl_at(st,i)->di.pulldown = d.opts.pulldown;
+
+    if (array_replicate(st, i, DECL_DIGITAL, alen) < 0)
+	return -1;
+    // The copies inherited element 0's pin; give each its own. `r` is where
+    // pmatch stopped, which is the first token of the pin spec's tail.
+    if (alen > 1)
+	return array_pins(st, tv, r, n, i, DECL_DIGITAL, alen,
+			  d.port_pin.pin);
     return 0;
 }
 
@@ -2829,11 +3009,16 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     analog_param_t d = {0};
     index_t ix;
-    int i;
+    int i, r;
+    ivalue_t alen = 1;
 
     d.r.res = 10;
     d.opts.vt = V_INTEGER;
-    if (pmatch(st, tv, ti, n, pat_analog, &d, sizeof(d)) < 0) {
+
+    if (array_splice(st, tv, ti, &n, &alen) < 0)
+	return -1;
+
+    if ((r = pmatch(st, tv, ti, n, pat_analog, &d, sizeof(d))) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -2849,7 +3034,12 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, int ti, size_t n)
     ram_decl_at(st,i)->an.port = d.port_pin.port;
     ram_decl_at(st,i)->dir = d.opts.dir;
     ram_decl_at(st,i)->an.pwm = d.opts.pwm;
-    ram_decl_at(st,i)->an.endian = d.opts.endian;    
+    ram_decl_at(st,i)->an.endian = d.opts.endian;
+
+    if (array_replicate(st, i, DECL_ANALOG, alen) < 0)
+	return -1;
+    if (alen > 1)
+	return array_pins(st, tv, r, n, i, DECL_ANALOG, alen, d.port_pin.pin);
     return 0;
 }
 
@@ -3345,7 +3535,7 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 		// primary that handles it on the read side. A constant index
 		// folds to the element's own declaration: no SETOX, and the
 		// bounds check lands at compile time.
-		if ((bx != BAD_INDEX) && (bt == DECL_VARIABLE) &&
+		if ((bx != BAD_INDEX) && is_subscriptable(bt) &&
 		    !part[k].idx_bits && !part[k].has_range &&
 		    (csp_array_len(st, INDEX(bx)) > 1)) {
 		    ivalue_t alen = (ivalue_t)csp_array_len(st, INDEX(bx));
@@ -4153,6 +4343,13 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 	else if ((tv[0].t == HASH) && (tv[1].t == WORD)) {
 	    int i;
 	    if ((i = find_decl_entry(tv[1].v.str.ptr,tv[1].v.str.len)) >= 0) {
+		// decl_table is indexed BY the keyword token, so `i` IS the
+		// dtok. #local maps to DECL_VARIABLE exactly as #variable does
+		// -- they differ by a bit, not a type -- so it has to be told
+		// apart here rather than in the switch below.
+		if (i == D_LOCAL)
+		    r = csp_parse_local(st, tv, 2, num);
+		else
 		switch(decl_table_code(i)) {
 		case DECL_MODULE:
 		    r = csp_parse_module(st, tv, 2, num);

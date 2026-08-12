@@ -7,7 +7,7 @@
 // brightness and bleeds away over a second or two.
 //
 //   port 0 : GPIO by Arduino pin number, A8/A9 analog sensors
-//   port 8 : accelerometer (pin 0/1/2 = X/Y/Z), ~0..1023, 512 = flat
+//   port 8 : accelerometer (pin 0/1/2 = X/Y/Z), SIGNED, +/-2 g over +/-512
 //   port 9 : NeoPixel ring (pin = pixel index 0..9), 16-bit RGB565
 //
 // Run:  ./csp -n -C -O rom.c examples/cpx_ball.csp && make -f Makefile.play
@@ -24,16 +24,16 @@
 #analog AccY:10  in 8:1
 #analog AccZ:10  in 8:2
 
-#analog P0:16 out 9:0
-#analog P1:16 out 9:1
-#analog P2:16 out 9:2
-#analog P3:16 out 9:3
-#analog P4:16 out 9:4
-#analog P5:16 out 9:5
-#analog P6:16 out 9:6
-#analog P7:16 out 9:7
-#analog P8:16 out 9:8
-#analog P9:16 out 9:9
+#analog P0:16 out unsigned 9:0
+#analog P1:16 out unsigned 9:1
+#analog P2:16 out unsigned 9:2
+#analog P3:16 out unsigned 9:3
+#analog P4:16 out unsigned 9:4
+#analog P5:16 out unsigned 9:5
+#analog P6:16 out unsigned 9:6
+#analog P7:16 out unsigned 9:7
+#analog P8:16 out unsigned 9:8
+#analog P9:16 out unsigned 9:9
 
 // 50 Hz. Every rule below is gated on this, so one timeout is one physics step
 // and the whole state advances together.
@@ -54,12 +54,15 @@
 // an IMPULSE does, which here is the shake: a heavier ball takes more shaking
 // to light up. Raise it for a sluggish ball, lower it for a jumpy one.
 #constant MASS = 100          // grams
+// 1 g in the readings own units: an #analog is SIGNED by default, so 0 is level
+// and the sensors +/-2 g spans +/-2^(res-1) -- at :10 that puts 1 g at 256.
+#constant G1 = 256
 
-#constant GAIN = 12           // tilt -> acceleration, /1000
+#constant GAIN = 24           // tilt -> acceleration, /1000
 #constant DRAG = 30           // rolling friction, /1000 of speed per tick
 #constant EMAX = 1000         // energy ceiling
 #constant EFADE = 12          // energy lost per tick (~1.7 s from full)
-#constant SHAKE = 120         // |Z - flat| that counts as a shake
+#constant SHAKE = 60          // deviation from 1 g that counts as a shake
 
 #variable Acc = 0             // gravity along the track, this tick
 #variable Vel = 0             // position units per tick, signed
@@ -97,16 +100,16 @@
 // One rule per pixel because the coefficients depend on where the ball IS, and
 // a table indexed at runtime is not something the language can say yet. If the
 // ball rolls the wrong way round, negate this whole column.
-Acc = (-100*(512-AccX) + 0*(AccY-512)) / 100     ? Idx == 0
-Acc = (-81*(512-AccX) + 59*(AccY-512)) / 100     ? Idx == 1
-Acc = (-31*(512-AccX) + 95*(AccY-512)) / 100     ? Idx == 2
-Acc = (31*(512-AccX) + 95*(AccY-512)) / 100      ? Idx == 3
-Acc = (81*(512-AccX) + 59*(AccY-512)) / 100      ? Idx == 4
-Acc = (100*(512-AccX) + 0*(AccY-512)) / 100      ? Idx == 5
-Acc = (81*(512-AccX) - 59*(AccY-512)) / 100      ? Idx == 6
-Acc = (31*(512-AccX) - 95*(AccY-512)) / 100      ? Idx == 7
-Acc = (-31*(512-AccX) - 95*(AccY-512)) / 100     ? Idx == 8
-Acc = (-81*(512-AccX) - 59*(AccY-512)) / 100     ? Idx == 9
+Acc = (-100*(-AccX) + 0*AccY) / 100     ? Idx == 0
+Acc = (-81*(-AccX) + 59*AccY) / 100     ? Idx == 1
+Acc = (-31*(-AccX) + 95*AccY) / 100     ? Idx == 2
+Acc = (31*(-AccX) + 95*AccY) / 100      ? Idx == 3
+Acc = (81*(-AccX) + 59*AccY) / 100      ? Idx == 4
+Acc = (100*(-AccX) + 0*AccY) / 100      ? Idx == 5
+Acc = (81*(-AccX) - 59*AccY) / 100      ? Idx == 6
+Acc = (31*(-AccX) - 95*AccY) / 100      ? Idx == 7
+Acc = (-31*(-AccX) - 95*AccY) / 100     ? Idx == 8
+Acc = (-81*(-AccX) - 59*AccY) / 100     ? Idx == 9
 
 // --- integrate ------------------------------------------------------------
 // a -> v -> x, one tick apart each, which is what semi-implicit Euler does
@@ -126,7 +129,7 @@ Idx = Pos / PIXEL
 // commit. Squared because a hard shake should be worth much more than a soft
 // one, over MASS because a heavier ball takes more to excite.
 
-Energy = clip(clip(Energy - EFADE, 0, EMAX) + (abs(AccZ-512)*abs(AccZ-512))/MASS, 0, EMAX) ? Sh > SHAKE
+Energy = clip(clip(Energy - EFADE, 0, EMAX) + (abs(AccZ - G1)*abs(AccZ - G1))/MASS, 0, EMAX) ? Sh > SHAKE
 
 // --- colour ---------------------------------------------------------------
 // RGB565: red 5 bits at 11, green 6 at 5, blue 5 at 0. Cold and blue at rest,

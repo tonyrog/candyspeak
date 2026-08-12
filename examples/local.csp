@@ -1,0 +1,9 @@
+#variable a = 2
+#variable b = 3
+#local sum = a + b
+#local twice = sum * 2
+#local plus1 = twice + 1
+
+println("sum=", sum)
+println("twice", twice)
+println("plus1", plus1)

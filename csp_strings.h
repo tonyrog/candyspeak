@@ -15,6 +15,8 @@ extern rochar s_constant[9] RODATA;
 #define ros_constant ((rostring_t) s_constant)
 extern rochar s_variable[9] RODATA;
 #define ros_variable ((rostring_t) s_variable)
+extern rochar s_local[6] RODATA;
+#define ros_local ((rostring_t) s_local)
 extern rochar s_digital[8] RODATA;
 #define ros_digital ((rostring_t) s_digital)
 extern rochar s_analog[7] RODATA;
@@ -493,6 +495,8 @@ extern rochar s_err_out_of_memory[38] RODATA;
 #define ros_err_out_of_memory ((rostring_t) s_err_out_of_memory)
 extern rochar s_err_index_range[19] RODATA;
 #define ros_err_index_range ((rostring_t) s_err_index_range)
+extern rochar s_err_assign_local[48] RODATA;
+#define ros_err_assign_local ((rostring_t) s_err_assign_local)
 extern rochar s_State[6] RODATA;
 #define ros_State ((rostring_t) s_State)
 extern rochar s_INIT[5] RODATA;

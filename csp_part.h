@@ -103,7 +103,10 @@ static const uint8_t csp_part_cfg[PL_COUNT] RODATA = {
 // it back, and stops both callers from being LEAF functions. On AVR a leaf pays
 // no prologue at all (it may use the call-clobbered registers freely), so the
 // out-parameter was costing far more than the subtraction it saved.
-#define CSP_PART_LAY(vt)  ((uint8_t)((vt) - V_TIMER))
+// MASKED to TYPE_BITS. A cfg vtype may carry flags above the type (CFG_SIGNED),
+// and without the mask `vt - V_TIMER` lands past PL_COUNT -- csp_part_row then
+// answers 0 for every part, so `AccX.pin` reads as zero and nothing says why.
+#define CSP_PART_LAY(vt)  ((uint8_t)(CSP_MASK((vt), TYPE_BITS) - V_TIMER))
 
 // Row for (vt, part); 0 when this type has no such part.
 static uint8_t csp_part_row(vtype_t vt, csp_part_t part)

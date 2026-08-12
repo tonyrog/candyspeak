@@ -13,6 +13,14 @@
 // still guards the firmware.
 #include "csp_config.h"
 
+// Base loop sampling period (ms). Bounds the idle sleep so continuous inputs and
+// the reactive display keep updating even when a slow timer is armed. Boards with
+// their own value (e.g. CPX above) define it first; this is the default for the
+// rest.
+#ifndef SAMPLE_MS
+#define SAMPLE_MS 2  // was 10
+#endif
+
 #ifdef CSP_CPX
 #include <Adafruit_CircuitPlayground.h>
 #endif
@@ -408,11 +416,6 @@ void csp_board_setup(csp_rt_t* st)
     (void)st;    
 }
 
-// Base sampling period (ms). Bounds the loop's idle sleep so continuous inputs
-// (accel, sensors) and the reactive display keep updating at ~100 Hz even when a
-// slow timer is armed. Timers stay accurate to within one SAMPLE_MS tick.
-#define SAMPLE_MS 10
-
 int accel_read = 0;   // read the LIS3DH once per cycle, not once per axis
 
 // start input cycle
@@ -441,6 +444,33 @@ void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
 {
     int value;
     if (vptr->a.port == PORT_ACCEL) {   // accelerometer X/Y/Z (raw)
+	// Scale to the DECLARED resolution instead of assuming ten bits.
+	// `#analog AccZ:10` and `:16` should differ in precision, not in what
+	// the numbers mean, and the old code hardcoded 0..1023.
+	//
+	// The LIS3DH is left at +/-2 g (the library writes CTRL4 = 0x88, so
+	// FS = 00, high-res), where a raw reading spans the full signed 16-bit
+	// range: 1 g is 16380 of 32760. Shifting by (16 - res) therefore maps
+	// the sensor's WHOLE range onto the declared width, and 1 g lands a
+	// quarter of full scale above the midpoint -- 768 of 0..1023 at :10.
+	//
+	// The old `>>5` mapped +/-1 g over the whole width instead, so a
+	// reading SATURATED at exactly 1 g: flat read 1023 and there was no
+	// headroom left to see a shake in. That is why abs(AccZ-512) was
+	// pinned at its maximum with the board sitting still.
+	//
+	// SIGNED is the default (see decl_cfg_vt): the reading comes through as
+	// it is, 0 = level, and the .csp needs no `- 512` anywhere. `unsigned`
+	// on the declaration asks for the old offset half-scale form instead,
+	// for a program that would rather have a magnitude.
+	csp_decl_t d = csp_get_decl(st, INDEX(ix));
+	int res = GET_RES(d.res);
+	int sgn = (CSP_MASK(d.vt,TYPE_BITS) != V_UNSIGNED);
+	int mid, lo, hi;
+	if (res < 2) res = 2; else if (res > 16) res = 16;
+	mid = sgn ? 0 : (1 << (res - 1));
+	lo  = sgn ? -(1 << (res - 1)) : 0;
+	hi  = sgn ?  (1 << (res - 1)) - 1 : (1 << res) - 1;
 	if (!accel_read) {
 	    CircuitPlayground.lis.read();
 	    accel_read = 1;
@@ -448,11 +478,8 @@ void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
 	value = (vptr->a.pin == 0) ? CircuitPlayground.lis.x
 	    : (vptr->a.pin == 1) ? CircuitPlayground.lis.y
 	    : CircuitPlayground.lis.z;
-	// a.val is unsigned:16 -> a signed reading wraps to ~65000.
-	// Offset+clamp to 0..1023 (unsigned 10-bit): 512 = flat,
-	// ~1g tilt swings to the ends. Rule: Idx = AccX / 103.
-	value = (value >> 5) + 512;
-	if (value < 0) value = 0; else if (value > 1023) value = 1023;
+	value = (value >> (16 - res)) + mid;
+	if (value < lo) value = lo; else if (value > hi) value = hi;
     }
     else if (vptr->a.pin == 8)               // A8 light sensor
 	value = CircuitPlayground.lightSensor();
@@ -1137,14 +1164,6 @@ const char* csp_eeprom_name(void)
 // ============================================================
 // Arduino setup/loop
 // ============================================================
-
-// Base loop sampling period (ms). Bounds the idle sleep so continuous inputs and
-// the reactive display keep updating even when a slow timer is armed. Boards with
-// their own value (e.g. CPX above) define it first; this is the default for the
-// rest.
-#ifndef SAMPLE_MS
-#define SAMPLE_MS 10
-#endif
 
 // Boot progress on the LED, for a board that will not give you a serial port.
 // Build with -DCSP_BOOT_BLINK and count the flashes: the number is how far setup

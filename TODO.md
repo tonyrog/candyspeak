@@ -211,6 +211,51 @@ Klart-markerat flyttas till DONE.md, inte hit.
 
 # 4. BEKVÄMLIGHET
 
+## `#every <timer>`-block i stället för 24 gånger `? timeout(T)` (Tony 2026-08-11)
+  FRÅGAN som ledde hit: borde `timeout(T)` vara en instruktion, som `changed`?
+  MÄTT FÖRST: `changed()` är INTE en instruktion -- den kompilerar till exakt
+  samma `LI + ARG + CALL` som timeout. OP_CHG finns men emitteras bara på den
+  reaktiva `<-`-vägen. Så båda är anrop: 3 instruktioner, 12 byte per användning.
+  examples/cpx_ball_array.csp har 24 stycken = 288 byte kod och 1200
+  builtin-dispatchar per sekund vid 50 Hz.
+
+  SOM OPCODE: ryms precis i csp_instr_mem_t (op 6 + x 4 + mem 16), alltså 4 byte
+  i stället för 12 -- ~192 byte sparat i den filen. MEN det finns bara TRE
+  opcodes kvar före OP_END_MARK (OP_AVAIL=60, END_MARK=63), och en per builtin
+  är dyrt.
+
+  BÄTTRE, och det Tony egentligen bad om ("undvika upprepning"): ett BLOCK.
+    #every Tick
+      Acc = ...
+      Vel = ...
+    #end
+  Samma form som `#in <state>`: OP_INSTATE gatear ett helt block med en patchad
+  hopplängd, och den maskinen finns. 24 villkor blir ETT, och källan blir
+  läsbarare. De två komponerar, men blocket dominerar -- ta det först och lägg
+  bara till OP_TIMEOUT om anropen fortfarande syns i en mätning efteråt.
+
+## #local -- KLART 2026-08-11, utom listnings-rundturen
+  BYGGT: `#local a:16 = <uttryck>`. Enkelbuffrat löv via BUF_F_LOCAL -- csp_slot
+  tvingar dir=DIN för det, så en kedja `sum -> twice -> plus1` löser sig i EN
+  cykel i stället för tre. Flaggan sitter på BUFFERTEN, inte på csp_view_t: vy-
+  tabellen är den största per program och en bredare flaggfält där hade växt
+  varje löv, medan csp_slot ändå laddar buf-posten för .hp.
+  Formeln kompileras till en vanlig alltid-sann regel emitterad vid
+  deklarationen -- locals måste ändå deklareras före sin användning, så
+  deklarationsordningen ÄR körordningen och ingen separat fas behövs.
+  Tilldelning avvisas med ERR_ASSIGN_TO_LOCAL i coerce_assign (den enda punkt
+  varje tilldelningsmål passerar); `cs.local_def` släpper igenom den enda
+  tilldelning som deklarationen själv lägger ut.
+  Tester: tests/unit/local + två fall i tests/repl.sh.
+
+  KVAR: LISTNINGEN GÅR INTE ATT KLISTRA TILLBAKA. En local listas som
+  `#local sum:32 integer` och formeln som en separat regel `sum=a+b`. Klistrar
+  man in det avvisas regeln (tilldelning till en local). Rätt fix: sätt formeln
+  PÅ deklarationsraden och undertryck den regeln i regel-listningen -- regeln som
+  hör till en local är den vars lagring träffar just den deklarationen, och
+  exprbuf kan redan rendera dess kropp. Tills dess skrivs ingen `= 0` ut, så
+  listningen ljuger åtminstone inte.
+
 ## #local -- namngiven formel i ett scope (DESIGN AVGJORD, Tony 2026-08-11)
   Mellanberäkningar utan att gå via transaktionen. En `#local` är INTE en variabel
   man tilldelar -- den BINDER en formel, som ALISTER/erlister:s `def`.
@@ -233,16 +278,34 @@ Klart-markerat flyttas till DONE.md, inte hit.
   Namnet: `#local`, inte `#temp`. Det är ingen temporär lagring, det är en skopad
   definition -- och inuti en `#module` är "local" bokstavligt sant.
 
-  IMPLEMENTATION (alternativ A, valt): PROLOG + EN PLATS.
+  IMPLEMENTATION (alternativ A, valt): PROLOG.
   Formlerna kompileras i deklarationsordning till en prolog som körs före
-  reglerna varje cykel och skriver till en ENKELBUFFRAD plats. Varje användning
-  blir en vanlig laddning: noll ändringar i uttryckskompilatorn vid
-  användningsstället, ingen ny opcode, och disassembleringen visar prologen som
-  vanliga instruktioner.
-  - Kostar EN plats, inte två -- ingen skugga, ingen post i commit-passet. Det är
-    hela poängen med "passas inte över i transaktionen".
+  reglerna varje cykel. Varje användning blir en vanlig laddning: noll ändringar
+  i uttryckskompilatorn vid användningsstället, ingen ny opcode, och
+  disassembleringen visar prologen som vanliga instruktioner.
+
+  RÄTTELSE (2026-08-11, undersökt): "kostar EN plats, inte två" var FEL. DIN och
+  DOUT är två halvor av EN allokering -- `heap[DIN]` är basen, `heap[DOUT]` är
+  basen + halva, `heap_cap` är bytes PER HALVA. Varje löv upptar sin plats i
+  båda oavsett, så det finns ingen RAM-vinst att hämta. Det som står kvar är:
+  ingen post i commit-passet, aldrig i /state, aldrig i EEPROM, och läsbar i
+  SAMMA cykel som den skrivs.
+
+  SAMMA-CYKEL-LÄSNINGEN, bättre mekanism (funnen 2026-08-11 vid genomgång av
+  csp_slot): halvan väljs av `dir` ENSAMT --
+      csp_slot(st,v,dir) = heap[dir] + buf[v->buf].hp
+  -- så en VY-FLAGGA som tvingar `dir = DIN` gör lövet enkelbuffrat på riktigt:
+  läsning och skrivning träffar samma bytes, ingen prolog-FAS behövs, ingen
+  `st->local[]`-lista, inget kopieringspass. En gren på ett fält som ändå är
+  laddat. `csp_view_t.flags` finns redan (VIEW_F_*); kolla att VIEW_F_BITS har
+  plats. Commit blir en no-op för dem (dset -> kopiera slot till sig själv).
+  Ersätter den tidigare planen med prolog-fas + kopiering; SEMANTIKEN är
+  oförändrad, bara mekaniken enklare.
+  Utvärderingen kan då vara en helt vanlig alltid-sann regel emitterad vid
+  deklarationen: locals måste ändå deklareras före sin användning (inga
+  framåtreferenser), så deklarationsordningen ÄR körordningen.
   - Aldrig i `/state`, aldrig i EEPROM-patchen.
-  - I en `#module` kör prologen per objekt -> en plats per instans. Faller ut.
+  - I en `#module` kör prologen per objekt. Faller ut.
   - Orena anrop i formeln körs exakt en gång per cykel. Väldefinierat.
 
   Alternativ B (inline-expansion vid varje användning) har IDENTISK semantik och
@@ -251,9 +314,15 @@ Klart-markerat flyttas till DONE.md, inte hit.
   användning och orena anrop skulle köras en gång per användning. Förkastat.
 
   BEHÖVER INGEN NY DECL-TYP. `DECL_AVAIL` står på 14 och `DECL_END_MARK` på 0xf --
-  det finns exakt EN ledig, och den ska inte gå hit. `DECL_HEADER` har fortfarande
-  sina `_reserved:2` oanvända: en local är en `DECL_VARIABLE` med `local:1` i en av
-  dem. Noll decl-typer, noll bytes, all befintlig variabelhantering oförändrad.
+  det finns exakt EN ledig, och den ska inte gå hit. En local är en
+  `DECL_VARIABLE` med `local:1`. Noll decl-typer, noll bytes, all befintlig
+  variabelhantering oförändrad -- och det är också det SÄKRA valet: en ny
+  decl-typ hade krävt en ny gren i varje switch över decl-typer (setup_decl,
+  csp_dump, csp_list_decl, REPL-listningen, estimate...), och en missad gren är
+  precis den buggklass som bitit gång på gång här.
+  OBS: `DECL_HEADER` hade `_reserved:2`, men `cont` (arrayer) tog den ena. Den
+  här tar den andra -- efteråt finns NOLL lediga bitar i headern och EN ledig
+  decl-typ. Nästa flagga måste alltså hitta plats någon annanstans.
 
   LÅS DESSA VID IMPLEMENTATION:
   - FÖRBJUD FRAMÅTREFERENSER. En `#local` får bara referera det som redan
@@ -473,8 +542,26 @@ Inte buggar -- saker som byggts men inte setts fungera på järn.
   den står -- parsern hoppar till fel ställe och det syns som ett par dussin
   syntaxfel på helt andra rader.
 
-  KVAR: `#analog`/`#digital A[N]` med pinnlista -- steg 3, det enda som återstår
-  innan examples/cpx_ball_array.csp går igenom (den stannar nu på rad 40).
+  KLART: `#analog`/`#digital A[N]` med pinnlista (`9:0..9`, `0:1..3,7,9`, eller
+  en blandning). Möjligt bara för att PINNEN bor i per-element-LAGRINGEN, seedad
+  från deklarationen av setup_digital/setup_analog -- tio element som delar en
+  deklaration driver ändå tio olika utgångar. Fel antal pinnar mot längden är ett
+  FEL, inte tyst fyllning: extra element hade annars pekat på pin 0, som är en
+  riktig pinne på varje kort här.
+
+  examples/cpx_ball_array.csp KOMPILERAR OCH KÖR -- 50 regler blev 7.
+
+  KVAR AV ARRAYERNA:
+  - REAKTIVT: grafen har en kant per DEKLARATION och en indexerad läsning tar
+    ingen kant alls (rentry:n byggs direkt i RB-fallet, förbi add_var). Alla
+    array-program hittills är timer-gatade så det biter inte, men `A[I] <- ...`
+    väcks inte. Antag kant till hela arrayen (grovt men korrekt) eller enq per
+    element.
+  - BROADCAST `P = 0` som bekvämlighet. Behövs inte av cpx_ball_array (den
+    släcker bara de pixlar bollen lämnat, se filen) men läser bättre än fyra
+    släckregler.
+  - `safe.A[i]` -- array i ett NAMNGIVET objekt. Avvisas medvetet.
+  - stride > 1 (array av MODULER). Fältet finns i OP_SETOX och är alltid 1 idag.
 
   SIDOFYND, åtgärdat: ett RUNTIME-fel sattes men rapporterades aldrig -- det finns
   inget kommando som väntar inne i eval-loopen. En bounds-check ingen ser är ingen

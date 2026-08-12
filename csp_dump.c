@@ -639,12 +639,20 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	break;
     case DECL_VARIABLE:
 	vt = decl(st,i,vt);
-	fprintf(f, "{decl,%d,variable,\"%s\",[{size,%d},{dir,%s},{type,%s},{init,",
+	// `local` and `cont` are what make two declarations of the same TYPE
+	// behave differently -- a local's leaf is single-buffered, a
+	// continuation is an array element with no name -- so a dump that omits
+	// them shows two identical lines for two different things. This dump is
+	// for reading what the runtime actually holds; that is exactly when the
+	// difference matters.
+	fprintf(f, "{decl,%d,%s,\"%s\",[{size,%d},{dir,%s},{type,%s}%s,{init,",
 		i,
+		decl(st,i,local) ? "local" : "variable",
 		decl_name(st, ix),
 		GET_RES(decl(st,i,res)),
 		(char*) csp_fmt_pindir(decl(st,i,dir)),
-		(char*) csp_fmt_vtype(vt));
+		(char*) csp_fmt_vtype(vt),
+		decl(st,i,cont) ? ",{cont,1}" : "");
 	csp_fprint_value(f, st, vt, decl(st,i,va.init));
 	fprintf(f, "},{value,");
 	csp_fprint_value(f, st, vt, csp_value(st, ix));
@@ -1040,16 +1048,15 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	csp_decl_t dv = csp_get_decl(st, i);  // RAM decls grow down: use the accessor
 	csp_decl_t* dp = &dv;
 	char cmn[128];
-	// .cont is EMITTED. It is real data -- an array's length is recovered by
-	// scanning for it -- so dropping it would put the image one bit away from
-	// the RAM the CRC was folded over AND silently unmake every array in a
-	// baked program. ._reserved goes out too, for the same discipline that
-	// this switch exists for: an arm writes EVERY field of its format, so the
-	// day that bit means something it is already carried.
+	// .cont and .local are EMITTED. Both are real data -- an array's length
+	// is recovered by scanning for `cont`, and `local` decides whether a leaf
+	// is evaluated by the prologue -- so dropping either would put the image
+	// a bit away from the RAM the CRC was folded over AND silently unmake the
+	// feature in a baked program.
 	snprintf(cmn, sizeof(cmn),
-		 ".type=%s,.cont=%u,._reserved=%u,.dir=%u,.name=%u,"
+		 ".type=%s,.cont=%u,.local=%u,.dir=%u,.name=%u,"
 		 ".vt=%s,.res=%u",
-		 csp_cfmt_dtype(dp->type), dp->cont, dp->_reserved,
+		 csp_cfmt_dtype(dp->type), dp->cont, dp->local,
 		 dp->dir, dp->name, csp_cfmt_vtype(dp->vt), dp->res);
 	switch(dp->type) {
 	case DECL_MODULE:
@@ -1104,10 +1111,10 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    // two states with a type and a width. The section CRC is folded over
 	    // the raw bytes, so an image written through the wrong arm fails its
 	    // own check at boot (or, worse, loads with two states quietly wrong).
-	    fprintf(f, "  {.s6={.type=%s,.cont=%u,._reserved=%u,.dir=%u,"
+	    fprintf(f, "  {.s6={.type=%s,.cont=%u,.local=%u,.dir=%u,"
 		    ".name=%u,.name2=%u,.name3=%u,"
 		    ".name4=%u,.name5=%u,.name6=%u}},\n",
-		    csp_cfmt_dtype(dp->type), dp->cont, dp->_reserved, dp->dir,
+		    csp_cfmt_dtype(dp->type), dp->cont, dp->local, dp->dir,
 		    dp->s6.name, dp->s6.name2, dp->s6.name3,
 		    dp->s6.name4, dp->s6.name5, dp->s6.name6);
 	    break;

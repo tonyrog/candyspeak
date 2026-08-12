@@ -1,0 +1,22 @@
+// An #analog reading is SIGNED by default -- the same rule a #variable has.
+//
+// The value slot is `unsigned val:16` and cannot hold a negative, so a signed
+// analog stores the low 16 bits and gets them sign-extended on the way out.
+// `unsigned` on the declaration is the opt-in for the raw 16-bit reading, which
+// is what a packed word (an RGB565 pixel) wants rather than a quantity.
+//
+// The declaration's vt used to be dropped entirely on this path: `signed`
+// parsed and meant nothing at all.
+
+#analog Sg:16 inout 0:2            // signed by default
+#analog Un:16 unsigned inout 0:3
+
+#variable a = 0
+#variable b = 0
+
+// 0xF000 has bit 15 set. Signed it is -4096; unsigned it is 61440.
+Sg = 0xF000 ? 1
+Un = 0xF000 ? 1
+
+a = Sg ? 1
+b = Un ? 1
