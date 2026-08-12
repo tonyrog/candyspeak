@@ -77,6 +77,62 @@ limits that should read as names instead of magic numbers.
 #constant Scale    = 4
 ```
 
+### Locals
+
+```
+#local <name>[:<bits>] [<type>] = <expression>
+```
+
+A local **binds a formula**. It is not a variable you assign to; it is a name for
+a calculation, evaluated once per cycle before the rules below it.
+
+```
+#local Gx = 512 - AccX
+#local Tilt = (Gx*Gx + Gy*Gy) / 100
+```
+
+What makes it worth having is **when** the value becomes visible. Every other
+leaf follows the transaction rule: a rule reads the value committed at the end of
+the previous cycle. A local does not — it is readable in the *same* cycle it is
+written. So a chain resolves in one cycle:
+
+```
+#local Sum   = a + b
+#local Twice = Sum * 2
+#local Plus1 = Twice + 1        // all three settle in ONE cycle
+```
+
+Written as three `#variable` rules the same chain would take three cycles, one
+per step, because each read would see the previous commit.
+
+The inputs are ordinary reads and still follow the ordinary rule — it is the
+local that is immediate, not what it looks at.
+
+**A local must be declared before it is used.** There are no forward references,
+which is also what makes declaration order the evaluation order: no separate
+phase is needed, and a local can safely refer to locals above it.
+
+`:bits` truncates at the binding point, so a local is a good place to narrow a
+value once instead of at every use:
+
+```
+#local Low:8 = 300              // 44
+```
+
+Assigning to a local is an error, reported as such rather than as an unknown
+name:
+
+```
+Gx = 5
+Error: cannot assign to a #local -- it binds a formula
+```
+
+> **Listing caveat.** `/list` currently shows a local's declaration and its
+> formula as two lines — the declaration, and the rule the formula compiled to.
+> That listing does not paste back: the pasted declaration would bind the local
+> to its initial value and the formula line would then be refused. Keep the
+> source.
+
 ### Digital I/O
 
 ```
@@ -96,7 +152,7 @@ Examples:
 ### Analog I/O
 
 ```
-#analog <name>[:<resolution>] [in|out] [pwm] [<port>:]<pin>
+#analog <name>[:<resolution>] [in|out] [pwm] [signed|unsigned] [<port>:]<pin>
 ```
 
 Resolution is number of bits (default 10).
@@ -107,6 +163,86 @@ Examples:
 #analog Dimmer:8 out pwm 9
 #analog HighRes:12 in A:1
 ```
+
+> **A reading is SIGNED unless you say otherwise** — the same default a
+> `#variable` has. A sensor that swings both ways about a rest point reads
+> naturally that way: for an accelerometer 0 is level, and there is no midpoint
+> to subtract in every rule.
+>
+> Say `unsigned` when the value is a bit pattern or a magnitude rather than a
+> quantity — a packed RGB565 pixel sets bit 15 at full red, and reading that
+> back as a negative number helps nobody:
+>
+> ```
+> #analog Pixel:16 out unsigned 9:0
+> ```
+>
+> The value slot is 16 bits wide whichever you choose; the declaration decides
+> how those bits are read back. How a board maps its hardware onto the declared
+> resolution is the board layer's business — see the notes for your target.
+
+### Arrays
+
+Any of `#variable`, `#constant`, `#digital` and `#analog` can declare an array by
+putting a length after the name:
+
+```
+#variable Acc[3] = 0
+#constant CT[10] = { -100, -81, -31, 31, 81, 100, 81, 31, -31, -81 }
+#digital  D[5]  in 0:1..3,7,9
+#analog   P[10]:16 out unsigned 9:0..9
+```
+
+An array is **N declarations, one per element** — the head keeps the name, the
+rest are unnamed and follow it. Everything else about the declaration works
+unchanged: width, type, direction, an initial value.
+
+**Constants take an init list.** One value per element, in braces:
+
+```
+#constant ST[10] = { 0, 59, 95, 95, 59, 0, -59, -95, -95, -59 }
+```
+
+Written this way the table is checkable at a glance, which ten separate rules
+never were.
+
+**Devices take a pin range, a pin list, or both.** Each element carries its own
+pin, so one line describes ten outputs:
+
+```
+#analog P[10]:16 out unsigned 9:0..9      // pins 0..9 on port 9
+#digital D[5] in 0:1..3,7,9               // pins 1,2,3,7,9 on port 0
+```
+
+A length that disagrees with the number of pins is an error, not silently padded
+— the extra elements would otherwise all point at pin 0, which is a real pin.
+
+#### Subscripts
+
+An element is `A[<expression>]`, and it works on both sides of an assignment:
+
+```
+Acc = (CT[Idx]*Gx + ST[Idx]*Gy) / 100
+P[(Idx + 1) % 10] = Colour
+```
+
+`A` with no subscript is element 0 — a scalar and a one-element array are the
+same thing.
+
+**A constant subscript costs nothing.** `CT[3]` resolves to that element's own
+declaration when the program is compiled, so it is exactly as fast as a plain
+name, and an index past the end is caught there and then.
+
+**A runtime subscript is checked every cycle** against the declared length. An
+index outside the array reports `index out of range` and the access is skipped —
+the value is wrong, but nothing outside the array is read or written.
+
+#### Limits
+
+- An array inside a *named object* (`obj.A[i]`) is not supported.
+- The reactive graph tracks dependencies per declaration, so a rule that reads
+  `A[i]` is not woken by a write to `A`. Timer- or state-driven programs are
+  unaffected; a `<-` rule over an array is not yet reliable.
 
 ### Timers
 
@@ -1642,8 +1778,9 @@ pandoc doc/manual_en.md -o doc/manual_en.pdf \
 ```
 #variable <name>[:<bits>] [type] [= value]              // bits 1..32, typeless = signed
 #variable <name>:<bits> [big|little] bind <buffer>[<a>..<b>]   // bit-field view
+#local <name>[:<bits>] [type] = <expr>   // a named FORMULA, same-cycle, no assign
 #digital <name> [in|out|inout] [pullup|pulldown] [<port>:]<pin>
-#analog <name>[:<resolution>] [in|out] [pwm] [<port>:]<pin>
+#analog <name>[:<resolution>] [in|out] [pwm] [signed|unsigned] [<port>:]<pin>
 #timer <name> <period_ms> [= 1]
 #constant <name> = <value>
 #buffer <name>:<bytes> [type]           // shared storage (size in BYTES)
@@ -1651,6 +1788,19 @@ pandoc doc/manual_en.md -o doc/manual_en.pdf \
 #field <name>:<bits> [type] [big|little] <frame>[<a>..<b>]  // field of a frame
 #states <name> ...                      // INIT/NORMAL/FAILSAFE implicit
 #module <name> ... #end
+```
+
+## Arrays
+```
+#variable Acc[3] = 0                     // N declarations, one per element
+#constant CT[10] = { -100, -81, 31 }     // init list, one value per element
+#digital  D[5]  in 0:1..3,7,9            // pin list: 1,2,3,7,9
+#analog   P[10]:16 out unsigned 9:0..9   // pin range: one pin per element
+
+x = A[I]                     // runtime index: checked every cycle
+A[(I + 1) % 10] = v          // ...on the left as well
+y = CT[3]                    // constant index: free, checked at compile time
+z = A                        // no subscript = element 0
 ```
 
 ## Buffers
