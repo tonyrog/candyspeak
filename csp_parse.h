@@ -104,6 +104,15 @@ enum {
     STOP_BODY_IDX0,         // first index in body lhs  Buf[idx0 ..]
     STOP_BODY_IDX1,         // second index in body lhs Buf[.. idx1]
     STOP_BODY_IDXE,         // A[<expr>] on the lhs -- stops at ']'
+    STOP_INIT_VAL,          // one element of `= { v0, v1, ... }`
+    // The pin spec, one set per SITE: a stop-set id may be built only once, so
+    // two P_INTEGER_S sharing an id leaves the first one reading the second's
+    // followers (and prints "stop set not empty" under DEBUG).
+    STOP_PIN_NUM,           // the leading number -- a port or a pin, not yet known
+    STOP_PIN_LO,            // <pin> after `<port> ':'`
+    STOP_PIN_HI,            // range end after `<port> ':' <pin> '..'`
+    STOP_PIN_HI2,           // range end after `<pin> '..'`
+    STOP_PIN_HI3,           // range end of a continued range, `'..' <pin>`
     STOP_OBJECT_INIT_CONT,
     STOP_PACK_VAL,          // pack field value expr (stops at ':' or next field)
     STOP_PACK_BITS,         // pack field width int
@@ -116,6 +125,8 @@ enum {
     PAT_END,
     PAT_RES,
     PAT_PORT_PIN,
+    PAT_INITVAL,     // one element of a `= { ... }` init list
+    PAT_PIN_ITEM,    // one item of a device array's pin spec
     PAT_VARIABLE,
     PAT_CONSTANT,
     PAT_DIGITAL,

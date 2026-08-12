@@ -361,6 +361,50 @@ Klart-markerat flyttas till DONE.md, inte hit.
     `token_t tv[24]` i `csp_process_line` + `csp_parse` (~288 byte) -- raden är
     redan tokeniserad en gång, andra passet är redundant.
 
+## LPC-porten (csp_lpcopen.c) -- klar grund, fyra stubbar kvar (2026-08-13)
+  Mot LPCOpen-drivrutinerna i nxp_lpcopen/, alltså ett lager under Arduino: inget
+  core, inga bibliotek. KLART och verifierat: GPIO in/ut/config, ADC-in med
+  res-skalning (samma signed-default som CPX), SysTick-klocka (ms + us),
+  UART-konsol med XON/XOFF, minnesrapport, huvudloopen, on-chip EEPROM på
+  17xx/40xx.
+
+  PORTKONVENTIONEN blir äntligen ärlig här: `0:13` ÄR GPIO-port 0 pin 13, chipets
+  egen numrering -- på Arduino måste `port` hittas på. En #analog väljer perifer
+  via porten: 15 = ADC (pin = kanal), 13 = DAC. PWM går på `pwm`-flaggan som förr.
+
+  STUBBAR att fylla i (alla har en fungerande no-op-kropp + kommentar som säger
+  vad en riktig gör, sök på "STUB" i filen):
+  - `csp_lpc_pin_mux()` -- IOCON (11xx/15xx/17xx/40xx) eller SCU (18xx/43xx).
+    Detta är också där pullup/pulldown hör hemma: de sitter INTE i GPIO-blocket,
+    så en `in pullup` funkar som vanlig ingång tills muxen sätter den.
+  - `csp_lpc_pwm_write()` -- SCT eller timer-match, board-beroende.
+  - `csp_lpc_dac_write()` -- två rader när man vet vilken familj.
+  - `csp_lpc_board_init()` -- klockor, ström till periferi, extern oscillator.
+  - CAN: tre olika API:er (Chip_CAN_ 17xx/40xx, Chip_CCAN_ 18xx/43xx, ROM-CAN
+    15xx). Stubbarna är no-bus, vilket är ett fungerande läge.
+  - EEPROM på 18xx/43xx: minnesmappad läsning, sidvis skrivning. Buffra en sida
+    som SAMD-flashbackenden i csp_arduino.c buffrar en rad.
+  - 15xx-ADC:n är sekvenserbaserad, egen init/läsväg.
+
+  TESTET: tests/lpcstub/ deklarerar LPCOpen-API:t med rätt signaturer, så
+  `make test` BYGGER OCH LÄNKAR porten mot kärnan med bara gcc -- och kör den:
+  stubbens __WFI anropar SysTick_Handler så idle-väntan fullbordas, och dess UART
+  läser stdin. Fångar båda sätten en port ruttnar (kärnan anropar något ingen
+  implementerar; två filer definierar samma sak). Arduino-porten har inget
+  motsvarande och kan inte lätt få det -- den behöver arduino-cli.
+
+  LPC1754 (Makefile.lpc1754) = 175x/6x-familjen: samma periferi som 177x/8x MEN
+  UTAN EEPROM. eeprom_17xx_40xx.h ligger i dess drivrutinskatalog vilket får det
+  att se annorlunda ut -- chip_lpc175x_6x.h definierar aldrig LPC_EEPROM. Den
+  grenen är därför NO_EEPROM: /save säger ärligt att det inte går. Vill man ha
+  persistens där är IAP-flash vägen (iap.h finns).
+
+  DUPLICERING, medveten: csp_setup/csp_input/csp_output är nästan identiska med
+  csp_arduino.c:s. Walken över st->nio, cfg-kollen och DIN/DOUT-hanteringen är
+  runtime-kontrakt, inte board-detalj. Bryt ut till en delad csp_io.c NÄR en
+  tredje port dyker upp -- två kopior är där dupliceringen syns men fortfarande
+  är billigare än en abstraktion anpassad efter ett urval på två.
+
 ## CAN, kvar att göra
   - CAN FD har diskreta DLC-värden (0-8,12,16,20,24,32,48,64). `.dlc` klampas
     bara till nbytes, den rundar inte upp till nästa giltiga FD-längd. Spelar
@@ -551,6 +595,45 @@ Inte buggar -- saker som byggts men inte setts fungera på järn.
 
   examples/cpx_ball_array.csp KOMPILERAR OCH KÖR -- 50 regler blev 7.
 
+  KLART (2026-08-13): BÅDA handskrivna scannrarna flyttade in i pmatch, på Tonys
+  fråga "borde man inte skriva detta i pmatch?".
+  - INIT-LISTAN: `pat_initval` = `P_CONST_S` + separator (`,` eller `}`) fångad
+    med `P_TOK_W`. `{` är nu ett ALTERNATIV i pat_constant, så tokenvektorn
+    muteras inte alls längre (minus-hacket och `{`-borttagningen är borta). Ger
+    gratis: konstant-UTTRYCK (`{ 1+2, MAX/2 }`) och STRÄNGAR (med `string`,
+    samma regel som en skalär strängkonstant). Listan gås igenom TVÅ gånger --
+    en räknande och en skrivande -- vilket är vad som gör längden känd innan
+    deklarationerna finns UTAN en fast maxgräns på antalet element.
+  - PINNSPECEN: `pat_pin_item`, ett item per pmatch-anrop. Ny syntax: FLERA
+    PORTAR (`1:1..3,2:1,3,5,9:,7..9`) och en port som står ensam (`9:`).
+    Per-element-port fungerade redan i runtime -- setup_analog/setup_digital
+    kopierar `port` till lagringen precis som `pin`.
+
+  TRE BUGGAR som föll ut av omskrivningen:
+  - `0:1,4,7` (ren pinnLISTA, utan `..`) har ALDRIG fungerat, trots att den stod
+    i manualen. Läst som port var stop-seten för det ledande talet `:` ensamt,
+    så scanningen sprang till nästa kolon på raden -- eller av slutet -- och vek
+    ihop hela listan till ETT tal. Bara formerna som börjar med `..` gick fram.
+    Fixat i två steg: `pat_port_pin` matchar nu ett efterföljande `,` (det är
+    DET som får COMMA in i pinnens stop-set), och pat_pin_item läser ETT tal som
+    blir port eller pinne beroende på om ett `:` följer -- inte två alternativ
+    som var för sig börjar med att läsa ett tal.
+  - `process_op` läste UNDER operandstacken när konstantfoldaren fick en position
+    som inte är ett uttryck (`,4`). Ett mönster som provar ett alternativ gör
+    precis det, och `num = (k > ti) ? k - ti : 1` lämnar över en token när
+    stop-token står först. ASan fångade det; en arity-koll överst i process_op
+    fixar det för ALLA anropare.
+  - `#analog` listade aldrig sin TYP. Med signed som ny default betyder det att
+    `out unsigned 9:0` kom tillbaka som signed -- allt över halva skalan
+    negativt. Listas nu när vt != V_INTEGER.
+
+  SIDOFYND, EJ ÅTGÄRDAT: unärt minus på en KONSTANT viks inte.
+  `#constant B = -N` är syntaxfel medan `#constant B = 0-N` och `#constant B = -5`
+  går bra -- `-` framför ett tal fälls in i literalen av tokenisern, framför ett
+  NAMN gör den inget. Gäller överallt konstantfoldaren körs, inte bara i
+  init-listor (där jag hittade det). Liten fix i uttrycksparsern, värd att göra
+  före release: formen är precis vad man skriver i en koefficienttabell.
+
   KVAR AV ARRAYERNA:
   - REAKTIVT: grafen har en kant per DEKLARATION och en indexerad läsning tar
     ingen kant alls (rentry:n byggs direkt i RB-fallet, förbi add_var). Alla
@@ -595,6 +678,10 @@ Inte buggar -- saker som byggts men inte setts fungera på järn.
 
   Två beslut att ta när det byggs:
   - Får `[N]` utelämnas när en lista anger längden? (`#digital D[] in 0:1..5,7`)
+    STATUS: `#constant A = { 1,2,3 }` (utan hakparenteser alls) sätter längden
+    från listan. Tomma `[]` är INTE implementerat -- array_splice kräver
+    `[ INT ]`. Värt att lägga till: `A[]` säger på deklarationen att det ÄR en
+    array, vilket `A = {...}` inte gör.
   - `#analog P[10] out 9:0..3` (tio element, fyra pinnar) ska vara ett FEL, inte
     en tyst nollfyllning.
 

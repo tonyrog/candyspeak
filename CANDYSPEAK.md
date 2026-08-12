@@ -104,7 +104,7 @@ the case for multiple bit selection.
 		| '>' clear               // clear all rules and saved rules
 
 	<declaration> :=
-		  '#' 'digital' <name> <iodir> [<port>':']<pin>
+		  '#' 'digital' <name>['['<int>']'] <iodir> <pin-spec>
           	  '#' 'variable' <name>[':' '1'] <iodir> ['=' '0'|'1']
 		| '#' 'can' <name> <can-bit>
 		 
@@ -129,6 +129,8 @@ the case for multiple bit selection.
     <frame-id> := <hex>
 	<port> := <int>
 	<pin> := <int> | <name>
+	<pin-spec> := <pin-item> (',' <pin-item>)*     -- device ARRAYS
+	<pin-item> := [<port> ':'] [<pin> ['..' <pin>]] | '..' <pin>
 	<bits> := <int>
 	<byte-pos> := 0..7 | 0..63
 	<bit-pos>  := 0..7 | 0..511
@@ -202,9 +204,11 @@ is probably to have all Off clauses after ALL On clauses.
 
 	<a-declaration> := 
 		  <declaration>
-		| '#' 'analog' <name> [':'<size>] [<iodir>] [<port>':'] <pin>
-		| '#' 'variable' <name>[':'<size>] [<iodir>] [<a-type>] ['=' <a-expr>]
-		| '#' 'constant' <name>[':'<size>] [<a-type>] '=' <a-expr>
+		| '#' 'analog' <name>['['<int>']'] [':'<size>] [<iodir>] <pin-spec>
+		| '#' 'variable' <name>['['<int>']'][':'<size>] [<iodir>] [<a-type>] ['=' <a-expr>]
+		| '#' 'local' <name> [':' <size>] '=' <a-expr>
+		| '#' 'constant' <name>['['<int>']'][':'<size>] [<a-type>] '=' <a-init>
+	<a-init> := <a-expr> | '{' <a-expr> (',' <a-expr>)* '}'
 		| '#' 'can' <name>[':'<size>] [<iodir>]
 		|                [<a-type>] [<a-endian>]<can-range>
 

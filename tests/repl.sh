@@ -645,6 +645,31 @@ else
     echo "  FAIL constant-array ROM did not build"; fail=$((fail+1))
 fi
 
+# An element of an init list is a constant EXPRESSION, and it is one because the
+# list is matched by the same P_CONST_S a scalar initialiser uses instead of by
+# a hand-written scan over INT tokens -- that scan understood a leading '-' and
+# nothing else. Strings come along for the ride, under the same `string` the
+# scalar form needs.
+cat > "$D/arrce.csp" <<'EOF'
+#constant N = 4
+#constant EX[3] = { 1+2, N*2, -5 }
+#constant SS[2] string = { "a", "bc" }
+EOF
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/arr14.db" --no-eeprom "$D/arrce.csp" |
+	  sed -n '/^#constant EX\|^#constant SS/p')
+ck "init list elements are constant expressions" \
+   '#constant EX[3]:32 integer = { 3, 8, -5 }  // R
+#constant SS[2]:32 string = { "a", "bc" }  // R' "$got"
+
+# A declared length and a list that disagree is a mistake, not something to pad
+# or truncate. Checked BEFORE any declaration is made, which is why the list is
+# walked twice -- counted, then written.
+cat > "$D/arrcbad.csp" <<'EOF'
+#constant CT[4] = { 1, 2, 3 }
+EOF
+./csp -n -c 0 "$D/arrcbad.csp" >/dev/null 2>&1
+ck "an init list that disagrees with the length is refused" "1" "$?"
+
 # `A[<expr>] = rhs`. The LEFT of a rule body is matched by pat_body, not by the
 # expression parser, so this is a separate path from the reads -- it emits the
 # SETOX in front of the STORE, and the arming has to happen after the right side
@@ -690,6 +715,36 @@ got=$(printf '/list\n/quit\n' | repl ./csp "$D/arr11.db" --no-eeprom "$D/arrd.cs
 ck "device arrays list their pin spec back" \
    '#analog P[10]:16 out 9:0..9  // R
 #digital D[5] in 0:1..3,7,9  // R' "$got"
+
+# A pin LIST with no range in it, and pins spread over SEVERAL PORTS. The plain
+# list is the case that never worked: read as a port, the leading integer's
+# stop-set was ':' alone, so in `0:1,4,7` the scan ran to the next colon on the
+# line -- or off the end -- and folded the whole list into one number. Every
+# form here has to survive a listing, since that is what a board hands back.
+cat > "$D/arrdp.csp" <<'EOF'
+#analog C[3]:16 out 0:1,4,7
+#digital E[4] in 0:2,1:5,2:6,3:7
+#analog D[9]:16 out 1:1..3,2:1,3,5,9:,7..9
+EOF
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/arr13.db" --no-eeprom "$D/arrdp.csp" |
+	  sed -n '/^#analog\|^#digital/p')
+ck "pin lists and several ports list back" \
+   '#analog C[3]:16 out 0:1,4,7  // R
+#digital E[4] in 0:2,1:5,2:6,3:7  // R
+#analog D[9]:16 out 1:1..3,2:1,3,5,9:7..9  // R' "$got"
+
+# An #analog is SIGNED by default, so `unsigned` has to survive a listing --
+# without it the line pastes back signed and every reading above half scale
+# comes home negative. Nothing else prints the type, so nothing else caught it.
+cat > "$D/arru.csp" <<'EOF'
+#analog U:16 out unsigned 9:0
+#analog S:16 out 9:1
+EOF
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/arr15.db" --no-eeprom "$D/arru.csp" |
+	  sed -n '/^#analog/p')
+ck "an unsigned analog lists as unsigned" \
+   '#analog U:16 out unsigned 9:0  // R
+#analog S:16 out 9:1  // R' "$got"
 
 # A length and a pin list that disagree is a typo. Silently padding would leave
 # the extra elements on pin 0, which is a real pin on every board here.
@@ -753,6 +808,43 @@ if build_rom tests/unit/local.csp "$D/loc_fw"; then
 sum                                   = 10' "$got"
 else
     echo "  FAIL #local ROM did not build"; fail=$((fail+1))
+fi
+
+# --- the LPC / LPCOpen port -------------------------------------------------
+# csp_lpcopen.c against stubbed chip drivers (tests/lpcstub). No LPC toolchain
+# is involved: the stub declares the LPCOpen functions with the signatures the
+# real headers have, so this compiles and LINKS the port the same way a firmware
+# build does -- which is what catches the two ways a port rots as the core moves
+# under it, a function the core now calls that nothing implements and one it no
+# longer calls that two files define.
+#
+# It runs, too. The stub's __WFI calls SysTick_Handler, so the idle wait in the
+# main loop actually completes, and its UART reads stdin -- so this exercises
+# boot, line assembly, csp_process_line, the rebuild and the listing.
+#
+# The Arduino port has no equivalent and cannot easily have one; it needs a core
+# that only arduino-cli can supply.
+echo "lpcopen:"
+if gcc -g -Wall -I. -Itests/lpcstub -DCSP_VERSION='"test"' -o "$D/lpc_fw" \
+       csp_lpcopen.c csp_rt.c csp_compile.c csp_parse.c csp_tok.c csp_print.c \
+       csp_repl.c csp_dump.c csp_eeprom.c csp_strings.c rom_host.c \
+       tests/lpcstub/stub.c >/dev/null 2>&1; then
+    ck "the LPC port builds and links against the core" "0" "0"
+    # A GPIO pin, an ADC channel (port 15) and a rule -- then list them back.
+    # `0:13` means GPIO port 0 pin 13 on this port, which is the chip's own
+    # numbering rather than a board pin table.
+    # Strip CR and the XON/XOFF bytes first. The firmware paces its peer with
+    # software flow control, so ^S/^Q land mid-stream -- right there in front of
+    # the first line of a listing, which is exactly where a rebuild happens.
+    got=$(printf '#digital Led out 0:13\n#analog Pot:10 in 15:3\nLed = 1 ? 1\n/list\n' |
+	      timeout 20 "$D/lpc_fw" 2>&1 | tr -d '\021\023\r' |
+	      sed -n '/^#digital\|^#analog\|^Led=/p')
+    ck "the LPC port boots, takes input and lists it back" \
+       '#digital Led out 0:13  // R
+#analog Pot:10 in 15:3  // R
+Led=1 ? 1  // 1 R' "$got"
+else
+    echo "  FAIL csp_lpcopen.c did not build"; fail=$((fail+1))
 fi
 
 echo "================================================"

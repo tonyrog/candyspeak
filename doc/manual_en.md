@@ -206,13 +206,35 @@ unchanged: width, type, direction, an initial value.
 Written this way the table is checkable at a glance, which ten separate rules
 never were.
 
+An element may be any constant **expression**, including one that names a
+constant declared earlier, and a `string` array takes string elements:
+
+```
+#constant Half[3] = { MAX/2, MAX/4, MAX/8 }
+#constant Names[3] string = { "off", "on", "auto" }
+```
+
 **Devices take a pin range, a pin list, or both.** Each element carries its own
-pin, so one line describes ten outputs:
+port and pin, so one line describes ten outputs:
 
 ```
 #analog P[10]:16 out unsigned 9:0..9      // pins 0..9 on port 9
 #digital D[5] in 0:1..3,7,9               // pins 1,2,3,7,9 on port 0
+#analog Q[3]:16 out 0:1,4,7               // a plain list, no range
 ```
+
+The pins do not have to sit on one port. A `<port>:` names the port for the
+pins after it, and it may stand on its own before a comma:
+
+```
+#digital E[4] in 0:2,1:5,2:6,3:7          // one pin on each of four ports
+#analog  R[9]:16 out 1:1..3,2:1,3,5,9:,7..9
+```
+
+The last line reads: pins 1..3 on port 1, then pins 1, 3 and 5 on port 2, then
+pins 7..9 on port 9 — nine elements over three ports. A listing collapses runs
+back into ranges and prints a port only where it changes, so what comes back out
+is the same spec in canonical form.
 
 A length that disagrees with the number of pins is an error, not silently padded
 — the extra elements would otherwise all point at pin 0, which is a real pin.
@@ -1796,6 +1818,7 @@ pandoc doc/manual_en.md -o doc/manual_en.pdf \
 #constant CT[10] = { -100, -81, 31 }     // init list, one value per element
 #digital  D[5]  in 0:1..3,7,9            // pin list: 1,2,3,7,9
 #analog   P[10]:16 out unsigned 9:0..9   // pin range: one pin per element
+#digital  E[4]  in 0:2,1:5,2:6,3:7       // a port names the pins after it
 
 x = A[I]                     // runtime index: checked every cycle
 A[(I + 1) % 10] = v          // ...on the left as well

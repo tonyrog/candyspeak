@@ -323,25 +323,35 @@ static void list_array_len(csp_rt_t* st, int i)
 // `port:pin` for a device, or the whole spec for a device ARRAY -- consecutive
 // elements collapse back into `a..b` and a jump starts a new group, so
 // `9:0..9` and `0:1..5,7,9` come out as they went in. Each element holds its own
-// pin, so this reads them rather than assuming anything about the order.
+// port and pin, so this reads them rather than assuming anything about the
+// order -- and a PORT change both ends the run in progress and prints itself,
+// without which `0:2,1:5,2:6` listed as `0:2,5..7`: three ports collapsed into
+// one range on the strength of the pin numbers alone.
 static void list_pin_spec(csp_rt_t* st, int i, int is_digital)
 {
     uint16_t alen = csp_array_len(st, i);
-    unsigned start, last;
+    unsigned port, start, last;
     uint16_t k;
 
-    csp_print_uint(is_digital ? decl(st,i,di.port) : decl(st,i,an.port));
+    port = is_digital ? decl(st,i,di.port) : decl(st,i,an.port);
+    csp_print_uint(port);
     csp_print_char(':');
     start = last = is_digital ? decl(st,i,di.pin) : decl(st,i,an.pin);
     csp_print_uint(start);
     for (k = 1; k < alen; k++) {
-	unsigned p = is_digital ? decl(st,i+k,di.pin) : decl(st,i+k,an.pin);
-	if (p == last + 1) {
+	unsigned q = is_digital ? decl(st,i+k,di.port) : decl(st,i+k,an.port);
+	unsigned p = is_digital ? decl(st,i+k,di.pin)  : decl(st,i+k,an.pin);
+	if ((q == port) && (p == last + 1)) {
 	    last = p;
 	    continue;
 	}
 	if (last != start) { csp_print_lit(".."); csp_print_uint(last); }
 	csp_print_char(',');
+	if (q != port) {
+	    port = q;
+	    csp_print_uint(port);
+	    csp_print_char(':');
+	}
 	csp_print_uint(p);
 	start = last = p;
     }
@@ -944,6 +954,14 @@ match:
 	    csp_print_uint(GET_RES(d.an.res));
 	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_pindir(d.dir));
+	    // The type, whenever it is not the default. An #analog is SIGNED
+	    // unless it says otherwise, so leaving `unsigned` out of the listing
+	    // is not a cosmetic omission: the line pastes back as a signed one
+	    // and every reading above half scale comes home negative.
+	    if (CSP_MASK(d.vt,TYPE_BITS) != V_INTEGER) {
+		csp_print_blank();
+		csp_print_rostr(csp_fmt_vtype(d.vt));
+	    }
 	    if (d.an.pwm) {
 		csp_print_blank();
 		csp_print_rostr(ros_pwm);

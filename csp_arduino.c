@@ -398,6 +398,26 @@ void csp_flush(void)
 EXTERN_C_END
 
 
+// Full-scale value of an #analog, for scaling a PWM write down to analogWrite's
+// 0..255.
+//
+// `res` is stored as bits-1 (MAKE_RES), so the raw field is NOT the width.
+// Reading it directly made every PWM output half the scale it should be: an
+// `#analog Servo:8 out pwm` divided by 127, so its top half mapped past 255 and
+// analogWrite got a value it cannot take.
+//
+// Capped at 30 because map() works in long and a declaration may ask for up to
+// MAX_RES_BITS (32) -- `1L << 32` is undefined, and a PWM finer than 30 bits is
+// not a thing any of these boards can emit anyway.
+static long pwm_full_scale(csp_rt_t* st, int di)
+{
+    int res = GET_RES(decl(st, di, res));
+
+    if (res > 30)
+	res = 30;
+    return (1L << res) - 1;
+}
+
 #ifdef CSP_CPX
 
 // before csp has memory
@@ -496,9 +516,9 @@ void csp_board_analog_output(csp_rt_t* st, int di, value_t* vptr)
     if (csp_neo_write(vptr))
 	;                             // an #analog on the NeoPixel port
     else if (vptr->a.pwm) {
-	int val = map(vptr->a.val, 0, (1<<decl(st,di,res))-1, 0, 255);
+	int val = map(vptr->a.val, 0, pwm_full_scale(st, di), 0, 255);
 	analogWrite(vptr->a.pin, val);
-    }	
+    }
 }
 
 #else
@@ -551,7 +571,7 @@ void csp_board_analog_output(csp_rt_t* st, int di, value_t* vptr)
 	return;                       // an #analog on the NeoPixel port
 #endif
     if (vptr->a.pwm) {
-	int val = map(vptr->a.val, 0, (1<<decl(st,di,res))-1, 0, 255);
+	int val = map(vptr->a.val, 0, pwm_full_scale(st, di), 0, 255);
 	analogWrite(vptr->a.pin, val);
     }
 }

@@ -1474,8 +1474,18 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
     int dst;
     opcode_t op;
     vtype_t rt;
+    int arity = op_table_arity(tok);
 
-    switch(op_table_arity(tok)) {
+    // An operator with nothing under it. Reached whenever the constant folder is
+    // handed a position that is not an expression at all -- a pattern probing an
+    // alternative does exactly that, and a scan bounded by a stop-set hands over
+    // one token when it finds the stop token immediately. `rstack[ep-2]` with
+    // ep = 0 then reads BELOW the stack, which is a real read of the frame under
+    // it, not a wrong answer.
+    if (ep < arity)
+	return PARSE_ERROR;
+
+    switch(arity) {
     case 2: {
 	rentry_t* a = &rstack[ep-2];
 	rentry_t* b = &rstack[ep-1];
@@ -2425,6 +2435,97 @@ static const uint8_t pat_port_pin[] = {
         P_INTEGER_S, csp_offsetof(port_pin_t, pin), STOP_PIN2,
       P_ALT_END,
     P_CHOICE_END,
+    // An array's pin list continues past the first pin, and the ',' has to be
+    // HERE for the pin's stop-set to contain it: without it `0:1,4,7` handed
+    // `1,4,7` to the constant folder as one expression and the whole list was
+    // lost -- only the forms starting with `..` ever worked. Matching it also
+    // consumes it, which is why an item may start without one.
+    P_OPT, 3, P_TOK, COMMA, P_OPT_END,
+    P_END
+};
+
+// One element of an init list, `<const>` followed by ',' or the closing '}'.
+// Written as a pattern rather than scanned by hand, which is what makes the
+// element grammar the SAME grammar a scalar initialiser has: P_CONST_S parses a
+// constant EXPRESSION and honours the declaration's type, so `{ 1+2, MAX/2 }`
+// and `{ "a", "b" }` cost nothing extra -- the hand-rolled scanner they replace
+// understood a leading '-' and nothing else.
+//
+// The separator is captured (P_TOK_W) instead of inferred: the caller reads
+// element after element and stops on '}', so the list needs no length known in
+// advance and no bound on how many elements it may hold.
+typedef struct {
+    value_t     init;
+    decl_opts_t opts;      // carries vt in, for P_CONST_S
+    ivalue_t    sep;       // COMMA or RBRACE
+} initval_param_t;
+
+static const uint8_t pat_initval[] = {
+    P_CONST_S,
+      csp_offsetof(initval_param_t, opts),
+      csp_offsetof(initval_param_t, init),
+      STOP_INIT_VAL,
+    P_CHOICE, 2,
+      P_ALT, 4, P_TOK_W, COMMA,  csp_offsetof(initval_param_t, sep), P_ALT_END,
+      P_ALT, 4, P_TOK_W, RBRACE, csp_offsetof(initval_param_t, sep), P_ALT_END,
+    P_CHOICE_END,
+    P_END
+};
+
+// One item of a device array's pin spec:
+//
+//   <port> ':' [<pin> ['..' <pin>]]     a port change, with or without pins
+//   <pin> ['..' <pin>]                  a pin or a range, in the current port
+//   '..' <pin>                          continues the range in progress
+//
+// The third is what lets `9:0..9` work at all: the declaration's own grammar
+// has already eaten `9:0` as its port:pin, so the tail starts mid-range.
+//
+// The first two SHARE their leading integer instead of being two alternatives
+// that each start by reading one. They have to: a stop-set is what bounds an
+// integer, and read as a port the set is `:` alone -- so in `3,5,9:` the scan
+// ran to the colon three items away and folded `3,5,9` into one number. Read
+// once, with `:` `..` and `,` all able to end it, `num` is a port when a colon
+// follows and a pin when one does not.
+//
+// A field left at -1 did not appear -- which is how `9:` (change port, name no
+// pins) is told apart from `9:0` without a flag per field.
+typedef struct {
+    ivalue_t num;          // the leading number: port if `colon`, else pin
+    ivalue_t colon;        // COLON when `num` was a port
+    ivalue_t lo;           // pin after `<port> ':'`
+    ivalue_t hi;           // range end, whichever range matched
+    ivalue_t sep;          // COMMA if another item follows
+} pin_item_t;
+
+// The trailing ',' is matched, not just tolerated: it is what puts COMMA in the
+// stop-set of every integer that can end an item. Consuming it also means the
+// next item starts clean, on its own first token.
+static const uint8_t pat_pin_item[] = {
+    P_CHOICE, 2,
+      P_ALT, 36,                        // <num> [':' [<pin> ['..' <pin>]]] ['..' <pin>]
+        P_INTEGER_S, csp_offsetof(pin_item_t, num), STOP_PIN_NUM,
+        P_OPT, 20,
+          P_TOK_W, COLON, csp_offsetof(pin_item_t, colon),
+          P_OPT, 14,
+            P_INTEGER_S, csp_offsetof(pin_item_t, lo), STOP_PIN_LO,
+            P_OPT, 8,
+              P_TOK, DOT, P_TOK, DOT,
+              P_INTEGER_S, csp_offsetof(pin_item_t, hi), STOP_PIN_HI,
+            P_OPT_END,
+          P_OPT_END,
+        P_OPT_END,
+        P_OPT, 8,
+          P_TOK, DOT, P_TOK, DOT,
+          P_INTEGER_S, csp_offsetof(pin_item_t, hi), STOP_PIN_HI2,
+        P_OPT_END,
+      P_ALT_END,
+      P_ALT, 8,                         // '..' <pin>
+        P_TOK, DOT, P_TOK, DOT,
+        P_INTEGER_S, csp_offsetof(pin_item_t, hi), STOP_PIN_HI3,
+      P_ALT_END,
+    P_CHOICE_END,
+    P_OPT, 4, P_TOK_W, COMMA, csp_offsetof(pin_item_t, sep), P_OPT_END,
     P_END
 };
 
@@ -2575,20 +2676,26 @@ NOINLINE static int array_replicate(csp_rt_t* st, int head, decl_t type,
     return 0;
 }
 
-// One element's pin. A device array shares ONE declaration's worth of config
-// with its copies, and the pin is the single field that has to differ -- which
-// is possible at all because the pin lives in the per-element STORAGE, seeded
-// from the declaration by setup_digital/setup_analog.
-NOINLINE static int set_elem_pin(csp_rt_t* st, int di, decl_t type, ivalue_t p)
+// One element's port and pin. A device array shares ONE declaration's worth of
+// config with its copies, and the port:pin pair is what has to differ -- which
+// is possible at all because both live in the per-element STORAGE, seeded from
+// the declaration by setup_digital/setup_analog.
+NOINLINE static int set_elem_pin(csp_rt_t* st, int di, decl_t type,
+				 ivalue_t port, ivalue_t p)
 {
-    if ((p < 0) || (p >= (1 << PIN_BITS))) {
+    if ((p < 0) || (p >= (1 << PIN_BITS)) ||
+	(port < 0) || (port >= (1 << PORT_BITS))) {
 	csp_set_error(st, ERR_NUMBER_RANGE);
 	return -1;
     }
-    if (type == DECL_DIGITAL)
-	ram_decl_at(st, di)->di.pin = (unsigned)p;
-    else
-	ram_decl_at(st, di)->an.pin = (unsigned)p;
+    if (type == DECL_DIGITAL) {
+	ram_decl_at(st, di)->di.port = (unsigned)port;
+	ram_decl_at(st, di)->di.pin  = (unsigned)p;
+    }
+    else {
+	ram_decl_at(st, di)->an.port = (unsigned)port;
+	ram_decl_at(st, di)->an.pin  = (unsigned)p;
+    }
     return 0;
 }
 
@@ -2598,57 +2705,72 @@ NOINLINE static int set_elem_pin(csp_rt_t* st, int di, decl_t type, ivalue_t p)
 //   9:0..9              a range   -- element k gets pin 0+k
 //   0:1,4,7             a list    -- element k gets the k-th pin
 //   0:1..5,7,9          both, in any order
+//   1:1..3,2:1,3,5      SEVERAL PORTS -- a port names the ones after it
+//   9:,7..9             a port on its own, pins after the comma
 //
-// Element 0 already has the first pin (pmatch read it); `last` tracks where a
-// range continues from. A count that does not match the declared length is an
-// ERROR -- ten elements over four pins is a typo, and padding or truncating it
-// silently would leave elements pointing at pin 0, which is a real pin.
+// Every item is matched by pat_pin_item; this only walks the items and turns
+// them into elements, so the grammar lives in one place and the port is just
+// another thing an item may carry. `port`/`last` are where an unqualified pin
+// and a continuing range pick up from.
+//
+// A count that does not match the declared length is an ERROR -- ten elements
+// over four pins is a typo, and padding or truncating it silently would leave
+// elements pointing at pin 0, which is a real pin.
 NOINLINE static int array_pins(csp_rt_t* st, const token_t* tv, int j, size_t n,
-			       int head, decl_t type, ivalue_t alen, ivalue_t p0)
+			       int head, decl_t type, ivalue_t alen,
+			       ivalue_t port0, ivalue_t pin0)
 {
-    ivalue_t last = p0;
+    ivalue_t port = port0;
+    ivalue_t last = pin0;
     int k = 1;
 
     while (j < (int)n) {
-	if ((j+2 < (int)n) && (tv[j].t == DOT) && (tv[j+1].t == DOT) &&
-	    (tv[j+2].t == INT)) {
-	    ivalue_t end = tv[j+2].v.val.i;
+	pin_item_t it;
+	ivalue_t lo;
+	int r;
+
+	it.num = it.lo = it.hi = -1;
+	it.colon = it.sep = 0;
+	if ((r = pmatch(st, tv, j, n, pat_pin_item, &it, sizeof(it))) <= j)
+	    break;                      // not part of the pin spec
+	j = r;
+	// `num` is the port when a ':' followed it, and the first pin when not.
+	if (it.colon == COLON) {
+	    port = it.num;
+	    lo = it.lo;
+	}
+	else
+	    lo = it.num;
+	if ((lo >= 0) || (it.hi >= 0)) {
+	    // `..hi` alone continues from the last pin named; `lo` alone is the
+	    // one-pin range lo..lo.
+	    ivalue_t hi;
 	    ivalue_t p;
-	    if (end < last) {           // `9:5..2` -- descending is a typo
+
+	    if (lo < 0)
+		lo = last + 1;
+	    hi = (it.hi >= 0) ? it.hi : lo;
+	    if (hi < lo) {              // `9:5..2` -- descending is a typo
 		csp_set_error(st, ERR_NUMBER_RANGE);
 		return -1;
 	    }
-	    for (p = last+1; p <= end; p++) {
-		if (k >= (int)alen)
-		    goto too_many;
-		if (set_elem_pin(st, head + k, type, p) < 0)
+	    for (p = lo; p <= hi; p++) {
+		if (k >= (int)alen) {
+		    csp_set_error(st, ERR_NUMBER_RANGE);
+		    return -1;
+		}
+		if (set_elem_pin(st, head + k, type, port, p) < 0)
 		    return -1;
 		k++;
 	    }
-	    last = end;
-	    j += 3;
+	    last = hi;
 	}
-	else if ((j+1 < (int)n) && (tv[j].t == COMMA) && (tv[j+1].t == INT)) {
-	    if (k >= (int)alen)
-		goto too_many;
-	    if (set_elem_pin(st, head + k, type, tv[j+1].v.val.i) < 0)
-		return -1;
-	    last = tv[j+1].v.val.i;
-	    k++;
-	    j += 2;
-	}
-	else
-	    break;                      // not part of the pin spec
     }
     if (k != (int)alen) {
 	csp_set_error(st, ERR_NUMBER_RANGE);   // too few pins for the length
 	return -1;
     }
     return 0;
-
-too_many:
-    csp_set_error(st, ERR_NUMBER_RANGE);
-    return -1;
 }
 
 // '#' 'variable' <name>[':' <size>] [<opt>+] ['=' <num> | <string>]
@@ -2823,27 +2945,76 @@ typedef struct {
     res_param_t r;
     decl_opts_t opts;
     value_t init;
+    ivalue_t list;          // LBRACE when `= { ... }` follows
 } constant_param_t;
 
+// The '{' is part of the GRAMMAR, so the two initialiser forms are one choice
+// instead of a pre-pass that edited the token vector. Matching the brace also
+// leaves pmatch stopped exactly on the first element, which is where the
+// element walk below starts.
 static const uint8_t pat_constant[] = {
     P_STR, csp_offsetof(constant_param_t, name),
     P_PAT, PAT_RES, csp_offsetof(constant_param_t, r), STOP_CONST_RES_CONT,
     P_OPTS, csp_offsetof(constant_param_t, opts),
     P_TOK, EQ,
-    P_CONST_S,
-    csp_offsetof(constant_param_t, opts), // pick up vt here
-    csp_offsetof(constant_param_t, init),
-    STOP_CONST_INIT,
+    P_CHOICE, 2,
+      P_ALT, 4,
+        P_TOK_W, LBRACE, csp_offsetof(constant_param_t, list),
+      P_ALT_END,
+      P_ALT, 5,
+        P_CONST_S,
+          csp_offsetof(constant_param_t, opts), // pick up vt here
+          csp_offsetof(constant_param_t, init),
+          STOP_CONST_INIT,
+      P_ALT_END,
+    P_CHOICE_END,
     P_END
 };
+
+// Walk `v0, v1, ... }` from `j`, calling nothing per element unless `head` is
+// given: with head < 0 it only COUNTS, which is what lets the length be known
+// before the declarations that hold the values exist. Parsing twice costs a
+// second constant-fold per element and buys an arbitrary list length with no
+// temporary array -- the alternative was a fixed cap on how many elements a
+// list may have, sized for a stack this also runs on.
+NOINLINE static int init_list(csp_rt_t* st, const token_t* tv, int j, size_t n,
+			      decl_opts_t opts, int head, int* np)
+{
+    int nv = 0;
+
+    for (;;) {
+	initval_param_t e;
+	int r;
+
+	e.opts = opts;
+	e.sep  = 0;
+	e.init.i = 0;
+	if ((r = pmatch(st, tv, j, n, pat_initval, &e, sizeof(e))) < 0) {
+	    csp_set_error(st, ERR_SYNTAX);
+	    return -1;
+	}
+	j = r;
+	if (head >= 0)
+	    ram_decl_at(st, head + nv)->cn.init = e.init;
+	nv++;
+	if (e.sep == RBRACE)
+	    break;
+	// A trailing `,` with nothing after it, or a runaway list.
+	if (j >= (int)n) {
+	    csp_set_error(st, ERR_SYNTAX);
+	    return -1;
+	}
+    }
+    *np = nv;
+    return j;
+}
 
 NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     constant_param_t d = {0};
     index_t ix;
-    int i, k, nv = 0;
+    int i, r, nv = 0;
     ivalue_t alen = 1;
-    int vpos = -1;              // token index of the first list element
 
     // set default values
     d.r.res = 8*sizeof(ivalue_t);
@@ -2852,73 +3023,27 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n)
     if (array_splice(st, tv, ti, &n, &alen) < 0)
 	return -1;
 
-    // `= { v0, v1, ... }` -- an init LIST. Handled around pmatch rather than in
-    // the grammar, and WITHOUT rewriting the values away: the only edit is to
-    // delete the `{`, after which pmatch is given a range that ENDS after v0.
-    // It then matches the ordinary `= <const>` it always did and the head comes
-    // out holding element 0, while v1.. sit untouched further up the vector for
-    // the copies to read. Rewriting them in place was the obvious move and the
-    // wrong one -- the values are the thing that has to survive.
-    {
-	int b = -1, e = -1, j;
-	for (j = ti; j < (int)n; j++) {
-	    if (tv[j].t == LBRACE) { b = j; break; }
-	}
-	if (b >= 0) {
-	    for (j = b+1; j < (int)n; j++) {
-		if (tv[j].t == RBRACE) { e = j; break; }
-	    }
-	    if ((e < 0) || (b == 0) || (tv[b-1].t != EQ)) {
-		csp_set_error(st, ERR_SYNTAX);       // `{` with no `}`, or no `=`
-		return -1;
-	    }
-	    // Shape: v (',' v)*. A leading '-' is its own token, so fold it into
-	    // the value first and an element is one token from here on.
-	    for (j = b+1; j < e; j++) {
-		if ((j - (b+1)) & 1) {
-		    if (tv[j].t != COMMA) {
-			csp_set_error(st, ERR_SYNTAX);
-			return -1;
-		    }
-		    continue;
-		}
-		if ((tv[j].t == MINUS) || (tv[j].t == MINUS1)) {
-		    if ((j+1 >= e) ||
-			((tv[j+1].t != INT) && (tv[j+1].t != FLT))) {
-			csp_set_error(st, ERR_SYNTAX);
-			return -1;
-		    }
-		    tv[j+1].v.val.i = -tv[j+1].v.val.i;
-		    memmove(&tv[j], &tv[j+1], (n - (j+1))*sizeof(token_t));
-		    n--; e--;
-		}
-		else if ((tv[j].t != INT) && (tv[j].t != FLT)) {
-		    csp_set_error(st, ERR_SYNTAX);
-		    return -1;
-		}
-		nv++;
-	    }
-	    // A declared length and a list that disagree is a mistake, not
-	    // something to pad or truncate silently.
-	    if ((nv < 1) || ((alen > 1) && (nv != alen))) {
-		csp_set_error(st, ERR_NUMBER_RANGE);
-		return -1;
-	    }
-	    if (alen == 1)
-		alen = nv;              // `#constant A[] = {..}` -- list sets it
-	    memmove(&tv[b], &tv[b+1], (n - (b+1))*sizeof(token_t));
-	    n--;                        // '{' gone; values now at b, b+2, b+4...
-	    vpos = b;
-	    n = b + 1;                  // pmatch sees `... = v0` and stops
-	}
-    }
-
-    if (pmatch(st, tv, ti, n, pat_constant, &d, sizeof(d)) < 0) {
+    if ((r = pmatch(st, tv, ti, n, pat_constant, &d, sizeof(d))) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
     if (check_res(st, d.r.res) < 0)
 	return -1;
+
+    // `= { v0, v1, ... }`. Counted first, so a length that disagrees with the
+    // list is caught before any declaration is made -- a mistake, not something
+    // to pad or truncate silently.
+    if (d.list == LBRACE) {
+	if (init_list(st, tv, r, n, d.opts, -1, &nv) < 0)
+	    return -1;
+	if ((alen > 1) && (nv != alen)) {
+	    csp_set_error(st, ERR_NUMBER_RANGE);
+	    return -1;
+	}
+	if (alen == 1)
+	    alen = nv;              // `#constant A = {..}` -- the list sets it
+    }
+
     if ((ix = csp_new_udecl(st,&d.name,DECL_CONSTANT)) == BAD_INDEX)
 	return -1;
     i = INDEX(ix);
@@ -2928,12 +3053,9 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n)
 
     if (array_replicate(st, i, DECL_CONSTANT, alen) < 0)
 	return -1;
-    // Element k's own value. The head already has element 0 (pmatch read it),
-    // and the copies inherited it -- overwrite each with its own.
-    if (vpos >= 0) {
-	for (k = 1; k < (int)alen; k++)
-	    ram_decl_at(st, i + k)->cn.init.i = tv[vpos + 2*k].v.val.i;
-    }
+    // Second pass: this one writes. The head is element 0 like any other.
+    if (d.list == LBRACE)
+	return (init_list(st, tv, r, n, d.opts, i, &nv) < 0) ? -1 : 0;
     return 0;
 }
 
@@ -2984,7 +3106,7 @@ NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, int ti, size_t n)
     // pmatch stopped, which is the first token of the pin spec's tail.
     if (alen > 1)
 	return array_pins(st, tv, r, n, i, DECL_DIGITAL, alen,
-			  d.port_pin.pin);
+			  d.port_pin.port, d.port_pin.pin);
     return 0;
 }
 
@@ -3039,7 +3161,8 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, int ti, size_t n)
     if (array_replicate(st, i, DECL_ANALOG, alen) < 0)
 	return -1;
     if (alen > 1)
-	return array_pins(st, tv, r, n, i, DECL_ANALOG, alen, d.port_pin.pin);
+	return array_pins(st, tv, r, n, i, DECL_ANALOG, alen,
+			  d.port_pin.port, d.port_pin.pin);
     return 0;
 }
 
@@ -4420,7 +4543,9 @@ void csp_compile_init(void)
     init_stop_sets();       // creates STOP_NONE (index 0)
 
     scan_pattern(PAT_PORT_PIN, pat_port_pin);
-    scan_pattern(PAT_RES,      pat_res);   
+    scan_pattern(PAT_RES,      pat_res);
+    scan_pattern(PAT_INITVAL,  pat_initval);
+    scan_pattern(PAT_PIN_ITEM, pat_pin_item);
 
     scan_pattern(PAT_MODULE,   pat_module);
     scan_pattern(PAT_END,      pat_end);
