@@ -498,8 +498,9 @@ kinds in use today, with the opcode each becomes:
     pat          P_PAT         another production, inlined by reference
     rep/array    P_REP/P_ARRAY repetition into an array of structs
 
-Stop sets are NOT an annotation.  They are computed from what can follow the
-capture, and the generator allocates one per SITE -- so the rule that an id may
+Stop sets are NOT an annotation.  The generator computes them from what can
+follow the capture and emits the finished tables as RODATA, so nothing is built
+at boot any more.  It allocates one id per SITE -- so the rule that an id may
 be built only once cannot be broken, because no id is written by hand.  The one
 exception is P_PAT, where a sub-pattern used twice in one pattern SHARES an id
 on purpose: pat_rule's second PAT_BODY sits inside the repetition and gets the

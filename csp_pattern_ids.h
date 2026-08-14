@@ -30,7 +30,7 @@ enum {
 
 enum {
     STOP_NONE = 0,       // empty/invalid placeholder
-    STOP_OPTS = 1,       // fixed set of all OPTION tokens (init_stop_sets)
+    STOP_OPTS = 1,       // fixed set of all OPTION tokens
     STOP_RES_RES,
     STOP_PORT_PIN_PORT,
     STOP_PORT_PIN_PIN,
@@ -69,5 +69,46 @@ enum {
     STOP_PACK_COND,
     NUM_STOP_SETS
 };
+
+// Names for dump_stop_sets(), indexed by the enum above.
+#define CSP_STOP_SET_NAMES \
+    "STOP_NONE", \
+    "STOP_OPTS", \
+    "STOP_RES_RES", \
+    "STOP_PORT_PIN_PORT", \
+    "STOP_PORT_PIN_PIN", \
+    "STOP_PORT_PIN_PIN_2", \
+    "STOP_INITVAL_INIT", \
+    "STOP_PIN_ITEM_NUM", \
+    "STOP_PIN_ITEM_LO", \
+    "STOP_PIN_ITEM_HI", \
+    "STOP_PIN_ITEM_HI_2", \
+    "STOP_PIN_ITEM_HI_3", \
+    "STOP_VARIABLE_RES_CONT", \
+    "STOP_VARIABLE_INIT", \
+    "STOP_CONSTANT_RES_CONT", \
+    "STOP_CONSTANT_INIT", \
+    "STOP_DIGITAL_PORT_PIN_CONT", \
+    "STOP_ANALOG_RES_CONT", \
+    "STOP_ANALOG_PORT_PIN_CONT", \
+    "STOP_TIMER_TIMEOUT", \
+    "STOP_TIMER_INIT", \
+    "STOP_FIELD_DECL_RES_CONT", \
+    "STOP_FIELD_DECL_BIT0", \
+    "STOP_FIELD_DECL_BIT1", \
+    "STOP_FIELD_DECL_BIT0_2", \
+    "STOP_BUFFER_RES_CONT", \
+    "STOP_BUFFER_FRAMEID", \
+    "STOP_BODY_IDX0", \
+    "STOP_BODY_IDX1", \
+    "STOP_BODY_IDXE", \
+    "STOP_BODY_RHS", \
+    "STOP_RULE_BODY_CONT", \
+    "STOP_RULE_COND", \
+    "STOP_OBJECT_BODY_CONT", \
+    "STOP_PACK_FIELD_VAL", \
+    "STOP_PACK_FIELD_BITS", \
+    "STOP_PACK_PACK_FIELD_CONT", \
+    "STOP_PACK_COND",
 
 #endif

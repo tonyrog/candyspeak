@@ -7,60 +7,34 @@
 // csp_compile.c.
 #if !defined(CSP_EXEC_ONLY)
 
-// Stop-set storage: all tokens in one array, NONE-terminated sets
-static uint8_t stop_toks[MAX_STOP_TOKENS];
-static uint8_t stop_pos[NUM_STOP_SETS];
-static const uint8_t*   pattern[NUM_PAT];
-static int stop_toks_len = 0;
-static int num_stop_sets = 0;
-// Tokens that did NOT fit. Any value but 0 means the patterns have outgrown
-// MAX_STOP_TOKENS and some stop set is short -- the parser is then wrong in ways
-// that look like unrelated syntax errors. Reported by print_defines.
-int csp_stop_overflow = 0;
+// Stop-set storage. GENERATED (csp_stop_sets.h) rather than built at boot:
+// collect_first() and scan_pattern_() computed something that cannot change,
+// every time the firmware came up, into 230 bytes of RAM. Now RODATA, and those
+// two functions plus add_stop_tok and init_stop_sets are gone with them.
+//
+// The budget check went with them too -- and had to go somewhere: the generator
+// fails the build if the sets outgrow MAX_STOP_TOKENS, which is a better place
+// to find out than a boot counter nobody reads.
+static const uint8_t stop_toks[] RODATA = { CSP_STOP_TOKS };
+static const uint8_t stop_pos[NUM_STOP_SETS] RODATA = { CSP_STOP_POS };
+static const uint8_t* pattern[NUM_PAT];
 
-int csp_stop_tokens_used(void) { return stop_toks_len; }
+int csp_stop_tokens_used(void) { return (int) sizeof(stop_toks); }
 
 #ifdef DEBUG
 
 #define STRCASE(id) case id: return #id
 
+// The names come from csp_pattern_ids.h, generated with the enum itself. As a
+// hand-written switch this only compiled under DEBUG, so it kept the old set
+// names through a rename and said nothing until somebody built with -DDEBUG.
+static const char* const stop_set_names[] = { CSP_STOP_SET_NAMES };
+
 static char* stop_set_name(uint8_t sid)
 {
-    switch(sid) {
-    STRCASE(STOP_NONE);
-    STRCASE(STOP_OPTS);
-    STRCASE(STOP_RULE_BODY);
-    STRCASE(STOP_RULE_COND);
-    STRCASE(STOP_RES);
-    STRCASE(STOP_PORT);
-    STRCASE(STOP_PIN1);
-    STRCASE(STOP_PIN2);
-    STRCASE(STOP_VAR_INIT);
-    STRCASE(STOP_CONST_INIT);
-    STRCASE(STOP_TIMER_TMO);
-    STRCASE(STOP_TIMER_INIT);
-    STRCASE(STOP_CAN_FRAMEID);    
-    STRCASE(STOP_BUFFER_CAN_ID);
-    STRCASE(STOP_CAN_BIT0);
-    STRCASE(STOP_CAN_BIT1);
-    STRCASE(STOP_CAN_BIT00);
-    STRCASE(STOP_OBJECT_INIT_RHS);
-    STRCASE(STOP_RULE_BODY_CONT);
-    STRCASE(STOP_VAR_RES_CONT);
-    STRCASE(STOP_CONST_RES_CONT);
-    STRCASE(STOP_DIGITAL_PP_CONT);
-    STRCASE(STOP_ANALOG_RES_CONT);
-    STRCASE(STOP_ANALOG_PP_CONT);
-    STRCASE(STOP_CAN_RES_CONT);
-    STRCASE(STOP_BUFFER_RES_CONT);
-    STRCASE(STOP_BODY_IDX0);
-    STRCASE(STOP_BODY_IDX1);    	
-    STRCASE(STOP_OBJECT_INIT_CONT);
-    STRCASE(STOP_PACK_VAL);
-    STRCASE(STOP_PACK_BITS);
-    STRCASE(STOP_PACK_FIELD_CONT);
-    default: return "???";
-    }
+    if (sid >= NUM_STOP_SETS)
+	return "???";
+    return (char*) stop_set_names[sid];
 }
 
 #if 0
@@ -86,68 +60,15 @@ static char* dtok_name(uint8_t dtok)
 }
 #endif
 
+// Indexed by tok_t, from csp_tokens.h -- generated with the enum, so a new
+// token cannot go unnamed here the way RBRACE did (it printed as "???").
+static const char* const tok_names[] = { CSP_TOKEN_NAMES };
+
 static char* tok_name(uint8_t tok)
 {
-    switch(tok) {
-    STRCASE(NONE);
-    STRCASE(NEWLINE);    
-    STRCASE(LP);
-    STRCASE(RP);
-    STRCASE(COLON);
-    STRCASE(HASH);
-    STRCASE(DOT);
-    STRCASE(DOTDOT);
-    STRCASE(LB);
-    STRCASE(RB);
-    STRCASE(INT);
-    STRCASE(FLT);
-    STRCASE(STR);
-    STRCASE(EXCLAMATION);
-    STRCASE(TILDE);
-    STRCASE(MINUS1);
-    STRCASE(PLUS1);
-    STRCASE(PLUS);
-    STRCASE(MINUS);
-    STRCASE(ASTERISK);
-    STRCASE(SLASH);
-    STRCASE(PERCENT);
-    STRCASE(LTLT);
-    STRCASE(GTGT);
-    STRCASE(LT);
-    STRCASE(LTEQ);
-    STRCASE(GT);
-    STRCASE(GTEQ);
-    STRCASE(EQEQ);
-    STRCASE(NEQ);
-    STRCASE(AMP);
-    STRCASE(BAR);
-    STRCASE(CIRC);
-    STRCASE(AMPAMP);
-    STRCASE(BARBAR);
-    STRCASE(EQ);
-    STRCASE(RIMP);
-    STRCASE(COMMA);
-    STRCASE(QUEST);
-    STRCASE(WORD);    
-    STRCASE(T_PULLUP);
-    STRCASE(T_PULLDOWN);
-    STRCASE(T_RESOLUTION);
-    STRCASE(T_IN);
-    STRCASE(T_OUT);
-    STRCASE(T_INOUT);
-    STRCASE(T_PWM);
-    STRCASE(T_FLOAT);
-    STRCASE(T_INTEGER);
-    STRCASE(T_UNSIGNED);
-    STRCASE(T_STRING);
-    STRCASE(T_NATIVE);
-    STRCASE(T_LITTLE);
-    STRCASE(T_BIG);
-    STRCASE(T_CAN);
-    STRCASE(T_DISABLE);
-    STRCASE(T_ENABLE);    
-    default: return "???";
-    }
+    if (tok > T_LAST)
+	return "???";
+    return (char*) tok_names[tok];
 }
 
 static void print_stop(FILE* f, uint8_t stop)
@@ -166,11 +87,13 @@ static void print_stop(FILE* f, uint8_t stop)
 int stop_set_has(int set_idx, uint8_t tok)
 {
     int i;
-    if ((set_idx < 0) || (set_idx >= num_stop_sets))
+    if ((set_idx < 0) || (set_idx >= NUM_STOP_SETS))
 	return 0;
-    i = stop_pos[set_idx];
-    while ((i < stop_toks_len) && (stop_toks[i] != NONE)) {
-	uint8_t t = stop_toks[i];
+    i = ro_byte(&stop_pos[set_idx]);
+    while (i < (int)sizeof(stop_toks)) {
+	uint8_t t = ro_byte(&stop_toks[i]);
+	if (t == NONE)
+	    break;
 	if (t & TOK_SET) { // t is a token set
 	    if (stop_set_has((t & TOK_SET_MASK), tok))
 		return 1;
@@ -183,243 +106,11 @@ int stop_set_has(int set_idx, uint8_t tok)
 }
 
 // Add token to current set (avoid duplicates)
-static void add_stop_tok(uint8_t sid, uint8_t tok)
-{
-    int start;
-    int i;
-    start = stop_pos[sid];
-    for (i = start; i < stop_toks_len; i++) {
-        if (stop_toks[i] == tok) return;  // already present
-    }
-    if (tok & TOK_SET)
-	DBG("add set {%s} to stop_set %s\n",
-	    stop_set_name(tok & TOK_SET_MASK), stop_set_name(sid));
-    else
-	DBG("add token %s to stop_set %s\n", tok_name(tok), stop_set_name(sid));
-    if (stop_toks_len < MAX_STOP_TOKENS)
-        stop_toks[stop_toks_len++] = tok;
-    else
-	csp_stop_overflow++;   // never silent again -- see MAX_STOP_TOKENS
-}
-
-// Collect FIRST tokens from pattern position pi
-static void collect_first(uint8_t sid, const uint8_t* pat, int pi)
-{
-    uint8_t cmd;
-    uint8_t len;
-
-next:
-    cmd = pat[pi];
-    switch (cmd) {
-    case P_END:
-	add_stop_tok(sid, NEWLINE);
-	return;
-    case P_ALT_END:    pi++; break;
-    case P_CHOICE_END: pi++; break;
-    case P_OPT_END:    pi++; break;
-    case P_REP_END:    pi++; break;
-    case P_TOK:
-    case P_TOK_W:
-	add_stop_tok(sid,pat[pi + 1]);
-	return;
-    case P_STR:
-	add_stop_tok(sid,WORD);
-	return;
-    case P_INTEGER_S:
-    case P_FLOAT_S:	
-    case P_CONST_S:
-    case P_EXPR_S:
-	return;
-    case P_ALT:  // BUG? choice should skip!
-	len = pat[pi+1];
-	pi += (len+1);
-	break;
-    case P_OPTS: // add the whole set
-	add_stop_tok(sid, STOP_SET(STOP_OPTS));
-	pi += 2;
-	break;
-    case P_OPT:
-	len = pat[pi + 1];
-	collect_first(sid, pat, pi + 2);
-	collect_first(sid, pat, pi + 2 + len);
-	return;
-    case P_CHOICE: {
-	uint8_t n = pat[pi + 1];
-	int p = pi + 2;
-	int a;
-	for (a = 0; a < n; a++) {
-	    if (pat[p++] != P_ALT) {
-		DBG("P_CHOICE %d P_ALT internal error\n", a);
-		return;
-	    }
-	    len = pat[p++];
-	    collect_first(sid, pat, p);
-	    p += len;
-	}
-	return;
-    }
-    case P_REP:
-	len = pat[pi + 1];
-	collect_first(sid, pat, pi + 2);
-	collect_first(sid, pat, pi + 2 + len);
-	return;
-    case P_ARRAY:
-	pi += 3;
-	break;
-    case P_PAT: {
-	int p = pat[pi + 1];
-	collect_first(sid, pattern[p], 0);
-	return;
-    }
-    default:
-	return;
-    }
-    goto next;
-}
-
-// Scan entire pattern,
-// build stop-sets for all P_CONST_S, P_INTEGER_S, P_FLOAT_S, P_EXPR_S
-static void scan_pattern_(const uint8_t* pat)
-{
-    int pi = 0;
-    int sid;
-    uint8_t len;
-    uint8_t n;
-    int p, a;
-next:
-    switch(pat[pi]) {
-    case P_END:
-    case P_OPT_END:
-    case P_ALT_END:
-    case P_REP_END:
-    case P_CHOICE_END:
-	return;
-    case P_TOK:
-    case P_STR:	
-	pi += 2;
-	break;
-    case P_TOK_W:	// cmd, tok, offset
-	pi += 3;
-	break;
-    case P_CONST_S:
-	n = 3;
-	goto p_scan_s;
-    case P_INTEGER_S:
-    case P_FLOAT_S:
-    case P_EXPR_S:
-	n = 2;
-	goto p_scan_s;	
-    case P_OPTS:
-	pi += 2;
-	break;
-    case P_OPT:
-	len = pat[pi + 1];
-	scan_pattern_(&pat[pi + 2]);
-	pi += 2 + len;
-	break;
-    case P_CHOICE:
-	n = pat[pi + 1];
-	p = pi + 2;
-	for (a = 0; a < n; a++) {
-	    if (pat[p++] != P_ALT) {
-		DBG("P_ALT %d internal error\n", a);
-		return;
-	    }	    
-	    len = pat[p++];
-	    scan_pattern_(&pat[p]);
-	    p += len;
-	}
-	if (pat[p] != P_CHOICE_END) {
-	    DBG("P_CHOICE_END  missing internal error\n");
-	    return;	    
-	}
-	pi = p+1;
-	break;
-    case P_REP:
-	len = pat[pi + 1];
-	scan_pattern_(&pat[pi + 2]);
-	pi += 2 + len;
-	break;
-    case P_ARRAY:
-	pi += 3;
-	break;
-    case P_PAT: {
-	uint8_t cont_sid = pat[pi+3];
-
-	// Build continuation stop-set from followers.
-	// A set shared by several P_PAT sites becomes the union
-	// of the followers from all sites.
-	if (cont_sid != STOP_NONE) {
-	    int old = stop_pos[cont_sid];
-	    if (cont_sid >= num_stop_sets)
-		num_stop_sets = cont_sid + 1;
-	    stop_pos[cont_sid] = stop_toks_len;
-	    DBG("build cont set %d from followers at %d\n", cont_sid, pi+4);
-	    if (old) {  // already built: merge old tokens
-		while (stop_toks[old] != NONE)
-		    add_stop_tok(cont_sid, stop_toks[old++]);
-	    }
-	    collect_first(cont_sid, pat, pi + 4);
-	    add_stop_tok(cont_sid, NONE);
-	}
-	// sub-pattern is scanned by its own scan_pattern call (enum order)
-	pi += 4;
-	break;
-    }
-    default:
-	pi++;
-	break;
-    }
-    goto next;
-    
-p_scan_s:
-    sid = pat[pi + n];
-    if (sid >= num_stop_sets)
-	num_stop_sets = sid+1;
-#ifdef DEBUG
-    if (stop_pos[sid] != 0)
-	printf("stop set %s not empty!!!\n", stop_set_name(sid));
-#endif
-    stop_pos[sid] = stop_toks_len;
-    DBG("build stop set %s = %d\n",
-	stop_set_name(sid), stop_pos[sid]);
-    pi += (n+1);
-    collect_first(sid, pat, pi);
-    add_stop_tok(sid, NONE);
-    goto next;
-}
-
+// Registration only. It used to scan the pattern and build its stop sets; those
+// are generated now, so all that is left is the table P_PAT resolves through.
 void scan_pattern(int pat_id, const uint8_t* pat)
 {
     pattern[pat_id] = pat;
-    scan_pattern_(pat);
-}
-
-void init_stop_sets(void)
-{
-    stop_toks_len = 0;
-    num_stop_sets = 0;
-    memset(stop_pos, 0, sizeof(stop_pos));
-    
-    stop_pos[STOP_NONE] = stop_toks_len; // empty placeholder
-    stop_toks[stop_toks_len++] = NONE;
-    // Add OPTS tokens as a special set
-    stop_pos[STOP_OPTS] = stop_toks_len; // options token set
-    stop_toks[stop_toks_len++] = T_UNSIGNED;
-    stop_toks[stop_toks_len++] = T_INTEGER;
-    stop_toks[stop_toks_len++] = T_FLOAT;
-    stop_toks[stop_toks_len++] = T_PWM;
-    stop_toks[stop_toks_len++] = T_IN;
-    stop_toks[stop_toks_len++] = T_OUT;
-    stop_toks[stop_toks_len++] = T_INOUT;
-    stop_toks[stop_toks_len++] = T_NATIVE;    
-    stop_toks[stop_toks_len++] = T_LITTLE;
-    stop_toks[stop_toks_len++] = T_BIG;
-    stop_toks[stop_toks_len++] = T_PULLUP;
-    stop_toks[stop_toks_len++] = T_PULLDOWN;
-    stop_toks[stop_toks_len++] = T_STRING;    
-    stop_toks[stop_toks_len++] = NONE;
-    num_stop_sets = 2;
 }
 
 #ifdef DEBUG
@@ -427,8 +118,8 @@ void dump_stop_sets(void)
 {
     int i;
     FILE* f = stdout;
-    fprintf(f, "stop_toks[%d] = {\n", stop_toks_len);
-    for (i = 0; i < stop_toks_len; i++) {
+    fprintf(f, "stop_toks[%d] = {\n", (int)sizeof(stop_toks));
+    for (i = 0; i < (int)sizeof(stop_toks); i++) {
 	uint8_t stop = stop_toks[i];
 	print_stop(f, stop);
 	if (i && !(i & 0x7)) fprintf(f, "\n");

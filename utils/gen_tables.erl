@@ -59,6 +59,12 @@ text() ->
      macro("CSP_TOK_TABLE", [row(T) || T <- Toks]),
      "\n",
      macro("CSP_DECL_TABLE", [drow(D) || D <- Decls]),
+     "\n",
+     %% For the DEBUG-only tok_name(). Written by hand it was a switch that
+     %% only compiles under DEBUG, so a new token could be missing from it for
+     %% as long as nobody built that way -- RBRACE printed as "???".
+     "// Names for tok_name(), indexed by tok_t.\n",
+     macro("CSP_TOKEN_NAMES", [["\"", name(T), "\","] || T <- Toks]),
      "\n#endif\n"].
 
 enum(Name, Rows) ->

@@ -576,7 +576,6 @@ void print_defines()
     // token silently shortens a stop set, and the parser then fails in places
     // that have nothing to do with whatever pattern outgrew it.
     printf("STOP_TOKENS=%d/%d\n", csp_stop_tokens_used(), MAX_STOP_TOKENS);
-    printf("STOP_OVERFLOW=%d\n", csp_stop_overflow);
 #endif
     printf("D_LAST=%d\n", D_LAST);        // #dtok
     printf("PART_LAST=%d\n", PART_LAST);  // <= 16 (4-bit max)
@@ -1053,8 +1052,6 @@ int main(int argc, char** argv)
     // AFTER init: the stop sets are built by csp_compile_init, which runs in
     // here. print_defines above sees zeroes and cannot report this.
     if (debug)
-	printf("STOP_TOKENS=%d/%d OVERFLOW=%d\n",
-	       csp_stop_tokens_used(), MAX_STOP_TOKENS, csp_stop_overflow);
 #endif
     // -m shrinks the usable code-memory budget to exercise the out-of-memory
     // path. Clamp to what csp_mem_init left for the pool, NOT to mem_size: the

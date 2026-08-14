@@ -166,4 +166,67 @@ typedef enum {
     DECL_ENT(D_BUFFER,DECL_BUFFER,s_buffer), \
     DECL_ENT(D_LAST,DECL_NONE,s_null),
 
+// Names for tok_name(), indexed by tok_t.
+#define CSP_TOKEN_NAMES \
+    "NONE", \
+    "NEWLINE", \
+    "LP", \
+    "RP", \
+    "COLON", \
+    "HASH", \
+    "DOT", \
+    "DOTDOT", \
+    "LB", \
+    "RB", \
+    "LBRACE", \
+    "RBRACE", \
+    "INT", \
+    "FLT", \
+    "STR", \
+    "EXCLAMATION", \
+    "TILDE", \
+    "MINUS1", \
+    "PLUS1", \
+    "PLUS", \
+    "MINUS", \
+    "ASTERISK", \
+    "SLASH", \
+    "PERCENT", \
+    "LTLT", \
+    "GTGT", \
+    "LT", \
+    "LTEQ", \
+    "GT", \
+    "GTEQ", \
+    "EQEQ", \
+    "NEQ", \
+    "AMP", \
+    "BAR", \
+    "CIRC", \
+    "AMPAMP", \
+    "BARBAR", \
+    "EQ", \
+    "RIMP", \
+    "COMMA", \
+    "QUEST", \
+    "WORD", \
+    "T_PULLUP", \
+    "T_PULLDOWN", \
+    "T_RESOLUTION", \
+    "T_IN", \
+    "T_OUT", \
+    "T_INOUT", \
+    "T_PWM", \
+    "T_FLOAT", \
+    "T_INTEGER", \
+    "T_UNSIGNED", \
+    "T_STRING", \
+    "T_NATIVE", \
+    "T_LITTLE", \
+    "T_BIG", \
+    "T_CAN", \
+    "T_DISABLE", \
+    "T_ENABLE", \
+    "T_LAST",
+
 #endif

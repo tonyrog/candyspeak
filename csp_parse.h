@@ -58,16 +58,13 @@ enum {
 int pmatch(csp_rt_t* st, const token_t* tv, int ti, size_t n,
 	   const uint8_t* pat, void* data, size_t data_size);
 
-// Stop-set functions for P_EXPR_S
-// Every stop set lives in one shared array, so this is the budget for ALL of
-// them together, not per set. Overflow used to be SILENT: add_stop_tok simply
-// dropped the token, the set it belonged to lost its terminator, and expression
-// scans ran past where they should stop -- which shows up as a couple of dozen
-// unrelated parse failures, nowhere near the pattern that was actually added.
-// csp_stop_overflow counts what was dropped and print_defines reports both, so
-// the next pattern that outgrows this says so instead of breaking the parser.
+// Budget for ALL stop sets together, not per set. The sets are generated
+// (csp_stop_sets.h) and the generator fails the build when they outgrow this,
+// so a set can no longer come out short at boot -- which used to happen
+// silently and showed up as a couple of dozen unrelated parse failures nowhere
+// near the pattern that had outgrown the table. Keep this in step with
+// MAX_STOP_TOKENS in utils/gen_patterns.erl.
 #define MAX_STOP_TOKENS 192
-extern int csp_stop_overflow;
 extern int csp_stop_tokens_used(void);
 
 // The PAT_* and STOP_* enums, generated from utils/syntax.terms together with
@@ -75,6 +72,7 @@ extern int csp_stop_tokens_used(void);
 // -- the rule that an id may be built only once cannot be broken by hand any
 // more, because ids are not written by hand.
 #include "csp_pattern_ids.h"
+#include "csp_stop_sets.h"
 
 // mark a token as a set pos (resurse)
 #define TOK_SET      0x80
@@ -84,12 +82,11 @@ extern int csp_stop_tokens_used(void);
 // Check if token is in stop-set
 int stop_set_has(int set_idx, uint8_t tok);
 
-// Initialize stop-sets storage (call first from csp_rt_init)
-void init_stop_sets(void);
 void dump_stop_sets();
 
-// Scan entire pattern, build stop-sets for all P_EXPR_S found
-// Call patterns in enum order
+// Register a pattern so P_PAT can resolve it. Stop sets are generated, so
+// this no longer scans anything; the name stayed because the call sites read
+// well.
 void scan_pattern(int pat_id, const uint8_t* pat);
 
 #endif // CSP_PARSE_H

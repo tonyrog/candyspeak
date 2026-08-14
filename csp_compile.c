@@ -4092,12 +4092,11 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
     return n;
 }
 
-// One-time setup of the parser's own tables: the stop-sets and the scanned
-// declaration patterns. Called from csp_rt_init.
+// One-time setup: register the declaration patterns so P_PAT can resolve
+// them. The stop sets they used to be scanned for are generated. Called from
+// csp_rt_init.
 void csp_compile_init(void)
 {
-    init_stop_sets();       // creates STOP_NONE (index 0)
-
     CSP_SCAN_PATTERNS
 }
 
