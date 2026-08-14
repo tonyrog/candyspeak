@@ -1,0 +1,529 @@
+CandySpeak grammar
+==================
+
+The language as the parser actually accepts it, in prose.  Its machine-readable
+form is utils/syntax.terms, and that file is now the SOURCE: three generators
+read it and emit the string table's keyword rows, the token and declaration
+tables, and the pmatch patterns with their capture structs, PAT_* ids and stop
+sets.  This document and the terms file describe the same language; edit the
+terms, run `make strings tables patterns`.
+
+Where the implementation and this document disagree, the implementation is the
+bug: everything below was checked against the code, and the places that are NOT
+grammar (hand-written scanners, table lookups) are called out in section 10 so
+the generator's scope is honest.
+
+Two older descriptions exist and are both behind: the BNF in CANDYSPEAK.md and
+utils/candy_speak_gram.yrl.  They are documentation, not input.
+
+
+1. Notation
+-----------
+
+    rule = alternative | alternative ;   a production
+    'x'                                  a literal token, spelled as written
+    UPPER                                a lexical class (section 2)
+    [ x ]                                zero or one
+    { x }                                zero or more
+    ( x | y )                            grouping
+    x...                                 one or more, whitespace separated
+
+Terminals are tokens, never characters: the scanner has already run.  There is
+no implicit whitespace rule -- the scanner drops it (section 2.1).
+
+
+2. Lexical structure
+--------------------
+
+2.1 Whitespace and comments
+
+Space and TAB separate tokens and are otherwise ignored.  `//` starts a comment
+that runs to the end of the line; the comment CONSUMES the line terminator, so a
+commented line yields exactly one NEWLINE like any other.
+
+2.2 Lines
+
+A statement is terminated by NEWLINE.  `\n`, `\r\n` and a lone `\r` are all one
+NEWLINE.  End of input yields NONE, which ends the scan without a NEWLINE.
+
+A single line may not exceed MAX_LINE_TOKENS tokens (24 embedded, 64 host);
+overflow is ERR_TOO_MANY_TOKENS, not a continuation.  There is no line
+continuation character.
+
+2.3 Lexical classes
+
+    NAME    letter { letter | digit | '_' }
+            At most MAX_NAME_LEN characters.  A NAME that matches a reserved
+            word (2.4) becomes that token instead.
+
+    INT     digit... decimal, value <= 2147483647
+          | '0x' hexdigit...   at most 8 digits, accumulated in uint32 so
+                               0xFFFFFFFF is the all-ones mask (== -1 as int32)
+
+            There is no octal or binary literal.  (candy_speak_lex.xrl declares
+            octnum/binnum; the C scanner has neither.)
+
+    FLT     digit... '.' digit...
+            A fraction only -- no exponent, no leading '.'.  In a fixpoint build
+            (FVALUE_IS_FIXPOINT) this is Q16.16, so the integer part must be
+            <= 32767.
+
+    STR     '"' { character | escape } '"'
+            escape = '\' ( 'a' | 'b' | 'e' | 'f' | 'n' | 'r' | 't' | 'v' )
+            Any other character after '\' stands for itself.  A string is
+            unterminated at end of input rather than an error.
+
+A numeric literal is never negative: a leading '-' is a separate MINUS token and
+becomes a unary negation, at scan time and at parse time alike.
+
+2.4 Reserved words
+
+These NAMEs are scanned as their own tokens and can therefore never be used as
+identifiers:
+
+    pullup  pulldown  resolution
+    in  out  inout  pwm
+    float  integer  unsigned  string
+    native  little  big
+    can  disable  enable
+
+`resolution` is reserved but consumed by nothing -- a reserved word with no
+grammar.  `integer` is the SIGNED integer type; there is no `signed` keyword
+(several code comments say `'signed'` and mean `integer`).
+
+The declaration keywords are deliberately NOT reserved:
+
+    module  end  states  constant  variable  local
+    digital  analog  timer  field  buffer
+
+They are ordinary NAMEs, recognised by a table lookup after the '#' (section
+3).  This is why `#field` needs no special case in the dispatcher while `#in`,
+`#disable` and `#enable` do -- their keyword is a reserved token and never
+arrives as a NAME.
+
+2.5 Operator and punctuation tokens
+
+    !  ~  -  +  *  /  %  <<  >>  <  <=  >  >=  ==  !=
+    &  ^  |  &&  ||  =  <-  ,  ?  .  ..  :  #  (  )  [  ]  {  }
+
+`..` is one token, so `Buf[0 . . 3]` is not a range.  `1..5` is INT `..` INT and
+`1.5` is one FLT: a fraction is consumed inside the number scan and never
+reaches the '.' case.
+
+
+3. Program structure
+--------------------
+
+    program   = { line } ;
+
+    line      = NEWLINE
+              | in-block
+              | rule-switch
+              | declaration
+              | instance
+              | immediate
+              | pack
+              | rule
+              ;
+
+The dispatcher (csp_parse) chooses in this order:
+
+    NEWLINE                            empty line
+    '#' 'in'                           in-block
+    '#' ('disable'|'enable')           rule-switch
+    '#' NAME                           declaration if NAME is a declaration
+                                       keyword, otherwise instance
+    '>'                                immediate
+    NAME ('<<'|'>>') '='               pack
+    otherwise                          rule
+
+The pack test looks at three raw tokens before committing, which is what keeps
+`Buf <<= a b c` from being read as a rule whose left side is `Buf`.
+
+
+4. Declarations
+---------------
+
+    declaration = variable-decl | local-decl   | constant-decl
+                | digital-decl  | analog-decl  | timer-decl
+                | field-decl    | buffer-decl
+                | module-decl   | end-decl     | states-decl
+                ;
+
+4.1 Common parts
+
+    array     = '[' INT ']' ;
+
+            The length is a literal INT token, not a constant expression:
+            `#variable A[N]` does not work even when N is a constant.  The
+            brackets are spliced out of the token vector before the rest of the
+            declaration is matched, so an array declaration and a scalar one
+            share one grammar from that point on.
+
+    res       = ':' const-int ;
+
+            Width in bits, 1..MAX_RES_BITS (32).  #buffer reuses this production
+            for a size in BYTES (4.8).
+
+    opt       = 'in' | 'out' | 'inout'
+              | 'unsigned' | 'integer' | 'float' | 'string'
+              | 'native' | 'little' | 'big'
+              | 'pwm' | 'pullup' | 'pulldown'
+              ;
+
+            Any number, in any order, no separators.  Later wins within a group
+            (type, endian); the direction bits OR together.  Not every option is
+            meaningful on every declaration -- the parser accepts the whole set
+            everywhere and the declaration ignores what it has no field for.
+
+    opts      = { opt } ;
+
+4.2 #variable
+
+    variable-decl = '#' 'variable' NAME [ array ] [ res ] opts
+                    [ '=' const-expr ]
+                    [ bind ] ;
+
+    bind          = 'bind' NAME '[' const-int [ '..' const-int ] ']' ;
+
+The initialiser is a CONSTANT expression -- a formula belongs in a rule or in a
+#local.  `bind` makes the variable a bit-field view into a #buffer; the range is
+in BITS and is checked against that buffer's size.
+
+`bind` is matched by hand after pmatch stops, and is not a reserved word.
+
+4.3 #local
+
+    local-decl = '#' 'local' NAME [ res ] opts '=' expr ;
+
+Same head as #variable with the initialiser replaced by an arbitrary
+expression, which is compiled as an always-true rule emitted right there.  A
+#local binds a formula; it is not assigned.  Declaration order is evaluation
+order, so a forward reference simply does not resolve.
+
+The '=' is located by a token scan before matching, because P_CONST_S would
+(rightly) refuse the expression that follows it.
+
+4.4 #constant
+
+    constant-decl = '#' 'constant' NAME [ array ] [ res ] opts '='
+                    ( const-expr | init-list ) ;
+
+    init-list     = '{' init-val { ',' init-val } '}' ;
+    init-val      = const-expr ;
+
+An element is the same grammar as a scalar initialiser, so `{ 1+2, MAX/2 }` and
+`{ "a", "b" }` both work.  With an explicit length the element count must match
+it exactly; without one (`#constant A = {...}`) the list sets the length.
+
+4.5 #digital
+
+    digital-decl = '#' 'digital' NAME [ array ] opts pin-spec ;
+
+4.6 #analog
+
+    analog-decl  = '#' 'analog' NAME [ array ] [ res ] opts pin-spec ;
+
+Note the order: options come BEFORE the pin spec in both, and the width sits
+between the name and the options in #analog.  pmatch is sequential, so this
+order is the grammar, not a convention.
+
+Default width is 10 bits for #analog and 1 for #digital; default direction is
+`in` for both.
+
+4.7 Pin specifications
+
+    pin-spec  = port-pin [ ',' ] { pin-item } ;
+
+    port-pin  = const-int ':' const-int
+              | const-int
+              ;
+
+    pin-item  = const-int [ ':' [ const-int [ '..' const-int ] ] ]
+                          [ '..' const-int ] [ ',' ]
+              | '..' const-int [ ',' ]
+              ;
+
+port-pin is the first element's pin; the pin-items that follow give the pins of
+elements 1..n-1 of an array.  A scalar declaration has no items.
+
+In a pin-item the leading number is a PORT when a ':' follows it and a PIN when
+one does not.  A port names every pin after it until the next port.  A bare
+`'..' pin` continues the range in progress -- which is what makes `9:0..9` work
+at all, since the declaration's own port-pin has already eaten `9:0`.
+
+    #digital L[10] out 9:0..9        one port, one range
+    #digital L[3]  out 0:1,4,7       one port, a list
+    #digital L[7]  out 1:1..3,2:1,3,5    two ports
+    #digital L[3]  out 9:,7..9       port named alone, pins after the comma
+
+The number of pins produced must equal the declared length; a mismatch is
+ERR_NUMBER_RANGE, not padding or truncation.
+
+4.8 #timer
+
+    timer-decl = '#' 'timer' NAME const-int [ '=' const-int ] ;
+
+The first value is the period in milliseconds, the second the initial running
+state (0 = stopped, the default).
+
+4.9 #field
+
+    field-decl = '#' 'field' NAME [ res ] opts
+                 NAME '[' const-int [ '..' const-int ] ']' ;
+
+The second NAME is a #buffer that must already be declared -- a field is a bit
+window into it.  With a range the width is the range; with a single bit position
+the width comes from `res`.  Direction is inherited from the buffer unless the
+field states one.
+
+4.10 #buffer
+
+    buffer-decl = '#' 'buffer' NAME [ res ] opts [ 'can' const-int ] ;
+
+Here `res` is a size in BYTES (1..1023, and at most 64 with `can`), not bits.
+The default is 8 bytes.  `can` gives the frame id and makes the transport CAN.
+
+4.11 #module, #end, #states
+
+    module-decl = '#' 'module' NAME ;
+    end-decl    = '#' 'end' ;
+    states-decl = '#' 'states' NAME... ;
+
+`#end` closes a #module or an #in block.  Each module gets an implicit `State`
+member as its first declaration.
+
+Every NAME in #states that is already a state is skipped without complaint.
+
+
+5. Instances
+------------
+
+    instance = '#' NAME NAME { init-part } ;
+
+    init-part = body-part ;
+
+The first NAME is a module, the second the object being created.  It is reached
+only when the first NAME is not a declaration keyword, which is also why there
+is no `#object` keyword -- `object` is a listing word, not syntax.
+
+At most MAX_INITS (8) init parts.  A `<-` part becomes a standing rule; `=` and
+`.part =` parts run once, gated on the object's State == INIT, and are followed
+by an automatic transition to NORMAL.
+
+
+6. State blocks and rule switches
+---------------------------------
+
+    in-block    = '#' 'in' NAME... ;
+
+    rule-switch = '#' ( 'disable' | 'enable' ) range... ;
+    range       = INT [ '-' INT ] ;
+
+`#in` opens a block that runs in ANY of the listed states (they OR together),
+closed by `#end`.  At most MAX_IN_STATES states.  A bare top-level rule outside
+any #in and any module runs in INIT and NORMAL implicitly.
+
+The ranges of #disable/#enable are rule NUMBERS as the listing prints them, and
+are raw INT tokens -- not expressions.
+
+
+7. Rules
+--------
+
+    rule      = body-part { ',' body-part } [ '?' expr ] ;
+
+    body-part = [ lvalue ( '=' | '<-' ) ] expr ;
+
+    lvalue    = NAME [ '.' NAME [ '.' NAME ] ] [ subscript ] ;
+
+    subscript = '[' const-int [ '..' const-int ] ']'
+              | '[' expr ']'
+              ;
+
+The dotted forms are `obj.field`, `var.part` and `obj.field.part`; the part
+names are in section 9.  The constant subscript is the buffer byte view and the
+bit-pack forms; the expression subscript is an array's runtime index.  The
+constant form is tried first and backs off completely -- including the '[' it
+had already matched -- when the index is not constant.
+
+`=` assigns; `<-` binds reactively.  A body part with no lvalue is an expression
+evaluated for its effect.  All parts of one rule share the guard.
+
+At most MAX_BODY_PARTS parts.  A '?' present with no parsable condition is a
+syntax error rather than a silently dropped guard.
+
+
+8. Frame packing
+----------------
+
+    pack       = NAME ( '<<' | '>>' ) '=' pack-field... [ '?' expr ] ;
+
+    pack-field = expr [ ':' const-int ] ;
+
+`<<=` packs the fields into the named buffer or variable at ascending bit
+offsets; `>>=` unpacks.  Fields are whitespace separated, not comma separated --
+a comma would be part of the expression.  A field with no ':' width uses the
+declared width of its variable, which means it must BE a single variable.
+
+
+9. Expressions
+--------------
+
+    expr      = ... precedence climbing over the table below ...
+
+    primary   = INT
+              | FLT
+              | STR
+              | NAME
+              | NAME '.' NAME [ '.' NAME ]
+              | NAME subscript
+              | NAME '(' [ expr { ',' expr } ] ')'
+              | '(' expr ')'
+              ;
+
+    const-expr = expr, folded at parse time; no reference to anything that is
+                 not already a constant.  Honours the declaration's type, so a
+                 STR is accepted where `string` was given as an option.
+
+    const-int  = const-expr that folds to an integer.
+
+9.1 Precedence
+
+Highest binds tightest.  From tok_table (csp_tok.c); the numbers are the
+implementation's own.
+
+    105  right   ! ~ - +          unary
+    100  left    * / %
+     90  left    + -
+     80  left    << >>
+     70  left    < <= > >=
+     60  left    == !=
+     50  left    &
+     40  left    ^
+     30  left    |
+     20  left    &&
+     10  left    ||
+      5  right   =                assignment, immediate only
+      4  right   <-               reactive bind, immediate only
+      2  right   ,                keeps the right operand
+
+`=` and `<-` are in the expression grammar so that an immediate line like
+`> T1 = 1` parses as an expression.  Rules do NOT come through this path -- their
+assignment is matched by the rule grammar (section 7).
+
+`,` is an arity-2 operator that discards its left operand.  This matters
+wherever an expression is bounded by a stop set: if COMMA is not in that set the
+scan swallows the whole comma list and folds it to its last element.
+
+9.2 Built-in functions
+
+    min(a,b)  max(a,b)  abs(x)  sign(x)  clip(x,lo,hi)
+    trunc(x)  round(x)
+    timeout(t)  elapsed(t)  progress(t)
+    changed(v)  rising(d)  falling(d)
+    print(...)      1..4 arguments
+    println(...)    0..4 arguments
+    tick()  cycle()  latch(x)
+
+min/max/abs/sign/clip/trunc/round are pure and fold at parse time; the rest do
+not.  print/println are the only overloaded names -- one table entry per arity.
+
+9.3 Parts
+
+    value  pin  port  dir  endian  pwm  pullup  pulldown
+    period  fired  id  rx  tx  dlc  len
+
+Which parts exist depends on what the value is (csp_part.h): timers have
+value/period/fired, digitals have value/pin/port/dir/pullup/pulldown, analogs
+add pwm/endian, CAN buffers have id/rx/tx/dlc, strings have len.  These are
+NAMEs, not reserved words.
+
+
+10. What is not grammar
+-----------------------
+
+The generator covers everything in sections 4 through 9 except the following,
+which are hand-written scans or table lookups.  Each is a candidate for moving
+into the grammar, and the note says what stands in the way.
+
+    array-splice (4.1)      Reads `[' INT ']` directly and MEMMOVEs it out of
+                            the token vector before matching.  It is a rewrite,
+                            not a match, so it cannot be a pattern until the
+                            declaration patterns each carry their own optional
+                            `[ INT ]` at the right place.
+
+    bind (4.2)              A 4-character memcmp against "bind" after pmatch
+                            returns, then a hand-walked `[a..b]`.  Blocked only
+                            by `bind` not being a token; nothing else.
+
+    local's '=' (4.3)       A forward scan for EQ to split the head from the
+                            formula.  Structural: P_CONST_S must not see the
+                            tail.
+
+    dispatch (3)            find_decl_entry over decl_table, plus the three
+                            reserved-token branches.  decl_table itself IS
+                            generated now; the branching is not.
+
+    #states, #in (4.11, 6)  Plain NAME loops with a state lookup per name.
+                            "no need to use pattern parser here, yet".
+
+    #disable/#enable (6)    INT and MINUS walked by hand.
+
+    immediate (3)           csp_parse_immediate is a stub returning 0; the '>'
+                            line is handled by the REPL (section 11), which
+                            re-scans it.
+
+    expressions (9)         csp_parse_expr is a precedence climber over
+                            tok_table, driven by a stop set.  It stays -- the
+                            patterns call INTO it (P_INTEGER_S, P_CONST_S,
+                            P_EXPR_S) and a generated table would replace it
+                            with something larger and slower.
+
+10.1 What a capture needs to say
+
+Beyond the productions, the generator needs one annotation per captured term,
+because a pure grammar cannot say where a value goes or how it is read.  The
+kinds in use today, with the opcode each becomes:
+
+    str          P_STR         a NAME, captured as tstr_t
+    tok          P_TOK         a literal, matched and discarded
+    tok!         P_TOK_W       a literal, matched and captured (which
+                               alternative fired)
+    int          P_INTEGER_S   constant integer expression, stop-set bounded
+    const        P_CONST_S     constant expression honouring a vt captured
+                               earlier in the same pattern
+    expr         P_EXPR_S      an expression left for codegen, stop-set bounded
+    opts         P_OPTS        the option word set (4.1)
+    pat          P_PAT         another production, inlined by reference
+    rep/array    P_REP/P_ARRAY repetition into an array of structs
+
+Stop sets are NOT an annotation.  They are computed from what can follow the
+capture, and the generator allocates one per SITE -- so the rule that an id may
+be built only once cannot be broken, because no id is written by hand.  The one
+exception is P_PAT, where a sub-pattern used twice in one pattern SHARES an id
+on purpose: pat_rule's second PAT_BODY sits inside the repetition and gets the
+COMMA that must end its expression only through that merge.
+
+Byte lengths on P_OPT/P_ALT/P_REP are likewise not source -- they are the thing
+the generator exists to compute.  Two of the hand-written ones were wrong when
+it took over (pat_variable and pat_buffer, each one short), harmless only
+because the short jump landed on the block terminator, which returns the same
+position P_END would.
+
+
+11. The REPL layer
+------------------
+
+Not part of the language.  csp_process_line classifies an input line before the
+parser sees it:
+
+    '//' ...        ignored, so a pasted source file's comments are quiet
+    '/' NAME ...    a REPL command (/list, /save, /pause, ...)
+    '#' ...         a persistent definition
+    '>' ...         an immediate expression
+    otherwise       persistent if the line has a top-level lone '=' or a '?',
+                    otherwise an immediate query
+
+The rule/query test is a character scan, not a tokenize: '=' counts only when it
+is not part of ==, <=, >=, != and is not inside a string or a comment.

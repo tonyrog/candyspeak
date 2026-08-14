@@ -101,15 +101,61 @@ strtab: strtab.c
 csp_strings.c csp_strings.h: strings.tab strtab
 	./strtab strings.tab csp_strings.c csp_strings.h
 
+# strings.tab is itself generated, from strings/*.tab.src -- one of which,
+# strings/keyword.tab.src, comes out of the grammar (utils/syntax.terms), so a
+# word the parser accepts and a word the string table holds cannot drift apart.
+#
+# Both are CHECKED IN and regenerating them is a developer action: a firmware
+# build needs strtab and a C compiler, never Erlang. `make test` runs the
+# staleness check instead (strings_check below).
+strings:
+	@escript utils/gen_strings.erl merge
+
+# csp_tokens.h: the tok_t and dtok_t enums AND the two table bodies indexed by
+# them, as CSP_TOK_TABLE / CSP_DECL_TABLE. Checked in, same policy as
+# strings.tab -- regenerating is a developer action.
+tables:
+	@escript utils/gen_tables.erl emit
+
+# csp_pattern_ids.h (the PAT_*/STOP_* enums) and csp_patterns.h (the capture
+# structs and the pattern byte arrays). This is the one that earns its keep:
+# every P_OPT/P_ALT/P_REP length is computed, and stop-set ids are allocated one
+# per site instead of written by hand.
+patterns:
+	@escript utils/gen_patterns.erl emit
+
 # sources that use the shared RODATA strings need the generated header first
 csp_rt.o csp_repl.o csp_compile.o csp_tok.o csp_strings.o: csp_strings.h
 
 clean:
 	rm -f $(OBJS) strtab csp_strings.c csp_strings.h csp-exec csp-min
 
-test:	csp test_repl
+test:	csp test_repl syntax_check strings_check tables_check patterns_check
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
+
+# utils/syntax.terms is the SOURCE the three generators read. This resolves its
+# cross-references before any of them run: every capture against its struct,
+# every sub-pattern and array element type, every literal against the token
+# table. First, because a term file that does not hold together produces
+# generated C that fails somewhere far from the mistake.
+syntax_check:
+	@escript utils/syntax_check.erl utils/syntax.terms
+
+# strings.tab must be what strings/*.tab.src produce. Catches a hand edit to the
+# generated file, and a grammar edit that never made it into the string table.
+strings_check:
+	@escript utils/gen_strings.erl check
+
+# Same for the token tables: the checked-in files must be what syntax.terms
+# produces. The enum/row mismatch itself is prevented by construction -- one
+# list emits both, and a member meant to have no row has to say so -- this
+# catches a hand edit to a generated file, or a terms edit never regenerated.
+tables_check:
+	@escript utils/gen_tables.erl check
+
+patterns_check:
+	@escript utils/gen_patterns.erl check
 
 # REPL/persistence level: /list segment tags, what a /clear keeps, and whether a
 # generated ROM image loads back into the firmware that links it. None of that is
@@ -138,7 +184,7 @@ test_crc_destroyer:
 
 -include .*.d
 
-.PHONY: all clean test test-examples test_repl test_crc_destroyer debug ubsan san exec min
+.PHONY: all clean test test-examples test_repl test_crc_destroyer syntax_check strings strings_check tables tables_check patterns patterns_check debug ubsan san exec min
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

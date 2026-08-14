@@ -21,6 +21,11 @@
 #include "csp_print.h"
 #include "csp_compile.h"
 #include "csp_tok.h"
+// Capture structs, pattern byte arrays and CSP_SCAN_PATTERNS, generated from
+// utils/syntax.terms. The parse functions below stay here -- what moved out is
+// the data they match with, whose byte lengths and stop-set ids are exactly
+// what nobody can verify by reading.
+#include "csp_patterns.h"
 
 // An exec-only build has no compiler: a ROM image is produced on the host and
 // an EEPROM patch is stored already compiled, so nothing on the target turns
@@ -588,25 +593,11 @@ NOINLINE int is_module_local(csp_rt_t* st, xindex_t di)
 }
 
 // The declaration keyword table. Compiler-only: nothing else looks a
-// declaration name up.
+// declaration name up. Rows generated from utils/syntax.terms, which also
+// generates the dtok_t enum indexing them -- D_UART, D_SOCKET and D_MOD are
+// enum members with no row, and stay that way so D_LAST does not move.
 const op_entry_t decl_table[] RODATA = {
-    DECL_ENT(D_NONE,DECL_NONE,s_none),
-    DECL_ENT(D_MODULE,DECL_MODULE,s_module),
-    DECL_ENT(D_END,DECL_END, s_end),
-    DECL_ENT(D_STATES,DECL_STATES,s_states),
-    DECL_ENT(D_IN,DECL_IN,s_in),       // 'in' FIXME? used as option keyword!
-    DECL_ENT(D_CONSTANT,DECL_CONSTANT,s_constant),
-    DECL_ENT(D_VARIABLE,DECL_VARIABLE,s_variable),
-    // A #local IS a DECL_VARIABLE -- the `local` bit is what separates them, so
-    // both keywords map to the same declaration type here and csp_parse_local
-    // sets the bit.
-    DECL_ENT(D_LOCAL,DECL_VARIABLE,s_local),
-    DECL_ENT(D_DIGITAL,DECL_DIGITAL,s_digital),
-    DECL_ENT(D_ANALOG,DECL_ANALOG,s_analog),
-    DECL_ENT(D_TIMER,DECL_TIMER,s_timer),
-    DECL_ENT(D_FIELD,DECL_FIELD,s_field),
-    DECL_ENT(D_BUFFER,DECL_BUFFER,s_buffer),
-    DECL_ENT(D_LAST,DECL_NONE,s_null),
+    CSP_DECL_TABLE
 };
 
 static int find_decl_entry(const char* name, int namelen)
@@ -674,7 +665,20 @@ next:
 	TOK(NEWLINE);
     case '\n': TOK(NEWLINE);
     case ',': TOK(COMMA);
-    case '.': TOK(DOT);
+    // '..' is ONE token. Scanned as two DOTs it had to be matched as two, and a
+    // pattern cannot capture "the range appeared" from a pair -- pat_body
+    // captured the first dot and matched the second, which works but means the
+    // grammar cannot say `..` where it means `..`. It also cost a token slot of
+    // MAX_LINE_TOKENS (24 embedded) per range.
+    //
+    // A float never reaches here: `1.5` is consumed inside the number scan, so
+    // `1..5` is INT DOTDOT INT and `1.5` is one FLT.
+    case '.':
+	if (*str == '.') {
+	    str++;
+	    TOK(DOTDOT);
+	}
+	TOK(DOT);
     case ':': TOK(COLON);
     case '#': TOK(HASH);
     case '?': TOK(QUEST);
@@ -2231,8 +2235,8 @@ next:
 		i++;                                   // '['
 		if (tv[i].t != INT) { csp_set_error(st, ERR_SYNTAX); return 0; }
 		p0 = p1 = tv[i].v.val.i; i++;
-		if ((tv[i].t == DOT) && (tv[i+1].t == DOT)) {
-		    i += 2;
+		if (tv[i].t == DOTDOT) {
+		    i++;
 		    if (tv[i].t != INT) {csp_set_error(st,ERR_SYNTAX); return 0;}
 		    p1 = tv[i].v.val.i; i++;
 		}
@@ -2392,17 +2396,7 @@ NOINLINE int csp_parse_const_expr(csp_rt_t* st,
 }
 
 
-typedef struct {
-    ivalue_t res;
-} res_param_t;
 
-static const uint8_t pat_res[] = {
-    P_OPT,6,
-      P_TOK,COLON,
-      P_INTEGER_S, csp_offsetof(res_param_t,res), STOP_RES,
-    P_OPT_END,
-    P_END
-};
 
 // ':' <size> for anything that is a scalar (#variable, #constant, #analog,
 // #field). The width has to fit DECL_COMMON.res, which is 5 bits holding
@@ -2417,128 +2411,8 @@ NOINLINE static int check_res(csp_rt_t* st, ivalue_t res)
     return 0;
 }
 
-typedef struct {
-    ivalue_t port;
-    ivalue_t pin;
-} port_pin_t;
-
-// sub-pattern for <port> ':' <pin> | <pin>
-// SCANED BEFORE use is scanned
-static const uint8_t pat_port_pin[] = {
-    P_CHOICE, 2,
-      P_ALT, 9, // Alt 1: port:pin
-        P_INTEGER_S, csp_offsetof(port_pin_t, port), STOP_PORT,
-	P_TOK, COLON,
-	P_INTEGER_S, csp_offsetof(port_pin_t, pin), STOP_PIN1,
-      P_ALT_END,
-      P_ALT, 4, // Alt 2: pin
-        P_INTEGER_S, csp_offsetof(port_pin_t, pin), STOP_PIN2,
-      P_ALT_END,
-    P_CHOICE_END,
-    // An array's pin list continues past the first pin, and the ',' has to be
-    // HERE for the pin's stop-set to contain it: without it `0:1,4,7` handed
-    // `1,4,7` to the constant folder as one expression and the whole list was
-    // lost -- only the forms starting with `..` ever worked. Matching it also
-    // consumes it, which is why an item may start without one.
-    P_OPT, 3, P_TOK, COMMA, P_OPT_END,
-    P_END
-};
-
-// One element of an init list, `<const>` followed by ',' or the closing '}'.
-// Written as a pattern rather than scanned by hand, which is what makes the
-// element grammar the SAME grammar a scalar initialiser has: P_CONST_S parses a
-// constant EXPRESSION and honours the declaration's type, so `{ 1+2, MAX/2 }`
-// and `{ "a", "b" }` cost nothing extra -- the hand-rolled scanner they replace
-// understood a leading '-' and nothing else.
-//
-// The separator is captured (P_TOK_W) instead of inferred: the caller reads
-// element after element and stops on '}', so the list needs no length known in
-// advance and no bound on how many elements it may hold.
-typedef struct {
-    value_t     init;
-    decl_opts_t opts;      // carries vt in, for P_CONST_S
-    ivalue_t    sep;       // COMMA or RBRACE
-} initval_param_t;
-
-static const uint8_t pat_initval[] = {
-    P_CONST_S,
-      csp_offsetof(initval_param_t, opts),
-      csp_offsetof(initval_param_t, init),
-      STOP_INIT_VAL,
-    P_CHOICE, 2,
-      P_ALT, 4, P_TOK_W, COMMA,  csp_offsetof(initval_param_t, sep), P_ALT_END,
-      P_ALT, 4, P_TOK_W, RBRACE, csp_offsetof(initval_param_t, sep), P_ALT_END,
-    P_CHOICE_END,
-    P_END
-};
-
-// One item of a device array's pin spec:
-//
-//   <port> ':' [<pin> ['..' <pin>]]     a port change, with or without pins
-//   <pin> ['..' <pin>]                  a pin or a range, in the current port
-//   '..' <pin>                          continues the range in progress
-//
-// The third is what lets `9:0..9` work at all: the declaration's own grammar
-// has already eaten `9:0` as its port:pin, so the tail starts mid-range.
-//
-// The first two SHARE their leading integer instead of being two alternatives
-// that each start by reading one. They have to: a stop-set is what bounds an
-// integer, and read as a port the set is `:` alone -- so in `3,5,9:` the scan
-// ran to the colon three items away and folded `3,5,9` into one number. Read
-// once, with `:` `..` and `,` all able to end it, `num` is a port when a colon
-// follows and a pin when one does not.
-//
-// A field left at -1 did not appear -- which is how `9:` (change port, name no
-// pins) is told apart from `9:0` without a flag per field.
-typedef struct {
-    ivalue_t num;          // the leading number: port if `colon`, else pin
-    ivalue_t colon;        // COLON when `num` was a port
-    ivalue_t lo;           // pin after `<port> ':'`
-    ivalue_t hi;           // range end, whichever range matched
-    ivalue_t sep;          // COMMA if another item follows
-} pin_item_t;
-
-// The trailing ',' is matched, not just tolerated: it is what puts COMMA in the
-// stop-set of every integer that can end an item. Consuming it also means the
-// next item starts clean, on its own first token.
-static const uint8_t pat_pin_item[] = {
-    P_CHOICE, 2,
-      P_ALT, 36,                        // <num> [':' [<pin> ['..' <pin>]]] ['..' <pin>]
-        P_INTEGER_S, csp_offsetof(pin_item_t, num), STOP_PIN_NUM,
-        P_OPT, 20,
-          P_TOK_W, COLON, csp_offsetof(pin_item_t, colon),
-          P_OPT, 14,
-            P_INTEGER_S, csp_offsetof(pin_item_t, lo), STOP_PIN_LO,
-            P_OPT, 8,
-              P_TOK, DOT, P_TOK, DOT,
-              P_INTEGER_S, csp_offsetof(pin_item_t, hi), STOP_PIN_HI,
-            P_OPT_END,
-          P_OPT_END,
-        P_OPT_END,
-        P_OPT, 8,
-          P_TOK, DOT, P_TOK, DOT,
-          P_INTEGER_S, csp_offsetof(pin_item_t, hi), STOP_PIN_HI2,
-        P_OPT_END,
-      P_ALT_END,
-      P_ALT, 8,                         // '..' <pin>
-        P_TOK, DOT, P_TOK, DOT,
-        P_INTEGER_S, csp_offsetof(pin_item_t, hi), STOP_PIN_HI3,
-      P_ALT_END,
-    P_CHOICE_END,
-    P_OPT, 4, P_TOK_W, COMMA, csp_offsetof(pin_item_t, sep), P_OPT_END,
-    P_END
-};
-
-typedef struct {
-    tstr_t name;
-} module_param_t;
 
 // '#' 'module' <name>
-static const uint8_t pat_module[] = {
-    P_STR, csp_offsetof(module_param_t, name),
-    P_END
-};
-
 NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     module_param_t d;
@@ -2574,14 +2448,8 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
     return 0;
 }
 
-typedef struct {
-} end_param_t;
 
 // '#' 'end' [....]
-static const uint8_t pat_end[] = {
-    P_END
-};
-
 NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     end_param_t d;
@@ -2773,32 +2641,6 @@ NOINLINE static int array_pins(csp_rt_t* st, const token_t* tv, int j, size_t n,
     return 0;
 }
 
-// '#' 'variable' <name>[':' <size>] [<opt>+] ['=' <num> | <string>]
-// <opt> := 'in'|'out'|'inout'|  -- when use as argument in module
-//          'signed'|'unsigned'|'float'
-// Note that in is used for input arguments in objects
-// and out is used for output argumets
-
-typedef struct {
-    tstr_t name;
-    res_param_t r;
-    decl_opts_t opts;
-    value_t init;
-} variable_param_t;
-
-static const uint8_t pat_variable[] = {
-    P_STR, csp_offsetof(variable_param_t, name),
-    P_PAT, PAT_RES, csp_offsetof(variable_param_t, r), STOP_VAR_RES_CONT,
-    P_OPTS, csp_offsetof(variable_param_t, opts),
-    P_OPT, 6, P_TOK, EQ,
-    P_CONST_S,
-      csp_offsetof(variable_param_t, opts), // pick up vt here
-      csp_offsetof(variable_param_t, init),
-      STOP_VAR_INIT,
-    P_OPT_END,
-    P_END
-};
-
 //
 NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
@@ -2847,8 +2689,8 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	}
 	j += 2;
 	b0 = b1 = tv[j-1].v.val.i;
-	if ((j+1 < (int)n) && (tv[j].t == DOT) && (tv[j+1].t == DOT)) {
-	    j += 2;
+	if ((j < (int)n) && (tv[j].t == DOTDOT)) {
+	    j++;
 	    if ((j >= (int)n) || (tv[j].t != INT)) {
 		csp_set_error(st, ERR_SYNTAX); return -1;
 	    }
@@ -2938,38 +2780,6 @@ NOINLINE int csp_parse_local(csp_rt_t* st, token_t* tv, int ti, size_t n)
     st->cs.local_def = 0;
     return r;
 }
-
-// '#' 'constant' <name>[':' <size>] [<opt>+] '=' <num> | <string>
-typedef struct {
-    tstr_t name;
-    res_param_t r;
-    decl_opts_t opts;
-    value_t init;
-    ivalue_t list;          // LBRACE when `= { ... }` follows
-} constant_param_t;
-
-// The '{' is part of the GRAMMAR, so the two initialiser forms are one choice
-// instead of a pre-pass that edited the token vector. Matching the brace also
-// leaves pmatch stopped exactly on the first element, which is where the
-// element walk below starts.
-static const uint8_t pat_constant[] = {
-    P_STR, csp_offsetof(constant_param_t, name),
-    P_PAT, PAT_RES, csp_offsetof(constant_param_t, r), STOP_CONST_RES_CONT,
-    P_OPTS, csp_offsetof(constant_param_t, opts),
-    P_TOK, EQ,
-    P_CHOICE, 2,
-      P_ALT, 4,
-        P_TOK_W, LBRACE, csp_offsetof(constant_param_t, list),
-      P_ALT_END,
-      P_ALT, 5,
-        P_CONST_S,
-          csp_offsetof(constant_param_t, opts), // pick up vt here
-          csp_offsetof(constant_param_t, init),
-          STOP_CONST_INIT,
-      P_ALT_END,
-    P_CHOICE_END,
-    P_END
-};
 
 // Walk `v0, v1, ... }` from `j`, calling nothing per element unless `head` is
 // given: with head < 0 it only COUNTS, which is what lets the length be known
@@ -3061,19 +2871,6 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n)
 
 
 // '#' 'digital' <name> [<iodir>|<pull>] [<port>':']<pin>
-typedef struct {
-    tstr_t name;
-    port_pin_t port_pin;
-    decl_opts_t opts;
-} digital_param_t;
-
-static const uint8_t pat_digital[] = {
-    P_STR, csp_offsetof(digital_param_t, name),
-    P_OPTS, csp_offsetof(digital_param_t, opts),
-    P_PAT, PAT_PORT_PIN, csp_offsetof(digital_param_t, port_pin), STOP_DIGITAL_PP_CONT,
-    P_END
-};
-
 NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     digital_param_t d = {0};
@@ -3110,20 +2907,7 @@ NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, int ti, size_t n)
     return 0;
 }
 
-typedef struct {
-    tstr_t name;
-    res_param_t r;
-    port_pin_t port_pin;    
-    decl_opts_t opts;
-} analog_param_t;
 
-static const uint8_t pat_analog[] = {
-    P_STR, csp_offsetof(analog_param_t, name),
-    P_PAT, PAT_RES, csp_offsetof(analog_param_t, r), STOP_ANALOG_RES_CONT,
-    P_OPTS, csp_offsetof(analog_param_t, opts),
-    P_PAT, PAT_PORT_PIN, csp_offsetof(analog_param_t, port_pin), STOP_ANALOG_PP_CONT,
-    P_END
-};
 
 //'#' 'analog' <name> [':'<size>] [<opt>*]  [<port>':'] <pin>
 //   <opt> := 'in' | 'out' | 'inout' | 'pwm' | 'float' | 'signed' | 'unsigned'
@@ -3166,21 +2950,7 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, int ti, size_t n)
     return 0;
 }
 
-typedef struct {
-    tstr_t name;
-    ivalue_t timeout;
-    ivalue_t init;
-} timer_param_t;
 
-static const uint8_t pat_timer[] = {
-    P_STR, csp_offsetof(timer_param_t, name),
-    P_INTEGER_S, csp_offsetof(timer_param_t, timeout), STOP_TIMER_TMO,
-    P_OPT, 6,
-      P_TOK, EQ,
-      P_INTEGER_S, csp_offsetof(timer_param_t, init), STOP_TIMER_INIT,
-    P_OPT_END,
-    P_END
-};
 
 NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
@@ -3221,36 +2991,6 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 //  <frame-id> '[' <bit-pos> ']'
 //  <frame-id> '[' <bit-pos> '..' <bit-pos> ']'
 //
-typedef struct {
-    tstr_t name;
-    res_param_t r;
-    tstr_t frame;        // the #buffer this field is a view into
-    ivalue_t bit0;
-    ivalue_t bit1;
-    decl_opts_t opts;
-} field_param_t;
-
-static const uint8_t pat_fdecl[] = {
-    P_STR, csp_offsetof(timer_param_t, name),
-    P_PAT, PAT_RES, csp_offsetof(field_param_t, r), STOP_CAN_RES_CONT,
-    P_OPTS, csp_offsetof(field_param_t, opts),
-    P_STR, csp_offsetof(field_param_t, frame),
-    P_TOK, LB,
-    P_CHOICE, 2,
-      // note the longer pattern first !!!
-      P_ALT, 11,
-        P_INTEGER_S, csp_offsetof(field_param_t, bit0), STOP_CAN_BIT0,
-	P_TOK, DOT, P_TOK, DOT,
-        P_INTEGER_S, csp_offsetof(field_param_t, bit1), STOP_CAN_BIT1,
-      P_ALT_END,
-      P_ALT, 4,
-        P_INTEGER_S, csp_offsetof(field_param_t, bit0), STOP_CAN_BIT00,
-      P_ALT_END,
-    P_CHOICE_END,
-    P_TOK, RB,
-    P_END
-};
-
 NOINLINE int csp_parse_field(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     field_param_t d = {0};
@@ -3259,7 +2999,7 @@ NOINLINE int csp_parse_field(csp_rt_t* st, token_t* tv, int ti, size_t n)
 
     d.bit0 = d.bit1 = -1;
     d.r.res = 1;  // single bit is default ok?
-    if (pmatch(st, tv, ti, n, pat_fdecl, &d, sizeof(d)) < 0) {
+    if (pmatch(st, tv, ti, n, pat_field_decl, &d, sizeof(d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3325,24 +3065,6 @@ NOINLINE int csp_parse_field(csp_rt_t* st, token_t* tv, int ti, size_t n)
 //   #buffer Buf:2                  2 bytes (16 bits)
 //   #buffer F201:8  in  can 0x201  8 bytes, classic frame
 //   #buffer Fbig:64 out can 0x300  64 bytes, CAN FD
-typedef struct {
-    tstr_t name;
-    res_param_t r;
-    decl_opts_t opts;
-    ivalue_t frameid;
-    uint8_t is_can;
-} buffer_param_t;
-
-static const uint8_t pat_buffer[] = {
-    P_STR, csp_offsetof(buffer_param_t, name),
-    P_PAT, PAT_RES, csp_offsetof(buffer_param_t, r), STOP_BUFFER_RES_CONT,
-    P_OPTS, csp_offsetof(buffer_param_t, opts),
-    P_OPT, 5, P_TOK, T_CAN,
-      P_INTEGER_S, csp_offsetof(buffer_param_t, frameid), STOP_BUFFER_CAN_ID,
-    P_OPT_END,
-    P_END
-};
-
 NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     buffer_param_t d = {0};
@@ -3443,9 +3165,9 @@ NOINLINE xindex_t lookup_lhs(csp_rt_t* st, const token_t* tv,
 	    }
 	    if (tv[j+2].t != INT) { csp_set_error(st, ERR_SYNTAX); return BAD_INDEX; }
 	    p0 = p1 = tv[j+2].v.val.i;
-	    if ((tv[j+3].t == DOT) && (tv[j+4].t == DOT)) {
-		if (tv[j+5].t != INT) {csp_set_error(st,ERR_SYNTAX);return BAD_INDEX;}
-		p1 = tv[j+5].v.val.i;
+	    if (tv[j+3].t == DOTDOT) {
+		if (tv[j+4].t != INT) {csp_set_error(st,ERR_SYNTAX);return BAD_INDEX;}
+		p1 = tv[j+4].v.val.i;
 	    }
 	    return make_buf_view(st, ix, p0*8, (p1+1)*8-1);
 	}
@@ -3478,30 +3200,6 @@ field:
 }
 
 
-#define MAX_BODY_PARTS 8
-
-// one rule body part: [<obj>['.'<fld>]['['<idx0>['..'<idx1>]']'] (=|<-)] <rhs>
-typedef struct {
-    tstr_t  obj;
-    tstr_t  fld;
-    tstr_t  pfld;   // third dotted name: <obj>.<fld>.<part>
-    int assign;     // NONE / EQ / RIMP
-    int has_idx;    // nonzero (= LB token) if '[' index present
-    int has_range;  // nonzero (= DOT token) if '..' range present
-    int idx_bits;   // idx0/idx1 are bit positions (pack), not byte indices
-    int is_unpack;  // <var> = <src_view>  (unpack: rhs is a prebuilt sub-view)
-    index_t src_view; // the source sub-view decl (when is_unpack)
-    ivalue_t idx0;  // Buf[idx0 ..]
-    ivalue_t idx1;  // Buf[.. idx1]
-    // A[<expr>] on the LEFT of an assignment. The right side goes through the
-    // expression parser, which handles a subscript in its primary; the left side
-    // is matched HERE, so without this a runtime subscript did not match at all
-    // and the whole `A[I] = 99` fell through as an r-value expression -- which
-    // made the expression parser perform the store itself, during the pass that
-    // only validates, before the leaf tables exist. That was a segfault.
-    pexpr_t idxe;
-    pexpr_t rhs;
-} rule_body_part_t;
 
 //  part (',' part)* [? cond]
 //
@@ -3818,26 +3516,7 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
     return 0;
 }
 
-#define MAX_INITS 8
 
-typedef struct {
-    tstr_t mod_name;
-    tstr_t obj_name;
-    rule_body_part_t inits[MAX_INITS];
-} object_param_t;
-
-// '#' ModName ObjName (Field (=|<-) Expr)*
-static const uint8_t pat_object[] = {
-    P_STR, csp_offsetof(object_param_t, mod_name),
-    P_STR, csp_offsetof(object_param_t, obj_name),
-    P_OPT, 11,
-    P_REP, 8,
-      P_ARRAY, csp_offsetof(object_param_t, inits), sizeof(rule_body_part_t),
-      P_PAT, PAT_BODY, 0, STOP_OBJECT_INIT_CONT,
-    P_REP_END,
-    P_OPT_END,    
-    P_END
-};
 
 // Emit an always-true rule "state_ix = snum" (RULE/body/NEXT shape, like
 // asm_rule). Used for the object-init INIT auto-transition to NORMAL.
@@ -3959,88 +3638,6 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
     return asm_NEW(st, decl(st,INDEX(mx),md.ent), ix);
 }
 
-//
-// Parse rule
-//
-//  <lhs> = <rhs> [ ? <cond> ]
-//  <lhs> <- <rhs> [ ? <cond> ]
-//  <lhs> [ ? <cond> ]
-//
-//  <lhs> = <var> | <obj>'.'<var>
-//  <rhs> = <expr>
-//  <cond> = <expr>
-//
-
-// cond first! body parts must start at a byte offset
-typedef struct {
-    pexpr_t cond;
-    rule_body_part_t body[MAX_BODY_PARTS];
-} rule_param_t;
-
-// PAT_BODY: [<name> ['.' <name> ['.' <name>]] ['[' <idx0> ['..' <idx1>] ']'] (=|<-)] <expr>
-static const uint8_t pat_body[] = {
-    // 65 = P_STR(2) + dotted-name block(14) + int-index block(22) +
-    //      expr-index block(11) + assign choice(15) + P_OPT_END(1).
-    // Add a block INSIDE and this has to grow by the same amount. Getting it
-    // wrong does not fail here -- it makes the parser skip to the wrong place
-    // and shows up as a couple of dozen unrelated syntax errors elsewhere.
-    P_OPT, 65,
-      P_STR, csp_offsetof(rule_body_part_t, obj),
-      P_OPT, 12,
-        P_TOK, DOT,
-        P_STR, csp_offsetof(rule_body_part_t, fld),
-        P_OPT, 5,
-          P_TOK, DOT,
-          P_STR, csp_offsetof(rule_body_part_t, pfld),
-        P_OPT_END,
-      P_OPT_END,
-      // '[' <int> ['..' <int>] ']' -- buffers and the bit-pack forms, unchanged.
-      P_OPT, 20,
-        P_TOK_W, LB, csp_offsetof(rule_body_part_t, has_idx),
-        P_INTEGER_S, csp_offsetof(rule_body_part_t, idx0), STOP_BODY_IDX0,
-        P_OPT, 9,
-          P_TOK_W, DOT, csp_offsetof(rule_body_part_t, has_range),
-          P_TOK, DOT,
-          P_INTEGER_S, csp_offsetof(rule_body_part_t, idx1), STOP_BODY_IDX1,
-        P_OPT_END,
-        P_TOK, RB,
-      P_OPT_END,
-      // '[' <expr> ']' -- an array's RUNTIME subscript, as a SECOND optional
-      // rather than an alternative inside the first. No P_CHOICE is needed: the
-      // block above backs off completely -- including the '[' it had already
-      // matched -- when P_INTEGER_S fails on a non-constant, which is exactly
-      // the behaviour that used to let `A[I] = 99` fall through as an r-value.
-      // So this one sees an untouched '[' and runs only when the integer form
-      // did not match, which also keeps `Buf[0..3]` on its old path.
-      P_OPT, 9,
-        P_TOK_W, LB, csp_offsetof(rule_body_part_t, has_idx),
-        P_EXPR_S, csp_offsetof(rule_body_part_t, idxe), STOP_BODY_IDXE,
-        P_TOK, RB,
-      P_OPT_END,
-      P_CHOICE, 2,
-        P_ALT, 4, P_TOK_W, EQ, csp_offsetof(rule_body_part_t, assign), P_ALT_END,
-        P_ALT, 4, P_TOK_W, RIMP, csp_offsetof(rule_body_part_t, assign), P_ALT_END,
-      P_CHOICE_END,
-    P_OPT_END,
-    P_EXPR_S, csp_offsetof(rule_body_part_t, rhs), STOP_RULE_BODY,
-    P_END
-};
-
-// <rule> := <body> (',' <body>)* ['?' <cond>]
-static const uint8_t pat_rule[] = {
-    P_PAT, PAT_BODY, csp_offsetof(rule_param_t, body), STOP_RULE_BODY_CONT,
-    P_REP, 10,
-      P_ARRAY, csp_offsetof(rule_param_t, body[1]), sizeof(rule_body_part_t),
-      P_TOK, COMMA,
-      P_PAT, PAT_BODY, 0, STOP_RULE_BODY_CONT,
-    P_REP_END,
-    P_OPT, 6,
-      P_TOK, QUEST,
-      P_EXPR_S, csp_offsetof(rule_param_t, cond), STOP_RULE_COND,
-    P_OPT_END,
-    P_END
-};
-
 // A bare top-level rule (no explicit #in, not inside a module) runs in the two
 // built-in operating states INIT and NORMAL by default -- "NORMAL+". So global
 // logic quiesces when the machine enters a SPECIAL state (FAILSAFE, REBOOT, or a
@@ -4109,47 +3706,6 @@ NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, int ti, size_t n)
 //   <field> := <expr> [':' <bits>]   blank separated
 // Fields are laid out at ascending bit offsets, each masked to its width.
 // Sugar for a sequence of bit-field stores: <buf>[off..off+w-1] = <expr>.
-#define MAX_PACK MAX_BODY_PARTS
-
-typedef struct {
-    pexpr_t  val;     // value expression to pack
-    ivalue_t bits;    // field width in bits; 0 => the value's declared width
-} pack_field_t;
-
-typedef struct {
-    pack_field_t field[MAX_PACK];
-    tstr_t       buffer;
-    int          op;       // LTLT = pack '<<=', GTGT = unpack '>>='
-    pexpr_t      cond;
-} pack_param_t;
-
-static const uint8_t pat_field[] = {
-    P_EXPR_S, csp_offsetof(pack_field_t, val), STOP_PACK_VAL,
-    P_OPT, 6,
-      P_TOK, COLON,
-      P_INTEGER_S, csp_offsetof(pack_field_t, bits), STOP_PACK_BITS,
-    P_OPT_END,
-    P_END
-};
-
-static const uint8_t pat_pack[] = {
-    P_STR, csp_offsetof(pack_param_t, buffer),
-    P_CHOICE, 2,
-      P_ALT, 4, P_TOK_W, LTLT, csp_offsetof(pack_param_t, op), P_ALT_END,
-      P_ALT, 4, P_TOK_W, GTGT, csp_offsetof(pack_param_t, op), P_ALT_END,
-    P_CHOICE_END,
-    P_TOK, EQ,
-    P_REP, 8,
-      P_ARRAY, csp_offsetof(pack_param_t, field), sizeof(pack_field_t),
-      P_PAT, PAT_FIELD, 0, STOP_PACK_FIELD_CONT,
-    P_REP_END,
-    P_OPT, 6,
-      P_TOK, QUEST,
-      P_EXPR_S, csp_offsetof(pack_param_t, cond), STOP_RULE_COND,
-    P_OPT_END,
-    P_END
-};
-
 NOINLINE int csp_parse_pack(csp_rt_t* st, token_t* tv, size_t n)
 {
     pack_param_t d = {0};
@@ -4542,25 +4098,7 @@ void csp_compile_init(void)
 {
     init_stop_sets();       // creates STOP_NONE (index 0)
 
-    scan_pattern(PAT_PORT_PIN, pat_port_pin);
-    scan_pattern(PAT_RES,      pat_res);
-    scan_pattern(PAT_INITVAL,  pat_initval);
-    scan_pattern(PAT_PIN_ITEM, pat_pin_item);
-
-    scan_pattern(PAT_MODULE,   pat_module);
-    scan_pattern(PAT_END,      pat_end);
-    scan_pattern(PAT_VARIABLE, pat_variable);
-    scan_pattern(PAT_CONSTANT, pat_constant);
-    scan_pattern(PAT_DIGITAL,  pat_digital);
-    scan_pattern(PAT_ANALOG,   pat_analog);
-    scan_pattern(PAT_TIMER,    pat_timer);
-    scan_pattern(PAT_FDECL,    pat_fdecl);
-    scan_pattern(PAT_BUFFER,   pat_buffer);
-    scan_pattern(PAT_BODY,     pat_body);
-    scan_pattern(PAT_RULE,     pat_rule);
-    scan_pattern(PAT_FIELD,    pat_field);
-    scan_pattern(PAT_PACK,     pat_pack);
-    scan_pattern(PAT_OBJECT,   pat_object);
+    CSP_SCAN_PATTERNS
 }
 
 #endif /* !CSP_EXEC_ONLY */

@@ -21,73 +21,12 @@
 #include "csp_strings.h"   // the operator spellings
 #include "csp_tok.h"
 
+// The rows come from csp_tokens.h, generated together with the tok_t enum this
+// table is indexed by. A macro rather than a linked table so it keeps living
+// HERE, in the file whose whole reason is that neither the compiler nor the
+// disassembler owns it.
 const op_entry_t tok_table[] RODATA = {
-    INSTR_ENT(NONE,OP_NOP,s_NOP,-1,0,NO),
-    INSTR_ENT(EXCLAMATION,OP_NOT,s_EXCLAMATION,1,105,RIGHT),
-    INSTR_ENT(TILDE,OP_BNOT,s_TILDE,1,105,RIGHT),
-    INSTR_ENT(MINUS1,OP_NEG,s_MINUS,1,105,RIGHT),
-    INSTR_ENT(PLUS1,OP_MOV,s_MOV,1,105,RIGHT),
-    // node - binary
-    INSTR_ENT(PLUS,OP_ADD,s_PLUS,2,90,LEFT),
-    INSTR_ENT(MINUS,OP_SUB,s_MINUS,2,90,LEFT),
-    INSTR_ENT(ASTERISK,OP_MUL,s_ASTERISK,2,100,LEFT),
-    INSTR_ENT(SLASH,OP_DIV,s_SLASH,2,100,LEFT),
-    INSTR_ENT(PERCENT,OP_REM,s_PERCENT,2,100,LEFT),
-    INSTR_ENT(LTLT,OP_SLA,s_LTLT,2,80,LEFT),
-    INSTR_ENT(GTGT,OP_SRA,s_GTGT,2,80,LEFT),
-    INSTR_ENT(LT,OP_LT,s_LT,2,70,LEFT),
-    INSTR_ENT(LTEQ,OP_LTE,s_LTEQ,2,70,LEFT),
-    INSTR_ENT(GT,OP_GT,s_GT,2,70,LEFT),
-    INSTR_ENT(GTEQ,OP_GTE,s_GTEQ,2,70,LEFT),
-    INSTR_ENT(EQEQ,OP_EQEQ,s_EQEQ,2,60,LEFT),
-    INSTR_ENT(NEQ,OP_NEQ,s_NEQ,2,60,LEFT),
-    INSTR_ENT(AMP,OP_BAND,s_AMP,2,50,LEFT),
-    INSTR_ENT(CIRC,OP_BXOR,s_CIRC,2,40,LEFT),
-    INSTR_ENT(BAR,OP_BOR,s_BAR,2,30,LEFT),
-    INSTR_ENT(AMPAMP,OP_AND,s_AMPAMP,2,20,LEFT),
-    INSTR_ENT(BARBAR,OP_OR,s_BARBAR,2,10,LEFT),
-    // EQ/RIMP are shunted as low-precedence right-assoc operators so that the
-    // expression parser handles `var = expr` -- needed for immediate `> T1=1`
-    // (one-shot assignment / timer start). Rules use asm_rule, not this path.
-    INSTR_ENT(EQ,OP_EQ,s_EQ,2,5,RIGHT),       // assign_expr
-    INSTR_ENT(RIMP,OP_RIMP,s_RIMP,2,4,RIGHT), // assign_expr
-    // INSTR_ENT(COMMA,OP_COMMA,s_COMMA,2,2,RIGHT),
-    INSTR_ENT(COMMA,OP_NOP,s_COMMA,2,2,RIGHT),    
-    INSTR_ENT(QUEST,OP_RULE,s_QUEST,-1,-1,NO),
-
-    TOK_ENT(T_PULLUP,OP_NOP,s_pullup),
-    TOK_ENT(T_PULLDOWN,OP_NOP,s_pulldown),
-    TOK_ENT(T_RESOLUTION,OP_NOP,s_resolution),
-    TOK_ENT(T_IN,OP_NOP,s_in),
-    TOK_ENT(T_OUT,OP_NOP,s_out),
-    TOK_ENT(T_INOUT,OP_NOP,s_inout),
-    TOK_ENT(T_PWM,OP_NOP,s_pwm),
-    TOK_ENT(T_FLOAT,OP_NOP,s_float),
-    TOK_ENT(T_INTEGER,OP_NOP,s_integer),
-    TOK_ENT(T_UNSIGNED,OP_NOP,s_unsigned),
-    TOK_ENT(T_STRING,OP_NOP,s_string),
-    TOK_ENT(T_NATIVE,OP_NOP,s_native),    
-    TOK_ENT(T_LITTLE,OP_NOP,s_little),
-    TOK_ENT(T_BIG,OP_NOP,s_big),
-    TOK_ENT(T_CAN,OP_NOP,s_can),   // the #buffer TRANSPORT, not a declaration
-    TOK_ENT(T_DISABLE,OP_NOP,s_disable),
-    TOK_ENT(T_ENABLE,OP_NOP,s_enable),
-
-    TOK_ENT(LP,OP_NOP,s_LP),
-    TOK_ENT(RP,OP_NOP,s_RP),
-    TOK_ENT(HASH,OP_NOP,s_HASH),
-    TOK_ENT(DOT,OP_NOP,s_DOT),
-    TOK_ENT(COLON,OP_NOP,s_COLON),
-    TOK_ENT(LB,OP_NOP,s_LB),
-    TOK_ENT(RB,OP_NOP,s_RB),
-    TOK_ENT(LBRACE,OP_NOP,s_LBRACE),
-    TOK_ENT(RBRACE,OP_NOP,s_RBRACE),
-    TOK_ENT(INT,OP_NOP,s_null),
-    TOK_ENT(FLT,OP_NOP,s_null),
-    TOK_ENT(WORD,OP_NOP,s_null),
-    TOK_ENT(NEWLINE,OP_NOP,s_null),
-    // eot
-    TOK_ENT(T_LAST,OP_NOP,s_null)
+    CSP_TOK_TABLE
 };
 
 int find_op_entry(const op_entry_t* tab, int size,

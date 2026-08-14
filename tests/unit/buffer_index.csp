@@ -10,6 +10,7 @@
 #variable Whole = 0
 #variable R0 = 0
 #variable R1 = 0
+#variable Rng = 0
 
 Frame[0] = 52 ? 1          // write low byte
 Frame[1] = 18 ? 1          // write high byte
@@ -20,3 +21,7 @@ Whole = Frame ? 1          // 52 + 256*18 = 4660
 F2[0..1] = 4660 ? 1        // write both bytes via a range
 R0 = F2[0] ? 1
 R1 = F2[1] ? 1
+// A range on the READ side. Its own line because it is a different code path
+// from the write above: the write is matched by the rule grammar, the read by
+// the expression parser's primary.
+Rng = F2[0..1] ? 1

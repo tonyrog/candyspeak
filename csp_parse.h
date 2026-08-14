@@ -70,77 +70,11 @@ int pmatch(csp_rt_t* st, const token_t* tv, int ti, size_t n,
 extern int csp_stop_overflow;
 extern int csp_stop_tokens_used(void);
 
-// Named stop-sets - used in xxx_pat definitions
-enum {
-    STOP_NONE = 0,       // empty/invalid placeholder
-    STOP_OPTS = 1,       // fixed set containing all OPTION tokens
-    STOP_RULE_BODY,      // <body> ? <cond> - stops at QUEST, NEWLINE
-    STOP_RULE_COND,      // ? <cond> - stops at NEWLINE
-    // Add more as needed:
-    STOP_RES,           // [:res]
-    STOP_PORT,
-    STOP_PIN1,
-    STOP_PIN2,
-    STOP_VAR_INIT,      // #variable x = <init>
-    STOP_CONST_INIT,    // #variable x = <init>
-    STOP_TIMER_TMO,
-    STOP_TIMER_INIT,
-    STOP_CAN_FRAMEID,
-    STOP_BUFFER_CAN_ID,     // frame id after 'can' in pat_buffer    
-    STOP_CAN_BIT0,
-    STOP_CAN_BIT1,
-    STOP_CAN_BIT00,
-    STOP_OBJECT_INIT_RHS,
-    // P_PAT continuation sets (built from followers)
-    STOP_RULE_BODY_CONT,    // PAT_BODY in pat_rule (both sites)
-    STOP_VAR_RES_CONT,      // PAT_RES in pat_variable
-    STOP_CONST_RES_CONT,    // PAT_RES in pat_constant
-    STOP_DIGITAL_PP_CONT,   // PAT_PORT_PIN in pat_digital
-    STOP_ANALOG_RES_CONT,   // PAT_RES in pat_analog
-    STOP_ANALOG_PP_CONT,    // PAT_PORT_PIN in pat_analog
-    STOP_CAN_RES_CONT,      // PAT_RES in pat_can
-    STOP_BUFFER_RES_CONT,   // PAT_RES in pat_buffer
-
-    STOP_BODY_IDX0,         // first index in body lhs  Buf[idx0 ..]
-    STOP_BODY_IDX1,         // second index in body lhs Buf[.. idx1]
-    STOP_BODY_IDXE,         // A[<expr>] on the lhs -- stops at ']'
-    STOP_INIT_VAL,          // one element of `= { v0, v1, ... }`
-    // The pin spec, one set per SITE: a stop-set id may be built only once, so
-    // two P_INTEGER_S sharing an id leaves the first one reading the second's
-    // followers (and prints "stop set not empty" under DEBUG).
-    STOP_PIN_NUM,           // the leading number -- a port or a pin, not yet known
-    STOP_PIN_LO,            // <pin> after `<port> ':'`
-    STOP_PIN_HI,            // range end after `<port> ':' <pin> '..'`
-    STOP_PIN_HI2,           // range end after `<pin> '..'`
-    STOP_PIN_HI3,           // range end of a continued range, `'..' <pin>`
-    STOP_OBJECT_INIT_CONT,
-    STOP_PACK_VAL,          // pack field value expr (stops at ':' or next field)
-    STOP_PACK_BITS,         // pack field width int
-    STOP_PACK_FIELD_CONT,   // PAT_FIELD continuation in pat_pack
-    NUM_STOP_SETS
-};
-
-enum {
-    PAT_MODULE,
-    PAT_END,
-    PAT_RES,
-    PAT_PORT_PIN,
-    PAT_INITVAL,     // one element of a `= { ... }` init list
-    PAT_PIN_ITEM,    // one item of a device array's pin spec
-    PAT_VARIABLE,
-    PAT_CONSTANT,
-    PAT_DIGITAL,
-    PAT_ANALOG,
-    PAT_TIMER,
-    PAT_FDECL,       // the #field DECLARATION; PAT_FIELD below is <obj>.<field>
-    PAT_BUFFER,
-    PAT_OBJECT,
-    PAT_BODY,
-    PAT_RULE,
-    PAT_FIELD,
-    PAT_PACK,
-    NUM_PAT
-};
+// The PAT_* and STOP_* enums, generated from utils/syntax.terms together with
+// the patterns that use them. Stop-set ids are ALLOCATED, one per capture site
+// -- the rule that an id may be built only once cannot be broken by hand any
+// more, because ids are not written by hand.
+#include "csp_pattern_ids.h"
 
 // mark a token as a set pos (resurse)
 #define TOK_SET      0x80

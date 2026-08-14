@@ -1,0 +1,686 @@
+%% -*- erlang -*-
+%%
+%% CandySpeak syntax, as Erlang terms.  Read with file:consult/1.
+%%
+%% This is the machine-readable form of doc/grammar.txt.  It is meant to be the
+%% SOURCE from which a generator emits
+%%
+%%   - the pmatch byte patterns (csp_compile.c's pat_* arrays)
+%%   - the parameter structs those patterns capture into
+%%   - the PAT_* enum
+%%   - the stop sets, computed rather than hand-allocated
+%%   - keyword rows for strings.tab
+%%
+%% Nothing generates anything yet.  This file is the input format, written out
+%% by hand for the language as it stands, so the format can be judged before a
+%% generator is written against it.
+%%
+%% ---------------------------------------------------------------------------
+%% VOCABULARY
+%%
+%%   {struct, Name, [{Field, Type}]}
+%%
+%%       The capture target of a pattern.  Field ORDER is the C struct's order
+%%       and is not always derivable from the pattern -- see rule_param, whose
+%%       comment in the C says why cond must come first.
+%%
+%%       Type ::= str | int | tok | expr | const | opts   (a capture kind)
+%%              | {pat, PatternName}                      (a sub-pattern's struct)
+%%              | {array, StructName, MaxMacro}
+%%              | {plain, "C type"}   -- a field the PATTERN never writes; the
+%%                                       caller fills it in after the match
+%%
+%%       The C type of a capture follows from its kind:
+%%           str -> tstr_t   int -> ivalue_t   tok -> ivalue_t
+%%           expr -> pexpr_t   const -> value_t   opts -> decl_opts_t
+%%
+%%   {pattern, Name, StructName, Items}
+%%
+%%   Item ::= {tok, Lit}                 match a literal, discard it
+%%          | {tok, Field, Lit}          match a literal, capture which one
+%%          | {str, Field}               a NAME
+%%          | {int, Field}               constant integer expression
+%%          | {const, VtField, Field}    constant expression, typed by VtField
+%%          | {expr, Field}              expression left for codegen
+%%          | {opts, Field}              the option word set
+%%          | {pat, PatternName, Field}  another pattern, captured
+%%          | {pat, PatternName}         another pattern, into the current
+%%                                       repetition element
+%%          | {opt, Items}               zero or one
+%%          | {choice, [Items]}          first alternative that matches
+%%          | {rep, Field, From, Items}  zero or more, into Field[From..]
+%%
+%%   {defaults, PatternName, [{Path, Value}]}
+%%
+%%       What the caller seeds the struct with before matching.  Not decoration:
+%%       pin_item tells "did not appear" from "appeared as 0" by the -1s below.
+%%
+%% Every literal is ONE token.  '..' used to be two DOTs, which meant a pattern
+%% could not capture "a range appeared" from it -- `body` captured the first dot
+%% and matched the second.  Writing this file is what made that visible; the
+%% scanner now produces DOTDOT.
+%%
+%% Two names differ from the C on purpose: pat_fdecl is the `#field`
+%% DECLARATION and pat_field is a field of a `<<=` PACK.  They are field_decl
+%% and pack_field here.
+%% ---------------------------------------------------------------------------
+
+
+%% ===========================================================================
+%% Tokens
+%%
+%% The tok_t enum IN ORDER, and the tok_table row each member gets.  ONE list,
+%% because tok_table is indexed BY the enum with designated initializers -- the
+%% two can drift apart today and the compiler will not say a word.
+%%
+%%   {token, Enum, Spelling, StrSym, Code, Arity, Prec, Assoc}
+%%   {token, Enum}                enum member with NO tok_table row
+%%
+%%   Spelling  what you type; `undefined` for a token with no fixed text (INT,
+%%             FLT, WORD, NEWLINE) or one the PARSER makes rather than the
+%%             scanner (MINUS1, PLUS1 -- the unary readings of '-' and '+')
+%%   StrSym    the strings.tab NAME its text lives under.  NOT derivable from
+%%             the enum: MINUS1 prints as s_MINUS and PLUS1 as s_MOV.
+%%   Code      the OP_* this token becomes in an instruction
+%%   Arity     operand count for the expression parser, -1 when not an operator
+%%   Prec      binding power, higher is tighter
+%%   Assoc     left | right | no
+%%
+%% A row's Spelling is also what puts it in strings.tab, and -- when it starts
+%% with a letter -- what makes it a RESERVED WORD.  Nothing else has to say so:
+%% the scanner decides reserved-ness by looking a WORD up in this table, so a
+%% spelled token IS a word you cannot use as an identifier.
+%% ===========================================================================
+
+{token, 'NONE',    undefined, 'NOP',   'OP_NOP',  -1,   0, no}.
+{token, 'NEWLINE', undefined, 'null',  'OP_NOP',  -1,  -1, no}.
+
+%% punctuation
+{token, 'LP',      '(',       'LP',     'OP_NOP', -1,  -1, no}.
+{token, 'RP',      ')',       'RP',     'OP_NOP', -1,  -1, no}.
+{token, 'COLON',   ':',       'COLON',  'OP_NOP', -1,  -1, no}.
+{token, 'HASH',    '#',       'HASH',   'OP_NOP', -1,  -1, no}.
+{token, 'DOT',     '.',       'DOT',    'OP_NOP', -1,  -1, no}.
+{token, 'DOTDOT',  '..',      'DOTDOT', 'OP_NOP', -1,  -1, no}.
+{token, 'LB',      '[',       'LB',     'OP_NOP', -1,  -1, no}.
+{token, 'RB',      ']',       'RB',     'OP_NOP', -1,  -1, no}.
+{token, 'LBRACE',  '{',       'LBRACE', 'OP_NOP', -1,  -1, no}.
+{token, 'RBRACE',  '}',       'RBRACE', 'OP_NOP', -1,  -1, no}.
+
+%% literals
+{token, 'INT',     undefined, 'null',  'OP_NOP',  -1,  -1, no}.
+{token, 'FLT',     undefined, 'null',  'OP_NOP',  -1,  -1, no}.
+%% STR has no tok_table row at all today, which leaves tok_table[STR].name a
+%% NULL pointer where every other row holds a string. Nothing asks for it, so
+%% nothing has crashed on it. Given a row it becomes s_null like INT and FLT.
+{token, 'STR',     undefined, 'null',  'OP_NOP',  -1,  -1, no}.
+
+%% unary -- MINUS1/PLUS1 are what the PARSER turns a leading '-'/'+' into
+{token, 'EXCLAMATION', '!',   'EXCLAMATION', 'OP_NOT',  1, 105, right}.
+{token, 'TILDE',       '~',   'TILDE',       'OP_BNOT', 1, 105, right}.
+{token, 'MINUS1',  undefined, 'MINUS', 'OP_NEG',   1, 105, right}.
+{token, 'PLUS1',   undefined, 'MOV',   'OP_MOV',   1, 105, right}.
+
+%% binary
+{token, 'PLUS',     '+',      'PLUS',      'OP_ADD',  2,  90, left}.
+{token, 'MINUS',    '-',      'MINUS',     'OP_SUB',  2,  90, left}.
+{token, 'ASTERISK', '*',      'ASTERISK',  'OP_MUL',  2, 100, left}.
+{token, 'SLASH',    '/',      'SLASH',     'OP_DIV',  2, 100, left}.
+{token, 'PERCENT',  '%',      'PERCENT',   'OP_REM',  2, 100, left}.
+{token, 'LTLT',     '<<',     'LTLT',      'OP_SLA',  2,  80, left}.
+{token, 'GTGT',     '>>',     'GTGT',      'OP_SRA',  2,  80, left}.
+{token, 'LT',       '<',      'LT',        'OP_LT',   2,  70, left}.
+{token, 'LTEQ',     '<=',     'LTEQ',      'OP_LTE',  2,  70, left}.
+{token, 'GT',       '>',      'GT',        'OP_GT',   2,  70, left}.
+{token, 'GTEQ',     '>=',     'GTEQ',      'OP_GTE',  2,  70, left}.
+{token, 'EQEQ',     '==',     'EQEQ',      'OP_EQEQ', 2,  60, left}.
+{token, 'NEQ',      '!=',     'NEQ',       'OP_NEQ',  2,  60, left}.
+{token, 'AMP',      '&',      'AMP',       'OP_BAND', 2,  50, left}.
+{token, 'BAR',      '|',      'BAR',       'OP_BOR',  2,  30, left}.
+{token, 'CIRC',     '^',      'CIRC',      'OP_BXOR', 2,  40, left}.
+{token, 'AMPAMP',   '&&',     'AMPAMP',    'OP_AND',  2,  20, left}.
+{token, 'BARBAR',   '||',     'BARBAR',    'OP_OR',   2,  10, left}.
+
+%% '=' and '<-' are shunted as low-precedence right-associative operators so an
+%% IMMEDIATE line (`> T1 = 1`) parses as an expression. Rules do not come
+%% through this path -- their assignment is matched by the rule grammar.
+{token, 'EQ',       '=',      'EQ',        'OP_EQ',   2,   5, right}.
+{token, 'RIMP',     '<-',     'RIMP',      'OP_RIMP', 2,   4, right}.
+
+%% Arity 2 but OP_NOP: it evaluates both sides and keeps the RIGHT one. That
+%% matters wherever an expression is bounded by a stop set -- if COMMA is not
+%% in the set, the scan swallows the whole list and folds it to its last
+%% element.
+{token, 'COMMA',    ',',      'COMMA',     'OP_NOP',  2,   2, right}.
+
+{token, 'QUEST',    '?',      'QUEST',     'OP_RULE', -1, -1, no}.
+{token, 'WORD',     undefined, 'null',     'OP_NOP',  -1, -1, no}.
+
+%% Option keywords. Reserved because they are spelled, see the header.
+{token, 'T_PULLUP',     pullup,     'pullup',     'OP_NOP', -1, -1, no}.
+{token, 'T_PULLDOWN',   pulldown,   'pulldown',   'OP_NOP', -1, -1, no}.
+%% Reserved and consumed by nothing -- a reserved word with no grammar.
+{token, 'T_RESOLUTION', resolution, 'resolution', 'OP_NOP', -1, -1, no}.
+{token, 'T_IN',         in,         'in',         'OP_NOP', -1, -1, no}.
+{token, 'T_OUT',        out,        'out',        'OP_NOP', -1, -1, no}.
+{token, 'T_INOUT',      inout,      'inout',      'OP_NOP', -1, -1, no}.
+{token, 'T_PWM',        pwm,        'pwm',        'OP_NOP', -1, -1, no}.
+{token, 'T_FLOAT',      float,      'float',      'OP_NOP', -1, -1, no}.
+%% The SIGNED integer type. There is no `signed` keyword.
+{token, 'T_INTEGER',    integer,    'integer',    'OP_NOP', -1, -1, no}.
+{token, 'T_UNSIGNED',   unsigned,   'unsigned',   'OP_NOP', -1, -1, no}.
+{token, 'T_STRING',     string,     'string',     'OP_NOP', -1, -1, no}.
+{token, 'T_NATIVE',     native,     'native',     'OP_NOP', -1, -1, no}.
+{token, 'T_LITTLE',     little,     'little',     'OP_NOP', -1, -1, no}.
+{token, 'T_BIG',        big,        'big',        'OP_NOP', -1, -1, no}.
+%% The #buffer TRANSPORT, not a declaration: `#buffer F:8 in can 0x201`.
+{token, 'T_CAN',        can,        'can',        'OP_NOP', -1, -1, no}.
+%% Reserved so the '#' dispatch can branch on them: it looks for a WORD after
+%% '#' and would otherwise read "disable" as a module name.
+{token, 'T_DISABLE',    disable,    'disable',    'OP_NOP', -1, -1, no}.
+{token, 'T_ENABLE',     enable,     'enable',     'OP_NOP', -1, -1, no}.
+
+%% Sizes the table: tok_table is [T_LAST+1] entries.
+{token, 'T_LAST',       undefined,  'null',       'OP_NOP', -1, -1, no}.
+
+
+%% ===========================================================================
+%% Declaration keywords
+%%
+%% The dtok_t enum IN ORDER, and the decl_table row each member gets -- same
+%% shape and same reason as the tokens above.
+%%
+%%   {decl, DTok, Spelling, StrSym, DeclCode, Pattern}
+%%   {decl, DTok}                 enum member with NO decl_table row
+%%
+%%   Pattern   which pattern parses the rest of the line; hand_written for the
+%%             ones still scanned by hand; undefined for a row that is not a
+%%             keyword at all
+%%
+%% These are NOT tokens: they are ordinary NAMEs looked up after the '#'. That
+%% is why `#field` needs no special case in the dispatcher while `#in`,
+%% `#disable` and `#enable` do -- those spell a reserved token and never arrive
+%% as a NAME. D_IN is therefore unreachable through this table.
+%%
+%% `local` and `variable` share DECL_VARIABLE and one pattern; they differ by a
+%% bit the parser sets, not by a type.
+%%
+%% There is deliberately no `object` row -- an instance is `# ModName ObjName`,
+%% reached when the word after '#' is NOT in this table.
+%% ===========================================================================
+
+{decl, 'D_NONE',     undefined, 'none',     'DECL_NONE',     undefined}.
+{decl, 'D_MODULE',   module,    'module',   'DECL_MODULE',   module}.
+{decl, 'D_END',      'end',     'end',      'DECL_END',      'end'}.
+{decl, 'D_STATES',   states,    'states',   'DECL_STATES',   hand_written}.
+{decl, 'D_IN',       in,        'in',       'DECL_IN',       hand_written}.
+{decl, 'D_CONSTANT', constant,  'constant', 'DECL_CONSTANT', constant}.
+{decl, 'D_VARIABLE', variable,  'variable', 'DECL_VARIABLE', variable}.
+{decl, 'D_LOCAL',    local,     'local',    'DECL_VARIABLE', variable}.
+{decl, 'D_DIGITAL',  digital,   'digital',  'DECL_DIGITAL',  digital}.
+{decl, 'D_ANALOG',   analog,    'analog',   'DECL_ANALOG',   analog}.
+{decl, 'D_TIMER',    timer,     'timer',    'DECL_TIMER',    timer}.
+{decl, 'D_FIELD',    field,     'field',    'DECL_FIELD',    field_decl}.
+{decl, 'D_BUFFER',   buffer,    'buffer',   'DECL_BUFFER',   buffer}.
+
+%% Placeholders: enum members with no table row and no syntax behind them yet.
+%% Keeping them keeps D_LAST -- and so decl_table's size -- where it is.
+{decl, 'D_UART'}.
+{decl, 'D_SOCKET'}.
+{decl, 'D_MOD'}.
+
+{decl, 'D_LAST',     undefined, 'null',     'DECL_NONE',     undefined}.
+
+
+
+
+%% ===========================================================================
+%% Option words
+%%
+%% What {opts, F} accepts.  {Word, Field, Value, How}: `set` overwrites the
+%% field, `or` ORs into it, `flag` sets it to 1.  Any number in any order, no
+%% separators.  Every declaration accepts the whole set and ignores what it has
+%% no field for.
+%% ===========================================================================
+
+{options,
+ [{unsigned, vt,       'V_UNSIGNED', set},
+  {integer,  vt,       'V_INTEGER',  set},
+  {float,    vt,       'V_FLOAT',    set},
+  {string,   vt,       'V_STRING',   set},
+  {in,       dir,      'DIR_IN',     'or'},
+  {out,      dir,      'DIR_OUT',    'or'},
+  {inout,    dir,      'DIR_INOUT',  'or'},
+  {native,   endian,   'E_NATIVE',   set},
+  {little,   endian,   'E_LITTLE',   set},
+  {big,      endian,   'E_BIG',      set},
+  {pwm,      pwm,      1,            flag},
+  {pullup,   pullup,   1,            flag},
+  {pulldown, pulldown, 1,            flag}]}.
+
+
+%% ===========================================================================
+%% Part names
+%%
+%% `<var>.<part>` and `<obj>.<field>.<part>`.  NAMEs, not reserved words --
+%% which types carry which part is in csp_part.h.  Here for the strings.
+%% ===========================================================================
+
+{parts,
+ [{value,    'PART_VAL'},
+  {pin,      'PART_PIN'},
+  {port,     'PART_PORT'},
+  {dir,      'PART_DIR'},
+  {pwm,      'PART_PWM'},
+  {endian,   'PART_ENDIAN'},
+  {pullup,   'PART_PULLUP'},
+  {pulldown, 'PART_PULLDOWN'},
+  {period,   'PART_PERIOD'},
+  {fired,    'PART_FIRED'},
+  {id,       'PART_ID'},
+  {rx,       'PART_RX'},
+  {tx,       'PART_TX'},
+  {dlc,      'PART_DLC'},
+  {len,      'PART_LEN'}]}.
+
+
+%% ===========================================================================
+%% Built-in functions
+%%
+%% {Name, Arity, Pure}.  Pure ones fold at parse time.  print/println are the
+%% only overloaded names -- one row per arity, because the call instruction's
+%% function index is 5 bits and entries are not cheap.
+%% ===========================================================================
+
+{functions,
+ [{min,      2, pure},
+  {max,      2, pure},
+  {abs,      1, pure},
+  {sign,     1, pure},
+  {clip,     3, pure},
+  {trunc,    1, pure},
+  {round,    1, pure},
+  {timeout,  1, impure},
+  {elapsed,  1, impure},
+  {progress, 1, impure},
+  {changed,  1, impure},
+  {rising,   1, impure},
+  {falling,  1, impure},
+  {print,    1, impure},
+  {print,    2, impure},
+  {print,    3, impure},
+  {print,    4, impure},
+  {println,  0, impure},
+  {println,  1, impure},
+  {println,  2, impure},
+  {println,  3, impure},
+  {println,  4, impure},
+  {tick,     0, impure},
+  {cycle,    0, impure},
+  {latch,    1, impure}]}.
+
+
+%% ===========================================================================
+%% Sub-patterns
+%%
+%% Referenced by {pat, Name, Field} from the declaration patterns.  A generator
+%% must emit these before their users -- the C scans them in that order today.
+%% ===========================================================================
+
+%% ':' <bits>.  Width for anything scalar; #buffer reuses it for BYTES.
+{struct, res_param,
+ [{res, int}]}.
+
+{pattern, res, res_param,
+ [{opt, [{tok, ':'}, {int, res}]}]}.
+
+
+%% <port> ':' <pin> | <pin>, and the first element's pin in an array.
+%%
+%% The trailing ',' is MATCHED, not just tolerated: that is what puts COMMA in
+%% the stop set of the pin integer.  Without it `0:1,4,7` handed `1,4,7` to the
+%% constant folder as one expression and the whole list was lost.
+{struct, port_pin,
+ [{port, int},
+  {pin,  int}]}.
+
+{pattern, port_pin, port_pin,
+ [{choice, [[{int, port}, {tok, ':'}, {int, pin}],
+            [{int, pin}]]},
+  {opt, [{tok, ','}]}]}.
+
+
+%% One element of `= { v0, v1, ... }`.
+%%
+%% opts is an INPUT: the caller seeds it with the declaration's type so the
+%% element is parsed with the same type rules a scalar initialiser gets.  The
+%% separator is captured rather than inferred, so the caller reads element
+%% after element and stops on '}' -- no length needed in advance, no cap on how
+%% many elements a list may hold.
+{struct, initval_param,
+ [{init, const},
+  {opts, opts},
+  {sep,  tok}]}.
+
+{pattern, initval, initval_param,
+ [{const, opts, init},
+  {choice, [[{tok, sep, ','}],
+            [{tok, sep, '}'}]]}]}.
+
+
+%% One item of a device array's pin spec:
+%%
+%%   <port> ':' [<pin> ['..' <pin>]]   a port change, with or without pins
+%%   <pin> ['..' <pin>]                a pin or a range, in the current port
+%%   '..' <pin>                        continues the range in progress
+%%
+%% The first two SHARE their leading integer instead of each reading one.  They
+%% have to: a stop set is what bounds an integer, and read as a port that set is
+%% ':' alone -- so in `3,5,9:` the scan ran to the colon three items away and
+%% folded `3,5,9` into one number.  Read once, with ':' '..' and ',' all able to
+%% end it, `num` is a port when a colon follows and a pin when one does not.
+%%
+%% `hi` is written by three alternatives and is ONE field.  A field left at -1
+%% did not appear, which is how `9:` (change port, name no pins) is told from
+%% `9:0` without a flag per field.
+{struct, pin_item,
+ [{num,   int},
+  {colon, tok},
+  {lo,    int},
+  {hi,    int},
+  {sep,   tok}]}.
+
+{pattern, pin_item, pin_item,
+ [{choice,
+   [[{int, num},
+     {opt, [{tok, colon, ':'},
+            {opt, [{int, lo},
+                   {opt, [{tok, '..'}, {int, hi}]}]}]},
+     {opt, [{tok, '..'}, {int, hi}]}],
+    [{tok, '..'}, {int, hi}]]},
+  {opt, [{tok, sep, ','}]}]}.
+
+{defaults, pin_item,
+ [{[num], -1}, {[lo], -1}, {[hi], -1}, {[colon], 0}, {[sep], 0}]}.
+
+
+%% ===========================================================================
+%% Declarations
+%% ===========================================================================
+
+%% '#' 'module' <name>
+{struct, module_param,
+ [{name, str}]}.
+
+{pattern, module, module_param,
+ [{str, name}]}.
+
+
+%% '#' 'end'
+{struct, end_param, []}.
+
+{pattern, 'end', end_param, []}.
+
+
+%% '#' 'variable' <name> [':' <bits>] <opts> ['=' <const>]
+%%
+%% Also the head of '#' 'local', whose '=' is found by a token scan first so
+%% the pattern never sees the formula -- {const, ...} would refuse it, and
+%% refusing is right for a #variable.
+%%
+%% `bind <buffer> '[' <bit0> ['..' <bit1>] ']'` follows, matched by hand after
+%% this pattern stops: `bind` is not a token.
+{struct, variable_param,
+ [{name, str},
+  {r,    {pat, res}},
+  {opts, opts},
+  {init, const}]}.
+
+{pattern, variable, variable_param,
+ [{str, name},
+  {pat, res, r},
+  {opts, opts},
+  {opt, [{tok, '='}, {const, opts, init}]}]}.
+
+{defaults, variable,
+ [{[r, res], 32}, {[opts, vt], 'V_INTEGER'}]}.
+
+
+%% '#' 'constant' <name> [':' <bits>] <opts> '=' (<const> | '{' ... )
+%%
+%% The '{' is part of the grammar rather than a pre-pass that edited the token
+%% vector.  Matching it also leaves the match stopped exactly on the first
+%% element, which is where the caller's element walk starts.
+{struct, constant_param,
+ [{name, str},
+  {r,    {pat, res}},
+  {opts, opts},
+  {init, const},
+  {list, tok}]}.
+
+{pattern, constant, constant_param,
+ [{str, name},
+  {pat, res, r},
+  {opts, opts},
+  {tok, '='},
+  {choice, [[{tok, list, '{'}],
+            [{const, opts, init}]]}]}.
+
+{defaults, constant,
+ [{[r, res], 32}, {[opts, vt], 'V_INTEGER'}]}.
+
+
+%% '#' 'digital' <name> <opts> <pin-spec>
+{struct, digital_param,
+ [{name,     str},
+  {port_pin, {pat, port_pin}},
+  {opts,     opts}]}.
+
+{pattern, digital, digital_param,
+ [{str, name},
+  {opts, opts},
+  {pat, port_pin, port_pin}]}.
+
+
+%% '#' 'analog' <name> [':' <bits>] <opts> <pin-spec>
+%%
+%% Note the order against #digital: the width sits between the name and the
+%% options, and the options come before the pin spec in both.  pmatch is
+%% sequential, so this order IS the grammar.
+{struct, analog_param,
+ [{name,     str},
+  {r,        {pat, res}},
+  {port_pin, {pat, port_pin}},
+  {opts,     opts}]}.
+
+{pattern, analog, analog_param,
+ [{str, name},
+  {pat, res, r},
+  {opts, opts},
+  {pat, port_pin, port_pin}]}.
+
+{defaults, analog,
+ [{[r, res], 10}, {[opts, vt], 'V_INTEGER'}]}.
+
+
+%% '#' 'timer' <name> <period-ms> ['=' <running>]
+{struct, timer_param,
+ [{name,    str},
+  {timeout, int},
+  {init,    int}]}.
+
+{pattern, timer, timer_param,
+ [{str, name},
+  {int, timeout},
+  {opt, [{tok, '='}, {int, init}]}]}.
+
+{defaults, timer,
+ [{[init], 0}]}.
+
+
+%% '#' 'field' <name> [':' <bits>] <opts> <buffer> '[' <bit0> ['..' <bit1>] ']'
+%%
+%% The LONGER alternative first: with the single-bit form first, `[3..7]` would
+%% match it and then fail on the ']'.
+%%
+%% Its first capture reads `csp_offsetof(timer_param_t, name)` in the C today.
+%% Both structs put `name` at offset 0, so it lands right by accident -- the
+%% kind of thing a generated offset cannot get wrong.
+{struct, field_param,
+ [{name,  str},
+  {r,     {pat, res}},
+  {frame, str},
+  {bit0,  int},
+  {bit1,  int},
+  {opts,  opts}]}.
+
+{pattern, field_decl, field_param,
+ [{str, name},
+  {pat, res, r},
+  {opts, opts},
+  {str, frame},
+  {tok, '['},
+  {choice, [[{int, bit0}, {tok, '..'}, {int, bit1}],
+            [{int, bit0}]]},
+  {tok, ']'}]}.
+
+{defaults, field_decl,
+ [{[bit0], -1}, {[bit1], -1}, {[r, res], 1}]}.
+
+
+%% '#' 'buffer' <name> [':' <bytes>] <opts> ['can' <frame-id>]
+%%
+%% Here the shared `res` sub-pattern means BYTES, not bits.
+{struct, buffer_param,
+ [{name,    str},
+  {r,       {pat, res}},
+  {opts,    opts},
+  {frameid, int},
+  {is_can,  {plain, "uint8_t"}}]}.
+
+{pattern, buffer, buffer_param,
+ [{str, name},
+  {pat, res, r},
+  {opts, opts},
+  {opt, [{tok, can}, {int, frameid}]}]}.
+
+{defaults, buffer,
+ [{[r, res], 8}, {[frameid], -1}, {[opts, vt], 'V_UNSIGNED'}]}.
+
+
+%% ===========================================================================
+%% Rules, instances, packing
+%% ===========================================================================
+
+%% [<name> ['.' <name> ['.' <name>]] [<subscript>] ('='|'<-')] <expr>
+%%
+%% The constant subscript and the expression subscript are two OPTIONALS, not
+%% two alternatives of a choice.  No choice is needed: the constant block backs
+%% off completely -- including the '[' it had already matched -- when its
+%% integer fails on a non-constant, so the second block sees an untouched '['
+%% and runs only when the first did not.
+%%
+%% idx_bits, is_unpack and src_view are filled in by the caller.
+{struct, rule_body_part,
+ [{obj,       str},
+  {fld,       str},
+  {pfld,      str},
+  {assign,    tok},
+  {has_idx,   tok},
+  {has_range, tok},
+  {idx_bits,  {plain, "int"}},
+  {is_unpack, {plain, "int"}},
+  {src_view,  {plain, "index_t"}},
+  {idx0,      int},
+  {idx1,      int},
+  {idxe,      expr},
+  {rhs,       expr}]}.
+
+{pattern, body, rule_body_part,
+ [{opt,
+   [{str, obj},
+    {opt, [{tok, '.'}, {str, fld},
+           {opt, [{tok, '.'}, {str, pfld}]}]},
+    {opt, [{tok, has_idx, '['},
+           {int, idx0},
+           {opt, [{tok, has_range, '..'}, {int, idx1}]},
+           {tok, ']'}]},
+    {opt, [{tok, has_idx, '['}, {expr, idxe}, {tok, ']'}]},
+    {choice, [[{tok, assign, '='}],
+              [{tok, assign, '<-'}]]}]},
+  {expr, rhs}]}.
+
+
+%% <body> (',' <body>)* ['?' <cond>]
+%%
+%% cond FIRST in the struct: the body parts are an array the repetition indexes
+%% by stride, and it has to start at a byte offset the stride divides.
+{struct, rule_param,
+ [{'cond', expr},
+  {body, {array, rule_body_part, 'MAX_BODY_PARTS'}}]}.
+
+{pattern, rule, rule_param,
+ [{pat, body, body},
+  {rep, body, 1, [{tok, ','}, {pat, body}]},
+  {opt, [{tok, '?'}, {expr, 'cond'}]}]}.
+
+
+%% '#' <ModName> <ObjName> (<field> ('='|'<-') <expr>)*
+%%
+%% Reached when the word after '#' is not a declaration keyword.  A '<-' init
+%% becomes a standing rule; '=' and '.part =' inits run once, gated on the
+%% object's State == INIT.
+{struct, object_param,
+ [{mod_name, str},
+  {obj_name, str},
+  {inits,    {array, rule_body_part, 'MAX_INITS'}}]}.
+
+{pattern, object, object_param,
+ [{str, mod_name},
+  {str, obj_name},
+  {opt, [{rep, inits, 0, [{pat, body}]}]}]}.
+
+
+%% <expr> [':' <bits>] -- one field of a pack, whitespace separated.
+%%
+%% A field with no ':' takes the declared width of its variable, which means it
+%% has to BE a single variable.
+{struct, pack_field,
+ [{val,  expr},
+  {bits, int}]}.
+
+{pattern, pack_field, pack_field,
+ [{expr, val},
+  {opt, [{tok, ':'}, {int, bits}]}]}.
+
+
+%% <buffer> ('<<'|'>>') '=' <field>... ['?' <cond>]
+%%
+%% Fields are whitespace separated, not comma separated: a comma would be part
+%% of the expression.
+{struct, pack_param,
+ [{field,  {array, pack_field, 'MAX_PACK'}},
+  {buffer, str},
+  {op,     tok},
+  {'cond', expr}]}.
+
+{pattern, pack, pack_param,
+ [{str, buffer},
+  {choice, [[{tok, op, '<<'}],
+            [{tok, op, '>>'}]]},
+  {tok, '='},
+  {rep, field, 0, [{pat, pack_field}]},
+  {opt, [{tok, '?'}, {expr, 'cond'}]}]}.
+
+
+%% ===========================================================================
+%% Limits
+%%
+%% How many elements the repetition-fed arrays hold.  They bound the struct a
+%% pattern captures into, so they are emitted with it -- a pattern and the array
+%% it fills cannot be sized apart.
+%% ===========================================================================
+
+{limit, 'MAX_BODY_PARTS', 8}.    %% <body> (',' <body>)* in one rule
+{limit, 'MAX_INITS', 8}.         %% (<field> (=|<-) <expr>)* on one instance
+{limit, 'MAX_PACK', 'MAX_BODY_PARTS'}.

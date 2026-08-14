@@ -719,91 +719,11 @@ typedef uint32_t set_group_t;  // bit set element
 #define bitset_clr(name,i) (name)[BITSET_GROUP((i))] &= ~BITSET_BIT((i))
 #define bitset_tst(name,i) (((name)[BITSET_GROUP((i))] & BITSET_BIT((i)))!=0)
 
-typedef enum {
-    NONE = 0,  // empty
-    NEWLINE,   // \n \r \r\n
-    LP,        // "("
-    RP,        // ")"
-    COLON,     // ":"
-    HASH,      // "#"
-    DOT,       // "."
-    LB,        // "["
-    RB,        // "]"
-    LBRACE,    // "{"  init list: #constant A[3] = { 1, 2, 3 }
-    RBRACE,    // "}"
-    INT,       // 123 | 0x9ab
-    FLT,       // 0.123
-    STR,       // "abc"
-    EXCLAMATION, // "!"  x=-y == x=0-y
-    TILDE,       // "~"  x=~y =  x=1^y        
-    MINUS1,      // "-"  x=-y == x=0-y
-    PLUS1,       // "+"  x=+y == x=0+y
-    PLUS,      // "+"
-    MINUS,     // "-"
-    ASTERISK,  // "*"
-    SLASH,     // "/"
-    PERCENT,   // "%"
-    LTLT,    // "<<"
-    GTGT,    // ">>"    
-    LT,      // "<"
-    LTEQ,    // "<="
-    GT,      // ">"
-    GTEQ,    // ">="
-    EQEQ,    // "=="
-    NEQ,     // "!="    
-    AMP,     // "&"
-    BAR,     // "|"
-    CIRC,    // "^"
-    AMPAMP,  // "&&"
-    BARBAR,  // "||"
-    EQ,      // "="
-    RIMP,    // "<-"    
-    COMMA,   // ","
-    // query rule/operator
-    QUEST,   // "?"
-    WORD,       // abc
-    // option keywords
-    T_PULLUP,   // 'pullup'
-    T_PULLDOWN, // 'pulldown'
-    T_RESOLUTION, // 'resolution'
-    T_IN,         // 'in'
-    T_OUT,        // 'out'
-    T_INOUT,      // 'inout'
-    T_PWM,        // 'pwm'
-    T_FLOAT,      // 'float'
-    T_INTEGER,    // 'integer'
-    T_UNSIGNED,   // 'unsigned'
-    T_STRING,     // 'string'
-    T_NATIVE,     // 'native'
-    T_LITTLE,     // 'little'
-    T_BIG,        // 'big'
-    T_CAN,      // 'can' -- transport option on #buffer: `#buffer F:8 in can 0x201`
-    // Reserved so the '#' dispatch can branch on them: it looks for a WORD after
-    // '#' and would otherwise read "disable" as a module name.
-    T_DISABLE,  // 'disable' -- #disable <rule-range>
-    T_ENABLE,   // 'enable'  -- #enable <rule-range>
-    T_LAST,     // number of enumerated tokens
-} tok_t;
-
-typedef enum {
-    D_NONE = 0,
-    D_MODULE,   // 'module'
-    D_END,      // 'end'
-    D_STATES,   // 'states'
-    D_IN,       // 'in'
-    D_CONSTANT, // 'constant'
-    D_VARIABLE, // 'variable'
-    D_LOCAL,    // 'local'  -- a named formula, see DECL_HEADER.local
-    D_DIGITAL,  // 'digital'
-    D_ANALOG,   // 'analog'
-    D_TIMER,    // 'timer'
-    D_FIELD,      // 'can'
-    D_BUFFER,   // 'buffer'
-    D_UART,     // 'uart'
-    D_SOCKET,   // 'socket'
-    D_MOD,      // module instance
-    D_LAST,     // number of enumerated declarations
-} dtok_t;
+// The tok_t and dtok_t enums, generated from utils/syntax.terms together with
+// the tables they index (CSP_TOK_TABLE in csp_tok.c, CSP_DECL_TABLE in
+// csp_compile.c). They used to live here, with nothing able to check them
+// against those tables.
+#include "csp_tokens.h"
 
 typedef struct {
     char* ptr;

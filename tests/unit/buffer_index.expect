@@ -4,5 +4,6 @@
   {final_var, "B1", 18},
   {final_var, "Whole", 4660},
   {final_var, "R0", 52},
-  {final_var, "R1", 18}
+  {final_var, "R1", 18},
+  {final_var, "Rng", 4660}
 ]}.

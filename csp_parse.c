@@ -96,6 +96,7 @@ static char* tok_name(uint8_t tok)
     STRCASE(COLON);
     STRCASE(HASH);
     STRCASE(DOT);
+    STRCASE(DOTDOT);
     STRCASE(LB);
     STRCASE(RB);
     STRCASE(INT);
