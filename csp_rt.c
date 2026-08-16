@@ -1416,34 +1416,52 @@ NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
 #endif
         x.i = op_SUB(y.i, z.i); goto store;
     case OP_MUL: x.i = op_MUL(y.i, z.i); goto store;
-    case OP_DIV: x.i = op_DIV(y.i, z.i); goto store;
-    case OP_REM: x.i = op_REM(y.i, z.i); goto store;
+    // The seven that read the operands' SIGN. `#variable Pi unsigned` stored the
+    // right bits and then divided, compared and shifted them as if they were
+    // signed: Pi = 4294967287 gave `Pi % 10` = 4294967287 (the signed -9 % 10,
+    // printed back through the unsigned type) instead of 7. csp_instr_alu_t.u
+    // says which arm to take; the compiler sets it when either operand's
+    // declared type is unsigned (see process_op).
+    case OP_DIV:
+	if (ci.a.u) { x.u = op_DIV(y.u, z.u); goto store; }
+	x.i = op_DIV(y.i, z.i); goto store;
+    case OP_REM:
+	if (ci.a.u) { x.u = op_REM(y.u, z.u); goto store; }
+	x.i = op_REM(y.i, z.i); goto store;
     case OP_SLA: x.i = op_SLA(y.i, z.i); goto store;
-    case OP_SRA: x.i = op_SRA(y.i, z.i); goto store;
+    case OP_SRA:
+	if (ci.a.u) { x.u = op_SRA(y.u, z.u); goto store; }  // logical shift
+	x.i = op_SRA(y.i, z.i); goto store;
     case OP_BAND: x.i = op_BAND(y.i, z.i); goto store;
     case OP_BOR: x.i = op_BOR(y.i, z.i); goto store;
     case OP_BXOR: x.i = op_BXOR(y.i, z.i); goto store;
     case OP_AND:  x.i = op_AND(y.i, z.i); goto store;
     case OP_OR:   x.i = op_OR(y.i, z.i); goto store;
+    // The four ORDER comparisons. Their RESULT is a truth value either way
+    // (CSP_TRUE/CSP_FALSE), so only the operands change arm.
     case OP_LT:
 #if FVALUE_IS_FIXPOINT
     case OP_FLT:
 #endif
+	if (ci.a.u) { x.i = op_LT(y.u, z.u); goto store; }
         x.i = op_LT(y.i, z.i); goto store;
     case OP_LTE:
 #if FVALUE_IS_FIXPOINT
     case OP_FLTE:
 #endif
+	if (ci.a.u) { x.i = op_LTE(y.u, z.u); goto store; }
         x.i = op_LTE(y.i, z.i); goto store;
     case OP_GT:
 #if FVALUE_IS_FIXPOINT
     case OP_FGT:
 #endif
+	if (ci.a.u) { x.i = op_GT(y.u, z.u); goto store; }
         x.i = op_GT(y.i, z.i); goto store;
     case OP_GTE:
 #if FVALUE_IS_FIXPOINT
     case OP_FGTE:
 #endif
+	if (ci.a.u) { x.i = op_GTE(y.u, z.u); goto store; }
         x.i = op_GTE(y.i, z.i); goto store;
     case OP_EQEQ:
 #if FVALUE_IS_FIXPOINT

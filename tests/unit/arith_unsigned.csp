@@ -1,0 +1,42 @@
+// The seven operators whose ANSWER depends on the operands' sign: / % >>
+// and the four order comparisons. Everything else (+ - * & | ^ == !=) gives
+// the same bits either way and is covered by arith.csp.
+//
+// U holds 0xFFFFFFF7 -- 4294967287 unsigned, -9 as a signed int. That is the
+// number the runtime used to get wrong: `U % 10` returned -9 (printed back
+// through the unsigned type as 4294967287) instead of 7, because eval_op only
+// had signed arms and the declared type never reached the instruction.
+//
+// U and V are VARIABLES, so these run through the runtime evaluator. The
+// constant folder takes the same arm (eval2 builds the instruction it would
+// have emitted) and Rfold below checks it.
+#variable U:32 unsigned = 0xFFFFFFF7
+#variable V:32 unsigned = 10
+#variable S = 0
+
+#variable Rrem:32  unsigned = 0
+#variable Rdiv:32  unsigned = 0
+#variable Rsra:32  unsigned = 0
+#variable Rmix:32  unsigned = 0
+#variable Rlt   = 0
+#variable Rgt   = 0
+#variable Rlte  = 0
+#variable Rgte  = 0
+
+// One unsigned operand makes the whole operation unsigned, so the plain `10`
+// on the right of Rmix and of Kfold does not drag either back to signed.
+//
+// Kbig carries the type: a bare `0xFFFFFFF7` is an INT literal and folds
+// SIGNED, the same way a C `int` literal would.
+#constant Kbig:32 unsigned = 0xFFFFFFF7
+#constant Kfold = Kbig % 10
+#variable Rfold:32 unsigned = Kfold
+
+Rrem = U % V,   S=1 ? S==0
+Rdiv = U / V,   S=2 ? S==1
+Rsra = U >> 1,  S=3 ? S==2
+Rlt  = U < V,   S=4 ? S==3
+Rgt  = U > V,   S=5 ? S==4
+Rlte = U <= V,  S=6 ? S==5
+Rgte = U >= V,  S=7 ? S==6
+Rmix = (U + 2) % 10, S=8 ? S==7

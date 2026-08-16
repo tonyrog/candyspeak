@@ -40,15 +40,15 @@ repl() {
 }
 
 # Link a host binary that carries PROGRAM as its firmware ROM image, the same way
-# a board does: -C generates the image, the image compiles in place of rom.c.
-# Without this there is no way to see an F tag at all -- the stock ./csp links an
-# empty ROM, so every line it can ever list is RAM.
+# a board does: -C generates the image, the image compiles in place of rom_host.c.
+# Without this there is no way to see an F tag at all -- the stock ./csp links the
+# neutral image, so every line it can ever list is RAM.
+#
+# `make rom` and not a gcc line of its own: the source list belongs in one place,
+# and this used to be a second copy of it that nothing kept in step.
 build_rom() {
     local src="$1" out="$2"
-    ./csp -n -C -O "$D/rom_gen.c" "$src" >/dev/null 2>&1 || return 1
-    gcc -g -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -I. -o "$out" \
-	csp_linux.c csp_rt.c csp_repl.c csp_compile.c csp_tok.c csp_dump.c \
-	csp_eeprom.c csp_parse.c csp_print.c csp_strings.c "$D/rom_gen.c" >/dev/null 2>&1
+    make -s rom PROG="$src" OUT="$out" >/dev/null 2>&1
 }
 
 cat > "$D/prog.csp" <<'EOF'
@@ -943,6 +943,97 @@ Error: #param Kq does not match the declaration it sets -- same width and type' 
 got=$(printf '#variable V = 0\n#param V = 1\n/quit\n' | repl ./csp "$D/pr5.db")
 ck "the exception does not extend to other declarations" 'OK
 Error: name V is already defined' "$got"
+
+# A #param where a CONSTANT is expected -- a timer period, a variable's
+# initialiser. Folding it would defeat the point (the saved value would never
+# reach the timer), so the declaration keeps the param's current value and the
+# live one arrives through an INIT-time assignment. `#timer Tick Period = 1` was
+# a syntax error before this, and `#variable Pt = SD` silently came out 0.
+cat > "$D/pinit.csp" <<'EOF'
+#param Period = 1000
+#param SD = 7
+#timer Tick Period = 1
+#variable Pt = SD
+EOF
+
+# Consecutive declarations share ONE gate -- see asm_decl_init.
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/pi1.db" "$D/pinit.csp")
+ck "a param initialiser becomes an INIT assignment" \
+   '#param Period:32 integer = 1000  // R
+#param SD:32 integer = 7  // R
+#timer Tick 1000 = 1  // R
+#variable Pt:32 integer = 7  // R
+#in INIT  // R
+  Tick.period=Period  // 1 R
+  Pt=SD  // 2 R
+#end   // R' "$got"
+
+# ...and only while they ARE consecutive: a rule in between ends the block, so
+# the next declaration opens its own rather than reaching back over it.
+got=$(printf '#param A = 1\n#variable X = A\nX = X + 1 ? 1\n#variable Y = A\n/list\n/quit\n' |
+	  repl ./csp "$D/pi1b.db" | grep -v '^OK$')
+ck "a rule between two declarations ends the shared block" \
+   '#param A:32 integer = 1  // R
+#variable X:32 integer = 1  // R
+#variable Y:32 integer = 1  // R
+#in INIT  // R
+  X=A  // 1 R
+#end   // R
+X=X+1 ? 1  // 2 R
+#in INIT  // R
+  Y=A  // 3 R
+#end   // R' "$got"
+
+# ...and that is what makes a saved setting reach them. Patch both params in a
+# ROM image, restart, and read the timer period and the variable back.
+if build_rom "$D/pinit.csp" "$D/pinit_fw"; then
+    printf '#param Period = 250\n#param SD = 42\n/save\n/quit\n' |
+	repl "$D/pinit_fw" "$D/pi2.db" >/dev/null 2>&1
+    # TWO /state, and the second one is the answer: the INIT rule runs in cycle
+    # 0 but its write sits in the DOUT shadow until the commit at the end of it,
+    # so a /state issued while State is still INIT reads the DECLARED value.
+    got=$(printf '/state\n/state\n/quit\n' | repl "$D/pinit_fw" "$D/pi2.db" |
+	      sed -n '/^Tick\|^Pt/p' | tail -2 | tr -s ' ')
+    ck "a saved param reaches the timer period and the variable" \
+       'Tick running timer 250/250
+Pt = 42' "$got"
+else
+    echo "  FAIL param-init ROM firmware did not build"; fail=$((fail+1))
+fi
+
+# The initialiser is an EXPRESSION now, so an unknown name in it has to be an
+# error. It used to fail the whole optional and leave a silent zero behind.
+got=$(printf '#variable Q = Zork\n/quit\n' | repl ./csp "$D/pi3.db")
+ck "an undeclared name in an initialiser is refused" \
+   'Error: variable Zork is not declared' "$got"
+
+echo "unsigned through a ROM image:"
+
+# The section CRC is folded over the RAW instruction words, so any bit the
+# dumper does not emit fails the image at boot -- and the whole program then
+# refuses to load, which reads as "variable X is not declared" on every line
+# typed afterwards. Every payload field has had this bug once (see the OP_SETOX
+# arm in csp_dump.c); csp_instr_alu_t.u is the newest.
+#
+# The unit suite cannot catch it: it runs RAM programs. The other build_rom
+# cases here cannot either -- none of them does unsigned arithmetic, so .u was
+# 0 in every instruction they ever dumped.
+cat > "$D/uns.csp" <<'EOF'
+#variable U:32 unsigned = 0xFFFFFFF7
+#variable R:32 unsigned = 0
+#variable L = 0
+R = U % 10 ? 1
+L = U < 10 ? 1
+EOF
+
+if build_rom "$D/uns.csp" "$D/uns_fw"; then
+    got=$(printf '/state\n/state\n/quit\n' | repl "$D/uns_fw" "$D/u1.db" |
+	      sed -n '/^R \|^L /p' | tail -2 | tr -s ' ')
+    ck "an unsigned op survives the round trip through a ROM image" 'R = 7
+L = 0' "$got"
+else
+    echo "  FAIL unsigned ROM firmware did not build"; fail=$((fail+1))
+fi
 
 echo "memory limit:"
 

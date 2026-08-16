@@ -28,8 +28,14 @@
 
 // 50 Hz. Every rule below is gated on this, so one timeout is one physics step
 // and the whole state advances together.
-#timer StepTick 50 = 1
-#timer ColorTick 100 = 1
+//
+// The periods and the two directions come from the #params above. A param does
+// not fold -- a saved setting has to be able to change it -- so each of these
+// declarations compiles to the assignment an `#in INIT` block used to have to
+// spell out, and the declaration keeps the param's current value for the one
+// cycle before that runs.
+#timer StepTick StepPeriod = 1
+#timer ColorTick ColorPeriod = 1
 #variable Pi unsigned = 0
 #variable Pt = StepDir
 #variable Ci unsigned = 0
@@ -43,13 +49,6 @@
 
 #constant COLOR[5] = { RED, GREEN, BLUE, AMBER, WHITE }
 #variable Color:16 = WHITE
-
-#in INIT
-    StepTick.period = StepPeriod
-    ColorTick.period = ColorPeriod
-    Pt = StepDir
-    Ct = ColorDir    
-#end
 
 P[(Pi + 9) % 10]  = 0 ? timeout(StepTick)
 P[(Pi + 10) % 10] = 0 ? timeout(StepTick)

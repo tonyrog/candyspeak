@@ -1221,10 +1221,13 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 		    op, ip->r.cnd, ip->r.nxt, ip->r.implicit);
 	    break;
 	default: // two/three-address-instruction
-	    // All three registers regardless of arity: the unused ones are zero in
-	    // RAM, and naming them keeps the emitted word equal to the folded one.
-	    fprintf(f, "  {.a={%s,.x=%u,.y=%u,.z=%u}},\n",
-		    op, ip->a.x, ip->a.y, ip->a.z);
+	    // All three registers regardless of arity, and .u: the unused ones are
+	    // zero in RAM, and naming them keeps the emitted word equal to the
+	    // folded one. .u is the unsigned flag -- drop it and `#variable Pi
+	    // unsigned` / `Pi % 10` comes out of the image dividing SIGNED, on top
+	    // of failing the section CRC at boot.
+	    fprintf(f, "  {.a={%s,.x=%u,.y=%u,.z=%u,.u=%u}},\n",
+		    op, ip->a.x, ip->a.y, ip->a.z, ip->a.u);
 	    break;
 	}
     }

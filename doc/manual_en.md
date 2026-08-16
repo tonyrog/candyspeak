@@ -178,8 +178,23 @@ Examples:
 > ```
 >
 > The value slot is 16 bits wide whichever you choose; the declaration decides
-> how those bits are read back. How a board maps its hardware onto the declared
-> resolution is the board layer's business — see the notes for your target.
+> how those bits are read back — and how it is CALCULATED with. Seven operators
+> read the sign: `/`, `%`, `>>` and the four order comparisons `< <= > >=`. One
+> unsigned operand makes the whole operation unsigned, so `Index % 10` counts
+> the way you meant it even though `10` is an ordinary literal, and the type
+> survives a chain like `(Index + 1) % 10`. Everything else — `+ - * & | ^ ==
+> !=` — gives the same answer either way.
+>
+> A comparison's RESULT is a truth value and stays signed. And signedness comes
+> from the declaration, not from the literal: a bare `0xFFFFFFF7` is a signed
+> integer, exactly as it would be in C. Give it a type if you need otherwise:
+>
+> ```
+> #constant FULL:32 unsigned = 0xFFFFFFF7
+> ```
+>
+> How a board maps its hardware onto the declared resolution is the board
+> layer's business — see the notes for your target.
 
 ### Arrays
 
@@ -1161,6 +1176,18 @@ Interactive mode:
 ```bash
 ./csp -i
 ```
+
+Build a binary that carries a program as its **firmware ROM image** — what a
+board runs, and the only way to exercise anything that needs a program in flash
+(the `F` tag in a listing, overriding a `#param` that shipped with the image,
+the section CRC):
+```bash
+make rom PROG=examples/cpx_rotate.csp            # -> tmp/cpx_rotate
+make rom PROG="lib/pid.csp app.csp" OUT=tmp/demo # several files, one program
+make rom PROG=examples/blink.csp TIER=min        # the smallest board tier
+```
+`./csp` itself deliberately carries no program, so a listing off it is all RAM.
+For a real board the image has to be `rom.c`: `make rom-image PROG=…`.
 
 ## Simulated Time (`-F`)
 

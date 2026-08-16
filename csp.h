@@ -907,11 +907,19 @@ extern const op_info_t op_info[] RODATA;
 #define INSTR_COMMON \
     opcode_t op:CSP_OPCODE_BITS
 
+// u: the operands are UNSIGNED. Only seven opcodes care -- / % >> < <= > >= --
+// and everything else (+ - * & | ^ == !=) gives the same bits either way.
+//
+// A FLAG and not seven more opcodes: OP_AVAIL is already 60 of the 63 the 6-bit
+// field can hold, so an unsigned mirror of each would not fit. The word has room
+// -- op(6) + three registers(4) is 18 of 32 -- and an image compiled before this
+// existed reads back with u == 0, which is the signed behaviour it had.
 typedef struct PACKED {
     INSTR_COMMON;
     unsigned x:REG_BITS;
     unsigned y:REG_BITS;
     unsigned z:REG_BITS;
+    unsigned u:1;
 } csp_instr_alu_t;
 
 // op = ST | LD | STP | LDP?
@@ -1450,6 +1458,11 @@ typedef struct {
     index_t in_marker;           // instr index of the pending OP_INSTATE block
                                  // gate (the terminating INSTATE of the OR-chain;
                                  // patched with the skip distance at #end)
+    // The INSTATE of the last `#in INIT` block a DECLARATION emitted, +1 (0 =
+    // none), so consecutive declarations share one gate instead of one each.
+    // See asm_decl_init -- which also explains why no separate "is it still the
+    // last thing emitted" flag is needed.
+    index_t dinit_mark;
     // xindex_t: inside a module body this is that module's own State, which is
     // CURRENT-relative -- an index_t would drop the selector on assignment.
     xindex_t save_sx;            // save sx during module parse

@@ -428,11 +428,19 @@
 {pattern, 'end', end_param, []}.
 
 
-%% '#' 'variable' <name> [':' <bits>] <opts> ['=' <const>]
+%% '#' 'variable' <name> [':' <bits>] <opts> ['=' (<const> | <expr>)]
 %%
 %% Also the head of '#' 'local', whose '=' is found by a token scan first so
-%% the pattern never sees the formula -- {const, ...} would refuse it, and
-%% refusing is right for a #variable.
+%% the pattern never sees the formula.
+%%
+%% The <expr> alternative exists for #param: a param reads like a constant but
+%% must NOT be folded, so `#variable Pt = StepDir` cannot bake StepDir's value
+%% into the declaration -- an EEPROM setting may change it after this was
+%% compiled.  What it becomes instead is the INIT-time assignment the program
+%% would otherwise have to write out by hand (see csp_parse_variable).
+%%
+%% The constant alternative FIRST: it folds, which is what an ordinary
+%% initialiser wants, and it backs off cleanly when the value does not fold.
 %%
 %% `bind <buffer> '[' <bit0> ['..' <bit1>] ']'` follows, matched by hand after
 %% this pattern stops: `bind` is not a token.
@@ -440,13 +448,16 @@
  [{name, str},
   {r,    {pat, res}},
   {opts, opts},
-  {init, const}]}.
+  {init, const},
+  {ini,  expr}]}.
 
 {pattern, variable, variable_param,
  [{str, name},
   {pat, res, r},
   {opts, opts},
-  {opt, [{tok, '='}, {const, opts, init}]}]}.
+  {opt, [{tok, '='},
+         {choice, [[{const, opts, init}],
+                   [{expr, ini}]]}]}]}.
 
 {defaults, variable,
  [{[r, res], 32}, {[opts, vt], 'V_INTEGER'}]}.
@@ -509,15 +520,22 @@
  [{[r, res], 10}, {[opts, vt], 'V_INTEGER'}]}.
 
 
-%% '#' 'timer' <name> <period-ms> ['=' <running>]
+%% '#' 'timer' <name> (<period-ms> | <expr>) ['=' <running>]
+%%
+%% Same two alternatives, and for the same reason, as the #variable initialiser
+%% above: a constant period folds into the declaration, a #param period becomes
+%% `<name>.period = <expr>` in INIT.  `#timer Tick Period = 1` used to be a
+%% syntax error, and the program had to write that assignment itself.
 {struct, timer_param,
  [{name,    str},
   {timeout, int},
-  {init,    int}]}.
+  {init,    int},
+  {period,  expr}]}.
 
 {pattern, timer, timer_param,
  [{str, name},
-  {int, timeout},
+  {choice, [[{int, timeout}],
+            [{expr, period}]]},
   {opt, [{tok, '='}, {int, init}]}]}.
 
 {defaults, timer,

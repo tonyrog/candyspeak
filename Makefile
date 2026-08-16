@@ -79,8 +79,12 @@ csp:	$(OBJS)
 # point of the exec tier, and it is the same file the boards flash. ./csp links
 # rom_host.c instead -- see the OBJS note above.
 # Point them at a real program with:  ./csp -n -C -O rom.c prog.csp && make exec
-EXEC_SRC = csp_linux.c csp_rt.c csp_repl.c csp_compile.c csp_tok.c csp_dump.c \
-	   csp_eeprom.c csp_parse.c csp_print.c csp_strings.c rom.c
+#
+# CORE_SRC is the same list with NO image at all -- `make rom` below appends
+# whichever one it just generated.
+CORE_SRC = csp_linux.c csp_rt.c csp_repl.c csp_compile.c csp_tok.c csp_dump.c \
+	   csp_eeprom.c csp_parse.c csp_print.c csp_strings.c
+EXEC_SRC = $(CORE_SRC) rom.c
 # csp_repl.c, csp_compile.c and csp_dump.c are still LISTED: each guards itself
 # to an empty translation unit, so the file list stays the same as ./csp and a
 # missing guard shows up as a link error rather than a silent divergence.
@@ -93,6 +97,68 @@ exec:	csp_strings.h
 min:	csp_strings.h
 	$(CC) $(EXEC_FLAGS) -DCSP_EXEC_ONLY -DCSP_NO_EEPROM $(EXEC_SRC) $(LIBS) -o csp-min
 	@size csp-min 2>/dev/null | tail -1 || true
+
+# --- a host binary carrying a PROGRAM as its firmware ROM image --------------
+#
+# ./csp deliberately carries none (rom_host.c is the neutral image, see the OBJS
+# note), so against it there is no F tag to see, no ROM #param to override and no
+# section CRC to check -- every one of those needs a program in flash. This links
+# a binary that has one, the same way a board does: -C generates the image and it
+# compiles in place of rom_host.c.
+#
+#   make rom PROG=examples/cpx_rotate.csp              -> tmp/cpx_rotate
+#   make rom PROG="lib/pid.csp app.csp" OUT=tmp/demo   -> tmp/demo
+#   make rom PROG=examples/blink.csp TIER=exec         -> the exec-only tier
+#
+# Several .csp files are read as ONE program, in order, exactly as ./csp reads
+# them. OUT defaults to tmp/<first program's basename>; tmp/ is gitignored, so
+# these do not accumulate in the tree the way a hand-rolled gcc line does.
+#
+# The generated image is kept beside the binary as <OUT>.rom.c -- when a load
+# fails ("ROM rejected: CRC mismatch...") that file is the evidence. It is
+# compiled with -I. because it lives wherever OUT points and #includes "csp.h",
+# which gcc otherwise looks for next to the image and not here.
+#
+# For the BOARD, the image has to be rom.c, which CandySpeak/rom.c symlinks to:
+#
+#   make rom-image PROG=examples/cpx_rotate.csp
+#   make -C CandySpeak -f Makefile.mega
+#
+PROG ?=
+OUT  ?=
+TIER ?=
+
+ifeq ($(TIER),exec)
+ROM_TIER = -DCSP_EXEC_ONLY
+else ifeq ($(TIER),min)
+ROM_TIER = -DCSP_EXEC_ONLY -DCSP_NO_EEPROM
+else ifeq ($(TIER),)
+ROM_TIER =
+else
+$(error TIER must be exec, min, or empty for the full build)
+endif
+
+# `csp` first: it is the compiler that produces the image.
+rom:	csp csp_strings.h
+	@test -n "$(PROG)" || { \
+	    echo "usage: make rom PROG='a.csp [b.csp ...]' [OUT=name] [TIER=exec|min]"; \
+	    exit 1; }
+	@mkdir -p tmp
+	@out='$(OUT)'; \
+	 test -n "$$out" || out="tmp/$$(basename '$(firstword $(PROG))' .csp)"; \
+	 ./csp -n -C -O "$$out.rom.c" $(PROG) || exit 1; \
+	 $(CC) $(EXEC_FLAGS) $(ROM_TIER) -I. $(CORE_SRC) "$$out.rom.c" $(LIBS) -o "$$out" \
+	    || exit 1; \
+	 sed -n 's|^//   size: *|    |p' "$$out.rom.c"; \
+	 echo "    $$out  <-  $(PROG)"
+
+# The board image. Overwrites rom.c, which is the point -- and worth saying out
+# loud, because rom.c and rom_host.c getting swapped is how a program ends up as
+# the baseline every test then runs on top of.
+rom-image: csp
+	@test -n "$(PROG)" || { echo "usage: make rom-image PROG='a.csp [b.csp ...]'"; exit 1; }
+	./csp -n -C -O rom.c $(PROG)
+	@sed -n '1,6p' rom.c
 
 # String table: a small C tool generates csp_strings.{c,h} from strings.tab.
 strtab: strtab.c
@@ -193,7 +259,7 @@ test_crc_destroyer:
 
 -include .*.d
 
-.PHONY: all clean test test-examples test_repl test_crc_destroyer syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check debug ubsan san exec min
+.PHONY: all clean test test-examples test_repl test_crc_destroyer syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check debug ubsan san exec min rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

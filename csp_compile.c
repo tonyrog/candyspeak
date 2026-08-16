@@ -374,13 +374,14 @@ static int asm_ARG(csp_rt_t* st, reg_t x, int16_t i)
 }
 
 NOINLINE static bool_t asm_alu(csp_rt_t* st, opcode_t op,
-			       reg_t x, reg_t y, reg_t z)
+			       reg_t x, reg_t y, reg_t z, int uns)
 {
     csp_instr_t* ip = alloc_instr_ptr(st, NULL, op);
     if (ip != NULL) {
 	ip->a.x = x;
 	ip->a.y = y;
 	ip->a.z = z;
+	ip->a.u = (uns != 0);
 	return 1;
     }
     return 0;
@@ -432,14 +433,15 @@ NOINLINE static bool_t asm_NEW(csp_rt_t* st, unsigned ent, index_t obj)
     return 0;
 }
 
-static bool_t asm_bop(csp_rt_t* st, opcode_t op, index_t x ,index_t y, index_t z)
+static bool_t asm_bop(csp_rt_t* st, opcode_t op, index_t x ,index_t y, index_t z,
+		      int uns)
 {
-    return asm_alu(st, op, x, y, z);
+    return asm_alu(st, op, x, y, z, uns);
 }
 
 static bool_t asm_uop(csp_rt_t* st, opcode_t op, index_t x, index_t y)
 {
-    return asm_alu(st, op, x, y, 0);
+    return asm_alu(st, op, x, y, 0, 0);
 }
 
 static bool_t asm_CVTIF(csp_rt_t* st, index_t x, index_t y)
@@ -459,7 +461,7 @@ static bool_t asm_MOV(csp_rt_t* st, reg_t x, reg_t y)
 
 static bool_t asm_AND(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
 {
-    return asm_bop(st, OP_AND, x, y, z);
+    return asm_bop(st, OP_AND, x, y, z, 0);
 }
 
 #if 0
@@ -468,11 +470,11 @@ static bool_t asm_AND(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
 // these register-form compares again.
 static bool_t asm_EQEQ(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
 {
-    return asm_bop(st, OP_EQEQ, x, y, z);
+    return asm_bop(st, OP_EQEQ, x, y, z, 0);
 }
 static bool_t asm_OR(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
 {
-    return asm_bop(st, OP_OR, x, y, z);
+    return asm_bop(st, OP_OR, x, y, z, 0);
 }
 NOINLINE static bool_t asm_NOP(csp_rt_t* st)
 {
@@ -1444,6 +1446,25 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
     return ep - 1;
 }
 
+// An operation on an unsigned operand YIELDS unsigned -- otherwise the type is
+// lost after one step and `(Pi+1) % 10` divides signed again. Comparisons are
+// the exception: their result is a truth value, and calling it unsigned would
+// make `(A < B) - 1` count the wrong way.
+NOINLINE static vtype_t unsigned_rtype(opcode_t op, vtype_t rt)
+{
+    if (rt != V_INTEGER)
+	return rt;
+    switch(op) {
+    case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_REM:
+    case OP_SLA: case OP_SRA:
+    case OP_BAND: case OP_BOR: case OP_BXOR:
+    case OP_NEG: case OP_BNOT: case OP_MOV:
+	return V_UNSIGNED;
+    default:
+	return rt;
+    }
+}
+
 // Get float version of arithmetic opcode (or same if no float version)
 NOINLINE static opcode_t float_op(opcode_t op)
 {
@@ -1479,12 +1500,15 @@ NOINLINE value_t eval1(csp_rt_t* st, opcode_t op, value_t y)
 }
 
 
-NOINLINE value_t eval2(csp_rt_t* st, opcode_t op, value_t y, value_t z)
+// `uns` rides along for the same reason it rides on the instruction: the folder
+// runs the REAL opcode through eval_op, so a folded `4294967287 % 10` has to
+// take the same arm the emitted instruction would.
+NOINLINE value_t eval2(csp_rt_t* st, opcode_t op, value_t y, value_t z, int uns)
 {
     value_t sx, sy, sz, x;
     int leave;
-    csp_instr_t ci = { .a = { .op=op,.x=0,.y=1,.z=2 }};    
-    
+    csp_instr_t ci = { .a = { .op=op,.x=0,.y=1,.z=2,.u=(unsigned)(uns!=0) }};
+
     sx = st->es.reg[0]; sy = st->es.reg[1]; sz = st->es.reg[2];
     st->es.reg[1] = y; st->es.reg[2] = z;
     eval_op(st, 0, ci, &leave);
@@ -1499,6 +1523,7 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
     int dst;
     opcode_t op;
     vtype_t rt;
+    int uns = 0;                 // operands are unsigned (see csp_instr_alu_t.u)
     int arity = op_table_arity(tok);
 
     // An operator with nothing under it. Reached whenever the constant folder is
@@ -1544,8 +1569,14 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 		op = float_op(op_table_code(tok));
 	    } else {
 		op = op_table_code(tok);
+		// C's rule: one unsigned operand makes the whole operation
+		// unsigned. `Pi % 10` has a plain INT literal on the right and
+		// still has to divide unsigned.
+		uns = ((at == V_UNSIGNED) || (bt == V_UNSIGNED));
 	    }
 	    rt = csp_opcode_rtype(op);
+	    if (uns)
+		rt = unsigned_rtype(op, rt);
 #ifdef DEBUG
 	    if (debug) {
 	    printf("op=%s\n", csp_opcode_name(op));
@@ -1557,12 +1588,16 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 	    if ((!st->cs.ap || ( !a->X && !b->X ))
 		&& a->I && b->I && (csp_opcode_arity(op) == 2)) {
 		// constant fold
-		value_t result = eval2(st, op, a->val, b->val);
+		value_t result = eval2(st, op, a->val, b->val, uns);
 		if (a->L) free_reg(st, a->reg);
 		if (b->L && (a->reg != b->reg)) free_reg(st, b->reg);
 		a->X = a->L = 0;
 		a->I = 1;
 		a->val = result;
+		// The folded value has the OPERATION's type, not the left
+		// operand's -- `1.5 < 2.0` folds to a truth value, and an
+		// unsigned fold has to keep saying unsigned.
+		a->vt = rt;
 	    }
 	    else {
 		if (csp_load(st, a) < 0) return -1;
@@ -1570,7 +1605,7 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 		if (a->L && b->L) {
 		    dst = alloc_reg(st);
 		    if (st->cs.ap != NULL) {
-			if (!asm_bop(st, op, dst, a->reg, b->reg))
+			if (!asm_bop(st, op, dst, a->reg, b->reg, uns))
 			    return PARSE_ERROR;
 			free_reg(st, a->reg);
 			if (a->reg != b->reg)
@@ -1601,8 +1636,11 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 	    op = float_op(op_table_code(tok));
 	} else {
 	    op = op_table_code(tok);
+	    uns = (at == V_UNSIGNED);
 	}
 	rt = csp_opcode_rtype(op);
+	if (uns)
+	    rt = unsigned_rtype(op, rt);   // ~X and -X on unsigned stay so
 
 #ifdef DEBUG
 	if (debug) {
@@ -2662,6 +2700,103 @@ NOINLINE static int array_pins(csp_rt_t* st, const token_t* tv, int j, size_t n,
     return 0;
 }
 
+NOINLINE static bool_t open_in_block(csp_rt_t* st, const uint8_t* states,
+				     int ns, int implicit);
+NOINLINE static void close_in_block(csp_rt_t* st);
+NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
+		      index_t oix, const rule_body_part_t* part, int np,
+		      const pexpr_t* cond);
+
+// The value a #param HOLDS right now, for seeding a declaration that an INIT
+// rule is going to assign anyway. Not a fold -- the rule is what makes the live
+// value win -- but it keeps cycle 0, and the listing, off a zero: a timer whose
+// period is still 0 when csp_input_timer first looks fires immediately and stops
+// itself. Only a bare name; anything computed seeds nothing.
+NOINLINE static int param_seed(csp_rt_t* st, const token_t* tv,
+			       const pexpr_t* e, value_t* vp)
+{
+    index_t ix;
+
+    if ((e->len != 1) || (tv[e->pos].t != WORD))
+	return 0;
+    if ((ix = csp_lookup_decl(st, &tv[e->pos].v.str)) == BAD_INDEX)
+	return 0;
+    if (decl(st, INDEX(ix), type) != DECL_CONSTANT)
+	return 0;
+    *vp = decl(st, INDEX(ix), cn.init);
+    return 1;
+}
+
+// Emit one assignment inside a one-shot `#in INIT` block -- the same
+// instructions the program would get by writing that block out itself.
+//
+// This is where a declaration whose value is NOT a constant lands: `#timer Tick
+// Period = 1`, `#variable Pt = StepDir`, with Period/StepDir a #param. A param
+// must not fold -- a saved setting can change it after the image was built -- so
+// the value has to be READ at run time, and INIT is the one cycle where "read it
+// once, at startup" is expressible. state_advance leaves INIT at the end of the
+// first cycle, so the assignment happens exactly once and the variable is a
+// plain variable from then on.
+//
+// Inside a module the gate lands on the MODULE's State (open_in_block reads
+// cs.sx), which is the right one: the member is per instance.
+NOINLINE static int asm_decl_init(csp_rt_t* st, const token_t* tv, size_t n,
+				  const rule_body_part_t* part)
+{
+    uint8_t init = STATE_INIT;
+    // A declaration may sit INSIDE an #in block, whose gate is still open and
+    // whose sdefv the block owns. Ours nests, so put the enclosing one back.
+    int      sdef  = st->cs.sdef;
+    uint8_t  nsdef = st->cs.n_sdef;
+    index_t  mark  = st->cs.in_marker;
+    uint8_t  sv[MAX_IN_STATES];
+    int merged = 0;
+    int r;
+
+    memcpy(sv, st->cs.sdefv, sizeof(sv));
+
+    // Consecutive declarations share ONE gate. Four #params followed by two
+    // timers and two variables would otherwise emit four LD+INSTATE pairs for
+    // four assignments that all run in the same cycle.
+    //
+    // "Still the last thing in the stream" needs no flag of its own: the block
+    // we closed patched its skip distance to reach the end, so mark + nxt ==
+    // ps.nn holds exactly while nothing has been emitted since. Anything at all
+    // in between -- another rule, an OP_ENTER for a module -- moves ps.nn and
+    // the test fails, which also takes care of the scope changing underneath us.
+    //
+    // The mark is CHECKED and not merely trusted, because the instruction cursor
+    // also moves BACKWARDS: /clear truncates to the ROM baseline, and a module
+    // that fails before its #end is rewound wholesale (cs.mod_mark). Neither
+    // clears this field, so the mark can outlive what it points at. Reading the
+    // opcode back is what makes that safe -- and if a stale mark ever does pass
+    // all four tests, it is because it really is an INIT gate that really is the
+    // last thing emitted, which is exactly the case worth merging into.
+    if (st->cs.dinit_mark != 0) {
+	index_t mk = (index_t)(st->cs.dinit_mark - 1);
+	if ((mk >= st->rom_nn) && (mk < (index_t)st->ps.nn) &&
+	    (instr(st, mk, op) == OP_INSTATE) &&
+	    (instr(st, mk, in.imm) == STATE_INIT) &&
+	    ((index_t)(mk + instr(st, mk, in.nxt)) == (index_t)st->ps.nn)) {
+	    st->cs.in_marker = mk;
+	    st->cs.sdefv[0]  = STATE_INIT;
+	    st->cs.n_sdef    = 1;
+	    st->cs.sdef      = STATE_INIT;
+	    merged = 1;
+	}
+    }
+    if (!merged && !open_in_block(st, &init, 1, 0))
+	return -1;
+    r = asm_rule(st, tv, n, BAD_INDEX, part, 1, NULL);
+    st->cs.dinit_mark = (index_t)(st->cs.in_marker + 1);
+    close_in_block(st);
+    st->cs.sdef      = sdef;
+    st->cs.n_sdef    = nsdef;
+    st->cs.in_marker = mark;
+    memcpy(st->cs.sdefv, sv, sizeof(sv));
+    return r;
+}
+
 //
 NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
@@ -2681,8 +2816,21 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
+    // Both initialiser alternatives sit inside one P_OPT, so a bad name in
+    // `= <expr>` fails the whole optional and the declaration used to come out
+    // silently zero-initialised -- `#variable Q = Zork` was accepted. The
+    // failing alternative already set the specific error; honour it. (Same
+    // reasoning as the dropped-guard check in csp_parse_rule.)
+    if (st->ps.err != ERR_OK)
+	return -1;
     if (check_res(st, d.r.res) < 0)
 	return -1;
+    // An array's elements all get the same declaration (array_replicate), so
+    // there is no one place for a per-element INIT assignment to land.
+    if ((d.ini.len > 0) && (alen != 1)) {
+	csp_set_error(st, ERR_SYNTAX);
+	return -1;
+    }
     if ((ix = csp_new_udecl(st,&d.name,DECL_VARIABLE)) == BAD_INDEX)
 	return -1;
     i = INDEX(ix);
@@ -2736,7 +2884,30 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
     }
 
     // Made LAST so the copies inherit everything decided above.
-    return array_replicate(st, i, DECL_VARIABLE, alen);
+    if (array_replicate(st, i, DECL_VARIABLE, alen) < 0)
+	return -1;
+
+    // `= <expr>` rather than `= <const>`: a #param initialiser, compiled to an
+    // INIT-time assignment (see asm_decl_init). The declared init carries the
+    // param's current value, so the one cycle before INIT runs -- and the
+    // listing -- show what the variable is going to be rather than a zero.
+    if (d.ini.len > 0) {
+	rule_body_part_t b = {0};
+	value_t seed;
+
+	if (param_seed(st, tv, &d.ini, &seed))
+	    ram_decl_at(st,i)->va.init = seed;
+	// asm_rule reads a plain `<var> = <rhs>` lvalue back out of the token
+	// vector at rhs.pos-2, and what sits there is DECLARATION syntax
+	// (`:32`, an option). Move the name down against the '=', the way
+	// csp_parse_local does; those tokens are already consumed.
+	tv[d.ini.pos - 2] = tv[ti];
+	b.obj    = d.name;
+	b.assign = EQ;
+	b.rhs    = d.ini;
+	return asm_decl_init(st, tv, n, &b);
+    }
+    return 0;
 }
 
 NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, int ti, size_t n);
@@ -3063,6 +3234,8 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
+    if (st->ps.err != ERR_OK)     // a bad name inside the period alternative
+	return -1;
     if ((tm = csp_new_udecl(st,&d.name,DECL_TIMER)) == BAD_INDEX)
 	return -1;
     tx = csp_new_decl(st,&empty,DECL_VARIABLE,0);
@@ -3080,6 +3253,25 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     ram_decl_at(st,i)->tm.fired = 0;
     ram_decl_at(st,i)->tm.init = d.init;
     ram_decl_at(st,i)->tm.period = d.timeout;
+
+    // `#timer Tick Period = 1` with Period a #param: the period is not a
+    // constant, so it becomes `Tick.period = Period` in INIT -- exactly what a
+    // program with a tunable period had to write by hand. The declaration keeps
+    // the param's CURRENT value so cycle 0 (which runs before INIT's rule) has a
+    // real period to count against; the rule then puts the live one in.
+    if (d.period.len > 0) {
+	RO_TSTR(period, ros_period);
+	rule_body_part_t b = {0};
+	value_t seed;
+
+	if (param_seed(st, tv, &d.period, &seed))
+	    ram_decl_at(st,i)->tm.period = seed.u;
+	b.obj    = d.name;
+	b.fld    = period;         // -> PART_PERIOD, via part_from_tstr
+	b.assign = EQ;
+	b.rhs    = d.period;
+	return asm_decl_init(st, tv, n, &b);
+    }
     return 0;
 }
 

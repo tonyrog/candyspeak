@@ -181,14 +181,16 @@ The pack test looks at three raw tokens before committing, which is what keeps
 4.2 #variable
 
     variable-decl = '#' 'variable' NAME [ array ] [ res ] opts
-                    [ '=' const-expr ]
+                    [ '=' ( const-expr | expr ) ]
                     [ bind ] ;
 
     bind          = 'bind' NAME '[' const-int [ '..' const-int ] ']' ;
 
-The initialiser is a CONSTANT expression -- a formula belongs in a rule or in a
-#local.  `bind` makes the variable a bit-field view into a #buffer; the range is
-in BITS and is checked against that buffer's size.
+The initialiser is normally a CONSTANT expression -- a formula belongs in a rule
+or in a #local -- and folds into the declaration.  The `expr` alternative exists
+for #param, which must not fold; see 4.4b.  `bind` makes the variable a
+bit-field view into a #buffer; the range is in BITS and is checked against that
+buffer's size.
 
 `bind` is matched by hand after pmatch stops, and is not a reserved word.
 
@@ -265,6 +267,45 @@ set, not in the override's own.
 Arrays are not re-declarable -- `#param A[3] = {...}` a second time is an
 ordinary redefinition error.
 
+4.4b A #param where a constant is expected
+
+A #param may stand where a declaration wants a constant: a #variable's
+initialiser and a #timer's period.  It cannot FOLD there -- that is the whole
+point of a param, and a value baked into the declaration would never see the
+setting saved after the image was built -- so the declaration compiles to two
+things:
+
+    #timer Tick Period = 1        =>  #timer Tick <Period's value now> = 1
+                                      #in INIT  Tick.period = Period  #end
+
+    #variable Pt = StepDir        =>  #variable Pt = <StepDir's value now>
+                                      #in INIT  Pt = StepDir  #end
+
+which is exactly what such a program had to write out by hand.  INIT is a
+one-cycle state (state_advance steps out of it at the end of the first cycle),
+so the assignment happens once and the variable is an ordinary variable from
+then on.  Inside a module the gate lands on the MODULE's State, so the member
+is set per instance.
+
+The declared value is the param's value AT THE POINT OF DECLARATION, not zero:
+the one cycle that runs before INIT commits then has a real period to count
+against -- a timer whose period is still 0 when csp_input_timer first looks
+fires immediately and stops itself -- and the listing shows what the program
+will actually use.  Only a bare name seeds; anything computed leaves it 0.
+
+The gate is not free (a #variable initialiser that used to cost nothing now
+costs a rule), which is why the constant alternative is tried first and this
+path is reached only when folding fails.  CONSECUTIVE such declarations share
+one block, so a run of params, timers and variables costs one gate and not one
+each; anything emitted in between -- a rule, a module -- ends it.
+
+An array initialiser cannot take this form: the elements share one declaration
+(array_replicate), so there is no single place for the assignment to land.
+
+Because the initialiser is now an EXPRESSION and not only a constant, an
+unknown name in one is an error rather than a silently dropped optional --
+`#variable Q = Zork` used to declare Q as 0 and say nothing.
+
 4.5 #digital
 
     digital-decl = '#' 'digital' NAME [ array ] opts pin-spec ;
@@ -311,10 +352,13 @@ ERR_NUMBER_RANGE, not padding or truncation.
 
 4.8 #timer
 
-    timer-decl = '#' 'timer' NAME const-int [ '=' const-int ] ;
+    timer-decl = '#' 'timer' NAME ( const-int | expr ) [ '=' const-int ] ;
 
 The first value is the period in milliseconds, the second the initial running
 state (0 = stopped, the default).
+
+The period may be a #param (`#timer Tick Period = 1`), in which case it is not
+folded -- see 4.4b.
 
 4.9 #field
 
@@ -464,6 +508,28 @@ assignment is matched by the rule grammar (section 7).
 `,` is an arity-2 operator that discards its left operand.  This matters
 wherever an expression is bounded by a stop set: if COMMA is not in that set the
 scan swallows the whole comma list and folds it to its last element.
+
+9.1a Signedness
+
+Seven operators read the operands' SIGN: `/` `%` `>>` and the four order
+comparisons.  Everything else (`+ - * & | ^ == !=`) gives the same bits either
+way.
+
+C's rule applies: ONE unsigned operand makes the operation unsigned, and the
+result of an arithmetic or bitwise operation on an unsigned operand is itself
+unsigned, so the type survives a chain like `(Pi + 1) % 10`.  A comparison is
+the exception -- its result is a truth value (0 / -1) and stays signed, or
+`(A < B) - 1` would count the wrong way.
+
+Signedness is a property of the DECLARATION, not of the literal: a bare
+`0xFFFFFFF7` is an INT literal and folds signed, exactly as a C `int` literal
+would.  Give it a type (`#constant K:32 unsigned = 0xFFFFFFF7`) to fold it
+unsigned.
+
+At the instruction level this is one FLAG BIT on the ALU word
+(csp_instr_alu_t.u) and not seven more opcodes: OP_AVAIL is already 60 of the 63
+a 6-bit opcode field holds.  An image compiled before the bit existed reads back
+with u == 0, which is the signed behaviour it had.
 
 9.2 Built-in functions
 
