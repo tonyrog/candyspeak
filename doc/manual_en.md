@@ -77,6 +77,160 @@ limits that should read as names instead of magic numbers.
 #constant Scale    = 4
 ```
 
+### Parameters
+
+```
+#param <name>[:<bits>] [<type>] = <value>
+#param <name>[N] [:<bits>] [<type>] = { <value>, ... }
+```
+
+A parameter is a **tunable constant**. It reads exactly like a `#constant` — a
+rule may not assign to it — but it is not folded, because something outside the
+program is allowed to change it while the program runs. That is the whole
+difference, and it is visible in a listing:
+
+```
+#param Kp:16 = 5
+#variable Out = 0
+Out = Kp * 2 ? 1
+```
+
+```
+#param Kp:16 integer = 5  // R
+#variable Out:32 integer = 0  // R
+Out=Kp*2 ? 1  // 1 R
+```
+
+Written with `#constant` instead, the same rule lists as `Out=5*2 ? 1` — the
+value has been baked into the rule and nothing can move it afterwards.
+
+Use `#param` for the numbers you expect to tune on the bench: gains, periods,
+thresholds, directions, a board's calibration offsets. Use `#constant` for the
+ones that are part of the program's meaning, and let them fold.
+
+#### Setting one
+
+A rule may not:
+
+```
+Kp = 9 ? 1
+Error: cannot assign to a #param in a rule -- set it with > name = value
+```
+
+An immediate at the prompt may — that is what makes it a parameter:
+
+```
+> Kp = 7
+7
+```
+
+`/state` lists parameters with the variables, because a parameter's live value is
+precisely the thing that can differ from what the source says. A plain constant
+is not listed there; its value is in the listing and nowhere else.
+
+```
+Kp                   param            = 7
+Out                                   = 10
+```
+
+#### Re-declaring one
+
+A parameter — and only a parameter — may be **re-declared**, and that is the
+mechanism for loading settings from a file: a config file is a list of `#param`
+lines pasted over a running program.
+
+```
+#param Kp:16 = 9
+```
+
+The width and type must match the declaration being set:
+
+```
+#param Kq:16 = 3
+#param Kq:32 = 8
+Error: #param Kq does not match the declaration it sets -- same width and type
+```
+
+which is not pedantry — any rule already compiled against `Kq` was built for that
+width. A name held by something that is not a parameter is still an ordinary
+redefinition error, and arrays are not re-declarable.
+
+This works even when the parameter shipped inside the firmware image, where its
+value sits in flash and cannot be written. The re-declaration is stored as a
+RAM **shadow**, and start-up applies it onto the ROM parameter's slot **by name**
+— not by position, because a reflashed program moves declarations around and an
+override keyed on where something used to sit would come down on whatever is
+there now. So a tuned value survives rebuilding and reflashing the program.
+
+An overridden parameter lists **once**, as the override, tagged `P` where an
+ordinary line carries F/E/R:
+
+```
+#variable Out:32 integer = 0  // F
+#param Kp:16 integer = 9  // P
+Out=Kp*2 ? 1  // 1 F
+```
+
+The ROM row is hidden because it no longer says what the program runs with, only
+what it shipped with. `/state` hides the opposite half — it shows the parameter
+being set, since that is where the live value lives, and not the override's own
+unused slot.
+
+A shadow is an ordinary RAM declaration, so `/save` persists it with everything
+else and it is back after a restart:
+
+```
+> Kp
+9
+```
+
+#### Where a constant is expected
+
+A parameter may stand where a declaration wants a constant — a `#timer`'s period,
+a `#variable`'s initialiser:
+
+```
+#param Period = 1000
+#param SD = 7
+#timer Tick Period = 1
+#variable Pt = SD
+```
+
+It cannot *fold* there, for the reason above, so the declaration compiles to two
+things: the parameter's value as it stands now, plus the assignment that reads
+the live one at start-up.
+
+```
+#param Period:32 integer = 1000  // R
+#param SD:32 integer = 7  // R
+#timer Tick 1000 = 1  // R
+#variable Pt:32 integer = 7  // R
+#in INIT  // R
+  Tick.period=Period  // 1 R
+  Pt=SD  // 2 R
+#end   // R
+```
+
+That is exactly what such a program had to write out by hand before. INIT is a
+one-cycle state, so the assignment happens once and the variable is an ordinary
+variable from then on; inside a module the gate is the *module's* INIT, so each
+instance is set separately. Consecutive declarations share one block.
+
+The declared value is not zero but the parameter's value at that point, so the
+one cycle before INIT commits has something real to work with — a timer whose
+period is still 0 when the runtime first looks fires immediately and stops
+itself. Only a plain name does this; anything computed leaves the declaration at
+0 and waits for INIT.
+
+A `#constant` may **not** be initialised from a parameter. A constant that could
+change is a contradiction, and the whole point of folding is that the value is
+final:
+
+```
+#constant K = P
+Error: syntax error
+```
+
 ### Locals
 
 ```
@@ -1395,11 +1549,18 @@ Seq=Seq+1 ? timeout(Beat)  // 2 R
 | `F` | Firmware flash — the ROM image | nothing; it is not a patch |
 | `E` | RAM, and EEPROM holds a copy | nothing permanent — `/load` or the next boot brings it back |
 | `R` | RAM only | **the line is gone** |
+| `P` | a `#param` re-declared over one that shipped in flash | **the tuning is gone** unless it was saved; the shipped value is back |
 
 `E` and `R` are both RAM patches and look identical everywhere else; the letter
 is the only place the difference shows. It is the answer to "what do I lose if I
 type `/clear`" — and to "did my `/save` actually take", since a successful save
 turns every `R` into an `E`.
+
+> **`P` does not answer the second question.** It sits in the same character
+> position as F/E/R and replaces it, so a tuned parameter looks the same before
+> and after a `/save` — which is a shame, because just after changing a value is
+> exactly when you want to know whether it is safe yet. Until that is fixed, use
+> `/save`'s own report, which counts the declarations it wrote.
 
 The tag is a trailing **comment**, so a listing pastes straight back in as
 source: select it in one terminal, paste into another, and the tags are ignored
@@ -1830,8 +1991,11 @@ pandoc doc/manual_en.md -o doc/manual_en.pdf \
 #local <name>[:<bits>] [type] = <expr>   // a named FORMULA, same-cycle, no assign
 #digital <name> [in|out|inout] [pullup|pulldown] [<port>:]<pin>
 #analog <name>[:<resolution>] [in|out] [pwm] [signed|unsigned] [<port>:]<pin>
-#timer <name> <period_ms> [= 1]
+#timer <name> <period_ms|param> [= 1]
 #constant <name> = <value>
+#param <name>[:<bits>] [type] = <value>  // a constant that does NOT fold:
+                                         // set it from the prompt, re-declare
+                                         // it to load a setting, /save keeps it
 #buffer <name>:<bytes> [type]           // shared storage (size in BYTES)
 #buffer <name>:<bytes> [in|out] can <id>  // CAN frame (size in BYTES)
 #field <name>:<bits> [type] [big|little] <frame>[<a>..<b>]  // field of a frame

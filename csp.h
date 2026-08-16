@@ -181,7 +181,14 @@ static inline void* rdvp(const void* p, int rom)
 //       block, csp_states_t), so it is stored, CRC'd, baked and persisted by the
 //       declaration machinery -- and the header loses n_state/crc_state/
 //       ofs_states, the image loses s_states, and state_t is gone.
-#define ROM_FORMAT_VERSION 10
+//  v11: csp_instr_alu_t.u -- a spare bit of the ALU word now says the operands
+//       are UNSIGNED, which decides what / % >> < <= > >= compute. "The meaning
+//       of a baked field" exactly: an old image reads back with u == 0 and is
+//       still right (that was signed), but a NEW image in an OLD firmware would
+//       compute every one of those SIGNED with no complaint. Images travel on
+//       their own -- an A/B slot, a FAILSAFE flashed alone -- so that direction
+//       is reachable and has to be rejected rather than run.
+#define ROM_FORMAT_VERSION 11
 
 // Free as in beer.
 #define CSP_IMAGE_MAGIC0 'J'

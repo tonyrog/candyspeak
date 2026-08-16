@@ -22,7 +22,18 @@ CFLAGS=-MMD -MP -MF .$<.d -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC
 # takes ./csp to produce one, and ./csp needs it to link. Regenerate it by hand
 # on the rare occasion the format changes:
 #
-#     ./csp -n -C -O rom_host.c tmp/empty.csp
+#     ./csp -n -C -O rom_host.c examples/empty.csp
+#
+# BUMPING ROM_FORMAT_VERSION closes that circle: the committed rom_host.c stops
+# compiling ("rom.c is stale ... regenerate"), so there is no ./csp to regenerate
+# it with. Break it with a one-off binary whose image is the OLD one -- csp does
+# not care, that image is empty, and a version mismatch only makes it boot with
+# no program:
+#
+#     sed 's/!= 10/!= 11/' rom_host.c > tmp/rom_boot.c     # old version -> new
+#     $(CC) -DCSP_ARENA_MALLOC -I. $(CORE_SRC) tmp/rom_boot.c -o tmp/csp_boot
+#     tmp/csp_boot -n -C -O rom_host.c examples/empty.csp
+#     tmp/csp_boot -n -C -O rom.c      examples/cpx_rotate.csp
 OBJS = csp_linux.o csp_rt.o csp_repl.o csp_compile.o csp_tok.o csp_dump.o csp_eeprom.o \
 	csp_parse.o csp_print.o csp_strings.o rom_host.o
 
