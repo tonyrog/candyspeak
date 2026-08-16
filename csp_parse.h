@@ -67,10 +67,10 @@ int pmatch(csp_rt_t* st, const token_t* tv, int ti, size_t n,
 #define MAX_STOP_TOKENS 192
 extern int csp_stop_tokens_used(void);
 
-// The PAT_* and STOP_* enums, generated from utils/syntax.terms together with
-// the patterns that use them. Stop-set ids are ALLOCATED, one per capture site
-// -- the rule that an id may be built only once cannot be broken by hand any
-// more, because ids are not written by hand.
+// The STOP_* enum, generated from utils/syntax.terms together with the patterns
+// that use it. Ids are ALLOCATED, one per capture site -- the rule that an id
+// may be built only once cannot be broken by hand any more, because no id is
+// written by hand.
 #include "csp_pattern_ids.h"
 #include "csp_stop_sets.h"
 
@@ -84,9 +84,5 @@ int stop_set_has(int set_idx, uint8_t tok);
 
 void dump_stop_sets();
 
-// Register a pattern so P_PAT can resolve it. Stop sets are generated, so
-// this no longer scans anything; the name stayed because the call sites read
-// well.
-void scan_pattern(int pat_id, const uint8_t* pat);
 
 #endif // CSP_PARSE_H

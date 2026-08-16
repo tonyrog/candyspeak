@@ -429,6 +429,8 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_OUT_OF_MEMORY] =          ros_err_out_of_memory,
     [ERR_INDEX_RANGE] =            ros_err_index_range,
     [ERR_ASSIGN_TO_LOCAL] =        ros_err_assign_local,
+    [ERR_ASSIGN_TO_PARAM] =        ros_err_assign_param,
+    [ERR_PARAM_SHAPE] =            ros_err_param_shape,
 };
 
 static rostring_t csp_format_error(csp_err_t err)
@@ -3385,10 +3387,6 @@ int csp_rt_init(csp_rt_t* st, int reactive)
 
     // The compiler's own tables, initialised on its side of the line. Dropping
     // this call is what lets --gc-sections take the whole compiler with it: the
-    // pattern tables are its anchor, and nothing else in the runtime names them.
-#if !defined(CSP_EXEC_ONLY)
-    csp_compile_init();
-#endif
     
 #ifdef DEBUG
     if (debug) // or precompile!
@@ -4135,6 +4133,97 @@ NOINLINE static ivalue_t get_md_n(csp_rt_t* st, index_t mx)
 // copy constant and init values
 // setup input, output and timer lists
 //
+// Two declaration names, compared through the string table. Both sides are
+// positions, so neither can be handed to csp_str_eq (which wants a char*).
+NOINLINE static int name_eq(csp_rt_t* st, sindex_t a, sindex_t b)
+{
+    uint8_t la, i;
+    if ((a == 0) || (b == 0))
+	return 0;
+    // A name's LENGTH sits at pos-1 and its characters at pos -- the layout
+    // csp_str_eq reads, and the reason this cannot just call it: both sides
+    // here are positions, not a char*.
+    la = csp_str_byte(st, a - 1);
+    if (la != csp_str_byte(st, b - 1))
+	return 0;
+    for (i = 0; i < la; i++)
+	if (csp_str_byte(st, a+i) != csp_str_byte(st, b+i))
+	    return 0;
+    return 1;
+}
+
+// Is this declaration a #param? DECL_CONSTANT with the `local` bit -- the same
+// trick #local plays on DECL_VARIABLE.
+static int is_param(const csp_decl_t* d)
+{
+    return (d->type == DECL_CONSTANT) && d->local && (d->name != 0);
+}
+
+// The RAM override declared for param `di`, or BAD_INDEX. A param that has one
+// is not what any listing should show: its cn.init is the value the program
+// SHIPPED with, and the override is the value it runs with.
+index_t csp_param_shadow(csp_rt_t* st, index_t di)
+{
+    csp_decl_t d = csp_get_decl(st, di);
+    index_t i;
+    if (!is_param(&d))
+	return BAD_INDEX;
+    // From di+1, not from the RAM base: a shadow is always LATER than what it
+    // sets, and starting at rom_nd made a shadow that happened to BE the first
+    // RAM declaration find itself -- so the listing suppressed both rows and
+    // the param vanished.
+    for (i = di + 1; i < st->ps.nd; i++) {
+	csp_decl_t o = csp_get_decl(st, i);
+	if (is_param(&o) && name_eq(st, o.name, d.name))
+	    return i;
+    }
+    return BAD_INDEX;
+}
+
+// The reverse: the param this RAM declaration SETS, or BAD_INDEX when it is a
+// declaration in its own right.
+index_t csp_param_target(csp_rt_t* st, index_t di)
+{
+    csp_decl_t d = csp_get_decl(st, di);
+    index_t j;
+    if (!is_param(&d))
+	return BAD_INDEX;
+    for (j = 0; j < di; j++) {
+	csp_decl_t t = csp_get_decl(st, j);
+	if (is_param(&t) && name_eq(st, d.name, t.name))
+	    return j;
+    }
+    return BAD_INDEX;
+}
+
+// Apply #param overrides.
+//
+// A RAM param whose name matches an EARLIER param is not a declaration of its
+// own: it is a saved value FOR that one. That is how `#param Kp = 9` works
+// against a Kp baked into ROM -- the ROM declaration's cn.init sits in flash and
+// cannot be written, but the slot it was seeded into is RAM, and the override
+// rides into EEPROM as an ordinary RAM declaration with no new format.
+//
+// Here rather than in csp_compile.c because the EEPROM patch is loaded by every
+// firmware, including an exec-only one that has no compiler at all.
+//
+// By NAME, not by index: a reflashed program moves declarations around, and an
+// override keyed on position would come back down on whatever now sits there.
+NOINLINE static void apply_param_overrides(csp_rt_t* st)
+{
+    index_t i;
+
+    for (i = st->rom_nd; i < st->ps.nd; i++) {
+	index_t j = csp_param_target(st, i);
+	value_t* iptr;
+	value_t* optr;
+	if (j == BAD_INDEX)
+	    continue;
+	csp_dio_slots(st, MAKE_INDEX(0, j), &iptr, &optr);
+	*iptr = *optr = csp_get_decl(st, i).cn.init;
+    }
+}
+
 int csp_rt_start(csp_rt_t* st)
 {
     int i;
@@ -4331,6 +4420,7 @@ int csp_rt_start(csp_rt_t* st)
 	    }
 	}
     }
+    apply_param_overrides(st);
     st->cur   = 0;     // back to global before anything executes
     st->cbase = 0;
     st->cycle = 0;  // init trace shows cycle 0

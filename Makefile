@@ -130,7 +130,7 @@ csp_rt.o csp_repl.o csp_compile.o csp_tok.o csp_strings.o: csp_strings.h
 clean:
 	rm -f $(OBJS) strtab csp_strings.c csp_strings.h csp-exec csp-min
 
-test:	csp test_repl syntax_check strings_check tables_check patterns_check
+test:	csp test_repl syntax_check strings_check tables_check patterns_check sketch_check
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
 
@@ -156,6 +156,15 @@ tables_check:
 
 patterns_check:
 	@escript utils/gen_patterns.erl check
+
+# The Arduino sketch folder reaches the sources through symlinks. A REGULAR file
+# there shadows one and freezes it: csp_patterns.h sat as a stale copy for a
+# while and the boards quietly built against it, so a header change showed up in
+# the host tests and nowhere else. Cheap to check, silent to miss.
+sketch_check:
+	@for f in CandySpeak/csp_*.h CandySpeak/csp_*.c; do \
+	    test -L "$$f" || { echo "$$f is a regular file, not a symlink"; exit 1; }; \
+	done; echo "CandySpeak/: ok -- all sources are symlinks"
 
 # REPL/persistence level: /list segment tags, what a /clear keeps, and whether a
 # generated ROM image loads back into the firmware that links it. None of that is
@@ -184,7 +193,7 @@ test_crc_destroyer:
 
 -include .*.d
 
-.PHONY: all clean test test-examples test_repl test_crc_destroyer syntax_check strings strings_check tables tables_check patterns patterns_check debug ubsan san exec min
+.PHONY: all clean test test-examples test_repl test_crc_destroyer syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check debug ubsan san exec min
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

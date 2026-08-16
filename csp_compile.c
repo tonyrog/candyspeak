@@ -21,10 +21,11 @@
 #include "csp_print.h"
 #include "csp_compile.h"
 #include "csp_tok.h"
-// Capture structs, pattern byte arrays and CSP_SCAN_PATTERNS, generated from
-// utils/syntax.terms. The parse functions below stay here -- what moved out is
-// the data they match with, whose byte lengths and stop-set ids are exactly
-// what nobody can verify by reading.
+// Capture structs and the pat_* names, generated from utils/syntax.terms. The
+// bytes themselves live in csp_parse.c, in one array these index into; the
+// parse functions below stay here. What moved out is the data they match with,
+// whose byte lengths and stop-set ids are exactly what nobody can verify by
+// reading.
 #include "csp_patterns.h"
 
 // An exec-only build has no compiler: a ROM image is produced on the host and
@@ -1067,14 +1068,20 @@ NOINLINE int map_reg(csp_rt_t* st, xindex_t ix)
 	    ram_decl_at(st,XIDX(ix))->reg = dst;
 	    ap->rmap[dst] = XIDX(ix);
 	}
-	if (decl(st,XIDX(ix),type) == DECL_CONSTANT) {
+	// A constant loads as an immediate; a #param does NOT. It is a
+	// DECL_CONSTANT with `local` set, and its value can change while the
+	// program runs, so it has to be LOADED from the slot setup_decl gave it
+	// like any variable. Baking it in here would be the same bug as folding
+	// it in push_var, one layer down.
+	if ((decl(st,XIDX(ix),type) == DECL_CONSTANT) &&
+	    !decl(st,XIDX(ix),local)) {
 	    value_t val = decl(st,XIDX(ix),cn.init);
 	    vtype_t vt = decl(st,XIDX(ix),vt);
 	    if (!csp_load_value(st, dst, vt, val))
 		return -1;
 	    return dst;
 	}
-	// generate LD instruction for variables, track for <- rules
+	// generate LD instruction for variables and params, track for <- rules
 	if (!asm_mem(st,OP_LD,dst,ix))
 	    return -1;
 	return dst;
@@ -1162,11 +1169,17 @@ NOINLINE static int push_var(csp_rt_t* st, rentry_t* rstack, int ep,
     value_t val;
     int I = 0;
 
-    if (decl(st,INDEX(ix),type) == DECL_CONSTANT) {
+    // A #param is a DECL_CONSTANT with `local` set, and the ONE thing it must not
+    // do is fold: its value can change while the program runs, so a rule has to
+    // read the slot setup_decl gave it (constants have one anyway -- CT[Idx]
+    // needs it). Everything else about it is a constant.
+    if ((decl(st,INDEX(ix),type) == DECL_CONSTANT) &&
+	!decl(st,INDEX(ix),local)) {
 	I = 1;
 	val = decl(st,INDEX(ix),cn.init);
     }
-    else if (decl(st,INDEX(ix),type) == DECL_VARIABLE) {
+    else if ((decl(st,INDEX(ix),type) == DECL_VARIABLE) ||
+	     (decl(st,INDEX(ix),type) == DECL_CONSTANT)) {
 	add_var(st, ix);
 	if (st->cs.ev) {
 	    ctx_save_t sv;
@@ -1306,11 +1319,19 @@ NOINLINE static bool_t coerce_assign(csp_rt_t* st, xindex_t ix, rentry_t* e)
     // The exception is the declaration's OWN rule: csp_parse_local emits
     // `name = <formula>` and marks the target here for the length of that
     // parse (+1, so a zeroed struct means "none" -- decl index 0 is real).
+    // A #param carries the same bit but the opposite exception: changing it from
+    // OUTSIDE is the point, so an immediate (`> Kp = 7`, st->cs.ev) is allowed
+    // and a rule is not. A rule that writes its own configuration is the bug
+    // this catches.
     if (decl(st,XIDX(ix),local) &&
 	(st->cs.local_def != (index_t)(XIDX(ix) + 1))) {
-	if (csp_set_error(st, ERR_ASSIGN_TO_LOCAL))
-	    csp_set_err_arg_int(st, 0, 0);
-	return 0;
+	int param = (decl(st,XIDX(ix),type) == DECL_CONSTANT);
+	if (!(param && st->cs.ev)) {
+	    if (csp_set_error(st, param ? ERR_ASSIGN_TO_PARAM
+				        : ERR_ASSIGN_TO_LOCAL))
+		csp_set_err_arg_int(st, 0, 0);
+	    return 0;
+	}
     }
 
     if (e->vt == V_UNSIGNED)  // same representation as int
@@ -2819,7 +2840,23 @@ NOINLINE static int init_list(csp_rt_t* st, const token_t* tv, int j, size_t n,
     return j;
 }
 
-NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n)
+// Write a param's live value as well as its declaration. Before csp_rt_start
+// there are no slots yet -- csp_rt_start seeds them, and applies the ROM
+// overrides -- so this is a no-op then and the value arrives that way instead.
+NOINLINE static void set_param_value(csp_rt_t* st, index_t di, value_t v)
+{
+    value_t* iptr;
+    value_t* optr;
+    if (!st->started)
+	return;
+    csp_dio_slots(st, MAKE_INDEX(0, di), &iptr, &optr);
+    *iptr = *optr = v;
+}
+
+// `#param` and `#constant` share this. A param is the same declaration with the
+// `local` bit set -- rules may not assign to it, and it is not folded.
+NOINLINE static int parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n,
+				   int is_param)
 {
     constant_param_t d = {0};
     index_t ix;
@@ -2854,11 +2891,57 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	    alen = nv;              // `#constant A = {..}` -- the list sets it
     }
 
+    // A #param may be re-declared, and that is the whole mechanism for SETTING
+    // one: a config file, or a line at the prompt, carries `#param Kp = 9` and
+    // it lands on the param that is already there. Three outcomes:
+    //
+    //   name is free            an ordinary declaration
+    //   a RAM param             its cn.init is overwritten -- durable, and it
+    //                           is what /save already writes
+    //   a ROM-baked param       flash cannot be written, so a RAM SHADOW is
+    //                           declared instead; csp_rt_start finds it by name
+    //                           and applies it onto the ROM param's slot. The
+    //                           shadow rides into EEPROM as any RAM decl does.
+    //
+    // Anything else -- the name taken by something that is not a param -- is
+    // still ERR_ALREADY_DEFINED, which csp_new_udecl reports below.
+    if (is_param && (alen == 1) && (d.list != LBRACE)) {
+	index_t px = csp_lookup_decl_local(st, &d.name);
+	if ((px != BAD_INDEX) &&
+	    (decl(st, INDEX(px), type) == DECL_CONSTANT) &&
+	    decl(st, INDEX(px), local)) {
+	    // The width and type are what any already-compiled rule was built
+	    // against, so a re-declaration may not change them.
+	    if ((GET_RES(decl(st, INDEX(px), res)) != d.r.res) ||
+		(decl(st, INDEX(px), vt) != d.opts.vt)) {
+		if (csp_set_error(st, ERR_PARAM_SHAPE))
+		    csp_set_err_arg_tstr(st, 0, &d.name);
+		return -1;
+	    }
+	    if (INDEX(px) >= st->rom_nd) {          // RAM: write it in place
+		ram_decl_at(st, INDEX(px))->cn.init = d.init;
+		set_param_value(st, INDEX(px), d.init);
+		return 0;
+	    }
+	    // ROM: fall through and declare the shadow.
+	    if ((ix = csp_new_decl(st, &d.name, DECL_CONSTANT, 0)) == BAD_INDEX)
+		return -1;
+	    i = INDEX(ix);
+	    ram_decl_at(st,i)->vt = d.opts.vt;
+	    ram_decl_at(st,i)->res = MAKE_RES(d.r.res);
+	    ram_decl_at(st,i)->local = 1;
+	    ram_decl_at(st,i)->cn.init = d.init;
+	    set_param_value(st, INDEX(px), d.init);
+	    return 0;
+	}
+    }
+
     if ((ix = csp_new_udecl(st,&d.name,DECL_CONSTANT)) == BAD_INDEX)
 	return -1;
     i = INDEX(ix);
     ram_decl_at(st,i)->vt = d.opts.vt;
     ram_decl_at(st,i)->res = MAKE_RES(d.r.res);
+    ram_decl_at(st,i)->local = is_param ? 1 : 0;
     ram_decl_at(st,i)->cn.init = d.init;
 
     if (array_replicate(st, i, DECL_CONSTANT, alen) < 0)
@@ -2867,6 +2950,22 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n)
     if (d.list == LBRACE)
 	return (init_list(st, tv, r, n, d.opts, i, &nv) < 0) ? -1 : 0;
     return 0;
+}
+
+NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n)
+{
+    return parse_constant(st, tv, ti, n, 0);
+}
+
+// '#' 'param' <name>[':' <size>] [<opt>*] '=' <const>
+//
+// A tunable: it reads like a constant and is written from OUTSIDE the program --
+// an immediate `> Kp = 7`, a config channel -- never by a rule. The value is
+// therefore not foldable, which is the whole difference from #constant at the
+// point of use (see push_var).
+NOINLINE int csp_parse_param(csp_rt_t* st, token_t* tv, int ti, size_t n)
+{
+    return parse_constant(st, tv, ti, n, 1);
 }
 
 
@@ -4028,6 +4127,10 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 		// apart here rather than in the switch below.
 		if (i == D_LOCAL)
 		    r = csp_parse_local(st, tv, 2, num);
+		// Same reason: #param maps to DECL_CONSTANT exactly as
+		// #constant does, so the two are told apart here too.
+		else if (i == D_PARAM)
+		    r = csp_parse_param(st, tv, 2, num);
 		else
 		switch(decl_table_code(i)) {
 		case DECL_MODULE:
@@ -4092,12 +4195,5 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
     return n;
 }
 
-// One-time setup: register the declaration patterns so P_PAT can resolve
-// them. The stop sets they used to be scanned for are generated. Called from
-// csp_rt_init.
-void csp_compile_init(void)
-{
-    CSP_SCAN_PATTERNS
-}
 
 #endif /* !CSP_EXEC_ONLY */

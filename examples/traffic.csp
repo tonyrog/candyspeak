@@ -10,9 +10,11 @@
 #digital Green  out 9
 #timer   Phase  500
 #states  green red redyellow yellow
+#param PhasePeriod = 600
 
 #in INIT
     State = green
+    Phase.period = PhasePeriod
     Phase = 1
 #end
 

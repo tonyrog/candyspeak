@@ -1,4 +1,8 @@
 #include "csp_parse.h"
+// This is the one translation unit that DEFINES the pattern bytes: pmatch owns
+// them, and putting them here is what lets the offset table be RODATA too.
+#define CSP_PATTERN_DEFINE
+#include "csp_patterns.h"
 #include <string.h>
 
 // The pmatch engine is part of the compiler: it exists to turn a token stream
@@ -17,7 +21,6 @@
 // to find out than a boot counter nobody reads.
 static const uint8_t stop_toks[] RODATA = { CSP_STOP_TOKS };
 static const uint8_t stop_pos[NUM_STOP_SETS] RODATA = { CSP_STOP_POS };
-static const uint8_t* pattern[NUM_PAT];
 
 int csp_stop_tokens_used(void) { return (int) sizeof(stop_toks); }
 
@@ -106,13 +109,6 @@ int stop_set_has(int set_idx, uint8_t tok)
 }
 
 // Add token to current set (avoid duplicates)
-// Registration only. It used to scan the pattern and build its stop sets; those
-// are generated now, so all that is left is the table P_PAT resolves through.
-void scan_pattern(int pat_id, const uint8_t* pat)
-{
-    pattern[pat_id] = pat;
-}
-
 #ifdef DEBUG
 void dump_stop_sets(void)
 {
@@ -148,6 +144,13 @@ void dump_stop_sets(void)
 #endif
 
 #define MAX_CONT_DEPTH 8
+
+// One pattern byte. The patterns are RODATA, which on AVR is PROGMEM -- reading
+// pat[pi] directly there reads DATA space at the table's flash address, which
+// on a mega lands inside CandySpeak's own arena. Same discipline as tok_table;
+// see the note at the top of csp_tok.c. `&pat[pi]` stays a plain address: it is
+// passed on to a recursive match, never dereferenced here.
+#define PB(i) ro_byte(&pat[(i)])
 
 typedef struct {
     csp_rt_t* st;
@@ -347,7 +350,7 @@ int pmatch_(pmatch_st_t* pst, const token_t* tv, int ti, size_t n, int l,
 {
     int pi = 0;  // pattern index
 next:
-    switch (pat[pi++]) {
+    switch (PB(pi++)) {
     case P_END:
 	DBG("%sP_END: (%d)\n", indent(l), ti);
 	return ti;  // tokens consumed
@@ -365,7 +368,7 @@ next:
 	return ti;  // tokens consumed	
     case P_TOK: {
 	// Match specific token
-	uint8_t tok = pat[pi++];
+	uint8_t tok = PB(pi++);
 	DBG("%sP_TOK: (%d) tok='%s'\n",indent(l),ti,(char*)tok_table[tok].name);
 	if ((ti >= (int)n) || (tv[ti].t != tok))
 	    return -1;
@@ -374,8 +377,8 @@ next:
     }
     case P_TOK_W: {
 	// Match specific token and write it
-	uint8_t tok = pat[pi++];
-	uint8_t val_off = pat[pi++];
+	uint8_t tok = PB(pi++);
+	uint8_t val_off = PB(pi++);
 	int off = pst->eo + val_off;
 
 	DBG("%sP_TOK_W: (%d) tok='%s' val_off=%d off=%d\n",
@@ -387,8 +390,8 @@ next:
 	break;
     }
     case P_INTEGER_S: {
-	uint8_t val_off = pat[pi++];
-	uint8_t sid = pat[pi++];
+	uint8_t val_off = PB(pi++);
+	uint8_t sid = PB(pi++);
 	DBG("%sP_INTEGER_S: (%d) val_off=%d,sid=%d\n", indent(l), ti,
 	    val_off, sid);		
 	if ((ti = pmatch_const_s(pst,tv,ti,n,V_INTEGER,val_off,sid)) < 0)
@@ -396,17 +399,17 @@ next:
 	break;
     }	    
     case P_FLOAT_S: {
-	uint8_t val_off = pat[pi++];
-	uint8_t sid = pat[pi++];	
+	uint8_t val_off = PB(pi++);
+	uint8_t sid = PB(pi++);	
 	DBG("%sP_FLOAT_S: (%d) val_off=%d\n", indent(l), ti, val_off);
 	if ((ti = pmatch_const_s(pst,tv,ti,n,V_FLOAT,val_off,sid)) < 0)
 	    return -1;
 	break;
     }
     case P_CONST_S: {
-	uint8_t opts_off = pat[pi++];
-	uint8_t val_off  = pat[pi++];
-	uint8_t sid      = pat[pi++];
+	uint8_t opts_off = PB(pi++);
+	uint8_t val_off  = PB(pi++);
+	uint8_t sid      = PB(pi++);
 	decl_opts_t opts = fetch_opts(pst->data, pst->eo+opts_off);
 	DBG("%sP_CONST_S: (%d) opts_off=%d, val_off=%d, vt=%d\n",indent(l),ti,
 	    opts_off, val_off, opts.vt);
@@ -416,7 +419,7 @@ next:
     }
     case P_STR: {
 	// Capture WORD as string
-	uint8_t val_off = pat[pi++];
+	uint8_t val_off = PB(pi++);
 	int off = pst->eo + val_off;  // eo already adjusted by P_REP
 	DBG("%sP_STR: (%d) \"%.*s\" val_off=%d, off=%d\n", indent(l),ti,
 	    tv[ti].v.str.len, tv[ti].v.str.ptr, val_off, off);
@@ -428,8 +431,8 @@ next:
     }
     case P_EXPR_S: {
 	// Capture EXPR with stop-set
-	uint8_t val_off = pat[pi++];
-	uint8_t sid = pat[pi++];
+	uint8_t val_off = PB(pi++);
+	uint8_t sid = PB(pi++);
 	DBG("%sP_EXPR_S: (%d) val_off=%d set=%d\n", indent(l), ti,
 	    val_off, sid);
 	if ((ti = pmatch_expr_s(pst, tv, ti, n, val_off, sid)) < 0)
@@ -438,7 +441,7 @@ next:
     }
     case P_OPTS: {
 	// Parse options, store at offset
-	uint8_t val_off = pat[pi++];
+	uint8_t val_off = PB(pi++);
 	decl_opts_t opts = fetch_opts(pst->data, pst->eo+val_off);
 	DBG("%sP_OPTS: (%d) val_off=%d\n", indent(l), ti, val_off);
 	opts = parse_opts(pst->st, tv, &ti, n, opts);
@@ -447,7 +450,7 @@ next:
     }
     case P_OPT: {
 	// Optional: try to match, ok if fails
-	uint8_t len = pat[pi++];
+	uint8_t len = PB(pi++);
 	int r;
 	DBG("%sP_OPT: (%d) len=%d\n", indent(l), ti, len);
 	if ((r = pmatch_(pst, tv, ti, n, l+1, &pat[pi])) >= 0)
@@ -459,7 +462,7 @@ next:
     case P_CHOICE: {
 	// Alternatives: try each until one matches
 	// Save data before each alt, restore if it fails
-	uint8_t num_alts = pat[pi++];
+	uint8_t num_alts = PB(pi++);
 	int matched = 0;
 	// is this really needed (mode compact way)
 	// temp save of data for backtracking. Copy only what actually remains of
@@ -476,11 +479,11 @@ next:
 	    uint8_t len;
 	    int r;
 	    
-	    if (pat[pi++] != P_ALT) {
+	    if (PB(pi++) != P_ALT) {
 		DBG("%sALT[%d]: (%d) missing\n", indent(l+1), a, ti);
 		return -1;
 	    }
-	    len = pat[pi++];
+	    len = PB(pi++);
 	    DBG("%sALT[%d]: (%d) len=%d\n", indent(l+1), ti, a, num_alts);
 		
 	    memcpy(saved, pst->data, slen);
@@ -492,15 +495,15 @@ next:
 		pi += len;
 		for (int b = a + 1; b < num_alts; b++) {
 		    uint8_t skip;
-		    if (pat[pi++] != P_ALT) {
+		    if (PB(pi++) != P_ALT) {
 			DBG("%sALT[%d]: (%d) missing\n", indent(l+1),
 			    b, ti);
 			return -1;
 		    }
-		    skip = pat[pi++];
+		    skip = PB(pi++);
 		    pi += skip;
 		}
-		if (pat[pi++] != P_CHOICE_END) {
+		if (PB(pi++) != P_CHOICE_END) {
 		    DBG("%sP_CHOICE: (%d) missing CHOICE_END\n",indent(l+1),ti);
 		    return -1;		    
 		}
@@ -514,23 +517,23 @@ next:
 	break;
     }
     case P_ARRAY: {  // normally used inside P_REP
-	pst->eo = pat[pi++];  // base offset
-	pst->ez = pat[pi++];  // element size
+	pst->eo = PB(pi++);  // base offset
+	pst->ez = PB(pi++);  // element size
 	DBG("%sP_ARRAY: (%d), eo=%d, ez=%d\n", indent(l), ti,
 	    pst->eo, pst->ez);
 	break;
     }
     case P_REP: {
 	// Repeat: match zero or more times
-	uint8_t len = pat[pi++];
+	uint8_t len = PB(pi++);
 	int pi0 = pi;  // len counts from here (including P_REP_END)
 	int ix = 0;
 	pst->eo = 0;
 	pst->ez = 0;
-	if (pat[pi] == P_ARRAY) {
+	if (PB(pi) == P_ARRAY) {
 	    pi++;
-	    pst->eo = pat[pi++];  // base offset
-	    pst->ez = pat[pi++];  // element size
+	    pst->eo = PB(pi++);  // base offset
+	    pst->ez = PB(pi++);  // element size
 	}
 	DBG("%sP_REP: (%d) n=%ld, len=%d, ez=%d\n", indent(l),
 	    ti, n, len, pst->ez);
@@ -553,21 +556,30 @@ next:
 	break;
     }
     case P_PAT: {
-	uint8_t pid = pat[pi++];
-	uint8_t off = pat[pi++];
-	uint8_t cont_sid = pat[pi++];
+	// The target's offset into csp_pattern_data, TWO bytes, high first. One
+	// would only hold while every P_PAT target happened to sit in the first
+	// 256 of them -- an ordering constraint nothing enforces and a silent
+	// wrong answer when it stops being true.
+	uint16_t poff = ((uint16_t)PB(pi) << 8) | PB(pi + 1);
+	uint8_t off;
+	uint8_t cont_sid;
 	void* saved_data = pst->data;
 	int saved_eo = pst->eo;
 	int r;
 
-	DBG("%sP_PAT: (%d) pid=%d off=%d cont=%d\n", indent(l), ti,
-	    pid, off, cont_sid);
+	pi += 2;
+	off = PB(pi++);
+	cont_sid = PB(pi++);
+	DBG("%sP_PAT: (%d) poff=%d off=%d cont=%d\n", indent(l), ti,
+	    poff, off, cont_sid);
 	// eo selects current array element when used inside P_REP
 	pst->data = (void*)(((uint8_t*)pst->data) + pst->eo + off);
 	pst->eo = 0;
 	if (cont_sid != STOP_NONE)
 	    pst->cont_stack[pst->cont_sp++] = cont_sid;
-	r = pmatch_(pst, tv, ti, n, l+1, pattern[pid]);
+	// The sub-pattern's bytes. P_PAT carries the OFFSET itself, so there is
+	// no id and no table between the two -- see the note in csp_patterns.h.
+	r = pmatch_(pst, tv, ti, n, l+1, csp_pattern_data + poff);
 	if (cont_sid != STOP_NONE)
 	    pst->cont_sp--;
 	pst->data = saved_data;

@@ -77,6 +77,7 @@ typedef enum {
     D_CONSTANT,
     D_VARIABLE,
     D_LOCAL,
+    D_PARAM,
     D_DIGITAL,
     D_ANALOG,
     D_TIMER,
@@ -159,6 +160,7 @@ typedef enum {
     DECL_ENT(D_CONSTANT,DECL_CONSTANT,s_constant), \
     DECL_ENT(D_VARIABLE,DECL_VARIABLE,s_variable), \
     DECL_ENT(D_LOCAL,DECL_VARIABLE,s_local), \
+    DECL_ENT(D_PARAM,DECL_CONSTANT,s_param), \
     DECL_ENT(D_DIGITAL,DECL_DIGITAL,s_digital), \
     DECL_ENT(D_ANALOG,DECL_ANALOG,s_analog), \
     DECL_ENT(D_TIMER,DECL_TIMER,s_timer), \

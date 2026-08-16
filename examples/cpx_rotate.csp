@@ -1,0 +1,64 @@
+
+// --- digital input / output ---
+#digital BtnA   in pulldown 0:4      // button A (pressed = 1)
+#digital BtnB   in pulldown 0:5      // button B
+#digital Switch in pullup   0:7      // slide switch
+#digital Led    out         0:13     // onboard red LED
+
+// --- analog sensors ---
+#analog Light:10 in 0:8      // light sensor  (A8)
+#analog Temp:10  in 0:9      // thermistor    (A9)
+#analog AccX:10  in 8:0
+#analog AccY:10  in 8:1
+#analog AccZ:10  in 8:2
+
+// The whole ring in one declaration. Ten elements, ten consecutive pins.
+// Each element carries its OWN pin: a pin lives in the per-element storage,
+// seeded from the declaration, which is what makes one declaration line able to
+// describe ten different outputs.
+// `unsigned` on purpose: a pixel is a packed RGB565 WORD, not a quantity, and
+// red at full sets bit 15. An #analog is signed by default -- right for a
+// sensor that swings both ways, wrong for a bit pattern.
+#analog P[10]:16 out unsigned 9:0..9
+
+#param StepPeriod  = 50
+#param ColorPeriod = 100
+#param StepDir = 1
+#param ColorDir = 1
+
+// 50 Hz. Every rule below is gated on this, so one timeout is one physics step
+// and the whole state advances together.
+#timer StepTick 50 = 1
+#timer ColorTick 100 = 1
+#variable Pi unsigned = 0
+#variable Pt = StepDir
+#variable Ci unsigned = 0
+#variable Ct = ColorDir
+
+#constant WHITE = 0xFFFF
+#constant RED   = 0xF8E0
+#constant GREEN = 0x07E0 
+#constant BLUE  = 0x001F
+#constant AMBER = 0xFD20
+
+#constant COLOR[5] = { RED, GREEN, BLUE, AMBER, WHITE }
+#variable Color:16 = WHITE
+
+#in INIT
+    StepTick.period = StepPeriod
+    ColorTick.period = ColorPeriod
+    Pt = StepDir
+    Ct = ColorDir    
+#end
+
+P[(Pi + 9) % 10]  = 0 ? timeout(StepTick)
+P[(Pi + 10) % 10] = 0 ? timeout(StepTick)
+P[(Pi + 1) % 10]  = 0 ? timeout(StepTick)
+P[(Pi + 2) % 10]  = 0 ? timeout(StepTick)
+P[Pi % 10]        = Color ? timeout(StepTick)
+
+StepTick = 1, Pi=Pi+Pt ? timeout(StepTick)
+ColorTick = 1, Color=COLOR[Ci % 5], Ci = Ci+Ct ? timeout(ColorTick)
+
+Pt = -Pt ? BtnA
+Ct = -Ct ? BtnB

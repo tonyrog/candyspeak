@@ -89,6 +89,10 @@ extern rochar s_err_index_range[19] RODATA;
 #define ros_err_index_range ((rostring_t) s_err_index_range)
 extern rochar s_err_assign_local[48] RODATA;
 #define ros_err_assign_local ((rostring_t) s_err_assign_local)
+extern rochar s_err_assign_param[66] RODATA;
+#define ros_err_assign_param ((rostring_t) s_err_assign_param)
+extern rochar s_err_param_shape[72] RODATA;
+#define ros_err_param_shape ((rostring_t) s_err_param_shape)
 extern rochar s_LP[2] RODATA;
 #define ros_LP ((rostring_t) s_LP)
 extern rochar s_RP[2] RODATA;
@@ -203,6 +207,8 @@ extern rochar s_variable[9] RODATA;
 #define ros_variable ((rostring_t) s_variable)
 extern rochar s_local[6] RODATA;
 #define ros_local ((rostring_t) s_local)
+extern rochar s_param[6] RODATA;
+#define ros_param ((rostring_t) s_param)
 extern rochar s_digital[8] RODATA;
 #define ros_digital ((rostring_t) s_digital)
 extern rochar s_analog[7] RODATA;
@@ -433,7 +439,7 @@ extern rochar s_cmd_exit[5] RODATA;
 #define ros_cmd_exit ((rostring_t) s_cmd_exit)
 extern rochar s_h_help[15] RODATA;
 #define ros_h_help ((rostring_t) s_h_help)
-extern rochar s_h_list[48] RODATA;
+extern rochar s_h_list[62] RODATA;
 #define ros_h_list ((rostring_t) s_h_list)
 extern rochar s_h_state[20] RODATA;
 #define ros_h_state ((rostring_t) s_h_state)

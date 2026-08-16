@@ -1048,11 +1048,6 @@ int main(int argc, char** argv)
 #endif
 
     csp_rt_init(&state, reactive);
-#if !defined(CSP_EXEC_ONLY)
-    // AFTER init: the stop sets are built by csp_compile_init, which runs in
-    // here. print_defines above sees zeroes and cannot report this.
-    if (debug)
-#endif
     // -m shrinks the usable code-memory budget to exercise the out-of-memory
     // path. Clamp to what csp_mem_init left for the pool, NOT to mem_size: the
     // line buffer sits in the gap between the two, and raising mem_limit back to
@@ -1147,6 +1142,12 @@ int main(int argc, char** argv)
 	if (csp_rebuild(&state) < 0) {   // graph + leaf/device setup, one layout
 	    fprintf(stderr, "setup failed: ");
 	    print_error(&state);
+	    // AND stop. It used to report and fall through to csp_setup, which
+	    // left the exit code at 0 -- so `csp prog.csp || handle_it` saw a
+	    // success after the one failure that means the program does not fit.
+	    // Nothing downstream can do anything useful with a state that failed
+	    // to lay out, which is what the comment above already said.
+	    exit(1);
 	}
 	csp_setup(&state);
     }

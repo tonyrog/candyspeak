@@ -202,8 +202,9 @@
 %% `#disable` and `#enable` do -- those spell a reserved token and never arrive
 %% as a NAME. D_IN is therefore unreachable through this table.
 %%
-%% `local` and `variable` share DECL_VARIABLE and one pattern; they differ by a
-%% bit the parser sets, not by a type.
+%% Two pairs share a declaration type and a pattern, differing by the `local`
+%% bit the parser sets rather than by a type: `local`/`variable`, and
+%% `param`/`constant`.
 %%
 %% There is deliberately no `object` row -- an instance is `# ModName ObjName`,
 %% reached when the word after '#' is NOT in this table.
@@ -217,6 +218,11 @@
 {decl, 'D_CONSTANT', constant,  'constant', 'DECL_CONSTANT', constant}.
 {decl, 'D_VARIABLE', variable,  'variable', 'DECL_VARIABLE', variable}.
 {decl, 'D_LOCAL',    local,     'local',    'DECL_VARIABLE', variable}.
+%% #param is to #constant what #local is to #variable: the same declaration type
+%% with the `local` bit set. A param reads like a constant -- rules may not
+%% assign to it -- but it is NOT folded, because a config setting can change it
+%% while the program runs.
+{decl, 'D_PARAM',    param,     'param',    'DECL_CONSTANT', constant}.
 {decl, 'D_DIGITAL',  digital,   'digital',  'DECL_DIGITAL',  digital}.
 {decl, 'D_ANALOG',   analog,    'analog',   'DECL_ANALOG',   analog}.
 {decl, 'D_TIMER',    timer,     'timer',    'DECL_TIMER',    timer}.

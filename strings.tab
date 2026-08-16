@@ -53,6 +53,8 @@ err_cannot_load cannot load from eeprom
 err_out_of_memory out of memory -- program does not fit
 err_index_range index out of range
 err_assign_local cannot assign to a #local -- it binds a formula
+err_assign_param cannot assign to a #param in a rule -- set it with > name = value
+err_param_shape #param %s does not match the declaration it sets -- same width and type
 LP (
 RP )
 COLON :
@@ -110,6 +112,7 @@ states states
 constant constant
 variable variable
 local local
+param param
 digital digital
 analog analog
 timer timer
@@ -225,7 +228,7 @@ cmd_load load
 cmd_quit quit
 cmd_exit exit
 h_help Show this help
-h_list List rules (F=flash E=eeprom-backed R=ram only)
+h_list List rules (F=flash E=eeprom-backed R=ram P=patches a #param)
 h_state Show current values
 h_memory Show code/RAM usage
 h_images List the images linked into this firmware

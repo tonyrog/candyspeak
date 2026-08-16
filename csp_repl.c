@@ -729,6 +729,17 @@ match:
 	index_t ix = MAKE_INDEX(0, i);
 	csp_decl_t d = csp_get_decl(st, i);	
 	int seg = decl_seg(st, i);
+	// A param that has been re-declared lists ONCE, as the override. Its
+	// original says what the program shipped with, which is no longer what
+	// it runs with -- and both lines pasted back would be one declaration
+	// and one setting of it, i.e. the same thing twice.
+	if (csp_param_shadow(st, i) != BAD_INDEX)
+	    continue;
+	// The override itself is tagged P: it lives in RAM (or eeprom, once
+	// saved) but what matters about it is that it PATCHES a declaration
+	// further up -- usually one baked into flash, which cannot be edited.
+	if (csp_param_target(st, i) != BAD_INDEX)
+	    seg = 'P';
 	if (d.type == DECL_MODULE) {
 	    cur_mod = d.name;
 	    mod_decl = i;
@@ -887,7 +898,17 @@ match:
 	    // list is rebuilt by walking them -- and the head alone would paste
 	    // back as a scalar with the other elements gone.
 	    uint16_t alen = csp_array_len(st, i);
-	    print_decl_and_name(st, d.type, cur_mod, npos);
+	    // A #param is a DECL_CONSTANT with `local` set and has to list back
+	    // as `#param` -- pasted back as `#constant` it would fold, and every
+	    // rule reading it would bake in whatever the value happened to be.
+	    if (d.local) {
+		csp_print_char('#');
+		csp_print_rostr(ros_param);
+		csp_print_blank();
+		list_name(st, cur_mod, npos);
+	    }
+	    else
+		print_decl_and_name(st, d.type, cur_mod, npos);
 	    if (alen > 1) {
 		csp_print_char('[');
 		csp_print_uint(alen);
@@ -1173,12 +1194,16 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
     }
 
     is_state = state_is_state_var(st, di);
-    if (t == DECL_VARIABLE) {
+    // A #param prints like a variable: it has no pin, no direction, and its slot
+    // holds a plain value. Falling through to the device branch read that value
+    // as a dvalue_t and printed a port and a pin out of the number itself.
+    if ((t == DECL_VARIABLE) || (t == DECL_CONSTANT)) {
 	csp_print_just("", LJUST, STATE_W_DIR);
 	if (is_state)
 	    csp_print_rojust(ros_state, LJUST, STATE_W_KIND);
 	else
-	    csp_print_rojust(ros_var, LJUST, STATE_W_KIND);
+	    csp_print_rojust((t == DECL_CONSTANT) ? ros_param : ros_var,
+			     LJUST, STATE_W_KIND);
 	csp_print_just("", LJUST, STATE_W_PIN);
     }
     else {   // digital / analog
@@ -1250,14 +1275,24 @@ static int state_want(csp_rt_t* st, int i,
     decl_t t = decl(st, i, type);
     uint16_t f_io;
     
+    // A #param is a DECL_CONSTANT with `local` set, and it belongs here: its
+    // whole point is that the value can differ from what the source says, which
+    // is exactly what /state is for. A plain constant still does not -- its
+    // value is in the listing and nowhere else.
     if ((t != DECL_VARIABLE) &&
 	(t != DECL_DIGITAL) &&
 	(t != DECL_ANALOG) &&
 	(t != DECL_BUFFER) &&
 	(t != DECL_FIELD) &&	
-	(t != DECL_TIMER))
+	(t != DECL_TIMER) &&
+	!((t == DECL_CONSTANT) && decl(st, i, local)))
 	return 0;
     if (decl_name_empty(st, MAKE_INDEX(0, i)))
+	return 0;
+    // The mirror image of the listing: a param override has a slot of its own,
+    // but nothing reads it -- csp_rt_start copies the value into the param it
+    // sets, and THAT is the row with the live value.
+    if (csp_param_target(st, i) != BAD_INDEX)
 	return 0;
     if (nnamed) {
 	int k;

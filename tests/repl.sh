@@ -847,6 +847,130 @@ else
     echo "  FAIL csp_lpcopen.c did not build"; fail=$((fail+1))
 fi
 
+echo "params:"
+
+# #param is a DECL_CONSTANT with the `local` bit set -- the same trick #local
+# plays on DECL_VARIABLE. What it has to prove is that it does NOT fold, since
+# that is the one thing separating it from #constant at the point of use, and a
+# folded param would bake today's value into every rule that reads it.
+cat > "$D/param.csp" <<'EOF'
+#param Kp:16 = 5
+#variable Out = 0
+Out = Kp * 2 ? 1
+EOF
+
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/p1.db" "$D/param.csp")
+ck "a param lists back as #param, and its rule does not fold it" \
+   '#param Kp:16 integer = 5  // R
+#variable Out:32 integer = 0  // R
+Out=Kp*2 ? 1  // 1 R' "$got"
+
+# The same program with #constant, to show the difference is real and not a
+# listing cosmetic: there the reference IS folded.
+sed 's/^#param/#constant/' "$D/param.csp" > "$D/const.csp"
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/p2.db" "$D/const.csp" | sed -n '/^Out=/p')
+ck "the same declaration as #constant folds" 'Out=5*2 ? 1  // 1 R' "$got"
+
+# Set from outside. How many cycles pass between two REPL lines is not fixed, so
+# this checks that the write LANDS -- that the rule then follows is the ordinary
+# OP_LD path the listing above already proves it takes.
+got=$(printf '> Kp = 7\n> Kp\n/quit\n' | repl ./csp "$D/p3.db" "$D/param.csp")
+ck "an immediate sets a param" '7
+7' "$got"
+
+# A rule may not. This is the half that makes it a param and not a variable.
+got=$(printf 'Kp = 9 ? 1\n/quit\n' | repl ./csp "$D/p4.db" "$D/param.csp")
+ck "a rule assigning to a param is refused" \
+   'Error: cannot assign to a #param in a rule -- set it with > name = value' "$got"
+
+# /state carries it: a param is exactly the thing whose live value can differ
+# from what the source says.
+got=$(printf '> Kp = 7\n/state\n/quit\n' | repl ./csp "$D/p5.db" "$D/param.csp" |
+	  sed -n '/^Kp/p' | tr -s ' ')
+ck "a param shows in /state, as a param" 'Kp param = 7' "$got"
+
+# Re-declaring a param SETS it -- that is the mechanism for saving a value, and
+# it has to work against a param baked into ROM, where cn.init sits in flash and
+# cannot be written. The override is declared as a RAM shadow and csp_rt_start
+# applies it onto the ROM param's slot by NAME.
+if build_rom "$D/param.csp" "$D/param_fw"; then
+    got=$(printf '#param Kp:16 = 9\n> Kp\n> Out\n/quit\n' |
+	      repl "$D/param_fw" "$D/pr1.db")
+    ck "a ROM param can be re-declared, and the ROM rule follows" 'OK
+9
+18' "$got"
+
+    # The listing shows it ONCE, as the override, tagged P: the ROM row says
+    # what the program shipped with, which is no longer what it runs with.
+    got=$(printf '#param Kp:16 = 9\n/list\n/quit\n' | repl "$D/param_fw" "$D/pr1b.db")
+    ck "an overridden param lists once, tagged P" 'OK
+#variable Out:32 integer = 0  // F
+#param Kp:16 integer = 9  // P
+Out=Kp*2 ? 1  // 1 F' "$got"
+
+    # /state is the mirror: the override has a slot of its own that nothing
+    # reads, so the row shown is the param it sets.
+    got=$(printf '#param Kp:16 = 9\n/state\n/quit\n' | repl "$D/param_fw" "$D/pr1c.db" |
+	      sed -n '/^Kp/p' | tr -s ' ')
+    ck "an overridden param shows one /state row" 'Kp param = 9' "$got"
+
+    # ...and it survives a restart, through the ordinary EEPROM patch: the
+    # override is a RAM declaration like any other, so /save already writes it.
+    printf '#param Kp:16 = 9\n/save\n/quit\n' |
+	repl "$D/param_fw" "$D/pr2.db" >/dev/null 2>&1
+    got=$(printf '> Kp\n> Out\n/quit\n' | repl "$D/param_fw" "$D/pr2.db" |
+	      grep -v '^Restored')
+    ck "a re-declared ROM param survives a restart" '9
+18' "$got"
+else
+    echo "  FAIL param ROM firmware did not build"; fail=$((fail+1))
+fi
+
+# A RAM param is written in place -- no shadow, one line in the listing.
+got=$(printf '#param Kq:16 = 3\n#param Kq:16 = 8\n/list\n> Kq\n/quit\n' |
+	  repl ./csp "$D/pr3.db")
+ck "a RAM param is re-declared in place" 'OK
+OK
+#param Kq:16 integer = 8  // R
+8' "$got"
+
+# The width and type are what any compiled rule was built against.
+got=$(printf '#param Kq:16 = 3\n#param Kq:32 = 8\n/quit\n' | repl ./csp "$D/pr4.db")
+ck "a re-declaration may not change the width" 'OK
+Error: #param Kq does not match the declaration it sets -- same width and type' "$got"
+
+# And the exception is for params only.
+got=$(printf '#variable V = 0\n#param V = 1\n/quit\n' | repl ./csp "$D/pr5.db")
+ck "the exception does not extend to other declarations" 'OK
+Error: name V is already defined' "$got"
+
+echo "memory limit:"
+
+# -m shrinks the usable code-memory budget so the out-of-memory path can be
+# exercised without a 2K board. It had no test until now, which is how it came to
+# be guarded by `if (debug)` for a while: a dangling `if` with no body picked up
+# the statement after it, and -m then did nothing unless -d was given too. Both
+# cases below run WITHOUT -d, which is the part that regressed.
+cat > "$D/mem.csp" <<'EOF'
+#variable A = 1
+#variable B = 2
+#variable C = 3
+EOF
+
+got=$(./csp -n "$D/mem.csp" 2>&1)
+ck "no limit, no complaint" '' "$got"
+
+# 200 bytes is below what three declarations plus the runtime baseline need, and
+# far enough below that this will not need retuning every time a struct grows a
+# field.
+#
+# rc=1 is half the point of the case: a setup failure used to report and carry
+# on, leaving the exit code at 0, so `csp prog.csp || handle_it` saw success.
+got=$(./csp -n -m 200 "$D/mem.csp" 2>&1; echo "rc=$?")
+ck "-m refuses a program that does not fit, and says so in rc" \
+   'setup failed: out of memory -- program does not fit
+rc=1' "$got"
+
 echo "================================================"
 echo "repl: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

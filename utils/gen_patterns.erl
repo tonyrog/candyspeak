@@ -3,9 +3,10 @@
 %%
 %% Generate the pmatch patterns from utils/syntax.terms.
 %%
-%%   csp_pattern_ids.h   the PAT_* and STOP_* enums (included by csp_parse.h)
-%%   csp_patterns.h      the capture structs, the pattern byte arrays and the
-%%                       registration macro (included by csp_compile.c)
+%%   csp_pattern_ids.h   the STOP_* enum (included by csp_parse.h)
+%%   csp_patterns.h      the capture structs, the PATOFF_* constants and the
+%%                       one array of pattern bytes
+%%   csp_stop_sets.h     the stop sets themselves
 %%
 %% THE POINT IS THE TWO NUMBERS NOBODY CAN CHECK BY HAND.
 %%
@@ -82,8 +83,9 @@ outputs() ->
      {?SETS, sets_text(Pats, Toks, ?MAX_STOP_TOKENS)}].
 
 %% Sub-patterns must be REGISTERED before any pattern that refers to them:
-%% collect_first follows a P_PAT into pattern[id], which scan_pattern fills in.
-%% Depth-first over the {pat, ...} references, declaration order within a level.
+%% Sub-patterns first. Nothing requires it any more -- a P_PAT carries an
+%% absolute offset -- but it is how the array reads: a definition before its use.
+%% Depth first over the {pat, ...} references, declaration order at each level.
 order(Pats) -> lists:reverse(lists:foldl(fun(P, Acc) -> visit(P, Pats, Acc) end, [], Pats)).
 
 visit({N, _, _} = P, Pats, Acc) ->
@@ -113,16 +115,12 @@ refs1(_)              -> [].
 %% csp_pattern_ids.h
 %% ---------------------------------------------------------------------------
 
-ids(Pats, Sids) ->
+ids(_Pats, Sids) ->
     [banner(),
      "//\n"
-     "// PAT_* is the order patterns are REGISTERED in, sub-patterns first.\n"
-     "// STOP_* is one id per capture site, plus one per (pattern, sub-pattern)\n"
-     "// pair. Nothing here is written by hand, which is the whole point.\n",
+     "// One id per capture site, plus one per (pattern, sub-pattern) pair.\n"
+     "// Nothing here is written by hand, which is the whole point.\n",
      "#ifndef __CSP_PATTERN_IDS_H__\n#define __CSP_PATTERN_IDS_H__\n\n",
-     "enum {\n",
-     [["    ", patid(N), ",\n"] || {N, _, _} <- Pats],
-     "    NUM_PAT\n};\n\n",
      "enum {\n",
      "    STOP_NONE = 0,       // empty/invalid placeholder\n",
      "    STOP_OPTS = 1,       // fixed set of all OPTION tokens\n",
@@ -141,23 +139,49 @@ ids(Pats, Sids) ->
 %% ---------------------------------------------------------------------------
 
 pats(Encoded, Structs, Pats, Limits) ->
+    Offs = offsets(Encoded, 0, []),
     [banner(),
      "//\n"
-     "// Capture structs and pattern byte arrays. Every byte length here was\n"
+     "// Capture structs and the pattern bytes. Every byte length here was\n"
      "// computed, not counted. See utils/syntax.terms for what each pattern\n"
-     "// means and why it is shaped the way it is.\n",
+     "// means and why it is shaped the way it is.\n"
+     "//\n"
+     "// ONE array, and PAT_* indexes it. Eighteen separate arrays meant a table\n"
+     "// of POINTERS to resolve P_PAT through, and a pointer table cannot follow\n"
+     "// them into flash on AVR: ro_ptr is a 16-bit pgm_read_word, so it holds\n"
+     "// only as long as the linker keeps every pattern under 64K. An OFFSET has\n"
+     "// no such ceiling, so the table is RODATA like the bytes it indexes and\n"
+     "// nothing is registered at boot any more.\n",
      "#ifndef __CSP_PATTERNS_H__\n#define __CSP_PATTERNS_H__\n\n",
      [[io_lib:format("#define ~s ~s~n", [N, val(V)])] || {N, V} <- Limits],
      "\n",
      [struct(S, Structs, Pats) || S <- used_structs(Encoded, Structs, Pats)],
-     [["\nstatic const uint8_t ", pname(N), "[] = {\n", rows(Rows), "};\n"]
+     "\nextern const uint8_t csp_pattern_data[] RODATA;\n\n",
+     "// Where each pattern starts. A P_PAT carries one of these directly, so\n"
+     "// there is no id and no table to look one up in.\n",
+     [io_lib:format("#define ~s ~p~n", [pdef(N), O]) || {N, O} <- Offs],
+     "\n// Each pattern as a pointer into the one array -- compile-time\n"
+     "// constants, so a pmatch call site reads as it did when these were\n"
+     "// separate arrays.\n",
+     [io_lib:format("#define ~s (csp_pattern_data + ~s)~n", [pname(N), pdef(N)])
+      || {N, _} <- Offs],
+     "\n// Defined by ONE translation unit -- csp_parse.c, which owns pmatch.\n"
+     "#ifdef CSP_PATTERN_DEFINE\n\n",
+     "const uint8_t csp_pattern_data[] RODATA = {\n",
+     [[io_lib:format("    // ~s @ ~p~n", [pname(N), pat_off(N, Offs)]), rows(Rows)]
       || {{N, _, _}, Rows} <- Encoded],
-     "\n// Registration, in dependency order: a sub-pattern must be in\n"
-     "// pattern[] before collect_first follows a P_PAT into it.\n",
-     "#define CSP_SCAN_PATTERNS \\\n",
-     join([io_lib:format("    scan_pattern(~s, ~s);", [patid(N), pname(N)])
-	   || {{N, _, _}, _} <- Encoded], " \\\n"),
-     "\n\n#endif\n"].
+     "};\n\n#endif\n",
+     "\n#endif\n"].
+
+%% Where each pattern starts in the one array. Its length is the number of
+%% items across its rows -- the same count P_OPT and friends carry.
+offsets([], _At, Acc) -> lists:reverse(Acc);
+offsets([{{N, _, _}, Rows} | Rest], At, Acc) ->
+    offsets(Rest, At + nitems(Rows), [{N, At} | Acc]).
+
+nitems(Rows) -> lists:sum([length(Is) || {_, Is} <- Rows]).
+
+pat_off(N, Offs) -> {N, O} = lists:keyfind(N, 1, Offs), O.
 
 val(V) when is_integer(V) -> integer_to_list(V);
 val(V) when is_atom(V)    -> atom_to_list(V).
@@ -210,7 +234,15 @@ ctype({plain, C}, _)    -> C.
 %% `pattern res` fills `res_param`, and the terms say so.
 ctname(S) -> [atom_to_list(S), "_t"].
 
-patid(N) -> ["PAT_", string:uppercase(atom_to_list(N))].
+%% The target's offset into the one array, as TWO bytes, high first. Not one:
+%% the array is bigger than 256 bytes and only luck (an ordering that put every
+%% P_PAT target early) would keep a single byte enough. Two bytes cost 10 bytes
+%% across the ten P_PAT sites and remove the constraint entirely.
+patoff(N) ->
+    C = "PATOFF_" ++ string:uppercase(atom_to_list(N)),
+    ["(" ++ C ++ " >> 8)", "(" ++ C ++ " & 0xff)"].
+
+pdef(N) -> ["PATOFF_", string:uppercase(atom_to_list(N))].
 pname(N) -> ["pat_", atom_to_list(N)].
 
 %% ---------------------------------------------------------------------------
@@ -251,10 +283,10 @@ enc({opts, F}, Ctx, Ind, S) ->
     {[{Ind, ["P_OPTS", off(F, Ctx)]}], S};
 enc({pat, P}, Ctx, Ind, S) ->
     {Sid, S1} = cont_sid(P, Ctx, S),
-    {[{Ind, ["P_PAT", patid(P), "0", Sid]}], S1};
+    {[{Ind, ["P_PAT"] ++ patoff(P) ++ ["0", Sid]}], S1};
 enc({pat, P, F}, Ctx, Ind, S) ->
     {Sid, S1} = cont_sid(P, Ctx, S),
-    {[{Ind, ["P_PAT", patid(P), off(F, Ctx), Sid]}], S1};
+    {[{Ind, ["P_PAT"] ++ patoff(P) ++ [off(F, Ctx), Sid]}], S1};
 enc({opt, Items}, Ctx, Ind, S) ->
     {Body0, S1} = enc_list(Items, Ctx, Ind + 1, S),
     Body = Body0 ++ [{Ind + 1, ["P_OPT_END"]}],

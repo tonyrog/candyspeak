@@ -93,7 +93,7 @@ grammar.  `integer` is the SIGNED integer type; there is no `signed` keyword
 
 The declaration keywords are deliberately NOT reserved:
 
-    module  end  states  constant  variable  local
+    module  end  states  constant  variable  local  param
     digital  analog  timer  field  buffer
 
 They are ordinary NAMEs, recognised by a table lookup after the '#' (section
@@ -145,8 +145,8 @@ The pack test looks at three raw tokens before committing, which is what keeps
 ---------------
 
     declaration = variable-decl | local-decl   | constant-decl
-                | digital-decl  | analog-decl  | timer-decl
-                | field-decl    | buffer-decl
+                | param-decl    | digital-decl | analog-decl
+                | timer-decl    | field-decl   | buffer-decl
                 | module-decl   | end-decl     | states-decl
                 ;
 
@@ -215,6 +215,55 @@ The '=' is located by a token scan before matching, because P_CONST_S would
 An element is the same grammar as a scalar initialiser, so `{ 1+2, MAX/2 }` and
 `{ "a", "b" }` both work.  With an explicit length the element count must match
 it exactly; without one (`#constant A = {...}`) the list sets the length.
+
+4.4a #param
+
+    param-decl = '#' 'param' NAME [ array ] [ res ] opts '='
+                 ( const-expr | init-list ) ;
+
+Exactly the #constant grammar, and the same declaration type with the `local`
+bit set -- the trick #local plays on #variable.  A param reads like a constant:
+a rule may not assign to it.  It differs in the one way that matters at the
+point of use: it is NOT folded.  A rule that reads it emits an OP_LD from the
+slot every constant already has (setup_decl allocates one so `CT[Idx]` can
+work), so a value changed while the program runs reaches the next evaluation.
+
+It is set from OUTSIDE the program -- an immediate `> Kp = 7` at the prompt, or
+a config channel.  A rule that assigns to one is refused with
+ERR_ASSIGN_TO_PARAM; the same guard that refuses an assignment to a #local
+allows this one when it comes from the prompt (st->cs.ev).
+
+/state lists params with the variables, since a param's live value is exactly
+the thing that can differ from what the source says.  A plain constant is not
+listed there: its value is in the listing and nowhere else.
+
+A param -- and ONLY a param -- may be RE-DECLARED, and that is how a value is
+set from a file: a config file is a list of `#param` lines laid over a program.
+The width and type must match the declaration being set; anything else is
+ERR_PARAM_SHAPE, and a name held by something that is not a param is still
+ERR_ALREADY_DEFINED.
+
+Where the value lands depends on where the param is:
+
+    a RAM param       cn.init is written in place -- one declaration, and
+                      /save already persists it
+    a ROM-baked param flash cannot be written, so a RAM SHADOW declaration is
+                      made instead.  csp_rt_start finds it by NAME and applies
+                      it onto the ROM param's slot after setup, so the override
+                      survives every rebuild and rides into EEPROM with no
+                      format of its own.
+
+By name, not by index: a reflashed program moves declarations around, and an
+override keyed on position would come down on whatever now sits there.
+
+An overridden param lists ONCE -- as the override, tagged `P` instead of the
+usual F/E/R -- and shows one row in /state.  The two views hide opposite halves
+for the same reason: /list shows declarations, and the override is the current
+one; /state shows live values, and those live in the slot of the param being
+set, not in the override's own.
+
+Arrays are not re-declarable -- `#param A[3] = {...}` a second time is an
+ordinary redefinition error.
 
 4.5 #digital
 

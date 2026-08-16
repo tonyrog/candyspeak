@@ -1364,6 +1364,8 @@ typedef enum {
     // it MEANS that is wrong -- so this cannot be reported as an unknown
     // variable without sending the reader looking for a typo.
     ERR_ASSIGN_TO_LOCAL,
+    ERR_ASSIGN_TO_PARAM,
+    ERR_PARAM_SHAPE,
 } csp_err_t;
 
 // parser state, save state before parse
@@ -2373,6 +2375,10 @@ extern int csp_parse_const_expr(csp_rt_t* st, const token_t* tv, size_t* num_tok
 //
 extern index_t csp_new_decl(csp_rt_t* st,const tstr_t* name, decl_t op,int sys);
 extern index_t csp_lookup_decl(csp_rt_t* st, const tstr_t* name);
+// #param overrides: shadow = the RAM declaration that SETS param `di`;
+// target = the param a RAM declaration sets. See apply_param_overrides.
+extern index_t csp_param_shadow(csp_rt_t* st, index_t di);
+extern index_t csp_param_target(csp_rt_t* st, index_t di);
 
 // backend port (linux/arduino/LPCopen/FreeRTOS)
 extern uint32_t csp_time_ms(void);

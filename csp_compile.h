@@ -28,7 +28,6 @@
 #define ISALPHA(c) (ISUPPER((c)) || ISLOWER((c)))
 
 // Compiler-side one-time init (stop-sets + declaration patterns).
-extern void csp_compile_init(void);
 // `blk` is the caller's cursor over the states block being filled; set it to
 // BAD_INDEX before the first name of a statement. See the definition.
 extern int  add_state(csp_rt_t* st, const tstr_t* name, index_t* blk);
