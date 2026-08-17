@@ -10,6 +10,8 @@
 #include <poll.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <time.h>
+#include <sys/stat.h>
 
 // SocketCAN is a Linux kernel facility; nothing else has it.
 #if defined(__linux__) && !defined(CSP_NO_SOCKETCAN)
@@ -31,6 +33,7 @@ static const char* eeprom_file = "eeprom.db";
 
 static const char* can_iface = NULL;   // --can=vcan0; NULL = no bus, stubs
 static const char* src_file = NULL;   // first .csp on the command line (ROM banner)
+static char src_modified[26];
 
 // git version, injected by the Makefile; a plain build still says something.
 #ifndef CSP_VERSION
@@ -1077,7 +1080,13 @@ int main(int argc, char** argv)
     }
 #else
     if (optind < argc) {
+	struct stat src_stat;
 	src_file = argv[optind];   // first one, for the ROM provenance banner
+	strcpy(src_modified, "unknown");
+	if (stat(src_file, &src_stat) >= 0) {
+	    if (ctime_r(&src_stat.st_mtime, src_modified)) 
+		src_modified[strlen(src_modified)-1] = '\0';
+	}
 	while (optind < argc) {
 	    if ((fin = fopen(argv[optind], "r")) == NULL) {
 		fprintf(stderr, "unable to open file '%s'\n", argv[optind]);
@@ -1161,6 +1170,7 @@ int main(int argc, char** argv)
 	FILE* objf = object_file == NULL ? stdout : object_file;
 	csp_rom_meta_t meta;
 	meta.src     = src_file;
+	meta.modified = src_modified;
 	meta.version = CSP_VERSION;
 	meta.date    = __DATE__ " " __TIME__;
 	meta.prefix  = rom_prefix;

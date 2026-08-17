@@ -24,6 +24,7 @@ extern void    csp_dump(FILE*, csp_rt_t* st);
 // knows them; the dumper does not); pass NULL for any that is unknown.
 typedef struct {
     const char* src;      // the .csp file this was compiled from
+    const char* modified; // the .csp file modification
     const char* version;  // CandySpeak version (git describe / short hash)
     const char* date;     // build date/time
     // Symbol prefix for the emitted image: `rom` gives rom_str/rom_decl/...,

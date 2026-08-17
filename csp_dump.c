@@ -925,6 +925,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     fprintf(f, "// Generated CandySpeak image (%s_*) -- do not edit.\n", px);
     if (meta) {
 	if (meta->src)     fprintf(f, "//   source:  %s\n", meta->src);
+	if (meta->src)     fprintf(f, "// modified:  %s\n", meta->modified);	
 	if (meta->version) fprintf(f, "//   version: %s\n", meta->version);
 	if (meta->date)    fprintf(f, "//   built:   %s\n", meta->date);
     }
