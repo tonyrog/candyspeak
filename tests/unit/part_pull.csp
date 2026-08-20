@@ -1,0 +1,17 @@
+// pullup, pulldown and pwm were in the part enum and in the layout table, but
+// part_from_tstr never mapped their NAMES -- so `D.pullup = 1` parsed, wrote
+// nothing, and read back 0 with no complaint. A part needs the enum, a get/set
+// handler, the name mapping AND a string to be reachable at all.
+#digital D in 5
+#analog A out 3
+#variable Up integer = 0
+#variable Down integer = 0
+#variable Pwm integer = 0
+
+D.pullup = 1
+D.pulldown = 0
+A.pwm = 1
+
+Up = D.pullup
+Down = D.pulldown
+Pwm = A.pwm

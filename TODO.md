@@ -743,10 +743,10 @@ Inte buggar -- saker som byggts men inte setts fungera på järn.
   System objekt
   
 #module Sys
-  #variable NodeName string         = "Node1"
-  #variable NodeID:32 unsigned      = 123
-  #variable NodeIP:32 inet          = 192.168.2.100
-  #constant NodeVersion:32 version  = 1.0.25
+  #param NodeName string         = "Node1"
+  #param NodeID:32 unsigned      = 123
+  #param NodeIP:32 inet          = 192.168.2.100
+  #param NodeVersion:32 version  = 1.0.25
 #endif
 #Sys sys
 

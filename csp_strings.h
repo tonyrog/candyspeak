@@ -31,6 +31,16 @@ extern rochar s_FAILSAFE[9] RODATA;
 #define ros_FAILSAFE ((rostring_t) s_FAILSAFE)
 extern rochar s_name[5] RODATA;
 #define ros_name ((rostring_t) s_name)
+extern rochar s_Sys[4] RODATA;
+#define ros_Sys ((rostring_t) s_Sys)
+extern rochar s_sys[4] RODATA;
+#define ros_sys ((rostring_t) s_sys)
+extern rochar s_Id[3] RODATA;
+#define ros_Id ((rostring_t) s_Id)
+extern rochar s_Name[5] RODATA;
+#define ros_Name ((rostring_t) s_Name)
+extern rochar s_Serial[7] RODATA;
+#define ros_Serial ((rostring_t) s_Serial)
 extern rochar s_err_ok[3] RODATA;
 #define ros_err_ok ((rostring_t) s_err_ok)
 extern rochar s_err_syntax[13] RODATA;
@@ -363,6 +373,8 @@ extern rochar s_STIMP[6] RODATA;
 #define ros_STIMP ((rostring_t) s_STIMP)
 extern rochar s_CHG[4] RODATA;
 #define ros_CHG ((rostring_t) s_CHG)
+extern rochar s_TMO[4] RODATA;
+#define ros_TMO ((rostring_t) s_TMO)
 extern rochar s_LD[3] RODATA;
 #define ros_LD ((rostring_t) s_LD)
 extern rochar s_LDP[4] RODATA;
@@ -429,6 +441,8 @@ extern rochar s_cmd_latch[6] RODATA;
 #define ros_cmd_latch ((rostring_t) s_cmd_latch)
 extern rochar s_cmd_commit[7] RODATA;
 #define ros_cmd_commit ((rostring_t) s_cmd_commit)
+extern rochar s_cmd_settings[9] RODATA;
+#define ros_cmd_settings ((rostring_t) s_cmd_settings)
 extern rochar s_cmd_save[5] RODATA;
 #define ros_cmd_save ((rostring_t) s_cmd_save)
 extern rochar s_cmd_load[5] RODATA;
@@ -439,7 +453,7 @@ extern rochar s_cmd_exit[5] RODATA;
 #define ros_cmd_exit ((rostring_t) s_cmd_exit)
 extern rochar s_h_help[15] RODATA;
 #define ros_h_help ((rostring_t) s_h_help)
-extern rochar s_h_list[62] RODATA;
+extern rochar s_h_list[72] RODATA;
 #define ros_h_list ((rostring_t) s_h_list)
 extern rochar s_h_state[20] RODATA;
 #define ros_h_state ((rostring_t) s_h_state)
@@ -461,6 +475,8 @@ extern rochar s_h_latch[25] RODATA;
 #define ros_h_latch ((rostring_t) s_h_latch)
 extern rochar s_h_commit[22] RODATA;
 #define ros_h_commit ((rostring_t) s_h_commit)
+extern rochar s_h_settings[45] RODATA;
+#define ros_h_settings ((rostring_t) s_h_settings)
 extern rochar s_h_save[22] RODATA;
 #define ros_h_save ((rostring_t) s_h_save)
 extern rochar s_h_load[24] RODATA;

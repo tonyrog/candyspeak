@@ -181,6 +181,16 @@ static inline void* rdvp(const void* p, int rom)
 //       block, csp_states_t), so it is stored, CRC'd, baked and persisted by the
 //       declaration machinery -- and the header loses n_state/crc_state/
 //       ofs_states, the image loses s_states, and state_t is gone.
+//  v13: OP_TMO replaces `timeout(T)` as a call, and fn_timeout is gone from the
+//       builtin table -- which SHIFTS every function index after it. A baked
+//       OP_CALL names its function by index, so an old image would call the one
+//       next door: elapsed() where it meant timeout().
+//  v12: `>` and `>=` are gone from the encoded opcodes (16, 17, 33, 34 are free)
+//       and csp_instr_alu_t.swap says the operands were exchanged to get there.
+//       An old image still has OP_GT at 16 and would decode it as whatever takes
+//       that number next; a new image read by an old firmware would compare with
+//       the operands the wrong way round, silently. Both directions have to be
+//       rejected, which is what the bump does.
 //  v11: csp_instr_alu_t.u -- a spare bit of the ALU word now says the operands
 //       are UNSIGNED, which decides what / % >> < <= > >= compute. "The meaning
 //       of a baked field" exactly: an old image reads back with u == 0 and is
@@ -188,7 +198,43 @@ static inline void* rdvp(const void* p, int rom)
 //       compute every one of those SIGNED with no complaint. Images travel on
 //       their own -- an A/B slot, a FAILSAFE flashed alone -- so that direction
 //       is reachable and has to be rejected rather than run.
-#define ROM_FORMAT_VERSION 11
+#define ROM_FORMAT_VERSION 13
+
+// Format version of the SETTINGS store, which is NOT ROM_FORMAT_VERSION and not
+// EEPROM_VERSION either. It needs its own because it is the one part of the
+// eeprom a new firmware is REQUIRED to still understand: the other two describe
+// things that are discarded on reflash, so bumping them is free. Bump this only
+// when the entry encoding changes, and then either read the older one or drop it
+// and SAY SO. See doc/EEPROM.md.
+#define CSP_SETTINGS_VERSION 1
+
+// RAM held for the settings store. An entry is 8 + strlen(path) bytes -- `Kp`
+// costs 10, `sys.NodeID` 18 -- so 128 is around ten settings on a board and the
+// host gets room to be careless. Boards override it in boards/*.h.
+//
+// It cannot be traded for a bitmask over the leaves, which is the obvious idea.
+// csp_rt_start re-seeds every slot from its declaration, so a rebuild -- one
+// more line typed at the prompt -- wipes the live value before anything could
+// diff it against the source. A mask would say WHICH leaf the operator owns and
+// not WHAT they set. The store is what makes a setting survive that, which is
+// also why csp_settings_apply is called from csp_rt_start and not only at boot.
+#ifndef CSP_SETTINGS_BYTES
+#ifdef ARDUINO
+#define CSP_SETTINGS_BYTES 128
+#else
+#define CSP_SETTINGS_BYTES 1024
+#endif
+#endif
+
+// Longest path an entry may name ("obj.member"). One byte holds the length, but
+// the cap is well under 255 so a corrupt length cannot walk the store off its
+// end before the payload CRC is even consulted.
+#define CSP_SETTINGS_MAX_PATH 63
+
+// Longest STRING value an entry may carry -- a node name, a version tag. Same
+// reason for the cap as the path above: one byte holds the length, and a short
+// bound keeps a corrupt one from walking the store apart.
+#define CSP_SETTINGS_MAX_STR 63
 
 // Free as in beer.
 #define CSP_IMAGE_MAGIC0 'J'
@@ -551,15 +597,53 @@ typedef enum  {
 
 CSP_STATIC_ASSERT(PART_LAST <= (1 << PART_BITS), "too many parts");
 
+// Which parts describe CONFIGURATION rather than state -- the ones a settings
+// entry may carry across a reboot and a reflash (see doc/EEPROM.md). `Led.pin`
+// says how this board is wired; `Led` (PART_VAL) turns the LED on to see which
+// one it is, and only the first is worth keeping.
+//
+// A RANGE, and the assert below is what keeps it one: PIN..PERIOD are contiguous
+// above, so reordering the enum without moving this line would silently start
+// persisting `fired` or a CAN transmit flag.
+#define CSP_PART_IS_CFG(p) (((p) >= PART_PIN) && ((p) <= PART_PERIOD))
+CSP_STATIC_ASSERT(PART_PERIOD - PART_PIN == 7, "config parts no longer contiguous");
+
 // How to reach a leaf's value. Everything lives in the buffer heap.
 // See doc/DESCRIPTORS.md.
+// A leaf either OWNS its storage or is a view INTO someone else's. That is the
+// distinction that decides whether it needs a csp_buf_t at all.
+//
+// A csp_buf_t is 16 bytes -- hp, nbytes, transport, dir, flags, dlc, a 32-bit
+// xref and an owner index. A leaf that owns four bytes nobody looks into needs
+// exactly one of those fields, `hp`, and used to be given all sixteen: measured
+// at 38 bytes of RAM per `#variable` on a mega, of which 16 were this. An owner
+// carries its heap offset in `pos` instead and allocates no buffer.
+//
+// Only a #buffer is ever a view PARENT -- `bind` refuses anything else
+// (csp_parse_variable checks DECL_BUFFER), and a #field lives inside one by
+// construction -- so nothing can be left pointing at a buffer that no longer
+// exists.
 typedef enum {
-    VIEW_SLOT = 0,   // value_t struct stored in its buffer (config+value types)
-    VIEW_HEAP = 1,   // bit-field in a buffer (scalar variables, buffer views)
+    VIEW_SLOT = 0,   // OWNS: a value_t struct at heap offset `pos`
+    VIEW_HEAP = 1,   // VIEW: bit-field at bit `pos` of buffer `buf`
+    VIEW_OWN  = 2,   // OWNS: bit-field of `len`+1 bits at heap offset `pos`
 } view_kind_t;
 
-#define VIEW_F_SIMPLE 0x01   // covers whole buffer, byte aligned, native endian
-#define VIEW_F_GLOBAL 0x02   // buf id is global (not object-offset)
+// SLOT is 0 so "does this leaf own a plain value_t struct" is a test against
+// zero. The two owning kinds differ only in how the bytes are read: SLOT is a
+// whole value_t (config parts packed into it), OWN is a width the declaration
+// gave, which may be narrower than a byte.
+#define VIEW_OWNS(v)  ((v)->kind != VIEW_HEAP)
+
+#define VIEW_F_SIMPLE 0x01   // covers the whole storage, byte aligned, native
+#define VIEW_F_GLOBAL 0x02   // VIEW_HEAP: buf id is global (not object-offset)
+#define VIEW_F_LOCAL  0x02   // VIEW_OWN: a #local -- SINGLE-BUFFERED, both
+			     // directions resolve to the DIN half so a rule
+			     // reads back what an earlier rule in the SAME cycle
+			     // wrote. Shares bit 1 with VIEW_F_GLOBAL because
+			     // `kind` already tells the two apart, and the flags
+			     // field has no third bit to spend. It used to be
+			     // BUF_F_LOCAL on the buffer -- which is gone.
 
 #define VIEW_F_BITS 2
 #define VIEW_LEN_BITS 6      // max length is 64 bits
@@ -575,13 +659,14 @@ typedef enum {
 // `buf` is uint16_t: the same width as the nbuf counter (index_t) that produces
 // it, so a buffer id can no longer silently truncate the way uint8_t did.
 typedef struct {
-    uint8_t kind:2;              // view_kind_t (VIEW_SLOT/VIEW_HEAP)
+    uint8_t kind:2;              // view_kind_t
     uint8_t vt:TYPE_BITS;        // value type (vtype_t 0..11); SLOT reads it from decl
-    uint8_t endian:ENDIAN_BITS;  // VIEW_HEAP: vendian_t (native/little/big)
-    uint8_t flags:VIEW_F_BITS;   // VIEW_HEAP: VIEW_F_*
-    uint8_t len:VIEW_LEN_BITS;   // VIEW_HEAP: number of bits - 1
-    uint16_t pos;                // VIEW_HEAP: start bit in buffer
-    uint16_t buf;                // buffer id (both kinds)    
+    uint8_t endian:ENDIAN_BITS;  // HEAP/OWN: vendian_t (native/little/big)
+    uint8_t flags:VIEW_F_BITS;   // VIEW_F_* -- read according to `kind`
+    uint8_t len:VIEW_LEN_BITS;   // HEAP/OWN: number of bits - 1
+    uint16_t pos;                // HEAP: start bit in buffer
+				 // SLOT/OWN: heap BYTE offset of the storage
+    uint16_t buf;                // VIEW_HEAP: buffer id. An owner has none.
 } csp_view_t;
 
 // csp_buf_t.transport -- what the buffer is bound to on the outside
@@ -623,17 +708,9 @@ typedef struct {
 			   // is what makes `? F.rx` line up. Lives one cycle.
 #define BUF_F_TX     0x08  // a rule asked for a send (F.tx = 1), regardless of
 			   // whether any field changed -- cyclic PDO
-#define BUF_F_LOCAL  0x10  // a #local: SINGLE-BUFFERED. csp_slot forces dir=DIN
-			   // for it, so a read in the same cycle sees the write
-			   // -- which is the whole point of a #local, and cannot
-			   // be had by pointing two views at one place because
-			   // the DIN/DOUT split is a whole-heap offset.
-			   //
-			   // On the BUFFER, not on csp_view_t: the view table is
-			   // the biggest per-program table, and widening its
-			   // flags field would grow every leaf. csp_slot already
-			   // loads this buf entry to read .hp, so the test is
-			   // free of an extra memory access.
+// (BUF_F_LOCAL is gone: a #local owns its storage and has no buffer to carry a
+// flag. It is VIEW_F_LOCAL on the view now -- no extra bit, since VIEW_F_GLOBAL
+// is a VIEW_HEAP meaning and `kind` separates the two.)
 
 #if defined(USE_FIXPOINT) && (USE_FIXPOINT == 1)
 #include "csp_fixpoint.h"
@@ -752,82 +829,106 @@ typedef struct
 
 typedef enum {
     OP_NOP = 0,  // nothing
-    OP_NOT,     // "!"  x=-y == x=0-y
-    OP_BNOT,    // "~"  x=~y =  x=1^y        
-    OP_NEG,     // "-"  x=-y == x=0-y
-    OP_MOV,     // "mov" x=y == x=y
-    OP_CVTIF,   // trunc float => integer
-    OP_CVTFI,   // cast int to float
+    OP_NOT = 1,     // "!"  x=-y == x=0-y
+    OP_BNOT = 2,    // "~"  x=~y =  x=1^y        
+    OP_NEG  = 3,     // "-"  x=-y == x=0-y
+    OP_MOV  = 4,     // "mov" x=y == x=y
+    OP_CVTIF = 5,   // trunc float => integer
+    OP_CVTFI = 6,   // cast int to float
     // node - binary operator
-    OP_ADD,     // "+"
-    OP_SUB,     // "-"
-    OP_MUL,     // "*"
-    OP_DIV,     // "/"
-    OP_REM,     // "%"
-    OP_SLA,     // "<<"
-    OP_SRA,     // ">>"    
-    OP_LT,      // "<"
-    OP_LTE,     // "<="
-    OP_GT,      // ">"
-    OP_GTE,     // ">="
-    OP_EQEQ,    // "=="
-    OP_NEQ,     // "!="
-    OP_BAND,    // "&"
-    OP_BOR,     // "|"
-    OP_BXOR,    // "^"
-    OP_AND,     // "&&"
-    OP_OR,      // "||"
+    OP_ADD   = 7,     // "+"
+    OP_SUB   = 8,     // "-"
+    OP_MUL   = 9,     // "*"
+    OP_DIV   = 10,     // "/"
+    OP_REM   = 11,     // "%"
+    OP_SLA   = 12,     // "<<"
+    OP_SRA   = 13,     // ">>"    
+    OP_LT   = 14,      // "<"
+    OP_LTE   = 15,     // "<="
+    // `>` and `>=` used to be 16 and 17; the compiler mirrors them into
+    // OP_LT/OP_LTE with the operands swapped (see mirror_op / asm_alu), so the
+    // numbers came free. 16 is spent again below; 17 is still free.
+    OP_TMO   = 16,     // timeout(T): x = the timer's `fired` bit
+    // 17 -- FREE
+    OP_EQEQ   = 18,    // "=="
+    OP_NEQ   = 19,     // "!="
+    OP_BAND   = 20,    // "&"
+    OP_BOR   = 21,     // "|"
+    OP_BXOR   = 22,    // "^"
+    OP_AND   = 23,     // "&&"
+    OP_OR   = 24,      // "||"
 
-    OP_FNEG,     // "-"  x=-y == x=0-y
-    OP_FMOV,     // "mov"  x=y
-    OP_FADD,     // "+"
-    OP_FSUB,     // "-"
-    OP_FMUL,     // "*"
-    OP_FDIV,     // "/"
+    OP_FNEG   = 25,     // "-"  x=-y == x=0-y
+    OP_FMOV   = 26,     // "mov"  x=y
+    OP_FADD   = 27,     // "+"
+    OP_FSUB   = 28,     // "-"
+    OP_FMUL   = 29,     // "*"
+    OP_FDIV   = 30,     // "/"
 
-    OP_FLT,      // "<"
-    OP_FLTE,     // "<="
-    OP_FGT,      // ">"
-    OP_FGTE,     // ">="
-    OP_FEQEQ,    // "=="
-    OP_FNEQ,     // "!="    
+    OP_FLT   = 31,      // "<"
+    OP_FLTE  = 32,      // "<="
+    // 33, 34 -- FREE, for the same reason as 16 and 17 above.
+    OP_FEQEQ = 35,     // "=="
+    OP_FNEQ  = 36,     // "!="    
     
-    OP_EQ,      // "="
-    OP_RIMP,    // "<-"    
-    // OP_COMMA,   // ","
-    // rule
-    OP_RULE,    // "?"
-    OP_NEXT,    // "next"
+    OP_EQ    = 37,     // "="
+    OP_RIMP  = 38,     // "<-"    
 
-    OP_ENTER,   // enter object
-    OP_LEAVE,   // leave object
-    OP_NEW,     // #<module> <instance-name>
-    OP_LD,      // load register from memory
-    OP_LDP,     // load register from memory part
-    OP_ST,      // store register to memory
-    OP_STP,     // store register to memory part
-    OP_STIMP,   // store for <- (reactive assign), same as ST but marks rimp
-    OP_CHG,     // r |= dset[ix], check if variable changed
-    OP_LI,      // load signed 16-bit constant
-    OP_LIU,     // load unsigned 16-bit constant (zero extend)
-    OP_LIH,     // load high 16-bit (OR into high bits)
-    OP_ARG,     // load argument from register
-    OP_CALL,    // function call:
-//    OP_EQI,     // compare memory with 8 bit value, result in x
-    OP_STI,     // store immediate value to memory (mirror of EQI)
-    OP_INSTATE, // #in <state> block gate: if reg != state, skip block (nxt)
-    OP_NINSTATE,// #in A B C OR-chain gate: if reg == state, jump INTO block (nxt)
-    OP_SETO,    // point CURRENT at a NAMED object for the next memory access
-    OP_SETOX,   // same, but the object number comes from a register (arrays)
-    OP_AVAIL,   // SENTINEL, not an opcode: the next free number, i.e. how many
-		// opcodes are in use. Printed by print_defines and asserted
-		// against OP_END_MARK below. Keep it last.
+    OP_RULE = 39,    // "?"
+    OP_NEXT = 40,    // "next"
+
+    OP_ENTER = 41,   // enter object
+    OP_LEAVE = 42,   // leave object
+    OP_NEW = 43,     // #<module> <instance-name>
+    OP_LD = 44,      // load register from memory
+    OP_LDP = 45,     // load register from memory part
+    OP_ST = 46,      // store register to memory
+    OP_STP = 47,     // store register to memory part
+    OP_STIMP = 48,  // store for <- (reactive assign), same as ST but marks rimp
+    OP_CHG = 49,     // r |= dset[ix], check if variable changed
+    OP_LI = 50,      // load signed 16-bit constant
+    OP_LIU = 51,     // load unsigned 16-bit constant (zero extend)
+    OP_LIH = 52,     // load high 16-bit (OR into high bits)
+    OP_ARG = 53,     // load argument from register
+    OP_CALL = 54,    // function call:
+    OP_STI = 55,     // store immediate value to memory (mirror of EQI)
+    OP_INSTATE = 56, // #in <state> block gate: if reg != state, skip block(nxt)
+    OP_NINSTATE = 57,// #in A B C OR-chain gate: if reg == state, jump INTO block (nxt)
+    OP_SETO = 58,    // point CURRENT at a NAMED object for the next memory access
+    OP_SETOX = 59,   // same, but the object number comes from a register (arrays)
+    OP_AVAIL = 60,   // SENTINEL, not an opcode: one past the highest number in
+		// use. NOT the count any more -- 17, 33 and 34 are holes where
+		// `>` and `>=` used to be (16 was one until OP_TMO took it), so
+		// 57 opcodes occupy 60 numbers and there are SIX free: those
+		// three plus 60..62.
+		// (63 is OP_END_MARK.) A new opcode should take a hole first.
+		// Printed by print_defines and asserted against OP_END_MARK
+		// below. Keep it last.
     OP_END_MARK = 0x3f
 } opcode_t;
 
 #define CSP_OPCODE_BITS       6
 #define CSP_OPCODE_ARITY_BITS 2 // 0
 CSP_STATIC_ASSERT(OP_AVAIL <= ((1 << CSP_OPCODE_BITS)-1), "too many opcodes");
+
+// NOT OPCODES. These two are what op_table_code returns for `>` and `>=`, and no
+// instruction is ever built from one: process_op mirrors each into OP_LT/OP_LTE
+// with the two operands exchanged and
+// csp_instr_alu_t.swap set, because `a > b` IS `b < a` -- so the runtime needs
+// no cases for them at all and four encodings come free.
+//
+// #define and not enum members, deliberately: putting them in opcode_t widens
+// the enum's range past 63, and `opcode_t op:CSP_OPCODE_BITS` then warns that
+// the field is narrower than its own type -- on every translation unit.
+//
+// ABOVE the 6-bit field, also deliberately. If the mirror is ever missed the
+// value cannot be encoded, and asm_alu refuses instead of truncating into an
+// unrelated opcode. They are absent from op_info[] and op_tok[]: nothing may
+// index a table with one.
+#define OP_GT   64      /* ">"   -> OP_LT,   swapped */
+#define OP_GTE  65      /* ">="  -> OP_LTE,  swapped */
+/* No float pair: mirror_op runs before float_op, so `>` on floats arrives as
+   OP_LT and becomes OP_FLT by the ordinary route. */
 
 // Forward declarations
 struct _csp_rt_t;
@@ -896,18 +997,6 @@ typedef struct {
 extern const op_entry_t tok_table[] RODATA;
 extern const op_entry_t decl_table[] RODATA;
 
-typedef struct PACKED {
-    rostring_t name;   // opcode name (RODATA)
-    uint8_t  tok;      // token that match the op
-    uint8_t arity;     // number of args
-    uint8_t rtype;     // return type
-    uint8_t _res;      // reserved
-    uint16_t argtypes; // instruction argument types
-} op_info_t;
-
-extern const op_info_t op_info[] RODATA;
-
-
 // new instruction format
 // general operations OP_ADD ...
 
@@ -921,12 +1010,25 @@ extern const op_info_t op_info[] RODATA;
 // field can hold, so an unsigned mirror of each would not fit. The word has room
 // -- op(6) + three registers(4) is 18 of 32 -- and an image compiled before this
 // existed reads back with u == 0, which is the signed behaviour it had.
+//
+// swap: the operands were EXCHANGED to get here. `a > b` is emitted as `b < a`,
+// which is why there is no OP_GT: the runtime already computes the answer, and
+// four opcodes buy nothing a swap of two register numbers does not.
+//
+// Nothing reads it at RUN time -- it is a note for the LISTING. To render the
+// source back, both halves have to be undone: exchange the operands AND mirror
+// the operator (`LT y=b z=a` -> `a > b`). Doing only one gives `a < b` or
+// `b > a`, which are different programs. See exprbuf_expr.
+//
+// Only the ordered comparisons ever set it. `==` and `!=` are symmetric, so a
+// swap on them would be a bit that never means anything.
 typedef struct PACKED {
     INSTR_COMMON;
     unsigned x:REG_BITS;
     unsigned y:REG_BITS;
     unsigned z:REG_BITS;
     unsigned u:1;
+    unsigned swap:1;    // y <-> z: `y < z` was written `z > y`
 } csp_instr_alu_t;
 
 // op = ST | LD | STP | LDP?
@@ -1475,6 +1577,9 @@ typedef struct {
     xindex_t save_sx;            // save sx during module parse
     xindex_t sx;                 // state variable being parsed against; inside a
                                  // module it is that module's own State
+    uint8_t no_state;            // #module: do not give it a State of its own.
+                                 // See csp_parse_module -- a data-only namespace
+                                 // has nothing to name a state for.
     index_t mdef;                // module being defined
     csp_pmark_t mod_mark;        // parse mark taken at #module: a failure before
                                  // #end rewinds the whole module, so the lines
@@ -1799,6 +1904,11 @@ typedef struct _csp_rt_t
     csp_buf_t*  buf;              // buffer table (own alloc, sized to estimate)
     index_t    buf_cap;          // buffers the table can hold (csp_estimate.nbuf)
     index_t    nbuf;              // number of buffers allocated
+    uint16_t   hp;                // heap bump cursor, bytes. Held rather than
+				  // derived from buf[nbuf-1]: most leaves take
+				  // heap without taking a buffer now, so the
+				  // buffer table is no longer a record of what
+				  // the heap has handed out.
     // The transaction model is permanent: rules read the committed DIN heap and
     // write the DOUT shadow; csp_commit copies dirty leaves DOUT->DIN. So a cycle
     // never sees its own writes -> sequential and reactive yield the same state.
@@ -1879,6 +1989,13 @@ typedef struct _csp_rt_t
     index_t sys_nd;
     index_t sys_nn;
     index_t sys_strp;
+    // The built-in Sys namespace (csp_sys_module): its module declaration and
+    // its one instance. Held so the listing can leave them out -- /list is meant
+    // to paste back as source, and a built-in cannot be re-declared -- and so
+    // platform code has them without a name lookup. BAD_INDEX when the build
+    // has no Sys (CSP_NO_SYS_MODULE) or a loaded image predates it.
+    index_t sys_mod;
+    index_t sys_obj;
     // How much of the RAM patch eeprom currently holds a copy of, counted from
     // CSP_BASE_ND/CSP_BASE_NN. Set by a successful save (everything in RAM is now
     // in eeprom) and by a successful load (what came back), zeroed by /clear and
@@ -1888,6 +2005,21 @@ typedef struct _csp_rt_t
     // place, because the DECLARATION is still the one eeprom holds.
     index_t ee_nd;
     index_t ee_nn;
+
+    // The SETTINGS store: values for things the firmware already declares -- a
+    // #param trimmed against this motor, a pin moved because this board is wired
+    // differently. Held in RAM in the same wire format eeprom keeps, so /save is
+    // a block write and a load is a block read.
+    //
+    // A separate store from the patch above because it has a separate LIFETIME.
+    // The patch is program text belonging to one firmware and is dropped when
+    // rom_fp moves; a setting belongs to the UNIT and must survive a reflash.
+    // That is also why an entry names its target as CHARACTERS: a reflash
+    // renumbers every declaration, so an index would point somewhere else.
+    // See doc/EEPROM.md.
+    uint8_t  settings[CSP_SETTINGS_BYTES];
+    uint16_t set_used;           // bytes of settings[] in use
+    uint8_t  set_dirty;          // changed since the last save (/settings tag)
 
     csp_pstate_t ps;             // parse state (counts, error, line)
 
@@ -2400,6 +2532,43 @@ extern index_t csp_lookup_decl(csp_rt_t* st, const tstr_t* name);
 extern index_t csp_param_shadow(csp_rt_t* st, index_t di);
 extern index_t csp_param_target(csp_rt_t* st, index_t di);
 
+// One decoded settings entry. The two pointers aim INTO st->settings, so they
+// are valid until the next csp_settings_record -- a caller that keeps one past
+// that is reading whatever moved into its place.
+typedef struct {
+    const char* path;    // "Kp", "Led", "sys.NodeID" -- NOT nul-terminated
+    uint8_t     plen;
+    uint8_t     part;    // csp_part_t
+    uint8_t     vt;      // vtype_t of the value
+    uint8_t     res;     // declared width in bits, for the shape check
+    value_t     val;     // scalar value (vt != V_STRING)
+    const char* str;     // characters (vt == V_STRING), else NULL
+    uint8_t     slen;
+} csp_setting_t;
+
+// Record what an IMMEDIATE write set, so /save can keep it. Rules never reach
+// here: a rule writing a config part is the program doing its job, not someone
+// configuring the unit. Returns -1 when the store is full.
+extern int  csp_settings_record(csp_rt_t* st, xindex_t ix,
+				csp_part_t part, value_t v);
+// Lay the store over the declarations. Called from csp_rt_start, BEFORE
+// csp_setup configures any hardware -- see doc/EEPROM.md.
+extern void csp_settings_apply(csp_rt_t* st);
+// Read entry `n` (0-based). Returns 0 at the end of the store.
+extern int  csp_settings_get(csp_rt_t* st, int n, csp_setting_t* sp);
+// Does this entry's path still resolve in the running program? An orphan is
+// kept and not applied -- the next firmware may reintroduce the name.
+extern int  csp_settings_resolve(csp_rt_t* st, const csp_setting_t* sp,
+				 xindex_t* ixp, index_t* objp);
+extern void csp_settings_clear(csp_rt_t* st);
+#define CSP_SET_ORPHAN  0   // the path names nothing in this firmware
+#define CSP_SET_REFUSED 1   // it does, but the width or type moved
+#define CSP_SET_LIVE    2   // applied
+extern int  csp_settings_status(csp_rt_t* st, const csp_setting_t* sp);
+extern int  csp_settings_covers(csp_rt_t* st, index_t di);
+// In csp_print.c, where the disassembler already needed it.
+extern rostring_t csp_part_name(csp_part_t part);
+
 // backend port (linux/arduino/LPCopen/FreeRTOS)
 extern uint32_t csp_time_ms(void);
 extern unsigned long csp_time_us(void);
@@ -2463,10 +2632,6 @@ extern rostring_t csp_fmt_endian(vendian_t et);
 // ps.err_args). Print an error with csp_print_error(st).
 // Print the current error with %s/%d substituted (light printf, no stdio).
 extern void    csp_print_error(csp_rt_t* st);
-
-extern const char* csp_opcode_name(opcode_t op);
-extern uint8_t csp_opcode_rtype(opcode_t op);
-extern uint8_t csp_opcode_arity(opcode_t op);
 
 extern int csp_opcode_to_tok(opcode_t opcode);
 extern uint8_t csp_opcode_rtype(opcode_t opcode);

@@ -252,11 +252,20 @@ Where the value lands depends on where the param is:
     a ROM-baked param flash cannot be written, so a RAM SHADOW declaration is
                       made instead.  csp_rt_start finds it by NAME and applies
                       it onto the ROM param's slot after setup, so the override
-                      survives every rebuild and rides into EEPROM with no
+                      rides into EEPROM as an ordinary RAM declaration, with no
                       format of its own.
 
-By name, not by index: a reflashed program moves declarations around, and an
-override keyed on position would come down on whatever now sits there.
+By name -- the CHARACTERS, through the string table (name_eq) -- and not by
+comparing the two decls' `name` fields, which are string POSITIONS.  Those never
+match: csp_new_decl calls new_string with no lookup, so the override's "Kp" is a
+second copy of the word at its own position even when the ROM string table
+already holds it.  (add_state and push_str do consult lookup_string first;
+declaration names do not.)
+
+What this does NOT buy is surviving a reflash.  csp_eeprom_load compares
+rom_header.crc_hdr -- counts plus every section CRC -- and drops the entire save
+when it moves, so a patch never reaches a program that has changed at all.  A
+tuned param comes back only on the SAME image.
 
 An overridden param lists ONCE -- as the override, tagged `P` instead of the
 usual F/E/R -- and shows one row in /state.  The two views hide opposite halves

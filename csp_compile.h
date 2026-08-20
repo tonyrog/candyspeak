@@ -27,6 +27,19 @@
 #define ISXDIGIT(c) (ISDIGIT((c)) || ISXUPPER((c)) || ISXLOWER((c)))
 #define ISALPHA(c) (ISUPPER((c)) || ISLOWER((c)))
 
+typedef struct PACKED {
+    rostring_t name;   // opcode name (RODATA)
+    uint8_t arity;     // number of args
+    uint8_t rtype;     // return type
+    uint16_t argtypes; // instruction argument types
+} op_info_t;
+
+extern const op_info_t op_info[] RODATA;
+
+extern const char* csp_opcode_name(opcode_t op);
+extern uint8_t csp_opcode_rtype(opcode_t op);
+extern uint8_t csp_opcode_arity(opcode_t op);
+
 // Compiler-side one-time init (stop-sets + declaration patterns).
 // `blk` is the caller's cursor over the states block being filled; set it to
 // BAD_INDEX before the first name of a statement. See the definition.
@@ -40,6 +53,9 @@ extern uint8_t func_rtype(const csp_func_t* fn, int i, int rom);
 extern index_t lookup_decl_in(csp_rt_t* st, const tstr_t* name, int start, int stop);
 extern int mem_fits(csp_rt_t* st, size_t add);
 extern csp_part_t part_from_tstr(const tstr_t* s);
+// timeout(T) compiles to OP_TMO; the compiler needs the same answer for an
+// immediate `> timeout(T)`, which has no instruction stream to run.
+extern int csp_timer_fired(csp_rt_t* st, index_t ix);
 
 extern void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp, csp_part_t part, dio_t dir);
 extern void csp_dio_set_part(csp_rt_t* st, index_t ix, value_t v, csp_part_t part, dio_t dir);

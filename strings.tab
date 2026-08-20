@@ -24,6 +24,11 @@ INIT INIT
 NORMAL NORMAL
 FAILSAFE FAILSAFE
 name name
+Sys Sys
+sys sys
+Id Id
+Name Name
+Serial Serial
 err_ok ok
 err_syntax syntax error
 err_string_space string space exhausted
@@ -190,6 +195,7 @@ ST ST
 STP STP
 STIMP STIMP
 CHG CHG
+TMO TMO
 LD LD
 LDP LDP
 CALL CALL
@@ -223,12 +229,13 @@ cmd_reset reset
 cmd_clear clear
 cmd_latch latch
 cmd_commit commit
+cmd_settings settings
 cmd_save save
 cmd_load load
 cmd_quit quit
 cmd_exit exit
 h_help Show this help
-h_list List rules (F=flash E=eeprom-backed R=ram P=patches a #param)
+h_list List rules (F=flash E=eeprom-backed R=ram P=patches a #param S=setting)
 h_state Show current values
 h_memory Show code/RAM usage
 h_images List the images linked into this firmware
@@ -239,6 +246,7 @@ h_reset Reset to initial values
 h_clear Drop RAM patches (keep ROM)
 h_latch on or off, device output
 h_commit Commit pending values
+h_settings Show stored settings (params and pin config)
 h_save Save state to storage
 h_load Load state from storage
 h_quit Exit interactive mode

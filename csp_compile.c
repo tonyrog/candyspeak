@@ -36,6 +36,7 @@
 // not exist becomes a LINK ERROR instead of a jump into unscanned pattern
 // tables, which is exactly how ./csp-exec used to segfault on a source file.
 #if !defined(CSP_EXEC_ONLY)
+
 #ifdef DEBUG
 #include "csp_dump.h"
 #include <stdio.h>
@@ -60,6 +61,111 @@ void print_rentry(csp_rt_t* st, char* name, rentry_t* rp)
     DBG("}");
 }
 #endif
+
+// The operator stack's marker encoding lives in csp_compile.h, which this file
+// already includes. A second copy sat here and went stale the moment a second
+// marker kind (array subscripts) moved the tag into the low byte -- nothing in
+// this file uses them, and the duplicate only compiled because both definitions
+// happened to agree.
+
+#endif /* !CSP_EXEC_ONLY -- reopened after the accessors below */
+
+// opcode => opcode type info
+//
+// OUTSIDE the exec-only guard, because it is a NAME TABLE and not compiler
+// logic: csp_dump.c's disassembler reads it, and csp_dump.c is a host file that
+// an exec-only HOST build still links (`make exec`, and `make rom` through
+// ROM_TIER). Guarding it left those two with undefined csp_opcode_name /
+// csp_opcode_arity.
+//
+// It costs a board nothing. csp_dump.c is not in the Arduino build at all, so
+// nothing there references this, and --gc-sections drops an unreferenced RODATA
+// array -- the guard was never what kept it off the target. (Same lesson as the
+// weak rom_* symbols: a section the linker can see is unused is cheaper than an
+// ifdef that has to be right.)
+//
+// No rows for `>`/`>=`: they are mirrored before anything indexes this table,
+// and their enum values sit above it on purpose -- a designated initialiser
+// for one would silently grow the array to 68 entries.
+//
+// The listing on a board does NOT come through here: csp_print.c renders a rule
+// from op_tok[] and the token table, which is why it needs no opcode names.
+const op_info_t op_info[] RODATA = {
+    [OP_ADD] = {ros_ADD,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_SUB] = {ros_SUB,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_MUL] = {ros_MUL,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_DIV] = {ros_DIV,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_REM] = {ros_REM,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_SLA] = {ros_SLA,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_SRA] = {ros_SRA,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_BAND] = {ros_BAND,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_BOR] = {ros_BOR,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_BXOR] = {ros_BXOR,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_AND] = {ros_AND,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_OR] = {ros_OR,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_EQ] = {ros_ASSIGN,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_LT] = {ros_OLT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_LTE] = {ros_OLTE,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_EQEQ] = {ros_OEQEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_NEQ] = {ros_ONEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
+    [OP_BNOT] = {ros_BNOT,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
+    [OP_NEG] = {ros_NEG,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
+    [OP_MOV] = {ros_OMOV,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
+    [OP_NOT] = {ros_NOT,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
+    [OP_CVTIF] = {ros_CVTIF,1,V_FLOAT,MAKE_TYPE1(V_INTEGER)},
+    [OP_CVTFI] = {ros_CVTFI,1,V_INTEGER,MAKE_TYPE1(V_FLOAT)},
+    [OP_FNEG] = {ros_FNEG,1,V_FLOAT,MAKE_TYPE1(V_FLOAT)},
+    [OP_FMOV] = {ros_FMOV,1,V_FLOAT,MAKE_TYPE1(V_FLOAT)},
+    [OP_FADD] = {ros_FADD,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FSUB] = {ros_FSUB,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FMUL] = {ros_FMUL,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FDIV] = {ros_FDIV,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FLT] = {ros_FLT,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FLTE] = {ros_FLTE,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FEQEQ] = {ros_FEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_FNEQ] = {ros_FNEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
+    [OP_ENTER] = {ros_ENTER,3,V_VOID,MAKE_TYPE0()},
+    [OP_LEAVE] = {ros_LEAVE,3,V_VOID,MAKE_TYPE0()},
+    [OP_NEW]   = {ros_NEW,3,V_VOID,MAKE_TYPE0()},
+    [OP_LI]    = {ros_LI,3,V_VOID,MAKE_TYPE0()},
+    [OP_LIU]   = {ros_LIU,3,V_VOID,MAKE_TYPE0()},
+    [OP_LIH]   = {ros_LIH,3,V_VOID,MAKE_TYPE0()},
+    [OP_ARG]   = {ros_ARG,3,V_VOID,MAKE_TYPE0()},
+    [OP_ST]    = {ros_ST,3,V_VOID,MAKE_TYPE0()},
+    [OP_STP]   = {ros_STP,3,V_VOID,MAKE_TYPE0()},
+    [OP_STIMP] = {ros_STIMP,3,V_VOID,MAKE_TYPE0()},
+    [OP_TMO]   = {ros_TMO,3,V_VOID,MAKE_TYPE0()},
+    [OP_CHG]   = {ros_CHG,3,V_VOID,MAKE_TYPE0()},
+    [OP_STI]   = {ros_STI,3,V_VOID,MAKE_TYPE0()},
+    [OP_INSTATE] = {ros_INSTATE,3,V_VOID,MAKE_TYPE0()},
+    [OP_NINSTATE] = {ros_NINSTATE,3,V_VOID,MAKE_TYPE0()},
+    [OP_SETO] = {ros_SETO,3,V_VOID,MAKE_TYPE0()},
+    [OP_SETOX] = {ros_SETOX,3,V_VOID,MAKE_TYPE0()},
+    [OP_LD]    = {ros_LD,3,V_VOID,MAKE_TYPE0()},
+    [OP_LDP]   = {ros_LDP,3,V_VOID,MAKE_TYPE0()},
+    [OP_CALL]  = {ros_CALL,3,V_VOID,MAKE_TYPE0()},
+    [OP_RULE]  = {ros_RULE,3,V_VOID,MAKE_TYPE0()},
+    [OP_NEXT]  = {ros_NEXT,3,V_VOID,MAKE_TYPE0()},
+    [OP_NOP]   = {ros_NOP,3,V_VOID,MAKE_TYPE0()},
+};
+
+uint8_t csp_opcode_rtype(opcode_t op)
+{
+    return ro_byte(&op_info[op].rtype);
+}
+
+uint8_t csp_opcode_arity(opcode_t op)
+{
+    return ro_byte(&op_info[op].arity);
+}
+
+const rochar* csp_opcode_name(opcode_t op)
+{
+    return (rochar*) ro_ptr(&op_info[op].name);
+}
+
+#if !defined(CSP_EXEC_ONLY)   /* the compiler proper resumes here */
+
 
 NOINLINE static csp_instr_t* alloc_instr_ptr(csp_rt_t* st,int* pos,opcode_t op)
 {
@@ -374,14 +480,23 @@ static int asm_ARG(csp_rt_t* st, reg_t x, int16_t i)
 }
 
 NOINLINE static bool_t asm_alu(csp_rt_t* st, opcode_t op,
-			       reg_t x, reg_t y, reg_t z, int uns)
+			       reg_t x, reg_t y, reg_t z, int uns, int swap)
 {
-    csp_instr_t* ip = alloc_instr_ptr(st, NULL, op);
+    csp_instr_t* ip;
+    // OP_GT and friends live above the 6-bit field and must have been mirrored
+    // by now (see mirror_op). Encoding one would truncate it into an unrelated
+    // opcode -- 64 becomes OP_NOP -- and the rule would quietly compute nothing.
+    if (op >= OP_AVAIL) {
+	csp_set_error(st, ERR_SYNTAX);
+	return 0;
+    }
+    ip = alloc_instr_ptr(st, NULL, op);
     if (ip != NULL) {
 	ip->a.x = x;
 	ip->a.y = y;
 	ip->a.z = z;
 	ip->a.u = (uns != 0);
+	ip->a.swap = (swap != 0);
 	return 1;
     }
     return 0;
@@ -434,14 +549,14 @@ NOINLINE static bool_t asm_NEW(csp_rt_t* st, unsigned ent, index_t obj)
 }
 
 static bool_t asm_bop(csp_rt_t* st, opcode_t op, index_t x ,index_t y, index_t z,
-		      int uns)
+		      int uns, int swap)
 {
-    return asm_alu(st, op, x, y, z, uns);
+    return asm_alu(st, op, x, y, z, uns, swap);
 }
 
 static bool_t asm_uop(csp_rt_t* st, opcode_t op, index_t x, index_t y)
 {
-    return asm_alu(st, op, x, y, 0, 0);
+    return asm_alu(st, op, x, y, 0, 0, 0);
 }
 
 static bool_t asm_CVTIF(csp_rt_t* st, index_t x, index_t y)
@@ -461,7 +576,7 @@ static bool_t asm_MOV(csp_rt_t* st, reg_t x, reg_t y)
 
 static bool_t asm_AND(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
 {
-    return asm_bop(st, OP_AND, x, y, z, 0);
+    return asm_bop(st, OP_AND, x, y, z, 0, 0);
 }
 
 #if 0
@@ -470,11 +585,11 @@ static bool_t asm_AND(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
 // these register-form compares again.
 static bool_t asm_EQEQ(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
 {
-    return asm_bop(st, OP_EQEQ, x, y, z, 0);
+    return asm_bop(st, OP_EQEQ, x, y, z, 0, 0);
 }
 static bool_t asm_OR(csp_rt_t* st, reg_t x, reg_t y, reg_t z)
 {
-    return asm_bop(st, OP_OR, x, y, z, 0);
+    return asm_bop(st, OP_OR, x, y, z, 0, 0);
 }
 NOINLINE static bool_t asm_NOP(csp_rt_t* st)
 {
@@ -497,6 +612,7 @@ NOINLINE csp_part_t part_from_tstr(const tstr_t* s)
 	if (ro_memcmp(s->ptr, s_dir, 3) == 0)    return PART_DIR;
 	if (ro_memcmp(s->ptr, s_dlc, 3) == 0)    return PART_DLC;
 	if (ro_memcmp(s->ptr, s_len, 3) == 0)    return PART_LEN;
+	if (ro_memcmp(s->ptr, s_pwm, 3) == 0)    return PART_PWM;
 	break;
     case 4:
 	if (ro_memcmp(s->ptr, s_port, 4) == 0)   return PART_PORT;
@@ -508,11 +624,34 @@ NOINLINE csp_part_t part_from_tstr(const tstr_t* s)
     case 6:
 	if (ro_memcmp(s->ptr, s_endian, 6) == 0) return PART_ENDIAN;
 	if (ro_memcmp(s->ptr, s_period, 6) == 0) return PART_PERIOD;
+	if (ro_memcmp(s->ptr, s_pullup, 6) == 0) return PART_PULLUP;
+	break;
+    case 8:
+	if (ro_memcmp(s->ptr, s_pulldown, 8) == 0) return PART_PULLDOWN;
 	break;
     default:
 	break;
     }
     return PART_LAST;
+}
+
+// The part a token after a `.` names.
+//
+// Not every part name arrives as a WORD. pullup, pulldown and pwm are also
+// DECLARATION OPTIONS (`#digital B in 2 pullup`), so the tokenizer hands them
+// back as keywords -- and the `.part` branches, which all tested for WORD, never
+// looked at them. `D.pullup = 1` parsed, wrote nothing and read back 0 with no
+// complaint. endian is not an option keyword, which is why it always worked and
+// hid the shape of the bug.
+NOINLINE csp_part_t part_from_token(const token_t* t)
+{
+    switch (t->t) {
+    case T_PULLUP:   return PART_PULLUP;
+    case T_PULLDOWN: return PART_PULLDOWN;
+    case T_PWM:      return PART_PWM;
+    case WORD:       return part_from_tstr(&t->v.str);
+    default:         return PART_LAST;
+    }
 }
 
 
@@ -809,8 +948,11 @@ next:
 		}
 		return -1; // fixme set error code
 	    }
+	    // A keyword carries its TEXT too. It costs nothing (tokval_t is a
+	    // union and a keyword has no value to lose) and it is what lets
+	    // csp_scan_line turn one back into a WORD after a dot -- see there.
 	    if ((i = find_tok_entry(name,len)) >= 0)
-		TOK(op_table_tok(i));
+		SYM(op_table_tok(i), name, len);
 	    SYM(WORD, name, len);
 	}
 	return -1;
@@ -916,6 +1058,21 @@ NOINLINE int csp_scan_line(csp_rt_t* st, char* str, token_t* tv, size_t* num_tok
 	    *num_toks = i;
 	    return str-str0;
 	}
+	// pullup, pulldown and pwm are DECLARATION OPTIONS (`#digital B in 2
+	// pullup`), so the tokenizer hands them back as keywords -- and every
+	// `.part` path, in the expression parser and in the grammar patterns
+	// alike, is written against WORD. `D.pullup = 1` therefore parsed as a
+	// rule, wrote nothing and read back 0 with no complaint.
+	//
+	// Retagged HERE rather than fixed in each consumer: after a dot, an
+	// option keyword can only be a part name -- there is no production where
+	// `.` is followed by one meaning anything else -- so one rule at the
+	// scanner serves pmatch and the expression parser both. endian is not an
+	// option keyword, which is why it always worked and hid the shape of it.
+	if ((i > 0) && (tv[i-1].t == DOT) &&
+	    ((tv[i].t == T_PULLUP) || (tv[i].t == T_PULLDOWN) ||
+	     (tv[i].t == T_PWM)))
+	    tv[i].t = WORD;
 	i++;
     }
     csp_set_error(st, ERR_TOO_MANY_TOKENS);
@@ -1421,6 +1578,11 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
 	    else
 		csp_set_value(st, lx, rhs.val);
 	    ctx_leave(st, &sv);
+	    // Only THIS branch records. The compiled path below emits a store for
+	    // a rule to run, and a rule writing a config part is the program doing
+	    // its job -- not someone configuring the unit. csp_settings_record
+	    // ignores everything that is neither a config part nor a #param.
+	    csp_settings_record(st, lhs.ix, lhs.part, rhs.val);
 	}
     }
     else { // Generate store instruction
@@ -1465,7 +1627,27 @@ NOINLINE static vtype_t unsigned_rtype(opcode_t op, vtype_t rt)
     }
 }
 
-// Get float version of arithmetic opcode (or same if no float version)
+// `a > b` is `b < a`. Turn the one into the other, in place, and say whether it
+// happened -- the caller then has to exchange the two operands to match.
+//
+// The whole reason `>` and `>=` are not opcodes: the runtime already computes
+// the answer with the operands the other way round, so four encodings, four
+// eval_op cases and four op_info rows bought nothing that swapping two register
+// numbers does not. See csp_instr_alu_t.swap.
+NOINLINE static int mirror_op(int* op)
+{
+    // An if-chain, not a switch: OP_GT and OP_GTE are #defines above the
+    // opcode_t range (see csp.h), and -Wswitch objects to a case label that is
+    // not a member of the enum being switched on.
+    if (*op == OP_GT)  { *op = OP_LT;  return 1; }
+    if (*op == OP_GTE) { *op = OP_LTE; return 1; }
+    return 0;
+}
+
+// Get float version of arithmetic opcode (or same if no float version).
+// No `>`/`>=` rows: mirror_op runs FIRST and has already turned them into
+// OP_LT/OP_LTE, so the float form needed here is OP_FLT/OP_FLTE -- which is
+// also why there is no float pseudo-opcode to invent.
 NOINLINE static opcode_t float_op(opcode_t op)
 {
     switch(op) {
@@ -1477,8 +1659,6 @@ NOINLINE static opcode_t float_op(opcode_t op)
     case OP_MOV: return OP_FMOV;
     case OP_LT:  return OP_FLT;
     case OP_LTE: return OP_FLTE;
-    case OP_GT:  return OP_FGT;
-    case OP_GTE: return OP_FGTE;
     case OP_EQEQ: return OP_FEQEQ;
     case OP_NEQ: return OP_FNEQ;
     default: return op;
@@ -1524,6 +1704,9 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
     opcode_t op;
     vtype_t rt;
     int uns = 0;                 // operands are unsigned (see csp_instr_alu_t.u)
+    int swapped = 0;             // `>` was mirrored (see csp_instr_alu_t.swap)
+    int iop;                     // op before the enum narrowing -- op_table_code
+				 // may hand back OP_GT, which is not an opcode_t
     int arity = op_table_arity(tok);
 
     // An operator with nothing under it. Reached whenever the constant folder is
@@ -1561,14 +1744,32 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 	    vtype_t bt = b->vt;
 
 	    // Type coerce: promote to float if either operand is float
+	    // Mirror `>`/`>=` FIRST, before the float form is chosen and before
+	    // anything looks at the operands: everything downstream -- float_op,
+	    // the constant folder, the register loads, csp_opcode_rtype, the emit
+	    // -- then sees a plain LT/LTE and needs no special case. Folding
+	    // especially: eval2 would otherwise be handed an opcode the runtime
+	    // has no arm for, and `3 > 5` would fold to whatever the default arm
+	    // left behind.
+	    //
+	    // The CONTENTS are exchanged, not the pointers: the result has to land
+	    // back in *a, which is rstack[ep-2], and the caller's ep-- depends on
+	    // that. Exchanging registers is also why this reorders nothing that
+	    // matters -- both operands are already evaluated by the time we are
+	    // here, so no side effect moves.
+	    iop = op_table_code(tok);
+	    swapped = mirror_op(&iop);
+	    if (swapped) {
+		rentry_t t = *a; *a = *b; *b = t;
+	    }
 	    if (at == V_FLOAT || bt == V_FLOAT) {
 		if ((at == V_INTEGER) && !coerce_to_float(st, a))
 		    return PARSE_ERROR;
 		if ((bt == V_INTEGER) && !coerce_to_float(st, b))
 		    return PARSE_ERROR;
-		op = float_op(op_table_code(tok));
+		op = float_op((opcode_t)iop);
 	    } else {
-		op = op_table_code(tok);
+		op = (opcode_t)iop;
 		// C's rule: one unsigned operand makes the whole operation
 		// unsigned. `Pi % 10` has a plain INT literal on the right and
 		// still has to divide unsigned.
@@ -1605,7 +1806,7 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 		if (a->L && b->L) {
 		    dst = alloc_reg(st);
 		    if (st->cs.ap != NULL) {
-			if (!asm_bop(st, op, dst, a->reg, b->reg, uns))
+			if (!asm_bop(st, op, dst, a->reg, b->reg, uns, swapped))
 			    return PARSE_ERROR;
 			free_reg(st, a->reg);
 			if (a->reg != b->reg)
@@ -1870,11 +2071,53 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
     value_t dval = {.u = 0};   // result value when folded; 0 keeps it defined
     int imm = 0;
 
+    // timeout(T) is an INSTRUCTION, not a call. The generic path below costs
+    // three -- an OP_LI to materialise the timer's index, an OP_ARG to move it
+    // into an argument register, and the OP_CALL -- and the callee then reads a
+    // single bit out of the timer's slot. OP_TMO carries the index in the
+    // instruction word and does it in one.
+    //
+    // Intercepted HERE, before the argument loop: past this point the OP_ARG
+    // has already been emitted and there is nothing left to save.
+    //
+    // By NAME, and BEFORE csp_match_func: the builtin table no longer has a
+    // `timeout` row at all, so the lookup would fail with "function does not
+    // exist" before anything got the chance to special-case it. Matching on the
+    // characters is also what keeps this from going stale -- removing the row
+    // shifted every function index after it.
+    //
+    // A user function may not shadow it: the name resolves to the instruction
+    // whatever csp_set_ufuncs was handed, which is the same rule every other
+    // built-in operator follows.
+    if ((arity == 1) &&
+	(word->v.str.len == 7) &&
+	(ro_memcmp(word->v.str.ptr, s_timeout, 7) == 0)) {
+	rentry_t arg = rarg[0];
+	if (arg.vt != V_TIMER) {
+	    j = 0;
+	    goto type_mismatch;
+	}
+	ep -= arity;
+	if (!st->cs.ap) {
+	    // Immediate `> timeout(T)`: no instruction stream to run it in, so
+	    // ask the runtime directly -- the same answer OP_TMO would give.
+	    value_t v;
+	    v.i = st->started ? csp_timer_fired(st, XIDX(arg.ix)) : 0;
+	    return push_imm(st, rstack, ep, V_INTEGER, v);
+	}
+	dst = alloc_reg(st);
+	// asm_mem lays down the OP_SETO when the timer names an object, which
+	// is the same binding the call path did through call_obj.
+	if (!asm_mem(st, OP_TMO, dst, arg.ix))
+	    return -1;
+	return push_reg(rstack, ep, dst, V_INTEGER, dval, 0);
+    }
+
     if ((func = csp_match_func(st, &word->v.str, arity,
 			       rarg, &is_user, &func_idx)) == NULL)
 	return -1;
     from = is_user ? st->ufuncs_rom : BUILTIN_ROM;
-    // FIXME: handle, changed(x), timeout(t) with ops
+
     n = arity;
     // A V_NUMBER parameter is NOT coerced -- the argument keeps its own
     // representation and avt tells the callee which it got. With more than one
@@ -2306,9 +2549,9 @@ next:
 	    }
 
 	    // <var> '.' <part>  -- config part read (obj.field handled above)
-	    if ((i+1 < n) && (tv[i].t == DOT) && (tv[i+1].t == WORD) &&
+	    if ((i+1 < n) && (tv[i].t == DOT) &&
 		(decl(st,INDEX(ix),type) != DECL_OBJECT)) {
-		csp_part_t pt = part_from_tstr(&tv[i+1].v.str);
+		csp_part_t pt = part_from_token(&tv[i+1]);
 		if (pt != PART_LAST) {
 		    i += 2;
 		    // '=' / '<-' after the part -> assignment target (STP), else
@@ -2487,14 +2730,23 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
     csp_pstate_save(st, &st->cs.mod_mark);
     if ((ix = csp_new_udecl(st,&d.name,DECL_MODULE)) == BAD_INDEX)
 	return -1;
-    {
-	// create a local state variable (if states are supported)
-	// maybe only if #states are defined in module context?
+    st->cs.save_sx = st->cs.sx;
+    // A module gets its own State so that a state named inside it belongs to it
+    // and numbers from its own base. A DATA-ONLY module -- a namespace, no
+    // #states and no #in -- never reads it, and pays a whole leaf for it (22
+    // bytes of RAM per instance after the view rework, and one more declaration
+    // in every image).
+    //
+    // cs.no_state suppresses it. cs.sx is then left pointing at the ENCLOSING
+    // State, which is the right fallback: a module with no states of its own has
+    // nothing else it could mean. Only the built-in namespace sets this today --
+    // deciding it automatically means knowing, at `#module`, whether the body
+    // that has not been read yet uses states.
+    if (!st->cs.no_state) {
 	RO_TSTR(State, ros_State);
-	index_t ix;
-	st->cs.save_sx = st->cs.sx;
-	ix = csp_new_decl(st,&State,DECL_VARIABLE,1);
-	st->cs.sx = MAKE_XINDEX(XOBJ_CURRENT, XIDX(ix));
+	index_t sx;
+	sx = csp_new_decl(st,&State,DECL_VARIABLE,1);
+	st->cs.sx = MAKE_XINDEX(XOBJ_CURRENT, XIDX(sx));
     }
 
     st->cs.mdef = ix;  // current module being defined
@@ -3022,6 +3274,11 @@ NOINLINE static void set_param_value(csp_rt_t* st, index_t di, value_t v)
 	return;
     csp_dio_slots(st, MAKE_INDEX(0, di), &iptr, &optr);
     *iptr = *optr = v;
+    // `#param Kp = 9` sets a param exactly as `> Kp = 9` does, so it records the
+    // same way. Reached only by a RE-declaration -- the declaration that creates
+    // a param goes through csp_new_udecl and never comes here -- so a program's
+    // own `#param` lines do not fill the store with their own defaults.
+    csp_settings_record(st, MAKE_XINDEX(XOBJ_GLOBAL, di), PART_VAL, v);
 }
 
 // `#param` and `#constant` share this. A param is the same declaration with the

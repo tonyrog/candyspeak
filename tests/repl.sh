@@ -12,6 +12,11 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 D=tmp/repl
 mkdir -p "$D"
+# Start every run from empty eeproms. They are NOT removed -- truncated -- but a
+# db left holding the previous run's patch makes a case pass or fail on what the
+# run before it did. It surfaced as a settings test seeing entries from a module
+# that had since been renamed; any case that saves has the same exposure.
+for f in "$D"/*.db; do [ -e "$f" ] && : > "$f"; done
 
 pass=0; fail=0
 
@@ -504,8 +509,14 @@ Lv = A.len ? 1
 Le = Empty.len ? 1
 Ln = N.len ? 1
 EOF
-got=$(./csp -c 4 -s /dev/stdout "$D/str.csp" 2>&1 | tail -1 |
-	  grep -o '"\(Same\|Cross\|Diff\|Lc\|Lv\|Le\|Ln\)",[0-9]*' | tr '\n' ' ')
+# The LAST SEVEN matches, not the last LINE. `]}.` is appended with no newline
+# in front of it, so it used to share the line with the variables -- until a
+# program had an object to dump, which put it on a line of its own and left
+# tail -1 with nothing but the bracket. Every node has one now (the built-in
+# Sys), so this reads the values wherever the closing bracket lands.
+got=$(./csp -c 4 -s /dev/stdout "$D/str.csp" 2>&1 |
+	  grep -o '"\(Same\|Cross\|Diff\|Lc\|Lv\|Le\|Ln\)",[0-9]*' |
+	  tail -7 | tr '\n' ' ')
 ck "string == compares positions, .len reads the length byte" \
 '"Same",1 "Cross",1 "Diff",0 "Lc",6 "Lv",3 "Le",0 "Ln",0 ' "$got"
 
@@ -521,8 +532,11 @@ if ./csp -n -C -O "$D/eo_rom.c" "$D/eo.csp" >/dev/null 2>&1 &&
        csp_linux.c csp_rt.c csp_repl.c csp_compile.c csp_tok.c csp_dump.c \
        csp_eeprom.c csp_parse.c csp_print.c csp_strings.c "$D/eo_rom.c" -o "$D/csp_exec" \
        >/dev/null 2>&1; then
-    got=$("$D/csp_exec" -c 6 --no-eeprom -s /dev/stdout 2>&1 | tail -1 |
-	      grep -o '"State",[0-9]*\|"N",[0-9]*' | tr '\n' ' ')
+    # Last two matches, not the last LINE -- see the note on the string case
+    # above: `]}.` moved onto a line of its own once every program had an object
+    # to dump.
+    got=$("$D/csp_exec" -c 6 --no-eeprom -s /dev/stdout 2>&1 |
+	      grep -o '"State",[0-9]*\|"N",[0-9]*' | tail -2 | tr '\n' ' ')
     ck "an exec-only build runs its ROM" '"State",1 "N",2 ' "$got"
 else
     echo "  FAIL exec-only build did not link"; fail=$((fail+1))
@@ -992,10 +1006,15 @@ if build_rom "$D/pinit.csp" "$D/pinit_fw"; then
     # TWO /state, and the second one is the answer: the INIT rule runs in cycle
     # 0 but its write sits in the DOUT shadow until the commit at the end of it,
     # so a /state issued while State is still INIT reads the DECLARED value.
+    # The remaining count is dropped. /state prints a timer as period/remaining,
+    # and remaining depends on how much WALL CLOCK passed between the two /state
+    # lines -- which under a sanitized build is enough to tick. What this case is
+    # about is the PERIOD: 250 is the saved setting, 500 is what the source says.
     got=$(printf '/state\n/state\n/quit\n' | repl "$D/pinit_fw" "$D/pi2.db" |
-	      sed -n '/^Tick\|^Pt/p' | tail -2 | tr -s ' ')
+	      sed -n '/^Tick\|^Pt/p' | tail -2 | tr -s ' ' |
+	      sed 's#\(timer [0-9]*\)/[0-9]*#\1#')
     ck "a saved param reaches the timer period and the variable" \
-       'Tick running timer 250/250
+       'Tick running timer 250
 Pt = 42' "$got"
 else
     echo "  FAIL param-init ROM firmware did not build"; fail=$((fail+1))
@@ -1006,6 +1025,252 @@ fi
 got=$(printf '#variable Q = Zork\n/quit\n' | repl ./csp "$D/pi3.db")
 ck "an undeclared name in an initialiser is refused" \
    'Error: variable Zork is not declared' "$got"
+
+echo "settings:"
+
+# A setting is a value for something the firmware ALREADY declares, kept in its
+# own eeprom store so it outlives a reflash. The patch cannot do that job: it is
+# fingerprinted against rom_header.crc_hdr and dropped the moment the program
+# changes, which is right for program text and wrong for a calibration.
+cat > "$D/set1.csp" <<'EOF'
+#param Kp:16 = 5
+#digital Led out 13
+#timer T 500
+#variable Out = 0
+Out = Kp * 2 ? 1
+EOF
+# The same program with one rule and one declaration added: a DIFFERENT firmware
+# as far as the fingerprint is concerned, which is the point.
+cat > "$D/set2.csp" <<'EOF'
+#param Kp:16 = 5
+#digital Led out 13
+#timer T 500
+#variable Out = 0
+#variable Other = 0
+Out = Kp * 2 ? 1
+Other = Other + 1 ? 1
+EOF
+# Kp gone entirely -- an orphan entry.
+cat > "$D/set3.csp" <<'EOF'
+#digital Led out 13
+#variable Out = 0
+EOF
+# Kp still there but widened: the shape check must refuse the stored value
+# rather than drop a 16-bit tuning into a rule compiled for 32.
+cat > "$D/set4.csp" <<'EOF'
+#param Kp:32 = 5
+#digital Led out 13
+EOF
+
+if build_rom "$D/set1.csp" "$D/set_fw1" &&
+   build_rom "$D/set2.csp" "$D/set_fw2" &&
+   build_rom "$D/set3.csp" "$D/set_fw3" &&
+   build_rom "$D/set4.csp" "$D/set_fw4"; then
+
+    # An immediate write records; /save writes the store.
+    got=$(printf '> Kp = 9\n> Led.pin = 7\n> T.period = 900\n/settings\n/quit\n' |
+	      repl "$D/set_fw1" "$D/s1.db")
+    ck "an immediate records a setting" '9
+7
+900
+Kp = 9
+Led.pin = 7
+T.period = 900
+30 of 1024 bytes, UNSAVED' "$got"
+
+    # Applied in csp_rt_start, BEFORE csp_setup -- so a re-pinned output is
+    # never configured on the pin the source named, not even for one cycle.
+    printf '> Kp = 9\n> Led.pin = 7\n> T.period = 900\n/save\n/quit\n' |
+	repl "$D/set_fw1" "$D/s2.db" >/dev/null 2>&1
+    got=$(printf '> Kp\n> Led.pin\n> T.period\n/quit\n' |
+	      repl "$D/set_fw1" "$D/s2.db" | grep -v '^Restored')
+    ck "settings come back after a restart" '9
+7
+900' "$got"
+
+    # The whole reason for a store of its own.
+    got=$(printf '> Kp\n> Led.pin\n/quit\n' | repl "$D/set_fw2" "$D/s2.db" |
+	      grep -v '^Restored')
+    ck "settings survive a reflash that drops the patch" '9
+7' "$got"
+
+    # /list shows what the SOURCE says, so a line the store overrides has to say
+    # so -- otherwise it prints a pin the unit is not running.
+    got=$(printf '/list\n/quit\n' | repl "$D/set_fw1" "$D/s2.db" |
+	      grep -v '^Restored' | sed -n '/^#digital Led/p;/^#param Kp/p')
+    ck "an overridden declaration lists tagged S" '#param Kp:16 integer = 5  // S
+#digital Led out 0:13  // S' "$got"
+
+    # ...and /state has the live value, which is the number that matters.
+    got=$(printf '/state\n/quit\n' | repl "$D/set_fw1" "$D/s2.db" |
+	      sed -n '/^Led/p' | tr -s ' ')
+    ck "/state shows the applied pin" 'Led out digital 0:7 = 0' "$got"
+
+    # Kept, not applied, and SAID. Dropping it would lose a calibration the next
+    # firmware may well want back; hiding it is how a store stops being trusted.
+    got=$(printf '/settings\n/quit\n' | repl "$D/set_fw3" "$D/s2.db" |
+	      grep -v '^Restored' | sed -n '/^Kp/p')
+    ck "a vanished name becomes a visible orphan" 'Kp = 9   // orphan' "$got"
+
+    # The boot-time twin of ERR_PARAM_SHAPE. The declaration wins.
+    got=$(printf '> Kp\n/settings\n/quit\n' | repl "$D/set_fw4" "$D/s2.db" |
+	      grep -v '^Restored' | sed -n '/^5$/p;/^Kp/p')
+    ck "a widened param refuses the stored value" '5
+Kp = 9   // not applied: width or type moved' "$got"
+
+    # ...and it must not be tagged as if it were in effect.
+    got=$(printf '/list\n/quit\n' | repl "$D/set_fw4" "$D/s2.db" |
+	      grep -v '^Restored' | sed -n '/^#param Kp/p')
+    ck "a refused setting does not tag the declaration" \
+       '#param Kp:32 integer = 5  // F' "$got"
+
+    # A value equal to the declaration is not a setting. Storing it would fill
+    # the store with no-ops and shadow the default the day it changes.
+    got=$(printf '> Kp = 9\n> Kp = 5\n/settings\n/quit\n' |
+	      repl "$D/set_fw1" "$D/s3.db")
+    ck "setting a value back to the default drops the entry" '9
+5
+no settings' "$got"
+
+    # Only an IMMEDIATE records. A rule writing a config part is the program
+    # doing its job, and freezing that would restore a value the rule recomputes.
+    got=$(printf 'T.period = 700 ? 1\n/settings\n/quit\n' |
+	      repl "$D/set_fw1" "$D/s4.db")
+    ck "a rule writing a part does not record" 'OK
+no settings' "$got"
+
+    # PART_VAL on anything that is not a param is state, not configuration.
+    got=$(printf '> Out = 3\n/settings\n/quit\n' | repl "$D/set_fw1" "$D/s5.db")
+    ck "poking a variable does not record" '3
+no settings' "$got"
+else
+    echo "  FAIL settings ROM firmware did not build"; fail=$((fail+1))
+fi
+
+# A module member costs nothing extra: the path is a string, so the dot is just
+# a character and there is no object index to find room for in a declaration.
+#
+# NOT named Sys: the runtime declares a built-in namespace by that name (see
+# csp_sys_module), and the names Sys and sys are taken the way State is.
+cat > "$D/setmod.csp" <<'EOF'
+#module Node
+  #param NodeName string    = "Node1"
+  #param NodeID:32 unsigned = 123
+#end
+#Node node
+EOF
+if build_rom "$D/setmod.csp" "$D/setmod_fw"; then
+    printf '> node.NodeID = 124\n> node.NodeName = "Node2"\n/save\n/quit\n' |
+	repl "$D/setmod_fw" "$D/s6.db" >/dev/null 2>&1
+    got=$(printf '> node.NodeID\n> node.NodeName\n/settings\n/quit\n' |
+	      repl "$D/setmod_fw" "$D/s6.db" | grep -v '^Restored')
+    ck "a module member is set by path and survives" '124
+Node2
+node.NodeID = 124
+node.NodeName = "Node2"
+42 of 1024 bytes' "$got"
+else
+    echo "  FAIL settings module firmware did not build"; fail=$((fail+1))
+fi
+
+echo "mirrored comparisons:"
+
+# `>` and `>=` are not opcodes. The compiler emits `b < a` with
+# csp_instr_alu_t.swap set, so the runtime computes the answer with the LT arms
+# and four encodings come free. What has to survive is the LISTING: undoing the
+# swap takes BOTH halves -- exchange the operands AND mirror the operator --
+# and doing only one renders a different program (`a < b`, or `b > a`).
+cat > "$D/gt.csp" <<'EOF'
+#variable A = 7
+#variable B = 3
+#variable R1 = 0
+#variable R2 = 0
+#variable R3 = 0
+#variable R4 = 0
+R1 = 1 ? A > B
+R2 = 1 ? A >= B
+R3 = 1 ? B > A
+R4 = 1 ? A < B
+EOF
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/gt1.db" "$D/gt.csp" | sed -n '/^R[0-9]=/p')
+ck "a mirrored comparison lists back as it was written" 'R1=1 ? A>B  // 1 R
+R2=1 ? A>=B  // 2 R
+R3=1 ? B>A  // 3 R
+R4=1 ? A<B  // 4 R' "$got"
+
+# ...and computes the same thing it always did. A=7, B=3.
+got=$(./csp -c 3 -s /dev/stdout "$D/gt.csp" 2>&1 |
+	  grep -o '"R[0-9]",[0-9-]*' | tail -4 | tr '\n' ' ')
+ck "a mirrored comparison computes the same" '"R1",1 "R2",1 "R3",0 "R4",0 ' "$got"
+
+# The folder has to mirror too: eval2 is handed the MIRRORED opcode, because the
+# runtime has no arm for `>` at all. Fold it unmirrored and `3 > 7` comes back as
+# whatever the default arm left behind.
+got=$(printf '#variable F1 = 0\n#variable F2 = 0\nF1 = 1 ? 7 > 3\nF2 = 1 ? 3 > 7\n/list\n/quit\n' |
+	  repl ./csp "$D/gt2.db" | sed -n '/^F[0-9]=/p')
+ck "a mirrored comparison folds" 'F1=1  // 1 R
+F2=1 ? 0  // 2 R' "$got"
+
+# Through an image: the swap bit rides in the raw instruction word, so a dumper
+# that forgets it fails the section CRC at boot -- and a program that does not
+# load answers "not declared" to every line typed after it.
+if build_rom "$D/gt.csp" "$D/gt_fw"; then
+    got=$(printf '/list\n> R1\n> R3\n/quit\n' | repl "$D/gt_fw" "$D/gt3.db" |
+	      sed -n '/^R1=/p;/^R3=/p;/^[01]$/p')
+    ck "the swap bit survives a ROM image" 'R1=1 ? A>B  // 1 F
+R3=1 ? B>A  // 3 F
+1
+0' "$got"
+else
+    echo "  FAIL mirrored-comparison ROM firmware did not build"; fail=$((fail+1))
+fi
+
+echo "timeout as an instruction:"
+
+# timeout(T) is OP_TMO, not a call. The call form cost three instructions -- an
+# OP_LI for the timer's index, an OP_ARG to move it into place, and the OP_CALL
+# -- to read one bit out of the timer's slot.
+#
+# What has to hold: it still LISTS as timeout(T) (the listing cannot go through
+# exprbuf_fcall any more -- there is no function index to look up), it still
+# computes, and the timer's index survives the image. OP_TMO is a MEMORY
+# instruction, so a dumper that emits it through the ALU arm truncates mem to
+# four bits and any timer past index 15 fails the section CRC at boot.
+cat > "$D/tmo.csp" <<'EOF'
+#timer T 100 = 1
+#variable N = 0
+T = 1 ? timeout(T)
+N = N + 1 ? timeout(T)
+EOF
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/tmo1.db" "$D/tmo.csp" | sed -n '/timeout/p')
+ck "timeout lists back as a call" 'T=1 ? timeout(T)  // 1 R
+N=N+1 ? timeout(T)  // 2 R' "$got"
+
+# A timer inside a module: the index is CURRENT-relative and asm_mem lays down
+# the OP_SETO, the same binding the call path did through call_obj.
+cat > "$D/tmomod.csp" <<'EOF'
+#module M
+  #timer T 100 = 1
+  #variable C = 0
+  C = C + 1 ? timeout(T)
+#end
+#M m1
+EOF
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/tmo2.db" "$D/tmomod.csp" | sed -n '/timeout/p')
+ck "timeout on an object timer lists back" '  C=C+1 ? timeout(T)  // 1 R' "$got"
+
+# It runs: a 100 ms timer over ~450 ms fires four times.
+got=$(./csp -T 450 -s /dev/stdout "$D/tmo.csp" 2>&1 | grep -o '"N",[0-9]*' | tail -1)
+ck "timeout still fires" '"N",4' "$got"
+
+# Through an image, where the CRC checks the instruction word bit for bit.
+if build_rom "$D/tmo.csp" "$D/tmo_fw"; then
+    got=$(printf '/list\n/quit\n' | repl "$D/tmo_fw" "$D/tmo3.db" | sed -n '/timeout/p')
+    ck "timeout survives a ROM image" 'T=1 ? timeout(T)  // 1 F
+N=N+1 ? timeout(T)  // 2 F' "$got"
+else
+    echo "  FAIL timeout ROM firmware did not build"; fail=$((fail+1))
+fi
 
 echo "unsigned through a ROM image:"
 

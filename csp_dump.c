@@ -4,13 +4,25 @@
 #include <stdio.h>
 #include <ctype.h>
 #include "csp.h"
+#include "csp_compile.h"
 #include "csp_dump.h"
 #include "csp_print.h"
 
+// NOT tier-gated. This whole file takes FILE* and prints with fprintf, and it is
+// not in the Arduino build at all (CandySpeak/ symlinks csp_rt/csp_compile/
+// csp_print/... and not this) -- so an embedded node never compiles a byte of
+// it, with or without a guard. Gating it only shrank the HOST exec binary, at
+// the price of -P/-C/-s/-L disappearing from it, which is where the test
+// harness reads state from.
+//
+// FILE* is exactly why it stays out of the runtime: csp_print.c prints through
+// csp_print_* and takes its file handle as void*, deliberately, so a target
+// pulls in no stdio. Anything here that wanted to run on a board would have to
+// be rewritten onto that API, not moved.
 
 extern const op_entry_t decl_table[];
 extern const op_entry_t tok_table[];
-extern const op_info_t op_info[];
+//extern const op_info_t op_info[];
 
 // Helper to print fvalue_t (works for both float and fixpoint)
 static void fprint_fvalue(FILE* f, fvalue_t v)
@@ -213,6 +225,12 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	break;
     case OP_CHG:
 	fprintf(f, "{instr,%d,'CHG',[r%d,",
+		i, instr(st,i,m.x));
+	csp_fprint_tag(f, st, instr(st,i,m.mem));
+	fprintf(f, "]}%s\n", eot);
+	break;
+    case OP_TMO:
+	fprintf(f, "{instr,%d,'TMO',[r%d,",
 		i, instr(st,i,m.x));
 	csp_fprint_tag(f, st, instr(st,i,m.mem));
 	fprintf(f, "]}%s\n", eot);
@@ -1170,6 +1188,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	case OP_ST:
 	case OP_STIMP:
 	case OP_CHG:
+	case OP_TMO:
 	case OP_LD:
 	case OP_STP:
 	case OP_LDP:
@@ -1222,13 +1241,16 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 		    op, ip->r.cnd, ip->r.nxt, ip->r.implicit);
 	    break;
 	default: // two/three-address-instruction
-	    // All three registers regardless of arity, and .u: the unused ones are
-	    // zero in RAM, and naming them keeps the emitted word equal to the
-	    // folded one. .u is the unsigned flag -- drop it and `#variable Pi
-	    // unsigned` / `Pi % 10` comes out of the image dividing SIGNED, on top
-	    // of failing the section CRC at boot.
-	    fprintf(f, "  {.a={%s,.x=%u,.y=%u,.z=%u,.u=%u}},\n",
-		    op, ip->a.x, ip->a.y, ip->a.z, ip->a.u);
+	    // All three registers regardless of arity, and both flags: the unused
+	    // ones are zero in RAM, and naming them keeps the emitted word equal
+	    // to the folded one. .u is the unsigned flag -- drop it and `#variable
+	    // Pi unsigned` / `Pi % 10` comes out of the image dividing SIGNED.
+	    // .swap says `>` was mirrored; drop it and the image still COMPUTES
+	    // correctly (the runtime never reads it) but lists `b < a` where the
+	    // source said `a > b`. Either omission also fails the section CRC at
+	    // boot, which is the loud half of the same mistake.
+	    fprintf(f, "  {.a={%s,.x=%u,.y=%u,.z=%u,.u=%u,.swap=%u}},\n",
+		    op, ip->a.x, ip->a.y, ip->a.z, ip->a.u, ip->a.swap);
 	    break;
 	}
     }
@@ -1568,4 +1590,5 @@ void csp_list_rules(FILE* f, csp_rt_t* st)
     st->list_state = -1;
     csp_set_file_output(savef);
 }
+
 

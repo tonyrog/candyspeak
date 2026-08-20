@@ -23,91 +23,6 @@ extern int debug;
 // convert integer to -1 if y != 0  0 otherwise
 #define BOOL(y) (-((y)!=0))
 
-
-// string length for constant strings "foo" => 3
-
-
-
-// The operator stack's marker encoding lives in csp_compile.h, which this file
-// already includes. A second copy sat here and went stale the moment a second
-// marker kind (array subscripts) moved the tag into the low byte -- nothing in
-// this file uses them, and the duplicate only compiled because both definitions
-// happened to agree.
-
-// opcode => opcode type info
-const op_info_t op_info[] RODATA = {
-    [OP_ADD] = {ros_ADD,PLUS,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_SUB] = {ros_SUB,MINUS,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_MUL] = {ros_MUL,ASTERISK,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_DIV] = {ros_DIV,SLASH,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_REM] = {ros_REM,PERCENT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_SLA] = {ros_SLA,LTLT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_SRA] = {ros_SRA,GTGT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_BAND] = {ros_BAND,AMP,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_BOR] = {ros_BOR,BAR,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_BXOR] = {ros_BXOR,CIRC,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_AND] = {ros_AND,AMPAMP,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_OR] = {ros_OR,BARBAR,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_EQ] = {ros_ASSIGN,EQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_LT] = {ros_OLT,LT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_LTE] = {ros_OLTE,LTEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_GT] = {ros_OGT,GT,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_GTE] = {ros_OGTE,GTEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_EQEQ] = {ros_OEQEQ,EQEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-    [OP_NEQ] = {ros_ONEQ,NEQ,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-
-    // unary versions (treated as binary with z ignored)
-    [OP_BNOT] = {ros_BNOT,TILDE,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
-    [OP_NEG] = {ros_NEG,MINUS1,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
-    [OP_MOV] = {ros_OMOV,PLUS1,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
-    [OP_NOT] = {ros_NOT,EXCLAMATION,1,V_INTEGER,MAKE_TYPE1(V_INTEGER)},
-    [OP_CVTIF] = {ros_CVTIF,NONE,1,V_FLOAT,MAKE_TYPE1(V_INTEGER)},   // int→float
-    [OP_CVTFI] = {ros_CVTFI,NONE,1,V_INTEGER,MAKE_TYPE1(V_FLOAT)},   // float→int
-
-    [OP_FNEG] = {ros_FNEG,MINUS1,1,V_FLOAT,MAKE_TYPE1(V_FLOAT)},
-    [OP_FMOV] = {ros_FMOV,PLUS1,1,V_FLOAT,MAKE_TYPE1(V_FLOAT)},
-    [OP_FADD] = {ros_FADD,PLUS,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
-    [OP_FSUB] = {ros_FSUB,MINUS,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
-    [OP_FMUL] = {ros_FMUL,ASTERISK,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
-    [OP_FDIV] = {ros_FDIV,SLASH,2,V_FLOAT,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
-
-    [OP_FLT] = {ros_FLT,LT,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
-    [OP_FLTE] = {ros_FLTE,LTEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
-    [OP_FGT] = {ros_FGT,GT,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
-    [OP_FGTE] = {ros_FGTE,GTEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
-    [OP_FEQEQ] = {ros_FEQ,EQEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
-    [OP_FNEQ] = {ros_FNEQ,NEQ,2,V_INTEGER,MAKE_TYPE2(V_FLOAT,V_FLOAT)},
-
-    // comman may not be needed?
-    //[OP_COMMA] = {ros_OCOMMA,NONE,2,V_INTEGER,MAKE_TYPE2(V_INTEGER,V_INTEGER)},
-
-    // other operations for name
-    [OP_ENTER] = {ros_ENTER,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_LEAVE] = {ros_LEAVE,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_NEW]   = {ros_NEW,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_LI]    = {ros_LI,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_LIU]   = {ros_LIU,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_LIH]   = {ros_LIH,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_ARG]   = {ros_ARG,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_ST]    = {ros_ST,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_STP]   = {ros_STP,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_STIMP] = {ros_STIMP,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_CHG]   = {ros_CHG,NONE,3,V_VOID,MAKE_TYPE0()},
-//    [OP_EQI]   = {ros_EQI,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_STI]   = {ros_STI,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_INSTATE] = {ros_INSTATE,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_NINSTATE] = {ros_NINSTATE,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_SETO] = {ros_SETO,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_SETOX] = {ros_SETOX,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_LD]    = {ros_LD,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_LDP]   = {ros_LDP,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_CALL]  = {ros_CALL,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_RULE]  = {ros_RULE,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_NEXT]  = {ros_NEXT,NONE,3,V_VOID,MAKE_TYPE0()},
-    [OP_NOP]   = {ros_NOP,NONE,3,V_VOID,MAKE_TYPE0()},
-};
-
-
 static const char tag_tab[] RODATA = {
     [DECL_OBJECT] = 'q',
     [DECL_MODULE] = 'm',
@@ -433,7 +348,7 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_PARAM_SHAPE] =            ros_err_param_shape,
 };
 
-static rostring_t csp_format_error(csp_err_t err)
+NOINLINE static rostring_t csp_format_error(csp_err_t err)
 {
     return err_tab[err];
 }
@@ -481,20 +396,6 @@ void csp_print_error(csp_rt_t* st)
 }
 
 
-uint8_t csp_opcode_rtype(opcode_t op)
-{
-    return ro_byte(&op_info[op].rtype);
-}
-
-uint8_t csp_opcode_arity(opcode_t op)
-{
-    return ro_byte(&op_info[op].arity);
-}
-
-const rochar* csp_opcode_name(opcode_t op)
-{
-    return (rochar*) ro_ptr(&op_info[op].name);
-}
 
 int csp_set_error(csp_rt_t* st, csp_err_t err)
 {
@@ -577,13 +478,16 @@ void csp_clr_error(csp_rt_t* st)
 // pointer to a VIEW_SLOT's value_t struct inside its buffer (in the heap)
 static inline value_t* csp_slot(csp_rt_t* st, csp_view_t* v, dio_t dir)
 {
-    csp_buf_t* b = &st->buf[v->buf];
+    // An owner's heap offset is in the view. This used to load st->buf[v->buf]
+    // for the two fields it wanted out of sixteen bytes; now there is no buffer
+    // to load, and the access is one add.
+    //
     // A #local is single-buffered: both directions resolve to the DIN half, so
     // the value a rule writes is readable by the rules after it in the SAME
     // cycle. Everything else keeps the transaction -- read DIN, write DOUT.
-    if (b->flags & BUF_F_LOCAL)
+    if (v->flags & VIEW_F_LOCAL)
 	dir = DIN;
-    return (value_t*)(st->heap[dir] + b->hp);
+    return (value_t*)(st->heap[dir] + v->pos);
 }
 
 // return pointer to the object/field value slot (VIEW_SLOT only)
@@ -672,7 +576,7 @@ int csp_print_fixpoint(fvalue_t v)
 }
 #endif
 
-int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val)
+NOINLINE int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val)
 {
     switch(CSP_MASK(vt, TYPE_BITS)) {
     case V_INTEGER: return csp_print_int(val.i);
@@ -799,15 +703,20 @@ static value_t fn_sign(csp_rt_t* st,uint16_t type, value_t* args, uint8_t nargs)
     return ret;
 }
 
-// FIXME: compile  timeout(T) -> OP_TMO
-static value_t fn_timeout(csp_rt_t* st,uint16_t type,
-			  value_t* args, uint8_t nargs)
+// Did this timer fire on the cycle now committed?
+//
+// Not a builtin function any more -- `timeout(T)` compiles to OP_TMO. The body
+// lives here rather than in eval_op because the COMPILER needs it too: an
+// immediate `> timeout(T)` at the prompt has no instruction stream to run, and
+// the alternative was a second copy of these three lines on that side of the
+// line.
+//
+// DIN, not DOUT: `fired` is set by the timer sweep and committed, so a rule
+// guarded on it reads the same answer wherever in the cycle it sits.
+int csp_timer_fired(csp_rt_t* st, index_t ix)
 {
-    value_t ret;
-    index_t ty = args[0].u;  // timer
-    value_t* vptr = csp_dio_slot(st, ty, DIN);
-    ret.i = BOOL(vptr->t.fired);
-    return ret;
+    value_t* vptr = csp_dio_slot(st, ix, DIN);
+    return BOOL(vptr->t.fired);
 }
 
 //  FIXME: if not running?
@@ -957,7 +866,7 @@ const csp_func_t csp_builtin_funcs[] RODATA = {
     CSP_FUNC_ENT(s_trunc,   1, 1, V_INTEGER, MAKE_TYPE1(V_NUMBER),  fn_trunc),
     CSP_FUNC_ENT(s_round,   1, 1, V_INTEGER, MAKE_TYPE1(V_NUMBER),  fn_round),
     // timer functions
-    CSP_FUNC_ENT(s_timeout, 1, 0, V_INTEGER, MAKE_TYPE1(V_TIMER), fn_timeout),
+    // (timeout is OP_TMO, not a call -- see csp_timer_fired)
     CSP_FUNC_ENT(s_elapsed,  1, 0, V_INTEGER, MAKE_TYPE1(V_TIMER), fn_elapsed),
     CSP_FUNC_ENT(s_progress, 1, 0, V_FLOAT, MAKE_TYPE1(V_TIMER), fn_progress),
     // variable changed detection
@@ -1038,19 +947,48 @@ NOINLINE void csp_enq_elist(csp_rt_t* st, index_t x)
 // --- buffer heap access (VIEW_HEAP) ----------------------------------------
 // Dormant in step 2 (no HEAP views are emitted yet); exercised from step 3.
 
+// Where a HEAP or OWN view's bits live: the base pointer, the start bit inside
+// it, and how many bytes a whole-storage access covers.
+//
+// The two kinds differ only here. A VIEW_HEAP reads its base and size from the
+// buffer it looks into; an owner has neither, so the base comes from its own
+// heap offset, the start bit is zero (it owns the whole thing) and the size
+// follows from the width the declaration gave.
+NOINLINE static uint8_t* heap_base(csp_rt_t* st, csp_view_t* vw, dio_t dir,
+				   uint16_t* bitp, uint8_t* nbytesp)
+{
+    if (vw->kind == VIEW_HEAP) {
+	csp_buf_t* b = &st->buf[vw->buf];
+	*bitp = vw->pos;
+	*nbytesp = (uint8_t)b->nbytes;
+	return st->heap[dir] + b->hp;
+    }
+    // NO local redirect here, deliberately. BUF_F_LOCAL was read by csp_slot
+    // only, and a #local is a DECL_VARIABLE -- an OWN view, never a SLOT -- so
+    // the redirect never applied to it and the value path has always been the
+    // ordinary DIN/DOUT transaction. Adding it here broke `#local sum` down to
+    // 0: writes went to DIN and the commit then copied the stale DOUT back over
+    // them. Whether a #local really gets its same-cycle read is a question that
+    // predates this and is not answered by the flag.
+    *bitp = 0;
+    *nbytesp = (uint8_t)((vw->len + 8) >> 3);   // (len+1 bits) rounded up
+    return st->heap[dir] + vw->pos;
+}
+
 NOINLINE static value_t csp_heap_get(csp_rt_t* st, csp_view_t* vw, dio_t dir)
 {
-    csp_buf_t* b = &st->buf[vw->buf];
-    uint8_t* p = st->heap[dir] + b->hp;
+    uint16_t bit;
+    uint8_t nbytes;
+    uint8_t* p = heap_base(st, vw, dir, &bit, &nbytes);
     value_t v;
     v.u = 0;
-    if (vw->flags & VIEW_F_SIMPLE) {       // whole buffer, byte aligned
-	uint8_t n = b->nbytes;
+    if (vw->flags & VIEW_F_SIMPLE) {       // whole storage, byte aligned
+	uint8_t n = nbytes;
 	if (n > sizeof(value_t)) n = sizeof(value_t);
 	memcpy(&v, p, n);
     }
     else {
-	csp_bits_get(p, &v.u, vw->pos, vw->len + 1, vw->endian == E_BIG);
+	csp_bits_get(p, &v.u, bit, vw->len + 1, vw->endian == E_BIG);
 	// Sign-extend a signed field from its own width up to the container, so a
 	// negative CAN signal reads back negative. get_bits zero-extends; unsigned
 	// fields keep that, as do 32-bit-wide ones (no spare high bits to fill).
@@ -1066,15 +1004,16 @@ NOINLINE static value_t csp_heap_get(csp_rt_t* st, csp_view_t* vw, dio_t dir)
 NOINLINE static void csp_heap_set(csp_rt_t* st, csp_view_t* vw, dio_t dir,
 				  value_t v)
 {
-    csp_buf_t* b = &st->buf[vw->buf];
-    uint8_t* p = st->heap[dir] + b->hp;
-    if (vw->flags & VIEW_F_SIMPLE) {       // whole buffer, byte aligned
-	uint8_t n = b->nbytes;
+    uint16_t bit;
+    uint8_t nbytes;
+    uint8_t* p = heap_base(st, vw, dir, &bit, &nbytes);
+    if (vw->flags & VIEW_F_SIMPLE) {       // whole storage, byte aligned
+	uint8_t n = nbytes;
 	if (n > sizeof(value_t)) n = sizeof(value_t);
 	memcpy(p, &v, n);
     }
     else
-	csp_bits_set(p, v.u, vw->pos, vw->len + 1, vw->endian == E_BIG);
+	csp_bits_set(p, v.u, bit, vw->len + 1, vw->endian == E_BIG);
 }
 
 // A digital/analog/timer decl carries vt=V_INTEGER (its value type); the
@@ -1121,17 +1060,21 @@ NOINLINE void csp_view_set_part(csp_rt_t* st, csp_view_t* vw,
 {
     if (part == PART_VAL)
 	csp_heap_set(st, vw, dir, v);
+    // Endian lives in the view, so it works for either kind.
+    else if (part == PART_ENDIAN) {
+	if ((v.i >= E_NATIVE) && (v.i <= E_BIG))
+	    vw->endian = v.i;
+    }
+    // Everything below reads st->buf[vw->buf], and an OWNER has no buffer --
+    // `buf` is not a valid index for one. A #variable has no transport state to
+    // set anyway, so this is the right answer as well as the safe one.
+    else if (vw->kind != VIEW_HEAP)
+	return;
     // A frame's transport state lives on the BUFFER, not in a value slot,
     // and is a command rather than a value -- so it is not DIN/DOUT
     // shadowed and does not go through the dirty set.
     else if (part == PART_DIR)
 	st->buf[vw->buf].dir = v.i;
-    // Endian lives in the view, like the position and the width -- config,
-    // not a shadowed value. Anything outside vendian_t is ignored.
-    else if (part == PART_ENDIAN) {
-	if ((v.i >= E_NATIVE) && (v.i <= E_BIG))
-	    vw->endian = v.i;
-    }
     else if (st->buf[vw->buf].transport == TR_CAN) {
 	csp_buf_t* bp = &st->buf[vw->buf];
 	if (part == PART_TX) {
@@ -1156,7 +1099,10 @@ NOINLINE void csp_dio_set_part(csp_rt_t* st, index_t ix, value_t v,
 			       csp_part_t part, dio_t dir)
 {
     csp_view_t* vw = csp_view(st, ix);
-    if (vw->kind == VIEW_HEAP) {  // bit-fields only carry a value, no pin/port
+    // Anything that is not a plain value_t slot carries only a VALUE -- a
+    // bit-field has no pin, port or period. VIEW_OWN joins VIEW_HEAP here: it is
+    // the same bit-field access, just over storage it owns rather than borrows.
+    if (vw->kind != VIEW_SLOT) {
 	csp_view_set_part(st, vw, v, part, dir);
 	return;
     }
@@ -1223,14 +1169,18 @@ NOINLINE void csp_dio_get_val_part(csp_rt_t* st, value_t* vslot,
 NOINLINE void csp_view_get_part(csp_rt_t* st, csp_view_t* vw, value_t* vp,
 				csp_part_t part, dio_t dir)
 {
-    csp_buf_t* bp = &st->buf[vw->buf];
+    // An OWNER has no buffer, so `bp` must not be dereferenced for one. Only
+    // PART_VAL, PART_ENDIAN and PART_LEN answer from the view itself; every
+    // other case here is buffer state, and reads 0 for a leaf that has none --
+    // which is the truth: a #variable has no transport, no frame id, no dlc.
+    csp_buf_t* bp = (vw->kind == VIEW_HEAP) ? &st->buf[vw->buf] : NULL;
     vp->u = 0;
     switch (CSP_MASK(part, PART_BITS)) {
     case PART_VAL: *vp = csp_heap_get(st, vw, dir); break;
 	// Direction is a property of the buffer, so it answers for a plain
 	// #buffer as well as a CAN frame -- and for a #field,  which reads
 	// its frame's direction.
-    case PART_DIR: vp->i = bp->dir; break;
+    case PART_DIR: if (bp) vp->i = bp->dir; break;
 	// Endianness is a property of the VIEW (a bound field / #field decides
 	// how its bits are laid out), so it answers from there and not from a
 	// value slot -- a heap view has none.
@@ -1238,19 +1188,19 @@ NOINLINE void csp_view_get_part(csp_rt_t* st, csp_view_t* vw, value_t* vp,
 	// Frame state, read off the buffer. A #field answers for its frame
 	// too: `A.rx` and `F201.rx` are the same fact.
     case PART_RX:
-	if (bp->transport == TR_CAN)
+	if (bp && (bp->transport == TR_CAN))
 	    vp->i = BOOL(bp->flags & BUF_F_RX);
 	break;
     case PART_TX:
-	if (bp->transport == TR_CAN)
+	if (bp && (bp->transport == TR_CAN))
 	    vp->i = BOOL(bp->flags & BUF_F_TX);
 	break;
     case PART_ID:
-	if (bp->transport == TR_CAN)
+	if (bp && (bp->transport == TR_CAN))
 	    vp->i = (ivalue_t)bp->xref;
 	break;
     case PART_DLC:
-	if (bp->transport == TR_CAN)
+	if (bp && (bp->transport == TR_CAN))
 	    vp->i = bp->dlc;
 	break;
 	// A plain #variable gets an auto-buffer (setup_variable -> setup_buffer),
@@ -1271,7 +1221,7 @@ NOINLINE void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp,
 			       csp_part_t part, dio_t dir)
 {
     csp_view_t* vw = csp_view(st, ix);
-    if (vw->kind == VIEW_HEAP) {  // bit-fields only carry a value, no pin/port
+    if (vw->kind != VIEW_SLOT) {  // bit-fields only carry a value, no pin/port
 	vp->u = 0;
 	csp_view_get_part(st, vw, vp, part, dir);
     }
@@ -1288,7 +1238,7 @@ NOINLINE void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp,
 NOINLINE void csp_dio_set(csp_rt_t* st, index_t ix, value_t v, dio_t dir)
 {
     csp_view_t* vw = csp_view(st, ix);
-    if (vw->kind == VIEW_HEAP) {
+    if (vw->kind != VIEW_SLOT) {
 	csp_heap_set(st, vw, dir, v);
 	return;
     }
@@ -1298,7 +1248,7 @@ NOINLINE void csp_dio_set(csp_rt_t* st, index_t ix, value_t v, dio_t dir)
 NOINLINE void csp_dio_get(csp_rt_t* st, index_t ix, value_t* vp, dio_t dir)
 {
     csp_view_t* vw = csp_view(st, ix);
-    if (vw->kind == VIEW_HEAP) {
+    if (vw->kind != VIEW_SLOT) {
 	*vp = csp_heap_get(st, vw, dir);
 	return;
     }
@@ -1451,18 +1401,9 @@ NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
 #endif
 	if (ci.a.u) { x.i = op_LTE(y.u, z.u); goto store; }
         x.i = op_LTE(y.i, z.i); goto store;
-    case OP_GT:
-#if FVALUE_IS_FIXPOINT
-    case OP_FGT:
-#endif
-	if (ci.a.u) { x.i = op_GT(y.u, z.u); goto store; }
-        x.i = op_GT(y.i, z.i); goto store;
-    case OP_GTE:
-#if FVALUE_IS_FIXPOINT
-    case OP_FGTE:
-#endif
-	if (ci.a.u) { x.i = op_GTE(y.u, z.u); goto store; }
-        x.i = op_GTE(y.i, z.i); goto store;
+    // No OP_GT/OP_GTE arms. `a > b` arrives here as `b < a` with
+    // csp_instr_alu_t.swap set for the listing's benefit, so the LT arms above
+    // already compute it -- and the swap bit is never read at run time.
     case OP_EQEQ:
 #if FVALUE_IS_FIXPOINT
     case OP_FEQEQ:
@@ -1481,8 +1422,6 @@ NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
     case OP_FSUB: x.f = op_FSUB(y.f, z.f); goto store;
     case OP_FLT:   x.i = op_FLT(y.f, z.f); goto store;
     case OP_FLTE:  x.i = op_FLTE(y.f, z.f); goto store;
-    case OP_FGT:   x.i = op_FGT(y.f, z.f); goto store;
-    case OP_FGTE:  x.i = op_FGTE(y.f, z.f); goto store;
     case OP_FEQEQ: x.i = op_FEQEQ(y.f, z.f); goto store;
     case OP_FNEQ:  x.i = op_FNEQ(y.f, z.f); goto store;
 #endif
@@ -1534,6 +1473,9 @@ NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
 	st->es.anyd = CSP_TRUE;
 	break;	
     }
+    case OP_TMO:    // timeout(T): one bit, straight out of the timer's slot
+	st->es.reg[ci.m.x].i = csp_timer_fired(st, ci.m.mem);
+	break;
     case OP_CHG: {  // r |= dset[ix]  (force-true on the seed cycle)
 	int i = st_index(st, ci.m.mem);
 	st->es.reg[ci.m.x].i |=
@@ -1714,14 +1656,30 @@ int csp_eval_rule(csp_rt_t* st, int n)
 #if defined(USE_STATISTICS) && (USE_STATISTICS==1)
 	st->num_eval0++;
 #endif
-	// One switch over the opcode: no csp_opcode_arity (a PROGMEM read of
-	// op_info[op] per executed instruction) and no four-way arity dispatch.
 	n = eval_op(st, n, csp_get_instr(st, n), &leave);
     }
     return n;
 }
 
-// mirror dirty leaf buffers between the two heaps (everything lives in the heap)
+// The heap region a dirty leaf commits: offset, and the size through *np.
+//
+// A view into a buffer commits the WHOLE buffer -- one field's write makes the
+// frame due, which is what a CAN TPDO needs. An owner commits its own bytes,
+// and gets them from the view: a SLOT is a whole value_t, an OWN is the width
+// its declaration asked for.
+static uint16_t leaf_region(csp_rt_t* st, csp_view_t* v, uint16_t* np)
+{
+    if (v->kind == VIEW_HEAP) {
+	csp_buf_t* b = &st->buf[v->buf];
+	*np = b->nbytes;
+	return b->hp;
+    }
+    *np = (v->kind == VIEW_SLOT) ? (uint16_t)sizeof(value_t)
+				 : (uint16_t)((v->len + 8) >> 3);
+    return v->pos;
+}
+
+// mirror dirty leaf storage between the two heaps (everything lives in the heap)
 NOINLINE static void heap_dset_copy(csp_rt_t* st, dio_t to, dio_t from)
 {
     int g, i;
@@ -1733,12 +1691,17 @@ NOINLINE static void heap_dset_copy(csp_rt_t* st, dio_t to, dio_t from)
 	i = g*BITSET_GROUP_BITS;
 	while (bits) {
 	    if (bits & 1) {
-		csp_buf_t* b = &st->buf[st->view[i].buf];
-		memcpy(st->heap[to] + b->hp, st->heap[from] + b->hp, b->nbytes);
+		csp_view_t* v = &st->view[i];
+		uint16_t n;
+		uint16_t hp = leaf_region(st, v, &n);
+		memcpy(st->heap[to] + hp, st->heap[from] + hp, n);
 		// Committing a change into a CAN frame is what makes it due for
-		// sending. Free ride: this walk already resolved view -> buffer.
-		if ((to == DIN) && (b->transport == TR_CAN))
-		    b->flags |= BUF_F_DIRTY;
+		// sending. Only a buffer can be one.
+		if ((to == DIN) && (v->kind == VIEW_HEAP)) {
+		    csp_buf_t* b = &st->buf[v->buf];
+		    if (b->transport == TR_CAN)
+			b->flags |= BUF_F_DIRTY;
+		}
 	    }
 	    bits >>= 1;
 	    i++;
@@ -1914,6 +1877,16 @@ static void states_advance(csp_rt_t* st)
     for (m = 1; (m < (int)st->obj_cap) && (m <= (int)st->ps.nq); m++) {
 	index_t ix = st->object[m];
 	index_t mx = decl(st, INDEX(ix), mq.mx);
+	// "The first declaration inside the module" is where a State is, but not
+	// every module HAS one -- a data-only namespace declares no states and is
+	// built without it (csp_sys_module, and csp_parse_module's no_state). Ask
+	// whether member 0 really is a State instead of assuming.
+	//
+	// Assuming stepped INIT->NORMAL straight into whatever member 0 was:
+	// `sys.Serial` read 0 on the first cycle and 1 on every one after, with
+	// nothing in the program touching it.
+	if (!state_is_state_var(st, INDEX(mx) + 1))
+	    continue;
 	csp_ctx_set(st, m);
 	state_advance(st, MAKE_INDEX(CURRENT, INDEX(mx) + 1));
     }
@@ -3171,6 +3144,20 @@ NOINLINE void csp_load_rom(csp_rt_t* st)
     if (base == NULL)
 	base = ro_ref(&rom_image).base;
     csp_load_image(st, base);
+    // The image replaces every declaration, so the Sys handles csp_rt_init just
+    // set describe THIS firmware's runtime region and not the one the image was
+    // built against. They agree whenever both were built with a Sys -- it sits at
+    // the same offset, right after State -- but an image from a firmware that had
+    // none puts the PROGRAM's declarations there, and the listing would then hide
+    // the first five lines of it. Confirm what is actually at those indices
+    // rather than assume the two builds match.
+    if ((st->sys_mod != BAD_INDEX) &&
+	((INDEX(st->sys_mod) >= st->ps.nd) ||
+	 (decl(st, INDEX(st->sys_mod), type) != DECL_MODULE) ||
+	 !csp_str_eq_ro(st, decl_name_pos(st, st->sys_mod), ros_Sys, 3) ||
+	 (INDEX(st->sys_obj) >= st->ps.nd) ||
+	 (decl(st, INDEX(st->sys_obj), type) != DECL_OBJECT)))
+	st->sys_mod = st->sys_obj = BAD_INDEX;
 }
 
 // Backend hook: hand out the raw RAM for the code arena. The memory source is a
@@ -3391,6 +3378,86 @@ NOINLINE int add_state(csp_rt_t* st, const tstr_t* name, index_t* blk)
     DBG("added state %d slot %d\n", s, k);
     return s;
 }
+// The built-in Sys namespace: the node's own identity, in one place every
+// program can name.
+//
+// Built HERE, by the runtime, for the same reason State is: an exec-only node
+// has no parser, and a program that says `sys.Id` has to find the same field on
+// a node that can compile and on one that cannot. Building it from source text
+// would mean csp_rt.c calling csp_parse -- and that one reference is what stops
+// --gc-sections from taking the whole compiler out of an exec-only image.
+//
+// NO INSTRUCTIONS. A module's OP_ENTER/OP_LEAVE pair exists to run its BODY, and
+// the OP_NEW at an instantiation exists to point CURRENT at the instance before
+// that body runs. A namespace has no body, so it needs none of the three:
+// csp_rt_start walks DECL_OBJECT in declaration order, sizes offs[] from md.n
+// and sets each member up without ever looking at md.ent. Five declarations,
+// zero code.
+//
+// NO State either. A module normally gets one so that a state named inside it
+// belongs to it; a namespace names no states. That is one whole leaf saved --
+// see csp_parse_module's no_state, which is the same decision on the parser
+// side.
+//
+// Fields, and who owns each (doc/manual_en.md carries the same table):
+//   Serial  #variable  the HARDWARE's. The platform publishes it at boot, so a
+//                      stored setting must not win -- csp_setup runs after
+//                      csp_settings_apply, which is exactly that order.
+//   Id      #param     the OPERATOR's. A setting wins and survives a reflash.
+//   Name    #param     likewise.
+NOINLINE static int csp_sys_module(csp_rt_t* st)
+{
+    RO_TSTR(Sys, ros_Sys);
+    RO_TSTR(sys, ros_sys);
+    RO_TSTR(Id, ros_Id);
+    RO_TSTR(Name, ros_Name);
+    RO_TSTR(Serial, ros_Serial);
+    const tstr_t empty = { .ptr = NULL, .len = 0 };
+    index_t mx, ex, ox;
+    int i;
+
+    if ((mx = csp_new_decl(st, &Sys, DECL_MODULE, 1)) == BAD_INDEX)
+	return -1;
+    ram_decl_at(st, INDEX(mx))->md.ent = 0;   // no body -- see above
+
+    if ((i = csp_new_decl(st, &Serial, DECL_VARIABLE, 1)) == BAD_INDEX)
+	return -1;
+    ram_decl_at(st, i)->vt  = V_UNSIGNED;
+    ram_decl_at(st, i)->res = MAKE_RES(32);
+
+    if ((i = csp_new_decl(st, &Id, DECL_CONSTANT, 1)) == BAD_INDEX)
+	return -1;
+    ram_decl_at(st, i)->vt    = V_UNSIGNED;
+    ram_decl_at(st, i)->res   = MAKE_RES(32);
+    ram_decl_at(st, i)->local = 1;            // DECL_CONSTANT + local == #param
+
+    if ((i = csp_new_decl(st, &Name, DECL_CONSTANT, 1)) == BAD_INDEX)
+	return -1;
+    ram_decl_at(st, i)->vt    = V_STRING;
+    ram_decl_at(st, i)->local = 1;
+
+    if ((ex = csp_new_decl(st, &empty, DECL_END, 1)) == BAD_INDEX)
+	return -1;
+    ram_decl_at(st, INDEX(mx))->md.n = (INDEX(ex) - INDEX(mx)) - 1;
+
+    if ((ox = csp_new_decl(st, &sys, DECL_OBJECT, 1)) == BAD_INDEX)
+	return -1;
+    ram_decl_at(st, INDEX(ox))->mq.mx = INDEX(mx);
+    // The object NUMBER, and it is not optional. csp_rt_start renumbers the
+    // objects itself, but the COMPILER reads mq.m to build the xindex for
+    // `sys.Id` -- and ps.nq is what csp_parse_object counts from, so the first
+    // user object must get 2 and not collide with this one.
+    //
+    // Left at 0 first time round, every member resolved as a GLOBAL declaration
+    // index: `sys.Id = 7` wrote over State, and `sys.Name` read the whole string
+    // table back.
+    ram_decl_at(st, INDEX(ox))->mq.m = st->ps.nq + 1;
+    st->ps.nq++;
+    st->sys_obj = INDEX(ox);
+    st->sys_mod = INDEX(mx);
+    return 0;
+}
+
 int csp_rt_init(csp_rt_t* st, int reactive)
 {
     memset(st, 0x00, sizeof(csp_rt_t));
@@ -3425,6 +3492,9 @@ int csp_rt_init(csp_rt_t* st, int reactive)
     st->ps.strp = 1;
     st->ps.err_strp = MAX_STR_BUF;
     st->cs.mdef = BAD_INDEX;  // no module being defined
+    st->sys_mod = st->sys_obj = BAD_INDEX;   // until csp_sys_module runs; the
+					     // memset above would leave 0, and
+					     // decl 0 is State, a real index
     st->n_rule_emit = 1;   // the implicit rule body at the RAM range base
     st->cs.var = st->cs.var_buf;  // dedicated scratch for var list during <- parse
     {
@@ -3453,8 +3523,13 @@ int csp_rt_init(csp_rt_t* st, int reactive)
 		return -1;
 	    }
 	}
+#if !defined(CSP_NO_SYS_MODULE)
+	if (csp_sys_module(st) < 0)
+	    return -1;
+#endif
 	// The runtime/program boundary -- see csp_rt_t. States need no separate
-	// one any more: they are declarations, so sys_nd covers them too.
+	// one any more: they are declarations, so sys_nd covers them too --
+	// and so is the Sys namespace above, which is why /clear cannot drop it.
 	st->sys_nd   = st->ps.nd;
 	st->sys_nn   = st->ps.nn;
 	st->sys_strp = st->ps.strp;
@@ -3761,20 +3836,37 @@ void csp_can_output(csp_rt_t* st)
     }
 }
 
+// bump-allocate heap bytes, return the offset (or 0xffff on overrun)
+//
+// The cursor is st->hp and not "behind the last buffer": most leaves take heap
+// without taking a buffer entry now, so the buffer table has stopped being a
+// record of what the heap has handed out.
+NOINLINE static uint16_t csp_heap_alloc(csp_rt_t* st, uint16_t nbytes)
+{
+    uint16_t hp = (st->hp + 3) & ~3;   // 4-align: value_t access must be aligned
+    // Sized by csp_estimate; an overrun means the estimate was short -- fail
+    // loudly (see the driver's rt_start check) instead of scribbling.
+    if ((uint32_t)hp + nbytes > st->heap_cap) {
+	csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
+	return 0xffff;
+    }
+    st->hp = hp + nbytes;
+    return hp;
+}
+
 // bump-allocate a buffer in the heap, return its id (or BAD_INDEX)
 NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint16_t nbytes,
 				      uint8_t transport, uint32_t xref,
 				      pindir_t dir)
 {
     index_t b = st->nbuf;
-    uint16_t hp = (b == 0) ? 0 : (st->buf[b-1].hp + st->buf[b-1].nbytes);
-    hp = (hp + 3) & ~3;   // 4-align so value_t access into the heap is aligned
-    // Table and heap are sized to csp_estimate; overrun means the estimate was
-    // short -- fail loudly (see the driver's rt_start check) instead of scribbling.
-    if ((b >= st->buf_cap) || (hp + nbytes > st->heap_cap)) {
+    uint16_t hp;
+    if (b >= st->buf_cap) {
 	csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
 	return BAD_INDEX;
     }
+    if ((hp = csp_heap_alloc(st, nbytes)) == 0xffff)
+	return BAD_INDEX;
     st->buf[b].hp        = hp;
     st->buf[b].nbytes    = nbytes;
     st->buf[b].transport = transport;
@@ -3802,7 +3894,7 @@ NOINLINE static int setup_buffer(csp_rt_t* st, index_t ix)
 {
     csp_decl_t d;
     // Only a real #buffer carries bf.nbytes. This function is shared with the
-    // auto-buffer a plain #variable gets, and there the size lives in res.
+    // storage a plain #variable gets, and there the size lives in res.
     int is_buf;
     uint16_t res, nbytes;
     uint8_t transport;
@@ -3815,6 +3907,24 @@ NOINLINE static int setup_buffer(csp_rt_t* st, index_t ix)
     res       = is_buf ? d.bf.nbytes*8 : GET_RES(d.res);
     nbytes    = (res + 7) >> 3;
     transport = is_buf ? d.bf.transport : TR_NONE;
+
+    // A plain #variable OWNS its bytes and nothing can view into it, so it takes
+    // heap and no buffer entry. Only a real #buffer needs the other fifteen
+    // bytes of a csp_buf_t -- a transport, a frame id, a dlc, an owner
+    // back-reference -- and only a #buffer can be a view parent.
+    if (!is_buf) {
+	uint16_t hp;
+	if ((hp = csp_heap_alloc(st, nbytes)) == 0xffff)
+	    return -1;
+	vw = &st->view[st_index(st, ix)];
+	vw->kind   = VIEW_OWN;
+	vw->vt     = d.vt;
+	vw->pos    = hp;
+	vw->len    = (res > VIEW_MAX_LEN) ? VIEW_MAX : (uint8_t)(res - 1);
+	vw->endian = E_NATIVE;
+	vw->flags  = ((res & 7) == 0) ? VIEW_F_SIMPLE : 0;
+	return 0;
+    }
 
     if (transport == TR_CAN) {               // the frame id, out of its constant
 	csp_decl_t id;
@@ -3876,33 +3986,38 @@ NOINLINE static int setup_variable(csp_rt_t* st, index_t ix)
 	setup_view_values(vw, d.vt, pv->buf, d.ca);
 	return 0;
     }
-    if (setup_buffer(st, ix) < 0)         // auto-buffer
+    if (setup_buffer(st, ix) < 0)         // its own storage
 	return -1;
-    // A #local's auto-buffer is single-buffered -- see BUF_F_LOCAL. Marked here,
-    // where the buffer this leaf owns is in hand; csp_slot does the rest.
+    // A #local is single-buffered -- see VIEW_F_LOCAL. Marked here, after
+    // setup_buffer has filled the view in; heap_base and csp_slot do the rest.
     if (d.local)
-	st->buf[vw->buf].flags |= BUF_F_LOCAL;
+	vw->flags |= VIEW_F_LOCAL;
     csp_heap_set(st, vw, DIN,  d.va.init);
     csp_heap_set(st, vw, DOUT, d.va.init);
     return 0;
 }
 
 // config+value types (constant/digital/analog/timer) live as a value_t struct
-// in their own buffer. Allocate it + point a VIEW_SLOT view at it; the caller
-// then fills it through the normal csp_dio_slot(s)/PART path (now -> heap).
+// of their own. Take the heap bytes and point a VIEW_SLOT at them; the caller
+// then fills it through the normal csp_dio_slot(s)/PART path.
+//
+// No csp_buf_t. Nothing can view into one of these -- `bind` refuses anything
+// that is not a #buffer -- so the only field such a leaf ever wanted from a
+// buffer was the heap offset, and that is in the view now.
 NOINLINE static int setup_slot(csp_rt_t* st, index_t ix)
 {
     csp_decl_t d;
-    index_t b;
+    uint16_t hp;
     csp_view_t* vw;
 
     csp_copy_decl(st, INDEX(ix), &d);
-    if ((b = csp_buf_alloc(st, sizeof(value_t), 0, 0, d.dir)) == BAD_INDEX)
+    if ((hp = csp_heap_alloc(st, sizeof(value_t))) == 0xffff)
 	return -1;
     vw = &st->view[st_index(st, ix)];
-    vw->kind = VIEW_SLOT;
-    vw->vt   = d.vt;
-    vw->buf  = b;
+    vw->kind  = VIEW_SLOT;
+    vw->vt    = d.vt;
+    vw->pos   = hp;
+    vw->flags = 0;
     return 0;
 }
 
@@ -4009,10 +4124,14 @@ NOINLINE static void est_leaf(csp_rt_t* st, int j, csp_estimate_t* e)
 	if (d.dir & DIR_INOUT) e->nio++;
 	return;
     default:
-	return;                               // module/end/object/view: no buffer
+	return;                               // module/end/object/view: no storage
     }
-    e->nbuf++;
-    e->heap += (uint16_t)((nbytes + 3) & ~3u);   // 4-aligned like csp_buf_alloc
+    // Only a real #buffer takes a csp_buf_t. Every other leaf owns its bytes and
+    // carries the heap offset in its view -- see view_kind_t. Counting a buffer
+    // for each of them was 16 bytes of table per declaration.
+    if (d.type == DECL_BUFFER)
+	e->nbuf++;
+    e->heap += (uint16_t)((nbytes + 3) & ~3u);   // 4-aligned like csp_heap_alloc
 }
 
 // Memory an already-parsed program needs, WITHOUT running csp_rt_start: the same
@@ -4225,8 +4344,16 @@ index_t csp_param_target(csp_rt_t* st, index_t di)
 // Here rather than in csp_compile.c because the EEPROM patch is loaded by every
 // firmware, including an exec-only one that has no compiler at all.
 //
-// By NAME, not by index: a reflashed program moves declarations around, and an
-// override keyed on position would come back down on whatever now sits there.
+// By NAME -- meaning the CHARACTERS, compared through the string table -- and
+// not by comparing the two `name` fields, which are string POSITIONS. They never
+// match: csp_new_decl calls new_string unconditionally, with no lookup, so the
+// override's "Kp" is a second copy at its own position even though the ROM
+// string table already holds that exact word. (add_state and push_str do look a
+// string up first; declaration names do not.)
+//
+// It is NOT about surviving a reflash. csp_eeprom_load rejects the whole save
+// when rom_header.crc_hdr moves, so a patch never crosses a changed program in
+// the first place -- see the note there.
 NOINLINE static void apply_param_overrides(csp_rt_t* st)
 {
     index_t i;
@@ -4239,6 +4366,451 @@ NOINLINE static void apply_param_overrides(csp_rt_t* st)
 	    continue;
 	csp_dio_slots(st, MAKE_INDEX(0, j), &iptr, &optr);
 	*iptr = *optr = csp_get_decl(st, i).cn.init;
+    }
+}
+
+// ============================================================
+// SETTINGS -- values for things the firmware ALREADY declares: a #param trimmed
+// against this motor, a pin moved because this board is wired differently.
+//
+// A separate store from the eeprom patch because it has a separate LIFETIME.
+// The patch is program text belonging to one firmware and is dropped when
+// rom_fp moves. A setting belongs to the UNIT, and nothing about it goes back
+// into the source, so a reflash must not take it -- see doc/EEPROM.md.
+//
+// That is what decides the encoding. Surviving a reflash means surviving a
+// renumbering of every declaration, so an entry names its target as CHARACTERS
+// and resolves it at boot:
+//
+//   u8 plen | char path[plen] | u8 part | u8 vt | u8 res | value
+//
+// where `value` is sizeof(value_t) raw bytes, or -- when vt is V_STRING -- a u8
+// length followed by that many characters. A string CANNOT be stored as the
+// sindex_t it is in a slot: that is a position in a string table the next boot
+// rebuilds, and it would point somewhere else or nowhere.
+// ============================================================
+
+#define SET_PLEN(p)   ((p)[0])
+#define SET_PATH(p)   ((const char*)((p) + 1))
+#define SET_PART(p)   ((p)[1 + SET_PLEN(p)])
+#define SET_VT(p)     ((p)[2 + SET_PLEN(p)])
+#define SET_RES(p)    ((p)[3 + SET_PLEN(p)])
+#define SET_VAL(p)    ((p) + 4 + SET_PLEN(p))
+#define SET_FIX(plen) (4 + (plen))   // bytes before the value
+
+// Bytes entry `p` occupies. The store is WALKED, not indexed: entries vary in
+// length and there are few enough that a scan beats an offset table that would
+// have to be kept in step with every edit.
+static uint16_t set_len(const uint8_t* p)
+{
+    uint8_t plen = SET_PLEN(p);
+    if (SET_VT(p) == V_STRING)
+	return (uint16_t)(SET_FIX(plen) + 1 + SET_VAL(p)[0]);
+    return (uint16_t)(SET_FIX(plen) + sizeof(value_t));
+}
+
+// Copy a declaration name out of the string table. Returns the length, or 0 for
+// a nameless declaration or one that will not fit.
+static uint8_t name_chars(csp_rt_t* st, sindex_t pos, char* buf, uint8_t room)
+{
+    uint8_t len, i;
+    if (pos == 0)
+	return 0;
+    len = csp_str_byte(st, pos - 1);
+    if ((len == 0) || (len > room))
+	return 0;
+    for (i = 0; i < len; i++)
+	buf[i] = (char)csp_str_byte(st, pos + i);
+    return len;
+}
+
+// The path an entry names: "Kp" for a global, "sys.NodeID" for a member of an
+// object. The same text you would type at the prompt -- which is exactly why a
+// module member costs nothing extra here. There is no object index to find room
+// for in an 8-byte declaration and no new declaration type to invent, because
+// the dot is just a character.
+static uint8_t set_path(csp_rt_t* st, xindex_t ix, char* buf)
+{
+    unsigned m = XOBJ(ix);
+    uint8_t n = 0, k;
+
+    if (m == XOBJ_CURRENT)
+	m = st->cur;
+    if ((m != XOBJ_GLOBAL) && (m <= (unsigned)st->ps.nq)) {
+	k = name_chars(st, decl(st, INDEX(st->object[m]), name), buf,
+		       CSP_SETTINGS_MAX_PATH - 2);
+	if (k == 0)
+	    return 0;
+	n = k;
+	buf[n++] = '.';
+    }
+    k = name_chars(st, decl(st, XIDX(ix), name), buf + n,
+		   (uint8_t)(CSP_SETTINGS_MAX_PATH - n));
+    return k ? (uint8_t)(n + k) : 0;
+}
+
+// What the DECLARATION says this part is -- the value a setting has to differ
+// from to be worth storing.
+//
+// Built by re-seeding a scratch slot through the same setup_*_values the real
+// slot went through, rather than by a second switch over the union members. One
+// place decides what a declared pin/period/pull-up is, so the two cannot drift.
+static int set_declared(csp_rt_t* st, xindex_t ix, csp_part_t part, value_t* vp)
+{
+    csp_decl_t d;
+    value_t ref;
+
+    csp_copy_decl(st, XIDX(ix), &d);
+    if (part == PART_VAL) {
+	if ((d.type != DECL_CONSTANT) || !d.local)
+	    return 0;               // only a #param has a settable value
+	*vp = d.cn.init;
+	return 1;
+    }
+    ref.u = 0;
+    switch (CSP_MASK(d.type, CSP_DECL_TYPE_BITS)) {
+    case DECL_DIGITAL: setup_digital_values(&ref, d.di); break;
+    case DECL_ANALOG:  setup_analog_values(&ref, d.an);  break;
+    case DECL_TIMER:   setup_timer_values(&ref, d.tm);   break;
+    default: return 0;
+    }
+    csp_part_get(&ref, decl_cfg_vt(d.type, d.vt), part, vp);
+    return 1;
+}
+
+// Find the entry for this path+part. Returns its offset, or set_used for "not
+// there" -- which is also where an append goes.
+static uint16_t set_find(csp_rt_t* st, const char* path, uint8_t plen,
+			 csp_part_t part)
+{
+    uint16_t off = 0;
+    while (off < st->set_used) {
+	const uint8_t* p = st->settings + off;
+	if ((SET_PLEN(p) == plen) && (SET_PART(p) == (uint8_t)part) &&
+	    (memcmp(SET_PATH(p), path, plen) == 0))
+	    return off;
+	off += set_len(p);
+    }
+    return st->set_used;
+}
+
+static void set_remove(csp_rt_t* st, uint16_t off)
+{
+    uint16_t n;
+    if (off >= st->set_used)
+	return;
+    n = set_len(st->settings + off);
+    memmove(st->settings + off, st->settings + off + n,
+	    (size_t)(st->set_used - off - n));
+    st->set_used -= n;
+    st->set_dirty = 1;
+}
+
+void csp_settings_clear(csp_rt_t* st)
+{
+    st->set_used = 0;
+    st->set_dirty = 1;
+}
+
+int csp_settings_get(csp_rt_t* st, int n, csp_setting_t* sp)
+{
+    uint16_t off = 0;
+    int k = 0;
+
+    while (off < st->set_used) {
+	const uint8_t* p = st->settings + off;
+	if (k == n) {
+	    sp->path = SET_PATH(p);
+	    sp->plen = SET_PLEN(p);
+	    sp->part = SET_PART(p);
+	    sp->vt   = SET_VT(p);
+	    sp->res  = SET_RES(p);
+	    sp->str  = NULL;
+	    sp->slen = 0;
+	    sp->val.u = 0;
+	    if (sp->vt == V_STRING) {
+		sp->slen = SET_VAL(p)[0];
+		sp->str  = (const char*)(SET_VAL(p) + 1);
+	    }
+	    else
+		// memcpy, NOT a cast through value_t*: the value sits at
+		// 4 + plen, which is odd for half the paths there are, and an
+		// unaligned 32-bit load HardFaults on Cortex-M0.
+		memcpy(&sp->val, SET_VAL(p), sizeof(value_t));
+	    return 1;
+	}
+	off += set_len(p);
+	k++;
+    }
+    return 0;
+}
+
+// Does this path still name something in the running program? Splits on the
+// dot: left of it an object, right of it a member of that object's module.
+//
+// In csp_rt.c rather than in the compiler because an exec-only firmware has no
+// parser and still has to apply its settings at boot.
+int csp_settings_resolve(csp_rt_t* st, const csp_setting_t* sp,
+			 xindex_t* ixp, index_t* objp)
+{
+    tstr_t nm;
+    index_t ix;
+    int dot = -1;
+    int i;
+
+    for (i = 0; i < (int)sp->plen; i++)
+	if (sp->path[i] == '.') { dot = i; break; }
+
+    if (dot < 0) {
+	nm.ptr = (char*)sp->path;
+	nm.len = sp->plen;
+	if ((ix = lookup_decl_in(st, &nm, 0, st->ps.nd)) == BAD_INDEX)
+	    return 0;
+	*ixp = MAKE_XINDEX(XOBJ_GLOBAL, INDEX(ix));
+	*objp = 0;
+	return 1;
+    }
+
+    // The instance, by name. Walked over object[] rather than looked up as a
+    // declaration: object numbers are what the context needs, and this table is
+    // the one that has them.
+    nm.ptr = (char*)sp->path;
+    nm.len = dot;
+    for (i = 1; i <= (int)st->ps.nq; i++) {
+	index_t ox = st->object[i];
+	index_t mx, base;
+	ivalue_t dn;
+	if (!csp_str_eq(st, decl(st, INDEX(ox), name), nm.ptr, nm.len))
+	    continue;
+	mx   = get_mq_m(st, ox);
+	base = (index_t)(INDEX(mx) + 1);
+	dn   = get_md_n(st, mx);
+	nm.ptr = (char*)sp->path + dot + 1;
+	nm.len = sp->plen - dot - 1;
+	if ((ix = lookup_decl_in(st, &nm, base, base + dn)) == BAD_INDEX)
+	    return 0;
+	*ixp = MAKE_XINDEX(i, INDEX(ix));
+	*objp = (index_t)i;
+	return 1;
+    }
+    return 0;
+}
+
+// Would this entry actually be applied to `ix`?
+//
+// The boot-time twin of the ERR_PARAM_SHAPE the parser makes when a #param line
+// redeclares one: a firmware that widened Kp to :32 gets an entry that still
+// says 16, and the declaration wins. Shared with the listing so an entry that
+// is stored but REFUSED does not get tagged as if it were in effect.
+static int set_applies(csp_rt_t* st, const csp_setting_t* sp, xindex_t ix)
+{
+    csp_decl_t d;
+
+    if (sp->part != PART_VAL)
+	return 1;
+    csp_copy_decl(st, XIDX(ix), &d);
+    return (d.type == DECL_CONSTANT) && d.local &&
+	   (sp->res == (uint8_t)GET_RES(d.res)) &&
+	   (sp->vt == CSP_MASK(d.vt, TYPE_BITS));
+}
+
+// What became of this entry: CSP_SET_ORPHAN (no such name any more),
+// CSP_SET_REFUSED (the name is there but the shape moved) or CSP_SET_LIVE.
+// /settings prints all three -- a stored value that is not in effect and does
+// not say so is worse than no store at all.
+int csp_settings_status(csp_rt_t* st, const csp_setting_t* sp)
+{
+    xindex_t ix;
+    index_t obj;
+
+    if (!csp_settings_resolve(st, sp, &ix, &obj))
+	return CSP_SET_ORPHAN;
+    return set_applies(st, sp, ix) ? CSP_SET_LIVE : CSP_SET_REFUSED;
+}
+
+// Is declaration `di` overridden by a setting? For the listing, which otherwise
+// shows a value that is not the one in effect: /list prints what the SOURCE
+// says, and a setting is by definition a value that differs from it.
+//
+// Compares the resolved declaration index, so a module member answers yes when
+// ANY instance of it is overridden -- the listing shows the template, and one
+// line cannot say which instance. /settings has the detail.
+int csp_settings_covers(csp_rt_t* st, index_t di)
+{
+    csp_setting_t s;
+    int n;
+
+    for (n = 0; csp_settings_get(st, n, &s); n++) {
+	xindex_t ix;
+	index_t obj;
+	if (csp_settings_resolve(st, &s, &ix, &obj) && (XIDX(ix) == di) &&
+	    set_applies(st, &s, ix))
+	    return 1;
+    }
+    return 0;
+}
+
+// Record what an IMMEDIATE write set. Rules never reach here -- a rule writing
+// a config part is the program doing its job, not someone configuring the unit,
+// and freezing that into eeprom would restore a value the rule recomputes on
+// the next cycle anyway.
+int csp_settings_record(csp_rt_t* st, xindex_t ix, csp_part_t part, value_t v)
+{
+    char path[CSP_SETTINGS_MAX_PATH];
+    // Staging for the value on its way to the wire. Sized for a STRING, not for
+    // a value_t: a string setting is stored as characters, and cutting it to
+    // sizeof(value_t) turned "Node2" into "Node".
+    uint8_t plen, vt, res, buf[CSP_SETTINGS_MAX_STR + 1];
+    uint8_t vlen;
+    uint16_t off, need;
+    value_t dv;
+    csp_decl_t d;
+
+    if (!CSP_PART_IS_CFG(part) && (part != PART_VAL))
+	return 0;
+    if (!set_declared(st, ix, part, &dv))
+	return 0;               // not a param, not a config part of this type
+    if ((plen = set_path(st, ix, path)) == 0)
+	return 0;
+
+    csp_copy_decl(st, XIDX(ix), &d);
+    vt  = (part == PART_VAL) ? CSP_MASK(d.vt, TYPE_BITS) : V_UNSIGNED;
+    res = (uint8_t)GET_RES(d.res);
+
+    if (vt == V_STRING) {
+	uint8_t n = (v.s == 0) ? 0 : csp_str_byte(st, v.s - 1);
+	uint8_t j;
+	if (n > CSP_SETTINGS_MAX_STR) {
+	    csp_set_error(st, ERR_STRING_SPACE_EXHUSTED);
+	    return -1;               // refuse, rather than store half a name
+	}
+	// A string setting stores CHARACTERS. v.s is a position in a table the
+	// next boot rebuilds from the source, so the position itself is
+	// meaningless once the firmware changes.
+	buf[0] = n;
+	for (j = 0; j < n; j++)
+	    buf[1+j] = csp_str_byte(st, v.s + j);
+	vlen = (uint8_t)(1 + n);
+    }
+    else {
+	memcpy(buf, &v, sizeof(value_t));
+	vlen = sizeof(value_t);
+    }
+
+    off = set_find(st, path, plen, part);
+
+    // A value equal to the declaration is not a setting. Storing it would fill
+    // the store with no-ops, and -- worse -- the day the default changes in the
+    // source it would be silently shadowed by an entry that matched it once.
+    if (vt == V_STRING) {
+	// Compared as CHARACTERS. The two positions differ even for identical
+	// text -- a declaration name is installed without a lookup -- so
+	// dv.s == v.s would almost never be true and every string setting would
+	// be stored, including one that restores the declared name.
+	uint8_t dn = (dv.s == 0) ? 0 : csp_str_byte(st, dv.s - 1);
+	uint8_t j;
+	if (dn == buf[0]) {
+	    for (j = 0; j < dn; j++)
+		if (csp_str_byte(st, dv.s + j) != buf[1+j])
+		    break;
+	    if (j == dn) {
+		set_remove(st, off);
+		return 0;
+	    }
+	}
+    }
+    else if (dv.u == v.u) {
+	set_remove(st, off);
+	return 0;
+    }
+
+    if (off < st->set_used)
+	set_remove(st, off);
+    need = (uint16_t)(SET_FIX(plen) + vlen);
+    if ((uint32_t)st->set_used + need > CSP_SETTINGS_BYTES) {
+	csp_set_error(st, ERR_CANNOT_SAVE);
+	return -1;
+    }
+    {
+	uint8_t* p = st->settings + st->set_used;
+	p[0] = plen;
+	memcpy(p + 1, path, plen);
+	p[1 + plen] = (uint8_t)part;
+	p[2 + plen] = vt;
+	p[3 + plen] = res;
+	memcpy(p + SET_FIX(plen), buf, vlen);
+	st->set_used += need;
+	st->set_dirty = 1;
+    }
+    return 1;
+}
+
+// Lay the store over the declarations.
+//
+// Called from csp_rt_start, so it lands BEFORE csp_setup configures any
+// hardware. That ordering is the whole reason a setting is not an `#in INIT`
+// rule: an INIT block runs at the END of the first cycle, by which time setup
+// has already driven the pin the declaration named.
+void csp_settings_apply(csp_rt_t* st)
+{
+    csp_setting_t s;
+    int n;
+
+    for (n = 0; csp_settings_get(st, n, &s); n++) {
+	xindex_t ix;
+	index_t obj;
+	value_t v;
+	int cur_save;
+	index_t cbase_save;
+
+	// An orphan -- the name was removed or renamed in the firmware now
+	// flashed. Kept, not applied: the next firmware may reintroduce it, and
+	// a calibration is expensive to recreate. /settings shows it.
+	if (!csp_settings_resolve(st, &s, &ix, &obj))
+	    continue;
+	if (!set_applies(st, &s, ix))
+	    continue;
+
+	if (s.vt == V_STRING) {
+	    // lookup_string FIRST. csp_rt_start reruns on every rebuild, and a
+	    // bare new_string would push another copy of the same characters into
+	    // the table each time -- a leak that grows with the number of edits,
+	    // not with the number of settings.
+	    int pos = lookup_string(st, (char*)s.str, s.slen);
+	    if (pos < 0)
+		pos = new_string(st, (char*)s.str, s.slen);
+	    if (pos < 0)
+		continue;           // no string room: leave the declared value
+	    v.s = (sindex_t)pos;
+	}
+	else
+	    v = s.val;
+
+	cur_save = st->cur;
+	cbase_save = st->cbase;
+	if (obj != 0)
+	    csp_ctx_set(st, obj);
+	{
+	    index_t lx = MAKE_INDEX(obj ? CURRENT : GLOBAL, XIDX(ix));
+	    if (s.part == PART_VAL) {
+		// The slots directly, as apply_param_overrides does. A plain
+		// integer slot has no PART_VAL row in the layout table, so
+		// csp_dio_set_part would find r == 0 and write nothing at all.
+		value_t* iptr;
+		value_t* optr;
+		if (csp_dio_slots(st, lx, &iptr, &optr) == 0)
+		    *iptr = *optr = v;
+	    }
+	    else {
+		// Both halves of the transaction. A config part written only to
+		// DOUT would be read back from a DIN still holding the declared
+		// value.
+		csp_dio_set_part(st, lx, v, (csp_part_t)s.part, DOUT);
+		csp_dio_set_part(st, lx, v, (csp_part_t)s.part, DIN);
+	    }
+	}
+	st->cur = cur_save;
+	st->cbase = cbase_save;
     }
 }
 
@@ -4330,6 +4902,7 @@ int csp_rt_start(csp_rt_t* st)
     st->nio = 0;
     st->nm = 0;
     st->nbuf = 0;
+    st->hp = 0;      // the heap cursor is no longer derivable from buf[nbuf-1]
     st->ps.nq = 0;   // rebuilt from DECL_OBJECT below (parse-time table is not
 		     // restored from ROM); idempotent for a freshly parsed program
 
@@ -4439,6 +5012,10 @@ int csp_rt_start(csp_rt_t* st)
 	}
     }
     apply_param_overrides(st);
+    // After the patch overrides -- a setting is the unit's word on a value, and
+    // it is the last one. Before csp_setup, which the platform main calls next:
+    // a re-pinned output must never be configured on the pin the source named.
+    csp_settings_apply(st);
     st->cur   = 0;     // back to global before anything executes
     st->cbase = 0;
     st->cycle = 0;  // init trace shows cycle 0

@@ -157,10 +157,8 @@ redefinition error, and arrays are not re-declarable.
 
 This works even when the parameter shipped inside the firmware image, where its
 value sits in flash and cannot be written. The re-declaration is stored as a
-RAM **shadow**, and start-up applies it onto the ROM parameter's slot **by name**
-— not by position, because a reflashed program moves declarations around and an
-override keyed on where something used to sit would come down on whatever is
-there now. So a tuned value survives rebuilding and reflashing the program.
+RAM **shadow**, and start-up applies it onto the ROM parameter's slot by matching
+the two **names**.
 
 An overridden parameter lists **once**, as the override, tagged `P` where an
 ordinary line carries F/E/R:
@@ -183,6 +181,18 @@ else and it is back after a restart:
 > Kp
 9
 ```
+
+The **shadow** does not survive a changed program. It is a RAM declaration, so it
+rides in the EEPROM patch, and the patch records a fingerprint of the firmware it
+was made against — the image's counts and every section CRC. Start-up drops the
+whole patch when that fingerprint has moved, silently, because a patch belonging
+to a different program is expected after a reflash rather than an error.
+
+The **setting** does survive it. Setting a parameter also records an entry in a
+separate store that is keyed by name and not fingerprinted, so the tuning is
+still there after you add a rule and reflash. That is the store described under
+[Settings](#settings), and it is the mechanism to rely on for a value that
+belongs to the unit rather than to the build.
 
 #### Where a constant is expected
 
@@ -1484,6 +1494,7 @@ Start interactive mode with `-i`:
 | `/latch on` | Hold outputs (freeze current values) |
 | `/latch off` | Release outputs (normal operation) |
 | `/commit` | Commit pending values |
+| `/settings` | Show stored settings — see [Settings](#settings) |
 | `/save` | Save state to storage (EEPROM file) |
 | `/load` | Load state from storage (EEPROM file) |
 | `/quit` (or `/exit`) | Exit |
@@ -1550,6 +1561,7 @@ Seq=Seq+1 ? timeout(Beat)  // 2 R
 | `E` | RAM, and EEPROM holds a copy | nothing permanent — `/load` or the next boot brings it back |
 | `R` | RAM only | **the line is gone** |
 | `P` | a `#param` re-declared over one that shipped in flash | **the tuning is gone** unless it was saved; the shipped value is back |
+| `S` | a **setting** overrides this declaration — see [Settings](#settings) | nothing; settings are a separate store and `/clear` does not touch them |
 
 `E` and `R` are both RAM patches and look identical everywhere else; the letter
 is the only place the difference shows. It is the answer to "what do I lose if I
@@ -1565,6 +1577,97 @@ turns every `R` into an `E`.
 The tag is a trailing **comment**, so a listing pastes straight back in as
 source: select it in one terminal, paste into another, and the tags are ignored
 along with everything else after `//`.
+
+### Settings
+
+A **setting** is a value for something the program already declares, kept for
+*this unit* rather than for this build: a `#param` trimmed against this motor, a
+pin moved because this board is wired differently, a timer period found by
+experiment.
+
+Set it at the prompt and save:
+
+```
+> Kp = 9
+> Led.pin = 7
+> T.period = 900
+/save
+```
+
+That is all. It comes back after a power cycle, and — unlike a rule you typed —
+it also comes back after you **change the program and reflash**. A rule patch
+belongs to one firmware and is dropped when the image changes; a calibration
+belongs to the board and is not, so the two are kept in separate stores.
+
+What may be a setting:
+
+| | recorded |
+|---|---|
+| a `#param` value | yes |
+| `.pin` `.port` `.dir` `.pullup` `.pulldown` `.pwm` `.endian` `.period` | yes |
+| `> Led = 1` — poking an output by hand | no |
+| `.fired` `.rx` `.tx` `.dlc` `.len` | no |
+
+The line is configuration versus state. `> Led.pin = 7` says how the board is
+wired; `> Led = 1` turns the LED on to see which one it is. Only the first is
+worth carrying across a reboot, and keeping the second out is what makes the
+prompt safe to experiment at. A **rule** writing a config part is not recorded
+either — that is the program doing its job, not you configuring the unit.
+
+An object's member is set by path, so a module costs nothing extra:
+
+```
+> sys.NodeID = 124
+> sys.NodeName = "Node2"
+```
+
+#### Reading it back
+
+Three views answer different questions:
+
+```
+/list        what the SOURCE says      -- an overridden line is tagged S
+/state       the LIVE value            -- what the unit is running
+/settings    what is STORED            -- and whether each entry took
+```
+
+```
+> /settings
+Kp = 9
+Led.pin = 7
+sys.NodeID = 124
+30 of 256 bytes, UNSAVED
+```
+
+`UNSAVED` means the store has changed since the last `/save` — the answer to
+"did my tuning actually take" that the `P` tag cannot give.
+
+#### After a reflash
+
+An entry is applied only if the new firmware still has somewhere to put it, and
+`/settings` says so when it does not:
+
+```
+Kp = 9   // orphan                            the name is gone from this image
+Kp = 9   // not applied: width or type moved   `#param Kp:16` became `#param Kp:32`
+```
+
+Neither is deleted. The next image may well reintroduce the name, and a
+calibration measured on real hardware is expensive to recreate — but an entry
+that is not in effect has to say so, or the store stops being trustworthy.
+
+Setting a value **back to what the source says** removes its entry rather than
+storing a redundant override. Otherwise the day you change that default in the
+source it would be silently shadowed by an entry that matched it once.
+
+> **A new `#param` is not a setting.** It is a declaration, so it goes in the
+> rule patch and dies with it on reflash — correctly, since a parameter the
+> running firmware does not declare has nothing to configure. New parameters
+> belong in the source. Parts cover what field work actually needs.
+
+The store is a fixed area of RAM (256 bytes on a board, 1024 on the host) written
+to its own section of the EEPROM, ahead of the patch and with its own CRC — so it
+stays readable even when the patch does not. `doc/EEPROM.md` has the format.
 
 ### Pause and Live
 

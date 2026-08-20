@@ -6,6 +6,66 @@
 #include "csp_strings.h"
 #include "csp_tok.h"   // the operator table, through its accessors
 
+// mapping from opcode => token number
+const uint8_t op_tok[] RODATA = {
+    [OP_ADD] = PLUS,
+    [OP_SUB] = MINUS,
+    [OP_MUL] = ASTERISK,
+    [OP_DIV] = SLASH,
+    [OP_REM] = PERCENT,
+    [OP_SLA] = LTLT,
+    [OP_SRA] = GTGT,
+    [OP_BAND] = AMP,
+    [OP_BOR] = BAR,
+    [OP_BXOR] = CIRC,
+    [OP_AND] = AMPAMP,
+    [OP_OR] = BARBAR,
+    [OP_EQ] = EQ,
+    [OP_LT] = LT,
+    [OP_LTE] = LTEQ,
+    [OP_EQEQ] = EQEQ,
+    [OP_NEQ] = NEQ,
+    [OP_BNOT] = TILDE,
+    [OP_NEG] = MINUS1,
+    [OP_MOV] = PLUS1,
+    [OP_NOT] = EXCLAMATION,
+    [OP_CVTIF] = NONE,
+    [OP_CVTFI] = NONE,
+    [OP_FNEG] = MINUS1,
+    [OP_FMOV] = PLUS1,
+    [OP_FADD] = PLUS,
+    [OP_FSUB] = MINUS,
+    [OP_FMUL] = ASTERISK,
+    [OP_FDIV] = SLASH,
+    [OP_FLT] = LT,
+    [OP_FLTE] = LTEQ,
+    [OP_FEQEQ] = EQEQ,
+    [OP_FNEQ] = NEQ,
+    [OP_ENTER] = NONE,
+    [OP_LEAVE] = NONE,
+    [OP_NEW]   = NONE,
+    [OP_LI]    = NONE,
+    [OP_LIU]   = NONE,
+    [OP_LIH]   = NONE,
+    [OP_ARG]   = NONE,
+    [OP_ST]    = NONE,
+    [OP_STP]   = NONE,
+    [OP_STIMP] = NONE,
+    [OP_TMO]   = NONE,
+    [OP_CHG]   = NONE,
+    [OP_STI]   = NONE,
+    [OP_INSTATE] = NONE,
+    [OP_NINSTATE] = NONE,
+    [OP_SETO] = NONE,
+    [OP_SETOX] = NONE,
+    [OP_LD]    = NONE,
+    [OP_LDP]   = NONE,
+    [OP_CALL]  = NONE,
+    [OP_RULE]  = NONE,
+    [OP_NEXT]  = NONE,
+    [OP_NOP]   = NONE,
+};
+
 #define MAX_STRPTRS 64
 #define MAX_BODY 16
 #define PRINT_STACK 16
@@ -404,8 +464,9 @@ static void exprbuf_fcall(csp_rt_t* st,
     bp->prio[ip->f.x] = 110;
 }
 
-// Name of a config part (<var>.<part>), for disassembly only.
-static rostring_t part_name(csp_part_t part)
+// Name of a config part (<var>.<part>). Used by the disassembler and by
+// /settings, which prints stored entries in the same `name.part` form.
+rostring_t csp_part_name(csp_part_t part)
 {
     switch (part) {
     case PART_PIN:      return ros_pin;
@@ -518,7 +579,7 @@ static void exprbuf_store_part(csp_rt_t* st,
     start = exprbuf_ptr(bp);
     exprbuf_strref(bp, var);
     exprbuf_char(bp, '.');
-    exprbuf_rostr(bp, part_name((csp_part_t)ip->m.y));
+    exprbuf_rostr(bp, csp_part_name((csp_part_t)ip->m.y));
     exprbuf_char(bp, '=');
     // A direction is written `out` in the source, so list it that way instead of
     // the 2 it compiles to -- otherwise the line reads like a magic number and
@@ -579,7 +640,7 @@ static void exprbuf_ld_part(csp_rt_t* st,
     start = exprbuf_ptr(bp);
     exprbuf_strref(bp, var);
     exprbuf_char(bp, '.');
-    exprbuf_rostr(bp, part_name((csp_part_t)ip->m.y));
+    exprbuf_rostr(bp, csp_part_name((csp_part_t)ip->m.y));
     bp->reg[ip->m.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
     bp->prio[ip->m.x] = 110;
 }
@@ -652,7 +713,7 @@ static int reg_consumed(csp_rt_t* st, int i, int reg)
 	    if (ip->a.x == reg) return 0;  // redefined
 	    break;
 	default:
-	    t = ro_byte(&op_info[ip->op].tok);
+	    t = (tok_t) ro_byte(&op_tok[ip->op]);
 	    if (op_table_arity(t) >= 0) {
 		if (ip->a.y == reg || ip->a.z == reg) return 1;
 		if (ip->a.x == reg) return 0;  // redefined
@@ -668,6 +729,20 @@ static int reg_consumed(csp_rt_t* st, int i, int reg)
 // 1. OP_RULE  then we have a condition expression
 // 2. OP_NEXT  then we have a body expression
 //
+// The comparison that reads the same with its operands the other way round.
+// Only the ORDERED ones have a mirror -- `==` and `!=` are their own, which is
+// why the compiler never sets swap on them.
+static tok_t mirror_tok(tok_t t)
+{
+    switch (t) {
+    case LT:    return GT;
+    case LTEQ:  return GTEQ;
+    case GT:    return LT;
+    case GTEQ:  return LTEQ;
+    default:    return t;
+    }
+}
+
 static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 {
     while(i < st->ps.nn) {
@@ -707,6 +782,24 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	case OP_STIMP:  // reactive assignment (<-)
 	    exprbuf_store(st, bp, ip, 1);
 	    break;
+	case OP_TMO: {
+	    // `timeout(T)`. It stopped being a call, so the listing has to build
+	    // the text the source had -- exprbuf_fcall reads a function table
+	    // index, and there is no index here, only the timer.
+	    // The timer FIRST: exprbuf_var writes its characters into the buffer
+	    // and hands back a span for them. Called inside the text below it
+	    // would put the name in twice -- once as characters, once through the
+	    // reference -- and `timeout(T)` listed as `timeout(TT)`.
+	    uint8_t v = exprbuf_var(st, bp, ip->m.mem);
+	    uint8_t* start = exprbuf_ptr(bp);
+	    exprbuf_rostr(bp, ros_timeout);
+	    exprbuf_char(bp, '(');
+	    exprbuf_strref(bp, v);
+	    exprbuf_char(bp, ')');
+	    bp->reg[ip->m.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
+	    bp->prio[ip->m.x] = 110;
+	    break;
+	}
 	case OP_CHG:
 	    // Mark register as "reactive condition" - empty string for AND to skip
 	    bp->reg[ip->m.x] = exprbuf_intern(bp, (uint8_t*)"", 0);
@@ -799,7 +892,21 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	    break;
 	}
 	default:
-	    t = ro_byte(&op_info[ip->op].tok);
+	    t = (tok_t) ro_byte(&op_tok[ip->op]);
+	    // `a > b` was emitted as `b < a` (csp_instr_alu_t.swap), so putting
+	    // the source back takes BOTH halves: exchange the operands AND mirror
+	    // the operator. Either one alone renders a different program -- `a < b`
+	    // or `b > a` -- and a listing is meant to paste back as source.
+	    if (ip->a.swap) {
+		csp_instr_t sw = *ip;
+		sw.a.y = ip->a.z;
+		sw.a.z = ip->a.y;
+		t = mirror_tok(t);
+		if (op_table_arity(t) >= 0)
+		    exprbuf_alu(bp, &sw, op_table_name(t),
+				op_table_arity(t), op_table_prec(t));
+		break;
+	    }
 	    if (op_table_arity(t) >= 0) {
 		exprbuf_alu(bp, ip, op_table_name(t),
 			    op_table_arity(t), op_table_prec(t));
@@ -881,7 +988,7 @@ int csp_print_rule(csp_rt_t* st, int i)
 // And the two platforms cannot drift. Serial.print(v, HEX) renders uppercase
 // where the host's "0x%x" renders lowercase; that difference was invisible
 // until you diffed a board against a host run.
-int csp_print_uint(uvalue_t v)
+NOINLINE int csp_print_uint(uvalue_t v)
 {
     char b[10];                    // 2^32-1 is 10 digits
     int n = 0, i;
@@ -906,12 +1013,12 @@ int csp_print_int(ivalue_t v)
 
 static rochar hex_digits[] RODATA = "0123456789abcdef";
 
-static char hex_digit(uint8_t v)
+NOINLINE static char hex_digit(uint8_t v)
 {
     return (char)ro_byte((rochar*)hex_digits + (v & 0xf));
 }
 
-int csp_print_hex(uvalue_t v)
+NOINLINE int csp_print_hex(uvalue_t v)
 {
     char b[8];
     int n = 0, i;

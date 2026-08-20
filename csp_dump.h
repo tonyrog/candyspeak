@@ -14,9 +14,10 @@ EXTERN_C_BEGIN
 #endif
 
 typedef enum {
-    TEXT,    
+    TEXT,
     ERLANG
 } csp_lang_t;
+
 
 extern void    csp_dump(FILE*, csp_rt_t* st);
 // Provenance stamped into the generated rom.c so a baked firmware says where it

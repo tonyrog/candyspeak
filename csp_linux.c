@@ -19,6 +19,7 @@
 #endif
 
 #include "csp.h"
+#include "csp_compile.h"
 #include "csp_print.h"
 #include "csp_parse.h"    // stop-set budget, reported by print_defines
 #include "csp_dump.h"
@@ -832,9 +833,15 @@ int cycle_input(csp_rt_t* st, FILE* fin)
 int main(int argc, char** argv)
 {
     csp_rt_t state;
-    int r;
     index_t x;
+    // Both belong to reading SOURCE, which this binary cannot do when it is
+    // built to run only its linked image -- the branch that uses them is
+    // compiled out below, so declaring them there too is what keeps the exec
+    // build warning-free.
+#if !defined(CSP_EXEC_ONLY)
+    int r;
     FILE* fin = stdin;
+#endif
     FILE* state_file = stdout;
     FILE* parse_out = stdout;
     FILE* object_file = NULL;

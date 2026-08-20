@@ -71,6 +71,7 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_commit(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_quit(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_latch(csp_rt_t* st, int argc, char* argv[]);
+static int cmd_settings(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_save(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_load(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_images(csp_rt_t* st, int argc, char* argv[]);
@@ -97,6 +98,7 @@ static const csp_cmd_t builtin_cmds[] = {
     { ros_cmd_clear,  ros_h_clear,   cmd_clear },
     { ros_cmd_latch,  ros_h_latch,   cmd_latch },
     { ros_cmd_commit, ros_h_commit,  cmd_commit },
+    { ros_cmd_settings, ros_h_settings, cmd_settings },
     { ros_cmd_save,   ros_h_save,    cmd_save },
     { ros_cmd_load,   ros_h_load,    cmd_load },
     { ros_cmd_quit,   ros_h_quit,    cmd_quit },
@@ -674,6 +676,7 @@ static int cmd_list(csp_rt_t* st, int argc, char* argv[])
     uint32_t bmask;  // body filter variables (filter index bitmask)
     uint32_t smask;  // states named with :S (bitmask over state numbers)
     list_ctx_t ctx;  // what list_rules needs to honour the same filters
+    int sys_skip = 0;// declarations of the built-in Sys block still to skip
     int mod_decl = 0;// decl index of the module block being listed
     const char* name;
     sindex_t cur_mod = 0;        // module name pos being listed (0 = global)
@@ -740,6 +743,28 @@ match:
 	// further up -- usually one baked into flash, which cannot be edited.
 	if (csp_param_target(st, i) != BAD_INDEX)
 	    seg = 'P';
+	// S last, because a setting is applied last: csp_rt_start lays the store
+	// over the declarations AFTER the patch overrides. Without this the line
+	// prints the source's pin or period with no hint that neither is what the
+	// unit is running -- /state has the live value, /list did not say to look.
+	if (csp_settings_covers(st, i))
+	    seg = 'S';
+	// The built-in Sys namespace and its instance are runtime machinery, the
+	// same as the implicit State below: a listing is meant to paste back as
+	// source, and re-declaring a built-in would collide with the one the
+	// runtime makes itself. `sys_skip` counts the module's members and its
+	// #end past as well. Their VALUES are /state's business, and the fields
+	// are documented rather than listed.
+	if ((st->sys_mod != BAD_INDEX) && (i == (int)INDEX(st->sys_mod))) {
+	    sys_skip = decl(st, i, md.n) + 1;   // members + the #end
+	    continue;
+	}
+	if (sys_skip > 0) {
+	    sys_skip--;
+	    continue;
+	}
+	if ((st->sys_obj != BAD_INDEX) && (i == (int)INDEX(st->sys_obj)))
+	    continue;
 	if (d.type == DECL_MODULE) {
 	    cur_mod = d.name;
 	    mod_decl = i;
@@ -766,8 +791,20 @@ match:
 		    // block (prefixed "Mod: ") is not source at all. The body is
 		    // the instructions between the module's OP_ENTER and its
 		    // OP_LEAVE; e.num is how many.
+		    // Ask whether there IS an OP_ENTER, rather than whether ent
+		    // is non-zero. 0 is a perfectly good entry point -- the
+		    // first module in a program puts its OP_ENTER at
+		    // instruction 0 -- and testing for it dropped every rule
+		    // out of every module that happened to be first.
+		    //
+		    // A body-less module (csp_sys_module builds one: a namespace
+		    // has no rules, so it emits no ENTER/LEAVE at all) leaves
+		    // ent at 0 too. The opcode tells the two apart, and it is
+		    // self-validating: whatever instruction 0 holds, if it is
+		    // not an ENTER there is no body to walk.
 		    index_t ent = decl(st, mod_decl, md.ent);
-		    int body_n  = instr(st, ent, e.num);
+		    int body_n  = (instr(st, ent, op) == OP_ENTER)
+			          ? instr(st, ent, e.num) : 0;
 		    ctx.filt = filt; ctx.nf = nf;
 		    ctx.cmask = cmask; ctx.bmask = bmask; ctx.smask = smask;
 		    ctx.scope = NULL;    // inside the block: no further narrowing
@@ -1442,6 +1479,62 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 		j++;
 	}
 	csp_ctx_reset(st);
+    }
+    return CSP_CMD_OK;
+}
+
+// /settings -- what the unit is configured to, as opposed to what the source
+// says. One row per stored entry.
+//
+// An ORPHAN (the path no longer names anything) is shown, not hidden and not
+// dropped: the next firmware may reintroduce the name and a calibration is
+// expensive to recreate, but a store that silently accumulates entries nobody
+// can account for is how you end up mistrusting the whole mechanism.
+static int cmd_settings(csp_rt_t* st, int argc, char* argv[])
+{
+    csp_setting_t s;
+    int n;
+
+    (void)argc; (void)argv;
+    for (n = 0; csp_settings_get(st, n, &s); n++) {
+	int status = csp_settings_status(st, &s);
+	int k;
+
+	for (k = 0; k < (int)s.plen; k++)
+	    csp_print_char(s.path[k]);
+	if (s.part != PART_VAL) {
+	    csp_print_char('.');
+	    csp_print_rostr(csp_part_name((csp_part_t)s.part));
+	}
+	csp_print_lit(" = ");
+	if (s.vt == V_STRING) {
+	    csp_print_char('"');
+	    for (k = 0; k < (int)s.slen; k++)
+		csp_print_char(s.str[k]);
+	    csp_print_char('"');
+	}
+	else if (s.vt == V_UNSIGNED)
+	    csp_print_uint(s.val.u);
+	else
+	    csp_print_int(s.val.i);
+	if (status == CSP_SET_ORPHAN)
+	    csp_print_lit("   // orphan");
+	else if (status == CSP_SET_REFUSED)
+	    csp_print_lit("   // not applied: width or type moved");
+	csp_println();
+    }
+    if (n == 0)
+	csp_print_line("no settings");
+    else {
+	csp_print_uint((uvalue_t)st->set_used);
+	csp_print_lit(" of ");
+	csp_print_uint((uvalue_t)CSP_SETTINGS_BYTES);
+	// Not a ternary: csp_print_line builds a RODATA array from the literal,
+	// so the text has to be one at the call site.
+	if (st->set_dirty)
+	    csp_print_line(" bytes, UNSAVED");
+	else
+	    csp_print_line(" bytes");
     }
     return CSP_CMD_OK;
 }

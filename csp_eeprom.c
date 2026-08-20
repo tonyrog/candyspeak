@@ -24,6 +24,13 @@ static uint16_t rom_fingerprint(void)
 typedef struct {
     uint8_t  magic[4];        // "CSP\0"
     uint16_t version;         // eeprom format version (EEPROM_VERSION)
+    // The SETTINGS descriptor, first and with a version of its own. Settings are
+    // the one part of the store a NEW firmware is required to still understand:
+    // the patch below is fingerprinted and discarded on reflash, a setting is
+    // not. See doc/EEPROM.md.
+    uint16_t set_ver;         // CSP_SETTINGS_VERSION the payload was written with
+    uint16_t set_bytes;       // settings payload size
+    uint16_t crc_set;         // CRC over that payload
     uint16_t rom_fp;          // firmware identity: the live rom_header.crc_hdr
     uint16_t nq;              // object count
     csp_image_header_t ram;   // RAM patch AS AN IMAGE: counts + per-section CRCs
@@ -36,6 +43,9 @@ typedef struct {
 // read and written through ro_memcmp/ro_memcpy. 4 bytes, terminator included.
 static rochar eeprom_magic[4] RODATA = "CSP";
 #define EEPROM_MAGIC eeprom_magic
+// v11: a SETTINGS payload ahead of the patch -- name-keyed values for what the
+//      firmware already declares, with their own version and CRC, and NOT
+//      covered by the rom_fp check that drops the patch on reflash.
 // v10: OP_NINSTATE + INSTATE/RULE bitfield changes (multi-state #in) shift the
 //      saved instruction wire format -- an older save would misread.
 // v9: bufdecl change from nbits nbytes
@@ -45,7 +55,7 @@ static rochar eeprom_magic[4] RODATA = "CSP";
 //     eeprom header itself. Binary-incompatible with v7's flat header.
 // v7: data_crc (single payload CRC).  v6: NAMEPOS_BITS widened decl `name`.
 // The version is what rejects a stale save, before ps.* is touched.
-#define EEPROM_VERSION 10
+#define EEPROM_VERSION 11
 
 // Bytes the #disable bitset occupies for a program with n rules. Rounded up to
 // whole set_group_t words so the read/write is a straight memcpy of the front
@@ -114,6 +124,9 @@ int csp_eeprom_clear(csp_rt_t* st)
 	return -1;
     csp_eeprom_close();
     st->ee_nd = st->ee_nn = 0;    // nothing is backed any more
+    // An erase takes the settings too. They outlive a reflash, not a deliberate
+    // wipe of the store they live in.
+    csp_settings_clear(st);
     return 0;
 }
 
@@ -139,6 +152,9 @@ int csp_eeprom_save(csp_rt_t* st)
     memset(&hdr, 0, sizeof(hdr));
     ro_memcpy(hdr.magic, EEPROM_MAGIC, 4);
     hdr.version = EEPROM_VERSION;
+    hdr.set_ver   = CSP_SETTINGS_VERSION;
+    hdr.set_bytes = st->set_used;
+    hdr.crc_set   = csp_crc16(0xFFFF, st->settings, st->set_used, 0);
     hdr.rom_fp  = rom_fingerprint();
     hdr.nq      = st->ps.nq;
     ram_image(st, &hdr.ram, ram_strp, ram_nd, ram_nn);
@@ -147,6 +163,13 @@ int csp_eeprom_save(csp_rt_t* st)
     hdr.crc_hdr = csp_crc16(0xFFFF, &hdr, sizeof(hdr) - sizeof(uint16_t), 0);
 
     if (csp_eeprom_write(&hdr, sizeof(hdr)) < 0)
+	goto error;
+    // The settings payload FIRST, at a fixed offset immediately behind the
+    // header. Reaching it never involves parsing anything of variable length, so
+    // a patch that is corrupt, half-written or built by a firmware that is no
+    // longer flashed does not stand between you and the calibration.
+    if (st->set_used &&
+	csp_eeprom_write(st->settings, st->set_used) < 0)
 	goto error;
     // Only the RAM patch area (ram_*[0..delta)); ROM stays in flash.
     if (csp_eeprom_write(st->ram_str + (base_strp - st->rom_strp), ram_strp) < 0)
@@ -178,6 +201,7 @@ int csp_eeprom_save(csp_rt_t* st)
     // half-way must not claim coverage it does not have.
     st->ee_nd = ram_nd;
     st->ee_nn = ram_nn;
+    st->set_dirty = 0;
     return 0;
 
 error:
@@ -230,6 +254,40 @@ int csp_eeprom_load(csp_rt_t* st)
     base_nd   = CSP_BASE_ND(st);
     base_nn   = CSP_BASE_NN(st);
     base_strp = CSP_BASE_STRP(st);
+
+    // SETTINGS, before the rom_fp check below -- deliberately. They are keyed by
+    // NAME and are meant to cross a reflash, so they must not be dropped along
+    // with the patch that is not. A payload this firmware cannot read (a bumped
+    // CSP_SETTINGS_VERSION), one too big for the store, or one that fails its own
+    // CRC is dropped -- and SAID, rather than silently as the patch is.
+    if (hdr.set_bytes) {
+	int readable = (hdr.set_ver == CSP_SETTINGS_VERSION) &&
+		       (hdr.set_bytes <= CSP_SETTINGS_BYTES);
+	if (!readable) {
+	    // Not consumed by a read, so the patch behind it would start at the
+	    // wrong byte. Step over it -- the stream has no seek.
+	    uint16_t left = hdr.set_bytes;
+	    uint8_t skip[16];
+	    while (left) {
+		uint16_t n = (left > sizeof(skip)) ? (uint16_t)sizeof(skip) : left;
+		if (csp_eeprom_read(skip, n) < 0)
+		    goto error;
+		left -= n;
+	    }
+	    if (hdr.set_ver != CSP_SETTINGS_VERSION)
+		csp_print_line("eeprom: settings in an unknown format -- ignored");
+	    else
+		csp_print_line("eeprom: settings too large for this build -- ignored");
+	}
+	else if (csp_eeprom_read(st->settings, hdr.set_bytes) < 0)
+	    goto error;
+	else if (csp_crc16(0xFFFF, st->settings, hdr.set_bytes, 0) != hdr.crc_set) {
+	    csp_print_line("eeprom rejected: CRC mismatch in settings section");
+	    st->set_used = 0;
+	}
+	else
+	    st->set_used = hdr.set_bytes;
+    }
 
     // Reject patches saved against a different firmware ROM. rom_header.crc_hdr is
     // a complete fingerprint (counts + every section CRC), so any change to the
@@ -364,6 +422,7 @@ int csp_eeprom_size(csp_rt_t* st)
 {
     index_t nr = csp_n_rules(st);
     return sizeof(eeprom_header_t) +
+	   st->set_used +
 	   (st->ps.strp - CSP_BASE_STRP(st)) +
 	   sizeof(csp_decl_t) * (st->ps.nd - CSP_BASE_ND(st)) +
 	   sizeof(csp_instr_t) * (st->ps.nn - CSP_BASE_NN(st)) +
