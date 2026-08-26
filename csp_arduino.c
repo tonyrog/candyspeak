@@ -101,6 +101,16 @@
 #define CSP_EMBEDDED 1
 #include "csp.h"
 #include "csp_print.h"
+
+// Does this build have a compiler? csp_rt_init wants its state, or NULL for a
+// node that only runs images -- and the tier is a driver's decision, so it is
+// spelled out here rather than guessed at further down.
+#if defined(CSP_EXEC_ONLY)
+#define CSP_CSTATE NULL
+#else
+#include "csp_compile.h"
+#define CSP_CSTATE csp_cstate()
+#endif
 #include "csp_strings.h"
 
 #if defined(__AVR__)
@@ -1244,7 +1254,7 @@ void setup()
     // A failed init leaves a half-set-up state; say so instead of running into a
     // fault. This is where an over-eager claim (freeRam - reserve too tight)
     // would surface, rather than as a mystery hang.
-    if (csp_rt_init(&state, REACTIVE_DEFAULT) < 0) {
+    if (csp_rt_init(&state, REACTIVE_DEFAULT, CSP_CSTATE) < 0) {
 	csp_print_line("FATAL: csp_rt_init failed (out of memory)");
 	return;   // leave loop() a no-op rather than crash
     }

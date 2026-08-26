@@ -1,0 +1,743 @@
+#!/usr/bin/env escript
+%%! -sname gen_chips
+%%
+%% chips/<vendor>/*.terms -> csp_chip.c + csp_chip.h, for ONE chip.
+%%
+%% Generated per build, not checked in: a target carries the geometry of the
+%% part it IS, not a table of thirty it is not. That is also what lets this do
+%% arithmetic the C compiler cannot -- solving a PLL against a board's crystal,
+%% and failing the BUILD when the numbers do not meet rather than at boot.
+%%
+%%     escript utils/gen_chips.erl lpc2129 csp_chip.c csp_chip.h
+%%     escript utils/gen_chips.erl --list
+%%
+%% The files are read as a set: a {chip,...} names a {group,...}, a group names
+%% a {family,...}, and each level only states what it changes. Nothing repeats.
+
+-mode(compile).
+
+%% --list [RE], --boards [RE]. The pattern is a regexp over the NAME, because
+%% "which parts are 212x" and "which boards use a 1754" are the questions
+%% actually asked of a table this size, and grepping the output loses the second
+%% line of each entry.
+main(["--list"]) -> main(["--list", "."]);
+main(["--boards"]) -> main(["--boards", "."]);
+main(["--boards", RE]) ->
+    Db = load(),
+    {ok, MP} = re:compile(RE, [caseless]),
+    Bs = [{N, P} || {board, N, P} <- Db, match(MP, N)],
+    (Bs =:= []) andalso io:format("no board matches ~s~n", [RE]),
+    [begin
+	 Chip = kv(P, chip, '?'),
+	 %% The chip is shown RESOLVED, not as written: a board naming a part
+	 %% that does not exist is the mistake worth catching, and it is
+	 %% invisible until something tries to build it.
+	 Geo = case lookup(Db, chip, Chip) of
+		   false -> "*** no such chip ***";
+		   CP -> f("~wK flash, ~wK ram",
+			   [kv(CP, flash_kb, 0), kv(CP, ram_kb, 0)])
+	       end,
+	 io:format("~-10s ~-10s ~s~n", [N, Chip, Geo]),
+	 io:format("           ~w MHz core, ~w MHz xtal, arena ~w~n",
+		   [kv(P, core, 0) div 1000000, kv(P, xtal, 0) div 1000000,
+		    kv(P, code_budget, '-')]),
+	 case kv(P, enable, []) of
+	     [] -> ok;
+	     E -> io:format("           enable:~s~n", [[f(" ~w",[X]) || X <- E]])
+	 end
+     end || {N, P} <- lists:sort(Bs)],
+    ok;
+%% --check [RE]: hold every board against its chip. This is the whole point of
+%% the terms -- data a script can disagree with. Three distinct verdicts,
+%% because they are three different situations:
+%%
+%%   ERROR    the pin is in the table and does not have that function. The
+%%            board is wrong and the build should not proceed.
+%%   UNKNOWN  the pin is not in the table. The TABLE is incomplete, not the
+%%            board -- say so and carry on.
+%%   MISSING  a peripheral is enabled with no pins muxed for it, or pins are
+%%            muxed for one that is not enabled. Either way something was half
+%%            done, and neither half fails on its own.
+main(["--check"]) -> main(["--check", "."]);
+main(["--check", RE]) ->
+    Db = load(),
+    {ok, MP} = re:compile(RE, [caseless]),
+    Bs = [{N, P} || {board, N, P} <- Db, match(MP, N)],
+    N = lists:sum([check_board(Db, B) || B <- lists:sort(Bs)]),
+    case N of
+	0 -> io:format("~w board(s): ok~n", [length(Bs)]);
+	_ -> io:format("~w problem(s)~n", [N]), halt(1)
+    end;
+main(["--list", RE]) ->
+    Db = load(),
+    {ok, MP} = re:compile(RE, [caseless]),
+    %% `usable` is what the sector table adds up to. Where it is less than the
+    %% part's size the difference is the boot block, and seeing both is how you
+    %% notice a table that is quietly wrong.
+    [begin
+	 G = resolve(Db, P),
+	 Use = lists:sum(kv(G, sectors, [])) div 1024,
+	 NS = length(kv(G, sectors, [])),
+	 Geom = case NS of
+		    %% No table: the part's flash is managed elsewhere (an
+		    %% Arduino core), so say what it erases in and where
+		    %% settings go rather than print two zeroes.
+		    0 -> f("~w-byte pages, store in ~s",
+			   [kv(G, page, 0), kv(G, store, '?')]);
+		    _ -> f("~wK usable, ~w sectors", [Use, NS])
+		end,
+	 Per = [f(" ~s~w", [K, N]) || {K, N} <- kv(G, peripherals, [])],
+	 io:format("~-10s ~-11s ~4wK flash (~s) ~3wK ram~n           ~s~n",
+		   [C, kv(G, group, '?'), kv(P, flash_kb, 0), Geom,
+		    kv(P, ram_kb, 0), Per])
+     end || {C, P} <- chips(Db), match(MP, C)],
+    ok;
+%% --all: every part in one table, for the HOST tools (--devices, --ld). A
+%% target gets one chip; a tool that has to name any of them gets the lot. Both
+%% come out of the same terms, which is the point -- the hand-written copy this
+%% replaces had the LPC1754 at 160K when the part has 128.
+main(["--all", CFile]) ->
+    Db = load(),
+    Chips = [{N, resolve(Db, P)} || {N, P} <- chips(Db)],
+    %% A part with no region map is geometry only: nothing can be written to it
+    %% until someone decides where things go, which is a decision and not a
+    %% default. nregion == 0 makes every csp_region_find miss.
+    ok = file:write_file(CFile, all_source(Chips)),
+    io:format("csp_chips: ~w parts~n", [length(Chips)]),
+    ok;
+%% --ld=PART: the linker script. In the SCRIPT and not in the C tool, because
+%% the answer is arithmetic over the terms and nothing at run time needs it --
+%% a 35-part table compiled into a host binary to serve one command-line flag
+%% is a table that has to be regenerated, linked and kept in step for no reason.
+main(["--ld", Chip]) ->
+    Db = load(),
+    case lookup(Db, chip, list_to_atom(Chip)) of
+	false ->
+	    io:format(standard_error, "gen_chips: no such chip '~s'~n", [Chip]),
+	    halt(1);
+	P -> io:put_chars(ld_script(list_to_atom(Chip), resolve(Db, P)))
+    end;
+%% One fact, one line, nothing else on stdout. For a Makefile, which should not
+%% be parsing a listing meant for a person -- and which pipes it through `head`,
+%% closing the pipe and leaving escript to die on EPIPE with a page of Erlang.
+main(["--chip-of", Name]) ->
+    Db = load(),
+    case lookup(Db, board, list_to_atom(Name)) of
+	false -> io:format(standard_error, "no such board '~s'~n", [Name]), halt(1);
+	P -> io:format("~s~n", [kv(P, chip, '?')])
+    end;
+%% arm7 or cm3, from the family's entry symbol -- the same fact the linker
+%% script needs, asked a different way.
+%% Where the runtime region starts. What a raw .bin has to be flashed AT, and
+%% what an ihex has to be shifted BY -- the two questions a .bin cannot answer
+%% about itself.
+main(["--load-addr", Name]) ->
+    Db = load(),
+    Chip = case lookup(Db, board, list_to_atom(Name)) of
+	       false -> list_to_atom(Name);
+	       P -> kv(P, chip, '?')
+	   end,
+    case lookup(Db, chip, Chip) of
+	false -> io:format(standard_error, "no such chip '~s'~n", [Chip]), halt(1);
+	CP ->
+	    G = resolve(Db, CP),
+	    Sectors = kv(G, sectors, []),
+	    Base = kv(G, flash_base, 0),
+	    First = case [A || {runtime, A, _} <- kv(G, map, [])] of
+			[A|_] -> A;
+			[] -> 0
+		    end,
+	    io:format("0x~8.16.0B~n",
+		      [Base + lists:sum(lists:sublist(Sectors, First))])
+    end;
+main(["--arch-of", Name]) ->
+    Db = load(),
+    Chip = case lookup(Db, board, list_to_atom(Name)) of
+	       false -> list_to_atom(Name);        %% a chip name works too
+	       P -> kv(P, chip, '?')
+	   end,
+    case lookup(Db, chip, Chip) of
+	false -> io:format(standard_error, "no such chip '~s'~n", [Chip]), halt(1);
+	CP ->
+	    G = resolve(Db, CP),
+	    io:format("~s~n", [case kv(G, entry, '_start') of
+				   'ResetISR' -> "cm3";
+				   _ -> "arm7"
+			       end])
+    end;
+%% --board <name> <out.h>: the pin mux and the power bits, generated.
+%%
+%% Two things a board file states in prose and nobody translates twice:
+%%   {pin, 'P0.25', rd1}  ->  a PINSEL field set to the function's index
+%%   {enable, [can1,...]} ->  a PCONP word with everything else CLEARED
+%%
+%% Cleared, not left alone: the reset value has several peripherals powered, so
+%% "not mentioned" has to mean "off" or the default is to run everything.
+main(["--board", Name, HFile]) ->
+    Db = load(),
+    B = list_to_atom(Name),
+    case lookup(Db, board, B) of
+	false ->
+	    io:format(standard_error, "gen_chips: no such board '~s'~n", [Name]),
+	    halt(1);
+	P ->
+	    %% Refuse to generate for a board that does not check out. A
+	    %% generated pin mux from a bad description is a board that comes up
+	    %% almost working, which is the expensive kind.
+	    case check_board(Db, {B, P}) of
+		0 -> ok;
+		N -> io:format(standard_error,
+			       "gen_chips: ~s has ~w problem(s); not generating~n",
+			       [Name, N]),
+		     halt(1)
+	    end,
+	    G = resolve(Db, lookup(Db, chip, kv(P, chip, '?'))),
+	    ok = file:write_file(HFile, board_header(B, P, G, pin_table(Db, G))),
+	    io:format("~s: ~w pins, PCONP 0x~8.16.0B~n",
+		      [Name, length([X || {pin,_,_} = X <- P]),
+		       pconp(P, G)])
+    end;
+main([Chip, CFile, HFile]) ->
+    Db = load(),
+    Name = list_to_atom(Chip),
+    case lookup(Db, chip, Name) of
+	false ->
+	    io:format(standard_error, "gen_chips: no such chip '~s'~n", [Chip]),
+	    io:format(standard_error, "  try: escript utils/gen_chips.erl --list~n", []),
+	    halt(1);
+	P ->
+	    G = resolve(Db, P),
+	    ok = file:write_file(HFile, header(Name, G)),
+	    ok = file:write_file(CFile, source(Name, G)),
+	    io:format("~s: ~w sectors, ~wK flash, ~wK ram~n",
+		      [Chip, length(kv(G, sectors, [])),
+		       kv(G, flash_kb, 0), kv(G, ram_kb, 0)])
+    end;
+main(_) ->
+    io:format(standard_error,
+	      "usage: gen_chips.erl <chip> <out.c> <out.h>~n"
+	      "       gen_chips.erl --list [regexp]~n"
+	      "       gen_chips.erl --boards [regexp]~n"
+	      "       gen_chips.erl --ld <chip>~n"
+	      "       gen_chips.erl --check [regexp]~n"
+		      "       gen_chips.erl --board <board> <out.h>~n", []),
+    halt(1).
+
+%% --- board generation --------------------------------------------------------
+
+%% The PCONP word. Everything the board asked for, and nothing else.
+pconp(P, G) ->
+    Bits = kv(G, pconp, []),
+    Always = kv(G, pconp_always, []),
+    lists:foldl(fun(Dev, Acc) ->
+			case kv(Bits, Dev, undefined) of
+			    undefined -> Acc;   %% no bit: see pconp_always
+			    N -> Acc bor (1 bsl N)
+			end
+		end, 0, kv(P, enable, []) -- Always).
+
+board_header(Name, P, G, Pins) ->
+    Muxed = [{Pin, Fn} || {pin, Pin, Fn} <- P],
+    Chip = kv(P, chip, '?'),
+    [f("// generated by `gen_chips.erl --board ~s` -- do not edit.~n"
+       "// boards/~s.terms is the source.~n"
+       "//~n"
+       "// The pin mux and the power word, which are the two things that are~n"
+       "// stated in a board description and then translated by hand into~n"
+       "// register writes. Doing it here means a pin that cannot have the~n"
+       "// function asked for is a BUILD error -- see `make check-boards`.~n"
+       "~n#ifndef __CSP_BOARD_~s_H__~n#define __CSP_BOARD_~s_H__~n~n",
+       [Name, Name, string:uppercase(atom_to_list(Name)),
+	string:uppercase(atom_to_list(Name))]),
+     f("#define CSP_BOARD_NAME  \"~s\"~n"
+       "#define CSP_CHIP        ~s~n"
+       "#define CSP_XTAL_HZ     ~w~n"
+       "#define CSP_CORE_HZ     ~w~n"
+       "#define CSP_PCLK_DIV    ~w~n",
+       [Name, Chip, kv(P, xtal, 0), kv(P, core, 0), kv(P, pclk_div, 4)]),
+     case kv(P, code_budget, undefined) of
+	 undefined -> [];
+	 CB -> f("#define CSP_CODE_BUDGET ~w~n", [CB])
+     end,
+     case kv(P, no_eeprom, false) of
+	 true -> f("#define CSP_NO_EEPROM   1~n", []);
+	 _ -> []
+     end,
+     case kv(P, console, undefined) of
+	 {U, Baud} -> f("#define CSP_LPC_UART    LPC_~s~n"
+			"#define CSP_LPC_BAUD    ~w~n",
+			[string:uppercase(atom_to_list(U)), Baud]);
+	 _ -> []
+     end,
+     [f("#define CSP_CAN~w_BITRATE ~w~n", [N, kv(Opts, bitrate, 0)])
+      || {can, N, Opts} <- P],
+     f("~n// PCONP: the peripherals this board uses. Written WHOLE, so anything~n"
+       "// not in {enable,...} ends up powered down rather than left at its~n"
+       "// reset value -- several of these come up on.~n"
+       "#define CSP_PCONP_VALUE 0x~8.16.0BUL~n~n", [pconp(P, G)]),
+     f("// Pin mux, as (port, bit, function) triples for csp_board_init.~n"
+       "#define CSP_BOARD_PINS \\~n", []),
+     pin_macro(Muxed, Pins),
+     f("~n#define CSP_BOARD_NPINS ~w~n~n#endif~n", [length(Muxed)])].
+
+pin_macro([], _) -> f("    /* none */~n", []);
+pin_macro(Muxed, Pins) ->
+    N = length(Muxed),
+    [begin
+	 {Port, Bit} = pin_split(Pin),
+	 Fs = case [X || {Po, Bi, X} <- Pins, Po =:= Port, Bi =:= Bit] of
+		  [X|_] -> X; [] -> []
+	      end,
+	 F = case index_of(Fn, Fs) of false -> 0; I -> I end,
+	 %% Every line but the last carries a continuation. Without it the
+	 %% macro is ONE LINE long and everything after it is stray syntax at
+	 %% file scope -- which the compiler does report, but as a hundred
+	 %% errors starting well after the cause.
+	 f("    { ~w, ~2w, ~w }~s  /* ~s = ~w */~s~n",
+	   [Port, Bit, F, case I0 < N of true -> ","; false -> " " end,
+	    atom_to_list(Pin), Fn,
+	    case I0 < N of true -> " \\"; false -> "" end])
+     end || {I0, {Pin, Fn}} <- lists:zip(lists:seq(1, N), Muxed)].
+
+%% --- checking ----------------------------------------------------------------
+
+check_board(Db, {Name, P}) ->
+    Chip = kv(P, chip, '?'),
+    case lookup(Db, chip, Chip) of
+	false ->
+	    io:format("~s: ERROR no such chip '~w'~n", [Name, Chip]),
+	    1;
+	CP ->
+	    G = resolve(Db, CP),
+	    Pins = pin_table(Db, G),
+	    Muxed = [{Pin, Fn} || {pin, Pin, Fn} <- P],
+	    lists:sum([check_pin(Name, Pins, Pin, Fn) || {Pin, Fn} <- Muxed]) +
+		check_dup(Name, Muxed) +
+		check_clock(Name, P, G) +
+		check_enable(Name, P, Muxed)
+    end.
+
+pin_table(Db, G) ->
+    case kv(G, pin_table, undefined) of
+	undefined -> [];
+	T -> case [L || {pins, F, L} <- Db, F =:= T] of
+		 [L|_] -> L;
+		 [] -> []
+	     end
+    end.
+
+%% 'P0.5' -> {0, 5}. The board writes what is printed on the silk screen.
+pin_split(Atom) ->
+    case string:lexemes(atom_to_list(Atom), "Pp.") of
+	[A, B] -> {list_to_integer(A), list_to_integer(B)};
+	_ -> error
+    end.
+
+check_pin(Board, Pins, Pin, Want) ->
+    case pin_split(Pin) of
+	error ->
+	    io:format("~s: ERROR ~w is not a pin name (want P<port>.<bit>)~n",
+		      [Board, Pin]), 1;
+	{Port, Bit} ->
+	    case [Fs || {Po, Bi, Fs} <- Pins, Po =:= Port, Bi =:= Bit] of
+		[] ->
+		    io:format("~s: UNKNOWN ~w -- not in the pin table, "
+			      "cannot verify ~w~n", [Board, Pin, Want]),
+		    0;                 %% the table's gap, not the board's fault
+		[Fs|_] ->
+		    case index_of(Want, Fs) of
+			false ->
+			    io:format("~s: ERROR ~w cannot be ~w (it can be:~s)~n",
+				      [Board, Pin, Want,
+				       [f(" ~w",[X]) || X <- Fs, X =/= '-']]),
+			    1;
+			_ -> 0
+		    end
+	    end
+    end.
+
+%% One pin, two jobs. Silicon has no opinion -- the second PINSEL write simply
+%% wins -- so this is invisible at run time and shows up as one of the two
+%% functions not working. The old cfg.h had exactly this: P0.20 is the CAN2
+%% warning LED and the co-controller's slave select, with a comment saying so.
+check_dup(Board, Muxed) ->
+    Pins = [P || {P, _} <- Muxed],
+    Dups = lists:usort([P || P <- Pins, count(P, Pins) > 1]),
+    [io:format("~s: ERROR ~w is assigned twice (~s)~n",
+	       [Board, P, [f(" ~w",[F]) || {Q, F} <- Muxed, Q =:= P]])
+     || P <- Dups],
+    length(Dups).
+
+count(X, L) -> length([Y || Y <- L, Y =:= X]).
+
+index_of(X, L) -> index_of(X, L, 0).
+index_of(_, [], _) -> false;
+index_of(X, [X|_], I) -> I;
+index_of(X, [_|T], I) -> index_of(X, T, I+1).
+
+%% The core clock against what the part is rated for. A board asking for more
+%% than the silicon does is a board that runs until it warms up.
+check_clock(Board, P, G) ->
+    Want = kv(P, core, 0),
+    %% Nested under {pll,...}, where it belongs -- it is a property of the PLL
+    %% and not a loose number. Looking only at the top level found nothing and
+    %% passed everything, which is the quiet way a check stops checking.
+    Max = kv(kv(G, pll, []), cclk_max, 0),
+    case (Max > 0) andalso (Want > Max) of
+	true ->
+	    io:format("~s: ERROR core ~w MHz exceeds the part's ~w MHz~n",
+		      [Board, Want div 1000000, Max div 1000000]),
+	    1;
+	false -> 0
+    end.
+
+%% Enabled but never muxed, or muxed but never enabled. Both are half a job,
+%% and neither half complains on its own: an unmuxed CAN controller is powered
+%% and silent, a muxed one that is not powered ignores every write.
+check_enable(Board, P, Muxed) ->
+    Enabled = kv(P, enable, []),
+    Funcs = [F || {_, F} <- Muxed],
+    Need = [{can1, [rd1, td1]}, {can2, [rd2, td2]},
+	    {uart0, [txd0, rxd0]}, {uart1, [txd1, rxd1]},
+	    {uart2, [txd2, rxd2]}, {uart3, [txd3, rxd3]}],
+    lists:sum(
+      [begin
+	   On = lists:member(Dev, Enabled),
+	   Has = [X || X <- Pins, lists:member(X, Funcs)],
+	   if On andalso (Has =:= []) ->
+		   io:format("~s: MISSING ~w is enabled but no pins are muxed "
+			     "for it~n", [Board, Dev]), 1;
+	      (not On) andalso (Has =/= []) ->
+		   io:format("~s: MISSING pins muxed for ~w but it is not in "
+			     "{enable,...}~n", [Board, Dev]), 1;
+	      true -> 0
+	   end
+       end || {Dev, Pins} <- Need]).
+
+%% --- reading -----------------------------------------------------------------
+
+load() ->
+    Files = filelib:wildcard("chips/*/*.terms") ++
+	filelib:wildcard("boards/*.terms"),
+    lists:flatten([consult(F) || F <- Files]).
+
+%% Name matching for the listings. An atom, so it comes back to a string first;
+%% caseless because nobody types LPC2129 the same way twice.
+match(MP, Name) ->
+    re:run(atom_to_list(Name), MP, [{capture, none}]) =:= match.
+
+consult(F) ->
+    case file:consult(F) of
+	{ok, Ts} -> Ts;
+	{error, E} ->
+	    io:format(standard_error, "gen_chips: ~s: ~p~n", [F, E]),
+	    halt(1)
+    end.
+
+%% A {Kind, Name, Props} term by kind and name.
+lookup(Db, Kind, Name) ->
+    case [P || {K, N, P} <- Db, K =:= Kind, N =:= Name] of
+	[P|_] -> P;
+	[]    -> false
+    end.
+
+chips(Db) -> [{N, P} || {chip, N, P} <- Db].
+
+kv(Props, K, Default) ->
+    case lists:keyfind(K, 1, Props) of
+	{K, V} -> V;
+	false  -> Default
+    end.
+
+%% Flatten chip -> group -> family into one property list, nearest first: a
+%% chip that states ram_base overrides its family's, and the lookup that finds
+%% it first wins because kv/3 takes the head.
+resolve(Db, ChipProps) ->
+    GName = kv(ChipProps, group, undefined),
+    GProps = case lookup(Db, group, GName) of false -> []; G -> G end,
+    FName = kv(GProps, family, kv(ChipProps, family, undefined)),
+    FProps = case lookup(Db, family, FName) of false -> []; F -> F end,
+    Map = case lookup(Db, map, GName) of false -> []; M -> M end,
+    %% A chip takes a PREFIX of its group's table. One geometry serves an
+    %% LPC2131 (8 sectors, 32K) and an LPC2138 (27, 500K) -- iap_lpc.c carried
+    %% the count per part for exactly this reason.
+    All = expand(kv(GProps, sectors, [])),
+    NSect = kv(ChipProps, nsect, length(All)),
+    Sectors = lists:sublist(All, NSect),
+    check_size(ChipProps, GProps, Sectors),
+    %% csp_sectors_t.n and csp_region_t.first/last are uint8_t: this describes
+    %% erase units we MANAGE, and a part with more than 255 of them is one whose
+    %% flash somebody else owns (an AVR page, a SAMD row). Those parts carry no
+    %% table at all -- refuse rather than emit a truncated one, which is what
+    %% 1024 rows silently became.
+    (length(Sectors) > 255) andalso
+	begin
+	    io:format(standard_error,
+		      "gen_chips: ~w sectors is more than the 255 a region map "
+		      "can address; a part whose flash is managed elsewhere "
+		      "should carry {page,...} and no sector table~n",
+		      [length(Sectors)]),
+	    halt(1)
+	end,
+    %% DERIVED FIRST. kv/3 takes the head, so the expanded sector list has to
+    %% come before the group's raw run-length form or the lookup finds the runs
+    %% -- which generated `{8,8192}, {2,65536}` into a uint32_t array and called
+    %% it three sectors.
+    [{sectors, Sectors}, {map, Map}, {group, GName}, {family, FName}] ++
+	ChipProps ++ GProps ++ FProps.
+
+%% The sector table must FIT the part.
+%%
+%% sum(sectors) <= flash_kb, and no more than that is claimed. A table bigger
+%% than the part is definitely wrong -- it is what the hand-written LPC1754
+%% entry was, 160K of sectors on a 128K device -- while a table SMALLER than the
+%% advertised size is normal and how much smaller is not uniform: an LPC2138 is
+%% 500K of 512 because the boot block overlaps the top of its flash, an LPC2131
+%% is 32K of 32 because its boot block lives elsewhere in the address space.
+%%
+%% So the check is the half that is certain. The shortfall is reported by
+%% --list, where a number that looks wrong can be looked up, rather than being
+%% asserted here from a rule that does not hold across the family.
+check_size(Chip, Group, Sectors) ->
+    Sum = lists:sum(Sectors),
+    Want = kv(Chip, flash_kb, 0) * 1024,
+    _ = Group,
+    case (Want =:= 0) orelse (Sum =< Want) of
+	true -> ok;
+	false ->
+	    io:format(standard_error,
+		      "gen_chips: id ~.16B: ~w sectors = ~wK, which does not fit "
+		      "a ~wK part~n",
+		      [kv(Chip, id, 0), length(Sectors), Sum div 1024,
+		       Want div 1024]),
+	    halt(1)
+    end.
+
+%% [{8,8192},{2,65536}] -> a flat list of sizes. The runs are how a data sheet
+%% states it and how a person checks it; the flat list is what C indexes.
+expand(Runs) ->
+    lists:flatten([lists:duplicate(N, Sz) || {N, Sz} <- Runs]).
+
+%% --- writing -----------------------------------------------------------------
+
+header(Chip, G) ->
+    [banner(Chip),
+     "#ifndef __CSP_CHIP_H__\n#define __CSP_CHIP_H__\n\n",
+     "#include \"csp_flash.h\"\n\n",
+     f("#define CSP_CHIP_NAME       \"~s\"\n", [Chip]),
+     f("#define CSP_CHIP_GROUP      \"~s\"\n", [kv(G, group, '?')]),
+     f("#define CSP_CHIP_FAMILY     \"~s\"\n", [kv(G, family, '?')]),
+     f("#define CSP_CHIP_ID         0x~8.16.0BUL\n", [kv(G, id, 0)]),
+     f("#define CSP_FLASH_BASE      0x~8.16.0BUL\n", [kv(G, flash_base, 0)]),
+     f("#define CSP_FLASH_SECTORS   ~w\n", [length(kv(G, sectors, []))]),
+     f("#define CSP_RAM_BASE        0x~8.16.0BUL\n", [kv(G, ram_base, 0)]),
+     f("#define CSP_RAM_BYTES       ~w\n", [kv(G, ram_kb, 0) * 1024]),
+     f("#define CSP_RAM_RESERVED    ~w\n", [kv(G, ram_reserve, 0)]),
+     "\n// IAP: the entry point and the command numbers, out of the family file.\n",
+     f("#define CSP_IAP_ENTRY       0x~8.16.0BUL\n", [kv(G, iap_entry, 0)]),
+     [f("#define CSP_IAP_~s~*s ~w\n",
+	[string:uppercase(atom_to_list(K)),
+	 12 - length(atom_to_list(K)), "", V])
+      || {K, V} <- kv(G, iap, [])],
+     "\n// How many of each peripheral the PART has. Not how many are wired: a\n"
+     "// board with one transceiver on a two-CAN part says so itself, and that\n"
+     "// belongs in boards/, not here. This is the ceiling.\n",
+     [f("#define CSP_HAS_~s~*s ~w\n",
+	[string:uppercase(atom_to_list(K)),
+	 12 - length(atom_to_list(K)), "", N])
+      || {K, N} <- kv(G, peripherals, [])],
+     case kv(G, store, undefined) of
+	 undefined -> [];
+	 Store -> f("\n// Where settings live on this part.\n"
+		    "#define CSP_STORE_~s      1\n",
+		    [string:uppercase(atom_to_list(Store))])
+     end,
+     "\nextern const csp_device_t csp_chip;\n\n",
+     "#endif\n"].
+
+source(Chip, G) ->
+    Sectors = kv(G, sectors, []),
+    Map = kv(G, map, []),
+    [banner(Chip),
+     "#include \"csp_chip.h\"\n\n",
+     "static const uint32_t sect[] = {\n",
+     rows(Sectors),
+     "};\n\n",
+     "static const csp_region_t reg[] = {\n",
+     [region(R) || R <- Map],
+     "};\n\n",
+     f("const csp_device_t csp_chip = {\n"
+       "    \"~s\",\n"
+       "    { CSP_FLASH_BASE, sect, CSP_FLASH_SECTORS },\n"
+       "    reg, ~w,\n"
+       "    CSP_RAM_BYTES, CSP_RAM_BASE, CSP_RAM_RESERVED,\n"
+       "    \"~s\", \"~s\"\n"
+       "};\n", [Chip, length(Map),
+		 kv(G, entry, '_start'), kv(G, vectors, '.vectors')])].
+
+%% Eight to a line, so the shape of the table is visible: a run of small
+%% sectors and then the big ones is the thing a reader is checking for.
+rows([]) -> [];
+rows(L) ->
+    {Head, Tail} = lists:split(min(8, length(L)), L),
+    [ "   ", [f(" ~w,", [S]) || S <- Head], "\n" | rows(Tail) ].
+
+region({runtime, A, B}) ->
+    f("    { \"runtime\", ~2w, ~2w, CSP_REG_RUNTIME },\n", [A, B]);
+region({store, A, B}) ->
+    f("    { \"store\",   ~2w, ~2w, CSP_REG_STORE   },\n", [A, B]);
+region({patch, A, B}) ->
+    f("    { \"eeprom\",  ~2w, ~2w, CSP_REG_PATCH   },\n", [A, B]);
+region({app, Name, A, B}) ->
+    %% 7 is strlen("runtime"), the longest fixed name, so an app slot lines its
+    %% sector numbers up with the other two rows whatever it is called.
+    f("    { \"~s\",~*s ~2w, ~2w, CSP_REG_APP     },\n",
+      [Name, 7 - length(Name), "", A, B]).
+
+all_source(Chips) ->
+    [banner("every part"),
+     "#include \"csp_flash.h\"\n\n",
+     [part(N, G) || {N, G} <- Chips],
+     "\nstatic const csp_device_t* const parts[] = {\n",
+     [f("    &csp_dev_~s,\n", [N]) || {N, _} <- Chips],
+     "};\n\n",
+     "int csp_part_count(void) { return "
+     ++ integer_to_list(length(Chips)) ++ "; }\n",
+     "const csp_device_t* csp_part_at(int i)\n"
+     "{\n"
+     "    if ((i < 0) || (i >= csp_part_count())) return 0;\n"
+     "    return parts[i];\n"
+     "}\n"].
+
+part(Name, G) ->
+    Sectors = kv(G, sectors, []),
+    Map = kv(G, map, []),
+    [f("// ~s -- ~s, ~w sectors\n", [Name, kv(G, group, '?'), length(Sectors)]),
+     f("static const uint32_t sect_~s[] = {\n", [Name]),
+     rows(Sectors),
+     "};\n",
+     case Map of
+	 [] -> f("#define reg_~s 0\n#define nreg_~s 0\n", [Name, Name]);
+	 _  -> [f("static const csp_region_t reg_~s[] = {\n", [Name]),
+		[region(R) || R <- Map],
+		"};\n",
+		f("#define nreg_~s ~w\n", [Name, length(Map)])]
+     end,
+     f("const csp_device_t csp_dev_~s = {\n"
+       "    \"~s\",\n"
+       "    { 0x~8.16.0BUL, sect_~s, ~w },\n"
+       "    reg_~s, nreg_~s,\n"
+       "    ~w, 0x~8.16.0BUL, ~w,\n"
+       "    \"~s\", \"~s\"\n"
+       "};\n\n",
+       [Name, Name, kv(G, flash_base, 0), Name, length(Sectors),
+	Name, Name,
+	kv(G, ram_kb, 0) * 1024, kv(G, ram_base, 0), kv(G, ram_reserve, 0),
+	kv(G, entry, '_start'), kv(G, vectors, '.vectors')])].
+
+%% One MEMORY entry per region, plus the RAM, plus the SECTIONS that define the
+%% symbols startup expects.
+%%
+%% Generated from the region map because the two say the SAME THING -- `runtime
+%% 0..7` and `LENGTH = 0x10000` -- and two copies of a statement drift. This way
+%% the LINKER enforces the map: an interpreter that outgrows its region fails to
+%% link, loudly, instead of being flashed over the top of an application slot.
+ld_script(Chip, G) ->
+    Regions = kv(G, map, []),
+    Sectors = kv(G, sectors, []),
+    Base = kv(G, flash_base, 0),
+    [f("/* generated by `gen_chips.erl --ld ~s` -- do not edit.~n"
+       " * The region map in chips/<vendor>/*.terms is the source. */~n"
+       "MEMORY~n{~n", [Chip]),
+     [ld_region(R, Sectors, Base) || R <- Regions],
+     %% The reserve comes off the BOTTOM, where the part keeps whatever it keeps
+     %% -- 64 bytes of remapped vectors on an LPC2000. Stating it here rather
+     %% than in a hand-written script is the same argument as the flash regions.
+     f("  ~-8s ~-4s : ORIGIN = 0x~8.16.0B, LENGTH = 0x~8.16.0B~s~n}~n~n",
+       ["DATA", "(rw)",
+	kv(G, ram_base, 0) + kv(G, ram_reserve, 0),
+	kv(G, ram_kb, 0)*1024 - kv(G, ram_reserve, 0),
+	case kv(G, ram_reserve, 0) of
+	    0 -> "";
+	    N -> f("   /* ~w reserved at the bottom */", [N])
+	end]),
+     ld_sections(G, Regions)].
+
+ld_region({K, A, B}, Sectors, Base) -> ld_region_(reg_name(K), K, A, B, Sectors, Base);
+ld_region({app, N, A, B}, Sectors, Base) -> ld_region_(N, app, A, B, Sectors, Base).
+
+reg_name(runtime) -> "runtime";
+reg_name(store)   -> "store";
+reg_name(patch)   -> "eeprom".
+
+ld_region_(Name, Kind, A, B, Sectors, Base) ->
+    Off = lists:sum(lists:sublist(Sectors, A)),
+    Len = lists:sum(lists:sublist(Sectors, A+1, B-A+1)),
+    f("  ~-8s ~-4s : ORIGIN = 0x~8.16.0B, LENGTH = 0x~8.16.0B   /* sector~s ~w~s */~n",
+      [Name, case Kind of runtime -> "(rx)"; _ -> "(r)" end,
+       Base + Off, Len,
+       case A =:= B of true -> ""; false -> "s" end, A,
+       case A =:= B of true -> ""; false -> f("..~w", [B]) end]).
+
+ld_sections(G, Regions) ->
+    case [R || R <- Regions, element(1, R) =:= runtime] of
+	[] -> [];      %% geometry only: MEMORY alone is the answer
+	_ ->
+	    f("ENTRY(~s)~n~n"
+	      "SECTIONS~n"
+	      "{~n"
+	      "  /* The vector table has to be the first thing at the flash~n"
+	      "   * base: the core fetches reset from offset 0 and nothing~n"
+	      "   * relocates it. */~n"
+	      "  .text : {~n"
+	      "    KEEP(*(~s))~n"
+	      "    *(.text*)~n"
+	      "    *(.rodata*)~n"
+	      "    *(.glue_7) *(.glue_7t)~n"
+	      "    . = ALIGN(4);~n"
+	      "    /* The image registry: an ORPHAN section otherwise, placed~n"
+	      "     * by a heuristic that differs by ld version -- and one that~n"
+	      "     * put it on top of .data here. KEEP because nothing~n"
+	      "     * references it: it is found by walking the two symbols. */~n"
+	      "    __start_csp_images = .;~n"
+	      "    KEEP(*(csp_images))~n"
+	      "    __stop_csp_images = .;~n"
+	      "    . = ALIGN(4);~n"
+	      "    /* Unwind tables. Never used -- nothing here throws -- but~n"
+	      "     * the compiler emits them and they are orphans too. */~n"
+	      "    *(.ARM.exidx*)~n"
+	      "    *(.ARM.extab*)~n"
+	      "  } > runtime~n"
+	      "  _data_load = .;~n~n"
+	      "  .data : AT (_data_load) {~n"
+	      "    _data_start = .;~n"
+	      "    *(.data*)~n"
+	      "    . = ALIGN(4);~n"
+	      "    _data_end = .;~n"
+	      "  } > DATA~n~n"
+	      "  .bss (NOLOAD) : {~n"
+	      "    _bss_start = .;~n"
+	      "    *(.bss*)~n"
+	      "    *(COMMON)~n"
+	      "    . = ALIGN(4);~n"
+	      "    _bss_end = .;~n"
+	      "  } > DATA~n~n"
+	      "  /* The stack grows DOWN from the top of RAM. */~n"
+	      "  _stack_top = 0x~8.16.0B;~n"
+	      "  _heap_start = _bss_end;~n~n"
+	      "  /* The same two under the names an LPCXpresso script uses:~n"
+	      "   * csp_lpcopen.c is written against the LPC ecosystem and asks~n"
+	      "   * for these, and a port should not have to care which script~n"
+	      "   * produced the numbers. */~n"
+	      "  _pvHeapStart = _heap_start;~n"
+	      "  _vStackTop   = _stack_top;~n"
+	      "}~n",
+	      [kv(G, entry, '_start'), kv(G, vectors, '.vectors'),
+	       kv(G, ram_base, 0) + kv(G, ram_kb, 0)*1024])
+    end.
+
+banner(Chip) ->
+    f("// GENERATED by utils/gen_chips.erl for ~s -- do not edit.\n"
+      "// The source is chips/<vendor>/*.terms; edit those.\n\n", [Chip]).
+
+f(Fmt, Args) -> io_lib:format(Fmt, Args).

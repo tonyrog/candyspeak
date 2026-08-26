@@ -1,0 +1,46 @@
+%% LPC17xx pin functions: two bits per pin, four choices, PINSEL0..PINSEL9.
+%%
+%% {pins, Family, [{Port, Bit, [F0, F1, F2, F3]}]} -- position IS the function
+%% number, so P0.0 asking for rd1 resolves to 1 by where it sits in the list.
+%% '-' is a reserved combination: selecting it is not "no function", it is an
+%% undefined state.
+%%
+%% THIS TABLE IS PARTIAL, and the checker knows it. A pin that is listed and
+%% asked for a function it does not have is an ERROR; a pin that is not listed
+%% is a WARNING that says so. That distinction is what makes a partial table
+%% safe to grow -- the alternative is a table that has to be complete before it
+%% can be trusted at all, which means it never gets started.
+%%
+%% P0 is verified against a working board: can.c sets P0.0/P0.1 to function 1
+%% for RD1/TD1, sleep.c sets P0.29/P0.30 to function 1 for USB, can_fd.c uses
+%% function 3 on P0.15..P0.18 for the legacy SPI, and adc reads P0.25/P0.26 as
+%% AD0.2/AD0.3. Six independent pins, all agreeing with the user manual.
+{pins, lpc1700,
+ [{0,  0, [gpio, rd1,     txd3,      sda1]},
+  {0,  1, [gpio, td1,     rxd3,      scl1]},
+  {0,  2, [gpio, txd0,    'ad0.7',   '-']},
+  {0,  3, [gpio, rxd0,    'ad0.6',   '-']},
+  {0,  4, [gpio, i2srx_clk, rd2,     'cap2.0']},
+  {0,  5, [gpio, i2srx_ws,  td2,     'cap2.1']},
+  {0,  6, [gpio, i2srx_sda, ssel1,   'mat2.0']},
+  {0,  7, [gpio, i2stx_clk, sck1,    'mat2.1']},
+  {0,  8, [gpio, i2stx_ws,  miso1,   'mat2.2']},
+  {0,  9, [gpio, i2stx_sda, mosi1,   'mat2.3']},
+  {0, 10, [gpio, txd2,    sda2,      'mat3.0']},
+  {0, 11, [gpio, rxd2,    scl2,      'mat3.1']},
+  {0, 15, [gpio, txd1,    sck0,      sck]},
+  {0, 16, [gpio, rxd1,    ssel0,     ssel]},
+  {0, 17, [gpio, cts1,    miso0,     miso]},
+  {0, 18, [gpio, dcd1,    mosi0,     mosi]},
+  {0, 19, [gpio, dsr1,    '-',       sda1]},
+  {0, 20, [gpio, dtr1,    '-',       scl1]},
+  {0, 21, [gpio, ri1,     '-',       rd1]},
+  {0, 22, [gpio, rts1,    '-',       td1]},
+  {0, 23, [gpio, 'ad0.0', i2srx_clk, 'cap3.0']},
+  {0, 24, [gpio, 'ad0.1', i2srx_ws,  'cap3.1']},
+  {0, 25, [gpio, 'ad0.2', i2srx_sda, txd3]},
+  {0, 26, [gpio, 'ad0.3', aout,      rxd3]},
+  {0, 27, [gpio, sda0,    usb_sda,   '-']},
+  {0, 28, [gpio, scl0,    usb_scl,   '-']},
+  {0, 29, [gpio, usb_dp,  '-',       '-']},
+  {0, 30, [gpio, usb_dm,  '-',       '-']}]}.

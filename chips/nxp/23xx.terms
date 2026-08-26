@@ -1,0 +1,28 @@
+%% LPC2300 -- the parts behind lpc23xx.h. ARM7 still, but a later generation:
+%% ethernet, USB host/OTG, more RAM. The flash geometry matches the 213x table
+%% (4K, 32K, 4K) which is why iap_lpc.c reuses it -- but the header family and
+%% the peripheral set are their own, so they live here.
+%%
+%% Two device ids each: the same part from two mask revisions. Both are listed
+%% in iap_lpc.c and both identify the same silicon.
+{group, '23xx', [{family,lpc2000}, {sectors,[{8,4096},{14,32768},{5,4096}]},
+                 {page,4096}]}.
+{map, '23xx', [{runtime,0,9}, {app,"A",10,14}, {app,"B",15,19}, {store,22,26}]}.
+
+{chip, lpc2364, [{group,'23xx'}, {id,16#0603FB02}, {id_alt,16#1600F902},
+                 {flash_kb,128}, {ram_kb,34}, {nsect,11},
+                 {peripherals,[{can,2},{usb,1},{uart,4},{i2c,3},{spi,1},{ssp,2},
+                               {adc,6},{dac,1},{pwm,6},{rtc,1},{wdt,1}]}]}.
+{chip, lpc2366, [{group,'23xx'}, {id,16#0603FB23}, {id_alt,16#1600F923},
+                 {flash_kb,256}, {ram_kb,58}, {nsect,15},
+                 {peripherals,[{can,2},{usb,1},{uart,4},{i2c,3},{spi,1},{ssp,2},
+                               {adc,6},{dac,1},{pwm,6},{rtc,1},{wdt,1}]}]}.
+{chip, lpc2368, [{group,'23xx'}, {id,16#0603FB25}, {id_alt,16#1600F925},
+                 {flash_kb,512}, {ram_kb,58}, {nsect,27},
+                 {peripherals,[{can,2},{usb,1},{uart,4},{i2c,3},{spi,1},{ssp,2},
+                               {adc,8},{dac,1},{pwm,6},{rtc,1},{wdt,1}]}]}.
+{chip, lpc2378, [{group,'23xx'}, {id,16#0703FF25}, {id_alt,16#1700FD25},
+                 {flash_kb,512}, {ram_kb,58}, {nsect,27},
+                 {peripherals,[{ethernet,1},{can,2},{usb,1},{uart,4},{i2c,3},
+                               {spi,1},{ssp,2},{adc,8},{dac,1},{pwm,6},
+                               {rtc,1},{wdt,1}]}]}.

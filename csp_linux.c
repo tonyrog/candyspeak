@@ -23,6 +23,17 @@
 #include "csp_print.h"
 #include "csp_parse.h"    // stop-set budget, reported by print_defines
 #include "csp_dump.h"
+#include "csp_flash.h"
+
+// Does this build have a compiler? csp_rt_init wants its state, or NULL for a
+// node that only runs images -- and the tier is a driver's decision, so it is
+// spelled out here rather than guessed at further down.
+#if defined(CSP_EXEC_ONLY)
+#define CSP_CSTATE NULL
+#else
+#include "csp_compile.h"
+#define CSP_CSTATE csp_cstate()
+#endif
 #include "csp_boards.h"   // generated: make boards
 
 #include <sys/time.h>
@@ -661,6 +672,7 @@ static struct option long_options[] = {
     {"role",         required_argument, 0,  1004},
     {"generation",   required_argument, 0,  1005},
     {"virtual-time", no_argument,       0,  1006},
+    {"checksum",     required_argument, 0,  1009},
     {"memory",       required_argument, 0,  'm'},
     {"pause",        no_argument,       0,  'b'},
     {0,              0,                 0,  0 }
@@ -711,6 +723,7 @@ void usage(const char* prog)
     fprintf(stderr, "      --role=ROLE      Image role: rom|failsafe (default rom)\n");
     fprintf(stderr, "      --generation=N   Image generation, higher is newer\n");
     fprintf(stderr, "      --virtual-time   Jump the clock to the next timer instead of sleeping\n");
+    fprintf(stderr, "      --checksum=BIN   Patch the LPC boot checksum into a .bin and exit\n");
     fprintf(stderr, "  -P, --debug-parse    Enable parser debugging\n");
     fprintf(stderr, "  -S, --debug-scan     Enable tokenizer debugging\n");
     fprintf(stderr, "  -Q, --debug-trace    Enable variable tracing\n");
@@ -952,6 +965,39 @@ int main(int argc, char** argv)
 	    }
 	    virtual_time = 1;
 	    break;
+	case 1009: {  // --checksum=FILE. Patch the boot checksum into a raw
+		      // firmware image, in place.
+		      //
+		      // The word at offset 0x14 is not reserved: the boot ROM
+		      // adds the first eight vectors and enters ISP if they do
+		      // not sum to zero. The part then comes up silent -- no
+		      // fault, no output, and a debugger says the code is fine.
+		      //
+		      // Here rather than in the startup file because it cannot
+		      // be known there: the vector words are what the LINKER
+		      // produced, so only something holding the finished image
+		      // can add them up.
+	    FILE* bf = fopen(optarg, "r+b");
+	    uint8_t v[32];
+	    uint32_t sum;
+	    if (bf == NULL) {
+		fprintf(stderr, "%s: %s: cannot open\n", argv[0], optarg);
+		exit(1);
+	    }
+	    if (fread(v, 1, 32, bf) != 32) {
+		fprintf(stderr, "%s: %s: shorter than a vector table\n",
+			argv[0], optarg);
+		exit(1);
+	    }
+	    sum = csp_lpc_checksum(v);
+	    if (fseek(bf, 0, SEEK_SET) != 0 || fwrite(v, 1, 32, bf) != 32) {
+		fprintf(stderr, "%s: %s: write failed\n", argv[0], optarg);
+		exit(1);
+	    }
+	    fclose(bf);
+	    printf("%s: checksum 0x%08lX\n", optarg, (unsigned long)sum);
+	    exit(0);
+	}
 	case 1006:  // virtual time WITHOUT an -F input file. The clock jumps to
 		    // the next timer deadline instead of sleeping, so a run is
 		    // deterministic and instant -- which is what a timer test
@@ -1057,7 +1103,7 @@ int main(int argc, char** argv)
     }
 #endif
 
-    csp_rt_init(&state, reactive);
+    csp_rt_init(&state, reactive, CSP_CSTATE);
     // -m shrinks the usable code-memory budget to exercise the out-of-memory
     // path. Clamp to what csp_mem_init left for the pool, NOT to mem_size: the
     // line buffer sits in the gap between the two, and raising mem_limit back to

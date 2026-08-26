@@ -1,0 +1,7 @@
+%% LPC2292/2294 -- the CAN parts of the LPC2200 line. 212x flash geometry.
+{chip, lpc2292, [{group,'212x'}, {id,16#0401FF13}, {flash_kb,256}, {ram_kb,16},
+                 {nsect,17}, {peripherals,[{can,2},{uart,2},{i2c,1},{spi,2},
+                                           {adc,8},{pwm,6},{rtc,1},{wdt,1}]}]}.
+{chip, lpc2294, [{group,'212x'}, {id,16#0501FF13}, {flash_kb,256}, {ram_kb,16},
+                 {nsect,17}, {peripherals,[{can,4},{uart,2},{i2c,1},{spi,2},
+                                           {adc,8},{pwm,6},{rtc,1},{wdt,1}]}]}.

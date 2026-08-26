@@ -41,6 +41,8 @@ extern rochar s_Name[5] RODATA;
 #define ros_Name ((rostring_t) s_Name)
 extern rochar s_Serial[7] RODATA;
 #define ros_Serial ((rostring_t) s_Serial)
+extern rochar s_Image[6] RODATA;
+#define ros_Image ((rostring_t) s_Image)
 extern rochar s_err_ok[3] RODATA;
 #define ros_err_ok ((rostring_t) s_err_ok)
 extern rochar s_err_syntax[13] RODATA;

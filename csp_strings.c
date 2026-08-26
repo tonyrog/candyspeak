@@ -20,6 +20,7 @@ rochar s_sys[] RODATA = "sys";
 rochar s_Id[] RODATA = "Id";
 rochar s_Name[] RODATA = "Name";
 rochar s_Serial[] RODATA = "Serial";
+rochar s_Image[] RODATA = "Image";
 rochar s_err_ok[] RODATA = "ok";
 rochar s_err_syntax[] RODATA = "syntax error";
 rochar s_err_string_space[] RODATA = "string space exhausted";

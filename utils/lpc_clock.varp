@@ -1,0 +1,329 @@
+//
+// Calculate various configuartion values
+// given user constraints
+//
+output lpc_clock_io;
+
+// peripheral clock divider config 0 selection (0-3)
+declare PCLK_WDT:2, PCLK_TIMER0:2,
+	PCLK_TIMER1:2, PCLK_UART0:2,
+	PCLK_UART1:2, PCLK_PWM1:2,
+	PCLK_I2C0:2, PCLK_SPI:2,
+	PCLK_SSP1:2, PCLK_DAC:2,
+	PCLK_ADC:2, PCLK_CAN1:2,
+	PCLK_CAN2:2, PCLK_ACF:2;
+// peripheral clock divider config 1 selection (0-3)
+declare PCLK_QEI:2, PCLK_GPIO:2, PCLK_PCB:2, PCLK_I2C1:2, 
+	PCLK_SPP0:2, PCLK_TIMER2:2, PCLK_TIMER3:2, PCLK_UART:2,
+	PCLK_UART3:2, PCLK_I2C2:2, PCLK_I2S:2, PCLK_RIT:2,
+	PCLK_SYSCON:2, PCLK_MC:2;
+// Enable / Disable devives
+declare PCTIM0:1, PCTIM1:1, PCUART0:1, PCUART1:1, PCPWM1:1, PCI2C0:1,
+	PCSPI:1, PCRTC:1, PCSSP1:1, PCAD:1, PCCAN1:1, PCCAN2:1,
+	PCGPIO:1, PCRIT:1, PCMC:1, PCQEI:1, PCI2C1:1, PCSSP0:1,
+	PCTIM2:1, PCTIM3:1, PCUART2:1, PCUART3:1, PCI2C2:1,
+	PCI2S:1, PCGPDMA:1, PCENET:1, PCUSB:1;
+
+// declare other variables
+declare CLKSRC:2;    // 0-2
+declare CCLK_DIV:8;  // 1-256
+declare Xtal:30;
+declare Osc_clk:30;
+declare Rtc_clk:30;
+declare Irc_osc:30;
+declare F_in:30;
+declare MSEL:15;   // => (1-8000)
+declare NSEL:8;    // => (1-256)
+declare TCCO0:40;  // 30+9+1
+declare F_cco0:30; // 0-1G    (275M - 550M)
+declare CCLK:30;   //
+declare CCLK_DIV2:30;   //
+declare CCLK_DIV4:30;   //
+declare CCLK_DIV6:30;   //
+declare CCLK_DIV8:30;   //
+declare MSEL1:5;
+declare PSEL:2;
+declare PSELExp:4;  // (1<<PSEL) == 1,2,4,8
+declare F_cco1:30;
+declare F_usb:30;
+// Peripheral clocks
+declare WDT_Pclk:30;
+declare TIMER0_Pclk:30;
+declare TIMER1_Pclk:30;
+declare UART0_Pclk:30;
+declare UART1_Pclk:30;
+declare SPI_Pclk:30;
+
+// spi bitrates
+declare SPI_bitrate:30;
+declare SPI_actual_bitrate:30;
+declare SPI_counter0:20;
+declare SPI_counter1:20;
+declare SPI_counter2:20;
+declare SPI_counter3:20;
+// uart0 baudrate
+declare UART0_baudrate:20;
+declare UART0_actual_baudrate:20;
+declare UART0_div:30;
+declare UART0_div_h:8;
+declare UART0_div_l:8;
+// Finally register settings
+declare CLKSRCSEL_Val:32;
+declare CCLKCFG_Val:32;
+declare PLL0CFG_Val:32;
+declare PLL1CFG_Val:32;
+declare PCLKSEL0_Val:32;
+declare PCLKSEL1_Val:32;
+declare PCONP_Val:32;
+
+(CLKSRC == 1) &&           //% 0-2
+(CLKSRC >= 0) && (CLKSRC <= 2) &&
+(Xtal == 12000000) &&      // external oscillator 12 Mhz (Clcksrc==1)
+(Osc_clk == Xtal) &&
+(Rtc_clk == 32000) &&      // (Clcksrc==2)
+(Irc_osc == 4000000) &&    // (Clcksrc==0)
+// select oscillator
+(F_in == (Irc_osc * (CLKSRC == 0)) +
+         (Osc_clk * (CLKSRC == 1)) +
+	 (Rtc_clk * (CLKSRC == 2)))  &&
+//
+(MSEL == 99) && (MSEL <= 7999) && // (1-8000)
+(NSEL == 5) &&
+(TCCO0 == 2*(MSEL+1)*F_in) &&
+(F_cco0 == TCCO0 / (NSEL+1)) &&             // 275-550 MHz
+(F_cco0 >= 275000000) && (F_cco0 <= 550000000) &&
+(CCLK_DIV == 4) && (CCLK_DIV >= 1) && (CCLK_DIV <= 256) &&
+(CCLK == F_cco0 / CCLK_DIV) &&
+(MSEL1 == 3) &&
+(MSEL1 <= 31) && // 0-31 (for USB must be <= 4)
+(PSEL == 1) && // 0=>1,1=>2,2=>4,3=>8
+(PSELExp == ((PSEL==0)*1 + (PSEL==1)*2 + (PSEL==2)*4 + (PSEL==3)*8)) &&
+(F_cco1 == F_in*(MSEL1+1)*2*PSELExp) && // 156-320 MHz
+(F_usb == F_cco1 / (2*PSELExp)) &&
+// peripherals power control (inital setup)
+// 0x042887DE = 00000100 00101000 10000111 11011110
+//           = 0,   // .0
+    (PCTIM0   == 1) &&   // .1
+    (PCTIM1   == 1) &&   // .2
+    (PCUART0  == 1) &&   // .3
+    (PCUART1  == 1) &&   // .4
+    //        == 0       // .5
+    (PCPWM1   == 1) &&   // .6
+    (PCI2C0   == 1) &&   // .7
+
+    (PCSPI    == 1) &&   // .8
+    (PCRTC    == 1) &&   // .9
+    (PCSSP1   == 1) &&   // .10
+    //        == 0) &&   // .11
+    (PCAD     == 0) &&   // .12
+    (PCCAN1   == 0) &&   // .13
+    (PCCAN2   == 0) &&   // .14
+    (PCGPIO   == 1) &&   // .15
+    
+    (PCRIT    == 0) &&   // .16
+    (PCMC     == 0) &&   // .17
+    (PCQEI    == 0) &&   // .18
+    (PCI2C1   == 1) &&   // .19
+    //        == 0) &&   // .20
+    (PCSSP0   == 1) &&   // .21
+    (PCTIM2   == 0) &&   // .22
+    (PCTIM3   == 0) &&   // .23
+
+    (PCUART2  == 0) &&   // .24
+    (PCUART3  == 0) &&   // .25
+    (PCI2C2   == 1) &&   // .26
+    (PCI2S    == 0) &&   // .27
+    //       == 0) &&   // .28
+    (PCGPDMA  == 0) &&   // .29
+    (PCENET   == 0) &&   // .30
+    (PCUSB    == 0) &&   // .31
+    
+    // peripheral clock divider config 0 selection (0-3)
+    (PCLK_WDT    == 0) &&
+    (PCLK_TIMER0 == 0) &&
+    (PCLK_TIMER1 == 0) &&
+    (PCLK_UART0  == 0) &&  // 1 is better try if needed
+    (PCLK_UART1  == 0) &&
+    (PCLK_PWM1   == 0) &&
+    (PCLK_I2C0   == 0) &&    
+    (PCLK_SPI    == 1) &&
+    (PCLK_SSP1   == 0) &&
+    (PCLK_DAC    == 0) &&
+    (PCLK_ADC    == 0) &&
+    (PCLK_CAN1   == 0) &&  // DIV_6
+    (PCLK_CAN2   == 0) &&  // DIV_6
+    (PCLK_ACF    == 0) &&  // DIV_6
+    // peripheral clock divider config 1 selection (0-3)    
+    (PCLK_QEI == 0) &&
+    (PCLK_GPIO == 0) &&
+    (PCLK_PCB == 0) &&
+    (PCLK_I2C1 == 0) &&
+    (PCLK_SPP0 == 0) &&
+    (PCLK_TIMER2 == 0) &&
+    (PCLK_TIMER3 == 0) &&
+    (PCLK_UART2 == 0) &&
+    (PCLK_UART3 == 0) &&
+    (PCLK_I2C2 == 0) &&
+    (PCLK_I2S == 0) &&
+    (PCLK_RIT == 0) &&
+    (PCLK_SYSCON == 0) &&
+    (PCLK_MC == 0) &&
+    // clocks 0
+    (CCLK_DIV4 == CCLK / 4) &&
+    (CCLK_DIV2 == CCLK / 2) &&
+    (CCLK_DIV8 == CCLK / 8) &&
+    (CCLK_DIV6 == CCLK / 6) &&        
+
+    (WDT_Pclk == (CCLK_DIV4*(PCLK_WDT==0)) +
+    	      	 (CCLK * (PCLK_WDT==1)) +
+       	         (CCLK_DIV2*(PCLK_WDT==2)) +
+       	         (CCLK_DIV8*(PCLK_WDT==3))) &&
+    (TIMER0_Pclk == (CCLK_DIV4*(PCLK_TIMER0==0)) +
+    	      	   (CCLK * (PCLK_TIMER0==1)) +
+       	           (CCLK_DIV2*(PCLK_TIMER0==2)) +
+       	           (CCLK_DIV8*(PCLK_TIMER0==3))) &&
+    (TIMER1_Pclk == (CCLK_DIV4*(PCLK_TIMER1==0)) +
+    	      	   (CCLK * (PCLK_TIMER1==1)) +
+       	           (CCLK_DIV2*(PCLK_TIMER1==2)) +
+       	           (CCLK_DIV8*(PCLK_TIMER1==3))) &&
+
+    (UART0_Pclk == (CCLK_DIV4*(PCLK_UART0==0)) +
+    	      	   (CCLK * (PCLK_UART0==1)) +
+       	           (CCLK_DIV2*(PCLK_UART0==2)) +
+       	           (CCLK_DIV8*(PCLK_UART0==3))) &&
+    (UART1_Pclk == (CCLK_DIV4*(PCLK_UART1==0)) +
+    	      	   (CCLK * (PCLK_UART1==1)) +
+       	           (CCLK_DIV2*(PCLK_UART1==2)) +
+       	           (CCLK_DIV8*(PCLK_UART1==3)))	&&
+		   
+    (SPI_Pclk == (CCLK_DIV4*(PCLK_SPI==0)) +
+    	      	   (CCLK * (PCLK_SPI==1)) +
+       	           (CCLK_DIV2*(PCLK_SPI==2)) +
+       	           (CCLK_DIV8*(PCLK_SPI==3))) &&
+// SPI bitrates
+   (SPI_bitrate == 10000000) && // requested bitrate (10MHz)
+   (SPI_counter0 == SPI_Pclk / SPI_bitrate)  &&
+   (SPI_counter1 == max(8, SPI_counter0)) &&
+   (SPI_counter2 == ((SPI_counter1+1) & -2)) &&
+   (SPI_counter3 == min(254, SPI_counter2)) &&
+   (SPI_actual_bitrate == SPI_Pclk / SPI_counter3) &&
+   // Here add a formula to test tolerance
+
+   (UART0_baudrate == 115200) &&
+   (UART0_div == UART0_Pclk / (UART0_baudrate * 16)) &&
+   (UART0_div_h == (UART0_div / 256)) &&
+   (UART0_div_l == (UART0_div - (UART0_div_h * 256))) &&
+   (UART0_actual_baudrate == (UART0_Pclk / (UART0_div*16))) &&
+   // Here add a formula to test tolerance   
+   
+/*
+    PWM1_Pclk = element(PCLK_PWM1+1,  PCLK_DIV_8),
+    I2C0_Pclk = element(PCLK_I2C0+1,  PCLK_DIV_8),
+    SSP1_Pclk = element(PCLK_SSP1+1,  PCLK_DIV_8),
+    DAC_Pclk = element(PCLK_DAC+1,  PCLK_DIV_8),
+    ADC_Pclk = element(PCLK_ADC+1,  PCLK_DIV_8),
+    CAN1_Pclk = element(PCLK_CAN1+1, PCLK_DIV_6),
+    CAN2_Pclk = element(PCLK_CAN1+1, PCLK_DIV_6),
+    ACF_Pclk = element(PCLK_ACF+1, PCLK_DIV_6),
+    // Clocks1
+    element(PCLK_QEI+1, PCLK_DIV_8),
+    GPIO_Pclk = element(PCLK_GPIO+1, PCLK_DIV_8),
+    PCB_Pclk = element(PCLK_PCB+1, PCLK_DIV_8),
+    I2C1_Pclk = element(PCLK_I2C1+1, PCLK_DIV_8),
+    SPP0_Pclk = element(PCLK_SPP0+1, PCLK_DIV_8),
+    TIMER2_Pclk = element(PCLK_TIMER2+1, PCLK_DIV_8),
+    TIMER3_Pclk = element(PCLK_TIMER3+1, PCLK_DIV_8),
+    UART2_Pclk = element(PCLK_UART2+1, PCLK_DIV_8),
+    UART3_Pclk = element(PCLK_UART3+1, PCLK_DIV_8),
+    I2C2_Pclk = element(PCLK_I2C2+1, PCLK_DIV_8),
+    I2S_Pclk = element(PCLK_I2S+1, PCLK_DIV_8),
+    RIT_Pclk = element(PCLK_RIT+1, PCLK_DIV_8),
+    SYSCON_Pclk = element(PCLK_SYSCON+1, PCLK_DIV_8),
+    MC_Pclk = element(PCLK_MC+1, PCLK_DIV_8),
+*/
+
+// CLKSRCSEL_Val
+(CLKSRCSEL_Val[0:1] == CLKSRC) &&
+(CLKSRCSEL_Val[2:31] == 0) &&
+
+// CCLKCFG_Val
+(CCLKCFG_Val == CCLK_DIV - 1) &&
+
+// PLL0CFG_Val
+(PLL0CFG_Val[0:14] == MSEL) &&
+(PLL0CFG_Val[15:15] == 0) &&
+(PLL0CFG_Val[16:23] == NSEL) &&
+(PLL0CFG_Val[24:31] == 0) &&
+
+// PLL1CFG_Val
+(PLL1CFG_Val[0:4] == MSEL1) &&
+(PLL1CFG_Val[5:6] == PSEL) &&
+(PLL1CFG_Val[7:31] == 0) &&
+
+// PCLKSEL0_Val
+(PCLKSEL0_Val[0:1] == PCLK_WDT) &&
+(PCLKSEL0_Val[2:3] == PCLK_TIMER0) &&
+(PCLKSEL0_Val[4:5] == PCLK_TIMER1) &&
+(PCLKSEL0_Val[6:7] == PCLK_UART0) &&
+(PCLKSEL0_Val[8:9] == PCLK_UART1) &&
+(PCLKSEL0_Val[10:11] == 0) && // 10?
+(PCLKSEL0_Val[12:13] == PCLK_PWM1) &&
+(PCLKSEL0_Val[14:15] == PCLK_I2C0) && 
+(PCLKSEL0_Val[16:17] == PCLK_SPI) &&
+(PCLKSEL0_Val[18:19] == 0) && // 18
+(PCLKSEL0_Val[20:21] == PCLK_SSP1) &&
+(PCLKSEL0_Val[22:23] == PCLK_DAC) &&
+(PCLKSEL0_Val[24:25] == PCLK_ADC) &&
+(PCLKSEL0_Val[26:27] == PCLK_CAN1) &&
+(PCLKSEL0_Val[28:29] == PCLK_CAN2) &&
+(PCLKSEL0_Val[30:31] == PCLK_ACF) &&
+// PCLKSEL1_Val
+(PCLKSEL1_Val[0:1] == PCLK_QEI) &&
+(PCLKSEL1_Val[2:3] == PCLK_GPIO) && 
+(PCLKSEL1_Val[4:5] == PCLK_PCB) &&
+(PCLKSEL1_Val[6:7] == PCLK_I2C1) &&
+(PCLKSEL1_Val[8:9] == 0) &&
+(PCLKSEL1_Val[10:11] == PCLK_SPP0) &&
+(PCLKSEL1_Val[12:13] == PCLK_TIMER2) &&
+(PCLKSEL1_Val[14:15] == PCLK_TIMER3) &&
+(PCLKSEL1_Val[16:17] == PCLK_UART2) && 
+(PCLKSEL1_Val[18:19] == PCLK_UART3) &&
+(PCLKSEL1_Val[20:21] == PCLK_I2C2) &&
+(PCLKSEL1_Val[22:23] == PCLK_I2S) &&
+(PCLKSEL1_Val[24:25] == 0) &&
+(PCLKSEL1_Val[26:27] == PCLK_RIT) &&
+(PCLKSEL1_Val[28:29] == PCLK_SYSCON) &&
+(PCLKSEL1_Val[30:31] == PCLK_MC)  &&
+// Peripher power control value
+(PCONP_Val[0] == 0) &&
+(PCONP_Val[1] == PCTIM0) &&    
+(PCONP_Val[2] == PCTIM1) &&
+(PCONP_Val[3] == PCUART0) &&
+(PCONP_Val[4] == PCUART1) &&
+(PCONP_Val[5] == 0) &&
+(PCONP_Val[6] == PCPWM1) &&
+(PCONP_Val[7] == PCI2C0) &&
+(PCONP_Val[8] == PCSPI) &&
+(PCONP_Val[9] == PCRTC) &&
+(PCONP_Val[10] == PCSSP1) &&
+(PCONP_Val[11] == 0) &&
+(PCONP_Val[12] == PCAD) &&
+(PCONP_Val[13] == PCCAN1) &&
+(PCONP_Val[14] == PCCAN2) &&
+(PCONP_Val[15] == PCGPIO) &&
+(PCONP_Val[16] == PCRIT) &&
+(PCONP_Val[17] == PCMC) &&
+(PCONP_Val[18] == PCQEI) &&
+(PCONP_Val[19] == PCI2C1) &&
+(PCONP_Val[20] == 0) &&
+(PCONP_Val[21] == PCSSP0) &&
+(PCONP_Val[22] == PCTIM2) &&
+(PCONP_Val[23] == PCTIM3) &&
+(PCONP_Val[24] == PCUART2) &&
+(PCONP_Val[25] == PCUART3) &&
+(PCONP_Val[26] == PCI2C2) &&
+(PCONP_Val[27] == PCI2S) &&
+(PCONP_Val[28] == 0) &&
+(PCONP_Val[29] == PCGPDMA) &&
+(PCONP_Val[30] == PCENET) &&
+(PCONP_Val[31] == PCUSB)

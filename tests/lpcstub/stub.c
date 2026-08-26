@@ -128,3 +128,17 @@ void Chip_EEPROM_Read(LPC_EEPROM_T* p, uint16_t o, uint16_t a, void* d,
  * gets these from the LPCXpresso/LPCOpen linker script. */
 char _pvHeapStart;
 char _vStackTop;
+
+// --- the tick seam ----------------------------------------------------------
+// csp_lpcopen.c asks the chip layer for the periodic tick (see the declaration
+// there). The stub has no timer and no interrupts, so this reports a period
+// that never advances -- enough to link and to let csp_time_ms, which the
+// stub's own SysTick_Handler drives, be the thing under test.
+void Chip_Tick_Init(uint32_t hz) { (void)hz; }
+
+// Microseconds. The platform file's own csp_ticks_ms is static to it, so this
+// counts separately -- and every __WFI() above calls SysTick_Handler, which is
+// what advances both. One step per call, which is enough for a timeout to
+// expire and for time to be monotonic, and no more precision than that.
+static uint32_t stub_us = 0;
+uint32_t Chip_Tick_Us(void) { stub_us += 1000; return stub_us; }

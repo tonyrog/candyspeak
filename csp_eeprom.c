@@ -248,7 +248,7 @@ int csp_eeprom_load(csp_rt_t* st)
 
     // Rebuild the ROM baseline, then load the RAM patches on top of it.
     reactive = st->reactive;
-    csp_rt_init(st, reactive);
+    csp_rt_init(st, reactive, st->cs);   // keep the compiler, if there is one
     did_init = 1;       // from here a failure has torn down view/heap/tables
     csp_load_rom(st);   // rebase ps.* to the ROM sizes (no-op if no firmware)
     base_nd   = CSP_BASE_ND(st);

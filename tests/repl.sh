@@ -186,33 +186,7 @@ got=$(printf '#variable X = 0\n#field Bad:8 unsigned X[0..7]\n/quit\n' |
 	  repl ./csp "$D/t10b.db" --no-eeprom | grep -v '^OK$')
 ck "a field over a non-buffer names it" "Error: X is not a buffer" "$got"
 
-# --- 10. an over-long line is refused, not truncated -------------------------
-# A line past the buffer used to lose its tail silently and run anyway. That is
-# not a partial command, it is a DIFFERENT one: `#disable 12` cut short disables
-# rule 1. The paste that triggers it is exactly the case the REPL exists for.
-echo "long line:"
-# Padded with a comment, so the line is over-long while everything IN it is
-# valid -- what comes back has to be the length complaint, not a parse error.
-# --board pins the arena to a MEASURED board, so the number this asserts is the
-# one a mega really has -- the buffer is a 32nd of the pool, so without a fixed
-# pool the limit would change with the machine running the suite.
-pad=$(printf 'x%.0s' $(seq 1 400))
-long="#variable Wide = 1 // $pad"
-got=$(printf '%s\n/quit\n' "$long" | repl ./csp "$D/t11.db" --no-eeprom --board mega |
-	  tr -d '\a')
-ck "an over-long line is refused with a reason" \
-"Error: line too long, max 95 characters -- line ignored" "$got"
-
-# ...and nothing from it reached the program: refused, not run short.
-got=$(printf '%s\n/list\n/quit\n' "$long" | repl ./csp "$D/t12.db" --no-eeprom --board mega |
-	  tr -d '\a' | grep -c 'Wide')
-ck "and nothing from it was declared" "0" "$got"
-
-# The buffer is sized from the pool, which is the whole point of moving it there:
-# the same paste that a mega refuses goes through on a board with room.
-got=$(printf '%s\n/list\n/quit\n' "$long" | repl ./csp "$D/t13.db" --no-eeprom |
-	  tr -d '\a' | grep -c 'Wide')
-ck "a board with room accepts the same line" "1" "$got"
+# (over-long lines: tests/slow.sh -- they wait on timeouts)
 
 # --- 10b. a declaration that does not FIT is refused, not fatal --------------
 # Whether a declaration fits is not known at parse time: it is the derived tables
@@ -237,6 +211,7 @@ ck "and the REPL still evaluates after the refusal" "42" "$got"
 got=$(printf '#buffer B1:1023\n#buffer B2:1023\n/list\n/quit\n' |
 	  repl ./csp "$D/t10e.db" --no-eeprom --board mega | grep -c 'B2')
 ck "and nothing from the refused line was declared" "0" "$got"
+
 
 # --- 11. a module lists as a block ------------------------------------------
 # The members were inside `#module ... #end`, but the RULES came after it with a
@@ -425,29 +400,8 @@ ck "a pasted module survives and lists back" \
   T=1 ? timeout(T)  // 6 R
 #end   // R' "$got"
 
-# --- 15. an over-long line does not strand the reader ------------------------
-# The queue must never reach "full with no complete line in it": that is the one
-# state where the reader stops draining and nothing can make it start again --
-# and on a UART it would leave XOFF asserted with no way to release it.
-# csp_line_input stops storing at line_size - 1 and raises line_ovf instead, so
-# the reader keeps draining and discarding until the newline. Proof: a line far
-# past the limit, then ordinary work, in one burst.
-echo "overflow recovery:"
-over=$(printf 'y%.0s' $(seq 1 400))
-got=$(printf '#variable Before = 1\n%s\n#variable After = 2\n/list\n/quit\n' "$over" |
-	  repl ./csp "$D/t19.db" --no-eeprom --board mega |
-	  tr -d '\a' | grep -v '^OK$')
-ck "the REPL keeps working after an over-long line" \
-'Error: line too long, max 95 characters -- line ignored
-#variable Before:32 integer = 1  // R
-#variable After:32 integer = 2  // R' "$got"
-
-# The same with no trailing newline on the long line until much later: the
-# discard has to survive being interrupted by the reader running out of input.
-got=$(printf '#variable A = 1\n%s' "$over" |
-	  repl ./csp "$D/t20.db" --no-eeprom --board mega |
-	  tr -d '\a' | grep -c 'A integer = 1')
-ck "an unterminated over-long line strands nothing" "0" "$got"
+# (overflow recovery: tests/slow.sh -- 400-byte lines and a reader that has
+# to be allowed to run out of input, which means waiting on a timeout)
 
 # --- 16. string variables ----------------------------------------------------
 # A string variable holds a POSITION in the string table, and assignment moves
@@ -530,7 +484,9 @@ printf '#digital Led out 0:13\n#timer T 500 = 1\n#variable N = 0\nT = 1 ? timeou
 if ./csp -n -C -O "$D/eo_rom.c" "$D/eo.csp" >/dev/null 2>&1 &&
    gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -DCSP_EXEC_ONLY -I. \
        csp_linux.c csp_rt.c csp_repl.c csp_compile.c csp_tok.c csp_dump.c \
-       csp_eeprom.c csp_parse.c csp_print.c csp_strings.c "$D/eo_rom.c" -o "$D/csp_exec" \
+       csp_eeprom.c csp_parse.c csp_print.c csp_strings.c \
+       csp_flash.c csp_devices.c csp_flash_host.c \
+       "$D/eo_rom.c" -o "$D/csp_exec" \
        >/dev/null 2>&1; then
     # Last two matches, not the last LINE -- see the note on the string case
     # above: `]}.` moved onto a line of its own once every program had an object
@@ -554,6 +510,70 @@ if gcc -I. -O2 -o "$D/bits_cmp" tests/bits_cmp.c >/dev/null 2>&1; then
 else
     echo "  FAIL bits_cmp did not build"; fail=$((fail+1))
 fi
+
+# --- 19b. the flash geometry -------------------------------------------------
+# Flash sectors are not the same size -- an LPC212x is 8 x 8K, 2 x 64K, 7 x 8K --
+# so "the application starts at 128K" is not something you can say: erasing is
+# per sector, and a byte offset does not tell you which. Every offset here is a
+# running sum, and the host device is deliberately non-uniform so an off-by-one
+# at the step from small sectors to big ones has somewhere to show up.
+echo "flash geometry:"
+if gcc -I. -O2 -o "$D/flash_geom" tests/flash_geom.c \
+       csp_flash.c csp_devices.c csp_flash_host.c csp_strings.c \
+       >/dev/null 2>&1; then
+    got=$(cd "$(dirname "$0")/.." && "$D/flash_geom" | tail -1)
+    ck "sector sums, regions and the file backend" "flash geometry: ok" "$got"
+else
+    echo "  FAIL flash_geom did not build"; fail=$((fail+1))
+fi
+
+# The linker script is generated FROM the region map, because the two say the
+# same thing -- `runtime 0..7` and `LENGTH = 0x10000` -- and two copies of a
+# statement drift. Generating it means the LINKER enforces the map: an
+# interpreter too big for its region fails to link instead of being flashed over
+# slot A.
+#
+# The RAM line is checked against the hand-written LPC2129-ROM.ld it replaces:
+# same origin, same length, same 64 reserved bytes at the bottom.
+got=$(escript utils/gen_chips.erl --ld lpc2129 | sed -n 's/^  DATA  *(rw) : \(.*\)   \/\*.*/\1/p')
+ck "the generated RAM line matches the hand-written script" \
+   'ORIGIN = 0x40000040, LENGTH = 0x00003FC0' "$got"
+
+# One MEMORY entry per region, at the sector offsets. `A` starting at 0x10000 is
+# the sum of eight 8K sectors -- not sector*size, which is the whole point.
+got=$(escript utils/gen_chips.erl --ld lpc2129 |
+	  sed -n 's/^  \([A-Za-z0-9]*\)  *(r[x]*)  *: ORIGIN = \(0x[0-9A-F]*\).*/\1 \2/p')
+ck "regions land at their sector offsets" 'runtime 0x00000000
+A 0x00020000
+store 0x00030000' "$got"
+
+# An unknown part is refused rather than silently emitting nothing.
+escript utils/gen_chips.erl --ld nosuchpart >/dev/null 2>&1
+ck "an unknown part is refused" 1 $?
+
+# The chip tables are generated from chips/<vendor>/*.terms. Two copies of a
+# part's geometry drift -- the hand-written one this replaced had the LPC1754 at
+# 160K when the part has 128 -- so the generator is checked against what the
+# data sheets say rather than against a second table.
+echo "chip tables:"
+# --list rather than a compiled table: the parts are read from the terms, so
+# this checks the source of truth and not a copy of it.
+got=$(escript utils/gen_chips.erl --list |
+	  sed -n 's/^\(lpc[0-9]*\) .*(\([0-9]*\)K usable, \([0-9]*\) sectors).*/\1 \2 \3/p' |
+	  grep -E '^lpc(2129|2138|1754) ')
+ck "the generated geometry matches the data sheets" 'lpc1754 128 18
+lpc2129 248 17
+lpc2138 500 27' "$got"
+
+# A group's map has to land on whole sectors of that group. The 212x slots are
+# the two 64K ones, which is the property that makes A/B cheap on that part.
+# The map, read back out of the generated linker script -- which is the form
+# that actually gets used, so this checks the thing rather than a listing of it.
+got=$(escript utils/gen_chips.erl --ld lpc2129 |
+	  sed -n 's/^  \([A-Za-z0-9]*\)  *(r[x]*)  *:.*sectors\{0,1\} \(.*\) \*\//\1 \2/p')
+ck "the 212x map holds a full runtime" 'runtime 0..8
+A 9
+store 10..16' "$got"
 
 # --- 20. the part layout -----------------------------------------------------
 # csp_part.h hand-writes the bit position of every .part inside value_t. Those

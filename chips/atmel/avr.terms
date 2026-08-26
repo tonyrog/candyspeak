@@ -1,0 +1,42 @@
+%% AVR (megaAVR) -- a different shape from LPC, and the terms say so.
+%%
+%% There is no sector TABLE: flash erases a page at a time and every page is the
+%% same size, so the geometry is one run. `csp_sector_*` still works -- a
+%% "sector" is an erase unit, and here they happen to be uniform.
+%%
+%% And there is no flash MAP. These parts have real EEPROM, the Arduino core
+%% owns flash, and settings go where they belong: {store, eeprom}. A part with
+%% no {map, ...} generates nregion == 0, so csp_region_find misses and nothing
+%% can be written to flash by accident.
+{family, avr,
+ [{vendor,      atmel},
+  {arch,        avr8},
+  {store,       eeprom},             %% not flash: the part has real EEPROM
+  {flash_base,  16#00000000},
+  {ram_base,    16#00000100},        %% after the register file and I/O space
+  {ram_reserve, 0}]}.
+
+%% NO sector table, on purpose. Self-programming erases a 128 or 256 byte PAGE,
+%% so a "sector table" would be a thousand identical entries -- 4K of RODATA
+%% describing geometry nothing here manages, because on these targets the
+%% Arduino core owns flash and we never erase a page ourselves. The page size is
+%% recorded as information; {store, eeprom} says where settings actually go.
+{group, 'atmega-128b', [{family, avr}, {page, 128}]}.
+{group, 'atmega-256b', [{family, avr}, {page, 256}]}.
+
+{chip, atmega328p,
+ [{group, 'atmega-128b'}, {signature, 16#1E950F},
+  {flash_kb, 32}, {ram_kb, 2}, {eeprom_kb, 1},
+  {peripherals, [{uart,1},{i2c,1},{spi,1},{adc,8},{pwm,6},{wdt,1}]}]}.
+
+{chip, atmega32u4,
+ [{group, 'atmega-128b'}, {signature, 16#1E9587},
+  {flash_kb, 32}, {ram_kb, 2}, {eeprom_kb, 1},
+  %% 28K usable: the USB bootloader takes 4K, which is why a full build does
+  %% not fit and this part is a min-tier target.
+  {peripherals, [{usb,1},{uart,1},{i2c,1},{spi,1},{adc,12},{pwm,6},{wdt,1}]}]}.
+
+{chip, atmega2560,
+ [{group, 'atmega-256b'}, {signature, 16#1E9801},
+  {flash_kb, 256}, {ram_kb, 8}, {eeprom_kb, 4},
+  {peripherals, [{uart,4},{i2c,1},{spi,1},{adc,16},{pwm,12},{wdt,1}]}]}.

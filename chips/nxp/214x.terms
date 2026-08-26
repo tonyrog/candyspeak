@@ -1,0 +1,12 @@
+%% LPC214x -- the 213x geometry plus USB device. Borrows the '213x' group; only
+%% the peripheral set differs, and that lives on the chip.
+{chip, lpc2141, [{group,'213x'}, {id,16#0402FF01}, {flash_kb,32},  {ram_kb,8},  {nsect,8},
+                 {peripherals,[{usb,1},{uart,2},{i2c,2},{spi,1},{ssp,1},{adc,6},{pwm,6},{rtc,1},{wdt,1}]}]}.
+{chip, lpc2142, [{group,'213x'}, {id,16#0402FF11}, {flash_kb,64},  {ram_kb,16}, {nsect,9},
+                 {peripherals,[{usb,1},{uart,2},{i2c,2},{spi,1},{ssp,1},{adc,6},{dac,1},{pwm,6},{rtc,1},{wdt,1}]}]}.
+{chip, lpc2144, [{group,'213x'}, {id,16#0402FF12}, {flash_kb,128}, {ram_kb,16}, {nsect,11},
+                 {peripherals,[{usb,1},{uart,2},{i2c,2},{spi,1},{ssp,1},{adc,14},{dac,1},{pwm,6},{rtc,1},{wdt,1}]}]}.
+{chip, lpc2146, [{group,'213x'}, {id,16#0402FF23}, {flash_kb,256}, {ram_kb,40}, {nsect,15},
+                 {peripherals,[{usb,1},{uart,2},{i2c,2},{spi,1},{ssp,1},{adc,14},{dac,1},{pwm,6},{rtc,1},{wdt,1}]}]}.
+{chip, lpc2148, [{group,'213x'}, {id,16#0402FF25}, {flash_kb,512}, {ram_kb,40}, {nsect,27},
+                 {peripherals,[{usb,1},{uart,2},{i2c,2},{spi,1},{ssp,1},{adc,14},{dac,1},{pwm,6},{rtc,1},{wdt,1}]}]}.

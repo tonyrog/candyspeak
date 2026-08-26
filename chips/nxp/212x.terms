@@ -1,0 +1,39 @@
+%% LPC2124/2129 -- 8 x 8K, 2 x 64K, 7 x 8K.
+%%
+%% The two 64K sectors in the middle are why this geometry is pleasant for A/B:
+%% a slot is ONE sector, so switching versions erases exactly one thing and
+%% cannot half-erase a neighbour.
+{group, '212x', [{family,lpc2000}, {sectors,[{8,8192},{2,65536},{7,8192}]},
+                 {page,8192}]}.
+
+%% TWO maps, because 64K does not hold a compiler.
+%%
+%% Measured for arm7tdmi -Os: the runtime with the compiler and the REPL is
+%% 68280 bytes of text+rodata in THUMB, 95520 in ARM mode. Plus a driver layer
+%% and startup that is another 15-20K. So a full node needs one of the 64K
+%% sectors for itself and gets one application slot; an exec-only node fits in
+%% the 8K sectors and can afford A/B.
+%%
+%% The default is the one that HOLDS a full build. A map too small for the
+%% runtime is a link failure -- loud, but only after someone has wondered why.
+{map, '212x',
+ [{runtime, 0,  8},                  %% 128K: the 8K sectors plus one 64K
+  {app, "A", 9,  9},                 %%  64K  one slot, no fallback
+  {store,   10, 16}]}.               %%  56K
+
+%% For a node built CSP_EXEC_ONLY: 64K is plenty without the compiler, and the
+%% two big sectors become A and B. A board picks this by naming it.
+{map, '212x_ab',
+ [{runtime, 0,  7},                  %%  64K
+  {app, "A", 8,  8},                 %%  64K
+  {app, "B", 9,  9},                 %%  64K
+  {store,   10, 16}]}.
+
+{chip, lpc2124, [{group,'212x'}, {id,16#0101FF13}, {flash_kb,256}, {ram_kb,16},
+                 {nsect,17}, {peripherals,[{uart,2},{i2c,1},{spi,2},{adc,4},
+                                           {pwm,6},{rtc,1},{wdt,1}]}]}.
+
+%% LPC2129 -- the board on the bench. 2 x CAN.
+{chip, lpc2129, [{group,'212x'}, {id,16#0201FF13}, {flash_kb,256}, {ram_kb,16},
+                 {nsect,17}, {peripherals,[{can,2},{uart,2},{i2c,1},{spi,2},
+                                           {adc,4},{pwm,6},{rtc,1},{wdt,1}]}]}.

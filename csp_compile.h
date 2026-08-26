@@ -15,6 +15,19 @@
 
 #include "csp.h"
 
+// The .ino is C++ and includes this through the driver, so every declaration
+// below needs C linkage or the link fails on a mangled name -- which is exactly
+// how `csp_cstate()` came out undefined on a mega. csp_dump.h has had these
+// guards all along; this header did not need them until a driver started
+// calling into it.
+#ifndef EXTERN_C_BEGIN
+#define EXTERN_C_BEGIN  extern "C" {
+#define EXTERN_C_END    }
+#endif
+#ifdef __cplusplus
+EXTERN_C_BEGIN
+#endif
+
 // Character classes -- the tokenizer needs them, and so does the command
 // splitter in csp_repl.c. No <ctype.h>: locale-dependent, and it is a table
 // lookup on a target where these are three comparisons.
@@ -53,6 +66,9 @@ extern uint8_t func_rtype(const csp_func_t* fn, int i, int rom);
 extern index_t lookup_decl_in(csp_rt_t* st, const tstr_t* name, int start, int stop);
 extern int mem_fits(csp_rt_t* st, size_t add);
 extern csp_part_t part_from_tstr(const tstr_t* s);
+// The compiler's state, to hand to csp_rt_init. A driver that wants a node
+// which only runs images passes NULL there instead and never calls this.
+extern csp_cstate_t* csp_cstate(void);
 // timeout(T) compiles to OP_TMO; the compiler needs the same answer for an
 // immediate `> timeout(T)`, which has no instruction stream to run.
 extern int csp_timer_fired(csp_rt_t* st, index_t ix);
@@ -91,5 +107,9 @@ extern uint8_t func_flags(const csp_func_t* fn, int i, int rom);
 #define MAKE_ARR_MARKER(cur, ix, pp0) ((ARR_MARKER_BASE) +	\
 				       ((uint32_t)(cur)<<31) +		\
 				       ((uint32_t)(ix)<<16) + ((pp0)<<8))
+
+#ifdef __cplusplus
+EXTERN_C_END
+#endif
 
 #endif

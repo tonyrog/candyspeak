@@ -1,0 +1,21 @@
+%% LPC213x -- 8 x 4K, 14 x 32K, 5 x 4K.
+%%
+%% Where {nsect,N} earns its keep: an LPC2131 is the first 8 of this table
+%% (32K), a 2132 the first 9, a 2138 all 27. One geometry, five sizes.
+{group, '213x', [{family,lpc2000}, {sectors,[{8,4096},{14,32768},{5,4096}]},
+                 {page,4096}]}.
+
+%% For the parts with somewhere to put it. A 2131 is 32K and has no room for
+%% two slots; nothing stops a board overriding the map with its own.
+{map, '213x', [{runtime,0,9}, {app,"A",10,14}, {app,"B",15,19}, {store,22,26}]}.
+
+{chip, lpc2131, [{group,'213x'}, {id,16#0002FF01}, {flash_kb,32},  {ram_kb,8},  {nsect,8},
+                 {peripherals,[{uart,2},{i2c,2},{spi,1},{ssp,1},{adc,8},{pwm,6},{rtc,1},{wdt,1}]}]}.
+{chip, lpc2132, [{group,'213x'}, {id,16#0002FF11}, {flash_kb,64},  {ram_kb,16}, {nsect,9},
+                 {peripherals,[{uart,2},{i2c,2},{spi,1},{ssp,1},{adc,8},{dac,1},{pwm,6},{rtc,1},{wdt,1}]}]}.
+{chip, lpc2134, [{group,'213x'}, {id,16#0002FF12}, {flash_kb,128}, {ram_kb,16}, {nsect,11},
+                 {peripherals,[{uart,2},{i2c,2},{spi,1},{ssp,1},{adc,16},{dac,1},{pwm,6},{rtc,1},{wdt,1}]}]}.
+{chip, lpc2136, [{group,'213x'}, {id,16#0002FF23}, {flash_kb,256}, {ram_kb,32}, {nsect,15},
+                 {peripherals,[{uart,2},{i2c,2},{spi,1},{ssp,1},{adc,16},{dac,1},{pwm,6},{rtc,1},{wdt,1}]}]}.
+{chip, lpc2138, [{group,'213x'}, {id,16#0002FF25}, {flash_kb,512}, {ram_kb,32}, {nsect,27},
+                 {peripherals,[{uart,2},{i2c,2},{spi,1},{ssp,1},{adc,16},{dac,1},{pwm,6},{rtc,1},{wdt,1}]}]}.

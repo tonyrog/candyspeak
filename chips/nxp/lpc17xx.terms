@@ -1,0 +1,45 @@
+%% LPC1700 -- the parts behind lpc17xx.h. Cortex-M3. A different family from LPC2000: the IAP entry moved,
+%% RAM is at 0x10000000, and the PLL takes a different equation.
+{family, lpc1700,
+ [{vendor,      nxp},
+  {arch,        cortex_m3},
+  {iap_entry,   16#1FFF1FF1},        %% already thumb-tagged on this family
+  {iap,         [{prepare,   50},
+                 {copy_ram,  51},
+                 {erase,     52},
+                 {blank,     53},
+                 {read_id,   54},
+                 {read_boot, 55},
+                 {compare,   56}]},
+  {iap_ok,      0},
+  %% Main SRAM only. The part is sold as 32kB but that is 16K here plus 16K of
+  %% AHB SRAM at 0x2007C000 -- two ranges, and a MEMORY region names one.
+  {ram_base,    16#10000000},
+  {ram_reserve, 0},
+  {flash_base,  16#00000000},
+
+  %% Cortex-M: a POINTER ARRAY, not branches -- entry 0 is the initial stack
+  %% pointer and entry 1 is the reset handler, which is why the symbol is
+  %% ResetISR and not _start.
+  %% PCONP, from utils/lpc_clock.varp -- which sets all 27 bits by hand, and is
+  %% exactly the table nobody should maintain twice.
+  %%
+  %% Note GPIO has a bit here (15) and does not on an LPC2000. A board file
+  %% naming gpio is right on both; the difference lives here.
+  {pconp, [{timer0,1}, {timer1,2}, {uart0,3}, {uart1,4}, {pwm1,6}, {pwm,6},
+	   {i2c0,7}, {spi0,8}, {spi,8}, {rtc,9}, {ssp1,10}, {adc,12},
+	   {can1,13}, {can2,14}, {gpio,15}, {rit,16}, {mc,17}, {qei,18},
+	   {i2c1,19}, {ssp0,21}, {timer2,22}, {timer3,23},
+	   {uart2,24}, {uart3,25}, {i2c2,26}, {i2s,27},
+	   {gpdma,29}, {enet,30}, {usb,31}]},
+
+  %% The pin table is in pins_17xx.terms, keyed by this family name.
+  {pin_table,   lpc1700},
+
+  {entry,       'ResetISR'},
+  {vectors,     '.isr_vector'},
+  {pll, [{formula, {fcco, '2*M*Fin/N'}},
+         {m,    6, 512},
+         {n,    1,  32},
+         {fcco, 275000000, 550000000},
+         {cclk_max, 100000000}]}]}.

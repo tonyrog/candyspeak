@@ -1940,7 +1940,9 @@ index_t csp_cycle(csp_rt_t* st)
     // well left the heap where it was, and the next leaf write landed inside the
     // module body -- one instruction came out zeroed, which /list then rendered
     // as a NOP where a call belonged.
-    if ((st->cs.mdef != BAD_INDEX) || (st->cs.sdef >= 0))
+    // "If there is a compiler, and it is part way through a module": a node
+    // that cannot be typed at can never be, so it never skips a rebuild.
+    if (st->cs && ((st->cs->mdef != BAD_INDEX) || (st->cs->sdef >= 0)))
 	return BAD_INDEX;
 
     // First cycle: force OP_CHG true so every <- binding fires once and seeds
@@ -2164,17 +2166,20 @@ NOINLINE uint16_t csp_array_len(csp_rt_t* st, index_t i)
 
 NOINLINE index_t csp_lookup_decl(csp_rt_t* st, const tstr_t* name)
 {
-    if (st->cs.mdef != BAD_INDEX) {
+    // Module-body scope, and only while one is being defined -- which needs a
+    // compiler to be doing the defining. An image's declarations are already
+    // flat by the time this runs.
+    if (st->cs && (st->cs->mdef != BAD_INDEX)) {
 	index_t ix;
 	// Module body first, so a local shadows a global of the same name.
-	if ((ix = lookup_decl_in(st, name, INDEX(st->cs.mdef)+1, st->ps.nd))
+	if ((ix = lookup_decl_in(st, name, INDEX(st->cs->mdef)+1, st->ps.nd))
 	    != BAD_INDEX)
 	    return ix;
 	// Then the globals declared before this module. lookup_decl_in skips
 	// other modules' bodies, so their members stay private. Without this a
 	// module body could not see ANY global -- not a constant, not a timer,
 	// nothing.
-	return lookup_decl_in(st, name, 0, INDEX(st->cs.mdef));
+	return lookup_decl_in(st, name, 0, INDEX(st->cs->mdef));
     }
     return lookup_decl_in(st, name, 0, st->ps.nd);
 }
@@ -3067,7 +3072,9 @@ NOINLINE void csp_load_image(csp_rt_t* st, const uint8_t* base)
     st->ps.nd   = st->rom_nd;
     st->ps.nn   = st->rom_nn;
     st->ps.strp = st->rom_strp;
-    st->cs.sx = st->gsx = 0;         // State is ROM decl 0
+    st->gsx = 0;                      // State is ROM decl 0
+    if (st->cs)
+	st->cs->sx = st->gsx;         // the parse cursor follows it
     // Nothing to restore: the program's states came back with its DECLARATIONS,
     // as DECL_STATES blocks, which the rebase above already pointed at. The
     // image's state section is empty (see csp_dump_code) and this loop used to
@@ -3106,10 +3113,23 @@ const uint8_t* csp_image_at(int i)
 // checking them twice would double the boot cost for no new information.
 const uint8_t* csp_find_image(unsigned role)
 {
+    return csp_find_image_no(role, NULL);
+}
+
+// The same choice, with the registry INDEX it landed on -- the number /images
+// prints, and what sys.Image reports so a node can say which of its images is
+// actually running. -1 when nothing matched (the caller then falls back to the
+// linked rom_image, which is not in the registry and has no index).
+const uint8_t* csp_find_image_no(unsigned role, int* nop)
+{
     const uint8_t* best = NULL;
     unsigned best_gen = 0;
+    int best_no = -1;
     int n = csp_image_count();
     int i;
+
+    if (nop != NULL)
+	*nop = -1;
 
     for (i = 0; i < n; i++) {
 	const uint8_t* base = csp_image_at(i);
@@ -3127,8 +3147,11 @@ const uint8_t* csp_find_image(unsigned role)
 	if ((best == NULL) || (h.generation >= best_gen)) {
 	    best = base;
 	    best_gen = h.generation;
+	    best_no = i;
 	}
     }
+    if (nop != NULL)
+	*nop = best_no;
     return best;
 }
 
@@ -3140,9 +3163,13 @@ NOINLINE void csp_load_rom(csp_rt_t* st)
     // Falling back to rom_image directly is deliberate: if --gc-sections ever
     // does collect the registry on some toolchain, the board still boots with
     // the image it was built with instead of nothing at all.
-    const uint8_t* base = csp_find_image(CSP_ROLE_ROM);
+    int no;
+    const uint8_t* base = csp_find_image_no(CSP_ROLE_ROM, &no);
     if (base == NULL)
 	base = ro_ref(&rom_image).base;
+    // Recorded, not written: sys.Image is a value SLOT and there are none until
+    // csp_rt_start has laid the tables out. It publishes this then.
+    st->image_no = no;
     csp_load_image(st, base);
     // The image replaces every declaration, so the Sys handles csp_rt_init just
     // set describe THIS firmware's runtime region and not the one the image was
@@ -3412,6 +3439,7 @@ NOINLINE static int csp_sys_module(csp_rt_t* st)
     RO_TSTR(Id, ros_Id);
     RO_TSTR(Name, ros_Name);
     RO_TSTR(Serial, ros_Serial);
+    RO_TSTR(Image, ros_Image);    
     const tstr_t empty = { .ptr = NULL, .len = 0 };
     index_t mx, ex, ox;
     int i;
@@ -3425,16 +3453,28 @@ NOINLINE static int csp_sys_module(csp_rt_t* st)
     ram_decl_at(st, i)->vt  = V_UNSIGNED;
     ram_decl_at(st, i)->res = MAKE_RES(32);
 
+    // #param Id:32 unsigned
     if ((i = csp_new_decl(st, &Id, DECL_CONSTANT, 1)) == BAD_INDEX)
 	return -1;
     ram_decl_at(st, i)->vt    = V_UNSIGNED;
     ram_decl_at(st, i)->res   = MAKE_RES(32);
     ram_decl_at(st, i)->local = 1;            // DECL_CONSTANT + local == #param
 
+    // #param Name string
     if ((i = csp_new_decl(st, &Name, DECL_CONSTANT, 1)) == BAD_INDEX)
 	return -1;
     ram_decl_at(st, i)->vt    = V_STRING;
     ram_decl_at(st, i)->local = 1;
+
+    // #param Image:32 unsigned
+    // STATUS, not a setting: the loader writes which image it actually booted,
+    // so a #param would be a field a saved value could contradict. Asking for a
+    // different image next boot is a REQUEST and wants a field of its own --
+    // one number cannot both say what is running and what you would prefer.
+    if ((i = csp_new_decl(st, &Image, DECL_VARIABLE, 1)) == BAD_INDEX)
+	return -1;
+    ram_decl_at(st, i)->vt  = V_UNSIGNED;
+    ram_decl_at(st, i)->res = MAKE_RES(32);
 
     if ((ex = csp_new_decl(st, &empty, DECL_END, 1)) == BAD_INDEX)
 	return -1;
@@ -3458,9 +3498,49 @@ NOINLINE static int csp_sys_module(csp_rt_t* st)
     return 0;
 }
 
-int csp_rt_init(csp_rt_t* st, int reactive)
+NOINLINE static ivalue_t get_md_n(csp_rt_t* st, index_t mx);
+
+// Write what the runtime KNOWS into the Sys namespace, once the tables exist.
+//
+// After csp_settings_apply on purpose: these are facts about the machine, not
+// preferences, so a stored setting must not be able to contradict them. It is
+// the same ordering rule csp_setup follows for a hardware-owned field.
+//
+// By NAME, not by member ordinal. The members are declared in one place and
+// read here; an ordinal would be a second copy of that order, and adding a
+// field between two others would move it silently.
+NOINLINE static void sys_publish(csp_rt_t* st)
+{
+    RO_TSTR(Image, ros_Image);
+    index_t mx, base, ix;
+    ivalue_t dn;
+    value_t v;
+
+    if ((st->sys_mod == BAD_INDEX) || (st->sys_obj == BAD_INDEX))
+	return;
+    mx   = st->sys_mod;
+    base = (index_t)(INDEX(mx) + 1);
+    dn   = get_md_n(st, mx);
+    if ((ix = lookup_decl_in(st, &Image, base, base + dn)) == BAD_INDEX)
+	return;
+    v.u = (st->image_no < 0) ? 0 : (uvalue_t)st->image_no;
+    {
+	int cur_save = st->cur;
+	index_t cbase_save = st->cbase;
+	value_t* iptr;
+	value_t* optr;
+	csp_ctx_set(st, decl(st, INDEX(st->sys_obj), mq.m));
+	if (csp_dio_slots(st, MAKE_INDEX(CURRENT, INDEX(ix)), &iptr, &optr) == 0)
+	    *iptr = *optr = v;
+	st->cur = cur_save;
+	st->cbase = cbase_save;
+    }
+}
+
+int csp_rt_init(csp_rt_t* st, int reactive, csp_cstate_t* cs)
 {
     memset(st, 0x00, sizeof(csp_rt_t));
+    st->cs = cs;   // NULL on a node that only runs images
 
     // Allocate the RAM code arena (instr[]/decl[]) before anything parses. The
     // line buffer comes off the top of it, so the line state can only be set up
@@ -3491,19 +3571,25 @@ int csp_rt_init(csp_rt_t* st, int reactive)
     st->reactive = reactive;
     st->ps.strp = 1;
     st->ps.err_strp = MAX_STR_BUF;
-    st->cs.mdef = BAD_INDEX;  // no module being defined
-    st->sys_mod = st->sys_obj = BAD_INDEX;   // until csp_sys_module runs; the
+    if (st->cs) {
+	st->cs->mdef = BAD_INDEX;  // no module being defined
+	st->cs->sdef = -1;
+	// dedicated scratch for the variable list during a <- parse
+	st->cs->var = st->cs->var_buf;
+    }
+    st->sys_mod = st->sys_obj = BAD_INDEX;
+    st->image_no = -1;    // until csp_load_rom picks one   // until csp_sys_module runs; the
 					     // memset above would leave 0, and
 					     // decl 0 is State, a real index
     st->n_rule_emit = 1;   // the implicit rule body at the RAM range base
-    st->cs.var = st->cs.var_buf;  // dedicated scratch for var list during <- parse
     {
 	RO_TSTR(State, ros_State);
 	RO_TSTR(INIT, ros_INIT);
 	RO_TSTR(NORMAL, ros_NORMAL);
 	RO_TSTR(FAILSAFE, ros_FAILSAFE);
-	st->cs.sx = st->gsx = csp_new_decl(st,&State,DECL_VARIABLE,1);
-	st->cs.sdef = -1;
+	st->gsx = csp_new_decl(st,&State,DECL_VARIABLE,1);
+	if (st->cs)
+	    st->cs->sx = st->gsx;
 	// Reserved states in fixed order: INIT=0, NORMAL=1, FAILSAFE=2 (sticky
 	// safe state). User states follow from 3. The numbers are contract --
 	// STATE_* in csp.h and the sticky check depend on them. One cursor for
@@ -5016,6 +5102,7 @@ int csp_rt_start(csp_rt_t* st)
     // it is the last one. Before csp_setup, which the platform main calls next:
     // a re-pinned output must never be configured on the pin the source named.
     csp_settings_apply(st);
+    sys_publish(st);
     st->cur   = 0;     // back to global before anything executes
     st->cbase = 0;
     st->cycle = 0;  // init trace shows cycle 0

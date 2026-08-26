@@ -1,0 +1,53 @@
+%% LPC2000 pin functions: the same two-bits-per-pin scheme, PINSEL0 for
+%% P0.0..P0.15 and PINSEL1 for P0.16..P0.31.
+%%
+%% P1 is NOT two bits per pin -- PINSEL2 is a handful of enables for the debug
+%% and trace ports -- which is why it is absent here rather than listed wrong.
+%% chip_212x.c's Chip_IOCON_PinMux returns without writing for port 1 for the
+%% same reason.
+%%
+%% Verified against a working BridgeZone cfg.h, which pins down 25 of these with
+%% their function numbers -- the UARTs, both I2Cs, SPI0, the four analog inputs,
+%% the PWM matches and every CAN pin including the ones only an LPC2194 has.
+%%
+%% TD1 IS NOT IN THIS TABLE, and that is not an omission. On an LPC2119/2129 the
+%% CAN1 transmit output is P0.31, which is output-only: it has no GPIO function
+%% and no PINSEL bits, so there is nothing to select. The cfg.h that confirmed
+%% the rest of this says it in one line -- `// #define PIN_CAN1_TX (not a
+%% pin!)` -- and a board file that tries to mux td1 should be told the same
+%% thing rather than have it silently accepted.
+{pins, lpc2000,
+ [%% PINSEL0 -- P0.0..P0.15, two bits each.
+  {0,  0, [gpio, txd0,  'pwm1',   '-']},
+  {0,  1, [gpio, rxd0,  'pwm3',   eint0]},
+  {0,  2, [gpio, scl0,  'cap0.0', '-']},
+  {0,  3, [gpio, sda0,  'mat0.0', eint1]},
+  {0,  4, [gpio, sck0,  'cap0.1', '-']},
+  {0,  5, [gpio, miso0, 'mat0.1', '-']},
+  {0,  6, [gpio, mosi0, 'cap0.2', '-']},
+  {0,  7, [gpio, ssel0, 'pwm2',   eint2]},
+  {0,  8, [gpio, txd1,  'pwm4',   '-']},
+  {0,  9, [gpio, rxd1,  'pwm6',   eint3]},
+  {0, 10, [gpio, rts1,  'cap1.0', '-']},
+  {0, 11, [gpio, cts1,  'cap1.1', scl1]},
+  {0, 12, [gpio, dsr1,  'mat1.0', rd4]},          %% rd4/td4: LPC2194 only
+  {0, 13, [gpio, dtr1,  'mat1.1', td4]},
+  {0, 14, [gpio, dcd1,  eint1,    sda1]},
+  {0, 15, [gpio, ri1,   eint2,    '-']},
+
+  %% PINSEL1 -- P0.16..P0.31. The CAN and analog pins are up here, and so is the
+  %% run of single-function pins (P0.23..P0.25) that have no alternate at all.
+  {0, 16, [gpio, eint0,    'mat0.2', 'cap0.2']},
+  {0, 17, [gpio, 'cap1.2', sck1,     'mat1.2']},
+  {0, 18, [gpio, 'cap1.3', miso1,    'mat1.3']},
+  {0, 19, [gpio, 'mat1.2', mosi1,    'cap1.2']},
+  {0, 20, [gpio, 'mat1.3', ssel1,    eint3]},
+  {0, 21, [gpio, 'pwm5',   rd3,      'cap1.3']},  %% rd3/td3: LPC2194 only
+  {0, 22, [gpio, td3,      'cap0.0', 'mat0.0']},
+  {0, 23, [gpio, rd2,      '-',      '-']},
+  {0, 24, [gpio, td2,      '-',      '-']},
+  {0, 25, [gpio, rd1,      '-',      '-']},
+  {0, 27, [gpio, 'ain0',   'cap0.1', 'mat0.1']},
+  {0, 28, [gpio, 'ain1',   'cap0.2', 'mat0.2']},
+  {0, 29, [gpio, 'ain2',   'cap0.3', 'mat0.3']},
+  {0, 30, [gpio, 'ain3',   eint3,    'cap0.0']}]}.

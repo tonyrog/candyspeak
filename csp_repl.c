@@ -1962,19 +1962,19 @@ static int csp_process_immediate(csp_rt_t* st, char* line)
     if (num == 0 || tv[0].t == NEWLINE)
 	return 0;
 
-    saved_ap = st->cs.ap;
-    st->cs.ap = NULL;
-    st->cs.ev = 1; // eval variables during (compile)
+    saved_ap = st->cs->ap;
+    st->cs->ap = NULL;
+    st->cs->ev = 1; // eval variables during (compile)
     if (!csp_parse_expr(st, tv, &num, &result)) {
-	st->cs.ap = saved_ap;
+	st->cs->ap = saved_ap;
 	csp_print_lit("Error: ");
 	csp_print_error(st);
 	csp_println();
 	csp_clr_error(st);
 	return -1;
     }
-    st->cs.ap = saved_ap;
-    st->cs.ev = 0;
+    st->cs->ap = saved_ap;
+    st->cs->ev = 0;
 
     if (result.I)
 	csp_print_value(st, result.vt, result.val);
@@ -2013,8 +2013,8 @@ static int csp_process_persistent(csp_rt_t* st, char* line)
 	// Rewind. Inside an unclosed module the whole module goes: otherwise
 	// mdef stays set with no #end in sight and every following line is
 	// swallowed by a module that can never be closed.
-	if (st->cs.mdef != BAD_INDEX) {
-	    csp_pstate_restore(st, &st->cs.mod_mark);
+	if (st->cs->mdef != BAD_INDEX) {
+	    csp_pstate_restore(st, &st->cs->mod_mark);
 	    csp_print_line("Module aborted");
 	}
 	else

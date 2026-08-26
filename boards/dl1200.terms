@@ -1,0 +1,41 @@
+%% DL1200 -- an LPC1754 on a screw-terminal carrier. Two CAN ports, fixed pin
+%% assignment, which is the useful part: the ports do not move, so pin mux is a
+%% table here rather than a question every time.
+{board, dl1200,
+ [%% The PLAIN 1754 map: runtime from sector 0, vectors at 0x00000000.
+  %%
+  %% NOT {chip, dl1200}, which is the same silicon with the USB boot loader's
+  %% map -- runtime at 0x8000 and sectors 0..3 reserved. That map is right when
+  %% the boot loader is there, and wrong in a way that is very easy to miss
+  %% without it: `objcopy -O binary` makes a file whose byte 0 is the LOWEST
+  %% section address, and nothing in the file records what that address was. An
+  %% image linked for 0x8000 and flashed from 0 then puts its vector table in
+  %% exactly the right place and everything the vectors point at 32K too high --
+  %% so it looks correct and jumps into nothing.
+  {chip, lpc1754},
+
+  {xtal, 12000000},
+  {core, 100000000},
+
+  {code_budget, 9216},
+  {no_eeprom, true},                 %% settings go to the flash store region
+
+  %% Pins by FUNCTION, not by register value. A generator can check each against
+  %% the chip's pin table -- P0.0 either can be CAN1 rx or it cannot -- so a
+  %% typo becomes a build error instead of a pin that reads noise.
+  {pin, 'P0.0',  rd1},               %% CAN1 rx
+  {pin, 'P0.1',  td1},               %% CAN1 tx
+  {pin, 'P0.4',  rd2},               %% CAN2 rx
+  {pin, 'P0.5',  td2},               %% CAN2 tx
+  {pin, 'P0.2',  txd0},              %% console
+  {pin, 'P0.3',  rxd0},
+
+  %% What gets POWERED. This is PCONP -- 27 individual bits, and
+  %% utils/lpc_clock.varp sets every one of them by hand. Deriving it from a
+  %% list of what the board uses is the difference between real power saving and
+  %% a value copied out of an example and never touched again.
+  {enable, [uart0, can1, can2, gpio, timer0]},
+
+  {console, {uart0, 115200}},
+  {can, 1, [{bitrate, 250000}]},
+  {can, 2, [{bitrate, 250000}]}]}.

@@ -1,0 +1,29 @@
+%% SAMD21 (Cortex-M0+) -- uniform again, but the erase unit is a ROW of four
+%% 64-byte pages, so 256 bytes. Writes are per page; erases are per row, and it
+%% is the erase unit that a region has to be whole multiples of.
+%%
+%% No EEPROM on the part. The Arduino cores emulate one in flash, which is why
+%% {store, flash} here and a map that reserves the top rows for it -- the same
+%% decision an LPC board makes, arrived at from the opposite direction.
+{family, samd21,
+ [{vendor,      microchip},
+  {arch,        cortex_m0plus},
+  {store,       flash},
+  {flash_base,  16#00000000},
+  {ram_base,    16#20000000},
+  {ram_reserve, 0}]}.
+
+%% NO sector table. The erase unit is a 256-byte ROW and a 256K part has a
+%% thousand of them -- geometry we do not manage, because the Arduino core's
+%% FlashStorage owns the emulated EEPROM and nothing here erases a row. Page and
+%% row sizes are recorded as information.
+{group, 'samd21-256k',
+ [{family, samd21},
+  {page, 64},                        %% write granularity
+  {row, 256}]}.                      %% erase granularity
+
+{chip, samd21g18a,
+ [{group, 'samd21-256k'}, {id, 16#10010100},
+  {flash_kb, 256}, {ram_kb, 32},
+  {peripherals, [{usb,1},{uart,6},{i2c,6},{spi,6},{adc,20},{dac,1},
+                 {pwm,3},{rtc,1},{wdt,1}]}]}.

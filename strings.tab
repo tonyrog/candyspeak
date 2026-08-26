@@ -29,6 +29,7 @@ sys sys
 Id Id
 Name Name
 Serial Serial
+Image Image
 err_ok ok
 err_syntax syntax error
 err_string_space string space exhausted

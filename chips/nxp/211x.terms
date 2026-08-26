@@ -1,0 +1,10 @@
+%% LPC2114/2119 -- 15 uniform 8K sectors.
+{group, '211x', [{family,lpc2000}, {sectors,[{15,8192}]}, {page,8192}]}.
+{map, '211x', [{runtime,0,7}, {app,"A",8,10}, {app,"B",11,13}, {store,14,14}]}.
+
+{chip, lpc2114, [{group,'211x'}, {id,16#0101FF12}, {flash_kb,128}, {ram_kb,16},
+                 {nsect,15}, {peripherals,[{uart,2},{i2c,1},{spi,2},{adc,4},
+                                           {pwm,6},{rtc,1},{wdt,1}]}]}.
+{chip, lpc2119, [{group,'211x'}, {id,16#0201FF12}, {flash_kb,128}, {ram_kb,16},
+                 {nsect,15}, {peripherals,[{can,2},{uart,2},{i2c,1},{spi,2},
+                                           {adc,4},{pwm,6},{rtc,1},{wdt,1}]}]}.

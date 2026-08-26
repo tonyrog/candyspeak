@@ -1,0 +1,63 @@
+%% LPC2000 -- what every part in the family shares.
+%%
+%% Transcribed from nxp_files/2129/iap_lpc.c. The family file holds what the
+%% IAP interface is; the NNNx files hold sector geometry; the NNNN files hold
+%% one part. A chip says {family, ...} and {sectors, ...} and stops repeating.
+
+{family, lpc2000,
+ [{vendor,      nxp},
+  {arch,        arm7tdmi},
+
+  %% IAP is a THUMB call through a fixed address at the top of the boot block.
+  %% The +1 that makes it thumb is the caller's business (see THUMB_CALL).
+  {iap_entry,   16#7FFFFFF0},
+  {iap,         [{prepare,   50},     %% prepare sectors for write
+                 {copy_ram,  51},     %% copy RAM to flash
+                 {erase,     52},
+                 {blank,     53},     %% blank check sectors
+                 {read_id,   54},
+                 {read_boot, 55},
+                 {compare,   56}]},
+  {iap_ok,      0},
+
+  %% RAM is at 0x40000000 across the family. The bottom 64 bytes hold the
+  %% remapped exception vectors, so a linker must not hand them out --
+  %% LPC2129-ROM.ld says `ORIGIN = 0x40000040, LENGTH = 0x00003FC0` for exactly
+  %% this reason, and that line is now derived rather than written.
+  {ram_base,    16#40000000},
+  {ram_reserve, 64},
+
+  {flash_base,  16#00000000},
+
+  %% ARM7: eight branch words at address 0, entered at _start.
+  %% PCONP: which bit powers what. From nxp_files/2129/lpc21xx.h.
+  %%
+  %% This is the table that makes {enable,[...]} mean something. A peripheral
+  %% absent from a board's list gets its bit CLEARED, not left alone -- the
+  %% reset value has several of these on, so "did not mention it" and "did not
+  %% want it" have to be the same thing or the default is to power everything.
+  {pconp, [{timer0,1}, {timer1,2}, {uart0,3}, {uart1,4},
+	   {pwm0,5}, {pwm,5}, {pwm1,6}, {i2c0,7}, {spi0,8}, {rtc,9},
+	   {spi1,10}, {emc,11}, {adc,12},
+	   {can1,13}, {can2,14}, {can3,15}, {can4,16},
+	   {i2c1,19}, {lcd,20}, {ssp0,21}, {timer2,22}]},
+
+  %% GPIO is always powered on an LPC2000 -- there is no bit for it, unlike the
+  %% 17xx. Naming it in {enable,...} is allowed and does nothing, which is
+  %% better than making a board file know which family it is on.
+  {pconp_always, [gpio]},
+
+  %% The pin table is in pins_2000.terms, keyed by this family name.
+  {pin_table,   lpc2000},
+
+  {entry,       '_start'},
+  {vectors,     '.vectors'},
+
+  %% The PLL: Fcco = 2 * M * Fosc * N, with the divider bringing it to cclk.
+  %% Ranges are the data sheet's; the generator solves M and N against a board's
+  %% crystal and refuses the build when the target is unreachable.
+  {pll, [{formula, {fcco, '2*M*Fosc*N'}},
+         {m,    1, 32},
+         {n,    1,  4},
+         {fcco, 156000000, 320000000},
+         {cclk_max, 60000000}]}]}.

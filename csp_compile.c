@@ -9,7 +9,7 @@
 //
 // The parse cursors it works through live in st->cs (csp_cstate_t) rather than
 // loose in csp_rt_t, so it is visible when a runtime path reaches into parse
-// state -- which is a bug: st->cs.sx moves to a module's own State between
+// state -- which is a bug: st->cs->sx moves to a module's own State between
 // #module and #end, so anything running on a CYCLE must read st->gsx instead.
 #include <stdlib.h>
 #include <stdint.h>
@@ -69,6 +69,22 @@ void print_rentry(csp_rt_t* st, char* name, rentry_t* rp)
 // happened to agree.
 
 #endif /* !CSP_EXEC_ONLY -- reopened after the accessors below */
+
+// The compiler's own state. It lives HERE, on the compiler's side of the line,
+// and csp_rt_t holds nothing but a pointer to it -- NULL on a node that only
+// runs images, where none of these fields mean anything.
+//
+// A file static rather than something the caller allocates: there is one
+// compiler, it is not re-entrant (the register allocator and the module cursor
+// are single-threaded by construction), and a driver should not have to find
+// storage for a type it never looks inside. Under CSP_EXEC_ONLY this whole file
+// is compiled out, so the storage goes with it.
+static csp_cstate_t the_cstate;
+
+csp_cstate_t* csp_cstate(void)
+{
+    return &the_cstate;
+}
 
 // opcode => opcode type info
 //
@@ -171,7 +187,7 @@ NOINLINE static csp_instr_t* alloc_instr_ptr(csp_rt_t* st,int* pos,opcode_t op)
 {
     int i;                        // logical instr index (or the dummy slot)
     csp_instr_t* ip;
-    if (st->cs.ap == NULL) {
+    if (st->cs->ap == NULL) {
 	i = MAX_INSTRS;           // scratch index (never fetched: ev folds inline)
 	ip = &st->imm_scratch;    // write-only dummy for immediate `> expr` eval
     }
@@ -199,7 +215,7 @@ NOINLINE bool_t asm_RULE(csp_rt_t* st, int* pos, reg_t cnd, int nxt)
     if (ip != NULL) {
 	ip->r.cnd = cnd;
 	ip->r.nxt = nxt;
-	ip->r.implicit = st->cs.rule_implicit;   // set for bare NORMAL+ rules
+	ip->r.implicit = st->cs->rule_implicit;   // set for bare NORMAL+ rules
 	return 1;
     }
     return 0;
@@ -283,11 +299,11 @@ NOINLINE static bool_t asm_seto(csp_rt_t* st, xindex_t mem, index_t* out)
     // front of its access, and this is the one funnel every mem instruction
     // passes through. The access must read CURRENT-relative for the base to
     // apply, whatever the reference's own selector said.
-    if (st->cs.arr_len > 0) {
+    if (st->cs->arr_len > 0) {
 	csp_instr_t* ip;
-	uint8_t  r = st->cs.arr_reg;
-	uint16_t l = st->cs.arr_len;
-	st->cs.arr_len = 0;                // one-shot: cleared before we can fail
+	uint8_t  r = st->cs->arr_reg;
+	uint16_t l = st->cs->arr_len;
+	st->cs->arr_len = 0;                // one-shot: cleared before we can fail
 	*out = MAKE_INDEX(CURRENT, XIDX(mem));
 	if ((ip = alloc_instr_ptr(st, NULL, OP_SETOX)) == NULL)
 	    return 0;
@@ -706,7 +722,7 @@ NOINLINE index_t new_signed_const(csp_rt_t* st, ivalue_t v)
 // every module that happens to use that name.
 NOINLINE index_t csp_lookup_decl_local(csp_rt_t* st, const tstr_t* name)
 {
-    int start = (st->cs.mdef != BAD_INDEX) ? INDEX(st->cs.mdef)+1 : 0;
+    int start = (st->cs->mdef != BAD_INDEX) ? INDEX(st->cs->mdef)+1 : 0;
     return lookup_decl_in(st, name, start, st->ps.nd);
 }
 // new uniq declaration
@@ -731,7 +747,7 @@ NOINLINE index_t csp_new_udecl(csp_rt_t* st, const tstr_t* name, decl_t type)
 // addressed CURRENT-relative) or to a global (which must NOT be).
 NOINLINE int is_module_local(csp_rt_t* st, xindex_t di)
 {
-    return (st->cs.mdef != BAD_INDEX) && ((int)XIDX(di) > (int)INDEX(st->cs.mdef));
+    return (st->cs->mdef != BAD_INDEX) && ((int)XIDX(di) > (int)INDEX(st->cs->mdef));
 }
 
 // The declaration keyword table. Compiler-only: nothing else looks a
@@ -1082,12 +1098,12 @@ NOINLINE int csp_scan_line(csp_rt_t* st, char* str, token_t* tv, size_t* num_tok
 void csp_pstate_save(csp_rt_t* st, csp_pmark_t* pm)
 {
     pm->ps          = st->ps;
-    pm->mdef        = st->cs.mdef;
-    pm->ent         = st->cs.ent;
-    pm->sdef        = st->cs.sdef;
-    pm->in_marker   = st->cs.in_marker;
-    pm->save_sx     = st->cs.save_sx;
-    pm->sx          = st->cs.sx;
+    pm->mdef        = st->cs->mdef;
+    pm->ent         = st->cs->ent;
+    pm->sdef        = st->cs->sdef;
+    pm->in_marker   = st->cs->in_marker;
+    pm->save_sx     = st->cs->save_sx;
+    pm->sx          = st->cs->sx;
     pm->cur         = st->cur;
     pm->n_rule_emit = st->n_rule_emit;
 }
@@ -1113,12 +1129,12 @@ void csp_pstate_restore(csp_rt_t* st, csp_pmark_t* pm)
     st->ps.err_args[2] = a2;
     st->ps.err_strp = esp;
     st->ps.line     = line;
-    st->cs.mdef        = pm->mdef;
-    st->cs.ent         = pm->ent;
-    st->cs.sdef        = pm->sdef;
-    st->cs.in_marker   = pm->in_marker;
-    st->cs.save_sx     = pm->save_sx;
-    st->cs.sx          = pm->sx;
+    st->cs->mdef        = pm->mdef;
+    st->cs->ent         = pm->ent;
+    st->cs->sdef        = pm->sdef;
+    st->cs->in_marker   = pm->in_marker;
+    st->cs->save_sx     = pm->save_sx;
+    st->cs->sx          = pm->sx;
     st->cur         = pm->cur;
     st->n_rule_emit = pm->n_rule_emit;
 }
@@ -1136,7 +1152,7 @@ NOINLINE static void alloc_init(reg_allocator_t* ap)
 NOINLINE static int alloc_reg(csp_rt_t* st)
 {
     reg_allocator_t* ap;
-    if ((ap = st->cs.ap) != NULL) {
+    if ((ap = st->cs->ap) != NULL) {
 	int r = ap->free_regs[ap->top++];
 	ap->rmap[r] = BAD_INDEX;
 	return r;
@@ -1147,7 +1163,7 @@ NOINLINE static int alloc_reg(csp_rt_t* st)
 NOINLINE static void free_reg(csp_rt_t* st, int r)
 {
     reg_allocator_t* ap;
-    if ((ap = st->cs.ap) != NULL) {
+    if ((ap = st->cs->ap) != NULL) {
 	index_t ix;
 	ap->free_regs[--ap->top] = r;
 	if ((ix = ap->rmap[r]) != BAD_INDEX) {
@@ -1187,12 +1203,12 @@ NOINLINE static bool_t csp_load_value(csp_rt_t* st, reg_t x, vtype_t vt, value_t
 // Add unique variable to var list (for <- parsing)
 NOINLINE static void add_var(csp_rt_t* st, xindex_t ix)
 {
-    if (st->cs.rimp) {  // only when in RHS in expression x <- a+b+c
+    if (st->cs->rimp) {  // only when in RHS in expression x <- a+b+c
 	int i;
-	for (i = 0; i < st->cs.nvar; i++)
-	    if (st->cs.var[i] == ix) return;  // already in list
-	if (st->cs.nvar < MAX_VARREFS)
-	    st->cs.var[st->cs.nvar++] = ix;
+	for (i = 0; i < st->cs->nvar; i++)
+	    if (st->cs->var[i] == ix) return;  // already in list
+	if (st->cs->nvar < MAX_VARREFS)
+	    st->cs->var[st->cs->nvar++] = ix;
     }
 }
 
@@ -1212,11 +1228,11 @@ NOINLINE int map_reg(csp_rt_t* st, xindex_t ix)
     // that costs one extra LD to get right. See asm_seto.
     int named = (XOBJ(ix) != XOBJ_GLOBAL) && (XOBJ(ix) != XOBJ_CURRENT);
 
-    if ((ap = st->cs.ap) != NULL) {
+    if ((ap = st->cs->ap) != NULL) {
 	// Check if already mapped AND mapping is still valid
 	if (!rom && !named && decl(st,XIDX(ix),is_mapped)) {
 	    reg_t r = decl(st,XIDX(ix),reg);
-	    if (st->cs.ap->rmap[r] == XIDX(ix))
+	    if (st->cs->ap->rmap[r] == XIDX(ix))
 		return r;  // mapping still valid
 	    // Stale mapping - clear it
 	    ram_decl_at(st,XIDX(ix))->is_mapped = 0;
@@ -1252,7 +1268,7 @@ NOINLINE int map_reg(csp_rt_t* st, xindex_t ix)
 // generate LD/LI.. load value into a register if not already
 NOINLINE int csp_load(csp_rt_t* st, rentry_t* rp)
 {
-    if (!rp->L && st->cs.ap) { // not loaded and generate code
+    if (!rp->L && st->cs->ap) { // not loaded and generate code
 	int r;
 
 	if (rp->X) {  // load variable
@@ -1267,8 +1283,8 @@ NOINLINE int csp_load(csp_rt_t* st, rentry_t* rp)
 		// -- so `A[j]` would be handed the register still holding
 		// `A[i]`. Fresh register, arm the subscript, emit the LD.
 		r = alloc_reg(st);
-		st->cs.arr_reg = rp->areg;
-		st->cs.arr_len = csp_array_len(st, XIDX(rp->ix));
+		st->cs->arr_reg = rp->areg;
+		st->cs->arr_len = csp_array_len(st, XIDX(rp->ix));
 		if (!asm_mem(st, OP_LD, r, rp->ix))
 		    return -1;
 		free_reg(st, rp->areg);   // the SETOX consumed it
@@ -1340,7 +1356,7 @@ NOINLINE static int push_var(csp_rt_t* st, rentry_t* rstack, int ep,
     else if ((decl(st,INDEX(ix),type) == DECL_VARIABLE) ||
 	     (decl(st,INDEX(ix),type) == DECL_CONSTANT)) {
 	add_var(st, ix);
-	if (st->cs.ev) {
+	if (st->cs->ev) {
 	    ctx_save_t sv;
 	    index_t rx = ctx_enter(st, ix, &sv);
 	    I = 1;
@@ -1377,7 +1393,7 @@ NOINLINE static int push_lval_part(rentry_t* rstack, int ep, xindex_t ix,
 NOINLINE static int push_part(csp_rt_t* st, rentry_t* rstack, int ep,
 			      xindex_t ix, csp_part_t part)
 {
-    if (st->cs.ev) {
+    if (st->cs->ev) {
 	ctx_save_t sv;
 	value_t pv;
 	index_t rx = ctx_enter(st, ix, &sv);
@@ -1407,7 +1423,7 @@ NOINLINE static bool_t coerce_to_float(csp_rt_t* st, rentry_t* e)
     if (ent.vt != V_INTEGER) return 0;  // can only convert int
 
     // For variables (X=1), load first then convert
-    if (ent.X && st->cs.ap) {
+    if (ent.X && st->cs->ap) {
 	if (csp_load(st, &ent) < 0)
 	    return 0;
     }
@@ -1417,7 +1433,7 @@ NOINLINE static bool_t coerce_to_float(csp_rt_t* st, rentry_t* e)
 	ent.I = 1;
 	ent.L = 0;
     }
-    else if (ent.L && st->cs.ap) {
+    else if (ent.L && st->cs->ap) {
 	reg_t r = alloc_reg(st);
 	if (!asm_CVTIF(st, r, ent.reg))
 	    return 0;
@@ -1440,7 +1456,7 @@ NOINLINE static bool_t coerce_to_int(csp_rt_t* st, rentry_t* e)
     if (ent.vt != V_FLOAT) return 0;  // can only convert float
 
     // For variables (X=1), load first then convert
-    if (ent.X && st->cs.ap) {
+    if (ent.X && st->cs->ap) {
 	if (csp_load(st, &ent) < 0)
 	    return 0;
     }
@@ -1450,7 +1466,7 @@ NOINLINE static bool_t coerce_to_int(csp_rt_t* st, rentry_t* e)
 	ent.I = 1;
 	ent.L = 0;
     }
-    else if (ent.L && st->cs.ap) {
+    else if (ent.L && st->cs->ap) {
 	reg_t r = alloc_reg(st);
 	if (!asm_CVTFI(st, r, ent.reg))
 	    return 0;
@@ -1479,13 +1495,13 @@ NOINLINE static bool_t coerce_assign(csp_rt_t* st, xindex_t ix, rentry_t* e)
     // `name = <formula>` and marks the target here for the length of that
     // parse (+1, so a zeroed struct means "none" -- decl index 0 is real).
     // A #param carries the same bit but the opposite exception: changing it from
-    // OUTSIDE is the point, so an immediate (`> Kp = 7`, st->cs.ev) is allowed
+    // OUTSIDE is the point, so an immediate (`> Kp = 7`, st->cs->ev) is allowed
     // and a rule is not. A rule that writes its own configuration is the bug
     // this catches.
     if (decl(st,XIDX(ix),local) &&
-	(st->cs.local_def != (index_t)(XIDX(ix) + 1))) {
+	(st->cs->local_def != (index_t)(XIDX(ix) + 1))) {
 	int param = (decl(st,XIDX(ix),type) == DECL_CONSTANT);
-	if (!(param && st->cs.ev)) {
+	if (!(param && st->cs->ev)) {
 	    if (csp_set_error(st, param ? ERR_ASSIGN_TO_PARAM
 				        : ERR_ASSIGN_TO_LOCAL))
 		csp_set_err_arg_int(st, 0, 0);
@@ -1531,13 +1547,13 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
 
     // Compiled path: collapse LI+ST into a single STI for a small immediate
     // plain-value store (mirror of EQI). Keeps e.g. State=OFF one instruction.
-    if (st->cs.ap && (lhs.part == PART_VAL) && fits_sti(op, &rhs)) {
+    if (st->cs->ap && (lhs.part == PART_VAL) && fits_sti(op, &rhs)) {
 	// asm_STI reaches asm_seto too, so an array lvalue arms here as well --
 	// `P[Idx] = 0` is exactly the shape this fast path exists for, and
 	// skipping it would cost an instruction per store in array-heavy code.
 	if (lhs.A) {
-	    st->cs.arr_reg = lhs.areg;
-	    st->cs.arr_len = csp_array_len(st, XIDX(lhs.ix));
+	    st->cs->arr_reg = lhs.areg;
+	    st->cs->arr_len = csp_array_len(st, XIDX(lhs.ix));
 	}
 	if (!asm_STI(st, 0, lhs.ix, (int8_t)rhs.val.i))
 	    return -1;
@@ -1550,13 +1566,13 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
     if (csp_load(st, &rhs) < 0)
 	return -1;
 
-    if (!rhs.L && st->cs.ap) {
+    if (!rhs.L && st->cs->ap) {
 	// is this an internal error?
 	csp_set_error(st, ERR_SYNTAX);  // rhs must have value
 	return -1;
     }
 
-    if (!st->cs.ap) {
+    if (!st->cs->ap) {
 	// Immediate mode STORES, and a store needs leaf storage. This path is
 	// also reached with codegen off while pmatch merely VALIDATES an
 	// expression range -- before csp_rt_start has laid the view/heap tables
@@ -1594,8 +1610,8 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
 	    // `A[i] = rhs`: arm the subscript so asm_seto lays the SETOX down
 	    // in front of the store, exactly as the read path does.
 	    if (lhs.A) {
-		st->cs.arr_reg = lhs.areg;
-		st->cs.arr_len = csp_array_len(st, XIDX(lhs.ix));
+		st->cs->arr_reg = lhs.areg;
+		st->cs->arr_len = csp_array_len(st, XIDX(lhs.ix));
 	    }
 	    if (!asm_mem(st, op, rhs.reg, lhs.ix))
 		return -1;
@@ -1725,7 +1741,7 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 
 	switch(tok) {
 	case RIMP:
-	    st->cs.rimp = 0;
+	    st->cs->rimp = 0;
 	    if ((ep = process_assign(st, OP_STIMP, rstack, ep)) < 0)
 		return PARSE_ERROR;
 	    break;
@@ -1786,7 +1802,7 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 	    printf("\n");
 	    }
 #endif
-	    if ((!st->cs.ap || ( !a->X && !b->X ))
+	    if ((!st->cs->ap || ( !a->X && !b->X ))
 		&& a->I && b->I && (csp_opcode_arity(op) == 2)) {
 		// constant fold
 		value_t result = eval2(st, op, a->val, b->val, uns);
@@ -1805,7 +1821,7 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 		if (csp_load(st, b) < 0) return -1;
 		if (a->L && b->L) {
 		    dst = alloc_reg(st);
-		    if (st->cs.ap != NULL) {
+		    if (st->cs->ap != NULL) {
 			if (!asm_bop(st, op, dst, a->reg, b->reg, uns, swapped))
 			    return PARSE_ERROR;
 			free_reg(st, a->reg);
@@ -1816,7 +1832,7 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 		    a->I = 0;
 		    a->vt = rt;
 		}
-		else if (st->cs.ap)
+		else if (st->cs->ap)
 		    return -1;
 		else {
 		    a->I = a->L = a->X = 0;
@@ -1861,7 +1877,7 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 	    if (csp_load(st, a) < 0) return -1;
 	    if (a->L) { // generate code
 		dst = alloc_reg(st);
-		if (st->cs.ap != NULL) {
+		if (st->cs->ap != NULL) {
 		    if (!asm_uop(st, op, dst, a->reg))
 			return PARSE_ERROR;
 		    free_reg(st, a->reg);
@@ -1870,7 +1886,7 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 		a->I = 0;
 		a->vt = rt;
 	    }
-	    else if (st->cs.ap)
+	    else if (st->cs->ap)
 		return -1;
 	    else
 		a->I = a->L = a->X = 0;
@@ -2098,7 +2114,7 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
 	    goto type_mismatch;
 	}
 	ep -= arity;
-	if (!st->cs.ap) {
+	if (!st->cs->ap) {
 	    // Immediate `> timeout(T)`: no instruction stream to run it in, so
 	    // ask the runtime directly -- the same answer OP_TMO would give.
 	    value_t v;
@@ -2220,10 +2236,10 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
     // or we have special functions
     imm = (argimm == ((1 << arity)-1));
     // Fold when all args are immediate AND either the function is pure, or we
-    // are in eval mode (st->cs.ev, i.e. an immediate `> expr` at the prompt) where
+    // are in eval mode (st->cs->ev, i.e. an immediate `> expr` at the prompt) where
     // even an impure call like latch()/print() must run now for its side effect
     // -- otherwise the emitted OP_CALL is never executed and the call no-ops.
-    if (imm && (func_pure(func,0,from) || st->cs.ev)) {
+    if (imm && (func_pure(func,0,from) || st->cs->ev)) {
 	value_t arg[MAX_ARGS];
 	csp_func_fn fn = NULL;
 
@@ -2375,7 +2391,7 @@ next:
 	// expression range with cs.ap NULL before asm_rule compiles it for real,
 	// so this runs twice and only the second pass lays instructions down.
 	// Erroring on the first pass rejected every runtime subscript there is.
-	if (st->cs.ap != NULL) {
+	if (st->cs->ap != NULL) {
 	    if (csp_load(st, &rstack[ep-1]) < 0)
 		return 0;
 	    r = rstack[ep-1].reg;
@@ -2633,7 +2649,7 @@ operator:
 	if ((p1 = op_table_prec(tok)) == -1)
 	    return 0;
 	if (pp == 0) {
-	    if (tok == RIMP) { st->cs.rimp = 1; }
+	    if (tok == RIMP) { st->cs->rimp = 1; }
 	    ostack[pp++] = tok;
 	}
 	else {
@@ -2641,7 +2657,7 @@ operator:
 	    int p2;
 	    // Either marker acts like LP - don't process operators past it
 	    if (IS_MARKER(tok2) || tok2 == LP) {
-		if (tok == RIMP) { st->cs.rimp = 1;  }
+		if (tok == RIMP) { st->cs->rimp = 1;  }
 		ostack[pp++] = tok;
 		ptok = tok;
 		goto next;
@@ -2658,7 +2674,7 @@ operator:
 		if (IS_MARKER(tok2) || (tok2 == LP)) break;
 		p2 = op_table_prec(tok2);
 	    }
-	    if (tok == RIMP) { st->cs.rimp = 1; }
+	    if (tok == RIMP) { st->cs->rimp = 1; }
 	    ostack[pp++] = tok;
 	}
 	ptok = tok;
@@ -2689,11 +2705,11 @@ NOINLINE int csp_parse_const_expr(csp_rt_t* st,
 				  const token_t* tv, size_t* num_toks,
 				  rentry_t* result)
 {
-    reg_allocator_t* saved_ap = st->cs.ap;
+    reg_allocator_t* saved_ap = st->cs->ap;
     int r;
-    st->cs.ap = NULL;  // no codegen
+    st->cs->ap = NULL;  // no codegen
     r = csp_parse_expr(st, tv, num_toks, result);
-    st->cs.ap = saved_ap;
+    st->cs->ap = saved_ap;
     return r;
 }
 
@@ -2727,10 +2743,10 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	return -1;
     }
     // Mark before anything is emitted: this is where an aborted module rewinds to.
-    csp_pstate_save(st, &st->cs.mod_mark);
+    csp_pstate_save(st, &st->cs->mod_mark);
     if ((ix = csp_new_udecl(st,&d.name,DECL_MODULE)) == BAD_INDEX)
 	return -1;
-    st->cs.save_sx = st->cs.sx;
+    st->cs->save_sx = st->cs->sx;
     // A module gets its own State so that a state named inside it belongs to it
     // and numbers from its own base. A DATA-ONLY module -- a namespace, no
     // #states and no #in -- never reads it, and pays a whole leaf for it (22
@@ -2742,20 +2758,20 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
     // nothing else it could mean. Only the built-in namespace sets this today --
     // deciding it automatically means knowing, at `#module`, whether the body
     // that has not been read yet uses states.
-    if (!st->cs.no_state) {
+    if (!st->cs->no_state) {
 	RO_TSTR(State, ros_State);
 	index_t sx;
 	sx = csp_new_decl(st,&State,DECL_VARIABLE,1);
-	st->cs.sx = MAKE_XINDEX(XOBJ_CURRENT, XIDX(sx));
+	st->cs->sx = MAKE_XINDEX(XOBJ_CURRENT, XIDX(sx));
     }
 
-    st->cs.mdef = ix;  // current module being defined
+    st->cs->mdef = ix;  // current module being defined
     if (!asm_ENTER(st, &jx, 0, ix))
 	return -1;
-    st->cs.ent = jx;   // entry point of module being defined
+    st->cs->ent = jx;   // entry point of module being defined
     i = INDEX(ix);
     ram_decl_at(st,i)->md.n = 0;
-    ram_decl_at(st,i)->md.ent = st->cs.ent;
+    ram_decl_at(st,i)->md.ent = st->cs->ent;
     return 0;
 }
 
@@ -2773,13 +2789,13 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	return -1;
     }
 
-    if (st->cs.sdef >= 0) {
+    if (st->cs->sdef >= 0) {
 	// close the #in block: patch OP_INSTATE.nxt to jump past everything
 	// emitted since the gate, so a State mismatch skips the whole block.
 	close_in_block(st);
 	return 0;
     }
-    if ((mx = st->cs.mdef) == BAD_INDEX) {
+    if ((mx = st->cs->mdef) == BAD_INDEX) {
 	csp_set_error(st, ERR_END_MISMATCH);
 	return -1;  // no module
     }
@@ -2789,13 +2805,13 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
     if (!asm_LEAVE(st, &lx, 0, 0))
 	return -1;
     // ent MUST be OP_ENTER!
-    ram_instr_at(st, st->cs.ent)->e.num = (lx - st->cs.ent - 1);
-    ram_instr_at(st, lx)->v.num = instr(st, st->cs.ent, e.num);
-    ram_instr_at(st, lx)->v.mx  = instr(st, st->cs.ent, e.mx);
+    ram_instr_at(st, st->cs->ent)->e.num = (lx - st->cs->ent - 1);
+    ram_instr_at(st, lx)->v.num = instr(st, st->cs->ent, e.num);
+    ram_instr_at(st, lx)->v.mx  = instr(st, st->cs->ent, e.mx);
     // stack?
-    st->cs.mdef = BAD_INDEX;
-    st->cs.ent = 0;
-    st->cs.sx   = st->cs.save_sx;
+    st->cs->mdef = BAD_INDEX;
+    st->cs->ent = 0;
+    st->cs->sx   = st->cs->save_sx;
     return 0;
 }
 
@@ -2998,14 +3014,14 @@ NOINLINE static int asm_decl_init(csp_rt_t* st, const token_t* tv, size_t n,
     uint8_t init = STATE_INIT;
     // A declaration may sit INSIDE an #in block, whose gate is still open and
     // whose sdefv the block owns. Ours nests, so put the enclosing one back.
-    int      sdef  = st->cs.sdef;
-    uint8_t  nsdef = st->cs.n_sdef;
-    index_t  mark  = st->cs.in_marker;
+    int      sdef  = st->cs->sdef;
+    uint8_t  nsdef = st->cs->n_sdef;
+    index_t  mark  = st->cs->in_marker;
     uint8_t  sv[MAX_IN_STATES];
     int merged = 0;
     int r;
 
-    memcpy(sv, st->cs.sdefv, sizeof(sv));
+    memcpy(sv, st->cs->sdefv, sizeof(sv));
 
     // Consecutive declarations share ONE gate. Four #params followed by two
     // timers and two variables would otherwise emit four LD+INSTATE pairs for
@@ -3024,28 +3040,28 @@ NOINLINE static int asm_decl_init(csp_rt_t* st, const token_t* tv, size_t n,
     // opcode back is what makes that safe -- and if a stale mark ever does pass
     // all four tests, it is because it really is an INIT gate that really is the
     // last thing emitted, which is exactly the case worth merging into.
-    if (st->cs.dinit_mark != 0) {
-	index_t mk = (index_t)(st->cs.dinit_mark - 1);
+    if (st->cs->dinit_mark != 0) {
+	index_t mk = (index_t)(st->cs->dinit_mark - 1);
 	if ((mk >= st->rom_nn) && (mk < (index_t)st->ps.nn) &&
 	    (instr(st, mk, op) == OP_INSTATE) &&
 	    (instr(st, mk, in.imm) == STATE_INIT) &&
 	    ((index_t)(mk + instr(st, mk, in.nxt)) == (index_t)st->ps.nn)) {
-	    st->cs.in_marker = mk;
-	    st->cs.sdefv[0]  = STATE_INIT;
-	    st->cs.n_sdef    = 1;
-	    st->cs.sdef      = STATE_INIT;
+	    st->cs->in_marker = mk;
+	    st->cs->sdefv[0]  = STATE_INIT;
+	    st->cs->n_sdef    = 1;
+	    st->cs->sdef      = STATE_INIT;
 	    merged = 1;
 	}
     }
     if (!merged && !open_in_block(st, &init, 1, 0))
 	return -1;
     r = asm_rule(st, tv, n, BAD_INDEX, part, 1, NULL);
-    st->cs.dinit_mark = (index_t)(st->cs.in_marker + 1);
+    st->cs->dinit_mark = (index_t)(st->cs->in_marker + 1);
     close_in_block(st);
-    st->cs.sdef      = sdef;
-    st->cs.n_sdef    = nsdef;
-    st->cs.in_marker = mark;
-    memcpy(st->cs.sdefv, sv, sizeof(sv));
+    st->cs->sdef      = sdef;
+    st->cs->n_sdef    = nsdef;
+    st->cs->in_marker = mark;
+    memcpy(st->cs->sdefv, sv, sizeof(sv));
     return r;
 }
 
@@ -3219,9 +3235,9 @@ NOINLINE int csp_parse_local(csp_rt_t* st, token_t* tv, int ti, size_t n)
     // The name is already declared, so a #local whose formula mentions ITSELF
     // resolves -- and reads its own previous value, which is defined (if odd)
     // rather than an error: it is the accumulator a plain variable can express.
-    st->cs.local_def = (index_t)(i + 1);   // allow the one assignment that defines it
+    st->cs->local_def = (index_t)(i + 1);   // allow the one assignment that defines it
     r = csp_parse_rule(st, tv, eq-1, n);
-    st->cs.local_def = 0;
+    st->cs->local_def = 0;
     return r;
 }
 
@@ -3789,24 +3805,24 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
     // cnd stays -1 here (no State condition); the changed/user condition follows.
 
     // dry run (get nvar) union over all <- parts
-    st->cs.nvar = 0;
+    st->cs->nvar = 0;
     for (k = 0; k < np; k++) {
 	if (part[k].assign == RIMP) {
 	    int r;
 	    num = part[k].rhs.len;
-	    st->cs.rimp = 1;
+	    st->cs->rimp = 1;
 	    r = csp_parse_const_expr(st, &tv[part[k].rhs.pos], &num, NULL);
-	    st->cs.rimp = 0;
+	    st->cs->rimp = 0;
 	    if (r == 0)
 		return -1;
 	}
     }
-    if (st->cs.nvar) {
+    if (st->cs->nvar) {
 	cnd2 = alloc_reg(st);
 	if (!asm_LI(st, cnd2, 0))
 	    return -1;
-	for (k = 0; k < st->cs.nvar; k++) {
-	    if (!asm_mem(st, OP_CHG, cnd2, st->cs.var[k]))
+	for (k = 0; k < st->cs->nvar; k++) {
+	    if (!asm_mem(st, OP_CHG, cnd2, st->cs->var[k]))
 		return -1;
 	}
     }
@@ -4020,8 +4036,8 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 	    fits_sti((part[k].assign == RIMP) ? OP_STIMP : OP_ST, &rbody)) {
 	    dst = alloc_reg(st);
 	    if (alen_a) {
-		st->cs.arr_reg = (uint8_t)aidx;
-		st->cs.arr_len = alen_a;
+		st->cs->arr_reg = (uint8_t)aidx;
+		st->cs->arr_len = alen_a;
 	    }
 	    if (!asm_STI(st, dst, ix, (int8_t)rbody.val.i))
 		return -1;
@@ -4042,8 +4058,8 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 		// Armed HERE, after the right side has been loaded: its own LD
 		// would otherwise consume the one-shot meant for this store.
 		if (alen_a) {
-		    st->cs.arr_reg = (uint8_t)aidx;
-		    st->cs.arr_len = alen_a;
+		    st->cs->arr_reg = (uint8_t)aidx;
+		    st->cs->arr_len = alen_a;
 		}
 		if (!asm_mem(st, op, dst, ix))
 		    return -1;
@@ -4202,13 +4218,13 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
 // there). Returns 1 if a wrap was applied (caller must clear it after the rule).
 NOINLINE static int wrap_normal_plus(csp_rt_t* st)
 {
-    if ((st->cs.sdef >= 0) || (st->cs.mdef != BAD_INDEX))
+    if ((st->cs->sdef >= 0) || (st->cs->mdef != BAD_INDEX))
 	return 0;                       // inside #in or a module: no wrap
-    st->cs.sdefv[0] = STATE_INIT;
-    st->cs.sdefv[1] = STATE_NORMAL;
-    st->cs.n_sdef   = 2;
-    st->cs.sdef     = STATE_INIT;          // >= 0 so asm_rule folds the OR condition
-    st->cs.rule_implicit = 1;              // mark the OP_RULE for bare listing
+    st->cs->sdefv[0] = STATE_INIT;
+    st->cs->sdefv[1] = STATE_NORMAL;
+    st->cs->n_sdef   = 2;
+    st->cs->sdef     = STATE_INIT;          // >= 0 so asm_rule folds the OR condition
+    st->cs->rule_implicit = 1;              // mark the OP_RULE for bare listing
     return 1;
 }
 
@@ -4243,9 +4259,9 @@ NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, int ti, size_t n)
     if (asm_rule(st, tv, n, BAD_INDEX, d.body, np, &d.cond) < 0)
 	return -1;
     if (wrap) {                         // clear the NORMAL+ context (no gate)
-	st->cs.sdef   = -1;
-	st->cs.n_sdef = 0;
-	st->cs.rule_implicit = 0;
+	st->cs->sdef   = -1;
+	st->cs->n_sdef = 0;
+	st->cs->rule_implicit = 0;
     }
     return 0;
 }
@@ -4444,8 +4460,8 @@ NOINLINE int csp_parse_immediate(csp_rt_t* st, token_t* tv, int ti, size_t n)
 // jumps INTO the block when it matches; the last is an OP_INSTATE that skips the
 // block when it does not. So the chain reads "enter if A, else enter if B, else
 // enter if C, else skip." The NINSTATE targets (block start) are patched here;
-// the INSTATE skip distance is patched at #end. Sets st->cs.sdefv/n_sdef/sdef (used
-// by asm_rule to fold the reactive per-rule State condition) and st->cs.in_marker.
+// the INSTATE skip distance is patched at #end. Sets st->cs->sdefv/n_sdef/sdef (used
+// by asm_rule to fold the reactive per-rule State condition) and st->cs->in_marker.
 NOINLINE static bool_t open_in_block(csp_rt_t* st, const uint8_t* states, int ns,
 				     int implicit)
 {
@@ -4456,7 +4472,7 @@ NOINLINE static bool_t open_in_block(csp_rt_t* st, const uint8_t* states, int ns
     if ((ns < 1) || (ns > MAX_IN_STATES))
 	return 0;
     cnd = alloc_reg(st);
-    if (!asm_mem(st, OP_LD, cnd, st->cs.sx))
+    if (!asm_mem(st, OP_LD, cnd, st->cs->sx))
 	return 0;
     for (k = 0; k < ns - 1; k++)
 	if (!asm_NINSTATE(st, &npos[k], cnd, states[k]))
@@ -4468,10 +4484,10 @@ NOINLINE static bool_t open_in_block(csp_rt_t* st, const uint8_t* states, int ns
     for (k = 0; k < ns - 1; k++)        // NINSTATE jumps forward into the block
 	ram_instr_at(st, npos[k])->in.nxt = l1 - npos[k];
     for (k = 0; k < ns; k++)
-	st->cs.sdefv[k] = states[k];
-    st->cs.n_sdef  = (uint8_t)ns;
-    st->cs.sdef    = states[0];
-    st->cs.in_marker = mk;
+	st->cs->sdefv[k] = states[k];
+    st->cs->n_sdef  = (uint8_t)ns;
+    st->cs->sdef    = states[0];
+    st->cs->in_marker = mk;
     return 1;
 }
 
@@ -4479,9 +4495,9 @@ NOINLINE static bool_t open_in_block(csp_rt_t* st, const uint8_t* states, int ns
 // whole block on a State mismatch, and clear the compile-time state context.
 NOINLINE static void close_in_block(csp_rt_t* st)
 {
-    ram_instr_at(st, st->cs.in_marker)->in.nxt = st->ps.nn - st->cs.in_marker;
-    st->cs.sdef   = -1;
-    st->cs.n_sdef = 0;
+    ram_instr_at(st, st->cs->in_marker)->in.nxt = st->ps.nn - st->cs->in_marker;
+    st->cs->sdef   = -1;
+    st->cs->n_sdef = 0;
 }
 
 // #in <state> [<state> ...]  -- a block that runs in ANY of the listed states.
@@ -4495,7 +4511,7 @@ NOINLINE int csp_parse_in(csp_rt_t* st, token_t* tv, int ti, size_t n)
 
     if (tv[ti].t != WORD) return -1;
 
-    if (st->cs.sdef != -1) {   // implicit NORMAL+ wraps close themselves, so an open
+    if (st->cs->sdef != -1) {   // implicit NORMAL+ wraps close themselves, so an open
 	csp_set_error(st, ERR_END_MISMATCH);   // block here is a genuine nested #in
 	return -1;
     }
@@ -4545,12 +4561,12 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
     reg_allocator_t alloc;
     int n;
 
-    st->cs.ap = &alloc;
+    st->cs->ap = &alloc;
     csp_stack_mark();     // tv[MAX_LINE_TOKENS] is already on the stack here
     while((n = csp_scan_line(st, str, tv, &num)) > 0) {
 	int r = -1;
 	str += n;
-	alloc_init(st->cs.ap);
+	alloc_init(st->cs->ap);
 
 	if (tv[0].t == NEWLINE)
 	    r = 0;

@@ -1,0 +1,45 @@
+%% 16 x 4K then 32K ones. How many big ones is the part's flash size.
+{group, '175x',
+ [{family, lpc1700},
+  {sectors, [{16, 4096}, {2, 32768}]},   %% 128K -- see lpc1754
+  {page, 4096}]}.
+
+%% Two maps, and which one you can have is decided by ONE fact: the vector
+%% table has to be at 0x00000000, so the runtime starts at sector 0 and eats
+%% the small sectors from the bottom up.
+%%
+%% Measured for cortex-m3 -Os:
+%%   full runtime (compiler + REPL)   67112 bytes
+%%   exec-only                        38692
+%%   a baked program image             ~1.2K
+%%
+%% A full build needs 67K, and sectors 0..15 are only 64K -- so it must reach
+%% into a 32K sector and take 0..16. That leaves exactly ONE sector, and one
+%% sector is one region: settings and patches have to share it, in a 32K erase
+%% unit rather than a 4K one.
+%%
+%% The trade is real and it is not close: on a node you can TYPE at, you do not
+%% need an application slot at all. The program arrives as source, lands in the
+%% patch, and a bad line is a syntax error instead of a brick. A/B is for nodes
+%% that only run images -- which is the other map.
+{map, '175x',
+ [{runtime,  0, 16},                 %%  96K  the compiler fits, with 29K spare
+  {store,   17, 17}]}.               %%  32K  settings and patches together
+
+%% Exec-only: 38692 leaves the small sectors free, and then everything gets its
+%% own erase unit. This is the map for a node that has been given its program
+%% and is done being talked to.
+{map, '175x_exec',
+ [{runtime,  0,  9},                 %%  40K
+  {store,   10, 10},                 %%   4K  settings alone: cheap to rewrite
+  {patch,   11, 12},                 %%   8K
+  {app, "A", 16, 16},                %%  32K
+  {app, "B", 17, 17}]}.              %%  32K
+
+{chip, lpc1754,
+ [{group, '175x'},
+  {id, 16#26011922},
+  {flash_kb, 128},
+  {ram_kb, 16},                      %% main SRAM; +16K AHB at 0x2007C000
+  {peripherals, [{can,1},{usb,1},{uart,4},{i2c,3},{spi,1},{ssp,2},
+                 {adc,8},{dac,1},{pwm,6},{rtc,1},{wdt,1}]}]}.

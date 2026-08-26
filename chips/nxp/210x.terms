@@ -1,0 +1,23 @@
+%% LPC210x -- two geometries under one name.
+%%
+%% LPC2101/2102/2103 are 4K sectors and nothing bigger; LPC2104/2105/2106 are
+%% uniform 8K. Same digit bucket, different flash, so two groups in one file.
+%% The file is where you LOOK for the part; the group is what its flash IS.
+
+{group, '210x_4k', [{family,lpc2000}, {sectors,[{8,4096}]},  {page,4096}]}.
+{group, '210x_8k', [{family,lpc2000}, {sectors,[{15,8192}]}, {page,8192}]}.
+
+%% 32K leaves no room for two slots AND a store. One application; the store is
+%% a single 4K sector, which is the right granularity for settings anyway.
+{map, '210x_4k', [{runtime,0,5}, {app,"A",6,6}, {store,7,7}]}.
+{map, '210x_8k', [{runtime,0,7}, {app,"A",8,10}, {app,"B",11,13}, {store,14,14}]}.
+
+{chip, lpc2103, [{group,'210x_4k'}, {id,16#0004FF11}, {flash_kb,32}, {ram_kb,8},
+                 {nsect,8}, {peripherals,[{uart,2},{i2c,2},{spi,1},{ssp,1},
+                                          {adc,8},{pwm,6},{rtc,1},{wdt,1}]}]}.
+{chip, lpc2104, [{group,'210x_8k'}, {id,16#FFF0FF12}, {flash_kb,128}, {ram_kb,16},
+                 {nsect,15}, {peripherals,[{uart,2},{i2c,1},{spi,2},{pwm,6},{wdt,1}]}]}.
+{chip, lpc2105, [{group,'210x_8k'}, {id,16#FFF0FF22}, {flash_kb,128}, {ram_kb,32},
+                 {nsect,15}, {peripherals,[{uart,2},{i2c,1},{spi,2},{pwm,6},{wdt,1}]}]}.
+{chip, lpc2106, [{group,'210x_8k'}, {id,16#FFF0FF32}, {flash_kb,128}, {ram_kb,64},
+                 {nsect,15}, {peripherals,[{uart,2},{i2c,1},{spi,2},{pwm,6},{wdt,1}]}]}.

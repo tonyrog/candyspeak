@@ -35,7 +35,8 @@ CFLAGS=-MMD -MP -MF .$<.d -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC
 #     tmp/csp_boot -n -C -O rom_host.c examples/empty.csp
 #     tmp/csp_boot -n -C -O rom.c      examples/cpx_rotate.csp
 OBJS = csp_linux.o csp_rt.o csp_repl.o csp_compile.o csp_tok.o csp_dump.o csp_eeprom.o \
-	csp_parse.o csp_print.o csp_strings.o rom_host.o
+	csp_parse.o csp_print.o csp_strings.o csp_flash.o csp_devices.o \
+	csp_flash_host.o rom_host.o
 
 LIBS =
 
@@ -94,7 +95,8 @@ csp:	$(OBJS)
 # CORE_SRC is the same list with NO image at all -- `make rom` below appends
 # whichever one it just generated.
 CORE_SRC = csp_linux.c csp_rt.c csp_repl.c csp_compile.c csp_tok.c csp_dump.c \
-	   csp_eeprom.c csp_parse.c csp_print.c csp_strings.c
+	   csp_eeprom.c csp_parse.c csp_print.c csp_strings.c \
+	   csp_flash.c csp_devices.c csp_flash_host.c
 EXEC_SRC = $(CORE_SRC) rom.c
 # csp_repl.c, csp_compile.c and csp_dump.c are still LISTED: each guards itself
 # to an empty translation unit, so the file list stays the same as ./csp and a
@@ -170,6 +172,39 @@ rom-image: csp
 	@test -n "$(PROG)" || { echo "usage: make rom-image PROG='a.csp [b.csp ...]'"; exit 1; }
 	./csp -n -C -O rom.c $(PROG)
 	@sed -n '1,6p' rom.c
+
+# Chip tables: generated from chips/<vendor>/*.terms, for the TARGET only. The
+# host asks the script directly -- `make chips`, `make ld CHIP=lpc2129` -- so
+# nothing here compiles a table of parts it is not.
+chip:
+	@test -n "$(CHIP)" || { echo "usage: make chip CHIP=lpc2129"; exit 1; }
+	@escript utils/gen_chips.erl $(CHIP) csp_chip.c csp_chip.h
+
+chips:
+	@escript utils/gen_chips.erl --list $(RE)
+
+ld:
+	@test -n "$(CHIP)" || { echo "usage: make ld CHIP=lpc2129"; exit 1; }
+	@escript utils/gen_chips.erl --ld $(CHIP)
+
+# Both listings take a regexp: `make chips RE=212`, `make board-list RE=dl`.
+# Not `boards` -- that already means "build every board", which is the slow
+# thing this is here to avoid needing.
+board-list:
+	@escript utils/gen_chips.erl --boards $(RE)
+
+# Hold every board against its chip: pin functions, core clock, and whether
+# anything was half-configured. `make check-boards RE=dl` for one.
+check-boards:
+	@escript utils/gen_chips.erl --check $(RE)
+
+# The board's pin mux and power word: `make board BOARD=bridgezone`. Written to
+# build/<board>/ because that is where a per-board build wants it, and it
+# refuses to generate for a board that does not pass check-boards.
+board:
+	@test -n "$(BOARD)" || { echo "usage: make board BOARD=bridgezone"; exit 1; }
+	@mkdir -p build/$(BOARD)
+	@escript utils/gen_chips.erl --board $(BOARD) build/$(BOARD)/csp_board.h
 
 # String table: a small C tool generates csp_strings.{c,h} from strings.tab.
 strtab: strtab.c
@@ -250,6 +285,31 @@ sketch_check:
 test_repl: csp
 	@bash tests/repl.sh
 
+# The cases that WAIT: over-long lines with no terminator, where the answer is
+# a timeout rather than an output. Four of them, and they were most of the
+# suite's wall clock -- so they are not in the loop you run after every edit.
+test_slow: csp
+	@bash tests/slow.sh
+
+# Everything, including every board. Minutes, not seconds: arduino-cli compiles
+# the whole core per target. For a release, not for a change.
+test_all: test test_slow boards_all
+
+boards_all:
+	@for f in CandySpeak/Makefile.*; do \
+	    b=$${f##*Makefile.}; \
+	    printf '%-14s ' "$$b"; \
+	    out=$$($(MAKE) -C CandySpeak -f Makefile.$$b 2>&1); \
+	    if echo "$$out" | grep -q 'Sketch uses'; then \
+		echo "$$out" | grep -E 'Sketch uses|Global variables' | \
+		  sed -E 's/.*Sketch uses ([0-9]+) bytes \(([0-9]+)%\).*/flash \1 (\2%)/; \
+		          s/.*Global variables use ([0-9]+) bytes \(([0-9]+)%\).*/ram \1 (\2%)/' | \
+		  tr '\n' ' '; echo; \
+	    else \
+		echo "$$out" | grep -iE 'undefined reference|error:' | head -1 | cut -c1-90; \
+	    fi; \
+	done
+
 test-examples: csp
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript examples
@@ -270,7 +330,7 @@ test_crc_destroyer:
 
 -include .*.d
 
-.PHONY: all clean test test-examples test_repl test_crc_destroyer syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check debug ubsan san exec min rom rom-image
+.PHONY: chips board-list check-boards board ld chip all clean test test-examples test_repl test_crc_destroyer syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check debug ubsan san exec min rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

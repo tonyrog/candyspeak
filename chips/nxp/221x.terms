@@ -1,0 +1,12 @@
+%% LPC2210/2212/2214 -- LPC2100 cores with an EXTERNAL memory bus.
+{group, '221x', [{family,lpc2000}, {sectors,[{15,8192}]}, {page,8192}]}.
+{map, '221x', [{runtime,0,7}, {app,"A",8,10}, {app,"B",11,13}, {store,14,14}]}.
+
+%% LPC2210 has NO internal flash -- iap_lpc.c calls its table a don't-care.
+%% nsect 0 is the truth, and it makes every csp_region_find miss.
+{chip, lpc2210, [{group,'221x'}, {id,16#0301FF12}, {flash_kb,0}, {ram_kb,16},
+                 {nsect,0}, {peripherals,[{uart,2},{i2c,1},{spi,2},{adc,8},{pwm,6},{rtc,1},{wdt,1}]}]}.
+{chip, lpc2212, [{group,'221x'}, {id,16#0401FF12}, {flash_kb,128}, {ram_kb,16},
+                 {nsect,15}, {peripherals,[{uart,2},{i2c,1},{spi,2},{adc,8},{pwm,6},{rtc,1},{wdt,1}]}]}.
+{chip, lpc2214, [{group,'212x'}, {id,16#0601FF13}, {flash_kb,256}, {ram_kb,16},
+                 {nsect,17}, {peripherals,[{uart,2},{i2c,1},{spi,2},{adc,8},{pwm,6},{rtc,1},{wdt,1}]}]}.

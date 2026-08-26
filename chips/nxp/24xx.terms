@@ -1,0 +1,16 @@
+%% LPC2400 -- the parts behind lpc24xx.h. The 23xx with an external memory
+%% controller and more on-chip RAM.
+{group, '24xx', [{family,lpc2000}, {sectors,[{8,4096},{14,32768},{5,4096}]},
+                 {page,4096}]}.
+{map, '24xx', [{runtime,0,9}, {app,"A",10,14}, {app,"B",15,19}, {store,22,26}]}.
+
+{chip, lpc2458, [{group,'24xx'}, {id,16#0503FF35}, {flash_kb,512}, {ram_kb,98},
+                 {nsect,27},
+                 {peripherals,[{ethernet,1},{can,2},{usb,1},{uart,4},{i2c,3},
+                               {spi,1},{ssp,2},{adc,8},{dac,1},{pwm,6},
+                               {rtc,1},{wdt,1}]}]}.
+{chip, lpc2468, [{group,'24xx'}, {id,16#0603FF35}, {flash_kb,512}, {ram_kb,98},
+                 {nsect,27},
+                 {peripherals,[{ethernet,1},{can,2},{usb,1},{uart,4},{i2c,3},
+                               {spi,1},{ssp,2},{adc,8},{dac,1},{pwm,6},
+                               {rtc,1},{wdt,1}]}]}.

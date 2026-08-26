@@ -1,0 +1,31 @@
+%% A plain LPC1754: no boot loader, the whole flash is ours, vectors at 0.
+%%
+%% This file lives ALONGSIDE boards/lpc1754.h, not instead of it. The header is
+%% still what the build includes; what is here is the part a script can check --
+%% that the chip exists, that the crystal and core clock actually meet, that a
+%% board does not ask for a peripheral its part does not have.
+{board, lpc1754,
+ [{chip, lpc1754},
+
+  {xtal, 12000000},
+  {core, 100000000},                 %% the part's ceiling
+
+  %% The arena, and it has to be stated. csp.h picks a code budget by target and
+  %% its branches are AVR, ARDUINO, and "host: full worst case" -- a bare-metal
+  %% ARM that is not an Arduino lands in the last one and asks for 24K, more
+  %% than this part's 16K of SRAM. Measured: 12420 bytes of bss at 9216.
+  {code_budget, 9216},
+
+  %% No EEPROM peripheral on a 175x. Its 177x/8x sibling has one and
+  %% eeprom_17xx_40xx.c sits in the same driver directory, which makes it look
+  %% otherwise -- but chip_lpc175x_6x.h never defines LPC_EEPROM.
+  {no_eeprom, true},
+
+  %% The console pins. Muxing them is not optional just because UART0 is "the
+  %% obvious one": LPCOpen does not set PINSEL, so an unmuxed TXD0 is a GPIO
+  %% input and the port stays silent with the peripheral running perfectly.
+  {pin, 'P0.2', txd0},
+  {pin, 'P0.3', rxd0},
+
+  {console, {uart0, 115200}},
+  {enable, [uart0, gpio, timer0]}]}.

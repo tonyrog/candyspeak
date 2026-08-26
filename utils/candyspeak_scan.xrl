@@ -10,80 +10,81 @@ L       = [a-zA-Z_\$]
 A       = ({L}|{U})
 H	= [a-fA-F0-9]
 E	= [Ee][+-]?{D}+
-FS	= (f|F|l|L)
-IS	= (u|U|l|L)*
 WS      = [\t|\s|\r]
 
 Rules.
 
 %% keywords
-can		   : {token,{can,TokenLine}}.
-digital		   : {token,{digital,TokenLine}}.
-analog		   : {token,{analog,TokenLine}}.
-variable	   : {token,{variable,TokenLine}}.
-local	           : {token,{local,TokenLine}}.
-constant	   : {token,{constant,TokenLine}}.
-timeout      	   : {token,{timeout,TokenLine}}.
-integer            : {token,{integer,TokenLine}}.
-unsigned           : {token,{unsigned,TokenLine}}.
-string             : {token,{string,TokenLine}}.
-float              : {token,{float,TokenLine}}.
-in		   : {token,{in,TokenLine}}.
-out		   : {token,{out,TokenLine}}.
-inout      	   : {token,{inout,TokenLine}}.
-little	           : {token,{little,TokenLine}}.
-big		   : {token,{big,TokenLine}}.
-native     	   : {token,{native,TokenLine}}.
-reset      	   : {token,{reset,TokenLine}}.
-push      	   : {token,{push,TokenLine}}.
-pop      	   : {token,{pop,TokenLine}}.
-save      	   : {token,{save,TokenLine}}.
-list      	   : {token,{list,TokenLine}}.
-clear      	   : {token,{clear,TokenLine}}.
 
-{L}({L}|{D})*	   : {token,{name,TokenLine,TokenChars}}.
-0[xX]{H}+{IS}?     : {token,{hexnum,TokenLine,TokenChars}}.
-0[b]{B}+{IS}?      : {token,{binnum,TokenLine,TokenChars}}.
-0{D}+{IS}?         : {token,{octnum,TokenLine,TokenChars}}.
-{D}+{IS}?          : {token,{decnum,TokenLine,TokenChars}}.
+module             : {token,{'D_MODULE',TokenLine}}.
+'end'              : {token,{'D_END',TokenLine}}.
+states             : {token,{'D_STATES',TokenLine}}.
+%% in                 : {token,{'D_IN',TokenLine}}.
+digital		   : {token,{'D_DIGITAL',TokenLine}}.
+analog		   : {token,{'D_ANALOG',TokenLine}}.
+variable	   : {token,{'D_VARIABLE',TokenLine}}.
+local	           : {token,{'D_LOCAL',TokenLine}}.
+param              : {token,{'D_PARAM',TokenLine}}.
+constant	   : {token,{'D_CONSTANT',TokenLine}}.
+timer              : {token,{'D_TIMER',TokenLine}}.
+field              : {token,{'D_FIELD',TokenLine}}.
+buffer             : {token,{'D_BUFFER',TokenLine}}.
 
-==                 : {token,{'==',TokenLine}}.
-!=                 : {token,{'==',TokenLine}}.
-<=                 : {token,{'<=',TokenLine}}.
->=                 : {token,{'>=',TokenLine}}.
+integer            : {token,{'T_INTEGER',TokenLine}}.
+unsigned           : {token,{'T_UNSIGNED',TokenLine}}.
+string             : {token,{'T_STRING',TokenLine}}.
+float              : {token,{'T_FLOAT',TokenLine}}.
+in		   : {token,{'T_IN',TokenLine}}.
+out		   : {token,{'T_OUT',TokenLine}}.
+inout      	   : {token,{'T_INOUT',TokenLine}}.
+little	           : {token,{'T_LITTLE',TokenLine}}.
+big		   : {token,{'T_BIG',TokenLine}}.
+native     	   : {token,{'T_NATIVE',TokenLine}}.
+can		   : {token,{'T_CAN',TokenLine}}.
 
-<<		    : {token,{'<<',TokenLine}}.
->>		    : {token,{'>>',TokenLine}}.
+{L}({L}|{D})*	   : {token,{'WORD',TokenLine,TokenChars}}.
+0[xX]{H}+          : {token,{'INT',TokenLine,TokenChars}}.
+{D}+               : {token,{'INT',TokenLine,TokenChars}}.
+{D}+.{D}+          : {token,{'FLT',TokenLine,TokenChars}}.
 
-=		    : {token,{'=',TokenLine}}.
-<		    : {token,{'<',TokenLine}}.
-!		    : {token,{'!',TokenLine}}.
-#		    : {token,{'#',TokenLine}}.
--		    : {token,{'-',TokenLine}}.
-\+		    : {token,{'+',TokenLine}}.
-/		    : {token,{'/',TokenLine}}.
-\%		    : {token,{'%',TokenLine}}.
-\*		    : {token,{'*',TokenLine}}.
-\?		    : {token,{'?',TokenLine}}.
+==                 : {token,{'EQEQ',TokenLine}}.
+!=                 : {token,{'NEQ',TokenLine}}.
+<=                 : {token,{'LTEQ',TokenLine}}.
+>=                 : {token,{'GTEQ',TokenLine}}.
 
-&&	            : {token,{'&&',TokenLine}}.
-&		    : {token,{'&',TokenLine}}.
-||		    : {token,{'||',TokenLine}}.
-|		    : {token,{'|',TokenLine}}.
-\^		    : {token,{'^',TokenLine}}.
-\~		    : {token,{'~',TokenLine}}.
+<<		    : {token,{'LTLT',TokenLine}}.
+>>		    : {token,{'GTGT',TokenLine}}.
 
-\(		    : {token,{'(',TokenLine}}.
-\)		    : {token,{')',TokenLine}}.
-\[		    : {token,{'[',TokenLine}}.
-\]		    : {token,{']',TokenLine}}.
-\{		    : {token,{'{',TokenLine}}.
-\}		    : {token,{'}',TokenLine}}.
-.		    : {token,{'.',TokenLine}}.
-,		    : {token,{',',TokenLine}}.
-;		    : {token,{';',TokenLine}}.
-:		    : {token,{':',TokenLine}}.
-\n                  : {token,{newline,TokenLine}}.
+=		    : {token,{'EQ',TokenLine}}.
+<		    : {token,{'LT',TokenLine}}.
+>		    : {token,{'GT',TokenLine}}.
+!		    : {token,{'EXCLAMATION',TokenLine}}.
+#		    : {token,{'HASH',TokenLine}}.
+-		    : {token,{'MINUS',TokenLine}}.
+\+		    : {token,{'PLUS',TokenLine}}.
+/		    : {token,{'SLASH',TokenLine}}.
+\%		    : {token,{'PERCENT',TokenLine}}.
+\*		    : {token,{'ASTERISK',TokenLine}}.
+\?		    : {token,{'QUEST',TokenLine}}.
+
+&&	            : {token,{'AMPAMP',TokenLine}}.
+&		    : {token,{'AMP',TokenLine}}.
+||		    : {token,{'BARBAR',TokenLine}}.
+|		    : {token,{'BAR',TokenLine}}.
+\^		    : {token,{'CIRC',TokenLine}}.
+\~		    : {token,{'TILDE',TokenLine}}.
+
+\(		    : {token,{'LP',TokenLine}}.
+\)		    : {token,{'RP',TokenLine}}.
+\[		    : {token,{'LB',TokenLine}}.
+\]		    : {token,{'RB',TokenLine}}.
+\{		    : {token,{'LBRACE',TokenLine}}.
+\}		    : {token,{'RBRACE',TokenLine}}.
+..		    : {token,{'DOTDOT',TokenLine}}.
+.		    : {token,{'DOT',TokenLine}}.
+,		    : {token,{'COMMA',TokenLine}}.
+:		    : {token,{'COLON',TokenLine}}.
+\n                  : {token,{'NEWLINE',TokenLine}}.
 {WS}+		    : skip_token .
 
 Erlang code.

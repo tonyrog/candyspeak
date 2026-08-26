@@ -59,6 +59,16 @@
 #include "csp_print.h"
 #include "csp_strings.h"
 
+// Does this build have a compiler? csp_rt_init wants its state, or NULL for a
+// node that only runs images -- and the tier is a driver's decision, so it is
+// spelled out here rather than guessed at further down.
+#if defined(CSP_EXEC_ONLY)
+#define CSP_CSTATE NULL
+#else
+#include "csp_compile.h"
+#define CSP_CSTATE csp_cstate()
+#endif
+
 // --- which family -----------------------------------------------------------
 // chip.h has already been included by now, so the family can be recognised from
 // what IT defined rather than from a flag we ask the build to pass. The families
@@ -77,6 +87,13 @@
 #define CSP_LPC_ADC_CLASSIC   1
 #define CSP_LPC_UART_LSR      1
 #define CSP_LPC_NO_EEPROM     1
+// And it spells them differently. The 175x library calls the first uart
+// LPC_UART0 and its one converter LPC_ADC; the 18xx/43xx one says LPC_USART0
+// and LPC_ADC0. Both are LPCOpen, neither is wrong, and the default further
+// down happens to be the other family's -- so say it here rather than make
+// every 175x board carry two defines that have nothing to do with the board.
+#define CSP_LPC_UART_DEFAULT  LPC_UART0
+#define CSP_LPC_ADC_DEFAULT   LPC_ADC
 #elif defined(CHIP_LPC18XX) || defined(CHIP_LPC43XX)
 #define CSP_LPC_ADC_CLASSIC   1
 #define CSP_LPC_UART_LSR      1
@@ -92,14 +109,21 @@
 #endif
 
 // --- board knobs ------------------------------------------------------------
+#ifndef CSP_LPC_UART_DEFAULT
+#define CSP_LPC_UART_DEFAULT  LPC_USART0
+#endif
+#ifndef CSP_LPC_ADC_DEFAULT
+#define CSP_LPC_ADC_DEFAULT   LPC_ADC0
+#endif
+
 #ifndef CSP_LPC_UART
-#define CSP_LPC_UART      LPC_USART0
+#define CSP_LPC_UART      CSP_LPC_UART_DEFAULT
 #endif
 #ifndef CSP_LPC_BAUD
 #define CSP_LPC_BAUD      115200
 #endif
 #ifndef CSP_LPC_ADC
-#define CSP_LPC_ADC       LPC_ADC0
+#define CSP_LPC_ADC       CSP_LPC_ADC_DEFAULT
 #endif
 #ifndef CSP_LPC_ADC_RATE
 #define CSP_LPC_ADC_RATE  400000     // ADC clock; 400 kHz is the usual max
@@ -151,8 +175,11 @@ int csp_lpc_adc_channel(uint8_t port, uint8_t pin)
 // timer match outputs, 15xx and 43xx have the SCT, and which one is wired to a
 // given pin is a board fact. `val` is already scaled to 0..255.
 //
-// A timer-match version is about ten lines: Chip_TIMER_SetMatch on the channel
-// the pin is muxed to, with the period set once at init.
+// WEAK, so a chip layer that has a real one replaces it by linking -- see
+// chips/nxp/drivers/212x/pwm_212x.c, which drives both the PWM0 block and the
+// timer match outputs because an LPC2129's one PWM block does not reach every
+// pin a board wants to dim.
+__attribute__((weak))
 void csp_lpc_pwm_write(uint8_t port, uint8_t pin, int val)
 {
     (void)port; (void)pin; (void)val;
@@ -195,10 +222,56 @@ void SysTick_Handler(void)
     csp_ticks_ms++;
 }
 
-static void csp_lpc_systick_init(void)
+// The same thing under a neutral name, for a chip layer that has no SysTick to
+// hang it on. The ARM7 VIC points a slot at a wrapper that clears the timer's
+// interrupt flag and calls this -- see Chip_Tick_Init in chip_212x.c.
+void csp_tick_isr(void) { csp_ticks_ms++; }
+
+// The tick seam. Declared HERE because it is this file's contract -- the chip
+// layer implements it, and the two families implement it differently:
+// Cortex-M below over SysTick, ARM7 in chip_212x.c over a timer match.
+//
+// Counting UP, deliberately. SysTick's VAL counts DOWN from LOAD and an
+// LPC2000 TC counts up from zero; picking one and making the other pretend
+// would hand csp_time_us a number that runs backwards inside every period.
+void     Chip_Tick_Init(uint32_t hz);
+uint32_t Chip_Tick_Us(void);
+
+// The 1 ms tick, through the seam rather than through SysTick directly: SysTick
+// is a Cortex-M peripheral and this file also serves an ARM7, where the tick is
+// a timer match. Chip_Tick_* is implemented by both -- see chip_212x.h for why
+// the seam counts UP and SysTick does not.
+#if defined(__CORTEX_M)
+static uint32_t tick_reload;
+void Chip_Tick_Init(uint32_t hz)
 {
     SystemCoreClockUpdate();
-    SysTick_Config(SystemCoreClock / 1000);
+    tick_reload = SystemCoreClock / (hz ? hz : 1000u);
+    SysTick_Config(tick_reload);
+}
+// Microseconds, composed from the ms counter and the fraction of the current
+// period SysTick has left. VAL counts DOWN from LOAD, so elapsed-within-the-
+// period is LOAD - VAL -- an LPC2000 has the number already and this is the
+// side that has to build it.
+//
+// Read ms twice around the counter and retry if it moved: the counter wraps
+// exactly when ms increments, so a naive pair can report a time a whole
+// millisecond early.
+uint32_t Chip_Tick_Us(void)
+{
+    uint32_t ms, val, ms2;
+    do {
+	ms  = csp_ticks_ms;
+	val = tick_reload - SysTick->VAL;
+	ms2 = csp_ticks_ms;
+    } while (ms != ms2);
+    return ms * 1000UL + ((val * 1000UL) / (tick_reload ? tick_reload : 1));
+}
+#endif
+
+static void csp_lpc_systick_init(void)
+{
+    Chip_Tick_Init(1000);
 }
 
 uint32_t csp_time_ms(void)
@@ -211,18 +284,7 @@ uint32_t csp_time_ms(void)
 // increments, so a naive pair can report a time a whole millisecond early.
 unsigned long csp_time_us(void)
 {
-    uint32_t ms, val, ms2;
-    uint32_t load = SysTick->LOAD + 1;
-
-    do {
-	ms   = csp_ticks_ms;
-	val  = SysTick->VAL;
-	ms2  = csp_ticks_ms;
-    } while (ms != ms2);
-
-    // VAL counts DOWN from LOAD, so elapsed-within-the-tick is LOAD - VAL.
-    return (unsigned long)ms * 1000UL +
-	   (unsigned long)(((load - val) * 1000UL) / load);
+    return (unsigned long)Chip_Tick_Us();
 }
 
 static void csp_delay_ms(uint32_t ms)
@@ -546,11 +608,19 @@ void csp_board_analog_config(value_t* vptr)
 // Board lifecycle
 // ============================================================
 
+// WEAK and empty by default: a chip layer with real PWM defines it. Called
+// below, after the pins are muxed and the clock is up.
+__attribute__((weak)) void csp_pwm_init(void) { }
+
 void csp_board_init(void)
 {
     csp_lpc_board_init();
     Chip_GPIO_Init(LPC_GPIO);
     csp_lpc_adc_init();
+    // AFTER the tick exists. On an LPC2000 the PWM period on TIMER0 is
+    // scheduled as TC + period, so TIMER0 has to be running and prescaled
+    // first -- Chip_Tick_Init does that, from main, before this.
+    csp_pwm_init();
 }
 
 void csp_board_setup(csp_rt_t* st)      { (void)st; }
@@ -714,6 +784,34 @@ void csp_output(csp_rt_t* st)
 // csp_can_init returning 0 with recv always saying "nothing" is a working
 // no-bus node: #buffer ... can declarations compile and simply never fire.
 
+// A board says CSP_CAN_BITRATE to have a bus at all: there is no sensible
+// default. 500k and 250k are both "the usual one" depending on who you ask, and
+// a node that guesses wrong is silent in a way that looks like broken wiring.
+#if defined(CSP_CAN_BITRATE) && defined(CSP_CAN_PORT)
+
+int csp_can_init(csp_rt_t* st)
+{
+    (void)st;
+    return Chip_CAN_Init(CSP_CAN_PORT, CSP_CAN_BITRATE);
+}
+
+int csp_can_recv(csp_rt_t* st, uint32_t* id, uint8_t* data, uint8_t* len)
+{
+    (void)st;
+    return Chip_CAN_Recv(CSP_CAN_PORT, id, data, len);
+}
+
+int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
+{
+    (void)st;
+    return Chip_CAN_Send(CSP_CAN_PORT, id, data, len);
+}
+
+#else
+
+// No bus. init succeeding with recv always saying "nothing" is a WORKING
+// node: `#buffer ... can` declarations compile and simply never fire, which is
+// what lets one program run on a board with a transceiver and one without.
 int csp_can_init(csp_rt_t* st)
 {
     (void)st;
@@ -731,6 +829,8 @@ int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
     (void)st; (void)id; (void)data; (void)len;
     return -1;
 }
+
+#endif
 
 // ============================================================
 // Persistent storage
@@ -885,7 +985,7 @@ static void csp_lpc_setup(void)
     // A failed init leaves a half-set-up state; say so instead of running into a
     // fault. This is where an over-eager claim (free - reserve too tight) shows
     // up, rather than as a mystery hang.
-    if (csp_rt_init(&state, REACTIVE_DEFAULT) < 0) {
+    if (csp_rt_init(&state, REACTIVE_DEFAULT, CSP_CSTATE) < 0) {
 	csp_print_line("FATAL: csp_rt_init failed (out of memory)");
 	return;                        // leave the loop a no-op rather than crash
     }

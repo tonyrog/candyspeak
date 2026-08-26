@@ -1996,6 +1996,11 @@ typedef struct _csp_rt_t
     // has no Sys (CSP_NO_SYS_MODULE) or a loaded image predates it.
     index_t sys_mod;
     index_t sys_obj;
+    // Registry index of the image csp_load_rom actually booted, or -1 for the
+    // linked rom_image (which is not in the registry). Published as sys.Image
+    // once csp_rt_start has slots to publish into -- the NUMBER /images prints,
+    // so "which one am I running" has one answer in both places.
+    int8_t  image_no;
     // How much of the RAM patch eeprom currently holds a copy of, counted from
     // CSP_BASE_ND/CSP_BASE_NN. Set by a successful save (everything in RAM is now
     // in eeprom) and by a successful load (what came back), zeroed by /clear and
@@ -2034,7 +2039,19 @@ typedef struct _csp_rt_t
     // emits into the same arena the runtime executes from -- decls, strings and
     // instructions are all reached through st -- so a pointer to just this would
     // not be enough to parse with. What it buys is a boundary you can see.
-    csp_cstate_t cs;
+    // The COMPILER's state, or NULL on a node that cannot compile.
+    //
+    // A pointer and not a member: none of this is the runtime's. It is the
+    // module being defined, the register allocator, the parse-rollback mark,
+    // the scratch list a `<-` binding collects its variables in -- all of it
+    // meaningless once nothing can be typed. An exec-only node carried 108
+    // bytes of it on an AVR and, worse, a runtime struct that named a compiler
+    // type as if it owned one.
+    //
+    // NULL is the tier, checkable at runtime: the three places csp_rt.c still
+    // asks about it now read "if there is a compiler, and it is mid-module",
+    // which is what they always meant.
+    csp_cstate_t* cs;
     csp_estate_t es;
 
     int list_state;              // during listing: state of the #in block being
@@ -2420,7 +2437,8 @@ static inline int decl_name_empty(csp_rt_t* st, index_t ix)
     return (pos == 0) || (csp_str_byte(st, pos - 1) == 0);
 }
 
-extern int     csp_rt_init(csp_rt_t*,  int reactive);
+// `cs` is the compiler's state, or NULL for a node that only runs images.
+extern int     csp_rt_init(csp_rt_t*,  int reactive, csp_cstate_t* cs);
 extern int     csp_mem_init(csp_rt_t*, size_t size);
 // Memory an already-parsed program needs, computed WITHOUT running csp_rt_start
 // (mirrors its global+object walk, counting only). Lets /memory and -b show the
@@ -2456,6 +2474,7 @@ extern const csp_image_ref_t rom_image;
 // How many images this firmware linked in, and the base of the i:th one.
 extern int            csp_image_count(void);
 extern const uint8_t* csp_image_at(int i);
+extern const uint8_t* csp_find_image_no(unsigned role, int* nop);
 // The best linked image for a role: highest generation whose header verifies.
 // NULL when the firmware carries none for that role.
 extern const uint8_t* csp_find_image(unsigned role);
