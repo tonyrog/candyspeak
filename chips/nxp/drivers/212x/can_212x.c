@@ -54,95 +54,101 @@ static int solve_btr(uint32_t pclk, uint32_t bitrate, uint32_t *btr_out)
     return -1;
 }
 
-int Chip_CAN_Init(LPC_CAN_T *can, uint32_t bitrate)
+void Chip_CAN_Init(LPC_CAN_T *can, LPC_CANAF_T *af, LPC_CANAF_RAM_T *afram)
+{
+    (void)af; (void)afram;          // no filter RAM on this family
+    can->MOD = CANMOD_RM;           // reset mode: where BTR is writable
+    can->IER = 0;                   // polled; nothing here needs an interrupt
+}
+
+void Chip_CAN_SetAFMode(LPC_CANAF_T *af, CAN_AF_MODE_T mode)
+{
+    (void)af;
+    LPC_CANAF_MODE = (uint32_t)mode;
+}
+
+Status Chip_CAN_SetBitRate(LPC_CAN_T *can, uint32_t bitrate)
 {
     uint32_t btr;
     uint32_t pclk = Chip_Clock_GetPeripheralClockRate();
 
     if ((pclk == 0) || (bitrate == 0))
-	return -1;
+	return ERROR;
     if (solve_btr(pclk, bitrate, &btr) < 0)
-	return -1;
+	return ERROR;
 
     // BTR is writable ONLY in reset mode. Writing it while the controller runs
     // is silently ignored -- the node then sits on the bus at whatever rate it
     // had, erroring on every frame, which looks like a wiring fault.
     can->MOD = CANMOD_RM;
-    can->IER = 0;                   // polled; nothing here needs an interrupt
     can->BTR = btr;
     can->MOD = 0;                   // leave reset: operational
-
-    // Accept everything. The filter LUT would let the controller drop frames
-    // this node does not want, but a #buffer already says which id it wants and
-    // the match happens there -- two places to state it is one too many.
-    LPC_CANAF_MODE = CANAF_ACCBP;
-    return 0;
+    return SUCCESS;
 }
 
-int Chip_CAN_Send(LPC_CAN_T *can, uint32_t id, const uint8_t *data, uint8_t len)
+Status Chip_CAN_Send(LPC_CAN_T *can, CAN_BUFFER_ID_T buf, CAN_MSG_T *msg)
 {
-    uint32_t fi;
-    uint32_t d1 = 0, d2 = 0;
-    int i;
+    uint32_t fi, d1 = 0, d2 = 0;
+    uint32_t i, len = (msg->DLC > 8) ? 8 : msg->DLC;
 
+    (void)buf;                      // buffer 1 only, which is all polling needs
     if (!(can->SR & CANSR_TBS1))
-	return -1;                  // buffer 1 busy; the caller retries
-    if (len > 8)
-	len = 8;
+	return ERROR;               // busy; the caller retries
 
-    fi = ((uint32_t)len << 16);
-    if (id & CSP_CAN_EFF_FLAG) {
+    fi = (len << 16);
+    if (msg->ID & CAN_EXTEND_ID_USAGE) {
 	fi |= CANFI_FF;
-	can->TID1 = id & CSP_CAN_EFF_MASK;
+	can->TID1 = msg->ID & CSP_CAN_EFF_MASK;
     } else {
-	can->TID1 = id & CSP_CAN_SFF_MASK;
+	can->TID1 = msg->ID & CSP_CAN_SFF_MASK;
     }
-    if (id & CSP_CAN_RTR_FLAG)
+    if (msg->Type & CAN_REMOTE_MSG)
 	fi |= CANFI_RTR;
     can->TFI1 = fi;
 
     // Byte by byte into two words: the data registers are 32-bit and little
-    // endian by byte number, and `data` has no alignment promise -- a word
-    // store through a cast would fault on an odd address.
+    // endian by byte number, and Data has no alignment promise -- a word store
+    // through a cast would fault on an odd address.
     for (i = 0; i < len; i++) {
 	if (i < 4)
-	    d1 |= (uint32_t)data[i] << (8 * i);
+	    d1 |= (uint32_t)msg->Data[i] << (8 * i);
 	else
-	    d2 |= (uint32_t)data[i] << (8 * (i - 4));
+	    d2 |= (uint32_t)msg->Data[i] << (8 * (i - 4));
     }
     can->TDA1 = d1;
     can->TDB1 = d2;
 
     can->CMR = CANCMR_TR | CANCMR_STB1;
-    return 0;
+    return SUCCESS;
 }
 
-int Chip_CAN_Recv(LPC_CAN_T *can, uint32_t *id, uint8_t *data, uint8_t *len)
+Status Chip_CAN_Receive(LPC_CAN_T *can, CAN_MSG_T *msg)
 {
     uint32_t rfs, d1, d2;
-    int i, n;
+    uint32_t i, n;
 
     if (!(can->SR & CANSR_RBS))
-	return 0;                   // nothing pending -- not an error
+	return ERROR;               // nothing pending
 
     rfs = can->RFS;
-    n = (int)((rfs >> 16) & 0x0f);
+    n = (rfs >> 16) & 0x0f;
     if (n > 8) n = 8;
 
-    *id = can->RID & ((rfs & CANFI_FF) ? CSP_CAN_EFF_MASK : CSP_CAN_SFF_MASK);
+    msg->ID = can->RID & ((rfs & CANFI_FF) ? CSP_CAN_EFF_MASK
+					   : CSP_CAN_SFF_MASK);
     if (rfs & CANFI_FF)
-	*id |= CSP_CAN_EFF_FLAG;
-    if (rfs & CANFI_RTR)
-	*id |= CSP_CAN_RTR_FLAG;
+	msg->ID |= CAN_EXTEND_ID_USAGE;
+    msg->Type = (rfs & CANFI_RTR) ? CAN_REMOTE_MSG : 0;
+    msg->DLC = n;
 
     d1 = can->RDA;
     d2 = can->RDB;
     for (i = 0; i < n; i++)
-	data[i] = (uint8_t)((i < 4) ? (d1 >> (8 * i)) : (d2 >> (8 * (i - 4))));
-    *len = (uint8_t)n;
+	msg->Data[i] = (uint8_t)((i < 4) ? (d1 >> (8 * i))
+					 : (d2 >> (8 * (i - 4))));
 
     // Release LAST. The registers above are only valid while the buffer is
     // held; releasing first lets the next frame overwrite what we are reading.
     can->CMR = CANCMR_RRB;
-    return 1;
+    return SUCCESS;
 }

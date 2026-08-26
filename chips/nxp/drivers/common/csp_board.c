@@ -57,6 +57,33 @@ void csp_board_pinmux(void)
 			  board_pins[i].bit, 0, board_pins[i].func);
 }
 
+// Which ADC channel a `port:pin` names, from the board's own mux table.
+//
+// The default in csp_lpcopen.c is the identity -- `15:3` is channel 3 -- which
+// is right when the .csp names channels. On a board with fixed screw terminals
+// it is the wrong question: the program knows the connector, not the converter,
+// so `in 0:25` should find channel 2 because that is how the pin is wired.
+//
+// Refusing an unmapped pin matters. Falling back to the identity would make
+// `0:26` read channel 26, which does not exist, and the read would quietly
+// return whatever the register held.
+#if defined(CSP_BOARD_ADC)
+
+typedef struct { uint8_t port, bit, chan; } board_adc_t;
+
+static const board_adc_t board_adc[] = { CSP_BOARD_ADC };
+
+int csp_lpc_adc_channel(uint8_t port, uint8_t pin)
+{
+    unsigned i;
+    for (i = 0; i < CSP_BOARD_NADC; i++)
+	if ((board_adc[i].port == port) && (board_adc[i].bit == pin))
+	    return (int)board_adc[i].chan;
+    return -1;                  // not an analog pin on this board
+}
+
+#endif
+
 #else
 
 // No generated description. Leave the pins at reset and let whatever set them

@@ -109,13 +109,28 @@ main(["--all", CFile]) ->
 %% the answer is arithmetic over the terms and nothing at run time needs it --
 %% a 35-part table compiled into a host binary to serve one command-line flag
 %% is a table that has to be regenerated, linked and kept in step for no reason.
-main(["--ld", Chip]) ->
+main(["--ld", Name]) -> main(["--ld", Name, ""]);
+main(["--ld", Name, Want]) ->
     Db = load(),
-    case lookup(Db, chip, list_to_atom(Chip)) of
-	false ->
-	    io:format(standard_error, "gen_chips: no such chip '~s'~n", [Chip]),
-	    halt(1);
-	P -> io:put_chars(ld_script(list_to_atom(Chip), resolve(Db, P)))
+    case target(Db, Name, Want) of
+	false -> halt(1);
+	G -> io:put_chars(ld_script(list_to_atom(Name), G))
+    end;
+%% Which maps a board offers, and which one is live.
+main(["--maps", Name]) ->
+    Db = load(),
+    case lookup(Db, board, list_to_atom(Name)) of
+	false -> io:format(standard_error, "no such board '~s'~n", [Name]),
+		 halt(1);
+	P ->
+	    Ms = [{N, R} || {map, N, R} <- P],
+	    Act = active_map_name(P),
+	    case Ms of
+		[] -> io:format("~s: no board maps; uses the chip's~n", [Name]);
+		_ -> [io:format("~s~-12s ~w region(s)~n",
+				[case N =:= Act of true -> "* "; false -> "  " end,
+				 N, length(R)]) || {N, R} <- Ms]
+	    end
     end;
 %% One fact, one line, nothing else on stdout. For a Makefile, which should not
 %% be parsing a listing meant for a person -- and which pipes it through `head`,
@@ -131,16 +146,12 @@ main(["--chip-of", Name]) ->
 %% Where the runtime region starts. What a raw .bin has to be flashed AT, and
 %% what an ihex has to be shifted BY -- the two questions a .bin cannot answer
 %% about itself.
-main(["--load-addr", Name]) ->
+main(["--load-addr", Name]) -> main(["--load-addr", Name, ""]);
+main(["--load-addr", Name, Want]) ->
     Db = load(),
-    Chip = case lookup(Db, board, list_to_atom(Name)) of
-	       false -> list_to_atom(Name);
-	       P -> kv(P, chip, '?')
-	   end,
-    case lookup(Db, chip, Chip) of
-	false -> io:format(standard_error, "no such chip '~s'~n", [Chip]), halt(1);
-	CP ->
-	    G = resolve(Db, CP),
+    case target(Db, Name, Want) of
+	false -> halt(1);
+	G ->
 	    Sectors = kv(G, sectors, []),
 	    Base = kv(G, flash_base, 0),
 	    First = case [A || {runtime, A, _} <- kv(G, map, [])] of
@@ -149,6 +160,39 @@ main(["--load-addr", Name]) ->
 		    end,
 	    io:format("0x~8.16.0B~n",
 		      [Base + lists:sum(lists:sublist(Sectors, First))])
+    end;
+%% Where a board's terms file lives. The build goes NEXT TO IT rather than into
+%% one shared tree: a pile of firmware images that all look alike is how one
+%% ends up flashing the wrong board, and a path that names the board is a much
+%% better guard than remembering which build was which.
+%% The name of the map a build would use, so the output directory can be named
+%% after it. Without this the variant is the literal MAP= string, which is empty
+%% for a default build -- and "build/" tells you nothing about what is in it.
+main(["--map-of", Name]) -> main(["--map-of", Name, ""]);
+main(["--map-of", Name, Want]) ->
+    Db = load(),
+    case lookup(Db, board, list_to_atom(Name)) of
+	false -> io:format("default~n");         %% a chip, or no such board
+	P ->
+	    case {[N || {map, N, _} <- P], Want} of
+		{[], _} -> io:format("default~n");   %% uses the chip's map
+		{_, ""} -> io:format("~w~n", [active_map_name(P)]);
+		{Ns, W} ->
+		    case [N || N <- Ns, atom_to_list(N) =:= W] of
+			[N|_] -> io:format("~w~n", [N]);
+			[] -> io:format(standard_error,
+					"gen_chips: board '~s' has no map '~s'~n",
+					[Name, W]),
+			      halt(1)
+		    end
+	    end
+    end;
+main(["--dir-of", Name]) ->
+    case term_file(board, list_to_atom(Name)) of
+	false ->
+	    io:format(standard_error, "gen_chips: no such board '~s'~n", [Name]),
+	    halt(1);
+	F -> io:format("~s~n", [filename:dirname(F)])
     end;
 main(["--arch-of", Name]) ->
     Db = load(),
@@ -223,6 +267,75 @@ main(_) ->
 		      "       gen_chips.erl --board <board> <out.h>~n", []),
     halt(1).
 
+%% Resolve a NAME -- board or chip -- into the property list to generate from,
+%% with the right region map already substituted.
+%%
+%% A MAP IS A BOARD FACT, not a chip one. The same LPC1754 with a USB boot
+%% loader in its low sectors has a different map from one without, and the
+%% silicon cannot tell you which. So a board may carry its own {map, N, [...]}
+%% entries and name one with {active_map, N}; a board that carries none falls
+%% back to its chip's, which is right for a part used plainly.
+target(Db, Name, Want) ->
+    A = list_to_atom(Name),
+    case lookup(Db, board, A) of
+	false ->
+	    case lookup(Db, chip, A) of
+		false ->
+		    io:format(standard_error,
+			      "gen_chips: no such board or chip '~s'~n", [Name]),
+		    false;
+		CP -> resolve(Db, CP)
+	    end;
+	P ->
+	    Chip = kv(P, chip, '?'),
+	    case lookup(Db, chip, Chip) of
+		false ->
+		    io:format(standard_error,
+			      "gen_chips: board '~s' names chip '~w', "
+			      "which does not exist~n", [Name, Chip]),
+		    false;
+		CP ->
+		    G = resolve(Db, CP),
+		    case board_map(P, Want) of
+			false ->
+			    io:format(standard_error,
+				      "gen_chips: board '~s' has no map '~s'~n",
+				      [Name, Want]),
+			    false;
+			[] -> G;                     %% no board maps: chip's
+			R -> [{map, R} | G]          %% kv takes the head
+		    end
+	    end
+    end.
+
+%% The board's maps, and which is live. `Want` overrides {active_map,...} so a
+%% build can say `MAP=usb_boot` without editing the board file.
+board_map(P, Want) ->
+    Ms = [{N, R} || {map, N, R} <- P],
+    case {Ms, Want} of
+	{[], _} -> [];
+	{_, ""} ->
+	    Act = active_map_name(P),
+	    case [R || {N, R} <- Ms, N =:= Act] of
+		[R|_] -> R;
+		[] -> element(2, hd(Ms))         %% no active_map: the first
+	    end;
+	{_, W} ->
+	    case [R || {N, R} <- Ms, atom_to_list(N) =:= W] of
+		[R|_] -> R;
+		[] -> false
+	    end
+    end.
+
+active_map_name(P) ->
+    case kv(P, active_map, undefined) of
+	undefined -> case [N || {map, N, _} <- P] of
+			 [N|_] -> N;
+			 [] -> undefined
+		     end;
+	N -> N
+    end.
+
 %% --- board generation --------------------------------------------------------
 
 %% The PCONP word. Everything the board asked for, and nothing else.
@@ -255,6 +368,11 @@ board_header(Name, P, G, Pins) ->
        "#define CSP_CORE_HZ     ~w~n"
        "#define CSP_PCLK_DIV    ~w~n",
        [Name, Chip, kv(P, xtal, 0), kv(P, core, 0), kv(P, pclk_div, 4)]),
+     %% Total RAM, from the CHIP. csp_lpcopen.c cannot derive it -- _vStackTop
+     %% is the top of one bank and these parts scatter RAM across several -- so
+     %% it reports 0 for "nobody told me", which makes the whole /memory block
+     %% read as zeroes. The terms know; say so.
+     f("#define CSP_LPC_RAM     ~w~n", [kv(G, ram_kb, 0) * 1024]),
      case kv(P, code_budget, undefined) of
 	 undefined -> [];
 	 CB -> f("#define CSP_CODE_BUDGET ~w~n", [CB])
@@ -263,11 +381,47 @@ board_header(Name, P, G, Pins) ->
 	 true -> f("#define CSP_NO_EEPROM   1~n", []);
 	 _ -> []
      end,
+     %% The ADC map, derived from the pins the board muxed to the converter.
+     %% A pin named 'ad0.2' (17xx) or 'ain2' (LPC2000) IS channel 2 -- the
+     %% number is in the function name, so it does not have to be stated twice.
+     adc_map([{Pin, F} || {pin, Pin, F} <- P]),
+     case kv(P, boot_led, undefined) of
+	 undefined -> [];
+	 Led0 ->
+	     %% {boot_led, Pin} or {boot_led, Pin, active_low}. The polarity is
+	     %% a wiring fact and it is not guessable: an LED to ground lights
+	     %% when the pin is high, one to Vcc when it is low, and both are
+	     %% ordinary. Getting it backwards makes "off" look like a board
+	     %% that is stuck on.
+	     {Led, Act} = case Led0 of
+			      {L, active_low} -> {L, 0};
+			      {L, active_high} -> {L, 1};
+			      L -> {L, 1}
+			  end,
+	     {LP, LB} = pin_split(Led),
+	     f("\n// A LED for the boot code, before anything else exists.\n"
+	       "#define CSP_BOOT_LED_PORT ~w\n"
+	       "#define CSP_BOOT_LED_PIN  ~w\n"
+	       "#define CSP_BOOT_LED_ON   ~w\n", [LP, LB, Act])
+     end,
      case kv(P, console, undefined) of
 	 {U, Baud} -> f("#define CSP_LPC_UART    LPC_~s~n"
 			"#define CSP_LPC_BAUD    ~w~n",
 			[string:uppercase(atom_to_list(U)), Baud]);
 	 _ -> []
+     end,
+     %% The bus csp_lpcopen.c actually opens. It looks for CSP_CAN_PORT and
+     %% CSP_CAN_BITRATE -- unnumbered -- and without both it compiles the no-bus
+     %% stub instead: init succeeds, recv always says "nothing", and the node is
+     %% silent in a way that looks exactly like working.
+     %%
+     %% The numbered ones below are the whole picture, for when more than one
+     %% bus is supported. The first {can,...} is the one that gets opened.
+     case lists:sort([{N, O} || {can, N, O} <- P]) of
+	 [] -> [];
+	 [{N1, O1}|_] ->
+	     f("#define CSP_CAN_PORT    LPC_CAN~w~n"
+	       "#define CSP_CAN_BITRATE ~w~n", [N1, kv(O1, bitrate, 0)])
      end,
      [f("#define CSP_CAN~w_BITRATE ~w~n", [N, kv(Opts, bitrate, 0)])
       || {can, N, Opts} <- P],
@@ -279,6 +433,32 @@ board_header(Name, P, G, Pins) ->
        "#define CSP_BOARD_PINS \\~n", []),
      pin_macro(Muxed, Pins),
      f("~n#define CSP_BOARD_NPINS ~w~n~n#endif~n", [length(Muxed)])].
+
+%% 'ad0.2' -> 2, 'ain2' -> 2, anything else -> false.
+adc_chan(F) ->
+    case atom_to_list(F) of
+	"ad0." ++ N -> catch_int(N);
+	"ain" ++ N  -> catch_int(N);
+	_ -> false
+    end.
+
+catch_int(S) -> case string:to_integer(S) of {N, ""} -> N; _ -> false end.
+
+adc_map(Muxed) ->
+    Ch = [{Pin, C} || {Pin, F} <- Muxed, (C = adc_chan(F)) =/= false],
+    case Ch of
+	[] -> [];
+	_ ->
+	    [f("\n// Which ADC channel each muxed pin is, so a .csp can name the\n"
+	       "// connector pin (`in 0:25`) instead of the channel (`15:2`).\n"
+	       "#define CSP_BOARD_ADC \\\n", []),
+	     [begin
+		  {Po, B} = pin_split(Pin),
+		  f("    { ~w, ~2w, ~w }~s~n",
+		    [Po, B, C, case I < length(Ch) of true -> ", \\"; false -> "" end])
+	      end || {I, {Pin, C}} <- lists:zip(lists:seq(1, length(Ch)), Ch)],
+	     f("#define CSP_BOARD_NADC ~w~n", [length(Ch)])]
+    end.
 
 pin_macro([], _) -> f("    /* none */~n", []);
 pin_macro(Muxed, Pins) ->
@@ -416,10 +596,65 @@ check_enable(Board, P, Muxed) ->
 
 %% --- reading -----------------------------------------------------------------
 
+%% Where terms are read from, and the ORDER IS THE PRECEDENCE: lookup/3 takes
+%% the head, so whatever comes first wins. Private definitions therefore
+%% override public ones, which is what makes a private repo useful -- a board
+%% that must not be published can shadow a placeholder here.
+%%
+%%   $CSP_PATH   colon-separated, first, for a repo cloned anywhere
+%%   private/    a clone parked inside the tree, gitignored
+%%   chips/ boards/  the public tree
+%%
+%% Shadowing is REPORTED. A private definition quietly replacing a public one
+%% is exactly the kind of thing that costs an afternoon when an edit to the
+%% wrong copy has no effect.
+term_files() ->
+    Extra = case os:getenv("CSP_PATH") of
+		false -> [];
+		"" -> [];
+		Path -> [D || D <- string:lexemes(Path, ":"), D =/= ""]
+	    end,
+    %% append, NOT flatten: a string IS a list, so flattening a list of file
+    %% names concatenates them into one long char list.
+    lists:append(
+      [filelib:wildcard(D ++ "/**/*.terms") || D <- Extra] ++
+      [filelib:wildcard("private/**/*.terms"),
+       filelib:wildcard("chips/*/*.terms"),
+       %% Both shapes: a board may be one file in boards/, or a DIRECTORY of
+       %% its own holding the terms, its pins.csp and its build output. The
+       %% second is what a board with more than one file wants, and it is the
+       %% same shape a private repo has.
+       filelib:wildcard("boards/*.terms"),
+       filelib:wildcard("boards/*/*.terms")]).
+
 load() ->
-    Files = filelib:wildcard("chips/*/*.terms") ++
-	filelib:wildcard("boards/*.terms"),
-    lists:flatten([consult(F) || F <- Files]).
+    Files = term_files(),
+    Tagged = [{F, consult(F)} || F <- Files],
+    warn_shadowed(Tagged),
+    lists:flatten([Ts || {_, Ts} <- Tagged]).
+
+%% Which file defines {Kind, Name}. The first in search order, which is the one
+%% that wins -- see term_files/0 for why private comes before public.
+term_file(Kind, Name) ->
+    Hit = [F || F <- term_files(),
+		lists:any(fun({K, N, _}) -> (K =:= Kind) andalso (N =:= Name);
+			     (_) -> false
+			  end, consult(F))],
+    case Hit of
+	[F|_] -> F;
+	[] -> false
+    end.
+
+%% Two files defining the same {Kind, Name}. The first wins; say which.
+warn_shadowed(Tagged) ->
+    Named = [{{K, N}, F} || {F, Ts} <- Tagged, {K, N, _} <- Ts],
+    Dups = [{Key, [F || {K2, F} <- Named, K2 =:= Key]}
+	    || Key <- lists:usort([K || {K, _} <- Named])],
+    [io:format(standard_error,
+	       "gen_chips: ~w ~w defined in ~s -- shadowing ~s~n",
+	       [K, N, hd(Fs), string:join(tl(Fs), ", ")])
+     || {{K, N}, Fs} <- Dups, length(Fs) > 1],
+    ok.
 
 %% Name matching for the listings. An atom, so it comes back to a string first;
 %% caseless because nobody types LPC2129 the same way twice.

@@ -41,34 +41,104 @@ const uint32_t OscRateIn    = CSP_XTAL_HZ;
 const uint32_t RTCOscRateIn = 32768;
 
 void csp_board_pinmux(void);
+extern void (* const g_vectors[])(void);
+
+// A bounded wait. An unbounded one is how a board that will not start a crystal
+// becomes a board that does nothing at all, forever, with no way to tell that
+// from a dozen other faults. Falling through on a timeout at least leaves
+// something running that can be asked what happened.
+//
+// The count is cycles of a `while` at up to 100 MHz, so this is milliseconds,
+// not microseconds -- far longer than the ~300 us a 12 MHz crystal needs.
+#define WAIT_LIMIT 1000000u
 
 void SystemInit(void)
 {
-    // Main oscillator on and stable before anything selects it. Selecting an
-    // oscillator that has not started leaves the part running on the IRC at
-    // 4 MHz -- everything works, at a twenty-fifth of the speed.
-    Chip_Clock_SetMainPLLSource(SYSCTL_PLLCLKSRC_MAINOSC);
+    uint32_t n;
+
+    // The vector table. At address 0 the reset value of VTOR is already 0 and
+    // this changes nothing -- but it stops being true the moment the image
+    // moves, which on this board is one line in boards/dl1200.terms.
+    SCB->VTOR = (uint32_t)&g_vectors;
+
+    // ORDER MATTERS HERE, and getting it wrong is silent.
+    //
+    // The oscillator is started and waited for BEFORE anything selects it.
+    // Writing CLKSRCSEL to choose an oscillator that is not running takes the
+    // clock away from the core -- the part simply stops, with no fault and no
+    // output, and looks exactly like a board that was never programmed. The
+    // user manual warns about this register in those words.
+    //
+    // The previous version here did it the other way round.
     Chip_Clock_EnableCrystal();
-    while (!Chip_Clock_IsCrystalEnabled())
+    for (n = WAIT_LIMIT; n && !Chip_Clock_IsCrystalEnabled(); n--)
 	;
 
+    // The CPU divider before the PLL is connected, so cclk is in range the
+    // instant it is.
     Chip_Clock_SetCPUClockDiv(CCLK_DIV - 1);
+
+    // NOW it is safe to select it.
+    Chip_Clock_SetMainPLLSource(SYSCTL_PLLCLKSRC_MAINOSC);
+
+    // SetupPLL writes PLLCFG, sets PLLCON = 1 and does the feed sequence, so
+    // the enable below is a second feed rather than the first enable. The feed
+    // is not optional: without the 0xAA/0x55 pair the write is ignored, no
+    // fault, and the part keeps running on the crystal at a fifth of the speed.
     Chip_Clock_SetupPLL(SYSCTL_MAIN_PLL, PLL0_M - 1, PLL0_N - 1);
     Chip_Clock_EnablePLL(SYSCTL_MAIN_PLL, SYSCTL_PLL_ENABLE);
-    while (!(Chip_Clock_GetPLLStatus(SYSCTL_MAIN_PLL) & SYSCTL_PLL0STS_LOCKED))
-	;
-    Chip_Clock_EnablePLL(SYSCTL_MAIN_PLL,
-			 SYSCTL_PLL_ENABLE | SYSCTL_PLL_CONNECT);
 
+    // PLOCK is bit 26 on PLL0 -- bit 10 is PLL1's, and SYSCTL_PLLSTS_LOCKED is
+    // the generic name for that one. Waiting on the wrong bit either never
+    // finishes or finishes immediately, and both are quiet.
+    for (n = WAIT_LIMIT; n; n--)
+	if (Chip_Clock_GetPLLStatus(SYSCTL_MAIN_PLL) & SYSCTL_PLL0STS_LOCKED)
+	    break;
+
+    if (n)
+	Chip_Clock_EnablePLL(SYSCTL_MAIN_PLL,
+			     SYSCTL_PLL_ENABLE | SYSCTL_PLL_CONNECT);
+
+    // Whatever actually happened above, this reads the registers back -- so
+    // SystemCoreClock is the truth and not the intention, and the UART divisor
+    // is computed from the clock the part really has.
     SystemCoreClockUpdate();
 
-    // Power and pin functions, from boards/<name>.terms. AFTER the clock,
-    // because writing PCONP needs the peripheral bus running, and BEFORE any
-    // driver, because a driver that initialises an unpowered block writes into
-    // nothing and reports success.
+#if defined(CSP_BOOT_LED_PORT)
+    // Blink, here, before the runtime exists. This is the one signal that does
+    // not need the UART, a correct baud rate, or a terminal on the other end --
+    // so it separates "the part is not running" from "the part is running and
+    // the console is wrong", which is otherwise one symptom with two causes.
     //
-    // This matters more here than on an ARM7: LPCOpen does not touch PINSEL,
-    // so an unmuxed TXD0 is a GPIO input and the console is silent while the
-    // UART runs perfectly.
+    // Deliberately BEFORE csp_board_pinmux: the LED is a GPIO at reset, so it
+    // needs no mux, and putting it first means it also reports a fault in the
+    // mux itself.
+    {
+	int i;
+	volatile uint32_t d;
+	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_GPIO);
+	Chip_GPIO_SetPinDIROutput(LPC_GPIO, CSP_BOOT_LED_PORT, CSP_BOOT_LED_PIN);
+	// Three blinks. A count, not a steady state: a LED that is simply on
+	// could be a stuck pin, and one that is off could be anything at all.
+	for (i = 0; i < 6; i++) {
+	    // XOR with the polarity, so `on` means lit on either wiring.
+	    Chip_GPIO_SetPinState(LPC_GPIO, CSP_BOOT_LED_PORT,
+				  CSP_BOOT_LED_PIN,
+				  ((i & 1) == 0) ? CSP_BOOT_LED_ON
+						 : !CSP_BOOT_LED_ON);
+	    // A spin, because there is no tick yet. Roughly 100 ms at 100 MHz,
+	    // and if the PLL did not connect it will visibly be 25 times
+	    // slower -- which makes the blink RATE a clock diagnostic too.
+	    for (d = 0; d < 2500000u; d++)
+		;
+	}
+	// Leave it OFF, which on this board means driving the pin HIGH. Ending
+	// on the wrong level is what made the first version look like a solid
+	// lamp: the blink happened and then it parked itself lit.
+	Chip_GPIO_SetPinState(LPC_GPIO, CSP_BOOT_LED_PORT, CSP_BOOT_LED_PIN,
+			      !CSP_BOOT_LED_ON);
+    }
+#endif
+
     csp_board_pinmux();
 }

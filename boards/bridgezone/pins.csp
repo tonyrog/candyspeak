@@ -1,0 +1,29 @@
+// pin names for bridgezone
+
+// Digtal input on J35
+#digital Din1 in 1:18      // func=0
+#digital Din2 in 1:19      // func=0
+#digital Din3 in 1:21      // func=0
+#digital Din4 in 0:11      // func=0
+
+// Digital output on J3
+#digital Dout1 out 1:22    // func=0
+#digital Dout2 out 1:23    // func=0
+#digital Dout3 out 1:24    // func=0
+#digital Dout4 out 1:25    // func=0
+
+// Analog input on J34
+#analog Ain1:10 in 0:27    // func=1
+#analog Ain2:10 in 0:28    // func=1
+#analog Ain3:10 in 0:29    // func=1
+#analog Ain4:10 in 0:30    // func=1
+
+// Analog output on J33
+#analog Aout1:10 out pwm  0:7   // PWM0 nr 2, func=2
+#analog Aout2:10 out pwm  0:21  // PWM0 nr 5, func=1
+
+// Pwm output on  J2
+#analog Pout1:10 out pwm 0:17    // MAT1.2 Timer1, func=3
+#analog Pout2:10 out pwm 0:13    // MAT1.1 Timer1, func=2
+#analog Pout3:10 out pwm 0:12    // MAT1.0 Timer1, func=2
+#analog Pout4:10 out pwm 0:22    // MAT0.0, Timer0, func=3

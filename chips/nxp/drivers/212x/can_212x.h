@@ -70,12 +70,43 @@ typedef struct {
 #define CSP_CAN_SFF_MASK 0x000007ffu
 #define CSP_CAN_EFF_MASK 0x1fffffffu
 
-// bitrate in bits/s. Returns 0 on success, -1 when the peripheral clock cannot
-// produce it -- which is a real answer and not a rounding: a CAN bus with two
-// nodes at different rates does not half-work, it fails on every frame.
-int Chip_CAN_Init(LPC_CAN_T *can, uint32_t bitrate);
+// LPCOpen's shape, so csp_lpcopen.c's CAN path is the same code on both
+// families. The acceptance-filter pointers are the 17xx library's; this family
+// has one global AFMR register and no RAM table worth a type, so they are
+// ignored -- named rather than removed, because a call that compiles on one
+// chip and not the other is the thing this whole layer exists to avoid.
+typedef struct { uint32_t _unused; } LPC_CANAF_T;
+typedef struct { uint32_t _unused; } LPC_CANAF_RAM_T;
+#define LPC_CANAF     ((LPC_CANAF_T *)0)
+#define LPC_CANAF_RAM ((LPC_CANAF_RAM_T *)0)
 
-int Chip_CAN_Send(LPC_CAN_T *can, uint32_t id, const uint8_t *data, uint8_t len);
-int Chip_CAN_Recv(LPC_CAN_T *can, uint32_t *id, uint8_t *data, uint8_t *len);
+typedef enum { CAN_BUFFER_1 = 0, CAN_BUFFER_2 = 1, CAN_BUFFER_3 = 2 }
+    CAN_BUFFER_ID_T;
+typedef enum { CAN_AF_NORMAL_MODE = 0, CAN_AF_BYBASS_MODE = 2 } CAN_AF_MODE_T;
+
+typedef struct {
+    uint32_t ID;                    // bit 30 set = 29-bit id
+    uint32_t Type;                  // CAN_REMOTE_MSG
+    uint32_t DLC;                   // 0..8
+    uint8_t  Data[8];
+} CAN_MSG_T;
+
+#define CAN_REMOTE_MSG      (1u << 0)
+#define CAN_EXTEND_ID_USAGE (1u << 30)
+
+#ifndef SUCCESS
+typedef enum { ERROR = 0, SUCCESS = 1 } Status;
+#endif
+
+void   Chip_CAN_Init(LPC_CAN_T *can, LPC_CANAF_T *af, LPC_CANAF_RAM_T *afram);
+void   Chip_CAN_SetAFMode(LPC_CANAF_T *af, CAN_AF_MODE_T mode);
+
+// Returns ERROR when the peripheral clock cannot produce the rate exactly --
+// a real answer and not a rounding. A CAN bus with two nodes at slightly
+// different rates does not half-work, it fails on every frame.
+Status Chip_CAN_SetBitRate(LPC_CAN_T *can, uint32_t bitrate);
+
+Status Chip_CAN_Send(LPC_CAN_T *can, CAN_BUFFER_ID_T buf, CAN_MSG_T *msg);
+Status Chip_CAN_Receive(LPC_CAN_T *can, CAN_MSG_T *msg);
 
 #endif

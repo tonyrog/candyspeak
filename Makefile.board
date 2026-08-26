@@ -1,0 +1,159 @@
+# Build a firmware for one board:  make -f Makefile.board BOARD=dl1200
+#
+# Everything that varies comes from boards/<BOARD>.terms -- the chip, the pin
+# mux, the power word, the linker script. Nothing below names a part.
+#
+# Output lands in build/<BOARD>/, Arduino-style: one directory per board, so
+# switching boards does not mean a clean.
+
+BOARD ?= dl1200
+GEN   := escript utils/gen_chips.erl
+
+# WHERE THE OUTPUT GOES: next to the board's own terms file, not into one shared
+# build/ tree.
+#
+#   private/dl1200/dl1200.terms  ->  private/dl1200/build/dl1200/
+#   boards/bridgezone.terms      ->  boards/build/bridgezone/
+#
+# A pile of firmware images that all look alike is how one ends up flashing the
+# wrong board. A path that names the board is a better guard than remembering
+# which build was which -- and a private board's output stays in its own repo,
+# which is where it belongs.
+#
+# BUILD_DIR= overrides the whole thing.
+BUILD_DIR ?= $(shell $(GEN) --dir-of $(BOARD))/build
+
+# One directory per VARIANT, and the variant is the region map -- because that
+# is what actually makes two builds of the same board incompatible. A `plain`
+# image and a `usb_boot` image are linked for different addresses and look
+# identical on disk; keeping them apart by name is cheaper than telling them
+# apart afterwards.
+VARIANT := $(shell $(GEN) --map-of $(BOARD) $(MAP))
+B       := $(BUILD_DIR)/$(VARIANT)
+
+# One fact per query. Parsing the human listing through `head` closed the pipe
+# and left escript dying on EPIPE -- noisy, and it would have masked a real
+# error the day one appeared.
+CHIP  := $(shell $(GEN) --chip-of $(BOARD))
+ARCH  := $(shell $(GEN) --arch-of $(BOARD))
+
+# Which region map to build against. A board may carry several -- `make -f
+# Makefile.board BOARD=dl1200 MAP=usb_boot` -- and with none given the board's
+# {active_map,...} decides. `make -f Makefile.board BOARD=x maps` lists them.
+MAP   ?=
+
+ifeq ($(ARCH),cm3)
+  CPU     := -mcpu=cortex-m3 -mthumb
+  LPC     := chips/nxp/lpcopen/lpc175x_6x/lpc_chip_175x_6x
+  CHIPINC := -I$(LPC)/inc
+  CHIPDEF := -DCORE_M3
+  STARTUP := chips/nxp/drivers/175x/startup_cm3.c
+  SYSINIT := chips/nxp/drivers/175x/sysinit_175x.c
+  DRV     := $(addprefix $(LPC)/src/, chip_17xx_40xx.c clock_17xx_40xx.c \
+               sysctl_17xx_40xx.c sysinit_17xx_40xx.c iocon_17xx_40xx.c \
+               gpio_17xx_40xx.c uart_17xx_40xx.c adc_17xx_40xx.c \
+               timer_17xx_40xx.c can_17xx_40xx.c)
+else
+  CPU     := -mcpu=arm7tdmi -mthumb
+  CHIPINC := -Ichips/nxp/drivers/212x
+  CHIPDEF :=
+  STARTUP := chips/nxp/drivers/212x/startup_212x.S
+  SYSINIT := chips/nxp/drivers/212x/sysinit_212x.c
+  DRV     := chips/nxp/drivers/212x/chip_212x.c \
+             chips/nxp/drivers/212x/can_212x.c \
+             chips/nxp/drivers/212x/pwm_212x.c
+  # vic_212x.c is ARM, not Thumb: mrs/msr do not exist in Thumb on an ARM7.
+  # Its own rule below passes -marm; the file has an #error if that is missed.
+  VICSRC  := chips/nxp/drivers/212x/vic_212x.c
+endif
+
+CC   := arm-none-eabi-gcc
+OC   := arm-none-eabi-objcopy
+SZ   := arm-none-eabi-size
+
+CORE := csp_rt.c csp_compile.c csp_repl.c csp_parse.c csp_tok.c csp_print.c \
+        csp_strings.c csp_eeprom.c csp_flash.c csp_lpcopen.c rom_host.c \
+        chips/nxp/drivers/common/csp_board.c
+
+SRC  := $(CORE) $(DRV) $(SYSINIT) $(STARTUP)
+OBJ  := $(addprefix $(B)/,$(notdir $(SRC:.c=.o)))
+OBJ  := $(OBJ:.S=.o)
+ifdef VICSRC
+OBJ  += $(B)/vic_212x.o
+endif
+
+VPATH := . $(dir $(SRC))
+
+# -MMD -MP: header dependencies, generated as a side effect of compiling.
+# Without them an edited header leaves every object stale, and the link fails
+# against a definition the compiler has already seen -- which reads as a missing
+# symbol and sends you looking in entirely the wrong place.
+CFLAGS := $(CPU) -Os -ffunction-sections -fdata-sections -Wall -MMD -MP \
+          -I. -I$(B) $(CHIPINC) $(CHIPDEF) \
+          -DCSP_BOARD=csp_board.h -DCSP_VERSION='"$(BOARD)"'
+
+all: $(B)/firmware.bin $(B)/firmware.hex
+
+# The map is in the build PATH now, so two maps cannot share a linker script.
+# When they could, `make MAP=usb_boot` found an up-to-date script from the
+# previous map and linked against it: the build succeeded and produced an image
+# for the wrong addresses, which is the failure this file exists to prevent.
+
+# The board header and the linker script, both generated. --board refuses for a
+# board that does not pass check-boards, so a bad description stops here rather
+# than becoming a firmware that comes up almost working.
+$(B)/csp_board.h: $(wildcard boards/*.terms) $(wildcard private/*/*.terms) $(wildcard chips/*/*.terms) utils/gen_chips.erl
+	@mkdir -p $(B)
+	@$(GEN) --board $(BOARD) $@
+
+$(B)/$(BOARD).ld: $(wildcard chips/*/*.terms) $(wildcard private/*/*.terms) utils/gen_chips.erl
+	@mkdir -p $(B)
+	@$(GEN) --ld $(BOARD) $(MAP) > $@
+
+$(B)/%.o: %.c $(B)/csp_board.h
+	@mkdir -p $(B)
+	@$(CC) $(CFLAGS) -c -o $@ $<
+
+$(B)/%.o: %.S $(B)/csp_board.h
+	@mkdir -p $(B)
+	@$(CC) $(CPU) -I. -I$(B) -c -o $@ $<
+
+$(B)/vic_212x.o: $(VICSRC) $(B)/csp_board.h
+	@$(CC) $(CFLAGS) -marm -c -o $@ $<
+
+LD := $(B)/$(BOARD).ld
+
+$(B)/firmware.elf: $(OBJ) $(LD)
+	@$(CC) $(CPU) -nostartfiles -Wl,--gc-sections -Wl,-T,$(LD) \
+	   -o $@ $(OBJ) -lc -lgcc
+	@$(SZ) $@
+
+# The checksum goes in LAST, on the finished binary. The word at 0x14 must make
+# the eight vectors sum to zero or the boot ROM enters ISP instead of running
+# the program -- silently, with no output and nothing a debugger can see.
+$(B)/firmware.bin: $(B)/firmware.elf csp
+	@$(OC) -O binary $< $@
+	@./csp --checksum=$@
+
+# A .hex as well, and prefer it when flashing. A raw .bin is just bytes: byte 0
+# is the LOWEST section address, and nothing in the file says what that address
+# was -- so an image linked for 0x8000 and flashed from 0 lands 32K out, with
+# the vector table looking right and everything it points at wrong. Intel hex
+# carries the address of every record, so the tool cannot get it wrong.
+#
+# Made from the patched .bin, not from the .elf, so it carries the checksum.
+$(B)/firmware.hex: $(B)/firmware.bin
+	@$(OC) -I binary -O ihex \
+	   --change-addresses=$$($(GEN) --load-addr $(BOARD) $(MAP)) \
+	   $< $@
+	@echo "$@: load address $$($(GEN) --load-addr $(BOARD) $(MAP))"
+
+-include $(OBJ:.o=.d)
+
+maps:
+	@$(GEN) --maps $(BOARD)
+
+clean:
+	@rm -rf $(B)
+
+.PHONY: all clean maps

@@ -165,6 +165,11 @@ void csp_lpc_pin_mux(uint8_t port, uint8_t pin, int analog)
 // directly. Override it if you would rather name board connector numbers.
 // Return < 0 to refuse the pin; the read then yields 0 rather than sampling a
 // channel nobody asked for.
+// WEAK: a board that states which pins go to the converter replaces this with
+// a real map -- see chips/nxp/drivers/common/csp_board.c, which builds one from
+// boards/<name>.terms so a .csp can name the connector pin rather than the
+// channel number.
+__attribute__((weak))
 int csp_lpc_adc_channel(uint8_t port, uint8_t pin)
 {
     (void)port;
@@ -789,22 +794,64 @@ void csp_output(csp_rt_t* st)
 // a node that guesses wrong is silent in a way that looks like broken wiring.
 #if defined(CSP_CAN_BITRATE) && defined(CSP_CAN_PORT)
 
+// LPCOpen's shape: a filter block to initialise, a bit rate set separately, and
+// a CAN_MSG_T rather than loose arguments.
+//
+// The ID CONVENTION IS NOT THE SAME as SocketCAN's, which is what CandySpeak
+// carries. LPCOpen puts the extended-frame flag in bit 30; SocketCAN uses bit
+// 31 for extended and bit 30 for remote. Passing one straight to the other
+// turns every remote frame into an extended one, which is the kind of thing
+// that works on the bench with two nodes agreeing and fails on a real bus.
+#define CSP_CAN_EFF 0x80000000u        /* SocketCAN: 29-bit id */
+#define CSP_CAN_RTR 0x40000000u        /* SocketCAN: remote frame */
+
 int csp_can_init(csp_rt_t* st)
 {
     (void)st;
-    return Chip_CAN_Init(CSP_CAN_PORT, CSP_CAN_BITRATE);
+    Chip_CAN_Init(CSP_CAN_PORT, LPC_CANAF, LPC_CANAF_RAM);
+    if (Chip_CAN_SetBitRate(CSP_CAN_PORT, CSP_CAN_BITRATE) != SUCCESS)
+	return -1;
+    // Accept everything: a #buffer already says which id it wants and the match
+    // happens there. Two places to state it is one too many.
+    Chip_CAN_SetAFMode(LPC_CANAF, CAN_AF_BYBASS_MODE);
+    return 0;
 }
 
 int csp_can_recv(csp_rt_t* st, uint32_t* id, uint8_t* data, uint8_t* len)
 {
+    CAN_MSG_T m;
+    uint32_t i;
+
     (void)st;
-    return Chip_CAN_Recv(CSP_CAN_PORT, id, data, len);
+    if (Chip_CAN_Receive(CSP_CAN_PORT, &m) != SUCCESS)
+	return 0;                  // nothing pending -- not an error
+    *id = m.ID & 0x1fffffffu;
+    if (m.ID & CAN_EXTEND_ID_USAGE)
+	*id |= CSP_CAN_EFF;
+    if (m.Type & CAN_REMOTE_MSG)
+	*id |= CSP_CAN_RTR;
+    *len = (uint8_t)((m.DLC > 8) ? 8 : m.DLC);
+    for (i = 0; i < *len; i++)
+	data[i] = m.Data[i];
+    return 1;
 }
 
 int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
 {
+    CAN_MSG_T m;
+    uint32_t i;
+
     (void)st;
-    return Chip_CAN_Send(CSP_CAN_PORT, id, data, len);
+    if (len > 8)
+	len = 8;
+    m.ID = id & ((id & CSP_CAN_EFF) ? 0x1fffffffu : 0x7ffu);
+    if (id & CSP_CAN_EFF)
+	m.ID |= CAN_EXTEND_ID_USAGE;
+    m.Type = (id & CSP_CAN_RTR) ? CAN_REMOTE_MSG : 0;
+    m.DLC = len;
+    for (i = 0; i < len; i++)
+	m.Data[i] = data[i];
+    return (Chip_CAN_Send(CSP_CAN_PORT, CAN_BUFFER_1, &m) == SUCCESS) ? 0 : -1;
 }
 
 #else
@@ -976,7 +1023,11 @@ static void csp_lpc_setup(void)
     csp_board_init();   // cannot use state: rt_init zeroes it below
 
 #if !defined(CSP_EXEC_ONLY)
-    csp_print_lit("boot: RAM "); csp_print_uint(csp_system_ram_capacity());
+    // The CLOCK first, and it is read back from the registers rather than
+    // taken from what the board asked for -- so a PLL that did not connect
+    // shows up as 12000000 here instead of looking like a UART problem.
+    csp_print_lit("boot: clk "); csp_print_uint(SystemCoreClock);
+    csp_print_lit(", RAM "); csp_print_uint(csp_system_ram_capacity());
     csp_print_lit(", free ");    csp_print_uint(csp_system_ram_avail());
     csp_print_lit(", struct ");  csp_print_uint((uint32_t)sizeof(csp_rt_t));
     csp_println();

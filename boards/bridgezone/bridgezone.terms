@@ -1,0 +1,78 @@
+%% BridgeZone -- LPC2129 with an ATmega328P co-controller and a 2 Mbit I2C
+%% EEPROM. Screw terminals, fixed port assignment, two CAN ports that can run
+%% as two separate buses or as one bridged across both sides.
+%%
+%% Transcribed from the cfg.h of the earlier project, which is also what
+%% verified chips/nxp/pins_2000.terms: it pins down 25 functions with their
+%% numbers, including every CAN pin.
+{board, bridgezone,
+ [{chip, lpc2129},
+
+  %% 12 MHz crystal, PLL x5, APBDIV 1.
+  %%   cclk = 12 * 5   = 60 MHz   (the LPC2129 ceiling)
+  %%   pclk = cclk / 1 = 60 MHz   (cfg.h notes it used to be 15 at APBDIV 4)
+  {xtal, 12000000},
+  {core, 60000000},
+  {pclk_div, 1},
+
+  %% 16K of SRAM, and the runtime is the whole flash on this one.
+  {code_budget, 9216},
+
+  %% --- CAN ------------------------------------------------------------------
+  %% CAN1 has only ONE pin here. TD1 on an LPC2119/2129 is P0.31, which is
+  %% output-only: no GPIO function, no PINSEL bits, nothing to select. cfg.h
+  %% says it in one line -- `// #define PIN_CAN1_TX (not a pin!)`.
+  {pin, 'P0.25', rd1},
+  {pin, 'P0.23', rd2},
+  {pin, 'P0.24', td2},
+  {can, 1, [{bitrate, 250000}]},
+  {can, 2, [{bitrate, 250000}]},
+
+  %% --- serial ---------------------------------------------------------------
+  %% UART1 doubles as DMX at 250000 -- the same port, a different baud rate and
+  %% a break-and-mark frame. 38400 is what it comes up at.
+  {pin, 'P0.0', txd0},
+  {pin, 'P0.1', rxd0},
+  {pin, 'P0.8', txd1},
+  {pin, 'P0.9', rxd1},
+  {console, {uart0, 38400}},
+
+  %% --- I2C: the EEPROM ------------------------------------------------------
+  %% An M24M02: 2 Mbit, 256 KiB, which is more persistent store than the part
+  %% has flash. Settings and patches have somewhere generous to live here.
+  {pin, 'P0.2', scl0},
+  {pin, 'P0.3', sda0},
+  {eeprom, [{part, m24m02}, {bus, i2c0}, {bytes, 262144}]},
+
+  %% --- SPI: the ATmega328P --------------------------------------------------
+  %% Slave select and the AVR's reset are driven as plain GPIO, which is why
+  %% they are function 0 and not ssel0.
+  {pin, 'P0.4',  sck0},
+  {pin, 'P0.5',  miso0},
+  {pin, 'P0.6',  mosi0},
+  {pin, 'P0.20', gpio},              %% co-controller slave select
+  {pin, 'P0.10', gpio},              %% ATmega328P reset
+
+  %% --- analog and PWM out ---------------------------------------------------
+  %% Two mechanisms, and the pin decides which. PWM0 is the real block -- one
+  %% period, a match per channel, no servicing. The MATn.m pins are a timer
+  %% match driving a pin, which needs an interrupt per period to put it back;
+  %% pdb_pwm.c called that soft PWM and it exists because the LPC2129's single
+  %% PWM block does not reach every pin this board wants to dim.
+  {pin, 'P0.7',  'pwm2'},            %% Aout1  J33   PWM0.2
+  {pin, 'P0.21', 'pwm5'},            %% Aout2  J33   PWM0.5
+  {pin, 'P0.17', 'mat1.2'},          %% Pout1  J2
+  {pin, 'P0.13', 'mat1.1'},          %% Pout2  J2
+  {pin, 'P0.12', 'mat1.0'},          %% Pout3  J2
+  {pin, 'P0.22', 'mat0.0'},          %% Pout4  J2   -- TIMER0, which is also
+				     %% the system clock: see chip_212x.h on
+				     %% why its TC is never reset.
+
+  %% --- analog in ------------------------------------------------------------
+  {pin, 'P0.27', ain0},
+  {pin, 'P0.28', ain1},
+  {pin, 'P0.29', ain2},
+  {pin, 'P0.30', ain3},
+
+  {enable, [uart0, uart1, can1, can2, i2c0, spi0, adc, pwm, gpio,
+	    timer0, timer1]}]}.
