@@ -1,0 +1,52 @@
+%% I2C EEPROM parts, as geometry rather than as a driver.
+%%
+%% Every one of these is the same device with different numbers, and the numbers
+%% are the whole difference: how big, how much lands in one write, how the
+%% internal address is spelled, and how many of the high address bits are smuggled
+%% into the SLAVE address instead.
+%%
+%% That last one is the field nobody expects. A 24C02 is one device at 0xA0. An
+%% M24M02 is FOUR devices at 0xA0, 0xA2, 0xA4, 0xA6 -- the two top address bits
+%% (A17, A16) sit in the address byte, and a sequential read that walks off the
+%% end of a 64 KiB bank does not continue into the next one, it wraps. So bank
+%% bits are not a detail of the encoding, they are where a transfer has to stop
+%% and be re-addressed.
+%%
+%%   bytes       total capacity
+%%   page        max bytes in one write; a write that would cross a page
+%%               boundary WRAPS within the page instead of continuing
+%%   addr_bytes  width of the internal address sent after the slave byte
+%%   bank_bits   how many top address bits ride in the slave address
+%%   base        slave address with all bank bits and the E2 strap at zero
+%%   hz          the part's maximum bus rate
+%%   write_ms    worst-case page write time, for the ACK-polling bound
+
+%% The one on BridgeZone: 2 Mbit, 256 KiB -- more persistent store than the
+%% LPC2129 has flash.
+{eeprom, m24m02,
+ [{bytes, 262144},
+  {page, 256},
+  {addr_bytes, 2},
+  {bank_bits, 2},
+  {base, 16#A0},
+  {hz, 400000},
+  {write_ms, 10}]}.
+
+%% The rest of the family, so a board can name one without this file needing an
+%% edit. Same driver, different geometry -- which is the point of stating it as
+%% data.
+{eeprom, m24c64,
+ [{bytes, 8192}, {page, 32}, {addr_bytes, 2}, {bank_bits, 0},
+  {base, 16#A0}, {hz, 400000}, {write_ms, 5}]}.
+
+{eeprom, m24256,
+ [{bytes, 32768}, {page, 64}, {addr_bytes, 2}, {bank_bits, 0},
+  {base, 16#A0}, {hz, 400000}, {write_ms, 5}]}.
+
+%% 24C16 is the awkward one: 2 KiB with a ONE-byte internal address, so all
+%% three high bits live in the slave address and it is eight devices of 256
+%% bytes. Kept because it is common, and because it is the case that proves
+%% bank_bits has to exist.
+{eeprom, m24c16,
+ [{bytes, 2048}, {page, 16}, {addr_bytes, 1}, {bank_bits, 3},
+  {base, 16#A0}, {hz, 400000}, {write_ms, 5}]}.

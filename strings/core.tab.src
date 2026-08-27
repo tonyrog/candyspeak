@@ -1,0 +1,50 @@
+# Core vocabulary: words the runtime needs that the GRAMMAR does not name.
+#
+# Anything a user types as part of the language belongs in the grammar
+# (utils/syntax.terms) and reaches strings.tab through keyword.tab.src. What is
+# left here is the other kind of word: type and listing names the parser never
+# matches, and names the runtime creates for itself.
+
+# The empty string. tok_table points INT, FLT, WORD and NEWLINE at it -- tokens
+# that carry their own text and have no fixed spelling.
+null
+
+# Value-type names, for listings and error messages. Four of them (float,
+# integer, unsigned, string) ARE grammar words and come from there; these are
+# the ones with no syntax behind them.
+undefined undefined
+none none
+void void
+index index
+number number
+any any
+
+# 'object' is a listing word, not syntax: an instance is `# ModName ObjName`,
+# reached when the word after '#' is not a declaration keyword. There is no
+# `#object`, which is why this row is here and not in the grammar.
+object object
+
+# The `bind` clause of a #variable. Not a token -- it is matched by a memcmp
+# after the pattern stops -- so the grammar cannot name it yet. Moves to
+# keyword.tab.src the day it becomes one.
+bind bind
+
+# Names the runtime creates itself: the implicit State variable and the two
+# built-in states. Distinct from the lowercase 'state' entry in repl.tab.src,
+# which is a listing keyword. Materialized as a tstr_t with RO_TSTR where a
+# declaration name is needed, compared in place with csp_str_eq_ro where it is
+# not.
+State State
+INIT INIT
+NORMAL NORMAL
+FAILSAFE FAILSAFE
+name name
+
+# The built-in Sys namespace, created the same way State is -- by the RUNTIME,
+# so an exec-only node finds the same fields a REPL node does. See csp_sys_module.
+Sys Sys
+sys sys
+Id Id
+Name Name
+Serial Serial
+Image Image

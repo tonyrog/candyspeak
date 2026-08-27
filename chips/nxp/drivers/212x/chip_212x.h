@@ -29,25 +29,47 @@
 // RBR/THR/DLL share an address, as do IER/DLM and IIR/FCR: which one you get
 // depends on the divisor-latch bit in LCR. A union says that in the type rather
 // than in a comment nobody reads.
+// EIGHT-BIT REGISTERS, four bytes apart -- not 32-bit ones.
+//
+// This matters and it is not cosmetic. The LPC2000 UART registers are byte
+// wide; the addresses are merely spaced by four. A 32-bit store to THR is a
+// word write to a byte port, and on the VPB bridge it need not land -- in which
+// case THRE stays set because nothing was ever written, the polling loop never
+// blocks, every byte appears to go out, and the pin stays silent.
+//
+// Which is a fault with no symptom except silence: the code runs to completion,
+// the status bits all read correctly, and nothing is transmitted.
+//
+// The header from the working driver for this board (nxp_files/2129/lpc21xx.h)
+// declares every one of these `vu8` with explicit `_PAD[3]`. That is where this
+// shape comes from.
 typedef struct {
     union {
-	__I  uint32_t RBR;          // DLAB=0: read  -- receive buffer
-	__O  uint32_t THR;          // DLAB=0: write -- transmit holding
-	__IO uint32_t DLL;          // DLAB=1: divisor low
+	__I  uint8_t RBR;           // DLAB=0: read  -- receive buffer
+	__O  uint8_t THR;           // DLAB=0: write -- transmit holding
+	__IO uint8_t DLL;           // DLAB=1: divisor low
     };
+    uint8_t _pad0[3];
     union {
-	__IO uint32_t DLM;          // DLAB=1: divisor high
-	__IO uint32_t IER;          // DLAB=0: interrupt enable
+	__IO uint8_t DLM;           // DLAB=1: divisor high
+	__IO uint8_t IER;           // DLAB=0: interrupt enable
     };
+    uint8_t _pad1[3];
     union {
-	__I  uint32_t IIR;          // read  -- interrupt id
-	__O  uint32_t FCR;          // write -- fifo control
+	__I  uint8_t IIR;           // read  -- interrupt id
+	__O  uint8_t FCR;           // write -- fifo control
     };
-    __IO uint32_t LCR;              // line control
-    __IO uint32_t MCR;              // modem control (UART1 only)
-    __I  uint32_t LSR;              // line status
-    __I  uint32_t MSR;              // modem status (UART1 only)
-    __IO uint32_t SCR;              // scratch
+    uint8_t _pad2[3];
+    __IO uint8_t LCR;               // line control
+    uint8_t _pad3[3];
+    __IO uint8_t MCR;               // modem control (UART1 only)
+    uint8_t _pad4[3];
+    __I  uint8_t LSR;               // line status
+    uint8_t _pad5[3];
+    __I  uint8_t MSR;               // modem status (UART1 only)
+    uint8_t _pad6[3];
+    __IO uint8_t SCR;               // scratch
+    uint8_t _pad7[3];
 } LPC_USART_T;
 
 #define LPC_UART0 ((LPC_USART_T *) 0xE000C000)
@@ -102,6 +124,21 @@ typedef struct {
 #define LPC_PLLSTAT (*(__I uint16_t *)(LPC_SCB_BASE + 0x088))
 #define LPC_PLLFEED (*(__O uint8_t  *)(LPC_SCB_BASE + 0x08C))
 #define LPC_VPBDIV (*(__IO uint8_t  *)(LPC_SCB_BASE + 0x100))
+
+// MEMMAP: which copy of the exception vectors the core actually reads. The
+// bottom 64 bytes are REMAPPED, so a table linked at 0x00000000 is not
+// necessarily the one that gets used -- see Chip_SystemInit.
+#define LPC_MEMMAP (*(__IO uint8_t  *)(LPC_SCB_BASE + 0x040))
+#define MEMMAP_BOOT_BLOCK  0
+#define MEMMAP_USER_FLASH  1
+#define MEMMAP_USER_RAM    2
+// Power control. Bit 0 (IDL) stops the CORE clock and leaves the peripheral
+// clocks running, so any interrupt wakes it -- this family's answer to WFI.
+// Bit 1 (PD) is real power-down and needs a good deal more care.
+#define LPC_PCON   (*(__IO uint8_t  *)(LPC_SCB_BASE + 0x0C0))
+#define PCON_IDL   (1u << 0)
+#define PCON_PD    (1u << 1)
+
 // Peripheral power. Bit per block; several come up SET, so a board that wants
 // anything off has to write the whole word. See gen_chips.erl --board.
 #define LPC_PCONP  (*(__IO uint32_t *)(LPC_SCB_BASE + 0x0C4))
@@ -142,13 +179,20 @@ typedef struct {
 // One converter, eight channels, 10 bits. The 17xx has a sequencer and this
 // does not, which is why Chip_ADC_SetupSequencer is a no-op here rather than a
 // missing symbol -- see chip_212x.c.
+//
+// TWO REGISTERS, and that is the whole block. An LPC2119/2129 has ADCR and
+// ADGDR and nothing else: the per-channel result registers DR[0..7], INTEN and
+// STAT arrived with the LPC213x and are NOT here. This struct used to carry
+// them, copied from the 17xx layout, and Chip_ADC_ReadValue then read
+// 0xE0034010 + 4*ch -- addresses this part does not implement. Channel 0 was
+// the only one that happened to land on a real register.
+//
+// The consequence for the DRIVER is the interesting part: one global result
+// register means exactly one conversion can be in flight, and reading it CLEARS
+// the DONE flag. So a poll-then-read pair has to cache -- see chip_212x.c.
 typedef struct {
-    __IO uint32_t CR;               // control
-    __IO uint32_t GDR;              // global data
-    __I  uint32_t _res;
-    __IO uint32_t INTEN;
-    __I  uint32_t DR[8];            // per-channel data
-    __I  uint32_t STAT;
+    __IO uint32_t CR;               // ADCR  0xE0034000 -- control
+    __IO uint32_t GDR;              // ADGDR 0xE0034004 -- the one result
 } LPC_ADC_T;
 
 #define LPC_ADC ((LPC_ADC_T *) 0xE0034000)
@@ -156,6 +200,8 @@ typedef struct {
 #define ADC_CR_PDN     (1u << 21)   // 1 = operational
 #define ADC_CR_START_NOW (1u << 24)
 #define ADC_DR_DONE    (1u << 31)
+#define ADC_DR_OVERRUN (1u << 30)
+#define ADC_DR_CHN(d)  (((d) >> 24) & 7u)   // which channel this result is
 
 // --- LPCOpen spellings ------------------------------------------------------
 // The 17xx library calls the first uart LPC_USART0 and has one GPIO block
@@ -212,6 +258,28 @@ void SystemCoreClockUpdate(void);
 // waking from it needs a reset or an external interrupt -- a different thing to
 // ask for, not a deeper version of this one.
 void __WFI(void);
+
+// --- watchdog ---------------------------------------------------------------
+//
+// Not to USE it, but to find out what it did. WDMOD's WDTOF bit SURVIVES the
+// reset it caused, and on this family it is the only thing that does -- an
+// LPC2129 has no reset-source register (that arrived with the 213x). So it is
+// the one way to tell "the watchdog reset me" from "somebody pulled RST".
+//
+// And WDEN cannot be cleared by software: once the watchdog is enabled, only a
+// reset turns it off. If something before us armed it -- a boot loader that
+// used it to jump into user code, say -- then not feeding it means being reset
+// forever, and the loop looks exactly like a hardware fault.
+#define LPC_WDMOD  (*(__IO uint8_t  *)0xE0000000)
+#define LPC_WDTC   (*(__IO uint32_t *)0xE0000004)
+#define LPC_WDFEED (*(__O  uint8_t  *)0xE0000008)
+
+#define WDMOD_WDEN    (1u << 0)
+#define WDMOD_WDRESET (1u << 1)
+#define WDMOD_WDTOF   (1u << 2)     // timed out -- survives the reset
+
+// WDMOD as it was at reset, before anything touched it.
+uint8_t Chip_ResetCause(void);
 
 // --- time ------------------------------------------------------------------
 //

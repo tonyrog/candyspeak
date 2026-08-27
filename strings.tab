@@ -228,6 +228,7 @@ cmd_live live
 cmd_resume resume
 cmd_reset reset
 cmd_clear clear
+cmd_undo undo
 cmd_latch latch
 cmd_commit commit
 cmd_settings settings
@@ -245,6 +246,7 @@ h_live Freeze rules, keep I/O (poke hardware)
 h_resume Resume execution (rebuild if edited)
 h_reset Reset to initial values
 h_clear Drop RAM patches (keep ROM)
+h_undo Take back the last typed line, or the last N
 h_latch on or off, device output
 h_commit Commit pending values
 h_settings Show stored settings (params and pin config)

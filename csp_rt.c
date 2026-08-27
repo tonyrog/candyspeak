@@ -3252,6 +3252,29 @@ int csp_mem_init(csp_rt_t* st, size_t size)
     // tighter budget than the machine really has.
     if (size > 0)
 	want = size;
+#if !defined(CSP_ARENA_CUSTOM) && !defined(CSP_ARENA_MALLOC)
+    // A FIXED STATIC ARENA is already reserved. It is a `static uint8_t
+    // arena[CSP_ARENA_BYTES]` in .bss, nothing else can ever have those bytes,
+    // and no amount of care here gives them back -- so ask for all of it.
+    //
+    // Deriving the claim from free RAM is right for a backend that ALLOCATES
+    // (malloc, sbrk): there the pool competes with the stack and with whatever
+    // else may take memory later. With a static array it is not merely
+    // unnecessary, it is backwards -- the array is counted in .bss, so it comes
+    // off the free figure the claim is computed from, and every byte added to
+    // CSP_CODE_BUDGET is a byte taken from the pool it was meant to grow.
+    //
+    // Measured on bridgezone: a 9216-byte arena handed out 1032 bytes. The
+    // other eight kilobytes were reserved and never used, and /memory reported
+    // them as `system` -- which reads as the runtime being large rather than
+    // the pool being starved.
+    //
+    // The stack reserve is not lost with it. It exists to keep a GROWING pool
+    // away from a growing stack; a static array in .bss cannot grow into
+    // anything.
+    else
+	want = CSP_ARENA_BYTES;
+#else
     else {
 	uint32_t avail = csp_system_ram_avail();
 	// Charge for the struct ONCE. On a board csp_system_ram_avail() is
@@ -3268,6 +3291,7 @@ int csp_mem_init(csp_rt_t* st, size_t size)
 #endif
 	want = (avail > over) ? (avail - over) : 0;
     }
+#endif
     want = CSP_A8(want);
 
     // The backend hands back what it can actually give (a claim may cap out, a

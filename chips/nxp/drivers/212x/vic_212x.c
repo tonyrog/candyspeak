@@ -1,4 +1,5 @@
 #include "vic_212x.h"
+#include "chip_212x.h"          // LPC_PCON: this family's wait-for-interrupt
 
 // MUST BE BUILT -marm. DisableIRQ/RestoreIRQ use mrs/msr, which ARM7TDMI does
 // not have in Thumb -- the assembler says "selected processor does not support
@@ -143,10 +144,37 @@ void RestoreIRQ(uint32_t cpsr)
     __asm__ volatile ("msr cpsr_c, %0" : : "r"(cpsr));
 }
 
-// Idle until an interrupt. Here rather than in chip_212x.c because `mcr` is an
-// ARM instruction: this file is the one built -marm, and everything else is
-// Thumb for size. See chip_212x.h.
+// Where the unhandled exception vectors land. ARM mode, which is why it lives
+// in this file: startup_212x.S branches straight here from the vector stubs.
+//
+// Blinks the number forever on the boot LED -- the count is in the comment
+// beside the vectors. csp_boot_mark is a spin loop over one GPIO pin, so it
+// needs no clock, no tick and no console, which is the whole point: an
+// exception is exactly when none of those can be relied on.
+void csp_boot_mark(int n);
+
+void csp_fault_blink(int n)
+{
+    for (;;)
+	csp_boot_mark(n);
+}
+
+// Idle until an interrupt.
+//
+// NOT `mcr p15, 0, r0, c7, c0, 4`. That is the ARM9/ARM926 wait-for-interrupt,
+// and it works by writing a CP15 register -- but an LPC2129 is an ARM7TDMI-S,
+// which has NO CP15 at all. An MCR to a coprocessor that is not there is an
+// UNDEFINED INSTRUCTION, and `_undef` in startup_212x.S is `b .`.
+//
+// So the part does not idle: it stops, permanently, the first time anything
+// waits. Everything printed before that arrives, nothing after it does, and the
+// board looks like a UART that transmits but will not receive -- because the
+// loop that would read the port is never reached again.
+//
+// The LPC2000 way is PCON's IDL bit: the core clock stops, the peripheral
+// clocks keep running, and any interrupt -- the millisecond tick will do --
+// starts it again on the instruction after this one.
 void __WFI(void)
 {
-    __asm__ volatile ("mcr p15, 0, %0, c7, c0, 4" : : "r" (0));
+    LPC_PCON = PCON_IDL;
 }

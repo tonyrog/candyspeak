@@ -1347,6 +1347,66 @@ ck "-m refuses a program that does not fit, and says so in rc" \
    'setup failed: out of memory -- program does not fit
 rc=1' "$got"
 
+echo "/undo:"
+
+# Taking back the last typed line is a TRUNCATION to where the line began -- the
+# same thing /clear does, to a nearer floor. The cases below are the four ways
+# that can go wrong.
+
+# The one that prompted it: a rule typed with the wrong target, taken back.
+got=$(printf '#digital A out 1:22\n#digital B out 1:23\nA=1\nA=0\n/undo\n/list\n' |
+	  repl ./csp "$D/undo.db")
+ck "undo takes back the last rule" \
+   'OK
+OK
+OK
+OK
+Took back 1 line
+#digital A out 1:22  // R
+#digital B out 1:23  // R
+A=1  // 1 R' "$got"
+
+# Undoing a DECLARATION has to return the name it introduced, or the string
+# table leaks on every typo and the feature needs a compaction pass to be worth
+# having. ps.strp is one of the four cursors precisely so this works.
+before=$(printf '#digital A out 1:22\n/memory\n' | repl ./csp "$D/undo2.db" |
+	     sed -n 's/^  string *\([0-9]*\).*/\1/p')
+after=$(printf '#digital A out 1:22\n#digital Bbbbbbbbbb out 1:23\n/undo\n/memory\n' |
+	    repl ./csp "$D/undo3.db" | sed -n 's/^  string *\([0-9]*\).*/\1/p')
+ck "undo returns the string space a declaration took" "$before" "$after"
+
+# A line that edits IN PLACE moves no cursor, so it must not push a mark --
+# otherwise the next /undo withdraws some older line the user had stopped
+# thinking about. #disable is the case that matters: it is what one reaches for
+# right before reaching for undo.
+got=$(printf '#digital A out 1:22\nA=1\nA=0\n#disable 1\n/undo\n/list\n' |
+	  repl ./csp "$D/undo4.db")
+ck "a #disable does not consume the undo history" \
+   'OK
+OK
+OK
+OK
+Took back 1 line
+#digital A out 1:22  // R
+A=1  // 1 R!' "$got"
+
+# Asking for more than the ring holds takes back what it has and says how many.
+# Then the disable bit must be GONE: a rule added afterwards inherits the number
+# of one that was withdrawn, and inheriting its disable is silent and baffling.
+got=$(printf '#digital A out 1:22\nA=1\n#disable 1\n/undo 9\n#digital B out 1:23\nB=1\n/list\n/undo 9\n/undo\n' |
+	  repl ./csp "$D/undo5.db")
+ck "undo past the end stops at the floor and clears stale disables" \
+   'OK
+OK
+OK
+Took back 2 lines
+OK
+OK
+#digital B out 1:23  // R
+B=1  // 1 R
+Took back 2 lines
+Nothing to take back' "$got"
+
 echo "================================================"
 echo "repl: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

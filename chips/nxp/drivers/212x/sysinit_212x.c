@@ -25,6 +25,12 @@
 #endif
 
 void csp_board_pinmux(void);
+void csp_boot_blink(void);
+
+// Overrides the weak one in csp_board.c: on this family the watchdog's WDTOF
+// bit is the only thing that survives the reset it caused, so it is the only
+// question the hardware can still answer afterwards.
+int csp_boot_fault(void) { return (Chip_ResetCause() & WDMOD_WDTOF) != 0; }
 
 void SystemInit(void)
 {
@@ -35,19 +41,21 @@ void SystemInit(void)
     // because writing PCONP needs the peripheral bus running, and BEFORE any
     // driver, because a driver that initialises an unpowered block writes into
     // nothing and reports success.
+    // The boot blink, before the pin mux. No clock to enable first: GPIO has no
+    // PCONP bit on an LPC2000 and is always powered.
+    csp_boot_blink();
+
     csp_board_pinmux();
 
-    // Unmask interrupts. LAST, and it has to be here because nothing else does
-    // it: a Cortex-M boots with interrupts enabled, so a platform file written
+    // The VIC FIRST. A VIC left in its reset state has every vector slot
+    // pointing at address 0, so one stray source would execute the reset
+    // vector -- so it has to be swept before the I bit comes down, not after.
+    Chip_VIC_Init();
+
+    // Then unmask, and it has to happen here because nothing else does it: a
+    // Cortex-M boots with interrupts enabled, so a platform file written
     // against one never asks. An ARM7 boots masked -- startup_212x.S leaves
     // I and F set -- and the first csp_delay_ms then spins in __WFI() forever
     // waiting for a tick that cannot arrive.
-    //
-    // Safe here: Chip_VIC_Init has cleared every source enable, so nothing can
-    // fire until a driver asks for it.
     EnableIRQ();
-    // Before any driver registers a handler, and before main enables
-    // interrupts: a VIC left in its reset state has every slot pointing at
-    // address 0, so one stray source would execute the reset vector.
-    Chip_VIC_Init();
 }

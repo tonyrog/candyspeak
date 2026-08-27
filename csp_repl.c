@@ -67,6 +67,7 @@ static int cmd_images(csp_rt_t* st, int argc, char* argv[])
 
 static int cmd_reset(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_clear(csp_rt_t* st, int argc, char* argv[]);
+static int cmd_undo(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_memory(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_commit(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_quit(csp_rt_t* st, int argc, char* argv[]);
@@ -96,6 +97,7 @@ static const csp_cmd_t builtin_cmds[] = {
     { ros_cmd_resume, ros_h_resume,  cmd_resume },
     { ros_cmd_reset,  ros_h_reset,   cmd_reset },
     { ros_cmd_clear,  ros_h_clear,   cmd_clear },
+    { ros_cmd_undo,   ros_h_undo,    cmd_undo },
     { ros_cmd_latch,  ros_h_latch,   cmd_latch },
     { ros_cmd_commit, ros_h_commit,  cmd_commit },
     { ros_cmd_settings, ros_h_settings, cmd_settings },
@@ -1648,6 +1650,10 @@ static int cmd_clear(csp_rt_t* st, int argc, char* argv[])
     st->ps.nd   = CSP_BASE_ND(st);
     st->ps.strp = CSP_BASE_STRP(st);
     st->ps.nq   = 0;
+    // Every line /undo could have taken back is gone. Marks left behind would
+    // point above the cursors and the next /undo would push them back UP into
+    // a pool that no longer holds what they described.
+    st->undo_n = st->undo_head = 0;
     csp_rebuild(st);
     csp_setup(st);
     csp_print_lit("Cleared RAM patches -- ROM restored");
@@ -1659,6 +1665,119 @@ static int cmd_clear(csp_rt_t* st, int argc, char* argv[])
     csp_println();
     st->ee_nd = st->ee_nn = 0;
     return CSP_CMD_OK;
+}
+
+// --- /undo -------------------------------------------------------------------
+//
+// cmd_clear with a NEARER floor. Everything a typed line adds -- instructions,
+// declarations, the names it introduced, anything it queued -- grows from a
+// bump cursor, so taking the line back is putting the four cursors where they
+// stood before it. No deletion, no gap to compact, and the string table is
+// reclaimed with the rest because ps.strp is one of the four.
+//
+// The floor still cannot go below the ROM baseline: those lines are in flash
+// and were never ours to take back. The ring simply runs out first.
+
+// Where the cursors stand right now.
+void csp_undo_mark(csp_rt_t* st, csp_undo_t* s)
+{
+    s->nn   = st->ps.nn;
+    s->nd   = st->ps.nd;
+    s->strp = st->ps.strp;
+    s->nq   = st->ps.nq;
+}
+
+// Keep the mark ONLY if the line actually appended something.
+//
+// #disable, a #param override and an assignment to an existing variable all
+// edit in place and move no cursor. Pushing for those would make the next
+// /undo withdraw some older line the user had stopped thinking about -- an
+// undo that takes back a thing you did not just do is worse than none.
+void csp_undo_push(csp_rt_t* st, const csp_undo_t* s)
+{
+#if CSP_UNDO_DEPTH > 0
+    if ((st->ps.nn == s->nn) && (st->ps.nd == s->nd) &&
+	(st->ps.strp == s->strp) && (st->ps.nq == s->nq))
+	return;
+    st->undo[st->undo_head] = *s;
+    st->undo_head = (uint8_t)((st->undo_head + 1) % CSP_UNDO_DEPTH);
+    if (st->undo_n < CSP_UNDO_DEPTH)
+	st->undo_n++;
+#else
+    (void)st; (void)s;
+#endif
+}
+
+static int cmd_undo(csp_rt_t* st, int argc, char* argv[])
+{
+#if CSP_UNDO_DEPTH > 0
+    csp_undo_t s;
+    index_t rules;
+    int n = 1;
+    int i;
+
+    if (argc >= 1) {
+	const char* p = argv[0];
+	n = 0;
+	while ((*p >= '0') && (*p <= '9'))
+	    n = n * 10 + (*p++ - '0');
+	if (*p != '\0' || n < 1)
+	    return CSP_CMD_ERROR;         // "/undo two" is a typo, not a request
+    }
+
+    if (st->undo_n == 0) {
+	csp_print_line("Nothing to take back");
+	return CSP_CMD_OK;
+    }
+    // Asking for more than the ring holds takes back what it has and SAYS how
+    // many, rather than refusing: the count is the thing being reported.
+    if (n > (int)st->undo_n)
+	n = (int)st->undo_n;
+
+    // Walk back n marks. The OLDEST of them is where those lines began.
+    for (i = 0; i < n; i++) {
+	st->undo_head = (uint8_t)((st->undo_head + CSP_UNDO_DEPTH - 1) %
+				  CSP_UNDO_DEPTH);
+	st->undo_n--;
+    }
+    s = st->undo[st->undo_head];
+
+    st->ps.nn = s.nn;
+    // Same reason as /clear: drop the disable bits of the rules that are about
+    // to disappear, or a rule added later inherits a disable it never asked
+    // for. Counted AFTER nn moves, so it counts what survives.
+    rules = csp_n_rules(st);
+    while (rules < MAX_DIS_RULES) {
+	bitset_clr(st->dis_rule, rules);
+	rules++;
+    }
+    st->ps.nd   = s.nd;
+    st->ps.strp = s.strp;
+    st->ps.nq   = s.nq;
+
+    // The EEPROM watermark measures how much of the RAM patch has a saved copy.
+    // RAM just shrank past it, so bring it down or /memory reports more backed
+    // than exists. The stored image itself is untouched -- /load still brings
+    // the withdrawn lines back, which is the escape hatch if the undo was the
+    // mistake.
+    if (st->ee_nd > st->ps.nd) st->ee_nd = st->ps.nd;
+    if (st->ee_nn > st->ps.nn) st->ee_nn = st->ps.nn;
+
+    csp_rebuild(st);
+    csp_setup(st);
+
+    csp_print_lit("Took back ");
+    csp_print_int(n);
+    if (n == 1)
+	csp_print_line(" line");
+    else
+	csp_print_line(" lines");
+    return CSP_CMD_OK;
+#else
+    (void)st; (void)argc; (void)argv;
+    csp_print_line("This firmware was built without /undo");
+    return CSP_CMD_OK;
+#endif
 }
 
 // print v right-aligned in a field of width w (v assumed >= 0)
@@ -1714,6 +1833,9 @@ static int cmd_load(csp_rt_t* st, int argc, char* argv[])
 	cmd_eeprom_failed(st);
 	return CSP_CMD_ERROR;
     }
+    // A load replaces the whole RAM patch, so the marks describe a pool that no
+    // longer exists. Same reasoning as /clear.
+    st->undo_n = st->undo_head = 0;
     csp_setup(st);
     csp_print_lit("Loaded from ");
     csp_print_str(csp_eeprom_name());
@@ -2122,8 +2244,13 @@ int csp_process_line(csp_rt_t* st, char* line)
 	return r;
     }
     else if (*line == '#') {
-	// Persistent definition
+	// Persistent definition. Marked for /undo -- csp_undo_push keeps the
+	// mark only if the line actually appended, so `#disable 4` (which edits
+	// in place) leaves the history alone.
+	csp_undo_t s;
+	csp_undo_mark(st, &s);
 	csp_process_persistent(st, line);
+	csp_undo_push(st, &s);
 	return CSP_CMD_OK;
     }
     else if (*line == '>') {
@@ -2141,8 +2268,12 @@ int csp_process_line(csp_rt_t* st, char* line)
 	// this frame sits directly above csp_parse's own token_t tv[24], and a
 	// second tv[24] here was 144 bytes of the deep-path stack for nothing --
 	// it was scanned only to look for EQ/QUEST and then thrown away.
-	if (line_is_rule(line))
+	if (line_is_rule(line)) {
+	    csp_undo_t s;
+	    csp_undo_mark(st, &s);
 	    csp_process_persistent(st, line);
+	    csp_undo_push(st, &s);
+	}
 	else
 	    csp_process_immediate(st, line);
 	return CSP_CMD_OK;

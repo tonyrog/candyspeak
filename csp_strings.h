@@ -439,6 +439,8 @@ extern rochar s_cmd_reset[6] RODATA;
 #define ros_cmd_reset ((rostring_t) s_cmd_reset)
 extern rochar s_cmd_clear[6] RODATA;
 #define ros_cmd_clear ((rostring_t) s_cmd_clear)
+extern rochar s_cmd_undo[5] RODATA;
+#define ros_cmd_undo ((rostring_t) s_cmd_undo)
 extern rochar s_cmd_latch[6] RODATA;
 #define ros_cmd_latch ((rostring_t) s_cmd_latch)
 extern rochar s_cmd_commit[7] RODATA;
@@ -473,6 +475,8 @@ extern rochar s_h_reset[24] RODATA;
 #define ros_h_reset ((rostring_t) s_h_reset)
 extern rochar s_h_clear[28] RODATA;
 #define ros_h_clear ((rostring_t) s_h_clear)
+extern rochar s_h_undo[45] RODATA;
+#define ros_h_undo ((rostring_t) s_h_undo)
 extern rochar s_h_latch[25] RODATA;
 #define ros_h_latch ((rostring_t) s_h_latch)
 extern rochar s_h_commit[22] RODATA;

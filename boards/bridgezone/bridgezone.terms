@@ -18,6 +18,13 @@
   %% 16K of SRAM, and the runtime is the whole flash on this one.
   {code_budget, 9216},
 
+  %% The settings store sits in the runtime struct, so it is RAM spent whether
+  %% anything is stored or not. csp.h defaults to 1024 for anything that is not
+  %% an Arduino -- which means the host -- and on a 16K part that is a kilobyte
+  %% of the struct for nothing. An entry is 8 + strlen(path) bytes, so this is
+  %% around twenty settings, which is more than this board has knobs.
+  {settings_bytes, 256},
+
   %% --- CAN ------------------------------------------------------------------
   %% CAN1 has only ONE pin here. TD1 on an LPC2119/2129 is P0.31, which is
   %% output-only: no GPIO function, no PINSEL bits, nothing to select. cfg.h
@@ -35,6 +42,37 @@
   {pin, 'P0.1', rxd0},
   {pin, 'P0.8', txd1},
   {pin, 'P0.9', rxd1},
+  %% --- status LEDs ----------------------------------------------------------
+  %% Four, all on P0 and all GPIO at reset, so they need no mux -- declared so
+  %% the checker can catch a conflict, and so one of them can be the boot blink.
+  %%
+  %% ACTIVE HIGH, from the schematic: each drives a MOSFET gate (Q8/Q14) with a
+  %% 10k pulldown, so a high on the pin lights the lamp.
+  {pin, 'P0.15', gpio},              %% Can1Green   CAN_1_STATUS
+  {pin, 'P0.18', gpio},              %% Can2Green   CAN_2_STATUS
+  {pin, 'P0.19', gpio},              %% Can1Yellow  CAN_1_YELLOW_STATUS
+  {pin, 'P0.20', gpio},              %% Can2Yellow  CAN_2_YELLOW_STATUS
+
+  %% The boot blink. Before the UART exists, this is the only thing the board
+  %% can say -- which matters most on a board that will not talk.
+  {boot_led, {'P0.15', active_high}},
+
+  %% Blink how far setup got: a long lead-in flash, then a count.
+  %%   1 entered setup     4 ROM loaded          6 program laid out
+  %%   2 UART up           5 EEPROM attempted    7 devices configured -- done
+  %%   3 runtime initialised
+  %% Off. Setup reaches 7 -- all of it -- so the count has answered its
+  %% question, and fifteen seconds of blinking at every boot is now just a wait.
+  %% Turn it back on the day something stops short again.
+  {boot_marks, false},
+
+  %% Och startblinken av med. Den var oumbärlig medan kortet var tyst -- den
+  %% var det ENDA kortet kunde säga -- men nu talar konsolen och bannern
+  %% skriver ut klockan i siffror. Kvar blir fyra sekunders väntan vid varje
+  %% flash. LED:en fungerar fortfarande: undantagsvektorerna blinkar sitt
+  %% nummer på den, och {boot_marks, true} tänder räkningen igen.
+  {boot_blink, false},
+
   {console, {uart0, 38400}},
 
   %% --- I2C: the EEPROM ------------------------------------------------------
@@ -50,7 +88,6 @@
   {pin, 'P0.4',  sck0},
   {pin, 'P0.5',  miso0},
   {pin, 'P0.6',  mosi0},
-  {pin, 'P0.20', gpio},              %% co-controller slave select
   {pin, 'P0.10', gpio},              %% ATmega328P reset
 
   %% --- analog and PWM out ---------------------------------------------------

@@ -102,10 +102,33 @@
 #define CSP_LPC_ADC_SEQ       1     // sequencer-based ADC, different API
 #define CSP_LPC_UART_STAT     1     // Chip_UART_GetStatus + UART_STAT_*
 #define CSP_LPC_EEPROM_IAP    1     // through the IAP ROM calls
+#elif defined(CHIP_LPC212X)
+// ARM7, and it has to say so. Without a define of its own this family fell
+// through to the `#else` below and was configured as an 11xx: a 12-BIT
+// converter on a part whose ADC is 10 bits, so every reading came back a
+// quarter of its true value with nothing to say why.
+//
+// That is the cost of a final #else that names parts rather than describing a
+// default: it accepts anything, including a family nobody considered.
+#define CSP_LPC_ADC_CLASSIC   1
+#define CSP_LPC_UART_LSR      1
+#define CSP_LPC_ADC_BITS      10    // ADGDR holds 10 bits, left-justified at 6
+#define CSP_LPC_UART_DEFAULT  LPC_UART0
+#define CSP_LPC_ADC_DEFAULT   LPC_ADC
+// No on-chip EEPROM. A board with an I2C part says so in its terms and gets
+// csp_eeprom_i2c.c instead; this only means the chip has none of its own.
+#define CSP_LPC_NO_EEPROM     1
 #else                                // 11xx, 11u6x, 13xx
 #define CSP_LPC_ADC_CLASSIC   1
 #define CSP_LPC_UART_LSR      1
 #define CSP_LPC_NO_EEPROM     1     // flash-only parts: /save has nowhere to go
+#endif
+
+// The first argument to Chip_IOCON_PinMux. The 212x header defines it to a null
+// pointer -- that family has no IOCON block, PINSEL is a handful of addresses --
+// and a real LPCOpen chip.h has LPC_IOCON. Same fallback as csp_board.c.
+#if !defined(LPC_IOCON_ARG)
+#define LPC_IOCON_ARG LPC_IOCON
 #endif
 
 // --- board knobs ------------------------------------------------------------
@@ -172,8 +195,10 @@ void csp_lpc_pin_mux(uint8_t port, uint8_t pin, int analog)
 __attribute__((weak))
 int csp_lpc_adc_channel(uint8_t port, uint8_t pin)
 {
-    (void)port;
-    return (pin < 8) ? (int)pin : -1;
+    // The PORT test belongs here and not in the caller. This stub answers only
+    // for the pseudo-port -- `15:3` is channel 3 -- and refuses everything else,
+    // which is what makes a board's real map able to answer for `0:27`.
+    return ((port == CSP_LPC_ADC_PORT) && (pin < 8)) ? (int)pin : -1;
 }
 
 // STUB: PWM output. There is no portable answer here -- 17xx has MCPWM and the
@@ -307,6 +332,18 @@ static int serial_output = 0;
 
 static void csp_lpc_uart_init(void)
 {
+    // Mux the console pins HERE, immediately before the port is used, even
+    // though csp_board_pinmux already did it from SystemInit.
+    //
+    // Between those two points run the boot blink, the PCONP write, the tick
+    // setup and the PWM setup -- and a console that goes silent because
+    // something in that stretch touched PINSEL is a fault with no symptom
+    // except silence. The working driver for this board muxes its pins inside
+    // its own init for the same reason. Two writes, and the question stops
+    // being askable.
+#if defined(CSP_LPC_CONSOLE_PINMUX)
+    CSP_LPC_CONSOLE_PINMUX;
+#endif
     Chip_UART_Init(CSP_LPC_UART);
     Chip_UART_SetBaud(CSP_LPC_UART, CSP_LPC_BAUD);
     // 8N1, spelled two ways: the 15xx USART has a config register (UART_CFG_*),
@@ -365,6 +402,14 @@ int csp_will_output()
 // the host's.
 int csp_print_char(char c)
 {
+    // Diagnostic builds SHOUT. Everything this firmware prints -- the echo
+    // included -- comes back upper case, so a character that returns unchanged
+    // did not pass through here. That distinguishes our echo from a loopback
+    // in the cable or the adapter, which no amount of reading registers can.
+#if defined(CSP_BITBANG_DIAG)
+    if (c >= 'a' && c <= 'z')
+	c = (char)(c - 'a' + 'A');
+#endif
     if (serial_output) {
 	if (c == '\n') {
 	    while (!csp_lpc_uart_can_send())
@@ -575,12 +620,19 @@ static int csp_lpc_scale(csp_rt_t* st, index_t ix, int raw)
 void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
 {
     int value = 0;
+    // Ask the MAP, whatever port the declaration named.
+    //
+    // This used to be gated on `port == CSP_LPC_ADC_PORT` first, which made the
+    // board map unreachable: the whole reason it exists is so a program can say
+    // `in 0:27` -- the screw terminal -- instead of `15:0`, the converter
+    // channel. The gate refused every such pin before the map was consulted, so
+    // a board with a perfectly good ADC map read zero on all four inputs and
+    // nothing anywhere reported a problem. The port test now lives in the weak
+    // default, which is the only one that needs it.
+    int ch = csp_lpc_adc_channel(vptr->a.port, vptr->a.pin);
 
-    if (vptr->a.port == CSP_LPC_ADC_PORT) {
-	int ch = csp_lpc_adc_channel(vptr->a.port, vptr->a.pin);
-	if (ch >= 0)
-	    value = csp_lpc_scale(st, ix, csp_lpc_adc_read(ch));
-    }
+    if (ch >= 0)
+	value = csp_lpc_scale(st, ix, csp_lpc_adc_read(ch));
     csp_set_ivalue(st, ix, value);
 }
 
@@ -886,6 +938,11 @@ int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
 // The access pattern is strictly sequential and csp_eeprom_save rewrites the
 // whole image every time, so no read-modify-write and no RAM shadow is needed.
 
+// An I2C part is a whole backend of its own -- page and bank geometry, ACK
+// polling -- and it lives in chips/nxp/drivers/common/csp_eeprom_i2c.c, which
+// defines every one of these. Nothing here, not even the name.
+#if !defined(CSP_EEPROM_I2C)
+
 const char* csp_eeprom_name(void)
 {
     static const char nm[] = "EEPROM";
@@ -977,6 +1034,8 @@ int csp_eeprom_write(const void* buf, size_t len) { (void)buf; (void)len; return
 
 #endif
 
+#endif /* !CSP_EEPROM_I2C */
+
 // ============================================================
 // Boot and main loop
 // ============================================================
@@ -988,25 +1047,15 @@ int csp_eeprom_write(const void* buf, size_t len) { (void)buf; (void)len; return
 //   1  entered setup      4  ROM loaded         6  program laid out
 //   2  UART up            5  EEPROM attempted   7  devices configured -- done
 //   3  runtime initialised
+#if defined(CSP_BITBANG_DIAG)
+void csp_bitbang_report(void);          // in csp_board.c
+#endif
+
 #if defined(CSP_BOOT_BLINK)
-#ifndef CSP_BOOT_LED_PORT
-#define CSP_BOOT_LED_PORT 0
-#endif
-#ifndef CSP_BOOT_LED_PIN
-#define CSP_BOOT_LED_PIN  0
-#endif
-static void boot_mark(int n)
-{
-    int i;
-    Chip_GPIO_SetPinDIROutput(LPC_GPIO, CSP_BOOT_LED_PORT, CSP_BOOT_LED_PIN);
-    for (i = 0; i < n; i++) {
-	Chip_GPIO_SetPinState(LPC_GPIO, CSP_BOOT_LED_PORT, CSP_BOOT_LED_PIN, true);
-	csp_delay_ms(120);
-	Chip_GPIO_SetPinState(LPC_GPIO, CSP_BOOT_LED_PORT, CSP_BOOT_LED_PIN, false);
-	csp_delay_ms(180);
-    }
-    csp_delay_ms(700);                 // gap, so the count is readable
-}
+// The chip layer's version: a spin loop, so it works before the tick exists and
+// keeps working when the tick is what is broken. See csp_board.c.
+void csp_boot_mark(int n);
+#define boot_mark(n) csp_boot_mark(n)
 #else
 #define boot_mark(n) ((void)0)
 #endif
@@ -1016,6 +1065,13 @@ static void csp_lpc_setup(void)
     boot_mark(1);
     csp_lpc_systick_init();
     csp_lpc_uart_init();
+    // DIAG=1 only. Bit-bangs the console pin as plain GPIO and dumps every
+    // register the silence could be hiding in -- over a path that does not use
+    // the peripheral under suspicion. Behind the #if rather than called into an
+    // empty stub, so a port that does not carry csp_board.c still links.
+#if defined(CSP_BITBANG_DIAG)
+    csp_bitbang_report();
+#endif
     boot_mark(2);
 
     serial_output = 1;
@@ -1113,6 +1169,26 @@ static void csp_lpc_loop(void)
 {
     static int first_cycle = 1;
     index_t x;
+
+    // A character a second, sent to nobody's request. UNSOLICITED output is the
+    // only thing that can tell our transmitter apart from a loop in the wiring:
+    // an echo proves a circle exists, not who closed it. If dots arrive, this
+    // firmware's TX reaches the terminal and the missing banner is a print-path
+    // fault; if only typed characters come back, the loop is outside the part
+    // and everything printed here has been going nowhere all along.
+    //
+    // Before the pool check, so it keeps beating even on a failed setup.
+#if defined(CSP_BITBANG_DIAG)
+    {
+	static uint32_t beat_ms;
+	uint32_t now = csp_time_ms();
+
+	if ((now - beat_ms) >= 1000u) {
+	    beat_ms = now;
+	    csp_print_char('.');
+	}
+    }
+#endif
 
     // If setup could not build a pool, do nothing but keep the port alive, so
     // the FATAL message stays readable instead of being buried by a crash loop.

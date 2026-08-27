@@ -28,7 +28,17 @@ BUILD_DIR ?= $(shell $(GEN) --dir-of $(BOARD))/build
 # image and a `usb_boot` image are linked for different addresses and look
 # identical on disk; keeping them apart by name is cheaper than telling them
 # apart afterwards.
-VARIANT := $(shell $(GEN) --map-of $(BOARD) $(MAP))
+# ARM=1 builds the whole firmware in ARM mode instead of Thumb. It goes in its
+# own directory for the same reason the map does: two images that look identical
+# on disk and behave differently are how the wrong one gets flashed.
+#
+# Costs about 38% of text on this port. What it buys is that ARM/Thumb
+# interworking stops existing -- no linker veneers, no bx-through-a-pointer in
+# the interrupt dispatch, no -marm exception for vic_212x.c.
+# DIAG=1 is in the name for the same reason: it changes CFLAGS but no header, so
+# -MMD would not rebuild anything and a diagnostic build would quietly be the
+# previous image.
+VARIANT := $(shell $(GEN) --map-of $(BOARD) $(MAP))$(if $(ARM),-arm,)$(if $(DIAG),-diag,)
 B       := $(BUILD_DIR)/$(VARIANT)
 
 # One fact per query. Parsing the human listing through `head` closed the pipe
@@ -42,6 +52,10 @@ ARCH  := $(shell $(GEN) --arch-of $(BOARD))
 # {active_map,...} decides. `make -f Makefile.board BOARD=x maps` lists them.
 MAP   ?=
 
+# -marm everywhere when ARM=1. vic_212x.c's own rule adds -marm again, which is
+# harmless.
+THUMB := $(if $(ARM),-marm,-mthumb)
+
 ifeq ($(ARCH),cm3)
   CPU     := -mcpu=cortex-m3 -mthumb
   LPC     := chips/nxp/lpcopen/lpc175x_6x/lpc_chip_175x_6x
@@ -54,14 +68,19 @@ ifeq ($(ARCH),cm3)
                gpio_17xx_40xx.c uart_17xx_40xx.c adc_17xx_40xx.c \
                timer_17xx_40xx.c can_17xx_40xx.c)
 else
-  CPU     := -mcpu=arm7tdmi -mthumb
+  CPU     := -mcpu=arm7tdmi $(THUMB)
   CHIPINC := -Ichips/nxp/drivers/212x
-  CHIPDEF :=
+  # The family has to NAME itself. csp_lpcopen.c picks its ADC width, UART
+  # status style and EEPROM kind from these, and its final #else is written for
+  # the 11xx -- so a family with no define of its own is silently configured as
+  # one, which cost four dead analog inputs.
+  CHIPDEF := -DCHIP_LPC212X
   STARTUP := chips/nxp/drivers/212x/startup_212x.S
   SYSINIT := chips/nxp/drivers/212x/sysinit_212x.c
   DRV     := chips/nxp/drivers/212x/chip_212x.c \
              chips/nxp/drivers/212x/can_212x.c \
-             chips/nxp/drivers/212x/pwm_212x.c
+             chips/nxp/drivers/212x/pwm_212x.c \
+             chips/nxp/drivers/212x/i2c_212x.c
   # vic_212x.c is ARM, not Thumb: mrs/msr do not exist in Thumb on an ARM7.
   # Its own rule below passes -marm; the file has an #error if that is missed.
   VICSRC  := chips/nxp/drivers/212x/vic_212x.c
@@ -72,8 +91,32 @@ OC   := arm-none-eabi-objcopy
 SZ   := arm-none-eabi-size
 
 CORE := csp_rt.c csp_compile.c csp_repl.c csp_parse.c csp_tok.c csp_print.c \
-        csp_strings.c csp_eeprom.c csp_flash.c csp_lpcopen.c rom_host.c \
-        chips/nxp/drivers/common/csp_board.c
+        csp_strings.c csp_eeprom.c csp_flash.c csp_lpcopen.c \
+        chips/nxp/drivers/common/csp_board.c \
+        chips/nxp/drivers/common/csp_eeprom_i2c.c
+
+# THE PROGRAM THE BOARD CARRIES IN FLASH.
+#
+# Defaults to the board's own pins.csp when there is one. Without this the
+# firmware links rom_host.c -- the NEUTRAL image, a couple of declarations and
+# no instructions -- and the board comes up with an empty /list and every pin
+# name undeclared. Which reads as "the ROM failed to load" and is really "there
+# was no ROM": the same symptom, a different place to look.
+#
+# Several .csp files are read as ONE program, in order, exactly as ./csp reads
+# them -- so a board's pin names and an application are two files, not one.
+#
+#   make -f Makefile.board BOARD=bridgezone
+#   make -f Makefile.board BOARD=bridgezone PROG="boards/bridgezone/pins.csp app.csp"
+#   make -f Makefile.board BOARD=bridgezone PROG=          # the neutral image
+BOARDDIR := $(shell $(GEN) --dir-of $(BOARD))
+PROG     ?= $(wildcard $(BOARDDIR)/pins.csp)
+
+ifeq ($(strip $(PROG)),)
+  CORE   += rom_host.c
+else
+  ROMOBJ := $(B)/rom.o
+endif
 
 SRC  := $(CORE) $(DRV) $(SYSINIT) $(STARTUP)
 OBJ  := $(addprefix $(B)/,$(notdir $(SRC:.c=.o)))
@@ -81,6 +124,7 @@ OBJ  := $(OBJ:.S=.o)
 ifdef VICSRC
 OBJ  += $(B)/vic_212x.o
 endif
+OBJ  += $(ROMOBJ)
 
 VPATH := . $(dir $(SRC))
 
@@ -90,7 +134,8 @@ VPATH := . $(dir $(SRC))
 # symbol and sends you looking in entirely the wrong place.
 CFLAGS := $(CPU) -Os -ffunction-sections -fdata-sections -Wall -MMD -MP \
           -I. -I$(B) $(CHIPINC) $(CHIPDEF) \
-          -DCSP_BOARD=csp_board.h -DCSP_VERSION='"$(BOARD)"'
+          -DCSP_BOARD=csp_board.h -DCSP_VERSION='"$(BOARD)"' \
+          $(if $(DIAG),-DCSP_BITBANG_DIAG)
 
 all: $(B)/firmware.bin $(B)/firmware.hex
 
@@ -102,13 +147,39 @@ all: $(B)/firmware.bin $(B)/firmware.hex
 # The board header and the linker script, both generated. --board refuses for a
 # board that does not pass check-boards, so a bad description stops here rather
 # than becoming a firmware that comes up almost working.
-$(B)/csp_board.h: $(wildcard boards/*.terms) $(wildcard private/*/*.terms) $(wildcard chips/*/*.terms) utils/gen_chips.erl
+# Every place a terms file can live. Missing one does not fail loudly -- it
+# leaves a STALE generated header, and the build then quietly uses yesterday's
+# pin mux. `boards/*/*.terms` was missing after boards got per-board
+# directories, and a new {boot_led,...} silently did not appear.
+TERMS := $(wildcard boards/*.terms) $(wildcard boards/*/*.terms) \
+         $(wildcard private/*/*.terms) $(wildcard chips/*/*.terms) \
+         $(wildcard chips/*/*/*.terms)
+
+$(B)/csp_board.h: $(TERMS) utils/gen_chips.erl
 	@mkdir -p $(B)
 	@$(GEN) --board $(BOARD) $@
 
-$(B)/$(BOARD).ld: $(wildcard chips/*/*.terms) $(wildcard private/*/*.terms) utils/gen_chips.erl
+$(B)/$(BOARD).ld: $(TERMS) utils/gen_chips.erl
 	@mkdir -p $(B)
 	@$(GEN) --ld $(BOARD) $(MAP) > $@
+
+# The board's program, compiled to a ROM image by ./csp -- the same compiler the
+# REPL uses, so what flash carries and what a typed line produces come from one
+# place. Lands in the build directory rather than over rom.c in the tree: rom.c
+# is the host demo image and swapping the two is how a program becomes the
+# baseline every test then runs on top of.
+$(B)/rom.c: $(PROG) csp $(B)/csp_board.h
+	@mkdir -p $(B)
+	@./csp -n -C -O $@ $(PROG)
+	@sed -n 's|^//   size: *|  rom: |p' $@
+
+$(B)/rom.o: $(B)/rom.c
+	@$(CC) $(CFLAGS) -c -o $@ $<
+
+# ./csp is the compiler above. Built by the top-level Makefile; no prerequisites
+# here, so this runs only when the binary is missing.
+csp:
+	@$(MAKE) --no-print-directory -f Makefile csp
 
 $(B)/%.o: %.c $(B)/csp_board.h
 	@mkdir -p $(B)

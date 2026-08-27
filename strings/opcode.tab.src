@@ -1,0 +1,69 @@
+# Instruction mnemonics, for the disassembler (/list, csp_print.c). Not
+# language: nothing here is ever typed, and an exec-only build drops the lot.
+MOV mov
+ADD ADD
+SUB SUB
+MUL MUL
+DIV DIV
+REM REM
+SLA SLA
+SRA SRA
+BAND BAND
+BOR BOR
+BXOR BXOR
+AND AND
+OR OR
+ASSIGN ASSIGN
+BNOT BNOT
+NEG NEG
+NOT NOT
+CVTIF CVTIF
+CVTFI CVTFI
+FADD FADD
+FSUB FSUB
+FMUL FMUL
+FDIV FDIV
+FNEG FNEG
+FMOV FMOV
+FLT FLT
+FLTE FLTE
+FGT FGT
+FGTE FGTE
+FEQ FEQ
+FNEQ FNEQ
+ENTER ENTER
+LEAVE LEAVE
+NEW NEW
+LI LI
+LIU LIU
+LIH LIH
+ARG ARG
+ST ST
+STP STP
+STIMP STIMP
+CHG CHG
+TMO TMO
+LD LD
+LDP LDP
+CALL CALL
+EQI EQI
+STI STI
+INSTATE INSTATE
+NINSTATE NINSTATE
+SETO SETO
+SETOX SETOX
+RULE RULE
+NEXT NEXT
+NOP NOP
+
+# Operator opcodes whose mnemonic collides with a token name (LT is both the
+# '<' token and the OP_LT instruction), so they carry an O prefix on the symbol
+# and print without it.
+OLT LT
+OLTE LTE
+OGT GT
+OGTE GTE
+OEQEQ EQEQ
+ONEQ NEQ
+OMOV MOV
+OCOMMA COMMA

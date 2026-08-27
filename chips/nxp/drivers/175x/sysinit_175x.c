@@ -41,6 +41,7 @@ const uint32_t OscRateIn    = CSP_XTAL_HZ;
 const uint32_t RTCOscRateIn = 32768;
 
 void csp_board_pinmux(void);
+void csp_boot_blink(void);
 extern void (* const g_vectors[])(void);
 
 // A bounded wait. An unbounded one is how a board that will not start a crystal
@@ -104,41 +105,11 @@ void SystemInit(void)
     // is computed from the clock the part really has.
     SystemCoreClockUpdate();
 
-#if defined(CSP_BOOT_LED_PORT)
-    // Blink, here, before the runtime exists. This is the one signal that does
-    // not need the UART, a correct baud rate, or a terminal on the other end --
-    // so it separates "the part is not running" from "the part is running and
-    // the console is wrong", which is otherwise one symptom with two causes.
-    //
-    // Deliberately BEFORE csp_board_pinmux: the LED is a GPIO at reset, so it
-    // needs no mux, and putting it first means it also reports a fault in the
-    // mux itself.
-    {
-	int i;
-	volatile uint32_t d;
-	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_GPIO);
-	Chip_GPIO_SetPinDIROutput(LPC_GPIO, CSP_BOOT_LED_PORT, CSP_BOOT_LED_PIN);
-	// Three blinks. A count, not a steady state: a LED that is simply on
-	// could be a stuck pin, and one that is off could be anything at all.
-	for (i = 0; i < 6; i++) {
-	    // XOR with the polarity, so `on` means lit on either wiring.
-	    Chip_GPIO_SetPinState(LPC_GPIO, CSP_BOOT_LED_PORT,
-				  CSP_BOOT_LED_PIN,
-				  ((i & 1) == 0) ? CSP_BOOT_LED_ON
-						 : !CSP_BOOT_LED_ON);
-	    // A spin, because there is no tick yet. Roughly 100 ms at 100 MHz,
-	    // and if the PLL did not connect it will visibly be 25 times
-	    // slower -- which makes the blink RATE a clock diagnostic too.
-	    for (d = 0; d < 2500000u; d++)
-		;
-	}
-	// Leave it OFF, which on this board means driving the pin HIGH. Ending
-	// on the wrong level is what made the first version look like a solid
-	// lamp: the blink happened and then it parked itself lit.
-	Chip_GPIO_SetPinState(LPC_GPIO, CSP_BOOT_LED_PORT, CSP_BOOT_LED_PIN,
-			      !CSP_BOOT_LED_ON);
-    }
-#endif
+    // The boot blink, before the pin mux -- see csp_board.c for why it is a
+    // count and not a steady state. GPIO needs its clock first.
+    Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_GPIO);
+    csp_boot_blink();
+
 
     csp_board_pinmux();
 }

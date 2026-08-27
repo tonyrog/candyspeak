@@ -37,6 +37,11 @@
 #ifndef SVC_STACK_SIZE
 #define SVC_STACK_SIZE  0x40
 #endif
+/* The boot ROM's IAP workspace: the top 32 bytes of on-chip RAM. Not a stack
+ * and not ours -- just space nothing else may occupy. */
+#ifndef IAP_RESERVE
+#define IAP_RESERVE     0x20
+#endif
 
 	.section .vectors, "ax"
 	.code 32
@@ -71,14 +76,29 @@ _vectors:
 	.code 32
 	.align 2
 
-/* Exceptions we do not handle: stop, so a debugger finds you at the fault
- * rather than three resets later. A production build points these at reset.
+/* Exceptions we do not handle. They still STOP -- a debugger should find you at
+ * the fault rather than three resets later -- but they say WHICH one first, by
+ * blinking the boot LED forever.
+ *
+ * `b .` was silent, and silence here is indistinguishable from a hung loop, a
+ * wedged peripheral or a dead console. An undefined instruction reached from
+ * ordinary C code (an `mcr` to a coprocessor this part does not have, say)
+ * then looks exactly like a UART that will not receive. Costing an evening.
+ *
+ * Each takes the number in r0 and does not return; csp_fault_blink loops.
+ *   1 undefined instruction   3 prefetch abort   5 FIQ
+ *   2 software interrupt      4 data abort
  */
-_undef:  b .
-_swi:    b .
-_pabort: b .
-_dabort: b .
-_fiq:    b .
+_undef:  mov r0, #1
+	 b   csp_fault_blink
+_swi:    mov r0, #2
+	 b   csp_fault_blink
+_pabort: mov r0, #3
+	 b   csp_fault_blink
+_dabort: mov r0, #4
+	 b   csp_fault_blink
+_fiq:    mov r0, #5
+	 b   csp_fault_blink
 
 /* IRQ. lr_irq is return+4 on ARM7, so the -4 is the correction, and the SPSR
  * has to be saved because a nested interrupt would otherwise overwrite it.
@@ -98,8 +118,16 @@ _irq_trampoline:
 _start:
 	/* A stack per mode, carved down from the top of RAM. Each `msr` puts
 	 * us in that mode just long enough to load its banked sp.
+	 *
+	 * MINUS THE IAP RESERVATION FIRST. The flash routines in the boot ROM
+	 * use the top 32 bytes of on-chip RAM as their own workspace -- they
+	 * are called with the part's own stack, and they take that region
+	 * regardless of what is in it. A stack placed there survives right up
+	 * until the first flash write, which is a fault that only appears when
+	 * you save something.
 	 */
 	ldr   r0, =_stack_top
+	sub   r0, r0, #IAP_RESERVE
 
 	msr   CPSR_c, #MODE_UND|I_BIT|F_BIT
 	mov   sp, r0

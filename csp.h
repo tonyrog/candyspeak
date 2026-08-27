@@ -1846,6 +1846,23 @@ typedef struct {
 // shared code pool (instr/decl) stays pre-reserved in this arena.
 #define CSP_ARENA_BYTES (CSP_CODE_BUDGET)
 
+// How many typed lines /undo can take back. Eight bytes each, so the default is
+// 64 bytes of the runtime struct -- nothing on a board with kilobytes of pool,
+// and worth turning down to 1, or off with 0, on one with a few hundred.
+#ifndef CSP_UNDO_DEPTH
+#define CSP_UNDO_DEPTH 8
+#endif
+
+// Where the four bump cursors stood before a line was accepted. Taking the line
+// back means putting them here again -- see cmd_undo, which is cmd_clear with a
+// nearer floor.
+typedef struct {
+    index_t nn;                 // instructions
+    index_t nd;                 // declarations
+    index_t strp;               // string table bump cursor
+    index_t nq;                 // pending queue
+} csp_undo_t;
+
 typedef struct _csp_rt_t
 {
 
@@ -1895,6 +1912,23 @@ typedef struct _csp_rt_t
     uint8_t  line_ovf;       // a character was dropped -> refuse the whole line
     uint8_t  need_prompt;    // print "> " before the next read
     uint8_t  serial_xoff;    // status of soft flow control
+
+    // /undo. Where the four bump cursors stood before each of the last few
+    // typed lines, so a line can be taken back by TRUNCATING to where it began
+    // -- which is what /clear already does, only to the ROM baseline instead.
+    //
+    // strp is in here and that is the point: the string table is a bump
+    // allocator too, so rolling it back returns the names a withdrawn
+    // declaration introduced. Without it an undo would leak them until /clear
+    // and the feature would need a compaction pass to be worth having.
+    //
+    // Only lines that APPEND leave a snapshot. #disable, a #param override and
+    // a plain assignment all edit in place and move no cursor, so nothing is
+    // pushed and /undo says there is nothing to take back rather than silently
+    // withdrawing an older line the user had stopped thinking about.
+    csp_undo_t undo[CSP_UNDO_DEPTH];
+    uint8_t  undo_n;         // valid entries, 0..CSP_UNDO_DEPTH
+    uint8_t  undo_head;      // next slot to write (ring)
 
     // All leaf values live in the buffer heap (see doc/DESCRIPTORS.md). Each of
     // these is its own allocation, sized to csp_estimate in csp_rt_start.
@@ -2681,6 +2715,10 @@ typedef struct {
 extern int csp_cmd_dispatch(csp_rt_t* st, char* cmd);
 extern void csp_cmd_help(void);
 extern int csp_process_line(csp_rt_t* st, char* line);
+// /undo: mark where the bump cursors stand, and keep the mark if the line that
+// followed actually appended something. See cmd_undo in csp_repl.c.
+extern void csp_undo_mark(csp_rt_t* st, csp_undo_t* s);
+extern void csp_undo_push(csp_rt_t* st, const csp_undo_t* s);
 // Bytes the csp_rt_t struct itself takes -- /memory reports it as `struct`.
 extern void csp_set_err_arg_int(csp_rt_t* st, int i, int ival);
 extern uint32_t model_state(void);

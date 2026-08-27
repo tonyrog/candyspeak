@@ -1,0 +1,34 @@
+# Error texts -- here rather than as literals in csp_format_error so they land
+# in flash like every other string in this table. Printed by csp_print_error,
+# which substitutes %s and %d.
+err_ok ok
+err_syntax syntax error
+err_string_space string space exhausted
+err_many_decls too many declarations
+err_many_instrs too many instructions
+err_many_objects too many objects
+err_no_module module %s not declared
+err_many_states too many states
+err_no_state state %s not declared
+err_not_module word %s not a module
+err_not_buffer %s is not a buffer
+err_end_mismatch end mismatch
+err_no_object object %s is not declared
+err_no_variable variable %s is not declared
+err_no_field field %s not found
+err_no_function function %s/%d does not exist
+err_defined %s %s is already defined
+err_internal internal error
+err_arg_mismatch function %s/%d argument %d type mismatch
+err_name_long identifier name too long %d, max %d
+err_rule_range bad rule range, rules are numbered 1..%d
+err_no_rule no rule %d, the program has %d
+err_num_range number out of range
+err_unknown unknown error
+err_cannot_save cannot save eeprom
+err_cannot_load cannot load from eeprom
+err_out_of_memory out of memory -- program does not fit
+err_index_range index out of range
+err_assign_local cannot assign to a #local -- it binds a formula
+err_assign_param cannot assign to a #param in a rule -- set it with > name = value
+err_param_shape #param %s does not match the declaration it sets -- same width and type

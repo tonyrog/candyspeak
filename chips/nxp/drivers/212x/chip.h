@@ -7,5 +7,6 @@
 #include "chip_212x.h"
 #include "vic_212x.h"
 #include "can_212x.h"
+#include "i2c_212x.h"
 
 #endif

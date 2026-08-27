@@ -27,3 +27,9 @@
 #analog Pout2:10 out pwm 0:13    // MAT1.1 Timer1, func=2
 #analog Pout3:10 out pwm 0:12    // MAT1.0 Timer1, func=2
 #analog Pout4:10 out pwm 0:22    // MAT0.0, Timer0, func=3
+
+// yellow/green leds on CAN ports
+#digital Can1Green  out 0:15        // CAN_1_STATUS
+#digital Can2Green  out 0:18        // CAN_2_STATUS
+#digital Can1Yellow out 0:19        // CAN_1_YELLOW_STATUS
+#digital Can2Yellow out 0:20        // CAN_2_YELLOW_STATUS
