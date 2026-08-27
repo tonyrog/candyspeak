@@ -213,11 +213,20 @@ $(B)/firmware.bin: $(B)/firmware.elf csp
 # carries the address of every record, so the tool cannot get it wrong.
 #
 # Made from the patched .bin, not from the .elf, so it carries the checksum.
+#
+# The address is CHECKED before it is used. Every call to the generator is a
+# $(shell ...), so a generator that fails for any reason -- and one did, on a
+# node-name clash under a parallel make -- hands back an empty string, and
+# `--change-addresses=` with nothing after it writes a hex file for address 0.
+# That flashes without complaint and runs nowhere. An empty answer must stop the
+# build, not become a default.
 $(B)/firmware.hex: $(B)/firmware.bin
-	@$(OC) -I binary -O ihex \
-	   --change-addresses=$$($(GEN) --load-addr $(BOARD) $(MAP)) \
-	   $< $@
-	@echo "$@: load address $$($(GEN) --load-addr $(BOARD) $(MAP))"
+	@addr=$$($(GEN) --load-addr $(BOARD) $(MAP)); \
+	 case "$$addr" in \
+	   ''|*[!0-9x]*) echo "$@: load address came back as '$$addr' -- refusing to build a hex file with no address" >&2; exit 1;; \
+	 esac; \
+	 $(OC) -I binary -O ihex --change-addresses=$$addr $< $@ && \
+	 echo "$@: load address $$addr"
 
 -include $(OBJ:.o=.d)
 

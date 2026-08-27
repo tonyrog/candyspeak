@@ -34,7 +34,7 @@ CFLAGS=-MMD -MP -MF .$<.d -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC
 #     $(CC) -DCSP_ARENA_MALLOC -I. $(CORE_SRC) tmp/rom_boot.c -o tmp/csp_boot
 #     tmp/csp_boot -n -C -O rom_host.c examples/empty.csp
 #     tmp/csp_boot -n -C -O rom.c      examples/cpx_rotate.csp
-OBJS = csp_linux.o csp_rt.o csp_repl.o csp_compile.o csp_tok.o csp_dump.o csp_eeprom.o \
+OBJS = csp_linux.o csp_rt.o csp_line.o csp_repl.o csp_compile.o csp_tok.o csp_dump.o csp_eeprom.o \
 	csp_parse.o csp_print.o csp_strings.o csp_flash.o csp_devices.o \
 	csp_flash_host.o rom_host.o
 

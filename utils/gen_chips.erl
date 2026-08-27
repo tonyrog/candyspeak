@@ -1,5 +1,13 @@
 #!/usr/bin/env escript
-%%! -sname gen_chips
+%% NO -sname. It used to say `%%! -sname gen_chips`, which starts a DISTRIBUTED
+%% node under a fixed name -- and two of those cannot exist at once. A parallel
+%% make (or a `make test` running alongside a board build) then had one
+%% invocation die with "the name gen_chips@host seems to be in use", and because
+%% every call site is a $(shell ...) that death became an EMPTY STRING.
+%%
+%% Which is how `objcopy --change-addresses=` ends up with no address and writes
+%% a hex file for 0 -- a firmware that flashes cleanly and runs nowhere. This
+%% script reads files and prints text; it never needed distribution.
 %%
 %% chips/<vendor>/*.terms -> csp_chip.c + csp_chip.h, for ONE chip.
 %%

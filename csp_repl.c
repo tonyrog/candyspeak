@@ -1918,7 +1918,8 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 	uint32_t cap     = csp_system_ram_capacity();
 	uint32_t sys     = csp_system_ram_used();
 	uint32_t buffers = csp_derived_bytes(st);
-	uint32_t acc     = sys + model_state() + buffers + st->line_buf_size
+	uint32_t acc     = sys + model_state() + buffers
+	                 + st->line.line_buf_size
 			 + CSP_STACK_RESERVE + (uint32_t)used;
 	uint32_t freeram = (cap > acc) ? (cap - acc) : 0;
 	csp_print_lit("RAM ");
@@ -1931,7 +1932,7 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 	csp_println();
 	// The REPL line buffer. Its own row because it is the one allocation whose
 	// size is a user-visible LIMIT -- it says how long a line may be pasted.
-	mem_val(ros_line,    st->line_buf_size);
+	mem_val(ros_line,    st->line.line_buf_size);
 	mem_val(ros_stack,   CSP_STACK_RESERVE);
 #ifdef CSP_STACK_WATCH
 	// Measured, not reserved: the closest the stack has come to the arena.

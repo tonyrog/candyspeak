@@ -517,6 +517,22 @@ fi
 # per sector, and a byte offset does not tell you which. Every offset here is a
 # running sum, and the host device is deliberately non-uniform so an off-by-one
 # at the step from small sectors to big ones has somewhere to show up.
+# The line editor cannot be exercised through the REPL above: everything a pipe
+# holds is available at once, so the reader drains past the newline and the rest
+# lands in the paste QUEUE, where cursor keys and history are deliberately off.
+# A ^P sent down a pipe is ignored BY DESIGN and proves nothing -- which is
+# exactly how a broken editor once passed for working here. So: drive
+# csp_line_input a byte at a time, the way a serial port delivers them.
+echo "line editor:"
+if gcc -I. -O2 -o "$D/line_edit" tests/line_edit.c \
+       csp_rt.c csp_print.c csp_strings.c csp_dump.c csp_tok.c \
+       csp_compile.c csp_parse.c rom_host.c >/dev/null 2>&1; then
+    got=$("$D/line_edit" | tail -1)
+    ck "cursor, history and the paste guard" "line editor: ok" "$got"
+else
+    echo "  FAIL line_edit did not build"; fail=$((fail+1))
+fi
+
 echo "flash geometry:"
 if gcc -I. -O2 -o "$D/flash_geom" tests/flash_geom.c \
        csp_flash.c csp_devices.c csp_flash_host.c csp_strings.c \
