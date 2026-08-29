@@ -524,9 +524,8 @@ fi
 # exactly how a broken editor once passed for working here. So: drive
 # csp_line_input a byte at a time, the way a serial port delivers them.
 echo "line editor:"
-if gcc -I. -O2 -o "$D/line_edit" tests/line_edit.c \
-       csp_rt.c csp_print.c csp_strings.c csp_dump.c csp_tok.c \
-       csp_compile.c csp_parse.c rom_host.c >/dev/null 2>&1; then
+if gcc -I. -O2 -o "$D/line_edit" tests/line_edit.c csp_line.c \
+       >/dev/null 2>&1; then
     got=$("$D/line_edit" | tail -1)
     ck "cursor, history and the paste guard" "line editor: ok" "$got"
 else

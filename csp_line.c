@@ -3,7 +3,13 @@
 #include "csp_print.h"
 
 #define CTRL(x) ((x) - 64)
-#define CTRL_U CTRL('U')
+#define ESCAPE          27
+#define DELETE          127
+#define SPACE           32
+#define BACKSPACE       '\b'
+#define NEWLINE         '\n'
+#define CARRIAGE_RETURN '\r'
+#define BELL            '\a'
 
 // ============================================================
 // Line input -- the editable buffer itself, not the commands. csp_mem_init
@@ -14,11 +20,11 @@
 
 void csp_line_init(csp_line_t* st)
 {
-    st->line_pos = 0;
-    st->line_cur = 0;
-    st->line_fill = 0;
-    st->line_ready = 0;
-    st->line_ovf = 0;
+    st->pos = 0;
+    st->cur = 0;
+    st->fill = 0;
+    st->ready = 0;
+    st->ovf = 0;
     st->esc = 0;
     st->refeed = 0;
     st->need_prompt = 1;
@@ -38,7 +44,7 @@ void csp_line_prompt(csp_line_t* st)
 
 int csp_line_space(csp_line_t* st)
 {
-    return st->line_fill < st->line_buf_size;
+    return st->fill < st->buf_size;
 }
 
 // Done with the line at the front. Anything that arrived while it ran was stored
@@ -53,21 +59,21 @@ int csp_line_space(csp_line_t* st)
 // never becomes ready -- which keeps the two apart even on the first byte.
 void csp_line_done(csp_line_t* st)
 {
-    uint16_t src = st->line_pos + 1;    // past the line and its terminator
-    uint16_t n   = (st->line_fill > src) ? (uint16_t)(st->line_fill - src) : 0;
+    uint16_t src = st->pos + 1;    // past the line and its terminator
+    uint16_t n   = (st->fill > src) ? (uint16_t)(st->fill - src) : 0;
     uint16_t k;
 
-    st->line_pos = 0;
-    st->line_cur = 0;
-    st->line_fill = 0;
-    st->line_ready = 0;
+    st->pos = 0;
+    st->cur = 0;
+    st->fill = 0;
+    st->ready = 0;
     // Cursor keys and history are OFF for the duration. csp_line_input is being
     // fed out of the very buffer it is writing into, and the whole thing rests
     // on "one byte in advances the write cursor by at most one". A recall puts
     // a whole line in at once, and the write would overtake the read.
     st->refeed = 1;
     for (k = 0; k < n; k++)
-	csp_line_input(st, st->line_buf[src + k]);
+	csp_line_input(st, st->buf[src + k]);
     st->refeed = 0;
 }
 
@@ -139,7 +145,7 @@ static void hist_push(csp_line_t* st, const char* s, uint16_t n)
 void csp_line_back(int n)             // move the cursor left n columns
 {
     while (n-- > 0)
-	csp_print_char('\b');
+	csp_print_char(BACKSPACE);
 }
 
 // Reprint from the cursor to the end, then come back. Used after any edit that
@@ -147,31 +153,32 @@ void csp_line_back(int n)             // move the cursor left n columns
 void csp_line_tail(csp_line_t* st, int pad)
 {
     uint16_t i;
+    int pad0 = pad;
 
-    for (i = st->line_cur; i < st->line_pos; i++)
-	csp_print_char(st->line_buf[i]);
+    for (i = st->cur; i < st->pos; i++)
+	csp_print_char(st->buf[i]);
     while (pad-- > 0)
 	csp_print_char(' ');            // rub out what the line used to be
-    csp_line_back((int)(st->line_pos - st->line_cur));
+    csp_line_back((int)(st->pos - st->cur)+pad0);
 }
 
 void csp_line_insert(csp_line_t* st, char c)
 {
     uint16_t i;
 
-    if (st->line_pos >= st->line_buf_size - 1) {
-	st->line_ovf = 1;
-	csp_print_char('\a');           // audible while typing, not at the end
+    if (st->pos >= st->buf_size - 1) {
+	st->ovf = 1;
+	csp_print_char(BELL);           // audible while typing, not at the end
 	return;
     }
-    for (i = st->line_pos; i > st->line_cur; i--)
-	st->line_buf[i] = st->line_buf[i - 1];
-    st->line_buf[st->line_cur] = c;
-    st->line_pos++;
+    for (i = st->pos; i > st->cur; i--)
+	st->buf[i] = st->buf[i - 1];
+    st->buf[st->cur] = c;
+    st->pos++;
     csp_print_char(c);
-    st->line_cur++;
-    st->line_fill = st->line_pos;
-    if (st->line_cur < st->line_pos)
+    st->cur++;
+    st->fill = st->pos;
+    if (st->cur < st->pos)
 	csp_line_tail(st, 0);
 }
 
@@ -179,53 +186,53 @@ void csp_line_erase_left(csp_line_t* st)
 {
     uint16_t i;
 
-    if (st->line_cur == 0) {
-	csp_print_char('\a');
+    if (st->cur == 0) {
+	csp_print_char(BELL);
 	return;
     }
-    for (i = (uint16_t)(st->line_cur - 1); i + 1 < st->line_pos; i++)
-	st->line_buf[i] = st->line_buf[i + 1];
-    st->line_pos--;
-    st->line_cur--;
-    st->line_fill = st->line_pos;
-    csp_print_char('\b');
+    for (i = (uint16_t)(st->cur - 1); i + 1 < st->pos; i++)
+	st->buf[i] = st->buf[i + 1];
+    st->pos--;
+    st->cur--;
+    st->fill = st->pos;
+    csp_print_char(BACKSPACE);
     csp_line_tail(st, 1);           // one column of old text to rub out
 }
 
 void csp_line_home(csp_line_t* st)
 {
-    csp_line_back((int)st->line_cur);
-    st->line_cur = 0;
+    csp_line_back((int)st->cur);
+    st->cur = 0;
 }
 
 void csp_line_end(csp_line_t* st)
 {
-    while (st->line_cur < st->line_pos)
-	csp_print_char(st->line_buf[st->line_cur++]);
+    while (st->cur < st->pos)
+	csp_print_char(st->buf[st->cur++]);
 }
 
 void csp_line_left(csp_line_t* st)
 {
-    if (st->line_cur > 0) {
-	csp_print_char('\b');
-	st->line_cur--;
+    if (st->cur > 0) {
+	csp_print_char(BACKSPACE);
+	st->cur--;
     }
 }
 
 void csp_line_right(csp_line_t* st)
 {
-    if (st->line_cur < st->line_pos)
-	csp_print_char(st->line_buf[st->line_cur++]);
+    if (st->cur < st->pos)
+	csp_print_char(st->buf[st->cur++]);
 }
 
 void csp_line_kill_to_end(csp_line_t* st)
 {
-    int n = (int)(st->line_pos - st->line_cur);
+    int n = (int)(st->pos - st->cur);
 
     if (n <= 0)
 	return;
-    st->line_pos = st->line_cur;
-    st->line_fill = st->line_pos;
+    st->pos = st->cur;
+    st->fill = st->pos;
     csp_line_tail(st, n);
 }
 
@@ -234,16 +241,16 @@ void csp_line_kill_to_end(csp_line_t* st)
 // one behind it on the screen. s may be NULL for "empty".
 void csp_line_replace(csp_line_t* st, const char* s, uint16_t n)
 {
-    int old = (int)st->line_pos;
+    int old = (int)st->pos;
 
     csp_line_home(st);
-    if (n > st->line_buf_size - 1)
-	n = (uint16_t)(st->line_buf_size - 1);
+    if (n > st->buf_size - 1)
+	n = (uint16_t)(st->buf_size - 1);
     if (n && s)
-	memcpy(st->line_buf, s, n);
-    st->line_pos = n;
-    st->line_fill = n;
-    st->line_ovf = 0;
+	memcpy(st->buf, s, n);
+    st->pos = n;
+    st->fill = n;
+    st->ovf = 0;
     csp_line_tail(st, (old > (int)n) ? (old - (int)n) : 0);
     csp_line_end(st);
 }
@@ -261,14 +268,14 @@ void csp_line_recall(csp_line_t* st, int dir)
     if (st->refeed)
 	return;
     if ((st->hist == NULL) || (st->hist_used == 0)) {
-	csp_print_char('\a');
+	csp_print_char(BELL);
 	return;
     }
     if (dir < 0) {
 	uint16_t len;
 
 	if (st->hist_at == 0) {         // already at the oldest
-	    csp_print_char('\a');
+	    csp_print_char(BELL);
 	    return;
 	}
 	len = (uint16_t)((uint8_t)st->hist[st->hist_at - 1]);
@@ -290,7 +297,7 @@ void csp_line_recall(csp_line_t* st, int dir)
     }
 #else
     (void)st; (void)dir;
-    csp_print_char('\a');
+    csp_print_char(BELL);
 #endif
 }
 
@@ -304,7 +311,7 @@ void csp_line_recall(csp_line_t* st, int dir)
 int csp_line_escape(csp_line_t* st, char c)
 {
     if (st->esc == 0) {
-	if (c != 27)
+	if (c != ESCAPE)
 	    return 0;
 	st->esc = 1;
 	return 1;
@@ -342,9 +349,9 @@ void csp_line_input(csp_line_t* st, char c)
     // line: queue it raw -- no echo, no editing -- and let csp_line_done deal
     // with it. Editing a line you have not seen run yet is not a thing anyone
     // does, and appending it to the ready line is the bug this replaced.
-    if (st->line_ready) {
-	if (st->line_fill < st->line_buf_size)
-	    st->line_buf[st->line_fill++] = c;
+    if (st->ready) {
+	if (st->fill < st->buf_size)
+	    st->buf[st->fill++] = c;
 	return;
     }
     // The prompt belongs immediately before the first character of a line, and
@@ -360,19 +367,21 @@ void csp_line_input(csp_line_t* st, char c)
     if (csp_line_escape(st, c))
 	return;
 
-    if (c == '\n' || c == '\r') {
-	// line_ovf: a character had to be dropped because the buffer was full, so
-	// the line is REFUSED rather than run short. A truncated command is not a
-	// harmless partial, it is a different command -- `#disable 12` cut to
-	// `#disable 1` disables the wrong rule and says nothing.
-	if (st->line_ovf) {
-	    st->line_pos = 0;
-	    st->line_fill = 0;
-	    st->line_ovf = 0;
+    switch(c) {
+    case NEWLINE:
+    case CARRIAGE_RETURN:
+     // line_ovf: a character had to be dropped because the buffer was full, so
+     // the line is REFUSED rather than run short. A truncated command is not a
+     // harmless partial, it is a different command -- `#disable 12` cut to
+     // `#disable 1` disables the wrong rule and says nothing.
+	if (st->ovf) {
+	    st->pos = 0;
+	    st->fill = 0;
+	    st->ovf = 0;
 	    csp_println();     // the echoed line has no newline yet -- without this
 			       // the complaint lands on the end of the input itself
 	    csp_print_lit("Error: line too long, max ");
-	    csp_print_uint(st->line_buf_size - 1);
+	    csp_print_uint(st->buf_size - 1);
 	    csp_print_line(" characters -- line ignored");
 	    csp_flush();
 	    // Print the next prompt here and return: no line was made ready, so
@@ -382,49 +391,36 @@ void csp_line_input(csp_line_t* st, char c)
 	    csp_line_prompt(st);
 	    return;
 	}
-	else if (st->line_pos > 0) {
+	else if (st->pos > 0) {
 #if defined(CSP_HIST_SHARE)
-	    hist_push(st, st->line_buf, st->line_pos);
+	    hist_push(st, st->buf, st->pos);
 #endif
-	    st->line_buf[st->line_pos] = '\0';
-	    st->line_ready = 1;
-	    st->line_fill = st->line_pos + 1;   // the queue starts after the NUL
+	    st->buf[st->pos] = '\0';
+	    st->ready = 1;
+	    st->fill = st->pos + 1;   // the queue starts after the NUL
 	}
 	csp_println();
-	csp_flush();
-	st->line_cur = 0;
+	st->cur = 0;
 	st->esc = 0;
 #if defined(CSP_HIST_SHARE)
 	st->hist_at = st->hist_used;            // browsing starts at the newest
 #endif
 	st->need_prompt = 1;
+	break;
+    case BACKSPACE:
+    case DELETE: csp_line_erase_left(st); break;
+    case CTRL('U'): csp_line_replace(st, NULL, 0);
+    case CTRL('K'): csp_line_kill_to_end(st); break;
+    case CTRL('A'): csp_line_home(st); break;	
+    case CTRL('E'): csp_line_end(st); break;
+    case CTRL('B'): csp_line_left(st); break;
+    case CTRL('F'): csp_line_right(st); break;
+    case CTRL('P'): csp_line_recall(st, -1); break;
+    case CTRL('N'): csp_line_recall(st, +1); break;
+    default:
+	if (c >= SPACE && c < DELETE)
+	    csp_line_insert(st, c);
+	break;
     }
-    else if (c == '\b' || c == 127) {
-	csp_line_erase_left(st);
-	csp_flush();
-    }
-    else if (c == CTRL('U')) {                    // clear the line
-	csp_line_replace(st, NULL, 0);
-	csp_flush();
-    }
-    else if (c == CTRL('K')) {                    // kill to end of line
-	csp_line_kill_to_end(st);
-	csp_flush();
-    }
-    else if (c == CTRL('A')) {                    // start of line
-	csp_line_home(st);
-	csp_flush();
-    }
-    else if (c == CTRL('E')) {                    // end of line
-	csp_line_end(st);
-	csp_flush();
-    }
-    else if (c == CTRL('B')) { csp_line_left(st);  csp_flush(); }
-    else if (c == CTRL('F')) { csp_line_right(st); csp_flush(); }
-    else if (c == CTRL('P')) { csp_line_recall(st, -1); csp_flush(); }
-    else if (c == CTRL('N')) { csp_line_recall(st, +1); csp_flush(); }
-    else if (c >= 32 && c < 127) {
-	csp_line_insert(st, c);
-	csp_flush();
-    }
+    csp_flush();
 }

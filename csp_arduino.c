@@ -1336,10 +1336,10 @@ void setup()
 
 static void serial_xoff_set(csp_rt_t* st, uint8_t on)
 {
-    if (on == st->serial_xoff)
+    if (on == st->line.serial_xoff)
 	return;
     Serial.write(on ? 0x13 : 0x11);
-    st->serial_xoff = on;
+    st->line.serial_xoff = on;
 }
 
 // About to stop reading the port for a while: parsing a line, and any rebuild it
@@ -1359,7 +1359,7 @@ static void serial_hold(csp_rt_t* st)
 // and the peer is still held off.
 static void serial_release(csp_rt_t* st)
 {
-    serial_xoff_set(st, csp_line_space(st) ? 0 : 1);
+    serial_xoff_set(st, csp_line_space(&st->line) ? 0 : 1);
 }
 
 void loop()
@@ -1392,16 +1392,16 @@ void loop()
     // board sat there looking like it had not finished the previous line. Not
     // while a line is already pending: the prompt means "waiting for you", and
     // the queue re-feed still needs the need_prompt it would consume.
-    if (!state.line_ready)
-	csp_line_prompt(&state);
-    while (Serial.available() && csp_line_space(&state)) {
-	csp_line_input(&state, Serial.read());
+    if (!state.line.ready)
+	csp_line_prompt(&state.line);
+    while (Serial.available() && csp_line_space(&state.line)) {
+	csp_line_input(&state.line, Serial.read());
 	serial_release(&state);
     }
-    if (state.line_ready) {
+    if (state.line.ready) {
 	serial_hold(&state);          // about to stop reading for a while
-	csp_process_line(&state, state.line_buf);
-	csp_line_done(&state);  // drop it, bring the queue down to the front
+	csp_process_line(&state, state.line.buf);
+	csp_line_done(&state.line);  // drop it, bring the queue down to the front
 	serial_release(&state); // the queue just shrank -- let the peer talk
     }
 #endif
@@ -1445,15 +1445,15 @@ void loop()
 	uint32_t remaining = (state.es.wait_ms != NOTIMEOUT) ? state.es.wait_ms : SAMPLE_MS;
 	if (remaining > SAMPLE_MS)
 	    remaining = SAMPLE_MS;   // cap: sample rate wins over timer wait
-	while ((remaining > 0) && !state.line_ready) {   /* line_ready: always 0 exec-only */
+	while ((remaining > 0) && !state.line.ready) {   /* line_ready: always 0 exec-only */
 	    uint32_t chunk = min(remaining, (uint32_t)10);
 	    delay(chunk);
 	    remaining -= chunk;
 #if !defined(CSP_EXEC_ONLY)
 	    // Same rule as the drain at the top of loop(): take everything the
 	    // port has for as long as there is room to put it.
-	    while (Serial.available() && csp_line_space(&state))
-		csp_line_input(&state, Serial.read());
+	    while (Serial.available() && csp_line_space(&state.line))
+		csp_line_input(&state.line, Serial.read());
 #endif
 	}
     }

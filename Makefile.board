@@ -90,8 +90,8 @@ CC   := arm-none-eabi-gcc
 OC   := arm-none-eabi-objcopy
 SZ   := arm-none-eabi-size
 
-CORE := csp_rt.c csp_compile.c csp_repl.c csp_parse.c csp_tok.c csp_print.c \
-        csp_strings.c csp_eeprom.c csp_flash.c csp_lpcopen.c \
+CORE := csp_rt.c csp_line.c csp_compile.c csp_repl.c csp_parse.c csp_tok.c \
+        csp_print.c csp_strings.c csp_eeprom.c csp_flash.c csp_lpcopen.c \
         chips/nxp/drivers/common/csp_board.c \
         chips/nxp/drivers/common/csp_eeprom_i2c.c
 

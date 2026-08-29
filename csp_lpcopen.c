@@ -1152,18 +1152,18 @@ static void csp_lpc_setup(void)
 // A real UART needs this; over USB CDC the host blocks by itself.
 static void serial_xoff_set(csp_rt_t* st, uint8_t on)
 {
-    if (on == st->serial_xoff)
+    if (on == st->line.serial_xoff)
 	return;
     while (!csp_lpc_uart_can_send())
 	;
     Chip_UART_SendByte(CSP_LPC_UART, on ? 0x13 : 0x11);
-    st->serial_xoff = on;
+    st->line.serial_xoff = on;
 }
 
 // About to stop reading the port for a while: parsing a line, and any rebuild it
 // triggers, takes longer than the FIFO holds.
 static void serial_hold(csp_rt_t* st)    { serial_xoff_set(st, 1); }
-static void serial_release(csp_rt_t* st) { serial_xoff_set(st, csp_line_space(st) ? 0 : 1); }
+static void serial_release(csp_rt_t* st) { serial_xoff_set(st, csp_line_space(&st->line) ? 0 : 1); }
 
 static void csp_lpc_loop(void)
 {
@@ -1204,16 +1204,16 @@ static void csp_lpc_loop(void)
     // Keep draining while the buffer has room, INCLUDING past a completed line:
     // the spare room is the point, since a line that adds a rule stops to
     // rebuild and the burst still coming in needs somewhere to go.
-    if (!state.line_ready)
-	csp_line_prompt(&state);
-    while (csp_lpc_uart_available() && csp_line_space(&state)) {
-	csp_line_input(&state, (char)csp_lpc_uart_read());
+    if (!state.line.ready)
+	csp_line_prompt(&state.line);
+    while (csp_lpc_uart_available() && csp_line_space(&state.line)) {
+	csp_line_input(&state.line, (char)csp_lpc_uart_read());
 	serial_release(&state);
     }
-    if (state.line_ready) {
+    if (state.line.ready) {
 	serial_hold(&state);           // about to stop reading for a while
-	csp_process_line(&state, state.line_buf);
-	csp_line_done(&state);
+	csp_process_line(&state, state.line.buf);
+	csp_line_done(&state.line);
 	serial_release(&state);        // the queue just shrank -- let them talk
     }
 #endif
@@ -1248,13 +1248,13 @@ static void csp_lpc_loop(void)
 	                   ? state.es.wait_ms : SAMPLE_MS;
 	if (remaining > SAMPLE_MS)
 	    remaining = SAMPLE_MS;
-	while ((remaining > 0) && !state.line_ready) {
+	while ((remaining > 0) && !state.line.ready) {
 	    uint32_t chunk = (remaining < 10) ? remaining : 10;
 	    csp_delay_ms(chunk);
 	    remaining -= chunk;
 #if !defined(CSP_EXEC_ONLY)
-	    while (csp_lpc_uart_available() && csp_line_space(&state))
-		csp_line_input(&state, (char)csp_lpc_uart_read());
+	    while (csp_lpc_uart_available() && csp_line_space(&state.line))
+		csp_line_input(&state.line, (char)csp_lpc_uart_read());
 #endif
 	}
     }

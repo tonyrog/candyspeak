@@ -1109,7 +1109,7 @@ int main(int argc, char** argv)
     // line buffer sits in the gap between the two, and raising mem_limit back to
     // the physical size would let decl[] grow down into it.
     if (mem_limit > 0) {
-	size_t pool = state.mem_size - state.line.line_buf_size;
+	size_t pool = state.mem_size - state.line.buf_size;
 	state.mem_limit = (mem_limit < pool) ? mem_limit : pool;
     }
     csp_set_uconst(&state, csp_uconst);
@@ -1305,13 +1305,13 @@ loop:
 	// you", and we are not. Printing it here consumed the need_prompt that
 	// the queue re-feed was going to use, so the OK of one line landed after
 	// a prompt and the next pasted line echoed with nothing in front of it.
-	if (interactive && !state.line.line_ready)
+	if (interactive && !state.line.ready)
 	    csp_line_prompt(&state.line);
 	// Never sleep on a line that is already in hand. With the input queue a
 	// whole paste can be waiting, and any wait EACH time turns a pasted file
 	// into a minute of watching it trickle in. This has to short-circuit the
 	// timer branch too -- a declared timer put wait_ms back in and undid it.
-	if (state.line.line_ready)
+	if (state.line.ready)
 	    timeout_ms = 0;
 	else {
 	    timeout_ms = interactive ? 100 : 0;
@@ -1324,8 +1324,8 @@ loop:
 	poll(pfd, nfds, timeout_ms);
 	serial_poll(&state, pfd, nfds);
 
-	if (state.line.line_ready) {
-	    process_serial_line(&state, state.line.line_buf);
+	if (state.line.ready) {
+	    process_serial_line(&state, state.line.buf);
 	    csp_line_done(&state.line);
 	    if (quit_flag) goto done;
 	}
