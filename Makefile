@@ -94,8 +94,8 @@ csp:	$(OBJS)
 #
 # CORE_SRC is the same list with NO image at all -- `make rom` below appends
 # whichever one it just generated.
-CORE_SRC = csp_linux.c csp_rt.c csp_repl.c csp_compile.c csp_tok.c csp_dump.c \
-	   csp_eeprom.c csp_parse.c csp_print.c csp_strings.c \
+CORE_SRC = csp_linux.c csp_rt.c csp_line.c csp_repl.c csp_compile.c csp_tok.c \
+	   csp_dump.c csp_eeprom.c csp_parse.c csp_print.c csp_strings.c \
 	   csp_flash.c csp_devices.c csp_flash_host.c
 EXEC_SRC = $(CORE_SRC) rom.c
 # csp_repl.c, csp_compile.c and csp_dump.c are still LISTED: each guards itself
@@ -242,6 +242,44 @@ csp_rt.o csp_repl.o csp_compile.o csp_tok.o csp_strings.o: csp_strings.h
 clean:
 	rm -f $(OBJS) strtab csp_strings.c csp_strings.h csp-exec csp-min
 
+# THE TEST LADDER. Four rungs, and which one you are on is a question of what you
+# are about to do, not how thorough you feel:
+#
+#   make quick     4 s     after every edit
+#   make test      2.5 min before a commit
+#   make test_all  minutes before a push or a release (adds test_slow + every board)
+#   make test_crc_destroyer, make san, make test-examples -- on their own, when
+#                          the change is in what they cover
+#
+# THE ONE TO RUN AFTER EVERY EDIT. Four seconds, so there is no reason not to.
+#
+# Everything in `make test` EXCEPT test_repl, which is 97% of its wall clock:
+# 150 seconds against 3.5 for all the rest put together. A suite you wait two and
+# a half minutes for is a suite you stop running between changes, and then it
+# only ever reports what broke several edits ago.
+#
+# What this catches: the unit suite, the line editor, and every generated file
+# drifting from the terms it came from. What it does NOT catch is the REPL and
+# persistence level -- segment tags, /clear, /undo, and whether a generated ROM
+# image loads back into the firmware that links it. Run `make test` before a
+# commit; this is for the loop in between.
+quick:	csp line_edit_check syntax_check strings_check tables_check \
+	patterns_check sketch_check
+	@chmod +x tests/run_tests.escript
+	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
+
+# The line editor, on its own: csp_line.c and a terminal emulator, no runtime and
+# no parser. It cannot be driven through the REPL -- everything a pipe holds is
+# available at once, so the reader drains past the newline and the rest lands in
+# the paste queue, where cursor keys and history are deliberately off. A ^P down
+# a pipe is ignored BY DESIGN and proves nothing.
+# NOT listed in `test` -- tests/repl.sh already builds and runs it, and a second
+# copy would only print the same line twice.
+line_edit_check:
+	@mkdir -p tmp
+	@$(CC) -I. -O2 -o tmp/line_edit tests/line_edit.c csp_line.c
+	@tmp/line_edit | tail -1
+
 test:	csp test_repl syntax_check strings_check tables_check patterns_check sketch_check
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
@@ -281,7 +319,12 @@ sketch_check:
 # REPL/persistence level: /list segment tags, what a /clear keeps, and whether a
 # generated ROM image loads back into the firmware that links it. None of that is
 # reachable from the unit suite, which only reads variables out of a state dump.
-# Fast, so it runs as part of `make test` -- unlike test_crc_destroyer.
+#
+# 150 seconds, and that is `make test` almost in its entirety -- everything else
+# together is 3.5. Two thirds of it is seven build_rom calls, each compiling all
+# of CORE_SRC from scratch; the rest is a REPL process per case. So it is the one
+# thing `make quick` leaves out, and it is where to cut if `make test` ever needs
+# to be quick too.
 test_repl: csp
 	@bash tests/repl.sh
 
@@ -330,7 +373,7 @@ test_crc_destroyer:
 
 -include .*.d
 
-.PHONY: chips board-list check-boards board ld chip all clean test test-examples test_repl test_crc_destroyer syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check debug ubsan san exec min rom rom-image
+.PHONY: chips board-list check-boards board ld chip all clean quick test test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check debug ubsan san exec min rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

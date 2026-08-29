@@ -409,7 +409,7 @@ void csp_line_input(csp_line_t* st, char c)
 	break;
     case BACKSPACE:
     case DELETE: csp_line_erase_left(st); break;
-    case CTRL('U'): csp_line_replace(st, NULL, 0);
+    case CTRL('U'): csp_line_replace(st, NULL, 0); break;
     case CTRL('K'): csp_line_kill_to_end(st); break;
     case CTRL('A'): csp_line_home(st); break;	
     case CTRL('E'): csp_line_end(st); break;

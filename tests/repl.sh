@@ -483,8 +483,8 @@ echo "exec-only:"
 printf '#digital Led out 0:13\n#timer T 500 = 1\n#variable N = 0\nT = 1 ? timeout(T)\nN = N + 1 ? timeout(T)\n' > "$D/eo.csp"
 if ./csp -n -C -O "$D/eo_rom.c" "$D/eo.csp" >/dev/null 2>&1 &&
    gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -DCSP_EXEC_ONLY -I. \
-       csp_linux.c csp_rt.c csp_repl.c csp_compile.c csp_tok.c csp_dump.c \
-       csp_eeprom.c csp_parse.c csp_print.c csp_strings.c \
+       csp_linux.c csp_rt.c csp_line.c csp_repl.c csp_compile.c csp_tok.c \
+       csp_dump.c csp_eeprom.c csp_parse.c csp_print.c csp_strings.c \
        csp_flash.c csp_devices.c csp_flash_host.c \
        "$D/eo_rom.c" -o "$D/csp_exec" \
        >/dev/null 2>&1; then
@@ -875,8 +875,8 @@ fi
 # that only arduino-cli can supply.
 echo "lpcopen:"
 if gcc -g -Wall -I. -Itests/lpcstub -DCSP_VERSION='"test"' -o "$D/lpc_fw" \
-       csp_lpcopen.c csp_rt.c csp_compile.c csp_parse.c csp_tok.c csp_print.c \
-       csp_repl.c csp_dump.c csp_eeprom.c csp_strings.c rom_host.c \
+       csp_lpcopen.c csp_rt.c csp_line.c csp_compile.c csp_parse.c csp_tok.c \
+       csp_print.c csp_repl.c csp_dump.c csp_eeprom.c csp_strings.c rom_host.c \
        tests/lpcstub/stub.c >/dev/null 2>&1; then
     ck "the LPC port builds and links against the core" "0" "0"
     # A GPIO pin, an ADC channel (port 15) and a rule -- then list them back.
