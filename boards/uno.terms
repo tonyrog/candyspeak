@@ -1,0 +1,20 @@
+%% Arduino Uno -- ATmega328P. 32K flash, 2K RAM, and the full build fits only
+%% because of the AVR code-size flags below.
+{board, uno,
+ [{toolchain, arduino_cli},
+  {fqbn, "arduino:avr:uno"},
+  {port, "/dev/serial/by-id/usb-Arduino_Srl_Arduino_Uno_55431313038351C04281-if00"},
+  {nm, "avr-nm"},
+  {optimize, "-Os"},
+
+  %% -mcall-prologues turns each function's register save/restore into two calls
+  %% into libgcc instead of up to 64 bytes of push/pop. Kilobytes on AVR, at the
+  %% cost of cycles. -fno-inline-functions-called-once stops gcc undoing it.
+  {cflags, "-fno-inline-functions-called-once -mcall-prologues"},
+  %% Linker relaxation. Must be a LINK flag: -mrelax in extra_flags is silently
+  %% ignored, because arduino-cli links as a separate step.
+  {ldflags, "-Wl,--relax"},
+
+  {define, ['CSP_ARENA_MALLOC']},
+  {support_reactive, 0},
+  {use_statistics, 0}]}.

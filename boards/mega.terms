@@ -1,0 +1,19 @@
+%% Arduino Mega 2560 -- 253952 bytes of flash and 8192 of RAM. Room for the
+%% full build, compiler and REPL included.
+{board, mega,
+ [{toolchain, arduino_cli},
+  {fqbn, "arduino:avr:mega"},
+  {port, "/dev/ttyACM0"},
+  {nm, "avr-nm"},
+  {optimize, "-Os"},
+  {cflags, "-fno-inline-functions-called-once -mcall-prologues"},
+  {ldflags, "-Wl,--relax"},
+
+  %% CSP_ARENA_MALLOC: claim the pool from the heap at boot, sized to freeRam()
+  %% minus the stack reserve -- so the arena is however much RAM is actually
+  %% free after the core and every linked library took theirs, decided at
+  %% runtime rather than by a per-board CSP_CODE_BUDGET constant.
+  %% Model it on the host with: ./csp --board mega
+  {define, ['CSP_ARENA_MALLOC']},
+  {support_reactive, 0},
+  {use_statistics, 0}]}.

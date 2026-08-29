@@ -52,14 +52,27 @@ The width is in **bits, 1..32** (32 when omitted); anything else is refused, as
 is a literal that does not fit the type — a wrong width is far more expensive to
 find later than at the declaration.
 
-> **A width without a type is SIGNED.** `#variable c:4` is a 4-bit *signed*
-> value, so it counts `-8..7` and `c = 15` reads back as `-1`. That follows the
-> rule that a typeless variable is `integer`, and it applies to `#field` and
-> `bind` in exactly the same way. When you want the plain `0..2^N-1` range —
-> flags, bit quantities, raw signals — say so:
+> **A width without a type is SIGNED — except one bit.** `#variable c:4` is a
+> 4-bit *signed* value, so it counts `-8..7` and `c = 15` reads back as `-1`.
+> That follows the rule that a typeless leaf is `integer`, and it applies to
+> `#local`, `#param`, `#constant`, `#field` and `bind` alike. When you want the
+> plain `0..2^N-1` range — flags, bit quantities, raw signals — say so:
 >
 > ```
 > #variable c:4 unsigned = 15      // 15, not -1
+> ```
+>
+> **`:1` is unsigned.** A one-bit signed integer holds exactly `0` and `-1`, and
+> nobody means that: `#variable Flag:1 = 1` would store `-1`, so `Flag == 1`
+> would be false and the flag silently dead. One bit is therefore `unsigned`
+> unless the declaration says `integer`, and that holds for every kind of leaf.
+> Two bits and up keep the signed default, because `{-2,-1,0,1}` is a real
+> range.
+>
+> ```
+> #variable Flag:1 = 1             // 1        (unsigned by default)
+> #variable Odd:1 integer = 1      // -1       (you asked for it)
+> #variable c:2 = 3                // -1       (signed, as before)
 > ```
 
 ### Constants
@@ -519,6 +532,11 @@ Speed = 50             // writes into Frame's bits 0..7
 > indexing is for convenient whole-byte access; `bind` is for packing
 > sub-byte bit-fields.
 
+`big` on a `bind` means what it means on a `#field`: it selects **MSB-first bit
+numbering** as well as the byte order, so the same index names a different
+physical bit. See *Which bit is bit n* under CAN frames — the rule is the same
+wherever a bit range appears.
+
 Either way the range must stay **inside the buffer** and cover at most **32
 bits** — a bound field or a `Buf[a..b]` slice that reaches past the end, or asks
 for more than 32 bits, is refused at declaration time.
@@ -558,8 +576,38 @@ F201 >>= a:8 b:8 c:16 ? F201.rx
 ```
 
 A `#field` field inherits its direction from the frame, so it rarely needs one of
-its own. The bit range is in **bits**, counted from bit 0 of byte 0, and the
-value is little-endian unless the field says `big`.
+its own. The bit range is in **bits**, counted from bit 0 of byte 0.
+
+#### Which bit is bit *n*
+
+`big` does more than pick a byte order for multi-byte values: **it changes which
+physical bit each index names.** This matters for a one-bit field, where byte
+order cannot mean anything at all, and it is the single easiest thing to get
+wrong when transcribing a signal from a CAN database.
+
+Default (little): indices run **LSB first** inside each byte.
+With `big`: they run **MSB first**.
+
+So for byte 1 with the mask `0x40` — bit 6 of that byte:
+
+```
+#field Sig:1 unsigned      F[14]    // little: 8 + 6      = 14
+#field Sig:1 unsigned big  F[9]     // big:    8 + (7-6)  = 9
+```
+
+Both name the same physical bit. The conversion between them, within a byte:
+
+```
+big_index = 8*byte + (7 - bit)
+little_index = 8*byte + bit
+```
+
+**Which one to use is decided by your tools, not by taste.** CAN databases and
+most bus analysers (DBC, J1939, and anything that shows you a `bytepos` and a
+`bitmask`) number bits MSB-first, so a signal documented as "byte 1, bit 6"
+transcribes directly as `big F[9]` and needs arithmetic to become `F[14]`. If
+the numbers in front of you came from such a tool, write `big` and copy them
+across; the default is for packing you define yourself.
 
 Because all fields of a frame are views into one buffer, writing one field and
 reading another shows the packing directly:
@@ -1117,7 +1165,7 @@ written by a rule.
 | `.port` | digital / analog | port number |
 | `.dir` | digital / analog / buffer | direction (in/out) |
 | `.pwm` | analog | PWM flag |
-| `.endian` | bound field / `#field` | byte order (`0` native, `1` little, `2` big) |
+| `.endian` | bound field / `#field` | bit numbering and byte order (`0` native, `1` little, `2` big) |
 | `.pullup` | digital | pull-up enable |
 | `.pulldown` | digital | pull-down enable |
 | `.period` | timer | timer period in ms |

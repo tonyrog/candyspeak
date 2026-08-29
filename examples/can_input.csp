@@ -17,9 +17,23 @@
 #field B:16 unsigned F201[8..23]
 #field C:32 unsigned F201[24..55]
 
+// A ONE-BIT SIGNAL is where the BIT numbering starts to matter -- byte order
+// cannot mean anything for a single bit, so the three fields above never had to
+// care. `big` selects MSB-first numbering inside each byte, which is what CAN
+// databases and bus analysers use. A signal documented as "byte 1, mask 0x40"
+// -- that is byte 1, bit 6 -- transcribes as:
+//
+//   big  F201[9]     8*1 + (7-6) = 9      <- copy the tool's numbers
+//        F201[14]    8*1 + 6     = 14     <- the default, same physical bit
+//
+// Both read the same bit. Write `big` when the numbers came from a tool, and
+// leave it off for packing you define yourself.
+#field Flag:1 unsigned big F201[9]
+
 // F201.rx is true for exactly one cycle: the one where the received frame has
 // crossed the commit and A/B/C are readable. That is the whole point of it --
 // changed(A) would be true one cycle EARLIER, while the new bytes are still in
 // the shadow and A/B/C still hold the previous frame.
 print("0x201  A=", A, "  B=", B)   ? F201.rx
-println("  C=", C)                 ? F201.rx
+print("  C=", C)                   ? F201.rx
+println("  Flag=", Flag)           ? F201.rx

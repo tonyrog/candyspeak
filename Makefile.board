@@ -23,6 +23,118 @@ GEN   := escript utils/gen_chips.erl
 # BUILD_DIR= overrides the whole thing.
 BUILD_DIR ?= $(shell $(GEN) --dir-of $(BOARD))/build
 
+# WHAT KIND OF BOARD THIS IS. A bare-metal board names a {chip, ...} and gets a
+# pin mux, a power word and a linker script generated here; an Arduino board
+# names an {fqbn, ...} and hands the core, the mux and the link to arduino-cli.
+# One terms file per board either way -- which is the point, because a board
+# used to be described in boards/<name>.h AND CandySpeak/Makefile.<name>, and
+# nothing made the two agree.
+TOOLCHAIN := $(shell $(GEN) --toolchain-of $(BOARD))
+
+ifeq ($(TOOLCHAIN),arduino_cli)
+
+FQBN := $(shell $(GEN) --fqbn-of $(BOARD))
+DEV  := $(shell $(GEN) --port-of $(BOARD))
+NM   := $(shell $(GEN) --nm-of $(BOARD))
+OPT  := $(shell $(GEN) --optimize-of $(BOARD))
+# Per-board compiler and LINK flags. The link ones have to go through
+# compiler.c.elf.extra_flags: -Wl,--relax in the compile flags is silently
+# ignored, because arduino-cli links as a separate step.
+BCFLAGS  := $(shell $(GEN) --cflags-of $(BOARD))
+BLDFLAGS := $(shell $(GEN) --ldflags-of $(BOARD))
+
+# The sketch folder: an .ino and a pile of symlinks back to the sources. No
+# variant in the path -- arduino-cli keys its own cache on the build path, and
+# the flag stamp below covers the rest.
+SKETCH := CandySpeak
+# NOT under boards/. CandySpeak/boards is a symlink to ../boards, so a build
+# path there lands INSIDE the sketch tree -- and arduino-cli then tries to
+# compile its own output ("unable to read contents of the source item ...
+# csp_board.h"). The repo root's build/ is outside the sketch and stays out of
+# its way.
+B      := build/$(BOARD)
+# arduino-cli's build path is a SUBdirectory, not $(B) itself: --clean wipes
+# whatever --build-path points at, and the generated csp_board.h lives in $(B).
+# Pointed at the same directory, the clean build deletes the header it is about
+# to include -- which reads as "csp_board.h: No such file or directory" from a
+# rule that just said it wrote one.
+CLIB   := $(B)/cli
+
+# ABSOLUTE. arduino-cli compiles with the sketch folder as the working
+# directory, so a relative -I would be resolved against CandySpeak/ and the
+# generated header would not be found.
+BOARDINC := $(abspath $(B))
+
+# csp_config.h does `#include CSP_STR(CSP_BOARD)`, so the value is a path, not a
+# quoted string -- the stringify happens there. See its comment.
+CSPFLAGS := $(OPT) -I$(BOARDINC) -DCSP_BOARD=csp_board.h $(BCFLAGS) $(EXTRA)
+
+OPTS = --build-property "compiler.c.extra_flags=$(CSPFLAGS)" \
+       --build-property "compiler.cpp.extra_flags=$(CSPFLAGS)" \
+       $(if $(BLDFLAGS),--build-property "compiler.c.elf.extra_flags=$(BLDFLAGS)",)
+
+TERMS := $(wildcard boards/*.terms) $(wildcard boards/*/*.terms) \
+         $(wildcard private/*/*.terms) $(wildcard chips/*/*.terms) \
+         $(wildcard chips/*/*/*.terms)
+
+all: compile
+
+$(B)/csp_board.h: $(TERMS) utils/gen_chips.erl
+	@mkdir -p $(B)
+	@$(GEN) --board $(BOARD) $@
+
+# arduino-cli decides what to rebuild from SOURCE contents -- it does NOT key
+# its cache on the --build-property flags it was invoked with. So flipping a -D
+# silently relinks objects compiled with the OLD flags, and the board runs
+# something matching neither what you wrote nor what you asked for. That is the
+# "I changed it and nothing happened" trap, and it costs an evening every time.
+#
+# Stamp the flags next to the objects and force one clean build when they move.
+# An ordinary source edit still builds incrementally. The stamp is written
+# AFTER the build, never before: --clean wipes the build path.
+FLAGS_KEY = $(CSPFLAGS)
+
+compile: $(B)/csp_board.h
+	@if [ "$$(cat $(B)/.cspflags 2>/dev/null)" = '$(FLAGS_KEY)' ]; then \
+	    arduino-cli compile -e --fqbn $(FQBN) $(OPTS) --build-path $(abspath $(CLIB)) $(SKETCH); \
+	else \
+	    echo "build flags changed -> clean build"; \
+	    arduino-cli compile -e --clean --fqbn $(FQBN) $(OPTS) --build-path $(abspath $(CLIB)) $(SKETCH); \
+	fi
+	@printf '%s\n' '$(FLAGS_KEY)' > $(B)/.cspflags
+
+exec:
+	@$(MAKE) --no-print-directory -f Makefile.board BOARD=$(BOARD) compile \
+	    EXTRA="-DCSP_EXEC_ONLY $(EXTRA)"
+
+min:
+	@$(MAKE) --no-print-directory -f Makefile.board BOARD=$(BOARD) compile \
+	    EXTRA="-DCSP_EXEC_ONLY -DCSP_NO_EEPROM $(EXTRA)"
+
+upload: compile
+	arduino-cli upload -p $(DEV) --fqbn $(FQBN) --input-dir $(abspath $(CLIB)) $(SKETCH)
+
+# Text size per symbol, largest first -- the list to read when it does not fit.
+size:
+	@$(NM) --size-sort -S -C $(CLIB)/*.ino.elf | \
+	  awk '$$3=="T"||$$3=="t"{n=strtonum("0x"$$2); t+=n; printf "%6d  %s\n", n, $$4}' | \
+	  sort -rn | head -25
+	@$(NM) --size-sort -S -C $(CLIB)/*.ino.elf | \
+	  awk '$$3=="T"||$$3=="t"{n=strtonum("0x"$$2); t+=n; \
+	    if ($$4 ~ /^(csp_|setup_|eval[0-9]|est_|fn_|add_|op_info|tok_table|decl_table|build_dis_ip|can_mark_fields|main$$|loop$$)/) ours+=n; \
+	    else core+=n } \
+	    END {printf "\n%6d  CandySpeak\n%6d  core/libs\n%6d  TOTAL text\n", ours, core, t}'
+
+clean:
+	rm -rf $(B)
+
+maps:
+	@echo "$(BOARD): arduino-cli board, no region maps"
+
+.PHONY: all compile exec min upload size clean maps
+
+else
+
 # One directory per VARIANT, and the variant is the region map -- because that
 # is what actually makes two builds of the same board incompatible. A `plain`
 # image and a `usb_boot` image are linked for different addresses and look
@@ -237,3 +349,5 @@ clean:
 	@rm -rf $(B)
 
 .PHONY: all clean maps
+
+endif

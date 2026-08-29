@@ -920,6 +920,15 @@ match:
 		// bind <buffer>[<lo>..<hi>] -- a bit-field view, so there is no
 		// init value to show; without this the bind vanished from /list
 		// and the output could not be pasted back.
+		//
+		// The endian goes before `bind`, where the parser wants it, and
+		// for the same reason as on a #field: `big` picks MSB-first bit
+		// numbering, so dropping it changes which bits the pasted
+		// declaration views.
+		if (d.ca.endian != E_NATIVE) {
+		    csp_print_blank();
+		    csp_print_rostr(csp_fmt_endian(d.ca.endian));
+		}
 		csp_print_lit(" bind ");
 		csp_print_str_at(st, decl_name_pos(st, d.ca.id));
 		csp_print_char('[');
@@ -1053,10 +1062,24 @@ match:
 	    print_decl_and_name(st, d.type, cur_mod, npos);
 	    csp_print_char(':');
 	    csp_print_uint(d.ca.len+1);
-	    csp_print_blank();
-	    csp_print_rostr(csp_fmt_pindir(d.dir));
+	    // Only a REAL direction. A field over a plain RAM buffer has none, and
+	    // csp_fmt_pindir(0) spells that "none" -- which is not a word the
+	    // parser knows, so the listing did not paste back at all. #buffer above
+	    // already guards its own direction the same way.
+	    if (d.dir) {
+		csp_print_blank();
+		csp_print_rostr(csp_fmt_pindir(d.dir));
+	    }
 	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_vtype(d.vt));
+	    // ENDIAN, and it is not cosmetic: `big` selects MSB-first bit
+	    // numbering, so `big F[9]` and `F[9]` name DIFFERENT physical bits.
+	    // Left out, two fields that read different bits listed identically,
+	    // and the listing pasted back as the wrong one.
+	    if (d.ca.endian != E_NATIVE) {
+		csp_print_blank();
+		csp_print_rostr(csp_fmt_endian(d.ca.endian));
+	    }
 	    csp_print_blank();
 	    csp_print_str_at(st, decl_name_pos(st, d.ca.id));
 	    csp_print_char('[');

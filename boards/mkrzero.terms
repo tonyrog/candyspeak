@@ -1,0 +1,12 @@
+%% Arduino MKR Zero -- SAMD21. The arena comes from the heap here, as on every
+%% SAMD21: the static-buffer backend would carry CSP_CODE_BUDGET as one object
+%% in .bss.
+{board, mkrzero,
+ [{toolchain, arduino_cli},
+  {fqbn, "arduino:samd:mkrzero"},
+  {port, "/dev/ttyACM0"},
+  {nm, "arm-none-eabi-nm"},
+  {optimize, "-Os"},
+  {define, ['CSP_ARENA_MALLOC']},
+  {support_reactive, 0},
+  {use_statistics, 0}]}.

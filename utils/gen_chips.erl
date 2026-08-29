@@ -35,25 +35,7 @@ main(["--boards", RE]) ->
     {ok, MP} = re:compile(RE, [caseless]),
     Bs = [{N, P} || {board, N, P} <- Db, match(MP, N)],
     (Bs =:= []) andalso io:format("no board matches ~s~n", [RE]),
-    [begin
-	 Chip = kv(P, chip, '?'),
-	 %% The chip is shown RESOLVED, not as written: a board naming a part
-	 %% that does not exist is the mistake worth catching, and it is
-	 %% invisible until something tries to build it.
-	 Geo = case lookup(Db, chip, Chip) of
-		   false -> "*** no such chip ***";
-		   CP -> f("~wK flash, ~wK ram",
-			   [kv(CP, flash_kb, 0), kv(CP, ram_kb, 0)])
-	       end,
-	 io:format("~-10s ~-10s ~s~n", [N, Chip, Geo]),
-	 io:format("           ~w MHz core, ~w MHz xtal, arena ~w~n",
-		   [kv(P, core, 0) div 1000000, kv(P, xtal, 0) div 1000000,
-		    kv(P, code_budget, '-')]),
-	 case kv(P, enable, []) of
-	     [] -> ok;
-	     E -> io:format("           enable:~s~n", [[f(" ~w",[X]) || X <- E]])
-	 end
-     end || {N, P} <- lists:sort(Bs)],
+    [show_board(Db, N, P) || {N, P} <- lists:sort(Bs)],
     ok;
 %% --check [RE]: hold every board against its chip. This is the whole point of
 %% the terms -- data a script can disagree with. Three distinct verdicts,
@@ -195,6 +177,29 @@ main(["--map-of", Name, Want]) ->
 		    end
 	    end
     end;
+%% One fact per query, the way --chip-of and --arch-of already work: the
+%% Makefile asks, and a missing answer is an empty string it can test for.
+%% Every board of one kind, one name per line. `make boards_all` walks this
+%% instead of globbing CandySpeak/Makefile.* -- the terms are the list now.
+main(["--boards-with", TC]) ->
+    Want = list_to_atom(TC),
+    [io:format("~s~n", [N])
+     || {board, N, P} <- load(), kv(P, toolchain, bare) =:= Want],
+    ok;
+main(["--toolchain-of", Name]) ->
+    io:format("~s~n", [atom_to_list(kv(board_of(Name), toolchain, bare))]);
+main(["--fqbn-of", Name]) ->
+    io:format("~s~n", [kv(board_of(Name), fqbn, "")]);
+main(["--port-of", Name]) ->
+    io:format("~s~n", [kv(board_of(Name), port, "")]);
+main(["--nm-of", Name]) ->
+    io:format("~s~n", [kv(board_of(Name), nm, "nm")]);
+main(["--cflags-of", Name]) ->
+    io:format("~s~n", [kv(board_of(Name), cflags, "")]);
+main(["--ldflags-of", Name]) ->
+    io:format("~s~n", [kv(board_of(Name), ldflags, "")]);
+main(["--optimize-of", Name]) ->
+    io:format("~s~n", [kv(board_of(Name), optimize, "-Os")]);
 main(["--dir-of", Name]) ->
     case term_file(board, list_to_atom(Name)) of
 	false ->
@@ -243,13 +248,21 @@ main(["--board", Name, HFile]) ->
 			       [Name, N]),
 		     halt(1)
 	    end,
-	    G = resolve(Db, lookup(Db, chip, kv(P, chip, '?'))),
-	    ok = file:write_file(HFile,
-				 board_header(B, P, G, pin_table(Db, G),
-					      eeprom_of(Db, P))),
-	    io:format("~s: ~w pins, PCONP 0x~8.16.0B~n",
-		      [Name, length([X || {pin,_,_} = X <- P]),
-		       pconp(P, G)])
+	    case kv(P, toolchain, bare) of
+		arduino_cli ->
+		    ok = file:write_file(HFile, arduino_header(B, P)),
+		    io:format("~s: ~w defines, fqbn ~s~n",
+			      [Name, length(kv(P, define, [])),
+			       kv(P, fqbn, "?")]);
+		_ ->
+		    G = resolve(Db, lookup(Db, chip, kv(P, chip, '?'))),
+		    ok = file:write_file(HFile,
+					 board_header(B, P, G, pin_table(Db, G),
+						      eeprom_of(Db, P))),
+		    io:format("~s: ~w pins, PCONP 0x~8.16.0B~n",
+			      [Name, length([X || {pin,_,_} = X <- P]),
+			       pconp(P, G)])
+	    end
     end;
 main([Chip, CFile, HFile]) ->
     Db = load(),
@@ -418,6 +431,80 @@ eeprom_defs({Part, Q}) ->
        kv(Q, base, 16#A0) bor (kv(Q, e2, 0) bsl 3),
        Bytes, kv(Q, page, 32), kv(Q, addr_bytes, 2), Bank,
        kv(Q, hz, 100000), kv(Q, write_ms, 10)]).
+
+%% The board's proplist, or die saying which name was not found. Every --*-of
+%% verb wants exactly this.
+%% An Arduino board has no chip to resolve and no clock to state -- the core
+%% owns both -- so listing it against the chip database printed "no such chip"
+%% for every one of them. What identifies it is the FQBN.
+show_board(_Db, N, P) when is_atom(N) ->
+    case kv(P, toolchain, bare) of
+	arduino_cli ->
+	    io:format("~-12s ~s~n", [N, kv(P, fqbn, "?")]),
+	    io:format("             arduino-cli~s~n",
+		      [case kv(P, define, []) of
+			   [] -> "";
+			   D -> f(", ~w define(s)", [length(D)])
+		       end]);
+	_ -> show_bare(_Db, N, P)
+    end.
+
+show_bare(Db, N, P) ->
+    Chip = kv(P, chip, '?'),
+    %% The chip is shown RESOLVED, not as written: a board naming a part that
+    %% does not exist is the mistake worth catching, and it is invisible until
+    %% something tries to build it.
+    Geo = case lookup(Db, chip, Chip) of
+	      false -> "*** no such chip ***";
+	      CP -> f("~wK flash, ~wK ram",
+		      [kv(CP, flash_kb, 0), kv(CP, ram_kb, 0)])
+	  end,
+    io:format("~-12s ~-10s ~s~n", [N, Chip, Geo]),
+    io:format("             ~w MHz core, ~w MHz xtal, arena ~w~n",
+	      [kv(P, core, 0) div 1000000, kv(P, xtal, 0) div 1000000,
+	       kv(P, code_budget, '-')]),
+    case kv(P, enable, []) of
+	[] -> ok;
+	E -> io:format("             enable:~s~n", [[f(" ~w",[X]) || X <- E]])
+    end.
+
+board_of(Name) ->
+    case lookup(load(), board, list_to_atom(Name)) of
+	false ->
+	    io:format(standard_error, "gen_chips: no such board '~s'~n", [Name]),
+	    halt(1);
+	P -> P
+    end.
+
+%% The header for a board arduino-cli builds.
+%%
+%% No pin mux and no power word -- the core does both -- so what is left is the
+%% settings that used to sit in boards/<name>.h by hand. Generating it means the
+%% FQBN and the defines come from ONE file, and a board can no longer describe
+%% itself two ways that disagree.
+%%
+%% #ifndef around each define: a define given on the command line (EXTRA=, or a
+%% one-off -D) still wins, which is how the exec-only and diagnostic builds work.
+arduino_header(Name, P) ->
+    U = string:uppercase(atom_to_list(Name)),
+    [f("// generated by `gen_chips.erl --board ~s` -- do not edit.~n"
+       "// boards/~s.terms is the source.~n"
+       "~n#ifndef __CSP_BOARD_~s_H__~n#define __CSP_BOARD_~s_H__~n~n",
+       [Name, Name, U, U]),
+     f("#define CSP_BOARD_NAME \"~s\"~n~n", [Name]),
+     [arduino_define(D) || D <- kv(P, define, [])],
+     f("~n#ifndef SUPPORT_REACTIVE~n#define SUPPORT_REACTIVE ~w~n#endif~n",
+       [kv(P, support_reactive, 0)]),
+     f("#ifndef USE_STATISTICS~n#define USE_STATISTICS   ~w~n#endif~n",
+       [kv(P, use_statistics, 0)]),
+     f("~n#endif~n", [])].
+
+arduino_define({K, V}) when is_integer(V) ->
+    f("#ifndef ~s~n#define ~s ~w~n#endif~n", [K, K, V]);
+arduino_define({K, V}) ->
+    f("#ifndef ~s~n#define ~s ~s~n#endif~n", [K, K, V]);
+arduino_define(K) ->
+    f("#ifndef ~s~n#define ~s 1~n#endif~n", [K, K]).
 
 board_header(Name, P, G, Pins, EE) ->
     Muxed = [{Pin, Fn} || {pin, Pin, Fn} <- P],
@@ -609,6 +696,26 @@ pin_macro(Muxed, Pins) ->
 %% --- checking ----------------------------------------------------------------
 
 check_board(Db, {Name, P}) ->
+    case kv(P, toolchain, bare) of
+	arduino_cli -> check_arduino(Name, P);
+	_ -> check_bare(Db, {Name, P})
+    end.
+
+%% An Arduino board names no chip and mixes no pins: arduino-cli owns the core,
+%% the mux and the link. What CAN be wrong here is the description itself, and
+%% an FQBN that is merely absent would surface as an arduino-cli usage error
+%% three layers down.
+check_arduino(Name, P) ->
+    case kv(P, fqbn, undefined) of
+	undefined ->
+	    io:format("~s: ERROR {toolchain, arduino_cli} but no {fqbn, \"...\"}~n",
+		      [Name]), 1;
+	F when is_list(F) -> 0;
+	F ->
+	    io:format("~s: ERROR {fqbn, ~p} must be a string~n", [Name, F]), 1
+    end.
+
+check_bare(Db, {Name, P}) ->
     Chip = kv(P, chip, '?'),
     case lookup(Db, chip, Chip) of
 	false ->

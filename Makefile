@@ -307,6 +307,25 @@ tables_check:
 patterns_check:
 	@escript utils/gen_patterns.erl check
 
+# Board programs under private/, each with its own tests/ directory.
+#
+# DELIBERATELY NOT part of `make test`, `make quick` or `make test_all`. private/
+# is a separate repo that most checkouts do not have, and a public suite that
+# fails when it is missing -- or, worse, passes only when it is present -- is a
+# suite nobody can trust. Run it when you are working on a board:
+#
+#   make test_boards
+#
+# The wildcard means an absent private/ is silently nothing to do, not an error.
+test_boards: csp
+	@chmod +x tests/run_tests.escript
+	@d=$$(echo private/*/tests); \
+	 test "$$d" != 'private/*/tests' || { echo "no private board tests"; exit 0; }; \
+	 for t in $$d; do \
+	     echo "== $$t"; \
+	     escript tests/run_tests.escript "$$t" || exit 1; \
+	 done
+
 # The Arduino sketch folder reaches the sources through symlinks. A REGULAR file
 # there shadows one and freezes it: csp_patterns.h sat as a stale copy for a
 # while and the boards quietly built against it, so a header change showed up in
@@ -338,16 +357,17 @@ test_slow: csp
 # the whole core per target. For a release, not for a change.
 test_all: test test_slow boards_all
 
+# Every arduino-cli board, from the terms rather than from a glob of
+# CandySpeak/Makefile.* -- one description per board, and the list of boards is
+# part of it.
 boards_all:
-	@for f in CandySpeak/Makefile.*; do \
-	    b=$${f##*Makefile.}; \
+	@for b in $$(escript utils/gen_chips.erl --boards-with arduino_cli); do \
 	    printf '%-14s ' "$$b"; \
-	    out=$$($(MAKE) -C CandySpeak -f Makefile.$$b 2>&1); \
+	    out=$$($(MAKE) -f Makefile.board BOARD=$$b 2>&1); \
 	    if echo "$$out" | grep -q 'Sketch uses'; then \
 		echo "$$out" | grep -E 'Sketch uses|Global variables' | \
-		  sed -E 's/.*Sketch uses ([0-9]+) bytes \(([0-9]+)%\).*/flash \1 (\2%)/; \
-		          s/.*Global variables use ([0-9]+) bytes \(([0-9]+)%\).*/ram \1 (\2%)/' | \
-		  tr '\n' ' '; echo; \
+		  awk '/Sketch uses/{printf "flash %s %s ", $$3, $$5} /Global variables/{printf "ram %s %s", $$4, $$6}'; \
+		echo; \
 	    else \
 		echo "$$out" | grep -iE 'undefined reference|error:' | head -1 | cut -c1-90; \
 	    fi; \
@@ -373,7 +393,7 @@ test_crc_destroyer:
 
 -include .*.d
 
-.PHONY: chips board-list check-boards board ld chip all clean quick test test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check debug ubsan san exec min rom rom-image
+.PHONY: chips board-list check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check debug ubsan san exec min rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

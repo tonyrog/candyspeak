@@ -2729,6 +2729,47 @@ NOINLINE static int check_res(csp_rt_t* st, ivalue_t res)
     return 0;
 }
 
+// The value type a leaf gets when the declaration does not name one.
+//
+// A ONE-BIT SIGNED integer holds exactly 0 and -1, and nobody has ever meant
+// that. `#variable Flag:1 = 1` stored -1, so `Flag == 1` was false and the flag
+// was quietly dead -- the whole debounce chain in the dl1200 port sat still for
+// this reason, because `Enable == EnPrev` compared 1 against -1. There is no
+// reading of `:1` that wants a sign bit and no value bits.
+//
+// Two bits and up keep the signed default: {-2,-1,0,1} is a real range, and
+// changing those would silently alter arithmetic in existing programs.
+// `#variable X:1 integer` still gets what it asked for.
+NOINLINE static vtype_t default_vt(ivalue_t res)
+{
+    return (res == 1) ? V_UNSIGNED : V_INTEGER;
+}
+
+// The declared width, read straight out of the tokens before pmatch runs.
+//
+// It has to be done by hand, and early. Every one of these patterns matches its
+// initialiser as `{const, opts, init}` -- pmatch reads opts.vt to know what kind
+// of constant to accept -- so the type must already be settled when pmatch
+// starts. Leaving it unset does not fail loudly either: the const alternative
+// simply does not match, the surrounding P_OPT succeeds anyway, and the
+// declaration comes out silently zero-initialised.
+//
+// Stops at '=' so a value cannot be mistaken for a width, and takes the LAST
+// `: <int>` before it, which is the width even when an array size came first
+// (`#variable A[3]:1 = 0`). An explicit `integer`/`unsigned` still wins: pmatch
+// overwrites opts.vt from the declaration itself.
+NOINLINE static ivalue_t peek_res(const token_t* tv, int ti, size_t n)
+{
+    ivalue_t res = 8*sizeof(ivalue_t);
+    int j;
+
+    for (j = ti; (j + 1 < (int)n) && (tv[j].t != EQ); j++) {
+	if ((tv[j].t == COLON) && (tv[j+1].t == INT))
+	    res = tv[j+1].v.val.i;
+    }
+    return res;
+}
+
 
 // '#' 'module' <name>
 NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
@@ -3075,7 +3116,7 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 
     // set default values
     d.r.res = 8*sizeof(ivalue_t);
-    d.opts.vt = V_INTEGER;
+    d.opts.vt = default_vt(peek_res(tv, ti, n));
 
     if (array_splice(st, tv, ti, &n, &alen) < 0)
 	return -1;
@@ -3198,7 +3239,7 @@ NOINLINE int csp_parse_local(csp_rt_t* st, token_t* tv, int ti, size_t n)
     int i, r, eq = -1, j;
 
     d.r.res = 8*sizeof(ivalue_t);
-    d.opts.vt = V_INTEGER;
+    d.opts.vt = default_vt(peek_res(tv, ti, n));
 
     // Find the '=' and let pmatch see only the declaration head. The tail is an
     // EXPRESSION, which P_CONST_S would refuse -- and refusing is right for a
@@ -3307,9 +3348,16 @@ NOINLINE static int parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n,
     int i, r, nv = 0;
     ivalue_t alen = 1;
 
-    // set default values
+    // Unlike a #variable, the type has to be settled BEFORE pmatch: the pattern
+    // matches the initialiser as `{const, opts, init}`, i.e. it reads opts.vt to
+    // know what kind of constant to accept. V_VOID there matches nothing and
+    // every #constant and #param in the file becomes a syntax error.
+    //
+    // So the width is found first, by hand, and only to answer the same
+    // question default_vt answers. An explicit `integer`/`unsigned` in the
+    // declaration wins -- pmatch overwrites this from opts.
+    d.opts.vt = default_vt(peek_res(tv, ti, n));
     d.r.res = 8*sizeof(ivalue_t);
-    d.opts.vt = V_INTEGER;
 
     if (array_splice(st, tv, ti, &n, &alen) < 0)
 	return -1;
@@ -3594,6 +3642,13 @@ NOINLINE int csp_parse_field(csp_rt_t* st, token_t* tv, int ti, size_t n)
     else {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
+    }
+    // No type named. Nothing set one at all before this, so the field came out
+    // V_VOID and every read of it printed `???` -- `#field Flag:1 F[9]`, the
+    // most ordinary field there is, was simply unusable. Same rule as every
+    // other leaf: one bit is unsigned, wider is signed unless it says otherwise.
+    if (d.opts.vt == V_VOID) {
+	d.opts.vt = default_vt(len);
     }
     // ca.bit is 9 bits and ca.len 5, so a wider field or a higher start bit
     // wrapped instead of being refused. setup_field then checks the range
@@ -4567,6 +4622,22 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 	int r = -1;
 	str += n;
 	alloc_init(st->cs->ap);
+	// A FRESH ERROR SLATE PER LINE. csp_set_error only writes when the slot is
+	// ERR_OK, so one error left standing silences every later one and, worse,
+	// is reported against whatever line happens to come next.
+	//
+	// Errors are set on paths that then SUCCEED. pmatch tries the alternatives
+	// of a {choice} in turn, and a failing alternative can set ERR_SYNTAX on
+	// its way out; the next alternative matches, the declaration is built
+	// correctly, and the flag stays. `#field HB:1 F[14]` did exactly that --
+	// the long `[a..b]` alternative is tried first, fails at the '..', and the
+	// single-bit form then matched perfectly. The field was declared right and
+	// every following line in the file reported `syntax error`, including a
+	// blank one.
+	//
+	// The REPL never saw it because csp_process_line clears the error itself
+	// before each line. This is the same thing for the file path.
+	csp_clr_error(st);
 
 	if (tv[0].t == NEWLINE)
 	    r = 0;

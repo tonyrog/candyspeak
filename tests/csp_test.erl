@@ -83,8 +83,24 @@ eval_test(File, Opts, Mode) ->
                 true -> "--virtual-time ";
                 _    -> ""
             end,
-    Cmd = io_lib:format("~s ~s~s-c ~p -s ~s -R ~s~s 2>&1",
-                        [?CSP, RFlag, VFlag, Cycles, TmpState, LibStr, File]),
+    %% {stimulus, "foo.dat"} feeds inputs the way the hardware would: rows of
+    %% `<time_ms> <var>=<value> ...` against the virtual clock, applied when the
+    %% clock reaches them. This is the right way to drive a sensor.
+    %%
+    %% The alternative -- writing `Sensor = 500 ? n >= 20` as a rule in the test
+    %% program -- puts the stimulus INSIDE the thing under test: it becomes one
+    %% more rule competing for evaluation order, it forces a cycle counter that
+    %% the real program does not have, and every reading is then a fact about
+    %% rule scheduling rather than about time. -F keeps the two apart.
+    %%
+    %% It implies the virtual clock, so {virtual_time, true} is not also needed.
+    SFlag = case proplists:get_value(stimulus, Opts, none) of
+                none -> "";
+                SF   -> "-F " ++ SF ++ " "
+            end,
+    Cmd = io_lib:format("~s ~s~s~s-c ~p -s ~s -R ~s~s 2>&1",
+                        [?CSP, RFlag, VFlag, SFlag, Cycles, TmpState,
+                         LibStr, File]),
     _Output = os:cmd(lists:flatten(Cmd)),
     StateResult = file:consult(TmpState),
     file:delete(TmpState),

@@ -1,0 +1,26 @@
+// `:1` without a type is UNSIGNED. A one-bit signed integer holds only 0 and
+// -1, so `Flag = 1` would store -1 and every `Flag == 1` in the program would
+// be false -- a flag that is set and reads as unset. This is the check that the
+// default stays width-dependent.
+//
+// Two bits and up keep the SIGNED default: {-2,-1,0,1} is a real range, and
+// changing that would quietly alter arithmetic in programs that already exist.
+#variable Flag:1 = 1              // unsigned by default -> 1
+#variable Odd:1 integer = 1       // asked for signed    -> -1
+#variable Two:2 = 3               // still signed        -> -1
+
+// A #param and a #constant follow the same rule; they are read through a
+// variable because the state dump only carries assignable leaves.
+#param    Par:1 = 1
+#constant Con:1 = 1
+#variable FromPar:8 integer = 0
+#variable FromCon:8 integer = 0
+FromPar = Par
+FromCon = Con
+
+// The initialiser must SURVIVE the type choice. Deciding the type after the
+// pattern matched left every typeless declaration zero-initialised, because the
+// pattern reads the type to know what kind of constant it may accept -- so a
+// width-dependent default has to be settled before the match, not after.
+#variable Kept:1 = 1
+#variable KeptWide:32 = -7

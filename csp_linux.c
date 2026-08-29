@@ -54,6 +54,12 @@ static char src_modified[26];
 
 #define MAX_LINE_SIZE 128
 
+// A line of SOURCE, which is not the same thing and must not be smaller than
+// what the REPL accepts: a rule you can type at the prompt has to survive being
+// written to a file and read back, and /list produces exactly such a file.
+// CSP_LINE_MAX is the REPL's own ceiling; the +2 is the CR and the LF.
+#define MAX_SRC_LINE (CSP_LINE_MAX + 2)
+
 typedef uint64_t tick_t;
 struct timeval boot_time;
 int debug = 0;
@@ -549,14 +555,38 @@ void csp_output(csp_rt_t* st)
 }
 
 #if !defined(CSP_EXEC_ONLY)
-int parse_file(csp_rt_t* st, FILE* fin)
+// Returns 0, or -1 with the error in st->ps for the caller to print, or -2 for
+// "already reported" -- a line too long is a fact about the FILE, not a parse
+// error, and there is nothing in st->ps to describe it.
+//
+// The length check is not politeness. fgets does not truncate, it SPLITS: what
+// did not fit comes back as the next call and is parsed as a line of its own. A
+// rule longer than the buffer therefore becomes TWO rules, and both of them may
+// parse -- the half before the break loses its `? condition` and runs every
+// cycle, and the half after it becomes something else again. That is how
+//
+//     ErrCurr = 1, IsOn = 0, Lamp = 0 ... ? Measuring && elapsed(Overload) ...
+//
+// turned into an unconditional trip plus a fragment, with the compiler
+// reporting `variable M is not declared` from the middle of a name. Refusing
+// the line is the only honest answer; a truncated rule is not a partial rule,
+// it is a different one.
+int parse_file(csp_rt_t* st, const char* name, FILE* fin)
 {
-    char buf[MAX_LINE_SIZE];
+    char buf[MAX_SRC_LINE];
     const tstr_t empty = { .ptr = NULL, .len = 0};
     csp_pmark_t pm;
 
     st->ps.line = 1;
-    while(fgets(buf, MAX_LINE_SIZE, fin)) {
+    while(fgets(buf, (int)sizeof(buf), fin)) {
+	size_t n = strlen(buf);
+
+	// Full buffer with no newline at the end: there is more of this line.
+	if ((n == sizeof(buf)-1) && (buf[n-1] != '\n')) {
+	    fprintf(stderr, "%s:%d line too long, max %d characters\n",
+		    name, st->ps.line, (int)(sizeof(buf) - 2));
+	    return -2;
+	}
 	if (debug_scan) {
 	    token_t tv[MAX_LINE_TOKENS];
 	    size_t num = MAX_LINE_TOKENS;
@@ -1145,9 +1175,11 @@ int main(int argc, char** argv)
 		fprintf(stderr, "unable to open file '%s'\n", argv[optind]);
 		exit(1);
 	    }
-	    if ((r = parse_file(&state, fin)) < 0) {
-		fprintf(stderr, "%s:%d ", argv[optind], state.ps.line);
-		print_error(&state);
+	    if ((r = parse_file(&state, argv[optind], fin)) < 0) {
+		if (r != -2) {          // -2 already said what was wrong
+		    fprintf(stderr, "%s:%d ", argv[optind], state.ps.line);
+		    print_error(&state);
+		}
 		exit(1);
 	    }
 	    fclose(fin);
@@ -1158,9 +1190,11 @@ int main(int argc, char** argv)
     else if (!interactive) {
 	// no files given, read from stdin (unless interactive)
 	given = 1;
-	if ((r = parse_file(&state, stdin)) < 0) {
-	    fprintf(stderr, "*stdin*:%d ", state.ps.line);
-	    print_error(&state);
+	if ((r = parse_file(&state, "*stdin*", stdin)) < 0) {
+	    if (r != -2) {
+		fprintf(stderr, "*stdin*:%d ", state.ps.line);
+		print_error(&state);
+	    }
 	    exit(1);
 	}
     }

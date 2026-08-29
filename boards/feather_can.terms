@@ -1,0 +1,13 @@
+%% Adafruit Feather RP2040 CAN -- an MCP2515 on the SPI bus and a NeoPixel.
+{board, feather_can,
+ [{toolchain, arduino_cli},
+  {fqbn, "rp2040:rp2040:adafruit_feather_can"},
+  {port, "/dev/ttyS0"},
+  {nm, "arm-none-eabi-nm"},
+  {optimize, "-Os"},
+  {define, ['CSP_HAS_CAN',
+	    'CSP_CAN_MCP2515',
+	    {'CSP_CAN_BITRATE', "500E3"},
+	    'CSP_NEO']},
+  {support_reactive, 0},
+  {use_statistics, 0}]}.

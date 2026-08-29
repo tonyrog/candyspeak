@@ -1,0 +1,15 @@
+%% Arduino Micro -- ATmega32U4. 2560 bytes of RAM but only 28672 usable flash:
+%% the Caterina USB bootloader takes 4K where the Uno's optiboot takes 512, and
+%% the software USB CDC stack costs another ~2.9K on top. Exec-only does not
+%% fit yet.
+{board, micro,
+ [{toolchain, arduino_cli},
+  {fqbn, "arduino:avr:micro"},
+  {port, "/dev/ttyACM0"},
+  {nm, "avr-nm"},
+  {optimize, "-Os"},
+  {cflags, "-fno-inline-functions-called-once -mcall-prologues"},
+  {ldflags, "-Wl,--relax"},
+  {define, ['CSP_ARENA_MALLOC', {'CSP_ROM_RECOVER', 0}]},
+  {support_reactive, 0},
+  {use_statistics, 0}]}.
