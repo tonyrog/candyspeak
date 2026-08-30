@@ -1,14 +1,14 @@
 
 // Analog.flags
-#constant ADC_UPPER_LIMIT_EXCEEDED:8   = 0x01
-#constant ADC_BELOW_LOWER_LIMIT:8      = 0x02
-#constant ADC_DELTA:8          = 0x04
-#constant ADC_NEGATIVE_DELTA:8 = 0x08
-#constant ADC_POSITIVE_DELTA:8 = 0x10
-#constant ADC_ALWAYS:8                 = 0x20 // after each inhibit
-#constant ADC_ANALOG_TO_DIGITAL:8      = 0x80
-#constant ADC_LIMIT_BITS:8             = 0x03
-#constant ADC_DELTA_BITS:8             = 0x1C
+#define ADC_UPPER_LIMIT_EXCEEDED 0x01
+#define ADC_BELOW_LOWER_LIMIT 0x02
+#define ADC_DELTA 0x04
+#define ADC_NEGATIVE_DELTA 0x08
+#define ADC_POSITIVE_DELTA 0x10
+#define ADC_ALWAYS 0x20 // after each inhibit
+#define ADC_ANALOG_TO_DIGITAL 0x80
+#define ADC_LIMIT_BITS 0x03
+#define ADC_DELTA_BITS 0x1C
 
 #module Analog
   // settings
@@ -65,10 +65,15 @@
   #local mask = t1 | t2 | t3 | t4 | t5
   #local mask1 = mask & flags
 
+  // The two gates adc.c has and this port did not: sampling rate and the
+  // inhibit window after a trigger.
+  #local due  = (sample_mark0 - sample_mark) >= delay_tm
+  #local free = (inhibit_mark == 0) || ((sample_mark0 - inhibit_mark) >= inhibit_tm)
   #local latch = (mask & ADC_ALWAYS) || (mask1 & ADC_DELTA_BITS) || ((mask1 & ADC_UPPER_LIMIT_EXCEEDED) && !(selected & ADC_UPPER_LIMIT_EXCEEDED)) || ((mask1 & ADC_BELOW_LOWER_LIMIT) && !(selected & ADC_BELOW_LOWER_LIMIT))
 
-  output = value2 ? latch
-  last_value = value2 ? latch
-  selected   = mask1  ? latch
-  inhibit_mark = sample_mark0 ? latch
+  sample_mark = sample_mark0 ? due
+  output = value2 ? latch && due && free
+  last_value = value2 ? latch && due && free
+  selected   = mask1  ? latch && due && free
+  inhibit_mark = sample_mark0 ? latch && due && free
 #end

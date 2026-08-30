@@ -254,6 +254,46 @@ final:
 Error: syntax error
 ```
 
+### Defines
+
+```
+#define <name> <value>
+```
+
+A **compile-time** name. The value folds into the code exactly as a `#constant`'s
+does; the difference is that the name is forgotten once the program is built. It
+makes no declaration, it never enters the string table, and it does not appear in
+a generated ROM image.
+
+```
+#define ADC_UPPER  0x01
+#define ADC_LOWER  0x02
+#define ADC_LIMITS  ADC_UPPER | ADC_LOWER    // built from the two above
+```
+
+The value is a constant *expression*, so a define may be built from defines
+declared before it.
+
+**Why it exists.** Every identifier a program declares is stored, and a
+declaration's name field is 9 bits — so all names together, ROM and RAM, cannot
+pass **512 bytes**. That is a ceiling in the declaration format, not a buffer
+size: making the buffer larger does not move it. A module with a dozen long
+`#param` names and a set of flag constants reaches it while still unfinished.
+
+`lib/analog.csp` is the case that prompted this. Its nine `ADC_` flag names cost
+167 bytes and contributed **nothing** to the generated code — the compiler had
+already folded them, so the instructions were identical with or without the
+names. Moving them to `#define` took the module from 492 bytes of names to 325,
+which is the difference between having room for the rest of the logic and not.
+
+**What you give up.** A `#define` does not appear in `/list`, so a listing of a
+program that uses one cannot be pasted back and give the same program. Keep the
+source. That is the trade: `#constant` is a declaration you can see and re-read,
+`#define` is a name that exists only while the compiler runs.
+
+Use `#constant` for a value you want to inspect at the prompt, and `#define` for
+the flag bits and masks that are only ever a way of writing a number.
+
 ### Locals
 
 ```

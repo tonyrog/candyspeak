@@ -1,0 +1,7 @@
+{modes, [seq]}.
+{cycles, 3}.
+{checks, [
+  {final_var, "a", 20},
+  {final_var, "b", 8},
+  {final_var, "c", 21}
+]}.

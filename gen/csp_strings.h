@@ -21,6 +21,8 @@ extern rochar s_object[7] RODATA;
 #define ros_object ((rostring_t) s_object)
 extern rochar s_bind[5] RODATA;
 #define ros_bind ((rostring_t) s_bind)
+extern rochar s_define[7] RODATA;
+#define ros_define ((rostring_t) s_define)
 extern rochar s_State[6] RODATA;
 #define ros_State ((rostring_t) s_State)
 extern rochar s_INIT[5] RODATA;
@@ -107,6 +109,8 @@ extern rochar s_err_param_shape[72] RODATA;
 #define ros_err_param_shape ((rostring_t) s_err_param_shape)
 extern rochar s_err_many_tokens[50] RODATA;
 #define ros_err_many_tokens ((rostring_t) s_err_many_tokens)
+extern rochar s_err_many_defines[39] RODATA;
+#define ros_err_many_defines ((rostring_t) s_err_many_defines)
 extern rochar s_LP[2] RODATA;
 #define ros_LP ((rostring_t) s_LP)
 extern rochar s_RP[2] RODATA;

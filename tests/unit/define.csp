@@ -1,0 +1,23 @@
+// #define binds a name for the COMPILER only. The value folds into the code
+// exactly as a #constant's does; what differs is that the name is forgotten
+// once the program is built -- no declaration, nothing in the string table,
+// nothing in a ROM image.
+//
+// That last part is what this cannot check: a unit test reads the state dump,
+// not the image. tests/repl.sh does it end to end.
+#define BIT0 0x01
+#define BIT2 0x04
+#define BIT4 0x10
+
+// A define may be built from defines above it -- the value is a constant
+// EXPRESSION, and resolving its names comes back through the same lookup.
+#define BOTH  BIT2 | BIT4
+#define SHIFTED  BIT0 << 3
+
+#variable a:8 = 0
+#variable b:8 = 0
+#variable c:8 = 0
+
+a = BOTH               // 0x14
+b = SHIFTED            // 0x08
+c = BIT0 | BOTH        // 0x15

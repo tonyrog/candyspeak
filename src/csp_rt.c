@@ -347,6 +347,7 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_ASSIGN_TO_PARAM] =        ros_err_assign_param,
     [ERR_PARAM_SHAPE] =            ros_err_param_shape,
     [ERR_TOO_MANY_TOKENS] =        ros_err_many_tokens,
+    [ERR_TOO_MANY_DEFINES] =       ros_err_many_defines,
 };
 
 // err_tab is a designated-initialiser array, so ANY code without a row in it

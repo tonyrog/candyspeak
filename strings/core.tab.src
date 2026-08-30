@@ -29,6 +29,11 @@ object object
 # keyword.tab.src the day it becomes one.
 bind bind
 
+# `#define` -- matched by memcmp for the same reason as `bind`: it is not a
+# token, and it makes no declaration, so neither the token table nor
+# decl_table has a row for it.
+define define
+
 # Names the runtime creates itself: the implicit State variable and the two
 # built-in states. Distinct from the lowercase 'state' entry in repl.tab.src,
 # which is a listing keyword. Materialized as a tstr_t with RO_TSTR where a

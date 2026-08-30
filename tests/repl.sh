@@ -532,6 +532,36 @@ fi
 #
 # The limit is in the text because "too complex" without a number gives no idea
 # how much to split off.
+# #define is a COMPILE-TIME name: the value folds into the code and the name is
+# forgotten. The whole point is that it never reaches the string table or a ROM
+# image, and neither of those is visible from the state dump -- so it is checked
+# here, against a generated image.
+#
+# lib/analog.csp is the case that motivated it: nine long ADC_ flag names put
+# that module at 492 bytes of a 512-byte ceiling (a declaration's name field is
+# 9 bits, so ROM and RAM names together cannot pass 512 whatever the buffer).
+echo "#define:"
+cat > "$D/def.csp" <<'EOD'
+#define A_DELIBERATELY_LONG_FLAG_NAME 0x04
+#define ANOTHER_LONG_ONE_HERE         0x10
+#define BOTH_OF_THEM  A_DELIBERATELY_LONG_FLAG_NAME | ANOTHER_LONG_ONE_HERE
+#variable v:8 = 0
+v = v | BOTH_OF_THEM
+EOD
+if ./csp -n -C -O "$D/def.rom.c" "$D/def.csp" >/dev/null 2>&1; then
+    got=$(grep -c 'A_DELIBERATELY_LONG_FLAG_NAME' "$D/def.rom.c")
+    ck "a #define name is not in the ROM image" "0" "$got"
+    # The value folded, and folded through another define.
+    got=$(printf '/list\n/quit\n' | ./csp -i --no-eeprom -c 0 "$D/def.csp" 2>&1 |
+	      grep -a '^v=' | sed 's/  *\/\/.*//')
+    ck "a #define folds into the rule, through another define" "v=v|20" "$got"
+    # And it costs nothing in the string table beyond the baseline.
+    got=$(sed -n 's|^//   size:.*[^0-9]\([0-9]*\) str.*|\1|p' "$D/def.rom.c")
+    ck "three long #define names cost no string space" "74" "$got"
+else
+    echo "  FAIL #define image did not build"; fail=$((fail+1))
+fi
+
 echo "over-long line:"
 { printf '#variable a = 0\n#variable b = 0\na = b'; \
   for i in $(seq 1 80); do printf ' + b'; done; printf '\n'; } > "$D/toks.csp"

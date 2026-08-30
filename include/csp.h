@@ -445,6 +445,38 @@ extern int ro_strcpy(char* dst, rostring_t src, int max);
 #define MAX_STACK_DEPTH 4
 #define NAME_BITS    5
 #define MAX_STR_BUF  (1 << STRING_BITS) // total number of char in var names
+
+// --- #define: compile-time names, and NOT in the string table ---------------
+//
+// `#define NAME VALUE` binds a name to a constant for the COMPILER only. The
+// value is folded into the code exactly as a #constant's is; the difference is
+// that the NAME is forgotten as soon as the program is built. It never becomes
+// a declaration, never reaches ram_str, and never appears in a ROM image.
+//
+// WHY IT NEEDS ITS OWN BUFFER. The obvious place -- ram_str -- would buy
+// nothing: that array is already double-ended (names grow up from 0, error
+// strings down from MAX_STR_BUF), so a define stored there competes for the
+// very 512 bytes it is meant to relieve. And the ceiling is not the buffer but
+// NAMEPOS_BITS: a declaration's name field is 9 bits, so ROM and RAM names
+// together cannot pass 512 whatever the buffer's size. A define has no
+// declaration and therefore no name field, which is exactly what puts it
+// outside that limit.
+//
+// Entries are LENGTH-NAME-TYPE-VALUE, bump-allocated and searched linearly.
+// Programs have a handful of defines, not hundreds, and a linear walk over a
+// few hundred bytes at parse time costs nothing worth a table.
+//
+// Sized per target: a board's REPL can still take a #define, but 128 bytes is
+// as much as a 2K part should spend on names it throws away. Set to 0 to refuse
+// them entirely.
+#ifndef CSP_DEFINE_BYTES
+#if defined(ARDUINO) || defined(CSP_SMALL_TARGET)
+#define CSP_DEFINE_BYTES 128
+#else
+#define CSP_DEFINE_BYTES 512
+#endif
+#endif
+
 #define MAX_NAME_LEN 31    // max var name len
 #define MAX_ARGS     4     // max number of arguments to function
 
@@ -1451,6 +1483,7 @@ typedef enum {
     ERR_OK = 0,
     ERR_SYNTAX,
     ERR_TOO_MANY_TOKENS,
+    ERR_TOO_MANY_DEFINES,
     ERR_STRING_SPACE_EXHUSTED,    
     ERR_TOO_MANY_DECLARATIONS,
     ERR_TOO_MANY_INSTRUCTIONS,
@@ -1901,6 +1934,12 @@ typedef struct _csp_rt_t
     uint8_t mid_full;                    // 1 = a request did not fit
     csp_instr_t  imm_scratch;            // dummy slot for immediate `> expr` eval fold
     char        ram_str[MAX_STR_BUF];    // store variable names
+#if CSP_DEFINE_BYTES > 0
+    // #define names and values -- see the note at CSP_DEFINE_BYTES. Deliberately
+    // NOT part of ram_str: it is the buffer a define is meant to relieve.
+    char        def_str[CSP_DEFINE_BYTES];
+    uint16_t    def_used;                // bump cursor into def_str
+#endif
 
     csp_line_t  line;                    // line data
 #if 0    

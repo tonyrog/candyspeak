@@ -10,6 +10,7 @@ rochar s_number[] RODATA = "number";
 rochar s_any[] RODATA = "any";
 rochar s_object[] RODATA = "object";
 rochar s_bind[] RODATA = "bind";
+rochar s_define[] RODATA = "define";
 rochar s_State[] RODATA = "State";
 rochar s_INIT[] RODATA = "INIT";
 rochar s_NORMAL[] RODATA = "NORMAL";
@@ -53,6 +54,7 @@ rochar s_err_assign_local[] RODATA = "cannot assign to a #local -- it binds a fo
 rochar s_err_assign_param[] RODATA = "cannot assign to a #param in a rule -- set it with > name = value";
 rochar s_err_param_shape[] RODATA = "#param %s does not match the declaration it sets -- same width and type";
 rochar s_err_many_tokens[] RODATA = "line too complex -- more than %d tokens; split it";
+rochar s_err_many_defines[] RODATA = "too many #define names -- max %d bytes";
 rochar s_LP[] RODATA = "(";
 rochar s_RP[] RODATA = ")";
 rochar s_COLON[] RODATA = ":";

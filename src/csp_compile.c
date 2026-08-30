@@ -37,6 +37,11 @@
 // tables, which is exactly how ./csp-exec used to segfault on a source file.
 #if !defined(CSP_EXEC_ONLY)
 
+// Defined next to csp_parse_define, far below -- declared here because the
+// expression parser resolves an unknown name through it.
+NOINLINE static int def_lookup(csp_rt_t* st, const tstr_t* name,
+			       vtype_t* vtp, value_t* valp);
+
 #ifdef DEBUG
 #include "csp_dump.h"
 #include <stdio.h>
@@ -2520,6 +2525,19 @@ next:
 		    ptok = INT;
 		    goto after_primary;
 		}
+		// A #define: a compile-time name with no declaration behind it.
+		// Looked up AFTER declarations and states so a real leaf always
+		// wins -- a define cannot shadow something that exists.
+		{
+		    vtype_t dvt;
+		    value_t dval;
+		    if (def_lookup(st, &tval.str, &dvt, &dval)) {
+			if ((ep = push_imm(st, rstack, ep, dvt, dval)) < 0)
+			    return 0;
+			ptok = INT;
+			goto after_primary;
+		    }
+		}
 		if (csp_set_error(st, ERR_VARIABLE_NOT_DECLARED)) {
 		    csp_set_err_arg_tstr(st, 0, &tval.str);
 		}
@@ -2743,6 +2761,124 @@ NOINLINE static int check_res(csp_rt_t* st, ivalue_t res)
 // Two bits and up keep the signed default: {-2,-1,0,1} is a real range, and
 // changing those would silently alter arithmetic in existing programs.
 // `#variable X:1 integer` still gets what it asked for.
+// --- #define ----------------------------------------------------------------
+//
+//   #define NAME VALUE          (no '=', like C's)
+//
+// A compile-time name. The value folds into the code exactly as a #constant's
+// does; the difference is that NAME is forgotten when the program is built --
+// it makes no declaration, never reaches ram_str, and never lands in a ROM
+// image. See CSP_DEFINE_BYTES in csp.h for why it needs its own buffer.
+//
+// Entries are LEN NAME VT VALUE, bump-allocated. A redefinition APPENDS and the
+// lookup walks backwards, so the newest wins -- cheaper than searching for the
+// old one, and it matches how a second `#define` of the same name reads.
+
+#if CSP_DEFINE_BYTES > 0
+
+#define DEF_OVERHEAD (1 + 1 + (int)sizeof(value_t))   /* len + vt + value */
+
+// Walk BACKWARDS from the newest entry. Returns 1 and fills vt/val on a hit.
+NOINLINE static int def_lookup(csp_rt_t* st, const tstr_t* name,
+			       vtype_t* vtp, value_t* valp)
+{
+    uint16_t p = 0;
+    int found = 0;
+
+    while (p + DEF_OVERHEAD <= st->def_used) {
+	uint8_t len = (uint8_t)st->def_str[p];
+	uint16_t next = (uint16_t)(p + 1 + len + 1 + sizeof(value_t));
+
+	if (next > st->def_used)
+	    break;
+	if ((len == name->len) &&
+	    (memcmp(&st->def_str[p+1], name->ptr, len) == 0)) {
+	    *vtp = (vtype_t)(uint8_t)st->def_str[p + 1 + len];
+	    memcpy(valp, &st->def_str[p + 1 + len + 1], sizeof(value_t));
+	    found = 1;                  // keep going: the LAST one wins
+	}
+	p = next;
+    }
+    return found;
+}
+
+NOINLINE int csp_parse_define(csp_rt_t* st, token_t* tv, int ti, size_t n)
+{
+    rentry_t result;
+    size_t num;
+    uint16_t need;
+    tstr_t name;
+    uint8_t len;
+
+    if ((ti + 1 >= (int)n) || (tv[ti].t != WORD)) {
+	csp_set_error(st, ERR_SYNTAX);
+	return -1;
+    }
+    name = tv[ti].v.str;
+    if (name.len > 255) {
+	csp_set_error(st, ERR_NAME_TOO_LONG);
+	return -1;
+    }
+    len = (uint8_t)name.len;
+
+    // The value is a CONSTANT EXPRESSION, so `#define MASK HI|LO` works and a
+    // define may be built from defines above it -- csp_parse_const_expr comes
+    // back through the same primary lookup that resolves them.
+    //
+    // The NEWLINE is not part of the expression. Handing it in makes the parse
+    // fail, and the pmatch-driven declarations never hit this because their
+    // stop sets end the expression for them.
+    {
+	int end = (int)n;
+	while ((end > ti + 1) && (tv[end-1].t == NEWLINE))
+	    end--;
+	num = (size_t)(end - (ti + 1));
+    }
+    if (num == 0) {
+	csp_set_error(st, ERR_SYNTAX);
+	return -1;
+    }
+    if (!csp_parse_const_expr(st, &tv[ti+1], &num, &result) || !result.I) {
+	if (csp_set_error(st, ERR_SYNTAX))
+	    csp_set_err_arg_tstr(st, 0, &name);
+	return -1;
+    }
+
+    need = (uint16_t)(1 + len + 1 + sizeof(value_t));
+    if ((uint32_t)st->def_used + need > (uint32_t)CSP_DEFINE_BYTES) {
+	// Its own message: "string space exhausted" would point at ram_str,
+	// which is exactly the buffer a #define does not use.
+	if (csp_set_error(st, ERR_TOO_MANY_DEFINES))
+	    csp_set_err_arg_int(st, 0, CSP_DEFINE_BYTES);
+	return -1;
+    }
+    st->def_str[st->def_used] = (char)len;
+    memcpy(&st->def_str[st->def_used + 1], name.ptr, len);
+    st->def_str[st->def_used + 1 + len] = (char)result.vt;
+    memcpy(&st->def_str[st->def_used + 1 + len + 1], &result.val,
+	   sizeof(value_t));
+    st->def_used = (uint16_t)(st->def_used + need);
+    return 0;
+}
+
+#else  /* CSP_DEFINE_BYTES == 0 */
+
+NOINLINE static int def_lookup(csp_rt_t* st, const tstr_t* name,
+			       vtype_t* vtp, value_t* valp)
+{
+    (void)st; (void)name; (void)vtp; (void)valp;
+    return 0;
+}
+
+NOINLINE int csp_parse_define(csp_rt_t* st, token_t* tv, int ti, size_t n)
+{
+    (void)tv; (void)ti; (void)n;
+    csp_set_error(st, ERR_SYNTAX);
+    return -1;
+}
+
+#endif /* CSP_DEFINE_BYTES */
+
 NOINLINE static vtype_t default_vt(ivalue_t res)
 {
     return (res == 1) ? V_UNSIGNED : V_INTEGER;
@@ -4656,6 +4792,14 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 	else if ((tv[0].t == HASH) &&
 		 ((tv[1].t == T_DISABLE) || (tv[1].t == T_ENABLE))) {
 	    r = csp_parse_disable(st, tv, 2, num, (tv[1].t == T_DISABLE));
+	}
+	// #define is matched by hand, before find_decl_entry: it is not a token
+	// and it makes NO declaration, so neither the token table nor decl_table
+	// has a row for it. Same treatment as `bind`.
+	else if ((tv[0].t == HASH) && (tv[1].t == WORD) &&
+		 (tv[1].v.str.len == 6) &&
+		 (ro_memcmp(ros_define, tv[1].v.str.ptr, 6) == 0)) {
+	    r = csp_parse_define(st, tv, 2, num);
 	}
 	else if ((tv[0].t == HASH) && (tv[1].t == WORD)) {
 	    int i;
