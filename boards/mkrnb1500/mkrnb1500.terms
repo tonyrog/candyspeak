@@ -1,0 +1,15 @@
+%% Arduino MKR NB 1500 -- SAMD21 with a cellular modem.
+{board, mkrnb1500,
+ [{toolchain, arduino_cli},
+  {fqbn, "arduino:samd:mkrnb1500"},
+  {port, "/dev/ttyACM0"},
+  {nm, "arm-none-eabi-nm"},
+  {optimize, "-Os"},
+
+  %% PINNED, so a build is reproducible: without this arduino-cli uses
+  %% whatever core happens to be installed, and a core update changes the
+  %% firmware with nothing in the tree to show for it. Feeds sketch.yaml.
+  {platform, "arduino:samd", "1.8.14"},
+
+  {support_reactive, 0},
+  {use_statistics, 0}]}.

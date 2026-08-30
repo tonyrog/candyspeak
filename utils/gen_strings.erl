@@ -26,7 +26,7 @@
 -define(TERMS,   "utils/syntax.terms").
 -define(SRCDIR,  "strings").
 -define(GEN,     "strings/keyword.tab.src").
--define(TAB,     "strings.tab").
+-define(TAB,     "gen/strings.tab").
 
 main(["emit"])  -> emit(), halt(0);
 main(["merge"]) -> merge(), halt(0);      % read_sources/0 emits first

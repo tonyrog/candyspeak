@@ -1,1 +1,1 @@
-../csp_strings.c
+../gen/csp_strings.c

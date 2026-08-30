@@ -25,7 +25,7 @@
 %%   escript utils/gen_tables.erl check   verify it is up to date
 
 -define(TERMS, "utils/syntax.terms").
--define(HDR,   "csp_tokens.h").
+-define(HDR,   "gen/csp_tokens.h").
 
 main(["emit"])  -> ok = file:write_file(?HDR, text()),
 		   io:format("~s~n", [?HDR]),

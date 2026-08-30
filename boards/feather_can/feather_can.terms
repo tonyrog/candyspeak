@@ -1,0 +1,28 @@
+%% Adafruit Feather RP2040 CAN -- an MCP2515 on the SPI bus and a NeoPixel.
+{board, feather_can,
+ [{toolchain, arduino_cli},
+  {fqbn, "rp2040:rp2040:adafruit_feather_can"},
+  {port, "/dev/ttyS0"},
+  {nm, "arm-none-eabi-nm"},
+  {optimize, "-Os"},
+  {define, ['CSP_HAS_CAN',
+	    'CSP_CAN_MCP2515',
+	    {'CSP_CAN_BITRATE', "500E3"},
+	    'CSP_NEO']},
+
+  %% PINNED, so a build is reproducible: without this arduino-cli uses
+  %% whatever core happens to be installed, and a core update changes the
+  %% firmware with nothing in the tree to show for it. Feeds sketch.yaml.
+  {platform, "rp2040:rp2040", "6.0.0",
+             "https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json"},
+
+  %% Pulled in by the board layer, and NOT obvious from the source: found
+  %% with `arduino-cli compile --dump-profile`. Pinned for the same reason
+  %% as the platform -- a library update would change the firmware silently.
+  {libraries, [{"Adafruit MCP2515", "0.2.1"},
+               {"Adafruit BusIO", "1.17.4"},
+               {"Adafruit CAN", "0.2.3"},
+               {"Adafruit NeoPixel", "1.15.5"}]},
+
+  {support_reactive, 0},
+  {use_statistics, 0}]}.

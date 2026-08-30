@@ -7,17 +7,17 @@
 #
 # The rest of the suite is driven from the top-level `make test`.
 
-CFLAGS := -Wall -Wextra -Wno-unused-parameter -g
+CFLAGS := -Wall -Wextra -Wno-unused-parameter -g -I../include -I../gen -I../src
 
 all:	line_edit
 
 line_edit:	csp_line.o line_edit.o
 	$(CC) -o$@ csp_line.o line_edit.o
 
-csp_line.o:	../csp_line.c ../csp_line.h
-	$(CC) $(CFLAGS) -c -I .. ../csp_line.c
+csp_line.o:	../src/csp_line.c ../include/csp_line.h
+	$(CC) $(CFLAGS) -c ../src/csp_line.c
 
-line_edit.o:	line_edit.c ../csp_line.h
+line_edit.o:	line_edit.c ../include/csp_line.h
 	$(CC) $(CFLAGS) -c line_edit.c
 
 check:	line_edit

@@ -9,7 +9,26 @@ CSP_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo 
 # CSP_ARENA_MALLOC: claim the pool from the heap, sized to the simulated board
 # (-M/-U/--board), instead of a fixed static array -- so the host can model a
 # board with more RAM than the compile-time CSP_CODE_BUDGET.
-CFLAGS=-MMD -MP -MF .$<.d -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC
+# WHERE THE SOURCES LIVE. Four directories, and the split is by who may touch
+# them:
+#   include/  handwritten headers
+#   src/      the core -- portable, no platform in it. CandySpeak/src links here.
+#   port/     one file per platform (linux, arduino, lpcopen) + their backends
+#   gen/      GENERATED. Never edit anything here; `make strings`/`tables`/
+#             `patterns` rewrite it, and make quick holds it against its source.
+#
+# VPATH plus -I means no #include line had to change when these moved: a source
+# still says "csp.h" and the compiler finds it.
+VPATH   = src:port:gen
+INCS    = -Iinclude -Igen -Isrc
+# Objects and their dependency files go in obj/, not the repo root. $(@:.o=.d)
+# names the dep after the TARGET, which already carries the directory -- and it
+# sidesteps the VPATH trap in `-MF .$<.d`, where $< carries the SOURCE's
+# directory and gcc is asked for `.port/csp_linux.c.d`, a path in a directory
+# that does not exist. That one is reported at the END of the translation unit,
+# pointing at the last line of the source, which is nowhere near the cause.
+OBJDIR = obj
+CFLAGS=-MMD -MP -MF $(@:.o=.d) $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC
 # rom_host.o, NOT rom.o. `rom.c` is the DEMO image -- CandySpeak/rom.c is a
 # symlink to it, so it is what a board flashes, and it changes every time you
 # run `csp -C -O rom.c prog.csp`. ./csp is the compiler, the REPL and what the
@@ -34,9 +53,10 @@ CFLAGS=-MMD -MP -MF .$<.d -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC
 #     $(CC) -DCSP_ARENA_MALLOC -I. $(CORE_SRC) tmp/rom_boot.c -o tmp/csp_boot
 #     tmp/csp_boot -n -C -O rom_host.c examples/empty.csp
 #     tmp/csp_boot -n -C -O rom.c      examples/cpx_rotate.csp
-OBJS = csp_linux.o csp_rt.o csp_line.o csp_repl.o csp_compile.o csp_tok.o csp_dump.o csp_eeprom.o \
-	csp_parse.o csp_print.o csp_strings.o csp_flash.o csp_devices.o \
-	csp_flash_host.o rom_host.o
+OBJS = $(addprefix $(OBJDIR)/, \
+	csp_linux.o csp_rt.o csp_line.o csp_repl.o csp_compile.o csp_tok.o \
+	csp_dump.o csp_eeprom.o csp_parse.o csp_print.o csp_strings.o \
+	csp_flash.o csp_devices.o csp_flash_host.o rom_host.o)
 
 LIBS =
 
@@ -94,20 +114,21 @@ csp:	$(OBJS)
 #
 # CORE_SRC is the same list with NO image at all -- `make rom` below appends
 # whichever one it just generated.
-CORE_SRC = csp_linux.c csp_rt.c csp_line.c csp_repl.c csp_compile.c csp_tok.c \
-	   csp_dump.c csp_eeprom.c csp_parse.c csp_print.c csp_strings.c \
-	   csp_flash.c csp_devices.c csp_flash_host.c
-EXEC_SRC = $(CORE_SRC) rom.c
+CORE_SRC = port/csp_linux.c src/csp_rt.c src/csp_line.c src/csp_repl.c \
+	   src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
+	   src/csp_parse.c src/csp_print.c gen/csp_strings.c src/csp_flash.c \
+	   port/csp_devices.c port/csp_flash_host.c
+EXEC_SRC = $(CORE_SRC) gen/rom.c
 # csp_repl.c, csp_compile.c and csp_dump.c are still LISTED: each guards itself
 # to an empty translation unit, so the file list stays the same as ./csp and a
 # missing guard shows up as a link error rather than a silent divergence.
-EXEC_FLAGS = -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC -Wall -g $(SAN)
+EXEC_FLAGS = $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC -Wall -g $(SAN)
 
-exec:	csp_strings.h
+exec:	gen/csp_strings.h
 	$(CC) $(EXEC_FLAGS) -DCSP_EXEC_ONLY $(EXEC_SRC) $(LIBS) -o csp-exec
 	@size csp-exec 2>/dev/null | tail -1 || true
 
-min:	csp_strings.h
+min:	gen/csp_strings.h
 	$(CC) $(EXEC_FLAGS) -DCSP_EXEC_ONLY -DCSP_NO_EEPROM $(EXEC_SRC) $(LIBS) -o csp-min
 	@size csp-min 2>/dev/null | tail -1 || true
 
@@ -152,7 +173,7 @@ $(error TIER must be exec, min, or empty for the full build)
 endif
 
 # `csp` first: it is the compiler that produces the image.
-rom:	csp csp_strings.h
+rom:	csp gen/csp_strings.h
 	@test -n "$(PROG)" || { \
 	    echo "usage: make rom PROG='a.csp [b.csp ...]' [OUT=name] [TIER=exec|min]"; \
 	    exit 1; }
@@ -160,7 +181,7 @@ rom:	csp csp_strings.h
 	@out='$(OUT)'; \
 	 test -n "$$out" || out="tmp/$$(basename '$(firstword $(PROG))' .csp)"; \
 	 ./csp -n -C -O "$$out.rom.c" $(PROG) || exit 1; \
-	 $(CC) $(EXEC_FLAGS) $(ROM_TIER) -I. $(CORE_SRC) "$$out.rom.c" $(LIBS) -o "$$out" \
+	 $(CC) $(EXEC_FLAGS) $(ROM_TIER) $(CORE_SRC) "$$out.rom.c" $(LIBS) -o "$$out" \
 	    || exit 1; \
 	 sed -n 's|^//   size: *|    |p' "$$out.rom.c"; \
 	 echo "    $$out  <-  $(PROG)"
@@ -170,8 +191,8 @@ rom:	csp csp_strings.h
 # the baseline every test then runs on top of.
 rom-image: csp
 	@test -n "$(PROG)" || { echo "usage: make rom-image PROG='a.csp [b.csp ...]'"; exit 1; }
-	./csp -n -C -O rom.c $(PROG)
-	@sed -n '1,6p' rom.c
+	./csp -n -C -O gen/rom.c $(PROG)
+	@sed -n '1,6p' gen/rom.c
 
 # Chip tables: generated from chips/<vendor>/*.terms, for the TARGET only. The
 # host asks the script directly -- `make chips`, `make ld CHIP=lpc2129` -- so
@@ -207,11 +228,11 @@ board:
 	@escript utils/gen_chips.erl --board $(BOARD) build/$(BOARD)/csp_board.h
 
 # String table: a small C tool generates csp_strings.{c,h} from strings.tab.
-strtab: strtab.c
-	$(CC) -Wall -o $@ strtab.c
+strtab: utils/strtab.c
+	$(CC) -Wall -o $@ utils/strtab.c
 
-csp_strings.c csp_strings.h: strings.tab strtab
-	./strtab strings.tab csp_strings.c csp_strings.h
+gen/csp_strings.c gen/csp_strings.h: gen/strings.tab strtab
+	./strtab gen/strings.tab gen/csp_strings.c gen/csp_strings.h
 
 # strings.tab is itself generated, from strings/*.tab.src -- one of which,
 # strings/keyword.tab.src, comes out of the grammar (utils/syntax.terms), so a
@@ -240,7 +261,11 @@ patterns:
 csp_rt.o csp_repl.o csp_compile.o csp_tok.o csp_strings.o: csp_strings.h
 
 clean:
-	rm -f $(OBJS) strtab csp_strings.c csp_strings.h csp-exec csp-min
+	rm -rf $(OBJDIR)
+	rm -f strtab gen/csp_strings.c gen/csp_strings.h csp-exec csp-min
+	@# objects and dep files from before the obj/ split, so a tree that
+	@# straddles the change does not keep stale ones around forever
+	@rm -f *.o .*.c.d *.d
 
 # THE TEST LADDER. Four rungs, and which one you are on is a question of what you
 # are about to do, not how thorough you feel:
@@ -277,7 +302,7 @@ quick:	csp line_edit_check syntax_check strings_check tables_check \
 # copy would only print the same line twice.
 line_edit_check:
 	@mkdir -p tmp
-	@$(CC) -I. -O2 -o tmp/line_edit tests/line_edit.c csp_line.c
+	@$(CC) $(INCS) -O2 -o tmp/line_edit tests/line_edit.c src/csp_line.c
 	@tmp/line_edit | tail -1
 
 test:	csp test_repl syntax_check strings_check tables_check patterns_check sketch_check
@@ -330,10 +355,23 @@ test_boards: csp
 # there shadows one and freezes it: csp_patterns.h sat as a stale copy for a
 # while and the boards quietly built against it, so a header change showed up in
 # the host tests and nowhere else. Cheap to check, silent to miss.
+# Four links now, not thirty. src/ is the whole core in one, because arduino-cli
+# compiles a sketch's src/ directory recursively and follows a symlink to it.
+# The rest are the files where the source directory holds MORE than the sketch
+# may have: gen/ carries two ROM images and only one belongs in a build, and
+# port/ carries every platform.
+SKETCH_LINKS = CandySpeak/CandySpeak.ino CandySpeak/src \
+               CandySpeak/csp_strings.c CandySpeak/rom.c \
+               CandySpeak/csp_flash_samd.cpp
 sketch_check:
-	@for f in CandySpeak/csp_*.h CandySpeak/csp_*.c; do \
-	    test -L "$$f" || { echo "$$f is a regular file, not a symlink"; exit 1; }; \
-	done; echo "CandySpeak/: ok -- all sources are symlinks"
+	@for f in $(SKETCH_LINKS); do \
+	    test -L "$$f" || { echo "$$f is not a symlink (or is missing)"; exit 1; }; \
+	    test -e "$$f" || { echo "$$f is a BROKEN symlink"; exit 1; }; \
+	done
+	@n=$$(find CandySpeak -maxdepth 1 \( -name 'csp_*' -o -name 'rom*' \) \
+	        ! -type l | wc -l); \
+	 test "$$n" = 0 || { echo "CandySpeak/: $$n regular file(s) shadowing a source"; exit 1; }
+	@echo "CandySpeak/: ok -- $(words $(SKETCH_LINKS)) links, none broken"
 
 # REPL/persistence level: /list segment tags, what a /clear keeps, and whether a
 # generated ROM image loads back into the firmware that links it. None of that is
@@ -386,12 +424,18 @@ test_crc_destroyer:
 	@chmod +x tests/crc_destroyer.sh
 	@bash tests/crc_destroyer.sh
 
-%.o:	%.c
-	$(CC) $(CFLAGS) -c -fPIC $<
+# ORDER-ONLY on the generated header: it must EXIST before anything compiles
+# (every source reaches it), but a rebuild is driven by the .d files, not by
+# this. Without it a clean tree compiles csp_rt.c before strtab has run and
+# stops on "csp_strings.h: No such file or directory" -- which reads like a
+# missing file and is really a missing rule.
+$(OBJDIR)/%.o: %.c | gen/csp_strings.h
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -fPIC -o $@ $<
 
 .%.d:	;
 
--include .*.d
+-include $(OBJS:.o=.d)
 
 .PHONY: chips board-list check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check debug ubsan san exec min rom rom-image
 

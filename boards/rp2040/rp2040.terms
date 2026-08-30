@@ -1,0 +1,15 @@
+%% Raspberry Pi Pico, through Arduino's mbed core.
+{board, rp2040,
+ [{toolchain, arduino_cli},
+  {fqbn, "arduino:mbed_rp2040:pico"},
+  {port, "/dev/ttyACM0"},
+  {nm, "arm-none-eabi-nm"},
+  {optimize, "-Os"},
+
+  %% PINNED, so a build is reproducible: without this arduino-cli uses
+  %% whatever core happens to be installed, and a core update changes the
+  %% firmware with nothing in the tree to show for it. Feeds sketch.yaml.
+  {platform, "arduino:mbed_rp2040", "4.6.0"},
+
+  {support_reactive, 0},
+  {use_statistics, 0}]}.

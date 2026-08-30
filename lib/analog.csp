@@ -1,0 +1,74 @@
+
+// Analog.flags
+#constant ADC_UPPER_LIMIT_EXCEEDED:8   = 0x01
+#constant ADC_BELOW_LOWER_LIMIT:8      = 0x02
+#constant ADC_DELTA:8          = 0x04
+#constant ADC_NEGATIVE_DELTA:8 = 0x08
+#constant ADC_POSITIVE_DELTA:8 = 0x10
+#constant ADC_ALWAYS:8                 = 0x20 // after each inhibit
+#constant ADC_ANALOG_TO_DIGITAL:8      = 0x80
+#constant ADC_LIMIT_BITS:8             = 0x03
+#constant ADC_DELTA_BITS:8             = 0x1C
+
+#module Analog
+  // settings
+  // 0x6421  Input Interrupt Trigger Selection  
+  #param flags:8 = ADC_DELTA // more than delta
+  // 0x6424 Analogue Input Interrupt Upper Limit
+  #param upper:32 = 0
+  // 0x6425 Analogue Input Interrupt Lower Limit  
+  #param lower:32 = 0
+  // 0x6426 Analogue Input Interrupt Delta  
+  #param delta:32 unsigned = 0 
+  // 0x6427 Analogue Input Interrupt Negative Delta
+  #param ndelta:32 unsigned = 0
+  // 0x6428 Analogue Input Interrupt Positive Delta
+  #param pdelta:32 unsigned = 0
+  // 0x6431 Analog Input Offset Integer  
+  #param offset:32 = 0
+  // 0x6432 Analog Input Scaling Integer
+  #param scale:32 = 1
+  // Sample delay time
+  #param delay_tm:32 = 500 // two per second
+  // Inhibit time after trigger
+  #param inhibit_tm:32 = 1000  // not more then one per second
+  // Minimum sample value (clamp)
+  #param min_val = 0
+  // Maximum sample value (clamp)
+  #param max_val = 0x0ffff
+  // User input value
+  #variable value:16 in
+  // Analog output value
+  #variable output:16 out
+  // Previous trigger mask (cause of interrupt)
+  #variable selected:8
+  // Last sample value
+  #variable last_value:16 unsigned
+  // Last sample time
+  #variable sample_mark
+  // Last output time
+  #variable inhibit_mark
+
+  #local sample_mark0 = tick()
+  // scale and offset
+  #local value1 = value*scale + offset
+  // clamp
+  #local value2 = max(min(value1, max_val), min_val)
+  
+  #local dv = value2 - last_value
+
+  #local t1 = ((value2 > upper) & ADC_UPPER_LIMIT_EXCEEDED)
+  #local t2 = ((value2 < lower) & ADC_BELOW_LOWER_LIMIT)
+  #local t3 = ((abs(dv) > delta) & ADC_DELTA)
+  #local t4 = ((dv > 0) & (dv > pdelta) & ADC_POSITIVE_DELTA)
+  #local t5 = ((dv < 0) & (-dv > ndelta) & ADC_NEGATIVE_DELTA)
+  #local mask = t1 | t2 | t3 | t4 | t5
+  #local mask1 = mask & flags
+
+  #local latch = (mask & ADC_ALWAYS) || (mask1 & ADC_DELTA_BITS) || ((mask1 & ADC_UPPER_LIMIT_EXCEEDED) && !(selected & ADC_UPPER_LIMIT_EXCEEDED)) || ((mask1 & ADC_BELOW_LOWER_LIMIT) && !(selected & ADC_BELOW_LOWER_LIMIT))
+
+  output = value2 ? latch
+  last_value = value2 ? latch
+  selected   = mask1  ? latch
+  inhibit_mark = sample_mark0 ? latch
+#end

@@ -32,3 +32,4 @@ err_index_range index out of range
 err_assign_local cannot assign to a #local -- it binds a formula
 err_assign_param cannot assign to a #param in a rule -- set it with > name = value
 err_param_shape #param %s does not match the declaration it sets -- same width and type
+err_many_tokens line too complex -- more than %d tokens; split it

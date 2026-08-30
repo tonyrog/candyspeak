@@ -1,9 +1,0 @@
-%% Raspberry Pi Pico, through Arduino's mbed core.
-{board, rp2040,
- [{toolchain, arduino_cli},
-  {fqbn, "arduino:mbed_rp2040:pico"},
-  {port, "/dev/ttyACM0"},
-  {nm, "arm-none-eabi-nm"},
-  {optimize, "-Os"},
-  {support_reactive, 0},
-  {use_statistics, 0}]}.

@@ -9,7 +9,7 @@
 // application sectors buy either one app with a fallback slot, or two apps with
 // none, or two apps with half-size slots each.
 
-#include "../csp_flash.h"
+#include "csp_flash.h"
 #include <stdio.h>
 #include <string.h>
 

@@ -17,3 +17,4 @@ csp-min
 boards/build/
 private/*/build/
 boards/*/build
+obj/

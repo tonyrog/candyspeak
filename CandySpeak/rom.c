@@ -1,1 +1,1 @@
-../rom.c
+../gen/rom.c

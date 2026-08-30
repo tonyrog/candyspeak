@@ -1,0 +1,53 @@
+%% Adafruit Circuit Playground Express -- SAMD21, built through arduino-cli.
+%%
+%% Everything about this board that used to live in TWO places: boards/play.h
+%% for the defines and CandySpeak/Makefile.play for the FQBN and the flags.
+%% Neither knew about the other, so a board was described twice and could
+%% disagree with itself.
+%%
+%%   make -f Makefile.board BOARD=play
+%%
+%% {toolchain, arduino_cli} is what makes this an Arduino board rather than a
+%% bare-metal one. A bare-metal board names a {chip, ...} out of chips/ and gets
+%% a pin mux and a linker script generated; this one names an FQBN and hands the
+%% work to arduino-cli, which owns the core, the mux and the link.
+{board, play,
+ [{toolchain, arduino_cli},
+  {fqbn, "arduino:samd:adafruit_circuitplayground_m0"},
+  {port, "/dev/ttyACM0"},
+
+  %% For `make -f Makefile.board BOARD=play size` -- the SAMD toolchain's nm.
+  {nm, "arm-none-eabi-nm"},
+  {optimize, "-Os"},
+
+  %% Compiled in as -D. Values are optional: a bare atom is `-DNAME`.
+  %%
+  %% CSP_ARENA_MALLOC: the same SAMD21 as the MKR Zero, so the arena comes from
+  %% the heap. Without it this board falls to the static-buffer backend and
+  %% carries CSP_CODE_BUDGET (12K) as one object in .bss -- which is what made
+  %% the linker report "changing start of section .bss by 4 bytes" here and on
+  %% no other target.
+  %%
+  %% CSP_CPX turns on the board layer that names the on-board sensors and the
+  %% NeoPixel ring.
+  {define, ['CSP_CPX',
+	    'CSP_ARENA_MALLOC',
+	    'CSP_NO_IMAGE_REGISTRY',
+	    {'CSP_RAM_RESERVE', 512}]},
+
+  %% What boards/embedded.h used to say for every constrained target. Stated
+  %% per board now, because "what a small board wants" was never actually the
+  %% same for all of them.
+
+  %% PINNED, so a build is reproducible: without this arduino-cli uses
+  %% whatever core happens to be installed, and a core update changes the
+  %% firmware with nothing in the tree to show for it. Feeds sketch.yaml.
+  {platform, "arduino:samd", "1.8.14"},
+
+  %% Pulled in by the board layer, and NOT obvious from the source: found
+  %% with `arduino-cli compile --dump-profile`. Pinned for the same reason
+  %% as the platform -- a library update would change the firmware silently.
+  {libraries, [{"Adafruit Circuit Playground", "1.12.0"}]},
+
+  {support_reactive, 0},     %% enq/deq -- saves ~1KB RAM
+  {use_statistics, 0}]}.     %% cycle/rule counters: diagnostics, not function

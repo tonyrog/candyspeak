@@ -482,10 +482,11 @@ ck "string == compares positions, .len reads the length byte" \
 echo "exec-only:"
 printf '#digital Led out 0:13\n#timer T 500 = 1\n#variable N = 0\nT = 1 ? timeout(T)\nN = N + 1 ? timeout(T)\n' > "$D/eo.csp"
 if ./csp -n -C -O "$D/eo_rom.c" "$D/eo.csp" >/dev/null 2>&1 &&
-   gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -DCSP_EXEC_ONLY -I. \
-       csp_linux.c csp_rt.c csp_line.c csp_repl.c csp_compile.c csp_tok.c \
-       csp_dump.c csp_eeprom.c csp_parse.c csp_print.c csp_strings.c \
-       csp_flash.c csp_devices.c csp_flash_host.c \
+   gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -DCSP_EXEC_ONLY -Iinclude -Igen -Isrc \
+       port/csp_linux.c src/csp_rt.c src/csp_line.c src/csp_repl.c \
+       src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
+       src/csp_parse.c src/csp_print.c gen/csp_strings.c src/csp_flash.c \
+       port/csp_devices.c port/csp_flash_host.c \
        "$D/eo_rom.c" -o "$D/csp_exec" \
        >/dev/null 2>&1; then
     # Last two matches, not the last LINE -- see the note on the string case
@@ -505,7 +506,7 @@ fi
 # the old implementation is proven directly: every position and width the view
 # encoding allows, both orders, against a buffer that already has content.
 echo "bit engine:"
-if gcc -I. -O2 -o "$D/bits_cmp" tests/bits_cmp.c >/dev/null 2>&1; then
+if gcc -Iinclude -Igen -Isrc -O2 -o "$D/bits_cmp" tests/bits_cmp.c >/dev/null 2>&1; then
     ck "csp_bits matches bitpack bit for bit" "ok, identical" "$("$D/bits_cmp")"
 else
     echo "  FAIL bits_cmp did not build"; fail=$((fail+1))
@@ -523,8 +524,23 @@ fi
 # A ^P sent down a pipe is ignored BY DESIGN and proves nothing -- which is
 # exactly how a broken editor once passed for working here. So: drive
 # csp_line_input a byte at a time, the way a serial port delivers them.
+# A line past MAX_LINE_TOKENS has to SAY SO. It used to segfault instead:
+# ERR_TOO_MANY_TOKENS was in the enum and absent from err_tab -- a designated
+# initialiser array, so the row was NULL and csp_print_error walked it from
+# address zero. The compiler dumped core while reporting an ordinary mistake,
+# which sends you looking at your program instead of at the message.
+#
+# The limit is in the text because "too complex" without a number gives no idea
+# how much to split off.
+echo "over-long line:"
+{ printf '#variable a = 0\n#variable b = 0\na = b'; \
+  for i in $(seq 1 80); do printf ' + b'; done; printf '\n'; } > "$D/toks.csp"
+got=$(./csp -n "$D/toks.csp" 2>&1 | sed 's|.*toks.csp:||')
+ck "an over-long line reports instead of crashing" \
+   "3 line too complex -- more than 64 tokens; split it" "$got"
+
 echo "line editor:"
-if gcc -I. -O2 -o "$D/line_edit" tests/line_edit.c csp_line.c \
+if gcc -Iinclude -Igen -Isrc -O2 -o "$D/line_edit" tests/line_edit.c src/csp_line.c \
        >/dev/null 2>&1; then
     got=$("$D/line_edit" | tail -1)
     ck "cursor, history and the paste guard" "line editor: ok" "$got"
@@ -533,8 +549,8 @@ else
 fi
 
 echo "flash geometry:"
-if gcc -I. -O2 -o "$D/flash_geom" tests/flash_geom.c \
-       csp_flash.c csp_devices.c csp_flash_host.c csp_strings.c \
+if gcc -Iinclude -Igen -Isrc -O2 -o "$D/flash_geom" tests/flash_geom.c \
+       src/csp_flash.c port/csp_devices.c port/csp_flash_host.c gen/csp_strings.c \
        >/dev/null 2>&1; then
     got=$(cd "$(dirname "$0")/.." && "$D/flash_geom" | tail -1)
     ck "sector sums, regions and the file backend" "flash geometry: ok" "$got"
@@ -597,7 +613,7 @@ store 10..16' "$got"
 # read the word back) and checks every row against the probe, then round-trips
 # the engine. It is the reason the table is allowed to be hand-written at all.
 echo "part layout:"
-if gcc -I. -O2 -o "$D/part_layout" tests/part_layout.c >/dev/null 2>&1; then
+if gcc -Iinclude -Igen -Isrc -O2 -o "$D/part_layout" tests/part_layout.c >/dev/null 2>&1; then
     ck "csp_part table matches the value_t structs" "ok, identical" "$("$D/part_layout")"
 else
     echo "  FAIL part_layout did not build"; fail=$((fail+1))
@@ -609,7 +625,7 @@ fi
 # numbers, so reordering the fields or changing NAMEPOS_BITS is caught here
 # rather than as first-state-of-every-block lookups quietly missing.
 echo "states layout:"
-if gcc -I. -O2 -o "$D/states_layout" tests/states_layout.c >/dev/null 2>&1; then
+if gcc -Iinclude -Igen -Isrc -O2 -o "$D/states_layout" tests/states_layout.c >/dev/null 2>&1; then
     ck "csp_states_t packs six names, slot 0 aliases name" "ok, identical" "$("$D/states_layout")"
 else
     echo "  FAIL states_layout did not build"; fail=$((fail+1))
@@ -815,7 +831,7 @@ fi
 # emitting one through the other's arm compiles fine and produces a plausible
 # wrong word. That is the shape of all three CRC mismatches this project has had.
 echo "instr layout:"
-if gcc -I. -O2 -o "$D/instr_layout" tests/instr_layout.c >/dev/null 2>&1; then
+if gcc -Iinclude -Igen -Isrc -O2 -o "$D/instr_layout" tests/instr_layout.c >/dev/null 2>&1; then
     ck "SETO/SETOX formats stay distinct" "ok, distinct" "$("$D/instr_layout")"
 else
     echo "  FAIL instr_layout did not build"; fail=$((fail+1))
@@ -874,9 +890,10 @@ fi
 # The Arduino port has no equivalent and cannot easily have one; it needs a core
 # that only arduino-cli can supply.
 echo "lpcopen:"
-if gcc -g -Wall -I. -Itests/lpcstub -DCSP_VERSION='"test"' -o "$D/lpc_fw" \
-       csp_lpcopen.c csp_rt.c csp_line.c csp_compile.c csp_parse.c csp_tok.c \
-       csp_print.c csp_repl.c csp_dump.c csp_eeprom.c csp_strings.c rom_host.c \
+if gcc -g -Wall -Iinclude -Igen -Isrc -Itests/lpcstub -DCSP_VERSION='"test"' -o "$D/lpc_fw" \
+       port/csp_lpcopen.c src/csp_rt.c src/csp_line.c src/csp_compile.c \
+       src/csp_parse.c src/csp_tok.c src/csp_print.c src/csp_repl.c \
+       port/csp_dump.c src/csp_eeprom.c gen/csp_strings.c gen/rom_host.c \
        tests/lpcstub/stub.c >/dev/null 2>&1; then
     ck "the LPC port builds and links against the core" "0" "0"
     # A GPIO pin, an ADC channel (port 15) and a rule -- then list them back.

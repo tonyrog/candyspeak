@@ -17,7 +17,7 @@
 // parses right and reads as something else is a bug you find by squinting at a
 // serial console, which is exactly the way not to find it.
 
-#include "../csp.h"
+#include "csp.h"
 
 #include <stdio.h>
 #include <string.h>

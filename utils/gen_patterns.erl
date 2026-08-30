@@ -31,9 +31,9 @@
 %%   escript utils/gen_patterns.erl check
 
 -define(TERMS, "utils/syntax.terms").
--define(IDS,   "csp_pattern_ids.h").
--define(PATS,  "csp_patterns.h").
--define(SETS,  "csp_stop_sets.h").
+-define(IDS,   "gen/csp_pattern_ids.h").
+-define(PATS,  "gen/csp_patterns.h").
+-define(SETS,  "gen/csp_stop_sets.h").
 %% Must match MAX_STOP_TOKENS in csp_parse.h. Checked here instead of at
 %% boot: the arrays are constant now, so an overflow is a build error.
 -define(MAX_STOP_TOKENS, 192).
