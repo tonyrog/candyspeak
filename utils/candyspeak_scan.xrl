@@ -29,6 +29,7 @@ constant	   : {token,{'D_CONSTANT',TokenLine}}.
 timer              : {token,{'D_TIMER',TokenLine}}.
 field              : {token,{'D_FIELD',TokenLine}}.
 buffer             : {token,{'D_BUFFER',TokenLine}}.
+define             : {token,{'D_DEFINE',TokenLine}}.
 
 integer            : {token,{'T_INTEGER',TokenLine}}.
 unsigned           : {token,{'T_UNSIGNED',TokenLine}}.

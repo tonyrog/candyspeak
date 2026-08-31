@@ -74,12 +74,15 @@
   
   #local dv = value2 - last_value
 
-  #local t1 = ((value2 > upper) & ADC_UPPER_LIMIT_EXCEEDED)
-  #local t2 = ((value2 < lower) & ADC_BELOW_LOWER_LIMIT)
-  #local t3 = ((abs(dv) > delta) & ADC_DELTA)
-  #local t4 = ((dv > 0) & (dv > pdelta) & ADC_POSITIVE_DELTA)
-  #local t5 = ((dv < 0) & (-dv > ndelta) & ADC_NEGATIVE_DELTA)
-  #local mask = t1 | t2 | t3 | t4 | t5
+  // One flag per reason, then OR them. A comparison yields -1 (all bits), so
+  // `& FLAG` picks the flag out when the test holds and nothing when it does
+  // not -- which is why this reads as "the bit, if the reason".
+  #local above_upper  = (value2 > upper) & ADC_UPPER_LIMIT_EXCEEDED
+  #local below_lower  = (value2 < lower) & ADC_BELOW_LOWER_LIMIT
+  #local moved_enough = (abs(dv) > delta) & ADC_DELTA
+  #local rose_enough  = (dv > 0) & (dv > pdelta) & ADC_POSITIVE_DELTA
+  #local fell_enough  = (dv < 0) & (-dv > ndelta) & ADC_NEGATIVE_DELTA
+  #local mask = above_upper | below_lower | moved_enough | rose_enough | fell_enough
   #local mask1 = mask & flags
 
   // The two gates adc.c has and this port did not: sampling rate and the

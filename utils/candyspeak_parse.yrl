@@ -3,7 +3,7 @@
 Terminals
   'D_MODULE' 'D_END' 'D_STATES' %% D_IN => T_IN 
   'D_DIGITAL' 'D_ANALOG' 'D_VARIABLE' 'D_LOCAL' 'D_PARAM' 'D_CONSTANT' 
-  'D_TIMER' 'D_FIELD' 'D_BUFFER'
+  'D_TIMER' 'D_FIELD' 'D_BUFFER' 'D_DEFINE'
   'T_INTEGER' 'T_UNSIGNED' 'T_STRING' 'T_FLOAT' 'T_IN' 'T_CAN' 'T_UDP'
   'T_OUT' 'T_INOUT' 'T_LITTLE' 'T_BIG' 'T_NATIVE'
   'WORD' 'INT' 'FLT'
@@ -85,6 +85,9 @@ declaration ->
 declaration ->
     'HASH' 'D_BUFFER' 'WORD' res options buftype :
 	{'#',buffer,'$3','$4','$5','$6'}.
+declaration ->
+    'HASH' 'D_DEFINE' 'WORD' expr :
+	{'#',define,'$3','$4'}.
 
 
 res -> 'COLON' 'INT' : '$2'.

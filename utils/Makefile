@@ -5,7 +5,7 @@ XRL_SRC=$(wildcard *.xrl)
 YRL_XRL_GENERATES=$(YRL_SRC:%.yrl=%.erl) $(XRL_SRC:%.xrl=%.erl)
 ERL_SOURCES=$(YRL_XRL_GENERATES)
 ERL_OBJECTS=$(ERL_SOURCES:%.erl=%.beam)
-ALL_OBJECTS=$(ERL_OBJECTS)
+ALL_OBJECTS=$(ERL_OBJECTS) candyspeak.beam
 ERL_MODULES=$(ERL_SOURCES:%.erl=%)
 
 .PRECIOUS: $(YRL_SRC:%.yrl=%.erl) $(XRL_SRC:%.xrl=%.erl)
