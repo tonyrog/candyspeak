@@ -750,6 +750,7 @@ static struct option long_options[] = {
     {"eeprom",       required_argument, 0,  'e'},
     {"eeprom-size",  required_argument, 0,  'E'},
     {"ram-used",     required_argument, 0,  'U'},
+    {"ram",          required_argument, 0,  'M'},
     {"board",        required_argument, 0,  1000},
     {"can",          required_argument, 0,  1001},
     {"no-eeprom",    no_argument,       0,  1002},

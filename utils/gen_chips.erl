@@ -277,6 +277,8 @@ main(["--board", Name, HFile]) ->
 			       pconp(P, G)])
 	    end
     end;
+main(["--help"|What]) -> help(What), halt(0);
+main(["-h"|What]) -> help(What), halt(0);
 main([Chip, CFile, HFile]) ->
     Db = load(),
     Name = list_to_atom(Chip),
@@ -293,15 +295,37 @@ main([Chip, CFile, HFile]) ->
 		      [Chip, length(kv(G, sectors, [])),
 		       kv(G, flash_kb, 0), kv(G, ram_kb, 0)])
     end;
-main(_) ->
+main(_) -> help(usage), halt(1).
+
+help(_) ->
     io:format(standard_error,
 	      "usage: gen_chips.erl <chip> <out.c> <out.h>~n"
-	      "       gen_chips.erl --list [regexp]~n"
-	      "       gen_chips.erl --boards [regexp]~n"
-	      "       gen_chips.erl --ld <chip>~n"
-	      "       gen_chips.erl --check [regexp]~n"
-		      "       gen_chips.erl --board <board> <out.h>~n", []),
-    halt(1).
+	      "  options: "
+              "       --help | -h~n"
+	      "       --list [regexp]~n"
+	      "       --boards [regexp]~n"
+	      "       --ld <chip>~n"
+	      "       --check [regexp]~n"
+	      "       --board <board> <out.h>~n"
+              "       --all <file>~n"
+	      "       --maps~n"
+	      "       --chip-of <name>~n"
+	      "       --load-addr <name>~n"
+	      "       --load-addr <name> <want>~n"
+	      "       --map-of <name>~n"
+	      "       --map-of <name> <want>~n"
+	      "       --sketch-yaml <file>~n"
+	      "       --boards-with <tool-chain>~n"
+              "       --toolchain-of <name>~n"
+              "       --fqbn-of <name>~n"
+              "       --port-of <name>~n"
+              "       --nm-of <name>~n"
+              "       --cflags-of <name>~n"
+              "       --ldflags-of <name>~n"
+              "       --optimize-of <name>~n"
+              "       --dir-of <name>~n"
+              "       --arch-of <name>~n"
+              , []).
 
 %% Resolve a NAME -- board or chip -- into the property list to generate from,
 %% with the right region map already substituted.
