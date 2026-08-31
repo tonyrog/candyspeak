@@ -1,0 +1,30 @@
+// lib/analog.csp with ADC_ANALOG_TO_DIGITAL: the input becomes a THRESHOLD
+// DETECTOR. 1 above max_val, 0 below min_val, and between them nothing is
+// reported at all -- the output holds whatever it last said.
+//
+// That middle band is hysteresis, not clamping, and it is the property worth a
+// test: an input resting on a limit cannot chatter. Reading adc.c's
+// `else { ctx->value = value; return false; }` as "clamp and carry on" is the
+// easy mistake, and a clamping implementation would put 500 on the output where
+// this expects the held value.
+//
+// A2D alone latches nothing -- mask1 is mask & flags -- so a trigger bit is
+// needed too. 0x84 is ADC_ANALOG_TO_DIGITAL | ADC_DELTA, and delta = 0 makes
+// "any change" the trigger. adc.c needs the same: its early
+// `if (!(flags & (LIMIT|DELTA|ALWAYS))) return false`.
+#Analog d
+#variable src:16 = 0
+#variable n = 0
+
+> d.flags = 0x84
+> d.max_val = 800
+> d.min_val = 200
+> d.delta = 0
+> d.delay_tm = 0
+> d.inhibit_tm = 0
+
+n = n + 1
+d.value = src
+src = 100 ? n < 4
+src = 900 ? n >= 4 && n < 8
+src = 500 ? n >= 8

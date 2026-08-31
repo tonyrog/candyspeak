@@ -344,11 +344,43 @@ Gx = 5
 Error: cannot assign to a #local -- it binds a formula
 ```
 
-> **Listing caveat.** `/list` currently shows a local's declaration and its
-> formula as two lines — the declaration, and the rule the formula compiled to.
-> That listing does not paste back: the pasted declaration would bind the local
-> to its initial value and the formula line would then be refused. Keep the
-> source.
+**Scope.** A local belongs to the module that declares it. `obj.name` on a local
+from outside is an error:
+
+```
+value1 is a #local -- only visible inside its own module
+```
+
+That is what a local *is* — a step in the module's own calculation, not a value
+that lives somewhere and can be read. Expose it as an `out` variable if the
+outside needs it.
+
+**A local is saved.** `/save` keeps it, because a local is a declaration plus
+the rule that computes it — drop the declaration and that rule has no target.
+What it does not get is a `/state` row.
+
+**A local has no `/state` row.** `/state` shows the machine's state; a local is
+a formula recomputed from that state every cycle, so listing it would be listing
+an intermediate result. Read it through the variable you assign it to.
+
+**A local lists as `$N`, not by name.**
+
+```
+#local $1:32 integer
+$7=$3&-$4|~$3&$6
+```
+
+The number is its position among the enclosing scope's locals, generated when
+the listing is written and stored nowhere — so a local costs no space in the
+name table, which has a hard 512-byte ceiling shared by ROM and RAM (see
+`#define`). Since nothing outside may name a local anyway, there is nothing for
+a name in the listing to be used *for*; `$3` says what it is instead of
+suggesting a handle that does not exist.
+
+> **Listing caveat.** `/list` shows a local's declaration and its formula as two
+> lines — the declaration, and the rule the formula compiled to. That listing
+> does not paste back: the pasted declaration would bind the local to its
+> initial value and the formula line would then be refused. Keep the source.
 
 ### Digital I/O
 

@@ -60,6 +60,34 @@ static char src_modified[26];
 // CSP_LINE_MAX is the REPL's own ceiling; the +2 is the CR and the LF.
 #define MAX_SRC_LINE (CSP_LINE_MAX + 2)
 
+// `> ...` lines met while READING a file cannot run where they are found: the
+// declarations are not complete and csp_rt_start has not laid out the arena, so
+// csp_process_line answers "not started -- /resume to allocate and run". They
+// are held here and run after csp_setup, in source order.
+//
+// One bump buffer with NUL-separated lines rather than an array of fixed rows:
+// the lines are short and few, and a row array would be 16K of .bss for the
+// handful anyone writes.
+// Parser tier only: CSP_EXEC_ONLY has no csp_process_line to run them WITH, and
+// no file reader to collect them in the first place.
+#if !defined(CSP_EXEC_ONLY)
+#define MAX_PENDING_IMM 4096
+static char pending_imm[MAX_PENDING_IMM];
+static size_t pending_imm_used = 0;
+
+// Run everything held, oldest first, then forget it.
+static void run_pending_immediates(csp_rt_t* st)
+{
+    size_t p = 0;
+    while (p < pending_imm_used) {
+	char* line = &pending_imm[p];
+	p += strlen(line) + 1;
+	csp_process_line(st, line);
+    }
+    pending_imm_used = 0;
+}
+#endif /* !CSP_EXEC_ONLY */
+
 typedef uint64_t tick_t;
 struct timeval boot_time;
 int debug = 0;
@@ -586,6 +614,33 @@ int parse_file(csp_rt_t* st, const char* name, FILE* fin)
 	    fprintf(stderr, "%s:%d line too long, max %d characters\n",
 		    name, st->ps.line, (int)(sizeof(buf) - 2));
 	    return -2;
+	}
+	// A `> ...` line is IMMEDIATE -- evaluate it now, exactly as typing it at
+	// the prompt would. Without this it went to csp_parse, whose
+	// csp_parse_immediate is an empty stub returning 0: the line was accepted
+	// and did nothing. That made a `#param` impossible to set from a file,
+	// and `> name = value` is the ONLY way to set one -- so no module with
+	// parameters could be configured, or tested, outside the REPL.
+	{
+	    char* p = buf;
+	    while ((*p == ' ') || (*p == '\t'))
+		p++;
+	    if (*p == '>') {
+		size_t len = strlen(p);
+		while ((len > 0) && ((p[len-1] == '\n') || (p[len-1] == '\r')))
+		    p[--len] = '\0';
+		if (pending_imm_used + len + 1 <= MAX_PENDING_IMM) {
+		    memcpy(&pending_imm[pending_imm_used], p, len + 1);
+		    pending_imm_used += len + 1;
+		}
+		else {
+		    fprintf(stderr, "%s:%d too many `>` lines to hold\n",
+			    name, st->ps.line);
+		    return -2;
+		}
+		st->ps.line++;
+		continue;
+	    }
 	}
 	if (debug_scan) {
 	    token_t tv[MAX_LINE_TOKENS];
@@ -1246,6 +1301,11 @@ int main(int argc, char** argv)
 	    exit(1);
 	}
 	csp_setup(&state);
+#if !defined(CSP_EXEC_ONLY)
+	// Now the arena exists and the leaves are laid out, so a held `>` can
+	// do what it says. In source order, which is what a reader expects.
+	run_pending_immediates(&state);
+#endif
     }
 
     if (debug_parse) {

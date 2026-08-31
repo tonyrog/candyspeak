@@ -840,7 +840,11 @@ match:
 	    continue;
 	
 	npos = d.name; // decl(st, i, name);
-	if ((npos == 0) || (csp_str_byte(st, npos-1) == 0))
+	// A #local has NO name here on purpose -- it lives in the define buffer
+	// until #end and lists as $N -- so the nameless skip below would drop
+	// its declaration line entirely.
+	if (!csp_is_local(st, MAKE_INDEX(0, i)) &&
+	    ((npos == 0) || (csp_str_byte(st, npos-1) == 0)))
 	    continue;                // no / empty name
 	if (nf && !is_fvar(ix, 2, filt, nf))
 	    continue;
@@ -889,7 +893,9 @@ match:
 		csp_print_char('#');
 		csp_print_rostr(ros_local);
 		csp_print_blank();
-		list_name(st, cur_mod, npos);
+		// $N, matching what the rules below call it.
+		csp_print_char('$');
+		csp_print_uint((uvalue_t)csp_local_number(st, (index_t)i));
 	    }
 	    else
 		print_decl_and_name(st, d.type, cur_mod, npos);
@@ -1163,10 +1169,18 @@ static int state_print_state(csp_rt_t* st, ivalue_t v)
 }
 
 // One leaf row. ix is the object-qualified leaf, di its declaration index.
+// A #local gets NONE: /state shows the machine's state, and a
+// local is a formula recomputed from that state every cycle -- listing it is
+// listing an intermediate result. csp.h's DECL_HEADER note has always said a
+// local "never reaches /state"; until now it did, under a name nothing outside
+// the module is even allowed to use.
 NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
 {
     decl_t t = decl(st, di, type);
     int is_state;
+
+    if (csp_is_local(st, MAKE_INDEX(0, di)))
+	return;
 
     state_name(st, ix);
 

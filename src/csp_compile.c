@@ -41,6 +41,9 @@
 // expression parser resolves an unknown name through it.
 NOINLINE static int def_lookup(csp_rt_t* st, const tstr_t* name,
 			       vtype_t* vtp, value_t* valp);
+NOINLINE int def_add_local_probe(csp_rt_t* st);
+NOINLINE int def_add_local(csp_rt_t* st, const tstr_t* name, index_t di);
+NOINLINE index_t def_lookup_local(csp_rt_t* st, const tstr_t* name);
 
 #ifdef DEBUG
 #include "csp_dump.h"
@@ -2514,6 +2517,16 @@ next:
 	    // and reg through DECL_COMMON, and those bits are the low six of
 	    // name3. `State = c` used to overwrite the third state's name.
 	    ix = csp_lookup_decl(st,&tval.str);
+	    // A #local carries no name in its declaration -- it lives in the
+	    // define buffer until #end -- so csp_lookup_decl cannot find one.
+	    // Looked up here, before the state and #define paths, because within
+	    // its own module a local is an ordinary leaf and everything below
+	    // (module context, subscripts, parts) applies to it unchanged.
+	    if (ix == BAD_INDEX) {
+		index_t lx = def_lookup_local(st, &tval.str);
+		if (lx != BAD_INDEX)
+		    ix = MAKE_INDEX(0, lx);
+	    }
 	    if ((ix == BAD_INDEX) ||
 		(decl(st,XIDX(ix),type) == DECL_STATES)) {
 		int s = lookup_state(st, &tval.str);
@@ -2555,6 +2568,18 @@ next:
 		    if (csp_set_error(st, ERR_FIELD_NOT_FOUND)) {
 			csp_set_err_arg_tstr(st, 0, &tval.str);
 		    }
+		    return 0;
+		}
+		// A #local is NOT a member. It is a formula the module evaluates
+		// for itself, it settles within one cycle, and nothing outside
+		// has any business reading it -- `obj.temp` would look like a
+		// value that lives somewhere when it is really a step in a
+		// calculation. Its own error, because "field not found" would be
+		// a lie: the name is right there.
+		if (decl(st, INDEX(jx), local) &&
+		    (decl(st, INDEX(jx), type) == DECL_VARIABLE)) {
+		    if (csp_set_error(st, ERR_LOCAL_SCOPE))
+			csp_set_err_arg_tstr(st, 0, &tval.str);
 		    return 0;
 		}
 		// A NAMED object. asm_mem_part/asm_memi turn this into an OP_SETO
@@ -2802,6 +2827,59 @@ NOINLINE static int def_lookup(csp_rt_t* st, const tstr_t* name,
     return found;
 }
 
+// --- #local names live here too -------------------------------------------
+//
+// A local's name is needed only while its module is being parsed: nothing
+// outside may read it (ERR_LOCAL_SCOPE), the listings generate $N, and /state
+// skips it. So it does not belong in ram_str, where it would spend part of the
+// 512-byte ceiling that NAMEPOS_BITS puts on ROM and RAM names together.
+//
+// It rides in the same buffer as #define, tagged V_INDEX -- "this entry holds a
+// declaration index, not a value" -- and the whole buffer is rolled back to
+// where the module started when #end closes it. Bump in, bump out: the name and
+// the scope end at the same place, which is the point.
+// Whether local names can be held outside ram_str at all.
+NOINLINE int def_add_local_probe(csp_rt_t* st) { (void)st; return 1; }
+
+NOINLINE int def_add_local(csp_rt_t* st, const tstr_t* name, index_t di)
+{
+    value_t v;
+    uint16_t need;
+    uint8_t len;
+
+    if (name->len > 255) {
+	csp_set_error(st, ERR_NAME_TOO_LONG);
+	return -1;
+    }
+    len = (uint8_t)name->len;
+    need = (uint16_t)(1 + len + 1 + sizeof(value_t));
+    if ((uint32_t)st->def_used + need > (uint32_t)CSP_DEFINE_BYTES) {
+	if (csp_set_error(st, ERR_TOO_MANY_DEFINES))
+	    csp_set_err_arg_int(st, 0, CSP_DEFINE_BYTES);
+	return -1;
+    }
+    v.u = (uvalue_t)di;
+    st->def_str[st->def_used] = (char)len;
+    memcpy(&st->def_str[st->def_used + 1], name->ptr, len);
+    st->def_str[st->def_used + 1 + len] = (char)V_INDEX;
+    memcpy(&st->def_str[st->def_used + 1 + len + 1], &v, sizeof(value_t));
+    st->def_used = (uint16_t)(st->def_used + need);
+    return 0;
+}
+
+// The declaration a #local name stands for, or BAD_INDEX.
+NOINLINE index_t def_lookup_local(csp_rt_t* st, const tstr_t* name)
+{
+    vtype_t vt;
+    value_t val;
+
+    if (!def_lookup(st, name, &vt, &val))
+	return BAD_INDEX;
+    if (vt != V_INDEX)
+	return BAD_INDEX;               // a #define, not a #local
+    return (index_t)val.u;
+}
+
 NOINLINE int csp_parse_define(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     rentry_t result;
@@ -2870,11 +2948,30 @@ NOINLINE static int def_lookup(csp_rt_t* st, const tstr_t* name,
     return 0;
 }
 
+// Its OWN error, not ERR_SYNTAX. A build with no define buffer still parses the
+// keyword, and reporting "syntax error" sends the reader to look at a line that
+// is written perfectly well. Say what is actually true: this build cannot.
 NOINLINE int csp_parse_define(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     (void)tv; (void)ti; (void)n;
-    csp_set_error(st, ERR_SYNTAX);
+    csp_set_error(st, ERR_NO_DEFINES);
     return -1;
+}
+
+// With no buffer there is nowhere to put a local's name either, so it keeps the
+// one in ram_str -- csp_parse_local falls back when this refuses.
+NOINLINE int def_add_local_probe(csp_rt_t* st) { (void)st; return 0; }
+
+NOINLINE int def_add_local(csp_rt_t* st, const tstr_t* name, index_t di)
+{
+    (void)st; (void)name; (void)di;
+    return -1;
+}
+
+NOINLINE index_t def_lookup_local(csp_rt_t* st, const tstr_t* name)
+{
+    (void)st; (void)name;
+    return BAD_INDEX;
 }
 
 #endif /* CSP_DEFINE_BYTES */
@@ -3396,8 +3493,39 @@ NOINLINE int csp_parse_local(csp_rt_t* st, token_t* tv, int ti, size_t n)
     }
     if (check_res(st, d.r.res) < 0)
 	return -1;
-    if ((ix = csp_new_udecl(st,&d.name,DECL_VARIABLE)) == BAD_INDEX)
+    // A LOCAL'S NAME DOES NOT GO IN ram_str.
+    //
+    // It is needed only while this module is parsed: nothing outside may read a
+    // local, the listings generate $N, and /state skips it. Keeping it in the
+    // declaration would spend part of the 512-byte ceiling NAMEPOS_BITS puts on
+    // all names, ROM and RAM together -- which is what lib/analog.csp was
+    // running into. It goes in the #define buffer instead, and is rolled back
+    // at #end.
+    //
+    // Duplicate check first, by hand: csp_new_udecl does it by NAME, and the
+    // declaration this makes has none.
+    if (def_lookup_local(st, &d.name) != BAD_INDEX) {
+	if (csp_set_error(st, ERR_ALREADY_DEFINED)) {
+	    csp_set_err_arg_rostr(st, 0, ros_local);
+	    csp_set_err_arg_tstr(st, 1, &d.name);
+	}
 	return -1;
+    }
+    {
+	// A named declaration is still made when there is no define buffer to
+	// hold the name (CSP_DEFINE_BYTES 0): correctness first, space second.
+	//
+	// NULL, not an empty tstr_t: csp_new_decl tests the POINTER, so an
+	// empty string still goes through new_string and spends two bytes.
+	if (def_add_local_probe(st)) {
+	    if ((ix = csp_new_decl(st, NULL, DECL_VARIABLE, 0)) == BAD_INDEX)
+		return -1;
+	    if (def_add_local(st, &d.name, INDEX(ix)) < 0)
+		return -1;
+	}
+	else if ((ix = csp_new_udecl(st, &d.name, DECL_VARIABLE)) == BAD_INDEX)
+	    return -1;
+    }
     i = INDEX(ix);
     ram_decl_at(st,i)->vt = d.opts.vt;
     ram_decl_at(st,i)->res = MAKE_RES(d.r.res);
@@ -3888,8 +4016,26 @@ NOINLINE xindex_t lookup_lhs(csp_rt_t* st, const token_t* tv,
     if (oix == BAD_INDEX) {
 	if (lhs->len == 1) {  // global | module local
 	    name = &tv[lhs->pos].v.str;
-	    if ((ix = csp_lookup_decl(st,name)) == BAD_INDEX)
+	    ix = csp_lookup_decl(st,name);
+	    // A #local's declaration carries no name (it lives in the define
+	    // buffer until #end), so the lookup above cannot find one. This is
+	    // the path csp_parse_local itself takes when it compiles the formula
+	    // as `<name> = <expr>`.
+	    if (ix == BAD_INDEX) {
+		index_t lx = def_lookup_local(st, name);
+		if (lx != BAD_INDEX)
+		    ix = MAKE_INDEX(0, lx);
+	    }
+	    // Say WHICH name. Returning BAD_INDEX silently left ps.err at ERR_OK,
+	    // and the caller's `return -1` then reported the error text for
+	    // ERR_OK -- so an undeclared name on the left of a rule printed
+	    // `ok`, which points nowhere. Every other exit from this function
+	    // already names its reason.
+	    if (ix == BAD_INDEX) {
+		if (csp_set_error(st, ERR_VARIABLE_NOT_DECLARED))
+		    csp_set_err_arg_tstr(st, 0, name);
 		return BAD_INDEX;
+	    }
 	    // Only a member of THIS module is per-instance; a global resolved
 	    // from inside the body stays global.
 	    if (is_module_local(st, ix))
@@ -4643,9 +4789,18 @@ NOINLINE static int csp_parse_disable(csp_rt_t* st, token_t* tv, int ti,
 }
 
 // '>' command
+// An immediate belongs to the REPL layer (csp_process_immediate), not here --
+// it EVALUATES rather than compiles, and this file is the compiler.
+//
+// It used to `return 0`, which is "accepted": a `> name = value` reaching this
+// path was silently discarded. Refusing is the honest answer; the file reader
+// routes such a line to csp_process_line before it ever gets here, so this is
+// now only reached by a path that has not been thought about.
 NOINLINE int csp_parse_immediate(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
-    return 0;
+    (void)tv; (void)ti; (void)n;
+    csp_set_error(st, ERR_SYNTAX);
+    return -1;
 }
 
 
@@ -4803,6 +4958,19 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 	}
 	else if ((tv[0].t == HASH) && (tv[1].t == WORD)) {
 	    int i;
+	    // `#variable out = 0`: `out` is a direction keyword, so the scanner
+	    // hands it over as a token and not a WORD -- pmatch's {str, name}
+	    // then simply does not match and the whole line reports "syntax
+	    // error", which sends the reader to look at the punctuation. Nine
+	    // words behave this way (out, in, pwm, pullup, can, big, little,
+	    // integer, unsigned); say which one it was.
+	    if ((num > 2) && (tv[2].t != WORD) && (tv[2].t != NEWLINE) &&
+		(tv[2].t < T_LAST)) {
+		if (csp_set_error(st, ERR_RESERVED_NAME))
+		    csp_set_err_arg_rostr(st,
+			0, (rostring_t)ro_ptr(&tok_table[tv[2].t].name));
+		return -1;
+	    }
 	    if ((i = find_decl_entry(tv[1].v.str.ptr,tv[1].v.str.len)) >= 0) {
 		// decl_table is indexed BY the keyword token, so `i` IS the
 		// dtok. #local maps to DECL_VARIABLE exactly as #variable does

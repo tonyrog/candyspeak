@@ -348,6 +348,9 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_PARAM_SHAPE] =            ros_err_param_shape,
     [ERR_TOO_MANY_TOKENS] =        ros_err_many_tokens,
     [ERR_TOO_MANY_DEFINES] =       ros_err_many_defines,
+    [ERR_NO_DEFINES] =             ros_err_no_defines,
+    [ERR_LOCAL_SCOPE] =            ros_err_local_scope,
+    [ERR_RESERVED_NAME] =          ros_err_reserved_name,
 };
 
 // err_tab is a designated-initialiser array, so ANY code without a row in it
@@ -1268,6 +1271,24 @@ NOINLINE void csp_dio_get(csp_rt_t* st, index_t ix, value_t* vp, dio_t dir)
     csp_dio_get_val_part(st, csp_slot(st, vw, dir), leaf_cfg_vt(st, ix), vp);
 }
 
+// A #local is READABLE IN THE CYCLE IT IS WRITTEN -- that is the whole reason it
+// exists, and it is what lets a chain of them settle in one cycle instead of one
+// cycle per step. Every other leaf follows the transaction rule: a rule reads
+// what was committed at the end of the previous cycle.
+//
+// The declaration bit and this comment's promise were both in place; the copy
+// was not. csp.h's DECL_HEADER note says "its leaf is copied DOUT->DIN right
+// after (so a read in the SAME cycle sees it -- see csp_local_commit)", and
+// csp_local_commit was never written. So a #local behaved exactly like a
+// #variable, and a chain of seven -- lib/analog.csp -- put its output seven
+// cycles behind its input.
+static inline int is_local_leaf(csp_rt_t* st, index_t n)
+{
+    index_t i = INDEX(n);
+    return (i < st->ps.nd) &&
+	(decl(st, i, type) == DECL_VARIABLE) && decl(st, i, local);
+}
+
 NOINLINE void csp_set_value(csp_rt_t* st, index_t n, value_t v)
 {
     value_t cv;
@@ -1281,6 +1302,9 @@ NOINLINE void csp_set_value(csp_rt_t* st, index_t n, value_t v)
 	    csp_enq_elist(st,n);
 #endif
 	csp_dio_set(st, n, v, DOUT);
+	// The commit a #local does not wait for.
+	if (is_local_leaf(st, n))
+	    csp_dio_set(st, n, v, DIN);
 	st->es.update++;
     }
 }

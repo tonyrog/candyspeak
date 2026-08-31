@@ -64,6 +64,9 @@ err_assign_param cannot assign to a #param in a rule -- set it with > name = val
 err_param_shape #param %s does not match the declaration it sets -- same width and type
 err_many_tokens line too complex -- more than %d tokens; split it
 err_many_defines too many #define names -- max %d bytes
+err_no_defines #define is not available in this build
+err_local_scope %s is a #local -- only visible inside its own module
+err_reserved_name %s is a reserved word and cannot be a name
 LP (
 RP )
 COLON :

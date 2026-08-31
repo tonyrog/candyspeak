@@ -1,0 +1,36 @@
+// A #local chain settles in ONE cycle. That is the whole reason #local exists:
+// written as #variable rules the same chain takes one cycle per step, because
+// each read sees the previous commit.
+//
+// It did not. csp.h's DECL_HEADER note describes the mechanism -- "its leaf is
+// copied DOUT->DIN right after (so a read in the SAME cycle sees it -- see
+// csp_local_commit)" -- and csp_local_commit was never written. The bit, the
+// documentation and the manual all promised it; the copy was missing, so a
+// #local behaved exactly like a #variable. lib/analog.csp has a chain seven
+// deep, which put its output seven cycles behind its input.
+#variable a = 0
+#local s1 = a + 1
+#local s2 = s1 * 2
+#local s3 = s2 + 1
+
+// The same chain as plain variables, for contrast: this one is EXPECTED to lag,
+// and it is what #local is supposed to differ from.
+// A #local has no name in the declaration table (it lives in the compiler's
+// define buffer until #end) and no /state row, so the checks read it through
+// mirrors. That does not weaken the test: m1 and m3 both lag the locals by
+// exactly one cycle, so if the locals settle together the mirrors do too.
+#variable m1 = 0
+#variable m3 = 0
+
+#variable v1 = 0
+#variable v2 = 0
+#variable v3 = 0
+#variable n = 0
+
+n = n + 1
+a = 10 ? n > 1
+m1 = s1
+m3 = s3
+v1 = a + 1
+v2 = v1 * 2
+v3 = v2 + 1

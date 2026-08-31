@@ -466,11 +466,23 @@ extern int ro_strcpy(char* dst, rostring_t src, int max);
 // Programs have a handful of defines, not hundreds, and a linear walk over a
 // few hundred bytes at parse time costs nothing worth a table.
 //
-// Sized per target: a board's REPL can still take a #define, but 128 bytes is
-// as much as a 2K part should spend on names it throws away. Set to 0 to refuse
-// them entirely.
+// Sized by what the build can DO, not by which chip it is for:
+//
+//   CSP_EXEC_ONLY   0. There is no parser, so a #define cannot be created --
+//                   the buffer would be RAM spent on a feature the build does
+//                   not have. This is the tier CoCo (ATmega328p) runs: it
+//                   executes a ROM image compiled on the host, where the names
+//                   were already folded away and forgotten.
+//   ARDUINO         128. The REPL can still take a #define at the prompt, but
+//                   a 2K part should not spend more than that on names it is
+//                   going to throw away.
+//   host            512.
+//
+// Set to 0 explicitly to refuse them entirely.
 #ifndef CSP_DEFINE_BYTES
-#if defined(ARDUINO) || defined(CSP_SMALL_TARGET)
+#if defined(CSP_EXEC_ONLY)
+#define CSP_DEFINE_BYTES 0
+#elif defined(ARDUINO) || defined(CSP_SMALL_TARGET)
 #define CSP_DEFINE_BYTES 128
 #else
 #define CSP_DEFINE_BYTES 512
@@ -1299,9 +1311,17 @@ typedef enum {
 // existing variable handling applies unchanged and only what cares looks.
 //
 // What it changes: the formula is evaluated once per cycle by a prologue before
-// the rules, its leaf is copied DOUT->DIN right after (so a read in the SAME
-// cycle sees it -- see csp_local_commit), it never reaches /state or EEPROM, and
-// assigning to it is an error.
+// the rules, its leaf is copied DOUT->DIN right after so a read in the SAME
+// cycle sees it (csp_set_value; the copy was missing for a long time and a
+// chain of locals lagged one cycle per step, exactly like variables), it gets
+// no /state row, its name is not stored at all -- it lists as $N and lives in
+// the compiler's define buffer until #end -- nothing outside the module may
+// read it, and assigning to it is an error.
+//
+// It DOES go to EEPROM, and must: a local is a declaration plus the rule that
+// computes it, and without the declaration that rule has no target. (This note
+// claimed otherwise for a long while. The save/load round trip was always
+// correct; the sentence was not.)
 //
 // This was the last spare bit in the header. Nothing free after it.
 #define DECL_HEADER \
@@ -1484,6 +1504,9 @@ typedef enum {
     ERR_SYNTAX,
     ERR_TOO_MANY_TOKENS,
     ERR_TOO_MANY_DEFINES,
+    ERR_NO_DEFINES,
+    ERR_LOCAL_SCOPE,
+    ERR_RESERVED_NAME,
     ERR_STRING_SPACE_EXHUSTED,    
     ERR_TOO_MANY_DECLARATIONS,
     ERR_TOO_MANY_INSTRUCTIONS,

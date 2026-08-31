@@ -1,0 +1,23 @@
+{modes, [seq]}.
+{cycles, 8}.
+%% a becomes 10 on the cycle after n reaches 2. The locals must ALL be current
+%% on that same cycle; the variables are still walking the chain.
+{checks, [
+  %% Before: a is 0, so the chain reads 1 / 2 / 3 throughout.
+  %% Cycle 1: a is still 0, and the WHOLE chain already reads 1/2/3 -- s3 is
+  %% not two cycles behind s1.
+  {var, 2, "m1", 1},
+  {var, 2, "m3", 3},
+  %% Cycle 4: a = 10 has landed, and s1 and s3 move TOGETHER. That is the
+  %% property. Before the fix s1 was 11 here and s3 still 3.
+  {var, 5, "m1", 11},
+  {var, 5, "m3", 23},
+  %% The #variable chain is still mid-flight on that cycle -- one step per
+  %% cycle, which is exactly what #local is supposed to differ from. It reaches
+  %% 23 only at cycle 6.
+  {var, 4, "v3", 3},
+  {var, 6, "v3", 23},
+  %% ...and catches up later, which is correct for a variable.
+  {final_var, "v3", 23},
+  {final_var, "m3", 23}
+]}.

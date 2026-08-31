@@ -52,8 +52,25 @@
   #local sample_mark0 = tick()
   // scale and offset
   #local value1 = value*scale + offset
-  // clamp
-  #local value2 = max(min(value1, max_val), min_val)
+
+  // ADC_ANALOG_TO_DIGITAL turns the converter into a THRESHOLD DETECTOR: the
+  // value reads 1 above max_val and 0 below min_val, and BETWEEN them nothing
+  // is reported at all. That middle is hysteresis, not clamping -- an input
+  // sitting on a limit cannot chatter, because leaving the band is what makes
+  // news. Reading adc.c's `else { ctx->value = value; return false; }` as
+  // "clamp and carry on" is the easy mistake here.
+  #local a2d     = (flags & ADC_ANALOG_TO_DIGITAL) != 0
+  #local hi      = value1 >= max_val
+  #local lo      = value1 <= min_val
+  #local clamped = max(min(value1, max_val), min_val)
+
+  // One value per mode, selected with a mask rather than a branch: a comparison
+  // yields -1 or 0, so one term is zeroed and the other passes through.
+  // -hi turns -1/0 into 1/0.
+  #local value2  = (a2d & -hi) | (~a2d & clamped)
+
+  // In A2D mode only the extremes are news. In normal mode every sample is.
+  #local edge    = !a2d || hi || lo
   
   #local dv = value2 - last_value
 
@@ -72,8 +89,15 @@
   #local latch = (mask & ADC_ALWAYS) || (mask1 & ADC_DELTA_BITS) || ((mask1 & ADC_UPPER_LIMIT_EXCEEDED) && !(selected & ADC_UPPER_LIMIT_EXCEEDED)) || ((mask1 & ADC_BELOW_LOWER_LIMIT) && !(selected & ADC_BELOW_LOWER_LIMIT))
 
   sample_mark = sample_mark0 ? due
-  output = value2 ? latch && due && free
-  last_value = value2 ? latch && due && free
-  selected   = mask1  ? latch && due && free
-  inhibit_mark = sample_mark0 ? latch && due && free
+
+  // Inside the A2D band: remember the reading, report nothing. This is the one
+  // place last_value moves WITHOUT a latch, and it matters -- the next dv is
+  // measured from here. adc.c does the same thing, one line before its
+  // `return false`.
+  last_value = value1 ? due && free && a2d && !hi && !lo
+
+  output = value2 ? latch && edge && due && free
+  last_value = value2 ? latch && edge && due && free
+  selected   = mask1  ? latch && edge && due && free
+  inhibit_mark = sample_mark0 ? latch && edge && due && free
 #end

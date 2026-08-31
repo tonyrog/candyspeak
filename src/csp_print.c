@@ -227,6 +227,46 @@ static void exprbuf_str_at(csp_rt_t* st, csp_exprbuf_t* bp, sindex_t pos)
 
 static void exprbuf_uint16(csp_exprbuf_t* bp, uint16_t v);
 
+// A #local lists as `$N`, never by name.
+//
+// The name is a COMPILE-TIME convenience: nothing outside the module may read a
+// local (ERR_LOCAL_SCOPE), and inside it the formula is what matters, not what
+// the step was called. Printing the name suggested a value that lives somewhere
+// and could be reached; `$3` says what it is -- the third step of this module's
+// calculation.
+//
+// N counts locals from the start of the enclosing scope (the module, or the
+// program for a global local), so a declaration and its uses carry the same
+// number and a listing can be read.
+int csp_local_number(csp_rt_t* st, index_t ix)
+{
+    index_t i = INDEX(ix);
+    index_t start = 0;
+    index_t k;
+    int n = 0;
+
+    for (k = i; k > 0; k--) {
+	decl_t t = decl(st, k-1, type);
+	if ((t == DECL_MODULE) || (t == DECL_END)) {
+	    start = k;
+	    break;
+	}
+    }
+    for (k = start; k < i; k++) {
+	if ((decl(st, k, type) == DECL_VARIABLE) && decl(st, k, local))
+	    n++;
+    }
+    return n + 1;
+}
+
+// True when this leaf is a #local, i.e. lists as $N.
+int csp_is_local(csp_rt_t* st, index_t ix)
+{
+    index_t i = INDEX(ix);
+    return (i < st->ps.nd) &&
+	(decl(st, i, type) == DECL_VARIABLE) && decl(st, i, local);
+}
+
 static uint8_t exprbuf_var(csp_rt_t* st, csp_exprbuf_t* bp, uint16_t ix)
 {
     uint8_t *start = exprbuf_ptr(bp);
@@ -248,7 +288,12 @@ static uint8_t exprbuf_var(csp_rt_t* st, csp_exprbuf_t* bp, uint16_t ix)
 	ix = INDEX(ix) - 1;
 	elem++;
     }
-    exprbuf_str_at(st, bp, decl_name_pos(st, ix));
+    if (csp_is_local(st, ix)) {
+	exprbuf_char(bp, '$');
+	exprbuf_uint16(bp, (uint16_t)csp_local_number(st, ix));
+    }
+    else
+	exprbuf_str_at(st, bp, decl_name_pos(st, ix));
     if (sx) {                          // A[<expr>] -- runtime subscript
 	exprbuf_char(bp, '[');
 	exprbuf_strref(bp, bp->setox);

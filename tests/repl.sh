@@ -879,13 +879,19 @@ ck "assigning to a #local is refused by name" \
 
 # It lists as #local, not as #variable: pasted back as a variable, every step of
 # a chain would lag a cycle instead of resolving in one.
+#
+# And it lists as $N rather than by name. A local is a formula, not a value that
+# lives somewhere -- nothing outside the module may read it (ERR_LOCAL_SCOPE), so
+# a name in the listing would suggest a handle that does not exist. The number is
+# its position among the module's locals, generated at listing time and stored
+# nowhere.
 cat > "$D/loc.csp" <<'EOF'
 #variable a = 7
 #local sum = a + 1
 EOF
 got=$(printf '/list\n/quit\n' | repl ./csp "$D/loc2.db" --no-eeprom "$D/loc.csp" |
 	  grep -E '^#local')
-ck "a #local lists as a #local" '#local sum:32 integer  // R' "$got"
+ck "a #local lists as \$N, not by name" '#local $1:32 integer  // R' "$got"
 
 # Baked into a ROM and loaded back. `local` is REAL DATA -- it decides whether a
 # leaf is single-buffered -- so an emitter that dropped it would both fail the
@@ -893,14 +899,15 @@ ck "a #local lists as a #local" '#local sum:32 integer  // R' "$got"
 # variable that lags a cycle. Checking the bit is in the generated C is not
 # enough: the image has to load and the chain has to still resolve in one cycle.
 if build_rom tests/unit/local.csp "$D/loc_fw"; then
-    # `sum` after ONE cycle: 10, not 0. That is the single-buffering surviving
-    # the round trip -- an ordinary variable would still read its init here,
-    # because a rule's write is not visible until the commit.
+    # Read through x (`x = sum ? 1`), because a #local has no /state row of its
+    # own -- it is a formula, not state. x reaching 10 is still the property
+    # under test: the local resolved a+b in the cycle it was written, and an
+    # ordinary variable in its place would have lagged.
     got=$(printf '/list\n/state\n/quit\n' | repl "$D/loc_fw" "$D/loc3.db" --no-eeprom |
-	      grep -E '^#local sum|^sum ')
+	      grep -E '^#local \$1:|^x ')
     ck "a #local survives a ROM round trip" \
-       '#local sum:32 integer  // F
-sum                                   = 10' "$got"
+       '#local $1:32 integer  // F
+x                                     = 10' "$got"
 else
     echo "  FAIL #local ROM did not build"; fail=$((fail+1))
 fi

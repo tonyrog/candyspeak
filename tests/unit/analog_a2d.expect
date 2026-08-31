@@ -1,0 +1,15 @@
+{modes, [seq]}.
+{cycles, 14}.
+{lib, ["lib/analog.csp"]}.
+%% src runs 100 (cycles 1-4), 900 (5-8), 500 (9-13).
+{checks, [
+  %% Below min_val: the detector reads 0, not 100.
+  {object_var, 3, "Analog.d", "d.output", 0},
+  %% Above max_val: 1, not 900.
+  {object_var, 8, "Analog.d", "d.output", 1},
+  %% THE HYSTERESIS. src is back in the middle band, where nothing is
+  %% reported -- so the output HOLDS the 1 it last said. A clamping
+  %% implementation would put 500 here, and that is what this catches.
+  {object_var, 12, "Analog.d", "d.output", 1},
+  {final_object_var, "Analog.d", "d.output", 1}
+]}.

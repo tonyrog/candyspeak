@@ -111,6 +111,12 @@ extern rochar s_err_many_tokens[50] RODATA;
 #define ros_err_many_tokens ((rostring_t) s_err_many_tokens)
 extern rochar s_err_many_defines[39] RODATA;
 #define ros_err_many_defines ((rostring_t) s_err_many_defines)
+extern rochar s_err_no_defines[39] RODATA;
+#define ros_err_no_defines ((rostring_t) s_err_no_defines)
+extern rochar s_err_local_scope[53] RODATA;
+#define ros_err_local_scope ((rostring_t) s_err_local_scope)
+extern rochar s_err_reserved_name[43] RODATA;
+#define ros_err_reserved_name ((rostring_t) s_err_reserved_name)
 extern rochar s_LP[2] RODATA;
 #define ros_LP ((rostring_t) s_LP)
 extern rochar s_RP[2] RODATA;

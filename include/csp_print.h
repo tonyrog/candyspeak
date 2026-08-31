@@ -12,6 +12,12 @@ int csp_will_output(void);
 
 // platform print functions
 int csp_print_char(char c);
+
+// A #local lists as `$N` -- see the note at csp_local_number. Shared so the
+// declaration listing and the rule listing agree; a name in one and a number in
+// the other would be worse than either.
+int csp_local_number(csp_rt_t* st, index_t ix);
+int csp_is_local(csp_rt_t* st, index_t ix);
 int csp_print_str(const char* s);
 int csp_print_rostr(rostring_t s);
 
