@@ -401,7 +401,7 @@ Examples:
 ### Analog I/O
 
 ```
-#analog <name>[:<resolution>] [in|out] [pwm] [signed|unsigned] [<port>:]<pin>
+#analog <name>[:<resolution>] [in|out] [pwm] [integer|unsigned] [<port>:]<pin>
 ```
 
 Resolution is number of bits (default 10).
@@ -1506,6 +1506,38 @@ Example — feed a sensor at two virtual times and let a timer expire:
 `elapsed(T)` and `progress(T)` all behave deterministically. This is the
 recommended way to write repeatable tests for timers and analog/digital input.
 
+A row carries three kinds of item, and they can be mixed:
+
+| Form | Sets |
+|---|---|
+| `<name> = <value>` | the value |
+| `<name>.<part> = <value>` | a part — `.pin`, `.port`, `.period`, `.dlc`, `.tx` |
+| `can <id> <byte>...` | delivers a CAN frame |
+
+A part is written to **both halves** of the transaction, the way a saved
+setting is: one written only to the output half would read back from an input
+half still holding the declared value.
+
+```
+# stimulus.dat
+0     Sensor.pin=7  Blink.period=250
+30    Sensor=10
+60    can 0x201 0x03 0x2a          # frame 0x201, two bytes
+```
+
+> **A frame takes two cycles to become visible.** The row queues it,
+> `csp_can_recv` takes it on the next cycle, and the commit after that raises
+> `.rx` — the same two cycles a real driver costs. Meanwhile the clock jumps to
+> whichever comes first, the next pending timer or the next row, so two rows a
+> minute apart can be *adjacent cycles*. When a test sends several commands in
+> sequence, put a row between them to give each frame its cycles; otherwise the
+> clock leaps past the delivery and the second command overwrites the first.
+>
+> `.rx` itself cannot be set from a row, and should not be: a frame having
+> arrived is a fact about the bus, not a value. Writing it directly would also
+> skip the shadow-heap write and `can_mark_fields`, so `changed()` on the
+> frame's fields would be wrong.
+
 ## Generate Embedded Code
 
 To generate C code for Arduino or other microcontrollers:
@@ -2213,7 +2245,7 @@ pandoc doc/manual_en.md -o doc/manual_en.pdf \
 #variable <name>:<bits> [big|little] bind <buffer>[<a>..<b>]   // bit-field view
 #local <name>[:<bits>] [type] = <expr>   // a named FORMULA, same-cycle, no assign
 #digital <name> [in|out|inout] [pullup|pulldown] [<port>:]<pin>
-#analog <name>[:<resolution>] [in|out] [pwm] [signed|unsigned] [<port>:]<pin>
+#analog <name>[:<resolution>] [in|out] [pwm] [integer|unsigned] [<port>:]<pin>
 #timer <name> <period_ms|param> [= 1]
 #constant <name> = <value>
 #param <name>[:<bits>] [type] = <value>  // a constant that does NOT fold:

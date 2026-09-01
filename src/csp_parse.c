@@ -40,29 +40,6 @@ static char* stop_set_name(uint8_t sid)
     return (char*) stop_set_names[sid];
 }
 
-#if 0
-static char* dtok_name(uint8_t dtok)
-{
-    switch(dtok) {
-    STRCASE(D_NONE);
-    STRCASE(D_MODULE);
-    STRCASE(D_END);
-    STRCASE(D_CONSTANT);
-    STRCASE(D_VARIABLE);
-    STRCASE(D_DIGITAL);
-    STRCASE(D_ANALOG);
-    STRCASE(D_TIMER);
-    // STRCASE(D_CAN);
-    STRCASE(D_UART);
-    STRCASE(D_SOCKET);
-    STRCASE(D_MOD);
-    STRCASE(D_STATES);
-    STRCASE(D_IN);    
-    default: return "???";    
-    }
-}
-#endif
-
 // Indexed by tok_t, from csp_tokens.h -- generated with the enum, so a new
 // token cannot go unnamed here the way RBRACE did (it printed as "???").
 static const char* const tok_names[] = { CSP_TOKEN_NAMES };

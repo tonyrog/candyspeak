@@ -1,0 +1,10 @@
+% Parts land, and they land in both halves -- reading them back through a rule
+% is what proves the second half: a rule reads DIN.
+{cycles, 8}.
+{modes, [seq]}.
+{stimulus, "tests/unit/stim_part.dat"}.
+{checks, [
+  {final_var, "Pin", 7},
+  {final_var, "Port", 2},
+  {final_var, "Per", 250}
+]}.

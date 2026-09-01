@@ -1,0 +1,15 @@
+% Two frames for 0x20, one for an id nothing declares.
+%
+% `.rx` is true for exactly ONE cycle per frame -- Seen counts 2, not the
+% number of cycles the data sat in the buffer. That is the property worth
+% pinning: a program that treats .rx as a level re-acts on every cycle until
+% the next frame replaces it.
+{cycles, 10}.
+{modes, [seq]}.
+{stimulus, "tests/unit/stim_can.dat"}.
+{checks, [
+  {final_var, "Seen", 2},
+  {final_var, "Last", 1},
+  % 42 + 7. The 0x21 frame carried 99 and matched no buffer, so it is gone.
+  {final_var, "Sum", 49}
+]}.

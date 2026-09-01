@@ -443,6 +443,64 @@ int csp_uconst(csp_rt_t* st, const char* name, int len,
 //   ./csp --can=vcan0 prog.csp
 // ============================================================
 
+// ------------------------------------------------------------
+// Stimulus-injected frames
+//
+// A -F row can deliver a frame:  `can <id> <b0> <b1> ...`
+//
+// It queues here and leaves through csp_can_recv, so it takes exactly the path
+// a real bus frame takes: into the SHADOW heap, through can_mark_fields, and
+// `.rx` raised by the commit that follows. Setting `.rx` from a stimulus row
+// instead would skip all three -- and `.rx` is read-only anyway, because a
+// frame having arrived is a fact about the bus and not a value anyone writes.
+//
+// Without this a program that receives CAN cannot be tested at all: the ONLY
+// way in is a real interface. Both board programs under private/ had their
+// command path compiled and unexercised for that reason.
+// ------------------------------------------------------------
+#define MAX_INJ_FRAMES 16
+
+typedef struct {
+    uint32_t id;
+    uint8_t  len;
+    uint8_t  data[8];
+} inj_frame_t;
+
+static inj_frame_t inj_q[MAX_INJ_FRAMES];
+static int inj_head = 0;         // next to read
+static int inj_tail = 0;         // next to write
+static int inj_dropped = 0;
+
+// A full queue is reported once and not per frame: the interesting fact is
+// that the test lost frames, not how many times it was told.
+static void inj_push(uint32_t id, const uint8_t* d, uint8_t len)
+{
+    int next = (inj_tail + 1) % MAX_INJ_FRAMES;
+
+    if (next == inj_head) {
+	if (!inj_dropped)
+	    fprintf(stderr, "stimulus: can queue full, frame 0x%x dropped\n",
+		    (unsigned)id);
+	inj_dropped = 1;
+	return;
+    }
+    inj_q[inj_tail].id  = id;
+    inj_q[inj_tail].len = len;
+    memcpy(inj_q[inj_tail].data, d, len);
+    inj_tail = next;
+}
+
+static int inj_pop(uint32_t* id, uint8_t* data, uint8_t* len)
+{
+    if (inj_head == inj_tail)
+	return 0;
+    *id  = inj_q[inj_head].id;
+    *len = inj_q[inj_head].len;
+    memcpy(data, inj_q[inj_head].data, *len);
+    inj_head = (inj_head + 1) % MAX_INJ_FRAMES;
+    return 1;
+}
+
 #if defined(CSP_HAS_SOCKETCAN)
 #include <net/if.h>
 #include <sys/ioctl.h>
@@ -493,6 +551,10 @@ int csp_can_recv(csp_rt_t* st, uint32_t* id, uint8_t* data, uint8_t* len)
     ssize_t n;
     (void)st;
 
+    // Stimulus first, and regardless of whether a bus is open: a test may want
+    // to drive one frame in while a real interface carries the rest.
+    if (inj_pop(id, data, len))
+	return 1;
     if (can_fd < 0)
 	return 0;
     if ((n = read(can_fd, &f, sizeof(f))) != (ssize_t)sizeof(f)) {
@@ -532,8 +594,10 @@ int csp_can_init(csp_rt_t* st) { (void)st; return 0; }
 int csp_can_pollfd(void) { return -1; }
 int csp_can_recv(csp_rt_t* st, uint32_t* id, uint8_t* data, uint8_t* len)
 {
-    (void)st; (void)id; (void)data; (void)len;
-    return 0;
+    (void)st;
+    // No interface, so the stimulus queue IS the bus. This is the path every
+    // -F test takes.
+    return inj_pop(id, data, len);
 }
 int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
 {
@@ -842,7 +906,30 @@ size_t  input_num = 0;
 uint32_t input_cycle = 0;
 int     input_delay = 0;
 
+// `can <id> <b0> <b1> ...` -- queue a frame for csp_can_recv. Returns the
+// number of TOKENS consumed, so the caller can step past the data bytes; a row
+// may carry a frame and ordinary assignments together.
+static int input_can_frame(token_t* tv, size_t num, int i)
+{
+    uint8_t data[8];
+    uint32_t id;
+    int n = 0;
+    int j;
+
+    id = (uint32_t)tv[i+1].v.val.i;
+    for (j = i + 2; (j < (int)num) && (tv[j].t == INT) && (n < 8); j++)
+	data[n++] = (uint8_t)tv[j].v.val.i;
+    inj_push(id, data, (uint8_t)n);
+    return j - i;
+}
+
 // tv[0] is cycle count tv[1] may be delay
+//
+// Three forms, and they are tried longest-first so `T.period = 500` is not read
+// as `T` followed by junk:
+//   <name> . <part> = <value>     a part: .pin .port .period .dlc .tx ...
+//   <name> = <value>              the value
+//   can <id> <byte>...            a frame delivered through csp_can_recv
 void cycle_input_values(csp_rt_t* st, token_t* tv, size_t num)
 {
     int i = 1;
@@ -853,6 +940,35 @@ void cycle_input_values(csp_rt_t* st, token_t* tv, size_t num)
 	input_delay = tv[1].v.val.i;
     }
     while(i < num) {
+	// `can` is the KEYWORD T_CAN, not a WORD -- it is the same token the
+	// scanner hands `#buffer F:16 in can 0x20`.
+	if ((tv[i].t == T_CAN) && ((i+1) < (int)num) && (tv[i+1].t == INT)) {
+	    i += input_can_frame(tv, num, i);
+	    continue;
+	}
+	if (((i+4) < (int)num) &&
+	    (tv[i].t == WORD) && (tv[i+1].t == DOT) && (tv[i+2].t == WORD) &&
+	    (tv[i+3].t == EQ) &&
+	    ((tv[i+4].t == INT) || (tv[i+4].t == FLT))) {
+	    csp_part_t part = part_from_tstr(&tv[i+2].v.str);
+	    if (part != PART_LAST) {
+		index_t ix = csp_lookup_decl(st, &tv[i].v.str);
+		if (ix != BAD_INDEX) {
+		    // BOTH halves, the way csp_settings_apply does it. A config
+		    // part written only to DOUT reads back from a DIN that still
+		    // holds the declared value -- so the write would appear to
+		    // land and then not be there.
+		    csp_dio_set_part(st, ix, tv[i+4].v.val, part, DOUT);
+		    csp_dio_set_part(st, ix, tv[i+4].v.val, part, DIN);
+		}
+		i += 5;
+		continue;
+	    }
+	    // Not a part. `obj.field` would land here; it is not supported, and
+	    // falling through would silently write the OBJECT's own value.
+	    i += 5;
+	    continue;
+	}
 	if ((tv[i].t == WORD) && (tv[i+1].t == EQ) &&
 	    ((tv[i+2].t == INT) ||(tv[i+2].t == FLT))) {
 	    index_t ix;
