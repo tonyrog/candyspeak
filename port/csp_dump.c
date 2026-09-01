@@ -114,7 +114,7 @@ void csp_fprint_value(FILE* f, csp_rt_t* st, vtype_t vt, value_t val)
 	if (val.s <= 0)
 	    fputs("\"\"", f);
 	else
-	    csp_fprint_escaped_string(f, csp_str_at(st, val.s), csp_str_byte(st, val.s-1));
+	    csp_fprint_escaped_string(f, csp_str_at(st, val.s), csp_str_len(st, val.s));
 	break;
     default: fprintf(f, "???"); break;
     }
@@ -150,7 +150,7 @@ index_t csp_dump_rule(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     case DECL_BUFFER:   // pack (Buf <<= ...) makes a buffer a reactive target
     case DECL_TIMER:
 	fprintf(f, "%s", indent(lev));
-	fprintf(f, "{rules,%d,'%s',", i, decl_name(st, ix));
+	fprintf(f, "{rules,%d,'%.*s',", i, DNAME(st, ix));
 	dump_edge_list(f, st, ix);
 	fprintf(f, "}%s\n", eot);
 	break;
@@ -167,6 +167,16 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     // dump runs outside execution, so borrowing st->cur is safe as long as the
     // one-shot is cleared again -- which is what the reset below the switch is.
     int seto = (instr(st,i,op) == OP_SETO);
+
+    // Identifier text, not code. Report the run and step over it -- rendering
+    // the payload as instructions is how a name like "State" came out as
+    // {instr,12,'LDP',[r5,{ ,9237},9]}, and it broke the dump's own syntax.
+    if (instr(st,i,op) == OP_SEGMENT) {
+	unsigned nsl = instr(st,i,sg.num);
+	fprintf(f, "%s{instr,%d,'SEGMENT',[{slots,%u},{used,%u}]}%s\n",
+		indent(lev), i, nsl, (unsigned)instr(st,i,sg.used), eot);
+	return (index_t)(i + nsl + 1);
+    }
 
     fprintf(f, "%s", indent(lev));
     switch(instr(st,i,op)) {
@@ -308,8 +318,8 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	index_t mx = instr(st,i,e.mx);
 	int n = instr(st,i,e.num);
 	int j;
-	fprintf(f, "{instr,%d,'ENTER','%s',[{n,%d}],[\n",
-		i, decl_name(st, mx), n);
+	fprintf(f, "{instr,%d,'ENTER','%.*s',[{n,%d}],[\n",
+		i, DNAME(st, mx), n);
 	i++;
 	for (j = 0; j <= n; j++) // <= include leave!
 	    i = csp_dump_instr(f, lev+1, st, i, (j == n) ? "" : ",");
@@ -319,17 +329,17 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     case OP_LEAVE: {
 	index_t mx = instr(st,i,v.mx);
 	int n = instr(st,i,v.num);
-	fprintf(f, "{instr,%d,'LEAVE','%s',[{n,%d}]}%s\n",
-		i, decl_name(st,mx), n, eot);
+	fprintf(f, "{instr,%d,'LEAVE','%.*s',[{n,%d}]}%s\n",
+		i, DNAME(st,mx), n, eot);
 	break;
     }
     case OP_NEW: {
-	index_t ent = instr(st,i,n.ent);
 	index_t obj = instr(st,i,n.obj);
 	index_t mx  = decl(st,INDEX(obj),mq.mx);
+	index_t ent = decl(st,INDEX(mx),md.ent);   // from the declaration now
 	unsigned m       = decl(st,INDEX(obj),mq.m);
-	fprintf(f, "{instr,%d,'NEW',\"%s\",\"%s\",[{ent,%d},{obj,%u}]}%s\n",
-		i, decl_name(st, mx), decl_name(st, obj), 
+	fprintf(f, "{instr,%d,'NEW',\"%.*s\",\"%.*s\",[{ent,%d},{obj,%u}]}%s\n",
+		i, DNAME(st, mx), DNAME(st, obj), 
 		INDEX(ent), m, eot);
 	break;
     }
@@ -364,10 +374,10 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 void csp_dump_var_name(FILE* f, csp_rt_t* st, int m, index_t di)
 {
     if (m == GLOBAL)
-	fprintf(f, "%s", decl_name(st, di));
+	fprintf(f, "%.*s", DNAME(st, di));
     else {
 	index_t obj = csp_object_decl(st, m);
-	fprintf(f, "%s.%s", decl_name(st, obj), decl_name(st, di));
+	fprintf(f, "%.*s.%.*s", DNAME(st, obj), DNAME(st, di));
     }
 }
 
@@ -414,11 +424,11 @@ void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
     switch(lang) {
     case ERLANG:
 	if (!fo) fprintf(f, ",");
-	fprintf(f, "{object,\"%s.%s\",[",
-		decl_name(st, mx), decl_name(st, obj));
+	fprintf(f, "{object,\"%.*s.%.*s\",[",
+		DNAME(st, mx), DNAME(st, obj));
 	break;
     case TEXT:
-	fprintf(f, "%s.%s\n", decl_name(st, mx), decl_name(st, obj));
+	fprintf(f, "%.*s.%.*s\n", DNAME(st, mx), DNAME(st, obj));
 	break;
     }
     fv = 1;
@@ -439,12 +449,12 @@ void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
 		if (lang == ERLANG) {
 		    if (!fv) fprintf(f, ",");
 		    fprintf(f, "{state,\"%.*s\",%d}",
-			    (int)csp_str_byte(st, np-1), csp_str_at(st, np),
+			    (int)csp_str_len(st, np), csp_str_at(st, np),
 			    lookup_state_pos(st, np));
 		}
 		else {
 		    fprintf(f, " state %.*s=%d\n",
-			    (int)csp_str_byte(st, np-1), csp_str_at(st, np),
+			    (int)csp_str_len(st, np), csp_str_at(st, np),
 			    lookup_state_pos(st, np));
 		}
 		fv = 0;
@@ -618,7 +628,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     case DECL_MODULE: {
 	index_t n = decl(st,i,md.n);
 	int j;
-	fprintf(f, "{decl,%d,module,'%s',[\n", i, decl_name(st, ix));
+	fprintf(f, "{decl,%d,module,'%.*s',[\n", i, DNAME(st, ix));
 	i++;
 	for (j = 0; j <= n; j++) { // include 'end'
 	    i = csp_dump_decl(f, lev+1, st, i, (j == n) ? "" : ",");
@@ -644,16 +654,16 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	    if (!first) fputc(',', f);
 	    first = 0;
 	    fprintf(f, "{%d,\"%.*s\"}", lookup_state_pos(st, np),
-		    (int)csp_str_byte(st, np-1), csp_str_at(st, np));
+		    (int)csp_str_len(st, np), csp_str_at(st, np));
 	}
 	fprintf(f, "]}%s\n", eot);
 	break;
     }
     case DECL_OBJECT:
-	fprintf(f, "{decl,%d,object,'%s','%s'}%s\n",
+	fprintf(f, "{decl,%d,object,'%.*s','%.*s'}%s\n",
 		i,
-		decl_name(st, decl(st,i,mq.mx)),
-		decl_name(st, ix), eot);
+		DNAME(st, decl(st,i,mq.mx)),
+		DNAME(st, ix), eot);
 	break;
     case DECL_VARIABLE:
 	vt = decl(st,i,vt);
@@ -663,10 +673,10 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	// them shows two identical lines for two different things. This dump is
 	// for reading what the runtime actually holds; that is exactly when the
 	// difference matters.
-	fprintf(f, "{decl,%d,%s,\"%s\",[{size,%d},{dir,%s},{type,%s}%s,{init,",
+	fprintf(f, "{decl,%d,%s,\"%.*s\",[{size,%d},{dir,%s},{type,%s}%s,{init,",
 		i,
 		decl(st,i,local) ? "local" : "variable",
-		decl_name(st, ix),
+		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
 		(char*) csp_fmt_pindir(decl(st,i,dir)),
 		(char*) csp_fmt_vtype(vt),
@@ -678,9 +688,9 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	break;
     case DECL_CONSTANT:
 	vt = decl(st,i,vt);	    
-	fprintf(f, "{decl,%d,constant,\"%s\",[{size,%d},{type,%s},{init,",
+	fprintf(f, "{decl,%d,constant,\"%.*s\",[{size,%d},{type,%s},{init,",
 		i,
-		decl_name(st, ix),
+		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
 		(char*) csp_fmt_vtype(vt));
 	csp_fprint_value(f, st, vt, decl(st,i,cn.init));
@@ -690,9 +700,9 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	break;
     case DECL_DIGITAL:
 	vt = decl(st,i,vt); // should be unsigned
-	fprintf(f, "{decl,%d,digital,\"%s\",[{dir,%s},{pull,%s},{port,%d},{pin,%d}]}%s\n",
+	fprintf(f, "{decl,%d,digital,\"%.*s\",[{dir,%s},{pull,%s},{port,%d},{pin,%d}]}%s\n",
 		i,
-		decl_name(st, ix),
+		DNAME(st, ix),
 		(char*) csp_fmt_pindir(decl(st,i,dir)),
 		(char*) csp_fmt_pull(st, i),
 		decl(st,i,di.port),decl(st,i,di.pin),
@@ -700,9 +710,9 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	break;
     case DECL_ANALOG:
 	vt = decl(st,i,vt);	    
-	fprintf(f,"{decl,%d,analog,\"%s\",[{size,%d},{type,%s},{dir,%s},{pwm,%s},{port,%d},{pin,%d}]}%s\n",
+	fprintf(f,"{decl,%d,analog,\"%.*s\",[{size,%d},{type,%s},{dir,%s},{pwm,%s},{port,%d},{pin,%d}]}%s\n",
 	       i,
-		decl_name(st, ix),
+		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
 		(char*)csp_fmt_vtype(vt),
 		(char*)csp_fmt_pindir(decl(st,i,dir)),
@@ -712,18 +722,18 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	break;
     case DECL_TIMER:
 	vt = decl(st,i,vt);
-	fprintf(f, "{decl,%d,timer,\"%s\",[{period,%d},{value,%d}]}%s\n",
+	fprintf(f, "{decl,%d,timer,\"%.*s\",[{period,%d},{value,%d}]}%s\n",
 		i,
-		decl_name(st, ix),
+		DNAME(st, ix),
 		decl(st,i,tm.period),
 		decl(st,i,tm.init),
 		eot);
 	break;
     case DECL_FIELD:
 	vt = decl(st,i,vt);
-	fprintf(f, "{decl,%d,can,\"%s\",[{size,%d},{type,%s},{endian,%s},{dir,%s},{id,16#%x},{bit,%d},{len,%d}]}%s\n",
+	fprintf(f, "{decl,%d,can,\"%.*s\",[{size,%d},{type,%s},{endian,%s},{dir,%s},{id,16#%x},{bit,%d},{len,%d}]}%s\n",
 		i,
-		decl_name(st, ix),
+		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
 		(char*)csp_fmt_vtype(vt),
 		(char*)csp_fmt_endian(decl(st,i,ca.endian)),
@@ -735,9 +745,9 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     case DECL_BUFFER:
 	vt = decl(st,i,vt);
 	// {size,N} in BYTES, matching the source syntax (bf.nbytes).
-	fprintf(f, "{decl,%d,buffer,\"%s\",[{size,%d},{type,%s},{transport,%d},{id,16#%x}]}%s\n",
+	fprintf(f, "{decl,%d,buffer,\"%.*s\",[{size,%d},{type,%s},{transport,%d},{id,16#%x}]}%s\n",
 		i,
-		decl_name(st, ix),
+		DNAME(st, ix),
 		decl(st,i,bf.nbytes),
 		(char*)csp_fmt_vtype(vt),
 		decl(st,i,bf.transport),
@@ -817,8 +827,8 @@ void csp_dump(FILE* f, csp_rt_t* st)
 	if ((ix == BAD_INDEX) || (m >= (int)st->obj_cap))
 	    continue;              // declared, but not laid out yet
 	fputc(',', f);
-	fprintf(f, "{'%s',%d,",
-		decl_name(st, decl(st,INDEX(ix),mq.mx)),
+	fprintf(f, "{'%.*s',%d,",
+		DNAME(st, decl(st,INDEX(ix),mq.mx)),
 		st->offs[m]);
 	csp_fprint_tag(f, st, ix);
 	fprintf(f, "}");
@@ -934,6 +944,8 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     const char* px = (meta && meta->prefix) ? meta->prefix : "rom";
     // Section lengths as emitted, and the offsets derived from them.
     unsigned n_str_b, n_decl_b, n_instr_b;
+    unsigned n_str_packed;
+    index_t  n_decl_real;
     unsigned n_idg = 1, n_ofs = 1, n_edg = 1;    // stubs unless -r bakes a graph
     uint32_t SP, o_str, o_decl, o_instr, o_idg, o_ofs, o_edg, img_size;
 
@@ -968,8 +980,26 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     // The generator must compute these itself: crc_hdr covers them, and a CRC
     // cannot be taken over values only the C compiler knows. CSP_IMAGE_CHECK
     // below makes the compiler confirm every one of them.
-    n_str_b   = st->ps.strp + 3;              // data + 0xFF sentinel + crc16
-    n_decl_b  = st->ps.nd + 1;                // + DECL_END_MARK
+    // The string section is EMPTY. Identifier text lives in DECL_SEGMENT runs in
+    // the declaration section, and those are written out with everything else --
+    // so the bytes are already in the image and a second flat copy would be both
+    // redundant and a second thing to keep in step.
+    //
+    // It also keeps declaration INDICES intact. Dropping segments here and
+    // packing the text into .str would renumber every declaration after them,
+    // and an index is baked into instructions (and into mq.mx, ca.id): the image
+    // would load and point at the wrong declarations.
+    n_str_packed = 0;
+    n_str_b   = n_str_packed + 3;             // just the sentinel + crc16
+    // Declarations that are actually WRITTEN: string segments are skipped, so
+    // ps.nd (which counts their slots) is not the number to size the section by.
+    {
+	index_t k;
+	n_decl_real = 0;
+	n_decl_real = st->ps.nd;
+	(void)k;
+    }
+    n_decl_b  = n_decl_real + 1;              // + DECL_END_MARK
     n_instr_b = st->ps.nn + 1;                // + OP_END_MARK
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     if (st->reactive) {
@@ -998,32 +1028,19 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     // the read is 4-byte aligned (a char at an odd address read as int HardFaults
     // on Cortex-M0), and avoids signed-char overflow for tables > 127 bytes.
     // CRC over the string DATA (used for the header AND the self-CRC trailer).
-    crc_str_data = csp_crc16(0xFFFF, st->ram_str, st->ps.strp, 0);
+    // Byte by byte through csp_str_byte, not over a flat buffer: RAM strings
+    // live in DECL_SEGMENT runs in the declaration pool now, so there is no
+    // contiguous block to hand a CRC. It also makes this correct when a ROM is
+    // loaded -- csp_str_byte reads flash below rom_strp and segments above,
+    // where the old `st->ram_str[i]` read RAM from index 0 either way.
+    {
+	crc_str_data = 0xFFFF;                // empty section
+    }
     // 3 extra bytes: a 0xFF sentinel (never a valid length or ASCII char, so it
     // marks the section end for header-free recovery) + the 2-byte CRC. See
     // rom_scan_str.
     fprintf(f, "  .s_str = { { CSP_SECT_STR }, %u },\n  .str = {\n",
 	    n_str_b + CSP_PAD4(n_str_b));
-    i = 0;
-    while (i < st->ps.strp) {
-	uint8_t n = st->ram_str[i]; // length of next string
-	int j = 1;
-	fprintf(f, "%d,", n);   // emit length
-	i++;
-	while(j <= n) {
-	    int c = st->ram_str[i];
-	    if (isprint(c))
-		fprintf(f, "'%c',", c);
-	    else if (c == 0)
-		fprintf(f, "0,");
-	    else
-		fprintf(f, "0x%02x,", (uint8_t) c);
-	    j++;
-	    i++;
-	    if ((i & 0xf) == 0)
-		fprintf(f, "\n");
-	}
-    }
     fprintf(f, "\n(char)0xff,%u,%u,", crc_str_data & 0xff, (crc_str_data >> 8) & 0xff);
     fprintf(f, "},\n");
 
@@ -1034,6 +1051,8 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     crc_decl_data = 0xFFFF;
     {
 	index_t di;
+	// Segments are not emitted, so they must not be folded either -- the
+	// target's crc_decl is over what the image actually carries.
 	for (di = 0; di < st->ps.nd; di++) {
 	    csp_decl_t d = csp_get_decl(st, di);
 	    // Normalise the runtime-scratch bits -- but NOT on a states block:
@@ -1060,6 +1079,10 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     fprintf(f, "  .s_decl = { { CSP_SECT_DECL }, %u },\n  .decl = {\n",
 	    n_decl_b * 8);
     for (i = 0; i < st->ps.nd; i++) {
+	// A string SEGMENT never reaches an image. Its bytes are already in the
+	// flat .str section above, and a ROM has no segments at all -- so both
+	// the header and its payload are skipped here, and n_decl below counts
+	// what is actually written.
 	// csp_decl_t is a UNION whose every arm begins with DECL_COMMON, so the
 	// common fields MUST be written inside the same arm designator as the
 	// type-specific fields -- a trailing ".va={..}" would otherwise clobber
@@ -1067,6 +1090,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	csp_decl_t dv = csp_get_decl(st, i);  // RAM decls grow down: use the accessor
 	csp_decl_t* dp = &dv;
 	char cmn[128];
+
 	// .cont and .local are EMITTED. Both are real data -- an array's length
 	// is recovered by scanning for `cont`, and `local` decides whether a leaf
 	// is evaluated by the prologue -- so dropping either would put the image
@@ -1169,6 +1193,29 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	char op[24];
 	snprintf(op, sizeof(op), ".op=OP_%s", csp_opcode_name(ip->op));
 	switch(ip->op) {
+	    // A string segment: header, then its payload as raw words. The
+	    // payload is identifier TEXT, so it is written byte-exact -- no arm
+	    // designator, because it is not an instruction and has no fields.
+	    //
+	    // Instructions grow up in RAM and a ROM image is an ascending array,
+	    // so the slots go out in order and the bytes land the same way in
+	    // flash. (Declarations grow down and would have needed reversing.)
+	case OP_SEGMENT: {
+	    unsigned nsl = ip->sg.num, k;
+	    fprintf(f, "  {.sg={%s,.num=%u,.used=%u}},\n",
+		    op, nsl, (unsigned)ip->sg.used);
+	    for (k = 1; k <= nsl; k++) {
+		const unsigned char* b =
+		    (const unsigned char*)csp_seg_slot(st, (index_t)i, k);
+		unsigned q;
+		fprintf(f, "  {.raw={{");
+		for (q = 0; q < sizeof(csp_instr_t); q++)
+		    fprintf(f, "%s%u", q ? "," : "", b[q]);
+		fprintf(f, "}}},\n");
+	    }
+	    i += nsl;                    // the loop's i++ steps past the header
+	    continue;
+	}
 	    // FIXME: OP_ENTER/OP_LEAVE could share format?
 	case OP_ENTER:
 	    fprintf(f, "  {.e={%s,.num=%u,.mx=%u}},\n", op, ip->e.num, ip->e.mx);
@@ -1177,7 +1224,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    fprintf(f, "  {.v={%s,.num=%u,.mx=%u}},\n", op, ip->v.num, ip->v.mx);
 	    break;
 	case OP_NEW:
-	    fprintf(f, "  {.n={%s,.ent=%u,.obj=%u}},\n", op, ip->n.ent, ip->n.obj);
+	    fprintf(f, "  {.n={%s,.obj=%u}},\n", op, ip->n.obj);
 	    break;
 	case OP_LI:
 	case OP_LIU:
@@ -1307,7 +1354,11 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	if (st->reactive) nedg = st->es.ofs[st->ps.nd];
 #endif
 	h.version = ROM_FORMAT_VERSION;
-	h.n_str = st->ps.strp; h.n_decl = st->ps.nd; h.n_instr = st->ps.nn;
+	// n_str is 0: the string SECTION is empty. Identifier text travels in the
+	// declaration section, as DECL_SEGMENT runs, and how much of it is used
+	// is read back from the last segment's `used` -- so the header does not
+	// carry a length for bytes it does not hold.
+	h.n_str = 0; h.n_decl = st->ps.nd; h.n_instr = st->ps.nn;
 	h.n_edg = nedg;
 
 	// crc over the str/decl/instr DATA -- precomputed above (same folds that
@@ -1385,7 +1436,7 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 
     switch(decl(st,i,type)) {
     case DECL_MODULE:
-	fprintf(f, "#module %s\n", decl_name(st, ix));
+	fprintf(f, "#module %.*s\n", DNAME(st, ix));
 	break;
     case DECL_END:
 	fprintf(f, "#end\n");
@@ -1402,15 +1453,15 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 	    sindex_t np = csp_states_name(&sb, k);
 	    if (np == 0)
 		continue;
-	    fprintf(f, " %.*s", (int)csp_str_byte(st, np-1), csp_str_at(st, np));
+	    fprintf(f, " %.*s", (int)csp_str_len(st, np), csp_str_at(st, np));
 	}
 	fputc('\n', f);
 	break;
     }
     case DECL_OBJECT:
-	fprintf(f, "#%s %s\n",
-		decl_name(st, decl(st,i,mq.mx)),
-		decl_name(st, ix));
+	fprintf(f, "#%.*s %.*s\n",
+		DNAME(st, decl(st,i,mq.mx)),
+		DNAME(st, ix));
 	break;
     case DECL_VARIABLE: {
 	// An array lists as its head with the length back on, so the listing
@@ -1422,8 +1473,8 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 	if (alen > 1)
 	    snprintf(abuf, sizeof(abuf), "[%u]", alen);
 	vt = decl(st,i,vt);
-	fprintf(f, "#variable %s%s:%d %s %s = ", // show init value
-		decl_name(st, ix), abuf,
+	fprintf(f, "#variable %.*s%s:%d %s %s = ", // show init value
+		DNAME(st, ix), abuf,
 		GET_RES(decl(st,i,res)),
 		(char*)csp_fmt_pindir(decl(st,i,dir)),
 		(char*)csp_fmt_vtype(vt));
@@ -1433,8 +1484,8 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
     }
     case DECL_CONSTANT:
 	vt = decl(st,i,vt);	    
-	fprintf(f, "#constant %s:%d %s = ",
-		decl_name(st, ix),
+	fprintf(f, "#constant %.*s:%d %s = ",
+		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
 		(char*)csp_fmt_vtype(vt));
 	csp_fprint_value(f, st, vt, decl(st,i,cn.init));
@@ -1442,16 +1493,16 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 	break;
     case DECL_DIGITAL:
 	vt = decl(st,i,vt); // should be unsigned
-	fprintf(f, "#digital %s %s %s %d:%d\n",
-		decl_name(st, ix),
+	fprintf(f, "#digital %.*s %s %s %d:%d\n",
+		DNAME(st, ix),
 		(char*)csp_fmt_pindir(decl(st,i,dir)),
 		(char*)csp_fmt_pull(st, i),
 		decl(st,i,di.port),decl(st,i,di.pin));
 	break;
     case DECL_ANALOG:
 	vt = decl(st,i,vt);
-	fprintf(f,"#analog %s:%d %s %s %s %d:%d\n",
-		decl_name(st, ix),
+	fprintf(f,"#analog %.*s:%d %s %s %s %d:%d\n",
+		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
 		(char*)csp_fmt_vtype(vt),
 		(char*)csp_fmt_pindir(decl(st,i,dir)),
@@ -1460,15 +1511,15 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 	break;
     case DECL_TIMER:
 	vt = decl(st,i,vt);
-	fprintf(f, "#timer %s %d = %d\n",
-		decl_name(st, ix),
+	fprintf(f, "#timer %.*s %d = %d\n",
+		DNAME(st, ix),
 		decl(st,i,tm.period),
 		decl(st,i,tm.init));
 	break;
     case DECL_FIELD:
 	vt = decl(st,i,vt);
-	fprintf(f, "#field %s:%d %s %s %s 0x%x[%d:%d]\n",
-		decl_name(st, ix),
+	fprintf(f, "#field %.*s:%d %s %s %s 0x%x[%d:%d]\n",
+		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
 		(char*)csp_fmt_vtype(vt),
 		(char*)csp_fmt_endian(decl(st,i,ca.endian)),
@@ -1480,8 +1531,8 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
     case DECL_BUFFER:
 	// #buffer <name>:<size> [dir] [can 0x<id>]. Size is BYTES (bf.nbytes)
 	// -- matching the board lister and the parser.
-	fprintf(f, "#buffer %s:%d",
-		decl_name(st, ix),
+	fprintf(f, "#buffer %.*s:%d",
+		DNAME(st, ix),
 		decl(st,i,bf.nbytes));
 	if (decl(st,i,dir))
 	    fprintf(f, " %s", (char*)csp_fmt_pindir(decl(st,i,dir)));
@@ -1540,7 +1591,7 @@ void csp_list_rules(FILE* f, csp_rt_t* st)
 	}
 	op = instr(st, i, op);
 	if (op == OP_ENTER) {
-	    fprintf(f, "%s#module %s\n", indent(lev), decl_name(st, instr(st,i,e.mx)));
+	    fprintf(f, "%s#module %.*s\n", indent(lev), DNAME(st, instr(st,i,e.mx)));
 	    lev++;
 	    i++;
 	    continue;

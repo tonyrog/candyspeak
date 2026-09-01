@@ -6,7 +6,7 @@
 // That alias is what lets everything reading a plain `d.name` see the block's
 // first state without special-casing it -- lookup_decl_in, the listing, the ROM
 // dump. Break the alignment (reorder csp_states_t, widen `dir`, change
-// NAMEPOS_BITS) and lookups start silently missing the first state of every
+// NAMEID_BITS) and lookups start silently missing the first state of every
 // block while the other five keep working.
 //
 // So this PROBES the real struct rather than restating the numbers: write a
@@ -31,7 +31,7 @@ static void fail(const char* what, unsigned long got, unsigned long want)
 // The largest name position the field can hold, so the probe uses values that
 // actually exercise the full width instead of small ones that would fit
 // anywhere.
-#define NP_MAX ((1u << NAMEPOS_BITS) - 1u)
+#define NP_MAX (MAX_NAMEIDS - 1u)
 
 int main(void)
 {

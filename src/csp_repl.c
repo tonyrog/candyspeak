@@ -447,10 +447,22 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
     st->list_nstate = 0;
     // Rules are numbered by absolute position, so a range starting part-way in
     // has to know how many came before it.
-    for (f = 0; f < from; f++)
+    for (f = 0; f < from; f++) {
+	if (instr(st,f,op) == OP_SEGMENT) {
+	    f += instr(st,f,sg.num);      // the loop's f++ steps past the header
+	    continue;
+	}
 	if (instr(st,f,op) == OP_RULE)
 	    rule_no++;
+    }
     while (i < to) {
+	// Identifier text, not code: step the whole run. Read as instructions
+	// its characters look like a gate or a rule, and the listing either
+	// invents a block or -- as it did -- loses the real one that followed.
+	if (instr(st,i,op) == OP_SEGMENT) {
+	    i += instr(st,i,sg.num) + 1;
+	    continue;
+	}
 	// Close a finished #in block: print `#end` (no number), leave the state.
 	// Only when its `#in` was printed -- an empty block writes neither half.
 	if ((block_end >= 0) && (i >= block_end)) {
@@ -844,7 +856,7 @@ match:
 	// until #end and lists as $N -- so the nameless skip below would drop
 	// its declaration line entirely.
 	if (!csp_is_local(st, MAKE_INDEX(0, i)) &&
-	    ((npos == 0) || (csp_str_byte(st, npos-1) == 0)))
+	    ((npos == 0) || (csp_str_len(st, npos) == 0)))
 	    continue;                // no / empty name
 	if (nf && !is_fvar(ix, 2, filt, nf))
 	    continue;
@@ -1687,6 +1699,7 @@ static int cmd_clear(csp_rt_t* st, int argc, char* argv[])
     st->ps.nd   = CSP_BASE_ND(st);
     st->ps.strp = CSP_BASE_STRP(st);
     st->ps.nq   = 0;
+    csp_str_recount(st);        // strp moved: handles must be recounted
     // Every line /undo could have taken back is gone. Marks left behind would
     // point above the cursors and the next /undo would push them back UP into
     // a pool that no longer holds what they described.
@@ -1791,6 +1804,7 @@ static int cmd_undo(csp_rt_t* st, int argc, char* argv[])
     st->ps.nd   = s.nd;
     st->ps.strp = s.strp;
     st->ps.nq   = s.nq;
+    csp_str_recount(st);        // strp rewound: handles must be recounted
 
     // The EEPROM watermark measures how much of the RAM patch has a saved copy.
     // RAM just shrank past it, so bring it down or /memory reports more backed
@@ -2024,6 +2038,12 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
     mem_row(ros_instr,   st->ps.nn   - st->rom_nn,   MAX_INSTRS, 0);   csp_println();
     mem_row(ros_decl,    st->ps.nd   - st->rom_nd,   MAX_DECLS,  0);   csp_println();
     mem_row(ros_string,  st->ps.strp - st->rom_strp, MAX_STR_BUF, 0);  csp_println();
+    // The row above is BYTES of the RAM buffer. This one is the count, and it
+    // is the ceiling that actually binds: a decl's name field is NAMEID_BITS
+    // wide, so a program gets 512 names however short they are. Shown as the
+    // TOTAL, ROM plus RAM, because that is what the 512 covers -- unlike every
+    // other row here, which measures the RAM patch against a per-target buffer.
+    mem_row(ros_names,   st->ps.nstr, MAX_NAMEIDS, 0);          csp_println();
     // -1 = no fixed ceiling: both tables are sized to the program (csp_estimate)
     // and come out of the arena, so what limits them is the `pool` row below.
     mem_row(ros_objects, st->ps.nq,  -1, 0);                           csp_println();

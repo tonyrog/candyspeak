@@ -57,7 +57,7 @@ extern void print_rentry(csp_rt_t* st, char* name, rentry_t* rp);
 void print_rentry(csp_rt_t* st, char* name, rentry_t* rp)
 {
     DBG("%s={", name);
-    if (rp->X) DBG("name=%s,", decl_name(st, rp->ix));
+    if (rp->X) DBG("name=%.*s,", DNAME(st, rp->ix));
     DBG("flags=");
     if (rp->I) DBG("im ");
     if (rp->L) DBG("ld ");
@@ -165,6 +165,9 @@ const op_info_t op_info[] RODATA = {
     [OP_NINSTATE] = {ros_NINSTATE,3,V_VOID,MAKE_TYPE0()},
     [OP_SETO] = {ros_SETO,3,V_VOID,MAKE_TYPE0()},
     [OP_SETOX] = {ros_SETOX,3,V_VOID,MAKE_TYPE0()},
+    // Not an instruction anyone writes: a string segment header, named only so
+    // the disassembler and the ROM generator can print it.
+    [OP_SEGMENT] = {ros_SEGMENT,0,V_VOID,0},
     [OP_LD]    = {ros_LD,3,V_VOID,MAKE_TYPE0()},
     [OP_LDP]   = {ros_LDP,3,V_VOID,MAKE_TYPE0()},
     [OP_CALL]  = {ros_CALL,3,V_VOID,MAKE_TYPE0()},
@@ -565,7 +568,8 @@ NOINLINE static bool_t asm_NEW(csp_rt_t* st, unsigned ent, index_t obj)
 {
     csp_instr_t* ip = alloc_instr_ptr(st, NULL, OP_NEW);
     if (ip != NULL) {
-	ip->n.ent = ent;
+    // n.ent is gone: the entry point lives in the module declaration, where it
+    // is a full index_t. See csp_instr_new_t.
 	ip->n.obj = obj;
 	return 1;
     }
@@ -714,12 +718,16 @@ NOINLINE index_t lookup_const(csp_rt_t* st, vtype_t vt, value_t v)
     }
     return BAD_INDEX;
 }
+// NULL, not an empty tstr_t. csp_new_decl tests the POINTER: NULL leaves
+// name = 0, which every reader already understands as "no name"
+// (lookup_decl_in skips it, decl_name_len returns 0). An empty tstr_t instead
+// ALLOCATES a zero-length string -- one length byte of a 512-byte table, for a
+// name nothing can ever ask for.
 NOINLINE index_t new_signed_const(csp_rt_t* st, ivalue_t v)
 {
     index_t ix;
     int i;
-    const tstr_t empty = { .ptr = NULL, .len = 0};
-    if ((ix = csp_new_decl(st,&empty,DECL_CONSTANT,0)) == BAD_INDEX)
+    if ((ix = csp_new_decl(st, NULL, DECL_CONSTANT,0)) == BAD_INDEX)
 	return BAD_INDEX;
     i = INDEX(ix);
     ram_decl_at(st,i)->cn.init.i = v;
@@ -2832,7 +2840,7 @@ NOINLINE static int def_lookup(csp_rt_t* st, const tstr_t* name,
 // A local's name is needed only while its module is being parsed: nothing
 // outside may read it (ERR_LOCAL_SCOPE), the listings generate $N, and /state
 // skips it. So it does not belong in ram_str, where it would spend part of the
-// 512-byte ceiling that NAMEPOS_BITS puts on ROM and RAM names together.
+// 512-byte ceiling that NAMEID_BITS puts on ROM and RAM names together.
 //
 // It rides in the same buffer as #define, tagged V_INDEX -- "this entry holds a
 // declaration index, not a value" -- and the whole buffer is rolled back to
@@ -3059,7 +3067,6 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
     end_param_t d;
     index_t mx, ex;
     int lx;
-    const tstr_t empty = { .ptr = NULL, .len = 0};
     
     if (pmatch(st, tv, ti, n, pat_end, &d, sizeof(d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
@@ -3076,7 +3083,7 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	csp_set_error(st, ERR_END_MISMATCH);
 	return -1;  // no module
     }
-    if ((ex = csp_new_decl(st,&empty,DECL_END,0)) == BAD_INDEX)
+    if ((ex = csp_new_decl(st, NULL, DECL_END,0)) == BAD_INDEX)
 	return -1;
     ram_decl_at(st, INDEX(mx))->md.n = (INDEX(ex) - INDEX(mx)) - 1;
     if (!asm_LEAVE(st, &lx, 0, 0))
@@ -3497,7 +3504,7 @@ NOINLINE int csp_parse_local(csp_rt_t* st, token_t* tv, int ti, size_t n)
     //
     // It is needed only while this module is parsed: nothing outside may read a
     // local, the listings generate $N, and /state skips it. Keeping it in the
-    // declaration would spend part of the 512-byte ceiling NAMEPOS_BITS puts on
+    // declaration would spend part of the 512-byte ceiling NAMEID_BITS puts on
     // all names, ROM and RAM together -- which is what lib/analog.csp was
     // running into. It goes in the #define buffer instead, and is rolled back
     // at #end.
@@ -3815,7 +3822,6 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     timer_param_t d = {0};
     index_t tm, tx;
     int i;
-    const tstr_t empty = { .ptr = NULL, .len = 0};
 
     d.init = 0;
     if (pmatch(st, tv, ti, n, pat_timer, &d, sizeof(d)) < 0) {
@@ -3826,7 +3832,7 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	return -1;
     if ((tm = csp_new_udecl(st,&d.name,DECL_TIMER)) == BAD_INDEX)
 	return -1;
-    tx = csp_new_decl(st,&empty,DECL_VARIABLE,0);
+    tx = csp_new_decl(st, NULL, DECL_VARIABLE,0);
     if (tx != tm+1) {
 	csp_set_error(st, ERR_INTERNAL_ERROR);
 	return -1;
@@ -4488,7 +4494,7 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
     ram_decl_at(st, INDEX(ix))->mq.m = m;
     st->ps.nq++;
 
-    DBG("object %s.%s\n", decl_name(st, mx), decl_name(st, ix));    
+    DBG("object %.*s.%.*s\n", DNAME(st, mx), DNAME(st, ix));    
 
     // Generate code for the init list. Two kinds:
     //  - reactive (<-) bindings become STANDING rules (must re-evaluate every

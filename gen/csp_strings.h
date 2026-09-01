@@ -407,6 +407,8 @@ extern rochar s_SETO[5] RODATA;
 #define ros_SETO ((rostring_t) s_SETO)
 extern rochar s_SETOX[6] RODATA;
 #define ros_SETOX ((rostring_t) s_SETOX)
+extern rochar s_SEGMENT[8] RODATA;
+#define ros_SEGMENT ((rostring_t) s_SEGMENT)
 extern rochar s_RULE[5] RODATA;
 #define ros_RULE ((rostring_t) s_RULE)
 extern rochar s_NEXT[5] RODATA;
@@ -531,6 +533,8 @@ extern rochar s_decl[5] RODATA;
 #define ros_decl ((rostring_t) s_decl)
 extern rochar s_str[4] RODATA;
 #define ros_str ((rostring_t) s_str)
+extern rochar s_names[6] RODATA;
+#define ros_names ((rostring_t) s_names)
 extern rochar s_hdr[4] RODATA;
 #define ros_hdr ((rostring_t) s_hdr)
 extern rochar s_graph[6] RODATA;

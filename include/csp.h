@@ -60,13 +60,12 @@ typedef unsigned bool_t;
 #define ro_ptr(p)       (void *)pgm_read_word((p))
 #define ro_memcmp(a,b,n) memcmp_P((a), (b), (n))
 #define ro_memcpy(d,s,n) memcpy_P((d), (s), (n))
-// STRING_BITS still buys RAM directly and stays per-target: it sizes ram_str
-// plus the exprbuf scratch (2 x 1<<STRING_BITS), and it appears in no struct,
-// so a program compiled on the host runs from an image on a board that has a
-// smaller string table. On a 2K part that is the difference between fitting and
+// The name buffer stays per-target: it is RAM, it appears in no struct that
+// travels, and a program compiled on the host runs from an image on a board with
+// a much smaller one. On a 2K part this is the difference between fitting and
 // not. OBJ_BITS used to be per-target too -- see the note at its definition for
 // why it cannot be.
-#define STRING_BITS  7
+#define CSP_STR_BYTES  128
 #else
 #define RODATA
 #define ro_byte(p)      (*(p))
@@ -75,13 +74,27 @@ typedef unsigned bool_t;
 #define ro_ptr(p)       (*((const void**)(p)))
 #define ro_memcmp(a,b,n) memcmp((a), (b), (n))
 #define ro_memcpy(d,s,n) memcpy((d), (s), (n))
-// Overridable so a big program can be compiled without editing this header:
-//   make csp CFLAGS_EXTRA=-DSTRING_BITS=10
-// The table holds EVERY identifier in the program (name, length byte and NUL),
-// so it is the ceiling a module with many long #param names runs into -- and
-// `-m` does not move it, because it is not part of the arena.
-#ifndef STRING_BITS
-#define STRING_BITS  9
+// BYTES, not a bit width. It was `1 << STRING_BITS` because a name field held a
+// byte OFFSET into this buffer, so its size and the format ceiling were the same
+// number and had to be a power of two. A name is a HANDLE now -- the Nth string
+// -- so the format caps how MANY names there are (MAX_NAMEIDS) and this caps how
+// many BYTES they take, independently. Nothing indexes it with a bit field any
+// more, so it can be whatever a board actually has room for.
+//
+// Overridable without editing this header:
+//   make csp CFLAGS_EXTRA=-DCSP_STR_BYTES=8000
+//
+// `-m` does not move it: it is not part of the arena. See the note at ram_str.
+//
+// 4 KB on the host, which is room for all 512 names at any length real programs
+// use. A target gets 512: it runs an image whose names are already in flash, and
+// this buffer only holds what the REPL adds at run time.
+#ifndef CSP_STR_BYTES
+#if defined(ARDUINO) || defined(CSP_SMALL_TARGET)
+#define CSP_STR_BYTES  512
+#else
+#define CSP_STR_BYTES  4096
+#endif
 #endif
 #endif
 
@@ -152,17 +165,39 @@ static inline void* rdvp(const void* p, int rom)
 // relative to a base and 15 bits is the ceiling on globals AND on members per
 // object -- not on the two together. It was 11 while obj took the other five.
 #define DECL_BITS    15
-#define INSTR_BITS   11
+// 15, not 11. This is NOT an encoding width -- nothing declares a bit field with
+// it, it only sizes MAX_INSTRS. What actually bounds the stream are the relative
+// offsets instructions carry, and they are all wider or bound something smaller:
+//
+//   rule.nxt      signed 15   a rule body,     +-16383
+//   instate.nxt   signed 13   an #in block,    +-4095
+//   enter.num     10          a module body,   1023
+//
+// The one absolute index was OP_NEW's `ent`, and it silently truncated any
+// module past 1023 until it was taken out (see csp_instr_new_t). With that gone
+// nothing in the encoding cares how long the stream is, and identifier text
+// shares it now -- so the ceiling had to stop being the tightest thing in sight.
+#define INSTR_BITS   15
 
-// Width of a decl's `name` field: a LOGICAL string position (rom_strp + RAM
-// offset), NOT a RAM-buffer size. It used to reuse STRING_BITS, which is a RAM
-// budget (7 on AVR = a 128-byte ram_str). That coupling was a bug: with a ROM
-// string table of 130 bytes the very first RAM decl name lands at position 131
-// and a 7-bit field truncates it to garbage. Sized here to rom_strp + the RAM
-// buffer with headroom, independent of the buffer. 9 bits (0..511) fits inside
-// DECL_COMMON's two spare bits on AVR, so csp_decl_t does not grow. new_string
-// rejects a position that will not fit rather than truncating (ERR_STRING_SPACE).
-#define NAMEPOS_BITS 9
+// Width of a decl's `name` field: a string HANDLE, which is an ID -- handle N
+// names the Nth string in the table, ROM and RAM together. So this caps how
+// MANY names a program may have, and nothing about how long they are.
+//
+// It used to be a byte POSITION (hence the old name, NAMEPOS_BITS), which made
+// the same 9 bits cap the total LENGTH of every identifier at 512 bytes -- a
+// wall a single module with long #param names could hit. The two limits are
+// separate now: this one, and the string buffer for the bytes.
+//
+// It also used to reuse STRING_BITS, which is a RAM budget (7 on AVR = a
+// 128-byte ram_str). That coupling was a bug in its own right: with a ROM
+// string table of 130 bytes the very first RAM decl name landed at position 131
+// and a 7-bit field truncated it to garbage.
+//
+// 9 bits fits inside DECL_COMMON's two spare bits on AVR, so csp_decl_t does not
+// grow. new_string refuses a handle that will not fit rather than truncating it
+// (ERR_STRING_SPACE).
+#define NAMEID_BITS 9
+#define MAX_NAMEIDS (1u << NAMEID_BITS)   // handles 1..MAX_NAMEIDS-1; 0 = no name
 
 // Format version of a generated ROM (rom.c). Baked in by `csp -C` as rom_version
 // and checked by csp_load_rom at boot. Bump it whenever the ROM layout changes
@@ -170,9 +205,18 @@ static inline void* rdvp(const void* p, int rom)
 // widths, the rom_* symbol set, or the meaning of a baked field. A mismatch
 // rejects the ROM (runs empty, with a message) instead of executing garbage --
 // exactly the "stale generate" trap that cost us the July-18 ROM and EEPROM v5.
-//   v1: first versioned ROM (post NAMEPOS_BITS)
+//   v1: first versioned ROM (post NAMEID_BITS)
 //   v2: csp_image_header_t (per-section CRCs) replaces the loose rom_* scalars
 //   v3: crc_graph covers the reactive graph (rom_idg/rom_ofs/rom_edg)
+//   v14: strings lost their nul terminator -- [len][chars], nothing after. Every
+//        position past the first shifts, so an older table reads as garbage.
+//   v15: a decl's `name` is a string HANDLE (the Nth string), not a byte
+//        offset, and the table starts at byte 0 instead of 1. The 9-bit field
+//        now caps the NUMBER of names at 512 rather than their bytes.
+//   v16: identifier text moved into the INSTRUCTION stream as OP_SEGMENT runs
+//        (the .str section is gone), and OP_NEW lost its 10-bit `ent` -- the
+//        entry point comes from the module declaration, which can address the
+//        whole stream.
 //   v4: #buffer size is bytes -- csp_bufdecl_t.nbits became nbytes
 //   v5: OP_NINSTATE + INSTATE.nxt 14->13 with implicit bit (multi-state #in)
 //   v6: DECL_END_MARK / OP_END_MARK self-CRC terminators (header-corruption
@@ -205,7 +249,7 @@ static inline void* rdvp(const void* p, int rom)
 //       compute every one of those SIGNED with no complaint. Images travel on
 //       their own -- an A/B slot, a FAILSAFE flashed alone -- so that direction
 //       is reachable and has to be rejected rather than run.
-#define ROM_FORMAT_VERSION 13
+#define ROM_FORMAT_VERSION 16
 
 // Format version of the SETTINGS store, which is NOT ROM_FORMAT_VERSION and not
 // EEPROM_VERSION either. It needs its own because it is the one part of the
@@ -417,7 +461,6 @@ extern int ro_strcpy(char* dst, rostring_t src, int max);
 // ERR_TOO_MANY_DECLARATIONS. This only refuses a number that cannot be stored.
 #define MAX_OBJECT_NUM 0xffffu
 // (buffers need no MAX_*: csp_view_t.buf is as wide as the nbuf counter feeding it)
-#define MAX_QUEUE    (MAX_INSTRS)      // ceiling csp_csr clamps the queue to
 // Highest rule number #disable can address. A fixed bitset on csp_rt_t (it has
 // to outlive every rebuild), so this is RAM spent whether or not it is used --
 // 128 bits = 16 bytes. Programs with more rules than this still RUN fine; only
@@ -444,7 +487,63 @@ extern int ro_strcpy(char* dst, rostring_t src, int max);
 #define QENTRY_ORD(st, e)         ((e) >> (st)->es.obj_shift)
 #define MAX_STACK_DEPTH 4
 #define NAME_BITS    5
-#define MAX_STR_BUF  (1 << STRING_BITS) // total number of char in var names
+#define MAX_STR_BUF  CSP_STR_BYTES   // total bytes of identifier text in RAM
+
+// --- string segments -------------------------------------------------------
+//
+// RAM string bytes live in the DECLARATION pool, in runs of DECL_SEGMENT: a
+// header slot with the payload count, then the slots holding characters. The
+// decl pool is the only allocator here that hands out permanent memory LAZILY
+// (the middle is reset by every rebuild; the two growing ends are anchored once
+// in csp_mem_init), so a segment inherits exactly the growth the table needs and
+// mem_fits() already counts it.
+//
+// ONE SIZE FOR EVERY PLATFORM. Not because an image forces it -- a segment
+// never reaches one, since csp -C writes a flat string section and a board's own
+// names live in flash -- but because two sizes would be two layouts to reason
+// about for no gain. 128 is what an AVR can spare: 17 slots is 136 bytes of a
+// 512-byte arena, about what its old fixed ram_str took, while a host arena
+// does not notice either way.
+//
+// The cost is 6% metadata (a whole 8-byte slot to carry 4 bytes of header) plus
+// ~2% lost to strings that do not fit at the end of a segment. A record may not
+// straddle a boundary: csp_str_at hands out a raw char* into one.
+#define CSP_STR_SEG_BITS  7
+#define CSP_STR_SEG_BYTES (1u << CSP_STR_SEG_BITS)          // 128
+#define CSP_STR_SEG_MASK  (CSP_STR_SEG_BYTES - 1u)
+#define CSP_STR_SEG_SLOTS (CSP_STR_SEG_BYTES / sizeof(csp_instr_t))
+
+// How many segments the map can hold. A table, not a format -- it may differ per
+// target. 512 names of the longest kind would want ~132; a host can afford that,
+// a small part cannot and will run out of arena long before.
+#ifndef CSP_STR_MAX_SEGS
+#if defined(__AVR__)
+#define CSP_STR_MAX_SEGS 4
+#elif defined(ARDUINO) || defined(CSP_SMALL_TARGET)
+#define CSP_STR_MAX_SEGS 16
+#else
+#define CSP_STR_MAX_SEGS 136
+#endif
+#endif
+
+
+// Scratch for the up-to-three %s arguments an error message carries. Its own
+// buffer, not the top of the name table: an error argument is a COPY of a name
+// (a ROM one lives in flash, and neither fprintf nor csp_print_error can tell
+// the segments apart from a pointer), it lives for one message, and sharing
+// space with the table meant a long program could not report what was wrong
+// with it. Same reasoning as CSP_DEFINE_BYTES.
+//
+// Three arguments of a name each, and a name is bounded by the line length.
+#ifndef CSP_ERR_STR_BYTES
+#define CSP_ERR_STR_BYTES 128
+#endif
+
+// The disassembler's scratch, where ONE rendered rule is built. It was sized to
+// MAX_STR_BUF, which is a different quantity entirely -- the whole name table --
+// and the cursor into it is a uint8_t, so on the host 3841 of those 4096 bytes
+// could never be reached. A rendered line is what it has to hold.
+#define MAX_EXPRBUF  ((MAX_STR_BUF < 255) ? MAX_STR_BUF : 255)
 
 // --- #define: compile-time names, and NOT in the string table ---------------
 //
@@ -457,7 +556,7 @@ extern int ro_strcpy(char* dst, rostring_t src, int max);
 // nothing: that array is already double-ended (names grow up from 0, error
 // strings down from MAX_STR_BUF), so a define stored there competes for the
 // very 512 bytes it is meant to relieve. And the ceiling is not the buffer but
-// NAMEPOS_BITS: a declaration's name field is 9 bits, so ROM and RAM names
+// NAMEID_BITS: a declaration's name field is 9 bits, so ROM and RAM names
 // together cannot pass 512 whatever the buffer's size. A define has no
 // declaration and therefore no name field, which is exactly what puts it
 // outside that limit.
@@ -943,15 +1042,25 @@ typedef enum {
     OP_ARG = 53,     // load argument from register
     OP_CALL = 54,    // function call:
     OP_STI = 55,     // store immediate value to memory (mirror of EQI)
+    // A run of identifier text living in the INSTRUCTION pool: this header, then
+    // num slots of characters. Executing it JUMPS the payload, which is what
+    // makes a segment transparent -- it lands mid-stream because a name is
+    // created while code is being generated, and there is no moving it
+    // afterwards without renumbering every jump.
+    //
+    // 17 is a hole (where `>` used to be, before it was mirrored to LT+swap),
+    // taken ahead of 60..62 as the note at OP_AVAIL asks.
+    OP_SEGMENT = 17,
+
     OP_INSTATE = 56, // #in <state> block gate: if reg != state, skip block(nxt)
     OP_NINSTATE = 57,// #in A B C OR-chain gate: if reg == state, jump INTO block (nxt)
     OP_SETO = 58,    // point CURRENT at a NAMED object for the next memory access
     OP_SETOX = 59,   // same, but the object number comes from a register (arrays)
     OP_AVAIL = 60,   // SENTINEL, not an opcode: one past the highest number in
-		// use. NOT the count any more -- 17, 33 and 34 are holes where
-		// `>` and `>=` used to be (16 was one until OP_TMO took it), so
-		// 57 opcodes occupy 60 numbers and there are SIX free: those
-		// three plus 60..62.
+		// use. NOT the count any more -- 33 and 34 are holes where `>=`
+		// used to be (16 was one until OP_TMO took it, 17 until
+		// OP_SEGMENT did), so 58 opcodes occupy 60 numbers and there are
+		// FIVE free: those two plus 60..62.
 		// (63 is OP_END_MARK.) A new opcode should take a hole first.
 		// Printed by print_defines and asserted against OP_END_MARK
 		// below. Keep it last.
@@ -1148,15 +1257,32 @@ typedef struct PACKED {
     index_t  mx;     // module index
 } csp_instr_enter_t;
 
+// A string segment header. `num` payload slots follow it, holding identifier
+// text; `used` is how many BYTES of them are in use, which is what lets an
+// image say how much string space it carries without a header field (only the
+// last segment's value is ever read).
+typedef struct PACKED {
+    INSTR_COMMON;
+    unsigned num:BODY_BITS;   // payload slots that follow
+    unsigned used:8;          // bytes used in this segment
+} csp_instr_seg_t;
+
 typedef struct PACKED {
     INSTR_COMMON;
     unsigned num:BODY_BITS;   // number of instructions (shares the word with mx)
     index_t  mx;     // module index
 } csp_instr_leave_t;
 
+// Instantiate an object: enter its module body like a call.
+//
+// The entry point is NOT here. It used to be `ent:BODY_BITS`, an ABSOLUTE
+// instruction index in ten bits -- so a module whose ENTER landed past 1023 had
+// its entry truncated silently: 1557 became 533, and the object called into the
+// middle of unrelated code with no error anywhere. The module DECLARATION
+// already carries it as a full index_t, reachable from obj in two steps
+// (obj_entry), which costs nothing at a call and removes the ceiling.
 typedef struct PACKED {
     INSTR_COMMON;
-    unsigned ent:BODY_BITS;  // entry point index in instr[] (shares word with obj)
     index_t  obj;            // object declaration index
 } csp_instr_new_t;
 
@@ -1236,6 +1362,11 @@ typedef union {
     // uint32 need on arduino uno (unsigned is 16 bit?)
     struct PACKED { INSTR_COMMON; uint32_t rest:26; };
     csp_instr_enter_t e;
+    csp_instr_seg_t   sg;
+    // A segment's payload slot: four bytes of identifier text, no fields. The
+    // arm exists so the ROM generator can write one and the loader read one
+    // without pretending it is an instruction.
+    struct PACKED { uint8_t b[4]; } raw;
     csp_instr_leave_t v;
     csp_instr_new_t n;
     csp_instr_imm_t i;
@@ -1329,7 +1460,7 @@ typedef enum {
     unsigned cont:1; \
     unsigned local:1; \
     pindir_t dir:DIR_BITS; \
-    unsigned name:NAMEPOS_BITS
+    unsigned name:NAMEID_BITS
 
 #define DECL_TYPE_HEADER \
     DECL_HEADER; \
@@ -1376,11 +1507,11 @@ typedef struct PACKED {
 // lands on name2 and name3; see tests/states_layout.c.
 typedef struct PACKED {
     DECL_HEADER;                  // type, dir, and slot 0 as `name`
-    unsigned name2:NAMEPOS_BITS;
-    unsigned name3:NAMEPOS_BITS;
-    unsigned name4:NAMEPOS_BITS;
-    unsigned name5:NAMEPOS_BITS;
-    unsigned name6:NAMEPOS_BITS;
+    unsigned name2:NAMEID_BITS;
+    unsigned name3:NAMEID_BITS;
+    unsigned name4:NAMEID_BITS;
+    unsigned name5:NAMEID_BITS;
+    unsigned name6:NAMEID_BITS;
 } csp_states_t;
 
 // Slots in one states block. Bit fields cannot be indexed, so reading slot k
@@ -1465,6 +1596,7 @@ typedef union {
     csp_states_t   s6;
     csp_decl_end_t em;
 } csp_decl_t;
+
 
 // Name position of slot k in a states block, 0 when the slot is padding. Slot 0
 // is DECL_COMMON's `name` -- csp_states_t lines its first three fields up with
@@ -1555,8 +1687,14 @@ typedef struct PACKED {
     index_t nd;                  // number of decls
     index_t nq;                  // number of objects
     index_t ns;                  // number of states
-    uint32_t strp;               // string table position (grows up)
-    uint32_t err_strp;           // error string position (grows down from MAX_STR_BUF)
+    uint32_t strp;               // string table position in BYTES (grows up)
+    // How many strings are in the table. A string HANDLE is an index into this
+    // count -- handle N is the Nth string -- so this is also the next handle to
+    // hand out. Kept alongside strp rather than derived, because new_string
+    // needs it on every allocation; anything that moves strp from the outside
+    // (ROM load, EEPROM load, /clear, an undo) calls csp_str_recount instead.
+    uint32_t nstr;
+    uint32_t err_strp;           // error scratch cursor (grows down from CSP_ERR_STR_BYTES)
     csp_err_t err;               // error code
     uintptr_t err_args[3];       // error arguments for printf
     uint32_t line;               // line number when parsing
@@ -1956,7 +2094,14 @@ typedef struct _csp_rt_t
     size_t mid_end;                      // where it must stop (before decl+scratch)
     uint8_t mid_full;                    // 1 = a request did not fit
     csp_instr_t  imm_scratch;            // dummy slot for immediate `> expr` eval fold
-    char        ram_str[MAX_STR_BUF];    // store variable names
+    // Segment map: str_seg[k] is the DECL INDEX of segment k's header slot, and
+    // its payload holds RAM string bytes [k*128 .. k*128+127]. 0 = not taken
+    // yet (index 0 is always State, never a segment). Rebuilt by
+    // csp_str_recount, which is what /clear, /undo, a ROM load and an EEPROM
+    // load already call.
+    index_t     str_seg[CSP_STR_MAX_SEGS];
+    uint8_t     nseg;                    // segments taken
+    char        err_str[CSP_ERR_STR_BYTES]; // error-message %s arguments
 #if CSP_DEFINE_BYTES > 0
     // #define names and values -- see the note at CSP_DEFINE_BYTES. Deliberately
     // NOT part of ram_str: it is the buffer a define is meant to relieve.
@@ -1965,43 +2110,7 @@ typedef struct _csp_rt_t
 #endif
 
     csp_line_t  line;                    // line data
-#if 0    
-    // The REPL line being typed or pasted. The buffer is carved off the TOP of
-    // the arena in csp_mem_init (see there for why not csp_mid_alloc), so how
-    // long a line may be is a property of the BOARD rather than a compile-time
-    // guess -- a mega and a Feather no longer have to agree on 64.
-    // It doubles as the input QUEUE: while a completed line is being run, what
-    // keeps arriving is stored raw behind it and re-fed afterwards, so a paste
-    // does not have to wait on the driver's FIFO alone. Hence two cursors.
-    char*    line_buf;
-    uint16_t line_buf_size;  // capacity in bytes, terminator included
-    uint16_t line_pos;       // LENGTH of the line being assembled (NUL position
-			     // once it is ready). Deliberately still the length
-			     // and not the cursor: csp_line_done reads it to
-			     // find where the queued paste begins, and the
-			     // "one byte in, at most one byte out" invariant
-			     // that keeps the re-feed from overtaking itself is
-			     // stated in terms of it.
-    uint16_t line_cur;       // where the next character is INSERTED, 0..line_pos
-    uint8_t  esc;            // escape-sequence decoder state (0 = idle)
-    uint8_t  refeed;         // re-feeding the queue after a line ran: history
-			     // and cursor keys are ignored, because a recall
-			     // would expand the line under the read cursor the
-			     // re-feed is walking
 
-    // Command history. NULL and 0 when the pool was too small to carve one.
-    char*    hist;
-    uint16_t hist_size;      // capacity
-    uint16_t hist_used;      // bytes in use; the newest entry ends here
-    uint16_t hist_at;        // browse point: offset just past the entry being
-			     // shown, or hist_used when not browsing
-    uint16_t line_fill;      // bytes held in total; == line_pos unless a ready
-			     // line has raw bytes queued behind it
-    uint8_t  line_ready;     // a complete line is waiting at the front
-    uint8_t  line_ovf;       // a character was dropped -> refuse the whole line
-    uint8_t  need_prompt;    // print "> " before the next read
-    uint8_t  serial_xoff;    // status of soft flow control
-#endif
     // /undo. Where the four bump cursors stood before each of the last few
     // typed lines, so a line can be taken back by TRUNCATING to where it began
     // -- which is what /clear already does, only to the ROM baseline instead.
@@ -2098,6 +2207,14 @@ typedef struct _csp_rt_t
     index_t rom_nd;              // # ROM decls   (RAM decl base)
     index_t rom_nn;              // # ROM instrs  (RAM instr base)
     index_t rom_strp;            // # ROM string bytes (RAM string base)
+    // Walk cache for csp_str_ofs. A handle is the Nth string, so resolving one
+    // means counting length bytes from the start -- and the readers that do it
+    // most (a listing, a name lookup over every decl) go through the handles in
+    // ascending order, so remembering the last one turns the whole sweep from
+    // O(n^2) into O(n). Purely derived: csp_str_recount resets it, and nothing
+    // depends on it being warm.
+    sindex_t str_cid;            // last handle resolved (0 = cold)
+    sindex_t str_cofs;           // and its byte offset
     index_t rom_ns;              // # baseline states (INIT/NORMAL + ROM states);
 				 // EEPROM persists only the runtime additions above
     index_t rom_nedg;            // # ROM reactive-graph edges (0 = no baked graph)
@@ -2354,29 +2471,149 @@ static inline csp_sect_t ro_sect(const csp_sect_t* p)
 extern csp_decl_t  csp_get_decl(csp_rt_t* st, index_t i);
 extern csp_instr_t csp_get_instr(csp_rt_t* st, index_t n);
 
-// one string byte at a logical position (length byte or char)
-static inline uint8_t csp_str_byte(csp_rt_t* st, sindex_t pos)
+// one string byte at a raw BYTE OFFSET into the table (length byte or char).
+// For a string, use csp_str_len / csp_str_at, which take a HANDLE; this one is
+// for walking the table itself.
+// RAM write slots -- logical index must be at/above the ROM base. decl grows
+// DOWN from the pool top, so the local index is negated (ram_decl points at
+// local 0, the topmost slot; local 1 is ram_decl[-1], and so on). Declared here
+// because the string accessors below resolve segments through it.
+#define ram_decl_at(st, logical)  (&(st)->ram_decl[(st)->rom_nd - (logical)])
+
+#define ram_instr_at(st, logical) (&(st)->ram_instr[(logical) - (st)->rom_nn])
+
+// Address of payload slot `k` (1..num) of the segment whose header is at `h`.
+//
+// Instructions grow UP in RAM and a ROM image is an ascending array, so the two
+// run the same way -- unlike declarations, which grow down and would have made
+// the same logical slot sit at opposite ends. Nothing has to be written in
+// reverse, and one offset works for either.
+// Next instruction index after `i`, stepping over a string segment's payload.
+//
+// EXECUTION does not need this -- OP_SEGMENT is a jump, so eval steps past the
+// run on its own. It is the loops that walk the stream LINEARLY that do: the
+// reactive graph builder, the rule scanners, the ROM emitter. Payload is
+// identifier text, so its opcode nibble is a character, and one in four reads
+// as something with operands to chase.
+static inline index_t instr_next(csp_rt_t* st, index_t i)
 {
-    if (pos < (sindex_t)st->rom_strp)
-	return ro_byte(&st->rom_p.str[pos]);
-    return (uint8_t)st->ram_str[pos - st->rom_strp];
+    csp_instr_t ci = csp_get_instr(st, i);
+    return (ci.op == OP_SEGMENT) ? (index_t)(i + ci.sg.num + 1) : (index_t)(i + 1);
 }
 
-// char* to the string at a logical position (host: RODATA is normal memory;
-// an AVR PROGMEM string needs a copy-out API -- deferred). Base 0 -> ram_str.
-static inline char* csp_str_at(csp_rt_t* st, sindex_t pos)
+static inline char* csp_seg_slot(csp_rt_t* st, index_t h, unsigned k)
 {
-    if (pos < (sindex_t)st->rom_strp)
-	return (char*)&st->rom_p.str[pos];
-    return &st->ram_str[pos - st->rom_strp];
+    index_t i = h + k;
+    if (i < st->rom_nn)
+	return (char*)&st->rom_p.instr[i];
+    return (char*)ram_instr_at(st, i);
+}
+
+// Byte pointer for a RAM-local offset, resolved through the segment map.
+//
+// ADDRESSES RUN BACKWARDS in the decl pool: ram_decl_at(i) is
+// &ram_decl[rom_nd - i], so a HIGHER index is a LOWER address. The payload is
+// therefore contiguous and ascending from the LAST slot of the run, which is
+// why the base is taken at header + CSP_STR_SEG_SLOTS.
+static inline char* csp_ram_str_at(csp_rt_t* st, sindex_t r)
+{
+    index_t h = st->str_seg[r >> CSP_STR_SEG_BITS];
+    return csp_seg_slot(st, h, 1) + (r & CSP_STR_SEG_MASK);
+}
+
+static inline uint8_t csp_str_byte(csp_rt_t* st, sindex_t pos)
+{
+    // No ROM/RAM split any more. Identifier text lives in DECL_SEGMENT runs,
+    // and a run is reached the same way whether its slots came from flash or
+    // from the pool -- so rom_strp is 0 and this is one lookup.
+    return (uint8_t)*csp_ram_str_at(st, pos);
+}
+
+// Step from the end of one segment's text to the start of the next.
+//
+// A record may not straddle a boundary, so a segment's tail goes unused when the
+// next name will not fit -- and a ROM segment's tail is unused from the moment
+// it is loaded, because RAM names cannot be written into flash. Both are the
+// same thing: the header's `used` says how far the text goes, and past that the
+// walk jumps to the next segment.
+//
+// This is what a fill BYTE cannot do. Marking the tail works while the tail is
+// writable; a loaded image's is not.
+static inline sindex_t csp_str_skip_fill(csp_rt_t* st, sindex_t ofs)
+{
+    while (ofs < (sindex_t)st->ps.strp) {
+	index_t h = st->str_seg[ofs >> CSP_STR_SEG_BITS];
+	unsigned used;
+	if (h == BAD_INDEX)
+	    break;
+	used = csp_get_instr(st, h).sg.used;
+	if ((ofs & CSP_STR_SEG_MASK) < used)
+	    break;
+	ofs = (ofs + CSP_STR_SEG_BYTES) & ~(sindex_t)CSP_STR_SEG_MASK;
+    }
+    return ofs;
+}
+
+
+// A string HANDLE -- what a decl's `name` and a V_STRING value hold -- resolved
+// to the byte offset of its LENGTH BYTE. Handle 0 means "no string" and has no
+// offset, so every reader tests for it first.
+//
+// A handle is an ID: handle N names the Nth string in the table, counting from
+// 1. That is what makes the 9-bit name field hold 512 NAMES rather than 512
+// bytes -- at a mean name of four characters, six times the room.
+//
+// The cost is that resolving one means counting, and the cache above is what
+// keeps that from mattering: every sweep that resolves many handles does it in
+// ascending order. Nothing in EXECUTION resolves a handle at all -- names are
+// for the parser and the listing.
+static inline sindex_t csp_str_ofs(csp_rt_t* st, sindex_t h)
+{
+    sindex_t i, ofs;
+
+    if (st->str_cid && (h >= st->str_cid)) {   // resume from the cache
+	i = st->str_cid; ofs = st->str_cofs;
+    }
+    else {
+	i = 1; ofs = 0;
+    }
+    while (i < h) {                            // one step per string
+	ofs = csp_str_skip_fill(st, ofs);      // past a segment's unused tail
+	ofs += csp_str_byte(st, ofs) + 1;      // length byte + that many chars
+	i++;
+    }
+    ofs = csp_str_skip_fill(st, ofs);
+    st->str_cid = h; st->str_cofs = ofs;
+    return ofs;
+}
+
+// Length of the string a handle names. 0 for the null handle.
+static inline uint8_t csp_str_len(csp_rt_t* st, sindex_t h)
+{
+    return h ? csp_str_byte(st, csp_str_ofs(st, h)) : 0;
+}
+
+// Character i of the string a handle names, read segment-aware (a ROM name is
+// in flash, a RAM one is not, and the caller cannot tell which).
+static inline uint8_t csp_str_char(csp_rt_t* st, sindex_t h, int i)
+{
+    return csp_str_byte(st, csp_str_ofs(st, h) + 1 + i);
+}
+
+// char* to the CHARACTERS a handle names (host: RODATA is normal memory; an AVR
+// PROGMEM string needs a copy-out API -- deferred). Base 0 -> ram_str.
+static inline char* csp_str_at(csp_rt_t* st, sindex_t h)
+{
+    sindex_t pos = csp_str_ofs(st, h) + 1;
+    // Safe as a raw pointer because no record straddles a segment boundary --
+    // new_string skips to the next one rather than split a string.
+    return csp_ram_str_at(st, pos);
 }
 
 // RAM write slots -- logical index must be at/above the ROM base (RAM region).
 // decl grows DOWN from the pool top, so the local index is negated (ram_decl
 // points at local 0, the topmost slot; local 1 is ram_decl[-1], and so on).
-#define ram_decl_at(st, logical)  (&(st)->ram_decl[(st)->rom_nd - (logical)])
-#define ram_instr_at(st, logical) (&(st)->ram_instr[(logical) - (st)->rom_nn])
-#define ram_str_at(st, logical)   ((st)->ram_str[(logical) - (st)->rom_strp])
+#define ram_str_at(st, logical)   (*csp_ram_str_at((st), (logical)))
 
 #define decl(st,i,fld)  (csp_get_decl((st),(i)).fld)
 #define instr(st,n,fld) (csp_get_instr((st),(n)).fld)
@@ -2550,15 +2787,22 @@ static inline sindex_t decl_name_pos(csp_rt_t* st, index_t ix)
 // address space on AVR. These two go through csp_str_byte instead.
 static inline int decl_name_len(csp_rt_t* st, index_t ix)
 {
-    sindex_t pos = decl_name_pos(st, ix);
-    return pos ? csp_str_byte(st, pos - 1) : 0;   // length byte precedes the text
+    return csp_str_len(st, decl_name_pos(st, ix));
 }
 
 static inline int decl_name_empty(csp_rt_t* st, index_t ix)
 {
-    sindex_t pos = decl_name_pos(st, ix);
-    return (pos == 0) || (csp_str_byte(st, pos - 1) == 0);
+    sindex_t h = decl_name_pos(st, ix);
+    return (h == 0) || (csp_str_len(st, h) == 0);
 }
+
+// Print a decl's name: `printf("%.*s", DNAME(st, ix))`. Two arguments, in the
+// order a precision takes them.
+//
+// A string is NOT nul-terminated. The length byte in front of it is the only
+// terminator there is -- which is what lets a name cost one byte of overhead
+// instead of two, and on a 3.8-character mean name that was 17% of the table.
+#define DNAME(st, ix)  decl_name_len((st), (ix)), decl_name((st), (ix))
 
 // `cs` is the compiler's state, or NULL for a node that only runs images.
 extern int     csp_rt_init(csp_rt_t*,  int reactive, csp_cstate_t* cs);
@@ -2668,6 +2912,16 @@ extern int csp_parse_const_expr(csp_rt_t* st, const token_t* tv, size_t* num_tok
 				rentry_t* result);
 //
 extern index_t csp_new_decl(csp_rt_t* st,const tstr_t* name, decl_t op,int sys);
+// Re-derive ps.nstr (and drop the walk cache) after ps.strp moved from outside
+// new_string -- ROM activation, EEPROM load, /clear, undo.
+extern void csp_str_recount(csp_rt_t* st);
+// Derive ps.strp from the OP_SEGMENT runs, after instructions arrive from an
+// image or an EEPROM patch.
+extern void csp_str_resize(csp_rt_t* st);
+// Take string segment k (a DECL_SEGMENT run in the decl pool) if it is not
+// there yet. Also used by the EEPROM load, which has to make room before the
+// stored bytes can land.
+extern int str_seg_ensure(csp_rt_t* st, unsigned k);
 extern index_t csp_lookup_decl(csp_rt_t* st, const tstr_t* name);
 // #param overrides: shadow = the RAM declaration that SETS param `di`;
 // target = the param a RAM declaration sets. See apply_param_overrides.

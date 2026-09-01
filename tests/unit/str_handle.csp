@@ -1,0 +1,34 @@
+// A decl's name and a V_STRING value are both string HANDLES: handle N names
+// the Nth string in the table, not the Nth byte. Resolving one means counting,
+// so this program has enough strings that a walk which lost its place would
+// land on the wrong one -- and it reads them back from both ends of the table.
+//
+// The immediate assignment matters on its own. `S = "delta"` compiles to STI
+// with the handle in the immediate field, and a handle is small enough to fit
+// there where a byte offset was not -- so this path only started being taken
+// when handles arrived.
+#variable Aaaaaaaaaaaa = 1
+#variable Bbbbbbbbbbbb = 2
+#variable Cccccccccccc = 3
+#variable Dddddddddddd = 4
+#variable Eeeeeeeeeeee = 5
+#variable Ffffffffffff = 6
+#variable Gggggggggggg = 7
+#variable Hhhhhhhhhhhh = 8
+
+#variable First  string = "alpha"     // an early handle
+#variable Last   string = "omega"     // and a late one
+#constant Middle string = "gamma"
+
+#variable Step = 0
+#variable Sum  = 0
+
+Step = Step + 1
+
+// Read a name from either end of the table: if the walk drifted, these pick up
+// each other's values and the sum moves.
+Sum = Aaaaaaaaaaaa + Hhhhhhhhhhhh + Dddddddddddd
+
+// Immediate store (STI), then a copy from a constant.
+First = "delta" ? Step == 2
+Last  = Middle  ? Step == 3

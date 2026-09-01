@@ -53,7 +53,7 @@ static rochar eeprom_magic[4] RODATA = "CSP";
 //     crc_graph placeholder), separate crc_dis for the #disable bitmap, ROM
 //     identity is the whole-header rom_header.crc_hdr, and a crc_hdr over the
 //     eeprom header itself. Binary-incompatible with v7's flat header.
-// v7: data_crc (single payload CRC).  v6: NAMEPOS_BITS widened decl `name`.
+// v7: data_crc (single payload CRC).  v6: NAMEID_BITS widened decl `name`.
 // The version is what rejects a stale save, before ps.* is touched.
 #define EEPROM_VERSION 11
 
@@ -86,7 +86,10 @@ static void ram_image(csp_rt_t* st, csp_image_header_t* im,
     im->n_str = n_str; im->n_decl = n_decl; im->n_instr = n_instr;
     im->n_edg = 0;
 
-    im->crc_str  = csp_crc16(0xFFFF, st->ram_str + CSP_RAM_STR_OFF(st), n_str, 0);
+    // 0 bytes, and no CRC of its own. Identifier text lives in OP_SEGMENT runs
+    // in the INSTRUCTION stream, so it is saved and restored by the instruction
+    // block below -- there is no separate string area left to store.
+    im->crc_str = 0xFFFF;
     im->crc_decl = 0xFFFF;
     for (i = 0; i < n_decl; i++)
 	im->crc_decl = csp_crc16(im->crc_decl, ram_decl_at(st, base_nd + i),
@@ -138,10 +141,9 @@ int csp_eeprom_save(csp_rt_t* st)
     // separate max() over two struct fields, including one inside the decl loop.
     index_t  base_nd   = CSP_BASE_ND(st);
     index_t  base_nn   = CSP_BASE_NN(st);
-    index_t  base_strp = CSP_BASE_STRP(st);
     uint16_t ram_nd   = st->ps.nd   - base_nd;      // RAM patch counts
     uint16_t ram_nn   = st->ps.nn   - base_nn;
-    uint16_t ram_strp = st->ps.strp - base_strp;
+    uint16_t ram_strp = 0;   // no separate string area any more
     // (No state block: states are declarations and are saved with them.)
 
     if (csp_eeprom_open_write() < 0)
@@ -172,8 +174,8 @@ int csp_eeprom_save(csp_rt_t* st)
 	csp_eeprom_write(st->settings, st->set_used) < 0)
 	goto error;
     // Only the RAM patch area (ram_*[0..delta)); ROM stays in flash.
-    if (csp_eeprom_write(st->ram_str + (base_strp - st->rom_strp), ram_strp) < 0)
-	goto error;
+    // (No string block. The names went out with the INSTRUCTIONS, as OP_SEGMENT
+    // runs -- one block write instead of a second area to keep in step.)
     // decl[] grows DOWN from the pool top, so the RAM decls are not contiguous in
     // save order -- walk them through the accessor. The stored format is unchanged
     // (logical order 0..ram_nd-1); only the memory walk differs. instr[] still
@@ -299,8 +301,7 @@ int csp_eeprom_load(csp_rt_t* st)
 
     // Read the RAM patch area into the RAM-local slots (counts from the header,
     // now trusted -- crc_hdr passed).
-    if (csp_eeprom_read(st->ram_str + (base_strp - st->rom_strp), hdr.ram.n_str) < 0)
-	goto error;
+    // (No string block: the names come back with the instructions.)
     // decl[] grows DOWN (see csp_eeprom_save): place them one at a time, or a
     // block read would write straight past the top of the pool.
     {
@@ -327,10 +328,14 @@ int csp_eeprom_load(csp_rt_t* st)
     }
 
     // Logical counts = ROM base + RAM patch
-    st->ps.strp = base_strp + hdr.ram.n_str;
     st->ps.nd   = base_nd   + hdr.ram.n_decl;
     st->ps.nn   = base_nn   + hdr.ram.n_instr;
     st->ps.nq   = hdr.nq;
+    // AFTER the counts: both of these walk 0..ps.nn looking for segments, so
+    // they can only find the patch's once nn covers it. resize builds the map
+    // and sets ps.strp; recount then counts the handles through that map.
+    csp_str_resize(st);
+    csp_str_recount(st);
 
     // The #disable set, with its own count+CRC descriptor. csp_rt_init above
     // zeroed dis_rule, so a save without one (n_dis == 0) leaves everything
@@ -407,6 +412,7 @@ error:
 	st->ps.nn   = base_nn;
 	st->ps.strp = base_strp;
 	st->ps.nq   = 0;
+	csp_str_recount(st);
 	// csp_rt_init tore down view/heap/the derived tables (NULL until a
 	// rebuild). A caller that just runs the next cycle -- the host main loop
 	// does -- would fault, so rebuild the clean baseline before returning.

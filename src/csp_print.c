@@ -75,7 +75,7 @@ const uint8_t op_tok[] RODATA = {
 
 typedef struct {
     uint8_t pos;
-    uint8_t buf[MAX_STR_BUF];
+    uint8_t buf[MAX_EXPRBUF];
     uint8_t nstrptrs;
     uint8_t* strptrs[MAX_STRPTRS];
     uint8_t strlens[MAX_STRPTRS];   // length of strptrs[i]
@@ -220,9 +220,9 @@ static void exprbuf_rostr(csp_exprbuf_t* bp, rostring_t s)
 // AVR-PROGMEM-safe (reads byte by byte via csp_str_byte)
 static void exprbuf_str_at(csp_rt_t* st, csp_exprbuf_t* bp, sindex_t pos)
 {
-    int len = csp_str_byte(st, pos-1);
+    int len = csp_str_len(st, pos);
     int i;
-    for (i = 0; i < len; i++) exprbuf_char(bp, csp_str_byte(st, pos+i));
+    for (i = 0; i < len; i++) exprbuf_char(bp, csp_str_char(st, pos, i));
 }
 
 static void exprbuf_uint16(csp_exprbuf_t* bp, uint16_t v);
@@ -656,8 +656,24 @@ static void exprbuf_store_imm(csp_rt_t* st,
     start = exprbuf_ptr(bp);
     exprbuf_strref(bp, var);
     exprbuf_char(bp, '=');
-    if (!exprbuf_state_name(st, bp, ip->mi.mem, ip->mi.imm))
-	exprbuf_int16(bp, ip->mi.imm);
+    // A V_STRING destination means the immediate is a string HANDLE, not a
+    // number: render what it names, or a listing cannot be pasted back.
+    //
+    // exprbuf_store has always done this; this path never had to, because a
+    // string used to be addressed by its BYTE OFFSET and those outgrew the
+    // immediate field almost immediately -- so `A = "hi"` compiled to LI+ST and
+    // came out through the other function. A handle is small, STI fits it, and
+    // the gap that was always here started showing.
+    if (!exprbuf_state_name(st, bp, ip->mi.mem, ip->mi.imm)) {
+	if (decl(st, INDEX(ip->mi.mem), vt) == V_STRING) {
+	    exprbuf_char(bp, '"');
+	    if (ip->mi.imm > 0)
+		exprbuf_str_at(st, bp, (sindex_t)ip->mi.imm);
+	    exprbuf_char(bp, '"');
+	}
+	else
+	    exprbuf_int16(bp, ip->mi.imm);
+    }
 
     bp->reg[ip->mi.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
     bp->prio[ip->mi.x] = 5;
@@ -724,6 +740,9 @@ static int reg_consumed(csp_rt_t* st, int i, int reg)
 	csp_instr_t ipv = csp_get_instr(st, j);
 	csp_instr_t* ip = &ipv;
 	switch (ip->op) {
+	case OP_SEGMENT:
+	    j += ip->sg.num;   // identifier text, not code
+	    continue;
 	case OP_NEXT:
 	case OP_RULE:
 	    return 0;  // rule boundary, never read
@@ -795,6 +814,13 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	csp_instr_t ipv = csp_get_instr(st, i);
 	csp_instr_t* ip = &ipv;
 	switch(ip->op) {
+	    // Identifier text sitting in the stream. Step the whole run: reading
+	    // the payload as instructions renders characters as operands, and the
+	    // register it interns them into is the one the caller reads back to
+	    // decide whether a rule's condition is the implicit `-1`.
+	case OP_SEGMENT:
+	    i += ip->sg.num;
+	    break;
 	case OP_SETO:
 	    // Names the object for the NEXT variable rendered. Mirrors the
 	    // runtime's one-shot exactly, so the listing cannot disagree with
@@ -986,6 +1012,10 @@ int csp_print_rule(csp_rt_t* st, int i)
 
     while(i < st->ps.nn) {
 	csp_instr_t ipv = csp_get_instr(st, i);   // ROM or RAM instr, by value
+	if (ipv.op == OP_SEGMENT) {               // identifier text, not code
+	    i += ipv.sg.num + 1;
+	    continue;
+	}
 	if (ipv.op == OP_RULE) {
 	    csp_instr_t* ip = &ipv;
 	    void* savef;

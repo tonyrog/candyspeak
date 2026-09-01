@@ -432,22 +432,20 @@ void csp_set_err_arg_int(csp_rt_t* st, int i, int ival)
     st->ps.err_args[i] = ival;
 }
 
-// Token string to temp area (grows down), set error with it.
+// Token string to the error scratch (grows down from its top), set error with it.
 //
-// The temp area and err_strp are RAM-LOCAL (0..MAX_STR_BUF, top of ram_str),
-// but ps.strp is a LOGICAL string position that includes rom_strp. Comparing
-// them directly meant that with a ROM linked (rom_strp = 130 for cpx) the guard
-// read `err_strp(128) >= 130+...` = false, so no error arg was ever stored and
-// every "%s" in a message printed blank on the board. Subtract rom_strp to get
-// the RAM string usage the err area actually shares space with. (All three
-// csp_set_err_arg_* had this.)
+// The scratch used to be the top of ram_str, which made this guard compare a
+// RAM-local cursor against a LOGICAL string position: with a ROM linked
+// (rom_strp = 130 for cpx) it read `err_strp(128) >= 130+...` = false, so no
+// argument was ever stored and every "%s" in a message printed blank on the
+// board. It has its own buffer now, so the two quantities no longer meet.
 void csp_set_err_arg_tstr(csp_rt_t* st, int i, const tstr_t* str)
 {
-    if (st->ps.err_strp >= (st->ps.strp - st->rom_strp) + (uint32_t)str->len + 1) {
+    if (st->ps.err_strp >= (uint32_t)str->len + 1) {
 	st->ps.err_strp -= str->len + 1;
-	memcpy(&st->ram_str[st->ps.err_strp], str->ptr, str->len);
-	st->ram_str[st->ps.err_strp + str->len] = '\0';
-	st->ps.err_args[i] = (uintptr_t)&st->ram_str[st->ps.err_strp];
+	memcpy(&st->err_str[st->ps.err_strp], str->ptr, str->len);
+	st->err_str[st->ps.err_strp + str->len] = '\0';
+	st->ps.err_args[i] = (uintptr_t)&st->err_str[st->ps.err_strp];
     }
 }
 
@@ -458,10 +456,10 @@ void csp_set_err_arg_rostr(csp_rt_t* st, int i, rostring_t str)
 {
     int len = ro_strlen(str);
 
-    if (st->ps.err_strp >= (st->ps.strp - st->rom_strp) + (uint32_t)len + 1) {
+    if (st->ps.err_strp >= (uint32_t)len + 1) {
 	st->ps.err_strp -= len + 1;
-	ro_strcpy(&st->ram_str[st->ps.err_strp], str, len + 1);
-	st->ps.err_args[i] = (uintptr_t)&st->ram_str[st->ps.err_strp];
+	ro_strcpy(&st->err_str[st->ps.err_strp], str, len + 1);
+	st->ps.err_args[i] = (uintptr_t)&st->err_str[st->ps.err_strp];
     }
 }
 
@@ -473,22 +471,22 @@ void csp_set_err_arg_rostr(csp_rt_t* st, int i, rostring_t str)
 void csp_set_err_arg_ix(csp_rt_t* st, int i, index_t ix)
 {
     sindex_t pos = decl_name_pos(st, ix);
-    int len = pos ? csp_str_byte(st, pos - 1) : 0;
+    int len = pos ? csp_str_len(st, pos) : 0;
 
-    if (st->ps.err_strp >= (st->ps.strp - st->rom_strp) + (uint32_t)len + 1) {
+    if (st->ps.err_strp >= (uint32_t)len + 1) {
 	int k;
 	st->ps.err_strp -= len + 1;
 	for (k = 0; k < len; k++)
-	    st->ram_str[st->ps.err_strp + k] = (char)csp_str_byte(st, pos + k);
-	st->ram_str[st->ps.err_strp + len] = '\0';
-	st->ps.err_args[i] = (uintptr_t)&st->ram_str[st->ps.err_strp];
+	    st->err_str[st->ps.err_strp + k] = (char)csp_str_char(st, pos, k);
+	st->err_str[st->ps.err_strp + len] = '\0';
+	st->ps.err_args[i] = (uintptr_t)&st->err_str[st->ps.err_strp];
     }
 }
 
 void csp_clr_error(csp_rt_t* st)
 {
     st->ps.err = ERR_OK;
-    st->ps.err_strp = MAX_STR_BUF;  // reset temp strings
+    st->ps.err_strp = CSP_ERR_STR_BYTES;  // reset temp strings
 }
 
 // pointer to a VIEW_SLOT's value_t struct inside its buffer (in the heap)
@@ -1161,7 +1159,7 @@ NOINLINE void csp_string_get_part(csp_rt_t* st, value_t* vslot, value_t* vp,
     if (part == PART_VAL)
 	vp->i = s;
     else if (part == PART_LEN)
-	vp->i = (s == 0) ? 0 : csp_str_byte(st, s - 1);
+	vp->i = (s == 0) ? 0 : csp_str_len(st, s);
 }
 
 NOINLINE void csp_dio_get_val_part(csp_rt_t* st, value_t* vslot,
@@ -1226,7 +1224,7 @@ NOINLINE void csp_view_get_part(csp_rt_t* st, csp_view_t* vw, value_t* vp,
     case PART_LEN: {
 	value_t sv = csp_heap_get(st, vw, dir);
 	if ((vw->vt == V_STRING) && (sv.s > 0))
-	    vp->i = csp_str_byte(st, sv.s - 1);
+	    vp->i = csp_str_len(st, sv.s);
 	break;	
     }
     default: break;
@@ -1601,6 +1599,13 @@ NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
     case OP_NEXT: // rule is done executing
 	*leave = 1;
 	return n+1;
+    // Identifier text, not code. Jump the payload and carry on -- which is the
+    // whole reason a segment can sit mid-stream: a name is created while code is
+    // being generated, so there is nowhere else to put it without renumbering
+    // every jump afterwards. No *leave: nothing is being left, the run is just
+    // stepped over.
+    case OP_SEGMENT:
+	return n + ci.sg.num + 1;
     case OP_ENTER: // skip y + 2
 	*leave = 1;
 	return n+ci.e.num+2;
@@ -1610,8 +1615,13 @@ NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
 	// single rules by ip; if one reaches OP_NEW it must be a no-op, else esp
 	// grows unboundedly and corrupts the struct.
 	if (st->es.sweep) {
-	    index_t ent = ci.n.ent;
+	    // The entry point comes from the module DECLARATION, not from the
+	    // instruction. It used to ride along in ten bits and was truncated
+	    // for any module whose body started past instruction 1023 -- see
+	    // csp_instr_new_t.
 	    index_t obj = ci.n.obj;
+	    index_t mx  = decl(st, INDEX(obj), mq.mx);
+	    index_t ent = decl(st, INDEX(mx), md.ent);
 	    st->stack[st->esp].ix = n+1;      // return address
 	    st->stack[st->esp].cur = st->cur;  // store current module
 	    st->esp++;
@@ -2104,7 +2114,7 @@ NOINLINE int csp_str_ncmp(csp_rt_t* st, sindex_t pos, const char* s, int n)
 {
     int i;
     for (i = 0; i < n; i++) {
-	int d = (int)csp_str_byte(st, pos+i) - (uint8_t)s[i];
+	int d = (int)csp_str_char(st, pos, i) - (uint8_t)s[i];
 	if (d) return d;
     }
     return 0;
@@ -2113,7 +2123,7 @@ NOINLINE int csp_str_ncmp(csp_rt_t* st, sindex_t pos, const char* s, int n)
 // True when the length-prefixed string at `pos` equals the n-byte RAM string s.
 NOINLINE int csp_str_eq(csp_rt_t* st, sindex_t pos, const char* s, int n)
 {
-    return (csp_str_byte(st, pos-1) == (uint8_t)n) &&
+    return (csp_str_len(st, pos) == (uint8_t)n) &&
 	   (csp_str_ncmp(st, pos, s, n) == 0);
 }
 
@@ -2123,10 +2133,10 @@ NOINLINE int csp_str_eq(csp_rt_t* st, sindex_t pos, const char* s, int n)
 NOINLINE int csp_str_eq_ro(csp_rt_t* st, sindex_t pos, rostring_t s, int n)
 {
     int i;
-    if (csp_str_byte(st, pos-1) != (uint8_t)n)
+    if (csp_str_len(st, pos) != (uint8_t)n)
 	return 0;
     for (i = 0; i < n; i++) {
-	if (csp_str_byte(st, pos+i) != ro_byte((rochar*)s + i))
+	if (csp_str_char(st, pos, i) != ro_byte((rochar*)s + i))
 	    return 0;
     }
     return 1;
@@ -2135,10 +2145,10 @@ NOINLINE int csp_str_eq_ro(csp_rt_t* st, sindex_t pos, rostring_t s, int n)
 // Print the length-prefixed string at logical position `pos`, byte by byte.
 NOINLINE void csp_print_str_at(csp_rt_t* st, sindex_t pos)
 {
-    int len = csp_str_byte(st, pos-1);
+    int len = csp_str_len(st, pos);
     int i;
     for (i = 0; i < len; i++)
-	csp_print_char(csp_str_byte(st, pos+i));
+	csp_print_char(csp_str_char(st, pos, i));
 }
 
 // look for symbol among nodes in range [start, stop)
@@ -2223,43 +2233,232 @@ NOINLINE index_t csp_lookup_decl(csp_rt_t* st, const tstr_t* name)
 
 
 
-// each string is installed like
-//  [3] 'a' 'b' 'c' '\0'
-// length byte characters terminated with 0
-// position return is pos efter length byte
+// Take string segment `k` if it is not there yet.
+//
+// A segment is a DECL_SEGMENT header followed by CSP_STR_SEG_SLOTS payload
+// slots, appended to the declaration pool. That is the whole trick: the decl
+// pool is the only allocator here that hands out permanent memory LAZILY, so
+// string space grows on demand without moving anything already written, and
+// mem_fits() charges it against the same budget as the program.
+//
+// The payload's `type` nibble is a character, so nothing may walk into it --
+// see decl_next().
+NOINLINE int str_seg_ensure(csp_rt_t* st, unsigned k)
+{
+    index_t h;
+    size_t want = (size_t)(CSP_STR_SEG_SLOTS + 1) * sizeof(csp_instr_t);
+
+    if (k >= CSP_STR_MAX_SEGS)
+	return -1;
+    if (st->str_seg[k] != BAD_INDEX)
+	return 0;                             // already taken
+    if (((st->ps.nn - st->rom_nn) + CSP_STR_SEG_SLOTS + 1) >= MAX_INSTRS ||
+	!mem_fits(st, want))
+	return -1;
+    h = st->ps.nn;
+    st->ps.nn = h + CSP_STR_SEG_SLOTS + 1;
+    memset(ram_instr_at(st, h), 0,
+	   (size_t)(CSP_STR_SEG_SLOTS + 1) * sizeof(csp_instr_t));
+    ram_instr_at(st, h)->op       = OP_SEGMENT;
+    ram_instr_at(st, h)->sg.num   = CSP_STR_SEG_SLOTS;
+    ram_instr_at(st, h)->sg.used  = 0;
+    st->str_seg[k] = h;
+    if (k >= st->nseg)
+	st->nseg = (uint8_t)(k + 1);
+    return 0;
+}
+
+// A string is installed as
+//   [3] 'a' 'b' 'c'
+// a length byte followed by that many characters, and NOTHING ELSE. There is no
+// nul: the length in front is the terminator, and every reader goes through it
+// (csp_str_byte(pos-1), decl_name_len, DNAME). A trailing nul was there to make
+// printf easy, which is not a good enough reason -- on a 3.8-character mean
+// name it was 17% of a table that is capped at 512 bytes for the whole image.
+//
+// The position returned is pos+1, i.e. the first CHARACTER. Position 0 is
+// reserved and means "no name" (ps.strp starts at 1), which is why every reader
+// tests pos before stepping back to the length byte.
 NOINLINE int new_string(csp_rt_t* st, char* name, int len)
 {
-    sindex_t pos = st->ps.strp;               // logical position
-    sindex_t next = pos + (len+2);
-    if ((next - st->rom_strp) >= MAX_STR_BUF) {  // check RAM-local room
+    sindex_t pos, next;
+    sindex_t r = st->ps.strp;                 // byte offset into the segments
+    sindex_t rec = (sindex_t)len + 1;         // length byte + characters
+
+    // A record may not straddle a segment boundary: csp_str_at hands out a raw
+    // pointer into one. When it will not fit in what is left, skip to the next
+    // segment and leave the tail unused -- about 2% at a mean name of five
+    // bytes, and it is what keeps the offset space LINEAR, so a byte offset
+    // still finds its segment with a shift instead of a search.
+    if (rec > CSP_STR_SEG_BYTES) {            // longer than a whole segment
 	csp_set_error(st, ERR_STRING_SPACE_EXHUSTED);
 	return -1;
     }
-    // The returned position (pos+1) is stored in a decl's NAMEPOS_BITS-wide name
-    // field. rom_strp + MAX_STR_BUF can exceed that on a board with a large ROM
-    // string table; fail loudly rather than truncate the field to garbage (which
-    // is exactly what the old STRING_BITS-wide field did on AVR).
-    if ((pos + 1) >= (sindex_t)(1u << NAMEPOS_BITS)) {
+    // Skip to the next segment when the record will not fit in what is left --
+    // and also when the current one came in with an IMAGE, because its slots are
+    // in flash. Either way the tail is simply not used, and the header's `used`
+    // is what tells a walk to jump it.
+    {
+	index_t h = (r >> CSP_STR_SEG_BITS) < CSP_STR_MAX_SEGS
+	    ? st->str_seg[r >> CSP_STR_SEG_BITS] : BAD_INDEX;
+	if ((((r & CSP_STR_SEG_MASK) + rec) > CSP_STR_SEG_BYTES) ||
+	    ((h != BAD_INDEX) && (h < st->rom_nn)))
+	    r = (r + CSP_STR_SEG_BYTES) & ~(sindex_t)CSP_STR_SEG_MASK;
+    }
+
+    // Two ceilings, and they bind at different times.
+    //
+    // BYTES: whatever the declaration pool can still give. There is no fixed
+    // string buffer any more -- a segment is taken from the same budget the
+    // program comes out of, so a name and an instruction compete for one pool.
+    if (str_seg_ensure(st, r >> CSP_STR_SEG_BITS) < 0) {
 	csp_set_error(st, ERR_STRING_SPACE_EXHUSTED);
 	return -1;
     }
+    // HANDLES: stored in a decl's NAMEID_BITS-wide name field, so the NUMBER of
+    // strings -- ROM and RAM together -- caps at 512. Fail loudly rather than
+    // truncate the field to garbage (which is exactly what the old
+    // STRING_BITS-wide field did on AVR).
+    if ((st->ps.nstr + 1) >= MAX_NAMEIDS) {
+	csp_set_error(st, ERR_STRING_SPACE_EXHUSTED);
+	return -1;
+    }
+    pos  = r;                                 // string position
+    next = pos + rec;
     st->ps.strp = next;  // allocate
+    // Record the high-water mark in the segment this landed in, so an image can
+    // say how much string space it holds without a header field.
+    {
+	index_t sh = st->str_seg[r >> CSP_STR_SEG_BITS];
+	if (sh >= st->rom_nn)
+	    ram_instr_at(st, sh)->sg.used =
+		(unsigned)((next - 1) & CSP_STR_SEG_MASK) + 1;
+    }
     ram_str_at(st, pos) = len;
     if (len > 0)                  // len==0 (empty string) may pass a NULL name
 	memcpy(&ram_str_at(st, pos+1), name, len);
-    ram_str_at(st, pos+1+len) = '\0';
-    return pos+1;
+    // The handle is the COUNT, so the string just written is handle nstr. The
+    // walk cache stays valid: it points into a prefix this append did not move.
+    st->ps.nstr++;
+    st->str_cid  = st->ps.nstr;   // and it is now the cheapest one to resume from
+    st->str_cofs = pos;
+    return (int)st->ps.nstr;
+}
+
+// Recount the strings and drop the walk cache.
+//
+// ps.nstr is a cursor, not a fact: every allocation bumps it. Anything that
+// moves ps.strp from OUTSIDE new_string -- a ROM activation, an EEPROM load, a
+// /clear, an undo rewinding a parse -- has changed how many strings there are
+// without going through it, and a stale count hands out a handle that names a
+// different string. Walking is O(n) once, against a table of a few hundred
+// bytes; deriving the count is not worth a field in a saved format.
+// Derive how much string space is in use from the SEGMENTS themselves.
+//
+// Called after anything loads instructions from outside -- an image, an EEPROM
+// patch. Every segment but the last is full, so the total is that many whole
+// segments plus the last one's high-water mark, which is why the header needs
+// no length field for text it does not hold.
+NOINLINE void csp_str_resize(csp_rt_t* st)
+{
+    index_t k;
+    unsigned nsg = 0, last_used = 0;
+
+    // The map first: csp_str_recount needs it to read bytes, and this walk is
+    // the only thing that can find the segments after instructions arrived from
+    // outside.
+    memset(st->str_seg, 0xFF, sizeof(st->str_seg));
+    st->nseg = 0;
+    for (k = 0; k < st->ps.nn; ) {
+	csp_instr_t ci = csp_get_instr(st, k);
+	if (ci.op == OP_SEGMENT) {
+	    if (st->nseg < CSP_STR_MAX_SEGS)
+		st->str_seg[st->nseg++] = k;
+	    k += ci.sg.num + 1;
+	    continue;
+	}
+	k++;
+    }
+    for (k = 0; k < st->ps.nn; ) {
+	csp_instr_t ci = csp_get_instr(st, k);
+	if (ci.op == OP_SEGMENT) {
+	    nsg++;
+	    last_used = ci.sg.used;
+	    k += ci.sg.num + 1;
+	    continue;
+	}
+	k++;
+    }
+    st->ps.strp = nsg ? ((nsg - 1) * CSP_STR_SEG_BYTES + last_used) : 0;
+}
+
+NOINLINE void csp_str_recount(csp_rt_t* st)
+{
+    sindex_t ofs = 0;
+    uint32_t n = 0;
+    index_t i;
+
+    // The SEGMENT MAP first, because the count below reads bytes through it.
+    // Rebuilt by scanning the declaration table for DECL_SEGMENT headers, in
+    // order: segment k is the kth one found, and that is what makes the map
+    // recoverable at all -- an undo rewinds ps.nd past some of them, an EEPROM
+    // load appends new ones, and neither writes the map itself.
+    // 0xFF fill, i.e. BAD_INDEX: instruction index 0 is a perfectly good place
+    // for a segment (an empty program's first name lands there), so 0 cannot
+    // mean "not taken".
+    memset(st->str_seg, 0xFF, sizeof(st->str_seg));
+    st->nseg = 0;
+    for (i = 0; i < st->ps.nn; ) {
+	csp_instr_t ci = csp_get_instr(st, i);
+	if (ci.op == OP_SEGMENT) {
+	    if (st->nseg < CSP_STR_MAX_SEGS)
+		st->str_seg[st->nseg++] = i;
+	    i += ci.sg.num + 1;
+	    continue;
+	}
+	i++;
+    }
+
+    while (ofs < (sindex_t)st->ps.strp) {
+	ofs = csp_str_skip_fill(st, ofs);
+	if (ofs >= (sindex_t)st->ps.strp)
+	    break;
+	ofs += csp_str_byte(st, ofs) + 1;
+	n++;
+    }
+    st->ps.nstr  = n;
+    st->str_cid  = 0;         // cold
+    st->str_cofs = 0;
+
+    // Re-stamp the last segment's high-water mark from ps.strp.
+    //
+    // An undo rewinds ps.nn and ps.strp, but a segment that SURVIVES the rewind
+    // still carries the `used` it had before -- and that is what a walk (and a
+    // saved image) reads to find the end of the text. Left alone it reports
+    // names that were just taken back.
+    if (st->nseg && st->ps.strp) {
+	index_t h = st->str_seg[(st->ps.strp - 1) >> CSP_STR_SEG_BITS];
+	if ((h != BAD_INDEX) && (h >= st->rom_nn))
+	    ram_instr_at(st, h)->sg.used =
+		(unsigned)((st->ps.strp - 1) & CSP_STR_SEG_MASK) + 1;
+    }
 }
 
 // Find a string in string buffer (ROM + RAM, by logical position)
 NOINLINE int lookup_string(csp_rt_t* st, char* name, int name_len)
 {
-    int pos = 1;  // search from pos=1 in str buf
-    while(pos < st->ps.strp) {
-	int len = csp_str_byte(st, pos);
-	if (csp_str_eq(st, pos+1, name, name_len))
-	    return pos+1;
-	pos += (len+2);  // length byte and \0
+    int ofs = 0;      // byte offset of the length byte
+    int h = 1;        // and the handle of the string there
+    while (ofs < (int)st->ps.strp) {
+	int len;
+	ofs = (int)csp_str_skip_fill(st, (sindex_t)ofs);
+	if (ofs >= (int)st->ps.strp)
+	    break;
+	len = csp_str_byte(st, ofs);
+	if (csp_str_eq(st, h, name, name_len))
+	    return h;
+	ofs += (len+1);   // the length byte, then the characters
+	h++;
     }
     return -1;
 }
@@ -2613,7 +2812,7 @@ void csp_csr(csp_rt_t* st)
     // Only RAM rules go into the runtime graph; ROM rules run sequentially (or
     // from their own baked graph). Scan from the RAM instruction base.
     current_rule = st->rom_nn;
-    for (i = st->rom_nn; i < st->ps.nn; i++) {
+    for (i = st->rom_nn; i < st->ps.nn; i = instr_next(st, i)) {
 	csp_instr_t ci = csp_get_instr(st, i);   // one read per instruction
 	switch (ci.op) {
 	case OP_RULE:
@@ -2714,7 +2913,7 @@ void csp_csr(csp_rt_t* st)
     ord = r_rom;
     next_ord = r_rom + 1;
     add_state_edge(st, wr, ord);        // the implicit body at the RAM base
-    for (i = st->rom_nn; i < st->ps.nn; i++) {
+    for (i = st->rom_nn; i < st->ps.nn; i = instr_next(st, i)) {
 	csp_instr_t ci = csp_get_instr(st, i);   // one read per instruction
 	switch (ci.op) {
 	case OP_RULE:
@@ -2996,7 +3195,7 @@ NOINLINE static int rom_scan_str(const char* str)
 {
     int p;
     if (str == NULL) return -1;
-    for (p = 0; p < (1 << NAMEPOS_BITS); p++) {
+    for (p = 0; p < (int)MAX_NAMEIDS; p++) {
 	if ((uint8_t)ro_byte((const uint8_t*)&str[p]) == 0xFF) {
 	    uint16_t stored = (uint8_t)ro_byte((const uint8_t*)&str[p+1]) |
 			      ((uint16_t)(uint8_t)ro_byte((const uint8_t*)&str[p+2]) << 8);
@@ -3092,7 +3291,11 @@ NOINLINE void csp_load_image(csp_rt_t* st, const uint8_t* base)
 	nd--;                     // drop the trailing terminator
     st->rom_nd   = nd;
     st->rom_nn   = h.n_instr;
-    st->rom_strp = h.n_str;
+    // 0: an image has no flat string section any more. Identifier text came in
+    // with the DECLARATIONS, as DECL_SEGMENT runs, so there is no ROM/RAM split
+    // in the string space -- the header's n_str is how many BYTES of those
+    // segments are used, which is where ps.strp picks up below.
+    st->rom_strp = 0;
     st->rom_nedg = h.n_edg;
     // A corrupt graph is recoverable where a corrupt section above is not: drop
     // the baked graph and let csp_cycle fall back to full sequential (rom_nedg
@@ -3108,7 +3311,11 @@ NOINLINE void csp_load_image(csp_rt_t* st, const uint8_t* base)
     // (INIT/NORMAL name offsets) still resolves correctly through the flash.
     st->ps.nd   = st->rom_nd;
     st->ps.nn   = st->rom_nn;
-    st->ps.strp = st->rom_strp;
+    // Not rom_strp (0) -- the image's names are in its segments. Derive how much
+    // is used from the LAST one: every earlier segment is full, so the total is
+    // (nseg-1) whole segments plus that one's high-water mark.
+    csp_str_resize(st);
+    csp_str_recount(st);              // count the ROM's strings into ps.nstr
     st->gsx = 0;                      // State is ROM decl 0
     if (st->cs)
 	st->cs->sx = st->gsx;         // the parse cursor follows it
@@ -3522,7 +3729,6 @@ NOINLINE static int csp_sys_module(csp_rt_t* st)
     RO_TSTR(Name, ros_Name);
     RO_TSTR(Serial, ros_Serial);
     RO_TSTR(Image, ros_Image);    
-    const tstr_t empty = { .ptr = NULL, .len = 0 };
     index_t mx, ex, ox;
     int i;
 
@@ -3558,7 +3764,7 @@ NOINLINE static int csp_sys_module(csp_rt_t* st)
     ram_decl_at(st, i)->vt  = V_UNSIGNED;
     ram_decl_at(st, i)->res = MAKE_RES(32);
 
-    if ((ex = csp_new_decl(st, &empty, DECL_END, 1)) == BAD_INDEX)
+    if ((ex = csp_new_decl(st, NULL, DECL_END, 1)) == BAD_INDEX)
 	return -1;
     ram_decl_at(st, INDEX(mx))->md.n = (INDEX(ex) - INDEX(mx)) - 1;
 
@@ -3651,8 +3857,16 @@ int csp_rt_init(csp_rt_t* st, int reactive, csp_cstate_t* cs)
     // knew about the memset, and every redundant `= 0` came back as a real
     // 4-byte absolute store. Twenty-one of them, ~84 bytes of nothing.
     st->reactive = reactive;
-    st->ps.strp = 1;
-    st->ps.err_strp = MAX_STR_BUF;
+    // 0, not 1. Byte 0 used to be reserved so that a name field of 0 could mean
+    // "no name" -- but a HANDLE is what carries that now (handle 0 is the null
+    // string), and the table can start where the storage does.
+    st->ps.strp = 0;
+    // Not zero: instruction index 0 is a valid place for a segment, so the
+    // "not taken" marker has to be a value no index can be. The memset above
+    // cleared this to 0, which would have read as "segment 0 is at 0".
+    memset(st->str_seg, 0xFF, sizeof(st->str_seg));
+    st->nseg = 0;
+    st->ps.err_strp = CSP_ERR_STR_BYTES;
     if (st->cs) {
 	st->cs->mdef = BAD_INDEX;  // no module being defined
 	st->cs->sdef = -1;
@@ -4368,7 +4582,7 @@ NOINLINE void csp_estimate(csp_rt_t* st, csp_estimate_t* e)
 NOINLINE index_t csp_n_rules(csp_rt_t* st)
 {
     index_t i, no = 0;
-    for (i = 0; i < st->ps.nn; i++) {
+    for (i = 0; i < st->ps.nn; i = instr_next(st, i)) {
 	if (instr(st, i, op) == OP_RULE)
 	    no++;
     }
@@ -4388,7 +4602,7 @@ NOINLINE static void build_dis_ip(csp_rt_t* st)
     for (i = 0; i < BITSET_GROUPS(MAX_DIS_RULES); i++)
 	any |= (st->dis_rule[i] != 0);
 
-    for (i = 0; i < st->ps.nn; i++) {
+    for (i = 0; i < st->ps.nn; i = instr_next(st, i)) {
 	if (instr(st, i, op) != OP_RULE)
 	    continue;
 	no++;
@@ -4448,11 +4662,11 @@ NOINLINE static int name_eq(csp_rt_t* st, sindex_t a, sindex_t b)
     // A name's LENGTH sits at pos-1 and its characters at pos -- the layout
     // csp_str_eq reads, and the reason this cannot just call it: both sides
     // here are positions, not a char*.
-    la = csp_str_byte(st, a - 1);
-    if (la != csp_str_byte(st, b - 1))
+    la = csp_str_len(st, a);
+    if (la != csp_str_len(st, b))
 	return 0;
     for (i = 0; i < la; i++)
-	if (csp_str_byte(st, a+i) != csp_str_byte(st, b+i))
+	if (csp_str_char(st, a, i) != csp_str_char(st, b, i))
 	    return 0;
     return 1;
 }
@@ -4584,11 +4798,11 @@ static uint8_t name_chars(csp_rt_t* st, sindex_t pos, char* buf, uint8_t room)
     uint8_t len, i;
     if (pos == 0)
 	return 0;
-    len = csp_str_byte(st, pos - 1);
+    len = csp_str_len(st, pos);
     if ((len == 0) || (len > room))
 	return 0;
     for (i = 0; i < len; i++)
-	buf[i] = (char)csp_str_byte(st, pos + i);
+	buf[i] = (char)csp_str_char(st, pos, i);
     return len;
 }
 
@@ -4846,7 +5060,7 @@ int csp_settings_record(csp_rt_t* st, xindex_t ix, csp_part_t part, value_t v)
     res = (uint8_t)GET_RES(d.res);
 
     if (vt == V_STRING) {
-	uint8_t n = (v.s == 0) ? 0 : csp_str_byte(st, v.s - 1);
+	uint8_t n = (v.s == 0) ? 0 : csp_str_len(st, v.s);
 	uint8_t j;
 	if (n > CSP_SETTINGS_MAX_STR) {
 	    csp_set_error(st, ERR_STRING_SPACE_EXHUSTED);
@@ -4857,7 +5071,7 @@ int csp_settings_record(csp_rt_t* st, xindex_t ix, csp_part_t part, value_t v)
 	// meaningless once the firmware changes.
 	buf[0] = n;
 	for (j = 0; j < n; j++)
-	    buf[1+j] = csp_str_byte(st, v.s + j);
+	    buf[1+j] = csp_str_char(st, v.s, j);
 	vlen = (uint8_t)(1 + n);
     }
     else {
@@ -4875,11 +5089,11 @@ int csp_settings_record(csp_rt_t* st, xindex_t ix, csp_part_t part, value_t v)
 	// text -- a declaration name is installed without a lookup -- so
 	// dv.s == v.s would almost never be true and every string setting would
 	// be stored, including one that restores the declared name.
-	uint8_t dn = (dv.s == 0) ? 0 : csp_str_byte(st, dv.s - 1);
+	uint8_t dn = (dv.s == 0) ? 0 : csp_str_len(st, dv.s);
 	uint8_t j;
 	if (dn == buf[0]) {
 	    for (j = 0; j < dn; j++)
-		if (csp_str_byte(st, dv.s + j) != buf[1+j])
+		if (csp_str_char(st, dv.s, j) != buf[1+j])
 		    break;
 	    if (j == dn) {
 		set_remove(st, off);

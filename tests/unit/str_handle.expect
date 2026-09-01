@@ -1,0 +1,15 @@
+% 1 + 8 + 4. A walk that lost its place would read a neighbouring decl's name,
+% resolve to a different declaration, and this would not be 13.
+{cycles, 8}.
+%% seq only. The steps are driven by `Step = Step + 1`, a rule whose only input
+%% is its own output -- reactive mode has nothing to wake it with, so the
+%% sequence never advances there. That is about how the test is driven, not
+%% about handles.
+{modes, [seq]}.
+{checks, [
+  {final_var, "Sum", 13},
+  % The immediate landed, and it is the string and not its handle.
+  {final_var, "First", "delta"},
+  % And a copy from a constant, which goes through the other store path.
+  {final_var, "Last", "gamma"}
+]}.

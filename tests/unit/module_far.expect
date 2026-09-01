@@ -1,0 +1,12 @@
+% 5*3 + 7*3 = 36. A truncated entry point gives 0 here, because the object never
+% runs its own body -- it calls into whatever instruction the wrap landed on.
+%
+% The check is deliberately on the SUM of two instances: one of them alone could
+% be right by accident if the wrap happened to land somewhere harmless.
+{cycles, 6}.
+{modes, [seq]}.
+{checks, [
+  {final_var, "Sum", 36},
+  {final_object_var, "Far.f1", "f1.Out", 15},
+  {final_object_var, "Far.f2", "f2.Out", 21}
+]}.

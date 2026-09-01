@@ -458,6 +458,9 @@ int csp_uconst(csp_rt_t* st, const char* name, int len,
 // way in is a real interface. Both board programs under private/ had their
 // command path compiled and unexercised for that reason.
 // ------------------------------------------------------------
+// Compiled out of an exec-only build: nothing there can fill the queue, so it
+// would be a dead 150 bytes on a target that counts them.
+#if !defined(CSP_EXEC_ONLY)
 #define MAX_INJ_FRAMES 16
 
 typedef struct {
@@ -500,6 +503,9 @@ static int inj_pop(uint32_t* id, uint8_t* data, uint8_t* len)
     inj_head = (inj_head + 1) % MAX_INJ_FRAMES;
     return 1;
 }
+#else
+#define inj_pop(id, data, len)  0
+#endif /* !CSP_EXEC_ONLY */
 
 #if defined(CSP_HAS_SOCKETCAN)
 #include <net/if.h>
@@ -666,7 +672,6 @@ void csp_output(csp_rt_t* st)
 int parse_file(csp_rt_t* st, const char* name, FILE* fin)
 {
     char buf[MAX_SRC_LINE];
-    const tstr_t empty = { .ptr = NULL, .len = 0};
     csp_pmark_t pm;
 
     st->ps.line = 1;
@@ -722,7 +727,10 @@ int parse_file(csp_rt_t* st, const char* name, FILE* fin)
 	    return -1;
 	}
     }
-    csp_new_decl(st, &empty, DECL_END, 0);
+    // NULL, not an empty tstr_t: name = 0 already means "no name", and an
+    // empty tstr_t would ALLOCATE a zero-length string instead -- one byte of a
+    // 512-byte table per source file, for a name nothing can ask for.
+    csp_new_decl(st, NULL, DECL_END, 0);
     return 0;
 }
 #endif
@@ -749,7 +757,7 @@ void print_defines()
     printf("OBJ_BITS=%d\n", OBJ_BITS);
     printf("DECL_BITS=%d\n", DECL_BITS);
     printf("INDEX_BITS=%d\n", INDEX_BITS);
-    printf("STRING_BITS=%d\n", STRING_BITS);
+    printf("CSP_STR_BYTES=%d\n", CSP_STR_BYTES);
     printf("MAX_INDICES=%lu\n", (unsigned long)MAX_INDICES);
     printf("MAX_INSTRS=%d\n", MAX_INSTRS);
     printf("MAX_DECLS=%d\n", MAX_DECLS);
@@ -906,6 +914,11 @@ size_t  input_num = 0;
 uint32_t input_cycle = 0;
 int     input_delay = 0;
 
+// The two helpers below parse a stimulus row, so they need the TOKENIZER and
+// part_from_tstr -- neither of which an exec-only build links. cycle_input is
+// already stubbed out there (see below), and nothing else calls them.
+#if !defined(CSP_EXEC_ONLY)
+
 // `can <id> <b0> <b1> ...` -- queue a frame for csp_can_recv. Returns the
 // number of TOKENS consumed, so the caller can step past the data bytes; a row
 // may carry a frame and ordinary assignments together.
@@ -979,6 +992,7 @@ void cycle_input_values(csp_rt_t* st, token_t* tv, size_t num)
 	i++;
     }
 }
+#endif /* !CSP_EXEC_ONLY */
 
 int input_applied = 1;   // virtual mode: has the loaded row been applied?
 int input_done = 0;      // virtual mode: input file exhausted

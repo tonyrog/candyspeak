@@ -275,16 +275,23 @@ The value is a constant *expression*, so a define may be built from defines
 declared before it.
 
 **Why it exists.** Every identifier a program declares is stored, and a
-declaration's name field is 9 bits — so all names together, ROM and RAM, cannot
-pass **512 bytes**. That is a ceiling in the declaration format, not a buffer
-size: making the buffer larger does not move it. A module with a dozen long
-`#param` names and a set of flag constants reaches it while still unfinished.
+declaration's name field is 9 bits — so a program cannot have more than **512
+names**, ROM and RAM together. Their total length is a separate limit, set by
+the string buffer (`STRING_BITS`, 4 KB on the host and smaller on a small
+part), and a name costs its length plus one: strings are stored as a length
+byte followed by the characters, with no terminator after them.
+
+The two used to be the same limit, because a name field held a byte offset
+rather than a handle — 512 *bytes* of names, which a module with a dozen long
+`#param` names and a set of flag constants reached while still unfinished.
 
 `lib/analog.csp` is the case that prompted this. Its nine `ADC_` flag names cost
 167 bytes and contributed **nothing** to the generated code — the compiler had
 already folded them, so the instructions were identical with or without the
 names. Moving them to `#define` took the module from 492 bytes of names to 325,
 which is the difference between having room for the rest of the logic and not.
+(Those two figures predate the format losing its nul terminator; the module
+measures 215 bytes today, and the *saving* is what the example is about.)
 
 **What you give up.** A `#define` does not appear in `/list`, so a listing of a
 program that uses one cannot be pasted back and give the same program. Keep the
@@ -372,7 +379,7 @@ $7=$3&-$4|~$3&$6
 
 The number is its position among the enclosing scope's locals, generated when
 the listing is written and stored nowhere — so a local costs no space in the
-name table, which has a hard 512-byte ceiling shared by ROM and RAM (see
+name table, which has a hard 512-name ceiling shared by ROM and RAM (see
 `#define`). Since nothing outside may name a local anyway, there is nothing for
 a name in the listing to be used *for*; `$3` says what it is instead of
 suggesting a handle that does not exist.

@@ -555,9 +555,13 @@ if ./csp -n -C -O "$D/def.rom.c" "$D/def.csp" >/dev/null 2>&1; then
     got=$(printf '/list\n/quit\n' | ./csp -i --no-eeprom -c 0 "$D/def.csp" 2>&1 |
 	      grep -a '^v=' | sed 's/  *\/\/.*//')
     ck "a #define folds into the rule, through another define" "v=v|20" "$got"
-    # And it costs nothing in the string table beyond the baseline.
+    # And it costs nothing in the string table beyond the baseline. 58 is that
+    # baseline -- State, INIT, NORMAL, FAILSAFE, the sys object and `v` -- and
+    # the same program with the three names written out as 0x14 measures 58 too.
+    # (74 before v14 dropped the nul terminator, 59 before v15 stopped reserving
+    # byte 0. What the check is about is the DIFFERENCE, which is zero.)
     got=$(sed -n 's|^//   size:.*[^0-9]\([0-9]*\) str.*|\1|p' "$D/def.rom.c")
-    ck "three long #define names cost no string space" "74" "$got"
+    ck "three long #define names cost no string space" "58" "$got"
 else
     echo "  FAIL #define image did not build"; fail=$((fail+1))
 fi
@@ -652,8 +656,19 @@ fi
 # csp_states_t packs six state names into one declaration, and the whole design
 # rests on slot 0 aliasing DECL_COMMON's `name` -- an alignment nothing would
 # fail to compile over. This probes the real struct instead of restating the
-# numbers, so reordering the fields or changing NAMEPOS_BITS is caught here
+# numbers, so reordering the fields or changing NAMEID_BITS is caught here
 # rather than as first-state-of-every-block lookups quietly missing.
+# OP_SEGMENT puts raw string bytes in the INSTRUCTION pool. Execution is safe by
+# construction (the header is a jump), but the loops that walk the stream
+# linearly are not -- the payload is TEXT, and one opcode nibble in four reads as
+# something with operands. A step that is off by one walks into a segment.
+echo "segment span:"
+if gcc -Iinclude -Igen -Isrc -O2 -o "$D/segment_span" tests/segment_span.c >/dev/null 2>&1; then
+    ck "instr_next steps over a whole string segment" "ok, stepped over" "$("$D/segment_span")"
+else
+    echo "  FAIL segment_span did not build"; fail=$((fail+1))
+fi
+
 echo "states layout:"
 if gcc -Iinclude -Igen -Isrc -O2 -o "$D/states_layout" tests/states_layout.c >/dev/null 2>&1; then
     ck "csp_states_t packs six names, slot 0 aliases name" "ok, identical" "$("$D/states_layout")"
@@ -774,9 +789,13 @@ cat > "$D/arrwr.csp" <<'EOF'
 #variable I = 2
 A[I] = 99 ? 1
 EOF
-got=$(./csp -n -P "$D/arrwr.csp" 2>&1 | sed -n "/SETOX/p")
+# The instruction NUMBER is dropped: OP_SEGMENT runs carry identifier text in
+# the same stream, so every index after them moves when a name is added. What
+# the check is about is that a runtime subscript emits SETOX carrying the bound
+# (len 3) and the stride -- not where in the stream it landed.
+got=$(./csp -n -P "$D/arrwr.csp" 2>&1 | sed -n "/SETOX/p" | sed "s/^{instr,[0-9]*,/{instr,/")
 ck "a runtime subscript write emits a bounds-checked SETOX" \
-   "{instr,5,'SETOX',[r1,{len,3},{stride,1}]}." "$got"
+   "{instr,'SETOX',[r1,{len,3},{stride,1}]}." "$got"
 
 # A rule that uses a subscript has to LIST with it. Without this an array
 # program pasted back out of a board came home reading element 0 everywhere:

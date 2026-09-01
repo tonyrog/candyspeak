@@ -212,6 +212,7 @@ INSTATE INSTATE
 NINSTATE NINSTATE
 SETO SETO
 SETOX SETOX
+SEGMENT SEGMENT
 RULE RULE
 NEXT NEXT
 NOP NOP
@@ -274,6 +275,7 @@ state state
 instr instr
 decl decl
 str str
+names names
 hdr hdr
 graph graph
 objects objects

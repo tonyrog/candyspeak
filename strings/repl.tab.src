@@ -56,6 +56,7 @@ state state
 instr instr
 decl decl
 str str
+names names
 hdr hdr
 graph graph
 objects objects

@@ -68,6 +68,14 @@ LDFLAGS = -g
 SAN =
 SANFLAGS = -fsanitize=undefined,address -fno-omit-frame-pointer -O0
 CFLAGS  += $(SAN)
+
+# Per-build overrides, e.g. a bigger string table for a large program:
+#
+#   make csp CFLAGS_EXTRA=-DCSP_STR_BYTES=8000
+#
+# csp.h documents this knob at CSP_STR_BYTES; it was never wired up here, so the
+# flag was accepted on the command line and silently dropped. Last, so it wins.
+CFLAGS  += $(CFLAGS_EXTRA)
 LDFLAGS += $(SAN)
 
 all:	csp
