@@ -1134,6 +1134,44 @@ got=$(printf '#variable Q = Zork\n/quit\n' | repl ./csp "$D/pi3.db")
 ck "an undeclared name in an initialiser is refused" \
    'Error: variable Zork is not declared' "$got"
 
+echo "eeprom format:"
+
+# A patch carries the ROM FORMAT it was written with. Nothing used to check it:
+# EEPROM_VERSION versions the eeprom's own header and a ROM format change leaves
+# it untouched, and the section CRCs prove the bytes survived storage -- not that
+# they still MEAN the same thing. So a patch from older firmware loaded cleanly
+# and was then read with the wrong layout.
+#
+# That is not theoretical: after v16 moved identifier text into OP_SEGMENT runs,
+# an older patch left ps.strp at 0 and every name handle addressed past the
+# table. On an LPC2129 that is a data abort -- boot LED blinking four, watchdog
+# rebooting into it forever, on the one unit that happened to have a save.
+printf '#variable Vv:8 unsigned = 7\nVv = Vv + 1 ? Vv < 100\n/save\n/quit\n' |
+    repl ./csp "$D/fmt.db" > /dev/null
+ck "a matching patch loads" "#variable Vv:8 unsigned = 7  // E" \
+   "$(printf '/list\n/quit\n' | repl ./csp "$D/fmt.db" | grep '^#variable Vv')"
+
+# Re-stamp it as an older firmware would have: the payload version AND the
+# header CRC that covers it, so it is a well-formed save from another format
+# rather than a corrupt one -- which is exactly the case the CRCs cannot catch.
+python3 - "$D/fmt.db" "$D/fmt14.db" <<'PYEOF'
+import struct, sys
+def crc16(b, crc=0xFFFF):
+    for x in b:
+        crc ^= x << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+d = bytearray(open(sys.argv[1], 'rb').read())
+struct.pack_into('<H', d, 24, 14)              # ram.version
+struct.pack_into('<H', d, 76, crc16(d[:76]))   # crc_hdr over it
+open(sys.argv[2], 'wb').write(d)
+PYEOF
+got=$(printf '/quit\n' | repl ./csp "$D/fmt14.db")
+ck "a patch from another ROM format is refused, and says why" \
+   "eeprom rejected: patch is ROM format 14, firmware is 16 -- clear it and re-enter" \
+   "$got"
+
 echo "settings:"
 
 # A setting is a value for something the firmware ALREADY declares, kept in its

@@ -111,6 +111,18 @@ static rostring_t ram_verify(csp_rt_t* st, const csp_image_header_t* im)
 {
     csp_image_header_t chk;
 
+    // FORMAT before content. The CRCs below prove the bytes came back the way
+    // they went in; they say nothing about what those bytes MEAN, so a patch
+    // written by another firmware passes them intact and is then read with the
+    // wrong layout.
+    //
+    // EEPROM_VERSION does not cover this: it versions the eeprom's own header,
+    // and a ROM format change leaves it untouched. What moved in v15/v16 was the
+    // patch's payload -- identifier text became OP_SEGMENT runs in the
+    // instruction stream, and OP_NEW lost its `ent` field. Loading a v14 patch
+    // into v16 firmware finds no segments, leaves ps.strp at 0, and every name
+    // handle then addresses past the table. On an LPC2129 that is a DATA ABORT:
+    // the boot LED blinks four, forever, and the watchdog reboots into it again.
     ram_image(st, &chk, im->n_str, im->n_decl, im->n_instr);
     if (chk.crc_str   != im->crc_str)   return ros_str;
     if (chk.crc_decl  != im->crc_decl)  return ros_decl;
@@ -247,6 +259,29 @@ int csp_eeprom_load(csp_rt_t* st)
     // section reads below run off into garbage. crc_hdr covers everything above it.
     if (csp_crc16(0xFFFF, &hdr, sizeof(hdr) - sizeof(uint16_t), 0) != hdr.crc_hdr)
 	goto error;
+
+    // FORMAT before anything is READ, and before csp_rt_init tears the current
+    // state down. Not down by ram_verify with the CRCs: by then the decl and
+    // instruction sections have already been read INTO the arena, using counts
+    // that mean something else -- which is a write past the end of the pool, and
+    // on an LPC2129 a DATA ABORT. The boot LED blinks four forever and the
+    // watchdog reboots into it, so the board never reaches a prompt where the
+    // patch could be cleared. Refusing here leaves the ROM program running.
+    //
+    // EEPROM_VERSION above does not cover this: it versions the eeprom's own
+    // header, and a ROM format change leaves it untouched. The section CRCs do
+    // not either -- they prove the bytes came back as they went in, not that
+    // they still MEAN the same thing. What moved in v15/v16 was the payload:
+    // identifier text became OP_SEGMENT runs in the instruction stream, and
+    // OP_NEW lost its `ent` field.
+    if (hdr.ram.version != ROM_FORMAT_VERSION) {
+	csp_print_lit("eeprom rejected: patch is ROM format ");
+	csp_print_uint(hdr.ram.version);
+	csp_print_lit(", firmware is ");
+	csp_print_uint(ROM_FORMAT_VERSION);
+	csp_print_line(" -- clear it and re-enter");
+	goto error;
+    }
 
     // Rebuild the ROM baseline, then load the RAM patches on top of it.
     reactive = st->reactive;

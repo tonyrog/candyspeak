@@ -1,8 +1,8 @@
 // Generated CandySpeak image (rom_*) -- do not edit.
 //   source:  examples/empty.csp
 // modified:  Wed Jul 22 21:40:41 2026
-//   version: 1.0-63-g5e19b12-dirty
-//   built:   Sep  1 2026 19:24:59
+//   version: 1.0-64-gb34e5f1
+//   built:   Sep  1 2026 20:10:45
 //   size:    33 instr, 10 decl, 56 str, 3 states
 
 #include "csp.h"

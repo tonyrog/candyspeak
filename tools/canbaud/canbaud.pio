@@ -1,0 +1,14 @@
+; Sample one pin, one bit per clock, into a 32-bit word.
+;
+; That is the whole program. Timing EDGES in PIO needs a counting loop whose
+; cycle cost has to be right in every branch, and a miscount is a wrong bit rate
+; that looks plausible. Sampling has no branches: every bit costs exactly one
+; clock, autopush hands off a word every 32, and the run lengths are recovered
+; on the CPU where they can be checked.
+;
+; At 125 MHz that is 8 ns per sample -- 15 samples across the shortest bit a
+; CAN FD bus can carry (125 ns at 8 Mbit), and 500 across a 250k bit.
+.program cansample
+.wrap_target
+    in pins, 1
+.wrap
