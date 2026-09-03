@@ -131,6 +131,33 @@ static int role_elsewhere(const csp_device_t* d, const csp_region_t* skip,
     return 0;
 }
 
+// Does this region contain that ADDRESS, in the part's own address space?
+//
+// For the one question the map cannot answer on its own: is this slot the one
+// holding the image we are executing. On a part with memory-mapped flash the
+// program runs IN PLACE out of its slot, so erasing that slot pulls the program
+// out from under the interpreter -- the same failure csp_flash_writable refuses
+// for the runtime region, one level up.
+//
+// Geometry, so it lives here and can be tested without a board. An address
+// outside the flash entirely -- which is every address on the host, where the
+// "flash" is a file and no image is executed from it -- answers 0.
+int csp_region_holds(const csp_device_t* d, const csp_region_t* r, uint32_t addr)
+{
+    uint32_t off, len;
+
+    if ((d == NULL) || (r == NULL))
+	return 0;
+    if (addr < d->flash.base)
+	return 0;
+    addr -= d->flash.base;
+    off = csp_region_offset(d, r);
+    len = csp_region_size(d, r);
+    if (len == 0)
+	return 0;
+    return (addr >= off) && (addr < (off + len));
+}
+
 int csp_flash_writable(const csp_device_t* d, const csp_region_t* r)
 {
     csp_image_header_t h;

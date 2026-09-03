@@ -233,6 +233,61 @@ just wrote, and it is a couple of lines — but keeping them loosely coupled is
 what lets you flash a slot without committing to it, and commit to it later
 without reflashing.
 
+## Where the program is linked — the image into a slot
+
+A part whose map has an application slot gets the program's image placed on that
+slot's **first byte**, by the generated linker script:
+
+```ld
+.image.A : {
+  KEEP(*/rom.o(.rodata.*_image_data*))
+  KEEP(*/rom.o(.rodata* .text*))
+} > A
+```
+
+Linked into `.text` instead, the interpreter and the program are one blob: the
+program cannot be replaced without reflashing everything, and `/upgrade` cannot
+touch it at all — the runtime region is protected, and rightly so. Placed here,
+the runtime is **program-independent** (one firmware for every node) and it
+shrinks by the size of the program.
+
+Measured on bridgezone: `.text` 88408 → 87744, `.image.A` 664 bytes at 0x20000.
+
+**Three things this depends on, each of which fails silently if got wrong:**
+
+- **It must come FIRST in the script.** ld gives each input section to the first
+  OUTPUT section that matches, and `.text` claims `*(.rodata*)` — which is where
+  an image lives. Put it after and the image is quietly swallowed back into the
+  runtime, with everything still linking.
+- **The image DATA must be listed before the rest of `rom.o`.** `rom_image` is a
+  4-byte `csp_image_ref_t` in the same object; without the first `KEEP` it took
+  the slot's first word and the magic sat at +4. The header has to be on the
+  first byte — that address is what a flash scan computes and what `/images`
+  reports.
+- **`*/rom.o`, not `*rom.o`.** The latter also matches `rom_host.o`, the neutral
+  image linked when `PROG` is empty.
+
+Because the image lands exactly where a flash scan would look, the linked
+registry pointer already does that scan's job for this slot: `/upgrade A` can
+replace the program with no rebuild.
+
+**And that is what makes the next guard necessary.** `csp_flash_writable`
+refuses the runtime region and the last failsafe, but it cannot answer "is this
+the slot the running image is in" — that is a fact about `st`, not about the
+map. It did not arise while the image sat in the runtime, which is refused
+anyway. It arises the moment the image is in a slot: flash is memory-mapped
+here and the program executes IN PLACE, so erasing its slot pulls the program
+out from under the interpreter mid-command. `csp_region_holds` answers it, and
+`/upgrade` refuses with `ERR running`.
+
+**A flat file has to say something about the gap** between the end of the
+runtime and the slot. `objcopy` is given `--gap-fill 0xFF`: 0 would be wrong
+twice — it is not what an erased part reads, and flash only goes 1→0 without an
+erase.
+
+Boards whose map has no application slot (lpc1754, dl1200 today) generate no
+such section and link exactly as before.
+
 ## Getting an image onto the part — `/upgrade`
 
 Built. One region, hex on lines, `.` to finish. It runs over the same UART the

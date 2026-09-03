@@ -254,6 +254,12 @@ CORE := src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c src/csp_repl
 
 # THE PROGRAM THE BOARD CARRIES IN FLASH.
 #
+# On a part whose map has an application slot, this no longer means "code linked
+# into the interpreter": the generated image is placed on the first byte of that
+# slot by the linker script (see ld_image in gen_chips.erl). The runtime becomes
+# program-independent -- one firmware for every node -- and the program can be
+# replaced by /upgrade without rebuilding it.
+#
 # Defaults to the board's own pins.csp when there is one. Without this the
 # firmware links rom_host.c -- the NEUTRAL image, a couple of declarations and
 # no instructions -- and the board comes up with an empty /list and every pin
@@ -368,8 +374,13 @@ $(B)/firmware.elf: $(OBJ) $(LD)
 # The checksum goes in LAST, on the finished binary. The word at 0x14 must make
 # the eight vectors sum to zero or the boot ROM enters ISP instead of running
 # the program -- silently, with no output and nothing a debugger can see.
+# --gap-fill 0xFF, not the default 0. With the program's image in an application
+# slot there is a GAP between the end of the runtime and that slot, and a flat
+# file has to say something about it. 0 says "write zeros there", which is wrong
+# twice: it is not what an erased part reads, and flash only goes 1 -> 0 without
+# an erase. 0xFF says "erased", which is the truth.
 $(B)/firmware.bin: $(B)/firmware.elf csp
-	@$(OC) -O binary $< $@
+	@$(OC) -O binary --gap-fill 0xFF $< $@
 	@./csp --checksum=$@
 
 # A .hex as well, and prefer it when flashing. A raw .bin is just bytes: byte 0

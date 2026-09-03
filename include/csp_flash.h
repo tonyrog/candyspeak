@@ -149,6 +149,11 @@ extern uint32_t csp_region_size(const csp_device_t* d, const csp_region_t* r);
 // caller cannot route around it by forgetting.
 extern int csp_flash_writable(const csp_device_t* d, const csp_region_t* r);
 
+// Is `addr` (in the part's address space) inside this region? Used to refuse an
+// erase of the slot the running image is executing from -- see csp_region_holds.
+extern int csp_region_holds(const csp_device_t* d, const csp_region_t* r,
+			    uint32_t addr);
+
 // Erase sectors first..last inclusive.
 extern int csp_flash_erase(uint8_t first, uint8_t last);
 // Write `len` bytes at `off` from flash base. The backend is responsible for

@@ -1288,6 +1288,7 @@ ld_sections(G, Regions) ->
 	    f("ENTRY(~s)~n~n"
 	      "SECTIONS~n"
 	      "{~n"
+	      "~s"
 	      "  /* The vector table has to be the first thing at the flash~n"
 	      "   * base: the core fetches reset from offset 0 and nothing~n"
 	      "   * relocates it. */~n"
@@ -1334,8 +1335,47 @@ ld_sections(G, Regions) ->
 	      "  _pvHeapStart = _heap_start;~n"
 	      "  _vStackTop   = _stack_top;~n"
 	      "}~n",
-	      [kv(G, entry, '_start'), kv(G, vectors, '.vectors'),
+	      [kv(G, entry, '_start'), ld_image(Regions),
+	       kv(G, vectors, '.vectors'),
 	       kv(G, ram_base, 0) + kv(G, ram_kb, 0)*1024])
+    end.
+
+%% THE PROGRAM'S IMAGE, INTO THE FIRST APPLICATION SLOT.
+%%
+%% rom.o is the compiled CandySpeak program. Linked into `.text` it becomes part
+%% of the runtime: the interpreter and the program are one blob, the program
+%% cannot be replaced without reflashing everything, and it cannot be replaced by
+%% /upgrade at all -- the runtime region is protected, and rightly so.
+%%
+%% Placed here it lands on the slot's first byte, which is the address a flash
+%% scan would compute for it. So the linked registry pointer already does that
+%% scan's job for this slot, and /upgrade can overwrite the program without the
+%% firmware being rebuilt. The runtime becomes program-independent: one image for
+%% every node.
+%%
+%% FIRST IN THE SCRIPT, and that is not cosmetic. ld gives each input section to
+%% the first OUTPUT section that matches it, and `.text` below claims
+%% *(.rodata*) -- which is where the image lives. Put this after it and the
+%% image is silently swallowed into the runtime again, with everything still
+%% linking.
+%%
+%% `*/rom.o` and not `*rom.o`: the latter also matches a future rom.o-suffixed
+%% object, and being wrong here is invisible.
+ld_image(Regions) ->
+    case [N || {app, N, _, _} <- Regions] of
+	[] -> "";            %% no application slot: the old layout
+	[N|_] ->
+	    f("  /* The program's image, on the first byte of slot ~s -- see~n"
+	      "   * ld_image in gen_chips.erl. MUST stay ahead of .text, which~n"
+	      "   * claims *(.rodata*) and would otherwise take it. */~n"
+	      "  .image.~s : {~n"
+	      "    /* The image DATA first, so the header lands on the slot's~n"
+	      "     * first byte -- that address is what a flash scan reads and~n"
+	      "     * what /images reports. Without this the 4-byte csp_image_ref~n"
+	      "     * took the first word and the magic sat at +4. */~n"
+	      "    KEEP(*/rom.o(.rodata.*_image_data*))~n"
+	      "    KEEP(*/rom.o(.rodata* .text*))~n"
+	      "  } > ~s~n~n", [N, N, N])
     end.
 
 banner(Chip) ->

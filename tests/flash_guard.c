@@ -116,6 +116,28 @@ int main(void)
     plant(d, "A", CSP_ROLE_FAILSAFE);
     ck("A is last: B's failsafe is torn", put(d, "A"), CSP_FLASH_PROTECTED);
 
+    // csp_region_holds: the address test that stops /upgrade from erasing the
+    // slot the running image executes from. Geometry only, so it is checkable
+    // here -- on the host no image is ever executed out of the flash file, so
+    // the command path cannot exercise it at all.
+    {
+	const csp_region_t* ra = csp_region_find(d, "A", 1);
+	const csp_region_t* rb = csp_region_find(d, "B", 1);
+	uint32_t base = d->flash.base;
+	uint32_t off  = csp_region_offset(d, ra);
+	uint32_t len  = csp_region_size(d, ra);
+
+	ck("first byte of A is inside A",  csp_region_holds(d, ra, base+off), 1);
+	ck("last byte of A is inside A",   csp_region_holds(d, ra, base+off+len-1), 1);
+	ck("one past A is outside",        csp_region_holds(d, ra, base+off+len), 0);
+	ck("one before A is outside",      csp_region_holds(d, ra, base+off-1), 0);
+	ck("A's first byte is not in B",   csp_region_holds(d, rb, base+off), 0);
+	// Every host address is off the part, which is why the check is inert
+	// rather than wrong on a machine whose flash is a file.
+	ck("an address off the part",      csp_region_holds(d, ra, 0x7fff0000u), 0);
+	ck("no region, no claim",          csp_region_holds(d, NULL, base+off), 0);
+    }
+
     if (!bad)
 	printf("ok, refused\n");
     return bad;

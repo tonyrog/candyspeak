@@ -1905,6 +1905,19 @@ static int cmd_upgrade(csp_rt_t* st, int argc, char* argv[])
 	csp_print_line("ERR protected");
 	return CSP_CMD_OK;
     }
+    // ...and the one that guard cannot answer: is this the slot the running
+    // image is in. That is a fact about st, not about the map.
+    //
+    // It did not arise while the image was linked into the runtime -- that
+    // region is refused anyway. It arises the moment the image is placed in an
+    // application slot, which is where it belongs: flash is memory-mapped on
+    // this part and the program executes IN PLACE, so erasing its slot pulls
+    // the program out from under the interpreter mid-command.
+    if ((st->image_no >= 0) &&
+	csp_region_holds(d, r, (uint32_t)(uintptr_t)csp_image_at(st->image_no))) {
+	csp_print_line("ERR running -- that slot holds the image now executing");
+	return CSP_CMD_OK;
+    }
     if (csp_flash_erase(r->first, r->last) != CSP_FLASH_OK) {
 	csp_print_line("ERR erase");
 	return CSP_CMD_OK;
