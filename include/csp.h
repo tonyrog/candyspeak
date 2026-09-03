@@ -296,6 +296,10 @@ static inline void* rdvp(const void* p, int rom)
 // What an image is FOR. A scan groups by role and picks one per role, which is
 // what makes redundant copies and A/B versions fall out of the same rule
 // instead of each being a special case.
+// sys.Boot: no preference, take the highest generation. Not 0 -- 0 is a real
+// image number, the first one /images prints.
+#define CSP_BOOT_AUTO   255
+
 #define CSP_ROLE_ROM      0   // the program
 #define CSP_ROLE_FAILSAFE 1   // the one that runs when the program cannot
 
@@ -2150,6 +2154,12 @@ typedef struct _csp_rt_t
     uint16_t   heap_cap;          // heap bytes per half (csp_estimate.heap)
     // allow device output latch=0 or disallow latch=1
     uint8_t latch;
+    // Firmware upgrade mode: while this is set, csp_process_line hands every
+    // line to the hex receiver instead of the parser. Execution is stopped for
+    // the duration -- a rule firing mid-write would change timing the flash
+    // controller is not expecting, and there is nothing for the program to do
+    // while its own storage is being rewritten.
+    uint8_t up_active;
     // check if any node has been set: anyx|anyd == CSP_TRUE
     int8_t  anyd;  // CSP_TRUE|CSP_FALSE
     set_group_t* dset;            // mark decl updated during cycle (own alloc, view_cap bits)
@@ -2241,6 +2251,17 @@ typedef struct _csp_rt_t
     // once csp_rt_start has slots to publish into -- the NUMBER /images prints,
     // so "which one am I running" has one answer in both places.
     int8_t  image_no;
+    // crc_hdr of the image csp_load_rom actually BOOTED -- the eeprom patch's
+    // fingerprint. Not read from rom_image: with more than one image linked the
+    // registry picks the highest generation, which is a DIFFERENT program, and
+    // fingerprinting the one that was not booted accepts a patch built against
+    // something else. Its declaration indices and name handles then address the
+    // wrong table -- observed as a saved `Z` coming back as a second `R`.
+    uint16_t rom_fp;
+    // Which image to boot NEXT time, as sys.Boot holds it -- read out of the
+    // settings store before csp_load_rom runs, because the choice has to be
+    // made before an image is loaded. CSP_BOOT_AUTO means "no preference".
+    uint8_t boot_want;
     // How much of the RAM patch eeprom currently holds a copy of, counted from
     // CSP_BASE_ND/CSP_BASE_NN. Set by a successful save (everything in RAM is now
     // in eeprom) and by a successful load (what came back), zeroed by /clear and
@@ -2836,12 +2857,17 @@ extern uint8_t* csp_arena_mem(size_t want, size_t* got);
 extern void    csp_load_rom(csp_rt_t*);
 // Load a NAMED image. Verifies it (version, per-section CRC, header-free
 // recovery via the end markers) and rebases the parse state onto it.
-extern void    csp_load_image(csp_rt_t*, const uint8_t* base);
+// 0 when the image is installed, -1 when it is refused. A refusal leaves st
+// untouched, so the caller may try another image.
+extern int     csp_load_image(csp_rt_t*, const uint8_t* base);
 extern const csp_image_ref_t rom_image;
 // How many images this firmware linked in, and the base of the i:th one.
 extern int            csp_image_count(void);
 extern const uint8_t* csp_image_at(int i);
 extern const uint8_t* csp_find_image_no(unsigned role, int* nop);
+// The same, ignoring registry indices whose bit is set in `skip` (0..31).
+extern const uint8_t* csp_find_image_skip(unsigned role, int* nop,
+					  uint32_t skip);
 // The best linked image for a role: highest generation whose header verifies.
 // NULL when the firmware carries none for that role.
 extern const uint8_t* csp_find_image(unsigned role);
@@ -2952,6 +2978,12 @@ extern int  csp_settings_record(csp_rt_t* st, xindex_t ix,
 extern void csp_settings_apply(csp_rt_t* st);
 // Read entry `n` (0-based). Returns 0 at the end of the store.
 extern int  csp_settings_get(csp_rt_t* st, int n, csp_setting_t* sp);
+// One setting by its path TEXT -- no declarations needed. See csp_boot_pick.
+extern int  csp_settings_find(csp_rt_t* st, const char* path, uint8_t plen,
+			      csp_setting_t* sp);
+// Read sys.Boot out of the settings store into st->boot_want. Call after the
+// store has been read (csp_eeprom_peek) and BEFORE csp_load_rom.
+extern void csp_boot_pick(csp_rt_t* st);
 // Does this entry's path still resolve in the running program? An orphan is
 // kept and not applied -- the next firmware may reintroduce the name.
 extern int  csp_settings_resolve(csp_rt_t* st, const csp_setting_t* sp,
@@ -2999,6 +3031,10 @@ extern void csp_output_timer(csp_rt_t* st);
 // eeprom save/load (csp_eeprom.c)
 extern int csp_eeprom_save(csp_rt_t* st);
 extern int csp_eeprom_load(csp_rt_t* st);
+// The settings section ALONE, for the boot path: sys.Boot has to be read before
+// csp_load_rom chooses an image. Silent on failure; the caller then boots with
+// no preference and csp_eeprom_load reports the real problem later.
+extern int csp_eeprom_peek(csp_rt_t* st);
 extern int csp_eeprom_size(csp_rt_t* st);   // bytes THIS program needs to save
 extern int csp_eeprom_clear(csp_rt_t* st);
 

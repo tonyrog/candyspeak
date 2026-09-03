@@ -142,3 +142,16 @@ void Chip_Tick_Init(uint32_t hz) { (void)hz; }
 // expire and for time to be monotonic, and no more precision than that.
 static uint32_t stub_us = 0;
 uint32_t Chip_Tick_Us(void) { stub_us += 1000; return stub_us; }
+
+// --- what the IAP flash backend needs ---------------------------------------
+// flash_212x.c cannot run here: IAP lives in the part's boot ROM and is called
+// through a fixed address. What CAN be checked on the host is that it compiles
+// and links against the same headers the board build uses -- which is what
+// caught its dependency on the CLOCK driver rather than on a constant, and on
+// the interrupt window rather than on nothing.
+uint32_t Chip_Clock_GetSystemClockRate(void) { return 60000000u; }
+uint32_t DisableIRQ(void) { return 0; }
+void     RestoreIRQ(uint32_t cpsr) { (void)cpsr; }
+
+// csp_device() itself comes from port/csp_devices.c, which the link includes --
+// a board would set its own with csp_device_set.

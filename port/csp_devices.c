@@ -10,6 +10,7 @@
 // the file it exercises can be rebuilt from it. If a number below and a number
 // in that test ever disagree, the TEST is the source.
 
+#include <string.h>
 #include "csp_flash.h"
 
 // --- the host part -----------------------------------------------------------
@@ -89,6 +90,18 @@ const csp_device_t csp_dev_host_full = {
 // between the three at run time to exercise all of them in one binary, and a
 // board sets its own once from startup.
 static const csp_device_t* active = &csp_dev_host_ab;
+
+// Pick one by name. For the host harness and its --part option: the three
+// layouts differ only in how the same sectors are spent, and the bugs worth
+// finding are the ones that show up in one arrangement and not another.
+const csp_device_t* csp_device_by_name(const char* name)
+{
+    if (name == NULL) return NULL;
+    if (strcmp(name, "ab")   == 0) return &csp_dev_host_ab;
+    if (strcmp(name, "apps") == 0) return &csp_dev_host_apps;
+    if (strcmp(name, "full") == 0) return &csp_dev_host_full;
+    return NULL;
+}
 
 const csp_device_t* csp_device(void)
 {

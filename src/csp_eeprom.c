@@ -4,15 +4,19 @@
 #include "csp_strings.h"   // ros_str/ros_decl/ros_instr/ros_states section names
 #include <string.h>
 
-// The firmware ROM image header, so a load can identify the firmware the patches
-// were saved against (see rom_fp below). Declared here the same way csp_rt.c does.
-// The firmware's identity for the patch log: crc_hdr of the linked image. Read
-// through the ref, because the image's struct type is generated per program and
-// cannot be named here.
-static uint16_t rom_fingerprint(void)
+// The identity of the firmware a patch was saved against: crc_hdr of the image
+// that csp_load_rom BOOTED, recorded by it in st->rom_fp.
+//
+// It used to read rom_image directly, and that is only right when the firmware
+// links exactly one image. The registry picks the highest generation, so with
+// two linked the running program can be the OTHER one -- and then two firmwares
+// running different programs share a fingerprint, the patch is accepted by the
+// wrong one, and its indices and name handles address the wrong table. A saved
+// `Z` came back as a second `R`. It gets worse the moment a slot in flash can
+// be booted, where the running image is almost never the linked one.
+static uint16_t rom_fingerprint(csp_rt_t* st)
 {
-    const uint8_t* base = ro_ref(&rom_image).base;
-    return ro_header((const csp_image_header_t*)base).crc_hdr;
+    return st->rom_fp;
 }
 
 // Binary eeprom format. Only the RAM patch area is persisted -- ROM runs from
@@ -169,7 +173,7 @@ int csp_eeprom_save(csp_rt_t* st)
     hdr.set_ver   = CSP_SETTINGS_VERSION;
     hdr.set_bytes = st->set_used;
     hdr.crc_set   = csp_crc16(0xFFFF, st->settings, st->set_used, 0);
-    hdr.rom_fp  = rom_fingerprint();
+    hdr.rom_fp  = rom_fingerprint(st);
     hdr.nq      = st->ps.nq;
     ram_image(st, &hdr.ram, ram_strp, ram_nd, ram_nn);
     hdr.n_dis   = (uint16_t)csp_n_rules(st);
@@ -221,6 +225,50 @@ int csp_eeprom_save(csp_rt_t* st)
 error:
     csp_eeprom_close();
     csp_set_error(st, ERR_CANNOT_SAVE);
+    return -1;
+}
+
+// The SETTINGS only, read before anything else exists.
+//
+// sys.Boot has to be known before csp_load_rom picks an image, and the normal
+// path -- csp_eeprom_load, then csp_settings_apply in csp_rt_start -- is far
+// too late for that. This reads the store on its own and nothing else.
+//
+// It is cheap and it is safe because of where the settings SIT: at a fixed
+// offset immediately behind the header. Reaching them never involves parsing
+// anything of variable length, so a patch that is corrupt, half-written, or
+// built by a firmware that is no longer flashed does not stand between the boot
+// path and the calibration. That property was designed in; this is what it buys.
+//
+// Silent on every failure. There is no console yet worth the name, the caller
+// carries on with CSP_BOOT_AUTO, and csp_eeprom_load runs later and reports
+// whatever is really wrong with the store.
+int csp_eeprom_peek(csp_rt_t* st)
+{
+    eeprom_header_t hdr;
+
+    st->set_used = 0;
+    if (csp_eeprom_open_read() < 0)
+	return -1;
+    if ((csp_eeprom_read(&hdr, sizeof(hdr)) < 0) ||
+	(ro_memcmp(hdr.magic, EEPROM_MAGIC, 4) != 0) ||
+	(hdr.version != EEPROM_VERSION) ||
+	(csp_crc16(0xFFFF, &hdr, sizeof(hdr) - sizeof(uint16_t), 0) != hdr.crc_hdr))
+	goto out;
+    if ((hdr.set_bytes == 0) ||
+	(hdr.set_ver != CSP_SETTINGS_VERSION) ||
+	(hdr.set_bytes > CSP_SETTINGS_BYTES))
+	goto out;
+    if (csp_eeprom_read(st->settings, hdr.set_bytes) < 0)
+	goto out;
+    if (csp_crc16(0xFFFF, st->settings, hdr.set_bytes, 0) != hdr.crc_set)
+	goto out;
+    st->set_used = hdr.set_bytes;
+    csp_eeprom_close();
+    return 0;
+out:
+    st->set_used = 0;
+    csp_eeprom_close();
     return -1;
 }
 
@@ -284,8 +332,18 @@ int csp_eeprom_load(csp_rt_t* st)
     }
 
     // Rebuild the ROM baseline, then load the RAM patches on top of it.
+    //
+    // boot_want is carried across the same way `reactive` is, and for the same
+    // reason: csp_rt_init resets the whole struct, and csp_load_rom below is the
+    // SECOND time it runs this boot. Without this the image chosen by the first
+    // call is silently replaced by the automatic choice here -- sys.Boot stored
+    // and read back correctly, and ignored.
     reactive = st->reactive;
-    csp_rt_init(st, reactive, st->cs);   // keep the compiler, if there is one
+    {
+	uint8_t want = st->boot_want;
+	csp_rt_init(st, reactive, st->cs);   // keep the compiler, if any
+	st->boot_want = want;
+    }
     did_init = 1;       // from here a failure has torn down view/heap/tables
     csp_load_rom(st);   // rebase ps.* to the ROM sizes (no-op if no firmware)
     base_nd   = CSP_BASE_ND(st);
@@ -331,7 +389,7 @@ int csp_eeprom_load(csp_rt_t* st)
     // flash program -- size OR content -- shows up here. The RAM patches reference
     // ROM decls by index; a different program makes those indices mean something
     // else, so the whole save must go, not just the disable set.
-    if (hdr.rom_fp != rom_fingerprint())
+    if (hdr.rom_fp != rom_fingerprint(st))
 	goto error;
 
     // Read the RAM patch area into the RAM-local slots (counts from the header,
@@ -462,9 +520,13 @@ error:
 int csp_eeprom_size(csp_rt_t* st)
 {
     index_t nr = csp_n_rules(st);
+    // Every term is a write csp_eeprom_save actually makes, in the same order.
+    // There is no string term: identifier text has ridden in the INSTRUCTIONS
+    // as OP_SEGMENT runs since v16, and the strp delta left here counted those
+    // bytes a second time -- 332 reported for a file of 255. It is what
+    // /memory calls (FULL), so an over-count refuses a save that fits.
     return sizeof(eeprom_header_t) +
 	   st->set_used +
-	   (st->ps.strp - CSP_BASE_STRP(st)) +
 	   sizeof(csp_decl_t) * (st->ps.nd - CSP_BASE_ND(st)) +
 	   sizeof(csp_instr_t) * (st->ps.nn - CSP_BASE_NN(st)) +
 	   (nr ? DIS_BYTES(nr) : 0);   // states ride in the decl count above

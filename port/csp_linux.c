@@ -364,6 +364,12 @@ uint32_t csp_eeprom_capacity(void)
 // Platform-specific command implementations
 // Platform-specific input polling
 static int quit_flag = 0;
+// stdin is finished with -- EOF on a pipe, or Ctrl-D at a terminal. NOT the
+// same as quitting. It ends the PROMPT, not the program: the loop drops to its
+// non-interactive rules and runs the program to wherever it settles, which is
+// what `./csp prog.csp` does and is the thing a person means by Ctrl-D after
+// typing a program in. /quit is how you say quit.
+static int stdin_gone = 0;
 
 static void serial_poll(csp_rt_t* st, struct pollfd* fds, nfds_t nfds)
 {
@@ -375,10 +381,28 @@ static void serial_poll(csp_rt_t* st, struct pollfd* fds, nfds_t nfds)
 	// raw mode with VMIN=1, so read() BLOCKS; a zero-timeout poll each turn
 	// is what keeps "take what is there" from becoming "wait for more".
 	while (csp_line_space(&st->line)) {
-	    if (read(STDIN_FILENO, &c, 1) != 1)
+	    ssize_t n = read(STDIN_FILENO, &c, 1);
+	    if (n == 0) {
+		// EOF -- the pipe's Ctrl-D, and it is treated as one.
+		//
+		// It must be NOTICED, whatever it then means. poll() reports a
+		// closed pipe as READABLE, forever: this read returned 0, broke
+		// out, and the main loop went straight round again at 100% CPU
+		// until something killed it. One such process ran for two and a
+		// half hours; four cases in tests/repl.sh sat here for their
+		// full 20-second timeout each.
+		//
+		// A last line with no newline still counts: terminate it so it
+		// is processed like any other.
+		if (st->line.fill > 0)
+		    csp_line_input(&st->line, '\n');
+		stdin_gone = 1;
+		return;
+	    }
+	    if (n != 1)
 		break;
-	    if (c == 4) { // Ctrl-D
-		quit_flag = 1;
+	    if (c == 4) { // Ctrl-D -- the same thing, said by hand
+		stdin_gone = 1;
 		return;
 	    }
 	    csp_line_input(&st->line, c);
@@ -831,6 +855,8 @@ static struct option long_options[] = {
     {"generation",   required_argument, 0,  1005},
     {"virtual-time", no_argument,       0,  1006},
     {"checksum",     required_argument, 0,  1009},
+    {"flash",        required_argument, 0,  1010},
+    {"part",         required_argument, 0,  1011},
     {"memory",       required_argument, 0,  'm'},
     {"pause",        no_argument,       0,  'b'},
     {0,              0,                 0,  0 }
@@ -882,6 +908,9 @@ void usage(const char* prog)
     fprintf(stderr, "      --generation=N   Image generation, higher is newer\n");
     fprintf(stderr, "      --virtual-time   Jump the clock to the next timer instead of sleeping\n");
     fprintf(stderr, "      --checksum=BIN   Patch the LPC boot checksum into a .bin and exit\n");
+    fprintf(stderr, "      --flash=FILE     Back the simulated flash with FILE, so /upgrade and\n");
+    fprintf(stderr, "                       the region guards run without hardware\n");
+    fprintf(stderr, "      --part=NAME      Flash layout to simulate: ab, apps, full\n");
     fprintf(stderr, "  -P, --debug-parse    Enable parser debugging\n");
     fprintf(stderr, "  -S, --debug-scan     Enable tokenizer debugging\n");
     fprintf(stderr, "  -Q, --debug-trace    Enable variable tracing\n");
@@ -905,6 +934,9 @@ void usage(const char* prog)
     fprintf(stderr, "\n");
     fprintf(stderr, "If no file is given, reads from stdin.\n");
     fprintf(stderr, "In interactive mode (-i), type /help for commands.\n");
+    fprintf(stderr, "Ctrl-D (or EOF on a pipe) ends the PROMPT, not the program:\n");
+    fprintf(stderr, "what is left runs on until it settles, as if it had been\n");
+    fprintf(stderr, "given as a file. /quit exits; -c and -T bound a run.\n");
 #endif
 }
 
@@ -1137,6 +1169,18 @@ int main(int argc, char** argv)
 #endif
 	case 'e': eeprom_file = optarg; break;
 	case 1001: can_iface = optarg; break;
+	case 1010:   // --flash=FILE: back the simulated flash with a file
+	    csp_flash_host_file(optarg);
+	    break;
+	case 1011: { // --part=ab|apps|full: which host layout to simulate
+	    const csp_device_t* d = csp_device_by_name(optarg);
+	    if (d == NULL) {
+		fprintf(stderr, "unknown part '%s' (ab, apps, full)\n", optarg);
+		exit(1);
+	    }
+	    csp_device_set(d);
+	    break;
+	}
 	case 1002: no_eeprom = 1; break;
 	case 'r': reactive = 1; break;   // -r: enable reactive mode (no argument)
 	case 'c': max_cycles = atoi(optarg); break;
@@ -1332,8 +1376,17 @@ int main(int argc, char** argv)
 
     // Activate flash-resident firmware: run ROM in place from flash, RAM holds
     // patches. Skip when compiling (-C) so the dump is exactly the parsed program.
-    if (!compile)
+    if (!compile) {
+	// WHICH image, before one is loaded. sys.Boot lives in the settings
+	// store, so the store is read on its own first -- see csp_eeprom_peek.
+	// No store, no preference, and csp_load_rom takes the highest
+	// generation, which is what it did before this existed.
+#if !defined(CSP_NO_EEPROM)
+	if (!no_eeprom && (csp_eeprom_peek(&state) == 0))
+	    csp_boot_pick(&state);
+#endif
 	csp_load_rom(&state);
+    }
 
     // Parse input files (if any)
 #if defined(CSP_EXEC_ONLY)
@@ -1477,6 +1530,16 @@ int main(int argc, char** argv)
 
 	printf("CandySpeak Interactive Mode\n");
 	printf("Type /help for commands, /quit to exit\n");
+	// Ctrl-D is NOT exit here, and saying so is cheaper than the surprise:
+	// it drops the prompt and leaves the program running, the way handing
+	// the same file on the command line would.
+	//
+	// Only to a TERMINAL. Nobody piping a file in is going to press it, and
+	// a third banner line is noise in front of their output -- which is not
+	// a guess: adding it unconditionally failed 41 cases in tests/repl.sh,
+	// all of them on the banner and none on the behaviour.
+	if (isatty(STDIN_FILENO))
+	    printf("Ctrl-D drops the prompt and lets the program run on\n");
 	if (pause_start)
 	    printf("Started paused -- /memory /state to inspect, /resume to run\n");
 	printf("\n");
@@ -1554,6 +1617,23 @@ loop:
 	    csp_line_done(&state.line);
 	    if (quit_flag) goto done;
 	}
+	// Nothing more can arrive on stdin: stop being interactive.
+	//
+	// Not "stop", though -- the loop's non-interactive rules take over from
+	// here and run the program to wherever it settles, exactly as if it had
+	// been given on the command line. A program that quiesces ends the
+	// process; one with a timer keeps running, which is what -c and -T are
+	// for.
+	//
+	// fd -1 rather than a shorter nfds: poll ignores it, the CAN slot keeps
+	// its index, and the queued-line branch above still runs -- serial_poll
+	// reads a whole paste in one sweep and csp_line_done feeds it back one
+	// line per turn, so the tail of a piped session is not dropped.
+	if (stdin_gone && interactive) {
+	    interactive = 0;
+	    pfd[0].fd = -1;
+	    disable_raw_mode();
+	}
     }
 
     // /pause freezes execution: keep servicing interactive input (above) so
@@ -1627,6 +1707,10 @@ loop:
 
     // Continue loop if: interactive mode, pending changes, timers, or reactive queue
     if (interactive) goto loop;
+    // A line still in hand outrunning the program: after Ctrl-D the prompt is
+    // gone but a paste can still be queued, and a program that has already
+    // settled would otherwise exit on top of it.
+    if (state.line.ready || state.line.fill) goto loop;
     if (virtual_time && !input_done) goto loop;  // more input rows to feed
     if (anyd) goto loop;
     if (state.es.wait_ms != NOTIMEOUT) goto loop;

@@ -72,7 +72,7 @@ void csp_stack_mark(void)
 // guessing where to put a probe. Costs a call pair per function. Both must
 // carry no_instrument_function or they recurse.
 //
-//   make -f Makefile.mega watch
+//   make -f Makefile.board BOARD=mega watch
 void __cyg_profile_func_enter(void* fn, void* call)
     __attribute__((no_instrument_function));
 void __cyg_profile_func_exit(void* fn, void* call)
@@ -175,25 +175,6 @@ CSP_STATIC_ASSERT(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
     "needs canonical field serialization");
 #endif
 
-// CRC-16/CCITT, incremental: folds n bytes into `crc` and returns it, so a
-// caller can chain several regions (str, then decls, then instrs, ...). is_rom
-// selects ro_byte, which is memcpy_P on AVR (the region is PROGMEM) and a plain
-// read on the host; pass 0 for ordinary RAM. Table-free. Seed with 0xFFFF.
-NOINLINE uint16_t csp_crc16(uint16_t crc, const void* data, size_t n, int is_rom)
-{
-    const uint8_t* p = (const uint8_t*)data;
-    size_t k;
-    unsigned b;
-
-    for (k = 0; k < n; k++) {
-	uint8_t byte = is_rom ? ro_byte(p + k) : p[k];
-	crc ^= (uint16_t)((uint16_t)byte << 8);
-	for (b = 0; b < 8; b++)
-	    crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021)
-				 : (uint16_t)(crc << 1);
-    }
-    return crc;
-}
 
 #if defined(__AVR__)
 // The one definition -- see the declaration in csp.h for why this is not a
@@ -3215,7 +3196,17 @@ NOINLINE static int rom_scan_str(const char* str)
 // `base` is the first byte of the image object; everything else is reached by
 // offset from it, so this is the same code for the linked rom, a FAILSAFE bank
 // or a copy found by scanning flash.
-NOINLINE void csp_load_image(csp_rt_t* st, const uint8_t* base)
+// Load one image, or REFUSE it.
+//
+// Returns 0 when the image is installed and -1 when it is not. The distinction
+// exists because a caller may have somewhere else to go: with images in flash
+// slots, "this one is damaged" and "there is nothing to run" are different
+// answers, and only the caller knows whether a second candidate exists.
+//
+// Nothing in st is touched until every check has passed -- see the commit point
+// below -- so a refusal leaves the caller free to try another image on top of
+// an untouched state.
+NOINLINE int csp_load_image(csp_rt_t* st, const uint8_t* base)
 {
     csp_image_header_t h = ro_header((const csp_image_header_t*)base);
     img_p_t p;
@@ -3224,9 +3215,9 @@ NOINLINE void csp_load_image(csp_rt_t* st, const uint8_t* base)
 
     if ((h.magic[0] != CSP_IMAGE_MAGIC0) || (h.magic[1] != CSP_IMAGE_MAGIC1) ||
 	(h.magic[2] != CSP_IMAGE_MAGIC2) || (h.magic[3] != CSP_IMAGE_MAGIC3))
-	return;                   // not an image at all
-    if (h.n_decl == 0)            // no firmware linked
-	return;
+	return -1;                // not an image at all
+    if (h.n_decl == 0)            // carries no program
+	return -1;
     nd = h.n_decl;
     img_from_hdr(base, &h, &p);
     // Reject a stale or corrupt generate before touching ps.*: an incompatible
@@ -3241,7 +3232,7 @@ NOINLINE void csp_load_image(csp_rt_t* st, const uint8_t* base)
 	csp_print_lit(", firmware expects ");
 	csp_print_uint(ROM_FORMAT_VERSION);
 	csp_print_line(" -- regenerate the image");
-	return;
+	return -1;
     }
     if ((bad = rom_verify(&p, &h)) != NULL) {
 	// Recover ONLY when the header itself (crc_hdr) is the casualty: then its
@@ -3280,7 +3271,7 @@ NOINLINE void csp_load_image(csp_rt_t* st, const uint8_t* base)
 	    csp_print_lit("ROM rejected: CRC mismatch in ");
 	    csp_print_rostr(bad);
 	    csp_print_line(" section (corrupt flash image)");
-	    return;
+	    return -1;
 	}
     }
     // Committed as one descriptor, and only now -- everything above may still
@@ -3323,6 +3314,7 @@ NOINLINE void csp_load_image(csp_rt_t* st, const uint8_t* base)
     // as DECL_STATES blocks, which the rebase above already pointed at. The
     // image's state section is empty (see csp_dump_code) and this loop used to
     // be the only thing that read it.
+    return 0;
 }
 
 // --- the linked-image registry -----------------------------------------------
@@ -3366,6 +3358,22 @@ const uint8_t* csp_find_image(unsigned role)
 // linked rom_image, which is not in the registry and has no index).
 const uint8_t* csp_find_image_no(unsigned role, int* nop)
 {
+    return csp_find_image_skip(role, nop, 0);
+}
+
+// ...and the same, ignoring the images in `skip`.
+//
+// One bit per registry index. It is what lets csp_load_rom go ROUND again after
+// an image is refused: rank on the header, discover the damage on load, take
+// that one out of the running and rank what is left. Header CRC is all a rank
+// can see -- the section CRCs are csp_load_image's business -- so the second
+// look is the only way a bad section can lose.
+//
+// 32 candidates. Past that an image cannot be marked, so it would be offered
+// forever; csp_load_rom bounds its loop for that reason and does not rely on
+// this alone.
+const uint8_t* csp_find_image_skip(unsigned role, int* nop, uint32_t skip)
+{
     const uint8_t* best = NULL;
     unsigned best_gen = 0;
     int best_no = -1;
@@ -3378,6 +3386,8 @@ const uint8_t* csp_find_image_no(unsigned role, int* nop)
     for (i = 0; i < n; i++) {
 	const uint8_t* base = csp_image_at(i);
 	csp_image_header_t h;
+	if ((i < 32) && (skip & ((uint32_t)1 << i)))
+	    continue;
 	if (base == NULL)
 	    continue;
 	h = ro_header((const csp_image_header_t*)base);
@@ -3399,6 +3409,8 @@ const uint8_t* csp_find_image_no(unsigned role, int* nop)
     return best;
 }
 
+NOINLINE static void csp_load_rom_sys(csp_rt_t* st);
+
 // The firmware's own image, by the name every backend already calls.
 NOINLINE void csp_load_rom(csp_rt_t* st)
 {
@@ -3408,13 +3420,90 @@ NOINLINE void csp_load_rom(csp_rt_t* st)
     // does collect the registry on some toolchain, the board still boots with
     // the image it was built with instead of nothing at all.
     int no;
-    const uint8_t* base = csp_find_image_no(CSP_ROLE_ROM, &no);
-    if (base == NULL)
-	base = ro_ref(&rom_image).base;
-    // Recorded, not written: sys.Image is a value SLOT and there are none until
-    // csp_rt_start has laid the tables out. It publishes this then.
+    const uint8_t* base = NULL;
+
+    // The REQUEST first, when there is one. st->boot_want is read out of the
+    // settings store before this runs (csp_eeprom_peek), because the choice has
+    // to be made before the image is loaded and the store is the only thing
+    // that survives a power cycle to carry it.
+    //
+    // A request for an image that is missing or whose header does not verify is
+    // NOT an error and NOT fatal: it falls through to the automatic choice
+    // below. That is the whole point of the two fields being separate -- the
+    // node comes up on something, and sys.Boot != sys.Image says what happened.
+    if (st->boot_want != CSP_BOOT_AUTO) {
+	const uint8_t* want = csp_image_at((int)st->boot_want);
+	if (want != NULL) {
+	    csp_image_header_t h = ro_header((const csp_image_header_t*)want);
+	    if ((h.magic[0] == CSP_IMAGE_MAGIC0) &&
+		(h.magic[1] == CSP_IMAGE_MAGIC1) &&
+		(h.magic[2] == CSP_IMAGE_MAGIC2) &&
+		(h.magic[3] == CSP_IMAGE_MAGIC3) &&
+		(h.role == CSP_ROLE_ROM) &&
+		(csp_crc16(0xFFFF, &h, sizeof(h) - sizeof(uint16_t), 0)
+		 == h.crc_hdr)) {
+		base = want;
+		no   = (int)st->boot_want;
+	    }
+	}
+    }
+    // Try it, then keep trying.
+    //
+    // Ranking can only see the HEADER; the section CRCs are discovered when the
+    // image is actually loaded. So an image can win the ranking and then turn
+    // out to be damaged -- and for an image in a flash slot that is not a
+    // curiosity, it is the case A/B exists for. Each refusal takes that
+    // candidate out of the running and the next best is ranked from what is
+    // left. csp_load_image touches nothing in st until it has committed, so
+    // going round again is safe.
+    //
+    // Bounded by the registry size and not by the skip mask alone: past 32
+    // images a candidate cannot be marked, and an unbounded loop would then
+    // offer the same broken one forever.
+    {
+	uint32_t skip = 0;
+	int rounds = csp_image_count() + 1;
+
+	while (rounds-- > 0) {
+	    if (base == NULL)
+		base = csp_find_image_skip(CSP_ROLE_ROM, &no, skip);
+	    if (base == NULL)
+		break;
+	    // Recorded, not written: sys.Image is a value SLOT and there are
+	    // none until csp_rt_start has laid the tables out. It publishes
+	    // this then. Set per attempt, so what is recorded is what RAN.
+	    st->image_no = no;
+	    // The identity of what is about to run, for the eeprom patch to be
+	    // matched against. This is the only place that knows which image
+	    // won -- see the field's note in csp.h.
+	    st->rom_fp = ro_header((const csp_image_header_t*)base).crc_hdr;
+	    if (csp_load_image(st, base) == 0) {
+		csp_load_rom_sys(st);
+		return;
+	    }
+	    if ((no >= 0) && (no < 32))
+		skip |= (uint32_t)1 << no;
+	    base = NULL;
+	}
+    }
+    // Last resort: the image this firmware was BUILT with, whether or not the
+    // registry knows about it. Deliberate -- if --gc-sections ever collects the
+    // registry on some toolchain, the board still comes up with its own program
+    // instead of with nothing at all.
+    base = ro_ref(&rom_image).base;
+    no   = -1;
     st->image_no = no;
+    st->rom_fp = ro_header((const csp_image_header_t*)base).crc_hdr;
     csp_load_image(st, base);
+    csp_load_rom_sys(st);
+}
+
+// The Sys handles, after an image has replaced every declaration.
+//
+// Split out because csp_load_rom now has two ways to finish -- a candidate that
+// loaded, or the built-in fallback -- and this has to happen on both.
+NOINLINE static void csp_load_rom_sys(csp_rt_t* st)
+{
     // The image replaces every declaration, so the Sys handles csp_rt_init just
     // set describe THIS firmware's runtime region and not the one the image was
     // built against. They agree whenever both were built with a Sys -- it sits at
@@ -3715,12 +3804,16 @@ NOINLINE int add_state(csp_rt_t* st, const tstr_t* name, index_t* blk)
 // see csp_parse_module's no_state, which is the same decision on the parser
 // side.
 //
-// Fields, and who owns each (doc/manual_en.md carries the same table):
+// Fields, and who owns each. doc/IMAGES.md carries the Image/Boot half; the
+// manual has no Sys section yet, and this comment used to claim it did.
 //   Serial  #variable  the HARDWARE's. The platform publishes it at boot, so a
 //                      stored setting must not win -- csp_setup runs after
 //                      csp_settings_apply, which is exactly that order.
 //   Id      #param     the OPERATOR's. A setting wins and survives a reflash.
 //   Name    #param     likewise.
+//   Image   #variable  STATUS: which image csp_load_rom actually booted.
+//   Boot    #param     the REQUEST: which one to boot next time, or
+//                      CSP_BOOT_AUTO for "highest generation".
 NOINLINE static int csp_sys_module(csp_rt_t* st)
 {
     RO_TSTR(Sys, ros_Sys);
@@ -3728,7 +3821,8 @@ NOINLINE static int csp_sys_module(csp_rt_t* st)
     RO_TSTR(Id, ros_Id);
     RO_TSTR(Name, ros_Name);
     RO_TSTR(Serial, ros_Serial);
-    RO_TSTR(Image, ros_Image);    
+    RO_TSTR(Image, ros_Image);
+    RO_TSTR(Boot, ros_Boot);
     index_t mx, ex, ox;
     int i;
 
@@ -3754,15 +3848,33 @@ NOINLINE static int csp_sys_module(csp_rt_t* st)
     ram_decl_at(st, i)->vt    = V_STRING;
     ram_decl_at(st, i)->local = 1;
 
-    // #param Image:32 unsigned
+    // #variable Image:32 unsigned
     // STATUS, not a setting: the loader writes which image it actually booted,
-    // so a #param would be a field a saved value could contradict. Asking for a
-    // different image next boot is a REQUEST and wants a field of its own --
-    // one number cannot both say what is running and what you would prefer.
+    // so a #param would be a field a saved value could contradict.
     if ((i = csp_new_decl(st, &Image, DECL_VARIABLE, 1)) == BAD_INDEX)
 	return -1;
     ram_decl_at(st, i)->vt  = V_UNSIGNED;
     ram_decl_at(st, i)->res = MAKE_RES(32);
+
+    // #param Boot:32 unsigned
+    // The REQUEST, and the field Image's note asks for: one number cannot both
+    // say what is running and what you would prefer. A #param, so it is stored
+    // as a SETTING -- name-keyed, and therefore surviving both the patch drop
+    // and a reflash, which is what a boot preference has to do.
+    //
+    // LOOSELY COUPLED to Image on purpose. Boot is what was asked for; Image is
+    // what happened. They differ when the wanted image is missing or its header
+    // does not verify, and seeing that they differ is the diagnosis.
+    //
+    // CSP_BOOT_AUTO (255) is "no preference": take the highest generation, the
+    // behaviour that existed before this field. 0 could not mean that -- 0 is a
+    // real image number, the one /images prints first.
+    if ((i = csp_new_decl(st, &Boot, DECL_CONSTANT, 1)) == BAD_INDEX)
+	return -1;
+    ram_decl_at(st, i)->vt    = V_UNSIGNED;
+    ram_decl_at(st, i)->res   = MAKE_RES(32);
+    ram_decl_at(st, i)->local = 1;            // DECL_CONSTANT + local == #param
+    ram_decl_at(st, i)->va.init.u = CSP_BOOT_AUTO;
 
     if ((ex = csp_new_decl(st, NULL, DECL_END, 1)) == BAD_INDEX)
 	return -1;
@@ -3874,7 +3986,9 @@ int csp_rt_init(csp_rt_t* st, int reactive, csp_cstate_t* cs)
 	st->cs->var = st->cs->var_buf;
     }
     st->sys_mod = st->sys_obj = BAD_INDEX;
-    st->image_no = -1;    // until csp_load_rom picks one   // until csp_sys_module runs; the
+    st->image_no = -1;    // until csp_load_rom picks one
+    st->rom_fp   = 0;
+    st->boot_want = CSP_BOOT_AUTO;   // until csp_sys_module runs; the
 					     // memset above would leave 0, and
 					     // decl 0 is State, a real index
     st->n_rule_emit = 1;   // the implicit rule body at the RAM range base
@@ -4892,6 +5006,43 @@ void csp_settings_clear(csp_rt_t* st)
 {
     st->set_used = 0;
     st->set_dirty = 1;
+}
+
+// One setting, found by the PATH TEXT alone.
+//
+// For the one question that has to be answered before the tables that
+// csp_settings_resolve needs exist: which image to boot. The store is a flat
+// run of length-prefixed records, so a name can be matched with memcmp and
+// nothing else -- no declarations, no objects, no string table.
+int csp_settings_find(csp_rt_t* st, const char* path, uint8_t plen,
+		      csp_setting_t* sp)
+{
+    int n;
+
+    for (n = 0; csp_settings_get(st, n, sp); n++)
+	if ((sp->plen == plen) && (memcmp(sp->path, path, plen) == 0))
+	    return 1;
+    return 0;
+}
+
+// What sys.Boot asks for, out of the settings store, or CSP_BOOT_AUTO.
+//
+// Called from the boot path BEFORE csp_load_rom: the choice of image has to be
+// made before an image is loaded, and csp_settings_apply -- which is what
+// normally puts a setting into its declaration -- does not run until
+// csp_rt_start, long after. So this reads the same bytes by hand.
+void csp_boot_pick(csp_rt_t* st)
+{
+    static const char boot_path[] = "sys.Boot";
+    csp_setting_t s;
+
+    st->boot_want = CSP_BOOT_AUTO;
+    if (!csp_settings_find(st, boot_path, sizeof(boot_path) - 1, &s))
+	return;
+    if (s.vt == V_STRING)
+	return;
+    if (s.val.u <= 0xFF)
+	st->boot_want = (uint8_t)s.val.u;
 }
 
 int csp_settings_get(csp_rt_t* st, int n, csp_setting_t* sp)

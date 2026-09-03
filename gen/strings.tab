@@ -31,6 +31,7 @@ Id Id
 Name Name
 Serial Serial
 Image Image
+Boot Boot
 err_ok ok
 err_syntax syntax error
 err_string_space string space exhausted
@@ -231,6 +232,7 @@ cmd_state state
 cmd_memory memory
 cmd_images images
 cmd_pause pause
+cmd_upgrade upgrade
 cmd_live live
 cmd_resume resume
 cmd_reset reset
@@ -248,6 +250,7 @@ h_list List rules (F=flash E=eeprom-backed R=ram P=patches a #param S=setting)
 h_state Show current values
 h_memory Show code/RAM usage
 h_images List the images linked into this firmware
+h_upgrade Receive a CandySpeak image into a flash region (hex lines, . to end)
 h_pause Stop execution (inspect/edit)
 h_live Freeze rules, keep I/O (poke hardware)
 h_resume Resume execution (rebuild if edited)

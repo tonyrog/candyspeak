@@ -95,6 +95,23 @@ main(["--all", CFile]) ->
     ok = file:write_file(CFile, all_source(Chips)),
     io:format("csp_chips: ~w parts~n", [length(Chips)]),
     ok;
+%% --device BOARD [MAP] CFILE: the part THIS firmware runs on, as ONE table.
+%%
+%% --all emits every part, for a host tool that has to name any of them. A board
+%% needs exactly one, and it needs the accessor with it: csp_flash.c asks
+%% csp_device() for the geometry, and on the host that lives in port/csp_devices.c
+%% -- which a target does not link. Without this the first thing to actually call
+%% a flash function fails to link, and it took an upgrade command to find that.
+%%
+%% Same source, same map, same numbers as --ld. Which is the point: the linker
+%% script and the region table the firmware carries cannot disagree.
+main(["--device", Name, CFile]) -> main(["--device", Name, "", CFile]);
+main(["--device", Name, Want, CFile]) ->
+    Db = load(),
+    case target(Db, Name, Want) of
+	false -> halt(1);
+	G -> ok = file:write_file(CFile, device_source(Name, G))
+    end;
 %% --ld=PART: the linker script. In the SCRIPT and not in the C tool, because
 %% the answer is arithmetic over the terms and nothing at run time needs it --
 %% a 35-part table compiled into a host binary to serve one command-line flag
@@ -1160,6 +1177,24 @@ region({app, Name, A, B}) ->
     %% sector numbers up with the other two rows whatever it is called.
     f("    { \"~s\",~*s ~2w, ~2w, CSP_REG_APP     },\n",
       [Name, 7 - length(Name), "", A, B]).
+
+device_source(Name, G) ->
+    [banner(Name),
+     "#include \"csp_flash.h\"\n\n",
+     part(Name, G),
+     "// Held in a variable rather than returned directly: the host harness\n"
+     "// switches parts at run time, and a target that never calls\n"
+     "// csp_device_set keeps the one it was built for.\n",
+     f("static const csp_device_t* active = &csp_dev_~s;\n\n", [Name]),
+     "const csp_device_t* csp_device(void)\n"
+     "{\n"
+     "    return active;\n"
+     "}\n\n"
+     "void csp_device_set(const csp_device_t* d)\n"
+     "{\n"
+     "    if (d != 0)\n"
+     "\tactive = d;\n"
+     "}\n"].
 
 all_source(Chips) ->
     [banner("every part"),

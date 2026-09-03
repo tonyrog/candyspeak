@@ -140,13 +140,39 @@ size:
 	    else core+=n } \
 	    END {printf "\n%6d  CandySpeak\n%6d  core/libs\n%6d  TOTAL text\n", ours, core, t}'
 
+# Stack-watch build. -finstrument-functions puts a call pair on every function
+# entry and exit, so the deepest point is MEASURED instead of guessed at -- see
+# __cyg_profile_func_enter in src/csp_rt.c. A diagnostic build, never a shipped
+# one: /memory then reports the margin AND the function that was deepest.
+watch:
+	@$(MAKE) --no-print-directory -f Makefile.board BOARD=$(BOARD) compile \
+	    EXTRA="-DCSP_STACK_WATCH -finstrument-functions $(EXTRA)"
+
+# Resolve the `at 0xADDR` from that margin row to a function.
+#
+# BOTH scales are printed because an AVR function pointer is a WORD address:
+# the byte address is twice the value, and which one you have depends on where
+# the number came from. Guessing wrong lands you in a plausible neighbour.
+whichfn:
+	@test -n "$(ADDR)" || { \
+	    echo "usage: make -f Makefile.board BOARD=$(BOARD) whichfn ADDR=0x17e1"; \
+	    exit 1; }
+	@elf=$$(echo $(CLIB)/*.ino.elf); \
+	 for scale in 1 2; do \
+	   b=$$(( $(ADDR) * scale )); \
+	   printf "ADDR*%d = 0x%X:\n" $$scale $$b; \
+	   $(NM) -C $$elf | grep -iE ' [tTwW] ' | sort | \
+	     awk -v t=$$b '{a=strtonum("0x"$$1)} a<=t {last=$$0} \
+			   a>t {print "  "last" <-- here"; print "  "$$0; exit}'; \
+	 done
+
 clean:
 	rm -rf $(B)
 
 maps:
 	@echo "$(BOARD): arduino-cli board, no region maps"
 
-.PHONY: all compile exec min upload size clean maps
+.PHONY: all compile exec min upload size clean maps watch whichfn
 
 else
 
@@ -201,13 +227,16 @@ else
   # status style and EEPROM kind from these, and its final #else is written for
   # the 11xx -- so a family with no define of its own is silently configured as
   # one, which cost four dead analog inputs.
-  CHIPDEF := -DCHIP_LPC212X
+  # The only family with a flash backend so far (flash_212x.c), so it is the
+  # only one where /upgrade exists. See csp_repl.c.
+  CHIPDEF := -DCHIP_LPC212X -DCSP_HAVE_FLASH
   STARTUP := chips/nxp/drivers/212x/startup_212x.S
   SYSINIT := chips/nxp/drivers/212x/sysinit_212x.c
   DRV     := chips/nxp/drivers/212x/chip_212x.c \
              chips/nxp/drivers/212x/can_212x.c \
              chips/nxp/drivers/212x/pwm_212x.c \
-             chips/nxp/drivers/212x/i2c_212x.c
+             chips/nxp/drivers/212x/i2c_212x.c \
+             chips/nxp/drivers/212x/flash_212x.c
   # vic_212x.c is ARM, not Thumb: mrs/msr do not exist in Thumb on an ARM7.
   # Its own rule below passes -marm; the file has an #error if that is missed.
   VICSRC  := chips/nxp/drivers/212x/vic_212x.c
@@ -217,7 +246,7 @@ CC   := arm-none-eabi-gcc
 OC   := arm-none-eabi-objcopy
 SZ   := arm-none-eabi-size
 
-CORE := src/csp_rt.c src/csp_line.c src/csp_compile.c src/csp_repl.c \
+CORE := src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c src/csp_repl.c \
         src/csp_parse.c src/csp_tok.c src/csp_print.c gen/csp_strings.c \
         src/csp_eeprom.c src/csp_flash.c port/csp_lpcopen.c \
         chips/nxp/drivers/common/csp_board.c \
@@ -252,7 +281,7 @@ OBJ  := $(OBJ:.S=.o)
 ifdef VICSRC
 OBJ  += $(B)/vic_212x.o
 endif
-OBJ  += $(ROMOBJ)
+OBJ  += $(ROMOBJ) $(B)/csp_chip.o
 
 VPATH := . $(dir $(SRC))
 
@@ -286,6 +315,15 @@ TERMS := $(wildcard boards/*.terms) $(wildcard boards/*/*.terms) \
 $(B)/csp_board.h: $(TERMS) utils/gen_chips.erl
 	@mkdir -p $(B)
 	@$(GEN) --board $(BOARD) $@
+
+# The part's flash geometry and region map, as a table the firmware carries --
+# the same terms the linker script above comes from, so the two cannot drift.
+$(B)/csp_chip.c: $(TERMS) utils/gen_chips.erl
+	@mkdir -p $(B)
+	@$(GEN) --device $(BOARD) $(MAP) $@
+
+$(B)/csp_chip.o: $(B)/csp_chip.c
+	@$(CC) $(CFLAGS) -c -o $@ $<
 
 $(B)/$(BOARD).ld: $(TERMS) utils/gen_chips.erl
 	@mkdir -p $(B)

@@ -13,7 +13,7 @@
 //
 // CSP_BOARD is stringified HERE rather than quoted in the Makefile:
 //
-//     make -f Makefile.uno exec      ->  -DCSP_BOARD=boards/uno.h
+//     make -f Makefile.board BOARD=uno exec  ->  -DCSP_BOARD=csp_board.h
 //
 // A quoted path has to survive make, then arduino-cli --build-property, then
 // the shell that invokes the compiler. That is three chances to lose a quote;

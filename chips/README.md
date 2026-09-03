@@ -23,7 +23,8 @@ against a board's crystal, and failing the BUILD when the numbers do not meet
 instead of leaving a node running at the wrong clock.
 
 The copy this replaces had the LPC1754 at 160K flash. The part has 128, and the
-data sheet line was sitting in `CandySpeak/Makefile.lpc1754` the whole time.
+data sheet line was sitting in the sketch's own per-board Makefile the whole
+time.
 
 ## Generated on demand, not checked in
 

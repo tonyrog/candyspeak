@@ -129,6 +129,25 @@ extern uint32_t csp_region_size(const csp_device_t* d, const csp_region_t* r);
 #define CSP_FLASH_ERR      -1   // the backend said no
 #define CSP_FLASH_TOOBIG   -2   // more bytes than the region holds
 #define CSP_FLASH_NOREGION -3   // no such region
+// Refused before anything was erased: the region is the one way back.
+#define CSP_FLASH_PROTECTED -4
+
+// May this region be written at all?
+//
+// Three regions are refused whatever the caller asked for, and they are the same
+// rule seen from three sides: NEVER ERASE THE ONLY WAY BACK.
+//
+//   RUNTIME  -- the code doing the writing lives there. The erase does not
+//               fail, it STOPS, mid-sector, and the part needs a programmer.
+//   the running image -- erasing what you are executing is the same thing,
+//               only later.
+//   the last FAILSAFE -- it exists to be the way back from a bad application.
+//               Overwriting it is detectable only afterwards, and afterwards
+//               the thing that would have detected it is gone.
+//
+// It lives here rather than in whatever command calls it so that a future
+// caller cannot route around it by forgetting.
+extern int csp_flash_writable(const csp_device_t* d, const csp_region_t* r);
 
 // Erase sectors first..last inclusive.
 extern int csp_flash_erase(uint8_t first, uint8_t last);
@@ -170,5 +189,7 @@ extern uint32_t csp_lpc2000_checksum(void* image);   // the old name
 // to pretend to be (the three layouts live in csp_devices.c).
 extern void csp_flash_host_file(const char* path);
 extern void csp_device_set(const csp_device_t* d);
+// One of the host layouts by name: "ab", "apps", "full".
+extern const csp_device_t* csp_device_by_name(const char* name);
 
 #endif

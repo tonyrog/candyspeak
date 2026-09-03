@@ -474,6 +474,152 @@ got=$(./csp -c 4 -s /dev/stdout "$D/str.csp" 2>&1 |
 ck "string == compares positions, .len reads the length byte" \
 '"Same",1 "Cross",1 "Diff",0 "Lc",6 "Lv",3 "Le",0 "Ln",0 ' "$got"
 
+# --- 17b. a patch does not cross a program change, a setting does -----------
+# What happens to a saved EEPROM when the program underneath it changes. The
+# patch references ROM declarations BY INDEX, so against another program those
+# indices mean something else -- it must not load. A setting is keyed by NAME
+# and is the unit's own word on a value, so it must.
+#
+# Two whole firmwares, because that is the only way to move the fingerprint:
+# rom_fp is the linked image's crc_hdr, and nothing short of a different image
+# changes it.
+echo "patch across a program change:"
+printf '#param Kp : 16 = 10\n#variable X : 16 = 0\nX = Kp\n' > "$D/fpa.csp"
+printf '#param Kp : 16 = 10\n#variable X : 16 = 0\n#variable Y : 16 = 0\nX = Kp\nY = Kp + 1\n' > "$D/fpb.csp"
+fw() {  # fw <out> <csp>   -- a host firmware carrying that program as its ROM
+    ./csp -n -C -O "$2.rom.c" "$2" >/dev/null 2>&1 &&
+    gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -Iinclude -Igen -Isrc \
+	port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c \
+	src/csp_repl.c src/csp_compile.c src/csp_tok.c port/csp_dump.c \
+	src/csp_eeprom.c src/csp_parse.c src/csp_print.c gen/csp_strings.c \
+	src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
+	"$2.rom.c" -o "$1" >/dev/null 2>&1
+}
+if fw "$D/fw_a" "$D/fpa.csp" && fw "$D/fw_b" "$D/fpb.csp"; then
+    : > "$D/fp.db"
+    got=$(printf '> Kp = 42\n> sys.Id = 7\n#variable Z : 16 = 7\nZ = X + 1\n/save\n/quit\n' \
+	  | "$D/fw_a" -i -e "$D/fp.db" 2>&1 | sed -n 's|^Saved to .* (\(.*\))$|\1|p')
+    ck "the patch and the settings are saved" \
+       "1 RAM decls, 40 RAM instrs, 274 bytes" "$got"
+
+    # The reported size is what the file WEIGHS. It was 332 for this 274-byte
+    # save -- a leftover string term counting bytes that have ridden in the
+    # instructions since v16 -- and /memory calls that (FULL).
+    ck "and the size it reports is the size on disk" \
+       "274" "$(wc -c < "$D/fp.db" | tr -d ' ')"
+
+    got=$(printf '/settings\n/quit\n' | "$D/fw_b" -i -e "$D/fp.db" 2>&1 |
+	  grep -E '^(Kp|sys\.Id) = ' | tr '\n' ' ')
+    ck "settings survive the program change" "Kp = 42 sys.Id = 7 " "$got"
+
+    # Kp reads 42 through the new program, which is the point of keeping it.
+    got=$(printf '> Kp\n/quit\n' | "$D/fw_b" -i -e "$D/fp.db" 2>&1 |
+	  sed -n '/^> > Kp$/{n;p;}')
+    ck "and they are in effect, not just stored" "42" "$got"
+
+    got=$(printf '/list\n/quit\n' | "$D/fw_b" -i -e "$D/fp.db" 2>&1 | grep -c 'Z')
+    ck "the patch does not load against another program" "0" "$got"
+
+
+    # ...and it is still THERE. Nothing was rewritten on the way past, so the
+    # old firmware finds its own patch again: this is the rollback.
+    got=$(printf '/list\n/quit\n' | "$D/fw_a" -i -e "$D/fp.db" 2>&1 |
+	  sed -n 's|^#variable Z.*// \(.\)$|\1|p')
+    ck "and rolling back to the old program finds it" "E" "$got"
+
+    # The fingerprint has to be the image that BOOTED, not the one that was
+    # LINKED. A firmware may link several; the registry picks the highest
+    # generation. So two firmwares can share a rom_image and still run
+    # different programs -- and reading rom_image gave them the same
+    # fingerprint. The patch loaded into the wrong one, where a saved `Z` came
+    # back as a second `R`: same indices, different table.
+    printf '#variable X : 16 = 0\nX = 1\n' > "$D/i1.csp"
+    printf '#variable X : 16 = 0\n#variable Y : 16 = 0\nX = 2\nY = 9\n' > "$D/i2.csp"
+    printf '#variable X : 16 = 0\n#variable Q : 16 = 0\n#variable R : 16 = 0\nX = 7\nQ = 3\nR = 4\n' > "$D/i3.csp"
+    ./csp -n -C -O "$D/i1.rom.c" --prefix rom --generation 0 "$D/i1.csp" >/dev/null 2>&1
+    ./csp -n -C -O "$D/i2.rom.c" --prefix alt --generation 5 "$D/i2.csp" >/dev/null 2>&1
+    ./csp -n -C -O "$D/i3.rom.c" --prefix alt --generation 5 "$D/i3.csp" >/dev/null 2>&1
+    fw2() {  # fw2 <out> <rom.c> <rom.c>  -- a firmware carrying TWO images
+	gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -Iinclude -Igen -Isrc \
+	    port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c \
+	    src/csp_repl.c src/csp_compile.c src/csp_tok.c port/csp_dump.c \
+	    src/csp_eeprom.c src/csp_parse.c src/csp_print.c gen/csp_strings.c \
+	    src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
+	    "$2" "$3" -o "$1" >/dev/null 2>&1
+    }
+    if fw2 "$D/fw2a" "$D/i1.rom.c" "$D/i2.rom.c" &&
+       fw2 "$D/fw2b" "$D/i1.rom.c" "$D/i3.rom.c"; then
+	got=$(printf '/images\n/quit\n' | "$D/fw2a" -i --no-eeprom 2>&1 |
+	      grep -E '^[01]: ' | tr '\n' ' ')
+	ck "the higher generation is the one that runs" \
+	   "0: ROM gen=0 size=376 rules=37 1: ROM gen=5 size=400 rules=41 " "$got"
+
+	: > "$D/two.db"
+	printf '#variable Z : 16 = 5\nZ = Y + 1\n/save\n/quit\n' |
+	    "$D/fw2a" -i -e "$D/two.db" >/dev/null 2>&1
+	got=$(printf '/list\n/quit\n' | "$D/fw2b" -i -e "$D/two.db" 2>&1 | grep -c '// E')
+	ck "a patch does not cross to a firmware sharing only its rom_image" \
+	   "0" "$got"
+
+	got=$(printf '/list\n/quit\n' | "$D/fw2a" -i -e "$D/two.db" 2>&1 |
+	      sed -n 's|^#variable Z.*// \(.\)$|\1|p')
+	ck "and the firmware that saved it still has it" "E" "$got"
+
+	# sys.Boot: WHICH image to run. sys.Image says what happened; the two
+	# are deliberately separate, because one number cannot both report and
+	# request. Stored as a setting, so it is name-keyed and survives.
+	: > "$D/boot.db"
+	got=$(printf '> sys.Image\n> sys.Boot\n/quit\n' |
+	      "$D/fw2a" -i -e "$D/boot.db" 2>&1 | sed -n '5p;7p' | tr '\n' ' ')
+	ck "with no preference the highest generation runs" "1 255 " "$got"
+
+	printf '> sys.Boot = 0\n/save\n/quit\n' |
+	    "$D/fw2a" -i -e "$D/boot.db" >/dev/null 2>&1
+	got=$(printf '> sys.Image\n/list\n/quit\n' |
+	      "$D/fw2a" -i -e "$D/boot.db" 2>&1 | sed -n '5p;/^X=/p' | tr '\n' ' ')
+	ck "asking for image 0 boots image 0" "0 X=1  // 1 F " "$got"
+
+	# The loose coupling, and what it is FOR: a request that cannot be met
+	# is not fatal. The node comes up on the automatic choice and the two
+	# fields disagree, which is the diagnosis.
+	printf '> sys.Boot = 7\n/save\n/quit\n' |
+	    "$D/fw2a" -i -e "$D/boot.db" >/dev/null 2>&1
+	got=$(printf '> sys.Boot\n> sys.Image\n/quit\n' |
+	      "$D/fw2a" -i -e "$D/boot.db" 2>&1 | sed -n '5p;7p' | tr '\n' ' ')
+	ck "a request that cannot be met still boots, and shows" "7 1 " "$got"
+
+	# Ranking can only see the HEADER. A damaged SECTION is discovered when
+	# the image is loaded -- by which point the choice has been made. So a
+	# refusal has to send the loader back for the next candidate, or a
+	# half-written slot takes the node down with it, which is precisely the
+	# case A/B exists to survive. Corrupt one payload word of the higher
+	# generation and the older, healthy image must win.
+	awk '/\.raw={{/ && !done { sub(/{{[0-9]+/, "{{200"); done=1 } {print}' \
+	    "$D/i2.rom.c" > "$D/i2bad.rom.c"
+	if cmp -s "$D/i2.rom.c" "$D/i2bad.rom.c"; then
+	    echo "  FAIL could not corrupt the image"; fail=$((fail+1))
+	elif fw2 "$D/fw2bad" "$D/i1.rom.c" "$D/i2bad.rom.c"; then
+	    got=$(printf '/quit\n' | "$D/fw2bad" -i --no-eeprom 2>&1 |
+		  sed -n '/^ROM rejected/p')
+	    ck "a damaged section is named, not guessed at" \
+	       "ROM rejected: CRC mismatch in instr section (corrupt flash image)" \
+	       "$got"
+
+	    got=$(printf '> sys.Image\n/list\n/quit\n' |
+		  "$D/fw2bad" -i --no-eeprom 2>&1 |
+		  sed -n '6p;/^X=/p' | tr '\n' ' ')
+	    ck "and the healthy older image runs instead of nothing" \
+	       "0 X=1  // 1 F " "$got"
+	else
+	    echo "  FAIL the damaged-image firmware did not build"; fail=$((fail+1))
+	fi
+    else
+	echo "  FAIL the two-image firmwares did not build"; fail=$((fail+1))
+    fi
+else
+    echo "  FAIL the two firmwares did not build"; fail=$((fail+1))
+fi
+
 # --- 18. the exec-only build still runs -------------------------------------
 # CSP_EXEC_ONLY drops the scanner, the parser and the command layer. What is
 # left has to still run a linked ROM image -- which is the whole point of the
@@ -483,7 +629,7 @@ echo "exec-only:"
 printf '#digital Led out 0:13\n#timer T 500 = 1\n#variable N = 0\nT = 1 ? timeout(T)\nN = N + 1 ? timeout(T)\n' > "$D/eo.csp"
 if ./csp -n -C -O "$D/eo_rom.c" "$D/eo.csp" >/dev/null 2>&1 &&
    gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -DCSP_EXEC_ONLY -Iinclude -Igen -Isrc \
-       port/csp_linux.c src/csp_rt.c src/csp_line.c src/csp_repl.c \
+       port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
        src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
        src/csp_parse.c src/csp_print.c gen/csp_strings.c src/csp_flash.c \
        port/csp_devices.c port/csp_flash_host.c \
@@ -559,9 +705,10 @@ if ./csp -n -C -O "$D/def.rom.c" "$D/def.csp" >/dev/null 2>&1; then
     # baseline -- State, INIT, NORMAL, FAILSAFE, the sys object and `v` -- and
     # the same program with the three names written out as 0x14 measures 58 too.
     # (74 before v14 dropped the nul terminator, 59 before v15 stopped reserving
-    # byte 0. What the check is about is the DIFFERENCE, which is zero.)
+    # byte 0, 58 before sys.Boot added a name to the Sys namespace. What the
+    # check is about is the DIFFERENCE, which is zero.)
     got=$(sed -n 's|^//   size:.*[^0-9]\([0-9]*\) str.*|\1|p' "$D/def.rom.c")
-    ck "three long #define names cost no string space" "58" "$got"
+    ck "three long #define names cost no string space" "63" "$got"
 else
     echo "  FAIL #define image did not build"; fail=$((fail+1))
 fi
@@ -582,14 +729,124 @@ else
     echo "  FAIL line_edit did not build"; fail=$((fail+1))
 fi
 
+echo "flash guard:"
+# What csp_flash_put must REFUSE. The caller of a flash write is, by definition,
+# the part that gets rewritten next -- a firmware-update mode, a command not
+# written yet -- so the guard lives in csp_flash_put and this proves nothing
+# routes around it. Removing the guard fails four of these and nothing else.
+if gcc -Iinclude -Igen -Isrc -O2 -o "$D/flash_guard" tests/flash_guard.c \
+       src/csp_flash.c src/csp_crc.c port/csp_devices.c port/csp_flash_host.c \
+       gen/csp_strings.c >/dev/null 2>&1; then
+    got=$(cd "$(dirname "$0")/.." && "$D/flash_guard" | tail -1)
+    ck "runtime and the last failsafe are refused" "ok, refused" "$got"
+else
+    echo "  FAIL flash_guard did not build"; fail=$((fail+1))
+fi
+
 echo "flash geometry:"
 if gcc -Iinclude -Igen -Isrc -O2 -o "$D/flash_geom" tests/flash_geom.c \
-       src/csp_flash.c port/csp_devices.c port/csp_flash_host.c gen/csp_strings.c \
+       src/csp_flash.c src/csp_crc.c port/csp_devices.c port/csp_flash_host.c \
+       gen/csp_strings.c \
        >/dev/null 2>&1; then
     got=$(cd "$(dirname "$0")/.." && "$D/flash_geom" | tail -1)
     ck "sector sums, regions and the file backend" "flash geometry: ok" "$got"
 else
     echo "  FAIL flash_geom did not build"; fail=$((fail+1))
+fi
+
+echo "firmware upgrade mode:"
+# The whole upgrade path with no board: csp-image turns a program into the bytes
+# a target would hold, and /upgrade receives them into a simulated flash file. What this is really for is the failure
+# cases -- a short image, a refused region, bad hex -- because those are the
+# ones a real board answers by not booting.
+# Through tools/csp-image, which is the one way to a flashable program -- so
+# this exercises the script as well as the receiver.
+if tools/csp-image -q -o "$D/up" examples/arith.csp >/dev/null 2>&1; then
+    blank() { head -c 38912 /dev/zero | tr '\000' '\377' > "$1"; }
+    up() {  # up <flashfile> <lines...>  -- runs a REPL session, prints its output
+	f=$1; shift
+	printf '%s\n' "$@" | ./csp -i --no-eeprom --flash="$f" --part=ab 2>&1
+    }
+
+    blank "$D/up.bin"
+    got=$({ echo "/upgrade A"; cat "$D/up.hex"; echo "."; echo "/images"; \
+	    echo "/quit"; } \
+	  | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
+	  | sed -n 's|^A: ||p')
+    ck "a whole image lands in slot A" "ROM gen=0 size=1324 rules=268" "$got"
+
+    got=$({ echo "/upgrade A"; cat "$D/up.hex"; echo "."; echo "/images"; \
+	    echo "/quit"; } \
+	  | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
+	  | sed -n 's|^B: ||p')
+    ck "the other slot is untouched" "erased" "$got"
+
+    # A COMPLETE transfer of an INCOMPLETE image. The header arrives first and
+    # its CRC covers only itself, so without the size check this reads back as
+    # a perfectly good image describing bytes that never arrived.
+    blank "$D/up.bin"
+    got=$({ echo "/upgrade B"; head -5 "$D/up.hex"; echo "."; \
+	    echo "/images"; echo "/quit"; } \
+	  | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
+	  | sed -n 's|^B: ||p')
+    ck "a short image leaves the slot erased" "erased" "$got"
+
+    # ...and says so. A silent "OK" on a slot that will not boot is the one
+    # answer this must never give.
+    got=$({ echo "/upgrade B"; head -5 "$D/up.hex"; echo "."; echo "/quit"; } \
+	  | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
+	  | sed -n '/^ERR /p' | tail -1)
+    ck "and the operator is told" "ERR incomplete -- slot is erased" "$got"
+
+    # Refused BEFORE the erase: the region still holds what it held. Proved on
+    # the file, not on the message -- a guard that prints and erases anyway
+    # passes every test that only reads stdout.
+    blank "$D/up.bin"
+    printf 'HELLO' | dd of="$D/up.bin" bs=1 seek=0 conv=notrunc status=none
+    got=$(up "$D/up.bin" "/upgrade runtime" "/quit" | sed -n '/^ERR /p')
+    ck "the runtime region is refused" "ERR protected" "$got"
+    got=$(head -c 5 "$D/up.bin")
+    ck "and nothing was erased" "HELLO" "$got"
+
+    got=$(up "$D/up.bin" "/upgrade nosuch" "/quit" | sed -n '/^ERR /p')
+    ck "an unknown region is named as such" "ERR no such region" "$got"
+
+    # Unsaved work stops it before the erase. The upgrade takes the board down
+    # and it is rebooted afterwards, so a RAM program that never reached the
+    # EEPROM does not come back.
+    blank "$D/up.bin"
+    got=$(printf '#variable q = 1\n/upgrade A\n/quit\n' \
+	  | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
+	  | sed -n '/^ERR unsaved/p' | sed 's| RAM instrs.*||')
+    ck "unsaved work stops the upgrade" "ERR unsaved -- 1 RAM decls, 33" "$got"
+
+    got=$(printf '#variable q = 1\n/upgrade A force\n!\n/quit\n' \
+	  | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
+	  | sed -n '/^OK 16384/p')
+    ck "and forcing it says so out loud" \
+       "OK 16384 bytes, hex lines then '.' ('!' aborts)" "$got"
+
+    # More bytes than the region holds. Caught while receiving, not after: the
+    # next block would have been written past the slot and into `store`.
+    blank "$D/up.bin"
+    got=$({ echo "/upgrade A"; \
+	    for i in $(seq 1 600); do \
+	      echo "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"; \
+	    done; echo "."; echo "/quit"; } \
+	  | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
+	  | sed -n '/^ERR full/p')
+    ck "more than the region holds is refused" "ERR full" "$got"
+
+    # Bad hex stops the transfer rather than guessing. The slot stays erased --
+    # the header block is only written on a clean `.`.
+    blank "$D/up.bin"
+    got=$({ echo "/upgrade A"; head -2 "$D/up.hex"; echo "zz"; echo "."; \
+	    echo "/images"; echo "/quit"; } \
+	  | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
+	  | sed -n 's|^A: ||p')
+    ck "bad hex leaves the slot erased" "erased" "$got"
+else
+    echo "  FAIL csp-image did not produce an image"; fail=$((fail+1))
 fi
 
 # The linker script is generated FROM the region map, because the two say the
@@ -946,10 +1203,12 @@ fi
 # The Arduino port has no equivalent and cannot easily have one; it needs a core
 # that only arduino-cli can supply.
 echo "lpcopen:"
-if gcc -g -Wall -Iinclude -Igen -Isrc -Itests/lpcstub -DCSP_VERSION='"test"' -o "$D/lpc_fw" \
-       port/csp_lpcopen.c src/csp_rt.c src/csp_line.c src/csp_compile.c \
+if gcc -g -Wall -Iinclude -Igen -Isrc -Itests/lpcstub -Ichips/nxp/drivers/212x \
+       -DCSP_VERSION='"test"' -o "$D/lpc_fw" \
+       port/csp_lpcopen.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c \
        src/csp_parse.c src/csp_tok.c src/csp_print.c src/csp_repl.c \
        port/csp_dump.c src/csp_eeprom.c gen/csp_strings.c gen/rom_host.c \
+       src/csp_flash.c chips/nxp/drivers/212x/flash_212x.c port/csp_devices.c \
        tests/lpcstub/stub.c >/dev/null 2>&1; then
     ck "the LPC port builds and links against the core" "0" "0"
     # A GPIO pin, an ADC channel (port 15) and a rule -- then list them back.

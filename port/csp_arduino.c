@@ -1276,6 +1276,13 @@ void setup()
     // there is no valid save. csp_eeprom_load re-does this on its success path,
     // but on failure (no save / wrong version / wrong firmware) it returns
     // before touching ROM -- so we must load it here.
+    // WHICH image, before one is loaded. sys.Boot lives in the settings store,
+    // so the store is read on its own first -- see csp_eeprom_peek. No store,
+    // no preference, and csp_load_rom falls back to the highest generation.
+#if !defined(CSP_NO_EEPROM)
+    if (csp_eeprom_peek(&state) == 0)
+	csp_boot_pick(&state);
+#endif
     csp_load_rom(&state);
     boot_mark(4);
 

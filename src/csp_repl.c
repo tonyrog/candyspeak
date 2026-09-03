@@ -18,6 +18,13 @@
 #include "csp_parse.h"
 #include "csp_compile.h"
 #include "csp_print.h"
+// Firmware upgrade mode. Guarded, not unconditional: csp_flash.c is linked
+// everywhere but a flash BACKEND (erase/write/read) is not -- only a part with
+// a driver has one. Without the guard /upgrade would be an undefined reference
+// on every board that has no way to program itself.
+#if defined(CSP_HAVE_FLASH)
+#include "csp_flash.h"
+#endif
 
 #if !defined(CSP_EXEC_ONLY)
 
@@ -62,6 +69,57 @@ static int cmd_images(csp_rt_t* st, int argc, char* argv[])
     }
     if (n == 0)
 	csp_print_line("no images registered");
+#if defined(CSP_HAVE_FLASH)
+    // ...and what is ON THE CHIP, which is a different question and the one an
+    // upgrade changes. A slot holds an image, or it is blank, or it holds
+    // something that did not finish arriving -- and only the last of those is
+    // worth a warning, so they are told apart rather than lumped as "no image".
+    {
+	const csp_device_t* d = csp_device();
+	uint8_t k;
+	for (k = 0; (d != NULL) && (k < d->nregion); k++) {
+	    const csp_region_t* r = &d->region[k];
+	    csp_image_header_t fh;
+	    uint32_t off = csp_region_offset(d, r);
+
+	    if (r->kind != CSP_REG_APP)
+		continue;
+	    csp_print_str(r->name);
+	    csp_print_lit(": ");
+	    if ((csp_region_size(d, r) < sizeof(fh)) ||
+		(csp_flash_read(off, &fh, sizeof(fh)) != CSP_FLASH_OK)) {
+		csp_print_line("unreadable");
+		continue;
+	    }
+	    if ((fh.magic[0] == 0xFF) && (fh.magic[1] == 0xFF) &&
+		(fh.magic[2] == 0xFF) && (fh.magic[3] == 0xFF)) {
+		csp_print_line("erased");
+		continue;
+	    }
+	    if ((fh.magic[0] != CSP_IMAGE_MAGIC0) ||
+		(fh.magic[1] != CSP_IMAGE_MAGIC1) ||
+		(fh.magic[2] != CSP_IMAGE_MAGIC2) ||
+		(fh.magic[3] != CSP_IMAGE_MAGIC3)) {
+		csp_print_line("not an image");
+		continue;
+	    }
+	    if (csp_crc16(0xFFFF, &fh, sizeof(fh) - sizeof(uint16_t), 0)
+		!= fh.crc_hdr) {
+		csp_print_line("header CRC BAD");
+		continue;
+	    }
+	    csp_print_rostr((fh.role == CSP_ROLE_FAILSAFE)
+			    ? ros_FAILSAFE : ros_ROM);
+	    csp_print_lit(" gen=");
+	    csp_print_uint(fh.generation);
+	    csp_print_lit(" size=");
+	    csp_print_uint(fh.size);
+	    csp_print_lit(" rules=");
+	    csp_print_uint(fh.n_instr);
+	    csp_print_line("");
+	}
+    }
+#endif
     return CSP_CMD_OK;
 }
 
@@ -77,6 +135,9 @@ static int cmd_save(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_load(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_images(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_pause(csp_rt_t* st, int argc, char* argv[]);
+#if defined(CSP_HAVE_FLASH)
+static int cmd_upgrade(csp_rt_t* st, int argc, char* argv[]);
+#endif
 static int cmd_live(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_resume(csp_rt_t* st, int argc, char* argv[]);
 
@@ -93,6 +154,9 @@ static const csp_cmd_t builtin_cmds[] = {
     { ros_cmd_memory, ros_h_memory,  cmd_memory },
     { ros_cmd_images, ros_h_images,  cmd_images },
     { ros_cmd_pause,  ros_h_pause,   cmd_pause },
+#if defined(CSP_HAVE_FLASH)
+    { ros_cmd_upgrade, ros_h_upgrade, cmd_upgrade },
+#endif
     { ros_cmd_live,   ros_h_live,    cmd_live },
     { ros_cmd_resume, ros_h_resume,  cmd_resume },
     { ros_cmd_reset,  ros_h_reset,   cmd_reset },
@@ -1622,6 +1686,248 @@ static int cmd_reset(csp_rt_t* st, int argc, char* argv[])
 // /pause -- freeze execution. The driver runs no cycle while paused, so you can
 // inspect (/state, /list, /memory) and add rules/declarations. Edits are staged
 // and integrated by /resume, keeping the running values until then.
+#if defined(CSP_HAVE_FLASH)
+// --- firmware upgrade mode ---------------------------------------------------
+//
+// One region, hex on lines, `.` to finish. Nothing fancy on purpose: this runs
+// with execution stopped, over the same UART the prompt uses, on a board whose
+// storage is being rewritten underneath it.
+//
+// WHY HEX AND NOT BINARY. The line reader is what receives this, and a binary
+// stream cannot be told apart from a stuck link or a half-typed command. Hex
+// costs twice the bytes and buys a stream that is still text: an interrupted
+// transfer leaves a prompt, not a parser in an unknown state.
+//
+// WHY BLOCK BY BLOCK AND NOT ONE BUFFERED IMAGE. An image can be larger than
+// the arena, and the arena is the program's. Writing as it arrives means an
+// interrupted transfer leaves a half-written slot -- which is exactly the case
+// A/B slots exist for, and is why csp_flash_writable refuses the last failsafe.
+#define UP_BLOCK 512
+
+// THE FIRST BLOCK IS WRITTEN LAST.
+//
+// The image header is at byte 0, and its CRC covers only itself -- so a
+// transfer that dies after the first block leaves a header that reads as
+// perfectly valid describing bytes that never arrived. /images said "ROM
+// gen=0 size=1316" about a slot holding 160 bytes.
+//
+// Holding block 0 back until the terminator makes the slot self-describing
+// with no extra reads and no CRC walk: a torn transfer leaves 0xff where the
+// magic goes, which is the same thing an erased slot says, which is the truth.
+// It costs one more block of static RAM, and it is the reason nothing else
+// here has to ask "did all of it arrive".
+static struct {
+    const csp_region_t* region;
+    uint32_t            off;          // next flash offset to write
+    uint32_t            room;         // bytes the region holds
+    uint16_t            fill;         // bytes staged in buf
+    uint16_t            crc;          // over everything received
+    uint32_t            total;
+    uint8_t             failed;
+    uint8_t             have_first;   // block 0 is in `first`, not in flash
+    uint8_t             buf[UP_BLOCK];
+    uint8_t             first[UP_BLOCK];
+} up;
+
+static int up_flush(csp_rt_t* st)
+{
+    const csp_device_t* d = csp_device();
+    int e;
+
+    (void)st;
+    if (up.fill == 0)
+	return CSP_FLASH_OK;
+    // Pad to a whole block with 0xFF -- erased flash -- so the tail is
+    // indistinguishable from never-written and the block is a legal size.
+    memset(up.buf + up.fill, 0xFF, UP_BLOCK - up.fill);
+    up.fill = 0;
+    if (!up.have_first) {
+	memcpy(up.first, up.buf, UP_BLOCK);
+	up.have_first = 1;
+	up.off += UP_BLOCK;
+	return CSP_FLASH_OK;
+    }
+    e = csp_flash_write(csp_region_offset(d, up.region) + up.off,
+			up.buf, UP_BLOCK);
+    up.off += UP_BLOCK;
+    return e;
+}
+
+// The last write of the transfer: block 0, once everything after it is down.
+//
+// And the one place the transfer is CHECKED AGAINST ITSELF. Holding the header
+// back catches a transfer that stopped; it does not catch one that ended
+// tidily on a file that was already short -- `.` after 160 bytes of a 1316
+// byte image is a complete transfer of an incomplete image, and looks like
+// success from every angle except this one. The header states the size; the
+// receiver counted the bytes. If they disagree, nothing gets stamped.
+static int up_commit(void)
+{
+    const csp_device_t* d = csp_device();
+    csp_image_header_t h;
+
+    if (!up.have_first)
+	return CSP_FLASH_OK;              // nothing was ever received
+    memcpy(&h, up.first, sizeof(h));
+    if ((h.magic[0] == CSP_IMAGE_MAGIC0) && (h.magic[1] == CSP_IMAGE_MAGIC1) &&
+	(h.magic[2] == CSP_IMAGE_MAGIC2) && (h.magic[3] == CSP_IMAGE_MAGIC3) &&
+	(csp_crc16(0xFFFF, &h, sizeof(h) - sizeof(uint16_t), 0) == h.crc_hdr) &&
+	(h.size != up.total))
+	return CSP_FLASH_ERR;
+    return csp_flash_write(csp_region_offset(d, up.region), up.first, UP_BLOCK);
+}
+
+static int up_byte(csp_rt_t* st, uint8_t b)
+{
+    if (up.total >= up.room) {
+	up.failed = 1;
+	return -1;
+    }
+    up.crc = csp_crc16(up.crc, &b, 1, 0);
+    up.buf[up.fill++] = b;
+    up.total++;
+    if (up.fill == UP_BLOCK)
+	return (up_flush(st) == CSP_FLASH_OK) ? 0 : -1;
+    return 0;
+}
+
+static int hexval(char c)
+{
+    if ((c >= '0') && (c <= '9')) return c - '0';
+    if ((c >= 'a') && (c <= 'f')) return c - 'a' + 10;
+    if ((c >= 'A') && (c <= 'F')) return c - 'A' + 10;
+    return -1;
+}
+
+// A line while the mode is active. Returns 1 if it was consumed.
+static int csp_upgrade_line(csp_rt_t* st, char* line)
+{
+    int hi, lo;
+
+    if (!st->up_active)
+	return 0;
+
+    if ((line[0] == '.') && (line[1] == '\0')) {
+	st->up_active = 0;
+	if (up.failed) {
+	    csp_print_line("ERR data");             // overflow or a write failed
+	    return 1;
+	}
+	if (up_flush(st) != CSP_FLASH_OK) {
+	    csp_print_line("ERR write");
+	    return 1;
+	}
+	if (up_commit() != CSP_FLASH_OK) {
+	    csp_print_line("ERR incomplete -- slot is erased");
+	    return 1;
+	}
+	csp_print_lit("OK ");
+	csp_print_uint(up.total);
+	csp_print_lit(" crc ");
+	csp_print_uint(up.crc);
+	csp_println();
+	return 1;
+    }
+    // Abandon: leaves the slot erased and says so. Better than a silent exit --
+    // the slot is NOT bootable now and the operator has to know that.
+    if ((line[0] == '!') && (line[1] == '\0')) {
+	st->up_active = 0;
+	csp_print_line("ERR aborted -- slot is erased");
+	return 1;
+    }
+    // Once it has gone wrong, say so ONCE. The rest of the transfer is still
+    // coming -- kilobytes of it -- and a line of error per line of hex buries
+    // the one that named the cause.
+    if (up.failed)
+	return 1;
+    while (*line) {
+	if ((*line == ' ') || (*line == '\t')) { line++; continue; }
+	hi = hexval(line[0]);
+	lo = hi < 0 ? -1 : hexval(line[1]);
+	if (lo < 0) {
+	    up.failed = 1;
+	    csp_print_line("ERR hex");
+	    return 1;
+	}
+	if (up_byte(st, (uint8_t)((hi << 4) | lo)) < 0) {
+	    csp_print_line("ERR full");
+	    return 1;
+	}
+	line += 2;
+    }
+    csp_print_line("OK");
+    return 1;
+}
+
+static int cmd_upgrade(csp_rt_t* st, int argc, char* argv[])
+{
+    const csp_device_t* d = csp_device();
+    const csp_region_t* r;
+    int guard;
+
+    if (argc < 1) {
+	csp_print_line("ERR usage: /upgrade <region>");
+	return CSP_CMD_OK;
+    }
+    if (d == NULL) {
+	csp_print_line("ERR no flash on this build");
+	return CSP_CMD_OK;
+    }
+    r = csp_region_find(d, argv[0], (int)strlen(argv[0]));
+    if (r == NULL) {
+	csp_print_line("ERR no such region");
+	return CSP_CMD_OK;
+    }
+    // What the operator loses by starting.
+    //
+    // /upgrade stops execution and the board is power-cycled afterwards, so
+    // anything typed at the prompt and not /saved is gone -- and it is gone
+    // three minutes into a transfer, which is not when to find out. REFUSED
+    // rather than warned: on a serial line a warning scrolls past behind the
+    // hex, and the next thing that happens is an erase.
+    //
+    // `force` as a second word is the whole confirmation. It is not a flag for
+    // convenience -- it is the operator saying the RAM program is expendable,
+    // which is a thing only they know.
+    if ((argc < 2) &&
+	(((uvalue_t)(st->ps.nd - st->rom_nd) != (uvalue_t)st->ee_nd) ||
+	 ((uvalue_t)(st->ps.nn - st->rom_nn) != (uvalue_t)st->ee_nn))) {
+	csp_print_lit("ERR unsaved -- ");
+	csp_print_uint((uvalue_t)(st->ps.nd - st->rom_nd));
+	csp_print_lit(" RAM decls, ");
+	csp_print_uint((uvalue_t)(st->ps.nn - st->rom_nn));
+	csp_print_line(" RAM instrs; /save first, or add: force");
+	return CSP_CMD_OK;
+    }
+    // The same guard csp_flash_put applies, asked EARLY so the refusal comes
+    // before the erase rather than after a transfer.
+    if ((guard = csp_flash_writable(d, r)) != CSP_FLASH_OK) {
+	csp_print_line("ERR protected");
+	return CSP_CMD_OK;
+    }
+    if (csp_flash_erase(r->first, r->last) != CSP_FLASH_OK) {
+	csp_print_line("ERR erase");
+	return CSP_CMD_OK;
+    }
+
+    // Execution stops for the duration. Not politeness: rules firing while the
+    // flash controller is mid-write change the timing it was given, and there
+    // is nothing useful for the program to do meanwhile.
+    st->paused = 1;
+
+    memset(&up, 0, sizeof(up));
+    up.region = r;
+    up.room   = csp_region_size(d, r);
+    up.crc    = 0xFFFF;
+    st->up_active = 1;
+
+    csp_print_lit("OK ");
+    csp_print_uint(up.room);
+    csp_print_line(" bytes, hex lines then '.' ('!' aborts)");
+    return CSP_CMD_OK;
+}
+#endif // CSP_HAVE_FLASH
+
 static int cmd_pause(csp_rt_t* st, int argc, char* argv[])
 {
     (void)argc; (void)argv;
@@ -2282,6 +2588,15 @@ int csp_process_line(csp_rt_t* st, char* line)
     // Remove trailing newline
     len = strlen(line);
     if (len > 0 && line[len-1] == '\n') line[len-1] = '\0';
+
+    // BEFORE the comment test and before the '/' test: in upgrade mode every
+    // line is data, including one that starts with a slash. Routing it here
+    // rather than inside the command dispatcher is what keeps a hex line
+    // beginning "2f2f" from being read as a comment.
+#if defined(CSP_HAVE_FLASH)
+    if (csp_upgrade_line(st, line))
+	return CSP_CMD_OK;
+#endif
 
     // A comment line is source, not a command -- `//` matched the '/' test below
     // and every header line of a pasted .csp file came back as "Unknown command:

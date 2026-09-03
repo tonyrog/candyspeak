@@ -96,14 +96,87 @@ int csp_region_app(const csp_region_t* r, const char** app, int* applen,
     return 1;
 }
 
+// Is there a VALID image with this role anywhere in flash, other than in `skip`?
+//
+// Read straight out of the region rather than from the linked-in registry: the
+// registry lists what this firmware carries, and the question here is what is
+// PROGRAMMED -- an image put into a slot at run time is not in the registry and
+// is exactly the one that matters.
+static int role_elsewhere(const csp_device_t* d, const csp_region_t* skip,
+			  uint8_t role)
+{
+    uint8_t i;
+
+    for (i = 0; i < d->nregion; i++) {
+	const csp_region_t* r = &d->region[i];
+	csp_image_header_t h;
+	if (r == skip || r->kind != CSP_REG_APP)
+	    continue;
+	if (csp_region_size(d, r) < sizeof(h))
+	    continue;
+	// Through the backend, not a pointer into flash. On a part it is memory
+	// mapped and a cast would work; on the host it is a FILE and flash.base
+	// is 0, so the cast is a null dereference. One path for both.
+	if (csp_flash_read(csp_region_offset(d, r), &h, sizeof(h)) != CSP_FLASH_OK)
+	    continue;
+	// Its own CRC, not just the role byte: erased flash is 0xFF in every
+	// field, and 0xFF is not a role anyone declared -- but a half-written
+	// slot can hold anything, and a torn image must not count as a way back.
+	if (h.role != role)
+	    continue;
+	if (csp_crc16(0xFFFF, &h, sizeof(h) - sizeof(uint16_t), 0) != h.crc_hdr)
+	    continue;
+	return 1;
+    }
+    return 0;
+}
+
+int csp_flash_writable(const csp_device_t* d, const csp_region_t* r)
+{
+    csp_image_header_t h;
+
+    if ((d == NULL) || (r == NULL))
+	return CSP_FLASH_NOREGION;
+
+    // The code doing the writing lives here. Nothing else needs saying.
+    if (r->kind == CSP_REG_RUNTIME)
+	return CSP_FLASH_PROTECTED;
+
+    // Only app slots can hold an image, so only they can hold the LAST one.
+    if (r->kind != CSP_REG_APP)
+	return CSP_FLASH_OK;
+    if (csp_region_size(d, r) < sizeof(h))
+	return CSP_FLASH_OK;
+
+    if (csp_flash_read(csp_region_offset(d, r), &h, sizeof(h)) != CSP_FLASH_OK)
+	return CSP_FLASH_OK;             // unreadable: nothing in there to lose
+    if (csp_crc16(0xFFFF, &h, sizeof(h) - sizeof(uint16_t), 0) != h.crc_hdr)
+	return CSP_FLASH_OK;             // nothing valid in there to lose
+
+    // A failsafe may be replaced, but not while it is the only one. Refusing
+    // outright would make failsafe unupdatable; allowing it freely makes the
+    // last one disappear on a typo.
+    if ((h.role == CSP_ROLE_FAILSAFE) &&
+	!role_elsewhere(d, r, CSP_ROLE_FAILSAFE))
+	return CSP_FLASH_PROTECTED;
+
+    return CSP_FLASH_OK;
+}
+
 int csp_flash_put(const csp_device_t* d, const csp_region_t* r,
 		  const void* data, uint32_t len)
 {
     uint32_t room;
     int e;
 
+    int guard;
+
     if (r == NULL)
 	return CSP_FLASH_NOREGION;
+    // BEFORE the size check and long before the erase. A caller that got the
+    // region wrong should be told that, not told its data was too big.
+    if ((guard = csp_flash_writable(d, r)) != CSP_FLASH_OK)
+	return guard;
     room = csp_region_size(d, r);
     // Checked BEFORE the erase. Erasing and then discovering it does not fit
     // leaves the slot empty, which on an A/B part is the one state you cannot

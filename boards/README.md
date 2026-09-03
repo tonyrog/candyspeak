@@ -5,7 +5,7 @@ then supplies a default for every setting the board did not pick, so a board
 file holds only its deltas and a new setting needs a default in exactly one
 place.
 
-    make -f Makefile.uno exec        # passes -DCSP_BOARD=boards/uno.h
+    make -f Makefile.board BOARD=uno exec    # passes -DCSP_BOARD=csp_board.h
 
 No quotes in the -D: `csp_config.h` stringifies the token itself. Quoting a
 path through make -> arduino-cli --build-property -> the compiler is three
