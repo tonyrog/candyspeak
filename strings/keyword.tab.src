@@ -50,6 +50,9 @@ native native
 little little
 big big
 can can
+i2c i2c
+spi spi
+udp udp
 disable disable
 enable enable
 module module

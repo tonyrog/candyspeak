@@ -217,6 +217,12 @@ extern rochar s_big[4] RODATA;
 #define ros_big ((rostring_t) s_big)
 extern rochar s_can[4] RODATA;
 #define ros_can ((rostring_t) s_can)
+extern rochar s_i2c[4] RODATA;
+#define ros_i2c ((rostring_t) s_i2c)
+extern rochar s_spi[4] RODATA;
+#define ros_spi ((rostring_t) s_spi)
+extern rochar s_udp[4] RODATA;
+#define ros_udp ((rostring_t) s_udp)
 extern rochar s_disable[8] RODATA;
 #define ros_disable ((rostring_t) s_disable)
 extern rochar s_enable[7] RODATA;

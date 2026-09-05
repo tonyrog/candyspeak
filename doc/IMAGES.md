@@ -288,6 +288,41 @@ erase.
 Boards whose map has no application slot (lpc1754, dl1200 today) generate no
 such section and link exactly as before.
 
+### The same `PROG` on an Arduino board
+
+An Arduino board names its program exactly the same way:
+
+```
+make -f Makefile.board BOARD=play PROG=examples/cpx_rotate.csp
+make -f Makefile.board BOARD=mega PROG=                 # the neutral image
+```
+
+It does not get a slot — arduino-cli owns the link, and none of these boards has
+a flash backend, so there is nothing to place an image *for* yet. What it gets
+is the half that matters today: **the program the board carries is a property of
+the board**. Before this, `CandySpeak/rom.c` was a fixed symlink to `gen/rom.c`,
+so all ten Arduino boards carried whatever `make rom-image` had last written,
+with `BOARD` playing no part in it.
+
+The mechanism is an include rather than a link, because arduino-cli compiles
+what is in the sketch folder and nothing else:
+
+    CandySpeak/rom.c -> port/csp_rom.c        #include CSP_ROM_STR(CSP_ROM)
+    CSP_ROM defaults to csp_rom.c, found on -I$(B)
+    Makefile.board generates $(B)/csp_rom.c from PROG
+    PROG= instead passes -DCSP_ROM=rom_host.c, found on -Igen
+
+`CSP_ROM` is a bare token stringified in the file, the same arrangement as
+`CSP_BOARD` and for the same reason. It must not name a file that exists in the
+sketch folder: a quoted include searches the including file's own directory
+first, so `-DCSP_ROM=rom.c` makes that file include itself.
+
+**Switching `PROG` needs a stamp, not a timestamp.** `PROG` is a list of names,
+and pointing it at a different program usually leaves the generated image newer
+than its new source — make then has nothing to do, the board keeps the previous
+program, and the build says so nowhere. `$(B)/.cspprog` records the list and is
+rewritten only when it changes. Same trap as `.cspflags`, same answer.
+
 ## Getting an image onto the part — `/upgrade`
 
 Built. One region, hex on lines, `.` to finish. It runs over the same UART the

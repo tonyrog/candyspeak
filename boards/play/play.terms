@@ -13,6 +13,7 @@
 %% work to arduino-cli, which owns the core, the mux and the link.
 {board, play,
  [{toolchain, arduino_cli},
+  {chip, samd21g18a},
   {fqbn, "arduino:samd:adafruit_circuitplayground_m0"},
   {port, "/dev/ttyACM0"},
 

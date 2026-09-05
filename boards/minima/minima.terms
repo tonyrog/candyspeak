@@ -1,6 +1,7 @@
 %% Arduino Uno R4 Minima -- Renesas RA4M1.
 {board, minima,
  [{toolchain, arduino_cli},
+  {chip, r7fa4m1ab},
   {fqbn, "arduino:renesas_uno:minima"},
   {port, "/dev/ttyACM0"},
   {nm, "arm-none-eabi-nm"},

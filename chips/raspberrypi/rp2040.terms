@@ -1,0 +1,35 @@
+%% RP2040 -- Cortex-M0+, two of them, and NO FLASH ON THE PART.
+%%
+%% That last one is why this file states {flash_kb, 0}, the same as an LPC2210:
+%% code lives in an external QSPI device that the XIP hardware maps at
+%% 0x10000000, and how much of it there is, is a property of the BOARD. Two
+%% boards here say two different things (Pico 2M, Feather RP2040 CAN 8M) and
+%% both are right.
+%%
+%% NO {map, ...}: nothing here writes flash today, and a part with no map
+%% generates nregion == 0, so csp_region_find misses and /upgrade cannot reach
+%% it by accident. Writing it is possible -- the SDK erases and programs from
+%% RAM with XIP disabled -- but that is a backend nobody has written.
+{family, rp2040,
+ [{vendor,      raspberrypi},
+  {arch,        cortex_m0plus},
+  {store,       flash},            %% no EEPROM on the part; the core emulates
+  {flash_base,  16#10000000},      %% XIP window, not address 0
+  {ram_base,    16#20000000},
+  {ram_reserve, 0}]}.
+
+%% The erase unit of the usual QSPI parts (W25Q-class), not of the RP2040: the
+%% chip has no flash of its own to have a geometry. Recorded as information --
+%% see the family comment for why nothing acts on it.
+{group, 'rp2040-qspi',
+ [{family, rp2040},
+  {page, 256},                     %% program granularity
+  {row, 4096}]}.                   %% erase granularity (a sector, on W25Q)
+
+%% 264K of SRAM in six banks -- four of 64K and two of 4K. Stated as the total,
+%% because that is what the firmware would be dimensioned against.
+{chip, rp2040,
+ [{group, 'rp2040-qspi'},
+  {flash_kb, 0}, {ram_kb, 264},
+  {peripherals, [{usb,1},{uart,2},{i2c,2},{spi,2},{adc,4},{pwm,16},
+                 {rtc,1},{wdt,1}]}]}.

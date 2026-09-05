@@ -1,0 +1,85 @@
+%% Bitcraze Crazyflie 2.1 -- STM32F405RG at 168 MHz.
+%%
+%% THE PINS BELOW ARE THE ONES private/pilot ALREADY NAMES, and nothing more.
+%% That program was written against this hardware -- `TIM2_CH2 PA1` is in its
+%% own comments -- so this file is the other half of a pair that already
+%% existed, not a description invented for it.
+%%
+%% Anything the drone has that pilot does not use (the radio link's USART, the
+%% expansion header, the second I2C, the microSD on a deck) is deliberately
+%% absent: an unmuxed pin is a pin left at its reset default, which is the safe
+%% way to be incomplete. Add them when something reads them.
+%%
+%% NOT VERIFIED AGAINST A SCHEMATIC. Every line here comes from pilot's own pin
+%% comments; the two LEDs and the IMU interrupt are stated there, the console
+%% UART is not and is a guess flagged below.
+{board, crazyflie,
+ [{chip, stm32f405rg},
+
+  %% 8 MHz crystal -> PLL -> 168 MHz. sysinit_f405.c derives M/N/P/Q from these
+  %% two numbers and refuses at compile time if they cannot be reached: 8 and
+  %% 168 give M=8, N=336, P=2, Q=7, and Q=7 is exactly 48 MHz for USB.
+  {xtal, 8000000},
+  {core, 168000000},
+
+  %% What gets clocked. GPIO is NOT in this list -- it is derived from the pins
+  %% below, because a board that names PA1 needs GPIOA and saying so twice is
+  %% one place too many to forget it.
+  {enable, [tim2, tim4, i2c3, usart3, adc1, pwr]},
+
+  %% MOTORS. Brushed, through a MOSFET each, and the rotation direction is not
+  %% decoration -- it is what makes yaw possible. See pilot/pins/motors.csp,
+  %% which has the diagram.
+  {pin, 'PA1',  tim2_ch2},          %% M1  front-right, CCW
+  {pin, 'PB11', tim2_ch4},          %% M2  back-right,  CW
+  {pin, 'PA15', tim2_ch1},          %% M3  back-left,   CCW
+  {pin, 'PB9',  tim4_ch4},          %% M4  front-left,  CW
+
+  %% 328 Hz. The frequency a brushed motor on a MOSFET wants: low enough that
+  %% the switching losses stay small, high enough to be above audible whine and
+  %% far above the control loop. The port's own default is 1 kHz, which is a
+  %% figure that damages nothing and suits nothing.
+  {pwm_hz, 328},
+
+  %% STATUS LEDS. Polarity is a wiring fact and pilot drives them as plain
+  %% outputs; `Fault out 2:0` in motors.csp is this pin.
+  {pin, 'PC0', gpio_out},           %% red   -- a cutoff has fired
+  {pin, 'PC1', gpio_out},           %% green -- motors are live
+
+  %% IMU. One 14-byte burst read over I2C3 plus a data-ready interrupt --
+  %% pilot/pins/imu.csp reads it as a #buffer, which is why there is no I2C
+  %% driver in this port yet and this is three muxed pins.
+  %%
+  %% A 2.1+ HAS A DIFFERENT IMU: BMI088 + BMP388 where 2.1 has an MPU9250.
+  %% Different address, different registers, different burst length -- so
+  %% imu.csp is a file to rewrite, not a pin to change.
+  {pin, 'PA8', i2c3_scl},
+  {pin, 'PC9', i2c3_sda},
+  {pin, 'PC13', gpio_in},           %% IMU INT, data-ready
+
+  %% BATTERY. Behind a 1:2 divider, so the reading is half the pack voltage --
+  %% pilot/pins/power.csp does that arithmetic.
+  {pin, 'PA2', adc1_in2},
+
+  %% CONSOLE -- A GUESS, and the one thing here to check first with a board on
+  %% the desk. USART3 on PC10/PC11 is the expansion header on a Crazyflie and
+  %% the natural place for a REPL; the radio link to the nRF51 is a different
+  %% UART and must NOT be taken over, because it is also the power switch.
+  %%
+  %% If this is wrong the symptom is a board that runs and says nothing, which
+  %% is why sysinit reports the clock over the LED as well.
+  {pin, 'PC10', usart3_tx},
+  {pin, 'PC11', usart3_rx},
+  {console, {usart3, 115200}},
+
+  %% The arena. 128K of usable SRAM (the 64K of CCM is not DMA-reachable and is
+  %% not counted), and the runtime struct plus the stack come out of it before
+  %% this. Generous next to an LPC2129's 9216, and it should be: this part has
+  %% eight times the RAM.
+  {code_budget, 32768},
+
+  %% Settings live in the flash `store` region -- see the map in
+  %% chips/st/stm32f4.terms and the store backend at the end of csp_stm32.c.
+  %% The sector is 128K and rewriting one setting erases all of it, so this is
+  %% deliberately small: twenty-odd entries, saved rarely.
+  {settings_bytes, 256}]}.

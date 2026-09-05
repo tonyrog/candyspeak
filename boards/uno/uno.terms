@@ -2,6 +2,7 @@
 %% because of the AVR code-size flags below.
 {board, uno,
  [{toolchain, arduino_cli},
+  {chip, atmega328p},
   {fqbn, "arduino:avr:uno"},
   {port, "/dev/serial/by-id/usb-Arduino_Srl_Arduino_Uno_55431313038351C04281-if00"},
   {nm, "avr-nm"},

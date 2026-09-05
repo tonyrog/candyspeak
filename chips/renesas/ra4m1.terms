@@ -1,0 +1,32 @@
+%% Renesas RA4M1 -- the part behind the Arduino Uno R4. Cortex-M4 at 48 MHz.
+%%
+%% The only Arduino target here with flash ON the part and a real separate data
+%% flash: 256K of code flash and 8K of data flash, which is where an EEPROM
+%% would be if the part had one. That is what {store, flash} means here -- not
+%% "we emulate one in the program area", which is what it means on a SAMD21.
+%%
+%% NO {map, ...}: the Arduino core owns the flash, and no map means nregion == 0
+%% so nothing can be written to it by accident. Self-programming is possible on
+%% this part (the FSP has a flash driver) -- it is a backend nobody has written.
+{family, ra4m1,
+ [{vendor,      renesas},
+  {arch,        cortex_m4},
+  {store,       flash},
+  {flash_base,  16#00000000},
+  {ram_base,    16#20000000},
+  {ram_reserve, 0}]}.
+
+%% Code flash writes in 128-byte lines and erases in 2K blocks. Data flash is
+%% finer -- 4-byte writes, 1K blocks -- which is the point of having it, but
+%% only one geometry fits in a group and the code flash is the one a program
+%% would be placed in.
+{group, 'ra4m1-256k',
+ [{family, ra4m1},
+  {page, 128},
+  {row, 2048}]}.
+
+{chip, r7fa4m1ab,
+ [{group, 'ra4m1-256k'},
+  {flash_kb, 256}, {ram_kb, 32},
+  {peripherals, [{usb,1},{uart,4},{i2c,2},{spi,2},{can,1},{adc,14},
+                 {dac,1},{pwm,8},{rtc,1},{wdt,1}]}]}.

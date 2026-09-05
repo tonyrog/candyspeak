@@ -63,6 +63,9 @@ typedef enum {
     T_LITTLE,
     T_BIG,
     T_CAN,
+    T_I2C,
+    T_SPI,
+    T_UDP,
     T_DISABLE,
     T_ENABLE,
     T_LAST,
@@ -147,6 +150,9 @@ typedef enum {
     TOK_ENT(T_LITTLE,OP_NOP,s_little), \
     TOK_ENT(T_BIG,OP_NOP,s_big), \
     TOK_ENT(T_CAN,OP_NOP,s_can), \
+    TOK_ENT(T_I2C,OP_NOP,s_i2c), \
+    TOK_ENT(T_SPI,OP_NOP,s_spi), \
+    TOK_ENT(T_UDP,OP_NOP,s_udp), \
     TOK_ENT(T_DISABLE,OP_NOP,s_disable), \
     TOK_ENT(T_ENABLE,OP_NOP,s_enable), \
     TOK_ENT(T_LAST,OP_NOP,s_null),
@@ -227,6 +233,9 @@ typedef enum {
     "T_LITTLE", \
     "T_BIG", \
     "T_CAN", \
+    "T_I2C", \
+    "T_SPI", \
+    "T_UDP", \
     "T_DISABLE", \
     "T_ENABLE", \
     "T_LAST",

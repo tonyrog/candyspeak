@@ -1,0 +1,33 @@
+%% ESP32-S3 -- and the odd one out in this directory: an Xtensa LX7, not an ARM.
+%%
+%% Here purely so `--chip-of lilygo_t3s3` answers something true. Nothing
+%% generates code from it: the ESP-IDF core owns the link, the partition table
+%% and the flash, and an image would be placed by esptool and an OTA partition
+%% rather than by anything here.
+%%
+%% NO FLASH ON THE PART, like the RP2040 -- an external SPI device that the MMU
+%% maps, and how much of it there is, is a board fact. The mapped address is not
+%% stated: it is the MMU's to decide and it differs between the instruction and
+%% the data window, so any single number here would be a guess dressed as a
+%% fact.
+{family, esp32s3,
+ [{vendor,      espressif},
+  {arch,        xtensa_lx7},
+  {store,       flash},            %% no EEPROM; EEPROM.h emulates one in NVS
+  {flash_base,  0},                %% see above -- mapped by the MMU
+  {ram_base,    0},
+  {ram_reserve, 0}]}.
+
+{group, 'esp32s3-spi',
+ [{family, esp32s3},
+  {page, 256},
+  {row, 4096}]}.
+
+%% 512K SRAM on the die. PSRAM is a package option and a board fact, not stated
+%% here. TWAI is the CAN controller -- named `can` because that is what it is
+%% and what a board asking for CAN means.
+{chip, esp32s3,
+ [{group, 'esp32s3-spi'},
+  {flash_kb, 0}, {ram_kb, 512},
+  {peripherals, [{usb,1},{uart,3},{i2c,2},{spi,2},{can,1},{adc,20},
+                 {pwm,8},{rtc,1},{wdt,3}]}]}.

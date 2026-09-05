@@ -1,0 +1,46 @@
+%% RP2350 -- the RP2040's successor, and the reason {arch, ...} is worth reading
+%% twice on this part: it has TWO Cortex-M33 cores AND two Hazard3 RISC-V cores
+%% on the same die, and which pair runs is chosen at boot out of OTP. Stated as
+%% cortex_m33 because that is what every Arduino core builds for; a RISC-V build
+%% would be a different toolchain end to end, not a flag.
+%%
+%% NO FLASH ON THE PART, the same as the RP2040 -- external QSPI mapped by XIP
+%% at 0x10000000, and how much of it there is, is a board fact. (The RP2354
+%% variants stack 2M in the package; those would be their own {chip, ...}.)
+%%
+%% NO {map, ...}: nothing writes flash here today, and no map means nregion == 0
+%% so /upgrade cannot reach it by accident. See the rp2040 file -- same story,
+%% same reason.
+{family, rp2350,
+ [{vendor,      raspberrypi},
+  {arch,        cortex_m33},
+  {store,       flash},            %% no EEPROM on the part; the core emulates
+  {flash_base,  16#10000000},      %% XIP window, not address 0
+  {ram_base,    16#20000000},
+  {ram_reserve, 0}]}.
+
+%% Geometry of the usual QSPI parts, not of the RP2350: it has no flash of its
+%% own to have a geometry. Information only.
+{group, 'rp2350-qspi',
+ [{family, rp2350},
+  {page, 256},                     %% program granularity
+  {row, 4096}]}.                   %% erase granularity (a sector, on W25Q)
+
+%% 520K of SRAM, up from the RP2040's 264K. The A part is the 60-pin package:
+%% 30 GPIO and four ADC channels. The B part (80 pins, 48 GPIO, eight ADC
+%% channels) is the same die and would be a second {chip, ...} here.
+%%
+%% NO CAN CONTROLLER -- like the RP2040, and worth stating because boards get
+%% built around this part specifically to carry CAN. That is always an external
+%% controller on SPI (or PIO, which is what can2040 does). The Waveshare
+%% RP2350-CAN in boards/ is one: an XL2515 on SPI1.
+%%
+%% 24 PWM channels, from 12 slices. Board vendors routinely print 16 on RP2350
+%% pages -- that is the RP2040's number, pasted along with the rest of the Pico
+%% blurb. This file states what the PART has; what a board brings out is the
+%% board's business.
+{chip, rp2350a,
+ [{group, 'rp2350-qspi'},
+  {flash_kb, 0}, {ram_kb, 520},
+  {peripherals, [{usb,1},{uart,2},{i2c,2},{spi,2},{adc,4},{pwm,24},
+                 {rtc,1},{wdt,1}]}]}.

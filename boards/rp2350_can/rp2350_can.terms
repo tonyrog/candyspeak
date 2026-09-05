@@ -1,0 +1,88 @@
+%% Waveshare RP2350-CAN -- RP2350A, 4M flash, XL2515 CAN controller.
+%%
+%% Written before the board arrived; the facts below come from the vendor wiki
+%% and, where the wiki only had prose, from the demo sources it ships
+%% (RP2350-CAN-Demo.zip -- C/rp2350_can/xl2515.c is the file that actually
+%% names the pins). Everything here is checkable against those two.
+%%
+%% https://www.waveshare.com/wiki/RP2350-CAN
+{board, rp2350_can,
+ [{toolchain, arduino_cli},
+  {chip, rp2350a},
+
+  %% Philhower's core has no entry for THIS board -- `arduino-cli board listall
+  %% | grep -i rp2350` lists a dozen Waveshare RP2350 boards and this is not
+  %% among them -- so it builds as a generic RP2350 with the flash size stated.
+  %%
+  %% THE :flash= PART IS NOT DECORATION. The generic default is 2MB and this
+  %% board has 4MB; get it wrong and the linker script describes a part half the
+  %% size, with the filesystem end landing inside the sketch. `arduino-cli board
+  %% details -b rp2040:rp2040:generic_rp2350` lists every option.
+  {fqbn, "rp2040:rp2040:generic_rp2350:flash=4194304_0"},
+
+  %% BOTH ARCHITECTURES. The RP2350 carries two Cortex-M33 and two Hazard3
+  %% RISC-V cores on the same die, and which PAIR runs is chosen at boot out of
+  %% OTP -- not by the program, and not at run time. To a build it is a
+  %% different toolchain end to end (riscv32-unknown-elf, -march=rv32imac...),
+  %% so it gets a profile and a build directory of its own:
+  %%
+  %%   make -f Makefile.board BOARD=rp2350_can                      -> arm
+  %%   make -f Makefile.board BOARD=rp2350_can ARCH_VARIANT=riscv
+  %%   make -f Makefile.board BOARD=rp2350_can variants
+  %%
+  %% First in the list is the default. Measured with the CAN build: arm 134312
+  %% bytes, riscv 160364 -- about 19% more code, which is what RV32IMAC against
+  %% Thumb-2 costs and no reason not to have the option.
+  %%
+  %% PIO has nothing to do with this. Those are eight state machines with a
+  %% nine-instruction ISA for clocking bits onto pins; they cannot run C.
+  %% Each variant carries its own binutils: `make size` on a RISC-V elf with
+  %% arm-none-eabi-nm says "File format not recognized", which reads as a broken
+  %% build rather than as the wrong tool.
+  {arch_variants, [{arm,   "arm-none-eabi-nm"},
+		   {riscv, "riscv32-unknown-elf-nm"}]},
+  {port, "/dev/ttyACM0"},
+  {nm, "arm-none-eabi-nm"},
+  {optimize, "-Os"},
+
+  %% CAN: an XL2515 -- an MCP2515 clone, register for register, which is why the
+  %% Adafruit MCP2515 library drives it -- into a SIT65HVD230 transceiver.
+  %%
+  %% CS on GP9, and the bus is SPI1 (SCK GP10, MOSI GP11, MISO GP12). On this
+  %% core the PINS DECIDE THE BUS: GP10/11/12 are SPI1 pins and the library's
+  %% default `SPI` object is spi0, so this has to name the object -- pin numbers
+  %% alone would not do it. INT is GP8; nothing uses it, because csp_can_recv
+  %% polls with parsePacket().
+  %%
+  %% NO STANDBY PIN. The transceiver's Rs is not on a GPIO -- the vendor demo
+  %% never touches one -- so CSP_CAN_STANDBY stays undefined. That matters: on a
+  %% board that HAS one and does not drive it, the bus is silent while every
+  %% other symptom says the controller came up fine.
+  %%
+  %% 16 MHz crystal, which is the library's default, so no CSP_CAN_CLOCK. Not
+  %% taken from the wiki -- computed from the demo's own CNF table: 125 kbps is
+  %% CNF1=0x03 (BRP=3) with a 16 TQ bit, i.e. Fosc/128, and 128 * 125k is 16M.
+  %% The comment in that file offers both 8M and 16M; the numbers only work for
+  %% one of them. An 8 MHz part here would halve every bitrate.
+  {define, ['CSP_HAS_CAN',
+	    'CSP_CAN_MCP2515',
+	    {'CSP_CAN_SPI', "SPI1"},
+	    {'CSP_CAN_CS', 9},
+	    {'CSP_CAN_BITRATE', "500E3"}]},
+
+  %% PINNED, so a build is reproducible: without this arduino-cli uses
+  %% whatever core happens to be installed, and a core update changes the
+  %% firmware with nothing in the tree to show for it. Feeds sketch.yaml.
+  {platform, "rp2040:rp2040", "6.0.0",
+             "https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json"},
+
+  %% The same set feather_can pins, and for the same reason -- a library update
+  %% would change the firmware silently.
+  {libraries, [{"Adafruit MCP2515", "0.2.1"},
+               {"Adafruit BusIO", "1.17.4"},
+               {"Adafruit CAN", "0.2.3"}]},
+
+  %% 520K of RAM: no reason to be frugal here, unlike every AVR in this
+  %% directory. Both left on.
+  {support_reactive, 1},
+  {use_statistics, 1}]}.

@@ -531,10 +531,116 @@ static int inj_pop(uint32_t* id, uint8_t* data, uint8_t* len)
 #define inj_pop(id, data, len)  0
 #endif /* !CSP_EXEC_ONLY */
 
+// --- UDP --------------------------------------------------------------------
+//
+// One socket per LISTENING port, shared by every buffer that names it -- two
+// `in udp 5000` buffers are two views of the same port, not two binds, and the
+// second bind would fail. Outbound needs no socket of its own: it borrows any
+// open one, and opens an unbound socket if the program only sends.
+//
+// NON-BLOCKING throughout. csp_buf_input polls once per cycle and must never
+// stall it; a datagram that has not arrived is simply not there yet.
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+#ifndef CSP_UDP_MAXSOCK
+#define CSP_UDP_MAXSOCK 4
+#endif
+
+static struct { uint16_t port; int fd; } udp_sock[CSP_UDP_MAXSOCK];
+static int udp_nsock = 0;
+static int udp_tx_fd = -1;
+
+static int udp_find(uint16_t port)
+{
+    int i;
+    for (i = 0; i < udp_nsock; i++)
+	if (udp_sock[i].port == port)
+	    return udp_sock[i].fd;
+    return -1;
+}
+
+int csp_udp_open(csp_rt_t* st, uint16_t port)
+{
+    struct sockaddr_in a;
+    int fd, on = 1;
+    (void)st;
+
+    if (udp_find(port) >= 0)
+	return 0;                      // already listening -- see above
+    if (udp_nsock >= CSP_UDP_MAXSOCK)
+	return -1;
+    if ((fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0)) < 0)
+	return -1;
+    // SO_REUSEADDR so a restarted program can bind a port its predecessor has
+    // not finished releasing -- which on a REPL you restart every minute is the
+    // difference between "works" and "works after a wait nobody explains".
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+    setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on));
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_ANY);
+    a.sin_port = htons(port);
+    if (bind(fd, (struct sockaddr*)&a, sizeof(a)) < 0) {
+	close(fd);
+	return -1;
+    }
+    udp_sock[udp_nsock].port = port;
+    udp_sock[udp_nsock].fd = fd;
+    udp_nsock++;
+    if (udp_tx_fd < 0)
+	udp_tx_fd = fd;
+    return 0;
+}
+
+int csp_udp_recv(csp_rt_t* st, uint16_t port, uint8_t* data, uint16_t* len)
+{
+    ssize_t n;
+    int fd;
+    (void)st;
+
+    // Open on first use rather than at setup: the runtime knows which ports a
+    // program wants only after it has built its buffer table, and a program
+    // edited in the REPL changes that table while running.
+    if ((fd = udp_find(port)) < 0) {
+	if (csp_udp_open(st, port) < 0)
+	    return -1;
+	fd = udp_find(port);
+    }
+    if ((n = recv(fd, data, *len, 0)) < 0)
+	return 0;                      // EAGAIN: nothing pending
+    *len = (uint16_t)n;
+    return 1;
+}
+
+int csp_udp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
+		 const uint8_t* data, uint16_t len)
+{
+    struct sockaddr_in a;
+    (void)st;
+
+    if (udp_tx_fd < 0) {
+	int on = 1;
+	if ((udp_tx_fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0)) < 0)
+	    return -1;
+	setsockopt(udp_tx_fd, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on));
+    }
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    // The address is stored in HOST order -- `udp 0xC0A80102` reads as
+    // 192.168.1.2 in the source and has to mean that on a little-endian host
+    // too, so the conversion is here and not in the declaration.
+    a.sin_addr.s_addr = htonl(addr);
+    a.sin_port = htons(port);
+    if (sendto(udp_tx_fd, data, len, 0, (struct sockaddr*)&a, sizeof(a)) < 0)
+	return -1;
+    return 0;
+}
+
 #if defined(CSP_HAS_SOCKETCAN)
 #include <net/if.h>
 #include <sys/ioctl.h>
-#include <sys/socket.h>
 #include <linux/can.h>
 #include <linux/can/raw.h>
 
@@ -655,6 +761,7 @@ void csp_input(csp_rt_t* st)
 	}
     }
     csp_can_input(st);
+    csp_buf_input(st);   // i2c/spi collections and datagrams
     csp_input_timer(st);
 }
 
@@ -672,6 +779,7 @@ void csp_output(csp_rt_t* st)
 	    }
 	}
 	csp_can_output(st);
+	csp_buf_output(st);  // i2c/spi starts and datagrams
     }
     csp_output_timer(st);
 }

@@ -175,6 +175,12 @@
 {token, 'T_BIG',        big,        'big',        'OP_NOP', -1, -1, no}.
 %% The #buffer TRANSPORT, not a declaration: `#buffer F:8 in can 0x201`.
 {token, 'T_CAN',        can,        'can',        'OP_NOP', -1, -1, no}.
+%% The other three transports. CAN and UDP are ASYNCHRONOUS -- packets arrive
+%% and csp_buf_input collects them. I2C and SPI are master transactions we start
+%% in csp_buf_output and collect on the next cycle. See transport_t in csp.h.
+{token, 'T_I2C',        i2c,        'i2c',        'OP_NOP', -1, -1, no}.
+{token, 'T_SPI',        spi,        'spi',        'OP_NOP', -1, -1, no}.
+{token, 'T_UDP',        udp,        'udp',        'OP_NOP', -1, -1, no}.
 %% Reserved so the '#' dispatch can branch on them: it looks for a WORD after
 %% '#' and would otherwise read "disable" as a module name.
 {token, 'T_DISABLE',    disable,    'disable',    'OP_NOP', -1, -1, no}.
@@ -572,7 +578,26 @@
  [{[bit0], -1}, {[bit1], -1}, {[r, res], 1}]}.
 
 
-%% '#' 'buffer' <name> [':' <bytes>] <opts> ['can' <frame-id>]
+%% '#' 'buffer' <name> [':' <bytes>] <opts> [<transport>]
+%%
+%%   can <frame-id>
+%%   i2c <bus> <addr> <reg>
+%%   spi <bus> <cs-port>':'<cs-pin> <cmd>
+%%   udp <port>                     -- in: listen on that port, any peer
+%%   udp <port> <ip>                -- out: send to that address and port
+%%
+%% PORT FIRST, and the optional address after it. The other order reads better
+%% -- everyone writes 192.168.1.2:5000 -- but it cannot be parsed: an optional
+%% leading integer eats the port of `udp 55001`, finds no second number, and
+%% pmatch does not back a partly-matched optional out cleanly. The port is also
+%% the half BOTH directions have, which is a fair argument for it coming first.
+%%
+%% The address is a NUMBER, not dotted quads: `192.168.1.2` scans as a float
+%% followed by two more dots, and teaching the scanner otherwise for one
+%% transport is not worth it. Write it once and name it:
+%%
+%%   #define GROUND 0xC0A80102       // 192.168.1.2
+%%   #buffer Tlm:16 out udp GROUND 5000
 %%
 %% Here the shared `res` sub-pattern means BYTES, not bits.
 {struct, buffer_param,
@@ -580,16 +605,37 @@
   {r,       {pat, res}},
   {opts,    opts},
   {frameid, int},
-  {is_can,  {plain, "uint8_t"}}]}.
+  {is_can,  {plain, "uint8_t"}},
+  {i2c_bus,  int},
+  {i2c_addr, int},
+  {i2c_reg,  int},
+  {spi_bus,  int},
+  {spi_cs,   {pat, port_pin}},
+  {spi_cmd,  int},
+  {udp_ip,   int},
+  {udp_port, int}]}.
 
+%% ONE optional block per transport, not a choice between them. A choice would
+%% commit on the keyword and then fail inside it, backing the whole thing out
+%% with an error naming the wrong place; separate optionals each back off
+%% cleanly, and a buffer naming two transports is caught in csp_parse_buffer,
+%% where the message can say which two.
 {pattern, buffer, buffer_param,
  [{str, name},
   {pat, res, r},
   {opts, opts},
-  {opt, [{tok, can}, {int, frameid}]}]}.
+  {opt, [{tok, can}, {int, frameid}]},
+  {opt, [{tok, i2c}, {int, i2c_bus}, {int, i2c_addr}, {int, i2c_reg}]},
+  {opt, [{tok, spi}, {int, spi_bus}, {pat, port_pin, spi_cs}, {int, spi_cmd}]},
+  %% The optional address is LAST, so `udp <port>` cannot be misread. See the
+  %% comment at the top of this pattern for why not the other way round.
+  {opt, [{tok, udp}, {int, udp_port}, {opt, [{int, udp_ip}]}]}]}.
 
 {defaults, buffer,
- [{[r, res], 8}, {[frameid], -1}, {[opts, vt], 'V_UNSIGNED'}]}.
+ [{[r, res], 8}, {[frameid], -1}, {[opts, vt], 'V_UNSIGNED'},
+  {[i2c_bus], -1}, {[i2c_addr], -1}, {[i2c_reg], -1},
+  {[spi_bus], -1}, {[spi_cmd], -1},
+  {[udp_ip], 0}, {[udp_port], -1}]}.
 
 
 %% ===========================================================================

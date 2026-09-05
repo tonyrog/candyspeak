@@ -754,6 +754,7 @@ void csp_input(csp_rt_t* st)
     }
     csp_ctx_reset(st);
     csp_can_input(st);
+    csp_buf_input(st);   // i2c/spi collections and datagrams
     csp_input_timer(st);
 }
 
@@ -779,7 +780,16 @@ void csp_input(csp_rt_t* st)
 #define CSP_CAN_STANDBY PIN_CAN_STANDBY
 #endif
 
-static Adafruit_MCP2515 csp_mcp2515(CSP_CAN_CS);
+// WHICH SPI BUS. The library defaults to the `SPI` object, which is what a
+// board with the controller on its primary bus wants -- but a board is free to
+// wire it anywhere, and on the RP2040/RP2350 cores the pins decide the bus:
+// GP10/11/12 are SPI1 pins and `SPI` is spi0, so a board wired there needs the
+// other object, not different pin numbers. -DCSP_CAN_SPI=SPI1 says so.
+#ifndef CSP_CAN_SPI
+#define CSP_CAN_SPI SPI
+#endif
+
+static Adafruit_MCP2515 csp_mcp2515(CSP_CAN_CS, &CSP_CAN_SPI);
 #define CSP_CANDEV csp_mcp2515
 #else
 #define CSP_CANDEV CAN
@@ -908,6 +918,7 @@ void csp_output(csp_rt_t* st)
 	}
 	csp_ctx_reset(st);
 	csp_can_output(st);
+	csp_buf_output(st);  // i2c/spi starts and datagrams
 	csp_board_stop_output(st);
     }
     csp_output_timer(st);

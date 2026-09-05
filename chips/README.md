@@ -71,6 +71,24 @@ for A/B.
 8K is a better price than 32K, which is why the LPC1754 map puts `store` at
 sectors 14..15 and leaves both big ones for the slots.
 
+## Asking what a part is
+
+    make chips RE=rp2350             # one line per matching chip
+    make board-list RE=rp             # one line per matching board
+    make info NAME=rp2350a            # everything about one of them
+    make info NAME=dl1200 MAP=usb_boot
+
+`info` takes a chip name or a board name. A board prints both halves — what the
+board says and what its chip resolves to — and a map other than the active one
+can be asked for, the same override `MAP=` gives a build.
+
+Sizes come out in **bytes as well as K**, and each region's size is worked out
+from the sector table rather than left as sector numbers to add up by hand:
+
+    ram        16K = 16384 bytes   base 0x40000000
+    sectors    17, 8x8K + 2x64K + 7x8K
+    map 212x   runtime 0..8 (128K)  app A 9..9 (64K)  store 10..16 (56K)
+
 ## Adding a part
 
 If it is a variant of a group that exists, it is four lines:

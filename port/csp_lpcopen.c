@@ -786,6 +786,7 @@ void csp_input(csp_rt_t* st)
     }
     csp_ctx_reset(st);
     csp_can_input(st);
+    csp_buf_input(st);   // i2c/spi collections and datagrams
     csp_input_timer(st);
 }
 
@@ -821,6 +822,7 @@ void csp_output(csp_rt_t* st)
 	}
 	csp_ctx_reset(st);
 	csp_can_output(st);
+	csp_buf_output(st);  // i2c/spi starts and datagrams
 	csp_board_stop_output(st);
     }
     csp_output_timer(st);

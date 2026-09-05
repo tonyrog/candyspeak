@@ -492,7 +492,7 @@ fw() {  # fw <out> <csp>   -- a host firmware carrying that program as its ROM
 	port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c \
 	src/csp_repl.c src/csp_compile.c src/csp_tok.c port/csp_dump.c \
 	src/csp_eeprom.c src/csp_parse.c src/csp_print.c gen/csp_strings.c \
-	src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
+	src/csp_transport.c src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
 	"$2.rom.c" -o "$1" >/dev/null 2>&1
 }
 if fw "$D/fw_a" "$D/fpa.csp" && fw "$D/fw_b" "$D/fpb.csp"; then
@@ -544,7 +544,7 @@ if fw "$D/fw_a" "$D/fpa.csp" && fw "$D/fw_b" "$D/fpb.csp"; then
 	    port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c \
 	    src/csp_repl.c src/csp_compile.c src/csp_tok.c port/csp_dump.c \
 	    src/csp_eeprom.c src/csp_parse.c src/csp_print.c gen/csp_strings.c \
-	    src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
+	    src/csp_transport.c src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
 	    "$2" "$3" -o "$1" >/dev/null 2>&1
     }
     if fw2 "$D/fw2a" "$D/i1.rom.c" "$D/i2.rom.c" &&
@@ -631,7 +631,7 @@ if ./csp -n -C -O "$D/eo_rom.c" "$D/eo.csp" >/dev/null 2>&1 &&
    gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -DCSP_EXEC_ONLY -Iinclude -Igen -Isrc \
        port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
        src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
-       src/csp_parse.c src/csp_print.c gen/csp_strings.c src/csp_flash.c \
+       src/csp_parse.c src/csp_print.c gen/csp_strings.c src/csp_transport.c src/csp_flash.c \
        port/csp_devices.c port/csp_flash_host.c \
        "$D/eo_rom.c" -o "$D/csp_exec" \
        >/dev/null 2>&1; then
@@ -735,7 +735,7 @@ echo "flash guard:"
 # written yet -- so the guard lives in csp_flash_put and this proves nothing
 # routes around it. Removing the guard fails four of these and nothing else.
 if gcc -Iinclude -Igen -Isrc -O2 -o "$D/flash_guard" tests/flash_guard.c \
-       src/csp_flash.c src/csp_crc.c port/csp_devices.c port/csp_flash_host.c \
+       src/csp_transport.c src/csp_flash.c src/csp_crc.c port/csp_devices.c port/csp_flash_host.c \
        gen/csp_strings.c >/dev/null 2>&1; then
     got=$(cd "$(dirname "$0")/.." && "$D/flash_guard" | tail -1)
     ck "runtime and the last failsafe are refused" "ok, refused" "$got"
@@ -745,7 +745,7 @@ fi
 
 echo "flash geometry:"
 if gcc -Iinclude -Igen -Isrc -O2 -o "$D/flash_geom" tests/flash_geom.c \
-       src/csp_flash.c src/csp_crc.c port/csp_devices.c port/csp_flash_host.c \
+       src/csp_transport.c src/csp_flash.c src/csp_crc.c port/csp_devices.c port/csp_flash_host.c \
        gen/csp_strings.c \
        >/dev/null 2>&1; then
     got=$(cd "$(dirname "$0")/.." && "$D/flash_geom" | tail -1)
@@ -1208,7 +1208,7 @@ if gcc -g -Wall -Iinclude -Igen -Isrc -Itests/lpcstub -Ichips/nxp/drivers/212x \
        port/csp_lpcopen.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c \
        src/csp_parse.c src/csp_tok.c src/csp_print.c src/csp_repl.c \
        port/csp_dump.c src/csp_eeprom.c gen/csp_strings.c gen/rom_host.c \
-       src/csp_flash.c chips/nxp/drivers/212x/flash_212x.c port/csp_devices.c \
+       src/csp_transport.c src/csp_flash.c chips/nxp/drivers/212x/flash_212x.c port/csp_devices.c \
        tests/lpcstub/stub.c >/dev/null 2>&1; then
     ck "the LPC port builds and links against the core" "0" "0"
     # A GPIO pin, an ADC channel (port 15) and a rule -- then list them back.
@@ -1428,7 +1428,7 @@ open(sys.argv[2], 'wb').write(d)
 PYEOF
 got=$(printf '/quit\n' | repl ./csp "$D/fmt14.db")
 ck "a patch from another ROM format is refused, and says why" \
-   "eeprom rejected: patch is ROM format 14, firmware is 16 -- clear it and re-enter" \
+   "eeprom rejected: patch is ROM format 14, firmware is 17 -- clear it and re-enter" \
    "$got"
 
 echo "settings:"

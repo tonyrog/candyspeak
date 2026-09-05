@@ -249,7 +249,7 @@ static inline void* rdvp(const void* p, int rom)
 //       compute every one of those SIGNED with no complaint. Images travel on
 //       their own -- an A/B slot, a FAILSAFE flashed alone -- so that direction
 //       is reachable and has to be rejected rather than run.
-#define ROM_FORMAT_VERSION 16
+#define ROM_FORMAT_VERSION 17
 
 // Format version of the SETTINGS store, which is NOT ROM_FORMAT_VERSION and not
 // EEPROM_VERSION either. It needs its own because it is the one part of the
@@ -823,12 +823,56 @@ typedef struct {
     uint16_t buf;                // VIEW_HEAP: buffer id. An owner has none.
 } csp_view_t;
 
-// csp_buf_t.transport -- what the buffer is bound to on the outside
+// csp_buf_t.transport -- what the buffer is bound to on the outside.
+//
+// TWO SHAPES, and the difference decides where the work happens:
+//
+//   ASYNCHRONOUS (CAN, UDP) -- packets arrive on their own. csp_buf_input
+//   collects whatever showed up; csp_buf_output sends what changed. Nothing
+//   here initiates a read.
+//
+//   SYNCHRONOUS (I2C, SPI) -- a master transaction, and WE are the master.
+//   csp_buf_output starts the transfer and csp_buf_input collects it on the
+//   NEXT cycle, so a 14-byte read at 100 kHz (1.4 ms, against a 2 ms sample
+//   period) costs no loop time at all. The data is one cycle old, which is the
+//   trade: overlapped, not blocking.
+//
+// The numbers are ABI -- a ROM image carries them -- so they are never
+// reordered and a retired one is never reused.
 typedef enum {
     TR_NONE = 0,        // plain RAM buffer
     TR_PIN  = 1,        // reserved: pin-mapped
     TR_CAN  = 2,        // a CAN frame; xref is the frame id
+    TR_I2C  = 3,        // a register read/write; xref is bus/addr/reg
+    TR_SPI  = 4,        // a transfer; xref is bus/cs-pin/command
+    TR_UDP  = 5,        // a datagram; xref is the IPv4 address, port is separate
 } transport_t;
+
+// Is this transport one WE start? The two synchronous buses are, and that is
+// the only place the distinction is needed.
+#define TR_IS_SYNC(t)  (((t) == TR_I2C) || ((t) == TR_SPI))
+
+// How xref is packed, per transport. One 32-bit constant carries the whole
+// endpoint for every transport but UDP, whose address and port do not fit in
+// one -- see csp_buf_t.port.
+//
+//   TR_CAN   the frame id
+//   TR_I2C   bus << 16 | addr << 8 | reg
+//   TR_SPI   bus << 24 | cs_port << 20 | cs_pin << 16 | command
+//   TR_UDP   the IPv4 address in host order; 0 means "listen on any"
+#define TR_I2C_XREF(bus,addr,reg)  (((uint32_t)(bus) << 16) | \
+				    ((uint32_t)(addr) << 8) | (uint32_t)(reg))
+#define TR_I2C_BUS(x)   (((x) >> 16) & 0xff)
+#define TR_I2C_ADDR(x)  (((x) >> 8) & 0xff)
+#define TR_I2C_REG(x)   ((x) & 0xff)
+
+#define TR_SPI_XREF(bus,po,pi,cmd) (((uint32_t)(bus) << 24) | \
+				    ((uint32_t)(po) << 20) | \
+				    ((uint32_t)(pi) << 16) | (uint32_t)(cmd))
+#define TR_SPI_BUS(x)   (((x) >> 24) & 0x0f)
+#define TR_SPI_PORT(x)  (((x) >> 20) & 0x0f)
+#define TR_SPI_PIN(x)   (((x) >> 16) & 0x1f)
+#define TR_SPI_CMD(x)   ((x) & 0xffff)
 
 // One per unique buffer. RAM table, filled at start.
 typedef struct {
@@ -840,7 +884,13 @@ typedef struct {
     uint8_t  dlc;       // TR_CAN: bytes to send / bytes last received. Starts
 			// at nbytes (the declared frame size) and is never
 			// allowed past it -- the heap has room for no more.
-    uint32_t xref;      // pin-number / can-id
+    // UDP's endpoint does not fit in xref: an IPv4 address is already 32 bits
+    // and the port is another 16. Here rather than in the DECLARATION, which a
+    // ROM image carries and which has four spare bits, not sixteen -- the
+    // declaration keeps a string constant and setup_buffer parses it into these
+    // two. Zero for every other transport.
+    uint16_t port;
+    uint32_t xref;      // pin-number / can-id / i2c or spi endpoint / IPv4
     index_t  owner;     // the decl (with object) whose leaf IS this buffer, or
 			// BAD_INDEX. Set by setup_buffer, which is the only
 			// place that knows both ends. can_mark_fields used to
@@ -862,6 +912,11 @@ typedef struct {
 			   // is what makes `? F.rx` line up. Lives one cycle.
 #define BUF_F_TX     0x08  // a rule asked for a send (F.tx = 1), regardless of
 			   // whether any field changed -- cyclic PDO
+#define BUF_F_BUSY   0x10  // TR_IS_SYNC: a transaction is in flight. Set when
+			   // csp_buf_output starts one, cleared when
+			   // csp_buf_input collects it. Without it a slow bus
+			   // gets a second transfer queued on top of the first
+			   // every cycle, and the bus never drains.
 // (BUF_F_LOCAL is gone: a #local owns its storage and has no buffer to carry a
 // flag. It is VIEW_F_LOCAL on the view now -- no extra bit, since VIEW_F_GLOBAL
 // is a VIEW_HEAP meaning and `kind` separates the two.)
@@ -1563,8 +1618,22 @@ typedef struct PACKED {
 typedef struct PACKED {
     DECL_COMMON;
     unsigned nbytes:10;     // 1..1023; a CAN FD frame is 64 bytes
-    unsigned transport:2;   // transport_t: TR_NONE plain RAM, TR_CAN a frame
-    unsigned id:INDEX_BITS; // TR_CAN: constant holding the frame id
+    // 3 bits, not 2: TR_UDP is 5. The word had four spare bits, so this costs
+    // nothing -- csp_bufdecl_t is 8 bytes before and after.
+    unsigned transport:3;   // transport_t: TR_NONE plain RAM, TR_CAN a frame
+    unsigned id:INDEX_BITS; // the constant holding this transport's endpoint:
+			    // a frame id, a packed bus/addr/reg, or an IPv4
+			    // address. See transport_t for the packings.
+			    //
+			    // TR_UDP USES TWO: `id` holds the IPv4 address and
+			    // `id + 1` the port. A constant is 32 bits and this
+			    // endpoint is 48, and a port field here would take
+			    // csp_decl_t from 8 bytes to 12 -- four bytes on
+			    // every declaration of every kind, to carry one
+			    // number for one transport. csp_parse_buffer makes
+			    // the pair with new_signed_const twice and REFUSES
+			    // to compile if they did not come out adjacent, so
+			    // the assumption cannot rot quietly.
 } csp_bufdecl_t;
 
 typedef struct PACKED {
@@ -3010,6 +3079,13 @@ extern void csp_output(csp_rt_t* st);
 #define CSP_CAN_RX_BURST 8
 #endif
 
+// The same bound for datagrams. There is no MTU constant to go with it: a
+// datagram is read straight into the buffer it feeds, so the declared size IS
+// the limit and a longer one is truncated -- which is what recv does anyway.
+#ifndef CSP_UDP_RX_BURST
+#define CSP_UDP_RX_BURST 4
+#endif
+
 // CAN. The core owns the frame logic (id -> buffer, bit packing, dirty
 // tracking) and calls down to three driver hooks. A driver with no bus links
 // the weak no-op versions in csp_can_none.c and everything above still works.
@@ -3024,6 +3100,44 @@ extern void csp_can_output(csp_rt_t* st);
 // 1 if the program has an inbound frame, i.e. the driver loop must keep running
 // even with no timers and nothing changing.
 extern int  csp_can_active(csp_rt_t* st);
+
+// --- the other three transports ---------------------------------------------
+//
+// Same shape as CAN and for the same reason: the core owns the buffer logic --
+// which endpoint feeds which buffer, the bit packing, the dirty tracking -- and
+// calls down to hooks a port implements. Every hook below has a weak do-nothing
+// default in src/csp_transport.c, so a port that implements none of them links
+// and a program using them runs and stays quiet.
+//
+// UDP is ASYNCHRONOUS, like CAN: datagrams arrive on their own.
+//   csp_udp_recv: 1 = a datagram was read, 0 = nothing pending, -1 = error.
+//   csp_udp_send: 0 = sent, -1 = error.
+extern int csp_udp_open(csp_rt_t* st, uint16_t port);
+extern int csp_udp_recv(csp_rt_t* st, uint16_t port, uint8_t* data, uint16_t* len);
+extern int csp_udp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
+			const uint8_t* data, uint16_t len);
+
+// I2C and SPI are SYNCHRONOUS -- we are the master -- and the pair is
+// deliberately split so a transfer can overlap the cycle that started it:
+//
+//   csp_output   csp_*_start(...)   ->  0 started, -1 busy or no bus
+//   csp_input    csp_*_done(...)    ->  1 complete, 0 in flight, -1 failed
+//
+// `data` is the buffer's own storage and the driver may write into it directly
+// (DMA lands there); it stays put for the life of the program. A port with no
+// DMA is free to do the transfer inside _start and report 1 immediately from
+// _done -- the sequencing is the same, it just costs the loop time.
+extern int csp_i2c_start(csp_rt_t* st, uint32_t xref, uint8_t* data,
+			 uint16_t len, int is_read);
+extern int csp_i2c_done(csp_rt_t* st, uint32_t xref, uint16_t* len);
+extern int csp_spi_start(csp_rt_t* st, uint32_t xref, uint8_t* data,
+			 uint16_t len, int is_read);
+extern int csp_spi_done(csp_rt_t* st, uint32_t xref, uint16_t* len);
+
+// One pass over every buffer with a transport. csp_can_input/output are these
+// under their old names -- a driver calls whichever it has always called.
+extern void csp_buf_input(csp_rt_t* st);
+extern void csp_buf_output(csp_rt_t* st);
 
 extern void csp_input_timer(csp_rt_t* st);
 extern void csp_output_timer(csp_rt_t* st);

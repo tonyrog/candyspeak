@@ -33,9 +33,22 @@ TOOLCHAIN := $(shell $(GEN) --toolchain-of $(BOARD))
 
 ifeq ($(TOOLCHAIN),arduino_cli)
 
+# WHICH ARCHITECTURE, on a board that has more than one. An RP2350 carries two
+# Cortex-M33 AND two Hazard3 RISC-V cores, and which pair runs is chosen at boot
+# out of OTP -- so to a build it is a different toolchain end to end, not a
+# flag. Empty for every board that has one architecture, which is all of them
+# but that one.
+#
+#   make -f Makefile.board BOARD=rp2350_can ARCH_VARIANT=riscv
+#   make -f Makefile.board BOARD=rp2350_can variants
+ARCH_VARIANT ?=
+AVAR := $(shell $(GEN) --variant-of $(BOARD) $(ARCH_VARIANT))
+
 FQBN := $(shell $(GEN) --fqbn-of $(BOARD))
 DEV  := $(shell $(GEN) --port-of $(BOARD))
-NM   := $(shell $(GEN) --nm-of $(BOARD))
+# The variant's own binutils when it has one: an arm-none-eabi-nm on a RISC-V
+# elf says "File format not recognized", which reads as a broken build.
+NM   := $(shell $(GEN) --nm-of $(BOARD) $(AVAR))
 OPT  := $(shell $(GEN) --optimize-of $(BOARD))
 # Per-board compiler and LINK flags. The link ones have to go through
 # compiler.c.elf.extra_flags: -Wl,--relax in the compile flags is silently
@@ -52,7 +65,12 @@ SKETCH := CandySpeak
 # with CandySpeak/boards -> ../boards, a build path here landed INSIDE the
 # sketch tree and arduino-cli tried to compile its own output. The sketch now
 # links src/ instead, and boards/ is out of its reach.
-B      := $(BUILD_DIR)/$(BOARD)
+# The variant is in the PATH and in the PROFILE name, always -- never only in
+# one of them. An `rp2350_can` directory that is secretly the ARM build is how
+# the wrong image gets flashed; the bare-metal branch names its build
+# directories after the region map for exactly this reason.
+PROFILE := $(BOARD)$(if $(AVAR),-$(AVAR),)
+B       := $(BUILD_DIR)/$(PROFILE)
 # arduino-cli's build path is a SUBdirectory, not $(B) itself: --clean wipes
 # whatever --build-path points at, and the generated csp_board.h lives in $(B).
 # Pointed at the same directory, the clean build deletes the header it is about
@@ -68,9 +86,24 @@ BOARDINC := $(abspath $(B))
 # folder as the working directory.
 COREINC  := -I$(abspath include) -I$(abspath gen) -I$(abspath src)
 
+# THE PROGRAM THE BOARD CARRIES. Read the same way as in the bare-metal branch
+# below, and for the same reason: a board's program is a property of the board,
+# not of whatever was compiled last.
+#
+# The sketch reaches it through port/csp_rom.c, which CandySpeak/rom.c symlinks
+# to -- arduino-cli compiles only what is in the sketch folder, so the image has
+# to be #included rather than handed to the link. That file has the details.
+#
+# With PROG empty the sketch includes gen/rom_host.c, the neutral image, which
+# is what the bare-metal branch links in the same case.
+BOARDDIR := $(shell $(GEN) --dir-of $(BOARD))
+PROG     ?= $(wildcard $(BOARDDIR)/pins.csp)
+ROMDEF   := $(if $(strip $(PROG)),,-DCSP_ROM=rom_host.c)
+ROMSRC   := $(if $(strip $(PROG)),$(B)/csp_rom.c,)
+
 # csp_config.h does `#include CSP_STR(CSP_BOARD)`, so the value is a path, not a
 # quoted string -- the stringify happens there. See its comment.
-CSPFLAGS := $(OPT) -I$(BOARDINC) $(COREINC) -DCSP_BOARD=csp_board.h $(BCFLAGS) $(EXTRA)
+CSPFLAGS := $(OPT) -I$(BOARDINC) $(COREINC) -DCSP_BOARD=csp_board.h $(ROMDEF) $(BCFLAGS) $(EXTRA)
 
 OPTS = --build-property "compiler.c.extra_flags=$(CSPFLAGS)" \
        --build-property "compiler.cpp.extra_flags=$(CSPFLAGS)" \
@@ -85,6 +118,40 @@ all: compile
 $(B)/csp_board.h: $(TERMS) utils/gen_chips.erl
 	@mkdir -p $(B)
 	@$(GEN) --board $(BOARD) $@
+
+# The board's program, compiled to an image by ./csp -- the same compiler the
+# REPL uses, so what the board carries and what a typed line produces come from
+# one place. Into the build directory, never over gen/rom.c: that one is the
+# HOST demo image, and overwriting it makes a board's program the baseline every
+# test then runs on top of.
+#
+# $(B), not $(CLIB): --clean wipes the arduino-cli build path, and this file is
+# a prerequisite of the build rather than an output of it. Same reason
+# csp_board.h lives there.
+#
+# The .cspprog stamp is what make cannot work out on its own: PROG is a LIST OF
+# NAMES, and switching from one program to another leaves the image newer than
+# its new source. make then has nothing to rebuild, the board keeps the previous
+# program, and the build says nothing about it. Recording the names and
+# rewriting the stamp only when they move gives the rule something to depend on
+# -- the same trap, and the same answer, as .cspflags below.
+$(B)/csp_rom.c: $(PROG) $(B)/.cspprog csp
+	@mkdir -p $(B)
+	@./csp -n -C -O $@ $(PROG)
+	@sed -n 's|^//   size: *|  rom: |p' $@
+
+# Touched only when the list actually changes, so an unrelated build does not
+# recompile the image.
+$(B)/.cspprog: FORCE
+	@mkdir -p $(B)
+	@printf '%s\n' '$(PROG)' | cmp -s - $@ 2>/dev/null || printf '%s\n' '$(PROG)' > $@
+
+FORCE:
+
+# ./csp is the compiler above. Built by the top-level Makefile; no prerequisites
+# here, so this runs only when the binary is missing.
+csp:
+	@$(MAKE) --no-print-directory -f Makefile csp
 
 # ONE sketch.yaml with a profile per board -- every board shares the sketch, so
 # it cannot be per-board. It pins the core and library VERSIONS, which is the
@@ -109,12 +176,12 @@ $(SKETCH)/sketch.yaml: $(TERMS) utils/gen_chips.erl
 FLAGS_KEY = $(CSPFLAGS)
 
 # -m $(BOARD), not --fqbn: the profile carries the fqbn AND the pinned versions.
-compile: $(B)/csp_board.h $(SKETCH)/sketch.yaml
+compile: $(B)/csp_board.h $(ROMSRC) $(SKETCH)/sketch.yaml
 	@if [ "$$(cat $(B)/.cspflags 2>/dev/null)" = '$(FLAGS_KEY)' ]; then \
-	    arduino-cli compile -e -m $(BOARD) $(OPTS) --build-path $(abspath $(CLIB)) $(SKETCH); \
+	    arduino-cli compile -e -m $(PROFILE) $(OPTS) --build-path $(abspath $(CLIB)) $(SKETCH); \
 	else \
 	    echo "build flags changed -> clean build"; \
-	    arduino-cli compile -e --clean -m $(BOARD) $(OPTS) --build-path $(abspath $(CLIB)) $(SKETCH); \
+	    arduino-cli compile -e --clean -m $(PROFILE) $(OPTS) --build-path $(abspath $(CLIB)) $(SKETCH); \
 	fi
 	@printf '%s\n' '$(FLAGS_KEY)' > $(B)/.cspflags
 
@@ -127,14 +194,26 @@ min:
 	    EXTRA="-DCSP_EXEC_ONLY -DCSP_NO_EEPROM $(EXTRA)"
 
 upload: compile
-	arduino-cli upload -p $(DEV) -m $(BOARD) --input-dir $(abspath $(CLIB)) $(SKETCH)
+	arduino-cli upload -p $(DEV) -m $(PROFILE) --input-dir $(abspath $(CLIB)) $(SKETCH)
 
 # Text size per symbol, largest first -- the list to read when it does not fit.
+#
+# The binutils may not be on PATH: arduino-cli installs a toolchain per core
+# under ~/.arduino15 and never puts it there. avr-nm and arm-none-eabi-nm
+# usually come from the distribution as well, but riscv32-unknown-elf-nm and
+# xtensa-esp32s3-elf-nm do not -- so look the tool up rather than assume it,
+# and say which one is missing instead of printing a table of zeroes.
+NMBIN = $$(command -v $(NM) 2>/dev/null || \
+	   find $$HOME/.arduino15/packages -name $(NM) -type f 2>/dev/null | head -1)
+
 size:
-	@$(NM) --size-sort -S -C $(CLIB)/*.ino.elf | \
+	@nm=$(NMBIN); \
+	 test -n "$$nm" || { echo "$(NM): not on PATH and not under ~/.arduino15"; exit 1; }; \
+	 $$nm --size-sort -S -C $(CLIB)/*.ino.elf | \
 	  awk '$$3=="T"||$$3=="t"{n=strtonum("0x"$$2); t+=n; printf "%6d  %s\n", n, $$4}' | \
 	  sort -rn | head -25
-	@$(NM) --size-sort -S -C $(CLIB)/*.ino.elf | \
+	@nm=$(NMBIN); \
+	 $$nm --size-sort -S -C $(CLIB)/*.ino.elf | \
 	  awk '$$3=="T"||$$3=="t"{n=strtonum("0x"$$2); t+=n; \
 	    if ($$4 ~ /^(csp_|setup_|eval[0-9]|est_|fn_|add_|op_info|tok_table|decl_table|build_dis_ip|can_mark_fields|main$$|loop$$)/) ours+=n; \
 	    else core+=n } \
@@ -172,7 +251,18 @@ clean:
 maps:
 	@echo "$(BOARD): arduino-cli board, no region maps"
 
-.PHONY: all compile exec min upload size clean maps watch whichfn
+# What `maps` is on the bare-metal side: the builds this board can produce that
+# are not interchangeable.
+variants:
+	@v=$$($(GEN) --variants $(BOARD)); \
+	 test -n "$$v" || { echo "$(BOARD): one architecture, no variants"; exit 0; }; \
+	 first=1; \
+	 for x in $$v; do \
+	     if [ $$first = 1 ]; then echo "  $$x   (default)"; first=0; \
+	     else echo "  $$x"; fi; \
+	 done
+
+.PHONY: all compile exec min upload size clean maps variants watch whichfn FORCE
 
 else
 
@@ -197,7 +287,9 @@ B       := $(BUILD_DIR)/$(VARIANT)
 # One fact per query. Parsing the human listing through `head` closed the pipe
 # and left escript dying on EPIPE -- noisy, and it would have masked a real
 # error the day one appeared.
-CHIP  := $(shell $(GEN) --chip-of $(BOARD))
+#
+# The chip NAME is not asked for: nothing below uses it, and each of these is a
+# separate escript start -- about a second before any compiling begins.
 ARCH  := $(shell $(GEN) --arch-of $(BOARD))
 
 # Which region map to build against. A board may carry several -- `make -f
@@ -209,13 +301,42 @@ MAP   ?=
 # harmless.
 THUMB := $(if $(ARM),-marm,-mthumb)
 
-ifeq ($(ARCH),cm3)
+# The family's own {arch, ...}. It used to be a two-valued guess derived from
+# the entry symbol; the terms have said this all along.
+# The NXP-only pieces: the boot LED/bit-bang diagnostics and the I2C EEPROM
+# backend. Named here so both LPC branches can say it in one word.
+NXPCOMMON := chips/nxp/drivers/common/csp_board.c \
+             chips/nxp/drivers/common/csp_eeprom_i2c.c
+
+# The STM32F4 branch. No vendor HAL: cmsis-device-f4 is the register map and
+# chips/arm/cmsis is ARM's core layer, and everything between those and
+# CandySpeak is port/csp_stm32.c. See chips/arm/README.md for why the CMSIS
+# core has a home of its own -- ST does not ship one, NXP ships eight.
+ifeq ($(ARCH),cortex_m4)
+  # softfp, not hard: the FPU is enabled (SystemInit sets CPACR) but nothing in
+  # CandySpeak is floating point -- its arithmetic is Q16.16 -- so there is no
+  # reason to change the ABI of every call for it.
+  CPU     := -mcpu=cortex-m4 -mthumb -mfloat-abi=softfp -mfpu=fpv4-sp-d16
+  CHIPINC := -Icmsis-device-f4/Include -Ichips/arm/cmsis
+  CHIPDEF := -DCHIP_STM32F4 -DCSP_HAVE_FLASH
+  STARTUP := chips/st/drivers/f405/startup_f405.c
+  SYSINIT := chips/st/drivers/f405/sysinit_f405.c
+  PORTSRC := port/csp_stm32.c
+  DRV     := chips/st/drivers/f405/flash_f405.c \
+             chips/st/drivers/f405/i2c_f405.c \
+             chips/st/drivers/f405/spi_f405.c
+  # ST's boot loader is selected by the BOOT pins and checks nothing, so there
+  # is no checksum word to patch into the image -- unlike every LPC here, where
+  # a wrong one silently enters ISP instead of running.
+  NOCHECKSUM := 1
+else ifeq ($(ARCH),cortex_m3)
   CPU     := -mcpu=cortex-m3 -mthumb
   LPC     := chips/nxp/lpcopen/lpc175x_6x/lpc_chip_175x_6x
   CHIPINC := -I$(LPC)/inc
   CHIPDEF := -DCORE_M3
   STARTUP := chips/nxp/drivers/175x/startup_cm3.c
   SYSINIT := chips/nxp/drivers/175x/sysinit_175x.c
+  PORTSRC := port/csp_lpcopen.c $(NXPCOMMON)
   DRV     := $(addprefix $(LPC)/src/, chip_17xx_40xx.c clock_17xx_40xx.c \
                sysctl_17xx_40xx.c sysinit_17xx_40xx.c iocon_17xx_40xx.c \
                gpio_17xx_40xx.c uart_17xx_40xx.c adc_17xx_40xx.c \
@@ -232,6 +353,7 @@ else
   CHIPDEF := -DCHIP_LPC212X -DCSP_HAVE_FLASH
   STARTUP := chips/nxp/drivers/212x/startup_212x.S
   SYSINIT := chips/nxp/drivers/212x/sysinit_212x.c
+  PORTSRC := port/csp_lpcopen.c $(NXPCOMMON)
   DRV     := chips/nxp/drivers/212x/chip_212x.c \
              chips/nxp/drivers/212x/can_212x.c \
              chips/nxp/drivers/212x/pwm_212x.c \
@@ -246,11 +368,12 @@ CC   := arm-none-eabi-gcc
 OC   := arm-none-eabi-objcopy
 SZ   := arm-none-eabi-size
 
+# The part that is the same on every target. The PORT layer -- the file that
+# knows what a GPIO write is -- is picked by architecture above, because that is
+# the whole difference between an LPC build and an STM32 one.
 CORE := src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c src/csp_repl.c \
         src/csp_parse.c src/csp_tok.c src/csp_print.c gen/csp_strings.c \
-        src/csp_eeprom.c src/csp_flash.c port/csp_lpcopen.c \
-        chips/nxp/drivers/common/csp_board.c \
-        chips/nxp/drivers/common/csp_eeprom_i2c.c
+        src/csp_eeprom.c src/csp_flash.c src/csp_transport.c
 
 # THE PROGRAM THE BOARD CARRIES IN FLASH.
 #
@@ -281,7 +404,7 @@ else
   ROMOBJ := $(B)/rom.o
 endif
 
-SRC  := $(CORE) $(DRV) $(SYSINIT) $(STARTUP)
+SRC  := $(CORE) $(PORTSRC) $(DRV) $(SYSINIT) $(STARTUP)
 OBJ  := $(addprefix $(B)/,$(notdir $(SRC:.c=.o)))
 OBJ  := $(OBJ:.S=.o)
 ifdef VICSRC
@@ -340,10 +463,20 @@ $(B)/$(BOARD).ld: $(TERMS) utils/gen_chips.erl
 # place. Lands in the build directory rather than over rom.c in the tree: rom.c
 # is the host demo image and swapping the two is how a program becomes the
 # baseline every test then runs on top of.
-$(B)/rom.c: $(PROG) csp $(B)/csp_board.h
+# .cspprog for the same reason as in the arduino branch: PROG is a list of
+# NAMES, and switching from one program to another usually leaves the image
+# newer than its new source, so make finds nothing to do and the firmware keeps
+# the program before it -- silently. `make prog_check` is the test.
+$(B)/rom.c: $(PROG) $(B)/.cspprog csp $(B)/csp_board.h
 	@mkdir -p $(B)
 	@./csp -n -C -O $@ $(PROG)
 	@sed -n 's|^//   size: *|  rom: |p' $@
+
+$(B)/.cspprog: FORCE
+	@mkdir -p $(B)
+	@printf '%s\n' '$(PROG)' | cmp -s - $@ 2>/dev/null || printf '%s\n' '$(PROG)' > $@
+
+FORCE:
 
 $(B)/rom.o: $(B)/rom.c
 	@$(CC) $(CFLAGS) -c -o $@ $<
@@ -381,7 +514,7 @@ $(B)/firmware.elf: $(OBJ) $(LD)
 # an erase. 0xFF says "erased", which is the truth.
 $(B)/firmware.bin: $(B)/firmware.elf csp
 	@$(OC) -O binary --gap-fill 0xFF $< $@
-	@./csp --checksum=$@
+	@$(if $(NOCHECKSUM),echo "$@: no checksum word on this family",./csp --checksum=$@)
 
 # A .hex as well, and prefer it when flashing. A raw .bin is just bytes: byte 0
 # is the LOWEST section address, and nothing in the file says what that address
@@ -413,6 +546,6 @@ maps:
 clean:
 	@rm -rf $(B)
 
-.PHONY: all clean maps
+.PHONY: all clean maps FORCE
 
 endif

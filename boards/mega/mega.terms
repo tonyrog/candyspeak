@@ -2,6 +2,7 @@
 %% full build, compiler and REPL included.
 {board, mega,
  [{toolchain, arduino_cli},
+  {chip, atmega2560},
   {fqbn, "arduino:avr:mega"},
   {port, "/dev/ttyACM0"},
   {nm, "avr-nm"},

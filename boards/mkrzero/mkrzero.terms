@@ -3,6 +3,7 @@
 %% in .bss.
 {board, mkrzero,
  [{toolchain, arduino_cli},
+  {chip, samd21g18a},
   {fqbn, "arduino:samd:mkrzero"},
   {port, "/dev/ttyACM0"},
   {nm, "arm-none-eabi-nm"},

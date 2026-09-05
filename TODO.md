@@ -1,7 +1,19 @@
 # TODO - Klart-markerat flyttas till DONE.md, inte hit.
 
+# SAVE/COPY IMAGE
 
-# 3. FAILSAFE-TRAPPAN
+/copy A B			-- B can not be running
+/copy B EEPROM			-- eeprom will be erasse
+/copy EEPROM B			-- save patches file as program B
+/copy A  -- output as HEX?
+
+/save        -- write RAM patches/program EEPROM
+/save A	     -- write RAM program to partition A
+
+/erase A     -- erase parition A
+/clear /save -- erase EEPROM
+
+# FAILSAFE-TRAPPAN
 
 ## FAILSAFE = ett #module (INSIKT, Tony 2026-07-26)
   Gör FAILSAFE till en `#module FAILSAFE` istället för ett `#in FAILSAFE`-block.

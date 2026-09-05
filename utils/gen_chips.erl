@@ -146,7 +146,18 @@ main(["--chip-of", Name]) ->
     Db = load(),
     case lookup(Db, board, list_to_atom(Name)) of
 	false -> io:format(standard_error, "no such board '~s'~n", [Name]), halt(1);
-	P -> io:format("~s~n", [kv(P, chip, '?')])
+	P ->
+	    %% A board with no {chip, ...} used to answer `?`, which then travelled
+	    %% on as a chip name and produced "no such chip '?'" from somewhere
+	    %% else entirely. Every board names one now, arduino-cli boards
+	    %% included -- what the part IS does not depend on who links it.
+	    case kv(P, chip, undefined) of
+		undefined ->
+		    io:format(standard_error,
+			      "gen_chips: board '~s' names no {chip, ...}~n", [Name]),
+		    halt(1);
+		C -> io:format("~s~n", [C])
+	    end
     end;
 %% arm7 or cm3, from the family's entry symbol -- the same fact the linker
 %% script needs, asked a different way.
@@ -194,6 +205,82 @@ main(["--map-of", Name, Want]) ->
 		    end
 	    end
     end;
+%% Which ARCH VARIANT a build would use, so the output directory and the profile
+%% can be named after it. Empty for a board that has none, which is every board
+%% but the RP2350 today -- the Makefile tests for that.
+%%
+%% An RP2350 carries two Cortex-M33 AND two Hazard3 RISC-V cores, and which pair
+%% runs is chosen at boot out of OTP. To the build it is a different toolchain
+%% end to end, so it is a variant in the same sense a region map is on the
+%% bare-metal side: two firmwares that look alike on disk and are not.
+main(["--variant-of", Name]) -> main(["--variant-of", Name, ""]);
+main(["--variant-of", Name, Want]) ->
+    case arch_variants(board_of(Name)) of
+	[] -> ok;                                %% none: print nothing
+	[V|_] when Want =:= "" -> io:format("~w~n", [V]);
+	Vs ->
+	    case [V || V <- Vs, atom_to_list(V) =:= Want] of
+		[V|_] -> io:format("~w~n", [V]);
+		[] ->
+		    io:format(standard_error,
+			      "gen_chips: board '~s' has no arch variant '~s' "
+			      "(has: ~s)~n",
+			      [Name, Want,
+			       lists:join(" ", [atom_to_list(V) || V <- Vs])]),
+		    halt(1)
+	    end
+    end;
+%% One name per line and NOTHING for a board with a single architecture -- a
+%% list a shell loop can walk. The first is the default; the `variants` target
+%% in Makefile.board is where that gets said out loud.
+%% Everything known about one part or one board, in one place. `--list` and
+%% `--boards` answer "which parts are there" a line at a time; this answers
+%% "what IS this one", which is the question asked when sizing an arena or
+%% deciding whether a program fits.
+%%
+%% Takes either name: a board resolves to its chip and prints both halves, a
+%% chip prints the chip half alone.
+main(["--info-of", Name]) -> main(["--info-of", Name, ""]);
+main(["--info-of", Name, Want]) ->
+    Db = load(),
+    A = list_to_atom(Name),
+    case lookup(Db, board, A) of
+	false ->
+	    case lookup(Db, chip, A) of
+		false ->
+		    io:format(standard_error,
+			      "gen_chips: no such board or chip '~s'~n", [Name]),
+		    halt(1);
+		CP -> info_chip(A, resolve(Db, CP), kv(CP, group, '?'))
+	    end;
+	P ->
+	    info_board(A, P),
+	    Chip = kv(P, chip, '?'),
+	    case lookup(Db, chip, Chip) of
+		false -> io:format("chip   ~w  *** no such chip ***~n", [Chip]);
+		CP ->
+		    G0 = resolve(Db, CP),
+		    %% A board's own map wins over the chip's, and `--info-of
+		    %% dl1200 usb_boot` asks for one that is not the active one
+		    %% -- the same override MAP= gives a build.
+		    case board_map(P, Want) of
+			false ->
+			    io:format(standard_error,
+				      "gen_chips: board '~s' has no map '~s'~n",
+				      [Name, Want]),
+			    halt(1);
+			[] -> info_chip(Chip, G0, kv(CP, group, '?'));
+			R ->
+			    MN = case Want of
+				     "" -> active_map_name(P);
+				     _ -> list_to_atom(Want)
+				 end,
+			    info_chip(Chip, [{map, R} | G0], MN)
+		    end
+	    end
+    end;
+main(["--variants", Name]) ->
+    [io:format("~w~n", [V]) || V <- arch_variants(board_of(Name))];
 %% One fact per query, the way --chip-of and --arch-of already work: the
 %% Makefile asks, and a missing answer is an empty string it can test for.
 %% Every board of one kind, one name per line. `make boards_all` walks this
@@ -210,7 +297,11 @@ main(["--sketch-yaml", Out]) ->
     Bs = [{N, P} || {board, N, P} <- load(),
                     kv(P, toolchain, bare) =:= arduino_cli],
     ok = file:write_file(Out, sketch_yaml(lists:sort(Bs))),
-    io:format("~s: ~w profile(s)~n", [Out, length(Bs)]);
+    %% Profiles, not boards: a board with arch variants contributes one profile
+    %% per variant.
+    io:format("~s: ~w profile(s) for ~w board(s)~n",
+	      [Out, lists:sum([length(profile_names(N, P)) || {N, P} <- Bs]),
+	       length(Bs)]);
 main(["--boards-with", TC]) ->
     Want = list_to_atom(TC),
     [io:format("~s~n", [N])
@@ -222,8 +313,13 @@ main(["--fqbn-of", Name]) ->
     io:format("~s~n", [kv(board_of(Name), fqbn, "")]);
 main(["--port-of", Name]) ->
     io:format("~s~n", [kv(board_of(Name), port, "")]);
-main(["--nm-of", Name]) ->
-    io:format("~s~n", [kv(board_of(Name), nm, "nm")]);
+main(["--nm-of", Name]) -> main(["--nm-of", Name, ""]);
+main(["--nm-of", Name, Want]) ->
+    P = board_of(Name),
+    io:format("~s~n", [case variant_nm(P, Want) of
+			   undefined -> kv(P, nm, "nm");
+			   Nm -> Nm
+		       end]);
 main(["--cflags-of", Name]) ->
     io:format("~s~n", [kv(board_of(Name), cflags, "")]);
 main(["--ldflags-of", Name]) ->
@@ -246,11 +342,12 @@ main(["--arch-of", Name]) ->
     case lookup(Db, chip, Chip) of
 	false -> io:format(standard_error, "no such chip '~s'~n", [Chip]), halt(1);
 	CP ->
-	    G = resolve(Db, CP),
-	    io:format("~s~n", [case kv(G, entry, '_start') of
-				   'ResetISR' -> "cm3";
-				   _ -> "arm7"
-			       end])
+	    %% The family's own {arch, ...}, not a guess from the entry symbol.
+	    %% That guess had exactly two answers, cm3 and arm7, and called an
+	    %% ATmega an ARM7 -- which was invisible while only bare-metal boards
+	    %% could be asked, and stops being invisible now that every board
+	    %% names a chip.
+	    io:format("~s~n", [kv(resolve(Db, CP), arch, unknown)])
     end;
 %% --board <name> <out.h>: the pin mux and the power bits, generated.
 %%
@@ -286,12 +383,27 @@ main(["--board", Name, HFile]) ->
 			       kv(P, fqbn, "?")]);
 		_ ->
 		    G = resolve(Db, lookup(Db, chip, kv(P, chip, '?'))),
-		    ok = file:write_file(HFile,
-					 board_header(B, P, G, pin_table(Db, G),
-						      eeprom_of(Db, P))),
-		    io:format("~s: ~w pins, PCONP 0x~8.16.0B~n",
-			      [Name, length([X || {pin,_,_} = X <- P]),
-			       pconp(P, G)])
+		    %% BY VENDOR, because the pin mux is the one thing that is not
+		    %% shared: an LPC states a function INDEX per pin in PINSEL
+		    %% and powers peripherals through one PCONP word; an STM32
+		    %% states a MODE plus an alternate-function number per pin
+		    %% and has three separate RCC enable registers. Same terms in,
+		    %% different registers out.
+		    case kv(G, vendor, '?') of
+			st ->
+			    ok = file:write_file(HFile, st_board_header(B, P, G)),
+			    io:format("~s: ~w pins, ~w pwm~n",
+				      [Name, length([X || {pin,_,_} = X <- P]),
+				       length(st_pwm_pins(P))]);
+			_ ->
+			    ok = file:write_file(HFile,
+						 board_header(B, P, G,
+							      pin_table(Db, G),
+							      eeprom_of(Db, P))),
+			    io:format("~s: ~w pins, PCONP 0x~8.16.0B~n",
+				      [Name, length([X || {pin,_,_} = X <- P]),
+				       pconp(P, G)])
+		    end
 	    end
     end;
 main(["--help"|What]) -> help(What), halt(0);
@@ -319,8 +431,10 @@ help(_) ->
 	      "usage: gen_chips.erl <chip> <out.c> <out.h>~n"
 	      "  options: "
               "       --help | -h~n"
-	      "       --list [regexp]~n"
-	      "       --boards [regexp]~n"
+	      "       --list [regexp]              one line per chip~n"
+	      "       --boards [regexp]            one line per board~n"
+	      "       --info-of <name>             everything about one of them~n"
+	      "       --info-of <name> <map>~n"
 	      "       --ld <chip>~n"
 	      "       --check [regexp]~n"
 	      "       --board <board> <out.h>~n"
@@ -337,6 +451,10 @@ help(_) ->
               "       --fqbn-of <name>~n"
               "       --port-of <name>~n"
               "       --nm-of <name>~n"
+              "       --nm-of <name> <variant>~n"
+              "       --variants <name>~n"
+              "       --variant-of <name>~n"
+              "       --variant-of <name> <want>~n"
               "       --cflags-of <name>~n"
               "       --ldflags-of <name>~n"
               "       --optimize-of <name>~n"
@@ -488,19 +606,159 @@ eeprom_defs({Part, Q}) ->
 
 %% The board's proplist, or die saying which name was not found. Every --*-of
 %% verb wants exactly this.
-%% An Arduino board has no chip to resolve and no clock to state -- the core
-%% owns both -- so listing it against the chip database printed "no such chip"
-%% for every one of them. What identifies it is the FQBN.
-show_board(_Db, N, P) when is_atom(N) ->
+%% An Arduino board has no pin mux to resolve and no clock to state -- the core
+%% owns both -- so listing it the way a bare board is listed printed a clock of
+%% zero and a power word for hardware nobody here configures. What identifies it
+%% is the FQBN.
+%%
+%% The chip and its geometry are shown all the same. The part is the part.
+show_board(Db, N, P) when is_atom(N) ->
     case kv(P, toolchain, bare) of
 	arduino_cli ->
 	    io:format("~-12s ~s~n", [N, kv(P, fqbn, "?")]),
-	    io:format("             arduino-cli~s~n",
-		      [case kv(P, define, []) of
+	    io:format("             ~s, arduino-cli~s~n",
+		      [chip_geo(Db, kv(P, chip, undefined)),
+		       case kv(P, define, []) of
 			   [] -> "";
 			   D -> f(", ~w define(s)", [length(D)])
 		       end]);
-	_ -> show_bare(_Db, N, P)
+	_ -> show_bare(Db, N, P)
+    end.
+
+%% "<chip>, <flash>K flash, <ram>K ram", or what is wrong with it. Zero flash is
+%% not a gap in the description: an RP2040 and an ESP32-S3 have none on the part
+%% and the board carries it externally.
+chip_geo(_Db, undefined) -> "*** no chip named ***";
+chip_geo(Db, C) ->
+    case lookup(Db, chip, C) of
+	false -> f("~w *** no such chip ***", [C]);
+	CP ->
+	    case kv(CP, flash_kb, 0) of
+		0 -> f("~w, external flash, ~wK ram", [C, kv(CP, ram_kb, 0)]);
+		F -> f("~w, ~wK flash, ~wK ram", [C, F, kv(CP, ram_kb, 0)])
+	    end
+    end.
+
+%% --- info-of -----------------------------------------------------------------
+
+info_board(N, P) ->
+    io:format("board  ~-16s ~s~n", [atom_to_list(N),
+				    case term_file(board, N) of
+					   false -> "";
+					   F -> F
+				       end]),
+    io:format("  toolchain  ~w~n", [kv(P, toolchain, bare)]),
+    case kv(P, toolchain, bare) of
+	arduino_cli ->
+	    io:format("  fqbn       ~s~n", [kv(P, fqbn, "?")]),
+	    case arch_variants(P) of
+		[] -> ok;
+		[D|_] = Vs ->
+		    io:format("  variants   ~s~n",
+			      [lists:join(", ",
+					  [atom_to_list(V) ++
+					       case V of D -> " (default)";
+						   _ -> "" end || V <- Vs])])
+	    end;
+	_ ->
+	    io:format("  clock      ~w MHz core, ~w MHz xtal~n",
+		      [kv(P, core, 0) div 1000000, kv(P, xtal, 0) div 1000000]),
+	    io:format("  arena      ~w bytes~n", [kv(P, code_budget, 0)]),
+	    case [Nm || {map, Nm, _} <- P] of
+		[] -> ok;
+		Ms -> io:format("  maps       ~s (active: ~w)~n",
+				[lists:join(" ", [atom_to_list(M) || M <- Ms]),
+				 active_map_name(P)])
+	    end
+    end,
+    case kv(P, define, []) of
+	[] -> ok;
+	Ds -> io:format("  defines    ~s~n",
+			[lists:join(" ", [info_define(D) || D <- Ds])])
+    end.
+
+info_define({K, V}) when is_integer(V) -> f("~s=~w", [K, V]);
+info_define({K, V}) -> f("~s=~s", [K, V]);
+info_define(K) -> atom_to_list(K).
+
+info_chip(N, G, MapName) ->
+    Sectors = kv(G, sectors, []),
+    Flash = kv(G, flash_kb, 0),
+    Ram = kv(G, ram_kb, 0),
+    io:format("chip   ~-16s ~s~n", [atom_to_list(N),
+				    case term_file(chip, N) of
+					   false -> "";
+					   F -> F
+				       end]),
+    io:format("  arch       ~w (~w)~n", [kv(G, arch, unknown), kv(G, vendor, '?')]),
+    %% BYTES as well as K. The K figure is what a datasheet says; the byte
+    %% figure is what an arena is sized against, and doing that multiplication
+    %% in one's head is how a factor of 1024 goes missing.
+    io:format("  flash      ~s   base 0x~8.16.0B~n",
+	      [case Flash of
+	           0 -> "external (none on the part)";
+	           _ -> f("~wK = ~w bytes", [Flash, Flash * 1024])
+	       end, kv(G, flash_base, 0)]),
+    io:format("  ram        ~wK = ~w bytes   base 0x~8.16.0B~n",
+	      [Ram, Ram * 1024, kv(G, ram_base, 0)]),
+    case kv(G, ram_reserve, 0) of
+	0 -> ok;
+	R -> io:format("  reserved   ~w bytes (bootloader/ROM)~n", [R])
+    end,
+    io:format("  write      ~w-byte page~s~n",
+	      [kv(G, page, 0),
+	       case kv(G, row, 0) of
+		   0 -> "";
+		   Row -> f(", ~w-byte erase row", [Row])
+	       end]),
+    io:format("  store      ~s~n",
+	      [case kv(G, store, undefined) of
+	           undefined -> "not stated -- the board decides (I2C part, ...)";
+	           St -> atom_to_list(St)
+	       end]),
+    case Sectors of
+	[] -> ok;
+	_ -> io:format("  sectors    ~w, ~s~n",
+		       [length(Sectors),
+			lists:join(" + ",
+				   [f("~wx~wK", [Cnt, Sz div 1024])
+				    || {Cnt, Sz} <- runs(Sectors)])])
+    end,
+    case kv(G, map, []) of
+	[] -> io:format("  regions    none -- nothing may be written to flash~n");
+	Rs -> io:format("  map ~-8s ~s~n",
+			[atom_to_list(MapName),
+			 lists:join("  ", [info_region(R, Sectors) || R <- Rs])])
+    end,
+    case kv(G, peripherals, []) of
+	[] -> ok;
+	Ps -> io:format("  has        ~s~n",
+			[lists:join(" ", [f("~w~w", [K, V]) || {K, V} <- Ps])])
+    end.
+
+%% The flat sector list folded back into {Count, Size} runs, which is how a
+%% datasheet states it and how the terms are written.
+runs([]) -> [];
+runs([H|T]) -> runs(T, H, 1, []).
+
+runs([], Sz, N, Acc)             -> lists:reverse([{N, Sz} | Acc]);
+runs([Sz|T], Sz, N, Acc)         -> runs(T, Sz, N + 1, Acc);
+runs([H|T], Sz, N, Acc)          -> runs(T, H, 1, [{N, Sz} | Acc]).
+
+%% A region as sectors AND as bytes: "app A 9..9 (64K)". The sector numbers are
+%% what the terms say; the size is what decides whether a program fits, and
+%% adding up a sector table by hand is not a thing anyone should be doing.
+info_region(R, Sectors) ->
+    {Nm, A, B} = case R of
+		     {app, S, X, Y} -> {"app " ++ S, X, Y};
+		     {K, X, Y} -> {atom_to_list(K), X, Y}
+		 end,
+    %% resolve/2 has already expanded the {Count, Size} runs, so this is one
+    %% size per sector and the region's bounds index straight into it.
+    Bytes = lists:sum(lists:sublist(Sectors, A + 1, B - A + 1)),
+    case Bytes of
+	0 -> f("~s ~w..~w", [Nm, A, B]);
+	_ -> f("~s ~w..~w (~wK)", [Nm, A, B, Bytes div 1024])
     end.
 
 show_bare(Db, N, P) ->
@@ -533,11 +791,30 @@ sketch_yaml(Bs) ->
      "# -I/-D build properties -- those stay on the command line -- so what it\n"
      "# buys is reproducibility, not fewer flags.\n"
      "profiles:\n",
-     [profile(N, P) || {N, P} <- Bs]].
+     [[profile(PN, Fq, P) || {PN, Fq} <- profile_names(N, P)] || {N, P} <- Bs]].
 
-profile(N, P) ->
+%% One profile per ARCH VARIANT, or one profile if the board has none.
+%%
+%% A variant is a menu option on the fqbn -- `arch=riscv` on an RP2350, which
+%% swaps the whole toolchain -- and it belongs in the PROFILE rather than on the
+%% command line because Makefile.board builds with `-m <profile>`: the profile is
+%% what pins the core, and a fqbn passed alongside it would be a second answer to
+%% the same question.
+%%
+%% The variant is in the NAME, always, even for the first one. The alternative
+%% is a profile called `rp2350_can` that is secretly the ARM build, and two
+%% images that look alike and are not is what the bare-metal side already names
+%% its build directories to avoid.
+profile_names(N, P) ->
+    Base = kv(P, fqbn, "?"),
+    case arch_variants(P) of
+	[] -> [{atom_to_list(N), Base}];
+	Vs -> [{f("~s-~s", [N, V]), f("~s,arch=~s", [Base, V])} || V <- Vs]
+    end.
+
+profile(N, Fqbn, P) ->
     [f("  ~s:\n", [N]),
-     f("    fqbn: ~s\n", [kv(P, fqbn, "?")]),
+     f("    fqbn: ~s\n", [Fqbn]),
      %% A THIRD-PARTY platform needs its index URL in the profile. Without it
      %% arduino-cli tries to DOWNLOAD the pinned version from the indexes it
      %% knows, finds nothing, and fails with "platform not installed" -- even
@@ -557,6 +834,24 @@ profile(N, P) ->
 	 Ls -> ["    libraries:\n",
 		[f("      - ~s (~s)\n", [Nm, V]) || {Nm, V} <- Ls]]
      end].
+
+%% A variant is either a bare name or {Name, Nm} -- the second when the variant
+%% needs its own binutils, which the RISC-V one does. `make size` against an
+%% arm-none-eabi-nm on a RISC-V elf says "File format not recognized", which
+%% reads as a broken build rather than as the wrong tool.
+arch_variants(P) ->
+    [case V of
+	 {N, _} -> N;
+	 N -> N
+     end || V <- kv(P, arch_variants, [])].
+
+variant_nm(P, Want) ->
+    case [Nm || V <- kv(P, arch_variants, []),
+		{N, Nm} <- [V],
+		atom_to_list(N) =:= Want] of
+	[Nm|_] -> Nm;
+	[] -> undefined
+    end.
 
 board_of(Name) ->
     case lookup(load(), board, list_to_atom(Name)) of
@@ -733,6 +1028,220 @@ board_header(Name, P, G, Pins, EE) ->
      pin_macro(Muxed, Pins),
      f("~n#define CSP_BOARD_NPINS ~w~n~n#endif~n", [length(Muxed)])].
 
+%% --- STM32 -------------------------------------------------------------------
+
+%% A pin is 'PA1', not 'P0.25'. Port letter and bit, which is how ST names them
+%% everywhere -- schematic, datasheet and reference manual -- and translating in
+%% the terms file would mean a board description that cannot be checked against
+%% the schematic by eye.
+st_pin(Atom) ->
+    case atom_to_list(Atom) of
+	[$P, L | Rest] when L >= $A, L =< $I ->
+	    case catch_int(Rest) of
+		false -> false;
+		N when N >= 0, N =< 15 -> {L - $A, N};
+		_ -> false
+	    end;
+	_ -> false
+    end.
+
+%% The alternate-function number for a peripheral, from the F4's AF table. The
+%% number is a property of the PERIPHERAL, not of the pin -- every TIM2 pin is
+%% AF1 wherever it is -- which is what makes this a table of fifteen entries
+%% rather than one per pin.
+%%
+%% The function in the terms is `tim2_ch2` or `i2c3_scl`; only the part before
+%% the underscore selects the AF.
+st_af(Fn) ->
+    Base = hd(string:lexemes(atom_to_list(Fn), "_")),
+    case Base of
+	"gpio"   -> 0;
+	"mco"    -> 0;
+	%% ANALOG IS NOT AN ALTERNATE FUNCTION. A converter input is MODER = 3
+	%% and the AF field is ignored -- st_mode/1 is what carries that. Zero
+	%% here so the pin table has something to hold, and st_mode says 3.
+	"adc"    -> 0;  "adc1" -> 0;  "adc2" -> 0;  "adc3" -> 0;
+	"dac"    -> 0;  "dac1" -> 0;  "dac2" -> 0;
+	"tim1"   -> 1;  "tim2"  -> 1;
+	"tim3"   -> 2;  "tim4"  -> 2;  "tim5"  -> 2;
+	"tim8"   -> 3;  "tim9"  -> 3;  "tim10" -> 3;  "tim11" -> 3;
+	"i2c1"   -> 4;  "i2c2"  -> 4;  "i2c3"  -> 4;
+	"spi1"   -> 5;  "spi2"  -> 5;
+	"spi3"   -> 6;
+	"usart1" -> 7;  "usart2" -> 7; "usart3" -> 7;
+	"uart4"  -> 8;  "uart5" -> 8;  "usart6" -> 8;
+	"can1"   -> 9;  "can2"  -> 9;  "tim12" -> 9; "tim13" -> 9; "tim14" -> 9;
+	"otg"    -> 10;
+	"eth"    -> 11;
+	"sdio"   -> 12; "fsmc"  -> 12;
+	"dcmi"   -> 13;
+	_        -> undefined
+    end.
+
+%% What MODER has to say for a function. `adc` is the one that is easy to get
+%% wrong: on this part analog is a MODE, not a flag, and a converter input left
+%% in digital mode has its input buffer across the source -- the reading sags
+%% and nothing reports it.
+st_mode(Fn) ->
+    case hd(string:lexemes(atom_to_list(Fn), "_")) of
+	"gpio" ->
+	    case atom_to_list(Fn) of
+		"gpio_out" -> 1;
+		_ -> 0
+	    end;
+	"adc"  -> 3;  "adc1" -> 3;  "adc2" -> 3;  "adc3" -> 3;
+	"dac"  -> 3;  "dac1" -> 3;  "dac2" -> 3;
+	_ -> 2                       %% alternate function
+    end.
+
+%% The PWM pins: any pin muxed to a timer channel. `tim2_ch2` carries both
+%% numbers, so the map the port needs is derivable and does not have to be
+%% stated a second time.
+st_pwm_pins(P) ->
+    [{Pin, T, C} || {pin, Pin, Fn} <- P,
+		    {T, C} <- [st_tim_ch(Fn)],
+		    T =/= false].
+
+st_tim_ch(Fn) ->
+    case string:lexemes(atom_to_list(Fn), "_") of
+	["tim" ++ TN, "ch" ++ CN] ->
+	    case {catch_int(TN), catch_int(CN)} of
+		{T, C} when is_integer(T), is_integer(C) -> {T, C};
+		_ -> {false, 0}
+	    end;
+	_ -> {false, 0}
+    end.
+
+%% RCC. Three registers rather than the LPC's one PCONP word, and the GPIO half
+%% is DERIVED from the pins the board muxed -- a board that names PA1 and PC0
+%% needs GPIOA and GPIOC clocked, and stating that separately is a second place
+%% to forget it.
+st_ahb1(P) ->
+    Ports = lists:usort([Po || {pin, Pin, _} <- P,
+			       {Po, _} <- [st_pin(Pin)], is_integer(Po)]),
+    lists:foldl(fun(Po, Acc) -> Acc bor (1 bsl Po) end, 0, Ports).
+
+st_apb1(P) ->
+    lists:foldl(fun(E, Acc) ->
+			case st_apb1_bit(E) of
+			    undefined -> Acc;
+			    B -> Acc bor (1 bsl B)
+			end
+		end, 1 bsl 28, kv(P, enable, [])).   %% PWR always: VOS needs it
+
+st_apb1_bit(tim2)  -> 0;  st_apb1_bit(tim3)  -> 1;  st_apb1_bit(tim4)  -> 2;
+st_apb1_bit(tim5)  -> 3;  st_apb1_bit(tim6)  -> 4;  st_apb1_bit(tim7)  -> 5;
+st_apb1_bit(tim12) -> 6;  st_apb1_bit(tim13) -> 7;  st_apb1_bit(tim14) -> 8;
+st_apb1_bit(wwdg)  -> 11; st_apb1_bit(spi2)  -> 14; st_apb1_bit(spi3)  -> 15;
+st_apb1_bit(usart2)-> 17; st_apb1_bit(usart3)-> 18; st_apb1_bit(uart4) -> 19;
+st_apb1_bit(uart5) -> 20; st_apb1_bit(i2c1)  -> 21; st_apb1_bit(i2c2)  -> 22;
+st_apb1_bit(i2c3)  -> 23; st_apb1_bit(can1)  -> 25; st_apb1_bit(can2)  -> 26;
+st_apb1_bit(pwr)   -> 28; st_apb1_bit(dac)   -> 29;
+st_apb1_bit(_)     -> undefined.
+
+st_apb2(P) ->
+    lists:foldl(fun(E, Acc) ->
+			case st_apb2_bit(E) of
+			    undefined -> Acc;
+			    B -> Acc bor (1 bsl B)
+			end
+		end, 0, kv(P, enable, [])).
+
+st_apb2_bit(tim1)   -> 0;  st_apb2_bit(tim8)  -> 1;  st_apb2_bit(usart1) -> 4;
+st_apb2_bit(usart6) -> 5;  st_apb2_bit(adc)   -> 8;  st_apb2_bit(adc1)   -> 8;
+st_apb2_bit(adc2)   -> 9;  st_apb2_bit(adc3)  -> 10; st_apb2_bit(sdio)   -> 11;
+st_apb2_bit(spi1)   -> 12; st_apb2_bit(syscfg)-> 14; st_apb2_bit(tim9)   -> 16;
+st_apb2_bit(tim10)  -> 17; st_apb2_bit(tim11) -> 18;
+st_apb2_bit(_)      -> undefined.
+
+st_board_header(Name, P, G) ->
+    U = string:uppercase(atom_to_list(Name)),
+    Muxed = [{Pin, Fn} || {pin, Pin, Fn} <- P],
+    Pwm = st_pwm_pins(P),
+    [f("// generated by `gen_chips.erl --board ~s` -- do not edit.~n"
+       "// boards/~s/~s.terms is the source.~n"
+       "//~n"
+       "// The pin mux, the PWM map and the RCC enables -- the three things a~n"
+       "// board states in prose and someone then translates into register~n"
+       "// writes by hand. Doing it here means the translation happens once.~n"
+       "~n#ifndef __CSP_BOARD_~s_H__~n#define __CSP_BOARD_~s_H__~n~n",
+       [Name, Name, Name, U, U]),
+     f("#define CSP_BOARD_NAME  \"~s\"~n"
+       "#define CSP_CHIP        ~s~n"
+       "#define CSP_XTAL_HZ     ~w~n"
+       "#define CSP_CORE_HZ     ~w~n"
+       "#define CSP_STM_RAM     ~w~n",
+       [Name, kv(P, chip, '?'), kv(P, xtal, 0), kv(P, core, 0),
+	kv(G, ram_kb, 0) * 1024]),
+     case kv(P, code_budget, undefined) of
+	 undefined -> [];
+	 CB -> f("#define CSP_CODE_BUDGET ~w~n", [CB])
+     end,
+     case kv(P, settings_bytes, undefined) of
+	 undefined -> [];
+	 SB -> f("#define CSP_SETTINGS_BYTES ~w~n", [SB])
+     end,
+     case kv(P, no_eeprom, false) of
+	 true -> f("#define CSP_NO_EEPROM   1~n", []);
+	 _ -> []
+     end,
+     case kv(P, console, undefined) of
+	 {Uart, Baud} ->
+	     f("~n#define CSP_STM_UART    ~s~n"
+	       "#define CSP_STM_BAUD    ~w~n",
+	       [string:uppercase(atom_to_list(Uart)), Baud]);
+	 _ -> []
+     end,
+     case kv(P, pwm_hz, undefined) of
+	 undefined -> [];
+	 Hz -> f("#define CSP_STM_PWM_HZ  ~w~n", [Hz])
+     end,
+     f("~n// RCC, written WHOLE for AHB1 and APB2 so a peripheral not asked~n"
+       "// for stays off rather than being left as a warm reset had it. APB1~n"
+       "// is OR'd: sysinit already turned PWR on to set the voltage scale,~n"
+       "// and clearing that mid-run browns the core out.~n"
+       "#define CSP_STM_RCC_AHB1 0x~8.16.0BUL~n"
+       "#define CSP_STM_RCC_APB1 0x~8.16.0BUL~n"
+       "#define CSP_STM_RCC_APB2 0x~8.16.0BUL~n~n",
+       [st_ahb1(P), st_apb1(P), st_apb2(P)]),
+     f("// Pin mux, as (port, bit, mode, af) for csp_board_init.~n"
+       "// mode: 0 in, 1 out, 2 alternate function, 3 analog.~n"
+       "#define CSP_BOARD_PINS \\~n", []),
+     st_pin_macro(Muxed),
+     f("~n#define CSP_BOARD_NPINS ~w~n", [length(Muxed)]),
+     case Pwm of
+	 [] -> [];
+	 _ ->
+	     [f("~n// PWM, as (port, bit, timer, channel). Derived from the pin~n"
+		"// functions -- `tim2_ch2` carries both numbers already.~n"
+		"#define CSP_BOARD_PWM \\~n", []),
+	      st_pwm_macro(Pwm)]
+     end,
+     f("~n#endif~n", [])].
+
+st_pin_macro([]) -> f("    /* none */~n", []);
+st_pin_macro(Muxed) ->
+    N = length(Muxed),
+    [begin
+	 {Po, B} = st_pin(Pin),
+	 %% Every line but the last carries a continuation, and the comment goes
+	 %% BEFORE it -- a `\\` that is not the last thing on the line ends the
+	 %% macro there, and the rest becomes statements at file scope.
+	 f("    { ~w, ~2w, ~w, ~2w }~s   /* ~w ~w */~s~n",
+	   [Po, B, st_mode(Fn), case st_af(Fn) of undefined -> 0; A -> A end,
+	    case I of N -> " "; _ -> "," end, Pin, Fn,
+	    case I of N -> ""; _ -> " \\" end])
+     end || {I, {Pin, Fn}} <- lists:zip(lists:seq(1, N), Muxed)].
+
+st_pwm_macro(Pwm) ->
+    N = length(Pwm),
+    [begin
+	 {Po, B} = st_pin(Pin),
+	 f("    { ~w, ~2w, ~2w, ~w }~s   /* ~w TIM~w_CH~w */~s~n",
+	   [Po, B, T, C, case I of N -> " "; _ -> "," end, Pin, T, C,
+	    case I of N -> ""; _ -> " \\" end])
+     end || {I, {Pin, T, C}} <- lists:zip(lists:seq(1, N), Pwm)].
+
 %% txd0/rxd0 are function 1 on every LPC2000 and 17xx UART pin this covers.
 %% Stated rather than looked up because the pin table is keyed by family and
 %% this runs before that is resolved; check-boards validates the pin anyway.
@@ -787,15 +1296,21 @@ pin_macro(Muxed, Pins) ->
 
 check_board(Db, {Name, P}) ->
     case kv(P, toolchain, bare) of
-	arduino_cli -> check_arduino(Name, P);
+	arduino_cli -> check_arduino(Db, Name, P);
 	_ -> check_bare(Db, {Name, P})
     end.
 
-%% An Arduino board names no chip and mixes no pins: arduino-cli owns the core,
-%% the mux and the link. What CAN be wrong here is the description itself, and
-%% an FQBN that is merely absent would surface as an arduino-cli usage error
-%% three layers down.
-check_arduino(Name, P) ->
+%% An Arduino board mixes no pins: arduino-cli owns the core, the mux and the
+%% link. What CAN be wrong here is the description itself, and an FQBN that is
+%% merely absent would surface as an arduino-cli usage error three layers down.
+%%
+%% It DOES name a chip, though. That is not the toolchain's business -- what the
+%% part is stays true whoever links it -- and naming one is what makes
+%% `--chip-of`, `--arch-of` and the peripheral ceiling answer for these boards
+%% too. Checked here for the same reason a bare board's chip is: an unchecked
+%% name is a name that drifts.
+check_arduino(Db, Name, P) ->
+    check_arduino_chip(Db, Name, P) +
     case kv(P, fqbn, undefined) of
 	undefined ->
 	    io:format("~s: ERROR {toolchain, arduino_cli} but no {fqbn, \"...\"}~n",
@@ -803,6 +1318,19 @@ check_arduino(Name, P) ->
 	F when is_list(F) -> check_platform(Name, P, F);
 	F ->
 	    io:format("~s: ERROR {fqbn, ~p} must be a string~n", [Name, F]), 1
+    end.
+
+check_arduino_chip(Db, Name, P) ->
+    case kv(P, chip, undefined) of
+	undefined ->
+	    io:format("~s: ERROR {toolchain, arduino_cli} but no {chip, ...}~n",
+		      [Name]), 1;
+	C ->
+	    case lookup(Db, chip, C) of
+		false ->
+		    io:format("~s: ERROR no such chip '~w'~n", [Name, C]), 1;
+		_ -> 0
+	    end
     end.
 
 %% An FQBN is <packager>:<arch>:<board>, and the platform it needs is the first
@@ -838,12 +1366,76 @@ check_bare(Db, {Name, P}) ->
 	    1;
 	CP ->
 	    G = resolve(Db, CP),
-	    Pins = pin_table(Db, G),
-	    Muxed = [{Pin, Fn} || {pin, Pin, Fn} <- P],
-	    lists:sum([check_pin(Name, Pins, Pin, Fn) || {Pin, Fn} <- Muxed]) +
-		check_dup(Name, Muxed) +
-		check_clock(Name, P, G) +
-		check_enable(Name, P, Muxed)
+	    case kv(G, vendor, '?') of
+		st -> check_st(Name, P, G);
+		_ -> check_lpc(Name, P, G, pin_table(Db, G))
+	    end
+    end.
+
+check_lpc(Name, P, G, Pins) ->
+    Muxed = [{Pin, Fn} || {pin, Pin, Fn} <- P],
+    lists:sum([check_pin(Name, Pins, Pin, Fn) || {Pin, Fn} <- Muxed]) +
+	check_dup(Name, Muxed) +
+	check_clock(Name, P, G) +
+	check_enable(Name, P, Muxed).
+
+%% WHAT IS CHECKED HERE AND WHAT IS NOT.
+%%
+%% Checked: the pin NAME parses, the function has an alternate-function number,
+%% no pin is muxed twice, and the crystal reaches the core clock through the
+%% PLL that sysinit_f405.c builds.
+%%
+%% NOT checked: whether that pin can actually have that function. An LPC pin
+%% table is a few hundred entries and lives in chips/nxp/pins_*.terms; the F4's
+%% is sixteen alternate functions across eighty-two pins, and writing it out
+%% from a datasheet by hand would introduce more errors than it caught. A wrong
+%% AF here is a pin that does nothing, found with a scope -- worth knowing, and
+%% worth saying out loud rather than implying a check that is not happening.
+check_st(Name, P, G) ->
+    Muxed = [{Pin, Fn} || {pin, Pin, Fn} <- P],
+    lists:sum([check_st_pin(Name, Pin, Fn) || {Pin, Fn} <- Muxed]) +
+	check_dup(Name, Muxed) +
+	check_st_clock(Name, P, G).
+
+check_st_pin(Name, Pin, Fn) ->
+    case st_pin(Pin) of
+	false ->
+	    io:format("~s: ERROR '~w' is not an STM32 pin name "
+		      "(want PA0..PI15)~n", [Name, Pin]), 1;
+	_ ->
+	    case st_af(Fn) of
+		undefined ->
+		    io:format("~s: ERROR ~w: no alternate function known for "
+			      "'~w' -- add it to st_af/1~n", [Name, Pin, Fn]), 1;
+		_ -> 0
+	    end
+    end.
+
+%% The same PLL arithmetic sysinit_f405.c does, so a board whose clock cannot be
+%% reached is caught by `make check-boards` rather than by a #error in the
+%% middle of a build.
+check_st_clock(Name, P, _G) ->
+    Xtal = kv(P, xtal, 0),
+    Core = kv(P, core, 0),
+    if
+	Xtal =:= 0 orelse Core =:= 0 ->
+	    io:format("~s: ERROR needs both {xtal,...} and {core,...}~n", [Name]), 1;
+	(Xtal rem 1000000) =/= 0 ->
+	    io:format("~s: ERROR crystal ~w is not a whole number of MHz~n",
+		      [Name, Xtal]), 1;
+	true ->
+	    N = (Core * 2) div 1000000,
+	    Vco = 1000000 * N,
+	    if
+		N < 50 orelse N > 432 ->
+		    io:format("~s: ERROR ~w Hz is not reachable from a ~w Hz "
+			      "crystal (PLLN would be ~w, range 50..432)~n",
+			      [Name, Core, Xtal, N]), 1;
+		Vco < 100000000 orelse Vco > 432000000 ->
+		    io:format("~s: ERROR PLL VCO would be ~w Hz, outside "
+			      "100..432 MHz~n", [Name, Vco]), 1;
+		true -> 0
+	    end
     end.
 
 pin_table(Db, G) ->

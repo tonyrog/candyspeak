@@ -1,0 +1,116 @@
+#!/bin/sh
+# Everything needed to put a CandySpeak program into flash, from one .csp.
+#
+#   tools/csp-image prog.csp              -> tmp/prog.rom.c .img .hex
+#   tools/csp-image -o out/pid lib.csp app.csp
+#   tools/csp-image -r failsafe -g 3 prog.csp
+#   tools/csp-image -p prog.csp           -> hex on stdout, nothing written
+#
+# A shell script and not four make targets: make earns its keep on DEPENDENCIES,
+# and there are none here worth expressing -- it is one compile, one link and one
+# dump, always in that order. What there IS is options, and options in make are
+# how a Makefile becomes unreadable.
+set -e
+
+here=$(dirname "$0")
+root=$(cd "$here/.." && pwd)
+
+usage() {
+    cat >&2 <<EOF
+usage: csp-image [options] prog.csp [more.csp ...]
+
+Several .csp files are read as ONE program, in order, the way ./csp reads them.
+
+  -o NAME     output basename (default: tmp/<first program's basename>)
+  -r ROLE     image role: rom | failsafe       (default rom)
+  -g N        generation, higher is newer      (default 0)
+  -p          write the hex to stdout and nothing to disk
+  -q          quiet
+  -h          this
+
+Writes three files:
+
+  NAME.rom.c  the image as C -- what a firmware links, and the evidence when a
+              load is rejected ("ROM rejected: CRC mismatch in ...")
+  NAME.img    the same image as bytes, for a programmer or a flash tool
+  NAME.hex    hex lines, for pasting into /upgrade. NOT Intel HEX -- a board's
+              firmware.hex is that, this is the format the receiver reads.
+
+The helper that dumps the bytes is built into the repo's tmp/, not next to the
+output.
+
+To flash it into a simulated part with no board attached:
+
+  { echo /upgrade A; csp-image -p prog.csp; echo .; echo /images; } |
+      ./csp -i --flash=tmp/flash.bin --part=ab
+EOF
+    exit 1
+}
+
+out=""; role="rom"; gen=0; to_stdout=0; quiet=0
+while getopts "o:r:g:pqh" opt; do
+    case "$opt" in
+	o) out=$OPTARG ;;
+	r) role=$OPTARG ;;
+	g) gen=$OPTARG ;;
+	p) to_stdout=1 ;;
+	q) quiet=1 ;;
+	*) usage ;;
+    esac
+done
+shift $((OPTIND - 1))
+[ $# -ge 1 ] || usage
+
+case "$role" in
+    rom|failsafe) ;;
+    *) echo "csp-image: role must be rom or failsafe, not '$role'" >&2; exit 1 ;;
+esac
+
+for f in "$@"; do
+    [ -f "$f" ] || { echo "csp-image: no such file: $f" >&2; exit 1; }
+done
+
+# ./csp is the compiler. Built here rather than demanded of the caller: it is a
+# build artefact of this same tree and asking for it back is not a service.
+[ -x "$root/csp" ] || make -s -C "$root" csp
+
+if [ -z "$out" ]; then
+    first=$1
+    out="$root/tmp/$(basename "$first" .csp)"
+    mkdir -p "$root/tmp"
+else
+    case "$out" in */*) mkdir -p "$(dirname "$out")" ;; esac
+fi
+
+say() { [ "$quiet" = 1 ] || echo "$@"; }
+
+"$root/csp" -n -C -O "$out.rom.c" --role "$role" --generation "$gen" "$@" >/dev/null
+
+# The helper links the GENERATED image and dumps what the compiler laid out, so
+# there is only ever one emitter. Rebuilt per program: it carries the image.
+#
+# It lands in the repo's tmp/, NOT beside the output. It is scaffolding, and
+# scaffolding in the caller's directory is litter they then have to know about.
+# The absolute path also settles the other half of that bug: `PILOT.mkimage`
+# with no directory in it is a PATH lookup, which fails with 127.
+mkdir -p "$root/tmp"
+mk="$root/tmp/$(basename "$out").mkimage"
+cc -I"$root/include" -I"$root/gen" -O2 \
+   "$root/tools/mkimage.c" "$root/src/csp_crc.c" "$out.rom.c" -o "$mk"
+
+if [ "$to_stdout" = 1 ]; then
+    "$mk"
+    exit 0
+fi
+
+# stderr is NOT redirected. It was, and it hid both "command not found" and
+# every complaint mkimage makes about a bad header -- leaving a run that wrote
+# two files, skipped two, and said nothing at all.
+"$mk" -b "$out.img"
+"$mk" > "$out.hex"
+
+if [ "$quiet" != 1 ]; then
+    sed -n 's|^//   size: *|    |p' "$out.rom.c"
+    say "    $(wc -c < "$out.img" | tr -d ' ') bytes, role $role, generation $gen"
+    say "    $out.rom.c  $out.img  $out.hex"
+fi

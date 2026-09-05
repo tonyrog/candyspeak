@@ -1,0 +1,81 @@
+%% STM32F4 -- Cortex-M4F. The part behind a Crazyflie 2.1.
+%%
+%% GEOMETRY ONLY so far: no port drives one of these yet. What this file buys
+%% today is that `make info NAME=stm32f405rg` answers, that a board file has
+%% something to name, and that the flash map is written down while the reasoning
+%% for it is fresh rather than reconstructed later.
+%%
+%% THE SECTOR TABLE IS HETEROGENEOUS, and that is the happy part: 4x16K, 1x64K,
+%% 7x128K on a 1M part. It is the same shape an LPC2129 has (8x8K, 2x64K, 7x8K),
+%% which is the shape csp_region_t was designed around -- a slot is whole
+%% sectors, erasing one cannot disturb a neighbour. Nothing about the region
+%% model needs changing for ST.
+{family, stm32f4,
+ [{vendor,      st},
+  {arch,        cortex_m4},
+  {store,       flash},            %% no EEPROM on F4 (the F0/L0 parts have one)
+  {flash_base,  16#08000000},      %% NOT 0 -- the boot pins alias it there
+  {ram_base,    16#20000000},
+  {ram_reserve, 0},
+
+  %% What the generated linker script names. `Reset_Handler` and `.isr_vector`
+  %% are ST's spelling and every STM32 example uses them; the LPC families here
+  %% say ResetISR/.vectors. One generated script serves all three because these
+  %% are terms rather than something the script hard-codes.
+  {entry,       'Reset_Handler'},
+  {vectors,     '.isr_vector'}]}.
+
+%% 1M: sectors 0..3 are 16K, 4 is 64K, 5..11 are 128K.
+%%
+%% Self-programming is FLASH_KEYR/CR directly -- no IAP call into a ROM the way
+%% every LPC here does it, so a flash backend for this family is smaller than
+%% flash_212x.c, not larger. The one trap is the PSIZE field: it has to match
+%% the supply voltage, and getting it wrong corrupts the write instead of
+%% refusing it.
+{group, 'f405-1m',
+ [{family, stm32f4},
+  {sectors, [{4,16384},{1,65536},{7,131072}]},
+  {page,    131072}]}.             %% the largest erase unit
+
+%% THE MAP IS A COMPROMISE AND THE REASON IS THE VECTOR TABLE.
+%%
+%% The runtime has to start at sector 0: reset fetches the initial stack pointer
+%% and the reset handler from the flash base, and moving that means moving VTOR
+%% before anything has run. So the four small 16K sectors are spent on the
+%% runtime whether or not it wants them, and `store` gets a 128K sector at the
+%% top -- rewriting one setting erases 128K, where the LPC1754 map manages 4K.
+%%
+%% That is the price of this part's geometry, not a mistake in the map. A board
+%% that rewrites settings often should carry an I2C EEPROM and drop `store`
+%% entirely, which is exactly what the LPC boards here do.
+{map, 'f405-1m',
+ [{runtime,  0,  6},               %% 384K  4x16K + 64K + 2x128K
+  {app, "A", 7,  8},               %% 256K
+  {app, "B", 9, 10},               %% 256K
+  {store,   11, 11}]}.             %% 128K  one sector, and it is a big one
+
+%% Exec-only nodes: no compiler, so the runtime fits in far less and both big
+%% slots stay free for images. Same trade the 212x_ab map makes.
+%%
+%% AND THE SAME LIMITATION: a chip map is found by the GROUP's name, so this one
+%% is not reachable by naming it -- `MAP=f405_ab` looks only at the board's own
+%% {map, ...} entries and finds nothing. A board that wants this layout has to
+%% carry a copy, exactly as dl1200 carries `plain` and `usb_boot`. Written down
+%% here because the layout is the thinking, and copying four lines is cheaper
+%% than redoing it.
+{map, 'f405_ab',
+ [{runtime,  0,  5},               %% 256K
+  {app, "A", 6,  7},               %% 256K
+  {app, "B", 8,  9},               %% 256K
+  {store,   10, 11}]}.             %% 256K
+
+%% 192K of SRAM, but NOT 192K of one thing: 112K + 16K contiguous at
+%% 0x20000000, and 64K of CCM at 0x10000000 that the DMA engine cannot reach.
+%% Stated as the 128K that behaves like ordinary memory -- an arena sized
+%% against 192K would be an arena that fails the first time a buffer is handed
+%% to DMA.
+{chip, stm32f405rg,
+ [{group, 'f405-1m'},
+  {flash_kb, 1024}, {ram_kb, 128},
+  {peripherals, [{usb,2},{uart,6},{i2c,3},{spi,3},{can,2},{adc,16},
+                 {dac,2},{pwm,14},{rtc,1},{wdt,2}]}]}.

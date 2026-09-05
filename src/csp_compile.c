@@ -3962,38 +3962,127 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     buffer_param_t d = {0};
     index_t ix;
     uint32_t nbytes;
+    uint32_t xref;
+    uint8_t transport;
     int i;
 
     d.r.res = 8;                 // default 8 bytes (a full classic CAN frame;
 				 // plain buffers default the same, for uniformity)
+    // -1 is "this clause did not appear", for each transport. NOT 0: a bus
+    // number of 0 is legal, and the defaults in utils/syntax.terms are a
+    // description of these lines rather than the source of them -- the struct
+    // is zeroed above, so a transport left at 0 reads as "present" and every
+    // #buffer becomes a syntax error, including the ones that name no
+    // transport at all.
     d.frameid = -1;              // no 'can' clause seen
+    d.i2c_bus = -1;              // no 'i2c'
+    d.spi_bus = -1;              // no 'spi'
+    d.udp_port = -1;             // no 'udp'
     d.opts.vt = V_UNSIGNED;      // raw bits -> unsigned by default
     if (pmatch(st, tv, ti, n, pat_buffer, &d, sizeof(d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
     d.is_can = (d.frameid >= 0);
-    // #buffer size is BYTES, always -- one rule for plain and CAN. bf.nbytes (the
-    // internal storage width) is that byte count. Cap at 1023 bytes (10 bits)
-    // CAN FD is 64.
+
+    // WHICH TRANSPORT, and at most one. The four optional blocks in the grammar
+    // each back off cleanly, so a line naming two of them matches both and the
+    // count is the only place that can notice.
+    {
+	int ntr = (d.frameid >= 0) + (d.i2c_bus >= 0) +
+		  (d.spi_bus >= 0) + (d.udp_port >= 0);
+	if (ntr > 1) {
+	    csp_set_error(st, ERR_SYNTAX);
+	    return -1;
+	}
+	if (d.frameid >= 0)        transport = TR_CAN;
+	else if (d.i2c_bus >= 0)   transport = TR_I2C;
+	else if (d.spi_bus >= 0)   transport = TR_SPI;
+	else if (d.udp_port >= 0)  transport = TR_UDP;
+	else                       transport = TR_NONE;
+    }
+
+    // #buffer size is BYTES, always -- one rule for every transport. bf.nbytes
+    // (the internal storage width) is that byte count. Cap at 1023 bytes (10
+    // bits); a CAN FD frame is 64, which is the cap for that transport.
     nbytes = (uint32_t)d.r.res;
-    if ((d.r.res == 0) || (d.r.res > 1023) || (d.is_can && (d.r.res > 64))) {
+    if ((d.r.res == 0) || (d.r.res > 1023) ||
+	((transport == TR_CAN) && (d.r.res > 64))) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
+
+    // Endpoint ranges, checked HERE rather than at setup: a bad address is a
+    // typo in a source line, and the compiler is where a typo gets a line
+    // number. csp_buf_setup runs long after the text is gone.
+    switch (transport) {
+    case TR_CAN:
+	xref = (uint32_t)d.frameid;
+	break;
+    case TR_I2C:
+	// 7-bit addressing. The 10-bit mode exists and nothing here speaks it,
+	// so an address above 0x7f is refused rather than truncated.
+	if ((d.i2c_bus > 15) || (d.i2c_addr < 0) || (d.i2c_addr > 0x7f) ||
+	    (d.i2c_reg < 0) || (d.i2c_reg > 0xff)) {
+	    csp_set_error(st, ERR_SYNTAX);
+	    return -1;
+	}
+	xref = TR_I2C_XREF(d.i2c_bus, d.i2c_addr, d.i2c_reg);
+	break;
+    case TR_SPI:
+	if ((d.spi_bus > 15) || (d.spi_cs.port > 15) || (d.spi_cs.pin > 31) ||
+	    (d.spi_cmd < 0) || (d.spi_cmd > 0xffff)) {
+	    csp_set_error(st, ERR_SYNTAX);
+	    return -1;
+	}
+	xref = TR_SPI_XREF(d.spi_bus, d.spi_cs.port, d.spi_cs.pin, d.spi_cmd);
+	break;
+    case TR_UDP:
+	if (d.udp_port > 0xffff) {
+	    csp_set_error(st, ERR_SYNTAX);
+	    return -1;
+	}
+	// No address given is `udp <port>`: listen on that port, any peer. That
+	// is the only form an `in` buffer needs; an `out` without a destination
+	// is caught at setup, where the direction is known.
+	xref = (uint32_t)d.udp_ip;
+	break;
+    default:
+	xref = 0;
+	break;
+    }
+
     if ((ix = csp_new_udecl(st, &d.name, DECL_BUFFER)) == BAD_INDEX)
 	return -1;
     i = INDEX(ix);
     ram_decl_at(st,i)->vt  = d.opts.vt;
     ram_decl_at(st,i)->dir = d.opts.dir;
     ram_decl_at(st,i)->bf.nbytes = nbytes;
-    ram_decl_at(st,i)->bf.transport = d.is_can ? TR_CAN : TR_NONE;
-    if (d.is_can) {
-	value_t fid;
+    ram_decl_at(st,i)->bf.transport = transport;
+    if (transport == TR_UDP) {
+	// TWO constants, made side by side: `id` is the address and `id + 1`
+	// the port. new_signed_const always appends, so a pair made with
+	// nothing in between is adjacent -- but that is an assumption about
+	// another module, so it is CHECKED rather than trusted. A future
+	// allocation slipped between these two would otherwise send every
+	// datagram to whatever constant happened to land there.
+	index_t ca, cp;
+	if ((ca = new_signed_const(st, (ivalue_t)xref)) == BAD_INDEX)
+	    return -1;
+	if ((cp = new_signed_const(st, (ivalue_t)d.udp_port)) == BAD_INDEX)
+	    return -1;
+	if (cp != (index_t)(ca + 1)) {
+	    csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
+	    return -1;
+	}
+	ram_decl_at(st,i)->bf.id = ca;
+    }
+    else if (transport != TR_NONE) {
+	value_t ep;
 	index_t cx;
-	fid.i = d.frameid;
-	if ((cx = lookup_const(st, V_INTEGER, fid)) == BAD_INDEX)
-	    cx = new_signed_const(st, fid.i);
+	ep.i = (ivalue_t)xref;
+	if ((cx = lookup_const(st, V_INTEGER, ep)) == BAD_INDEX)
+	    cx = new_signed_const(st, ep.i);
 	ram_decl_at(st,i)->bf.id = cx;
     }
     return 0;

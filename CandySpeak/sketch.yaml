@@ -52,6 +52,24 @@ profiles:
     fqbn: arduino:mbed_rp2040:pico
     platforms:
       - platform: arduino:mbed_rp2040 (4.6.0)
+  rp2350_can-arm:
+    fqbn: rp2040:rp2040:generic_rp2350:flash=4194304_0,arch=arm
+    platforms:
+      - platform: rp2040:rp2040 (6.0.0)
+        platform_index_url: https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+    libraries:
+      - Adafruit MCP2515 (0.2.1)
+      - Adafruit BusIO (1.17.4)
+      - Adafruit CAN (0.2.3)
+  rp2350_can-riscv:
+    fqbn: rp2040:rp2040:generic_rp2350:flash=4194304_0,arch=riscv
+    platforms:
+      - platform: rp2040:rp2040 (6.0.0)
+        platform_index_url: https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+    libraries:
+      - Adafruit MCP2515 (0.2.1)
+      - Adafruit BusIO (1.17.4)
+      - Adafruit CAN (0.2.3)
   uno:
     fqbn: arduino:avr:uno
     platforms:

@@ -1,6 +1,7 @@
 %% Arduino MKR NB 1500 -- SAMD21 with a cellular modem.
 {board, mkrnb1500,
  [{toolchain, arduino_cli},
+  {chip, samd21g18a},
   {fqbn, "arduino:samd:mkrnb1500"},
   {port, "/dev/ttyACM0"},
   {nm, "arm-none-eabi-nm"},

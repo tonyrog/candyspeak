@@ -1070,7 +1070,10 @@ NOINLINE void csp_view_set_part(csp_rt_t* st, csp_view_t* vw,
     // shadowed and does not go through the dirty set.
     else if (part == PART_DIR)
 	st->buf[vw->buf].dir = v.i;
-    else if (st->buf[vw->buf].transport == TR_CAN) {
+    // Every transport that moves bytes, not TR_CAN alone. `.tx`, `.rx` and
+    // `.dlc` describe a transfer, and a transfer is what a transport IS -- the
+    // test was written when CAN was the only one.
+    else if (st->buf[vw->buf].transport != TR_NONE) {
 	csp_buf_t* bp = &st->buf[vw->buf];
 	if (part == PART_TX) {
 	    if (v.i)
@@ -1183,19 +1186,19 @@ NOINLINE void csp_view_get_part(csp_rt_t* st, csp_view_t* vw, value_t* vp,
 	// Frame state, read off the buffer. A #field answers for its frame
 	// too: `A.rx` and `F201.rx` are the same fact.
     case PART_RX:
-	if (bp && (bp->transport == TR_CAN))
+	if (bp && (bp->transport != TR_NONE))
 	    vp->i = BOOL(bp->flags & BUF_F_RX);
 	break;
     case PART_TX:
-	if (bp && (bp->transport == TR_CAN))
+	if (bp && (bp->transport != TR_NONE))
 	    vp->i = BOOL(bp->flags & BUF_F_TX);
 	break;
     case PART_ID:
-	if (bp && (bp->transport == TR_CAN))
+	if (bp && (bp->transport != TR_NONE))
 	    vp->i = (ivalue_t)bp->xref;
 	break;
     case PART_DLC:
-	if (bp && (bp->transport == TR_CAN))
+	if (bp && (bp->transport != TR_NONE))
 	    vp->i = bp->dlc;
 	break;
 	// A plain #variable gets an auto-buffer (setup_variable -> setup_buffer),
@@ -1723,11 +1726,17 @@ NOINLINE static void heap_dset_copy(csp_rt_t* st, dio_t to, dio_t from)
 		uint16_t n;
 		uint16_t hp = leaf_region(st, v, &n);
 		memcpy(st->heap[to] + hp, st->heap[from] + hp, n);
-		// Committing a change into a CAN frame is what makes it due for
-		// sending. Only a buffer can be one.
+		// Committing a change into a buffer with a TRANSPORT is what
+		// makes it due for sending -- a frame, a datagram or a bus
+		// write, the same rule for all three. Only a buffer can be one.
+		//
+		// This tested for TR_CAN, which is why a UDP buffer never went
+		// out: the field changed, the commit ran, and nothing marked it
+		// dirty. Everything downstream was correct and had nothing to
+		// do.
 		if ((to == DIN) && (v->kind == VIEW_HEAP)) {
 		    csp_buf_t* b = &st->buf[v->buf];
-		    if (b->transport == TR_CAN)
+		    if (b->transport != TR_NONE)
 			b->flags |= BUF_F_DIRTY;
 		}
 	    }
@@ -1758,7 +1767,11 @@ void csp_commit(csp_rt_t* st)
     // the PREVIOUS frame. One cycle of life, then gone.
     for (b = 0; b < st->nbuf; b++) {
 	csp_buf_t* bp = &st->buf[b];
-	if (bp->transport != TR_CAN)
+	// Every transport, not TR_CAN alone: this is what turns "arrived" into
+	// "visible this cycle", and it is what makes `? Buf.rx` line up with
+	// the data it describes. A UDP buffer left out here received its bytes
+	// and never announced them.
+	if (bp->transport == TR_NONE)
 	    continue;
 	bp->flags &= ~BUF_F_RX;
 	if (bp->flags & BUF_F_RXPEND)
@@ -4274,8 +4287,11 @@ NOINLINE static void can_mark_fields(csp_rt_t* st, index_t b)
 int csp_can_active(csp_rt_t* st)
 {
     index_t b;
+    // ANY inbound transport, not just CAN. The question this answers is "must
+    // the loop keep running with no timers and nothing changing", and a
+    // datagram or a sensor read is as good a reason as a frame.
     for (b = 0; b < st->nbuf; b++) {
-	if ((st->buf[b].transport == TR_CAN) && (st->buf[b].dir & DIR_IN))
+	if ((st->buf[b].transport != TR_NONE) && (st->buf[b].dir & DIR_IN))
 	    return 1;
     }
     return 0;
@@ -4284,6 +4300,24 @@ int csp_can_active(csp_rt_t* st)
 // Drain the receive side. One frame can feed several buffers only if the same
 // id is declared twice, so the loop below keeps scanning rather than stopping
 // at the first match.
+// Land `n` bytes into a buffer's shadow and mark what changed. Shared by every
+// inbound transport: the arrival mechanism differs, what happens to the bytes
+// afterwards does not.
+NOINLINE static void buf_deliver(csp_rt_t* st, index_t b, const uint8_t* data,
+				 uint16_t n)
+{
+    csp_buf_t* bp = &st->buf[b];
+
+    if (n > bp->nbytes)
+	n = bp->nbytes;
+    // Into the SHADOW, not the committed half: DIN must keep the previous
+    // contents so can_mark_fields can tell what actually changed.
+    memcpy(st->heap[DOUT] + bp->hp, data, n);
+    bp->dlc = (uint8_t)((n > 255) ? 255 : n);
+    bp->flags |= BUF_F_RXPEND;         // csp_commit turns this into BUF_F_RX
+    can_mark_fields(st, b);
+}
+
 void csp_can_input(csp_rt_t* st)
 {
     uint8_t data[64];
@@ -4329,6 +4363,126 @@ void csp_can_output(csp_rt_t* st)
 	bp->flags &= ~(BUF_F_DIRTY|BUF_F_TX);
 	if (bp->dir & DIR_OUT)
 	    csp_can_send(st, bp->xref, st->heap[DIN] + bp->hp, bp->dlc);
+    }
+}
+
+// --- the other three transports ---------------------------------------------
+
+// UDP in, and the SYNCHRONOUS collections. Called from a port's csp_input,
+// after csp_can_input.
+//
+// Ordering inside: collect finished transfers FIRST, then poll for datagrams.
+// A transfer started last cycle is older data than a datagram that arrived
+// since, and delivering the older one second would make the newer look stale
+// for a cycle.
+void csp_buf_input(csp_rt_t* st)
+{
+    index_t b;
+
+    for (b = 0; b < st->nbuf; b++) {
+	csp_buf_t* bp = &st->buf[b];
+	uint16_t n;
+	int r;
+
+	if (!TR_IS_SYNC(bp->transport) || !(bp->flags & BUF_F_BUSY))
+	    continue;
+	n = bp->nbytes;
+	r = (bp->transport == TR_I2C) ? csp_i2c_done(st, bp->xref, &n)
+				      : csp_spi_done(st, bp->xref, &n);
+	if (r == 0)
+	    continue;                  // still in flight; look again next cycle
+	bp->flags &= ~BUF_F_BUSY;
+	// A FAILED transfer is not a delivery. Leaving BUF_F_RXPEND clear is
+	// what makes `? Imu.rx` false on a bus error, so a rule guarded on it
+	// keeps the previous reading instead of acting on a half-written one.
+	if ((r > 0) && (bp->dir & DIR_IN))
+	    buf_deliver(st, b, st->heap[DOUT] + bp->hp, n);
+    }
+
+    for (b = 0; b < st->nbuf; b++) {
+	csp_buf_t* bp = &st->buf[b];
+	int guard;
+
+	if ((bp->transport != TR_UDP) || !(bp->dir & DIR_IN))
+	    continue;
+	// STRAIGHT INTO THE BUFFER'S OWN SHADOW -- no staging array.
+	//
+	// It started as a 1472-byte static (an Ethernet MTU), which is a
+	// sensible size for a datagram and an absurd one for a runtime that
+	// runs on parts with 2K of RAM: it cost every board 1472 bytes whether
+	// or not the program had a single UDP buffer. Reading into the
+	// destination costs nothing and truncates a too-long datagram, which is
+	// what recv does anyway and what the declared size means.
+	//
+	// Bounded per buffer, the same reason csp_can_input is bounded: a
+	// talkative peer would otherwise feed this loop forever and the cycle
+	// would never run. What is left in the socket is read next cycle.
+	for (guard = 0; guard < CSP_UDP_RX_BURST; guard++) {
+	    uint16_t n = bp->nbytes;
+	    if (csp_udp_recv(st, bp->port, st->heap[DOUT] + bp->hp, &n) != 1)
+		break;
+	    if (n > bp->nbytes)
+		n = bp->nbytes;
+	    bp->dlc = (uint8_t)((n > 255) ? 255 : n);
+	    bp->flags |= BUF_F_RXPEND;
+	    can_mark_fields(st, b);
+	}
+    }
+}
+
+// UDP out, and the STARTS for the synchronous buses. Called from a port's
+// csp_output, after csp_can_output.
+void csp_buf_output(csp_rt_t* st)
+{
+    index_t b;
+
+    for (b = 0; b < st->nbuf; b++) {
+	csp_buf_t* bp = &st->buf[b];
+
+	switch (bp->transport) {
+	case TR_UDP:
+	    if (!(bp->flags & (BUF_F_DIRTY|BUF_F_TX)))
+		continue;
+	    bp->flags &= ~(BUF_F_DIRTY|BUF_F_TX);
+	    if (bp->dir & DIR_OUT)
+		csp_udp_send(st, bp->xref, bp->port,
+			     st->heap[DIN] + bp->hp, bp->nbytes);
+	    break;
+
+	case TR_I2C:
+	case TR_SPI:
+	    // ONE transfer in flight per buffer. Without BUF_F_BUSY a bus
+	    // slower than the cycle gets a second transfer queued on top of the
+	    // first every cycle and never drains -- and on a device with
+	    // auto-incrementing registers the two would interleave into
+	    // readings that are half one sample and half the next.
+	    if (bp->flags & BUF_F_BUSY)
+		continue;
+	    // An `in` buffer reads every cycle: that is what makes a sensor
+	    // behave like an analog input rather than something to poke. An
+	    // `out` one transfers only when a field changed or a rule asked.
+	    if (!(bp->dir & DIR_IN) && !(bp->flags & (BUF_F_DIRTY|BUF_F_TX)))
+		continue;
+	    bp->flags &= ~(BUF_F_DIRTY|BUF_F_TX);
+	    {
+		int rd = (bp->dir & DIR_IN) ? 1 : 0;
+		// Reads land in the SHADOW half and writes come from the
+		// committed one -- the same split every other transport uses,
+		// so a rule that writes a field this cycle sends this cycle's
+		// value and not the one being assembled.
+		uint8_t* p = rd ? (st->heap[DOUT] + bp->hp)
+				: (st->heap[DIN] + bp->hp);
+		int r = (bp->transport == TR_I2C)
+		      ? csp_i2c_start(st, bp->xref, p, bp->nbytes, rd)
+		      : csp_spi_start(st, bp->xref, p, bp->nbytes, rd);
+		if (r == 0)
+		    bp->flags |= BUF_F_BUSY;
+	    }
+	    break;
+
+	default:
+	    break;
+	}
     }
 }
 
@@ -4395,6 +4549,7 @@ NOINLINE static int setup_buffer(csp_rt_t* st, index_t ix)
     uint16_t res, nbytes;
     uint8_t transport;
     uint32_t xref = 0;
+    uint16_t port = 0;
     index_t b;
     csp_view_t* vw;
 
@@ -4422,13 +4577,25 @@ NOINLINE static int setup_buffer(csp_rt_t* st, index_t ix)
 	return 0;
     }
 
-    if (transport == TR_CAN) {               // the frame id, out of its constant
+    // The endpoint, out of its constant. EVERY transport but TR_NONE has one --
+    // this used to test for TR_CAN alone, which was right when CAN was the only
+    // one and became a UDP buffer with an address of zero the moment it was not.
+    if (transport != TR_NONE) {
 	csp_decl_t id;
 	csp_copy_decl(st, INDEX(d.bf.id), &id);
 	xref = (uint32_t)id.cn.init.i;
+	// TR_UDP's endpoint is TWO constants -- see csp_bufdecl_t. The address
+	// is the one just read; the port is the next one along, which
+	// csp_parse_buffer guaranteed is adjacent.
+	if (transport == TR_UDP) {
+	    csp_decl_t pn;
+	    csp_copy_decl(st, INDEX(d.bf.id) + 1, &pn);
+	    port = (uint16_t)pn.cn.init.i;
+	}
     }
     if ((b = csp_buf_alloc(st, nbytes, transport, xref, d.dir)) == BAD_INDEX)
 	return -1;
+    st->buf[b].port = port;
     st->buf[b].owner = ix;             // ix, not the leaf: csp_enq_elist wants
 				       // the object-qualified index
     vw = &st->view[st_index(st, ix)];

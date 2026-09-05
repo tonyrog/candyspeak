@@ -56,6 +56,7 @@ CFLAGS=-MMD -MP -MF $(@:.o=.d) $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_AR
 OBJS = $(addprefix $(OBJDIR)/, \
 	csp_linux.o csp_rt.o csp_crc.o csp_line.o csp_repl.o csp_compile.o csp_tok.o \
 	csp_dump.o csp_eeprom.o csp_parse.o csp_print.o csp_strings.o \
+	csp_transport.o \
 	csp_flash.o csp_devices.o csp_flash_host.o rom_host.o)
 
 LIBS =
@@ -124,6 +125,7 @@ csp:	$(OBJS)
 # whichever one it just generated.
 CORE_SRC = port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
 	   src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
+	   src/csp_transport.c \
 	   src/csp_parse.c src/csp_print.c gen/csp_strings.c src/csp_flash.c \
 	   port/csp_devices.c port/csp_flash_host.c
 EXEC_SRC = $(CORE_SRC) gen/rom.c
@@ -161,10 +163,14 @@ min:	gen/csp_strings.h
 # compiled with -I. because it lives wherever OUT points and #includes "csp.h",
 # which gcc otherwise looks for next to the image and not here.
 #
-# For the BOARD, the image has to be rom.c, which CandySpeak/rom.c symlinks to:
+# NOT for a board. A board names its own program, on both toolchains:
 #
-#   make rom-image PROG=examples/cpx_rotate.csp
-#   make -f Makefile.board BOARD=mega
+#   make -f Makefile.board BOARD=mega PROG=examples/cpx_rotate.csp
+#
+# gen/rom.c is the HOST demo image and nothing else reads it -- `make exec`
+# links it (EXEC_SRC above). It used to be the board image as well, through a
+# fixed CandySpeak/rom.c symlink, which meant all ten Arduino boards carried
+# whatever `make rom-image` last wrote regardless of BOARD.
 #
 PROG ?=
 OUT  ?=
@@ -194,9 +200,11 @@ rom:	csp gen/csp_strings.h
 	 sed -n 's|^//   size: *|    |p' "$$out.rom.c"; \
 	 echo "    $$out  <-  $(PROG)"
 
-# The board image. Overwrites rom.c, which is the point -- and worth saying out
-# loud, because rom.c and rom_host.c getting swapped is how a program ends up as
-# the baseline every test then runs on top of.
+# The HOST demo image. Overwrites gen/rom.c, which is the point -- and worth
+# saying out loud, because rom.c and rom_host.c getting swapped is how a program
+# ends up as the baseline every test then runs on top of.
+#
+# No longer reaches a board: use PROG= on Makefile.board for that.
 rom-image: csp
 	@test -n "$(PROG)" || { echo "usage: make rom-image PROG='a.csp [b.csp ...]'"; exit 1; }
 	./csp -n -C -O gen/rom.c $(PROG)
@@ -230,6 +238,18 @@ ld:
 # thing this is here to avoid needing.
 board-list:
 	@escript utils/gen_chips.erl --boards $(RE)
+
+# Everything about ONE part or ONE board -- RAM and flash in bytes as well as K,
+# the erase geometry, the region map with each region's size worked out, and
+# what the part has. The question `make chips` answers a line at a time.
+#
+#   make info NAME=rp2350_can
+#   make info NAME=lpc2138
+#   make info NAME=dl1200 MAP=usb_boot
+info:
+	@test -n "$(NAME)" || { \
+	    echo "usage: make info NAME=<board|chip> [MAP=<map>]"; exit 1; }
+	@escript utils/gen_chips.erl --info-of $(NAME) $(MAP)
 
 # Hold every board against its chip: pin functions, core clock, and whether
 # anything was half-configured. `make check-boards RE=dl` for one.
@@ -368,6 +388,29 @@ test_boards: csp
 	     escript tests/run_tests.escript "$$t" || exit 1; \
 	 done
 
+# PROG has to REACH the board. The image is a generated file and make compares
+# timestamps, so pointing PROG at a different program usually leaves the image
+# newer than its new source: nothing rebuilds, the board keeps the program
+# before it, and the build says so nowhere. $(B)/.cspprog is what prevents that,
+# and this is the test that it still does.
+#
+# No arduino-cli: it asks only for the image, which is a ./csp run. It is still
+# 15 seconds, and not because of the compiling -- Makefile.board answers eight
+# separate $(shell escript ...) questions per invocation and each escript start
+# is about a second. That is a cost every board build pays; it is why this sits
+# in test_all with the other board checks and not in `make test`.
+prog_check: csp
+	@b=tmp/progcheck; mkdir -p $$b; \
+	 $(MAKE) -s -f Makefile.board BOARD=uno BUILD_DIR=$$b \
+	     PROG=examples/empty.csp $$b/uno/csp_rom.c >/dev/null || exit 1; \
+	 cp $$b/uno/csp_rom.c $$b/first.c; \
+	 $(MAKE) -s -f Makefile.board BOARD=uno BUILD_DIR=$$b \
+	     PROG=examples/button_3.csp $$b/uno/csp_rom.c >/dev/null || exit 1; \
+	 if cmp -s $$b/first.c $$b/uno/csp_rom.c; then \
+	     echo "prog_check: PROG changed and the image did not"; exit 1; \
+	 fi; \
+	 echo "PROG: ok -- a different PROG regenerates the board image"
+
 # The Arduino sketch folder reaches the sources through symlinks. A REGULAR file
 # there shadows one and freezes it: csp_patterns.h sat as a stale copy for a
 # while and the boards quietly built against it, so a header change showed up in
@@ -408,24 +451,54 @@ test_repl: csp
 test_slow: csp
 	@bash tests/slow.sh
 
+# Every BARE-METAL board -- the other half of boards_all, and the half that had
+# no sweep at all until an STM32 port arrived and a shared Makefile variable
+# moved. That edit expanded to nothing in the LPC branches, the link lost
+# csp_eeprom_read on three boards, and nothing in any suite would have said so.
+#
+# Seconds, not minutes: these are gcc, not arduino-cli.
+bare_all:
+	@for b in $$(escript utils/gen_chips.erl --boards-with bare); do \
+	    printf '%-14s ' "$$b"; \
+	    if out=$$($(MAKE) -f Makefile.board BOARD=$$b 2>&1); then \
+		echo "$$out" | awk '/firmware\.elf/ && $$1 ~ /^[0-9]+$$/ \
+		    {printf "text %6s  data %3s  bss %6s", $$1, $$2, $$3; f=1} \
+		    END {if (!f) printf "ok (up to date)"}'; \
+		echo; \
+	    else \
+		echo "$$out" | grep -iE 'undefined reference|error:' | \
+		  head -1 | cut -c1-90; \
+	    fi; \
+	done
+
 # Everything, including every board. Minutes, not seconds: arduino-cli compiles
 # the whole core per target. For a release, not for a change.
-test_all: test test_slow boards_all
+test_all: test test_slow prog_check bare_all boards_all
 
 # Every arduino-cli board, from the terms rather than from a glob of
 # CandySpeak/Makefile.* -- one description per board, and the list of boards is
 # part of it.
+#
+# And every ARCH VARIANT of a board that has them, because a variant that is
+# never built in any sweep is a variant that breaks quietly. `--variants` prints
+# one name per line and nothing at all for a board with a single architecture --
+# the `-` below is the stand-in for that empty case, and cannot collide with a
+# variant name.
 boards_all:
 	@for b in $$(escript utils/gen_chips.erl --boards-with arduino_cli); do \
-	    printf '%-14s ' "$$b"; \
-	    out=$$($(MAKE) -f Makefile.board BOARD=$$b 2>&1); \
-	    if echo "$$out" | grep -q 'Sketch uses'; then \
-		echo "$$out" | grep -E 'Sketch uses|Global variables' | \
-		  awk '/Sketch uses/{printf "flash %s %s ", $$3, $$5} /Global variables/{printf "ram %s %s", $$4, $$6}'; \
-		echo; \
-	    else \
-		echo "$$out" | grep -iE 'undefined reference|error:' | head -1 | cut -c1-90; \
-	    fi; \
+	    vs=$$(escript utils/gen_chips.erl --variants $$b); \
+	    for v in $${vs:--}; do \
+		test "$$v" = "-" && v=""; \
+		printf '%-17s ' "$$b$${v:+-$$v}"; \
+		out=$$($(MAKE) -f Makefile.board BOARD=$$b ARCH_VARIANT=$$v 2>&1); \
+		if echo "$$out" | grep -q 'Sketch uses'; then \
+		    echo "$$out" | grep -E 'Sketch uses|Global variables' | \
+		      awk '/Sketch uses/{printf "flash %s %s ", $$3, $$5} /Global variables/{printf "ram %s %s", $$4, $$6}'; \
+		    echo; \
+		else \
+		    echo "$$out" | grep -iE 'undefined reference|error:' | head -1 | cut -c1-90; \
+		fi; \
+	    done; \
 	done
 
 test-examples: csp
@@ -454,7 +527,7 @@ $(OBJDIR)/%.o: %.c | gen/csp_strings.h
 
 -include $(OBJS:.o=.d)
 
-.PHONY: chips board-list check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check debug ubsan san exec min rom rom-image
+.PHONY: chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first
