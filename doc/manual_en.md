@@ -555,7 +555,7 @@ Examples:
 ### Buffers
 
 ```
-#buffer <name>:<size> [<type>] [in|out] [can <frame-id>]
+#buffer <name>:<size> [<type>] [in|out] [<transport>]
 ```
 
 A buffer is a block of storage that variables can map into. A regular variable
@@ -619,6 +619,48 @@ wherever a bit range appears.
 Either way the range must stay **inside the buffer** and cover at most **32
 bits** — a bound field or a `Buf[a..b]` slice that reaches past the end, or asks
 for more than 32 bits, is refused at declaration time.
+
+### Transports
+
+A buffer with a **transport** is bound to something outside the program. The
+bytes are the same bytes; what changes is that they arrive from somewhere, or
+leave for somewhere, on their own.
+
+    #buffer F201:8  in  can 0x201            a CAN frame
+    #buffer Imu:14  in  i2c 3 0x68 0x3B      I2C3, device 0x68, from register 0x3B
+    #buffer Gyro:6  in  spi 1 2:4 0x28       SPI1, CS on port 2 pin 4, command 0x28
+    #buffer Rx:16   in  udp 5000             listen on port 5000
+    #buffer Tlm:16  out udp 5000 GROUND      send to GROUND:5000
+
+`.rx`, `.tx` and `.dlc` work on all of them — see *Frame parts* below, which is
+written for CAN and true for every transport.
+
+**Two shapes, and the difference is who starts the transfer.**
+
+`can` and `udp` are **asynchronous**: packets arrive by themselves and are
+collected at the top of each cycle. Nothing in the program asks for one.
+
+`i2c` and `spi` are **synchronous** — the program is the master. A transfer is
+started at the END of a cycle and collected at the start of the NEXT one, so a
+14-byte read at 400 kHz costs the loop nothing and the reading is one cycle old.
+An `in` buffer transfers every cycle, which is what makes a sensor behave like
+an analog input; an `out` one transfers when a field changed or a rule set
+`.tx`. Only one transfer per buffer is ever in flight.
+
+**The UDP address is a number, and the port comes first.** `192.168.1.2` is not
+something the scanner can read as one value — it sees a float and two more dots
+— so an address is written as an integer and named once:
+
+    #define GROUND 0xC0A80102        // 192.168.1.2
+    #buffer Tlm:16 out udp 5000 GROUND
+
+The port leads because it is the half both directions have: `udp 5000` on its
+own listens, and the optional address after it says where to send.
+
+**A missing bus is not an error.** A program using a transport the target does
+not have compiles, links and runs — it simply never delivers, `.rx` stays false,
+and rules guarded on it do not fire. That is what lets a program be written and
+tested on the host and then moved to a board.
 
 ### CAN frames
 

@@ -1431,6 +1431,153 @@ ck "a patch from another ROM format is refused, and says why" \
    "eeprom rejected: patch is ROM format 14, firmware is 17 -- clear it and re-enter" \
    "$got"
 
+# --- transports: declaration, listing and refusal ----------------------------
+# Everything about a transport that can be checked WITHOUT hardware: that the
+# endpoint survives the round trip through a constant, that /list gives back a
+# line that can be typed again, that /state names the far end, and that a
+# nonsense endpoint is refused where a typo has a line number.
+echo "transports:"
+
+cat > "$D/tr.csp" <<'CSPEOF'
+#define GROUND 0xC0A80102
+#buffer Imu:14  in  i2c 3 0x68 0x3B
+#buffer Gyro:6  in  spi 1 2:4 0x28
+#buffer Rx:16   in  udp 5000
+#buffer Tlm:16  out udp 5000 GROUND
+#buffer Frame:8 in  can 0x201
+CSPEOF
+
+# RE-ENTERABLE, which is the contract /list has: what comes out is what went in,
+# modulo the #define. Each endpoint has to survive being packed into a constant
+# and unpacked again -- a shift off by four in TR_SPI_XREF would show here and
+# nowhere else until a scope came out.
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/tr.db" "$D/tr.csp" | grep '^#buffer')
+ck "every transport lists the way it was written" \
+'#buffer Imu:14 in i2c 3 0x68 0x3b  // R
+#buffer Gyro:6 in spi 1 2:4 0x28  // R
+#buffer Rx:16 in udp 5000  // R
+#buffer Tlm:16 out udp 5000 0xc0a80102  // R
+#buffer Frame:8 in can 0x201  // R' "$got"
+
+# /state names the FAR END, which differs per bus: a device address, a chip
+# select, a port, a frame id. The second half is the length that last moved.
+got=$(printf '/state\n/quit\n' | repl ./csp "$D/tr.db" "$D/tr.csp" |
+	  grep -E '^(Imu|Gyro|Rx|Tlm|Frame) ' | tr -s ' ' | cut -d= -f1 | sed 's/ *$//')
+ck "/state names the far end per transport" \
+'Imu in buffer 0x68/14
+Gyro in buffer 2:4/6
+Rx in buffer 5000/16
+Tlm out buffer 5000/16
+Frame in buffer 0x201/8' "$got"
+
+# A 7-bit bus and an 8-bit register. Out of range is a TYPO, and a typo caught
+# at declaration has a line number -- csp_buf_setup runs long after the text is
+# gone, and a truncated address would just talk to the wrong device.
+got=$(printf '#buffer B:4 in i2c 3 0x99 0x00\n/quit\n' | repl ./csp "$D/tr2.db" |
+	  grep -c 'syntax error')
+ck "an I2C address past 7 bits is refused" "1" "$got"
+
+# Two transports on one buffer. Each optional block backs off cleanly, so both
+# match and only the COUNT notices -- which is the thing worth testing, because
+# it is the one place a second transport could be silently ignored.
+got=$(printf '#buffer B:4 in can 0x201 udp 5000\n/quit\n' | repl ./csp "$D/tr3.db" |
+	  grep -c 'syntax error')
+ck "a buffer naming two transports is refused" "1" "$got"
+
+# A transport with no driver: the weak stubs in csp_transport.c. This is what
+# lets a program be written on the host and moved to a board -- it has to RUN,
+# not fail to link, and `.rx` has to stay false so a rule guarded on it does
+# not fire on a reading that never happened.
+cat > "$D/nodrv.csp" <<'CSPEOF'
+#buffer Imu:4 in i2c 3 0x68 0x3B
+#variable Fired:8 = 0
+Fired = 1 ? Imu.rx
+CSPEOF
+got=$(printf '/latch off\n/state\n/quit\n' | repl ./csp "$D/nodrv.db" "$D/nodrv.csp" |
+	  grep -E '^Fired ' | tr -s ' ' | sed 's/ *$//')
+ck "a bus with no driver runs and never delivers" "Fired = 0" "$got"
+
+# A port already held by something else. SO_REUSEADDR used to be set on these
+# sockets, which on UDP lets a second process bind the SAME port -- the bind
+# succeeds, the kernel gives each datagram to one of them, and the loser
+# receives nothing and says nothing. Every symptom pointed at the sender.
+#
+# Now the bind fails and the failure is REPORTED, on stderr, once. The test is
+# on the message: silence is the bug.
+echo "udp bind:"
+if command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import socket,time
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+s.bind(('',55733)); time.sleep(3)" &
+    hogpid=$!
+    sleep 0.4
+    printf '#buffer B:4 in udp 55733\n' > "$D/hog.csp"
+    ( printf '/latch off\n'; sleep 0.6; printf '/quit\n' ) |
+	./csp -i --no-eeprom "$D/hog.csp" >/dev/null 2>"$D/hog.err"
+    kill $hogpid 2>/dev/null; wait $hogpid 2>/dev/null
+    got=$(grep -c 'cannot listen on port 55733' "$D/hog.err")
+    ck "a port already taken is reported, not suffered in silence" "1" "$got"
+    # ONCE, not once per cycle: this is polled every pass through the loop.
+    ck "and reported once, not every cycle" "1" \
+       "$(grep -c 'cannot listen' "$D/hog.err")"
+else
+    echo "  SKIP no python3 to hold the port"
+fi
+
+# --- transports: udp end to end ---------------------------------------------
+# TWO CandySpeak programs, a real socket between them. Nothing is simulated:
+# one declares an out buffer, the other an in buffer on the same port, and the
+# receiving program's RULE has to fire.
+#
+# This exists because the transport plumbing failed in FOUR separate places
+# while it was written, and every one of them looked like the others: a test
+# that had checked only "the datagram left" would have passed with the receiver
+# stone deaf. The assertion is on `Seen`, which is only set by a rule guarded on
+# `.rx` -- so it covers the send, the socket, the delivery, the RX flag, the
+# field unpacking and the rule.
+echo "udp:"
+cat > "$D/utx.csp" <<'CSPEOF'
+#define LOOPBACK 0x7F000001
+#buffer Tx:4 out udp 55731 LOOPBACK
+#field  Out:16 Tx[0..15]
+#timer Tick 50 = 1
+Out = 4711 ? Tick
+CSPEOF
+cat > "$D/urx.csp" <<'CSPEOF'
+#buffer Rx:4 in udp 55731
+#field  Val:16 Rx[0..15]
+#variable Seen:16
+Seen = Val ? Rx.rx
+CSPEOF
+ubuild() {
+    ./csp -n -C -O "$2.rom.c" "$2" >/dev/null 2>&1 &&
+    gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -Iinclude -Igen -Isrc \
+	port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
+	src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
+	src/csp_parse.c src/csp_print.c gen/csp_strings.c src/csp_transport.c \
+	src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
+	"$2.rom.c" -o "$1" >/dev/null 2>&1
+}
+if ubuild "$D/utx" "$D/utx.csp" && ubuild "$D/urx" "$D/urx.csp"; then
+    # `/latch off` FIRST, on both. The host build starts latched, which blocks
+    # every device output including the transports -- a program that looks
+    # perfect and sends nothing.
+    ( printf '/latch off\n'; sleep 2; printf '/state\n/quit\n' ) |
+	"$D/urx" -i --no-eeprom > "$D/urx.out" 2>&1 &
+    rxpid=$!
+    sleep 0.5
+    ( printf '/latch off\n'; sleep 1; printf '/quit\n' ) |
+	"$D/utx" -i --no-eeprom >/dev/null 2>&1
+    wait $rxpid 2>/dev/null
+    got=$(grep -E '^(Val|Seen) ' "$D/urx.out" | tr -s ' ' | sed 's/ *$//')
+    ck "a datagram crosses two programs and fires a rule" \
+"Val in field [0..15] = 4711
+Seen = 4711" "$got"
+else
+    echo "  FAIL the two udp programs did not build"; fail=$((fail+1))
+fi
+
 echo "settings:"
 
 # A setting is a value for something the firmware ALREADY declares, kept in its

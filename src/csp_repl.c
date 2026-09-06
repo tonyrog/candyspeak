@@ -1131,9 +1131,49 @@ match:
 		csp_print_blank();
 		csp_print_rostr(csp_fmt_pindir(d.dir));
 	    }
-	    if (decl(st,i,bf.transport) == TR_CAN) {
-		csp_print_lit(" can ");   // csp_print_hex emits the 0x itself
-		csp_print_hex((uvalue_t)decl(st, d.bf.id, cn.init).i);
+	    // The transport, spelled the way it was typed -- these lines have to
+	    // be RE-ENTERABLE, which is what /list is for. The endpoint lives in
+	    // a constant (two, for UDP: address then port), packed as
+	    // transport_t in csp.h describes.
+	    {
+		uint32_t ep = (uint32_t)decl(st, d.bf.id, cn.init).i;
+		switch (decl(st,i,bf.transport)) {
+		case TR_CAN:
+		    csp_print_lit(" can ");  // csp_print_hex emits the 0x itself
+		    csp_print_hex(ep);
+		    break;
+		case TR_I2C:
+		    csp_print_lit(" i2c ");
+		    csp_print_uint(TR_I2C_BUS(ep));
+		    csp_print_blank();
+		    csp_print_hex(TR_I2C_ADDR(ep));
+		    csp_print_blank();
+		    csp_print_hex(TR_I2C_REG(ep));
+		    break;
+		case TR_SPI:
+		    csp_print_lit(" spi ");
+		    csp_print_uint(TR_SPI_BUS(ep));
+		    csp_print_blank();
+		    csp_print_uint(TR_SPI_PORT(ep));
+		    csp_print_char(':');
+		    csp_print_uint(TR_SPI_PIN(ep));
+		    csp_print_blank();
+		    csp_print_hex(TR_SPI_CMD(ep));
+		    break;
+		case TR_UDP:
+		    // Port first, address after and only when there is one --
+		    // exactly the grammar, so the line goes back in as it came
+		    // out. A listener has address 0 and prints none.
+		    csp_print_lit(" udp ");
+		    csp_print_uint((uvalue_t)decl(st, d.bf.id + 1, cn.init).i);
+		    if (ep != 0) {
+			csp_print_blank();
+			csp_print_hex(ep);
+		    }
+		    break;
+		default:
+		    break;
+		}
 	    }
 	    list_eol();
 	    break;
@@ -1313,8 +1353,31 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
 	    csp_print_char(']');
 	    n = 4 + state_udigits(lo) + state_udigits(hi);
 	}
-	else if (b->transport == TR_CAN) {
-	    n  = csp_print_hex(b->xref);
+	else if (b->transport != TR_NONE) {
+	    // WHO, then how many bytes last moved. "Who" is whatever identifies
+	    // the far end on that bus -- a frame id, a device address, a chip
+	    // select, a port -- and the full endpoint is in /list rather than
+	    // repeated here, where the column is eight wide.
+	    //
+	    // The dlc half is the part that CHANGES: a short frame, a truncated
+	    // datagram or a failed transfer all show up as a length that is not
+	    // the declared size.
+	    switch (b->transport) {
+	    case TR_I2C:
+		n = csp_print_hex(TR_I2C_ADDR(b->xref));
+		break;
+	    case TR_SPI:
+		n  = csp_print_uint(TR_SPI_PORT(b->xref));
+		csp_print_char(':');
+		n += 1 + csp_print_uint(TR_SPI_PIN(b->xref));
+		break;
+	    case TR_UDP:
+		n = csp_print_uint(b->port);
+		break;
+	    default:
+		n = csp_print_hex(b->xref);
+		break;
+	    }
 	    csp_print_char('/');
 	    csp_print_uint(b->dlc);
 	    n += 1 + state_udigits(b->dlc);

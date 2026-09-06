@@ -552,6 +552,12 @@ static struct { uint16_t port; int fd; } udp_sock[CSP_UDP_MAXSOCK];
 static int udp_nsock = 0;
 static int udp_tx_fd = -1;
 
+// Ports we tried to bind and could not. Kept so the message is printed once
+// rather than every cycle, and so a doomed bind is not retried a hundred times
+// a second for the life of the program.
+static uint16_t udp_dead[CSP_UDP_MAXSOCK];
+static int udp_ndead = 0;
+
 static int udp_find(uint16_t port)
 {
     int i;
@@ -559,6 +565,21 @@ static int udp_find(uint16_t port)
 	if (udp_sock[i].port == port)
 	    return udp_sock[i].fd;
     return -1;
+}
+
+static int udp_gave_up(uint16_t port)
+{
+    int i;
+    for (i = 0; i < udp_ndead; i++)
+	if (udp_dead[i] == port)
+	    return 1;
+    return 0;
+}
+
+static void udp_give_up(uint16_t port)
+{
+    if (udp_ndead < CSP_UDP_MAXSOCK)
+	udp_dead[udp_ndead++] = port;
 }
 
 int csp_udp_open(csp_rt_t* st, uint16_t port)
@@ -569,21 +590,45 @@ int csp_udp_open(csp_rt_t* st, uint16_t port)
 
     if (udp_find(port) >= 0)
 	return 0;                      // already listening -- see above
+    if (udp_gave_up(port))
+	return -1;                     // said why once; not saying it again
     if (udp_nsock >= CSP_UDP_MAXSOCK)
 	return -1;
     if ((fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0)) < 0)
 	return -1;
-    // SO_REUSEADDR so a restarted program can bind a port its predecessor has
-    // not finished releasing -- which on a REPL you restart every minute is the
-    // difference between "works" and "works after a wait nobody explains".
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+    // NO SO_REUSEADDR.
+    //
+    // On TCP it means "reuse a port still in TIME_WAIT" and is harmless. On UDP
+    // it means SEVERAL PROCESSES MAY BIND THE SAME PORT, and the kernel hands
+    // each unicast datagram to exactly one of them -- whichever it likes. So a
+    // forgotten csp still holding port 12345 makes the next one bind
+    // successfully, receive nothing, and report nothing. That is not a
+    // hypothetical: it is what "my program does not get the datagram" turned
+    // out to be, and every symptom pointed at the sender.
+    //
+    // UDP has no TIME_WAIT, so a closed socket releases its port immediately
+    // and the restart case this was added for does not exist.
+    //
+    // SO_BROADCAST stays: it is needed to SEND to a broadcast address.
     setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on));
     memset(&a, 0, sizeof(a));
     a.sin_family = AF_INET;
     a.sin_addr.s_addr = htonl(INADDR_ANY);
     a.sin_port = htons(port);
     if (bind(fd, (struct sockaddr*)&a, sizeof(a)) < 0) {
+	// SAY SO, once, and on STDERR -- like the CAN errors above it. Not
+	// through csp_print_*: that is the PROGRAM's output stream, it is NULL
+	// until the driver opens it, and the first bind happens on the first
+	// cycle. A message written there arrives nowhere, which is precisely the
+	// failure this line exists to prevent.
+	//
+	// Once, because this is polled every cycle: unconditional would be a
+	// hundred lines a second, and silence is what made the REUSEADDR bug
+	// above take an evening to find.
+	fprintf(stderr, "udp: cannot listen on port %u -- %s\n",
+		(unsigned)port, strerror(errno));
 	close(fd);
+	udp_give_up(port);
 	return -1;
     }
     udp_sock[udp_nsock].port = port;

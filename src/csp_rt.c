@@ -4379,53 +4379,58 @@ void csp_buf_input(csp_rt_t* st)
 {
     index_t b;
 
+    // ONE pass. A buffer has exactly one transport, so the cases below are
+    // disjoint per buffer and nothing here reads what another arm wrote -- two
+    // passes bought an ordering between DIFFERENT buffers, which is an ordering
+    // nothing can observe.
     for (b = 0; b < st->nbuf; b++) {
 	csp_buf_t* bp = &st->buf[b];
-	uint16_t n;
-	int r;
 
-	if (!TR_IS_SYNC(bp->transport) || !(bp->flags & BUF_F_BUSY))
-	    continue;
-	n = bp->nbytes;
-	r = (bp->transport == TR_I2C) ? csp_i2c_done(st, bp->xref, &n)
-				      : csp_spi_done(st, bp->xref, &n);
-	if (r == 0)
-	    continue;                  // still in flight; look again next cycle
-	bp->flags &= ~BUF_F_BUSY;
-	// A FAILED transfer is not a delivery. Leaving BUF_F_RXPEND clear is
-	// what makes `? Imu.rx` false on a bus error, so a rule guarded on it
-	// keeps the previous reading instead of acting on a half-written one.
-	if ((r > 0) && (bp->dir & DIR_IN))
-	    buf_deliver(st, b, st->heap[DOUT] + bp->hp, n);
-    }
+	if (TR_IS_SYNC(bp->transport)) {
+	    uint16_t n;
+	    int r;
 
-    for (b = 0; b < st->nbuf; b++) {
-	csp_buf_t* bp = &st->buf[b];
-	int guard;
+	    // Collect a transfer csp_buf_output started, at the earliest, last
+	    // cycle. Nothing to collect is the common case.
+	    if (!(bp->flags & BUF_F_BUSY))
+		continue;
+	    n = bp->nbytes;
+	    r = (bp->transport == TR_I2C) ? csp_i2c_done(st, bp->xref, &n)
+					  : csp_spi_done(st, bp->xref, &n);
+	    if (r == 0)
+		continue;              // still in flight; look again next cycle
+	    bp->flags &= ~BUF_F_BUSY;
+	    // A FAILED transfer is not a delivery. Leaving BUF_F_RXPEND clear
+	    // is what makes `? Imu.rx` false on a bus error, so a rule guarded
+	    // on it keeps the previous reading instead of acting on a
+	    // half-written one.
+	    if ((r > 0) && (bp->dir & DIR_IN))
+		buf_deliver(st, b, st->heap[DOUT] + bp->hp, n);
+	}
+	else if ((bp->transport == TR_UDP) && (bp->dir & DIR_IN)) {
+	    int guard;
 
-	if ((bp->transport != TR_UDP) || !(bp->dir & DIR_IN))
-	    continue;
-	// STRAIGHT INTO THE BUFFER'S OWN SHADOW -- no staging array.
-	//
-	// It started as a 1472-byte static (an Ethernet MTU), which is a
-	// sensible size for a datagram and an absurd one for a runtime that
-	// runs on parts with 2K of RAM: it cost every board 1472 bytes whether
-	// or not the program had a single UDP buffer. Reading into the
-	// destination costs nothing and truncates a too-long datagram, which is
-	// what recv does anyway and what the declared size means.
-	//
-	// Bounded per buffer, the same reason csp_can_input is bounded: a
-	// talkative peer would otherwise feed this loop forever and the cycle
-	// would never run. What is left in the socket is read next cycle.
-	for (guard = 0; guard < CSP_UDP_RX_BURST; guard++) {
-	    uint16_t n = bp->nbytes;
-	    if (csp_udp_recv(st, bp->port, st->heap[DOUT] + bp->hp, &n) != 1)
-		break;
-	    if (n > bp->nbytes)
-		n = bp->nbytes;
-	    bp->dlc = (uint8_t)((n > 255) ? 255 : n);
-	    bp->flags |= BUF_F_RXPEND;
-	    can_mark_fields(st, b);
+	    // STRAIGHT INTO THE BUFFER'S OWN SHADOW -- no staging array. A
+	    // 1472-byte static (an Ethernet MTU) is a sensible size for a
+	    // datagram and an absurd one for a runtime that runs on parts with
+	    // 2K of RAM: it would cost every board those bytes whether or not
+	    // the program had a single UDP buffer. Reading into the destination
+	    // costs nothing and truncates a too-long datagram, which is what
+	    // recv does anyway and what the declared size means.
+	    //
+	    // Bounded, the same reason csp_can_input is bounded: a talkative
+	    // peer would otherwise feed this loop forever and the cycle would
+	    // never run. What is left in the socket is read next cycle.
+	    for (guard = 0; guard < CSP_UDP_RX_BURST; guard++) {
+		uint16_t n = bp->nbytes;
+		if (csp_udp_recv(st, bp->port, st->heap[DOUT] + bp->hp, &n) != 1)
+		    break;
+		if (n > bp->nbytes)
+		    n = bp->nbytes;
+		bp->dlc = (uint8_t)((n > 255) ? 255 : n);
+		bp->flags |= BUF_F_RXPEND;
+		can_mark_fields(st, b);
+	    }
 	}
     }
 }
