@@ -2258,6 +2258,32 @@ NOINLINE int str_seg_ensure(csp_rt_t* st, unsigned k)
     if (((st->ps.nn - st->rom_nn) + CSP_STR_SEG_SLOTS + 1) >= MAX_INSTRS ||
 	!mem_fits(st, want))
 	return -1;
+    // AND IT MUST NOT REACH THE MIDDLE. mem_fits weighs instructions and
+    // declarations against the budget; it knows nothing about the derived
+    // tables, which csp_mid_reset lays out immediately above the instructions
+    // ONCE PER REBUILD. A segment taken between two rebuilds grows the
+    // instruction area under them.
+    //
+    // With a ROM program there are no RAM instructions at all, so mid_base is
+    // just CSP_SCRATCH and a 132-byte segment lands squarely in the view/heap
+    // tables: `> sys.Name = "..."` turned a pin's value slot to zeroes, and
+    // /state showed `Wake none digital 0:1` where the declaration said
+    // `in digital 0:16`. Silent, and it corrupted a different thing each time.
+    //
+    // Refusing is not the whole answer -- a program with a ROM base cannot take
+    // a new name at the prompt until the segment area is reserved before the
+    // middle rather than after it -- but "string space exhausted" is a fact the
+    // user can act on, and overwriting the heap is not.
+    // Only once the middle IS laid out: while a program is first compiled there
+    // are no derived tables yet, and the rebuild that follows places them above
+    // whatever the instructions grew to. mid_base is 0 until then, and testing
+    // against it would refuse every string in every program.
+    if (st->mid_base > 0) {
+	size_t ib_after = (size_t)((st->ps.nn - st->rom_nn) + CSP_STR_SEG_SLOTS
+				   + 1) * sizeof(csp_instr_t);
+	if (CSP_A8(ib_after + CSP_SCRATCH) > st->mid_base)
+	    return -1;
+    }
     h = st->ps.nn;
     st->ps.nn = h + CSP_STR_SEG_SLOTS + 1;
     memset(ram_instr_at(st, h), 0,
@@ -2536,7 +2562,19 @@ NOINLINE void csp_mid_reset(csp_rt_t* st)
 {
     size_t ib = (size_t)(st->ps.nn - st->rom_nn) * sizeof(csp_instr_t);
     size_t db = (size_t)(st->ps.nd - st->rom_nd) * sizeof(csp_decl_t);
-    st->mid_base = CSP_A8(ib + CSP_SCRATCH);
+    // ONE STRING SEGMENT OF HEADROOM above the instructions, on top of the
+    // scratch. new_string can take a segment BETWEEN two rebuilds -- a name
+    // typed at the prompt, a string setting -- and that grows the instruction
+    // area under tables this function has already placed. Without the headroom
+    // a ROM program (ib == 0, so mid_base was just CSP_SCRATCH) had its
+    // view/heap written over by the 132 bytes of a new segment: `> sys.Name =
+    // "..."` turned a pin's value slot to zeroes and /state read
+    // `Wake none digital 0:1` where the declaration said `in digital 0:16`.
+    //
+    // 132 bytes of the pool, and it buys back an operation that silently
+    // corrupted a different thing every time.
+    st->mid_base = CSP_A8(ib + CSP_SCRATCH
+			  + (CSP_STR_SEG_SLOTS + 1) * sizeof(csp_instr_t));
     st->mid      = st->mid_base;
     st->mid_full = 0;
     // The decl end grows DOWN from the top of the pool, so the middle must stop
@@ -5912,11 +5950,34 @@ void csp_input_event(csp_rt_t* st)
 	}
 	else
 	    v.u = (pend >> slot) & 1;
-	// BOTH halves, the way csp_input_timer writes both t.fired slots: a
-	// rule reads DIN and the listing reads DOUT, and a bit written to one
-	// of them reads back as whatever the other still held.
-	csp_dio_set_part(st, ix, v, PART_FIRED, DIN);
-	csp_dio_set_part(st, ix, v, PART_FIRED, DOUT);
+	// DOUT ONLY, MARKED DIRTY, and this is the difference from
+	// csp_input_timer.
+	//
+	// A timer's `fired` stands alone -- there is no second value that has to
+	// agree with it. A PIN has one: the level the edge produced, which
+	// csp_board_digital_input writes to DOUT and which a rule therefore sees
+	// after the commit. Writing `fired` to DIN as well put it one cycle AHEAD
+	// of that level, so `println(... Term)` on a falling edge printed the
+	// level from BEFORE the edge -- 1 where /state said 0.
+	//
+	// Through DOUT both travel together: the rule that sees `.fired` sees the
+	// level that caused it. Seen first on a BridgeZone, where the pin is read
+	// from hardware; on the host the two happened to line up because
+	// csp_input reads no pins at all.
+	{
+	    value_t was;
+	    csp_dio_get_part(st, ix, &was, PART_FIRED, DOUT);
+	    if (was.u != v.u) {
+		csp_dio_set_part(st, ix, v, PART_FIRED, DOUT);
+		// csp_commit copies only what is MARKED -- csp_dio_set_part
+		// writes the slot but records nothing, so without this the bit
+		// sat in DOUT and no rule ever saw it. Marked only on a CHANGE,
+		// or every source would dirty its leaf every cycle and the
+		// commit would copy the lot.
+		bitset_set(st->dset, st_index(st, ix));
+		st->es.anyd = CSP_TRUE;
+	    }
+	}
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 	if (v.u && st->reactive)
 	    csp_enq_elist(st, ix);

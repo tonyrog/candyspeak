@@ -723,6 +723,13 @@ int csp_board_irq_attach(csp_rt_t* st, index_t ix, trigger_t trig, uint8_t slot)
 
     if (slot >= CSP_MAX_EVENTS)
 	return -1;
+    // SLOT 0 STARTS A NEW SWEEP. csp_setup_events numbers from zero every time,
+    // and it runs on every rebuild -- so without this the second rebuild found
+    // the channels still claimed by the first, refused them all, and the runtime
+    // fell back to sampling. The board then WORKS, which is what made it hard to
+    // see: /state said `falling~!` and the edges kept counting.
+    if (slot == 0)
+	memset(lpc_eint_slot, 0xFF, sizeof(lpc_eint_slot));
     switch (decl(st, INDEX(ix), type)) {
     case DECL_DIGITAL: port = v->d.port; pin = v->d.pin; break;
     case DECL_ANALOG:  port = v->a.port; pin = v->a.pin; break;

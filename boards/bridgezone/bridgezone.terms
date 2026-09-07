@@ -16,7 +16,17 @@
   {pclk_div, 1},
 
   %% 16K of SRAM, and the runtime is the whole flash on this one.
-  {code_budget, 9216},
+  %% 6144, down from 9216 (2026-09-07). The pool and the STACK come out of the
+  %% same 16K -- whatever the pool claims, the stack gets the rest, growing down
+  %% from _stack_top toward the top of .bss. At 9216 this board had 1984 bytes
+  %% of stack, and a DL1200 with 543 hung on every write typed at the prompt:
+  %% csp_process_line -> csp_parse -> asm_rule -> csp_settings_record, with a
+  %% token_t tv[24] in each of the first two.
+  %%
+  %% 1984 is not 543 and might well have held. Lowering it anyway, because the
+  %% cost is code budget on a board whose program lives in ROM, and the other
+  %% side of the trade is a board that has to be recovered over ISP.
+  {code_budget, 6144},
 
   %% The settings store sits in the runtime struct, so it is RAM spent whether
   %% anything is stored or not. csp.h defaults to 1024 for anything that is not
@@ -99,11 +109,24 @@
   %% still asserted after the wake would re-fire, which is a way of not losing
   %% the reason. Edge until something reads it and can say which is wanted.
   %%
-  %% MUXED BUT NOT YET SERVICED: EXTINT/EXTMODE/EXTPOLAR and a handler on VIC
-  %% channel 14 are still missing, so today this only moves the pin off its
-  %% reset default. See doc/EVENTS.md.
+  %% SERVICED as of 2026-09-07: EXTINT/EXTMODE/EXTPOLAR and a handler on VIC
+  %% channel 14 are in port/csp_lpcopen.c behind CSP_LPC_EINT. A program says
+  %% `#digital Wake in falling 0:16` and guards on `Wake.fired`; the mux above
+  %% is what makes it reach the EINT at all, which is why the driver refuses to
+  %% do it -- see boards/bridgezone/tests/einttest.csp and doc/EVENTS.md.
   {pin, 'P0.16', eint0},
   {irq, 'P0.16', falling},
+
+  %% AND ONE THAT CAN BE REACHED BY HAND. P0.16 goes to the AVR, not to a
+  %% terminal, so there is nothing to pull on it while testing -- P0.30 is Ain4
+  %% on a screw terminal and carries eint3 on function 2.
+  %%
+  %% THIS TAKES Ain4 AWAY: the pin is muxed to the EINT instead of to the
+  %% converter, so `#analog Ain4 in 0:30` reads nothing while this line is here.
+  %% It is here to test the EINT path on a board where the real source cannot be
+  %% driven by hand; take it out and Ain4 comes back.
+  {pin, 'P0.30', eint3},
+  {irq, 'P0.30', falling},
 
   %% --- analog and PWM out ---------------------------------------------------
   %% Two mechanisms, and the pin decides which. PWM0 is the real block -- one
@@ -124,7 +147,7 @@
   {pin, 'P0.27', ain0},
   {pin, 'P0.28', ain1},
   {pin, 'P0.29', ain2},
-  {pin, 'P0.30', ain3},
+  %% P0.30 (ain3/Ain4) is muxed to eint3 above -- see the note there.
 
   {enable, [uart0, uart1, can1, can2, i2c0, spi0, adc, pwm, gpio,
 	    timer0, timer1]}]}.

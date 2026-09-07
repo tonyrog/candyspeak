@@ -911,10 +911,14 @@ echo "interrupts:"
 # free interrupt pin actually needs.
 got=$(escript utils/gen_chips.erl --irq-of bridgezone |
 	  sed -n 's/^ *\(eint[0-3]\)  \(.*\)/\1 \2/p')
+# `*` is a pin that IS the interrupt; a name in parentheses is what else took
+# it. P0.16 is the AVR's wakeup line and P0.30 is Ain4 muxed to eint3 so the
+# path can be driven by hand -- take that line out of bridgezone.terms and this
+# expectation goes back to `P0.30(ain3)`.
 ck "EINT pins come from the pin table, with what took them" 'eint0 P0.1(rxd0) P0.16*
 eint1 P0.3(sda0) P0.14
 eint2 P0.7(pwm2) P0.15(gpio)
-eint3 P0.9(rxd1) P0.20(gpio) P0.30(ain3)' "$got"
+eint3 P0.9(rxd1) P0.20(gpio) P0.30*' "$got"
 
 # per_bit is a rule, not a list: the EXTI line IS the bit number, so PA1 and
 # PB1 are the same channel and only one of them can be a source.
@@ -1501,6 +1505,34 @@ ck "a patch from another ROM format is refused, and says why" \
 # endpoint survives the round trip through a constant, that /list gives back a
 # line that can be typed again, that /state names the far end, and that a
 # nonsense endpoint is refused where a typo has a line number.
+# --- 25c. a string taken between two rebuilds ---------------------------------
+# csp_mid_reset places the derived tables (view, heap, buffer table, graph)
+# immediately above the RAM instructions, ONCE PER REBUILD. new_string can take
+# a whole 132-byte segment between two rebuilds -- a name typed at the prompt,
+# a string setting -- and that grows the instruction area underneath them.
+#
+# With a ROM program there are no RAM instructions at all, so the middle started
+# just CSP_SCRATCH above zero and the segment landed squarely in the tables. The
+# symptom was NOT a crash: a pin's VALUE SLOT went to zeroes while its
+# declaration still read correctly, so /state showed `none digital 0:1` for a
+# pin declared `in digital 0:16`. Found on a BridgeZone, 2026-09-08.
+echo "string segments:"
+
+cat > "$D/ss.csp" <<'CSPEOF'
+#digital Pin in falling 0:16
+#variable N = 0
+N = N + 1
+CSPEOF
+if build_rom "$D/ss.csp" "$D/ss_fw"; then
+    got=$(printf '> sys.Name = "Node1"\n/state\n/quit\n' |
+	      repl "$D/ss_fw" "$D/ss.db" --no-eeprom |
+	      grep -E "^Pin" | tr -s ' ' | cut -d= -f1 | sed 's/ *$//')
+    ck "a string setting does not overwrite a value slot" \
+       "Pin in digital 0:16" "$got"
+else
+    ck "a string setting does not overwrite a value slot" "built" "build failed"
+fi
+
 # --- 26a. #when blocks -------------------------------------------------------
 # `#when <condition> ... #end` gates a whole block; `#in <state>+` gates on the
 # state machine. Two words, deliberately: `#in Idle` reads as "in this state",
