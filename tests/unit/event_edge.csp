@@ -1,0 +1,20 @@
+// An interrupt trigger is an OPTION on a pin declaration -- `falling` sits with
+// `in` and `pullup`, because an interrupt is a property of how the pin is
+// configured. The guard is `.fired`, true for exactly ONE cycle after the edge:
+// the same shape `timeout(T)` has.
+//
+// The host has no interrupt controller, so its backend compares the pin's level
+// between cycles. A board's arms the silicon; the language is the same.
+#digital Drdy in falling 2:13
+#digital Btn  in rising  2:7
+
+#variable Falls = 0
+#variable Rises = 0
+#variable Level = 0
+
+Falls = Falls + 1 ? Drdy.fired
+Rises = Rises + 1 ? Btn.fired
+// THE PIN IS STILL THE PIN. A trigger adds to a declaration, it does not
+// replace one -- and the two agree: a FALLING edge means the pin is low, so
+// this lands on 100 and not 101.
+Level = Drdy + 100 ? Drdy.fired

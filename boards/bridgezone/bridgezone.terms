@@ -90,6 +90,21 @@
   {pin, 'P0.6',  mosi0},
   {pin, 'P0.10', gpio},              %% ATmega328P reset
 
+  %% THE WAKEUP LINE. The AVR watches the inputs while this part sleeps and
+  %% pulls P0.16 to say something happened -- LPC_WAKEUP in the old cfg.h.
+  %% That is EINT0 on function 1, which is what makes it able to wake a
+  %% power-down: a GPIO level cannot, an external interrupt can.
+  %%
+  %% Falling, and level rather than edge is the tempting alternative -- a level
+  %% still asserted after the wake would re-fire, which is a way of not losing
+  %% the reason. Edge until something reads it and can say which is wanted.
+  %%
+  %% MUXED BUT NOT YET SERVICED: EXTINT/EXTMODE/EXTPOLAR and a handler on VIC
+  %% channel 14 are still missing, so today this only moves the pin off its
+  %% reset default. See doc/EVENTS.md.
+  {pin, 'P0.16', eint0},
+  {irq, 'P0.16', falling},
+
   %% --- analog and PWM out ---------------------------------------------------
   %% Two mechanisms, and the pin decides which. PWM0 is the real block -- one
   %% period, a match per channel, no servicing. The MATn.m pins are a timer

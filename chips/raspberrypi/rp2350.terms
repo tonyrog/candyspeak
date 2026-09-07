@@ -44,3 +44,17 @@
   {flash_kb, 0}, {ram_kb, 520},
   {peripherals, [{usb,1},{uart,2},{i2c,2},{spi,2},{adc,4},{pwm,24},
                  {rtc,1},{wdt,1}]}]}.
+
+%% --- INTERRUPT SOURCES -------------------------------------------------------
+%%
+%% The same as an RP2040 and for the same reason: four enable bits per GPIO, no
+%% shared channel, one vector for the bank. See chips/raspberrypi/rp2040.terms.
+%%
+%% Unchanged across arch variants -- the Hazard3 RISC-V cores see the same GPIO
+%% block through the same registers; what differs is the interrupt controller
+%% behind it, which is the port's problem and not a board's.
+{irq, rp2350,
+ [{gpio, [{scheme, port_any},
+	  {ports,  [0]},
+	  {edges,  [rising, falling, both, high, low]},
+	  {vector, shared}]}]}.

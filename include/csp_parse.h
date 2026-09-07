@@ -15,12 +15,23 @@ typedef union {
 	unsigned pwm:1;
 	unsigned pullup:1;
 	unsigned pulldown:1;
+	// trigger_t. An interrupt is a property of how the PIN is configured,
+	// the same kind of thing pullup is -- which is why it is an option here
+	// and not a declaration of its own.
+	unsigned trig:3;
+	// `soft`: sampling is acceptable on this pin. Without it, a board that
+	// cannot arm the interrupt in hardware is falling SHORT of what the
+	// program asked, and /state says so; with it, software is the answer
+	// that was wanted.
+	unsigned soft:1;
     };
 } decl_opts_t;
 
 // Parse options from token stream
 decl_opts_t parse_opts(csp_rt_t* st, const token_t* tv, int* ip, size_t n,
 		       decl_opts_t iopts);
+// A word to an interrupt trigger, IRQ_NONE if it is not one.
+trigger_t trig_from_tstr(const tstr_t* s);
 
 // Expression reference start pos and length (in tokens)
 typedef struct {

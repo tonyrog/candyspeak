@@ -1117,12 +1117,19 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    fprintf(f, "  {.cn={%s,.init={.u=%u}}},\n", cmn, dp->cn.init.u);
 	    break;
 	case DECL_DIGITAL:
-	    fprintf(f, "  {.di={%s,.pin=%u,.port=%u,.pullup=%u,.pulldown=%u}},\n",
-		    cmn, dp->di.pin, dp->di.port, dp->di.pullup, dp->di.pulldown);
+	    // .irq with the rest, not conditionally: a field left out of the arm
+	    // is a field baked as zero AND a crc_decl that no longer matches, the
+	    // trap the buffer's nbytes and the view's ca both fell into.
+	    fprintf(f, "  {.di={%s,.pin=%u,.port=%u,.pullup=%u,.pulldown=%u"
+		    ",.irq=%u,.soft=%u}},\n",
+		    cmn, dp->di.pin, dp->di.port, dp->di.pullup, dp->di.pulldown,
+		    dp->di.irq, dp->di.soft);
 	    break;
 	case DECL_ANALOG:
-	    fprintf(f, "  {.an={%s,.pin=%u,.port=%u,.pwm=%u,.endian=%u}},\n",
-		    cmn, dp->an.pin, dp->an.port, dp->an.pwm, dp->an.endian);
+	    fprintf(f, "  {.an={%s,.pin=%u,.port=%u,.pwm=%u,.endian=%u"
+		    ",.irq=%u,.soft=%u}},\n",
+		    cmn, dp->an.pin, dp->an.port, dp->an.pwm, dp->an.endian,
+		    dp->an.irq, dp->an.soft);
 	    break;
 	case DECL_FIELD:
 	case DECL_VIEW:

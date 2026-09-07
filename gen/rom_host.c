@@ -2,12 +2,12 @@
 //   source:  examples/empty.csp
 // modified:  Wed Jul 22 21:40:41 2026
 //   version: unknown
-//   built:   Sep  6 2026 00:26:41
+//   built:   Sep  7 2026 00:45:39
 //   size:    33 instr, 11 decl, 61 str, 3 states
 
 #include "csp.h"
-#if ROM_FORMAT_VERSION != 17
-#error "rom.c is stale: generated for ROM format 17, csp.h is newer -- regenerate with 'csp -C'"
+#if ROM_FORMAT_VERSION != 18
+#error "rom.c is stale: generated for ROM format 18, csp.h is newer -- regenerate with 'csp -C'"
 #endif
 
 CSP_IMAGE_TYPE(rom_image_t, 3,12,34,1,1,1);
@@ -78,12 +78,12 @@ static const rom_image_t rom_image_data RODATA = {
   .edg = {0},
   .hdr = {
     .magic = { CSP_IMAGE_MAGIC0, CSP_IMAGE_MAGIC1, CSP_IMAGE_MAGIC2, CSP_IMAGE_MAGIC3 },
-    .size=352, .version=17, .role=0, .generation=0,
+    .size=352, .version=18, .role=0, .generation=0,
     .n_str=0, .n_decl=11, .n_instr=33, .n_edg=0,
     .crc_str=65535, .crc_decl=47814, .crc_instr=43945, .crc_graph=0,
     .ofs_str=64, .ofs_decl=76, .ofs_instr=180, .ofs_idg=324,
     .ofs_ofs=336, .ofs_edg=348,
-    .crc_hdr=43359 }
+    .crc_hdr=16501 }
 };
 const csp_image_ref_t rom_image RODATA = { (const uint8_t*)&rom_image_data };
 CSP_REGISTER_IMAGE(rom_image_data);

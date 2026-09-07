@@ -31,3 +31,14 @@
   {flash_kb, 0}, {ram_kb, 512},
   {peripherals, [{usb,1},{uart,3},{i2c,2},{spi,2},{can,1},{adc,20},
                  {pwm,8},{rtc,1},{wdt,3}]}]}.
+
+%% --- INTERRUPT SOURCES -------------------------------------------------------
+%%
+%% Any GPIO, any edge or level, and the matrix routes it to whichever CPU
+%% interrupt is free -- so like an RP2040 there is no per-pin channel to run out
+%% of. GPIO46 is input-only, which does not stop it interrupting.
+{irq, esp32s3,
+ [{gpio, [{scheme, port_any},
+	  {ports,  [0]},
+	  {edges,  [rising, falling, both, high, low]},
+	  {vector, shared}]}]}.

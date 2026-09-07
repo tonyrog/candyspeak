@@ -51,3 +51,29 @@
   {0, 28, [gpio, 'ain1',   'cap0.2', 'mat0.2']},
   {0, 29, [gpio, 'ain2',   'cap0.3', 'mat0.3']},
   {0, 30, [gpio, 'ain3',   eint3,    'cap0.0']}]}.
+
+%% --- INTERRUPT SOURCES -------------------------------------------------------
+%%
+%% NOTHING NEW IS STATED HERE. An LPC2000 external interrupt is a PIN FUNCTION,
+%% so the table above already says which pins can be one and which EINT each is
+%% -- eint0 on P0.1 and P0.16, eint1 on P0.3 and P0.14, eint2 on P0.7 and P0.15,
+%% eint3 on P0.9, P0.20 and P0.30. `scheme, pin_function` means exactly that:
+%% derive the answer from the table rather than repeat it, because a second list
+%% is a second thing to keep in step.
+%%
+%% The CHANNEL is the function name, and that is the constraint worth checking:
+%% there are four EINTs, so two pins wanting eint2 is a board that cannot work,
+%% and it is silent -- the second PINSEL write wins and the first pin is simply
+%% never heard from.
+%%
+%% VIC channels 14..17, see chips/nxp/drivers/212x/vic_212x.h. Each EINT has its
+%% own vector, so an ISR knows which pin fired without reading anything.
+%%
+%% EXTMODE picks level or edge and EXTPOLAR picks the polarity, so all four
+%% edges below are reachable -- but NOT `both`: one pin, one direction. A
+%% program wanting both has to read the pin in the handler.
+{irq, lpc2000,
+ [{eint, [{scheme,    pin_function},
+	  {functions, [eint0, eint1, eint2, eint3]},
+	  {edges,     [rising, falling, high, low]},
+	  {vector,    per_channel}]}]}.

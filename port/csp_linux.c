@@ -787,10 +787,23 @@ int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
 }
 #endif
 
+// NO INTERRUPT BACKEND HERE, on purpose.
+//
+// A host has no interrupt controller, so csp_board_irq_attach's weak default
+// refuses every source and the RUNTIME falls back to comparing the pin's level
+// between cycles (csp_input_event). That is the same software edge this file
+// used to implement, in the one place every board without the silicon needs it
+// -- and it is what makes a trigger testable under `-F`: a stimulus row writes
+// `Drdy = 1` and the next input phase reports the edge.
+//
+// /state marks such a source `~`: it samples, so a pulse shorter than a cycle
+// is lost where hardware would have caught it.
+
 void csp_setup(csp_rt_t* st)
 {
     time_init();
     csp_can_init(st);
+    csp_setup_events(st);
 }
 
 void csp_input(csp_rt_t* st)
@@ -808,6 +821,7 @@ void csp_input(csp_rt_t* st)
     csp_can_input(st);
     csp_buf_input(st);   // i2c/spi collections and datagrams
     csp_input_timer(st);
+    csp_input_event(st);   // deal out this cycle's interrupt edges
 }
 
 void csp_output(csp_rt_t* st)
@@ -904,6 +918,14 @@ int parse_file(csp_rt_t* st, const char* name, FILE* fin)
 	    return -1;
 	}
     }
+    // A #module/#in/#when the file never closed. Reported HERE because this is
+    // where "the file ended" is known -- the parser sees only lines, and every
+    // one of them after the missing `#end` looked fine on its own.
+    //
+    // NOT at the prompt: a block is legitimately open there while the rules are
+    // being typed.
+    if (csp_check_blocks_closed(st) < 0)
+	return -1;
     // NULL, not an empty tstr_t: name = 0 already means "no name", and an
     // empty tstr_t would ALLOCATE a zero-length string instead -- one byte of a
     // 512-byte table per source file, for a name nothing can ask for.

@@ -249,7 +249,13 @@ static inline void* rdvp(const void* p, int rom)
 //       compute every one of those SIGNED with no complaint. Images travel on
 //       their own -- an A/B slot, a FAILSAFE flashed alone -- so that direction
 //       is reachable and has to be rejected rather than run.
-#define ROM_FORMAT_VERSION 17
+//  v18: interrupts -- csp_digital_t/csp_analog_t carry an `irq` trigger, and the
+//       value slots carry a `fired` bit. The declaration bits were spare and
+//       read back as IRQ_NONE, so an old image in a new firmware is right; a
+//       NEW image in an old firmware is the direction that breaks, because
+//       nothing there arms the interrupt and `? Drdy.fired` reads a bit no
+//       sweep ever sets -- a rule that silently never runs.
+#define ROM_FORMAT_VERSION 18
 
 // Format version of the SETTINGS store, which is NOT ROM_FORMAT_VERSION and not
 // EEPROM_VERSION either. It needs its own because it is the one part of the
@@ -710,7 +716,13 @@ typedef struct PACKED {
     unsigned pullup:1;
     unsigned pulldown:1;
     unsigned cfg:1;     // configuration changed, board must re-apply it
-    unsigned val:16;    // we may shift in bits...?
+    unsigned val:15;    // we may shift in bits...?
+    // An interrupt. Set by csp_input_event for ONE cycle, read as `Drdy.fired`,
+    // and
+    // taken from the TOP of val rather than from a new word: only bit 0 of val
+    // is ever read (csp_part.h gives PART_VAL the PLC_1 row), so the fifteen
+    // above it were free and shift-in still has fourteen left.
+    unsigned fired:1;
 } dvalue_t;
 
 // No endian here, unlike csp_analog_t further down. The declaration keeps it and
@@ -724,7 +736,7 @@ typedef struct PACKED {
     unsigned dir:DIR_BITS;
     unsigned pwm:1;
     unsigned cfg:1;    // configuration changed, board must re-apply it
-    unsigned _res:1;   // spare
+    unsigned fired:1;  // interrupt: set for ONE cycle, read as `Drdy.fired`
     unsigned val:16;
 } avalue_t;
 
@@ -851,6 +863,43 @@ typedef enum {
 // Is this transport one WE start? The two synchronous buses are, and that is
 // the only place the distinction is needed.
 #define TR_IS_SYNC(t)  (((t) == TR_I2C) || ((t) == TR_SPI))
+
+// What makes an interrupt fire. Three bits in csp_digital_t/csp_analog_t; IRQ_NONE
+// is 0 so a declaration that never mentions one is not an interrupt source, and
+// an image from before v18 reads back correctly.
+//
+// NOT every part has all of these -- STM32's EXTI has no level trigger at all --
+// so csp_board_irq_attach REFUSES what the silicon cannot do rather than arming
+// something else. chips/*/*.terms carry which, and `gen_chips.erl --irq-of`
+// prints them.
+//
+// IRQ_READY is not an edge: it is the device's own event, for a part that has
+// one -- a conversion that finished, a frame that arrived.
+typedef enum {
+    IRQ_NONE    = 0,
+    IRQ_RISING  = 1,
+    IRQ_FALLING = 2,
+    IRQ_BOTH    = 3,
+    IRQ_HIGH    = 4,
+    IRQ_LOW     = 5,
+    IRQ_READY   = 6,
+    // NOT a trigger and never stored in a declaration: the spelling `soft`
+    // reaches parse_opts through the same lookup and sets a flag instead. It
+    // sits here so trig_from_tstr has one return type.
+    IRQ_SOFT    = 7,
+} trigger_t;
+
+// How deep blocks may nest. ONE limit for `#in` and `#when` together, because
+// they share one stack -- `#end` closes whichever opened last, and it cannot do
+// that from two separate counters.
+#define CSP_MAX_BLOCK 4
+
+// How many interrupt sources one program may have. The pending set is a
+// uint32_t an ISR ORs into, which is what fixes the number: a wider set is not
+// a bigger array but a read-and-clear that is no longer one instruction on a
+// 32-bit part, and no board here comes close (STM32 has 16 EXTI lines, an LPC
+// has four EINTs).
+#define CSP_MAX_EVENTS 32
 
 // How xref is packed, per transport. One 32-bit constant carries the whole
 // endpoint for every transport but UDP, whose address and port do not fit in
@@ -1594,6 +1643,8 @@ typedef struct PACKED  {
     unsigned port:PORT_BITS;
     unsigned pullup:1;
     unsigned pulldown:1;
+    unsigned irq:3;      // trigger_t; IRQ_NONE = not an interrupt source
+    unsigned soft:1;     // sampling is acceptable -- see decl_opts_t.soft
 } csp_digital_t;
 
 typedef struct PACKED {
@@ -1602,6 +1653,8 @@ typedef struct PACKED {
     unsigned port:PORT_BITS;
     unsigned pwm:1;    // pwm output
     unsigned endian:2; // |little|big
+    unsigned irq:3;    // trigger_t; IRQ_NONE = not an interrupt source
+    unsigned soft:1;   // sampling is acceptable -- see decl_opts_t.soft
 } csp_analog_t;
 
 typedef struct PACKED {
@@ -1751,6 +1804,19 @@ typedef enum {
     ERR_ASSIGN_TO_LOCAL,
     ERR_ASSIGN_TO_PARAM,
     ERR_PARAM_SHAPE,
+    // A word left over after the pin spec on a #digital/#analog. pmatch reads
+    // the options BEFORE the pin, so anything after it was silently dropped --
+    // which is how `#digital D in 2:1 pullup` became a pin with no pull, and
+    // `... 2:13 falling` a pin with no interrupt.
+    ERR_OPTS_AFTER_PIN,
+    // A #module/#in/#when that reached the end of the file with no `#end`.
+    // Raised where the FILE ends, and names the line the block opened on --
+    // which is the only useful place to point, because everything after it was
+    // quietly swallowed into a block that never closed.
+    ERR_BLOCK_OPEN,
+    // More interrupt sources than the pending word has bits. Not a syntax
+    // error: it is raised while arming, where the count is first known.
+    ERR_TOO_MANY_EVENTS,
 } csp_err_t;
 
 // parser state, save state before parse
@@ -1783,6 +1849,7 @@ typedef struct {
     int      ent;                // entry op of that module
     int      sdef;               // state being defined
     index_t  in_marker;          // pending OP_INSTATE gate
+    uint8_t  blk_depth;          // open #in/#when blocks
     xindex_t save_sx;            // sx saved across the module body
     xindex_t sx;                 // state variable
     index_t  cur;                // current module index
@@ -1831,6 +1898,22 @@ typedef struct
 
 // Tokenizer + parser state. See csp_rt_t.cs for why it lives inside the runtime
 // struct rather than beside it.
+// One open block. `#in` and `#when` share the stack, so this carries which kind
+// it is and everything its `#end` has to put back.
+typedef enum { BLK_IN = 0, BLK_WHEN = 1, BLK_MODULE = 2 } blk_kind_t;
+
+typedef struct {
+    index_t mark;                // the gate instruction, patched at #end
+    uint16_t line;               // source line it was opened on -- for the
+				 // "never closed" report, which is useless
+				 // without it: the END is where you notice, the
+				 // OPENING is where the mistake is
+    uint8_t kind;                // blk_kind_t
+    int8_t  sdef;                // state context to restore when this closes
+    uint8_t n_sdef;
+    uint8_t sdefv[MAX_IN_STATES];
+} csp_block_t;
+
 typedef struct {
     reg_allocator_t* ap;         // register allocator
     int ev;                      // eval variables when ev=1
@@ -1841,6 +1924,18 @@ typedef struct {
     index_t in_marker;           // instr index of the pending OP_INSTATE block
                                  // gate (the terminating INSTATE of the OR-chain;
                                  // patched with the skip distance at #end)
+    // Open blocks, innermost last. ONE stack for `#in` and `#when` both: `#end`
+    // closes the group that opened last, and with a counter per kind it closed
+    // the wrong one -- `#when X / #in Idle / ... / #end` shut the #when and left
+    // the #in open, silently swallowing every line after it.
+    //
+    // Each entry carries the enclosing STATE CONTEXT as well as the gate,
+    // because `#in` sets sdef/sdefv for the rules inside it and the block around
+    // it needs its own back when this one closes. A `#when` changes none of
+    // that; it saves and restores the same fields anyway, so the pop is one path
+    // rather than two.
+    csp_block_t blk[CSP_MAX_BLOCK];
+    uint8_t blk_depth;
     // The INSTATE of the last `#in INIT` block a DECLARATION emitted, +1 (0 =
     // none), so consecutive declarations share one gate instead of one each.
     // See asm_decl_init -- which also explains why no separate "is it still the
@@ -2430,6 +2525,27 @@ typedef struct _csp_rt_t
     index_t* timer;              // list of timers, timer_cap slots
     uint8_t* timer_obj;          // owning object per timer[] entry (0 = global)
     index_t  timer_cap;
+    // Interrupts. NOT a list: a source is an io[] entry whose
+    // declaration carries an irq, and io[] is already walked every cycle -- so
+    // the sources are numbered by their ORDER in that walk and csp_setup_events
+    // and csp_input_event agree by both walking it the same way. One list less
+    // to size, allocate and keep in step.
+    //
+    // irq_hw is which of those numbers the board armed IN HARDWARE.
+    //
+    // irq_sw is the rest of the digital ones: a source the silicon cannot arm
+    // is detected in SOFTWARE instead, by comparing the pin's level between
+    // cycles -- so `#digital P in falling 2:1` works on every board and a
+    // program does not have to know which kind it got. The difference is real
+    // and /state shows it: `~` samples, and a pulse shorter than a cycle is
+    // lost where hardware would have caught it.
+    //
+    // A source in NEITHER (an analog `ready` nobody implements) keeps its slot
+    // so the numbering does not shift, and never fires.
+    uint32_t irq_hw;
+    uint32_t irq_sw;
+    uint32_t irq_lvl;            // last level seen, per software slot
+    uint8_t  ne;                 // interrupt sources, <= CSP_MAX_EVENTS
     index_t* module;             // list of modules, mod_cap slots
     index_t  mod_cap;
     // Rule bodies counted at EMIT time (alloc_instr_ptr), no scan. csp_rebuild
@@ -3071,6 +3187,36 @@ extern uint32_t csp_time_ms(void);
 extern unsigned long csp_time_us(void);
 extern void csp_setup(csp_rt_t* st);
 extern void csp_input(csp_rt_t* st);
+
+// --- interrupts: the two board hooks -----------------------------------------
+//
+// RULES NEVER RUN IN INTERRUPT CONTEXT. The arena is not re-entrant, so an ISR
+// does one thing -- OR its bit into a pending word -- and the cycle reads that
+// word once, in the input phase, exactly as csp_input_timer reads the clock.
+//
+// attach: arm `slot` (0..CSP_MAX_EVENTS-1) for this declaration's pin on this
+// trigger. 0 when armed, -1 when the silicon cannot -- a pin with no interrupt,
+// a channel already taken, a level trigger on a part that has only edges. A
+// refusal is reported once at setup and the source stays quiet; it is NOT an
+// error that stops the program, because the same source file is meant to run on
+// more than one board.
+extern int csp_board_irq_attach(csp_rt_t* st, index_t ix, trigger_t trig,
+				uint8_t slot);
+// take: read AND CLEAR the pending set. Bit `slot` means that source fired at
+// least once since the last call -- at least, not exactly: two edges inside one
+// cycle are one `fired`, which is what an edge-triggered bit can say.
+extern uint32_t csp_board_irq_take(csp_rt_t* st);
+
+// Arm every declared source. Called from csp_setup, after the pins are
+// configured -- arming an interrupt on a pin that is still at its reset default
+// is arming it on whatever the pin happened to be.
+extern void csp_setup_events(csp_rt_t* st);
+// One cycle's worth: clear last cycle's `fired`, deal out this cycle's pending
+// bits, and wake the rules that read them. The counterpart to csp_input_timer.
+extern void csp_input_event(csp_rt_t* st);
+// Which slot a declaration got, -1 if it is not a source. For /state, which
+// needs it to say whether the board actually armed this one.
+extern int csp_event_slot(csp_rt_t* st, index_t ix);
 extern void csp_output(csp_rt_t* st);
 // common timer processing 
 // Frames drained per csp_input. A bound is required: an idle bus costs one
@@ -3213,6 +3359,9 @@ extern void csp_undo_mark(csp_rt_t* st, csp_undo_t* s);
 extern void csp_undo_push(csp_rt_t* st, const csp_undo_t* s);
 // Bytes the csp_rt_t struct itself takes -- /memory reports it as `struct`.
 extern void csp_set_err_arg_int(csp_rt_t* st, int i, int ival);
+// Report a #module/#in/#when left open at the end of a file. 0 when all closed,
+// -1 with the error set (innermost first) otherwise.
+extern int csp_check_blocks_closed(csp_rt_t* st);
 extern uint32_t model_state(void);
 // True when decl `di` is the implicit State variable -- the runtime's sticky
 // FAILSAFE gate asks, and so does the listing (which must not print it).

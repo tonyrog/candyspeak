@@ -79,3 +79,29 @@
   {flash_kb, 1024}, {ram_kb, 128},
   {peripherals, [{usb,2},{uart,6},{i2c,3},{spi,3},{can,2},{adc,16},
                  {dac,2},{pwm,14},{rtc,1},{wdt,2}]}]}.
+
+%% --- INTERRUPT SOURCES -------------------------------------------------------
+%%
+%% EVERY GPIO PIN CAN INTERRUPT, and there is still a hard limit: the EXTI line
+%% is the BIT NUMBER, not the pin. PA1, PB1 and PC1 all want line 1, SYSCFG_EXTICR
+%% selects which port owns it, and only one can. So sixteen sources at a time out
+%% of eighty-two pins, and the collision is between pins that look unrelated --
+%% the motor on PA1 and a sensor on PB1 are the same channel.
+%%
+%% That is what `per_bit` means and it is the whole reason this needs checking
+%% rather than documenting. Nothing warns at run time: the second EXTICR write
+%% wins and the first pin goes quiet.
+%%
+%% Vectors are not one per line: EXTI0..EXTI4 have their own, then EXTI9_5 and
+%% EXTI15_10 are shared, so a handler above line 4 reads EXTI_PR to find out
+%% which pin fired. See the IRQn list in cmsis-device-f4/Include/stm32f405xx.h.
+%%
+%% NO LEVEL TRIGGER. EXTI has a rising trigger register and a falling one and
+%% nothing else; setting both gives `both`. A level-sensitive source -- an IMU
+%% that holds DRDY low until read -- has to be edge-triggered here and the level
+%% checked in the handler.
+{irq, stm32f4,
+ [{exti, [{scheme,   per_bit},
+	  {channels, 16},
+	  {edges,    [rising, falling, both]},
+	  {vector,   grouped}]}]}.

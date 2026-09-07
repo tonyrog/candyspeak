@@ -27,3 +27,27 @@
   {flash_kb, 256}, {ram_kb, 32},
   {peripherals, [{usb,1},{uart,6},{i2c,6},{spi,6},{adc,20},{dac,1},
                  {pwm,3},{rtc,1},{wdt,1}]}]}.
+
+%% --- INTERRUPT SOURCES -------------------------------------------------------
+%%
+%% The EIC has sixteen EXTINT channels and a FIXED pin-to-channel map: a pin can
+%% only ever be the one EXTINT its silicon wires it to, and two pins on the same
+%% channel cannot both be sources. Shaped exactly like STM32's EXTI, except the
+%% map is arbitrary rather than "the bit number" -- PA02 is EXTINT2 but PB08 is
+%% EXTINT8 and PA16 is EXTINT0.
+%%
+%% NO TABLE HERE, and that is deliberate. Transcribing eighty pin-to-EXTINT rows
+%% from a datasheet for a board nothing bare-metal builds would introduce more
+%% errors than it caught -- the same call chips/st/README.md makes about the F4
+%% pin capability table. The Arduino core already holds the map and answers at
+%% run time: digitalPinToInterrupt(pin) returns NOT_AN_INTERRUPT for a pin that
+%% cannot, and attachInterrupt on an already-claimed channel silently replaces
+%% the earlier one.
+%%
+%% So a port asks the core. Write the table the day something builds bare-metal
+%% for this part, when a pin naming a wrong channel becomes possible.
+{irq, samd21,
+ [{eic, [{scheme,   runtime},
+	 {resolver, "digitalPinToInterrupt"},
+	 {channels, 16},
+	 {edges,    [rising, falling, both, high, low]}]}]}.

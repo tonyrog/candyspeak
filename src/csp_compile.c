@@ -281,6 +281,48 @@ NOINLINE static bool_t open_in_block(csp_rt_t* st, const uint8_t* states, int ns
 				     int implicit);
 NOINLINE static void close_in_block(csp_rt_t* st);
 
+// Push an open block. Saves the STATE CONTEXT the block around us set, so the
+// pop can put it back -- an `#in` inside an `#in` has to see the outer one's
+// states again when it closes, and a `#when` in between must not lose them.
+// Returns 0 when the stack is full.
+NOINLINE static int blk_push(csp_rt_t* st, index_t mark, uint8_t kind)
+{
+    csp_block_t* b;
+
+    if (st->cs->blk_depth >= CSP_MAX_BLOCK)
+	return 0;
+    b = &st->cs->blk[st->cs->blk_depth++];
+    b->mark   = mark;
+    b->line   = (uint16_t)st->ps.line;
+    b->kind   = kind;
+    b->sdef   = (int8_t)st->cs->sdef;
+    b->n_sdef = st->cs->n_sdef;
+    memcpy(b->sdefv, st->cs->sdefv, sizeof(b->sdefv));
+    return 1;
+}
+
+// Close the innermost block: patch its gate to skip everything emitted since,
+// and restore the state context of the one around it. ONE path for both kinds --
+// the gate opcodes differ but the patch and the restore do not.
+NOINLINE static void blk_pop(csp_rt_t* st)
+{
+    csp_block_t* b;
+
+    if (st->cs->blk_depth == 0)
+	return;
+    b = &st->cs->blk[--st->cs->blk_depth];
+    // A module's mark is its OP_ENTER, which csp_parse_end patches with the body
+    // length -- not a skip distance. Only a gate is patched here.
+    if (b->kind != BLK_MODULE)
+	ram_instr_at(st, b->mark)->in.nxt = st->ps.nn - b->mark;
+    st->cs->sdef   = b->sdef;
+    st->cs->n_sdef = b->n_sdef;
+    memcpy(st->cs->sdefv, b->sdefv, sizeof(b->sdefv));
+    // in_marker follows the block we are back INSIDE, not the one just closed.
+    st->cs->in_marker = st->cs->blk_depth
+	? st->cs->blk[st->cs->blk_depth - 1].mark : 0;
+}
+
 // Narrow a compiler xindex_t to the index_t a memory instruction carries, and
 // emit the OP_SETO in front of it when the reference names an object.
 //
@@ -1121,6 +1163,7 @@ void csp_pstate_save(csp_rt_t* st, csp_pmark_t* pm)
     pm->ent         = st->cs->ent;
     pm->sdef        = st->cs->sdef;
     pm->in_marker   = st->cs->in_marker;
+    pm->blk_depth   = st->cs->blk_depth;
     pm->save_sx     = st->cs->save_sx;
     pm->sx          = st->cs->sx;
     pm->cur         = st->cur;
@@ -1152,6 +1195,7 @@ void csp_pstate_restore(csp_rt_t* st, csp_pmark_t* pm)
     st->cs->ent         = pm->ent;
     st->cs->sdef        = pm->sdef;
     st->cs->in_marker   = pm->in_marker;
+    st->cs->blk_depth   = pm->blk_depth;
     st->cs->save_sx     = pm->save_sx;
     st->cs->sx          = pm->sx;
     st->cur         = pm->cur;
@@ -3053,6 +3097,15 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
     st->cs->mdef = ix;  // current module being defined
     if (!asm_ENTER(st, &jx, 0, ix))
 	return -1;
+    // ON THE SAME STACK as #in and #when. A module IS a block that `#end`
+    // closes, and leaving it off meant `#when X` then `#module M` then `#end`
+    // shut the #when -- the module stayed open and swallowed the rest of the
+    // file. The mark is the OP_ENTER, not a gate; blk_pop reads `kind` before
+    // touching it.
+    if (!blk_push(st, (index_t)jx, BLK_MODULE)) {
+	csp_set_error(st, ERR_END_MISMATCH);
+	return -1;
+    }
     st->cs->ent = jx;   // entry point of module being defined
     i = INDEX(ix);
     ram_decl_at(st,i)->md.n = 0;
@@ -3060,6 +3113,32 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
     return 0;
 }
 
+
+// A BLOCK LEFT OPEN AT THE END OF A FILE.
+//
+// Silence was the old answer: everything after the missing `#end` was swallowed
+// into the block, the file parsed, and the program ran with rules that fire only
+// when a condition holds that the author thought applied to two lines.
+//
+// The INNERMOST is reported, and by the line it OPENED on -- where the file ends
+// is where you notice, but the opening is where the mistake is.
+NOINLINE int csp_check_blocks_closed(csp_rt_t* st)
+{
+    const csp_block_t* b;
+    rostring_t what;
+
+    if ((st->cs == NULL) || (st->cs->blk_depth == 0))
+	return 0;
+    b = &st->cs->blk[st->cs->blk_depth - 1];
+    what = (b->kind == BLK_MODULE) ? ros_module
+	 : (b->kind == BLK_WHEN)   ? ros_when
+				   : ros_in;
+    if (csp_set_error(st, ERR_BLOCK_OPEN)) {
+	csp_set_err_arg_rostr(st, 0, what);
+	csp_set_err_arg_int(st, 1, (int)b->line);
+    }
+    return -1;
+}
 
 // '#' 'end' [....]
 NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
@@ -3073,11 +3152,17 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	return -1;
     }
 
-    if (st->cs->sdef >= 0) {
-	// close the #in block: patch OP_INSTATE.nxt to jump past everything
-	// emitted since the gate, so a State mismatch skips the whole block.
-	close_in_block(st);
-	return 0;
+    // THE INNERMOST BLOCK, whichever kind it is. One stack, so `#end` cannot
+    // close the wrong group -- with a flag per kind, `#when X / #in Idle / ... /
+    // #end` shut the #when and left the #in open, and every line after it was
+    // swallowed into a block that never ended.
+    if (st->cs->blk_depth > 0) {
+	if (st->cs->blk[st->cs->blk_depth - 1].kind != BLK_MODULE) {
+	    blk_pop(st);
+	    return 0;
+	}
+	// A module: the work below closes it, and the pop restores the state
+	// context the module was opened in.
     }
     if ((mx = st->cs->mdef) == BAD_INDEX) {
 	csp_set_error(st, ERR_END_MISMATCH);
@@ -3096,6 +3181,7 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
     st->cs->mdef = BAD_INDEX;
     st->cs->ent = 0;
     st->cs->sx   = st->cs->save_sx;
+    blk_pop(st);
     return 0;
 }
 
@@ -3330,6 +3416,11 @@ NOINLINE static int asm_decl_init(csp_rt_t* st, const token_t* tv, size_t n,
 	    (instr(st, mk, op) == OP_INSTATE) &&
 	    (instr(st, mk, in.imm) == STATE_INIT) &&
 	    ((index_t)(mk + instr(st, mk, in.nxt)) == (index_t)st->ps.nn)) {
+	    // PUSH even though no gate was emitted: close_in_block below pops,
+	    // and an unbalanced pop closes the block we are standing in. Before
+	    // installing the INIT context, so the pop restores the outer one.
+	    if (!blk_push(st, mk, BLK_IN))
+		return -1;
 	    st->cs->in_marker = mk;
 	    st->cs->sdefv[0]  = STATE_INIT;
 	    st->cs->n_sdef    = 1;
@@ -3735,6 +3826,30 @@ NOINLINE int csp_parse_param(csp_rt_t* st, token_t* tv, int ti, size_t n)
 }
 
 
+// A WORD LEFT OVER AFTER THE PIN SPEC.
+//
+// The options come before the pin, so pmatch never looks past it -- and
+// anything written there was accepted and thrown away. `#digital D in 2:1
+// pullup` was a pin with no pull, silently; a trigger in that place is a pin
+// with no interrupt, which is the same failure with a longer fuse.
+//
+// Only for the non-array forms: an array's tail IS the rest of the pin spec,
+// and array_pins reads it.
+NOINLINE static int check_pin_tail(csp_rt_t* st, token_t* tv, int r, size_t n)
+{
+    if ((r < (int)n) && (tv[r].t != NEWLINE)) {
+	if (csp_set_error(st, ERR_OPTS_AFTER_PIN)) {
+	    if (tv[r].t == WORD)
+		csp_set_err_arg_tstr(st, 0, &tv[r].v.str);
+	    else
+		csp_set_err_arg_rostr(st,
+		    0, (rostring_t)ro_ptr(&tok_table[tv[r].t].name));
+	}
+	return -1;
+    }
+    return 0;
+}
+
 // '#' 'digital' <name> [<iodir>|<pull>] [<port>':']<pin>
 NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
@@ -3761,6 +3876,11 @@ NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, int ti, size_t n)
     ram_decl_at(st,i)->dir = d.opts.dir;
     ram_decl_at(st,i)->di.pullup = d.opts.pullup;
     ram_decl_at(st,i)->di.pulldown = d.opts.pulldown;
+    // An interrupt is a property of the pin, like the pull. `#digital Drdy in
+    // falling 2:13` is the whole of it: the trigger arms the source and the
+    // guard is Drdy.fired. See doc/EVENTS.md.
+    ram_decl_at(st,i)->di.irq = d.opts.trig;
+    ram_decl_at(st,i)->di.soft = d.opts.soft;
 
     if (array_replicate(st, i, DECL_DIGITAL, alen) < 0)
 	return -1;
@@ -3769,7 +3889,7 @@ NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, int ti, size_t n)
     if (alen > 1)
 	return array_pins(st, tv, r, n, i, DECL_DIGITAL, alen,
 			  d.port_pin.port, d.port_pin.pin);
-    return 0;
+    return check_pin_tail(st, tv, r, n);
 }
 
 
@@ -3806,13 +3926,15 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, int ti, size_t n)
     ram_decl_at(st,i)->dir = d.opts.dir;
     ram_decl_at(st,i)->an.pwm = d.opts.pwm;
     ram_decl_at(st,i)->an.endian = d.opts.endian;
+    ram_decl_at(st,i)->an.irq = d.opts.trig;
+    ram_decl_at(st,i)->an.soft = d.opts.soft;
 
     if (array_replicate(st, i, DECL_ANALOG, alen) < 0)
 	return -1;
     if (alen > 1)
 	return array_pins(st, tv, r, n, i, DECL_ANALOG, alen,
 			  d.port_pin.port, d.port_pin.pin);
-    return 0;
+    return check_pin_tail(st, tv, r, n);
 }
 
 
@@ -4929,20 +5051,82 @@ NOINLINE static bool_t open_in_block(csp_rt_t* st, const uint8_t* states, int ns
 	ram_instr_at(st, npos[k])->in.nxt = l1 - npos[k];
     for (k = 0; k < ns; k++)
 	st->cs->sdefv[k] = states[k];
+    // PUSH BEFORE the new context is installed: what the pop restores is the
+    // block around us, not this one.
+    if (!blk_push(st, (index_t)mk, BLK_IN))
+	return 0;
     st->cs->n_sdef  = (uint8_t)ns;
     st->cs->sdef    = states[0];
     st->cs->in_marker = mk;
     return 1;
 }
 
-// Close the current #in block: patch the terminating OP_INSTATE.nxt to skip the
-// whole block on a State mismatch, and clear the compile-time state context.
+// Close the current #in block. The patch and the state restore are blk_pop's;
+// this name is kept because asm_decl_init reads better with it.
 NOINLINE static void close_in_block(csp_rt_t* st)
 {
-    ram_instr_at(st, st->cs->in_marker)->in.nxt = st->ps.nn - st->cs->in_marker;
-    st->cs->sdef   = -1;
-    st->cs->n_sdef = 0;
+    blk_pop(st);
 }
+
+// '#' 'when' <expr>  ...  '#' 'end'
+//
+// A block gate on a CONDITION, where `#in <state>+` is one on the state machine.
+// A SECOND WORD rather than a second meaning for `#in`: `#in Idle` reads as "in
+// this state", and giving that word a second sense makes both harder to read.
+//
+// WHAT IT COMPILES TO:
+//
+//     <the condition, into a register>
+//     NINSTATE r, 0, nxt        skip the block when the condition is false
+//     <the rules>
+//
+// OP_NINSTATE already means "if reg == imm, jump nxt". With imm 0 and nxt
+// patched past the block at `#end`, that is exactly "skip unless the condition
+// holds" -- so NO NEW OPCODE and no ROM format change, and the same truthiness
+// OP_RULE tests (nonzero, not == 1). That is the whole of Tony's hint about
+// reusing `#in`: the gate was already there, it just needed a different imm.
+//
+// The condition is emitted as PLAIN INSTRUCTIONS, not as a rule of its own. One
+// evaluation per cycle for the whole block, which is what a block is for:
+// measured, `? Drdy.fired` costs one instruction per rule but
+// `? Drdy.fired && A < 100` costs five.
+NOINLINE int csp_parse_when(csp_rt_t* st, token_t* tv, int ti, size_t n)
+{
+    rentry_t rc;
+    size_t num;
+    int mk = 0;
+
+    if ((ti >= (int)n) || (tv[ti].t == NEWLINE)) {
+	csp_set_error(st, ERR_SYNTAX);     // a gate with no condition is nothing
+	return -1;
+    }
+    // Blocks NEST -- a condition refining another one is the ordinary case -- and
+    // #in and #when share the stack, so the only limit is its depth.
+    if (st->cs->blk_depth >= CSP_MAX_BLOCK) {
+	csp_set_error(st, ERR_END_MISMATCH);
+	return -1;
+    }
+    num = n - (size_t)ti;
+    if (!csp_parse_expr(st, &tv[ti], &num, &rc))
+	return -1;
+    if (!rc.L)
+	csp_load(st, &rc);
+    if (!asm_NINSTATE(st, &mk, rc.reg, 0)) {
+	csp_set_error(st, ERR_SYNTAX);
+	return -1;
+    }
+    free_reg(st, rc.reg);
+    if (!blk_push(st, (index_t)mk, BLK_WHEN)) {
+	csp_set_error(st, ERR_END_MISMATCH);
+	return -1;
+    }
+    st->cs->in_marker = (index_t)mk;
+    return 0;
+}
+
+// Close the current #when: patch the NINSTATE to jump past everything emitted
+// since it. The mirror of close_in_block, and the same one-line patch.
+
 
 // #in <state> [<state> ...]  -- a block that runs in ANY of the listed states.
 // Multiple states OR together (see open_in_block). A single state is the common
@@ -4955,8 +5139,8 @@ NOINLINE int csp_parse_in(csp_rt_t* st, token_t* tv, int ti, size_t n)
 
     if (tv[ti].t != WORD) return -1;
 
-    if (st->cs->sdef != -1) {   // implicit NORMAL+ wraps close themselves, so an open
-	csp_set_error(st, ERR_END_MISMATCH);   // block here is a genuine nested #in
+    if (st->cs->blk_depth >= CSP_MAX_BLOCK) {
+	csp_set_error(st, ERR_END_MISMATCH);
 	return -1;
     }
     for (i = ti; (i < (int)n) && (tv[i].t == WORD); i++) {
@@ -5077,6 +5261,10 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 		// #constant does, so the two are told apart here too.
 		else if (i == D_PARAM)
 		    r = csp_parse_param(st, tv, 2, num);
+		// #when declares no type: it makes a hidden #local for the
+		// condition and gates the block on it. Nothing for the switch.
+		else if (i == D_WHEN)
+		    r = csp_parse_when(st, tv, 2, num);
 		else
 		switch(decl_table_code(i)) {
 		case DECL_MODULE:

@@ -67,6 +67,7 @@ analog analog
 timer timer
 field field
 buffer buffer
+when when
 value value
 pin pin
 port port
@@ -79,6 +80,13 @@ rx rx
 tx tx
 dlc dlc
 len len
+soft soft
+rising rising
+falling falling
+both both
+high high
+low low
+ready ready
 min min
 max max
 abs abs
@@ -90,8 +98,6 @@ timeout timeout
 elapsed elapsed
 progress progress
 changed changed
-rising rising
-falling falling
 print print
 println println
 tick tick

@@ -377,6 +377,19 @@ static void print_decl_and_name(csp_rt_t* st, decl_t d, sindex_t mod, sindex_t n
     list_name(st, mod, name);
 }
 
+static rostring_t fmt_trigger(trigger_t t)
+{
+    switch (t) {
+    case IRQ_RISING:  return ros_rising;
+    case IRQ_FALLING: return ros_falling;
+    case IRQ_BOTH:    return ros_both;
+    case IRQ_HIGH:    return ros_high;
+    case IRQ_LOW:     return ros_low;
+    case IRQ_READY:   return ros_ready;
+    default:          return ros_none;
+    }
+}
+
 // `[N]` after the name of an array's head. Nothing for a plain declaration.
 static void list_array_len(csp_rt_t* st, int i)
 {
@@ -458,6 +471,27 @@ typedef struct {
 // The `#in <states>` line itself, from st->list_states. The caller has already
 // emitted the tag column and the indent -- this is only the text, so the eager
 // and the deferred paths cannot render it differently.
+// `#when <condition>`. The condition is rendered from the instructions the gate
+// left behind, the same way a rule's `?` clause is -- so what comes out is what
+// went in, which is the contract /list has to keep for /save and for a ROM.
+// Does the (N)INSTATE run starting at j end in an INSTATE? That is what makes it
+// an `#in` chain rather than a `#when` gate; see the call site.
+static int gate_is_in(csp_rt_t* st, int j, int to)
+{
+    while ((j < to) && (instr(st,j,op) == OP_NINSTATE))
+	j++;
+    return (j < to) && (instr(st,j,op) == OP_INSTATE);
+}
+
+static void list_when_header(csp_rt_t* st, int from, int gate)
+{
+    csp_print_char('#');
+    csp_print_rostr(ros_when);
+    csp_print_blank();
+    csp_print_when(st, from, gate);
+    list_eol();
+}
+
 static void list_in_header(csp_rt_t* st, int indent)
 {
     int k;
@@ -495,7 +529,17 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
     // the traffic example gave eight `#in X` / `#end` pairs with nothing between
     // them, more lines of empty block than of matching rule.
     int block_gate;  // ip of the gate whose `#in` is still unprinted, -1 if none
+    // For a #when block, where its CONDITION's instructions start (-1 = this is
+    // an #in, or no block). The gate itself only says which register to read;
+    // the code that filled it runs from the end of the previous rule.
+    int block_when;
     int block_shown; // 1 once this block's `#in` has been printed
+    // ENCLOSING blocks, innermost last. #when nests -- lib/analog.csp puts one
+    // inside another -- so the four fields above are the INNERMOST block and
+    // this is what to go back to when it closes. Without it the outer `#end`
+    // was never printed and the inner rules were indented one level short.
+    struct { int end, gate, when, shown; } stk[CSP_MAX_BLOCK + 1];
+    int depth;
     uint32_t fbits;  // variables/states present in this rule (by filter index)
     sindex_t cur_mod = 0;
 
@@ -507,7 +551,9 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
     fbits = 0;
     block_end = -1;
     block_gate = -1;
+    block_when = -1;
     block_shown = 0;
+    depth = 0;
     st->list_nstate = 0;
     // Rules are numbered by absolute position, so a range starting part-way in
     // has to know how many came before it.
@@ -529,24 +575,77 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	}
 	// Close a finished #in block: print `#end` (no number), leave the state.
 	// Only when its `#in` was printed -- an empty block writes neither half.
-	if ((block_end >= 0) && (i >= block_end)) {
+	// One `#end` per level: a nested block closes at the same ip as the one
+	// around it when it is the last thing in it, so this is a while.
+	while ((block_end >= 0) && (i >= block_end)) {
 	    if (block_shown) {
 		list_column(0, instr_seg(st, i), 0);
-		list_indent(indent);
+		// Same level its `#when`/`#in` went out at: the header was
+		// printed with the depth this block sits at, and the pop below
+		// has not happened yet.
+		list_indent(indent + depth);
 		print_decl(DECL_END);
 		list_eol();
 	    }
-	    block_end = -1;
-	    block_gate = -1;
+	    if (depth > 0) {
+		depth--;
+		block_end   = stk[depth].end;
+		block_gate  = stk[depth].gate;
+		block_when  = stk[depth].when;
+		block_shown = stk[depth].shown;
+	    }
+	    else {
+		block_end = -1;
+		block_gate = -1;
+		block_when = -1;
+		block_shown = 0;
+	    }
+	    st->list_nstate = 0;
+	}
+	// A #when gate: the condition, then ONE OP_NINSTATE against zero whose
+	// nxt skips the block. Told apart from an #in chain by coming FIRST --
+	// an #in gate is `LD State` immediately before its (N)INSTATE run, and
+	// that shape is matched below, so a bare NINSTATE reaching here is a
+	// #when. The condition renders from where the last rule ended.
+	if ((instr(st,i,op) == OP_NINSTATE) && (instr(st,i,in.imm) == 0)) {
+	    if ((block_end >= 0) && (depth < CSP_MAX_BLOCK)) {
+		stk[depth].end   = block_end;   // remember the block around us
+		stk[depth].gate  = block_gate;
+		stk[depth].when  = block_when;
+		stk[depth].shown = block_shown;
+		depth++;
+	    }
+	    block_end = i + instr(st,i,in.nxt);
+	    block_gate = i;
+	    block_when = rule;         // where the condition's code starts
 	    block_shown = 0;
 	    st->list_nstate = 0;
+	    if (!c->nf && !c->scope && !c->smask) {
+		list_column(0, instr_seg(st, i), 0);
+		list_indent(indent + depth);
+		list_when_header(st, block_when, i);
+		block_shown = 1;
+	    }
+	    i++;
+	    rule = i;
+	    continue;
 	}
 	// A block gate is `LD State ; NINSTATE* ; INSTATE` (open_in_block). Emit
 	// `#in <states>` from the chain, arm block_end, and let list_states drop
 	// the per-rule State guard. The whole gate is consumed here, never listed.
+	// AN #in CHAIN ALWAYS ENDS IN AN INSTATE -- open_in_block emits the last
+	// state that way, and a single state emits only that. A #when gate is one
+	// NINSTATE against zero and nothing else. The two have the SAME two
+	// instruction shape when a #when's condition is a plain variable (`LD X ;
+	// NINSTATE 0`), which listed as `#in INIT` because state 0 is INIT.
+	//
+	// Testing gsx instead would be wrong: a module's #in gates on the
+	// MODULE's own State, a different declaration, and that block still has
+	// to list as `#in`.
 	if ((instr(st,i,op) == OP_LD) && (i+1 < to) &&
 	    ((instr(st,i+1,op) == OP_NINSTATE) ||
-	     (instr(st,i+1,op) == OP_INSTATE))) {
+	     (instr(st,i+1,op) == OP_INSTATE)) &&
+	    gate_is_in(st, i+1, to)) {
 	    int j = i + 1;
 	    int ns = 0;
 	    while ((j < to) && (instr(st,j,op) == OP_NINSTATE)) {
@@ -555,7 +654,6 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	    }
 	    // terminating INSTATE
 	    if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st,j,in.imm);
-	    block_end = j + instr(st,j,in.nxt);
 	    st->list_nstate = ns;
 	    // With a filter: remembered, not printed -- the header goes out with
 	    // the first rule inside it that survives. Without one: printed now,
@@ -566,11 +664,22 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	    //
 	    // list_states/list_nstate are set either way: the rule renderer reads
 	    // them to drop the per-rule State guard.
+	    // The same push a #when does: the two nest in each other, so an #in
+	    // opening inside an open block must not overwrite it.
+	    if ((block_end >= 0) && (depth < CSP_MAX_BLOCK)) {
+		stk[depth].end   = block_end;
+		stk[depth].gate  = block_gate;
+		stk[depth].when  = block_when;
+		stk[depth].shown = block_shown;
+		depth++;
+	    }
+	    block_end = j + instr(st,j,in.nxt);
 	    block_gate = i;
+	    block_when = -1;
 	    block_shown = 0;
 	    if (!c->nf && !c->scope && !c->smask) {
 		list_column(0, instr_seg(st, i), 0);
-		list_indent(indent);
+		list_indent(indent + depth);
 		list_in_header(st, indent);
 		block_shown = 1;
 	    }
@@ -649,7 +758,10 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 		    if ((block_gate >= 0) && !block_shown) {
 			list_column(0, instr_seg(st, block_gate), 0);
 			list_indent(indent);
-			list_in_header(st, indent);
+			if (block_when >= 0)
+			    list_when_header(st, block_when, block_gate);
+			else
+			    list_in_header(st, indent);
 			block_shown = 1;
 		    }
 		    list_column(rule_no, instr_seg(st, rule_pos),
@@ -657,7 +769,7 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 				bitset_tst(st->dis_rule, rule_no-1));
 		    // One level deeper inside an #in block, so a listing nests the
 		    // way the source does instead of running flat under the gate.
-		    list_indent(indent + ((block_end >= 0) ? 1 : 0));
+		    list_indent(indent + depth + ((block_end >= 0) ? 1 : 0));
 		    csp_print_rule(st, rule);
 		    list_eol();
 		}
@@ -693,13 +805,23 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	default: i++; break;
 	}
     }
-    // A #in block that ran to the end of the range still needs its `#end` -- but
-    // again only if its header was printed.
-    if ((block_end >= 0) && block_shown) {
-	list_column(0, instr_seg(st, to - 1), 0);
-	list_indent(indent);
-	print_decl(DECL_END);
-	list_eol();                 // csp_print_line here left the tag pending
+    // Blocks that ran to the end of the range still need their `#end` -- but
+    // again only where the header was printed. A LOOP, because they nest and
+    // the innermost one closing at `to` means every one around it does too:
+    // `#when X / #when Y / Z=7 / #end / #end` at the end of a program wrote a
+    // single `#end` and listed back as one block.
+    while (block_end >= 0) {
+	if (block_shown) {
+	    list_column(0, instr_seg(st, to - 1), 0);
+	    list_indent(indent + depth);
+	    print_decl(DECL_END);
+	    list_eol();             // csp_print_line here left the tag pending
+	}
+	if (depth == 0)
+	    break;
+	depth--;
+	block_end   = stk[depth].end;
+	block_shown = stk[depth].shown;
     }
     st->list_nstate = 0;
     return rule_no;
@@ -1094,6 +1216,18 @@ match:
 		csp_print_blank();
 		csp_print_rostr(ros_pulldown);
 	    }
+	    // The interrupt trigger, with the other options and in the order
+	    // they are read back in. Dropped from the listing, a program copied
+	    // out of a board comes home with its interrupts gone -- the same
+	    // failure a timer's `= 1` used to have.
+	    if (d.di.irq != IRQ_NONE) {
+		if (d.di.soft) {
+		    csp_print_blank();
+		    csp_print_rostr(ros_soft);
+		}
+		csp_print_blank();
+		csp_print_rostr(fmt_trigger((trigger_t)d.di.irq));
+	    }
 	    csp_print_blank();  // port:pin (needed to mod/rewire)
 	    list_pin_spec(st, i, 1);
 	    list_eol();
@@ -1116,6 +1250,14 @@ match:
 	    if (d.an.pwm) {
 		csp_print_blank();
 		csp_print_rostr(ros_pwm);
+	    }
+	    if (d.an.irq != IRQ_NONE) {
+		if (d.an.soft) {
+		    csp_print_blank();
+		    csp_print_rostr(ros_soft);
+		}
+		csp_print_blank();
+		csp_print_rostr(fmt_trigger((trigger_t)d.an.irq));
 	    }
 	    csp_print_blank();              // port:pin
 	    list_pin_spec(st, i, 0);
@@ -1440,6 +1582,45 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
     csp_print_lit("= ");
     if (!is_state || !state_print_state(st, csp_value(st, ix).i))
 	csp_print_value(st, decl(st,di,vt), csp_value(st, ix));
+    // The interrupt trigger, and WHETHER THE BOARD ARMED IT. A source the silicon refused
+    // -- a pin with no interrupt, a channel already taken, a level trigger on a
+    // part that has only edges -- is silent forever, and silence is exactly what
+    // a working source looks like between edges. `!` says it is not armed, the
+    // same mark /list uses for a rule that is switched off.
+    {
+	trigger_t trig = (t == DECL_DIGITAL) ? (trigger_t)decl(st,di,di.irq)
+	    : (t == DECL_ANALOG) ? (trigger_t)decl(st,di,an.irq) : IRQ_NONE;
+	if (trig != IRQ_NONE) {
+	    int slot = csp_event_slot(st, ix);
+	    value_t* v = csp_dio_slot(st, ix, DIN);
+	    csp_print_lit("  ");
+	    csp_print_rostr(fmt_trigger(trig));
+	    // WHICH KIND OF SOURCE THIS IS, because all three look the same
+	    // between edges and only one of them cannot miss a short pulse:
+	    //
+	    //   (nothing)  the silicon arms it -- an edge is caught between
+	    //              cycles and cannot be lost
+	    //   ~          software: the level is compared each cycle, so a
+	    //              pulse shorter than a cycle is not seen
+	    //   !          armed by neither, and will never fire
+	    if (slot < 0)
+		csp_print_char('!');
+	    else if (st->irq_sw & ((uint32_t)1 << slot)) {
+		csp_print_char('~');
+		// The pin did not ask for sampling and got it anyway: the board
+		// cannot arm this one, so a pulse shorter than a cycle is lost.
+		// `soft` in the declaration says that is acceptable and drops
+		// the mark -- which is the whole point of the word.
+		if (!((t == DECL_DIGITAL) ? decl(st,di,di.soft)
+					  : decl(st,di,an.soft)))
+		    csp_print_char('!');
+	    }
+	    else if (!(st->irq_hw & ((uint32_t)1 << slot)))
+		csp_print_char('!');
+	    if ((t == DECL_DIGITAL) ? v->d.fired : v->a.fired)
+		csp_print_lit("  FIRED");
+	}
+    }
     list_eol();
 }
 
@@ -2653,6 +2834,24 @@ static int line_is_rule(const char* line)
     return 0;
 }
 
+// IS A BLOCK OPEN? A bare expression at the prompt is a query -- run it once,
+// show the answer -- but the same line inside a `#module`, an `#in` or a
+// `#when` is the block's BODY. Evaluating it once there prints at the wrong
+// time and leaves the block empty, which is the shape a program comes back in
+// after /save: the rules the user typed are simply not there.
+//
+// The nesting is already tracked, one field per kind, because each of the three
+// needs it for its own `#end`. Reading them here costs nothing and is the only
+// place the answer differs from line_is_rule's character scan.
+static int in_open_block(csp_rt_t* st)
+{
+    if (st->cs == NULL)
+	return 0;
+    return (st->cs->mdef != BAD_INDEX) ||    /* #module */
+	   (st->cs->sdef != -1) ||           /* #in      */
+	   (st->cs->blk_depth > 0);          /* #in/#when */
+}
+
 int csp_process_line(csp_rt_t* st, char* line)
 {
     int len;
@@ -2713,11 +2912,15 @@ int csp_process_line(csp_rt_t* st, char* line)
 	// like `println("hi") ? Idx==1`, which has no '=' at all. A plain
 	// expression (a query) has neither and is evaluated once.
 	//
+	// ...UNLESS a block is open, in which case the line belongs to the block
+	// whatever it looks like. `println("hi")` is a query at the prompt and a
+	// rule inside a #when, and the difference is the nesting, not the text.
+	//
 	// Classified by line_is_rule (a char scan) rather than a full tokenize:
 	// this frame sits directly above csp_parse's own token_t tv[24], and a
 	// second tv[24] here was 144 bytes of the deep-path stack for nothing --
 	// it was scanned only to look for EQ/QUEST and then thrown away.
-	if (line_is_rule(line)) {
+	if (line_is_rule(line) || in_open_block(st)) {
 	    csp_undo_t s;
 	    csp_undo_mark(st, &s);
 	    csp_process_persistent(st, line);

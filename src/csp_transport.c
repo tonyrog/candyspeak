@@ -80,3 +80,26 @@ CSP_WEAK int csp_spi_done(csp_rt_t* st, uint32_t xref, uint16_t* len)
     (void)st; (void)xref; (void)len;
     return -1;
 }
+
+// --- interrupts --------------------------------------------------------------
+//
+// A board with no interrupt backend. `#digital Drdy in falling 2:13` compiles,
+// links and runs; `Drdy.fired` is simply never true, so the rules guarded on it
+// do not fire and everything else in the program is unaffected -- the same
+// bargain the transports above make, and for the same reason.
+
+CSP_WEAK int csp_board_irq_attach(csp_rt_t* st, index_t ix, trigger_t trig,
+				  uint8_t slot)
+{
+    (void)st; (void)ix; (void)trig; (void)slot;
+    // -1, so csp_setup_events leaves this slot's bit clear in irq_hw. A default
+    // that claimed success would let a backend's stale pending word deal an edge
+    // to a pin nothing ever armed.
+    return -1;
+}
+
+CSP_WEAK uint32_t csp_board_irq_take(csp_rt_t* st)
+{
+    (void)st;
+    return 0;
+}

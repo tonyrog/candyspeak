@@ -1,0 +1,20 @@
+% Drdy goes 1,0,1,0 -- two FALLING edges. The two rising ones are not counted,
+% which is what naming the trigger is for.
+%
+% Btn goes 1,0,1 -- two RISING edges.
+%
+% Level is Drdy read ON its own falling edge, +100 so that "0" and "never ran"
+% are different answers. 100 means the pin was low when the edge was delivered,
+% which is what a falling edge means -- the device and its event agree, because
+% they are the same declaration.
+%
+% A stimulus row is re-applied every cycle until the next is due, so these are
+% written one per cycle rather than at the corners.
+{cycles, 12}.
+{modes, [seq]}.
+{stimulus, "tests/unit/event_edge.dat"}.
+{checks, [
+  {final_var, "Falls", 2},
+  {final_var, "Rises", 2},
+  {final_var, "Level", 100}
+]}.

@@ -76,6 +76,8 @@ static const uint8_t csp_part_loc[PL_COUNT * PL_STRIDE] RODATA = {
     [(PL_DIGITAL << PART_BITS) | PART_DIR]      = PL(11, PLC_2),
     [(PL_DIGITAL << PART_BITS) | PART_PULLUP]   = PL(13, PLC_1),
     [(PL_DIGITAL << PART_BITS) | PART_PULLDOWN] = PL(14, PLC_1),
+    // An interrupt trigger. Top bit of the word, taken off val -- see dvalue_t.
+    [(PL_DIGITAL << PART_BITS) | PART_FIRED]    = PL(31, PLC_1),
 
     // --- avalue_t ------------------------------------------------------------
     // No .endian: byte order that means something lives in csp_view_t.endian
@@ -85,6 +87,8 @@ static const uint8_t csp_part_loc[PL_COUNT * PL_STRIDE] RODATA = {
     [(PL_ANALOG  << PART_BITS) | PART_PORT]     = PL( 7, PLC_4),
     [(PL_ANALOG  << PART_BITS) | PART_DIR]      = PL(11, PLC_2),
     [(PL_ANALOG  << PART_BITS) | PART_PWM]      = PL(13, PLC_1),
+    // An interrupt trigger. The spare bit avalue_t had, between cfg and val.
+    [(PL_ANALOG  << PART_BITS) | PART_FIRED]    = PL(15, PLC_1),
 };
 
 // Position of the `cfg` bit per layout, 0 for a layout that has none. cfg is
@@ -92,6 +96,10 @@ static const uint8_t csp_part_loc[PL_COUNT * PL_STRIDE] RODATA = {
 // and writing .val never is -- that held for all eleven writable parts, so the
 // rule is one line of code instead of a bit in every row. (Bit 0 is a pin
 // number in both layouts that have a cfg, so 0 is free as "none".)
+//
+// PART_FIRED is the twelfth and it is the exception: the sweep sets and clears
+// it every cycle, so treating a write as a configuration change would re-apply
+// the pin on every edge. csp_dio_set_part excludes it by name.
 static const uint8_t csp_part_cfg[PL_COUNT] RODATA = {
     [PL_TIMER] = 0, [PL_DIGITAL] = 15, [PL_ANALOG] = 14
 };
@@ -149,7 +157,11 @@ static void csp_part_set(value_t* slot, vtype_t vt, csp_part_t part, value_t v)
     pos = (uint8_t)(r & 31);
     m = ro_dword(&csp_pl_mask[r >> 5]) << pos;
     slot->u = (slot->u & ~m) | ((v.u << pos) & m);
-    if (CSP_MASK(part, PART_BITS) != PART_VAL) {
+    // PART_FIRED joins PART_VAL in not being a configuration change: the event
+    // sweep writes it every cycle, and marking cfg there would have the board
+    // re-apply the pin on every edge.
+    if ((CSP_MASK(part, PART_BITS) != PART_VAL) &&
+	(CSP_MASK(part, PART_BITS) != PART_FIRED)) {
 	cfg = ro_byte(&csp_part_cfg[CSP_PART_LAY(vt)]);
 	if (cfg)
 	    slot->u |= ((uint32_t)1 << cfg);

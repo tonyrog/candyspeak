@@ -717,6 +717,9 @@ void csp_setup(csp_rt_t* st)
 
 //    if (res)
 //	analogReadResolution(res);
+    // AFTER the pin loop: arming an interrupt on a pin still at its reset
+    // default arms it on whatever the pin happened to be.
+    csp_setup_events(st);
 }
 
 void csp_input(csp_rt_t* st)
@@ -756,6 +759,7 @@ void csp_input(csp_rt_t* st)
     csp_can_input(st);
     csp_buf_input(st);   // i2c/spi collections and datagrams
     csp_input_timer(st);
+    csp_input_event(st);   // deal out this cycle's interrupt edges
 }
 
 // ============================================================

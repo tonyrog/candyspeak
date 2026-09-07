@@ -235,6 +235,17 @@
 {decl, 'D_FIELD',    field,     'field',    'DECL_FIELD',    field_decl}.
 {decl, 'D_BUFFER',   buffer,    'buffer',   'DECL_BUFFER',   buffer}.
 
+%% #when <expr> ... #end -- a block gate on a CONDITION, where `#in <state>+` is
+%% one on the state machine.  Deliberately a second word rather than a second
+%% meaning for `#in`: `#in Idle` reads as "in this state", and giving the same
+%% word a second sense makes both harder to read (Tony, 2026-09-07).
+%%
+%% Hand written: the tail is an EXPRESSION, and what it compiles to is a hidden
+%% #local plus a gate on it -- see csp_parse_when.
+%% QUOTED: `when` is a reserved word in Erlang, and this file is read with
+%% file:consult/1.  The atom is the same either way.
+{decl, 'D_WHEN',     'when',    'when',     'DECL_NONE',     hand_written}.
+
 %% Placeholders: enum members with no table row and no syntax behind them yet.
 %% Keeping them keeps D_LAST -- and so decl_table's size -- where it is.
 {decl, 'D_UART'}.
@@ -294,6 +305,46 @@
   {tx,       'PART_TX'},
   {dlc,      'PART_DLC'},
   {len,      'PART_LEN'}]}.
+
+
+%% ===========================================================================
+%% Interrupt triggers
+%%
+%% What a pin declaration accepts as its interrupt trigger:
+%%
+%%     #digital Drdy in falling 2:13
+%%
+%% AN OPTION, not a declaration of its own.  An interrupt is a property of how
+%% the pin is configured -- the same kind of thing `pullup` is -- and there is
+%% no `#pullup` for the same reason.  `.fired` then sits on the device, where
+%% it was going to sit anyway.
+%%
+%% NAMEs, not reserved words -- the same call the parts above make, and for a
+%% sharper reason: `ready` is a #variable in examples/can_pack.csp, and `high`
+%% and `low` are names anyone would reach for.  parse_opts looks the word up
+%% and STOPS on one that is not a trigger, so a name is still a name.
+%%
+%% `rising` and `falling` are ALREADY here as built-in functions -- rising(X)
+%% is the software edge on a sampled value.  Same word, and deliberately: an
+%% #event is that edge caught in hardware, between cycles, so a pulse shorter
+%% than one cycle is not lost.  That is the ONLY difference, and reusing the
+%% word says so.
+%%
+%% `ready` is not an edge at all: it is the device's own event -- an #analog
+%% whose conversion finished, a #buffer that took a frame.
+%% ===========================================================================
+
+%% `soft` is not a trigger but shares the lookup: it is the word that says
+%% "sampling is fine here", so a board that cannot arm the pin in hardware is
+%% doing what the program asked rather than falling short of it.
+{triggers,
+ [{soft,    'IRQ_SOFT'},
+  {rising,  'IRQ_RISING'},
+  {falling, 'IRQ_FALLING'},
+  {both,    'IRQ_BOTH'},
+  {high,    'IRQ_HIGH'},
+  {low,     'IRQ_LOW'},
+  {ready,   'IRQ_READY'}]}.
 
 
 %% ===========================================================================

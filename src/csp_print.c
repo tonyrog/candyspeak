@@ -835,6 +835,15 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	    bp->has_setox = 1;
 	    bp->setox = bp->reg[ip->ox.x];
 	    break;
+	    // A BLOCK GATE ENDS THE EXPRESSION. What follows belongs to the block,
+	    // and its first instruction reuses the register the gate's condition
+	    // landed in -- so running on would render that condition as whatever
+	    // the block's first rule loaded. An #in gate never appears inside a
+	    // rule body (the listing consumes it before the rule starts), so
+	    // stopping here costs that case nothing.
+	case OP_NINSTATE:
+	case OP_INSTATE:
+	    return i;
 	case OP_RULE:
 	    exprbuf_rule(st, bp, ip);
 	    return i+1;
@@ -995,6 +1004,25 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 //
 // ni: OP_NEXT:
 //
+// The condition of a `#when` gate, rendered from the instructions between the
+// end of the previous rule and the gate. Exactly the machinery a rule's `?`
+// condition uses: build the expression with output off, then print the string
+// that landed in the register the gate tests.
+int csp_print_when(csp_rt_t* st, int from, int gate)
+{
+    static csp_exprbuf_t buf;
+    void* savef;
+    unsigned r = (unsigned)instr(st, gate, in.x);
+
+    exprbuf_init(&buf);
+    savef = csp_set_file_output(NULL);
+    exprbuf_expr(st, &buf, from);
+    csp_set_file_output(savef);
+    if (r < MAX_REGS)
+	exprbuf_print(&buf, buf.reg[r]);
+    return 0;
+}
+
 int csp_print_rule(csp_rt_t* st, int i)
 {
     int Lc = i;

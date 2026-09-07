@@ -93,14 +93,17 @@
 
   sample_mark = sample_mark0 ? due
 
+  #when due && free
   // Inside the A2D band: remember the reading, report nothing. This is the one
   // place last_value moves WITHOUT a latch, and it matters -- the next dv is
   // measured from here. adc.c does the same thing, one line before its
   // `return false`.
-  last_value = value1 ? due && free && a2d && !hi && !lo
-
-  output = value2 ? latch && edge && due && free
-  last_value = value2 ? latch && edge && due && free
-  selected   = mask1  ? latch && edge && due && free
-  inhibit_mark = sample_mark0 ? latch && edge && due && free
+    last_value = value1 ? a2d && !hi && !lo
+  #end
+  #when due && free && latch && edge
+      output = value2
+      last_value = value2
+      selected   = mask1
+      inhibit_mark = sample_mark0
+  #end
 #end

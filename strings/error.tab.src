@@ -37,3 +37,6 @@ err_many_defines too many #define names -- max %d bytes
 err_no_defines #define is not available in this build
 err_local_scope %s is a #local -- only visible inside its own module
 err_reserved_name %s is a reserved word and cannot be a name
+err_many_events too many interrupt sources -- max %d
+err_opts_after_pin option '%s' comes BEFORE the pin -- '#digital D in pullup 2:1', not after
+err_block_open #%s opened on line %d was never closed

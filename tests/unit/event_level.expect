@@ -1,0 +1,17 @@
+% THE SAME SIGNAL, THE TWO TRIGGERS. Sig and Ping are driven identically -- up
+% for three cycles, then down -- and read out 3 against 1.
+%
+% That is what the trigger word decides, and why it is not a decoration: a level
+% source re-fires for as long as it is asserted (an IMU holding DRDY low until
+% the sample is read), an edge source fires once per transition.
+%
+% A row is applied every cycle until the next one is due, so these are written
+% one per cycle rather than at the corners -- otherwise the last row read keeps
+% being re-applied and the signal never comes back down.
+{cycles, 9}.
+{modes, [seq]}.
+{stimulus, "tests/unit/event_level.dat"}.
+{checks, [
+  {final_var, "Held", 3},
+  {final_var, "Edges", 1}
+]}.

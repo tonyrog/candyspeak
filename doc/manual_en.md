@@ -552,6 +552,48 @@ Examples:
 #timer Timeout 5000
 ```
 
+### Interrupts
+
+A pin declaration can name a **trigger**, and then `.fired` is true for exactly
+one cycle after it — the same shape `timeout(T)` has.
+
+```
+#digital Drdy in falling 2:13
+#digital Btn  in pullup rising 2:7
+
+Sample = Imu ? Drdy.fired
+```
+
+A trigger is an **option**, in the same place as `in`, `pullup` and `pwm`: an
+interrupt is a property of how the pin is configured, not a thing of its own.
+The pin stays the pin, so `Drdy` still reads its level — a program almost always
+wants both, and on a falling edge the two agree.
+
+| Trigger | Means |
+|---------|-------|
+| `rising` | 0 → 1 |
+| `falling` | 1 → 0 |
+| `both` | either direction |
+| `high` | asserted for as long as the pin is high |
+| `low` | asserted for as long as the pin is low |
+| `ready` | the device's own event — a conversion finished |
+
+Not every part offers all six. An STM32's EXTI has no level trigger at all, so
+`high` and `low` are refused there rather than turned into an edge. A refused
+source is never armed and never fires; `/state` marks it with `!` after the
+trigger so that is visible rather than silent.
+
+**Rules never run in interrupt context.** The handler sets one bit and returns;
+the rule runs in the next cycle, in ordinary rule context, exactly as a timer's
+does. So a trigger does not make a response faster than one cycle — what it buys
+is that an edge shorter than a cycle is not *missed*. `rising(X)` is the same
+edge sampled in software, and misses those.
+
+Trigger words are ordinary names: `#variable ready = 0` is still legal.
+
+See `doc/EVENTS.md` for the board side, and `utils/gen_chips.erl --irq-of
+<board>` for which pins on a given part can be sources.
+
 ### Buffers
 
 ```
@@ -1268,6 +1310,41 @@ carries its own `State`, so instances step through the machine independently:
 #Blinker b2 Led.pin=13
 ```
 
+## Blocks
+
+Rules that share a condition can share it once:
+
+```
+#when Drdy.fired && Level > 0
+  Sample = Imu
+  Count  = Count + 1
+#end
+```
+
+`#when <condition> ... #end` gates the whole block: the rules inside run only in
+a cycle where the condition holds, exactly as if each carried it as its own `?`
+clause. The condition is evaluated **once per cycle** rather than once per rule.
+
+`#in <state>...` is the same shape for the state machine, and the two are kept
+as separate words on purpose — `#in Idle` reads as "in this state", and one word
+with two senses makes both harder to read.
+
+Blocks nest, up to four deep, and `#in`, `#when` and `#module` share one stack —
+so `#end` always closes whichever opened last:
+
+```
+#when Drdy.fired
+  #in Armed
+    Shot = 1
+  #end
+  Seen = Seen + 1
+#end
+```
+
+A block left open at the end of a file is an error, reported by the line it
+opened on. At the prompt it is not: a block is open there while its rules are
+being typed, and a bare expression inside one is a rule rather than a query.
+
 ## Parts
 
 Every resource carries not just a *value* but a set of **attributes** — the pin
@@ -1290,7 +1367,7 @@ written by a rule.
 | `.pullup` | digital | pull-up enable |
 | `.pulldown` | digital | pull-down enable |
 | `.period` | timer | timer period in ms |
-| `.fired` | timer | timeout occurred this cycle |
+| `.fired` | timer / interrupt pin | fired this cycle (edge-triggered — one cycle) |
 | `.id` | CAN frame / field | the frame id |
 | `.rx` | CAN frame / field | a frame arrived and is readable this cycle |
 | `.tx` | CAN frame / field | write 1 to force a send |

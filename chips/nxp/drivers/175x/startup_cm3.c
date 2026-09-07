@@ -20,6 +20,16 @@
 
 extern uint32_t _data_load, _data_start, _data_end;
 extern uint32_t _bss_start, _bss_end;
+// THE TOP OF RAM IS NOT OURS, and on a Cortex-M the reserve cannot live here:
+// the core loads SP from vector 0 before a line of this file runs, so the only
+// place to take it off is the linker script. chips/nxp/lpc17xx.terms says
+// `{ram_reserve_top, 128}` and gen_chips.erl subtracts it from _stack_top.
+//
+// The ARM7 sibling does the same thing in its startup (IAP_RESERVE in
+// startup_212x.S) because it sets its own stacks. Same reason, different place:
+// the boot ROM's IAP routines use the highest bytes of on-chip RAM as scratch,
+// and a stack that starts there is written from under itself on the first flash
+// erase. It does not fail -- the node hangs.
 extern uint32_t _stack_top;
 
 extern int main(void);

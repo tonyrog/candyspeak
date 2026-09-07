@@ -1,0 +1,16 @@
+% One falling edge in thirty cycles, so every rule in the block runs ONCE --
+% including the last, whose right-hand side changes every single cycle.
+%
+% That is what the gate is for and it is the thing worth pinning: a block's
+% second and third rules have no gate of their own in the instruction stream,
+% and a listing or a dispatch that lost track of the block would let them run
+% on their own dependencies.
+{cycles, 30}.
+{modes, [seq, reactive]}.
+{stimulus, "tests/unit/when_block.dat"}.
+{checks, [
+  {final_var, "A", 1},
+  {final_var, "B", 1},
+  % Ticks at the cycle the edge landed, not at cycle 30.
+  {final_var, "Seen", 3}
+]}.

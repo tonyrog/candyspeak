@@ -281,7 +281,7 @@ else
 # DIAG=1 is in the name for the same reason: it changes CFLAGS but no header, so
 # -MMD would not rebuild anything and a diagnostic build would quietly be the
 # previous image.
-VARIANT := $(shell $(GEN) --map-of $(BOARD) $(MAP))$(if $(ARM),-arm,)$(if $(DIAG),-diag,)
+VARIANT := $(shell $(GEN) --map-of $(BOARD) $(MAP))$(if $(ARM),-arm,)$(if $(DIAG),-diag,)$(if $(WATCH),-watch,)
 B       := $(BUILD_DIR)/$(VARIANT)
 
 # One fact per query. Parsing the human listing through `head` closed the pipe
@@ -333,11 +333,16 @@ else ifeq ($(ARCH),cortex_m3)
   CPU     := -mcpu=cortex-m3 -mthumb
   LPC     := chips/nxp/lpcopen/lpc175x_6x/lpc_chip_175x_6x
   CHIPINC := -I$(LPC)/inc
-  CHIPDEF := -DCORE_M3
+  # CSP_HAVE_FLASH: the part has no EEPROM, so /save writes the flash `store`
+  # region -- which dl1200.terms has asked for since it was written. Without the
+  # define and the driver, csp_lpcopen.c fell through to "no store" and /memory
+  # reported `EEPROM 229 0 (NONE)`.
+  CHIPDEF := -DCORE_M3 -DCSP_HAVE_FLASH
   STARTUP := chips/nxp/drivers/175x/startup_cm3.c
   SYSINIT := chips/nxp/drivers/175x/sysinit_175x.c
   PORTSRC := port/csp_lpcopen.c $(NXPCOMMON)
-  DRV     := $(addprefix $(LPC)/src/, chip_17xx_40xx.c clock_17xx_40xx.c \
+  DRV     := chips/nxp/drivers/175x/flash_175x.c \
+             $(addprefix $(LPC)/src/, chip_17xx_40xx.c clock_17xx_40xx.c \
                sysctl_17xx_40xx.c sysinit_17xx_40xx.c iocon_17xx_40xx.c \
                gpio_17xx_40xx.c uart_17xx_40xx.c adc_17xx_40xx.c \
                timer_17xx_40xx.c can_17xx_40xx.c)
@@ -421,9 +426,25 @@ VPATH := . $(dir $(SRC))
 CFLAGS := $(CPU) -Os -ffunction-sections -fdata-sections -Wall -MMD -MP \
           -Iinclude -Igen -Isrc -I$(B) $(CHIPINC) $(CHIPDEF) \
           -DCSP_BOARD=csp_board.h -DCSP_VERSION='"$(BOARD)"' \
-          $(if $(DIAG),-DCSP_BITBANG_DIAG)
+          $(if $(DIAG),-DCSP_BITBANG_DIAG) \
+          $(if $(WATCH),-DCSP_STACK_WATCH -finstrument-functions)
 
 all: $(B)/firmware.bin $(B)/firmware.hex
+
+# WATCH=1: measure the deepest the stack actually got, instead of guessing.
+# -finstrument-functions puts a call pair on every function entry and exit
+# (__cyg_profile_func_enter in src/csp_rt.c), and /memory then reports the
+# margin AND the address of the function that was deepest -- feed that to
+# `make -f Makefile.board BOARD=x whichfn ADDR=0x...`.
+#
+# A DIAGNOSTIC BUILD, never a shipped one: every function gets two extra calls,
+# which is slower and bigger, and the instrumentation runs inside interrupt
+# handlers too. The Arduino branch has had this since it was written; the
+# bare-metal one did not, which is why a board that hung had no way to say
+# whether it had run out of stack.
+watch:
+	@$(MAKE) --no-print-directory -f Makefile.board BOARD=$(BOARD) \
+	    MAP=$(MAP) PROG="$(PROG)" WATCH=1 all
 
 # The map is in the build PATH now, so two maps cannot share a linker script.
 # When they could, `make MAP=usb_boot` found an up-to-date script from the
@@ -546,6 +567,6 @@ maps:
 clean:
 	@rm -rf $(B)
 
-.PHONY: all clean maps FORCE
+.PHONY: all clean maps watch FORCE
 
 endif

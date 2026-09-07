@@ -1,0 +1,15 @@
+// An edge fires ONCE; a level fires every cycle it holds. Same option slot, and
+// the trigger word is the whole difference -- so the two counters below drift
+// apart by exactly the number of cycles the pin stays high.
+//
+// Not every part has a level trigger. STM32's EXTI has rising and falling and
+// nothing else, so csp_board_irq_attach refuses `high` there and the source
+// stays quiet rather than firing on something the silicon substituted.
+#digital Sig  in high   2:5
+#digital Ping in rising 2:6
+
+#variable Held = 0        // cycles the level was asserted
+#variable Edges = 0       // times the edge arrived
+
+Held = Held + 1 ? Sig.fired
+Edges = Edges + 1 ? Ping.fired

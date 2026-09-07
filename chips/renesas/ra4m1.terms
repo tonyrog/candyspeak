@@ -30,3 +30,17 @@
   {flash_kb, 256}, {ram_kb, 32},
   {peripherals, [{usb,1},{uart,4},{i2c,2},{spi,2},{can,1},{adc,14},
                  {dac,1},{pwm,8},{rtc,1},{wdt,1}]}]}.
+
+%% --- INTERRUPT SOURCES -------------------------------------------------------
+%%
+%% IRQ0..IRQ15, each on a fixed short list of pins, and the ICU has to route the
+%% channel to a vector before it does anything -- two levels of allocation where
+%% a SAMD21 has one. The Arduino core does both in attachInterrupt.
+%%
+%% Same reasoning as samd21.terms: the map is real and it is the core's, so the
+%% port asks rather than repeats. digitalPinToInterrupt is the resolver.
+{irq, ra4m1,
+ [{icu, [{scheme,   runtime},
+	 {resolver, "digitalPinToInterrupt"},
+	 {channels, 16},
+	 {edges,    [rising, falling, both, low]}]}]}.

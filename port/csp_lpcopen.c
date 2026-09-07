@@ -78,6 +78,7 @@
 #define CSP_LPC_ADC_CLASSIC   1     // Chip_ADC_Init(pADC, &ADC_CLOCK_SETUP_T)
 #define CSP_LPC_UART_LSR      1     // Chip_UART_ReadLineStatus + UART_LSR_*
 #define CSP_LPC_EEPROM_PAGED  1     // Chip_EEPROM_Read/Write(page, offset, ...)
+#define CSP_LPC_GPIOINT       1     // GPIO interrupts on ports 0 and 2
 #elif defined(CHIP_LPC175X_6X)
 // Same peripherals as its 177x/8x sibling with ONE exception that matters here:
 // no EEPROM. eeprom_17xx_40xx.h is in the 175x_6x driver directory, which makes
@@ -94,6 +95,9 @@
 // every 175x board carry two defines that have nothing to do with the board.
 #define CSP_LPC_UART_DEFAULT  LPC_UART0
 #define CSP_LPC_ADC_DEFAULT   LPC_ADC
+// Any pin on port 0 or 2 can interrupt, with no pin function to select. The
+// 177x/8x above has the same block; the 212x below has none and uses EINT.
+#define CSP_LPC_GPIOINT       1
 #elif defined(CHIP_LPC18XX) || defined(CHIP_LPC43XX)
 #define CSP_LPC_ADC_CLASSIC   1
 #define CSP_LPC_UART_LSR      1
@@ -118,6 +122,10 @@
 // No on-chip EEPROM. A board with an I2C part says so in its terms and gets
 // csp_eeprom_i2c.c instead; this only means the chip has none of its own.
 #define CSP_LPC_NO_EEPROM     1
+// NO GPIO INTERRUPTS on this family -- that block arrived with the 17xx. Pin
+// interrupts here are the four EINTs, and they are a PIN FUNCTION: the pin has
+// to be muxed to eintN, which the board file does.
+#define CSP_LPC_EINT          1
 #else                                // 11xx, 11u6x, 13xx
 #define CSP_LPC_ADC_CLASSIC   1
 #define CSP_LPC_UART_LSR      1
@@ -521,6 +529,256 @@ void csp_board_digital_input(csp_rt_t* st, index_t ix, value_t* vptr)
     csp_set_ivalue(st, ix, value);
 }
 
+// ============================================================
+// Interrupts -- GPIO on ports 0 and 2
+// ============================================================
+//
+// THE 17xx's GOOD MECHANISM. Any pin on port 0 or port 2 can interrupt on either
+// edge with NO pin function to select: the pin stays gpio and IO0IntEnR/IO0IntEnF
+// turn it on. Ports 1, 3 and 4 cannot -- the LPC_GPIOINT struct has fields IO0
+// and IO2 and no others -- which is the fact chips/nxp/pins_17xx.terms records.
+//
+// The four dedicated EINTs are the OTHER mechanism, on P2.10..P2.13 only. They
+// are not used here: every pin a board in this tree wants is on port 0 or 2
+// anyway, and GPIO interrupts cost no pin function.
+//
+// THE PRICE IS THE VECTOR. Every GPIO interrupt on the part arrives on EINT3 --
+// one handler, which reads the status registers to find out which pin fired. So
+// a board using these cannot also use eint3, and that is a real collision rather
+// than a style note.
+//
+// The handler does ONE thing: work out which slots fired, OR their bits into a
+// word, clear the flags. Rules never run in interrupt context -- the arena is
+// not re-entrant -- so the cycle reads that word once, in csp_input_event.
+
+#if defined(CSP_LPC_GPIOINT)
+static volatile uint32_t lpc_irq_pend;      // set here, read once per cycle
+static uint8_t lpc_irq_port[CSP_MAX_EVENTS];
+static uint8_t lpc_irq_pin[CSP_MAX_EVENTS];
+static uint8_t lpc_irq_n;
+
+// Which slots the pins in `mask` on `port` belong to.
+static void lpc_irq_mark(uint8_t port, uint32_t mask)
+{
+    uint8_t k;
+
+    for (k = 0; k < lpc_irq_n; k++)
+	if ((lpc_irq_port[k] == port) && (mask & (1u << lpc_irq_pin[k])))
+	    lpc_irq_pend |= ((uint32_t)1 << k);
+}
+
+// Every GPIO interrupt on this part lands here. EINT3's own external pin
+// (P2.13) would too; no board here uses it, and one that did would need this
+// handler to check EXTINT as well.
+void EINT3_IRQHandler(void)
+{
+    uint32_t r0 = Chip_GPIOINT_GetStatusRising(LPC_GPIOINT, GPIOINT_PORT0);
+    uint32_t f0 = Chip_GPIOINT_GetStatusFalling(LPC_GPIOINT, GPIOINT_PORT0);
+    uint32_t r2 = Chip_GPIOINT_GetStatusRising(LPC_GPIOINT, GPIOINT_PORT2);
+    uint32_t f2 = Chip_GPIOINT_GetStatusFalling(LPC_GPIOINT, GPIOINT_PORT2);
+
+    lpc_irq_mark(0, r0 | f0);
+    lpc_irq_mark(2, r2 | f2);
+    // CLEARED LAST, and by the bits we actually read: an edge arriving while
+    // this runs sets its flag again and the handler re-enters, rather than
+    // being wiped by a blanket clear it never appeared in.
+    if (r0 | f0) Chip_GPIOINT_ClearIntStatus(LPC_GPIOINT, GPIOINT_PORT0, r0 | f0);
+    if (r2 | f2) Chip_GPIOINT_ClearIntStatus(LPC_GPIOINT, GPIOINT_PORT2, r2 | f2);
+}
+
+int csp_board_irq_attach(csp_rt_t* st, index_t ix, trigger_t trig, uint8_t slot)
+{
+    value_t* v = csp_dio_slot(st, ix, DOUT);
+    unsigned port, pin;
+    uint32_t bit;
+    LPC_GPIOINT_PORT_T gp;
+
+    if (slot >= CSP_MAX_EVENTS)
+	return -1;
+    switch (decl(st, INDEX(ix), type)) {
+    case DECL_DIGITAL: port = v->d.port; pin = v->d.pin; break;
+    case DECL_ANALOG:  port = v->a.port; pin = v->a.pin; break;
+    default: return -1;
+    }
+    // Ports 0 and 2, and nothing else. Refusing is what makes the runtime fall
+    // back to sampling rather than arm a register the part does not have.
+    if ((port != 0) && (port != 2))
+	return -1;
+    if (pin > 31)
+	return -1;
+    // Edges only. A level trigger would have to be built out of one, and a
+    // source that fires on something other than what was asked for is worse
+    // than one that does not fire.
+    if ((trig != IRQ_RISING) && (trig != IRQ_FALLING) && (trig != IRQ_BOTH))
+	return -1;
+
+    if (lpc_irq_n == 0)
+	Chip_GPIOINT_Init(LPC_GPIOINT);
+    gp  = (port == 0) ? GPIOINT_PORT0 : GPIOINT_PORT2;
+    bit = (uint32_t)1 << pin;
+
+    if (trig == IRQ_RISING || trig == IRQ_BOTH)
+	Chip_GPIOINT_SetIntRising(LPC_GPIOINT, gp,
+	    Chip_GPIOINT_GetIntRising(LPC_GPIOINT, gp) | bit);
+    if (trig == IRQ_FALLING || trig == IRQ_BOTH)
+	Chip_GPIOINT_SetIntFalling(LPC_GPIOINT, gp,
+	    Chip_GPIOINT_GetIntFalling(LPC_GPIOINT, gp) | bit);
+
+    // Any edge left over from configuring the pin is not an event the program
+    // asked for. Cleared before the vector opens, or the first cycle sees it.
+    Chip_GPIOINT_ClearIntStatus(LPC_GPIOINT, gp, bit);
+
+    lpc_irq_port[slot] = (uint8_t)port;
+    lpc_irq_pin[slot]  = (uint8_t)pin;
+    if (slot >= lpc_irq_n)
+	lpc_irq_n = (uint8_t)(slot + 1);
+    NVIC_EnableIRQ(EINT3_IRQn);
+    return 0;
+}
+
+uint32_t csp_board_irq_take(csp_rt_t* st)
+{
+    uint32_t p;
+
+    (void)st;
+    // READ AND CLEAR AS ONE. An edge landing between the two would be dropped,
+    // and a dropped edge is the single failure this mechanism exists to prevent.
+    __disable_irq();
+    p = lpc_irq_pend;
+    lpc_irq_pend = 0;
+    __enable_irq();
+    return p;
+}
+#endif  // CSP_LPC_GPIOINT
+
+#if defined(CSP_LPC_EINT)
+// ============================================================
+// Interrupts -- the four EINTs (LPC2000)
+// ============================================================
+//
+// NO GPIO INTERRUPT BLOCK on this family; that arrived with the 17xx. A pin
+// interrupt here is one of four dedicated EINTs, and it is a PIN FUNCTION: the
+// pin must be muxed to eintN, which the board file does and `make check-boards`
+// verifies against the pin table (chips/nxp/pins_2000.terms).
+//
+// So this backend does NOT mux anything. If the board did not, the pin is still
+// gpio and the EINT sees nothing -- which is exactly what check-boards refuses,
+// and refusing it there is better than a driver quietly rewriting a board's pin
+// assignment from under it.
+//
+// EACH EINT HAS ITS OWN VECTOR (VIC channels 14..17), so a handler knows which
+// pin fired without reading anything.
+//
+// AND THIS IS WHAT WAKES A POWERED-DOWN PART. A GPIO level cannot; an external
+// interrupt can. BridgeZone's AVR pulls P0.16 for exactly that reason.
+
+static volatile uint32_t lpc_irq_pend;
+// -1 = free. NOT zero-initialised by accident: slot 0 is a real slot, so a
+// table of zeroes would claim every EINT for it.
+static int8_t lpc_eint_slot[4] = { -1, -1, -1, -1 };
+
+// The pin table says which pin carries which EINT; this is the same fact from
+// the other end, and short enough to be worth stating rather than deriving.
+// -1 when the pin is not an EINT pin at all.
+static int lpc_eint_of(unsigned port, unsigned pin)
+{
+    if (port != 0)
+	return -1;
+    switch (pin) {
+    case 1: case 16: return 0;
+    case 3: case 14: return 1;
+    case 7: case 15: return 2;
+    case 9: case 20: case 30: return 3;
+    default: return -1;
+    }
+}
+
+// One per vector. Clearing is rc_w1 and comes FIRST: an edge arriving while
+// this runs sets the flag again and the handler re-enters, rather than being
+// wiped by a clear that happens after we looked.
+static void lpc_eint_isr(int n)
+{
+    LPC_EXTINT = (uint8_t)(1u << n);
+    if (lpc_eint_slot[n] >= 0)
+	lpc_irq_pend |= ((uint32_t)1 << lpc_eint_slot[n]);
+}
+
+static void lpc_eint0_isr(void) { lpc_eint_isr(0); }
+static void lpc_eint1_isr(void) { lpc_eint_isr(1); }
+static void lpc_eint2_isr(void) { lpc_eint_isr(2); }
+static void lpc_eint3_isr(void) { lpc_eint_isr(3); }
+
+int csp_board_irq_attach(csp_rt_t* st, index_t ix, trigger_t trig, uint8_t slot)
+{
+    static const vic_handler_t isr[4] = {
+	lpc_eint0_isr, lpc_eint1_isr, lpc_eint2_isr, lpc_eint3_isr
+    };
+    static const IRQn_Type irqn[4] = {
+	EINT0_IRQn, EINT1_IRQn, EINT2_IRQn, EINT3_IRQn
+    };
+    value_t* v = csp_dio_slot(st, ix, DOUT);
+    unsigned port, pin;
+    int n;
+    uint8_t bit;
+
+    if (slot >= CSP_MAX_EVENTS)
+	return -1;
+    switch (decl(st, INDEX(ix), type)) {
+    case DECL_DIGITAL: port = v->d.port; pin = v->d.pin; break;
+    case DECL_ANALOG:  port = v->a.port; pin = v->a.pin; break;
+    default: return -1;
+    }
+    if ((n = lpc_eint_of(port, pin)) < 0)
+	return -1;
+    // Four channels, and two pins wanting one is a board that half works: the
+    // second PINSEL write wins and the first pin is never heard from. Refused
+    // here as well as by check-boards, because a program names its own pins.
+    if (lpc_eint_slot[n] >= 0)
+	return -1;
+
+    bit = (uint8_t)(1u << n);
+    // EXTMODE picks level or edge, EXTPOLAR the direction. All four are
+    // reachable -- but not `both`: one pin, one direction, and a program that
+    // wants both edges reads the pin in the rule.
+    switch (trig) {
+    case IRQ_RISING:  LPC_EXTMODE |= bit;  LPC_EXTPOLAR |= bit;  break;
+    case IRQ_FALLING: LPC_EXTMODE |= bit;  LPC_EXTPOLAR &= (uint8_t)~bit; break;
+    case IRQ_HIGH:    LPC_EXTMODE &= (uint8_t)~bit; LPC_EXTPOLAR |= bit;  break;
+    case IRQ_LOW:     LPC_EXTMODE &= (uint8_t)~bit; LPC_EXTPOLAR &= (uint8_t)~bit; break;
+    default:
+	return -1;              // IRQ_BOTH and IRQ_READY: say no, do not guess
+    }
+    // Any edge left from configuring the pin is not an event the program asked
+    // for. Cleared before the vector opens, or the first cycle delivers it.
+    LPC_EXTINT = bit;
+
+    lpc_eint_slot[n] = (int8_t)slot;
+    Chip_VIC_SetHandler(irqn[n], isr[n]);
+    NVIC_EnableIRQ(irqn[n]);
+    return 0;
+}
+
+uint32_t csp_board_irq_take(csp_rt_t* st)
+{
+    uint32_t p;
+    uint32_t saved;
+
+    (void)st;
+    // READ AND CLEAR AS ONE. On ARM7 that means masking IRQs around it; an edge
+    // landing between the two would be dropped, and a dropped edge is the one
+    // failure this whole mechanism exists to prevent.
+    //
+    // RESTORE, not EnableIRQ: this runs inside the cycle, and turning interrupts
+    // on regardless of what they were is how a masked section stops being one.
+    // The same pairing flash_212x.c uses.
+    saved = DisableIRQ();
+    p = lpc_irq_pend;
+    lpc_irq_pend = 0;
+    RestoreIRQ(saved);
+    return p;
+}
+#endif  // CSP_LPC_EINT
+
 // An inout pin is borrowed for the length of one write and handed straight back
 // as an input, which is what makes a bidirectional line usable from a rule.
 void csp_board_digital_output(csp_rt_t* st, value_t* vptr)
@@ -750,6 +1008,9 @@ void csp_setup(csp_rt_t* st)
 	}
     }
     csp_ctx_reset(st);
+    // AFTER the pin loop: arming an interrupt on a pin still at its reset
+    // default arms it on whatever the pin happened to be.
+    csp_setup_events(st);
 }
 
 void csp_input(csp_rt_t* st)
@@ -788,6 +1049,7 @@ void csp_input(csp_rt_t* st)
     csp_can_input(st);
     csp_buf_input(st);   // i2c/spi collections and datagrams
     csp_input_timer(st);
+    csp_input_event(st);   // deal out this cycle's interrupt edges
 }
 
 void csp_output(csp_rt_t* st)
@@ -1022,6 +1284,166 @@ void csp_eeprom_close(void) { }
 int csp_eeprom_read(void* buf, size_t len)        { (void)buf; (void)len; return -1; }
 int csp_eeprom_write(const void* buf, size_t len) { (void)buf; (void)len; return -1; }
 
+#elif defined(CSP_HAVE_FLASH)
+
+#include "csp_flash.h"   // the region map and the IAP backend behind it
+
+// NO EEPROM ON THE PART, so settings go in the flash `store` region -- which is
+// what dl1200.terms has said since it was written (`{no_eeprom, true}`, and the
+// map gives sector 17 to store). Until now nothing read that: the branch below
+// answered "no store" and /save could not work, which is what `EEPROM 229 0
+// (NONE)` was reporting.
+//
+// The same backend csp_stm32.c has, on IAP instead of FLASH_KEYR. By REGION
+// KIND rather than by name, so a board that spells its settings region
+// something else still works.
+//
+// THE ERASE IS AT open_write, ONCE. Flash only goes 1 -> 0, so a save over a
+// previous one has to start from erased -- and doing it at open rather than per
+// write means one erase per /save, which is what the part's endurance budget is
+// written for.
+static const csp_region_t* store_region(void)
+{
+    const csp_device_t* d = csp_device();
+    uint8_t i;
+
+    if (d == NULL)
+	return NULL;
+    for (i = 0; i < d->nregion; i++)
+	if (d->region[i].kind == CSP_REG_STORE)
+	    return &d->region[i];
+    return NULL;
+}
+
+// IAP COPIES WHOLE BLOCKS TO AN ALIGNED DESTINATION -- it does not take a
+// 40-byte header at offset 0 and then 8 bytes at offset 40. csp_eeprom_save
+// makes exactly that sequence of small writes, so this buffers them and hands
+// the flash one aligned block at a time.
+//
+// Without it the header landed (offset 0 is aligned, by luck) and every write
+// after it was refused -- which is a /save that fails with a valid-looking
+// header already in the region.
+// Matches IAP_BLOCK in chips/nxp/drivers/175x/flash_175x.c. 256, not 512: this
+// is .bss on a 16K part, and the two buffers together are the difference
+// between a board that can take another rule at the prompt and one that cannot.
+#define STORE_BLK 256
+
+static uint32_t store_off;        // byte cursor within the region
+static uint32_t store_base;       // the region's offset from the flash base
+static uint32_t store_len;
+static int      store_mode;       // 0 closed, 1 reading, 2 writing
+static uint32_t store_fill;       // bytes waiting in store_buf
+static uint8_t  store_buf[STORE_BLK];
+
+uint32_t csp_eeprom_capacity(void)
+{
+    const csp_region_t* r = store_region();
+    return r ? csp_region_size(csp_device(), r) : 0;
+}
+
+int csp_eeprom_open_read(void)
+{
+    const csp_region_t* r = store_region();
+
+    if (r == NULL)
+	return -1;
+    store_base = csp_region_offset(csp_device(), r);
+    store_len  = csp_region_size(csp_device(), r);
+    store_off  = 0;
+    store_mode = 1;
+    return 0;
+}
+
+int csp_eeprom_open_write(void)
+{
+    const csp_region_t* r = store_region();
+
+    if (r == NULL)
+	return -1;
+    // REFUSED IF THE REGION IS NOT WRITABLE. The runtime lives in flash too,
+    // and an erase aimed at it does not fail -- it stops mid-sector, with the
+    // eraser gone. This is the check that keeps a map mistake from bricking a
+    // board that is sitting on a desk.
+    // CSP_FLASH_OK is ZERO, so this reads `!= OK` and not `!writable`. Written
+    // the other way it refuses exactly the region it is meant to permit.
+    if (csp_flash_writable(csp_device(), r) != CSP_FLASH_OK)
+	return -1;
+    store_base = csp_region_offset(csp_device(), r);
+    store_len  = csp_region_size(csp_device(), r);
+    store_off  = 0;
+    store_fill = 0;
+    store_mode = 2;
+    if (csp_flash_erase(r->first, r->last) < 0) {
+	store_mode = 0;
+	return -1;
+    }
+    return 0;
+}
+
+// Push whatever is in the buffer out as one aligned block, padded with 0xFF --
+// erased flash, so the padding is indistinguishable from never-written.
+static int store_flush(void)
+{
+    if (store_fill == 0)
+	return 0;
+    memset(store_buf + store_fill, 0xFF, STORE_BLK - store_fill);
+    if (csp_flash_write(store_base + store_off, store_buf, STORE_BLK) < 0)
+	return -1;
+    store_off += STORE_BLK;
+    store_fill = 0;
+    return 0;
+}
+
+void csp_eeprom_close(void)
+{
+    // The tail. csp_eeprom_save's last write is rarely a whole block, and a
+    // save that dropped its last few bytes is one that reads back short --
+    // with a header that says the bytes should be there.
+    if (store_mode == 2)
+	(void)store_flush();
+    store_mode = 0;
+}
+
+// Reads go straight to the mapped flash: a read session and a write session
+// never overlap (open_read and open_write both reset the cursor), so there is
+// no buffered tail to account for here.
+int csp_eeprom_read(void* buf, size_t len)
+{
+    if (store_mode != 1)
+	return -1;
+    if (store_off + len > store_len)
+	return -1;
+    if (csp_flash_read(store_base + store_off, buf, (uint32_t)len) < 0)
+	return -1;
+    store_off += (uint32_t)len;
+    return 0;
+}
+
+int csp_eeprom_write(const void* buf, size_t len)
+{
+    const uint8_t* p = (const uint8_t*)buf;
+
+    if (store_mode != 2)
+	return -1;
+    // Refuse to run off the end rather than wrap: a program too big to persist
+    // would otherwise half-save silently. The buffered bytes count too.
+    if (store_off + store_fill + len > store_len)
+	return -1;
+    while (len) {
+	uint32_t n = STORE_BLK - store_fill;
+
+	if (n > (uint32_t)len)
+	    n = (uint32_t)len;
+	memcpy(store_buf + store_fill, p, n);
+	store_fill += n;
+	p          += n;
+	len        -= n;
+	if ((store_fill == STORE_BLK) && (store_flush() < 0))
+	    return -1;
+    }
+    return 0;
+}
+
 #else
 
 // No persistent store on this part (or none wired up yet). Say so honestly
@@ -1102,7 +1524,15 @@ static void csp_lpc_setup(void)
 
 #if !defined(CSP_EXEC_ONLY)
     csp_print_lit("pool "); csp_print_uint((uint32_t)state.mem_limit);
-    csp_print_lit(", heap left "); csp_print_uint(csp_system_ram_avail());
+    // THE REAL GAP, not csp_system_ram_avail(). That one adds sizeof(csp_rt_t)
+    // back on because csp_mem_init subtracts it again -- correct for sizing the
+    // pool, and off by 2600 as a report. It read `heap left 3143` on a DL1200
+    // whose stack actually had 543 bytes, which is how a board that hung on the
+    // next rule looked like a board with room to spare.
+    //
+    // This is what the stack grows down into: everything between here and the
+    // top of .bss.
+    csp_print_lit(", stack room "); csp_print_uint(raw_free());
     csp_print_lit(", reserve "); csp_print_uint((uint32_t)CSP_RAM_RESERVE);
     csp_println();
 #endif

@@ -71,6 +71,9 @@ keyword_rows(Terms) ->
 	 || {parts, L} <- Terms, {W, _Part} <- L]
 	++
 	[{atom_to_list(W), atom_to_list(W)}
+	 || {triggers, L} <- Terms, {W, _Irq} <- L]
+	++
+	[{atom_to_list(W), atom_to_list(W)}
 	 || {functions, L} <- Terms, {W, _Arity, _Pure} <- L],
     collapse(Rows, ?TERMS).
 

@@ -279,6 +279,35 @@ main(["--info-of", Name, Want]) ->
 		    end
 	    end
     end;
+%% --irq-of <board|chip>: what on this part can be an interrupt source, what
+%% the channel budget is, and -- for a board -- which pins it has claimed.
+%%
+%% The question `#event` will have to answer for every program, asked of the
+%% terms rather than of a datasheet.
+main(["--irq-of", Name]) ->
+    Db = load(),
+    A = list_to_atom(Name),
+    case lookup(Db, board, A) of
+	false ->
+	    case lookup(Db, chip, A) of
+		false ->
+		    io:format(standard_error,
+			      "gen_chips: no such board or chip '~s'~n", [Name]),
+		    halt(1);
+		CP ->
+		    G = resolve(Db, CP),
+		    irq_mechs_report(A, Db, G, pin_table(Db, G), [])
+	    end;
+	P ->
+	    case target(Db, Name, "") of
+		false -> halt(1);
+		G ->
+		    Pins = pin_table(Db, G),
+		    Muxed = [{Pin, Fn} || {pin, Pin, Fn} <- P],
+		    irq_mechs_report(A, Db, G, Pins, Muxed),
+		    irq_board_report(Db, P, G, Pins)
+	    end
+    end;
 main(["--variants", Name]) ->
     [io:format("~w~n", [V]) || V <- arch_variants(board_of(Name))];
 %% One fact per query, the way --chip-of and --arch-of already work: the
@@ -435,6 +464,7 @@ help(_) ->
 	      "       --boards [regexp]            one line per board~n"
 	      "       --info-of <name>             everything about one of them~n"
 	      "       --info-of <name> <map>~n"
+	      "       --irq-of <name>              what can interrupt, and on what~n"
 	      "       --ld <chip>~n"
 	      "       --check [regexp]~n"
 	      "       --board <board> <out.h>~n"
@@ -1311,6 +1341,7 @@ check_board(Db, {Name, P}) ->
 %% name is a name that drifts.
 check_arduino(Db, Name, P) ->
     check_arduino_chip(Db, Name, P) +
+    check_arduino_irq(Name, P) +
     case kv(P, fqbn, undefined) of
 	undefined ->
 	    io:format("~s: ERROR {toolchain, arduino_cli} but no {fqbn, \"...\"}~n",
@@ -1318,6 +1349,22 @@ check_arduino(Db, Name, P) ->
 	F when is_list(F) -> check_platform(Name, P, F);
 	F ->
 	    io:format("~s: ERROR {fqbn, ~p} must be a string~n", [Name, F]), 1
+    end.
+
+%% An Arduino board names its pins by the NUMBER printed on the header, and that
+%% number belongs to the core's variant file rather than to anything here -- so
+%% `{irq, 'P0.16', ...}` has no meaning on one and `{irq, 2, ...}` would be a
+%% fact this tree cannot check. The core already answers, at run time, through
+%% digitalPinToInterrupt(); say so rather than accept a line that does nothing.
+check_arduino_irq(Name, P) ->
+    case [Pin || {irq, Pin, _} <- P] of
+	[] -> 0;
+	Pins ->
+	    io:format("~s: ERROR {irq, ...} on an Arduino board (~s) -- the core "
+		      "owns the pin map, so an interrupt source is resolved at "
+		      "run time by digitalPinToInterrupt()~n",
+		      [Name, [f(" ~w", [X]) || X <- Pins]]),
+	    1
     end.
 
 check_arduino_chip(Db, Name, P) ->
@@ -1366,9 +1413,11 @@ check_bare(Db, {Name, P}) ->
 	    1;
 	CP ->
 	    G = resolve(Db, CP),
+	    Pins = pin_table(Db, G),
+	    check_irq(Name, Db, P, G, Pins) +
 	    case kv(G, vendor, '?') of
 		st -> check_st(Name, P, G);
-		_ -> check_lpc(Name, P, G, pin_table(Db, G))
+		_ -> check_lpc(Name, P, G, Pins)
 	    end
     end.
 
@@ -1495,6 +1544,226 @@ index_of(X, L) -> index_of(X, L, 0).
 index_of(_, [], _) -> false;
 index_of(X, [X|_], I) -> I;
 index_of(X, [_|T], I) -> index_of(X, T, I+1).
+
+%% --- interrupts --------------------------------------------------------------
+%%
+%% A CHANNEL IS THE THING TWO PINS CANNOT SHARE, and it is the one fact a board
+%% file gets wrong silently: the second write to SYSCFG_EXTICR or PINSEL wins,
+%% the first pin goes quiet, and there is nothing to see but a signal nobody
+%% answers. Everything below exists to make that a `make check-boards` error.
+%%
+%% Four schemes cover every part in this tree:
+%%
+%%   pin_function  the interrupt IS an alternate function, so the PIN TABLE
+%%                 already says which pins and which channel -- LPC2000, and the
+%%                 four EINTs of an LPC17xx. Nothing is stated twice.
+%%   per_bit       any pin; the channel is the bit number regardless of port,
+%%                 N of them at a time. STM32's EXTI.
+%%   port_any      any pin on the listed ports, each with its own channel and no
+%%                 budget. RP2040/RP2350, ESP32-S3, and an LPC17xx's ports 0/2.
+%%   runtime       the map is real but it belongs to the Arduino core, which
+%%                 answers digitalPinToInterrupt() at run time. No table here on
+%%                 purpose -- the reasoning is in chips/microchip/samd21.terms.
+irq_mechs(Db, G) ->
+    case lookup(Db, irq, kv(G, family, undefined)) of
+	false -> [];
+	Ms -> Ms
+    end.
+
+%% {Port, Bit} from either spelling. 'P0.16' is NXP's and 'PC13' is ST's, and
+%% neither parses as the other -- so trying both in turn cannot be ambiguous.
+pin_num(Pin) ->
+    case pin_split(Pin) of
+	error -> st_pin(Pin);
+	PB -> PB
+    end.
+
+pin_functions(Pins, Port, Bit) ->
+    case [Fs || {Po, Bi, Fs} <- Pins, Po =:= Port, Bi =:= Bit] of
+	[Fs|_] -> Fs;
+	[]     -> []
+    end.
+
+%% Every way this pin could be an interrupt source: [{Mechanism, Channel}].
+%% EMPTY MEANS IT CANNOT BE ONE, which is the first question #event has to ask.
+irq_channels(Mechs, Pins, Pin) ->
+    case pin_num(Pin) of
+	false -> [];
+	{Port, Bit} ->
+	    lists:append([irq_channel(M, Props, Pins, Pin, Port, Bit)
+			  || {M, Props} <- Mechs])
+    end.
+
+irq_channel(M, Props, Pins, Pin, Port, Bit) ->
+    case kv(Props, scheme, undefined) of
+	pin_function ->
+	    Fs = pin_functions(Pins, Port, Bit),
+	    [{M, F} || F <- kv(Props, functions, []), lists:member(F, Fs)];
+	per_bit ->
+	    case Bit < kv(Props, channels, 0) of
+		true  -> [{M, Bit}];
+		false -> []
+	    end;
+	port_any ->
+	    case lists:member(Port, kv(Props, ports, [])) of
+		%% Its own channel, so no two pins ever collide. Naming the
+		%% channel after the pin keeps ONE collision test for all four
+		%% schemes rather than a special case here.
+		true  -> [{M, Pin}];
+		false -> []
+	    end;
+	runtime -> [{M, runtime}];
+	_ -> []
+    end.
+
+%% What the silicon offers. For pin_function this lists the pins, because that
+%% is the scheme where the answer is a short enumeration rather than a rule.
+irq_mechs_report(Name, Db, G, Pins, Muxed) ->
+    case irq_mechs(Db, G) of
+	[] ->
+	    io:format("~w: no interrupt facts for family ~w -- "
+		      "add an {irq, ~w, [...]} term~n",
+		      [Name, kv(G, family, '?'), kv(G, family, '?')]);
+	Ms ->
+	    io:format("~w  (~w)~n", [Name, kv(G, family, '?')]),
+	    [irq_mech_line(M, Props, Pins, Muxed) || {M, Props} <- Ms],
+	    ok
+    end.
+
+irq_mech_line(M, Props, Pins, Muxed) ->
+    Scheme = kv(Props, scheme, '?'),
+    io:format("  ~-5w ~-13w ~s~n", [M, Scheme, irq_reach(Scheme, Props)]),
+    [io:format("          ~-6w~s~n",
+	       [F, [f(" ~s", [irq_free(Muxed, F, P)])
+		    || P <- irq_pins_with(Pins, F)]])
+     || Scheme =:= pin_function, F <- kv(Props, functions, [])],
+    io:format("          edges  ~s~n",
+	      [string:join([atom_to_list(E) || E <- kv(Props, edges, [])], " ")]).
+
+irq_reach(pin_function, Props) ->
+    f("~w channels, one vector each", [length(kv(Props, functions, []))]);
+irq_reach(per_bit, Props) ->
+    f("any pin, channel = bit number, ~w at a time",
+      [kv(Props, channels, 0)]);
+irq_reach(port_any, Props) ->
+    f("any pin on port~s, no shared channel",
+      [[f(" ~w", [P]) || P <- kv(Props, ports, [])]]);
+irq_reach(runtime, Props) ->
+    f("~s() decides at run time", [kv(Props, resolver, "the core")]);
+irq_reach(S, _) ->
+    f("*** unknown scheme ~w ***", [S]).
+
+irq_pins_with(Pins, F) ->
+    [{Po, Bi} || {Po, Bi, Fs} <- Pins, lists:member(F, Fs)].
+
+irq_pin_name({Port, Bit}) -> f("P~w.~w", [Port, Bit]).
+
+%% A pin the board has already spent on something else is not a candidate, so
+%% say what it went to. Listing the silicon\'s eight EINT pins without that is a
+%% list where half the entries are already gone.
+irq_free(Muxed, F, PB) ->
+    Name = irq_pin_name(PB),
+    case [Fn || {Q, Fn} <- Muxed, pin_num(Q) =:= PB] of
+	[]      -> Name;
+	[F|_]   -> f("~s*", [Name]);              %% already the interrupt
+	[Fn|_]  -> f("~s(~w)", [Name, Fn])
+    end.
+
+%% What the board has claimed, and whether it holds together. Printed by
+%% --irq-of; the same facts are turned into errors by check_irq/5.
+irq_board_report(Db, P, G, Pins) ->
+    case [{Pin, Edge} || {irq, Pin, Edge} <- P] of
+	[] -> ok;
+	Want ->
+	    io:format("  claimed~n"),
+	    Mechs = irq_mechs(Db, G),
+	    [begin
+		 Cs = irq_channels(Mechs, Pins, Pin),
+		 io:format("    ~-6s ~-8w ~s~n",
+			   [Pin, Edge,
+			    case Cs of
+				[] -> "*** cannot interrupt ***";
+				[{M, C}|_] -> f("~w/~w", [M, C])
+			    end])
+	     end || {Pin, Edge} <- Want],
+	    ok
+    end.
+
+%% THE CHECK. Four ways a claimed interrupt is wrong, and all four are quiet at
+%% run time, which is the whole argument for catching them here.
+check_irq(Board, Db, P, G, Pins) ->
+    Want = [{Pin, Edge} || {irq, Pin, Edge} <- P],
+    Mechs = irq_mechs(Db, G),
+    Muxed = [{Pin, Fn} || {pin, Pin, Fn} <- P],
+    case {Want, Mechs} of
+	{[], _} -> 0;
+	{_, []} ->
+	    io:format("~s: ERROR claims interrupts but family ~w has no "
+		      "{irq, ...} term~n", [Board, kv(G, family, '?')]),
+	    1;
+	_ ->
+	    lists:sum([check_irq_pin(Board, Mechs, Pins, Muxed, Pin, Edge)
+		       || {Pin, Edge} <- Want]) +
+		check_irq_dup(Board, Mechs, Pins, Want)
+    end.
+
+check_irq_pin(Board, Mechs, Pins, Muxed, Pin, Edge) ->
+    case irq_channels(Mechs, Pins, Pin) of
+	[] ->
+	    io:format("~s: ERROR ~w cannot be an interrupt source~n",
+		      [Board, Pin]),
+	    1;
+	[{M, C}|_] ->
+	    Props = kv(Mechs, M, []),
+	    Edges = kv(Props, edges, []),
+	    E = case lists:member(Edge, Edges) of
+		    true -> 0;
+		    false ->
+			io:format("~s: ERROR ~w cannot trigger on '~w' "
+				  "(~w takes:~s)~n",
+				  [Board, Pin, Edge, M,
+				   [f(" ~w", [X]) || X <- Edges]]),
+			1
+		end,
+	    E + check_irq_mux(Board, Props, Muxed, Pin, C)
+    end.
+
+%% A CLAIMED INTERRUPT ON AN UNMUXED PIN NEVER FIRES. Under pin_function the pin
+%% has to BE the eint -- `{pin, 'P0.16', eint0}`, not gpio -- and under the other
+%% schemes it still has to be an input the board has configured, or it sits at
+%% its reset default and the edge that was supposed to arrive never does.
+check_irq_mux(Board, Props, Muxed, Pin, Chan) ->
+    Have = [Fn || {Q, Fn} <- Muxed, Q =:= Pin],
+    case {kv(Props, scheme, undefined), Have} of
+	{pin_function, [Chan|_]} -> 0;
+	{pin_function, []} ->
+	    io:format("~s: ERROR ~w is an interrupt but the board does not mux "
+		      "it -- add {pin, ~w, ~w}~n", [Board, Pin, Pin, Chan]),
+	    1;
+	{pin_function, [Fn|_]} ->
+	    io:format("~s: ERROR ~w is muxed as ~w, so ~w cannot reach it~n",
+		      [Board, Pin, Fn, Chan]),
+	    1;
+	{runtime, _} -> 0;                 %% no pin table to check against
+	{_, []} ->
+	    io:format("~s: ERROR ~w is an interrupt but the board never mentions "
+		      "the pin -- add a {pin, ~w, ...} that makes it an input~n",
+		      [Board, Pin, Pin]),
+	    1;
+	{_, _} -> 0
+    end.
+
+%% Two claims on one channel. The failure this whole file is for.
+check_irq_dup(Board, Mechs, Pins, Want) ->
+    Cs = [{Pin, hd(C)} || {Pin, _} <- Want,
+			  C <- [irq_channels(Mechs, Pins, Pin)], C =/= []],
+    Chans = [C || {_, C} <- Cs],
+    Dups = lists:usort([C || C <- Chans, count(C, Chans) > 1]),
+    [io:format("~s: ERROR ~w/~w is claimed by~s -- only one can be live~n",
+	       [Board, M, Ch, [f(" ~w", [Q]) || {Q, {M2, Ch2}} <- Cs,
+						M2 =:= M, Ch2 =:= Ch]])
+     || {M, Ch} <- Dups],
+    length(Dups).
 
 %% The core clock against what the part is rated for. A board asking for more
 %% than the silicon does is a board that runs until it warms up.
@@ -1850,10 +2119,13 @@ ld_script(Chip, G) ->
      f("  ~-8s ~-4s : ORIGIN = 0x~8.16.0B, LENGTH = 0x~8.16.0B~s~n}~n~n",
        ["DATA", "(rw)",
 	kv(G, ram_base, 0) + kv(G, ram_reserve, 0),
-	kv(G, ram_kb, 0)*1024 - kv(G, ram_reserve, 0),
-	case kv(G, ram_reserve, 0) of
-	    0 -> "";
-	    N -> f("   /* ~w reserved at the bottom */", [N])
+	kv(G, ram_kb, 0)*1024 - kv(G, ram_reserve, 0)
+	    - kv(G, ram_reserve_top, 0),
+	case {kv(G, ram_reserve, 0), kv(G, ram_reserve_top, 0)} of
+	    {0, 0} -> "";
+	    {N, 0} -> f("   /* ~w reserved at the bottom */", [N]);
+	    {0, T} -> f("   /* ~w reserved at the top */", [T]);
+	    {N, T} -> f("   /* ~w at the bottom, ~w at the top */", [N, T])
 	end]),
      ld_sections(G, Regions)].
 
@@ -1917,7 +2189,10 @@ ld_sections(G, Regions) ->
 	      "    . = ALIGN(4);~n"
 	      "    _bss_end = .;~n"
 	      "  } > DATA~n~n"
-	      "  /* The stack grows DOWN from the top of RAM. */~n"
+	      "  /* The stack grows DOWN from the top of RAM, minus whatever~n"
+	      "   * the part keeps up there -- the boot ROM's IAP scratch on an~n"
+	      "   * LPC17xx. Handing that out is a board that hangs on the first~n"
+	      "   * flash erase, with the stack written from under it. */~n"
 	      "  _stack_top = 0x~8.16.0B;~n"
 	      "  _heap_start = _bss_end;~n~n"
 	      "  /* The same two under the names an LPCXpresso script uses:~n"
@@ -1929,7 +2204,8 @@ ld_sections(G, Regions) ->
 	      "}~n",
 	      [kv(G, entry, '_start'), ld_image(Regions),
 	       kv(G, vectors, '.vectors'),
-	       kv(G, ram_base, 0) + kv(G, ram_kb, 0)*1024])
+	       kv(G, ram_base, 0) + kv(G, ram_kb, 0)*1024
+		   - kv(G, ram_reserve_top, 0)])
     end.
 
 %% THE PROGRAM'S IMAGE, INTO THE FIRST APPLICATION SLOT.

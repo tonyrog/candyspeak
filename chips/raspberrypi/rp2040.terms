@@ -33,3 +33,18 @@
   {flash_kb, 0}, {ram_kb, 264},
   {peripherals, [{usb,1},{uart,2},{i2c,2},{spi,2},{adc,4},{pwm,16},
                  {rtc,1},{wdt,1}]}]}.
+
+%% --- INTERRUPT SOURCES -------------------------------------------------------
+%%
+%% ALL OF THEM, WITH NO SHARED CHANNEL. Every GPIO has its own four enable bits
+%% in PROC0_INTE -- rising, falling, level-high, level-low -- so there is no
+%% budget to run out of and no pair of pins that collide. The generous case, and
+%% the reason this file says it in four lines while stm32f4.terms needs twenty.
+%%
+%% One vector (IO_IRQ_BANK0) for the whole bank; the handler reads INTS to find
+%% the pin. Under the Arduino core that is attachInterrupt's problem, not ours.
+{irq, rp2040,
+ [{gpio, [{scheme, port_any},
+	  {ports,  [0]},
+	  {edges,  [rising, falling, both, high, low]},
+	  {vector, shared}]}]}.

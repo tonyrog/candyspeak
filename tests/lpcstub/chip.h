@@ -47,6 +47,31 @@ void Chip_GPIO_SetPinDIROutput(LPC_GPIO_T* p, uint8_t port, uint8_t pin);
 void Chip_GPIO_SetPinDIRInput(LPC_GPIO_T* p, uint8_t port, uint8_t pin);
 
 /* --- ADC ----------------------------------------------------------------- */
+// The NVIC, as much of it as the interrupt backend needs. EINT3 is the vector
+// every GPIO interrupt on this part arrives on.
+typedef enum { EINT3_IRQn = 21 } IRQn_Type;
+void NVIC_EnableIRQ(IRQn_Type irq);
+void NVIC_DisableIRQ(IRQn_Type irq);
+#ifndef __disable_irq
+#define __disable_irq()  do { } while (0)
+#define __enable_irq()   do { } while (0)
+#endif
+
+// GPIO interrupts: ports 0 and 2 only, all arriving on EINT3. Enough of the
+// LPCOpen surface for the port's backend to compile and link -- this stub is a
+// LINK test, so the calls have to exist and nothing has to happen.
+typedef enum { GPIOINT_PORT0 = 0, GPIOINT_PORT2 = 2 } LPC_GPIOINT_PORT_T;
+typedef struct { uint32_t dummy; } LPC_GPIOINT_T;
+extern LPC_GPIOINT_T* LPC_GPIOINT;
+void Chip_GPIOINT_Init(LPC_GPIOINT_T* p);
+void Chip_GPIOINT_SetIntRising(LPC_GPIOINT_T* p, LPC_GPIOINT_PORT_T port, uint32_t pins);
+void Chip_GPIOINT_SetIntFalling(LPC_GPIOINT_T* p, LPC_GPIOINT_PORT_T port, uint32_t pins);
+uint32_t Chip_GPIOINT_GetIntRising(LPC_GPIOINT_T* p, LPC_GPIOINT_PORT_T port);
+uint32_t Chip_GPIOINT_GetIntFalling(LPC_GPIOINT_T* p, LPC_GPIOINT_PORT_T port);
+uint32_t Chip_GPIOINT_GetStatusRising(LPC_GPIOINT_T* p, LPC_GPIOINT_PORT_T port);
+uint32_t Chip_GPIOINT_GetStatusFalling(LPC_GPIOINT_T* p, LPC_GPIOINT_PORT_T port);
+void Chip_GPIOINT_ClearIntStatus(LPC_GPIOINT_T* p, LPC_GPIOINT_PORT_T port, uint32_t pins);
+
 typedef struct { uint32_t dummy; } LPC_ADC_T;
 extern LPC_ADC_T* LPC_ADC0;
 typedef struct { uint32_t adcRate; uint8_t bitsAccuracy; bool burstMode; } ADC_CLOCK_SETUP_T;

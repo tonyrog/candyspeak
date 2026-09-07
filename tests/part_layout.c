@@ -247,7 +247,10 @@ int main(void)
 		continue;
 	    slot.u = 0;
 	    csp_part_set(&slot, vt, p, (value_t){ .u = 1 });
-	    want = (p != PART_VAL);
+	    // PART_FIRED joins PART_VAL. The interrupt sweep writes it every cycle,
+	    // and a cfg there would have the board re-apply the pin on every
+	    // edge -- pinMode at the interrupt rate.
+	    want = ((p != PART_VAL) && (p != PART_FIRED));
 	    if (!!(slot.u & (1u << cfg)) != want) {
 		printf("FAIL %s.%s: cfg %s\n", lay_name(lay), part_name(p),
 		       want ? "not set by a config write" : "set by a .val write");

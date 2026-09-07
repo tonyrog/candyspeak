@@ -155,3 +155,26 @@ void     RestoreIRQ(uint32_t cpsr) { (void)cpsr; }
 
 // csp_device() itself comes from port/csp_devices.c, which the link includes --
 // a board would set its own with csp_device_set.
+
+// GPIO interrupts. Nothing fires in a stub, so the getters answer "no pins" and
+// the setters record nothing -- what is being checked here is that the port's
+// backend compiles and links, not that it works without silicon.
+static LPC_GPIOINT_T gpioint_dummy;
+LPC_GPIOINT_T* LPC_GPIOINT = &gpioint_dummy;
+void Chip_GPIOINT_Init(LPC_GPIOINT_T* p) { (void)p; }
+void Chip_GPIOINT_SetIntRising(LPC_GPIOINT_T* p, LPC_GPIOINT_PORT_T port, uint32_t pins)
+{ (void)p; (void)port; (void)pins; }
+void Chip_GPIOINT_SetIntFalling(LPC_GPIOINT_T* p, LPC_GPIOINT_PORT_T port, uint32_t pins)
+{ (void)p; (void)port; (void)pins; }
+uint32_t Chip_GPIOINT_GetIntRising(LPC_GPIOINT_T* p, LPC_GPIOINT_PORT_T port)
+{ (void)p; (void)port; return 0; }
+uint32_t Chip_GPIOINT_GetIntFalling(LPC_GPIOINT_T* p, LPC_GPIOINT_PORT_T port)
+{ (void)p; (void)port; return 0; }
+uint32_t Chip_GPIOINT_GetStatusRising(LPC_GPIOINT_T* p, LPC_GPIOINT_PORT_T port)
+{ (void)p; (void)port; return 0; }
+uint32_t Chip_GPIOINT_GetStatusFalling(LPC_GPIOINT_T* p, LPC_GPIOINT_PORT_T port)
+{ (void)p; (void)port; return 0; }
+void Chip_GPIOINT_ClearIntStatus(LPC_GPIOINT_T* p, LPC_GPIOINT_PORT_T port, uint32_t pins)
+{ (void)p; (void)port; (void)pins; }
+void NVIC_EnableIRQ(IRQn_Type irq) { (void)irq; }
+void NVIC_DisableIRQ(IRQn_Type irq) { (void)irq; }

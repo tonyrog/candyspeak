@@ -40,3 +40,25 @@
  [{group, 'atmega-256b'}, {signature, 16#1E9801},
   {flash_kb, 256}, {ram_kb, 8}, {eeprom_kb, 4},
   {peripherals, [{uart,4},{i2c,1},{spi,1},{adc,16},{pwm,12},{wdt,1}]}]}.
+
+%% --- INTERRUPT SOURCES -------------------------------------------------------
+%%
+%% TWO KINDS, and only one of them is what a program usually wants.
+%%
+%% INTn is the good one: its own vector, a choice of edge or level, and it knows
+%% which pin fired. There are two on an ATmega328P, five reachable on a 32U4 and
+%% eight on a 2560 -- and WHICH Arduino pin each is differs per board, because it
+%% is the variant's pin map that decides, not the part.
+%%
+%% PCINTn is the other: a whole port shares one vector, it fires on ANY change on
+%% ANY enabled pin of that port, and the handler has to remember the previous
+%% state to work out what happened. Nearly every pin has one. The Arduino core
+%% does not expose it at all -- attachInterrupt covers INTn only.
+%%
+%% Which is why this is `runtime` rather than a table. The honest answer to "can
+%% this pin interrupt" on an Arduino board is digitalPinToInterrupt(pin), and it
+%% answers for INTn, which is the set the core can actually attach to.
+{irq, avr,
+ [{ext, [{scheme,   runtime},
+	 {resolver, "digitalPinToInterrupt"},
+	 {edges,    [rising, falling, both, low]}]}]}.

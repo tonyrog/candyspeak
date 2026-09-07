@@ -64,6 +64,8 @@ int csp_print_blank(void);
 void csp_flush(void);
 int csp_print_value(csp_rt_t* st, vtype_t vt, value_t val);
 int csp_print_rule(csp_rt_t* st, int i);
+// The condition of the #when gate at `gate`, whose instructions start at `from`.
+int csp_print_when(csp_rt_t* st, int from, int gate);
 
 #ifdef __cplusplus
 EXTERN_C_END

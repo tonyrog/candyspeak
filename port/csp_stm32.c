@@ -736,6 +736,9 @@ void csp_setup(csp_rt_t* st)
 	}
     }
     csp_ctx_reset(st);
+    // AFTER the pin loop: arming an interrupt on a pin still at its reset
+    // default arms it on whatever the pin happened to be.
+    csp_setup_events(st);
 }
 
 void csp_input(csp_rt_t* st)
@@ -770,6 +773,7 @@ void csp_input(csp_rt_t* st)
     csp_can_input(st);
     csp_buf_input(st);   // i2c/spi collections and datagrams
     csp_input_timer(st);
+    csp_input_event(st);   // deal out this cycle's interrupt edges
 }
 
 void csp_output(csp_rt_t* st)
@@ -833,6 +837,139 @@ int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
 {
     (void)st; (void)id; (void)data; (void)len;
     return 0;
+}
+
+// ============================================================
+// Interrupts -- EXTI
+// ============================================================
+//
+// THE LINE IS THE BIT NUMBER. PA1, PB1 and PC1 all want EXTI line 1, and
+// SYSCFG_EXTICR decides which port owns it -- so sixteen sources at a time out
+// of eighty-two pins, and the collision is between pins that look unrelated.
+//
+// `gen_chips.erl --irq-of` prints that budget and `make check-boards` refuses a
+// board file claiming one line twice. This refuses it AGAIN, at attach: a
+// program declares its own pins and may name ones no board file mentions, so
+// the check has to exist on both sides of that gap.
+//
+// NO LEVEL TRIGGER. EXTI has a rising trigger register and a falling one and
+// nothing else. `high` and `low` are refused rather than quietly turned into an
+// edge -- a source that fires on something other than what was asked for is
+// worse than one that does not fire, because it looks like it works. An IMU
+// that holds DRDY low until it is read is edge-triggered here and the level
+// checked in the rule.
+//
+// The ISRs do ONE thing: clear the pending flag and OR a bit into a word. Rules
+// never run in interrupt context -- the arena is not re-entrant -- so the cycle
+// reads that word once, in csp_input_event.
+
+static volatile uint32_t stm_irq_pend;    // set by the ISRs below
+static uint8_t  stm_line_slot[16];        // EXTI line -> slot + 1, 0 = free
+
+// Clear the flags this vector owns and record which sources they were. `mask`
+// is which lines reach this handler: EXTI0..4 have their own, then 9..5 and
+// 15..10 share, so above line 4 the handler has to ask EXTI->PR which pin it
+// was -- there is nothing in the vector to say.
+static void stm_exti_isr(uint32_t mask)
+{
+    uint32_t pr = EXTI->PR & mask;
+
+    // rc_w1: writing a one clears. Cleared FIRST, so an edge arriving while
+    // this runs sets the flag again and the handler re-enters rather than
+    // being lost between the read and the clear.
+    EXTI->PR = pr;
+    while (pr) {
+	unsigned line = (unsigned)__builtin_ctz(pr);
+	pr &= ~(1u << line);
+	if (stm_line_slot[line])
+	    stm_irq_pend |= ((uint32_t)1 << (stm_line_slot[line] - 1));
+    }
+}
+
+void EXTI0_IRQHandler(void)     { stm_exti_isr(1u << 0); }
+void EXTI1_IRQHandler(void)     { stm_exti_isr(1u << 1); }
+void EXTI2_IRQHandler(void)     { stm_exti_isr(1u << 2); }
+void EXTI3_IRQHandler(void)     { stm_exti_isr(1u << 3); }
+void EXTI4_IRQHandler(void)     { stm_exti_isr(1u << 4); }
+void EXTI9_5_IRQHandler(void)   { stm_exti_isr(0x03E0u); }
+void EXTI15_10_IRQHandler(void) { stm_exti_isr(0xFC00u); }
+
+// The vector a line arrives on. Five of their own, then two shared.
+static IRQn_Type stm_exti_irqn(unsigned line)
+{
+    static const IRQn_Type low[5] = {
+	EXTI0_IRQn, EXTI1_IRQn, EXTI2_IRQn, EXTI3_IRQn, EXTI4_IRQn
+    };
+    if (line < 5)  return low[line];
+    if (line < 10) return EXTI9_5_IRQn;
+    return EXTI15_10_IRQn;
+}
+
+int csp_board_irq_attach(csp_rt_t* st, index_t ix, trigger_t trig, uint8_t slot)
+{
+    value_t* v = csp_dio_slot(st, ix, DOUT);
+    unsigned port, line;
+    uint32_t bit;
+
+    if (slot >= CSP_MAX_EVENTS)
+	return -1;
+    // .fired is a bit of the value word, so port and pin come from the SLOT --
+    // the same place csp_setup read them to configure the pin, and the same
+    // place a rule writing .pin would have changed them.
+    switch (decl(st, INDEX(ix), type)) {
+    case DECL_DIGITAL: port = v->d.port; line = v->d.pin; break;
+    case DECL_ANALOG:  port = v->a.port; line = v->a.pin; break;
+    default: return -1;
+    }
+    if ((port >= (unsigned)NPORTS) || (line > 15))
+	return -1;
+    // Edges only, and say no to the rest rather than substituting one.
+    if ((trig != IRQ_RISING) && (trig != IRQ_FALLING) && (trig != IRQ_BOTH))
+	return -1;
+    // The line, not the pin: taken means taken, whatever port claimed it.
+    if (stm_line_slot[line])
+	return -1;
+
+    // SYSCFG's clock is not in a board's {enable,...} -- nothing else on the
+    // part needs it -- so the one piece of code that does turns it on.
+    RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
+    (void)RCC->APB2ENR;
+
+    // Four lines per EXTICR word, four bits each, and the value is the port.
+    SYSCFG->EXTICR[line >> 2] =
+	(SYSCFG->EXTICR[line >> 2] & ~(0xFu << ((line & 3u) * 4u))) |
+	((uint32_t)port << ((line & 3u) * 4u));
+
+    bit = (uint32_t)1 << line;
+    if (trig == IRQ_RISING || trig == IRQ_BOTH) EXTI->RTSR |= bit;
+    else                                        EXTI->RTSR &= ~bit;
+    if (trig == IRQ_FALLING || trig == IRQ_BOTH) EXTI->FTSR |= bit;
+    else                                         EXTI->FTSR &= ~bit;
+
+    // Any edge left over from configuring the pin is not an event the program
+    // asked for. Cleared before the mask opens, or the first cycle delivers it.
+    EXTI->PR = bit;
+    EXTI->IMR |= bit;
+
+    stm_line_slot[line] = (uint8_t)(slot + 1);
+    NVIC_EnableIRQ(stm_exti_irqn(line));
+    return 0;
+}
+
+uint32_t csp_board_irq_take(csp_rt_t* st)
+{
+    uint32_t p;
+
+    (void)st;
+    // READ AND CLEAR AS ONE. An edge landing between the two would be dropped,
+    // and a dropped edge is the single failure this whole mechanism exists to
+    // prevent -- it is why the sampled host backend is not good enough on a
+    // board.
+    __disable_irq();
+    p = stm_irq_pend;
+    stm_irq_pend = 0;
+    __enable_irq();
+    return p;
 }
 
 // ============================================================

@@ -1,0 +1,24 @@
+// `#when <condition> ... #end` gates a whole block, where `#in <state>+` gates
+// on the state machine. A second word rather than a second meaning for `#in`:
+// `#in Idle` reads as "in this state", and one word with two senses makes both
+// harder to read.
+//
+// It compiles to the condition plus ONE OP_NINSTATE against zero -- the opcode
+// `#in` already uses, with a different immediate -- so no new opcode and no ROM
+// format change.
+#digital Drdy in falling 2:13
+#variable Ticks = 0
+#variable A = 0
+#variable B = 0
+#variable Seen = 0
+
+// Runs every cycle, so it wakes the block's rules reactively whether or not the
+// gate holds. That is the property under test: a rule in the block must not run
+// because its OWN dependency changed.
+Ticks = Ticks + 1
+
+#when Drdy.fired
+  A = A + 1
+  B = B + 1
+  Seen = Ticks
+#end

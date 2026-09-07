@@ -43,4 +43,42 @@
   {0, 27, [gpio, sda0,    usb_sda,   '-']},
   {0, 28, [gpio, scl0,    usb_scl,   '-']},
   {0, 29, [gpio, usb_dp,  '-',       '-']},
-  {0, 30, [gpio, usb_dm,  '-',       '-']}]}.
+  {0, 30, [gpio, usb_dm,  '-',       '-']},
+
+  %% P2 -- ONLY the four EINT pins, which is the whole of port 2 that anything
+  %% here needs. The rest of P2 is PWM1.1..1.6, UART1 modem lines and the
+  %% Ethernet MII, none of which a board file has asked for; adding them would
+  %% be transcription without a reader. P2.10 also carries NMI on function 2,
+  %% which is why that entry is not '-'.
+  {2, 10, [gpio, eint0, nmi, '-']},
+  {2, 11, [gpio, eint1, '-', i2stx_clk]},
+  {2, 12, [gpio, eint2, '-', i2stx_ws]},
+  {2, 13, [gpio, eint3, '-', i2stx_sda]}]}.
+
+%% --- INTERRUPT SOURCES -------------------------------------------------------
+%%
+%% TWO MECHANISMS, and the difference decides what a board can do.
+%%
+%% `eint` is the LPC2000 one: four dedicated inputs, each its own pin function
+%% and its own vector, on P2.10..P2.13 and nowhere else. Four channels.
+%%
+%% `gpio` is what the 17xx adds and it is much better: ANY pin on port 0 or port
+%% 2 can interrupt, on either edge, with NO pin function to select -- the pin
+%% stays gpio and IO0IntEnR/IO0IntEnF turn it on. Ports 1, 3 and 4 CANNOT, and
+%% that is the fact worth writing down: the LPC_GPIOINT struct in
+%% lpcopen/.../gpioint_17xx_40xx.h has fields IO0 and IO2 and no others.
+%%
+%% The price is the vector. Every GPIO interrupt on the part arrives on EINT3 --
+%% one handler, which reads IO0IntStatR/F to find out which pin fired. So a
+%% board using gpio interrupts cannot also use eint3, and that is a real
+%% collision rather than a style note.
+{irq, lpc1700,
+ [{eint, [{scheme,    pin_function},
+	  {functions, [eint0, eint1, eint2, eint3]},
+	  {edges,     [rising, falling, high, low]},
+	  {vector,    per_channel}]},
+
+  {gpio, [{scheme, port_any},
+	  {ports,  [0, 2]},
+	  {edges,  [rising, falling, both]},
+	  {vector, eint3}]}]}.

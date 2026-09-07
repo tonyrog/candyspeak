@@ -897,6 +897,71 @@ ck "the 212x map holds a full runtime" 'runtime 0..8
 A 9
 store 10..16' "$got"
 
+# --- 19b. interrupt sources --------------------------------------------------
+# A CHANNEL IS THE THING TWO PINS CANNOT SHARE, and every way of getting it
+# wrong is silent on the hardware: the second PINSEL or SYSCFG_EXTICR write
+# wins, the first pin goes quiet, and there is nothing to find but a signal
+# nobody answers. So the checks are the whole point, and they are what is
+# tested here rather than the listing that shows them off.
+echo "interrupts:"
+
+# pin_function derives its pins from the pin table rather than repeating them,
+# so this checks the derivation: eint2 is on P0.7 and P0.15 on an LPC2000, and
+# the board has already spent both -- which is the answer someone picking a
+# free interrupt pin actually needs.
+got=$(escript utils/gen_chips.erl --irq-of bridgezone |
+	  sed -n 's/^ *\(eint[0-3]\)  \(.*\)/\1 \2/p')
+ck "EINT pins come from the pin table, with what took them" 'eint0 P0.1(rxd0) P0.16*
+eint1 P0.3(sda0) P0.14
+eint2 P0.7(pwm2) P0.15(gpio)
+eint3 P0.9(rxd1) P0.20(gpio) P0.30(ain3)' "$got"
+
+# per_bit is a rule, not a list: the EXTI line IS the bit number, so PA1 and
+# PB1 are the same channel and only one of them can be a source.
+got=$(escript utils/gen_chips.erl --irq-of crazyflie | sed -n 's/^ *PC13 *//p')
+ck "an STM32 pin reports its EXTI line" 'falling  exti/13' "$got"
+
+# The four silent failures, plus the one an Arduino board cannot express. A
+# scratch terms directory rather than a real board file: CSP_PATH is searched
+# first, so these exist only for the length of this case.
+mkdir -p "$D/terms"
+cat > "$D/terms/irq.terms" <<'EOF'
+{board, tirqcollide,                       %% PA1 and PB1 are both EXTI line 1
+ [{chip, stm32f405rg}, {xtal, 8000000}, {core, 168000000},
+  {pin, 'PA1', gpio_in}, {pin, 'PB1', gpio_in},
+  {irq, 'PA1', falling}, {irq, 'PB1', rising}]}.
+{board, tirqlevel,                         %% EXTI has no level trigger
+ [{chip, stm32f405rg}, {xtal, 8000000}, {core, 168000000},
+  {pin, 'PC13', gpio_in}, {irq, 'PC13', low}]}.
+{board, tirqunmuxed,                       %% never configured, never fires
+ [{chip, stm32f405rg}, {xtal, 8000000}, {core, 168000000},
+  {irq, 'PC13', falling}]}.
+{board, tirqnocap,                         %% P0.23 has no eint function at all
+ [{chip, lpc2129}, {xtal, 12000000}, {core, 60000000},
+  {pin, 'P0.23', gpio}, {irq, 'P0.23', falling}, {enable, [gpio]}]}.
+{board, tirqwrongmux,                      %% right pin, muxed as gpio
+ [{chip, lpc2129}, {xtal, 12000000}, {core, 60000000},
+  {pin, 'P0.16', gpio}, {irq, 'P0.16', falling}, {enable, [gpio]}]}.
+{board, tirqarduino,                       %% the core owns the pin map
+ [{toolchain, arduino_cli}, {chip, atmega328p},
+  {fqbn, "arduino:avr:uno"}, {irq, 2, falling}]}.
+EOF
+# Board AND reason: six boards each reporting SOME error would also pass if
+# they all reported the same one.
+got=$(CSP_PATH="$D/terms" escript utils/gen_chips.erl --check tirq 2>&1 |
+	  sed -n 's/^\(tirq[a-z]*\): ERROR .*\(on an Arduino board\|is claimed by\|cannot trigger on\|cannot be an interrupt source\|never mentions\|cannot reach it\).*/\1 -- \2/p')
+ck "every silent way to claim an interrupt is refused" 'tirqarduino -- on an Arduino board
+tirqcollide -- is claimed by
+tirqlevel -- cannot trigger on
+tirqnocap -- cannot be an interrupt source
+tirqunmuxed -- never mentions
+tirqwrongmux -- cannot reach it' "$got"
+
+# And a board that is right stays right -- the checks above are worthless if
+# they also fire on the two boards that actually claim an interrupt.
+escript utils/gen_chips.erl --check >/dev/null 2>&1
+ck "the real boards still pass" 0 $?
+
 # --- 20. the part layout -----------------------------------------------------
 # csp_part.h hand-writes the bit position of every .part inside value_t. Those
 # are bitfields in different union arms, so a wrong number corrupts data instead
@@ -1428,7 +1493,7 @@ open(sys.argv[2], 'wb').write(d)
 PYEOF
 got=$(printf '/quit\n' | repl ./csp "$D/fmt14.db")
 ck "a patch from another ROM format is refused, and says why" \
-   "eeprom rejected: patch is ROM format 14, firmware is 17 -- clear it and re-enter" \
+   "eeprom rejected: patch is ROM format 14, firmware is 18 -- clear it and re-enter" \
    "$got"
 
 # --- transports: declaration, listing and refusal ----------------------------
@@ -1436,6 +1501,248 @@ ck "a patch from another ROM format is refused, and says why" \
 # endpoint survives the round trip through a constant, that /list gives back a
 # line that can be typed again, that /state names the far end, and that a
 # nonsense endpoint is refused where a typo has a line number.
+# --- 26a. #when blocks -------------------------------------------------------
+# `#when <condition> ... #end` gates a whole block; `#in <state>+` gates on the
+# state machine. Two words, deliberately: `#in Idle` reads as "in this state",
+# and one word with two senses makes both harder to read.
+#
+# The listing is how a program is serialised, so a block that lists back as
+# anything else is a program that changes meaning on the way home.
+echo "when:"
+
+cat > "$D/wn.csp" <<'CSPEOF'
+#digital Drdy in falling 2:13
+#variable A = 0
+#variable B = 0
+#when Drdy.fired && A < 100
+  A = A + 1
+  B = B + 2
+#end
+CSPEOF
+
+# The condition is rendered from the gate's own instructions -- the same
+# machinery a rule's `?` clause uses -- so what comes out is what went in.
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/wn.db" "$D/wn.csp" |
+	  grep -E '^(#when|#end|  )' | sed 's; *// .*;;')
+ck "a #when block lists back as itself" \
+'#when Drdy.fired&&A<100
+  A=A+1
+  B=B+2
+#end' "$got"
+
+# ...and re-enters. A form that lists but does not parse back is worse than one
+# that does neither, because it looks like it worked.
+printf '/list\n/quit\n' | repl ./csp "$D/wn.db" "$D/wn.csp" |
+    grep -E '^(#|  )' | sed 's; *// .*;;' | sed 's/^  //' > "$D/wn2.csp"
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/wn2.db" "$D/wn2.csp" |
+	  grep -E '^(#when|#end|  )' | sed 's; *// .*;;')
+ck "the listing parses back to the same block" \
+'#when Drdy.fired&&A<100
+  A=A+1
+  B=B+2
+#end' "$got"
+
+# THE STATE MACHINE IS UNTOUCHED. #when reuses OP_NINSTATE with a different
+# immediate, and the listing tells the two gates apart by shape -- so this is
+# the case that catches a #when header rendered over an #in one.
+got=$(printf '#states Idle Run\n#variable X = 0\n#in Idle\nX = 1\n#end\n#in Run\nX = 2\n#end\n/list\n/quit\n' |
+	  repl ./csp "$D/wn3.db" | grep -E '^(#in|#end|  X)' | sed 's; *// .*;;')
+ck "#in still lists as #in" \
+'#in Idle
+  X=1
+#end
+#in Run
+  X=2
+#end' "$got"
+
+# One gate for N rules instead of N copies of the condition. Measured on the
+# program above with four rules rather than two: 81 instructions written out,
+# 67 as a block -- and the condition is evaluated ONCE per cycle instead of
+# four times, which is the part that does not show up in a size.
+got=$(printf '#digital D in falling 2:13\n#variable A=0\n#when D.fired\nA=A+1\n#end\n#when D.fired\nA=A+2\n#end\n/quit\n' |
+	  repl ./csp "$D/wn4.db" | grep -c 'end mismatch')
+ck "two blocks in a row are both accepted" "0" "$got"
+
+# A BARE EXPRESSION INSIDE AN OPEN BLOCK IS A RULE, not a query.
+#
+# `println("hi")` at the prompt is a query -- run it, show the answer -- and
+# line_is_rule says so from the text alone, because there is no '=' and no '?'.
+# But the SAME line inside a #when, an #in or a #module is the block's body.
+# Evaluating it once there printed at the wrong time and left the block empty:
+# the rules the user typed were simply not in the program afterwards.
+#
+# The nesting is what decides, not the text.
+got=$(printf '#variable X=1\n#when X\nprintln("in")\n#end\n/list\n/quit\n' |
+	  repl ./csp "$D/wq1.db" | grep -E '(#when|#end|println)' | sed 's; *// .*;;')
+ck "a bare call inside a #when is a rule" '#when X
+  println("in")
+#end' "$got"
+
+got=$(printf '#states Idle\n#in Idle\nprintln("in")\n#end\n/list\n/quit\n' |
+	  repl ./csp "$D/wq2.db" | grep -E '(#in |#end|println)' | sed 's; *// .*;;')
+ck "a bare call inside an #in is a rule" '#in Idle
+  println("in")
+#end' "$got"
+
+got=$(printf '#module M\n#variable A out\nprintln("in")\n#end\n/list\n/quit\n' |
+	  repl ./csp "$D/wq3.db" | grep -E '(#module|#end|println)' | sed 's; *// .*;;')
+ck "a bare call inside a #module is a rule" '#module M
+  println("in")
+#end' "$got"
+
+# ...and at the top level it is still a query: evaluated once, nothing stored.
+got=$(printf '#variable X=7\nX+1\n/list\n/quit\n' |
+	  repl ./csp "$D/wq4.db" | grep -cE '^X\+1')
+ck "a bare expression at the prompt stores nothing" "0" "$got"
+
+# ONE STACK FOR #in, #when AND #module, so `#end` closes the group that opened
+# last. With a flag per kind it closed the wrong one -- `#when X / #in Idle /
+# ... / #end` shut the #when and left the #in open, and every line after it was
+# swallowed into a block that never ended.
+got=$(printf '#states Idle\n#variable X=1\n#variable Z=0\n#when X\n#in Idle\nZ=1\n#end\nZ=2\n#end\n/list\n/quit\n' |
+	  repl ./csp "$D/wm1.db" | grep -E '(#when|#in |#end|Z=)' | sed 's; *// .*;;')
+ck "#end closes the innermost block, whatever kind" '#when X
+  #in Idle
+    Z=1
+  #end
+  Z=2
+#end' "$got"
+
+# A BLOCK LEFT OPEN AT THE END OF A FILE used to pass in silence: everything
+# after the missing `#end` was swallowed, the file parsed, and the program ran
+# with rules that fire only under a condition their author meant for two lines.
+#
+# Reported by the line it OPENED on -- where the file ends is where you notice,
+# the opening is where the mistake is. Innermost first.
+printf '#variable X=1\n#variable Y=0\n#when X\nY=1\n' > "$D/op1.csp"
+printf '#module M\n#variable A out\n' > "$D/op2.csp"
+printf '#states Idle\n#variable X=0\n#in Idle\nX=1\n' > "$D/op3.csp"
+got=$(for f in op1 op2 op3; do ./csp -n "$D/$f.csp" 2>&1 | sed 's;.*csp:;;'; done)
+ck "a block left open at end of file is refused" '5 #when opened on line 3 was never closed
+3 #module opened on line 1 was never closed
+5 #in opened on line 3 was never closed' "$got"
+
+# ...but NOT at the prompt, where a block is legitimately open while its rules
+# are being typed.
+got=$(printf '#variable X=1\n#when X\n/quit\n' | repl ./csp "$D/wm2.db" |
+	  grep -c 'never closed')
+ck "an open block at the prompt is not an error" "0" "$got"
+
+# AN UNCLOSED BLOCK MUST NOT SPIN. The skip distance is patched at `#end`, and
+# at the REPL a block is open for as long as it takes to type the rules -- with
+# the cycle running the whole time. A distance of zero is a jump to the gate
+# itself, so a false condition span the machine forever. It ends the cycle now.
+got=$(printf '#variable X=0\n#when X\n/quit\n' | repl ./csp "$D/wn7.db" | wc -l)
+ck "an unclosed block does not spin" "2" "$got"
+
+# A gate with no condition is nothing, and nesting is refused rather than
+# half-supported: there is one in_marker, so there is one gate.
+got=$(printf '#when\n/quit\n' | repl ./csp "$D/wn5.db" | grep -c 'syntax error')
+ck "a #when with no condition is refused" "1" "$got"
+
+# BLOCKS NEST. A condition refining another one is the ordinary case --
+# lib/analog.csp puts `#when latch && edge` inside `#when due && free` -- and
+# each level keeps its own gate, so the inner `#end` patches the inner one.
+got=$(printf '#variable X=1\n#variable Y=1\n#variable Z=0\n#when X\n#when Y\nZ=7\n#end\n#end\n/list\n/quit\n' |
+	  repl ./csp "$D/wn6.db" | grep -E '(#when|#end|Z=)' | sed 's; *// .*;;')
+ck "#when blocks nest" '#when X
+  #when Y
+    Z=7
+  #end
+#end' "$got"
+
+# --- 26b. interrupt triggers -------------------------------------------------
+# A trigger is an OPTION on the pin, like the pull -- an interrupt is a property
+# of how the pin is configured, and there is no #pullup declaration for the same
+# reason. The listing is how a program is serialised (/save, a ROM image, a paste
+# back), so a trigger dropped from it is a program that comes home without its
+# interrupts -- the failure a timer's `= 1` once had.
+echo "events:"
+
+cat > "$D/ev.csp" <<'CSPEOF'
+#digital Drdy in falling 2:13
+#digital Btn  in pullup rising 2:7
+#analog  Adc:10 in ready 0:3
+CSPEOF
+
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/ev.db" "$D/ev.csp" |
+	  grep -E '^#(digital|analog)')
+ck "a trigger lists with the other options" \
+'#digital Drdy in falling 2:13  // R
+#digital Btn in pullup rising 2:7  // R
+#analog Adc:10 in ready 0:3  // R' "$got"
+
+# ...and survives being baked into a ROM image. `irq` is REAL DATA -- it is what
+# decides whether the source is armed at all -- so an emitter that dropped it
+# would both fail the decl-section CRC and, if it somehow loaded, produce a
+# program whose interrupts silently never fire.
+if build_rom "$D/ev.csp" "$D/ev_fw"; then
+    got=$(printf '/list\n/quit\n' | repl "$D/ev_fw" "$D/ev8.db" --no-eeprom |
+	      grep -E '^#(digital|analog)' | sed 's;  // .*;;')
+    ck "a trigger survives a ROM round trip" \
+'#digital Drdy in falling 2:13
+#digital Btn in pullup rising 2:7
+#analog Adc:10 in ready 0:3' "$got"
+else
+    ck "a trigger survives a ROM round trip" "built" "build failed"
+fi
+
+# THREE KINDS OF SOURCE LOOK THE SAME BETWEEN EDGES, and only one of them
+# cannot miss a short pulse. /state says which:
+#
+#   (nothing)  the silicon arms it
+#   ~          software: the level is compared each cycle
+#   !          armed by neither, and will never fire
+#
+# On the host every edge is software -- there is no interrupt controller -- and
+# `ready` is refused outright, because a conversion finishing is not a level
+# anything can compare.
+# `soft` is the word that says sampling is acceptable, so the mark drops: the
+# board is doing what the program asked rather than falling short of it.
+got=$(printf '#analog Adc:10 in ready 0:3\n#digital D in falling 2:1\n#digital S in soft falling 2:2\n/state\n/quit\n' |
+	  repl ./csp "$D/ev7.db" | grep -E '^(Adc|D|S) ' | tr -s ' ' | cut -d= -f2)
+ck "/state says which kind of source each pin got" \
+' 0 ready!
+ 0 falling~!
+ 0 falling~' "$got"
+
+# ...and it lists back, with the other options and before the trigger.
+got=$(printf '#digital S in soft falling 2:2\n/list\n/quit\n' |
+	  repl ./csp "$D/ev9b.db" | grep '^#digital' | sed 's; *// .*;;')
+ck "soft lists with the other options" '#digital S in soft falling 2:2' "$got"
+
+# It is a NAME like the triggers are -- reserving it would have cost more than
+# it bought, and this is the case that says so.
+got=$(printf '#variable soft = 5\n> soft\n/quit\n' | repl ./csp "$D/ev9c.db" | tail -1)
+ck "soft is still usable as a name" "5" "$got"
+
+# TRIGGER WORDS ARE ORDINARY NAMES. parse_opts stops on a word that is not a
+# trigger, so a name is still a name -- examples/can_pack.csp already has
+# `#variable ready`, and `high` and `low` are names anyone would reach for.
+got=$(printf '#variable ready = 7\n#variable high = 8\n> ready\n/quit\n' |
+	  repl ./csp "$D/ev6.db" | tail -1)
+ck "a trigger word is still usable as a name" "7" "$got"
+
+# And a pin with no trigger stays exactly as it listed before -- the option is
+# absent, not printed as `none`.
+got=$(printf '#digital Plain in 2:2\n/list\n/quit\n' |
+	  repl ./csp "$D/ev9.db" | grep '^#digital')
+ck "a pin with no interrupt lists unchanged" '#digital Plain in 2:2  // R' "$got"
+
+# AN OPTION AFTER THE PIN WAS SILENTLY DROPPED. pmatch reads the options before
+# the pin and never looks past it, so `#digital D in 2:1 pullup` was a pin with
+# no pull and nothing said so. A trigger written there is the same failure with
+# a longer fuse -- a pin that never interrupts, on a program that looks right.
+got=$(printf '#digital D in 2:1 falling\n#digital E in 2:2 pullup\n/quit\n' |
+	  repl ./csp "$D/eva.db" | grep -c 'comes BEFORE the pin')
+ck "an option written after the pin is refused" "2" "$got"
+
+# ...and the array form still reads its own tail, which is a pin spec and not
+# a stray option.
+got=$(printf '#digital G[3] in 0:1..3\n/list\n/quit\n' |
+	  repl ./csp "$D/evb.db" | grep '^#digital')
+ck "a device array still parses its pin list" '#digital G[3] in 0:1..3  // R' "$got"
+
 echo "transports:"
 
 cat > "$D/tr.csp" <<'CSPEOF'

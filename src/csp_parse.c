@@ -3,6 +3,7 @@
 // them, and putting them here is what lets the offset table be RODATA too.
 #define CSP_PATTERN_DEFINE
 #include "csp_patterns.h"
+#include "csp_strings.h"   // the trigger spellings parse_opts matches
 #include <string.h>
 
 // The pmatch engine is part of the compiler: it exists to turn a token stream
@@ -155,6 +156,41 @@ static int stop_match(pmatch_st_t* pst, int sid, uint8_t tok)
 }
 
 
+// Map a word to an interrupt trigger, IRQ_NONE if it is not one.
+//
+// The same shape part_from_tstr has, and for the same reason: these are NAMEs,
+// not reserved words. `ready` is a #variable in examples/can_pack.csp and `high`
+// and `low` are names anyone would reach for -- reserving them to spell an
+// a trigger would cost more than it bought. parse_opts STOPS on a word that is
+// not one, so a name in that position is still a name.
+NOINLINE trigger_t trig_from_tstr(const tstr_t* s)
+{
+    switch(s->len) {
+    case 3:
+	if (ro_memcmp(s->ptr, s_low, 3) == 0)      return IRQ_LOW;
+	break;
+    case 4:
+	if (ro_memcmp(s->ptr, s_both, 4) == 0)     return IRQ_BOTH;
+	if (ro_memcmp(s->ptr, s_high, 4) == 0)     return IRQ_HIGH;
+	// Not a trigger: the word that says sampling is acceptable. Same lookup
+	// so there is one table of option words that are ordinary names.
+	if (ro_memcmp(s->ptr, s_soft, 4) == 0)     return IRQ_SOFT;
+	break;
+    case 5:
+	if (ro_memcmp(s->ptr, s_ready, 5) == 0)    return IRQ_READY;
+	break;
+    case 6:
+	if (ro_memcmp(s->ptr, s_rising, 6) == 0)   return IRQ_RISING;
+	break;
+    case 7:
+	if (ro_memcmp(s->ptr, s_falling, 7) == 0)  return IRQ_FALLING;
+	break;
+    default:
+	break;
+    }
+    return IRQ_NONE;
+}
+
 // how to do this be made with pattern?
 NOINLINE decl_opts_t parse_opts(csp_rt_t* st, const token_t* tv,
 				int* ip, size_t n,
@@ -177,6 +213,20 @@ NOINLINE decl_opts_t parse_opts(csp_rt_t* st, const token_t* tv,
 	case T_BIG:      opts.endian=E_BIG; DBG("BIG,"); break;	    
 	case T_PULLUP:   opts.pullup=1; DBG("PULLUP,"); break;
 	case T_PULLDOWN: opts.pulldown=1; DBG("PULLDOWN,"); break;
+	// An interrupt trigger. A WORD and not a keyword: `ready` is a
+	// #variable in examples/can_pack.csp and `high` and `low` are names
+	// anyone would reach for, so reserving them would cost more than it
+	// buys. A word that is not a trigger ends the option run, exactly as
+	// any other word does -- so a name here is still a name.
+	case WORD: {
+	    trigger_t t = trig_from_tstr(&tv[i].v.str);
+	    if (t == IRQ_NONE) goto done;
+	    // `soft` is not a trigger -- it is what the pin will settle for.
+	    // Sharing the lookup keeps one table of words that are names.
+	    if (t == IRQ_SOFT) { opts.soft = 1; DBG("SOFT,"); }
+	    else               { opts.trig = t; DBG("TRIG,"); }
+	    break;
+	}
 	default: goto done;
 	}
 	i++;

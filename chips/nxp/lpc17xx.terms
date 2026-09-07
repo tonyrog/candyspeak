@@ -16,6 +16,23 @@
   %% AHB SRAM at 0x2007C000 -- two ranges, and a MEMORY region names one.
   {ram_base,    16#10000000},
   {ram_reserve, 0},
+
+  %% THE TOP OF RAM IS NOT OURS. The IAP routines in the boot ROM use the
+  %% highest bytes of on-chip RAM as their own scratch -- and the stack starts
+  %% at the top of RAM, so an IAP call made from a running program writes into
+  %% the live stack and the return goes somewhere else. It does not fail; the
+  %% node HANGS.
+  %%
+  %% Measured the hard way: /clear on a DL1200 locked the board solid, and
+  %% /clear is the first thing that erases a flash sector through IAP.
+  %%
+  %% UM10360 says 32 bytes. This reserves 128, because the difference is 96
+  %% bytes of 16384 and the failure mode is a board that has to be recovered
+  %% over ISP -- there is no cheaper insurance in this file.
+  %%
+  %% ram_reserve above comes off the BOTTOM (remapped vectors on an LPC2000);
+  %% this comes off the TOP, which is a different place and a different reason.
+  {ram_reserve_top, 128},
   {flash_base,  16#00000000},
 
   %% Cortex-M: a POINTER ARRAY, not branches -- entry 0 is the initial stack

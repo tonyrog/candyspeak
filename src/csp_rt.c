@@ -332,6 +332,9 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_NO_DEFINES] =             ros_err_no_defines,
     [ERR_LOCAL_SCOPE] =            ros_err_local_scope,
     [ERR_RESERVED_NAME] =          ros_err_reserved_name,
+    [ERR_OPTS_AFTER_PIN] =         ros_err_opts_after_pin,
+    [ERR_BLOCK_OPEN] =             ros_err_block_open,
+    [ERR_TOO_MANY_EVENTS] =        ros_err_many_events,
 };
 
 // err_tab is a designated-initialiser array, so ANY code without a row in it
@@ -1535,16 +1538,22 @@ NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
 	    st->es.reg[ci.r.cnd].i)
 	    break;
 	return n+ci.r.nxt;
+    // nxt == 0 IS AN UNCLOSED BLOCK. The distance is patched at `#end`, and at
+    // the REPL the block is open for as long as it takes to type the rules --
+    // during which the cycle keeps running. Jumping zero is jumping to this
+    // instruction, so the machine spins on it forever, which is what an
+    // unfinished `#when X` with X false did. An unclosed block ends the cycle
+    // instead: nothing after it has been written yet.
     case OP_INSTATE:  // #in block gate: skip the whole block if State != imm
 	if (st->es.reg[ci.in.x].i != ci.in.imm) {
 	    *leave = 1;
-	    return n + ci.in.nxt;
+	    return ci.in.nxt ? (n + ci.in.nxt) : (index_t)st->ps.nn;
 	}
 	break;
-    case OP_NINSTATE: // OR-chain gate: jump INTO the block if State == imm
+    case OP_NINSTATE: // gate: jump past the block (#when) or into it (#in chain)
 	if (st->es.reg[ci.in.x].i == ci.in.imm) {
 	    *leave = 1;
-	    return n + ci.in.nxt;
+	    return ci.in.nxt ? (n + ci.in.nxt) : (index_t)st->ps.nn;
 	}
 	break;
     case OP_SETO:
@@ -3995,6 +4004,7 @@ int csp_rt_init(csp_rt_t* st, int reactive, csp_cstate_t* cs)
     if (st->cs) {
 	st->cs->mdef = BAD_INDEX;  // no module being defined
 	st->cs->sdef = -1;
+	st->cs->blk_depth = 0;
 	// dedicated scratch for the variable list during a <- parse
 	st->cs->var = st->cs->var_buf;
     }
@@ -5746,6 +5756,175 @@ int csp_set_latch(csp_rt_t* st, int onoff)
 }
 
 // Common timer input (called from cs_input)
+
+// --- interrupts ---------------------------------------------------------------
+//
+// RULES NEVER RUN IN INTERRUPT CONTEXT. The arena is not re-entrant, so an ISR
+// does exactly one thing -- OR its bit into a pending word -- and the cycle
+// reads that word once, here, the way csp_input_timer reads the clock. A rule
+// guarded by `Drdy.fired` then runs in ordinary rule context, one cycle after
+// the edge, exactly as `timeout(T)` does.
+//
+// NO event[] LIST. An interrupt source is an io[] entry whose declaration
+// carries an irq, and io[] is walked every cycle anyway -- so a source's SLOT is
+// its position among those entries, and csp_setup_events and csp_input_event
+// agree because both walk io[] the same way. One list less to size, allocate,
+// and keep in step across a rebuild.
+
+// The trigger this entry carries, IRQ_NONE when it is not a source. ONE
+// definition, because the setup pass and the sweep must agree on exactly which
+// entries count -- if they disagreed, every slot after the first difference
+// would deal an edge to the wrong pin.
+static trigger_t io_trigger(csp_rt_t* st, index_t ix)
+{
+    int i = INDEX(ix);
+    switch (decl(st, i, type)) {
+    case DECL_DIGITAL: return (trigger_t) decl(st, i, di.irq);
+    case DECL_ANALOG:  return (trigger_t) decl(st, i, an.irq);
+    default: return IRQ_NONE;
+    }
+}
+
+// Arm every declared source. Called from csp_setup AFTER the pins are
+// configured: arming an interrupt on a pin still at its reset default arms it
+// on whatever the pin happened to be.
+//
+// A source the board REFUSES keeps its slot -- with its bit clear in irq_hw, so
+// it never fires. Dropping it instead would renumber every source after it, and
+// the numbering is the only thing tying a bit in the pending word to a pin.
+// The pin's level right now, from the INPUT half -- the same half a rule reads.
+// Digital only: an analog reading has no level, and `ready` on one means the
+// converter finished, which software cannot see.
+static int io_level(csp_rt_t* st, index_t ix)
+{
+    value_t* v = csp_dio_slot(st, ix, DIN);
+    return (int)(v->d.val & 1);
+}
+
+void csp_setup_events(csp_rt_t* st)
+{
+    int i;
+    uint8_t slot = 0;
+
+    st->irq_hw = 0;
+    st->irq_sw = 0;
+    st->irq_lvl = 0;
+    for (i = 0; i < st->nio; i++) {
+	index_t ix = csp_io_at(st, i);
+	trigger_t trig = io_trigger(st, ix);
+
+	if (trig == IRQ_NONE)
+	    continue;
+	if (slot >= CSP_MAX_EVENTS) {
+	    if (csp_set_error(st, ERR_TOO_MANY_EVENTS))
+		csp_set_err_arg_int(st, 0, CSP_MAX_EVENTS);
+	    break;
+	}
+	if (csp_board_irq_attach(st, ix, trig, slot) == 0)
+	    st->irq_hw |= ((uint32_t)1 << slot);
+	else if ((decl(st, INDEX(ix), type) == DECL_DIGITAL) &&
+		 (trig != IRQ_READY)) {
+	    // SOFTWARE FALLBACK. The silicon cannot arm this one, so the sweep
+	    // compares its level between cycles instead. That is what
+	    // `rising(X)` does in the language, and saying it in the declaration
+	    // means the same program moves to a board that CAN arm it without a
+	    // line changing -- which is most of what a portable pin spec is for.
+	    st->irq_sw |= ((uint32_t)1 << slot);
+	    // THE LEVEL AT SETUP IS THE BASELINE. Without it a pin that starts
+	    // high reports a rising edge on the first cycle -- an edge that never
+	    // happened, delivered before the program has run once.
+	    if (io_level(st, ix))
+		st->irq_lvl |= ((uint32_t)1 << slot);
+	}
+	slot++;
+    }
+    st->ne = slot;
+    csp_ctx_reset(st);
+}
+
+// The slot a declaration was given, or -1 when it is not an interrupt source.
+// Walks io[] the same way csp_setup_events did, which is what makes the answer
+// the same -- and is why the numbering is not stored anywhere.
+int csp_event_slot(csp_rt_t* st, index_t ix)
+{
+    int i;
+    uint8_t slot = 0;
+
+    for (i = 0; i < st->nio; i++) {
+	index_t e = csp_io_at(st, i);
+	if (io_trigger(st, e) == IRQ_NONE)
+	    continue;
+	if (e == ix) {
+	    csp_ctx_reset(st);
+	    return slot;
+	}
+	slot++;
+    }
+    csp_ctx_reset(st);
+    return -1;
+}
+
+// One cycle: clear last cycle's `fired`, deal this cycle's pending bits out,
+// and wake the rules that read them.
+//
+// `fired` lives in a different bit of the two layouts (dvalue_t's top bit,
+// avalue_t's spare one), so this goes through csp_dio_set_part rather than
+// naming a union arm -- the same table `Drdy.fired` is read through, so the
+// writer and the reader cannot drift apart.
+void csp_input_event(csp_rt_t* st)
+{
+    uint32_t pend;
+    uint8_t slot = 0;
+    int i;
+
+    if (st->ne == 0)
+	return;
+    // Masked with irq_hw: a source the board refused must never appear to fire,
+    // whatever a backend leaves in the word.
+    pend = csp_board_irq_take(st) & st->irq_hw;
+    for (i = 0; i < st->nio; i++) {
+	index_t ix = csp_io_at(st, i);
+	trigger_t trig = io_trigger(st, ix);
+	uint32_t bit;
+	value_t v;
+
+	if (trig == IRQ_NONE)
+	    continue;
+	bit = (uint32_t)1 << slot;
+	if (st->irq_sw & bit) {
+	    // Software: the edge is the difference between the level now and
+	    // the level at the last sweep. A level trigger is not an edge at
+	    // all -- it holds for as long as the pin does.
+	    int now = io_level(st, ix);
+	    int was = (st->irq_lvl >> slot) & 1;
+	    int fire = 0;
+	    switch (trig) {
+	    case IRQ_RISING:  fire = (now && !was); break;
+	    case IRQ_FALLING: fire = (!now && was); break;
+	    case IRQ_BOTH:    fire = (now != was);  break;
+	    case IRQ_HIGH:    fire = now;           break;
+	    case IRQ_LOW:     fire = !now;          break;
+	    default: break;
+	    }
+	    if (now) st->irq_lvl |= bit;
+	    else     st->irq_lvl &= ~bit;
+	    v.u = (uvalue_t)(fire ? 1 : 0);
+	}
+	else
+	    v.u = (pend >> slot) & 1;
+	// BOTH halves, the way csp_input_timer writes both t.fired slots: a
+	// rule reads DIN and the listing reads DOUT, and a bit written to one
+	// of them reads back as whatever the other still held.
+	csp_dio_set_part(st, ix, v, PART_FIRED, DIN);
+	csp_dio_set_part(st, ix, v, PART_FIRED, DOUT);
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
+	if (v.u && st->reactive)
+	    csp_enq_elist(st, ix);
+#endif
+	slot++;
+    }
+    csp_ctx_reset(st);
+}
 
 void csp_input_timer(csp_rt_t* st)
 {

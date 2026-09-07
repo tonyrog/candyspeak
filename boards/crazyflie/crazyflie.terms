@@ -57,6 +57,16 @@
   {pin, 'PC9', i2c3_sda},
   {pin, 'PC13', gpio_in},           %% IMU INT, data-ready
 
+  %% AND IT IS A REAL INTERRUPT, so say so. EXTI line 13, because the line is
+  %% the bit number -- which means no other pin on this board may be PxN with
+  %% N=13, and check-boards enforces that. Falling: the part pulls DRDY low when
+  %% a sample is ready, and EXTI has no level trigger to express "still ready".
+  %%
+  %% Nothing consumes this yet -- see doc/EVENTS.md. It is written down because
+  %% it is a fact about the wiring, and a fact left unstated is one the next
+  %% person derives again from a schematic.
+  {irq, 'PC13', falling},
+
   %% BATTERY. Behind a 1:2 divider, so the reading is half the pack voltage --
   %% pilot/pins/power.csp does that arithmetic.
   {pin, 'PA2', adc1_in2},

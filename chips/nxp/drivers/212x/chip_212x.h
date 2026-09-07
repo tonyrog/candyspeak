@@ -139,6 +139,22 @@ typedef struct {
 #define PCON_IDL   (1u << 0)
 #define PCON_PD    (1u << 1)
 
+// The four external interrupts. EINT0..3 are a PIN FUNCTION on this family --
+// there is no GPIO interrupt block, that arrived with the 17xx -- so the pin has
+// to be muxed to eintN first, which the board file does.
+//
+//   EXTINT   rc_w1 flags, one per EINT. Writing a one CLEARS.
+//   EXTMODE  0 = level sensitive, 1 = edge
+//   EXTPOLAR 0 = falling edge / low level, 1 = rising / high
+//
+// AND THEY ARE WHAT WAKES A POWERED-DOWN PART. A GPIO level cannot; an external
+// interrupt can, which is why BridgeZone's AVR pulls P0.16 rather than driving
+// an ordinary input.
+#define LPC_EXTINT  (*(__IO uint8_t *)(LPC_SCB_BASE + 0x140))
+#define LPC_EXTWAKE (*(__IO uint8_t *)(LPC_SCB_BASE + 0x144))
+#define LPC_EXTMODE (*(__IO uint8_t *)(LPC_SCB_BASE + 0x148))
+#define LPC_EXTPOLAR (*(__IO uint8_t *)(LPC_SCB_BASE + 0x14C))
+
 // Peripheral power. Bit per block; several come up SET, so a board that wants
 // anything off has to write the whole word. See gen_chips.erl --board.
 #define LPC_PCONP  (*(__IO uint32_t *)(LPC_SCB_BASE + 0x0C4))

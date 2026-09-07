@@ -70,6 +70,12 @@ mailboxes and two receive FIFOs — the shape `can_212x.c` has, in ST's spelling
 `pilot/pins/imu.csp` reads the device as a `#buffer`, and filling that buffer is
 a driver this port does not have.
 
+**EXTI.** `boards/crazyflie` marks the IMU's data-ready line with `{irq, 'PC13',
+falling}` and `make check-boards` holds it to line 13 — no other pin on the
+board may be an EXTI source on bit 13, because the line IS the bit number. What
+is missing is everything below that: `SYSCFG_EXTICR`, the trigger registers and
+the two grouped vectors. See doc/EVENTS.md.
+
 **A pin-capability table.** `check-boards` verifies that a pin name parses, that
 its function has an AF number, and that no pin is muxed twice. It does NOT
 verify that *this* pin can have *that* function. An LPC pin table is a few
