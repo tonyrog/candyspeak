@@ -112,12 +112,30 @@ pin_range -> 'INT' : {pin,'$1'}.
 pin_range -> 'INT' 'COLON' 'INT' : {port_pin,'$1','$3'}.
 pin_range -> 'INT' 'COLON' 'INT' 'DOTDOT' 'INT' : {port_pin,'$1',
 						  {range,'$3','$5'}}.
+%% can <frame-id> 
 buftype -> 'T_CAN' 'INT' : [{can,'$2'}].
-buftype -> 'T_I2C' 'INT' : [{i2c,'$2'}].
-buftype -> 'T_SPI' 'INT' : [{spi,'$2'}].
-buftype -> 'T_UDP' 'INT' : [{udp,'$2'}].
-buftype -> 'T_TCP' 'INT' : [{tcp,'$2'}].
-buftype -> 'T_UART' 'INT' : [{uart,'$2'}].
+%% i2c <bus> <addr> <reg>
+buftype -> 'T_I2C' 'INT' 'INT' 'INT' : [{i2c,'$2','$3','$4'}].
+%% spi <bus> <cs-port> ':' <cs-pin> <cmd>
+buftype -> 'T_SPI' 'INT' 'INT' 'COLON' 'INT' 'INT' :
+	       [{spi,'$2',{'$3','$5'},'$6'}].
+%% udp <port> == udp <port> 0
+buftype -> 'T_UDP' 'INT' : [{udp,'$2',udefined}].
+%% udp <port> <ip>
+buftype -> 'T_UDP' 'INT' 'INT' : [{udp,'$2','$3'}].
+%% tcp <port> == tcp <port> 0
+buftype -> 'T_TCP' 'INT' : [{tcp,'$2',udefined}].
+%% tcp <port> <ip>
+buftype -> 'T_TCP' 'INT' 'INT' : [{tcp,'$2','$3'}].
+%% uart <rx-port>':'<rx-pin> <tx-port>':'<tx-pin> mode-bits
+%%  uart 0:25 0:24  [baud-rate][data-bits][parity][stop-bits]
+buftype -> 'T_UART' 'INT' 'COLON' 'INT' 'INT' 'COLON' 'INT' 'INT' :
+	       [{uart,{'$2','$4'},{'$5','$7'},'$8'}].
+%% Data:4,Parity:4,Stop:4,Baud100:20 = 32
+%% Data      = 5-9  
+%% parity    = N=0|E=1|O=2|M=3|S=4
+%% stop-bits = 1,2
+%% mode = 81100000+192 
 
 options -> option options : ['$1'|'$2'].
 options -> '$empty'       : [].

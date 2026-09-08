@@ -635,7 +635,12 @@
 %%   i2c <bus> <addr> <reg>
 %%   spi <bus> <cs-port>':'<cs-pin> <cmd>
 %%   udp <port>                     -- in: listen on that port, any peer
+%%   udp <port> <ip>                -- in: listen on that port, match peer ip
 %%   udp <port> <ip>                -- out: send to that address and port
+%%   tcp <port>                     -- in: listen on that port, any peer
+%%   tcp <port> <ip>                -- in: listen on that port, accept peer ip
+%%   tcp <port> <ip>                -- out: send to that address and port
+%%   uart <rx-port>':'<rx-pin> <tx-port>':'<tx-pin> <mode>
 %%
 %% PORT FIRST, and the optional address after it. The other order reads better
 %% -- everyone writes 192.168.1.2:5000 -- but it cannot be parsed: an optional
