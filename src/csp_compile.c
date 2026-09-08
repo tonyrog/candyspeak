@@ -208,6 +208,9 @@ NOINLINE static csp_instr_t* alloc_instr_ptr(csp_rt_t* st,int* pos,opcode_t op)
 	return NULL;
     }
     else {
+	// The instruction area is about to grow. If it reaches the derived
+	// tables they are void from here -- see csp_mid_note_instr.
+	csp_mid_note_instr(st, sizeof(csp_instr_t));
 	i = st->ps.nn++;
 	ip = ram_instr_at(st, i);
 	// Mirror number_rules: a rule body ends at NEXT/ENTER, so each one opens

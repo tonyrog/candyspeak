@@ -2834,6 +2834,19 @@ static int csp_process_persistent(csp_rt_t* st, char* line)
 }
 
 // A bare line is a persistent RULE if it has a top-level assignment '=' or a
+// A line that grew the code past the derived tables leaves them void, and the
+// rebuild that would move them happens at the top of a CYCLE. A paused session
+// has none -- so /state and /list would read tables the line just wrote over,
+// which is how a paused edit came back as names and values mixed together.
+//
+// So the line settles its own damage before returning. Nothing else in the REPL
+// has to know.
+static void mid_settle(csp_rt_t* st)
+{
+    if (st->mid_stale && st->started)
+	csp_rebuild(st);
+}
+
 // '?' guard, an immediate query otherwise. This is the token-level test
 // "any EQ or QUEST" done as a char scan, so csp_process_line needs no token_t
 // tv[24] of its own one frame above csp_parse's.
@@ -2932,11 +2945,13 @@ int csp_process_line(csp_rt_t* st, char* line)
 	csp_undo_mark(st, &s);
 	csp_process_persistent(st, line);
 	csp_undo_push(st, &s);
+	mid_settle(st);
 	return CSP_CMD_OK;
     }
     else if (*line == '>') {
 	// Immediate expression
 	csp_process_immediate(st, line + 1);
+	mid_settle(st);
 	return CSP_CMD_OK;
     }
     else {
@@ -2961,6 +2976,7 @@ int csp_process_line(csp_rt_t* st, char* line)
 	}
 	else
 	    csp_process_immediate(st, line);
+	mid_settle(st);
 	return CSP_CMD_OK;
     }
 }

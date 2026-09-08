@@ -139,6 +139,11 @@ $(B)/csp_rom.c: $(PROG) $(B)/.cspprog csp
 	@mkdir -p $(B)
 	@./csp -n -C -O $@ $(PROG)
 	@sed -n 's|^//   size: *|  rom: |p' $@
+	@{ echo "// The program in this image, in build order."; \
+	   echo "// PROG = $(PROG)"; \
+	   for f in $(PROG); do echo ""; echo "// ---- $$f"; cat "$$f"; done; \
+	 } > $(dir $@)rom.csp
+	@echo "  src: $(dir $@)rom.csp"
 
 # Touched only when the list actually changes, so an unrelated build does not
 # recompile the image.
@@ -484,6 +489,15 @@ $(B)/$(BOARD).ld: $(TERMS) utils/gen_chips.erl
 # place. Lands in the build directory rather than over rom.c in the tree: rom.c
 # is the host demo image and swapping the two is how a program becomes the
 # baseline every test then runs on top of.
+# THE SOURCE GOES IN THE BUILD, next to the image it produced. `rom.c` is an
+# array of numbers -- true, and unreadable -- so what actually answers "what is
+# on this board" is the .csp text that made it, concatenated in build order with
+# the file names in it.
+#
+# One caveat: it is written by the rule that builds the image, so switching a
+# board to the NEUTRAL image (PROG empty) does not rewrite it. The PROG line at
+# the top is there to be read before trusting the rest.
+#
 # .cspprog for the same reason as in the arduino branch: PROG is a list of
 # NAMES, and switching from one program to another usually leaves the image
 # newer than its new source, so make finds nothing to do and the firmware keeps
@@ -492,6 +506,11 @@ $(B)/rom.c: $(PROG) $(B)/.cspprog csp $(B)/csp_board.h
 	@mkdir -p $(B)
 	@./csp -n -C -O $@ $(PROG)
 	@sed -n 's|^//   size: *|  rom: |p' $@
+	@{ echo "// The program in this image, in build order."; \
+	   echo "// PROG = $(PROG)"; \
+	   for f in $(PROG); do echo ""; echo "// ---- $$f"; cat "$$f"; done; \
+	 } > $(dir $@)rom.csp
+	@echo "  src: $(dir $@)rom.csp"
 
 $(B)/.cspprog: FORCE
 	@mkdir -p $(B)

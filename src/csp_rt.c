@@ -1957,7 +1957,8 @@ index_t csp_cycle(csp_rt_t* st)
     // that costs one comparison and needs no scan -- it catches an emission on
     // a path that forgot to mark. Doing it here, at a cycle boundary, is the
     // only safe point: mid_reset moves every derived table.
-    if (st->started && (st->edited || (st->n_rule_emit != st->graph_rules)))
+    if (st->started && (st->edited || st->mid_stale ||
+			(st->n_rule_emit != st->graph_rules)))
 	csp_rebuild(st);
     // A rebuild that ran out of arena left every derived table NULL and cleared
     // `started`. Evaluating anyway read a null heap slot -- a segfault two
@@ -2264,32 +2265,12 @@ NOINLINE int str_seg_ensure(csp_rt_t* st, unsigned k)
     if (((st->ps.nn - st->rom_nn) + CSP_STR_SEG_SLOTS + 1) >= MAX_INSTRS ||
 	!mem_fits(st, want))
 	return -1;
-    // AND IT MUST NOT REACH THE MIDDLE. mem_fits weighs instructions and
-    // declarations against the budget; it knows nothing about the derived
-    // tables, which csp_mid_reset lays out immediately above the instructions
-    // ONCE PER REBUILD. A segment taken between two rebuilds grows the
-    // instruction area under them.
-    //
-    // With a ROM program there are no RAM instructions at all, so mid_base is
-    // just CSP_SCRATCH and a 132-byte segment lands squarely in the view/heap
-    // tables: `> sys.Name = "..."` turned a pin's value slot to zeroes, and
-    // /state showed `Wake none digital 0:1` where the declaration said
-    // `in digital 0:16`. Silent, and it corrupted a different thing each time.
-    //
-    // Refusing is not the whole answer -- a program with a ROM base cannot take
-    // a new name at the prompt until the segment area is reserved before the
-    // middle rather than after it -- but "string space exhausted" is a fact the
-    // user can act on, and overwriting the heap is not.
-    // Only once the middle IS laid out: while a program is first compiled there
-    // are no derived tables yet, and the rebuild that follows places them above
-    // whatever the instructions grew to. mid_base is 0 until then, and testing
-    // against it would refuse every string in every program.
-    if (st->mid_base > 0) {
-	size_t ib_after = (size_t)((st->ps.nn - st->rom_nn) + CSP_STR_SEG_SLOTS
-				   + 1) * sizeof(csp_instr_t);
-	if (CSP_A8(ib_after + CSP_SCRATCH) > st->mid_base)
-	    return -1;
-    }
+    // A segment is 132 bytes of INSTRUCTION area, so it can reach the derived
+    // tables like any other emission. It used to be refused here -- the only
+    // place in the program that asked the question -- which meant a name typed
+    // at the prompt failed with "string space exhausted" on a board that had
+    // plenty. Now it notes it like everything else and the tables move.
+    csp_mid_note_instr(st, want);
     h = st->ps.nn;
     st->ps.nn = h + CSP_STR_SEG_SLOTS + 1;
     memset(ram_instr_at(st, h), 0,
@@ -2501,6 +2482,50 @@ NOINLINE int lookup_string(csp_rt_t* st, char* name, int name_len)
 // True if `add` more arena bytes still fit inside the usable budget. Used bytes
 // = RAM instructions + RAM declarations; this is the byte-level cap that now
 // binds before (or alongside) the index-count caps.
+// THE MIDDLE IS NOT IN THE BUDGET, and that is the hole these two close.
+//
+// The pool holds three things: instructions growing UP from 0, declarations
+// growing DOWN from the top, and the derived tables in between -- placed ONCE
+// per rebuild by csp_mid_reset, at wherever the ends happened to be. mem_fits
+// weighs instructions against declarations and says nothing about the tables,
+// so either end could walk straight into them and nothing anywhere noticed.
+// The header two thousand lines up says "mem_fits() keeps the ends out of it",
+// which is what it was believed to do and never did.
+//
+// What that cost: the tables are the view, the heap, the buffer table and the
+// reactive graph -- so a program's VALUES and its NAMES landed on top of each
+// other, differently every time, and a walk through a half-overwritten graph
+// hung the board. Two ordinary things reached it. A rule long enough to emit
+// more than the headroom's worth of instructions did it inside one line; and a
+// PAUSED session did it with any number of rules, because the rebuild that
+// would have moved the tables happens at the top of a cycle and a paused
+// session has none.
+//
+// str_seg_ensure used to carry this check on its own, for its one caller. That
+// is why a string was the shape that showed it first.
+//
+// The tables YIELD. They are derived from the declarations and cost only time
+// to rebuild, so the write goes through and the layout is marked void.
+NOINLINE void csp_mid_note_instr(csp_rt_t* st, size_t add)
+{
+    size_t ib = (size_t)(st->ps.nn - st->rom_nn) * sizeof(csp_instr_t);
+
+    if ((st->mid_base > 0) && (CSP_A8(ib + add + CSP_SCRATCH) > st->mid_base))
+	st->mid_stale = 1;
+}
+
+// The mirror, for the end that grows down. `mid` rather than `mid_end` is the
+// LIVE top of the tables: mid_end is where they were allowed to reach, mid is
+// where they actually do.
+NOINLINE void csp_mid_note_decl(csp_rt_t* st, size_t add)
+{
+    size_t db = (size_t)(st->ps.nd - st->rom_nd) * sizeof(csp_decl_t);
+
+    if ((st->mid > 0) &&
+	(st->mem_limit < (db + add + CSP_SCRATCH + st->mid)))
+	st->mid_stale = 1;
+}
+
 NOINLINE int mem_fits(csp_rt_t* st, size_t add)
 {
     size_t ib = (size_t)(st->ps.nn - st->rom_nn) * sizeof(csp_instr_t);
@@ -2517,6 +2542,7 @@ NOINLINE static index_t next_decl_index(csp_rt_t* st)
 	csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
 	return BAD_INDEX;
     }
+    csp_mid_note_decl(st, sizeof(csp_decl_t));
     ix = MAKE_INDEX(0, st->ps.nd);
     st->ps.nd++;
     return ix;
@@ -2569,20 +2595,15 @@ NOINLINE void csp_mid_reset(csp_rt_t* st)
     size_t ib = (size_t)(st->ps.nn - st->rom_nn) * sizeof(csp_instr_t);
     size_t db = (size_t)(st->ps.nd - st->rom_nd) * sizeof(csp_decl_t);
     // ONE STRING SEGMENT OF HEADROOM above the instructions, on top of the
-    // scratch. new_string can take a segment BETWEEN two rebuilds -- a name
-    // typed at the prompt, a string setting -- and that grows the instruction
-    // area under tables this function has already placed. Without the headroom
-    // a ROM program (ib == 0, so mid_base was just CSP_SCRATCH) had its
-    // view/heap written over by the 132 bytes of a new segment: `> sys.Name =
-    // "..."` turned a pin's value slot to zeroes and /state read
-    // `Wake none digital 0:1` where the declaration said `in digital 0:16`.
-    //
-    // 132 bytes of the pool, and it buys back an operation that silently
-    // corrupted a different thing every time.
+    // scratch. It is no longer what keeps the tables safe -- csp_mid_note_instr
+    // does that, for every emission rather than for strings alone -- but it is
+    // still worth its 132 bytes: it absorbs the common small growth so an
+    // ordinary line does not cost a relayout.
     st->mid_base = CSP_A8(ib + CSP_SCRATCH
 			  + (CSP_STR_SEG_SLOTS + 1) * sizeof(csp_instr_t));
     st->mid      = st->mid_base;
     st->mid_full = 0;
+    st->mid_stale = 0;
     // The decl end grows DOWN from the top of the pool, so the middle must stop
     // short of it. Guard the subtraction: a program that already fills the pool
     // leaves no middle at all rather than wrapping to a huge end.

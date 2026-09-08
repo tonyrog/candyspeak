@@ -2320,6 +2320,59 @@ else
     echo "  SKIP no python3 to send datagrams"
 fi
 
+# --- the code may not walk into the derived tables ---------------------------
+# The pool holds THREE things: instructions growing up from 0, declarations
+# growing down from the top, and the derived tables -- view, heap, buffer table,
+# reactive graph -- placed once per rebuild in whatever gap was left.
+#
+# mem_fits weighed the two ENDS against the budget and knew nothing about the
+# tables between them, so either end walked straight into them and nothing
+# noticed. What that looked like: a program's values and its names written over
+# each other, differently every time, and a board that hung in a half-built
+# graph.
+#
+# Two ordinary things reached it, and both are here. The rebuild that moves the
+# tables happens at the top of a CYCLE, which is why the second one is about
+# being PAUSED -- a paused session never gets one.
+echo "code vs derived tables:"
+cat > "$D/mid.csp" <<'CSPEOF'
+#variable A:16 = 1111
+#variable B:16 = 2222
+#variable C:16 = 3333
+#variable D:16 = 4444
+#variable E:16 = 5555
+CSPEOF
+
+# ONE LINE long enough to emit more instructions than the headroom holds.
+# Before: /state listed NOT ONE of the five variables -- the view table was
+# gone. The assertion is deliberately on all five, because what came back was
+# different each run.
+got=$(( printf '/latch off\n'; printf 'A = B+1+2+3+4+5+6+7+8+9+10+11+12+13+14+15+16+17+18+19+20 ? B > 0\n'; sleep 0.4; printf '/state\n/quit\n' ) |
+	  ./csp -i --no-eeprom "$D/mid.csp" 2>&1 |
+	  grep -cE '^[A-E] +=')
+ck "a long rule does not eat the tables under it" "5" "$got"
+
+# PAUSED, so no cycle comes and nothing rebuilds until the line says so itself.
+got=$(( printf '/latch off\n/pause\n'
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+	    printf "A = A + $i ? B > $i\n"
+	done
+	printf '/state\n/quit\n' ) |
+	  ./csp -i --no-eeprom "$D/mid.csp" 2>&1 |
+	  grep -cE '^[A-E] +=')
+ck "and neither does a paused burst of them" "5" "$got"
+
+# And the rules RAN, so the relayout did not throw the program away: 1111 plus
+# 1..20 where B > i, which B (2222) always is.
+got=$(( printf '/latch off\n/pause\n'
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+	    printf "A = A + $i ? B > $i\n"
+	done
+	printf '/resume\n'; sleep 0.4; printf '/state\n/quit\n' ) |
+	  ./csp -i --no-eeprom "$D/mid.csp" 2>&1 |
+	  grep -E '^A +=' | tr -s ' ' | sed 's/.*= //')
+ck "and the rules that caused it still work" "1211" "$got"
+
 echo "settings:"
 
 # A setting is a value for something the firmware ALREADY declares, kept in its

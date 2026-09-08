@@ -2303,6 +2303,16 @@ typedef struct _csp_rt_t
     size_t mid_base;                     // where the middle starts (after instr+scratch)
     size_t mid_end;                      // where it must stop (before decl+scratch)
     uint8_t mid_full;                    // 1 = a request did not fit
+    // 1 = THE DERIVED TABLES ARE VOID: the code growing in from an end has
+    // reached them since the last layout. They are DERIVED, so they yield to
+    // the program rather than the program to them -- the write goes through and
+    // this says the tables must be rebuilt before anything reads one.
+    //
+    // Marked rather than rebuilt on the spot: a rebuild in the middle of a parse
+    // moves every table the caller is standing on. csp_cycle rebuilds at its
+    // top, and csp_process_line rebuilds at the end of the line -- which is what
+    // covers a PAUSED session, where no cycle ever comes.
+    uint8_t mid_stale;
     csp_instr_t  imm_scratch;            // dummy slot for immediate `> expr` eval fold
     // Segment map: str_seg[k] is the DECL INDEX of segment k's header slot, and
     // its payload holds RAM string bytes [k*128 .. k*128+127]. 0 = not taken
@@ -3130,6 +3140,10 @@ extern int     csp_parse(csp_rt_t*, char* str);
 // Build the reactive graph. 0, or -1 with ERR_OUT_OF_MEMORY when a table did
 // not fit -- which the caller MUST propagate: a missing graph is a program that
 // accepts rules, lists them, and never fires one.
+// The code is about to grow by `add` bytes at one end. Notes whether that
+// reaches the derived tables, which are then void until the next rebuild.
+extern void    csp_mid_note_instr(csp_rt_t* st, size_t add);
+extern void    csp_mid_note_decl(csp_rt_t* st, size_t add);
 extern int     csp_csr(csp_rt_t* st);
 // Segment-aware string helpers: operate on a logical string position (ROM in
 // flash or RAM), so they are AVR-PROGMEM-safe where csp_str_at's raw pointer is
