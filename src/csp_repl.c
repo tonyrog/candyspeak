@@ -1305,12 +1305,19 @@ match:
 		case TR_UDP:
 		    // Port first, address after and only when there is one --
 		    // exactly the grammar, so the line goes back in as it came
-		    // out. A listener has address 0 and prints none.
+		    // out. A listener with no filter has address 0 and prints
+		    // none; `0.0.0.0` means the same thing and comes back as the
+		    // shorter form.
+		    //
+		    // DOTTED QUAD, not hex. This is the one place the runtime
+		    // knows a 32-bit constant is an address, which is the whole
+		    // reason `1.2.3.4` is a literal rather than a string: it
+		    // reads back the way it was written.
 		    csp_print_lit(" udp ");
 		    csp_print_uint((uvalue_t)decl(st, d.bf.id + 1, cn.init).i);
 		    if (ep != 0) {
 			csp_print_blank();
-			csp_print_hex(ep);
+			csp_print_ipv4(ep);
 		    }
 		    break;
 		default:

@@ -31,6 +31,33 @@ The language is rule-based - each line describes WHAT should happen and WHEN, no
 
 # Language Reference
 
+## Numbers
+
+    42              decimal
+    0x2A            hex
+    1.5             float
+    1.2.3.4         an IPv4 address
+
+**A dotted quad is a number, not a string.** `1.2.3.4` is another spelling of
+`0x01020304` and is interchangeable with it — it exists so an address reads like
+an address where one is meant:
+
+    #define GROUND 192.168.1.2
+    #buffer Tlm:16 out udp 5000 GROUND
+
+How many parts there are decides what it is: one is an integer, two are a float,
+four are an address. Nothing else is — `1.2.3` and `1.2.3.4.5` are refused by
+name rather than misread, and so is a part above 255.
+
+`..` is untouched: the dot only continues a number when a **digit** follows it,
+so `Buf[0..15]` is still a range.
+
+An address takes the same path a hex literal takes, so `192.168.1.2` is the bit
+pattern `0xC0A80102` and is not refused for being past `INT32_MAX` — the same
+value `0xC0A80102` has always had. Printed back out it is a signed integer like
+any other, except where the runtime knows it is an address: `/list` shows the
+`udp` operand as a dotted quad, so the line goes back in as it came out.
+
 ## Declarations
 
 Declarations start with `#` and define program resources.
@@ -689,15 +716,45 @@ An `in` buffer transfers every cycle, which is what makes a sensor behave like
 an analog input; an `out` one transfers when a field changed or a rule set
 `.tx`. Only one transfer per buffer is ever in flight.
 
-**The UDP address is a number, and the port comes first.** `192.168.1.2` is not
-something the scanner can read as one value — it sees a float and two more dots
-— so an address is written as an integer and named once:
+**The UDP address is a number, and the port comes first.**
 
-    #define GROUND 0xC0A80102        // 192.168.1.2
-    #buffer Tlm:16 out udp 5000 GROUND
+    #buffer Tlm:16 out udp 5000 192.168.1.2
 
-The port leads because it is the half both directions have: `udp 5000` on its
-own listens, and the optional address after it says where to send.
+`192.168.1.2` is a *number literal* — another spelling of `0xC0A80102`, and
+interchangeable with it everywhere — see *Numbers*. The port
+leads because it is the half both directions have: `udp 5000` on its own
+listens, and the optional address after it says where to send.
+
+**On an `in` buffer that address is a sender filter, not a destination.**
+
+    #buffer Rx:16 in udp 5000                 anyone may send
+    #buffer Rx:16 in udp 5000 0.0.0.0         the same thing, written out
+    #buffer Rx:16 in udp 5000 192.168.1.2     only that peer
+
+A datagram from anyone else is read off the socket and thrown away — not left
+there, where it would sit at the head of the queue and stall the port behind it.
+The filter is exact for now; a real netmask is a later thing.
+
+The filter belongs to the **port**, not to the buffer: with two views of one
+port (below) the address on the first one is the one that applies.
+
+**A datagram that has been overtaken is dropped.** An `in udp` buffer holds one
+datagram, and each cycle the port is drained into it: what the program sees is
+the NEWEST thing the peer said, and whatever was queued behind it is discarded
+unread. That is deliberate. A datagram is a snapshot of the sender at the moment
+it left, so a queue of them is not data waiting to be read but data that was
+already stale when it was not read — and a peer sending faster than the cycle
+would otherwise build a backlog that never drains, leaving the program
+permanently behind reality and falling further behind the longer it runs.
+`Rx.rx` is true for the cycle after any datagram arrived, whether that was one
+or twenty.
+
+Use `.rx` to *react* to what arrived, not to count arrivals. If every message
+has to be seen, a datagram is the wrong carrier for it.
+
+**Two `in udp` buffers on the same port are two views of it**, not two consumers.
+The port is bound once, and both buffers parse the same datagram with their own
+fields.
 
 **A missing bus is not an error.** A program using a transport the target does
 not have compiles, links and runs — it simply never delivers, `.rx` stays false,

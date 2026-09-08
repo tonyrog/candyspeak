@@ -33,10 +33,10 @@ CSP_WEAK int csp_udp_open(csp_rt_t* st, uint16_t port)
     return -1;                     // no stack: nothing to bind
 }
 
-CSP_WEAK int csp_udp_recv(csp_rt_t* st, uint16_t port, uint8_t* data,
-			  uint16_t* len)
+CSP_WEAK int csp_udp_recv(csp_rt_t* st, uint16_t port, uint32_t accept,
+			  uint8_t* data, uint16_t* len)
 {
-    (void)st; (void)port; (void)data; (void)len;
+    (void)st; (void)port; (void)accept; (void)data; (void)len;
     return 0;                      // nothing pending, ever
 }
 

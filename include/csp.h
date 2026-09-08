@@ -1788,6 +1788,11 @@ typedef enum {
     ERR_CANNOT_SAVE,
     ERR_CANNOT_LOAD,
     ERR_NUMBER_RANGE,
+    // A dotted literal that is not an IPv4 address: `1.2.3`, `1.2.3.4.5`, or a
+    // part above 255. Distinct from ERR_NUMBER_RANGE because the number is not
+    // the thing that is wrong -- the SHAPE is, and "number out of range" would
+    // send the reader looking at the wrong end of it.
+    ERR_BAD_IPV4,
     // The arena could not hold the program's derived tables (view, heap, buffer
     // table, reactive graph). Distinct from ERR_TOO_MANY_DECLARATIONS, which is
     // about a COUNT hitting an encoding limit: this one is about bytes, and it
@@ -3225,11 +3230,18 @@ extern void csp_output(csp_rt_t* st);
 #define CSP_CAN_RX_BURST 8
 #endif
 
-// The same bound for datagrams. There is no MTU constant to go with it: a
-// datagram is read straight into the buffer it feeds, so the declared size IS
-// the limit and a longer one is truncated -- which is what recv does anyway.
+// The same bound for datagrams, and it means something else. A CAN burst
+// DELIVERS eight frames -- they carry different ids and feed different buffers.
+// A UDP burst drains one port into one buffer, so all but the last are DROPPED
+// (see csp_buf_input for why that is the right semantics), and the bound is
+// only there so a flood cannot own the cycle. Higher than CAN's for that
+// reason: an idle port still costs exactly one failed recv.
+//
+// There is no MTU constant to go with it: a datagram is read straight into the
+// buffer it feeds, so the declared size IS the limit and a longer one is
+// truncated -- which is what recv does anyway.
 #ifndef CSP_UDP_RX_BURST
-#define CSP_UDP_RX_BURST 4
+#define CSP_UDP_RX_BURST 32
 #endif
 
 // CAN. The core owns the frame logic (id -> buffer, bit packing, dirty
@@ -3258,10 +3270,31 @@ extern int  csp_can_active(csp_rt_t* st);
 // UDP is ASYNCHRONOUS, like CAN: datagrams arrive on their own.
 //   csp_udp_recv: 1 = a datagram was read, 0 = nothing pending, -1 = error.
 //   csp_udp_send: 0 = sent, -1 = error.
+//
+// csp_udp_recv takes an ACCEPTED SENDER: 0 for anyone, otherwise the only peer
+// whose datagrams it may return. The test is down here rather than in the core
+// because the datagram is read straight into the buffer's own shadow -- there
+// is no staging array -- so one from the wrong peer must never be read there at
+// all. It would overwrite the last good datagram with bytes nothing is going to
+// mark. A port answers with the sender it can see; one that cannot see a sender
+// ignores the argument and says so in its own comment.
 extern int csp_udp_open(csp_rt_t* st, uint16_t port);
-extern int csp_udp_recv(csp_rt_t* st, uint16_t port, uint8_t* data, uint16_t* len);
+extern int csp_udp_recv(csp_rt_t* st, uint16_t port, uint32_t accept,
+			uint8_t* data, uint16_t* len);
 extern int csp_udp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
 			const uint8_t* data, uint16_t len);
+
+// NOT A HOOK: a port that can WAIT on its transport says so its own way. The
+// host has csp_can_pollfd() and csp_udp_pollfd(slot) in port/csp_linux.c, used
+// by the loop in that same file and declared nowhere -- a board has no fds and
+// would have nothing to implement. It is written down here because the shape is
+// the thing a TCP or UART transport would copy: enumerate, and re-read every
+// time round, because an endpoint opens on first use.
+//
+// Those two would not copy the DROP, though. Dropping what it cannot read is
+// right for UDP because a datagram is a whole message and a stale one is worth
+// nothing; a stream has no boundaries to drop on, and bytes left unread ARE the
+// back-pressure that makes it a stream.
 
 // I2C and SPI are SYNCHRONOUS -- we are the master -- and the pair is
 // deliberately split so a transfer can overlap the cycle that started it:

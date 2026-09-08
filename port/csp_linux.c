@@ -639,10 +639,14 @@ int csp_udp_open(csp_rt_t* st, uint16_t port)
     return 0;
 }
 
-int csp_udp_recv(csp_rt_t* st, uint16_t port, uint8_t* data, uint16_t* len)
+int csp_udp_recv(csp_rt_t* st, uint16_t port, uint32_t accept,
+		 uint8_t* data, uint16_t* len)
 {
+    struct sockaddr_in a;
+    socklen_t alen;
     ssize_t n;
-    int fd;
+    int fd, guard;
+    uint8_t peek;
     (void)st;
 
     // Open on first use rather than at setup: the runtime knows which ports a
@@ -653,10 +657,60 @@ int csp_udp_recv(csp_rt_t* st, uint16_t port, uint8_t* data, uint16_t* len)
 	    return -1;
 	fd = udp_find(port);
     }
-    if ((n = recv(fd, data, *len, 0)) < 0)
-	return 0;                      // EAGAIN: nothing pending
-    *len = (uint16_t)n;
-    return 1;
+    if (accept == 0) {
+	// No filter: one syscall, straight into the caller's buffer.
+	alen = sizeof(a);
+	if ((n = recvfrom(fd, data, *len, 0, (struct sockaddr*)&a, &alen)) < 0)
+	    return 0;                  // EAGAIN: nothing pending
+	*len = (uint16_t)n;
+	return 1;
+    }
+    // FILTERED: PEEK THE SENDER FIRST. `data` is the buffer's own shadow, so a
+    // datagram from the wrong peer must not be read into it even to be thrown
+    // away -- it would overwrite the last good one with bytes nothing marks.
+    // MSG_PEEK fills the address without consuming, so the decision is made
+    // before anything lands.
+    //
+    // Bounded like the core's drain: a flood from the wrong peer must not
+    // starve the right one, but it must not own the loop either.
+    for (guard = 0; guard < CSP_UDP_RX_BURST; guard++) {
+	alen = sizeof(a);
+	memset(&a, 0, sizeof(a));
+	if (recvfrom(fd, &peek, 1, MSG_PEEK, (struct sockaddr*)&a, &alen) < 0)
+	    return 0;                  // EAGAIN: nothing pending
+	// Stored in HOST order, which is how `1.2.3.4` and 0x01020304 both read.
+	if (ntohl(a.sin_addr.s_addr) != accept) {
+	    // Consume and throw away. A UDP read takes the WHOLE datagram
+	    // however small the buffer, so one byte drops it -- and it has to be
+	    // dropped rather than left, or it sits at the head of the queue and
+	    // stalls the port behind it for good.
+	    (void)recv(fd, &peek, 1, 0);
+	    continue;
+	}
+	alen = sizeof(a);
+	if ((n = recvfrom(fd, data, *len, 0, (struct sockaddr*)&a, &alen)) < 0)
+	    return 0;
+	*len = (uint16_t)n;
+	return 1;
+    }
+    return 0;
+}
+
+// The listening sockets, so the loop can WAIT on a datagram instead of looking
+// again every hundred milliseconds -- csp_can_pollfd's counterpart, and what a
+// program whose only input is UDP needs to stop spinning.
+//
+// ENUMERATED rather than handed over as a set, and re-read every time round the
+// loop, because a port is bound on FIRST USE: the runtime knows which ports the
+// program wants only after it has built its buffer table, and the REPL changes
+// that table while running. A set collected once at start would be empty.
+//
+// slot 0, 1, 2... in open order; -1 past the end.
+int csp_udp_pollfd(int slot)
+{
+    if ((slot < 0) || (slot >= udp_nsock))
+	return -1;
+    return udp_sock[slot].fd;
 }
 
 int csp_udp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
@@ -1266,6 +1320,26 @@ int cycle_input(csp_rt_t* st, FILE* fin)
 #endif
 
 
+// Append the UDP sockets to the fixed slots and say how many fds there are now.
+//
+// Called at EVERY poll site rather than once at start, because the sockets open
+// on first use -- the first cycle a buffer naming the port is polled, and the
+// REPL can add such a buffer at any time. stdin and CAN keep their indices, so
+// serial_poll and the CAN wake-up are unaffected.
+static nfds_t poll_set(struct pollfd* pfd, nfds_t fixed, nfds_t max)
+{
+    nfds_t n = fixed;
+    int i, fd;
+
+    for (i = 0; (n < max) && ((fd = csp_udp_pollfd(i)) >= 0); i++) {
+	pfd[n].fd = fd;
+	pfd[n].events = POLLIN;
+	pfd[n].revents = 0;
+	n++;
+    }
+    return n;
+}
+
 int main(int argc, char** argv)
 {
     csp_rt_t state;
@@ -1298,8 +1372,10 @@ int main(int argc, char** argv)
     const char* rom_prefix = "rom";
     unsigned rom_role = CSP_ROLE_ROM;
     unsigned rom_generation = 0;
-    struct pollfd pfd[2];
-    nfds_t nfds = 0;
+    // stdin, the CAN socket, and one slot per bound UDP port.
+    struct pollfd pfd[2 + CSP_UDP_MAXSOCK];
+    nfds_t pfd_max = (nfds_t)(sizeof(pfd)/sizeof(pfd[0]));
+    nfds_t nfds = 0;    // the FIXED part: stdin and CAN, whose slots never move
     int can_slot = 0;   // index of the CAN socket in pfd (0 = not polled)
     csp_lang_t lang = TEXT;
     int first_cycle = 1;
@@ -1737,7 +1813,7 @@ int main(int argc, char** argv)
 
     // inital poll
     if (nfds > 0)
-	poll(pfd, nfds, 0);
+	poll(pfd, poll_set(pfd, nfds, pfd_max), 0);
 
 loop:
     if (quit_flag)
@@ -1784,7 +1860,7 @@ loop:
 		    timeout_ms = state.es.wait_ms;
 	    }
 	}
-	poll(pfd, nfds, timeout_ms);
+	poll(pfd, poll_set(pfd, nfds, pfd_max), timeout_ms);
 	serial_poll(&state, pfd, nfds);
 
 	if (state.line.ready) {
@@ -1870,11 +1946,18 @@ loop:
 	// seconds and then everything at once. anyd is already computed for the
 	// continue-test below; this is the same question asked earlier.
 	int tmo = (state.es.wait_ms != NOTIMEOUT) ? (int)state.es.wait_ms : -1;
-	if (csp_can_active(&state) && (nfds > 0)) {
+	// The count TESTED is the one with the UDP sockets in it, not the fixed
+	// part: with no CAN and no prompt they are the only thing there is to
+	// wait on. Without them this branch fell through to `tmo > 0` with
+	// tmo == -1 and did not wait at all -- a program whose only input is a
+	// datagram spun a core flat between packets, 2.0 s of CPU per 2.0 s of
+	// waiting, measured.
+	nfds_t pn = poll_set(pfd, nfds, pfd_max);
+	if (csp_can_active(&state) && (pn > 0)) {
 	    // Bounded even when a frame would wake us, so -T still expires
 	    // while the bus is quiet.
 	    if ((tmo < 0) || (tmo > 100)) tmo = 100;
-	    poll(pfd, nfds, tmo);
+	    poll(pfd, pn, tmo);
 	}
 	else if (tmo > 0)
 	    poll(NULL, 0, tmo);

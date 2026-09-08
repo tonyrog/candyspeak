@@ -1144,6 +1144,22 @@ int csp_print_hex2(uint8_t v)
     return 2;
 }
 
+// An IPv4 address, dotted quad, from the 32-bit value the scanner made of one.
+// The inverse of the literal: `1.2.3.4` goes in as 0x01020304 and comes back
+// out as 1.2.3.4.
+int csp_print_ipv4(uint32_t a)
+{
+    int n = 0;
+    int i;
+
+    for (i = 24; i >= 0; i -= 8) {
+	if (i != 24)
+	    n += csp_print_char('.');
+	n += csp_print_uint((a >> i) & 0xff);
+    }
+    return n;
+}
+
 // Print s padded to `w` columns. Returns the number of characters written.
 //
 // A string LONGER than w is never truncated -- the column widens instead. That

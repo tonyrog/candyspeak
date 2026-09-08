@@ -322,6 +322,7 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_CANNOT_SAVE] =            ros_err_cannot_save,
     [ERR_CANNOT_LOAD] =            ros_err_cannot_load,
     [ERR_NUMBER_RANGE] =           ros_err_num_range,
+    [ERR_BAD_IPV4] =               ros_err_bad_ipv4,
     [ERR_OUT_OF_MEMORY] =          ros_err_out_of_memory,
     [ERR_INDEX_RANGE] =            ros_err_index_range,
     [ERR_ASSIGN_TO_LOCAL] =        ros_err_assign_local,
@@ -4456,7 +4457,32 @@ void csp_buf_input(csp_rt_t* st)
 		buf_deliver(st, b, st->heap[DOUT] + bp->hp, n);
 	}
 	else if ((bp->transport == TR_UDP) && (bp->dir & DIR_IN)) {
-	    int guard;
+	    index_t p, first = b;
+	    uint16_t last = 0;
+	    int guard, got = 0;
+
+	    // TWO VIEWS OF ONE PORT, not two consumers of it. A port is bound
+	    // ONCE and every `in udp <port>` buffer parses the SAME datagram --
+	    // otherwise the second buffer takes whichever datagrams the first
+	    // happened not to grab, which is not a shape anybody can write a
+	    // program against. So the FIRST such buffer reads the port and hands
+	    // the rest what it read (below); a later one does nothing here.
+	    //
+	    // Which also means the SENDER FILTER belongs to the port, not to the
+	    // view: the address on the first buffer is the one that applies, and
+	    // a different one on a second view is not a second filter. Two views
+	    // of one port with two different peers is a contradiction, not a
+	    // feature.
+	    for (p = 0; p < b; p++) {
+		csp_buf_t* op = &st->buf[p];
+		if ((op->transport == TR_UDP) && (op->dir & DIR_IN) &&
+		    (op->port == bp->port)) {
+		    first = p;
+		    break;
+		}
+	    }
+	    if (first != b)
+		continue;
 
 	    // STRAIGHT INTO THE BUFFER'S OWN SHADOW -- no staging array. A
 	    // 1472-byte static (an Ethernet MTU) is a sensible size for a
@@ -4466,18 +4492,56 @@ void csp_buf_input(csp_rt_t* st)
 	    // costs nothing and truncates a too-long datagram, which is what
 	    // recv does anyway and what the declared size means.
 	    //
-	    // Bounded, the same reason csp_can_input is bounded: a talkative
-	    // peer would otherwise feed this loop forever and the cycle would
-	    // never run. What is left in the socket is read next cycle.
+	    // DRAIN THE PORT AND KEEP THE LAST -- everything ahead of it is
+	    // DROPPED, deliberately.
+	    //
+	    // A datagram is a snapshot of the sender at the moment it left, and
+	    // this buffer holds exactly one. Carrying the unread ones over to
+	    // the next cycle hands the program a value that was already stale
+	    // when we chose not to read it, and a peer faster than the cycle
+	    // builds a backlog that never drains: the program then runs
+	    // permanently behind reality, further behind the longer it runs,
+	    // reading datagrams it can never catch up with. Dropping is what
+	    // keeps `Rx.rx` meaning "the newest thing the peer said".
+	    //
+	    // This is a UDP judgement and does not generalise. A TCP or UART
+	    // stream has no message boundaries to drop on, and leaving bytes in
+	    // the kernel is the back-pressure that makes it a stream at all --
+	    // whenever those grow a transport here they keep what they cannot
+	    // take.
+	    //
+	    // Still bounded, the same reason csp_can_input is bounded: a flood
+	    // must not own the cycle. The bound is on READS, and only the last
+	    // one is unpacked -- the burst before it costs a recv each and no
+	    // field marking, since nothing can observe a value the same input
+	    // phase overwrites.
+	    //
+	    // THE SENDER FILTER goes down with the read. An `in` buffer's
+	    // declared address is an accept test, not a destination -- 0.0.0.0,
+	    // which is also what "no address" compiles to, takes anyone;
+	    // anything else takes that peer alone. It is applied before the
+	    // bytes land, so a datagram from elsewhere cannot overwrite the last
+	    // good one; see the hook's comment in csp.h.
 	    for (guard = 0; guard < CSP_UDP_RX_BURST; guard++) {
 		uint16_t n = bp->nbytes;
-		if (csp_udp_recv(st, bp->port, st->heap[DOUT] + bp->hp, &n) != 1)
+		if (csp_udp_recv(st, bp->port, bp->xref,
+				 st->heap[DOUT] + bp->hp, &n) != 1)
 		    break;
-		if (n > bp->nbytes)
-		    n = bp->nbytes;
-		bp->dlc = (uint8_t)((n > 255) ? 255 : n);
+		last = (n > bp->nbytes) ? bp->nbytes : n;
+		got = 1;
+	    }
+	    if (got) {
+		bp->dlc = (uint8_t)((last > 255) ? 255 : last);
 		bp->flags |= BUF_F_RXPEND;
 		can_mark_fields(st, b);
+		// And the other views of this port, with the LENGTH rather than
+		// dlc: dlc saturates at 255 and a datagram may be longer.
+		for (p = b + 1; p < st->nbuf; p++) {
+		    csp_buf_t* op = &st->buf[p];
+		    if ((op->transport == TR_UDP) && (op->dir & DIR_IN) &&
+			(op->port == bp->port))
+			buf_deliver(st, p, st->heap[DOUT] + bp->hp, last);
+		}
 	    }
 	}
     }

@@ -59,6 +59,8 @@ int csp_print_uintw(uvalue_t v, int nw);
 int csp_print_float(fvalue_t v);
 int csp_print_hex(uvalue_t v);
 int csp_print_hex2(uint8_t v);
+// An IPv4 address as a dotted quad -- the inverse of the `1.2.3.4` literal.
+int csp_print_ipv4(uint32_t a);
 int csp_println(void);
 int csp_print_blank(void);
 void csp_flush(void);

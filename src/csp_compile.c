@@ -861,6 +861,24 @@ NOINLINE static int hex(int c)
 #define TOK_INT(y) do { tok = INT; val.val.i = (y); goto done; } while(0)
 #define TOK_FLT(y) do { tok = FLT; val.val.f = (y); goto done; } while(0)
 
+// One octet of a dotted quad: at most three digits, value 0..255, -1 if it is
+// neither. The digit CAP is what keeps a silly literal from wrapping into a
+// value that passes the range test by accident.
+static int scan_octet(char** sp)
+{
+    char* s = *sp;
+    int v = 0;
+    int nd = 0;
+
+    while (ISDIGIT(*s)) {
+	v = v*10 + dec(*s++);
+	if (++nd > 3)
+	    return -1;
+    }
+    *sp = s;
+    return (v > 255) ? -1 : v;
+}
+
 NOINLINE static int csp_next_token(csp_rt_t* st, char* str, token_t* tp)
 {
     char* str0 = str;
@@ -1060,43 +1078,76 @@ next:
 		    return -1;
 		}
 	    }
-	    // parse simple fraction for now
+	    // A '.' FOLLOWED BY A DIGIT is either a fraction or the second part
+	    // of a dotted quad, and nothing here can tell which until the SECOND
+	    // dot: `1.2` is a float and `1.2.3.4` is an address. So the part
+	    // after the first dot is scanned ONCE, into numer/denom, and the
+	    // branch is taken after looking one dot further.
+	    //
+	    // `..` is untouched by all of this: the test is on a DIGIT after the
+	    // dot, so `0..15` still scans as INT DOTDOT INT -- which is what a
+	    // bit range depends on, and what makes `1.2.3.4..5` terminate at the
+	    // right place.
 	    if ((str[0] == '.') && ISDIGIT(str[1])) {
-#if FVALUE_IS_FIXPOINT
-		fvalue_t result;
-		// Parse as Q16.16 fixpoint
-		fvalue_t frac;
 		uint32_t denom = 1;
 		uint32_t numer = 0;
-		ivalue_t v;
-		// A number literal is always non-negative here -- a leading '-' is a
-		// separate unary-minus token (runtime NEG), never folded in. Q16.16
-		// thus tops out at an integer part of 32767; a larger magnitude
-		// cannot be represented, so reject rather than silently wrap
-		// (FIX_FROM_INT would overflow int32).
-		if (uv > 32767) {
-		    csp_set_error(st, ERR_NUMBER_RANGE);
-		    return -1;
-		}
-		v = (ivalue_t)uv;
+
 		str++;
 		while(ISDIGIT(*str)) {
 		    numer = numer*10 + dec(*str++);
 		    denom *= 10;
 		}
-		frac = (int32_t)(((uint64_t)numer<<FIX_SHIFT) / denom);
-		result = FIX_FROM_INT(v) + frac;
-		TOK_FLT(result);
-#else
-		float b = 0.1;
-		float f = 0.0;
-		str++;
-		while(ISDIGIT(*str)) {
-		    f = f + (b*dec(*str++));
-		    b /= 10.0;
+		// A THIRD part: this is an address, not a number. 1.2.3.4 is
+		// another spelling of 0x01020304 and takes the same path a hex
+		// literal takes -- the bit pattern, uint32, no int32 range check
+		// (192.168.1.2 is 0xC0A80102, which is negative as an int32 and
+		// is meant to be the same bit pattern the hex form gives).
+		if ((str[0] == '.') && ISDIGIT(str[1])) {
+		    int q3, q4;
+
+		    str++;
+		    q3 = scan_octet(&str);
+		    // Three parts is not an address. Saying so is the point:
+		    // `1.2.3` used to scan as FLT DOT INT and die later as a
+		    // syntax error pointing at the dot.
+		    if (!((str[0] == '.') && ISDIGIT(str[1]))) {
+			csp_set_error(st, ERR_BAD_IPV4);
+			return -1;
+		    }
+		    str++;
+		    q4 = scan_octet(&str);
+		    // denom bounds part two to three digits, so numer is exact.
+		    if ((q3 < 0) || (q4 < 0) || (uv > 255) ||
+			(numer > 255) || (denom > 1000) ||
+			((str[0] == '.') && ISDIGIT(str[1]))) {
+			csp_set_error(st, ERR_BAD_IPV4);
+			return -1;
+		    }
+		    TOK_INT((ivalue_t)(((uint32_t)uv << 24) |
+				       (numer << 16) |
+				       ((uint32_t)q3 << 8) | (uint32_t)q4));
 		}
-		f += (float)uv;
-		TOK_FLT(f*sign);
+#if FVALUE_IS_FIXPOINT
+		{
+		    // Parse as Q16.16 fixpoint.
+		    fvalue_t result;
+		    fvalue_t frac;
+		    // A number literal is always non-negative here -- a leading
+		    // '-' is a separate unary-minus token (runtime NEG), never
+		    // folded in. Q16.16 thus tops out at an integer part of
+		    // 32767; a larger magnitude cannot be represented, so reject
+		    // rather than silently wrap (FIX_FROM_INT would overflow
+		    // int32).
+		    if (uv > 32767) {
+			csp_set_error(st, ERR_NUMBER_RANGE);
+			return -1;
+		    }
+		    frac = (int32_t)(((uint64_t)numer<<FIX_SHIFT) / denom);
+		    result = FIX_FROM_INT((ivalue_t)uv) + frac;
+		    TOK_FLT(result);
+		}
+#else
+		TOK_FLT((((float)uv + ((float)numer / (float)denom)) * sign));
 #endif
 	    }
 	    // Integer literal: must fit int32 (a leading '-' is a separate token,

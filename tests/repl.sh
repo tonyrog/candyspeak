@@ -1795,7 +1795,7 @@ ck "every transport lists the way it was written" \
 '#buffer Imu:14 in i2c 3 0x68 0x3b  // R
 #buffer Gyro:6 in spi 1 2:4 0x28  // R
 #buffer Rx:16 in udp 5000  // R
-#buffer Tlm:16 out udp 5000 0xc0a80102  // R
+#buffer Tlm:16 out udp 5000 192.168.1.2  // R
 #buffer Frame:8 in can 0x201  // R' "$got"
 
 # /state names the FAR END, which differs per bus: a device address, a chip
@@ -1915,6 +1915,158 @@ if ubuild "$D/utx" "$D/utx.csp" && ubuild "$D/urx" "$D/urx.csp"; then
 Seen = 4711" "$got"
 else
     echo "  FAIL the two udp programs did not build"; fail=$((fail+1))
+fi
+
+# --- transports: udp drops what it cannot read -------------------------------
+# A datagram is a SNAPSHOT of the sender at the moment it left, and an `in`
+# buffer holds exactly one. So a backlog is not data waiting to be read, it is
+# data that was already stale when we did not read it -- and a peer faster than
+# the cycle would build one that never drains, leaving the program permanently
+# behind reality.
+#
+# The test stalls the receiver with /pause, queues twenty datagrams in the
+# socket, and lets it go. Right is ONE delivery carrying the LAST value. The
+# assertion is on the COUNT as much as the value: draining four per cycle and
+# carrying the rest over also arrives at 20 eventually, and would pass a test
+# that only looked at the number.
+echo "udp drop:"
+cat > "$D/udrop.csp" <<'CSPEOF'
+#buffer Rx:4 in udp 55735
+#field  Val:16 big Rx[0..15]
+println("rx", Val) ? Rx.rx
+CSPEOF
+if command -v python3 >/dev/null 2>&1; then
+    ( printf '/latch off\n'; sleep 0.5; printf '/pause\n'; sleep 1.2;
+      printf '/resume\n'; sleep 0.5; printf '/quit\n' ) |
+	./csp -i --no-eeprom "$D/udrop.csp" > "$D/udrop.out" 2>&1 &
+    dpid=$!
+    sleep 1.0
+    python3 -c "
+import socket,struct
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+for i in range(1,21):
+    s.sendto(struct.pack('>HH', i, 0), ('127.0.0.1', 55735))"
+    wait $dpid 2>/dev/null
+    # grep -o, not '^rx': the print lands at the prompt, so the line reads
+    # "> rx20".
+    ck "a stalled port delivers the newest datagram" "rx20" \
+       "$(grep -o 'rx[0-9]*' "$D/udrop.out" | tail -1)"
+    ck "and delivers it once -- the other nineteen are dropped" "1" \
+       "$(grep -c 'rx[0-9]' "$D/udrop.out")"
+else
+    echo "  SKIP no python3 to send datagrams"
+fi
+
+# --- transports: two buffers on one port are two VIEWS ------------------------
+# A port is bound ONCE, so two `in udp <port>` buffers cannot be two consumers
+# of it: the second would take whichever datagrams the first happened not to
+# grab, which is not a shape anyone can write a program against. They parse the
+# SAME datagram, each with its own fields.
+echo "udp views:"
+cat > "$D/uview.csp" <<'CSPEOF'
+#buffer A:4 in udp 55736
+#buffer B:4 in udp 55736
+#field  Av:16 big A[0..15]
+#field  Bv:16 big B[16..31]
+println("both", Av, Bv) ? A.rx && B.rx
+CSPEOF
+if command -v python3 >/dev/null 2>&1; then
+    ( printf '/latch off\n'; sleep 1.5; printf '/quit\n' ) |
+	./csp -i --no-eeprom "$D/uview.csp" > "$D/uview.out" 2>&1 &
+    vpid=$!
+    sleep 0.8
+    python3 -c "
+import socket,struct
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+s.sendto(struct.pack('>HH', 1234, 5678), ('127.0.0.1', 55736))"
+    wait $vpid 2>/dev/null
+    ck "one datagram reaches both buffers on the port" "both12345678" \
+       "$(grep -o 'both[0-9]*' "$D/uview.out" | head -1)"
+else
+    echo "  SKIP no python3 to send datagrams"
+fi
+
+# --- ipv4 literals ------------------------------------------------------------
+# `1.2.3.4` is another SPELLING of 0x01020304, decided at the second dot: one
+# part is an integer, two are a float, four are an address. The scanner cannot
+# know which until it has looked past the second dot, so the part after the
+# first one is scanned once and the branch taken afterwards.
+echo "ipv4 literals:"
+
+got=$(printf '#variable A = 1.2.3.4\nprintln(A)\n/quit\n' |
+	  repl ./csp "$D/ip1.db" | grep -E '^[0-9-]+$' | head -1)
+ck "a dotted quad is the same bit pattern as the hex" "16909060" "$got"
+
+# 192.168.1.2 is 0xC0A80102, which is NEGATIVE as an int32 -- the same value the
+# hex literal has always produced. The quad takes the hex path, not the decimal
+# one, so it is not refused for being past INT32_MAX.
+got=$(printf '#variable A = 192.168.1.2\nprintln(A)\n/quit\n' |
+	  repl ./csp "$D/ip2.db" | grep -E '^-?[0-9]+$' | head -1)
+ck "an address past INT32_MAX is a bit pattern, not an overflow" "-1062731518" "$got"
+
+# THREE parts is not an address, and saying so is the point: `1.2.3` used to
+# scan as FLT DOT INT and die further along as a syntax error at the dot.
+got=$(printf '#variable A = 1.2.3\n/quit\n' | repl ./csp "$D/ip3.db" |
+	  grep -c 'ipv4 literal')
+ck "three parts is refused, and named" "1" "$got"
+
+got=$(printf '#variable A = 1.2.3.4.5\n/quit\n' | repl ./csp "$D/ip4.db" |
+	  grep -c 'ipv4 literal')
+ck "five parts is refused" "1" "$got"
+
+got=$(printf '#variable A = 1.2.300.4\n/quit\n' | repl ./csp "$D/ip5.db" |
+	  grep -c 'ipv4 literal')
+ck "a part above 255 is refused" "1" "$got"
+
+# The two things the quad must not have eaten. A float is two parts, and `..` is
+# still a range -- the test is on a DIGIT after the dot, which is what keeps
+# `0..15` scanning as INT DOTDOT INT.
+got=$(printf '#variable F float = 1.25\nprintln(F)\n/quit\n' |
+	  repl ./csp "$D/ip6.db" | grep -E '^[0-9.]+$' | head -1)
+ck "a float is still a float" "1.250000" "$got"
+
+got=$(printf '#buffer Q:4\n#field Y:16 Q[0..15]\n/list\n/quit\n' |
+	  repl ./csp "$D/ip7.db" | grep '^#field')
+ck "a bit range is still a range" '#field Y:16 integer Q[0..15]  // R' "$got"
+
+# --- transports: udp sender filter -------------------------------------------
+# The address on an `in` buffer is an ACCEPT TEST, not a destination: 0.0.0.0 --
+# which is what no address at all compiles to -- takes anyone, anything else
+# takes that peer alone. Two senders on the loopback net, one of each.
+#
+# The filter is applied BEFORE the bytes land. That is the part worth testing:
+# the datagram is read straight into the buffer's own shadow, so a rejected one
+# read there would overwrite the last good one with bytes nothing ever marks.
+echo "udp filter:"
+cat > "$D/ufilt.csp" <<'CSPEOF'
+#buffer Rx:4 in udp 55740 127.0.0.1
+#field  Val:16 big Rx[0..15]
+println("rx", Val) ? Rx.rx
+CSPEOF
+if command -v python3 >/dev/null 2>&1; then
+    got=$(printf '/list\n/quit\n' | repl ./csp "$D/ufilt.db" "$D/ufilt.csp" |
+	      grep '^#buffer')
+    ck "a filtered listener lists its peer as a dotted quad" \
+       '#buffer Rx:4 in udp 55740 127.0.0.1  // R' "$got"
+
+    ( printf '/latch off\n'; sleep 3; printf '/quit\n' ) |
+	./csp -i --no-eeprom "$D/ufilt.csp" > "$D/ufilt.out" 2>&1 &
+    fpid=$!
+    python3 -c "
+import socket,struct,time
+time.sleep(0.8)
+a=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); a.bind(('127.0.0.2',0))
+a.sendto(struct.pack('>HH',111,0),('127.0.0.1',55740))
+time.sleep(0.5)
+b=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); b.bind(('127.0.0.1',0))
+b.sendto(struct.pack('>HH',222,0),('127.0.0.1',55740))"
+    wait $fpid 2>/dev/null
+    ck "only the declared peer is delivered" "rx222" \
+       "$(grep -o 'rx[0-9]*' "$D/ufilt.out" | tail -1)"
+    ck "and the other peer leaves no trace" "1" \
+       "$(grep -c 'rx[0-9]' "$D/ufilt.out")"
+else
+    echo "  SKIP no python3 to send datagrams"
 fi
 
 echo "settings:"
