@@ -1,0 +1,20 @@
+// The REPL end of the same relay: a node driven from somewhere else.
+//
+// Nothing here is specific to having a serial port -- `repl` names the
+// INTERPRETER, so this is what a board with no UART at all would run. Swap the
+// two udp buffers for `can` and it is the same six rules.
+
+#buffer Out:4 in  repl                 // what the interpreter printed
+#buffer In:4  out repl                 // fed to it, as if typed
+#buffer Rx:4  in  udp 55801            // from the console
+#buffer Tx:4  out udp 55800 127.0.0.1  // back to it
+
+// Bytes in, straight to the interpreter.
+In.dlc = Rx.dlc ? Rx.rx
+In = Rx          ? Rx.rx
+In.tx = 1        ? Rx.rx
+
+// And everything it prints, back.
+Tx.dlc = Out.dlc ? Out.rx
+Tx = Out         ? Out.rx
+Tx.tx = 1        ? Out.rx

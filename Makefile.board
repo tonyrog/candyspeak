@@ -378,7 +378,7 @@ SZ   := arm-none-eabi-size
 # the whole difference between an LPC build and an STM32 one.
 CORE := src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c src/csp_repl.c \
         src/csp_parse.c src/csp_tok.c src/csp_print.c gen/csp_strings.c \
-        src/csp_eeprom.c src/csp_flash.c src/csp_transport.c
+        src/csp_eeprom.c src/csp_flash.c src/csp_transport.c src/csp_console.c
 
 # THE PROGRAM THE BOARD CARRIES IN FLASH.
 #

@@ -316,6 +316,10 @@ int csp_will_output(void)
 // ways and all three come through csp_print_char.
 int csp_print_char(char c)
 {
+    // The console tap. First thing, and NON-CONSUMING: the port still prints,
+    // because a node with a terminal attached wants to see its own output. At
+    // CSP_CONSOLE_BYTES == 0 this compiles to nothing.
+    csp_repl_tap(c);
     if (!serial_output)
 	return 0;
     if (c == '\n') {
@@ -1171,7 +1175,7 @@ static void stm_loop(void)
     if (!state.line.ready)
 	csp_line_prompt(&state.line);
     while (stm_uart_available() && csp_line_space(&state.line))
-	csp_line_input(&state.line, (char)stm_uart_read());
+	csp_con_input(&state, (char)stm_uart_read());
     if (state.line.ready) {
 	csp_process_line(&state, state.line.buf);
 	csp_line_done(&state.line);
@@ -1211,7 +1215,7 @@ static void stm_loop(void)
 	    remaining -= chunk;
 #if !defined(CSP_EXEC_ONLY)
 	    while (stm_uart_available() && csp_line_space(&state.line))
-		csp_line_input(&state.line, (char)stm_uart_read());
+		csp_con_input(&state, (char)stm_uart_read());
 #endif
 	}
     }

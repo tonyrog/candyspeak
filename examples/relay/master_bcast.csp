@@ -1,0 +1,72 @@
+// The CONSOLE end of a relay over a UDP BUS, so several nodes run on one
+// laptop and one of them is selected by id.
+//
+//   ./csp -i --id=5 examples/relay/node_bcast.csp     (a node, in its window)
+//   ./csp -i --id=6 examples/relay/node_bcast.csp     (another)
+//   ./csp -i examples/relay/master_bcast.csp          (type here)
+//
+//   > Node = 5        pick one
+//   Ctrl-]            hand it the keyboard; Ctrl-] again takes it back
+//
+// THE HEADER IS AT THE END OF THE FRAME, and that is not a style choice.
+// A buffer assignment writes FOUR BYTES AT OFFSET 0 -- `Tx = Keys` always lands
+// on bytes 0..3 and there is no way to say "payload at byte 1". A command byte
+// in FRONT of the payload is therefore overwritten by the payload itself:
+//
+//     TxCmd = 0            // byte 0 := 0
+//     Tx    = Keys         // bytes 0..3 := the keys -- byte 0 is gone
+//
+// and the far end reads the first typed character as the command. So the
+// payload takes the bytes the copy lands on, and the header takes the ones it
+// cannot reach.
+//
+//   byte 0..3   payload, or the node id on a select
+//   byte 4      command: 1 = select, 0 = data
+//   byte 5      how many of bytes 0..3 are real
+
+#buffer Keys:4 in  console                   // what was typed here
+#buffer Show:4 out console                   // what to put on this screen
+#buffer Tx:8   out udp 55801 127.255.255.255 // the BUS -- every node hears it
+#field  TxArg  Tx[0..31]                     // where a copy lands
+#field  TxCmd  Tx[32..39]
+#field  TxLen  Tx[40..47]
+#buffer Rx:4   in  udp 55802 127.0.0.1       // the selected node answers here
+
+#variable Node = 0  // the node we want to drive -- set it at the prompt
+#states selecting selected
+
+#in NORMAL
+    State = selecting ? Node != 0
+#end
+
+#in selecting
+    #when Node != 0
+	TxArg = Node
+	TxCmd = 1
+	TxLen = 4
+	Tx.dlc = 6
+	Tx.tx = 1
+	State = selected
+    #end
+#end
+
+#in selected
+    // Keys out. TxLen carries the real length: the frame is always six bytes
+    // because the header sits at the end, so the receiver cannot get the
+    // payload length from .dlc.
+    #when Keys.rx
+	Tx = Keys
+	TxCmd = 0
+	TxLen = Keys.dlc
+	Tx.dlc = 6
+	Tx.tx = 1
+    #end
+
+    // And what the node printed, onto this screen. No header this way: the
+    // node answers on its own port, so there is nothing to tell apart.
+    #when Rx.rx
+	Show.dlc = Rx.dlc
+	Show = Rx
+	Show.tx = 1
+    #end
+#end

@@ -288,7 +288,40 @@ static uint8_t exprbuf_var(csp_rt_t* st, csp_exprbuf_t* bp, uint16_t ix)
 	ix = INDEX(ix) - 1;
 	elem++;
     }
-    if (csp_is_local(st, ix)) {
+    // A BUFFER SLICE -- `Buf[0]`, `Buf[2..3]` -- is a synthesised DECL_VIEW with
+    // no name of its own (make_buf_view is the only place one is made, and it
+    // always passes an empty name). Rendering that name printed NOTHING, so
+    // `A[0] = 65` listed as `=65` and `T = B[0]` as `T=`.
+    //
+    // The rules RAN correctly the whole time; it was only the listing that lost
+    // the subscript. Which is worse than it sounds twice over: a listing is how
+    // a program comes off a board, and a line that lists as `=65` does not go
+    // back in. It also reads as a broken feature -- looking at that output is
+    // what made buffer byte-assignment and `B = A` both look like they did
+    // nothing, when the first works and the second is simply one cycle behind.
+    if (decl(st, INDEX(ix), type) == DECL_VIEW) {
+	index_t pi   = decl(st, INDEX(ix), ca.id);
+	uint16_t bit = decl(st, INDEX(ix), ca.bit);
+	uint16_t len = (uint16_t)GET_FIELD_LEN(decl(st, INDEX(ix), ca.len));
+
+	exprbuf_str_at(st, bp, decl_name_pos(st, MAKE_INDEX(0, pi)));
+	// Byte form when it IS whole bytes, which is what `Buf[a]` and
+	// `Buf[a..b]` produce -- the two that have to go back in as they came
+	// out. A slice at a bit boundary comes from a pack, whose own printer
+	// renders the `<<=` line instead, so it never reaches here.
+	if (((bit & 7) == 0) && ((len & 7) == 0)) {
+	    uint16_t lo = (uint16_t)(bit >> 3);
+	    uint16_t hi = (uint16_t)(lo + (len >> 3) - 1);
+	    exprbuf_char(bp, '[');
+	    exprbuf_uint16(bp, lo);
+	    if (hi != lo) {
+		exprbuf_str(bp, "..");
+		exprbuf_uint16(bp, hi);
+	    }
+	    exprbuf_char(bp, ']');
+	}
+    }
+    else if (csp_is_local(st, ix)) {
 	exprbuf_char(bp, '$');
 	exprbuf_uint16(bp, (uint16_t)csp_local_number(st, ix));
     }

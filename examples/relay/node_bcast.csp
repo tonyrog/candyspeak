@@ -1,0 +1,38 @@
+// The REPL end, on a bus. Several of these run at once, each with its own id:
+//
+//   ./csp -i --id=5 examples/relay/node_bcast.csp
+//
+// `repl` names the INTERPRETER, not a serial port, so this is what a board with
+// no UART would run. Swap the two udp buffers for `can` and it is the same
+// three blocks.
+//
+// Frame layout is master_bcast.csp's, and the reason the header is at the END
+// is written out there: a buffer assignment always lands on bytes 0..3.
+
+#buffer Out:4 in  repl                      // what the interpreter printed
+#buffer In:4  out repl                      // fed to it, as if typed
+#buffer Rx:8  in  udp 55801 127.255.255.255 // the bus
+#field  RxArg Rx[0..31]
+#field  RxCmd Rx[32..39]
+#field  RxLen Rx[40..47]
+#buffer Tx:4  out udp 55802 127.0.0.1       // back to the console
+#variable Selected = 0
+
+// Every node sees every select. Only the one whose id matches keeps it -- and
+// the others must CLEAR theirs, or two nodes answer at once the moment the
+// operator switches.
+#when Rx.rx && RxCmd == 1
+      Selected = RxArg == sys.Id
+#end
+
+#when Rx.rx && RxCmd == 0 && Selected
+      In = Rx
+      In.dlc = RxLen
+      In.tx = 1
+#end
+
+#when Out.rx && Selected
+      Tx.dlc = Out.dlc
+      Tx = Out
+      Tx.tx = 1
+#end

@@ -28,7 +28,10 @@ INCS    = -Iinclude -Igen -Isrc
 # that does not exist. That one is reported at the END of the translation unit,
 # pointing at the last line of the source, which is nowhere near the cause.
 OBJDIR = obj
-CFLAGS=-MMD -MP -MF $(@:.o=.d) $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC -DCSP_HAVE_FLASH
+# CSP_CONSOLE_BYTES: the two console rings. Off by default everywhere (a 2K
+# part should not carry them for a transport it never names); on here, because
+# the host is where the console transports are TESTED.
+CFLAGS=-MMD -MP -MF $(@:.o=.d) $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC -DCSP_HAVE_FLASH -DCSP_CONSOLE_BYTES=256
 # rom_host.o, NOT rom.o. `rom.c` is the DEMO image -- CandySpeak/rom.c is a
 # symlink to it, so it is what a board flashes, and it changes every time you
 # run `csp -C -O rom.c prog.csp`. ./csp is the compiler, the REPL and what the
@@ -56,7 +59,7 @@ CFLAGS=-MMD -MP -MF $(@:.o=.d) $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_AR
 OBJS = $(addprefix $(OBJDIR)/, \
 	csp_linux.o csp_rt.o csp_crc.o csp_line.o csp_repl.o csp_compile.o csp_tok.o \
 	csp_dump.o csp_eeprom.o csp_parse.o csp_print.o csp_strings.o \
-	csp_transport.o \
+	csp_transport.o csp_console.o \
 	csp_flash.o csp_devices.o csp_flash_host.o rom_host.o)
 
 LIBS =
@@ -125,7 +128,7 @@ csp:	$(OBJS)
 # whichever one it just generated.
 CORE_SRC = port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
 	   src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
-	   src/csp_transport.c \
+	   src/csp_transport.c src/csp_console.c \
 	   src/csp_parse.c src/csp_print.c gen/csp_strings.c src/csp_flash.c \
 	   port/csp_devices.c port/csp_flash_host.c
 EXEC_SRC = $(CORE_SRC) gen/rom.c

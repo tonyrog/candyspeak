@@ -1320,6 +1320,14 @@ match:
 			csp_print_ipv4(ep);
 		    }
 		    break;
+		case TR_CONSOLE:
+		    // No endpoint to print: there is one serial port and one
+		    // interpreter, so the keyword is the whole declaration.
+		    csp_print_lit(" console");
+		    break;
+		case TR_REPL:
+		    csp_print_lit(" repl");
+		    break;
 		default:
 		    break;
 		}
@@ -1552,6 +1560,12 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
 		csp_print_lit("  RX");
 	    if (b->flags & (BUF_F_DIRTY|BUF_F_TX))
 		csp_print_lit("  TX");
+	    // The endpoint refused the buffer -- today a UDP port another
+	    // process already holds. Without this there is nothing to tell
+	    // "nobody is sending" from "this program never listened", and the
+	    // one stderr line that says so goes by in the banner.
+	    if (b->flags & BUF_F_DEAD)
+		csp_print_lit("  DEAD");
 	}
 	list_eol();
 	return;
@@ -1794,6 +1808,18 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 	csp_print_lit("live");
     else
 	csp_print_lit("running");
+    // THE ONLY PLACE that can say why the keystrokes are going nowhere. While
+    // the console is diverted the local prompt sees nothing, so a reader with
+    // no idea what ^] did has to be told here.
+    if (csp_con_diverted())
+	csp_print_lit("   console remote");
+    // And what the tap could not keep. A hole in a relayed listing reads as
+    // valid output, so the size of it is printed rather than left to be
+    // discovered.
+    if (csp_con_lost()) {
+	csp_print_lit("   console lost ");
+	csp_print_uint(csp_con_lost());
+    }
     csp_println();
     csp_println();
 

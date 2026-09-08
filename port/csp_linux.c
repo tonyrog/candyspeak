@@ -75,6 +75,19 @@ static char src_modified[26];
 static char pending_imm[MAX_PENDING_IMM];
 static size_t pending_imm_used = 0;
 
+// Queue one, from anywhere. --id and --name use this: an override IS an
+// immediate, and going through the same path means it behaves like one --
+// applied on every rebuild, visible in /settings, and UNSAVED until /save.
+// That is exactly "override, do not store": nothing here touches eeprom.db.
+static void queue_immediate(const char* line)
+{
+    size_t len = strlen(line);
+    if (pending_imm_used + len + 1 <= MAX_PENDING_IMM) {
+	memcpy(&pending_imm[pending_imm_used], line, len + 1);
+	pending_imm_used += len + 1;
+    }
+}
+
 // Run everything held, oldest first, then forget it.
 static void run_pending_immediates(csp_rt_t* st)
 {
@@ -230,6 +243,10 @@ int csp_will_output()
 // platform print functions
 int csp_print_char(char c)
 {
+    // The console tap. First thing, and NON-CONSUMING: the port still prints,
+    // because a node with a terminal attached wants to see its own output. At
+    // CSP_CONSOLE_BYTES == 0 this compiles to nothing.
+    csp_repl_tap(c);
     if (file_output) {
 	if (fputc(c, file_output) == EOF)
 	    return 0;
@@ -405,7 +422,7 @@ static void serial_poll(csp_rt_t* st, struct pollfd* fds, nfds_t nfds)
 		stdin_gone = 1;
 		return;
 	    }
-	    csp_line_input(&st->line, c);
+	    csp_con_input(st, c);
 	    more.revents = 0;
 	    if (poll(&more, 1, 0) <= 0)
 		break;
@@ -558,6 +575,20 @@ static int udp_tx_fd = -1;
 static uint16_t udp_dead[CSP_UDP_MAXSOCK];
 static int udp_ndead = 0;
 
+// A BUS ADDRESS, and it is the one thing that can never be a SENDER: no
+// datagram arrives from a broadcast address. So the address on an `in` buffer
+// carries two disjoint meanings and needs no keyword to tell them apart --
+// a host address is the peer to accept, a broadcast address names the BUS.
+//
+// The test is the low octet, which covers the two forms anyone writes:
+// 255.255.255.255 and a /24's own broadcast (192.168.1.255, and 127.255.255.255
+// for a laptop running several nodes against loopback). A host address never
+// ends in .255 on a /24, so nothing legitimate is caught by it.
+static int udp_is_bus(uint32_t a)
+{
+    return (a == 0xFFFFFFFFu) || ((a & 0xffu) == 0xffu);
+}
+
 static int udp_find(uint16_t port)
 {
     int i;
@@ -584,6 +615,11 @@ static void udp_give_up(uint16_t port)
 
 int csp_udp_open(csp_rt_t* st, uint16_t port)
 {
+    return csp_udp_open_bus(st, port, 0);
+}
+
+int csp_udp_open_bus(csp_rt_t* st, uint16_t port, int bus)
+{
     struct sockaddr_in a;
     int fd, on = 1;
     (void)st;
@@ -596,20 +632,25 @@ int csp_udp_open(csp_rt_t* st, uint16_t port)
 	return -1;
     if ((fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0)) < 0)
 	return -1;
-    // NO SO_REUSEADDR.
+    // SO_REUSEADDR ONLY ON A BUS, and the difference is the whole point.
     //
-    // On TCP it means "reuse a port still in TIME_WAIT" and is harmless. On UDP
-    // it means SEVERAL PROCESSES MAY BIND THE SAME PORT, and the kernel hands
-    // each unicast datagram to exactly one of them -- whichever it likes. So a
-    // forgotten csp still holding port 12345 makes the next one bind
+    // On UNICAST it means several processes may bind the same port and the
+    // kernel hands each datagram to exactly ONE of them -- whichever it likes.
+    // A forgotten csp still holding port 12345 then makes the next one bind
     // successfully, receive nothing, and report nothing. That is not a
     // hypothetical: it is what "my program does not get the datagram" turned
-    // out to be, and every symptom pointed at the sender.
+    // out to be, and every symptom pointed at the sender. UDP has no TIME_WAIT
+    // either, so the restart case the flag is usually there for does not exist.
     //
-    // UDP has no TIME_WAIT, so a closed socket releases its port immediately
-    // and the restart case this was added for does not exist.
+    // On BROADCAST it means the opposite: every socket bound to the port gets a
+    // COPY. That is exactly a bus, and it is the only way several nodes run on
+    // one laptop. So the flag follows the declaration -- an `in udp <port>
+    // <broadcast>` buffer asks for it, and nothing else gets it.
     //
-    // SO_BROADCAST stays: it is needed to SEND to a broadcast address.
+    // SO_BROADCAST is unconditional: it is needed to SEND to a broadcast
+    // address, and an out buffer's socket may be any of these.
+    if (bus)
+	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
     setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on));
     memset(&a, 0, sizeof(a));
     a.sin_family = AF_INET;
@@ -653,11 +694,14 @@ int csp_udp_recv(csp_rt_t* st, uint16_t port, uint32_t accept,
     // program wants only after it has built its buffer table, and a program
     // edited in the REPL changes that table while running.
     if ((fd = udp_find(port)) < 0) {
-	if (csp_udp_open(st, port) < 0)
+	if (csp_udp_open_bus(st, port, udp_is_bus(accept)) < 0)
 	    return -1;
 	fd = udp_find(port);
     }
-    if (accept == 0) {
+    // A bus address is not a peer to match -- see udp_is_bus. Everyone on the
+    // bus is welcome; who a message is FOR is the program's business, which is
+    // what an id in the payload is for.
+    if ((accept == 0) || udp_is_bus(accept)) {
 	// No filter: one syscall, straight into the caller's buffer.
 	alen = sizeof(a);
 	if ((n = recvfrom(fd, data, *len, 0, (struct sockaddr*)&a, &alen)) < 0)
@@ -1088,6 +1132,8 @@ static struct option long_options[] = {
     {"part",         required_argument, 0,  1011},
     {"memory",       required_argument, 0,  'm'},
     {"pause",        no_argument,       0,  'b'},
+    {"id",           required_argument, 0,  1012},
+    {"name",         required_argument, 0,  1013},
     {0,              0,                 0,  0 }
 };
 
@@ -1148,6 +1194,8 @@ void usage(const char* prog)
     fprintf(stderr, "  -p, --parse-file=F   Parsed structure file\n");
     fprintf(stderr, "  -e, --eeprom=F       EEPROM file for save/load (default: eeprom.db)\n");
     fprintf(stderr, "      --no-eeprom      Do not overlay the saved EEPROM patches at boot\n");
+    fprintf(stderr, "      --id=N           sys.Id for this run (recorded, NOT saved)\n");
+    fprintf(stderr, "      --name=TEXT      sys.Name likewise -- both survive /save only if you ask\n");
     fprintf(stderr, "  -I, --input-file=F   Data input file\n");
     fprintf(stderr, "      --board=NAME     Simulate a board: mega, mkrzero (measured;\n");
     fprintf(stderr, "                       sets --ram/--ram-used/--eeprom-size)\n");
@@ -1432,6 +1480,27 @@ int main(int argc, char** argv)
 	    csp_device_set(d);
 	    break;
 	}
+#if !defined(CSP_EXEC_ONLY)
+	case 1012: { // --id=N: sys.Id for this run, not written to the store
+	    char line[64];
+	    // The '>' is the IMMEDIATE marker, not decoration: line_is_rule
+	    // sees a lone '=' and would otherwise file this as a rule -- and a
+	    // rule may not assign to a #param.
+	    snprintf(line, sizeof(line), "> sys.Id = %s", optarg);
+	    queue_immediate(line);
+	    break;
+	}
+	case 1013: { // --name=TEXT: likewise sys.Name
+	    char line[CSP_SETTINGS_MAX_STR + 16];
+	    // Quoted, because sys.Name is a string param and the immediate is
+	    // parsed as ordinary source. A name with a quote in it is refused by
+	    // the parser rather than smuggled through, which is the right answer
+	    // for something that ends up in a settings store.
+	    snprintf(line, sizeof(line), "> sys.Name = \"%s\"", optarg);
+	    queue_immediate(line);
+	    break;
+	}
+#endif
 	case 1002: no_eeprom = 1; break;
 	case 'r': reactive = 1; break;   // -r: enable reactive mode (no argument)
 	case 'c': max_cycles = atoi(optarg); break;

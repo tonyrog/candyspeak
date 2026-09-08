@@ -1,0 +1,35 @@
+// The CONSOLE end of a remote-REPL relay, over UDP so it runs on one laptop.
+//
+//   ./csp -i examples/relay/node.csp          (one window -- the node)
+//   ./csp -i examples/relay/master.csp        (the other -- type here)
+//
+// Ctrl-] hands the keyboard to the far end, Ctrl-] again takes it back. The
+// prompt says [remote] and [local].
+//
+// FOUR BUFFERS, not two: `in` and `out` on one buffer share ONE heap block, so
+// a buffer cannot be both the key source and the screen sink -- the display
+// bytes land on top of the keys and get sent back out as input. That is not
+// theoretical; it is what the first version of this file did, and the far end
+// received `sys.sys.Id =Id = 42`.
+//
+// FOUR BYTES per cycle each way: a whole-buffer assignment carries 32 bits, so
+// the buffers are 4 and the relay moves one word per cycle. Enough to type at;
+// a listing crawls. See TODO.md for why raising it wants a route rather than a
+// rule.
+
+#buffer Keys:4 in  console             // what was typed here
+#buffer Show:4 out console             // what to put on this screen
+#buffer Tx:4   out udp 55801 127.0.0.1 // to the node
+#buffer Rx:4   in  udp 55800           // from the node
+
+// Keys out. .dlc first: it says how many of the four bytes are real, and the
+// datagram carries exactly that many -- padding would arrive as NULs in the far
+// end's line editor.
+Tx.dlc = Keys.dlc ? Keys.rx
+Tx = Keys         ? Keys.rx
+Tx.tx = 1         ? Keys.rx
+
+// And what the node printed, onto this screen.
+Show.dlc = Rx.dlc ? Rx.rx
+Show = Rx         ? Rx.rx
+Show.tx = 1       ? Rx.rx

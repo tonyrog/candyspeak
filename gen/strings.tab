@@ -124,6 +124,8 @@ can can
 i2c i2c
 spi spi
 udp udp
+console console
+repl repl
 disable disable
 enable enable
 module module

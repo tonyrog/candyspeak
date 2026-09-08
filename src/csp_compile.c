@@ -4151,6 +4151,7 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     d.i2c_bus = -1;              // no 'i2c'
     d.spi_bus = -1;              // no 'spi'
     d.udp_port = -1;             // no 'udp'
+    d.con_kind = -1;             // no 'console' and no 'repl'
     d.opts.vt = V_UNSIGNED;      // raw bits -> unsigned by default
     if (pmatch(st, tv, ti, n, pat_buffer, &d, sizeof(d)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
@@ -4163,7 +4164,7 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     // count is the only place that can notice.
     {
 	int ntr = (d.frameid >= 0) + (d.i2c_bus >= 0) +
-		  (d.spi_bus >= 0) + (d.udp_port >= 0);
+		  (d.spi_bus >= 0) + (d.udp_port >= 0) + (d.con_kind >= 0);
 	if (ntr > 1) {
 	    csp_set_error(st, ERR_SYNTAX);
 	    return -1;
@@ -4172,6 +4173,10 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	else if (d.i2c_bus >= 0)   transport = TR_I2C;
 	else if (d.spi_bus >= 0)   transport = TR_SPI;
 	else if (d.udp_port >= 0)  transport = TR_UDP;
+	// Which END of the console wire. The pattern captured the keyword itself,
+	// so this is the one place the two are told apart.
+	else if (d.con_kind == T_CONSOLE) transport = TR_CONSOLE;
+	else if (d.con_kind == T_REPL)    transport = TR_REPL;
 	else                       transport = TR_NONE;
     }
 

@@ -410,6 +410,10 @@ int csp_will_output()
 // the host's.
 int csp_print_char(char c)
 {
+    // The console tap. First thing, and NON-CONSUMING: the port still prints,
+    // because a node with a terminal attached wants to see its own output. At
+    // CSP_CONSOLE_BYTES == 0 this compiles to nothing.
+    csp_repl_tap(c);
     // Diagnostic builds SHOUT. Everything this firmware prints -- the echo
     // included -- comes back upper case, so a character that returns unchanged
     // did not pass through here. That distinguishes our echo from a loopback
@@ -1653,7 +1657,7 @@ static void csp_lpc_loop(void)
     if (!state.line.ready)
 	csp_line_prompt(&state.line);
     while (csp_lpc_uart_available() && csp_line_space(&state.line)) {
-	csp_line_input(&state.line, (char)csp_lpc_uart_read());
+	csp_con_input(&state, (char)csp_lpc_uart_read());
 	serial_release(&state);
     }
     if (state.line.ready) {
@@ -1700,7 +1704,7 @@ static void csp_lpc_loop(void)
 	    remaining -= chunk;
 #if !defined(CSP_EXEC_ONLY)
 	    while (csp_lpc_uart_available() && csp_line_space(&state.line))
-		csp_line_input(&state.line, (char)csp_lpc_uart_read());
+		csp_con_input(&state, (char)csp_lpc_uart_read());
 #endif
 	}
     }

@@ -492,7 +492,7 @@ fw() {  # fw <out> <csp>   -- a host firmware carrying that program as its ROM
 	port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c \
 	src/csp_repl.c src/csp_compile.c src/csp_tok.c port/csp_dump.c \
 	src/csp_eeprom.c src/csp_parse.c src/csp_print.c gen/csp_strings.c \
-	src/csp_transport.c src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
+	src/csp_transport.c src/csp_console.c src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
 	"$2.rom.c" -o "$1" >/dev/null 2>&1
 }
 if fw "$D/fw_a" "$D/fpa.csp" && fw "$D/fw_b" "$D/fpb.csp"; then
@@ -544,7 +544,7 @@ if fw "$D/fw_a" "$D/fpa.csp" && fw "$D/fw_b" "$D/fpb.csp"; then
 	    port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c \
 	    src/csp_repl.c src/csp_compile.c src/csp_tok.c port/csp_dump.c \
 	    src/csp_eeprom.c src/csp_parse.c src/csp_print.c gen/csp_strings.c \
-	    src/csp_transport.c src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
+	    src/csp_transport.c src/csp_console.c src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
 	    "$2" "$3" -o "$1" >/dev/null 2>&1
     }
     if fw2 "$D/fw2a" "$D/i1.rom.c" "$D/i2.rom.c" &&
@@ -631,7 +631,7 @@ if ./csp -n -C -O "$D/eo_rom.c" "$D/eo.csp" >/dev/null 2>&1 &&
    gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -DCSP_EXEC_ONLY -Iinclude -Igen -Isrc \
        port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
        src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
-       src/csp_parse.c src/csp_print.c gen/csp_strings.c src/csp_transport.c src/csp_flash.c \
+       src/csp_parse.c src/csp_print.c gen/csp_strings.c src/csp_transport.c src/csp_console.c src/csp_flash.c \
        port/csp_devices.c port/csp_flash_host.c \
        "$D/eo_rom.c" -o "$D/csp_exec" \
        >/dev/null 2>&1; then
@@ -735,7 +735,7 @@ echo "flash guard:"
 # written yet -- so the guard lives in csp_flash_put and this proves nothing
 # routes around it. Removing the guard fails four of these and nothing else.
 if gcc -Iinclude -Igen -Isrc -O2 -o "$D/flash_guard" tests/flash_guard.c \
-       src/csp_transport.c src/csp_flash.c src/csp_crc.c port/csp_devices.c port/csp_flash_host.c \
+       src/csp_transport.c src/csp_console.c src/csp_flash.c src/csp_crc.c port/csp_devices.c port/csp_flash_host.c \
        gen/csp_strings.c >/dev/null 2>&1; then
     got=$(cd "$(dirname "$0")/.." && "$D/flash_guard" | tail -1)
     ck "runtime and the last failsafe are refused" "ok, refused" "$got"
@@ -745,7 +745,7 @@ fi
 
 echo "flash geometry:"
 if gcc -Iinclude -Igen -Isrc -O2 -o "$D/flash_geom" tests/flash_geom.c \
-       src/csp_transport.c src/csp_flash.c src/csp_crc.c port/csp_devices.c port/csp_flash_host.c \
+       src/csp_transport.c src/csp_console.c src/csp_flash.c src/csp_crc.c port/csp_devices.c port/csp_flash_host.c \
        gen/csp_strings.c \
        >/dev/null 2>&1; then
     got=$(cd "$(dirname "$0")/.." && "$D/flash_geom" | tail -1)
@@ -1277,7 +1277,7 @@ if gcc -g -Wall -Iinclude -Igen -Isrc -Itests/lpcstub -Ichips/nxp/drivers/212x \
        port/csp_lpcopen.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c \
        src/csp_parse.c src/csp_tok.c src/csp_print.c src/csp_repl.c \
        port/csp_dump.c src/csp_eeprom.c gen/csp_strings.c gen/rom_host.c \
-       src/csp_transport.c src/csp_flash.c chips/nxp/drivers/212x/flash_212x.c port/csp_devices.c \
+       src/csp_transport.c src/csp_console.c src/csp_flash.c chips/nxp/drivers/212x/flash_212x.c port/csp_devices.c \
        tests/lpcstub/stub.c >/dev/null 2>&1; then
     ck "the LPC port builds and links against the core" "0" "0"
     # A GPIO pin, an ADC channel (port 15) and a rule -- then list them back.
@@ -1860,6 +1860,23 @@ s.bind(('',55733)); time.sleep(3)" &
     # ONCE, not once per cycle: this is polled every pass through the loop.
     ck "and reported once, not every cycle" "1" \
        "$(grep -c 'cannot listen' "$D/hog.err")"
+
+    # And the state SAYS SO afterwards. One line on stderr, in a banner, is
+    # gone by the time anyone wonders why nothing arrives -- and a silent
+    # buffer looks exactly like a quiet peer. This is the difference between
+    # "nobody is sending" and "this program never listened".
+    python3 -c "
+import socket,time
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+s.bind(('',55734)); time.sleep(3)" &
+    hog2=$!
+    sleep 0.4
+    printf '#buffer B:4 in udp 55734\n' > "$D/hog2.csp"
+    got=$(( printf '/latch off\n'; sleep 0.6; printf '/state\n/quit\n' ) |
+	       ./csp -i --no-eeprom "$D/hog2.csp" 2>/dev/null |
+	       grep -E '^B ' | grep -c 'DEAD')
+    kill $hog2 2>/dev/null; wait $hog2 2>/dev/null
+    ck "a refused port is marked DEAD in /state" "1" "$got"
 else
     echo "  SKIP no python3 to hold the port"
 fi
@@ -1895,6 +1912,7 @@ ubuild() {
 	port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
 	src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
 	src/csp_parse.c src/csp_print.c gen/csp_strings.c src/csp_transport.c \
+	src/csp_console.c \
 	src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
 	"$2.rom.c" -o "$1" >/dev/null 2>&1
 }
@@ -2065,6 +2083,239 @@ b.sendto(struct.pack('>HH',222,0),('127.0.0.1',55740))"
        "$(grep -o 'rx[0-9]*' "$D/ufilt.out" | tail -1)"
     ck "and the other peer leaves no trace" "1" \
        "$(grep -c 'rx[0-9]' "$D/ufilt.out")"
+else
+    echo "  SKIP no python3 to send datagrams"
+fi
+
+# --- the console wire --------------------------------------------------------
+# The two ends of the wire between a node's serial port and its interpreter.
+# Normally one feeds the other; a buffer on either end splices in so a rule can
+# carry the bytes somewhere else -- over CAN to a node with no serial port,
+# which is the whole point.
+#
+#   console   the serial port.  in = what was TYPED, out = what is SHOWN
+#   repl      the interpreter.  in = what it PRINTED, out = fed in as typed
+echo "console wire:"
+
+got=$(printf '#buffer Rp:32 in repl\n#buffer Cn:32 inout console\n/list\n/quit\n' |
+	  repl ./csp "$D/con0.db" | grep '^#buffer')
+ck "both ends of the wire list the way they were written" \
+'#buffer Rp:32 in repl  // R
+#buffer Cn:32 inout console  // R' "$got"
+
+# In PATTERN ORDER, which is where the count can see both: the optionals are
+# tried can, i2c, spi, udp, console -- so `repl can 0x201` is a console buffer
+# with trailing words, while `can 0x201 repl` is the two-transport line the
+# count exists to refuse.
+got=$(printf '#buffer B:4 in can 0x201 repl\n/quit\n' | repl ./csp "$D/con1.db" |
+	  grep -c 'syntax error')
+ck "an end of the wire is a transport like any other" "1" "$got"
+
+# THE TAP. What the interpreter prints lands in an `in repl` buffer, which is
+# how a node with no serial port gets its output anywhere at all.
+cat > "$D/tap.csp" <<'CSPEOF'
+#buffer Rp:8 in repl
+#field  C0:8 Rp[0..7]
+#variable Seen:8 = 0
+Seen = C0 ? Rp.rx
+CSPEOF
+( printf '/latch off\nprintln("Zebra")\n'; sleep 0.5; printf '/quit\n' ) |
+    ./csp -i --no-eeprom "$D/tap.csp" > "$D/tap.out" 2>&1
+# '^Zebra', not 'Zebra': the prompt echoes the line that produced it too, and
+# the tap is non-consuming, so the local console still shows the output.
+ck "what the interpreter printed reaches a rule" "1" \
+   "$(grep -c '^Zebra' "$D/tap.out")"
+# 5a 65 62 72 61 = "Zebra". The assertion is on the BYTES, not on Seen: Seen
+# holds whichever chunk landed last, and /state's own output is tapped too.
+got=$(printf '/latch off\nprintln("Zebra")\n/state\n/quit\n' |
+	  ./csp -i --no-eeprom "$D/tap.csp" 2>&1 |
+	  grep -o '5a 65 62 72 61' | head -1)
+ck "and arrives as the bytes that were printed" "5a 65 62 72 61" "$got"
+
+# THE FEED, the other direction: a rule writes bytes to an `out repl` buffer
+# and the interpreter runs them as if they had been typed. This is the half
+# that makes a remote REPL a REPL rather than a log.
+cat > "$D/feed.csp" <<'CSPEOF'
+#variable Q:8 = 0
+#buffer Fd:4 out repl
+#field  F0:8 Fd[0..7]
+#field  F1:8 Fd[8..15]
+#field  F2:8 Fd[16..23]
+#field  F3:8 Fd[24..31]
+#timer  T 300 = 1
+F0 = 81 ? timeout(T)
+F1 = 61 ? timeout(T)
+F2 = 55 ? timeout(T)
+F3 = 10 ? timeout(T)
+Fd.tx = 1 ? timeout(T)
+CSPEOF
+got=$(( printf '/latch off\n'; sleep 1.2; printf '/state\n/quit\n' ) |
+	  ./csp -i --no-eeprom "$D/feed.csp" 2>&1 |
+	  grep -E '^Q ' | tr -s ' ' | sed 's/ *$//')
+ck "a rule can type at the interpreter" "Q = 7" "$got"
+
+# THE ESCAPE. While diverted every keystroke belongs to the far end, so the
+# local prompt is unreachable -- and if it is the RELAYING RULE that is wrong
+# there is no way back short of a reset. So the way back is one character
+# compare in C, in front of everything, and it is tested as such: ^] in, two
+# characters that must NOT reach the prompt, ^] out.
+cat > "$D/esc.csp" <<'CSPEOF'
+#buffer Cn:8 in console
+#field  K0:8 Cn[0..7]
+#variable Key:8 = 0
+CSPEOF
+( printf '/latch off\n'; sleep 0.3; printf '\035'; sleep 0.3; printf 'Zx';
+  sleep 0.3; printf '\035'; sleep 0.3; printf '/state\n/quit\n' ) |
+    ./csp -i --no-eeprom "$D/esc.csp" > "$D/esc.out" 2>&1
+ck "the escape says which way it went" "[remote]
+[local]" "$(grep -oE '\[(remote|local)\]' "$D/esc.out")"
+ck "keystrokes go to the buffer, not the prompt" "5a 78" \
+   "$(grep -o '5a 78' "$D/esc.out" | head -1)"
+# And the prompt got them back: /state ran, which it could not have done from
+# inside the diversion.
+ck "and the escape gives the prompt back" "1" \
+   "$(grep -c '^cycle ' "$D/esc.out")"
+
+# --- buffer slices in the listing --------------------------------------------
+# `Buf[0]` and `Buf[2..3]` compile to a synthesised DECL_VIEW with no name of
+# its own, and the listing rendered that name -- which printed nothing. So a
+# rule that RAN correctly listed as `=65`, and the line did not go back in.
+#
+# The damage is not the missing text. A listing is how a program comes off a
+# board, and reading this output is what made buffer byte-assignment look like a
+# feature that did not exist: the rules worked all along.
+echo "buffer slices:"
+
+got=$(printf '#buffer A:4\n#buffer B:4\n#variable T:8 = 0\nA[0] = 65\nA[1..2] = 300\nB[0] = A[0]\nT = B[0]\nB = A\n/list\n/quit\n' |
+	  repl ./csp "$D/slice.db" | grep -E '^(A\[|B\[|T=|B=|=)')
+ck "a buffer slice lists with its subscript" \
+'A[0]=65  // 1 R
+A[1..2]=300  // 2 R
+B[0]=A[0]  // 3 R
+T=B[0]  // 4 R
+B=A  // 5 R' "$got"
+
+# And the point of the subscript being there: the listing goes back in.
+printf '#buffer A:4\n#variable T:8 = 0\nA[0] = 65\nT = A[0]\n/list\n/quit\n' |
+    repl ./csp "$D/slice2.db" | grep -E '^(#|A\[|T=)' | sed 's|  // .*||' > "$D/slice.csp"
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/slice3.db" "$D/slice.csp" |
+	  grep -E '^(A\[|T=)')
+ck "and the listing goes back in" \
+'A[0]=65  // 1 R
+T=A[0]  // 2 R' "$got"
+
+# The slice WORKS, and always did -- this is the assertion that says the listing
+# was the only thing wrong. B is one cycle behind A because a rule reads the
+# committed half, which is the ordinary rule and not a fault.
+cat > "$D/slice4.csp" <<'CSPEOF'
+#buffer A:4
+#buffer B:4
+#field  Av:8 A[0..7]
+#field  Bv:8 B[0..7]
+A[0] = 65
+B[0] = A[0]
+CSPEOF
+got=$(( printf '/latch off\n'; sleep 0.3; printf '/state\n/quit\n' ) |
+	  ./csp -i --no-eeprom "$D/slice4.csp" 2>&1 |
+	  grep -E '^(Av|Bv) ' | tr -s ' ' | sed 's/.*= //')
+ck "a byte written through a slice is really there" "65
+65" "$got"
+
+# --- a udp BUS, and --id/--name ----------------------------------------------
+# Several nodes on one port. That needs SO_REUSEADDR, which was deliberately
+# taken OFF these sockets because on UNICAST it lets a forgotten process hold a
+# port and silently swallow half the traffic. On BROADCAST it means the
+# opposite: every bound socket gets a copy, which is exactly a bus.
+#
+# So the flag follows the DECLARATION, and the address says which it is -- a
+# broadcast address can never be a sender, so the operand carries both meanings
+# with no keyword to tell them apart.
+echo "udp bus:"
+cat > "$D/bus.csp" <<'CSPEOF'
+#buffer Rx:4 in udp 56200 127.255.255.255
+#field  V:8 Rx[0..7]
+#variable Seen:8 = 0
+Seen = V ? Rx.rx
+println("bus", V) ? Rx.rx
+CSPEOF
+if command -v python3 >/dev/null 2>&1; then
+    ( printf '/latch off\n'; sleep 2; printf '/quit\n' ) |
+	./csp -i --no-eeprom "$D/bus.csp" > "$D/bus1.out" 2>&1 &
+    b1=$!
+    ( printf '/latch off\n'; sleep 2; printf '/quit\n' ) |
+	./csp -i --no-eeprom "$D/bus.csp" > "$D/bus2.out" 2>&1 &
+    b2=$!
+    sleep 0.8
+    python3 -c "
+import socket
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+s.sendto(b'\x41BCD', ('127.255.255.255', 56200))"
+    wait $b1 $b2 2>/dev/null
+    ck "two nodes bind one bus port and both hear it" "1 1" \
+       "$(grep -c 'bus65' "$D/bus1.out") $(grep -c 'bus65' "$D/bus2.out")"
+    # The bind that would have failed: without the flag the second node reports
+    # "cannot listen on port" and receives nothing for the rest of its life.
+    ck "and neither was refused the port" "0" \
+       "$(cat "$D/bus1.out" "$D/bus2.out" | grep -c 'cannot listen')"
+else
+    echo "  SKIP no python3 to drive the bus"
+fi
+
+# --id / --name: an override for a test run. They go in as IMMEDIATES, which is
+# what makes them behave: recorded in the RAM store (so they survive a rebuild
+# and show in /settings) and UNSAVED, so eeprom.db is not rewritten for every
+# experiment.
+echo "id and name overrides:"
+got=$(( printf '/latch off\n'; sleep 0.3; printf '/state\n/quit\n' ) |
+	  ./csp -i --no-eeprom --id=123 --name=Node1 2>&1 |
+	  grep -E '^sys\.(Id|Name) ' | tr -s ' ' | sed 's/ *$//')
+ck "--id and --name set the sys members" \
+'sys.Id param = 123
+sys.Name param = Node1' "$got"
+
+got=$(printf '/settings\n/quit\n' | ./csp -i --no-eeprom --id=123 --name=Node1 2>&1 |
+	  grep -E 'UNSAVED')
+ck "and are recorded UNSAVED, not written to the store" \
+   "32 of 1024 bytes, UNSAVED" "$got"
+
+# The point of the pair: run a node without rewriting eeprom.db every time.
+printf '/quit\n' | ./csp -i -e "$D/never.db" --id=55 --name=Zed >/dev/null 2>&1
+ck "no store file is created for an override" "no" \
+   "$([ -e "$D/never.db" ] && echo yes || echo no)"
+
+# --- .dlc arrives WITH the bytes ---------------------------------------------
+# The length used to be a live field while the bytes were double-buffered.
+# csp_buf_input runs before the rules, so a rule guarded on `.rx` read the
+# NEWEST length against the PREVIOUS delivery's bytes.
+#
+# On a byte stream that eats a character at every boundary where the next chunk
+# is shorter, and nothing anywhere reports it: `abcdefghijklmnopqrstuvwxyz`
+# relayed as `...uvwyz`. On CAN it meant `F201.dlc` in a rule was the length of
+# a frame the rule had not been shown yet.
+#
+# Two datagrams of DIFFERENT lengths, spaced so each gets its own cycle. The
+# assertion is that the pairs agree: 4 with ABCD, 2 with EF.
+echo "dlc in step:"
+cat > "$D/dlc.csp" <<'CSPEOF'
+#buffer Rx:8 in udp 56300
+#field  B0:8 Rx[0..7]
+println("n", Rx.dlc, "first", B0) ? Rx.rx
+CSPEOF
+if command -v python3 >/dev/null 2>&1; then
+    ( printf '/latch off\n'; sleep 2.5; printf '/quit\n' ) |
+	./csp -i --no-eeprom "$D/dlc.csp" > "$D/dlc.out" 2>&1 &
+    dpid=$!
+    python3 -c "
+import socket,time
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+time.sleep(0.6); s.sendto(b'ABCD', ('127.0.0.1', 56300))
+time.sleep(0.6); s.sendto(b'EF',   ('127.0.0.1', 56300))"
+    wait $dpid 2>/dev/null
+    # 65 is 'A', 69 is 'E'. The lengths must pair with THOSE bytes.
+    ck "a length arrives with the bytes it describes" \
+"n4first65
+n2first69" "$(grep -o 'n[0-9]*first[0-9]*' "$D/dlc.out")"
 else
     echo "  SKIP no python3 to send datagrams"
 fi

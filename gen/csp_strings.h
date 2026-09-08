@@ -231,6 +231,10 @@ extern rochar s_spi[4] RODATA;
 #define ros_spi ((rostring_t) s_spi)
 extern rochar s_udp[4] RODATA;
 #define ros_udp ((rostring_t) s_udp)
+extern rochar s_console[8] RODATA;
+#define ros_console ((rostring_t) s_console)
+extern rochar s_repl[5] RODATA;
+#define ros_repl ((rostring_t) s_repl)
 extern rochar s_disable[8] RODATA;
 #define ros_disable ((rostring_t) s_disable)
 extern rochar s_enable[7] RODATA;

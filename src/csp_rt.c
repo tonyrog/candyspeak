@@ -1784,8 +1784,13 @@ void csp_commit(csp_rt_t* st)
 	if (bp->transport == TR_NONE)
 	    continue;
 	bp->flags &= ~BUF_F_RX;
-	if (bp->flags & BUF_F_RXPEND)
+	if (bp->flags & BUF_F_RXPEND) {
 	    bp->flags = (bp->flags & ~BUF_F_RXPEND) | BUF_F_RX;
+	    // The length lands WITH the bytes. Both halves of a delivery become
+	    // visible to a rule in the same cycle, which is the whole point of
+	    // holding it -- see dlc_in in csp.h.
+	    bp->dlc = bp->dlc_in;
+	}
     }
     memset(st->dset, 0, BITSET_GROUPS(st->view_cap) * sizeof(set_group_t));
     st->es.anyd = CSP_FALSE;
@@ -2768,7 +2773,28 @@ NOINLINE static int number_rule_states(csp_rt_t* st, int lo, int hi,
 }
 #endif
 
-void csp_csr(csp_rt_t* st)
+// 0, or -1 with ERR_OUT_OF_MEMORY set when a table did not fit.
+//
+// SIX FAILURE POINTS, and every one used to be a bare `return` out of a void
+// function. Nothing propagated: the caller could not tell a laid-out graph from
+// no graph, a graph from one with no edges, or either from one with no pending
+// set -- and all three mean the same thing at the prompt, which is that a rule
+// is accepted, listed, and never fires.
+//
+// WHY THAT NEVER SHOWED. csp_rt_start runs straight after, out of the same
+// exhausted bump, and fails too -- so csp_rebuild returned -1 regardless and the
+// operator was told. That is arithmetic, not design: rt_start CLEARS mid_full at
+// its top, so a failure here leaves no record at all, and the day rt_start's
+// tables are smaller than the csr table that did not fit, the rebuild reports
+// success with no graph. Three program shapes were swept against -m on the host
+// (few leaves/many rules, many leaves/wide rules, and the plain case) without
+// constructing it, so this is a latent hazard rather than a live bug -- but it
+// is one that costs a return value to close and is unfindable if it ever opens.
+//
+// ERR_OUT_OF_MEMORY is the code its own comment in csp.h already describes: the
+// arena could not hold the program's derived tables, the reactive graph being
+// one of them.
+int csp_csr(csp_rt_t* st)
 {
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     int i;
@@ -2792,7 +2818,11 @@ void csp_csr(csp_rt_t* st)
     st->es.edg = NULL;
     st->es.graph_n = 0;               // enq skips the graph until it is fully built
     st->es.idg = (index_t*)csp_mid_alloc(st, (size_t)(n + (n+1) + n) * sizeof(index_t));
-    if (st->es.idg == NULL) { st->es.ofs = NULL; return; }  // middle full: no graph
+    if (st->es.idg == NULL) {                 // middle full: no graph at all
+	st->es.ofs = NULL;
+	csp_set_error(st, ERR_OUT_OF_MEMORY);
+	return -1;
+    }
     st->es.ofs = st->es.idg + n;
     wr      = st->es.ofs + (n+1);
 
@@ -2807,13 +2837,21 @@ void csp_csr(csp_rt_t* st)
 	    r_rom = number_rules(st, 0, st->rom_nn, NULL, 0);
 	nr = number_rules(st, st->rom_nn, st->ps.nn, NULL, r_rom);
 	st->es.rule_ip = (index_t*)csp_mid_alloc(st, (size_t)nr * sizeof(index_t));
-	if (st->es.rule_ip == NULL) { st->es.ofs = NULL; return; }  // middle full
+	if (st->es.rule_ip == NULL) {         // middle full: no ordinal map
+	    st->es.ofs = NULL;
+	    csp_set_error(st, ERR_OUT_OF_MEMORY);
+	    return -1;
+	}
 	if (st->rom_nn > 0)
 	    number_rules(st, 0, st->rom_nn, st->es.rule_ip, 0);
 	number_rules(st, st->rom_nn, st->ps.nn, st->es.rule_ip, r_rom);
 	// Parallel: each ordinal's State membership mask (gates reactive dispatch).
 	st->es.rule_state = (uint16_t*)csp_mid_alloc(st, (size_t)nr * sizeof(uint16_t));
-	if (st->es.rule_state == NULL) { st->es.ofs = NULL; return; }  // middle full
+	if (st->es.rule_state == NULL) {      // middle full: no State masks
+	    st->es.ofs = NULL;
+	    csp_set_error(st, ERR_OUT_OF_MEMORY);
+	    return -1;
+	}
 	if (st->rom_nn > 0)
 	    number_rule_states(st, 0, st->rom_nn, st->es.rule_state, 0);
 	number_rule_states(st, st->rom_nn, st->ps.nn, st->es.rule_state, r_rom);
@@ -2826,8 +2864,9 @@ void csp_csr(csp_rt_t* st)
     // can ever be pending. And sizing the object field to the objects that EXIST
     // rather than to OBJ_BITS: a program with none gets a 0-bit field (one slot
     // per rule) instead of reserving all 32.
-    // On failure pending_cap stays 0 and csp_enq drops the mark -- reactive then
-    // does nothing, which is visible rather than silently wrong.
+    // On failure pending_cap stays 0 and csp_enq drops the mark. That leaves a
+    // graph nothing can enqueue into, which is reactive doing NOTHING -- so it
+    // is reported like the rest rather than left to be inferred.
     {
 	size_t bits, grp;
 	st->es.obj_shift = 0;
@@ -2837,10 +2876,13 @@ void csp_csr(csp_rt_t* st)
 	grp  = BITSET_GROUPS(bits);
 	st->es.pending[0] = (set_group_t*)csp_mid_alloc(st, grp * sizeof(set_group_t));
 	st->es.pending[1] = (set_group_t*)csp_mid_alloc(st, grp * sizeof(set_group_t));
-	if (!st->es.pending[0] || !st->es.pending[1])
+	if (!st->es.pending[0] || !st->es.pending[1]) {
 	    st->es.pending_cap = 0;
-	else
-	    st->es.pending_cap = (uint32_t)bits;
+	    st->es.gen = 0;
+	    csp_set_error(st, ERR_OUT_OF_MEMORY);
+	    return -1;
+	}
+	st->es.pending_cap = (uint32_t)bits;
 	st->es.gen = 0;
     }
 
@@ -2937,7 +2979,10 @@ void csp_csr(csp_rt_t* st)
     {
 	size_t edges = st->es.ofs[st->ps.nd];
 	st->es.edg = (index_t*)csp_mid_alloc(st, (edges ? edges : 1) * sizeof(index_t));
-	if (st->es.edg == NULL) return;   // middle full: leave idg/ofs, no edges
+	if (st->es.edg == NULL) {         // middle full: a graph with no edges,
+	    csp_set_error(st, ERR_OUT_OF_MEMORY);   // which propagates nothing
+	    return -1;
+	}
     }
 
     // Pass 3: Fill in rule ORDINALS for each declaration. edg stores the ordinal,
@@ -3040,7 +3085,10 @@ void csp_csr(csp_rt_t* st)
     }
     st->es.graph_n = n;   // graph is complete: enq may now read it for ix < n
 
+#else
+    (void)st;
 #endif
+    return 0;
 }
 
 // The section pointers of one image, derived from its base. The runtime never
@@ -4362,7 +4410,7 @@ NOINLINE static void buf_deliver(csp_rt_t* st, index_t b, const uint8_t* data,
     // Into the SHADOW, not the committed half: DIN must keep the previous
     // contents so can_mark_fields can tell what actually changed.
     memcpy(st->heap[DOUT] + bp->hp, data, n);
-    bp->dlc = (uint8_t)((n > 255) ? 255 : n);
+    bp->dlc_in = (uint8_t)((n > 255) ? 255 : n);   // published at commit
     bp->flags |= BUF_F_RXPEND;         // csp_commit turns this into BUF_F_RX
     can_mark_fields(st, b);
 }
@@ -4392,7 +4440,7 @@ void csp_can_input(csp_rt_t* st)
 	    // not once: the same id may feed several buffers of different sizes.
 	    n = (len < bp->nbytes) ? len : bp->nbytes;
 	    memcpy(st->heap[DOUT] + bp->hp, data, n);
-	    bp->dlc = n;                   // what the sender actually sent
+	    bp->dlc_in = n;                // what the sender actually sent
 	    bp->flags |= BUF_F_RXPEND;     // csp_commit turns this into BUF_F_RX
 	    can_mark_fields(st, b);
 	}
@@ -4427,6 +4475,7 @@ void csp_can_output(csp_rt_t* st)
 void csp_buf_input(csp_rt_t* st)
 {
     index_t b;
+    uint8_t con = 0;                   // which console ends a buffer is on
 
     // ONE pass. A buffer has exactly one transport, so the cases below are
     // disjoint per buffer and nothing here reads what another arm wrote -- two
@@ -4524,14 +4573,17 @@ void csp_buf_input(csp_rt_t* st)
 	    // good one; see the hook's comment in csp.h.
 	    for (guard = 0; guard < CSP_UDP_RX_BURST; guard++) {
 		uint16_t n = bp->nbytes;
-		if (csp_udp_recv(st, bp->port, bp->xref,
-				 st->heap[DOUT] + bp->hp, &n) != 1)
+		int r = csp_udp_recv(st, bp->port, bp->xref,
+				     st->heap[DOUT] + bp->hp, &n);
+		if (r < 0)
+		    bp->flags |= BUF_F_DEAD;   // the port was refused: /state
+		if (r != 1)
 		    break;
 		last = (n > bp->nbytes) ? bp->nbytes : n;
 		got = 1;
 	    }
 	    if (got) {
-		bp->dlc = (uint8_t)((last > 255) ? 255 : last);
+		bp->dlc_in = (uint8_t)((last > 255) ? 255 : last);
 		bp->flags |= BUF_F_RXPEND;
 		can_mark_fields(st, b);
 		// And the other views of this port, with the LENGTH rather than
@@ -4544,7 +4596,35 @@ void csp_buf_input(csp_rt_t* st)
 		}
 	    }
 	}
+	else if (TR_IS_CON(bp->transport)) {
+	    // THE CONSOLE WIRE. A STREAM, so this takes as MANY bytes as the
+	    // buffer holds rather than one item, and what is left waits for the
+	    // next cycle. Nothing is dropped for being overtaken the way a
+	    // datagram is -- a byte has no newer version of itself.
+	    //
+	    // The wired mask is recomputed here, from the buffer table, so the
+	    // print tap follows a /undo that drops the declaration. Both
+	    // directions count: an `out console` buffer means the ring is being
+	    // written even though nothing is read from it.
+	    int which = (bp->transport == TR_CONSOLE) ? CON_KEYS : CON_OUT;
+
+	    if (bp->dir & DIR_IN) {
+		uint16_t n = bp->nbytes;
+		// Only an `in` buffer arms the ring. An `out`-only one writes
+		// to the wire and reads nothing, and arming the tap for it
+		// would fill the ring once and then count losses forever --
+		// a number that means nothing, reported as though it meant
+		// something.
+		con |= (uint8_t)(1 << which);
+		if (csp_con_take(which, st->heap[DOUT] + bp->hp, &n) == 1) {
+		    bp->dlc_in = (uint8_t)((n > 255) ? 255 : n);
+		    bp->flags |= BUF_F_RXPEND;
+		    can_mark_fields(st, b);
+		}
+	    }
+	}
     }
+    csp_con_wire(con);
 }
 
 // UDP out, and the STARTS for the synchronous buses. Called from a port's
@@ -4562,8 +4642,34 @@ void csp_buf_output(csp_rt_t* st)
 		continue;
 	    bp->flags &= ~(BUF_F_DIRTY|BUF_F_TX);
 	    if (bp->dir & DIR_OUT)
+		// dlc, like CAN. It starts at nbytes, so a buffer nobody sets
+		// it on sends whole as it always did -- but a program CAN now
+		// say how many bytes this datagram carries, which is what makes
+		// a byte stream over UDP expressible at all. Sending the whole
+		// buffer padded with last cycle's bytes is not a length any
+		// receiver can undo.
 		csp_udp_send(st, bp->xref, bp->port,
-			     st->heap[DIN] + bp->hp, bp->nbytes);
+			     st->heap[DIN] + bp->hp, bp->dlc);
+	    break;
+
+	case TR_CONSOLE:
+	case TR_REPL:
+	    // The far end of the wire from the input side above: TR_CONSOLE out
+	    // is SHOWN on the serial port, TR_REPL out is fed to the interpreter
+	    // as if it had been typed.
+	    //
+	    // dlc, not nbytes: a stream carries what a rule put there, and the
+	    // rest of the buffer is last cycle's bytes. Sending those would
+	    // repeat them.
+	    if (!(bp->flags & (BUF_F_DIRTY|BUF_F_TX)))
+		continue;
+	    bp->flags &= ~(BUF_F_DIRTY|BUF_F_TX);
+	    if (bp->dir & DIR_OUT) {
+		if (bp->transport == TR_CONSOLE)
+		    csp_con_show(st->heap[DIN] + bp->hp, bp->dlc);
+		else
+		    csp_con_feed(st, st->heap[DIN] + bp->hp, bp->dlc);
+	    }
 	    break;
 
 	case TR_I2C:
@@ -4641,6 +4747,7 @@ NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint16_t nbytes,
     st->buf[b].dir       = dir;
     st->buf[b].flags     = 0;
     st->buf[b].dlc       = nbytes;     // send the whole frame unless told less
+    st->buf[b].dlc_in    = nbytes;     // and the same before anything arrives
     st->buf[b].owner     = BAD_INDEX;  // setup_buffer fills this in; setup_slot
 				       // has no leaf of its own to record
     st->nbuf++;
@@ -4987,7 +5094,7 @@ NOINLINE index_t csp_n_rules(csp_rt_t* st)
     return no;
 }
 
-NOINLINE static void build_dis_ip(csp_rt_t* st)
+NOINLINE static int build_dis_ip(csp_rt_t* st)
 {
     index_t i;
     int no = 0;
@@ -4996,7 +5103,7 @@ NOINLINE static void build_dis_ip(csp_rt_t* st)
     st->dis_ip = NULL;
     st->n_rule_no = 0;
     if (st->ps.nn == 0)
-	return;
+	return 0;
     for (i = 0; i < BITSET_GROUPS(MAX_DIS_RULES); i++)
 	any |= (st->dis_rule[i] != 0);
 
@@ -5011,27 +5118,47 @@ NOINLINE static void build_dis_ip(csp_rt_t* st)
 	    if (st->dis_ip == NULL) {
 		st->dis_ip = (set_group_t*)csp_mid_alloc(st,
 			      (size_t)BITSET_GROUPS(st->ps.nn) * sizeof(set_group_t));
-		if (st->dis_ip == NULL)
-		    return;
+		// Nothing is skipped when this is NULL, which means every rule
+		// the operator DISABLED runs anyway. Silence there is the same
+		// failure csp_csr used to have, one table over.
+		if (st->dis_ip == NULL) {
+		    st->n_rule_no = (index_t)no;
+		    csp_set_error(st, ERR_OUT_OF_MEMORY);
+		    return -1;
+		}
 	    }
 	    bitset_set(st->dis_ip, i);
 	}
     }
     st->n_rule_no = (index_t)no;
+    return 0;
 }
 
 int csp_rebuild(csp_rt_t* st)
 {
+    int r = 0;
+
     csp_mid_reset(st);          // forget the old layout; everything below re-bumps
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     if (st->reactive)
-	csp_csr(st);
+	r = csp_csr(st);
 #endif
-    build_dis_ip(st);           // rule numbers -> start ips, after mid_reset
+    // rule numbers -> start ips, after mid_reset. Still run when the graph
+    // failed: n_rule_no is read by the listing, and a half-built table is worse
+    // than a complete one nobody uses.
+    if (build_dis_ip(st) < 0)
+	r = -1;
     // Everything emitted so far is now covered: clear both staleness signals.
     st->graph_rules = st->n_rule_emit;
     st->edited = 0;
-    return csp_rt_start(st);
+    // rt_start LAST, and its failure wins nothing over an earlier one -- both
+    // are ERR_OUT_OF_MEMORY and csp_set_error keeps the first. What matters is
+    // that a table csp_csr could not lay out now REACHES the caller: every one
+    // of those used to return void into a rebuild that answered 0, and the line
+    // that caused it was told "OK".
+    if (csp_rt_start(st) < 0)
+	r = -1;
+    return r;
 }
 
 // given an object index get index of module def

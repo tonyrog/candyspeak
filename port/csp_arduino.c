@@ -364,6 +364,10 @@ int csp_will_output()
 // the wire -- so csp_print_just's column arithmetic matches the host's.
 int csp_print_char(char c)
 {
+    // The console tap. First thing, and NON-CONSUMING: the port still prints,
+    // because a node with a terminal attached wants to see its own output. At
+    // CSP_CONSOLE_BYTES == 0 this compiles to nothing.
+    csp_repl_tap(c);
     if (serial_output) {
 	if (c == '\n')
 	    Serial.write('\r');
@@ -1417,7 +1421,7 @@ void loop()
     if (!state.line.ready)
 	csp_line_prompt(&state.line);
     while (Serial.available() && csp_line_space(&state.line)) {
-	csp_line_input(&state.line, Serial.read());
+	csp_con_input(&state, Serial.read());
 	serial_release(&state);
     }
     if (state.line.ready) {
@@ -1475,7 +1479,7 @@ void loop()
 	    // Same rule as the drain at the top of loop(): take everything the
 	    // port has for as long as there is room to put it.
 	    while (Serial.available() && csp_line_space(&state.line))
-		csp_line_input(&state.line, Serial.read());
+		csp_con_input(&state, Serial.read());
 #endif
 	}
     }

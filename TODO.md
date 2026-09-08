@@ -487,3 +487,191 @@ Inte buggar -- saker som byggts men inte setts fungera på järn.
   #buffer Udp:128 inout udp 192.168.2.1  // interface address
   Udp = "Hello world\n"
   Udp.tx = 1
+
+## PRIORITET (Tony 2026-09-08): interaktiv reaktiv BASIC pa hardvara
+  Text-flytten ur instruktionsstrommen, strommade instruktioner, tcp/uart och
+  epoll ar alla PARKERADE bakom detta. Det som raknas ar vad som hander nar man
+  skriver en rad vid prompten.
+
+  GJORT 2026-09-08. Tre saker stod har som "rader som tas emot, sager OK och
+  gor ingenting". Efter att ha undersokt dem var EN av tre sann, och det ar
+  vart att skriva ner varfor de andra tva inte var det:
+
+  1. csp_csr returnerade TYST ur en void-funktion pa sex stallen. FIXAT: den
+     returnerar int och satter ERR_OUT_OF_MEMORY, och csp_rebuild propagerar.
+     MEN: det gick inte att observera. csp_rt_start kor direkt efter, ur samma
+     tomma bump, och faller da ocksa -- sa csp_rebuild gav -1 anda. Tre
+     programformer svepta mot -m pa host (fa lov/manga regler, manga lov/breda
+     regler, och det vanliga fallet) utan att traffa fonstret. LATENT, inte
+     levande. Det som gor det latent och inte omojligt ar att rt_start NOLLAR
+     mid_full hogst upp, sa csr:s fel lamnar inget spar alls.
+
+  2. `B = A` mellan tva buffertar FUNKAR. Den ar en cykel efter, darfor att en
+     regel laser den commitade halvan -- den vanliga DIN/DOUT-regeln, inte ett
+     fel. Jag tittade pa en /state i forsta cykeln och drog fel slutsats.
+
+  3. Byte-indexering FUNKAR ocksa. Det var LISTNINGEN som tappade subscriptet:
+     `A[0] = 65` listades som `=65`, `T = B[0]` som `T=`. En Buf[a..b] ar en
+     syntetiserad DECL_VIEW utan eget namn, och listningen renderade det namnet.
+     FIXAT i exprbuf_var: parentens namn plus byte-intervallet.
+
+  LARDOMEN, och den ar viktigare an de tre: listningen fick MIG att felsoka
+  tva fungerande funktioner som trasiga. Det ar precis vad en listning som inte
+  gar tillbaka in kostar -- den ar inte kosmetik, den ar det man laser nar man
+  inte kan koda om vad som hander.
+
+## TCP och UART som transporter (parkerat 2026-09-08)
+  Bada finns redan som terminaler i utils/candyspeak_parse.yrl (T_TCP, T_UART).
+  Det som skiljer dem fran UDP ar INTE mekaniken utan semantiken:
+
+    UDP droppar det den inte hinner lasa. Ett datagram ar en ogonblicksbild, och
+    en ko av dem ar inte data som vantar utan data som redan var inaktuell.
+
+    En STROM har inga meddelandegranser att droppa pa, och de olasta byten i
+    karnan AR mottrycket som gor den till en strom. Sa tcp/uart BEHALLER det de
+    inte kan ta. Den som behover varje meddelande valjer tcp -- det ar svaret,
+    inte en runtime-flagga pa udp.
+
+  Det oppna: en `#buffer` ar en FAST layout och en strom ar det inte. Antingen
+  ramar man in strommen (langdprefix? avgransare?) eller sa blir tcp/uart nagot
+  annat an en buffer -- se console-transporten nedan, som ar samma fraga.
+
+## Pollset i epoll-form (parkerat 2026-09-08)
+  Idag byggs pfd-arrayen om vid varje poll (poll_set i port/csp_linux.c). Vad
+  det borde vara:
+
+    ps_add / ps_mod / ps_del / ps_wait   -- fyra anrop, poll() under
+
+  Kompakt array, swap-remove, parallell info-array. VIKTIGT: reverse-indexet ska
+  INTE nycklas pa fd -- fd:er ar processglobala och obundna, sa en tabell fd->
+  index maste dimensioneras efter fd-rymden eller hashas. Indexet som behovs ar
+  agare->plats, och det kostar noll: varje socketpost bar sitt platsnummer och
+  swap-remove rattar det ena element som flyttade.
+
+  epolls data.u32 AR den parallella infon, buren av karnan i stallet for av oss:
+  registrera en token per fd, fa tokens tillbaka fran wait, aldrig fd:er. Da
+  finns ingen reverse-lookup i nagon av implementationerna. Men epoll ar
+  LANGSAMMARE an poll vid sex fd:er (ett syscall per registreringsandring mot
+  noll) -- skalet att forma det sa ar tcp senare, manga anslutningar.
+
+  DET SOM FAKTISKT SAKNAS IDAG ar remove: ingenting stanger nagonsin en
+  UDP-socket. /undo pa en `#buffer B:4 in udp 5000` och porten ar bunden livet
+  ut. Med add/remove kan en mark-and-sweep i slutet av csp_input stada -- varje
+  levande in-buffert anropar csp_udp_recv varje cykel, sa en omarkerad socket ar
+  en som ingen buffert vill ha.
+
+## Konsol-routing over CAN: ett mikro-OS som lib i CandySpeak (Tony 2026-09-08)
+  FORLAGAN, sagd av Tony: Forths KEY/EMIT-vektorer, och F18/GA144:s
+  PORT-EXEKVERING -- en nod satter PC till en portadress och kor det som kommer
+  in pa porten. `can.in -> repl.in` ar samma sak, grovkornigt: porten ar en
+  legitim EXEKVERINGSKALLA, inte bara en datakalla. Det ar redan vad
+  `#buffer Fd:4 out repl` gor.
+  Skillnaden som styr designen: en F18-nod BLOCKERAR pa en tom port, och den
+  asynkrona handskakningen ar flodeskontrollen -- ingen ring, ingen pollning.
+  Vi har en karna och en cykel som maste fortsatta, sa vi far ringen i stallet.
+  Deras elegans ar kopt for 143 andra processorer.
+
+
+  BYGGT 2026-09-08: TR_CONSOLE + TR_REPL, escapen och ringarna. Se
+  src/csp_console.c och doc/manual_en.md. Kvar star tva saker som visade sig
+  under bygget och som blockerar sjalva routing-libbet:
+
+  1. `B = A` MELLAN TVA BUFFERTAR KOMPILERAR, LISTAS OCH KOPIERAR INGENTING.
+     Ingen varning, inget fel. `A[0] = 65` tappar dessutom vansterledet i
+     listningen (`=65`), sa byte-indexering som LVALUE finns inte heller.
+     Det betyder att bryggan console<->can maste skrivas som ett #field per
+     byte -- atta falt och atta regler per riktning. Bryggan pa tva rader som
+     stod har tidigare gar inte att skriva an.
+
+  2. GENOMSTROMNINGEN. Jag skrev tidigare att N ramar per cykel i
+     csp_can_output var fixen. Fel: flaskhalsen ar REGELN, som kor en gang per
+     cykel och flyttar hogst en buffert. En CAN-ram bar 8 byte, sa taket ar
+     8 byte per cykel oavsett vad csp_can_output gor. Att hoja det kraver att
+     transporterna talar med varandra utan en regel emellan -- alltsa en RUTT
+     som runtime-objekt, vilket ar precis vad ordet "routing" betyder och vad
+     detta stycke egentligen efterfragar.
+
+
+  MALET: skriva pa nod A:s konsol och na REPL:en pa nod B, som bara har CAN.
+  Nagra (konfigurerbara) frame-id reserveras som konsolkanal. Protokollet:
+  select-id pa kanalen, ratt nod svarar "sedd och redo", ingen annan svarar,
+  resend och sedan timeout. Sedan gar tecken fram och tillbaka.
+
+  DEN AVGORANDE INSIKTEN: det som ska exponeras ar inte UART:en utan REPL:ens
+  BYTESTROM. Ett kort utan UART har ocksa en REPL. Pa konsolnoden ar `in` det
+  anvandaren skrev och `out` det som ska visas; pa fjarrnoden ar `in` tecken att
+  mata REPL:en med och `out` det REPL:en skrev. Riktningarna ar spegelvanda i de
+  tva andarna, vilket ar precis vad en brygga ar.
+
+  Som en transport pa en buffer blir routingen tva regler:
+
+    #buffer Con:8 inout console
+    #buffer Ch:8  inout can CONSOLE_ID
+
+    Ch  <<= Con ? Con.rx && Selected
+    Con <<= Ch  ? Ch.rx
+
+  och da funkar det for VARJE backend -- console<->udp, console<->spi -- utan en
+  rad till. Det ar samma tva regler med en annan #buffer.
+
+  VAD SOM MASTE LIGGA I C, och det ar allt:
+  - En TR_CONSOLE, ett case i csp_buf_input och ett i csp_buf_output.
+  - Inmatningen finns REDAN: csp_line_input(&st->line, c) ar "mata REPL:en ett
+    tecken" och csp_line_space() ar mottrycket. Noll nytt.
+  - Utmatningen finns INTE: csp_print_char skriver rakt ut i varje port. Att
+    fanga vad REPL:en skriver kraver en avtappning -- en ring pa 64-128 byte.
+    Det ar hela kostnaden, och det ar den enda nya lagringen.
+
+  ALLT ANNAT I CANDYSPEAK: select, ack, resend, timeout, sekvensnummer. Ett
+  #module. Skalen: protokollet kan andras utan att flasha om runtime, det gar
+  att testa pa host med -F (en CAN-buffert ar redan drivbar dar), och det ar det
+  som gor pastaendet "ett mikro-OS som lib i CandySpeak" sant i stallet for
+  dekorativt.
+
+  FALLAN: mata ALDRIG REPL:en fran en regel genom att anropa csp_process_line.
+  Arenan ar inte reentrant -- en deklaration som kompileras mitt i en cykel
+  bygger om strukturerna cykeln star mitt i. Sanken ska KOA in i csp_line och
+  lata huvudloopen konsumera den pa sin vanliga plats, exakt som en byte fran
+  UART:en. csp_line hanterar redan en klistrad ko.
+
+  AVGRANSAT (Tony 2026-09-08): EN master, EN uppkoppling i taget. Tva konsoler
+  som valjer var sin nod ar bortdefinierat tills vidare, och da behovs varken
+  avsandar-id i svaret eller sekvensnummer for multiplexing. Bilden ar: USB-
+  serial in i en nod som har CAN, dess REPL initierar uppkopplingen, och sedan
+  relayas UART fram och tillbaka om noden svarade. CANopen gor detta till en
+  katedral (CiA 309, SDO block transfer); tva reserverade id och ett select ar
+  hela saken.
+
+  Och pa CAN behovs ingen egen retransmission for BITFEL: en CAN-ram ar
+  kvitterad av lankskiktet eller sand om av hardvaran. Det som kan forsvinna ar
+  ram som inte far plats, alltsa flodeskontroll -- inte parvis ack.
+
+  TVA SAKER SOM AVGRANSNINGEN INTE LOSER:
+
+  1. ESCAPE-TECKNET, och det ar det enda som INTE kan ligga i CandySpeak.
+     Nar relayen ar igang ater den varje tecken anvandaren skriver, sa den
+     lokala REPL:en ar oatkomlig -- och om det ar relay-REGELN som ar fel finns
+     ingen vag ut alls utom reset. Escapen maste darfor sitta i C, pa det ENDA
+     stallet dar bytes tas ifran, fore avledningen: en teckenjamforelse.
+     Telnets Ctrl-], minicoms Ctrl-A, ssh:s ~. -- alla tre sitter dar av samma
+     skal.
+
+  2. UTMATNINGEN FAR ALDRIG BLOCKERA I csp_print_char. UART-vagen busy-waitar
+     pa hardvaran, vilket ar ofarligt darfor att hardvaran tommer sig sjalv. En
+     ring som bara toms av csp_buf_output toms bara nar CYKELN kor -- och
+     cykeln kan inte kora medan vi star och vantar inne i en utskrift. Det ar
+     ett dodlage, och det ar latt att skriva av misstag.
+
+     Formen som funkar: konsolbufferten skickar UPP TILL N ramar per cykel sa
+     lange den har bytes -- en drain pa utsidan som speglar den vi redan har pa
+     insidan for UDP. Ingen ny mekanism.
+
+     Rakningen som avgor N: en ram per cykel vid 50 Hz ar 400 B/s, och en
+     `/list` pa en kilobyte tar da tva och en halv sekund. Vid N=16 blir det
+     6,4 kB/s, val under vad 250 kbit CAN bar (~18 kB/s nyttolast). Sa N ar
+     skillnaden mellan "gar att skriva pa" och "gar att anvanda".
+
+  DET UNDERLIGGANDE, som ar samma fraga som tcp/uart staller: en `#buffer` ar en
+  FAST layout och konsolen ar en STROM. Antagandet "fast layout tills vidare"
+  bar hela vagen for tangenttryckningar, och det ar drain-takten -- inte
+  formatet -- som avgor om det bar for utskrifter ocksa.

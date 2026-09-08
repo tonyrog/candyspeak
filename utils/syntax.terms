@@ -181,6 +181,17 @@
 {token, 'T_I2C',        i2c,        'i2c',        'OP_NOP', -1, -1, no}.
 {token, 'T_SPI',        spi,        'spi',        'OP_NOP', -1, -1, no}.
 {token, 'T_UDP',        udp,        'udp',        'OP_NOP', -1, -1, no}.
+%% The node's own byte streams, and they are two DIFFERENT ends of one wire:
+%% normally the serial port feeds the interpreter and the interpreter prints
+%% back to it. A buffer on either end taps that wire.
+%%
+%%   console   the serial port.  in = what was TYPED, out = what is SHOWN.
+%%   repl      the interpreter.  in = what it PRINTED, out = fed to it as typed.
+%%
+%% A node being driven from somewhere else declares `repl`; the node with the
+%% keyboard declares `console`. Both, on one node, is the wire itself.
+{token, 'T_CONSOLE',    console,    'console',    'OP_NOP', -1, -1, no}.
+{token, 'T_REPL',       repl,       'repl',       'OP_NOP', -1, -1, no}.
 %% Reserved so the '#' dispatch can branch on them: it looks for a WORD after
 %% '#' and would otherwise read "disable" as a module name.
 {token, 'T_DISABLE',    disable,    'disable',    'OP_NOP', -1, -1, no}.
@@ -648,12 +659,15 @@
 %% pmatch does not back a partly-matched optional out cleanly. The port is also
 %% the half BOTH directions have, which is a fair argument for it coming first.
 %%
-%% The address is a NUMBER, not dotted quads: `192.168.1.2` scans as a float
-%% followed by two more dots, and teaching the scanner otherwise for one
-%% transport is not worth it. Write it once and name it:
+%% The address IS dotted quads, as of 2026-09-08: the scanner counts the parts
+%% and `1.2.3.4` is another spelling of 0x01020304. One part is an integer, two
+%% a float, four an address; three or five is an error by name. `..` is
+%% untouched -- a dot only continues a number when a DIGIT follows.
 %%
-%%   #define GROUND 0xC0A80102       // 192.168.1.2
-%%   #buffer Tlm:16 out udp GROUND 5000
+%%   #buffer Tlm:16 out udp 5000 192.168.1.2
+%%
+%% On an `in` buffer that address is a SENDER FILTER, not a destination:
+%% 0.0.0.0 (and no address at all) takes anyone, anything else takes that peer.
 %%
 %% Here the shared `res` sub-pattern means BYTES, not bits.
 {struct, buffer_param,
@@ -669,7 +683,8 @@
   {spi_cs,   {pat, port_pin}},
   {spi_cmd,  int},
   {udp_ip,   int},
-  {udp_port, int}]}.
+  {udp_port, int},
+  {con_kind, tok}]}.
 
 %% ONE optional block per transport, not a choice between them. A choice would
 %% commit on the keyword and then fail inside it, backing the whole thing out
@@ -685,13 +700,17 @@
   {opt, [{tok, spi}, {int, spi_bus}, {pat, port_pin, spi_cs}, {int, spi_cmd}]},
   %% The optional address is LAST, so `udp <port>` cannot be misread. See the
   %% comment at the top of this pattern for why not the other way round.
-  {opt, [{tok, udp}, {int, udp_port}, {opt, [{int, udp_ip}]}]}]}.
+  {opt, [{tok, udp}, {int, udp_port}, {opt, [{int, udp_ip}]}]},
+  %% The two ends of the node's own console wire. No operand: there is exactly
+  %% one serial port and exactly one interpreter, so there is nothing to number.
+  {opt, [{choice, [[{tok, con_kind, console}],
+                   [{tok, con_kind, repl}]]}]}]}.
 
 {defaults, buffer,
  [{[r, res], 8}, {[frameid], -1}, {[opts, vt], 'V_UNSIGNED'},
   {[i2c_bus], -1}, {[i2c_addr], -1}, {[i2c_reg], -1},
   {[spi_bus], -1}, {[spi_cmd], -1},
-  {[udp_ip], 0}, {[udp_port], -1}]}.
+  {[udp_ip], 0}, {[udp_port], -1}, {[con_kind], -1}]}.
 
 
 %% ===========================================================================

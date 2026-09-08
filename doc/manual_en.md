@@ -738,6 +738,24 @@ The filter is exact for now; a real netmask is a later thing.
 The filter belongs to the **port**, not to the buffer: with two views of one
 port (below) the address on the first one is the one that applies.
 
+**A broadcast address in that position means a BUS instead.**
+
+    #buffer Rx:8 in udp 5000 192.168.1.255       every node on the subnet
+    #buffer Rx:8 in udp 5000 127.255.255.255     several nodes on one laptop
+
+A broadcast address can never be a *sender* — no datagram arrives from one — so
+the operand carries both meanings with nothing to tell them apart. On a bus the
+port is opened so that **several nodes may bind it and each gets a copy** of
+every datagram, and the filter is off: everyone on the bus is welcome, and who a
+message is *for* is the program's business.
+
+That reuse is granted **only** for a bus. On unicast it would mean the opposite
+— the kernel hands each datagram to exactly one of the processes holding the
+port, so a forgotten node swallows half the traffic and neither end says a word.
+
+> An address ending in `.255` counts as broadcast, as does `255.255.255.255`.
+> A host address never ends in `.255` on a /24.
+
 **A datagram that has been overtaken is dropped.** An `in udp` buffer holds one
 datagram, and each cycle the port is drained into it: what the program sees is
 the NEWEST thing the peer said, and whatever was queued behind it is discarded
@@ -755,6 +773,49 @@ has to be seen, a datagram is the wrong carrier for it.
 **Two `in udp` buffers on the same port are two views of it**, not two consumers.
 The port is bound once, and both buffers parse the same datagram with their own
 fields.
+
+#### The console wire
+
+A node's serial port feeds its interpreter, and the interpreter prints back to
+it. Those are the two ends of one wire, and a buffer can splice into either:
+
+    #buffer Cn:8 inout console      the SERIAL PORT
+    #buffer Rp:8 inout repl         the INTERPRETER
+
+| | `in` | `out` |
+|---|---|---|
+| `console` | what was **typed** | what is **shown** |
+| `repl` | what it **printed** | fed in **as if typed** |
+
+A node being driven from somewhere else declares `repl`: what its interpreter
+prints becomes bytes a rule can send, and bytes a rule receives are run as
+commands. **A board with no serial port has a `repl` all the same** — that is
+the point of naming the interpreter rather than the UART.
+
+The node with the keyboard declares `console`, and switches between its own
+prompt and the far end with **`Ctrl-]`**. It says which way it went:
+
+    > [remote]        keystrokes now go to the buffer
+    > [local]         and back to the prompt
+
+**The escape is not a rule and cannot be one.** While diverted, every keystroke
+belongs to the far end, so the local prompt is unreachable — and if it is the
+relaying rule that is wrong, there is no way back at all short of a reset. So it
+is one character compare ahead of everything else, the way telnet's `^]`,
+minicom's `^A` and ssh's `~.` all are. `/state` says `console remote` while the
+diversion is on.
+
+**A stream, not a frame.** Each cycle a buffer takes as many bytes as it holds
+and leaves the rest for the next one. Nothing is dropped for being overtaken the
+way a datagram is — a byte has no newer version of itself. What *can* be lost is
+output printed faster than the rules carry it away: the ring is finite, and when
+it fills the bytes are dropped and **counted**, because a hole in a relayed
+listing reads as valid output. `/state` prints `console lost N`.
+
+> **Off by default.** The rings cost `CSP_CONSOLE_BYTES` (256 on the host, 0
+> everywhere else) — a part with 2K of RAM should not carry them for a transport
+> it never names. At 0 the declarations still compile and run and simply never
+> deliver, like any other bus the target does not have.
 
 **A missing bus is not an error.** A program using a transport the target does
 not have compiles, links and runs — it simply never delivers, `.rx` stays false,
@@ -1612,6 +1673,19 @@ reports numbers that mean something before you flash anything:
 `--board` fills in `-M`, `-U` and `-E` from figures measured on real firmware
 builds (regenerate them with `make boards`). `/memory` then shows how much of
 that board's RAM the program would actually claim.
+
+### Overriding sys.Id and sys.Name
+
+    ./csp --id=7 --name=Node7 prog.csp
+
+Both go in as **immediates**, exactly as typing `> sys.Id = 7` would. So they are
+recorded in the settings store *in RAM* — they survive a rebuild and show in
+`/settings` — and they are **UNSAVED**: nothing is written to the EEPROM file
+unless you ask for it with `/save`.
+
+That is what makes them useful for running several nodes against one another on
+one machine: each gets its own identity for the run, and no test rewrites the
+store.
 
 ### The EEPROM Is Read at Start-up
 

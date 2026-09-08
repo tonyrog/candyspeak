@@ -858,7 +858,24 @@ typedef enum {
     TR_I2C  = 3,        // a register read/write; xref is bus/addr/reg
     TR_SPI  = 4,        // a transfer; xref is bus/cs-pin/command
     TR_UDP  = 5,        // a datagram; xref is the IPv4 address, port is separate
+    // The node's OWN console wire, tapped at one of its two ends. Neither has
+    // an endpoint to name, so xref and port are 0 for both.
+    //
+    //   TR_CONSOLE  the serial port.  in = TYPED,   out = SHOWN
+    //   TR_REPL     the interpreter.  in = PRINTED, out = fed in as typed
+    //
+    // A STREAM, not a frame -- which is why both are drained a whole buffer at
+    // a time rather than one datagram at a time, and why nothing here is ever
+    // dropped for being overtaken the way a datagram is. Bytes have no newer
+    // version of themselves.
+    TR_CONSOLE = 6,
+    TR_REPL    = 7,
 } transport_t;
+
+// Is this transport an end of the node's own console wire? Both ends share
+// their storage (one ring each) and neither has an endpoint, so the places that
+// care ask this rather than naming the two.
+#define TR_IS_CON(t)  (((t) == TR_CONSOLE) || ((t) == TR_REPL))
 
 // Is this transport one WE start? The two synchronous buses are, and that is
 // the only place the distinction is needed.
@@ -927,12 +944,26 @@ typedef enum {
 typedef struct {
     uint16_t hp;        // heap byte offset
     uint16_t nbytes;    // size in bytes (up to 1023 -- widened from the freed loc)
-    uint8_t  transport; // transport_t
-    uint8_t  dir;       // in/out
+    // ONE byte for both, which pays for dlc_in below at no cost in struct size.
+    // transport_t has eight members and dir has three, so four bits each is
+    // room to spare -- and the transport numbers are ABI, so the ceiling of 16
+    // is a real bound rather than a guess.
+    uint8_t  transport:4;   // transport_t
+    uint8_t  dir:4;         // in/out
     uint8_t  flags;     // BUF_F_*
-    uint8_t  dlc;       // TR_CAN: bytes to send / bytes last received. Starts
-			// at nbytes (the declared frame size) and is never
-			// allowed past it -- the heap has room for no more.
+    uint8_t  dlc;       // bytes to send / bytes last received. Starts at nbytes
+			// (the declared frame size) and is never allowed past
+			// it -- the heap has room for no more.
+    // THE LENGTH THAT ARRIVED, held until commit publishes it into dlc.
+    //
+    // Without this, dlc was a live field while the BYTES were double-buffered:
+    // input runs before the rules, so a rule guarded on `.rx` read the NEWEST
+    // length against the PREVIOUS chunk's bytes. On a byte stream that silently
+    // eats a character at every boundary where the next chunk is shorter --
+    // `abcdefghijklmnopqrstuvwxyz` arrived as `...uvwyz`, one letter gone, with
+    // nothing anywhere reporting a loss. CAN has it too: `F201.dlc` in a rule
+    // was the length of a frame the rule had not been shown yet.
+    uint8_t  dlc_in;
     // UDP's endpoint does not fit in xref: an IPv4 address is already 32 bits
     // and the port is another 16. Here rather than in the DECLARATION, which a
     // ROM image carries and which has four spare bits, not sixteen -- the
@@ -961,6 +992,12 @@ typedef struct {
 			   // is what makes `? F.rx` line up. Lives one cycle.
 #define BUF_F_TX     0x08  // a rule asked for a send (F.tx = 1), regardless of
 			   // whether any field changed -- cyclic PDO
+// THE ENDPOINT REFUSED IT, and it will not be asked again. Today: a UDP port
+// another process already holds. The port says so once on stderr and then goes
+// quiet, which is a line you scroll past in a banner -- and afterwards there is
+// NOTHING to distinguish "nobody is sending" from "this program was never
+// listening". /state marks it, which is the whole reason the flag exists.
+#define BUF_F_DEAD   0x20
 #define BUF_F_BUSY   0x10  // TR_IS_SYNC: a transaction is in flight. Set when
 			   // csp_buf_output starts one, cleared when
 			   // csp_buf_input collects it. Without it a slow bus
@@ -3090,7 +3127,10 @@ extern int     csp_set_reactive(csp_rt_t*, int onoff);
 extern int     csp_set_latch(csp_rt_t*, int onoff);
 extern int     csp_scan_line(csp_rt_t*,char* str,token_t* tv,size_t* num_toks);
 extern int     csp_parse(csp_rt_t*, char* str);
-extern void    csp_csr(csp_rt_t* st);
+// Build the reactive graph. 0, or -1 with ERR_OUT_OF_MEMORY when a table did
+// not fit -- which the caller MUST propagate: a missing graph is a program that
+// accepts rules, lists them, and never fires one.
+extern int     csp_csr(csp_rt_t* st);
 // Segment-aware string helpers: operate on a logical string position (ROM in
 // flash or RAM), so they are AVR-PROGMEM-safe where csp_str_at's raw pointer is
 // not. NOINLINE to keep the flash-access logic in one place (code size).
@@ -3279,6 +3319,10 @@ extern int  csp_can_active(csp_rt_t* st);
 // mark. A port answers with the sender it can see; one that cannot see a sender
 // ignores the argument and says so in its own comment.
 extern int csp_udp_open(csp_rt_t* st, uint16_t port);
+// Same, but the port is a BUS: several nodes bind it and each gets a copy of
+// every broadcast. A port opens itself on first use, so nothing calls this
+// directly -- csp_udp_recv does, from the address the declaration carried.
+extern int csp_udp_open_bus(csp_rt_t* st, uint16_t port, int bus);
 extern int csp_udp_recv(csp_rt_t* st, uint16_t port, uint32_t accept,
 			uint8_t* data, uint16_t* len);
 extern int csp_udp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
@@ -3295,6 +3339,72 @@ extern int csp_udp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
 // right for UDP because a datagram is a whole message and a stale one is worth
 // nothing; a stream has no boundaries to drop on, and bytes left unread ARE the
 // back-pressure that makes it a stream.
+
+// --- the console wire --------------------------------------------------------
+//
+// Two rings, both in src/csp_console.c, both sized by CSP_CONSOLE_BYTES. At 0 --
+// the default -- there are no rings, the calls below compile to nothing, and a
+// program declaring `console` or `repl` runs and never delivers, exactly the way
+// a program naming a bus the board does not have runs. A board that wants a
+// remote console defines the size.
+//
+// The two calls a PORT makes, and they are the only two lines a port adds:
+//
+//   csp_repl_tap(c)         in csp_print_char, first thing: record what the
+//                           interpreter printed. Non-consuming -- the port
+//                           still prints it, because a node with a terminal
+//                           attached wants to see its own output.
+//
+//   csp_con_input(st, c)    IN PLACE OF csp_line_input, wherever a port reads a
+//                           byte off its console: the escape and the diversion
+//                           first, the line editor otherwise. At 0 bytes it IS
+//                           csp_line_input.
+//
+// THE ESCAPE LIVES HERE, behind csp_con_input, and that is deliberate: while the
+// console is diverted every keystroke belongs to the far end, so the local REPL
+// is unreachable -- and if it is the RELAYING RULE that is wrong, there is no
+// way back at all short of a reset. So the one thing that must keep working
+// cannot be written in CandySpeak. It is one character compare in front of
+// everything else, which is where telnet's ^], minicom's ^A and ssh's ~. all
+// live, for the same reason.
+#ifndef CSP_CONSOLE_BYTES
+#define CSP_CONSOLE_BYTES 0
+#endif
+
+// The two rings, named for where the bytes CAME FROM. Also the bit positions of
+// the csp_con_wire mask.
+#define CON_KEYS 0             // typed at the serial port
+#define CON_OUT  1             // printed by the interpreter
+
+// ^] -- telnet's, and free: no editor binding uses it.
+#ifndef CSP_CONSOLE_ESCAPE
+#define CSP_CONSOLE_ESCAPE 0x1d
+#endif
+
+extern void csp_repl_tap(char c);
+// Which ends a buffer is attached to right now, bit per CON_*. Recomputed by
+// csp_buf_input each cycle, so it follows a /undo that drops the declaration.
+extern void csp_con_wire(uint8_t mask);
+#if CSP_CONSOLE_BYTES > 0
+extern void csp_con_input(csp_rt_t* st, char c);
+#else
+// A MACRO when the console is off, not a stub function: a stub would make
+// csp_console.o reference csp_line_input, and the small link-a-few-files tests
+// (tests/flash_guard.c and friends) would have to drag csp_line.c in for a call
+// that does nothing. The ports that use this already include csp_line.h.
+#define csp_con_input(st, c) csp_line_input(&(st)->line, (c))
+#endif
+// Is the console diverted right now? For /state, which is the only thing that
+// can tell a user why their keystrokes are going nowhere.
+extern int  csp_con_diverted(void);
+// Bytes the tap could not keep, because the ring was full while nothing was
+// draining it. Reported rather than papered over: a listing with a silent hole
+// in it is worse than one that says how big the hole was.
+extern uint32_t csp_con_lost(void);
+// Called from csp_buf_input/csp_buf_output; not a port hook.
+extern int  csp_con_take(int which, uint8_t* data, uint16_t* len);
+extern void csp_con_show(const uint8_t* data, uint16_t len);
+extern void csp_con_feed(csp_rt_t* st, const uint8_t* data, uint16_t len);
 
 // I2C and SPI are SYNCHRONOUS -- we are the master -- and the pair is
 // deliberately split so a transfer can overlap the cycle that started it:
