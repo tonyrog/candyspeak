@@ -1613,7 +1613,7 @@ static void serial_xoff_set(csp_rt_t* st, uint8_t on)
 // About to stop reading the port for a while: parsing a line, and any rebuild it
 // triggers, takes longer than the FIFO holds.
 static void serial_hold(csp_rt_t* st)    { serial_xoff_set(st, 1); }
-static void serial_release(csp_rt_t* st) { serial_xoff_set(st, csp_line_space(&st->line) ? 0 : 1); }
+static void serial_release(csp_rt_t* st) { serial_xoff_set(st, (csp_line_space(&st->line) && csp_con_space()) ? 0 : 1); }
 
 static void csp_lpc_loop(void)
 {
@@ -1656,7 +1656,8 @@ static void csp_lpc_loop(void)
     // rebuild and the burst still coming in needs somewhere to go.
     if (!state.line.ready)
 	csp_line_prompt(&state.line);
-    while (csp_lpc_uart_available() && csp_line_space(&state.line)) {
+    while (csp_lpc_uart_available() && csp_line_space(&state.line) &&
+	   csp_con_space()) {
 	csp_con_input(&state, (char)csp_lpc_uart_read());
 	serial_release(&state);
     }
@@ -1679,8 +1680,14 @@ static void csp_lpc_loop(void)
     else if (!state.paused)                // frozen while /pause is in effect
 	state.cycle++;
 
-    if (state.paused)
+    // The routes still run while paused -- they move bytes between transports
+    // and touch nothing the pause protects. /upgrade pauses the node for the
+    // flash write, so without this a node being upgraded OVER a route stops
+    // reading the link the image is arriving on.
+    if (state.paused) {
+	csp_route_run(&state);
 	return;
+    }
 
     csp_input(&state);
     x = state.live ? BAD_INDEX : csp_cycle(&state);   // ROM (seq) + RAM, one model
@@ -1703,7 +1710,8 @@ static void csp_lpc_loop(void)
 	    csp_delay_ms(chunk);
 	    remaining -= chunk;
 #if !defined(CSP_EXEC_ONLY)
-	    while (csp_lpc_uart_available() && csp_line_space(&state.line))
+	    while (csp_lpc_uart_available() && csp_line_space(&state.line) &&
+		   csp_con_space())
 		csp_con_input(&state, (char)csp_lpc_uart_read());
 #endif
 	}

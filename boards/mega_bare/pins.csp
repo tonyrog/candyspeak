@@ -1,0 +1,30 @@
+// The program mega_bare carries in ROM.
+//
+// Named pins.csp because that is the name Makefile.board looks for -- PROG
+// defaults to the board directory's pins.csp -- but it is a whole program, not
+// just a pin map: on a board that exists to prove the port runs, a pin map that
+// declares two pins and does nothing would prove exactly as much as an empty
+// image.
+//
+// It matches boards/mega_bare/diagram.json: an LED with a 220R resistor on pin
+// 13, and a button to ground on pin 2.
+//
+//   make -f Makefile.board BOARD=mega_bare
+//   then F1 -> "Wokwi: Start Simulator"
+
+#digital Led out 13
+#digital Btn in pullup 2
+
+// Half a second on, half a second off.
+//
+// `= 1` starts it at program start. A timer does NOT restart itself -- it fires
+// once and stops -- so the rule below arms it again on its own timeout. Leaving
+// that out gives one blink and then a board that looks dead.
+#timer Blink 500 = 1
+Blink = 1 ? timeout(Blink)
+
+// TOGGLE, unless the button is down. The pin has its pullup on, so an open
+// button reads 1 and a pressed one reads 0: holding it freezes the LED at
+// whatever it was, which is a visible answer to "is the input being read"
+// that does not need a second LED to show it.
+Led = !Led ? timeout(Blink) && Btn

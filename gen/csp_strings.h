@@ -95,6 +95,8 @@ extern rochar s_err_num_range[20] RODATA;
 #define ros_err_num_range ((rostring_t) s_err_num_range)
 extern rochar s_err_bad_ipv4[40] RODATA;
 #define ros_err_bad_ipv4 ((rostring_t) s_err_bad_ipv4)
+extern rochar s_err_trailing[54] RODATA;
+#define ros_err_trailing ((rostring_t) s_err_trailing)
 extern rochar s_err_unknown[14] RODATA;
 #define ros_err_unknown ((rostring_t) s_err_unknown)
 extern rochar s_err_cannot_save[19] RODATA;
@@ -231,6 +233,10 @@ extern rochar s_spi[4] RODATA;
 #define ros_spi ((rostring_t) s_spi)
 extern rochar s_udp[4] RODATA;
 #define ros_udp ((rostring_t) s_udp)
+extern rochar s_tcp[4] RODATA;
+#define ros_tcp ((rostring_t) s_tcp)
+extern rochar s_uart[5] RODATA;
+#define ros_uart ((rostring_t) s_uart)
 extern rochar s_console[8] RODATA;
 #define ros_console ((rostring_t) s_console)
 extern rochar s_repl[5] RODATA;
@@ -263,6 +269,8 @@ extern rochar s_field[6] RODATA;
 #define ros_field ((rostring_t) s_field)
 extern rochar s_buffer[7] RODATA;
 #define ros_buffer ((rostring_t) s_buffer)
+extern rochar s_route[6] RODATA;
+#define ros_route ((rostring_t) s_route)
 extern rochar s_when[5] RODATA;
 #define ros_when ((rostring_t) s_when)
 extern rochar s_value[6] RODATA;

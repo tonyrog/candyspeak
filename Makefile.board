@@ -317,7 +317,44 @@ NXPCOMMON := chips/nxp/drivers/common/csp_board.c \
 # chips/arm/cmsis is ARM's core layer, and everything between those and
 # CandySpeak is port/csp_stm32.c. See chips/arm/README.md for why the CMSIS
 # core has a home of its own -- ST does not ship one, NXP ships eight.
-ifeq ($(ARCH),cortex_m4)
+# THE ONE THAT IS NOT AN ARM. An AVR has no pin mux register, no power word and
+# no region map: a pin is a bit in a DDR, settings live in real EEPROM, and the
+# boot loader owns the top of flash. So this branch names a part and a port file
+# and then says what it does NOT need -- which is most of what the branches
+# below spend their lines on.
+ifeq ($(ARCH),avr8)
+  # The part, asked once and used twice: -mmcu selects the linker script, and
+  # avr-size --mcu answers what fraction of the part the image is.
+  #
+  # It is NOT a link error to overflow this part. avr-ld's script gives the text
+  # region no LENGTH, so an image over 32K links quietly and would be flashed
+  # wrapping onto itself -- which is why the rule below asks avr-size and says
+  # so out loud instead of trusting the link to complain.
+  MCU     := $(shell $(GEN) --chip-of $(BOARD))
+  CPU     := -mmcu=$(MCU)
+  PORTSRC := port/csp_avr.c
+  # Code-size flags, and they are worth kilobytes on this architecture rather
+  # than the percent they would be worth on an ARM. -mcall-prologues turns each
+  # function's register save/restore into two calls into libgcc instead of up to
+  # 64 bytes of push/pop, and -fno-inline-functions-called-once stops gcc
+  # undoing it. Same pair boards/uno/uno.terms hands to arduino-cli.
+  #
+  # -flto with -fno-fat-lto-objects: the objects carry ONLY the IL, so the whole
+  # program is optimised at the link. -std=gnu11 because avr-gcc 7 defaults to
+  # gnu89, where a declaration after a statement is an error.
+  XCFLAGS := -std=gnu11 -flto -fno-fat-lto-objects -fuse-linker-plugin \
+             -mcall-prologues -fno-inline-functions-called-once
+  # Linker relaxation: rcall/rjmp instead of call/jmp wherever the target is in
+  # range. Must be a LINK flag -- -mrelax in CFLAGS is silently ignored.
+  XLDFLAGS := -Wl,--relax
+  # NO GENERATED LINK. avr-gcc supplies crt, the vector table and the script,
+  # the part has no {map, ...} to build regions from, and its boot ROM checks no
+  # checksum. So: no startup, no sysinit, no <board>.ld, no csp_chip table --
+  # nothing in the core asks csp_device() unless CSP_HAVE_FLASH is defined, and
+  # on this family it is not.
+  NOLD       := 1
+  NOCHECKSUM := 1
+else ifeq ($(ARCH),cortex_m4)
   # softfp, not hard: the FPU is enabled (SystemInit sets CPACR) but nothing in
   # CandySpeak is floating point -- its arithmetic is Q16.16 -- so there is no
   # reason to change the ABI of every call for it.
@@ -374,16 +411,32 @@ else
   VICSRC  := chips/nxp/drivers/212x/vic_212x.c
 endif
 
-CC   := arm-none-eabi-gcc
-OC   := arm-none-eabi-objcopy
-SZ   := arm-none-eabi-size
+# THE CROSS TOOLCHAIN, and for AVR it is the one arduino-cli uses rather than
+# the one on PATH. They are different compilers -- 7.3.0 against the
+# distribution's 14.3.0 -- and they do not produce the same size, so building a
+# bare-metal image with one and comparing it against an arduino_cli image built
+# with the other measures the compiler and not the port. That is how a change
+# that saved 836 bytes was first measured as costing 1064.
+#
+# CROSS= overrides the prefix; with no Arduino toolchain installed it falls back
+# to plain avr- and the sizes are then simply not comparable with `uno`.
+ifeq ($(ARCH),avr8)
+  AVRBIN := $(firstword $(wildcard $(HOME)/.arduino15/packages/arduino/tools/avr-gcc/7.3.0-*/bin))
+  CROSS  ?= $(if $(AVRBIN),$(AVRBIN)/avr-,avr-)
+else
+  CROSS  ?= arm-none-eabi-
+endif
+
+CC   := $(CROSS)gcc
+OC   := $(CROSS)objcopy
+SZ   := $(CROSS)size
 
 # The part that is the same on every target. The PORT layer -- the file that
 # knows what a GPIO write is -- is picked by architecture above, because that is
 # the whole difference between an LPC build and an STM32 one.
 CORE := src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c src/csp_repl.c \
         src/csp_parse.c src/csp_tok.c src/csp_print.c gen/csp_strings.c \
-        src/csp_eeprom.c src/csp_flash.c src/csp_transport.c src/csp_console.c
+        src/csp_eeprom.c src/csp_flash.c src/csp_transport.c src/csp_console.c src/csp_states.c
 
 # THE PROGRAM THE BOARD CARRIES IN FLASH.
 #
@@ -408,6 +461,13 @@ CORE := src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c src/csp_repl
 BOARDDIR := $(shell $(GEN) --dir-of $(BOARD))
 PROG     ?= $(wildcard $(BOARDDIR)/pins.csp)
 
+# `=`, not `:=` -- these are for `make upload` only, and a recursive variable is
+# not expanded until something uses it. Every $(shell $(GEN) ...) at this level
+# is an escript start, about a second, paid by every build including the fifteen
+# in `make bare_all`; these two would be paid for nothing.
+UPFQBN = $(shell $(GEN) --fqbn-of $(BOARD))
+UPPORT = $(shell $(GEN) --port-of $(BOARD))
+
 ifeq ($(strip $(PROG)),)
   CORE   += gen/rom_host.c
 else
@@ -420,7 +480,12 @@ OBJ  := $(OBJ:.S=.o)
 ifdef VICSRC
 OBJ  += $(B)/vic_212x.o
 endif
-OBJ  += $(ROMOBJ) $(B)/csp_chip.o
+OBJ  += $(ROMOBJ)
+# The part's flash geometry, as a table the firmware carries. Only where there
+# is one: see NOLD above.
+ifndef NOLD
+OBJ  += $(B)/csp_chip.o
+endif
 
 VPATH := . $(dir $(SRC))
 
@@ -428,13 +493,45 @@ VPATH := . $(dir $(SRC))
 # Without them an edited header leaves every object stale, and the link fails
 # against a definition the compiler has already seen -- which reads as a missing
 # symbol and sends you looking in entirely the wrong place.
-CFLAGS := $(CPU) -Os -ffunction-sections -fdata-sections -Wall -MMD -MP \
+# -Wshift-overflow=2: not in -Wall, and the one that matters here. On AVR an
+# `int` is 16 bits, so `1 << 15` is INT_MIN -- which made MAX_INSTRS negative and
+# every declaration "out of memory" on a mega. Zero warnings on this tree, so it
+# costs nothing to keep. See the same note in Makefile.
+# THE PRINT LAYER IS NOT INSTRUMENTED under WATCH, and without this the trace is
+# useless. csp_print_char and the console tap run once per CHARACTER, so a
+# twelve-entry crash ring holds three characters of output and nothing about how
+# the program got there -- the caller being hunted has already fallen off the
+# front. Excluding them by FILE leaves the call structure and drops the noise.
+#
+# csp_console.c matters for a second reason: with CSP_CONSOLE_BYTES 0 its
+# functions are empty, and identical empty functions fold to one address -- so
+# the symbol a trace entry resolves to is not necessarily the one that ran.
+#
+# DEFINED BEFORE CFLAGS, which is `:=` and therefore expanded on the spot: put
+# it after and it is empty, the build looks fine, and nothing changes. The size
+# being byte-identical across the "fix" is what gave that away.
+# BY FUNCTION, not by file: csp_print_char and csp_print_str are defined in the
+# PORT (port/csp_avr.c), not in src/csp_print.c, so a file list misses exactly
+# the two that matter -- and the build looks like it worked.
+WATCH_SKIP := -finstrument-functions-exclude-function-list=csp_print_char,csp_print_str,csp_print_rostr,csp_println,csp_repl_tap,csp_print_uint,csp_print_hex,csp_flush
+
+CFLAGS := $(CPU) -Os -ffunction-sections -fdata-sections -Wall -Wshift-overflow=2 -MMD -MP \
           -Iinclude -Igen -Isrc -I$(B) $(CHIPINC) $(CHIPDEF) \
           -DCSP_BOARD=csp_board.h -DCSP_VERSION='"$(BOARD)"' \
           $(if $(DIAG),-DCSP_BITBANG_DIAG) \
-          $(if $(WATCH),-DCSP_STACK_WATCH -finstrument-functions)
+          $(if $(WATCH),-DCSP_STACK_WATCH -finstrument-functions $(WATCH_SKIP)) \
+          $(XCFLAGS)
 
+# A .hex only on AVR. A flat .bin is what a part whose boot ROM is handed a
+# raw image needs; here the bootloader speaks hex, the elf carries its own
+# addresses, and objcopy -O binary would gap-fill from 0 up to the EEPROM
+# image avr-gcc links at 0x810000 -- an eight-megabyte file describing a 32K
+# part.
+ifdef NOLD
+all: $(B)/firmware.hex
+else
 all: $(B)/firmware.bin $(B)/firmware.hex
+endif
 
 # WATCH=1: measure the deepest the stack actually got, instead of guessing.
 # -finstrument-functions puts a call pair on every function entry and exit
@@ -537,12 +634,40 @@ $(B)/%.o: %.S $(B)/csp_board.h
 $(B)/vic_212x.o: $(VICSRC) $(B)/csp_board.h
 	@$(CC) $(CFLAGS) -marm -c -o $@ $<
 
+ifdef NOLD
+
+# avr-gcc's own link: its crt supplies the vector table and the .data copy, so
+# there is nothing to hand-roll and nothing to place.
+#
+# And then the part is measured, because the link will not do it -- see MCU
+# above. `.text + .data + .bootloader` against the part's flash, and `.data +
+# .bss + .noinit` against its RAM, which is the same pair arduino-cli reports.
+# Over 100% is said in one line rather than left in a percentage to be read.
+$(B)/firmware.elf: $(OBJ)
+	@$(CC) $(CPU) $(XLDFLAGS) -Wl,--gc-sections -o $@ $(OBJ)
+	@$(SZ) $@
+	@$(SZ) --mcu=$(MCU) -C $@ | awk \
+	   '/^(Program|Data):/ { lbl = $$1; sub(/:/, "", lbl); \
+	      pct = $$4; gsub(/[()]/, "", pct); \
+	      printf "  %-8s %6s bytes  %s\n", lbl, $$2, pct; \
+	      if (pct + 0 > 100) over = over " " lbl } \
+	    END { if (over) printf "  ** DOES NOT FIT on $(MCU):%s over 100%% **\n", over }'
+	@$(MAKE) --no-print-directory -f Makefile.board BOARD=$(BOARD) MAP=$(MAP) \
+	    PROG="$(PROG)" $(if $(WATCH),WATCH=1) B=$(B) stackcheck
+
+
+else
+
 LD := $(B)/$(BOARD).ld
 
 $(B)/firmware.elf: $(OBJ) $(LD)
 	@$(CC) $(CPU) -nostartfiles -Wl,--gc-sections -Wl,-T,$(LD) \
 	   -o $@ $(OBJ) -lc -lgcc
 	@$(SZ) $@
+	@$(MAKE) --no-print-directory -f Makefile.board BOARD=$(BOARD) MAP=$(MAP) \
+	    PROG="$(PROG)" $(if $(WATCH),WATCH=1) B=$(B) stackcheck
+
+endif
 
 # The checksum goes in LAST, on the finished binary. The word at 0x14 must make
 # the eight vectors sum to zero or the boot ROM enters ISP instead of running
@@ -570,6 +695,21 @@ $(B)/firmware.bin: $(B)/firmware.elf csp
 # `--change-addresses=` with nothing after it writes a hex file for address 0.
 # That flashes without complaint and runs nowhere. An empty answer must stop the
 # build, not become a default.
+ifdef NOLD
+
+# STRAIGHT OFF THE ELF, not off the .bin. An AVR elf already carries the address
+# of every section, and -R .eeprom drops the separate EEPROM image that avr-gcc
+# links at 0x810000 -- left in, objcopy writes it into the hex as if it were
+# flash at 8 MB, and avrdude then refuses the file.
+#
+# This is the file `arduino-cli upload -i` takes, so the bootloader on the part
+# is still the way in even without the core.
+$(B)/firmware.hex: $(B)/firmware.elf
+	@$(OC) -O ihex -R .eeprom $< $@
+	@echo "$@: load address 0x00000000"
+
+else
+
 $(B)/firmware.hex: $(B)/firmware.bin
 	@addr=$$($(GEN) --load-addr $(BOARD) $(MAP)); \
 	 case "$$addr" in \
@@ -578,10 +718,71 @@ $(B)/firmware.hex: $(B)/firmware.bin
 	 $(OC) -I binary -O ihex --change-addresses=$$addr $< $@ && \
 	 echo "$@: load address $$addr"
 
+endif
+
+# WHAT IS LEFT FOR THE STACK, said out loud.
+#
+# The pool and the stack are the same RAM. A static arena takes what the board's
+# {code_budget, ...} asks for, .bss holds it, and the stack gets whatever is
+# above -- growing DOWN from RAMEND toward it. Nothing checks that what is left
+# is enough, and when it is not the stack writes over the NEWEST declarations,
+# which sit at the top of the pool.
+#
+# What that looks like: `#variable count = 1` is accepted, answers OK, and the
+# listing then shows it under an unrelated ROM name with the previous
+# declaration gone. No error, no fault -- the parser's frames simply landed on
+# the data it had just written. On mega_bare it took 3627 bytes of stack to do
+# that and 4477 to stop.
+#
+# CSP_STACK_RESERVE (csp.h) is the documented floor and is used to SIZE a malloc
+# arena; a static one ignores it entirely, which is exactly how this got missed.
+# So the check belongs here, at the link, where both numbers are known.
+#
+# EVERY bare board, not just AVR: the LPC and STM32 ports have the same shape --
+# a static arena in .bss with the stack above it -- and their hand-tuned
+# {code_budget, ...} lines carry comments about boards that hung. That is this
+# bug, found the expensive way, once per board. The part's RAM comes from the
+# generated header, whichever vendor emitted it; a board that states none is
+# skipped rather than guessed at.
+STACK_MIN ?= 4096
+
+stackcheck:
+	@ram=$$(sed -n 's/^#define CSP_\(AVR\|LPC\|STM\)_RAM  *//p' $(B)/csp_board.h); \
+	 used=$$($(SZ) $(B)/firmware.elf | awk 'NR==2{print $$2+$$3}'); \
+	 test -n "$$ram" || exit 0; \
+	 left=$$((ram - used)); \
+	 printf "  %-8s %6s bytes  for the stack\n" "Stack" "$$left"; \
+	 if [ "$$left" -lt "$(STACK_MIN)" ]; then \
+	   echo "  ** ONLY $$left BYTES OF STACK on $(BOARD) -- want $(STACK_MIN) **"; \
+	   echo "     The pool and the stack share RAM. Lower {code_budget, ...}"; \
+	   echo "     in the board terms, or raise STACK_MIN if this board is"; \
+	   echo "     known to need less. A stack that reaches the pool corrupts"; \
+	   echo "     the newest declarations SILENTLY -- see the note above."; \
+	 fi
+
+.PHONY: stackcheck
+
 -include $(OBJ:.o=.d)
 
 maps:
 	@$(GEN) --maps $(BOARD)
+
+ifdef NOLD
+# The bootloader is still on the part, so arduino-cli is still the way in even
+# though nothing here came from the Arduino core. `-i` takes a prebuilt image
+# and never looks for a sketch; the fqbn is only how the tool picks the upload
+# protocol and the baud rate.
+#
+# What is lost by not going through arduino-cli's compile: nothing about the
+# upload. What is lost by not going through the core: the 1200-baud touch reset
+# that a native-USB board needs -- irrelevant on an Uno, whose reset is DTR on
+# the FTDI/16U2 line and is done by avrdude.
+upload: all
+	@test -n "$(UPFQBN)" || { echo "$(BOARD): no {fqbn, ...} to upload with"; exit 1; }
+	arduino-cli upload -p $(UPPORT) -b $(UPFQBN) -i $(B)/firmware.hex
+
+.PHONY: upload
+endif
 
 clean:
 	@rm -rf $(B)

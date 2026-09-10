@@ -1,4 +1,9 @@
-// The line editor, driven a byte at a time.
+// The line editor -- and, built a second time with -DCSP_LINE_SIMPLE, the
+// COLLECTOR that replaces it on an exec-only node. One harness, because the two
+// have to agree about everything they share: typing, backspace at the end, the
+// refusal of a line that did not fit, and the paste queue.
+//
+// Driven a byte at a time.
 //
 // It cannot be tested through a pipe. Everything a pipe holds is available at
 // once, so the reader drains past the newline and the rest of the input lands
@@ -34,7 +39,9 @@
 
 static csp_line_t st;
 static char linebuf[128];
+#if !defined(CSP_LINE_SIMPLE)
 static char histbuf[256];
+#endif
 
 #define TERMBUF_SIZE 130
 static char term_buf[TERMBUF_SIZE];
@@ -214,6 +221,9 @@ static void ck(const char* what, const char* want, const char* got,
 // the BUFFER, term_pos is the column it will appear in. They differ by the width
 // of the prompt and by nothing else -- if they drift apart, the next character
 // typed lands in one place and is drawn in another.
+//
+// Editor only: the collector has no cursor field, because it has no cursor.
+#if !defined(CSP_LINE_SIMPLE)
 static void ck_cur(const char* what, int want)
 {
     if ((int)st.cur != want) {
@@ -224,6 +234,22 @@ static void ck_cur(const char* what, int want)
     else if (term_pos != want + 2) {           // 2 == strlen("> ")
 	printf("  FAIL %s: screen column: want %d, got %d\n",
 	       what, want + 2, term_pos);
+	fails++;
+    }
+    else {
+	printf("  PASS %s\n", what);
+    }
+}
+#endif
+
+// The BUFFER only, for a line whose newline has already been echoed. The screen
+// has moved on to the next line by then, so term() is empty by construction and
+// asserting on it would be asserting the emulator's rules rather than the
+// editor's.
+static void ck_buf(const char* what, const char* want, const char* got)
+{
+    if (strcmp(want, got) != 0) {
+	printf("  FAIL %s: buffer: want \"%s\", got \"%s\"\n", what, want, got);
 	fails++;
     }
     else {
@@ -246,8 +272,10 @@ static void reset(void)
     memset(&st, 0, sizeof(st));
     st.buf = linebuf;
     st.buf_size = (uint16_t)sizeof(linebuf);
+#if !defined(CSP_LINE_SIMPLE)
     st.hist = histbuf;
     st.hist_size = (uint16_t)sizeof(histbuf);
+#endif
     csp_line_init(&st);
 
     memset(term_buf, 0, sizeof(term_buf));
@@ -270,9 +298,11 @@ static void enter(void)
 {
     csp_line_input(&st, NEWLINE);
     st.pos = 0;
-    st.cur = 0;
     st.fill = 0;
     st.ready = 0;
+#if !defined(CSP_LINE_SIMPLE)
+    st.cur = 0;
+#endif
 }
 
 // What is in the line right now.
@@ -314,9 +344,15 @@ static const char* term(void)
 }
 
 
+#if defined(CSP_LINE_SIMPLE)
+#define WHICH "line input"
+#else
+#define WHICH "line editor"
+#endif
+
 int main(void)
 {
-    printf("line editor:\n");
+    printf(WHICH ":\n");
 
     // --- typing and backspace, which is all the old editor could do ---------
     reset();
@@ -331,6 +367,77 @@ int main(void)
     feed("ba");
     ck("backspace at the end", "ba", line(), term());    
     
+
+    // Backspace with nothing to take back rings and does nothing. Both modes:
+    // the alternative is a cursor that walks off the front of the buffer.
+    reset();
+    feed("\b\b");
+    ck("backspace on an empty line", "", line(), term());
+    feed("x");
+    ck("and the line still starts at the front", "x", line(), term());
+
+    // A LINE THAT DID NOT FIT IS REFUSED, not run short. `#disable 12` cut to
+    // `#disable 1` disables the wrong rule and says nothing about it. Both
+    // modes, and it is the only case where a newline does not produce a line.
+    reset();
+    {
+	int i;
+	for (i = 0; i < (int)sizeof(linebuf) + 8; i++)
+	    csp_line_input(&st, 'a');
+	csp_line_input(&st, NEWLINE);
+	ck_int("an over-long line is not made ready", 0, (int)st.ready);
+	ck_int("and nothing of it is kept", 0, (int)st.pos);
+    }
+
+    // THE PASTE QUEUE, in both modes. What arrives while a line is waiting to
+    // run is stored raw behind it, and csp_line_done brings it back down to the
+    // front through the normal path -- so a pasted file is echoed interleaved
+    // with its results rather than all at once.
+    reset();
+    feed("one\ntwo\nthree\n");
+    ck_buf("the first line of a paste is the one that is ready", "one", line());
+    ck_int("and the rest is held behind it", 1, (int)st.ready);
+    csp_line_done(&st);
+    ck_int("the second line comes up next", 1, (int)st.ready);
+    ck_buf("and it is the second line", "two", line());
+    csp_line_done(&st);
+    ck_buf("and then the third", "three", line());
+    csp_line_done(&st);
+    ck_int("after the last one there is nothing waiting", 0, (int)st.ready);
+
+#if defined(CSP_LINE_SIMPLE)
+
+    // --- what the collector does INSTEAD of editing --------------------------
+    //
+    // The keys the editor acts on are not typed into the line here, they are
+    // dropped. That is the whole difference, and it is worth asserting because
+    // the failure mode is not "editing does not work" -- it is `[A` and `^P`
+    // appearing in the middle of a command.
+
+    reset();
+    feed("ab\033[Acd");
+    ck("an arrow key is swallowed, not typed", "abcd", line(), term());
+
+    reset();
+    feed("ab\033[15~cd");
+    ck("an unknown escape sequence is swallowed too", "abcd", line(), term());
+
+    reset();
+    feed("ab\033OAcd");
+    ck("and the application-cursor form of it", "abcd", line(), term());
+
+    reset();
+    feed("ab\020\016\001\005cd");   // ^P ^N ^A ^E
+    ck("editor control keys are ignored", "abcd", line(), term());
+
+    reset();
+    feed("abc");
+    feed("\b");
+    feed("d");
+    ck("backspace takes from the END and typing appends", "abd",
+       line(), term());
+
+#else
 
     // --- the cursor --------------------------------------------------------
     //
@@ -453,6 +560,8 @@ int main(void)
     ck("no arrow keys either", "", line(), term());
     st.refeed = 0;
 
-    printf("line editor: %s\n", fails ? "FAILED" : "ok");
+#endif // CSP_LINE_SIMPLE
+
+    printf(WHICH ": %s\n", fails ? "FAILED" : "ok");
     return fails != 0;
 }

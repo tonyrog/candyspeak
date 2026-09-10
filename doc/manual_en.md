@@ -774,6 +774,52 @@ has to be seen, a datagram is the wrong carrier for it.
 The port is bound once, and both buffers parse the same datagram with their own
 fields.
 
+#### TCP
+
+    #buffer Rx:8 in  tcp 5000                 listen; take the first caller
+    #buffer Rx:8 in  tcp 5000 192.168.1.2     ...only if it is that peer
+    #buffer Tx:8 out tcp 5000 192.168.1.2     dial there and write
+
+The same surface as `udp`, and the address carries the same two meanings. What
+differs is **delivery**:
+
+| | UDP | TCP |
+|---|---|---|
+| a partial message | cannot happen | arrives partial, `.dlc` says so |
+| what it cannot take now | **dropped** — a newer datagram supersedes it | **kept** — bytes are the back-pressure |
+| the connection | none | one at a time, dialled and re-dialled on its own |
+
+A datagram is whole or absent, so an old one is worth nothing and UDP throws it
+away. A byte has no newer version of itself, so nothing here is ever dropped:
+what does not fit this cycle is read the next one.
+
+**One connection per port.** A second caller waits rather than displacing the
+first — dropping a peer that was working, silently, is the worse failure. EOF
+closes and the port goes back to listening, so a peer that restarts is served
+again with no intervention.
+
+> **Records are not framed yet.** A record split across two TCP segments arrives
+> split, and `.dlc` is where that shows. Fixed-size records are the assumption;
+> a length prefix or a separator is what would make them whole, and neither is
+> built.
+
+#### UART
+
+    #buffer B:8 inout uart 1              the board's own baud
+    #buffer B:8 inout uart 2 115200       ...or this one
+
+A **second** serial port, by unit number. The board has already muxed the pins,
+so a program names a unit the way `i2c 3` and `spi 1` do. The console's own UART
+belongs to the REPL and is not this one.
+
+A stream, with TCP's discipline: take what arrived, keep what will not fit. What
+it does not have is a connection — a wire is either carrying bytes or quiet, and
+there is no way to tell which, so a UART never reports an error for "nobody is
+talking".
+
+On the host, `--uart=[<unit>:]<device>` gives it a port — a real tty, or a pty
+from `socat` — which is what makes the transport testable without hardware.
+
 #### The console wire
 
 A node's serial port feeds its interpreter, and the interpreter prints back to
@@ -816,6 +862,39 @@ listing reads as valid output. `/state` prints `console lost N`.
 > everywhere else) — a part with 2K of RAM should not carry them for a transport
 > it never names. At 0 the declarations still compile and run and simply never
 > deliver, like any other bus the target does not have.
+
+### Routes
+
+    #buffer Keys:64 in  console
+    #buffer Link:8  out can 0x7E0
+    #route  Keys Link
+
+Bytes arriving at one buffer go out another, **with no rule in between**. Two
+things a rule cannot do:
+
+**It loops.** A rule runs once per cycle and a buffer assignment carries 32
+bits, so a relay written as rules tops out around 36 bytes a second whatever the
+link can do. A route moves `CSP_ROUTE_BURST` chunks a cycle.
+
+**It chunks by the sink.** The chunk is the smaller of the two buffers, so a
+64-byte stream into an 8-byte CAN frame is framed by the runtime — and `.dlc`
+is set per chunk. That framing used to be written by hand, and it was written
+wrong.
+
+The bytes still **land in both buffers**, so `/state`, a `#field` view and a
+rule can all watch them: a route you cannot see is one you cannot debug, and the
+win is the loop, not skipping the buffer.
+
+Routes run **last** in the cycle, after every rule — so a rule that also wrote
+the sink has already had its turn. They also run **while `/pause` is in effect**,
+because `/upgrade` pauses the node and a node being upgraded over a route must
+not go deaf on the link the image is arriving on.
+
+**Nothing blocks.** A push the link will not take leaves the chunk in the sink
+with `.tx` set, and the ordinary output pass retries it next cycle.
+
+    ./csp -i --id=5 examples/relay/node_bcast.csp     # a node
+    ./csp -i examples/relay/master_bcast.csp          # type here
 
 **A missing bus is not an error.** A program using a transport the target does
 not have compiles, links and runs — it simply never delivers, `.rx` stays false,

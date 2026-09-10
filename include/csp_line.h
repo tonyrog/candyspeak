@@ -4,6 +4,12 @@
 
 #include <stdint.h>
 
+// For CSP_LINE_SIMPLE, which is decided from the board header and the command
+// line and MUST be the same answer everywhere -- it changes the layout of
+// csp_line_t below. csp_config.h does not include this file, so there is no
+// cycle, and csp.h includes the two in this order anyway.
+#include "csp_config.h"
+
 #ifndef EXTERN_C_BEGIN
 #define EXTERN_C_BEGIN  extern "C" {
 #define EXTERN_C_END    }
@@ -34,8 +40,14 @@ typedef struct {
 			// "one byte in, at most one byte out" invariant
 			// that keeps the re-feed from overtaking itself is
 			// stated in terms of it.
+#if !defined(CSP_LINE_SIMPLE)
     uint16_t cur;       // where the next character is INSERTED, 0..line_pos
-    uint8_t  esc;       // escape-sequence decoder state (0 = idle)
+#endif
+    uint8_t  esc;       // escape-sequence decoder state (0 = idle). Present in
+			// BOTH modes: the collector still has to swallow an
+			// arrow key, or its '[' and 'A' get typed into the
+			// line as ordinary characters.
+#if !defined(CSP_LINE_SIMPLE)
     uint8_t  refeed;    // re-feeding the queue after a line ran: history
 			// and cursor keys are ignored, because a recall
 			// would expand the line under the read cursor the
@@ -47,6 +59,7 @@ typedef struct {
     uint16_t hist_used;   // bytes in use; the newest entry ends here
     uint16_t hist_at;     // browse point: offset just past the entry being
 			  // shown, or hist_used when not browsing
+#endif
     uint16_t fill;        // bytes held in total; == line_pos unless a ready
 			  // line has raw bytes queued behind it
     uint8_t  ready;       // a complete line is waiting at the front
@@ -65,9 +78,14 @@ typedef struct {
 // Under CSP_HIST_MIN there is no point: one short line is not a history. Set
 // CSP_HISTORY_BYTES to 0 to leave it out entirely -- the cursor editing below
 // costs nothing extra and stays.
+// Not under CSP_LINE_SIMPLE: no history at all there, and CSP_HIST_SHARE being
+// undefined is what compiles the history out of csp_line.c and stops
+// csp_mem_init carving a buffer for it.
+#if !defined(CSP_LINE_SIMPLE)
 #define CSP_HIST_SHARE 32
 #define CSP_HIST_MAX  512
 #define CSP_HIST_MIN   32
+#endif
 // A line longer than this is edited normally but not REMEMBERED: the length
 // byte at each end holds 255, and widening it to two would cost every entry a
 // byte to buy back a case nobody types.
@@ -84,15 +102,23 @@ extern void csp_line_prompt(csp_line_t* st);
 // INCLUDING while a line is waiting to run -- that spare room is what absorbs a
 // paste. When it goes false the driver's FIFO takes over.
 extern int  csp_line_space(csp_line_t* st);
+// How many bytes it can take. A route needs the COUNT: it pulls a chunk off a
+// transport before it knows the sink can hold it, and what will not fit is lost.
+extern uint16_t csp_line_room(csp_line_t* st);
 // Finished with the line at the front: drop it and bring anything queued behind
 // it down to the start. MUST be called instead of clearing line_ready by hand.
 extern void csp_line_done(csp_line_t* st);
 
+// THE EDITOR. None of these exist under CSP_LINE_SIMPLE, and nothing outside
+// csp_line.c calls them -- they are declared here because the file that does is
+// entitled to a header rather than to forward declarations of its own.
+#if !defined(CSP_LINE_SIMPLE)
 extern void csp_line_left(csp_line_t* st);
 extern void csp_line_right(csp_line_t* st);
 extern void csp_line_kill_to_end(csp_line_t* st);
 extern void csp_line_replace(csp_line_t* st, const char* s, uint16_t n);
 extern void csp_line_recall(csp_line_t* st, int dir);
+#endif
 
 #ifdef __cplusplus
 EXTERN_C_END

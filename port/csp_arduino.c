@@ -1385,7 +1385,7 @@ static void serial_hold(csp_rt_t* st)
 // and the peer is still held off.
 static void serial_release(csp_rt_t* st)
 {
-    serial_xoff_set(st, csp_line_space(&st->line) ? 0 : 1);
+    serial_xoff_set(st, (csp_line_space(&st->line) && csp_con_space()) ? 0 : 1);
 }
 
 void loop()
@@ -1420,7 +1420,8 @@ void loop()
     // the queue re-feed still needs the need_prompt it would consume.
     if (!state.line.ready)
 	csp_line_prompt(&state.line);
-    while (Serial.available() && csp_line_space(&state.line)) {
+    while (Serial.available() && csp_line_space(&state.line) &&
+	   csp_con_space()) {
 	csp_con_input(&state, Serial.read());
 	serial_release(&state);
     }
@@ -1451,8 +1452,14 @@ void loop()
 
     // /pause freezes execution: serial was already handled at the top so /resume
     // and edits still work; run no input/cycle/commit/output.
-    if (state.paused)
+    // The routes still run while paused -- they move bytes between transports
+    // and touch nothing the pause protects. /upgrade pauses the node for the
+    // flash write, so without this a node being upgraded OVER a route stops
+    // reading the link the image is arriving on.
+    if (state.paused) {
+	csp_route_run(&state);
 	return;
+    }
 
     // run evaluation cycle. /live freezes the rules (skip csp_cycle) but keeps I/O
     // running, so immediate commands drive outputs and inputs keep sampling.
@@ -1478,7 +1485,8 @@ void loop()
 #if !defined(CSP_EXEC_ONLY)
 	    // Same rule as the drain at the top of loop(): take everything the
 	    // port has for as long as there is room to put it.
-	    while (Serial.available() && csp_line_space(&state.line))
+	    while (Serial.available() && csp_line_space(&state.line) &&
+		   csp_con_space())
 		csp_con_input(&state, Serial.read());
 #endif
 	}

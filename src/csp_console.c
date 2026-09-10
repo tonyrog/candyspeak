@@ -146,6 +146,33 @@ void csp_con_input(csp_rt_t* st, char c)
     csp_line_input(&st->line, c);
 }
 
+// ROOM FOR ANOTHER KEYSTROKE. The counterpart to csp_line_space, and needed for
+// the same reason: a port reads as fast as the other end writes, and while the
+// console is diverted the bytes go to a RING rather than to the line editor --
+// so the editor's own back-pressure no longer holds anyone back.
+//
+// Without this, pasting more than the ring at once silently lost most of it.
+// It showed relaying a firmware image: `/upgrade A force` was accepted by the
+// far node, the 2690 bytes of hex behind it went into a 256-byte ring, and the
+// node answered "ERR hex" to a stream with holes in it.
+// How much a route may pull for this end of the wire. The SHOW end takes
+// whatever it is given -- csp_print_char blocks on the hardware and always
+// finishes -- but the FEED end is the line editor, which is small.
+uint16_t csp_con_room(csp_rt_t* st, int which)
+{
+    if (which == CON_KEYS)             // fed to the interpreter
+	return csp_line_room(&st->line);
+    return 0xffff;                     // shown on the port: no ceiling
+}
+
+int csp_con_space(void)
+{
+    if (!diverted)
+	return 1;                      // the line editor's problem, not ours
+    return ((uint16_t)((ring[CON_KEYS].tail + 1) % CSP_CONSOLE_BYTES)
+	    != ring[CON_KEYS].head);
+}
+
 int csp_con_diverted(void) { return diverted; }
 
 uint32_t csp_con_lost(void) { return ring[CON_KEYS].lost + ring[CON_OUT].lost; }
@@ -190,11 +217,17 @@ void csp_con_feed(csp_rt_t* st, const uint8_t* data, uint16_t len)
 
 void csp_con_wire(uint8_t mask) { (void)mask; }
 void csp_repl_tap(char c) { (void)c; }
+int csp_con_space(void) { return 1; }
 int csp_con_diverted(void) { return 0; }
 uint32_t csp_con_lost(void) { return 0; }
 int csp_con_take(int which, uint8_t* data, uint16_t* len)
 {
     (void)which; (void)data; (void)len;
+    return 0;
+}
+uint16_t csp_con_room(csp_rt_t* st, int which)
+{
+    (void)st; (void)which;
     return 0;
 }
 void csp_con_show(const uint8_t* data, uint16_t len) { (void)data; (void)len; }

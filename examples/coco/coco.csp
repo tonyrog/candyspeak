@@ -1,0 +1,81 @@
+// CoCo, as CandySpeak: the ATmega328P side of the DL1200/BridgeZone pair.
+//
+// The original is apps/pdb/atmega328p/CoCo/CoCo.ino -- an SPI slave that
+// watches four digital and four analog inputs, raises an interrupt line when a
+// condition it was configured with is met, and hands the master a CAPTURE
+// record saying WHAT it woke on. The master (apps/pdb/pdb_coco.c) configures it
+// through an index:subindex object dictionary.
+//
+// Three things map straight across and one does not:
+//
+//   the dictionary   index:subindex -> 32-bit value IS a #param path. `Ain1.up`
+//                    is what SET/GET(INDEX_ADC_UPPER, 1) was, and it is already
+//                    persisted, listed and settable at a prompt.
+//   CAPTURE          a fixed record of flags-and-values IS a #buffer with
+//                    #fields over it.
+//   the wake         a condition per pin IS `#digital ... rising` and a
+//                    comparison on an analog.
+//
+//   the SPI framing  is what does NOT map: the original is a byte-at-a-time
+//                    master-clocked exchange with a reply code in the byte
+//                    after the command. Here the link is a transport and the
+//                    record is the frame, so the framing goes away entirely.
+//
+// SIMULATED OVER UART to start with, which is what makes it runnable on one
+// laptop with no boards:
+//
+//   socat -d -d pty,raw,echo=0 pty,raw,echo=0        # note the two /dev/pts/N
+//   ./csp -i --uart=0:/dev/pts/A examples/coco/coco.csp
+//   ./csp -i --uart=0:/dev/pts/B examples/coco/master.csp
+
+// --- what the master configures -------------------------------------------
+// The object dictionary, as parameters. INDEX_ADC_UPPER:1 and friends.
+#param Up1:16   = 1023
+#param Low1:16  = 0
+#param Up2:16   = 1023
+#param Low2:16  = 0
+#param Mask8:8  = 0            // INTERRUPT_MASK_ANY_CHANGE8
+#param Pol8:8   = 0            // POLARITY_INPUT8
+
+// --- the pins CoCo watches --------------------------------------------------
+// Both sides read these: on a board the master reads them too, which is why the
+// original says the atmega only has to say WHAT WOKE IT, not what the values
+// are. Here they are ordinary declarations.
+#digital D0 in 2
+#digital D1 in 3
+#analog  A1:10 in 14
+#analog  A2:10 in 15
+
+// --- the CAPTURE record -----------------------------------------------------
+// iodata_t from pdb_coco.c, byte for byte: the interrupt flags first, then the
+// values. Six bytes rather than the original's packed ten -- the two spare
+// analog channels are not wired on this board, and the 10-bit packing that put
+// four pairs of high bits in a trailing byte is not needed when the field
+// widths say what they are.
+#buffer Cap:6 out uart 0
+#field  DIntf:8  Cap[0..7]     // which digital pin woke us
+#field  DValue:8 Cap[8..15]    // and what the four inputs read
+#field  AIntf:8  Cap[16..23]   // which analog channel woke us
+#field  A1Val:10 Cap[24..33]
+#field  A2Val:10 Cap[34..43]
+
+// --- what wakes it ----------------------------------------------------------
+// update_digital()'s three masks, as one condition each. The original ORs three
+// masks over eight pins; two pins and one mask is the same shape smaller.
+#variable Woke:8 = 0
+
+DIntf = 1 ? changed(D0) && (Mask8 & 1)
+DIntf = 2 ? changed(D1) && (Mask8 & 2)
+AIntf = 1 ? (A1 > Up1) || (A1 < Low1)
+AIntf = 2 ? (A2 > Up2) || (A2 < Low2)
+
+Woke = DIntf | AIntf
+
+// --- and the record that goes out -------------------------------------------
+// The original raised a pin and waited to be read. Here the wake IS the send:
+// there is nothing to poll and no second exchange, because the transport
+// carries the record rather than a byte at a time.
+DValue = D0 | (D1 << 1) ? Woke != 0
+A1Val = A1               ? Woke != 0
+A2Val = A2               ? Woke != 0
+Cap.tx = 1               ? Woke != 0

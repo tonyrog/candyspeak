@@ -1,0 +1,41 @@
+// EINT0 on a BridgeZone, STANDALONE -- not loaded after pins.csp.
+//
+// Few enough names to fit one string segment, which is the point while the
+// segment/rom_nn question is open: with pins.csp the image needs two, and
+// everything past the first was read out of empty RAM.
+//
+// P0.16 is the AVR's wakeup line (LPC_WAKEUP in the old cfg.h), muxed to eint0
+// by the board file. On an LPC2000 a pin interrupt IS a pin function -- there is
+// no GPIO interrupt block, that arrived with the 17xx -- so that mux is what
+// makes this reach the EINT at all.
+//
+// FALLING ONLY. EXTPOLAR picks one direction, so `both` is refused on this part
+// rather than guessed at.
+#digital Wake in falling 0:16
+
+// AND ONE YOU CAN REACH. P0.16 goes to the AVR; P0.30 is Ain4 on a screw
+// terminal and carries eint3 on function 2, muxed there by the board file --
+// which costs Ain4 as an analog input for as long as that line is in.
+//
+// An analog input has a divider and usually a filter in front of it, so the
+// edge is slow. A slow edge through a logic threshold can trip several times on
+// the way -- more counts than pulls is the interrupt seeing what a 500 Hz read
+// does not.
+#digital Term in falling 0:30
+
+// Can1Yellow. Active high: the pin drives a MOSFET gate with a 10k pulldown.
+#digital Lamp out 0:19
+
+#variable Edges = 0
+
+#when Wake.fired
+  Edges = Edges + 1
+  println("wake ", Edges, " level=", Wake)
+#end
+
+#when Term.fired
+  Edges = Edges + 1
+  println("term ", Edges, " level=", Term)
+#end
+
+Lamp = Term

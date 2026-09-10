@@ -1,0 +1,17 @@
+# Wokwi, for running the bare-metal AVR port without hardware.
+#
+#   make -f Makefile.board BOARD=mega_bare
+#   code boards/mega_bare          <- THIS directory, not the repository root
+#   F1 -> "Wokwi: Start Simulator"
+#
+# The extension looks for wokwi.toml in the folder VS Code has open and does not
+# search up the tree, so opening the repository root finds nothing and the
+# simulator never starts.
+#
+# Paths are relative to this file. The names are ours -- Wokwi loads whatever
+# the toml points at and has no opinion about `.ino.elf`. The elf is what gives the simulator symbol
+# names and source lines; the hex is what it actually loads.
+[wokwi]
+version = 1
+firmware = "build/default/firmware.hex"
+elf      = "build/default/firmware.elf"

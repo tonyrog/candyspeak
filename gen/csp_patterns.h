@@ -92,10 +92,17 @@ typedef struct {
     ivalue_t spi_bus;
     port_pin_t spi_cs;
     ivalue_t spi_cmd;
-    ivalue_t udp_ip;
-    ivalue_t udp_port;
+    ivalue_t net_ip;
+    ivalue_t net_port;
+    ivalue_t net_kind;
+    ivalue_t uart_unit;
+    ivalue_t uart_baud;
     ivalue_t con_kind;
 } buffer_param_t;
+typedef struct {
+    tstr_t src;
+    tstr_t dst;
+} route_param_t;
 typedef struct {
     tstr_t obj;
     tstr_t fld;
@@ -148,11 +155,12 @@ extern const uint8_t csp_pattern_data[] RODATA;
 #define PATOFF_TIMER 195
 #define PATOFF_FIELD_DECL 221
 #define PATOFF_BUFFER 257
-#define PATOFF_BODY 337
-#define PATOFF_RULE 406
-#define PATOFF_OBJECT 433
-#define PATOFF_PACK_FIELD 452
-#define PATOFF_PACK 464
+#define PATOFF_ROUTE 364
+#define PATOFF_BODY 369
+#define PATOFF_RULE 438
+#define PATOFF_OBJECT 465
+#define PATOFF_PACK_FIELD 484
+#define PATOFF_PACK 496
 
 // Each pattern as a pointer into the one array -- compile-time
 // constants, so a pmatch call site reads as it did when these were
@@ -170,6 +178,7 @@ extern const uint8_t csp_pattern_data[] RODATA;
 #define pat_timer (csp_pattern_data + PATOFF_TIMER)
 #define pat_field_decl (csp_pattern_data + PATOFF_FIELD_DECL)
 #define pat_buffer (csp_pattern_data + PATOFF_BUFFER)
+#define pat_route (csp_pattern_data + PATOFF_ROUTE)
 #define pat_body (csp_pattern_data + PATOFF_BODY)
 #define pat_rule (csp_pattern_data + PATOFF_RULE)
 #define pat_object (csp_pattern_data + PATOFF_OBJECT)
@@ -339,11 +348,25 @@ const uint8_t csp_pattern_data[] RODATA = {
         P_PAT, (PATOFF_PORT_PIN >> 8), (PATOFF_PORT_PIN & 0xff), csp_offsetof(buffer_param_t, spi_cs), STOP_BUFFER_PORT_PIN_CONT,
         P_INTEGER_S, csp_offsetof(buffer_param_t, spi_cmd), STOP_BUFFER_SPI_CMD,
         P_OPT_END,
-    P_OPT, 12,
-        P_TOK, T_UDP,
-        P_INTEGER_S, csp_offsetof(buffer_param_t, udp_port), STOP_BUFFER_UDP_PORT,
+    P_OPT, 25,
+        P_CHOICE, 2,
+            P_ALT, 4,
+                P_TOK_W, T_UDP, csp_offsetof(buffer_param_t, net_kind),
+                P_ALT_END,
+            P_ALT, 4,
+                P_TOK_W, T_TCP, csp_offsetof(buffer_param_t, net_kind),
+                P_ALT_END,
+        P_CHOICE_END,
+        P_INTEGER_S, csp_offsetof(buffer_param_t, net_port), STOP_BUFFER_NET_PORT,
         P_OPT, 4,
-            P_INTEGER_S, csp_offsetof(buffer_param_t, udp_ip), STOP_BUFFER_UDP_IP,
+            P_INTEGER_S, csp_offsetof(buffer_param_t, net_ip), STOP_BUFFER_NET_IP,
+            P_OPT_END,
+        P_OPT_END,
+    P_OPT, 12,
+        P_TOK, T_UART,
+        P_INTEGER_S, csp_offsetof(buffer_param_t, uart_unit), STOP_BUFFER_UART_UNIT,
+        P_OPT, 4,
+            P_INTEGER_S, csp_offsetof(buffer_param_t, uart_baud), STOP_BUFFER_UART_BAUD,
             P_OPT_END,
         P_OPT_END,
     P_OPT, 16,
@@ -357,7 +380,11 @@ const uint8_t csp_pattern_data[] RODATA = {
         P_CHOICE_END,
         P_OPT_END,
     P_END,
-    // pat_body @ 337
+    // pat_route @ 364
+    P_STR, csp_offsetof(route_param_t, src),
+    P_STR, csp_offsetof(route_param_t, dst),
+    P_END,
+    // pat_body @ 369
     P_OPT, 63,
         P_STR, csp_offsetof(rule_body_part_t, obj),
         P_OPT, 12,
@@ -393,7 +420,7 @@ const uint8_t csp_pattern_data[] RODATA = {
         P_OPT_END,
     P_EXPR_S, csp_offsetof(rule_body_part_t, rhs), STOP_BODY_RHS,
     P_END,
-    // pat_rule @ 406
+    // pat_rule @ 438
     P_PAT, (PATOFF_BODY >> 8), (PATOFF_BODY & 0xff), csp_offsetof(rule_param_t, body), STOP_RULE_BODY_CONT,
     P_REP, 11,
         P_ARRAY, csp_offsetof(rule_param_t, body[1]), sizeof(rule_body_part_t),
@@ -405,7 +432,7 @@ const uint8_t csp_pattern_data[] RODATA = {
         P_EXPR_S, csp_offsetof(rule_param_t, cond), STOP_RULE_COND,
         P_OPT_END,
     P_END,
-    // pat_object @ 433
+    // pat_object @ 465
     P_STR, csp_offsetof(object_param_t, mod_name),
     P_STR, csp_offsetof(object_param_t, obj_name),
     P_OPT, 12,
@@ -415,14 +442,14 @@ const uint8_t csp_pattern_data[] RODATA = {
             P_REP_END,
         P_OPT_END,
     P_END,
-    // pat_pack_field @ 452
+    // pat_pack_field @ 484
     P_EXPR_S, csp_offsetof(pack_field_t, val), STOP_PACK_FIELD_VAL,
     P_OPT, 6,
         P_TOK, COLON,
         P_INTEGER_S, csp_offsetof(pack_field_t, bits), STOP_PACK_FIELD_BITS,
         P_OPT_END,
     P_END,
-    // pat_pack @ 464
+    // pat_pack @ 496
     P_STR, csp_offsetof(pack_param_t, buffer),
     P_CHOICE, 2,
         P_ALT, 4,

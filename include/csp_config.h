@@ -31,6 +31,59 @@
 #include CSP_STR(CSP_BOARD)
 #endif
 
+// THE IMAGE REGISTRY IS OFF ON AVR, and it has to be.
+//
+// `csp_images` is an ORPHAN section -- no linker script on any of these
+// platforms names it -- so where it lands is a heuristic, and on this
+// architecture both answers are wrong. Measured 2026-09-09:
+//
+//   mega  (arduino-cli, 122 kB)  csp_images VMA 0x1dc72 -- in FLASH, and the
+//                                runtime reads the array as DATA. A 16-bit data
+//                                address cannot even name it, so /images
+//                                reported `size=274371596 rules=4186
+//                                (header CRC BAD)` -- an image read from
+//                                nowhere.
+//   mega_bare (avr-gcc, 116 kB)  csp_images VMA 0x8002ca -- which is also where
+//                                .bss starts. The entry is either not copied or
+//                                immediately zeroed, so it reads NULL.
+//
+// Reading it as flash instead is not the fix: pgm_read_word is LPM and reaches
+// the first 64 kB, and the section lands past that on exactly the images big
+// enough to care.
+//
+// Nothing is lost. The registry answers "what did this build LINK", which only
+// /images and the A/B image choice ask -- and no AVR here defines
+// CSP_HAVE_FLASH, so there are no slots to choose between. csp_load_rom reaches
+// the firmware's own image through `rom_image` directly and boots exactly as
+// before; /images now says "no images registered", which is true, instead of
+// printing a header read from an address that is not in the data space.
+#if defined(__AVR__) && !defined(CSP_IMAGE_REGISTRY)
+#define CSP_NO_IMAGE_REGISTRY 1
+#endif
+
+// LINE INPUT OR A LINE EDITOR.
+//
+// The editor is cursor keys, history, insert-in-the-middle and the escape
+// decoder that makes them work -- about 1500 bytes of AVR text. An exec-only
+// node has no compiler and no prompt worth editing at: its input is a handful
+// of commands and whatever a master relays to it.
+//
+// And on a RELAYED node the editing has already happened at the other end.
+// Arrow keys and history on a node reached through a route are not merely
+// unnecessary, they are WRONG -- the escape sequences would be interpreted
+// twice, once by the master's editor and once by the slave's.
+//
+// So: exec-only gets the collector, everything else gets the editor. A board
+// that wants the editor back in an exec image defines CSP_LINE_EDIT.
+//
+// It changes csp_line_t's LAYOUT (no history, no cursor), so it has to be the
+// same answer in every translation unit -- which is why it is decided here,
+// from the same board header and command line every file sees, and not per
+// source file.
+#if defined(CSP_EXEC_ONLY) && !defined(CSP_LINE_EDIT) && !defined(CSP_LINE_SIMPLE)
+#define CSP_LINE_SIMPLE 1
+#endif
+
 // RAM the system reports having. The host default assumes plenty; a small
 // target sets its own (or leaves it alone -- nothing is dimensioned from it,
 // it only feeds /memory).

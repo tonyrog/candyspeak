@@ -254,16 +254,44 @@ int csp_print_char(char c)
     return 1;
 }
 
+// CHARACTER BY CHARACTER, not one fprintf.
+//
+// csp_print_char is the node's single output point -- the console tap hangs off
+// it, and every other port's csp_print_str already loops through it. This one
+// shortcut meant the tap saw only what was printed a character at a time: a
+// listing relayed to another node arrived as `# Out:64 R` where it should have
+// read `#buffer Out:64 in repl  // R`, with every RODATA word missing and
+// nothing anywhere saying so.
+//
+// A call per character on a host is not a cost worth a second output path.
 int csp_print_str(const char* s)
 {
-    if (file_output)
-	return fprintf(file_output, "%s", s);
-    return strlen(s);
+    int n = 0;
+
+    while (*s)
+	n += csp_print_char(*s++);
+    return n;
 }
 
+// A rostring is RODATA, and under CSP_RO_POISON that is a second address space
+// -- so it is read a byte at a time through ro_byte, exactly as port/csp_avr.c
+// has always had to. Without the poison ro_byte is a plain dereference and this
+// compiles to the same loop csp_print_str would have run.
+//
+// Not an #ifdef: having the host and the AVR port read a rostring the SAME way
+// is the point. The cast through const char* was the shortcut that only worked
+// because the host has one address space.
 int csp_print_rostr(rostring_t s)
 {
-    return csp_print_str((const char*) s);
+    const uint8_t* p = (const uint8_t*)s;
+    int n = 0;
+    uint8_t c;
+
+    while ((c = ro_byte(p + n)) != 0) {
+	csp_print_char((char)c);
+	n++;
+    }
+    return n;
 }
 
 void csp_flush(void)
@@ -397,7 +425,7 @@ static void serial_poll(csp_rt_t* st, struct pollfd* fds, nfds_t nfds)
 	// a completed line and on into the queue behind it. The terminal is in
 	// raw mode with VMIN=1, so read() BLOCKS; a zero-timeout poll each turn
 	// is what keeps "take what is there" from becoming "wait for more".
-	while (csp_line_space(&st->line)) {
+	while (csp_line_space(&st->line) && csp_con_space()) {
 	    ssize_t n = read(STDIN_FILENO, &c, 1);
 	    if (n == 0) {
 		// EOF -- the pipe's Ctrl-D, and it is treated as one.
@@ -781,6 +809,340 @@ int csp_udp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
     return 0;
 }
 
+// --- UART --------------------------------------------------------------------
+//
+// A host has no second serial port, so `--uart=DEV` gives it one: a tty, a pty
+// from socat, or anything else that reads and writes bytes. Unit 0 unless the
+// option says otherwise (`--uart=2:/dev/ttyUSB0`).
+//
+// The BAUD in the declaration is applied when the device is a real tty and
+// ignored when it is not -- a pty has no baud, and refusing to run on one would
+// make the transport untestable without hardware.
+#include <termios.h>
+
+#ifndef CSP_UART_MAXPORT
+#define CSP_UART_MAXPORT 2
+#endif
+
+static struct { int unit; const char* dev; int fd; } uart_port[CSP_UART_MAXPORT];
+static int uart_nport = 0;
+
+// --uart=[<unit>:]<device>
+static void uart_add(const char* spec)
+{
+    const char* colon = strchr(spec, ':');
+    int unit = 0;
+
+    if (uart_nport >= CSP_UART_MAXPORT) {
+	fprintf(stderr, "uart: no room for '%s'\n", spec);
+	return;
+    }
+    if (colon != NULL) {
+	unit = atoi(spec);
+	spec = colon + 1;
+    }
+    uart_port[uart_nport].unit = unit;
+    uart_port[uart_nport].dev  = spec;
+    uart_port[uart_nport].fd   = -1;
+    uart_nport++;
+}
+
+static int uart_find(uint32_t xref)
+{
+    unsigned unit = TR_UART_UNIT(xref);
+    int i;
+
+    for (i = 0; i < uart_nport; i++)
+	if ((unsigned)uart_port[i].unit == unit)
+	    return i;
+    return -1;
+}
+
+int csp_uart_open(csp_rt_t* st, uint32_t xref)
+{
+    int i = uart_find(xref);
+    (void)st;
+
+    if (i < 0)
+	return -1;                     // no --uart for this unit
+    if (uart_port[i].fd >= 0)
+	return 0;
+    if ((uart_port[i].fd = open(uart_port[i].dev,
+				O_RDWR | O_NOCTTY | O_NONBLOCK)) < 0) {
+	// Once, on stderr, like every other endpoint that cannot be opened.
+	fprintf(stderr, "uart: cannot open %s -- %s\n",
+		uart_port[i].dev, strerror(errno));
+	uart_port[i].unit = -1;        // and not once per cycle after that
+	return -1;
+    }
+    if (isatty(uart_port[i].fd)) {
+	struct termios tio;
+	if (tcgetattr(uart_port[i].fd, &tio) == 0) {
+	    // RAW. A UART carries BYTES, and any line discipline here would
+	    // show up as a relayed listing with its newlines rewritten.
+	    cfmakeraw(&tio);
+	    if (TR_UART_BAUD(xref) != 0) {
+		speed_t sp = B0;
+		switch (TR_UART_BAUD(xref)) {
+		case 9600:   sp = B9600; break;
+		case 19200:  sp = B19200; break;
+		case 38400:  sp = B38400; break;
+		case 57600:  sp = B57600; break;
+		case 115200: sp = B115200; break;
+		default:     sp = B0; break;
+		}
+		if (sp != B0) {
+		    cfsetispeed(&tio, sp);
+		    cfsetospeed(&tio, sp);
+		}
+	    }
+	    tcsetattr(uart_port[i].fd, TCSANOW, &tio);
+	}
+    }
+    return 0;
+}
+
+int csp_uart_recv(csp_rt_t* st, uint32_t xref, uint8_t* data, uint16_t* len)
+{
+    int i;
+    ssize_t n;
+
+    if (csp_uart_open(st, xref) < 0)
+	return 0;                      // no port: QUIET, not an error -- a wire
+    i = uart_find(xref);               // with nobody on it looks the same
+    if ((i < 0) || (uart_port[i].fd < 0))
+	return 0;
+    if ((n = read(uart_port[i].fd, data, *len)) > 0) {
+	*len = (uint16_t)n;
+	return 1;
+    }
+    return 0;
+}
+
+int csp_uart_send(csp_rt_t* st, uint32_t xref, const uint8_t* data, uint16_t len)
+{
+    int i;
+
+    if (csp_uart_open(st, xref) < 0)
+	return -1;
+    i = uart_find(xref);
+    if ((i < 0) || (uart_port[i].fd < 0))
+	return -1;
+    if (write(uart_port[i].fd, data, len) != (ssize_t)len)
+	return -1;                     // the caller keeps it and retries
+    return 0;
+}
+
+// For the loop to wait on, like the other two.
+int csp_uart_pollfd(int slot)
+{
+    int i, k = 0;
+
+    for (i = 0; i < uart_nport; i++)
+	if (uart_port[i].fd >= 0) {
+	    if (k++ == slot) return uart_port[i].fd;
+	}
+    return -1;
+}
+
+// --- TCP ---------------------------------------------------------------------
+//
+// UDP's surface with a connection under it. What that costs is a state machine
+// per port, and it is small because of two decisions:
+//
+//   ONE CONNECTION per listening port. Tony's shape is one master and one node
+//   at a time, so a second caller waits in the backlog rather than being
+//   multiplexed. Accepting it and dropping the first would be worse: the peer
+//   that was working goes quiet with nothing said.
+//
+//   NOTHING BLOCKS, ever. Listen, accept, connect and read are all
+//   non-blocking, so "the peer is not up yet" is the same nothing a quiet bus
+//   gives -- 0 from recv, -1 from send -- and the program keeps cycling. A
+//   connect that has not completed is retried, not waited on.
+//
+// EOF closes and goes back to listening. A peer that reconnects gets served
+// again with no intervention, which is what makes a remote console survive
+// restarting the other end.
+#include <netinet/tcp.h>
+
+#ifndef CSP_TCP_MAXSOCK
+#define CSP_TCP_MAXSOCK 4
+#endif
+
+typedef struct {
+    uint16_t port;
+    int      lfd;                  // listening, for an `in` buffer
+    int      cfd;                  // the one connection, either direction
+    uint32_t peer;                 // who is on it (host order), 0 = nobody
+    uint8_t  outbound;             // 1 = we dialled, so a drop means redial
+} tcp_sock_t;
+
+static tcp_sock_t tcp_sock[CSP_TCP_MAXSOCK];
+static int tcp_nsock = 0;
+
+static tcp_sock_t* tcp_find(uint16_t port, int make)
+{
+    int i;
+
+    for (i = 0; i < tcp_nsock; i++)
+	if (tcp_sock[i].port == port)
+	    return &tcp_sock[i];
+    if (!make || (tcp_nsock >= CSP_TCP_MAXSOCK))
+	return NULL;
+    tcp_sock[tcp_nsock].port = port;
+    tcp_sock[tcp_nsock].lfd = -1;
+    tcp_sock[tcp_nsock].cfd = -1;
+    tcp_sock[tcp_nsock].peer = 0;
+    tcp_sock[tcp_nsock].outbound = 0;
+    return &tcp_sock[tcp_nsock++];
+}
+
+static void tcp_drop(tcp_sock_t* s)
+{
+    if (s->cfd >= 0)
+	close(s->cfd);
+    s->cfd = -1;
+    s->peer = 0;
+}
+
+// The listening side. SO_REUSEADDR belongs here and not on UDP: on TCP it means
+// "reuse a port still in TIME_WAIT", which is the ordinary restart case, and it
+// does NOT let a second process steal the traffic the way it does on UDP.
+static int tcp_listen(tcp_sock_t* s)
+{
+    struct sockaddr_in a;
+    int on = 1;
+
+    if (s->lfd >= 0)
+	return 0;
+    if ((s->lfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0)) < 0)
+	return -1;
+    setsockopt(s->lfd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_ANY);
+    a.sin_port = htons(s->port);
+    if ((bind(s->lfd, (struct sockaddr*)&a, sizeof(a)) < 0) ||
+	(listen(s->lfd, 1) < 0)) {
+	// Said once, like the UDP bind, and on stderr for the same reason: this
+	// is polled every cycle and the program's own stream may not exist yet.
+	fprintf(stderr, "tcp: cannot listen on port %u -- %s\n",
+		(unsigned)s->port, strerror(errno));
+	close(s->lfd);
+	s->lfd = -1;
+	return -1;
+    }
+    return 0;
+}
+
+// accept_ip, not `accept`: the parameter would shadow the socket call two
+// lines down, and the compiler's word for that is not obvious.
+int csp_tcp_recv(csp_rt_t* st, uint16_t port, uint32_t accept_ip,
+		 uint8_t* data, uint16_t* len)
+{
+    tcp_sock_t* s = tcp_find(port, 1);
+    ssize_t n;
+    (void)st;
+
+    if (s == NULL)
+	return -1;
+    if ((s->cfd < 0) && !s->outbound) {
+	struct sockaddr_in a;
+	socklen_t alen = sizeof(a);
+	int fd;
+	if (tcp_listen(s) < 0)
+	    return -1;
+	memset(&a, 0, sizeof(a));
+	// accept, not accept4: accept4 wants _GNU_SOURCE, and this file defines
+	// no feature-test macros -- one fcntl is cheaper than that dependency.
+	if ((fd = accept(s->lfd, (struct sockaddr*)&a, &alen)) < 0)
+	    return 0;                  // nobody calling yet
+	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+	// THE SAME FILTER UDP HAS, and the same reason it is here rather than in
+	// the core: a peer we will not talk to must not get a connection at all,
+	// let alone have its bytes read into the buffer's shadow.
+	if ((accept_ip != 0) && (ntohl(a.sin_addr.s_addr) != accept_ip)) {
+	    close(fd);
+	    return 0;
+	}
+	s->cfd = fd;
+	s->peer = ntohl(a.sin_addr.s_addr);
+    }
+    if (s->cfd < 0)
+	return 0;
+    if ((n = recv(s->cfd, data, *len, 0)) > 0) {
+	*len = (uint16_t)n;
+	return 1;
+    }
+    // 0 is EOF -- the peer hung up. Anything else that is not EAGAIN is the
+    // connection failing. Both mean the same here: drop it and go back to
+    // listening, so a peer that restarts is served again with no help.
+    if ((n == 0) || ((n < 0) && (errno != EAGAIN) && (errno != EWOULDBLOCK)))
+	tcp_drop(s);
+    return 0;
+}
+
+int csp_tcp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
+		 const uint8_t* data, uint16_t len)
+{
+    tcp_sock_t* s = tcp_find(port, 1);
+    ssize_t n;
+    (void)st;
+
+    if ((s == NULL) || (addr == 0))
+	return -1;                     // an out buffer with no destination
+    if (s->cfd < 0) {
+	struct sockaddr_in a;
+	int fd;
+	s->outbound = 1;
+	if ((fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0)) < 0)
+	    return -1;
+	memset(&a, 0, sizeof(a));
+	a.sin_family = AF_INET;
+	a.sin_addr.s_addr = htonl(addr);
+	a.sin_port = htons(port);
+	// A non-blocking connect answers EINPROGRESS and finishes later. Rather
+	// than track that as a third state, the socket is kept and the WRITE
+	// below is what discovers whether it landed: a write on a half-open
+	// socket fails, we drop it, and the next cycle dials again. One retry
+	// per cycle is fast enough for a console and costs no state.
+	if ((connect(fd, (struct sockaddr*)&a, sizeof(a)) < 0) &&
+	    (errno != EINPROGRESS)) {
+	    close(fd);
+	    return -1;
+	}
+	s->cfd = fd;
+	s->peer = addr;
+	return -1;                     // nothing written yet; try next cycle
+    }
+    if (len == 0)
+	return 0;                      // a dial check, not a write
+    if ((n = send(s->cfd, data, len, MSG_NOSIGNAL)) == (ssize_t)len)
+	return 0;
+    if ((n < 0) && ((errno == EAGAIN) || (errno == EWOULDBLOCK)))
+	return -1;                     // the window is full: the rest waits
+    tcp_drop(s);
+    return -1;
+}
+
+// The connections, for the loop to wait on -- csp_udp_pollfd's counterpart.
+// Both ends are here: a listening socket becomes readable when someone calls,
+// and a connection when bytes arrive.
+int csp_tcp_pollfd(int slot)
+{
+    int i, k = 0;
+
+    for (i = 0; i < tcp_nsock; i++) {
+	if (tcp_sock[i].lfd >= 0) {
+	    if (k++ == slot) return tcp_sock[i].lfd;
+	}
+	if (tcp_sock[i].cfd >= 0) {
+	    if (k++ == slot) return tcp_sock[i].cfd;
+	}
+    }
+    return -1;
+}
+
 #if defined(CSP_HAS_SOCKETCAN)
 #include <net/if.h>
 #include <sys/ioctl.h>
@@ -1056,8 +1418,8 @@ void print_defines()
     printf("INDEX_BITS=%d\n", INDEX_BITS);
     printf("CSP_STR_BYTES=%d\n", CSP_STR_BYTES);
     printf("MAX_INDICES=%lu\n", (unsigned long)MAX_INDICES);
-    printf("MAX_INSTRS=%d\n", MAX_INSTRS);
-    printf("MAX_DECLS=%d\n", MAX_DECLS);
+    printf("MAX_INSTRS=%ld\n", (long)MAX_INSTRS);
+    printf("MAX_DECLS=%ld\n", (long)MAX_DECLS);
     printf("MAX_OBJECT_NUM=%u\n", MAX_OBJECT_NUM);
     printf("MAX_STR_BUF=%d\n", MAX_STR_BUF);
     printf("MAX_STACK_DEPTH=%d\n", MAX_STACK_DEPTH);
@@ -1132,6 +1494,7 @@ static struct option long_options[] = {
     {"part",         required_argument, 0,  1011},
     {"memory",       required_argument, 0,  'm'},
     {"pause",        no_argument,       0,  'b'},
+    {"uart",         required_argument, 0,  1014},
     {"id",           required_argument, 0,  1012},
     {"name",         required_argument, 0,  1013},
     {0,              0,                 0,  0 }
@@ -1385,8 +1748,177 @@ static nfds_t poll_set(struct pollfd* pfd, nfds_t fixed, nfds_t max)
 	pfd[n].revents = 0;
 	n++;
     }
+    // And the TCP ends -- a listening socket is readable when someone calls, a
+    // connection when bytes arrive, and both are things to wake for.
+    for (i = 0; (n < max) && ((fd = csp_tcp_pollfd(i)) >= 0); i++) {
+	pfd[n].fd = fd;
+	pfd[n].events = POLLIN;
+	pfd[n].revents = 0;
+	n++;
+    }
+    // And a serial port, if --uart gave the host one.
+    for (i = 0; (n < max) && ((fd = csp_uart_pollfd(i)) >= 0); i++) {
+	pfd[n].fd = fd;
+	pfd[n].events = POLLIN;
+	pfd[n].revents = 0;
+	n++;
+    }
     return n;
 }
+
+// ============================================================
+// The read-only poison (CSP_RO_POISON) -- see the long note at ro_byte in csp.h
+// ============================================================
+//
+// The host has one address space, so a read of RODATA that forgot its ro_
+// accessor is CORRECT here and wrong only on AVR, where it reads the data space
+// at a flash address. Four tables shipped that way, one of them the error table.
+//
+// This gives the host the second address space it lacks. The linker has already
+// gathered the core objects' .rodata into `csp_ro`, page-aligned and on its own
+// pages (utils/ro_ld.sh). What is left is to make the section unreadable and
+// keep a copy somewhere the code cannot name:
+//
+//   shadow = mmap(...); memcpy(shadow, section);   the copy that EXISTS
+//   mprotect(section, PROT_NONE);                  the place that does NOT
+//   csp_ro_delta = shadow - section;               what ro_* adds
+//
+// FIRST THING IN main, before anything reads a string: every csp_print_lit in
+// the core resolves through ro_byte, and those work either way, but a read that
+// happens before the delta is set would use 0 and hit the real (still readable)
+// section -- passing a test it should fail.
+//
+// Not a shipped configuration. `make ro_poison`.
+#if defined(CSP_RO_POISON)
+// _GNU_SOURCE early enough for siginfo_t/sigaction: this file compiles with
+// -std= defaults that hide them behind feature-test macros.
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
+#include <sys/mman.h>
+#include <execinfo.h>
+#include <signal.h>
+#include <unistd.h>
+
+extern const char __start_csp_ro[], __stop_csp_ro[];
+
+const char* csp_ro_lo    = NULL;
+const char* csp_ro_hi    = NULL;
+long        csp_ro_delta = 0;
+
+static void csp_ro_trap(void);
+
+static void csp_ro_init(void)
+{
+    const char* lo = __start_csp_ro;
+    const char* hi = __stop_csp_ro;
+    size_t n = (size_t)(hi - lo);
+    void* shadow;
+
+    // Empty means this binary was linked without the fragment -- a one-shot test
+    // build, say. Not poisoned, and that is correct rather than an error: the
+    // delta stays 0 and csp_ro_real's range test never matches, so every
+    // accessor is the plain read it would have been. Silent on purpose; the
+    // readelf check in `make ro_poison` is what guards the binary that matters.
+    if (n == 0)
+	return;
+    shadow = mmap(NULL, n, PROT_READ | PROT_WRITE,
+		  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (shadow == MAP_FAILED) {
+	perror("csp_ro: mmap");
+	return;
+    }
+    memcpy(shadow, lo, n);
+    // PROT_NONE, not PROT_READ: the point is that the ADDRESS the code names is
+    // not backed by anything. mprotect works in whole pages, which is why the
+    // linker script pads the section out to one.
+    if (mprotect((void*)(uintptr_t)lo, n, PROT_NONE) != 0) {
+	perror("csp_ro: mprotect");
+	return;
+    }
+    csp_ro_lo    = lo;
+    csp_ro_hi    = hi;
+    csp_ro_delta = (const char*)shadow - lo;
+    csp_ro_trap();
+}
+
+// A poison that only says "Segmentation fault" is barely worth having: the
+// whole point is to name the read, and a bare core file makes you go and get a
+// debugger for something the process already knows.
+//
+// So: catch SIGSEGV, and if the address is inside the section say so and print
+// the stack. Anything else is re-raised with the handler removed, so a real bug
+// still dies the way it should instead of being swallowed by the tool that was
+// meant to find bugs.
+//
+// THE MESSAGE FIRST, with write(2), and only then the stack.
+//
+// The order is not style. fprintf takes a lock and backtrace() calls into the
+// dynamic linker, which takes another -- and neither is async-signal-safe. If
+// the faulting read happened while libc already held one of those, the handler
+// DEADLOCKS. The process then sits there until something kills it, and every
+// byte of buffered stdout dies with it: no message, no stack, no output at all.
+//
+// That is not a theory. It is what a test looked like -- `got` empty, `want`
+// five lines, and no sign anywhere that a fault had even happened. The tool
+// swallowed its own finding, and cost several wrong hypotheses.
+//
+// So the address goes out through write(2), which is async-signal-safe and
+// unbuffered, before anything that can block. If the backtrace then hangs, the
+// one fact worth having is already on the terminal.
+static void csp_ro_write(const char* s)
+{
+    size_t n = 0;
+    while (s[n]) n++;
+    if (write(STDERR_FILENO, s, n) < 0) { /* dying anyway */ }
+}
+
+static void csp_ro_hex(char* out, unsigned long v)
+{
+    static const char d[] = "0123456789abcdef";
+    int i, k = 0;
+    for (i = (int)(2 * sizeof(v)) - 1; i >= 0; i--) {
+	unsigned nib = (unsigned)((v >> (4 * i)) & 0xf);
+	if (nib || k || i == 0) out[k++] = d[nib];
+    }
+    out[k] = '\0';
+}
+
+static void csp_ro_segv(int sig, siginfo_t* si, void* uc)
+{
+    void*  bt[24];
+    char   hex[24];
+    int    n;
+    (void)uc;
+
+    if ((const char*)si->si_addr < csp_ro_lo ||
+	(const char*)si->si_addr >= csp_ro_hi) {
+	signal(sig, SIG_DFL);           // not ours -- let it die normally
+	raise(sig);
+	return;
+    }
+    csp_ro_write("\n*** RODATA read without an ro_ accessor: csp_ro+0x");
+    csp_ro_hex(hex, (unsigned long)((const char*)si->si_addr - csp_ro_lo));
+    csp_ro_write(hex);
+    csp_ro_write("\n*** On AVR this reads the data space at a flash address.\n");
+
+    // Best effort from here. -rdynamic gives names instead of offsets; a hang
+    // in here costs the stack, not the finding.
+    n = backtrace(bt, (int)(sizeof(bt)/sizeof(bt[0])));
+    backtrace_symbols_fd(bt, n, STDERR_FILENO);
+    _exit(90);                          // distinct from a plain crash
+}
+
+static void csp_ro_trap(void)
+{
+    struct sigaction sa;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = csp_ro_segv;
+    sa.sa_flags = SA_SIGINFO;
+    sigaction(SIGSEGV, &sa, NULL);
+}
+#endif
 
 int main(int argc, char** argv)
 {
@@ -1420,8 +1952,10 @@ int main(int argc, char** argv)
     const char* rom_prefix = "rom";
     unsigned rom_role = CSP_ROLE_ROM;
     unsigned rom_generation = 0;
-    // stdin, the CAN socket, and one slot per bound UDP port.
-    struct pollfd pfd[2 + CSP_UDP_MAXSOCK];
+    // stdin, the CAN socket, one slot per bound UDP port, and two per TCP port
+    // (the listener and the connection on it).
+    struct pollfd pfd[2 + CSP_UDP_MAXSOCK + 2*CSP_TCP_MAXSOCK
+		      + CSP_UART_MAXPORT];
     nfds_t pfd_max = (nfds_t)(sizeof(pfd)/sizeof(pfd[0]));
     nfds_t nfds = 0;    // the FIXED part: stdin and CAN, whose slots never move
     int can_slot = 0;   // index of the CAN socket in pfd (0 = not polled)
@@ -1430,6 +1964,10 @@ int main(int argc, char** argv)
     int given = 0;    // was a program handed to us (file or stdin)?
     int anyd;
 
+#if defined(CSP_RO_POISON)
+    // FIRST, before anything reads a string from the core's RODATA.
+    csp_ro_init();
+#endif
     file_output = stdout;
 
     while (1) {
@@ -1468,6 +2006,9 @@ int main(int argc, char** argv)
 #endif
 	case 'e': eeprom_file = optarg; break;
 	case 1001: can_iface = optarg; break;
+	case 1014:   // --uart=[<unit>:]<device>: give the host a serial port
+	    uart_add(optarg);
+	    break;
 	case 1010:   // --flash=FILE: back the simulated flash with a file
 	    csp_flash_host_file(optarg);
 	    break;
@@ -1958,8 +2499,16 @@ loop:
 
     // /pause freezes execution: keep servicing interactive input (above) so
     // /resume and edits still work, but run no input/cycle/commit/output.
-    if (state.paused)
+    //
+    // THE ROUTES STILL RUN. They are not rules -- they move bytes between two
+    // transports and touch nothing the pause is protecting. And they have to:
+    // /upgrade pauses the node for the duration of a flash write, so a node
+    // being upgraded OVER a route would stop reading the very link the image is
+    // arriving on. It accepted `/upgrade A force` and then went deaf.
+    if (state.paused) {
+	csp_route_run(&state);
 	goto loop;
+    }
 
     csp_input(&state);
     if (input_file) {
@@ -2022,7 +2571,7 @@ loop:
 	// datagram spun a core flat between packets, 2.0 s of CPU per 2.0 s of
 	// waiting, measured.
 	nfds_t pn = poll_set(pfd, nfds, pfd_max);
-	if (csp_can_active(&state) && (pn > 0)) {
+	if (csp_io_active(&state) && (pn > 0)) {
 	    // Bounded even when a frame would wake us, so -T still expires
 	    // while the bus is quiet.
 	    if ((tmo < 0) || (tmo > 100)) tmo = 100;
@@ -2041,7 +2590,7 @@ loop:
     if (virtual_time && !input_done) goto loop;  // more input rows to feed
     if (anyd) goto loop;
     if (state.es.wait_ms != NOTIMEOUT) goto loop;
-    if (csp_can_active(&state)) goto loop;   // a frame may still arrive
+    if (csp_io_active(&state)) goto loop;   // a frame may still arrive
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     if (state.reactive && csp_pending(&state)) goto loop;
 #endif

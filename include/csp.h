@@ -68,12 +68,79 @@ typedef unsigned bool_t;
 #define CSP_STR_BYTES  128
 #else
 #define RODATA
+
+#if defined(CSP_RO_POISON)
+// A SECOND ADDRESS SPACE FOR THE HOST, so a read that should have gone through
+// an ro_ accessor faults here instead of quietly working -- and being wrong only
+// on AVR, where nobody looks until a board will not boot.
+//
+// How it is built (port/csp_linux.c has the other half, utils/ro_ld.sh the
+// linker fragment):
+//
+//   1. ld gathers the CORE objects' .rodata into its own page-aligned section
+//      `csp_ro`. By OBJECT FILE, so nothing has to be annotated -- a table that
+//      forgot its RODATA marker is covered too, which is the whole point.
+//   2. At startup csp_ro_init() mmaps a copy, then mprotect(PROT_NONE)s the
+//      original. The bytes now live somewhere the code does not name.
+//   3. ro_* adds the delta. A plain `err_tab[i]` does not, and takes SIGSEGV.
+//
+// The delta is computed at run time rather than by the linker, because Linux
+// loads at p_vaddr and ignores p_paddr -- an LMA/VMA split, which is how this
+// works on bare metal, does nothing in a hosted process. Computing it at startup
+// survives ASLR as a bonus.
+//
+// RANGE-CHECKED, and it has to be: ro_memcmp is called BOTH ways round --
+// ro_memcmp(s->ptr, s_low, 3) has RAM first, ro_memcmp(hdr.magic, MAGIC, 4) has
+// RAM first too, and on AVR the PROGMEM side is the second argument while other
+// accessors take the first. Translating a pointer that is not in the section
+// would corrupt the RAM side. So the test is on the ADDRESS, not on the
+// argument position: outside the section, the pointer passes through unchanged.
+//
+// One compare per read, in a build that exists to find bugs. Not shipped.
+extern const char* csp_ro_lo;      /* section bounds, set by csp_ro_init */
+extern const char* csp_ro_hi;
+extern long        csp_ro_delta;   /* shadow - original */
+
+static inline const void* csp_ro_real(const void* p)
+{
+    const char* c = (const char*)p;
+    return ((c >= csp_ro_lo) && (c < csp_ro_hi))
+	? (const void*)(c + csp_ro_delta) : p;
+}
+
+#define ro_byte(p)      (*(const uint8_t*)csp_ro_real(p))
+#define ro_word(p)      (*(const uint16_t*)csp_ro_real(p))
+#define ro_dword(p)     (*(const uint32_t*)csp_ro_real(p))
+#define ro_ptr(p)       (*((const void* const*)csp_ro_real(p)))
+#define ro_memcmp(a,b,n) memcmp(csp_ro_real(a), csp_ro_real(b), (n))
+#define ro_memcpy(d,s,n) memcpy((d), csp_ro_real(s), (n))
+
+// An address the ORDINARY machinery can read.
+//
+// For the places that must hand a plain pointer to something else instead of
+// walking it a byte at a time -- fprintf("%s", ...), a libc string function --
+// and where doing it a byte at a time would mean reimplementing printf. Under
+// the poison it hands back the shadow; otherwise the pointer itself.
+//
+// Safe to apply to ANY pointer: the translation is range-checked, so one that
+// is not in the section comes back unchanged. That is what makes it usable at a
+// call site where the argument is sometimes RODATA and sometimes RAM.
+//
+// HOST ONLY, and deliberately undefined on a board: there is no shadow there
+// and a flash pointer cannot be made readable by arithmetic. A use that reaches
+// a target is a compile error, which is the point -- on AVR the answer is
+// ro_byte in a loop, not a converted pointer.
+#define ro_maybe_ptr(p) ((const char*)csp_ro_real(p))
+
+#else
 #define ro_byte(p)      (*(p))
 #define ro_word(p)      (*(p))
 #define ro_dword(p)     (*(p))
 #define ro_ptr(p)       (*((const void**)(p)))
 #define ro_memcmp(a,b,n) memcmp((a), (b), (n))
 #define ro_memcpy(d,s,n) memcpy((d), (s), (n))
+#define ro_maybe_ptr(p) ((const char*)(p))   /* see the poisoned branch above */
+#endif  /* CSP_RO_POISON */
 // BYTES, not a bit width. It was `1 << STRING_BITS` because a name field held a
 // byte OFFSET into this buffer, so its size and the format ceiling were the same
 // number and had to be a power of two. A name is a HANDLE now -- the Nth string
@@ -450,8 +517,40 @@ extern int ro_strcpy(char* dst, rostring_t src, int max);
 #define CURRENT      ((1 << OBJ_BITS)-1)     // current obj
 #define MAX_INDICES  (1UL << INDEX_BITS)   // 1<<16: needs the long on a 16-bit int
 #define MAX_REGS     (1 << REG_BITS)
-#define MAX_INSTRS   (1 << INSTR_BITS)
-#define MAX_DECLS    (1 << DECL_BITS)
+// 1L, for the same reason MAX_INDICES needs the UL, and it is the same trap one
+// bit lower down: INSTR_BITS and DECL_BITS are 15, and on AVR an `int` is
+// SIXTEEN bits, so `1 << 15` is INT_MIN -- minus 32768, not plus.
+//
+// What that did, measured on a mega (2026-09-09): every guard that reads
+//
+//     if ((st->ps.nd - st->rom_nd) >= MAX_DECLS || !mem_fits(...))
+//
+// compares an int against a NEGATIVE ceiling and is therefore always true. The
+// first declaration setup tried to add was refused, and the board said
+// `setup failed: out of memory` with an empty program and 4184 bytes of free
+// pool. rom_scan_instr's `for (p = 0; p <= MAX_INSTRS; p++)` ran zero times for
+// the same reason, and /memory printed the ceiling as `-` because mem_row takes
+// an int32_t and saw a negative number -- which is what made it visible.
+//
+// A long is right on both: the comparisons promote to it and the value is the
+// 32768 the encoding actually allows.
+// MINUS ONE, and that is not an off-by-one -- it is what makes the value fit an
+// `int` on a target where an int is sixteen bits.
+//
+// An instruction index is INSTR_BITS wide, so the largest one is 32767, and
+// that fits an int16 exactly. The COUNT 32768 does not. alloc_instr_ptr uses
+// the ceiling as a scratch sentinel:
+//
+//     if (st->cs->ap == NULL) {
+//         i = MAX_INSTRS;        // int i -- 32768 truncates to -32768 on AVR
+//
+// and hands it back through `int* pos`, where a caller may use it as an index:
+// ram_instr_at(st, -32768) is a wild pointer, and on AVR a silent one.
+//
+// So the cap is the largest INDEX rather than the count. It costs one slot out
+// of 32768 and removes a value that cannot be represented where it is stored.
+#define MAX_INSTRS   ((1L << INSTR_BITS) - 1)
+#define MAX_DECLS    ((1L << DECL_BITS) - 1)
 // The input/output/timer lists and the buffer heap are sized to what the program
 // actually declares (csp_estimate -> csp_rt_start), so they have no MAX_* here.
 // What remains are limits the ENCODING imposes, not reservations: an index must
@@ -870,6 +969,9 @@ typedef enum {
     // version of themselves.
     TR_CONSOLE = 6,
     TR_REPL    = 7,
+    // streams
+    TR_TCP     = 8,
+    TR_UART    = 9,
 } transport_t;
 
 // Is this transport an end of the node's own console wire? Both ends share
@@ -922,15 +1024,24 @@ typedef enum {
 // endpoint for every transport but UDP, whose address and port do not fit in
 // one -- see csp_buf_t.port.
 //
-//   TR_CAN   the frame id
-//   TR_I2C   bus << 16 | addr << 8 | reg
-//   TR_SPI   bus << 24 | cs_port << 20 | cs_pin << 16 | command
+//   TR_CAN   the frame id:32
+//   TR_I2C   bus:8,addr:8,reg:8  (24 bit)
+//   TR_SPI   bus:4,port:4,pin:5,cmd:16 (29 bit)
 //   TR_UDP   the IPv4 address in host order; 0 means "listen on any"
+//   TR_TCP   the IPv4 address in host order; 0 means "accept from any"
+//   TR_UART  unit << 28 | baud. The board has already muxed the pins -- a
+//            program names a UNIT, the way `i2c 3` and `spi 1` do -- so one
+//            constant carries the whole endpoint and there is no pair to keep
+//            adjacent. Baud 0 means "leave the board's own setting alone".
 #define TR_I2C_XREF(bus,addr,reg)  (((uint32_t)(bus) << 16) | \
 				    ((uint32_t)(addr) << 8) | (uint32_t)(reg))
 #define TR_I2C_BUS(x)   (((x) >> 16) & 0xff)
 #define TR_I2C_ADDR(x)  (((x) >> 8) & 0xff)
 #define TR_I2C_REG(x)   ((x) & 0xff)
+
+#define TR_UART_XREF(unit,baud) (((uint32_t)(unit) << 28) | (uint32_t)(baud))
+#define TR_UART_UNIT(x)  (((x) >> 28) & 0x0f)
+#define TR_UART_BAUD(x)  ((x) & 0x0fffffffu)
 
 #define TR_SPI_XREF(bus,po,pi,cmd) (((uint32_t)(bus) << 24) | \
 				    ((uint32_t)(po) << 20) | \
@@ -939,6 +1050,12 @@ typedef enum {
 #define TR_SPI_PORT(x)  (((x) >> 20) & 0x0f)
 #define TR_SPI_PIN(x)   (((x) >> 16) & 0x1f)
 #define TR_SPI_CMD(x)   ((x) & 0xffff)
+
+// One #route, resolved from declaration indices to buffer ids at rt_start.
+typedef struct {
+    index_t src;
+    index_t dst;
+} csp_rpair_t;
 
 // One per unique buffer. RAM table, filled at start.
 typedef struct {
@@ -973,7 +1090,7 @@ typedef struct {
     uint32_t xref;      // pin-number / can-id / i2c or spi endpoint / IPv4
     index_t  owner;     // the decl (with object) whose leaf IS this buffer, or
 			// BAD_INDEX. Set by setup_buffer, which is the only
-			// place that knows both ends. can_mark_fields used to
+			// place that knows both ends. buf_mark_fields used to
 			// find it by scanning every declaration -- a flash read
 			// per decl, per received CAN frame -- and that scan
 			// could only ever match a GLOBAL, since it compared a
@@ -997,6 +1114,10 @@ typedef struct {
 // quiet, which is a line you scroll past in a banner -- and afterwards there is
 // NOTHING to distinguish "nobody is sending" from "this program was never
 // listening". /state marks it, which is the whole reason the flag exists.
+// This buffer is a ROUTE SOURCE: the route drains it, not the ordinary input
+// pass. One owner per buffer -- with both pulling, the chunk the input pass
+// took would land in the buffer and never be sent.
+#define BUF_F_ROUTED 0x40
 #define BUF_F_DEAD   0x20
 #define BUF_F_BUSY   0x10  // TR_IS_SYNC: a transaction is in flight. Set when
 			   // csp_buf_output starts one, cleared when
@@ -1267,6 +1388,17 @@ typedef enum {
     DECL_BUFFER=12,         // 'buffer' (heap-backed storage)
     DECL_VIEW=13,           // synthetic bit/byte view into a buffer (Buf[a..b])
 
+    // #route <src> <dst> -- bytes arriving at one buffer go out another, with
+    // no rule in between. A rule runs ONCE per cycle and a buffer assignment
+    // carries four bytes, so a relay written as rules tops out around 36 B/s
+    // whatever the link can do. A route loops, and it chunks by the SINK's
+    // size -- which is also the framing that had to be hand-written before,
+    // and got written wrong.
+    //
+    // THE LAST FREE DECL TYPE. decl_t is four bits, 15 is DECL_END_MARK, and
+    // this is 14: the next new declaration kind needs the field widened, which
+    // is a ROM format change. Spent here deliberately (Tony, 2026-09-09).
+    DECL_ROUTE=14,
     DECL_AVAIL,   // SENTINEL, not a decl type: see OP_AVAIL.
     DECL_END_MARK = 0xf
 } decl_t;
@@ -1708,9 +1840,9 @@ typedef struct PACKED {
 typedef struct PACKED {
     DECL_COMMON;
     unsigned nbytes:10;     // 1..1023; a CAN FD frame is 64 bytes
-    // 3 bits, not 2: TR_UDP is 5. The word had four spare bits, so this costs
+    // 4 bits, not 2: TR_UDP is 5. The word had four spare bits, so this costs
     // nothing -- csp_bufdecl_t is 8 bytes before and after.
-    unsigned transport:3;   // transport_t: TR_NONE plain RAM, TR_CAN a frame
+    unsigned transport:4;   // transport_t: TR_NONE plain RAM, TR_CAN a frame
     unsigned id:INDEX_BITS; // the constant holding this transport's endpoint:
 			    // a frame id, a packed bus/addr/reg, or an IPv4
 			    // address. See transport_t for the packings.
@@ -1725,6 +1857,15 @@ typedef struct PACKED {
 			    // to compile if they did not come out adjacent, so
 			    // the assumption cannot rot quietly.
 } csp_bufdecl_t;
+
+// #route. Two buffer DECLARATIONS -- resolved to buffer ids at setup, so the
+// pairing survives a rebuild that renumbers nothing and a ROM image that
+// carries the declarations and not the tables.
+typedef struct PACKED {
+    DECL_COMMON;
+    unsigned src:INDEX_BITS;   // where the bytes come from
+    unsigned dst:INDEX_BITS;   // and where they go
+} csp_route_t;
 
 typedef struct PACKED {
     DECL_COMMON;
@@ -1754,6 +1895,7 @@ typedef union {
     csp_analog_t   an;
     csp_field_t    ca;
     csp_bufdecl_t  bf;
+    csp_route_t    rt;
     csp_timer_t    tm;
     // csp_statedecl_t sd;
     csp_states_t   s6;
@@ -1765,34 +1907,26 @@ typedef union {
 // is DECL_COMMON's `name` -- csp_states_t lines its first three fields up with
 // DECL_COMMON on purpose -- so anything reading `d.name` sees the block's first
 // state and nothing has to special-case it.
-static inline sindex_t csp_states_name(const csp_decl_t* d, int k)
-{
-    switch (k) {
-    case 0: return d->s6.name;
-    case 1: return d->s6.name2;
-    case 2: return d->s6.name3;
-    case 3: return d->s6.name4;
-    case 4: return d->s6.name5;
-    case 5: return d->s6.name6;
-    default: return 0;
-    }
-}
+// SLOT k STARTS AT BIT 8 + k*NAMEID_BITS. The fields are regular -- probed, not
+// assumed; tests/states_layout.c is what holds them to it -- and that regularity
+// is what lets ONE routine replace six.
+//
+// It used to be a six-armed switch, inline, and on an AVR that is six
+// read-modify-writes of a 9-bit field at a NON-BYTE-ALIGNED offset: 298
+// instructions in add_state, of which ~94 were andi/or/ldd/std/lsr/bst/bld/swap
+// and only 11 were calls. The read side cost 202 bytes on its own, for a switch
+// that only extracts a field.
+//
+// Bit at a time is slower and much smaller, which is the trade this is for --
+// and it runs once per state at boot, not in a cycle.
+#define CSP_STATES_BIT0 8
+
+extern sindex_t csp_states_name(const csp_decl_t* d, int k);
 
 // Write slot k. The counterpart to the reader above, and the only place a slot
 // is assigned -- a states block must never be filled through DECL_COMMON, whose
 // `vt` and `res` fields sit on top of name2 and name3.
-static inline void csp_states_set_name(csp_decl_t* d, int k, sindex_t pos)
-{
-    switch (k) {
-    case 0: d->s6.name  = pos; break;
-    case 1: d->s6.name2 = pos; break;
-    case 2: d->s6.name3 = pos; break;
-    case 3: d->s6.name4 = pos; break;
-    case 4: d->s6.name5 = pos; break;
-    case 5: d->s6.name6 = pos; break;
-    default: break;
-    }
-}
+extern void csp_states_set_name(csp_decl_t* d, int k, sindex_t pos);
 
 typedef enum {
     ERR_OK = 0,
@@ -1830,6 +1964,11 @@ typedef enum {
     // the thing that is wrong -- the SHAPE is, and "number out of range" would
     // send the reader looking at the wrong end of it.
     ERR_BAD_IPV4,
+    // Words the pattern never consumed. ERR_OPTS_AFTER_PIN says the same thing
+    // for a pin declaration and names the pin in its text, which is a lie on a
+    // #buffer or a #route -- and a wrong message is how a real fault gets read
+    // as a typo somewhere else.
+    ERR_TRAILING_WORDS,
     // The arena could not hold the program's derived tables (view, heap, buffer
     // table, reactive graph). Distinct from ERR_TOO_MANY_DECLARATIONS, which is
     // about a COUNT hitting an encoding limit: this one is about bytes, and it
@@ -2137,24 +2276,28 @@ typedef struct {
 // Verified on host gcc, avr-gcc 4.8.1 and arm-none-eabi 7.2.1, all surviving
 // Arduino's -ffunction-sections -fdata-sections -Wl,--gc-sections.
 //
-// The entries are ADDRESSES of image objects, and the array is deliberately
-// NOT const-qualified as a whole. On AVR that puts it in .data -- RAM, two bytes
-// per image -- and a plain read works. Made read-only it would be an orphan
-// section placed after all the code: measured at 0x17d30 on a 98 kB mega
-// firmware, which is past the 64 kB that memcpy_P/pgm_read_byte can reach, so
-// every entry would read back as garbage. Six bytes of RAM for three images is
-// the cheaper problem.
-// The POINTER is const too, not just what it points at. Without the second
-// const the object is writable, so gcc emits `csp_images` as a writable section
-// and the linker -- which has no entry for this name in any of the platform
-// scripts, so it places it as an orphan -- puts it in RAM right after .data.
-// It then falls OUTSIDE __data_start__/__data_end__, so the startup copy never
-// initialises it, and outside .bss, so nothing zeroes it either: the entry read
-// back whatever was in RAM at power-on. It also pushed .bss along, which is
-// where "changing start of section .bss by 4 bytes" came from.
+// The entries are ADDRESSES of image objects, and the array is const ALL THE WAY
+// -- the pointer as well as what it points at. Without the second const the
+// object is writable, gcc emits `csp_images` as a writable section, and the
+// linker -- which has no entry for this name in any of the platform scripts, so
+// it places it as an orphan -- puts it in RAM right after .data. It then falls
+// OUTSIDE __data_start__/__data_end__, so the startup copy never initialises
+// it, and outside .bss, so nothing zeroes it either: the entry read back
+// whatever was in RAM at power-on. It also pushed .bss along, which is where
+// "changing start of section .bss by 4 bytes" came from.
 //
 // Const all the way makes it read-only, so it lands in flash with the rest of
 // the image it names -- initialised, and costing no RAM.
+//
+// THAT IS TRUE ON ARM AND FALSE ON AVR, and the difference is not the
+// qualifier, it is that AVR has two address spaces. A read-only orphan lands in
+// FLASH; the code above reads the array as DATA; and a 16-bit data address
+// cannot name a flash address on a part with more than 64 kB of it. Reading it
+// with pgm_read_word instead does not help either, because LPM reaches the
+// first 64 kB and the section lands past that on exactly the images big enough
+// to care. Both AVR placements were measured and both are wrong -- see the
+// CSP_NO_IMAGE_REGISTRY block in csp_config.h, which is why every AVR build
+// takes the switch below.
 // CSP_NO_IMAGE_REGISTRY drops the custom section entirely. The registry answers
 // "what did this build LINK", which only /images and csp_find_image ask -- the
 // firmware's own image is reached through `rom_image`, so a board without the
@@ -2353,6 +2496,11 @@ typedef struct _csp_rt_t
     csp_view_t* view;             // per-leaf view (own alloc, sized to estimate)
     index_t    view_cap;          // leaves view[]/dset hold (csp_estimate.nleaf);
 				  // rt_start reruns on any decl add so it stays >= max st_index
+    // ROUTES: pairs of buffer ids, one per #route, built at rt_start. A pair
+    // rather than a field on the buffer -- routes are few and buffers are many,
+    // so four bytes per ROUTE beats four per buffer.
+    csp_rpair_t* route;
+    index_t    nroute;
     csp_buf_t*  buf;              // buffer table (own alloc, sized to estimate)
     index_t    buf_cap;          // buffers the table can hold (csp_estimate.nbuf)
     index_t    nbuf;              // number of buffers allocated
@@ -2711,6 +2859,13 @@ extern csp_image_ref_t ro_ref(const csp_image_ref_t* p);   // ditto: 16 bytes
 static inline csp_sect_t ro_sect(const csp_sect_t* p)
 { csp_sect_t v; memcpy_P(&v, p, sizeof(v)); return v; }
 
+#elif defined(CSP_RO_POISON)
+#define ro_decl(p)   (*(const csp_decl_t*)csp_ro_real(p))
+#define ro_copy_decl(p,d) (*(d)) = ro_decl(p)
+#define ro_instr(p)  (*(const csp_instr_t*)csp_ro_real(p))
+#define ro_header(p) (*(const csp_image_header_t*)csp_ro_real(p))
+#define ro_ref(p)    (*(const csp_image_ref_t*)csp_ro_real(p))
+#define ro_sect(p)   (*(const csp_sect_t*)csp_ro_real(p))
 #else
 #define ro_decl(p)  (*(p))
 #define ro_copy_decl(p,d) (*(d)) = (*(p))
@@ -2779,12 +2934,39 @@ static inline char* csp_ram_str_at(csp_rt_t* st, sindex_t r)
     return csp_seg_slot(st, h, 1) + (r & CSP_STR_SEG_MASK);
 }
 
+// THE one place identifier text is read, and therefore the one place that has
+// to know which address space it is in.
+//
+// Identifier text lives in DECL_SEGMENT runs, and a run is reached the same way
+// whether its slots came from flash or from the pool -- but READING it is not
+// the same. csp_seg_slot hands back &rom_p.instr[i] for a run that arrived with
+// the IMAGE, and on AVR that is a FLASH address. Dereferenced with a plain `*`
+// it reads the DATA space at the same number, which is not the text and on a
+// part with more RAM than 64 K of flash is not anything.
+//
+// What that looked like, on a mega (2026-09-09): every length byte read as 0,
+// so csp_str_recount's walk -- `ofs += csp_str_byte(ofs) + 1` -- stepped one
+// byte per string and counted 61 names in 61 bytes of text. `/memory` said
+// `string 61` and `names 61`, the same number twice, where the host said 61 and
+// 11. Setup then failed with "out of memory" laying out tables sized from a
+// name count five times too big.
+//
+// csp_get_instr has always done this correctly (ro_instr for the ROM range);
+// this is the same split, one level down. Every segment-aware helper above --
+// csp_str_len, csp_str_char, csp_str_ofs, and csp_str_ncmp/eq/eq_ro in
+// csp_rt.c -- is built on this one read, which is why fixing it here fixes all
+// of them.
+//
+// A run's payload slots are contiguous, so the whole record is on one side of
+// rom_nn and the header's own slot decides for all of it.
 static inline uint8_t csp_str_byte(csp_rt_t* st, sindex_t pos)
 {
-    // No ROM/RAM split any more. Identifier text lives in DECL_SEGMENT runs,
-    // and a run is reached the same way whether its slots came from flash or
-    // from the pool -- so rom_strp is 0 and this is one lookup.
-    return (uint8_t)*csp_ram_str_at(st, pos);
+    index_t     h = st->str_seg[pos >> CSP_STR_SEG_BITS];
+    const char* p = csp_seg_slot(st, h, 1) + (pos & CSP_STR_SEG_MASK);
+
+    if ((index_t)(h + 1) < st->rom_nn)
+	return ro_byte((const uint8_t*)p);
+    return (uint8_t)*p;
 }
 
 // Step from the end of one segment's text to the start of the next.
@@ -2912,7 +3094,7 @@ typedef struct PACKED {
 
 // Built-in function table (defined in csp_rt.c)
 extern const csp_func_t csp_builtin_funcs[];
-extern const uint8_t csp_num_builtin_funcs;
+extern const uint8_t csp_num_builtin_funcs RODATA;  /* read with ro_byte */
 
 extern csp_func_fn func_fn(const csp_func_t* fn, int i, int rom);
 extern uint8_t func_arity(const csp_func_t* fn, int i, int rom);
@@ -3060,7 +3242,25 @@ static inline int decl_name_empty(csp_rt_t* st, index_t ix)
 // A string is NOT nul-terminated. The length byte in front of it is the only
 // terminator there is -- which is what lets a name cost one byte of overhead
 // instead of two, and on a 3.8-character mean name that was 17% of the table.
-#define DNAME(st, ix)  decl_name_len((st), (ix)), decl_name((st), (ix))
+//
+// The POINTER half goes through ro_maybe_ptr, because decl_name hands back a raw
+// pointer that lands in the ROM IMAGE for a ROM-range name and in the arena
+// otherwise -- and the caller cannot tell which. On AVR that is the difference
+// between flash and RAM (see decl_name_len's note); under CSP_RO_POISON on the
+// host it is the difference between the shadow and a page that is not there.
+// Either way the caller is about to hand it to printf, which reads it as
+// ordinary memory.
+//
+// This is what csp_str_at's note has called a "copy-out API -- deferred". It is
+// not a copy: the translation is an address, and it is the identity outside the
+// poisoned section. That is enough for printf and costs nothing in an ordinary
+// build.
+//
+// HOST ONLY, and it always was: the two users are port/csp_dump.c and a DBG()
+// in csp_compile.c, which expands to nothing off the host. A board lister prints
+// a name with csp_print_str_at, which walks it a byte at a time and works in
+// either address space.
+#define DNAME(st, ix)  decl_name_len((st), (ix)), ro_maybe_ptr(decl_name((st), (ix)))
 
 // `cs` is the compiler's state, or NULL for a node that only runs images.
 extern int     csp_rt_init(csp_rt_t*,  int reactive, csp_cstate_t* cs);
@@ -3294,6 +3494,18 @@ extern void csp_output(csp_rt_t* st);
 // There is no MTU constant to go with it: a datagram is read straight into the
 // buffer it feeds, so the declared size IS the limit and a longer one is
 // truncated -- which is what recv does anyway.
+// Chunks a route moves per cycle. A bound is required for the same reason every
+// other burst here has one -- a fast source must not own the cycle -- and it is
+// larger than the frame bursts because this is where the throughput went: a
+// relay written as RULES managed four bytes a cycle.
+//
+// NOTHING BLOCKS. A push that fails leaves the chunk in the sink with BUF_F_TX
+// set, so the ordinary output pass retries it next cycle, and the route stops
+// for this one. Waiting for a link to drain would stall the whole machine.
+#ifndef CSP_ROUTE_BURST
+#define CSP_ROUTE_BURST 16
+#endif
+
 #ifndef CSP_UDP_RX_BURST
 #define CSP_UDP_RX_BURST 32
 #endif
@@ -3309,9 +3521,13 @@ extern int  csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t
 // Called from the driver's csp_input/csp_output.
 extern void csp_can_input(csp_rt_t* st);
 extern void csp_can_output(csp_rt_t* st);
-// 1 if the program has an inbound frame, i.e. the driver loop must keep running
-// even with no timers and nothing changing.
-extern int  csp_can_active(csp_rt_t* st);
+// 1 if the program has an INBOUND anything -- a frame, a datagram, a stream, a
+// sensor read -- i.e. the driver loop must keep running even with no timers and
+// nothing changing.
+//
+// Named csp_can_active until 2026-09-09, which its own comment had already
+// stopped meaning.
+extern int  csp_io_active(csp_rt_t* st);
 
 // --- the other three transports ---------------------------------------------
 //
@@ -3341,6 +3557,45 @@ extern int csp_udp_recv(csp_rt_t* st, uint16_t port, uint32_t accept,
 			uint8_t* data, uint16_t* len);
 extern int csp_udp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
 			const uint8_t* data, uint16_t len);
+
+// TCP is UDP's surface over a STREAM, and the difference is what the hooks have
+// to promise.
+//
+//   A DATAGRAM IS WHOLE OR ABSENT. A stream is bytes, so csp_tcp_recv returns
+//   as many as have arrived -- up to *len -- and says how many in *len. A
+//   record split across two segments arrives split, and `.dlc` is where that
+//   shows. Fixed-size records are the assumption for now; a length prefix or a
+//   separator is what makes them whole, and neither is built.
+//
+//   NOTHING IS EVER DROPPED. UDP throws away what it cannot take because a
+//   newer datagram supersedes an older one; a byte has no newer version of
+//   itself, and the bytes left in the kernel ARE the back-pressure that makes
+//   it a stream. So csp_tcp_recv takes what fits and leaves the rest.
+//
+//   THE CONNECTION IS THE PORT'S BUSINESS. An `in` buffer listens and accepts;
+//   an `out` buffer connects. Both are non-blocking and both retry, so a peer
+//   that is not up yet is not an error -- it is a 0 from recv and a -1 from
+//   send, which is the same thing a quiet bus looks like.
+//
+// csp_tcp_recv: 1 = bytes were read, 0 = nothing pending, -1 = no endpoint.
+// csp_tcp_send: 0 = written, -1 = no connection yet.
+extern int csp_tcp_recv(csp_rt_t* st, uint16_t port, uint32_t accept,
+			uint8_t* data, uint16_t* len);
+extern int csp_tcp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
+			const uint8_t* data, uint16_t len);
+
+// UART: a STREAM like TCP, and the same two promises -- take what has arrived,
+// keep what will not fit. What it does NOT have is a connection: a wire is
+// either there or quiet, and there is no way to tell which. So a UART never
+// reports an error for "nobody is talking"; it reports 0, the same as a bus
+// with nothing on it.
+//
+// `xref` is TR_UART_XREF(unit, baud). Baud 0 leaves the board's own setting.
+extern int csp_uart_open(csp_rt_t* st, uint32_t xref);
+extern int csp_uart_recv(csp_rt_t* st, uint32_t xref, uint8_t* data,
+			 uint16_t* len);
+extern int csp_uart_send(csp_rt_t* st, uint32_t xref, const uint8_t* data,
+			 uint16_t len);
 
 // NOT A HOOK: a port that can WAIT on its transport says so its own way. The
 // host has csp_can_pollfd() and csp_udp_pollfd(slot) in port/csp_linux.c, used
@@ -3410,6 +3665,14 @@ extern void csp_con_input(csp_rt_t* st, char c);
 #endif
 // Is the console diverted right now? For /state, which is the only thing that
 // can tell a user why their keystrokes are going nowhere.
+// Room for another keystroke -- csp_line_space's counterpart for the diverted
+// path. A port's read loop must honour BOTH, or a paste larger than the ring is
+// lost without a word.
+extern int  csp_con_space(void);
+// How many bytes this end of the wire can take right now. A route asks before
+// it pulls, because what it pulls and cannot hand on is gone.
+extern uint16_t csp_con_room(csp_rt_t* st, int which);
+extern int  csp_con_space(void);
 extern int  csp_con_diverted(void);
 // Bytes the tap could not keep, because the ring was full while nothing was
 // draining it. Reported rather than papered over: a listing with a silent hole
@@ -3437,10 +3700,14 @@ extern int csp_spi_start(csp_rt_t* st, uint32_t xref, uint8_t* data,
 			 uint16_t len, int is_read);
 extern int csp_spi_done(csp_rt_t* st, uint32_t xref, uint16_t* len);
 
-// One pass over every buffer with a transport. csp_can_input/output are these
-// under their old names -- a driver calls whichever it has always called.
+// One pass over every buffer with a transport EXCEPT CAN. A driver calls both
+// these and csp_can_input/output, which are a separate pair and not old names
+// for these: CAN arrives by frame id and is dispatched to whichever buffers
+// carry that id, which is a different walk from "ask each buffer's endpoint".
 extern void csp_buf_input(csp_rt_t* st);
 extern void csp_buf_output(csp_rt_t* st);
+// The #routes, moved after every rule has run. Called from csp_buf_output.
+extern void csp_route_run(csp_rt_t* st);
 
 extern void csp_input_timer(csp_rt_t* st);
 extern void csp_output_timer(csp_rt_t* st);
@@ -3465,6 +3732,27 @@ extern int stack_used();
 extern char* csp_arena_top;
 extern long  csp_stack_low;
 extern void* csp_stack_low_fn;
+
+// Survives a reset. Only .bss is cleared by the startup code, so a variable
+// placed outside it keeps what it held -- which is the only way to learn
+// anything about a fault on a part that answers a crash by starting over.
+// Plain statics everywhere else: the section only exists on AVR and gcc, and
+// nothing else needs it.
+#if defined(__AVR__)
+#define CSP_NOINIT __attribute__((section(".noinit")))
+#else
+#define CSP_NOINIT
+#endif
+// A RING, not a single slot. One slot always names the most frequently entered
+// LEAF -- the millisecond tick, or the console tap that runs once per printed
+// character -- because that is genuinely what ran last, and it says nothing
+// about how the program got there. Eight entries is a path.
+#define CSP_CRASH_TRACE 12
+extern void*    csp_crash_ring[CSP_CRASH_TRACE];
+extern uint8_t  csp_crash_dir[CSP_CRASH_TRACE];   /* 1 = entered, 0 = returned */
+extern uint8_t  csp_crash_at;      /* next slot to write */
+extern uint16_t csp_crash_magic;   /* 0xC5AF once main has run at least once */
+#define CSP_CRASH_MAGIC 0xC5AFu
 extern void  csp_stack_mark(void);
 #else
 #define csp_stack_mark() ((void)0)

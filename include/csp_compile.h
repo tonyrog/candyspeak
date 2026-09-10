@@ -65,6 +65,7 @@ extern csp_func_fn func_fn(const csp_func_t* fn, int i, int rom);
 extern uint8_t func_rtype(const csp_func_t* fn, int i, int rom);
 extern index_t lookup_decl_in(csp_rt_t* st, const tstr_t* name, int start, int stop);
 extern int mem_fits(csp_rt_t* st, size_t add);
+extern int csp_parse_route(csp_rt_t* st, token_t* tv, int ti, size_t n);
 extern csp_part_t part_from_tstr(const tstr_t* s);
 // The compiler's state, to hand to csp_rt_init. A driver that wants a node
 // which only runs images passes NULL there instead and never calls this.

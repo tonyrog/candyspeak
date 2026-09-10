@@ -21,16 +21,18 @@
 void csp_line_init(csp_line_t* st)
 {
     st->pos = 0;
-    st->cur = 0;
     st->fill = 0;
     st->ready = 0;
     st->ovf = 0;
     st->esc = 0;
-    st->refeed = 0;
     st->need_prompt = 1;
+#if !defined(CSP_LINE_SIMPLE)
+    st->cur = 0;
+    st->refeed = 0;
     // NOT the history: it survives a /clear and a /load, because what you typed
     // is yours and has nothing to do with what the program now contains.
     st->hist_at = st->hist_used;
+#endif
 }
 
 void csp_line_prompt(csp_line_t* st)
@@ -45,6 +47,19 @@ void csp_line_prompt(csp_line_t* st)
 int csp_line_space(csp_line_t* st)
 {
     return st->fill < st->buf_size;
+}
+
+// HOW MANY more it can take, not just whether it can take one.
+//
+// A reader that only knows "is there room" can offer a byte at a time and stop
+// when the answer turns false -- fine for a keyboard. A ROUTE cannot: it takes
+// a chunk off a transport before it knows where the chunk is going, and bytes
+// it cannot hand on are simply gone. Relaying a firmware image showed it: the
+// far node accepted `/upgrade A force` and then answered `ERR hex` to 2690
+// bytes with holes in them.
+uint16_t csp_line_room(csp_line_t* st)
+{
+    return (st->fill < st->buf_size) ? (uint16_t)(st->buf_size - st->fill) : 0;
 }
 
 // Done with the line at the front. Anything that arrived while it ran was stored
@@ -64,18 +79,28 @@ void csp_line_done(csp_line_t* st)
     uint16_t k;
 
     st->pos = 0;
-    st->cur = 0;
     st->fill = 0;
     st->ready = 0;
+#if !defined(CSP_LINE_SIMPLE)
+    st->cur = 0;
     // Cursor keys and history are OFF for the duration. csp_line_input is being
     // fed out of the very buffer it is writing into, and the whole thing rests
     // on "one byte in advances the write cursor by at most one". A recall puts
     // a whole line in at once, and the write would overtake the read.
     st->refeed = 1;
+#endif
     for (k = 0; k < n; k++)
 	csp_line_input(st, st->buf[src + k]);
+#if !defined(CSP_LINE_SIMPLE)
     st->refeed = 0;
+#endif
 }
+
+#if !defined(CSP_LINE_SIMPLE)
+
+// ============================================================
+// THE EDITOR -- everything from here to the collector at the bottom.
+// ============================================================
 
 // --- command history ---------------------------------------------------------
 //
@@ -424,3 +449,103 @@ void csp_line_input(csp_line_t* st, char c)
     }
     csp_flush();
 }
+
+#else  // CSP_LINE_SIMPLE
+
+// ============================================================
+// THE COLLECTOR -- gather bytes until a newline, and nothing else.
+// ============================================================
+//
+// What an exec-only node needs from its console: assemble a line, echo it, take
+// a backspace back, refuse one that did not fit, and hand it over. No cursor,
+// no history, no insert-in-the-middle -- and therefore none of the redraw
+// arithmetic that makes those work, which is where the bytes go.
+//
+// ESCAPE SEQUENCES ARE STILL DECODED, and then dropped. Skipping the decoder is
+// not the same as not having one: ESC itself is unprintable and vanishes, but
+// the '[' and the 'A' behind it are ordinary characters and would be typed into
+// the line. So the state machine stays; only the actions are gone.
+//
+// There is no re-feed flag either. csp_line_done still replays what arrived
+// behind a running line, and the invariant that makes that safe -- one byte in
+// advances the write cursor by at most one -- holds here by construction: the
+// only thing that ever grows the line is a single append.
+
+void csp_line_input(csp_line_t* st, char c)
+{
+    // A complete line is already waiting to run, so this byte belongs to a
+    // LATER line: queue it raw and let csp_line_done deal with it.
+    if (st->ready) {
+	if (st->fill < st->buf_size)
+	    st->buf[st->fill++] = c;
+	return;
+    }
+    // The prompt belongs immediately before the first character of a line, and
+    // this is the only place that knows one is starting -- the caller's own
+    // csp_line_prompt never runs during a re-feed out of the queue.
+    csp_line_prompt(st);
+
+    if (st->esc) {
+	if (st->esc == 1)
+	    st->esc = (uint8_t)(((c == '[') || (c == 'O')) ? 2 : 0);
+	else if ((c < '0') || (c > '9'))
+	    st->esc = 0;                // the final byte of ESC [ ... X
+	return;
+    }
+    if (c == ESCAPE) {
+	st->esc = 1;
+	return;
+    }
+
+    if ((c == NEWLINE) || (c == CARRIAGE_RETURN)) {
+	// ovf: a character had to be dropped because the buffer was full, so
+	// the line is REFUSED rather than run short. A truncated command is not
+	// a harmless partial, it is a different command -- `#disable 12` cut to
+	// `#disable 1` disables the wrong rule and says nothing.
+	if (st->ovf) {
+	    st->pos = 0;
+	    st->fill = 0;
+	    st->ovf = 0;
+	    csp_println();
+	    csp_print_lit("Error: line too long, max ");
+	    csp_print_uint(st->buf_size - 1);
+	    csp_print_line(" characters -- line ignored");
+	    csp_flush();
+	    // The next prompt goes here: no line was made ready, so the caller
+	    // never reaches the point where it would print one.
+	    st->need_prompt = 1;
+	    csp_line_prompt(st);
+	    return;
+	}
+	if (st->pos > 0) {
+	    st->buf[st->pos] = '\0';
+	    st->ready = 1;
+	    st->fill = (uint16_t)(st->pos + 1);   // the queue starts after the NUL
+	}
+	csp_println();
+	st->need_prompt = 1;
+    }
+    else if ((c == BACKSPACE) || (c == DELETE)) {
+	if (st->pos == 0)
+	    csp_print_char(BELL);
+	else {
+	    st->pos--;
+	    st->fill = st->pos;
+	    csp_print_lit("\b \b");    // back, rub out, back again
+	}
+    }
+    else if ((c >= SPACE) && (c < DELETE)) {
+	if (st->pos >= st->buf_size - 1) {
+	    st->ovf = 1;
+	    csp_print_char(BELL);       // audible while typing, not at the end
+	}
+	else {
+	    st->buf[st->pos++] = c;
+	    st->fill = st->pos;
+	    csp_print_char(c);
+	}
+    }
+    csp_flush();
+}
+
+#endif // CSP_LINE_SIMPLE

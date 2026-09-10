@@ -1,0 +1,69 @@
+%% Arduino Mega 2560, WITHOUT the Arduino core -- the bare-metal AVR port on a
+%% part that has room for the whole thing.
+%%
+%% WHY THIS BOARD EXISTS. `uno_bare` does not fit and cannot be run, so the port
+%% has never executed an instruction. This one fits with room to spare, runs in
+%% Wokwi, and is a full build -- compiler and REPL included, not exec-only -- so
+%% the port can be exercised at a prompt rather than only linked.
+%%
+%% And it makes the core's cost measurable a second time, on a different part
+%% and against a FULL image: `mega` and `mega_bare` are the same program built
+%% two ways.
+{board, mega_bare,
+ [{chip, atmega2560},
+
+  %% The crystal, and F_CPU. The UART divisor and the TIMER0 CTC reload are both
+  %% computed from it.
+  {core, 16000000},
+
+  %% USART0 -- the one on the USB bridge, and the one Wokwi shows.
+  {console, {uart0, 38400}},
+
+  %% The instruction/declaration pool, out of 8192 bytes of RAM. STATIC, unlike
+  %% `mega`: that board claims the pool from the heap at boot and sizes it to
+  %% whatever the core and its libraries left over, which is the right answer
+  %% when a core owns most of the RAM and an unknowable amount of it. Here
+  %% nothing else is running, so the number can be stated, and a stated number
+  %% is one the link reports and the map file shows.
+  %%
+  %% 3072 and not more: the arena is .bss, and what the stack gets is whatever
+  %% is left under RAMEND. Measured at 4096 the image had 6581 bytes of .bss and
+  %% therefore 1611 for the stack -- below the 2048 that csp.h asks for and that
+  %% a DL1200 proved the hard way by hanging on a typed line. At 3072 the stack
+  %% has ~2600.
+  %%
+  %% 1536, och siffran ar MATT, inte vald.
+  %%
+  %% Poolen och stacken ar samma RAM: arenan ligger i .bss och stacken vaxer ner
+  %% fran RAMEND mot den. Vid 2048 (3627 byte stack) tog parserns ramar den
+  %% andra deklarationens minne -- `#variable count = 1` svarade OK och listades
+  %% sedan under ett ROM-namn med den forsta borta. Ingen fel, ingen fault: en
+  %% tyst overskrivning av de NYASTE deklarationerna, som ligger overst i poolen.
+  %% Vid 1024 (4477 byte stack) gick bada in korrekt.
+  %%
+  %% 1280 lamnar 4221 byte stack och klarar stackcheck (STACK_MIN 4096, vald
+  %% mellan de tva matningarna). Det ar en LITEN pool for ett fullt bygge -- ett
+  %% trettiotal deklarationer -- och den riktiga siffran ska matas med
+  %% `make -f Makefile.board BOARD=mega_bare watch`, vars /memory rapporterar
+  %% hur nara stacken faktiskt kom. Tills dess ar 4096 en gissning MELLAN tva
+  %% matta punkter och inte ett svar.
+  %%
+  %% CSP_STACK_RESERVE i csp.h ar 2048 och anvands bara for att SIZA en
+  %% malloc-arena; en statisk ignorerar den helt, vilket ar precis hur det har
+  %% kunde ga obemarkt.
+  {code_budget, 1280},
+
+  %% An entry is 8 + strlen(path) bytes, so this is around thirty settings.
+  {settings_bytes, 256},
+
+  %% NO {define, ['CSP_EXEC_ONLY']}, unlike uno_bare -- 253952 bytes is room for
+  %% the compiler, and a node you can type at is what makes the port testable.
+
+  %% For `make upload` only; the board is {toolchain, bare} and links with
+  %% avr-gcc. The bootloader on the part is untouched, so arduino-cli is still
+  %% the way in.
+  {fqbn, "arduino:avr:mega"},
+  {port, "/dev/ttyACM0"},
+
+  {support_reactive, 0},
+  {use_statistics, 0}]}.

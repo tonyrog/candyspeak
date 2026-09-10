@@ -82,11 +82,45 @@ void __cyg_profile_func_exit(void* fn, void* call)
 // /memory and resolve it with:  avr-nm -C <elf> | sort | grep -i <addr>
 // Note avr-gcc reports fn as a BYTE address; nm prints byte addresses too, so
 // they compare directly.
+// THE LAST FUNCTION ENTERED, kept across a reset.
+//
+// An AVR that faults does not stop, it runs to address 0 and starts over -- and
+// there is no debugger, no exception vector and no stack to walk afterwards.
+// But RAM SURVIVES a reset: only .bss is cleared, by the crt, and `.noinit` is
+// not. So the one thing worth having is written down before the crash and read
+// back after it.
+//
+// The magic word is what tells a boot after a CRASH from the first boot after
+// power-up, where these bytes are whatever the RAM happened to hold.
+//
+// Diagnostic build only (`make ... watch`), like everything else in here.
+CSP_NOINIT void* csp_crash_ring[CSP_CRASH_TRACE];
+CSP_NOINIT uint8_t csp_crash_dir[CSP_CRASH_TRACE];
+CSP_NOINIT uint8_t csp_crash_at;
+
+// ENTERS AND EXITS BOTH, and the exits are the point.
+//
+// A fault on the way OUT of a call is a corrupted return address, and enters
+// alone cannot show it: the trace ends at some leaf that returned perfectly
+// well. With exits recorded, the last unmatched ENTER names the frame whose
+// return never happened.
+static void csp_crash_note(void* fn, uint8_t enter)
+    __attribute__((no_instrument_function));
+
+static void csp_crash_note(void* fn, uint8_t enter)
+{
+    csp_crash_ring[csp_crash_at] = fn;
+    csp_crash_dir[csp_crash_at] = enter;
+    csp_crash_at = (uint8_t)((csp_crash_at + 1) % CSP_CRASH_TRACE);
+}
+CSP_NOINIT uint16_t csp_crash_magic;
+
 void __cyg_profile_func_enter(void* fn, void* call)
 {
     char probe;
     long m;
     (void)call;
+    csp_crash_note(fn, 1);
     if (csp_arena_top == NULL)
 	return;
     m = (long)(&probe - csp_arena_top);
@@ -98,7 +132,8 @@ void __cyg_profile_func_enter(void* fn, void* call)
 
 void __cyg_profile_func_exit(void* fn, void* call)
 {
-    (void)fn; (void)call;
+    (void)call;
+    csp_crash_note(fn, 0);
 }
 #endif
 
@@ -219,9 +254,13 @@ NOINLINE csp_instr_t csp_get_instr(csp_rt_t* st, index_t n)
     return st->ram_instr[n - st->rom_nn];
 }
 
+// ro_byte: tag_tab is RODATA. Read as data on AVR it hands back whatever is at
+// that address in RAM -- which is why every line of /list on a mega came back
+// tagged `F` instead of `R`. One character, in the one column that says what
+// kind of declaration you are looking at.
 const char csp_tag(csp_rt_t* st, index_t n)
 {
-    return tag_tab[decl(st,INDEX(n),type)];
+    return (char)ro_byte((const uint8_t*)&tag_tab[decl(st,INDEX(n),type)]);
 }
 
 static rostring_t const pindir_tab[] RODATA = {
@@ -284,7 +323,7 @@ static rostring_t  const endian_tab[] RODATA = {
 
 rostring_t csp_fmt_endian(vendian_t et)
 {
-    return endian_tab[et&0x3];
+    return (rostring_t)ro_ptr(&endian_tab[et&0x3]);   // RODATA: see csp_tag
 }
 
 
@@ -323,6 +362,7 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_CANNOT_LOAD] =            ros_err_cannot_load,
     [ERR_NUMBER_RANGE] =           ros_err_num_range,
     [ERR_BAD_IPV4] =               ros_err_bad_ipv4,
+    [ERR_TRAILING_WORDS] =         ros_err_trailing,
     [ERR_OUT_OF_MEMORY] =          ros_err_out_of_memory,
     [ERR_INDEX_RANGE] =            ros_err_index_range,
     [ERR_ASSIGN_TO_LOCAL] =        ros_err_assign_local,
@@ -347,10 +387,22 @@ static rostring_t  const err_tab[] RODATA = {
 // The row is there now, but the guard stays: the next error code added will be
 // missing from this table too, and it should print something useless rather
 // than segfault while reporting a different mistake.
+// ro_ptr, not err_tab[err]. The table is RODATA -- flash on AVR -- and a plain
+// subscript reads the DATA space at that address, which is not the table and on
+// a part with more flash than RAM is not anything. It came back NULL, so EVERY
+// error on an AVR printed the fallback: "internal error", whatever had actually
+// gone wrong.
+//
+// That is the worst possible place for this bug. It does not break a feature --
+// it breaks the machine that TELLS you what broke, and it lies with a plausible
+// answer rather than an obvious one. A wrong "not declared" would have been read
+// as a clue; "internal error" was read as a crash, twice, by two people.
+//
+// csp_fmt_pindir and csp_fmt_vtype right above have always done it correctly.
 NOINLINE static rostring_t csp_format_error(csp_err_t err)
 {
     rostring_t f = ((unsigned)err < (sizeof(err_tab)/sizeof(err_tab[0])))
-	? err_tab[err] : NULL;
+	? (rostring_t)ro_ptr(&err_tab[err]) : NULL;
     return f ? f : ros_err_internal;
 }
 
@@ -525,9 +577,16 @@ static inline ivalue_t isign(ivalue_t a)
     return (a < 0) ? -1 : (a ? 1 : 0);
 }
 
+// `0`, NOT `0.0`. Under USE_FIXPOINT -- which is every AVR, SAMD21 and Due --
+// fvalue_t is a Q16.16 INTEGER, and comparing it against a double literal
+// promotes it: the whole float library came into the image for this one
+// character. __floatsisf and __floatunsisf, 240 bytes, on a part that was
+// deliberately built without floating point.
+//
+// A plain 0 is right in both modes: a float compares against it just as well.
 static inline ivalue_t fsign(fvalue_t a)
 {
-    return (a < 0.0) ? -1 : (a ? 1 : 0);
+    return (a < 0) ? -1 : (a ? 1 : 0);
 }
 
 static inline ivalue_t iclip(ivalue_t x, ivalue_t a, ivalue_t b)
@@ -889,7 +948,15 @@ const csp_func_t csp_builtin_funcs[] RODATA = {
     CSP_FUNC_ENT(s_latch,   1, 0, V_INTEGER, MAKE_TYPE1(V_INTEGER), fn_latch),
 };
 
-const uint8_t csp_num_builtin_funcs = sizeof(csp_builtin_funcs)/sizeof(csp_builtin_funcs[0]);
+// RODATA like the table it counts. It is a compile-time constant that spent its
+// life in RAM on every target because the attribute was missing -- one byte, but
+// the principle is the whole point: a const in core code belongs in flash, and
+// the two readers below go through ro_byte to get it.
+//
+// Found by `make ro_poison`. NOT by `make ro_check`, which looks for `name[` and
+// therefore cannot see a scalar -- see the note in doc/RO_POISON.md.
+const uint8_t csp_num_builtin_funcs RODATA =
+    sizeof(csp_builtin_funcs)/sizeof(csp_builtin_funcs[0]);
 
 // Declaration index of object number `m`.
 //
@@ -1650,7 +1717,7 @@ NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave)
 	    }
 	}
 	else {
-	    if (idx < csp_num_builtin_funcs) {
+	    if (idx < ro_byte(&csp_num_builtin_funcs)) {
 		arity = func_arity(csp_builtin_funcs, idx, BUILTIN_ROM);
 		fn    = func_fn(csp_builtin_funcs, idx, BUILTIN_ROM);
 	    }
@@ -3788,6 +3855,10 @@ int csp_mem_init(csp_rt_t* st, size_t size)
 	// The history, below the line buffer and off the same top. Carved only
 	// when the pool can spare it: a board that has to choose should spend
 	// its bytes on the program, and the editor works without a history.
+	//
+	// Not at all under CSP_LINE_SIMPLE -- there is no editor to browse
+	// with, and csp_line_t has no fields to point at it.
+#if !defined(CSP_LINE_SIMPLE)
 	{
 	    size_t want_hist = st->mem_size / CSP_HIST_SHARE;
 
@@ -3805,6 +3876,7 @@ int csp_mem_init(csp_rt_t* st, size_t size)
 	    }
 	    st->line.hist_used = st->line.hist_at = 0;
 	}
+#endif
     }
     // Clear the POOL, not the whole block: /load re-runs csp_rt_init from inside
     // csp_process_line, which is reading the line out of the buffer above the
@@ -4335,16 +4407,20 @@ NOINLINE static int setup_field(csp_rt_t* st, index_t ix)
 //   TPDO cyclic  Frame.X = ... ? timeout(T)  -- the timer is the trigger
 // ============================================================
 
-// A received frame has to enter through the same door as any other device
-// input: compare against the committed value, and where a field differs mark
-// it dirty and push its dependents. That is what makes changed() see it and
-// what wakes the reactive rules.
+// ANYTHING that arrives in a buffer has to enter through the same door as any
+// other device input: compare against the committed value, and where a field
+// differs mark it dirty and push its dependents. That is what makes changed()
+// see it and what wakes the reactive rules.
+//
+// Named for CAN until 2026-09-09, which it stopped being long before that: a
+// datagram, a TCP segment, a chunk off the console wire and a route all come
+// through here. The name said "frame" and every caller but one meant "bytes".
 //
 // No extra copy of the old bytes is needed -- the transaction already keeps
-// one. csp_can_input drops the frame into the DOUT shadow, DIN still holds the
-// previous frame, so the diff below is old-vs-new, and commit then moves DOUT
+// one. The caller drops the new bytes into the DOUT shadow, DIN still holds the
+// previous ones, so the diff below is old-vs-new, and commit then moves DOUT
 // to DIN exactly as it does for a value a rule wrote.
-NOINLINE static void can_mark_fields(csp_rt_t* st, index_t b)
+NOINLINE static void buf_mark_fields(csp_rt_t* st, index_t b)
 {
     int i;
     index_t own = st->buf[b].owner;
@@ -4402,7 +4478,7 @@ NOINLINE static void can_mark_fields(csp_rt_t* st, index_t b)
 // program whose only input is CAN -- there is no timer and nothing changes, so
 // every other "is there work left" test says no and the loop would quit before
 // the first frame ever arrived.
-int csp_can_active(csp_rt_t* st)
+int csp_io_active(csp_rt_t* st)
 {
     index_t b;
     // ANY inbound transport, not just CAN. The question this answers is "must
@@ -4429,11 +4505,11 @@ NOINLINE static void buf_deliver(csp_rt_t* st, index_t b, const uint8_t* data,
     if (n > bp->nbytes)
 	n = bp->nbytes;
     // Into the SHADOW, not the committed half: DIN must keep the previous
-    // contents so can_mark_fields can tell what actually changed.
+    // contents so buf_mark_fields can tell what actually changed.
     memcpy(st->heap[DOUT] + bp->hp, data, n);
     bp->dlc_in = (uint8_t)((n > 255) ? 255 : n);   // published at commit
     bp->flags |= BUF_F_RXPEND;         // csp_commit turns this into BUF_F_RX
-    can_mark_fields(st, b);
+    buf_mark_fields(st, b);
 }
 
 void csp_can_input(csp_rt_t* st)
@@ -4456,14 +4532,14 @@ void csp_can_input(csp_rt_t* st)
 		!(bp->dir & DIR_IN))
 		continue;
 	    // Into the SHADOW, not the committed half: DIN must keep the previous
-	    // frame so can_mark_fields can tell what actually changed.
+	    // frame so buf_mark_fields can tell what actually changed.
 	    // A short frame updates only the bytes it carried. Clamp per buffer,
 	    // not once: the same id may feed several buffers of different sizes.
 	    n = (len < bp->nbytes) ? len : bp->nbytes;
 	    memcpy(st->heap[DOUT] + bp->hp, data, n);
 	    bp->dlc_in = n;                // what the sender actually sent
 	    bp->flags |= BUF_F_RXPEND;     // csp_commit turns this into BUF_F_RX
-	    can_mark_fields(st, b);
+	    buf_mark_fields(st, b);
 	}
     }
 }
@@ -4504,6 +4580,19 @@ void csp_buf_input(csp_rt_t* st)
     // nothing can observe.
     for (b = 0; b < st->nbuf; b++) {
 	csp_buf_t* bp = &st->buf[b];
+
+	// THE CONSOLE WIRE MASK IS COUNTED FOR EVERY BUFFER, routed or not.
+	// It arms the print tap, and a routed `in repl` buffer is exactly the
+	// one that needs it -- skipping it below left the tap disarmed, so a
+	// node whose output was routed captured nothing at all.
+	if (TR_IS_CON(bp->transport) && (bp->dir & DIR_IN))
+	    con |= (uint8_t)(1 << ((bp->transport == TR_CONSOLE) ? CON_KEYS
+								: CON_OUT));
+
+	// A ROUTE SOURCE belongs to its route, which drains it in the output
+	// pass. Two owners would mean the chunk taken here is never sent.
+	if (bp->flags & BUF_F_ROUTED)
+	    continue;
 
 	if (TR_IS_SYNC(bp->transport)) {
 	    uint16_t n;
@@ -4606,7 +4695,7 @@ void csp_buf_input(csp_rt_t* st)
 	    if (got) {
 		bp->dlc_in = (uint8_t)((last > 255) ? 255 : last);
 		bp->flags |= BUF_F_RXPEND;
-		can_mark_fields(st, b);
+		buf_mark_fields(st, b);
 		// And the other views of this port, with the LENGTH rather than
 		// dlc: dlc saturates at 255 and a datagram may be longer.
 		for (p = b + 1; p < st->nbuf; p++) {
@@ -4615,6 +4704,42 @@ void csp_buf_input(csp_rt_t* st)
 			(op->port == bp->port))
 			buf_deliver(st, p, st->heap[DOUT] + bp->hp, last);
 		}
+	    }
+	}
+	else if ((bp->transport == TR_UART) && (bp->dir & DIR_IN)) {
+	    // A wire, not a connection: it is either carrying bytes or quiet,
+	    // and there is no third answer. Same stream discipline as TCP --
+	    // take what arrived, leave the rest.
+	    uint16_t n = bp->nbytes;
+	    if (csp_uart_recv(st, bp->xref, st->heap[DOUT] + bp->hp, &n) == 1) {
+		bp->dlc_in = (uint8_t)((n > 255) ? 255 : n);
+		bp->flags |= BUF_F_RXPEND;
+		buf_mark_fields(st, b);
+	    }
+	}
+	else if (bp->transport == TR_TCP) {
+	    uint16_t n = bp->nbytes;
+
+	    // AN OUT BUFFER DIALS FROM THE FIRST CYCLE. A zero-length send means
+	    // "make sure the connection is up" and writes nothing -- without it
+	    // the socket was opened by the first byte anyone sent, the dial had
+	    // not completed by the time it was written, and that byte was lost.
+	    // It showed as `sys.Serial` reaching the far end as `Serial`: a
+	    // whole chunk, gone, on every fresh connection.
+	    if (bp->dir & DIR_OUT)
+		(void)csp_tcp_send(st, bp->xref, bp->port, NULL, 0);
+	    if (!(bp->dir & DIR_IN))
+		continue;
+	    // A STREAM: take what has arrived, up to the buffer, and leave the
+	    // rest for the next cycle. No drain loop and no keep-the-last -- a
+	    // byte has no newer version of itself, so nothing here may be thrown
+	    // away the way a datagram is. One read per cycle is also what makes
+	    // the bytes and `.dlc` describe the same delivery.
+	    if (csp_tcp_recv(st, bp->port, bp->xref,
+			     st->heap[DOUT] + bp->hp, &n) == 1) {
+		bp->dlc_in = (uint8_t)((n > 255) ? 255 : n);
+		bp->flags |= BUF_F_RXPEND;
+		buf_mark_fields(st, b);
 	    }
 	}
 	else if (TR_IS_CON(bp->transport)) {
@@ -4631,21 +4756,116 @@ void csp_buf_input(csp_rt_t* st)
 
 	    if (bp->dir & DIR_IN) {
 		uint16_t n = bp->nbytes;
-		// Only an `in` buffer arms the ring. An `out`-only one writes
-		// to the wire and reads nothing, and arming the tap for it
-		// would fill the ring once and then count losses forever --
-		// a number that means nothing, reported as though it meant
-		// something.
-		con |= (uint8_t)(1 << which);
+		// The mask was counted above, for routed and unrouted alike.
 		if (csp_con_take(which, st->heap[DOUT] + bp->hp, &n) == 1) {
 		    bp->dlc_in = (uint8_t)((n > 255) ? 255 : n);
 		    bp->flags |= BUF_F_RXPEND;
-		    can_mark_fields(st, b);
+		    buf_mark_fields(st, b);
 		}
 	    }
 	}
     }
     csp_con_wire(con);
+}
+
+// One chunk off a buffer's own transport into its shadow. Only the transports
+// that can be ASKED are here: CAN arrives by frame id and is already in the
+// buffer by the time a route looks at it, so a CAN source moves one delivery a
+// cycle like a rule would -- the loop is for the streams, which is where the
+// throughput went.
+NOINLINE static int route_pull(csp_rt_t* st, csp_buf_t* bp, uint16_t* n)
+{
+    uint8_t* dst = st->heap[DOUT] + bp->hp;
+
+    switch (bp->transport) {
+    case TR_CONSOLE: return csp_con_take(CON_KEYS, dst, n);
+    case TR_REPL:    return csp_con_take(CON_OUT, dst, n);
+    case TR_UDP:     return csp_udp_recv(st, bp->port, bp->xref, dst, n);
+    case TR_TCP:     return csp_tcp_recv(st, bp->port, bp->xref, dst, n);
+    case TR_UART:    return csp_uart_recv(st, bp->xref, dst, n);
+    default:         return 0;
+    }
+}
+
+// And out the other end. 0 on success; anything else and the caller stops --
+// NOTHING BLOCKS, so a link that will not take it now keeps the chunk for the
+// ordinary output pass to retry next cycle.
+NOINLINE static int route_push(csp_rt_t* st, csp_buf_t* bp,
+			       const uint8_t* data, uint16_t n)
+{
+    switch (bp->transport) {
+    case TR_CONSOLE: csp_con_show(data, n); return 0;
+    case TR_REPL:    csp_con_feed(st, data, n); return 0;
+    case TR_UDP:     return csp_udp_send(st, bp->xref, bp->port, data, n);
+    case TR_TCP:     return csp_tcp_send(st, bp->xref, bp->port, data, n);
+    case TR_UART:    return csp_uart_send(st, bp->xref, data, n);
+    case TR_CAN:     return csp_can_send(st, bp->xref, data, (uint8_t)n);
+    default:         return -1;
+    }
+}
+
+// THE ROUTES. Bytes arriving at one buffer go out another with no rule in
+// between, which buys two things a rule cannot.
+//
+//   THE LOOP. A rule runs once per cycle and a buffer assignment carries four
+//   bytes, so a relay written as rules topped out near 36 B/s whatever the link
+//   could do. This moves CSP_ROUTE_BURST chunks.
+//
+//   THE CHUNKING. The chunk is the SMALLER of the two buffers, so a 64-byte
+//   stream into an 8-byte CAN frame is framed by the runtime. That framing was
+//   hand-written before, and it was written wrong -- the header sat where the
+//   payload copy landed and the far end read the first typed character as a
+//   command.
+//
+// LAST in the output pass, so a rule that also wrote the sink this cycle has
+// already had its turn and the route's bytes are the ones that go (Tony,
+// 2026-09-09). The data still LANDS in both buffers, so /state, a #field view
+// and a rule can all watch it -- a route you cannot see is one you cannot
+// debug, and the win is the loop, not skipping the buffer.
+void csp_route_run(csp_rt_t* st)
+{
+    index_t r;
+
+    for (r = 0; r < st->nroute; r++) {
+	csp_buf_t* src = &st->buf[st->route[r].src];
+	csp_buf_t* dst = &st->buf[st->route[r].dst];
+	uint16_t cap = (src->nbytes < dst->nbytes) ? src->nbytes : dst->nbytes;
+	int k;
+
+	for (k = 0; k < CSP_ROUTE_BURST; k++) {
+	    uint16_t n = cap;
+	    // ASK THE SINK FIRST. A pull takes bytes off a transport before
+	    // anything knows where they are going, and what the sink cannot
+	    // hold is simply gone -- the socket's own back-pressure has already
+	    // been given up by then. Relaying a firmware image is what showed
+	    // it: 2690 bytes of hex went in, the far end answered "ERR hex".
+	    if (dst->transport == TR_REPL) {
+		uint16_t room = csp_con_room(st, CON_KEYS);
+		if (room == 0)
+		    break;             // the line editor is full: next cycle
+		if (n > room)
+		    n = room;
+	    }
+	    if (route_pull(st, src, &n) != 1)
+		break;                 // nothing more waiting
+	    if (n > cap)
+		n = cap;
+	    // Into the SOURCE's shadow it already went; publish the length the
+	    // same way a delivery does, so a rule sees a whole one next cycle.
+	    src->dlc_in = (uint8_t)((n > 255) ? 255 : n);
+	    src->flags |= BUF_F_RXPEND;
+	    buf_mark_fields(st, st->route[r].src);
+	    // And into the SINK's committed half, which is what output reads.
+	    memcpy(st->heap[DIN] + dst->hp, st->heap[DOUT] + src->hp, n);
+	    dst->dlc = (uint8_t)((n > 255) ? 255 : n);
+	    if (route_push(st, dst, st->heap[DIN] + dst->hp, n) < 0) {
+		// Kept, not dropped: the ordinary output pass sends it next
+		// cycle. Waiting here would stall every other buffer too.
+		dst->flags |= BUF_F_TX;
+		break;
+	    }
+	}
+    }
 }
 
 // UDP out, and the STARTS for the synchronous buses. Called from a port's
@@ -4671,6 +4891,38 @@ void csp_buf_output(csp_rt_t* st)
 		// receiver can undo.
 		csp_udp_send(st, bp->xref, bp->port,
 			     st->heap[DIN] + bp->hp, bp->dlc);
+	    break;
+
+	case TR_TCP:
+	    if (!(bp->flags & (BUF_F_DIRTY|BUF_F_TX)))
+		continue;
+	    // THE FLAGS SURVIVE A FAILED SEND, which is the whole difference
+	    // from UDP. A datagram is fire-and-forget, so clearing first costs
+	    // nothing; a TCP connection is not up on the cycle it is dialled,
+	    // and clearing first threw away exactly the first thing anyone sent.
+	    // It showed as `sys.Serial` arriving at the far end as `Serial`.
+	    //
+	    // dlc, like CAN and UDP: a stream carries what a rule put there, and
+	    // the rest of the buffer is last cycle's bytes.
+	    if (bp->dir & DIR_OUT) {
+		if (csp_tcp_send(st, bp->xref, bp->port,
+				 st->heap[DIN] + bp->hp, bp->dlc) < 0)
+		    break;              // not written: try again next cycle
+	    }
+	    bp->flags &= ~(BUF_F_DIRTY|BUF_F_TX);
+	    break;
+
+	case TR_UART:
+	    if (!(bp->flags & (BUF_F_DIRTY|BUF_F_TX)))
+		continue;
+	    // Like TCP: the flags survive a send that did not go, so a port
+	    // whose FIFO is full keeps the bytes rather than dropping them.
+	    if (bp->dir & DIR_OUT) {
+		if (csp_uart_send(st, bp->xref,
+				  st->heap[DIN] + bp->hp, bp->dlc) < 0)
+		    break;
+	    }
+	    bp->flags &= ~(BUF_F_DIRTY|BUF_F_TX);
 	    break;
 
 	case TR_CONSOLE:
@@ -4728,6 +4980,9 @@ void csp_buf_output(csp_rt_t* st)
 	    break;
 	}
     }
+    // LAST: the routes move their bytes after every rule has had its say, so a
+    // rule that also wrote a sink this cycle does not overwrite them.
+    csp_route_run(st);
 }
 
 // bump-allocate heap bytes, return the offset (or 0xffff on overrun)
@@ -4829,10 +5084,10 @@ NOINLINE static int setup_buffer(csp_rt_t* st, index_t ix)
 	csp_decl_t id;
 	csp_copy_decl(st, INDEX(d.bf.id), &id);
 	xref = (uint32_t)id.cn.init.i;
-	// TR_UDP's endpoint is TWO constants -- see csp_bufdecl_t. The address
-	// is the one just read; the port is the next one along, which
+	// A NET endpoint is TWO constants -- see csp_bufdecl_t. The address is
+	// the one just read; the port is the next one along, which
 	// csp_parse_buffer guaranteed is adjacent.
-	if (transport == TR_UDP) {
+	if ((transport == TR_UDP) || (transport == TR_TCP)) {
 	    csp_decl_t pn;
 	    csp_copy_decl(st, INDEX(d.bf.id) + 1, &pn);
 	    port = (uint16_t)pn.cn.init.i;
@@ -4997,6 +5252,62 @@ NOINLINE static int setup_decl(csp_rt_t* st, index_t ix, csp_decl_t d)
     return 0;
 }
 
+
+// Decl index -> buffer id. A buffer carries its owner and there are few of
+// either, so a scan beats a map that has to be kept in step with both.
+NOINLINE static index_t buf_of_decl(csp_rt_t* st, index_t di)
+{
+    index_t b;
+
+    for (b = 0; b < st->nbuf; b++)
+	if ((st->buf[b].owner != BAD_INDEX) &&
+	    ((index_t)INDEX(st->buf[b].owner) == di))
+	    return b;
+    return BAD_INDEX;
+}
+
+// Resolve every #route once the buffers exist.
+//
+// The SOURCE is marked BUF_F_ROUTED so the ordinary input pass leaves it alone:
+// one owner per buffer. With both pulling, the chunk the input pass took would
+// land in the buffer and never be sent -- a silent hole in the stream, which is
+// the failure this whole area keeps producing.
+NOINLINE static int setup_routes(csp_rt_t* st)
+{
+    int i, n = 0;
+
+    st->nroute = 0;
+    st->route = NULL;
+    for (i = 0; i < st->ps.nd; i++)
+	if (decl(st, i, type) == DECL_ROUTE)
+	    n++;
+    if (n == 0)
+	return 0;
+    if ((st->route = (csp_rpair_t*)csp_mid_alloc(st,
+			(size_t)n * sizeof(csp_rpair_t))) == NULL) {
+	csp_set_error(st, ERR_OUT_OF_MEMORY);
+	return -1;
+    }
+    for (i = 0; i < st->ps.nd; i++) {
+	csp_decl_t d;
+	index_t sb, db;
+	if (decl(st, i, type) != DECL_ROUTE)
+	    continue;
+	csp_copy_decl(st, i, &d);
+	sb = buf_of_decl(st, (index_t)d.rt.src);
+	db = buf_of_decl(st, (index_t)d.rt.dst);
+	// A route whose ends did not both become buffers is dropped rather than
+	// half-built. csp_parse_route already refused anything that is not a
+	// #buffer, so this is the belt to that brace.
+	if ((sb == BAD_INDEX) || (db == BAD_INDEX))
+	    continue;
+	st->route[st->nroute].src = sb;
+	st->route[st->nroute].dst = db;
+	st->nroute++;
+	st->buf[sb].flags |= BUF_F_ROUTED;
+    }
+    return 0;
+}
 
 // Count the buffer/heap/io a single value-leaf decl `j` needs, mirroring the
 // setup_* functions (which decls get a buffer, its byte size, and whether it is
@@ -5451,8 +5762,15 @@ int csp_settings_find(csp_rt_t* st, const char* path, uint8_t plen,
 {
     int n;
 
+    // ro_memcmp, and `path` is the RODATA side. The store's own path is RAM
+    // (it came out of EEPROM); the one being looked for is a literal in flash.
+    // On AVR that is memcmp_P, whose SECOND argument is the PROGMEM one -- which
+    // is the order these two already had.
+    //
+    // One caller, and it passes a RODATA literal. If a second one ever passes a
+    // RAM string this has to take which-side as an argument rather than assume.
     for (n = 0; csp_settings_get(st, n, sp); n++)
-	if ((sp->plen == plen) && (memcmp(sp->path, path, plen) == 0))
+	if ((sp->plen == plen) && (ro_memcmp(sp->path, path, plen) == 0))
 	    return 1;
     return 0;
 }
@@ -5465,7 +5783,11 @@ int csp_settings_find(csp_rt_t* st, const char* path, uint8_t plen,
 // csp_rt_start, long after. So this reads the same bytes by hand.
 void csp_boot_pick(csp_rt_t* st)
 {
-    static const char boot_path[] = "sys.Boot";
+    // RODATA: eight bytes that were sitting in RAM on a 2K part for no reason.
+    // The poison found it (make ro_poison) -- not because the read was wrong on
+    // AVR, but because a const string in core code that is NOT in flash is a
+    // waste the host cannot see.
+    static rochar boot_path[] RODATA = "sys.Boot";
     csp_setting_t s;
 
     st->boot_want = CSP_BOOT_AUTO;
@@ -5867,6 +6189,7 @@ int csp_rt_start(csp_rt_t* st)
     st->nio = 0;
     st->nm = 0;
     st->nbuf = 0;
+    st->nroute = 0;
     st->hp = 0;      // the heap cursor is no longer derivable from buf[nbuf-1]
     st->ps.nq = 0;   // rebuilt from DECL_OBJECT below (parse-time table is not
 		     // restored from ROM); idempotent for a freshly parsed program
@@ -5976,6 +6299,10 @@ int csp_rt_start(csp_rt_t* st)
 	    }
 	}
     }
+    // After every buffer exists -- a route names two of them, and `owner` is
+    // what ties a declaration to its buffer.
+    if (setup_routes(st) < 0)
+	return -1;
     apply_param_overrides(st);
     // After the patch overrides -- a setting is the unit's word on a value, and
     // it is the last one. Before csp_setup, which the platform main calls next:

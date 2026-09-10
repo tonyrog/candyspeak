@@ -53,6 +53,8 @@ can can
 i2c i2c
 spi spi
 udp udp
+tcp tcp
+uart uart
 console console
 repl repl
 disable disable
@@ -69,6 +71,7 @@ analog analog
 timer timer
 field field
 buffer buffer
+route route
 when when
 value value
 pin pin

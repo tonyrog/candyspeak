@@ -8,8 +8,15 @@
 #include <stdint.h>
 
 #define FIX_SHIFT 16
-#define FIX_SCALE (1 << FIX_SHIFT)       // 65536
-#define FIX_MASK  (FIX_SCALE - 1)        // 0xFFFF
+// (int32_t)1, not 1. On AVR an `int` is SIXTEEN bits, so `1 << 16` is undefined
+// and gcc folds it to zero -- with a warning that scrolls past in every build.
+// FIX_SCALE is then 0, and everything derived from it goes quietly wrong on the
+// one family that actually runs this code: FIX_CONST turns every float literal
+// into 0, fix_round adds nothing and truncates instead of rounding, and
+// FIX_MASK becomes all ones. Nothing changes on a 32-bit target, where the two
+// spellings are the same constant.
+#define FIX_SCALE ((int32_t)1 << FIX_SHIFT)   // 65536
+#define FIX_MASK  (FIX_SCALE - 1)             // 0xFFFF
 
 // Type for fixed-point values
 typedef int32_t fixpoint_t;

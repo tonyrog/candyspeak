@@ -1,0 +1,18 @@
+// The master side: what pdb_coco.c does, as rules.
+//
+// coco_capture() polled over SPI. Here the record arrives on its own, because
+// the wake and the send are the same event on the far side -- so there is no
+// interrupt pin, no SYN/ACK, and no second exchange to read what the interrupt
+// meant.
+
+#buffer Cap:6 in uart 0
+#field  DIntf:8  Cap[0..7]
+#field  DValue:8 Cap[8..15]
+#field  AIntf:8  Cap[16..23]
+#field  A1Val:10 Cap[24..33]
+#field  A2Val:10 Cap[34..43]
+
+// println takes at most four arguments, so the record is read out in two
+// lines rather than crammed into one.
+println("woke d", DIntf, " a", AIntf) ? Cap.rx
+println("  v", DValue, " a1", A1Val) ? Cap.rx

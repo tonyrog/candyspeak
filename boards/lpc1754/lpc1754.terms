@@ -13,8 +13,17 @@
   %% The arena, and it has to be stated. csp.h picks a code budget by target and
   %% its branches are AVR, ARDUINO, and "host: full worst case" -- a bare-metal
   %% ARM that is not an Arduino lands in the last one and asks for 24K, more
-  %% than this part's 16K of SRAM. Measured: 12420 bytes of bss at 9216.
-  {code_budget, 9216},
+  %% than this part's 16K of SRAM.
+  %%
+  %% 9216 -> 6144 (2026-09-10). At 9216 this board had 1192 BYTES OF STACK: the
+  %% pool and the stack are the same RAM, .bss holds the arena and the stack
+  %% grows down toward it, and nothing checked the gap. That is the value
+  %% dl1200 carried before someone lowered it to 6144 -- after a board hung on
+  %% every write typed at the prompt.
+  %%
+  %% Found by Makefile.board's stackcheck on its first run, not by a board
+  %% hanging. 6144 leaves ~4264 here, the same as dl1200 measures.
+  {code_budget, 6144},
 
   %% No EEPROM peripheral on a 175x. Its 177x/8x sibling has one and
   %% eeprom_17xx_40xx.c sits in the same driver directory, which makes it look

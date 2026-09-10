@@ -198,11 +198,14 @@ static void exprbuf_strref(csp_exprbuf_t* bp, uint8_t ix)
     bp->buf[bp->pos++] = STRREF(ix);
 }
 
-static void exprbuf_str(csp_exprbuf_t* bp, const char *s)
-{
-    char c;
-    while ((c = *s++)) exprbuf_char(bp, c);
-}
+// exprbuf_str -- a plain RAM string -- is GONE. Its only three callers passed
+// LITERALS (`..`, `<-`, `==`), and a literal in core code sits in a different
+// address space on a target, so walking it with *s++ read the wrong one. Two
+// exprbuf_char calls need no string at all.
+//
+// If a string ever does need to go in, exprbuf_rostr below is the one that
+// reads it correctly -- the same pairing as csp_print_just / csp_print_rojust,
+// and the same trap: a `const char*` parameter hides which space it came from.
 
 // append a nul-terminated RODATA string (operator/keyword names live in flash);
 // AVR-PROGMEM-safe. On the host ro_byte==plain so it matches exprbuf_str.
@@ -315,7 +318,7 @@ static uint8_t exprbuf_var(csp_rt_t* st, csp_exprbuf_t* bp, uint16_t ix)
 	    exprbuf_char(bp, '[');
 	    exprbuf_uint16(bp, lo);
 	    if (hi != lo) {
-		exprbuf_str(bp, "..");
+		exprbuf_char(bp, '.'); exprbuf_char(bp, '.');
 		exprbuf_uint16(bp, hi);
 	    }
 	    exprbuf_char(bp, ']');
@@ -621,7 +624,7 @@ static void exprbuf_store(csp_rt_t* st,
     var = exprbuf_var(st, bp, ip->m.mem);
     start = exprbuf_ptr(bp);
     exprbuf_strref(bp, var);
-    if (rimp) exprbuf_str(bp, "<-");
+    if (rimp) { exprbuf_char(bp, '<'); exprbuf_char(bp, '-'); }
     else exprbuf_char(bp, '=');
     // A string literal compiles to an OP_LI carrying a POSITION in the string
     // table, and the instruction stream keeps no type -- so on its own the
@@ -965,7 +968,7 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 		break;
 	    }
 	    exprbuf_var(st, bp, ip->mi.mem);
-	    exprbuf_str(bp, "==");
+	    exprbuf_char(bp, '='); exprbuf_char(bp, '=');
 	    if (!exprbuf_state_name(st, bp, ip->mi.mem, ip->mi.imm))
 		exprbuf_int16(bp, ip->mi.imm);
 	    bp->reg[ip->a.x] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
@@ -1224,7 +1227,13 @@ int csp_print_just(const char* s, just_t j, int w)
 {
     int len, lead;
 
-    if (s == NULL) s = "";
+    // NULL is PADDING, not an empty string to walk. It used to be rewritten to
+    // "" and then measured, which meant the two callers that wanted w blanks
+    // passed a literal for the function to find the end of -- and a literal in
+    // core code is exactly the thing that is in a different address space on a
+    // target. csp_print_rojust below has always done it this way.
+    if (s == NULL)
+	return (j == NJUST) ? 0 : just_pad(w);
     if (j == NJUST)
 	return csp_print_str(s);
     if (j == LJUST) {               // no strlen: csp_print_str reports what it wrote

@@ -59,13 +59,21 @@ CFLAGS=-MMD -MP -MF $(@:.o=.d) $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_AR
 OBJS = $(addprefix $(OBJDIR)/, \
 	csp_linux.o csp_rt.o csp_crc.o csp_line.o csp_repl.o csp_compile.o csp_tok.o \
 	csp_dump.o csp_eeprom.o csp_parse.o csp_print.o csp_strings.o \
-	csp_transport.o csp_console.o \
+	csp_transport.o csp_console.o csp_states.o \
 	csp_flash.o csp_devices.o csp_flash_host.o rom_host.o)
 
 LIBS =
 
+# -Wshift-overflow=2 is NOT in -Wall, and it is the one that matters on a target
+# where `int` is 16 bits: `1 << 15` is INT_MIN there, not 32768. That is what
+# made MAX_INSTRS negative on a mega, which turned every declaration into
+# "out of memory" -- and the same shape one bit up (FIX_SCALE, `1 << 16`) made
+# every float literal zero. -Wall catches the second (shift-count-overflow) and
+# says nothing about the first.
+#
+# Measured 2026-09-09: zero warnings on this tree, host and AVR. Free.
 # -O3 -std=c99
-CFLAGS += -Wall -g -Wdeclaration-after-statement -Wenum-compare -Wenum-conversion -Wswitch
+CFLAGS += -Wall -Wshift-overflow=2 -g -Wdeclaration-after-statement -Wenum-compare -Wenum-conversion -Wswitch
 LDFLAGS = -g
 
 # `make ubsan` / `make san` fill SAN with these for a host build (targets below).
@@ -105,8 +113,25 @@ san:
 	$(MAKE) clean
 	$(MAKE) all
 
-csp:	$(OBJS)
-	$(CC) $(LDFLAGS) $(OBJS) $(LIBS) -o $@
+# UNDER THE POISON every link out of $(OBJDIR) needs the fragment, or it fails on
+# `undefined reference to __start_csp_ro` -- including the links a test triggers
+# INDIRECTLY. `make rom` depends on `csp`, so a repl test that builds a ROM
+# rebuilt this binary without the script and reported "could not build a
+# ROM-linked binary", which reads as a compiler problem and is a link one.
+#
+# Here, in the one rule that links the objects, so there is no second place to
+# remember. CFLAGS_EXTRA reaches a sub-make through MAKEFLAGS, which is what
+# makes an indirect link see the same setting as the direct one.
+ifneq (,$(findstring -DCSP_RO_POISON,$(CFLAGS_EXTRA)))
+RO_LD      := $(OBJDIR)/csp_ro.ld
+RO_LDFLAGS := -Wl,-T,$(RO_LD)
+endif
+
+$(OBJDIR)/csp_ro.ld: utils/ro_ld.sh $(OBJS)
+	@bash utils/ro_ld.sh $(OBJDIR) > $@
+
+csp:	$(OBJS) $(RO_LD)
+	$(CC) $(LDFLAGS) $(OBJS) $(LIBS) $(RO_LDFLAGS) -o $@
 
 # --- exec-only host builds ---------------------------------------------------
 # The same two tiers the boards use, built here so the guards can be checked
@@ -128,7 +153,7 @@ csp:	$(OBJS)
 # whichever one it just generated.
 CORE_SRC = port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
 	   src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
-	   src/csp_transport.c src/csp_console.c \
+	   src/csp_transport.c src/csp_console.c src/csp_states.c \
 	   src/csp_parse.c src/csp_print.c gen/csp_strings.c src/csp_flash.c \
 	   port/csp_devices.c port/csp_flash_host.c
 EXEC_SRC = $(CORE_SRC) gen/rom.c
@@ -345,7 +370,7 @@ line_edit_check:
 	@$(CC) $(INCS) -O2 -o tmp/line_edit tests/line_edit.c src/csp_line.c
 	@tmp/line_edit | tail -1
 
-test:	csp test_repl syntax_check strings_check tables_check patterns_check sketch_check
+test:	csp test_repl syntax_check strings_check tables_check patterns_check sketch_check ro_check width_check
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
 
@@ -371,6 +396,48 @@ tables_check:
 
 patterns_check:
 	@escript utils/gen_patterns.erl check
+
+# RODATA read as ordinary memory -- the AVR bug class, caught in the SOURCE.
+#
+# On AVR, RODATA is PROGMEM: a second address space. `err_tab[i]` there reads
+# the DATA space at a flash address, which is not the table. The compiler says
+# nothing, the host is unaffected because it has one address space, and the
+# wrong value looks plausible. Four tables shipped that way -- one of them the
+# ERROR table, so every error on a mega printed "internal error" whatever had
+# actually gone wrong, and cost an hour of chasing the wrong thing.
+#
+# A source check rather than a runtime one because that is where the answer is:
+# nothing has to run, no board is involved, and it covers code no test executes.
+# Validated by putting all four bugs back and confirming it names them.
+ro_check:
+	@python3 utils/ro_check.py
+
+# THE READ-ONLY POISON: run the host tests with the core's RODATA in a second
+# address space, so a read that forgot its ro_ accessor takes SIGSEGV here
+# instead of being wrong only on AVR. See doc/RO_POISON.md for how it is built
+# and what it does and does not catch.
+#
+# A clean rebuild both ways: the flag changes csp.h's accessors, so a stale
+# object would be linked with the wrong ones. The binary is restored afterwards
+# for the same reason `make san` does it -- a poisoned ./csp left lying around
+# would make the next ordinary run mysterious.
+ro_poison:
+	$(MAKE) clean
+	$(MAKE) csp CFLAGS_EXTRA=-DCSP_RO_POISON
+	@sz=$$(readelf -S csp | awk '/csp_ro/{getline; print strtonum("0x"$$1)}'); \
+	 echo "csp_ro: $${sz:-0} bytes poisoned"; \
+	 test "$${sz:-0}" -gt 0 || { echo "csp_ro is EMPTY -- the poison is off"; exit 1; }
+	-bash tests/repl.sh
+	-escript tests/run_tests.escript tests/unit
+	$(MAKE) clean
+	$(MAKE) all
+
+# Values that do not survive a 16-bit `int`. The host cannot reproduce that --
+# there is no -fshort-int, and -m16 is 16-bit code generation, not a 16-bit int
+# -- so this asks the compiler that knows. Skips itself with a message when no
+# avr-gcc is installed. See the head of the script.
+width_check:
+	@bash utils/width_check.sh
 
 # Board programs under private/, each with its own tests/ directory.
 #
@@ -530,7 +597,7 @@ $(OBJDIR)/%.o: %.c | gen/csp_strings.h
 
 -include $(OBJS:.o=.d)
 
-.PHONY: chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
+.PHONY: ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

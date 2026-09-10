@@ -53,6 +53,44 @@ CSP_WEAK int csp_udp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
     return -1;
 }
 
+// --- TCP --------------------------------------------------------------------
+
+CSP_WEAK int csp_tcp_recv(csp_rt_t* st, uint16_t port, uint32_t accept,
+			  uint8_t* data, uint16_t* len)
+{
+    (void)st; (void)port; (void)accept; (void)data; (void)len;
+    return 0;                      // nothing pending, ever
+}
+
+CSP_WEAK int csp_tcp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
+			  const uint8_t* data, uint16_t len)
+{
+    (void)st; (void)addr; (void)port; (void)data; (void)len;
+    return -1;
+}
+
+// --- UART -------------------------------------------------------------------
+
+CSP_WEAK int csp_uart_open(csp_rt_t* st, uint32_t xref)
+{
+    (void)st; (void)xref;
+    return -1;                     // no second port on this board
+}
+
+CSP_WEAK int csp_uart_recv(csp_rt_t* st, uint32_t xref, uint8_t* data,
+			   uint16_t* len)
+{
+    (void)st; (void)xref; (void)data; (void)len;
+    return 0;                      // quiet, like a wire with nobody on it
+}
+
+CSP_WEAK int csp_uart_send(csp_rt_t* st, uint32_t xref, const uint8_t* data,
+			   uint16_t len)
+{
+    (void)st; (void)xref; (void)data; (void)len;
+    return -1;
+}
+
 // --- I2C --------------------------------------------------------------------
 
 CSP_WEAK int csp_i2c_start(csp_rt_t* st, uint32_t xref, uint8_t* data,

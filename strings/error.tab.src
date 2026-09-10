@@ -25,6 +25,7 @@ err_rule_range bad rule range, rules are numbered 1..%d
 err_no_rule no rule %d, the program has %d
 err_num_range number out of range
 err_bad_ipv4 an ipv4 literal is four parts of 0..255
+err_trailing nothing may follow the declaration -- %s is left over
 err_unknown unknown error
 err_cannot_save cannot save eeprom
 err_cannot_load cannot load from eeprom

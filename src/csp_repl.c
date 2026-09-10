@@ -351,7 +351,9 @@ static void print_decl(decl_t d)
     case DECL_OBJECT:
     case DECL_VIEW:
 	csp_print_rostr(ros_undefined); break;
-    case DECL_AVAIL:
+    case DECL_ROUTE:    csp_print_rostr(ros_route); break;
+    // DECL_AVAIL is the "next free type" counter, and taking DECL_ROUTE made it
+    // equal to DECL_END_MARK -- so it can no longer be a case of its own.
     case DECL_END_MARK:
 	break;
     }    
@@ -1041,7 +1043,12 @@ match:
 	// A #local has NO name here on purpose -- it lives in the define buffer
 	// until #end and lists as $N -- so the nameless skip below would drop
 	// its declaration line entirely.
-	if (!csp_is_local(st, MAKE_INDEX(0, i)) &&
+	// A #route has no name of its own either -- what it says is two OTHER
+	// names -- so it needs the same exemption a #local does, or it vanishes
+	// from the listing and a program copied off a board comes home with its
+	// routing gone.
+	if ((d.type != DECL_ROUTE) &&
+	    !csp_is_local(st, MAKE_INDEX(0, i)) &&
 	    ((npos == 0) || (csp_str_len(st, npos) == 0)))
 	    continue;                // no / empty name
 	if (nf && !is_fvar(ix, 2, filt, nf))
@@ -1302,6 +1309,7 @@ match:
 		    csp_print_blank();
 		    csp_print_hex(TR_SPI_CMD(ep));
 		    break;
+		case TR_TCP:
 		case TR_UDP:
 		    // Port first, address after and only when there is one --
 		    // exactly the grammar, so the line goes back in as it came
@@ -1313,11 +1321,26 @@ match:
 		    // knows a 32-bit constant is an address, which is the whole
 		    // reason `1.2.3.4` is a literal rather than a string: it
 		    // reads back the way it was written.
-		    csp_print_lit(" udp ");
+		    // Two branches, not a conditional: csp_print_lit declares a
+		    // static array for the literal, so it has to see one.
+		    if (d.bf.transport == TR_TCP)
+			csp_print_lit(" tcp ");
+		    else
+			csp_print_lit(" udp ");
 		    csp_print_uint((uvalue_t)decl(st, d.bf.id + 1, cn.init).i);
 		    if (ep != 0) {
 			csp_print_blank();
 			csp_print_ipv4(ep);
+		    }
+		    break;
+		case TR_UART:
+		    // Unit, then the baud only when the program named one --
+		    // exactly the grammar, so the line goes back in.
+		    csp_print_lit(" uart ");
+		    csp_print_uint(TR_UART_UNIT(ep));
+		    if (TR_UART_BAUD(ep) != 0) {
+			csp_print_blank();
+			csp_print_uint(TR_UART_BAUD(ep));
 		    }
 		    break;
 		case TR_CONSOLE:
@@ -1334,6 +1357,16 @@ match:
 	    }
 	    list_eol();
 	    break;
+	case DECL_ROUTE: {
+	    // Two names and nothing else -- exactly the grammar, so the line
+	    // goes back in as it came out.
+	    csp_print_lit("#route ");
+	    csp_print_str_at(st, decl_name_pos(st, MAKE_INDEX(0, d.rt.src)));
+	    csp_print_blank();
+	    csp_print_str_at(st, decl_name_pos(st, MAKE_INDEX(0, d.rt.dst)));
+	    list_eol();
+	    break;
+	}
 	case DECL_FIELD:
 	    // #field <name>:<width> <dir> <type> <frame>[<lo>..<hi>].ca.id is the
 	    // #buffer decl the field is a view into, so the frame is named, not
@@ -1576,13 +1609,13 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
     // holds a plain value. Falling through to the device branch read that value
     // as a dvalue_t and printed a port and a pin out of the number itself.
     if ((t == DECL_VARIABLE) || (t == DECL_CONSTANT)) {
-	csp_print_just("", LJUST, STATE_W_DIR);
+	csp_print_just(NULL, LJUST, STATE_W_DIR);
 	if (is_state)
 	    csp_print_rojust(ros_state, LJUST, STATE_W_KIND);
 	else
 	    csp_print_rojust((t == DECL_CONSTANT) ? ros_param : ros_var,
 			     LJUST, STATE_W_KIND);
-	csp_print_just("", LJUST, STATE_W_PIN);
+	csp_print_just(NULL, LJUST, STATE_W_PIN);
     }
     else {   // digital / analog
 	// port/pin/dir live in the VALUE slot, not the declaration: an object's
@@ -1758,9 +1791,13 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 	const char* w = argv[a];
 	int i = 0;
 	
-	while(i < (sizeof(filt_table)/sizeof(filt_table[0]))) {
-	    if (ro_strcmp(w, filt_table[i].key) == 0) {
-		f_flags |= filt_table[i].flags;
+	// Both fields through ro_*: filt_table is RODATA, so on AVR a plain
+	// `filt_table[i].key` reads the data space at a flash address. The
+	// filter then matched nothing and `/list timers` silently listed
+	// everything -- an answer, just not to the question asked.
+	while(i < (int)(sizeof(filt_table)/sizeof(filt_table[0]))) {
+	    if (ro_strcmp(w, (rostring_t)ro_ptr(&filt_table[i].key)) == 0) {
+		f_flags |= (filter_flag_t)ro_word(&filt_table[i].flags);
 		break;
 	    }
 	    i++;
@@ -2428,9 +2465,18 @@ static int cmd_undo(csp_rt_t* st, int argc, char* argv[])
 }
 
 // print v right-aligned in a field of width w (v assumed >= 0)
-static void mem_int_r(int v, int w)
+// int32_t, NOT int. On AVR an `int` is SIXTEEN bits, and the widest thing this
+// prints is MAX_INSTRS -- 32768, one past what an int16 can hold. The truncation
+// happened at the CALL, before this function saw anything, so /memory reported
+// the instruction ceiling as `-32768` on a board whose ceiling was correct. It
+// read as the bug that had just been fixed.
+//
+// csp_print_int already takes an ivalue_t, so nothing below had to change.
+static void mem_int_r(int32_t v, int w)
 {
-    int n = 1, t = v;
+    int n = 1;
+    int32_t t = v;
+
     while (t >= 10) { n++; t /= 10; }
     while (n++ < w) csp_print_blank();
     csp_print_int(v);
@@ -2500,7 +2546,7 @@ static int cmd_load(csp_rt_t* st, int argc, char* argv[])
 static void mem_row(rostring_t name, uint32_t used, int32_t limit, int show_pct)
 {
     mem_roname(name);
-    mem_int_r((int)used, 8);
+    mem_int_r((int32_t)used, 8);
     if (limit < 0) {
 	int k;
 	for (k = 1; k < 9; k++) csp_print_blank();
@@ -2509,7 +2555,7 @@ static void mem_row(rostring_t name, uint32_t used, int32_t limit, int show_pct)
     else
 	mem_int_r(limit, 9);
     if (show_pct && (limit > 0)) {
-	mem_int_r((int)((used * 100) / (uint32_t)limit), 5);
+	mem_int_r((int32_t)((used * 100) / (uint32_t)limit), 5);
 	csp_print_char('%');
     }
 }
@@ -2521,7 +2567,7 @@ static void mem_row(rostring_t name, uint32_t used, int32_t limit, int show_pct)
 static void mem_val(rostring_t name, uint32_t v)
 {
     mem_roname(name);
-    mem_int_r((int)v, 8);
+    mem_int_r((int32_t)v, 8);
     csp_println();
 }
 
@@ -2574,7 +2620,7 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 	csp_print_line(" total:");
 	mem_val(ros_system,  sys);
 	mem_val(ros_struct,  model_state());
-	mem_roname(ros_buffers); mem_int_r((int)buffers, 8);
+	mem_roname(ros_buffers); mem_int_r((int32_t)buffers, 8);
 	if (!st->started) csp_print_lit("   (allocated on /resume)");
 	csp_println();
 	// The REPL line buffer. Its own row because it is the one allocation whose
@@ -2589,7 +2635,7 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 	if (csp_stack_low > 0x7fff)          // host: stack and arena never meet
 	    csp_print_just("-", RJUST, 8);
 	else
-	    mem_int_r((int)csp_stack_low, 8);
+	    mem_int_r((int32_t)csp_stack_low, 8);
 	csp_print_lit("  at ");
 	csp_print_hex((uvalue_t)(uintptr_t)csp_stack_low_fn);
 	csp_println();
@@ -2901,6 +2947,21 @@ static int in_open_block(csp_rt_t* st)
 int csp_process_line(csp_rt_t* st, char* line)
 {
     int len;
+
+    // NO ERROR SURVIVES INTO THE NEXT LINE.
+    //
+    // csp_set_error keeps the FIRST error, so one left set by something outside
+    // the REPL -- a boot-time eeprom load that found nothing, say -- is carried
+    // forward forever. And it does not merely mislabel the next complaint:
+    // csp_parse_variable opens with `if (st->ps.err != ERR_OK) return -1;`, so a
+    // stale error makes every declaration fail at the guard, before the parser
+    // has looked at anything. `#variable n = 10` did nothing and said nothing,
+    // and the line after it reported "cannot load from eeprom".
+    //
+    // A line reports its own errors before it returns, so there is never
+    // anything here worth carrying. Clearing at the START rather than the end is
+    // what makes that true no matter who set it or when.
+    csp_clr_error(st);
 
     // Skip leading whitespace
     while (*line && (*line == ' ' || *line == '\t')) line++;

@@ -75,7 +75,10 @@ void csp_print_tag(csp_rt_t* st, index_t n)
     csp_fprint_tag(stdout, st, n);
 }
 
-void csp_fprint_escaped_string(FILE* f, char* ptr, int len)
+// const: it only reads. The caller now hands it a pointer that has been through
+// ro_maybe_ptr, which is const because what it points at is read-only in either
+// address space.
+void csp_fprint_escaped_string(FILE* f, const char* ptr, int len)
 {
     fputc('"', f);
     while(len--) {
@@ -114,7 +117,7 @@ void csp_fprint_value(FILE* f, csp_rt_t* st, vtype_t vt, value_t val)
 	if (val.s <= 0)
 	    fputs("\"\"", f);
 	else
-	    csp_fprint_escaped_string(f, csp_str_at(st, val.s), csp_str_len(st, val.s));
+	    csp_fprint_escaped_string(f, ro_maybe_ptr(csp_str_at(st, val.s)), csp_str_len(st, val.s));
 	break;
     default: fprintf(f, "???"); break;
     }
@@ -348,7 +351,7 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	case 1:
 	    fprintf(f, "{instr,%d,'%s',[r%d,r%d]}%s\n",
 		    i,
-		    csp_opcode_name(instr(st,i,op)),
+		    ro_maybe_ptr(csp_opcode_name(instr(st,i,op))),
 		    instr(st,i,a.x),
 		    instr(st,i,a.y),
 		    eot);
@@ -356,7 +359,7 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	case 2:
 	    fprintf(f, "{instr,%d,'%s',[r%d,r%d,r%d]}%s\n",
 		    i,
-		    csp_opcode_name(instr(st,i,op)),
+		    ro_maybe_ptr(csp_opcode_name(instr(st,i,op))),
 		    instr(st,i,a.x),
 		    instr(st,i,a.y),
 		    instr(st,i,a.z),
@@ -449,12 +452,12 @@ void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
 		if (lang == ERLANG) {
 		    if (!fv) fprintf(f, ",");
 		    fprintf(f, "{state,\"%.*s\",%d}",
-			    (int)csp_str_len(st, np), csp_str_at(st, np),
+			    (int)csp_str_len(st, np), ro_maybe_ptr(csp_str_at(st, np)),
 			    lookup_state_pos(st, np));
 		}
 		else {
 		    fprintf(f, " state %.*s=%d\n",
-			    (int)csp_str_len(st, np), csp_str_at(st, np),
+			    (int)csp_str_len(st, np), ro_maybe_ptr(csp_str_at(st, np)),
 			    lookup_state_pos(st, np));
 		}
 		fv = 0;
@@ -654,7 +657,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	    if (!first) fputc(',', f);
 	    first = 0;
 	    fprintf(f, "{%d,\"%.*s\"}", lookup_state_pos(st, np),
-		    (int)csp_str_len(st, np), csp_str_at(st, np));
+		    (int)csp_str_len(st, np), ro_maybe_ptr(csp_str_at(st, np)));
 	}
 	fprintf(f, "]}%s\n", eot);
 	break;
@@ -678,8 +681,8 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		decl(st,i,local) ? "local" : "variable",
 		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
-		(char*) csp_fmt_pindir(decl(st,i,dir)),
-		(char*) csp_fmt_vtype(vt),
+		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
+		ro_maybe_ptr(csp_fmt_vtype(vt)),
 		decl(st,i,cont) ? ",{cont,1}" : "");
 	csp_fprint_value(f, st, vt, decl(st,i,va.init));
 	fprintf(f, "},{value,");
@@ -692,7 +695,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		i,
 		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
-		(char*) csp_fmt_vtype(vt));
+		ro_maybe_ptr(csp_fmt_vtype(vt)));
 	csp_fprint_value(f, st, vt, decl(st,i,cn.init));
 	fprintf(f, "},{value,");
 	csp_fprint_value(f, st, vt, csp_value(st, ix));
@@ -703,8 +706,8 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	fprintf(f, "{decl,%d,digital,\"%.*s\",[{dir,%s},{pull,%s},{port,%d},{pin,%d}]}%s\n",
 		i,
 		DNAME(st, ix),
-		(char*) csp_fmt_pindir(decl(st,i,dir)),
-		(char*) csp_fmt_pull(st, i),
+		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
+		ro_maybe_ptr(csp_fmt_pull(st, i)),
 		decl(st,i,di.port),decl(st,i,di.pin),
 		eot);
 	break;
@@ -714,9 +717,9 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	       i,
 		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
-		(char*)csp_fmt_vtype(vt),
-		(char*)csp_fmt_pindir(decl(st,i,dir)),
-		(char*)csp_fmt_pwm(st, i),
+		ro_maybe_ptr(csp_fmt_vtype(vt)),
+		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
+		ro_maybe_ptr(csp_fmt_pwm(st, i)),
 		decl(st,i,an.port), decl(st,i,an.pin),
 		eot);
 	break;
@@ -735,9 +738,9 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		i,
 		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
-		(char*)csp_fmt_vtype(vt),
-		(char*)csp_fmt_endian(decl(st,i,ca.endian)),
-		(char*)csp_fmt_pindir(decl(st,i,dir)),
+		ro_maybe_ptr(csp_fmt_vtype(vt)),
+		ro_maybe_ptr(csp_fmt_endian(decl(st,i,ca.endian))),
+		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
 		csp_ivalue(st, decl(st,i,ca.id)),
 		decl(st,i,ca.bit),
 		GET_FIELD_LEN(decl(st,i,ca.len)), eot);
@@ -749,7 +752,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		i,
 		DNAME(st, ix),
 		decl(st,i,bf.nbytes),
-		(char*)csp_fmt_vtype(vt),
+		ro_maybe_ptr(csp_fmt_vtype(vt)),
 		decl(st,i,bf.transport),
 		(decl(st,i,bf.transport) == TR_CAN)
 		    ? (unsigned)csp_ivalue(st, decl(st,i,bf.id)) : 0u,
@@ -839,7 +842,10 @@ void csp_dump(FILE* f, csp_rt_t* st)
 extern const op_entry_t op_table[];
 
 // 
-static int maybe_unquoted_atom(char* ptr, int len)
+// const: it only LOOKS at the bytes, and one of its two callers now hands it a
+// pointer that came through ro_maybe_ptr -- which is const, because what it
+// points at is read-only in both address spaces.
+static int maybe_unquoted_atom(const char* ptr, int len)
 {
     int i;
     if (len <= 0)
@@ -870,10 +876,13 @@ void csp_dump_tokens(FILE* f, token_t* tv, int n)
 		fprintf(f,"'%.*s',", tv[i].v.str.len, tv[i].v.str.ptr);
 	    break;
 	default:
-	    if (maybe_unquoted_atom((char*)tok_table[tv[i].t].name, tok_table[tv[i].t].namelen))
-		fprintf(f,"%.*s,", tok_table[tv[i].t].namelen, (char*) tok_table[tv[i].t].name);
+	    if (maybe_unquoted_atom(ro_maybe_ptr(ro_ptr(&tok_table[tv[i].t].name)),
+			    (int)ro_byte(&tok_table[tv[i].t].namelen)))
+		fprintf(f,"%.*s,", (int)ro_byte(&tok_table[tv[i].t].namelen),
+			ro_maybe_ptr(ro_ptr(&tok_table[tv[i].t].name)));
 	    else
-		fprintf(f,"'%.*s',", tok_table[tv[i].t].namelen, (char*) tok_table[tv[i].t].name);
+		fprintf(f,"'%.*s',", (int)ro_byte(&tok_table[tv[i].t].namelen),
+			ro_maybe_ptr(ro_ptr(&tok_table[tv[i].t].name)));
 	    break;
 	}
     }
@@ -1198,7 +1207,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	// ".op=..,.m={..}" would let the .m arm clobber (zero) op to OP_NOP.
 	csp_instr_t* ip = &st->ram_instr[i];
 	char op[24];
-	snprintf(op, sizeof(op), ".op=OP_%s", csp_opcode_name(ip->op));
+	snprintf(op, sizeof(op), ".op=OP_%s", ro_maybe_ptr(csp_opcode_name(ip->op)));
 	switch(ip->op) {
 	    // A string segment: header, then its payload as raw words. The
 	    // payload is identifier TEXT, so it is written byte-exact -- no arm
@@ -1460,7 +1469,7 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 	    sindex_t np = csp_states_name(&sb, k);
 	    if (np == 0)
 		continue;
-	    fprintf(f, " %.*s", (int)csp_str_len(st, np), csp_str_at(st, np));
+	    fprintf(f, " %.*s", (int)csp_str_len(st, np), ro_maybe_ptr(csp_str_at(st, np)));
 	}
 	fputc('\n', f);
 	break;
@@ -1483,8 +1492,8 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 	fprintf(f, "#variable %.*s%s:%d %s %s = ", // show init value
 		DNAME(st, ix), abuf,
 		GET_RES(decl(st,i,res)),
-		(char*)csp_fmt_pindir(decl(st,i,dir)),
-		(char*)csp_fmt_vtype(vt));
+		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
+		ro_maybe_ptr(csp_fmt_vtype(vt)));
 	csp_fprint_value(f, st, vt, decl(st,i,va.init));
 	fprintf(f, "\n");
 	break;
@@ -1494,7 +1503,7 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 	fprintf(f, "#constant %.*s:%d %s = ",
 		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
-		(char*)csp_fmt_vtype(vt));
+		ro_maybe_ptr(csp_fmt_vtype(vt)));
 	csp_fprint_value(f, st, vt, decl(st,i,cn.init));
 	fprintf(f, "\n");	
 	break;
@@ -1502,8 +1511,8 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 	vt = decl(st,i,vt); // should be unsigned
 	fprintf(f, "#digital %.*s %s %s %d:%d\n",
 		DNAME(st, ix),
-		(char*)csp_fmt_pindir(decl(st,i,dir)),
-		(char*)csp_fmt_pull(st, i),
+		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
+		ro_maybe_ptr(csp_fmt_pull(st, i)),
 		decl(st,i,di.port),decl(st,i,di.pin));
 	break;
     case DECL_ANALOG:
@@ -1511,9 +1520,9 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 	fprintf(f,"#analog %.*s:%d %s %s %s %d:%d\n",
 		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
-		(char*)csp_fmt_vtype(vt),
-		(char*)csp_fmt_pindir(decl(st,i,dir)),
-		(char*)csp_fmt_pwm(st, i),
+		ro_maybe_ptr(csp_fmt_vtype(vt)),
+		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
+		ro_maybe_ptr(csp_fmt_pwm(st, i)),
 		decl(st,i,an.port), decl(st,i,an.pin));
 	break;
     case DECL_TIMER:
@@ -1528,9 +1537,9 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 	fprintf(f, "#field %.*s:%d %s %s %s 0x%x[%d:%d]\n",
 		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
-		(char*)csp_fmt_vtype(vt),
-		(char*)csp_fmt_endian(decl(st,i,ca.endian)),
-		(char*)csp_fmt_pindir(decl(st,i,dir)),
+		ro_maybe_ptr(csp_fmt_vtype(vt)),
+		ro_maybe_ptr(csp_fmt_endian(decl(st,i,ca.endian))),
+		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
 		csp_ivalue(st, decl(st,i,ca.id)),
 		decl(st,i,ca.bit),
 		decl(st,i,ca.bit) + GET_FIELD_LEN(decl(st,i,ca.len)));
@@ -1542,7 +1551,7 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 		DNAME(st, ix),
 		decl(st,i,bf.nbytes));
 	if (decl(st,i,dir))
-	    fprintf(f, " %s", (char*)csp_fmt_pindir(decl(st,i,dir)));
+	    fprintf(f, " %s", ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))));
 	if (decl(st,i,bf.transport) == TR_CAN)
 	    fprintf(f, " can 0x%x", (unsigned)csp_ivalue(st, decl(st,i,bf.id)));
 	fprintf(f, "\n");
@@ -1625,7 +1634,7 @@ void csp_list_rules(FILE* f, csp_rt_t* st)
 	    st->list_nstate = ns;
 	    for (k = 0; k < ns; k++) {
 		sindex_t np = list_state_name_pos(st, st->list_states[k]);
-		fprintf(f, " %s", np ? csp_str_at(st, np) : "?");
+		fprintf(f, " %s", np ? ro_maybe_ptr(csp_str_at(st, np)) : "?");
 	    }
 	    fprintf(f, "\n");
 	    block_end = j + instr(st, j, in.nxt);

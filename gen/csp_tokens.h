@@ -66,6 +66,8 @@ typedef enum {
     T_I2C,
     T_SPI,
     T_UDP,
+    T_TCP,
+    T_UART,
     T_CONSOLE,
     T_REPL,
     T_DISABLE,
@@ -88,6 +90,7 @@ typedef enum {
     D_TIMER,
     D_FIELD,
     D_BUFFER,
+    D_ROUTE,
     D_WHEN,
     D_UART,
     D_SOCKET,
@@ -156,6 +159,8 @@ typedef enum {
     TOK_ENT(T_I2C,OP_NOP,s_i2c), \
     TOK_ENT(T_SPI,OP_NOP,s_spi), \
     TOK_ENT(T_UDP,OP_NOP,s_udp), \
+    TOK_ENT(T_TCP,OP_NOP,s_tcp), \
+    TOK_ENT(T_UART,OP_NOP,s_uart), \
     TOK_ENT(T_CONSOLE,OP_NOP,s_console), \
     TOK_ENT(T_REPL,OP_NOP,s_repl), \
     TOK_ENT(T_DISABLE,OP_NOP,s_disable), \
@@ -177,6 +182,7 @@ typedef enum {
     DECL_ENT(D_TIMER,DECL_TIMER,s_timer), \
     DECL_ENT(D_FIELD,DECL_FIELD,s_field), \
     DECL_ENT(D_BUFFER,DECL_BUFFER,s_buffer), \
+    DECL_ENT(D_ROUTE,DECL_ROUTE,s_route), \
     DECL_ENT(D_WHEN,DECL_NONE,s_when), \
     DECL_ENT(D_LAST,DECL_NONE,s_null),
 
@@ -242,6 +248,8 @@ typedef enum {
     "T_I2C", \
     "T_SPI", \
     "T_UDP", \
+    "T_TCP", \
+    "T_UART", \
     "T_CONSOLE", \
     "T_REPL", \
     "T_DISABLE", \

@@ -181,6 +181,17 @@
 {token, 'T_I2C',        i2c,        'i2c',        'OP_NOP', -1, -1, no}.
 {token, 'T_SPI',        spi,        'spi',        'OP_NOP', -1, -1, no}.
 {token, 'T_UDP',        udp,        'udp',        'OP_NOP', -1, -1, no}.
+%% TCP is UDP's shape with a connection behind it -- same `<port> [<ip>]`, and
+%% the same two meanings for the address (a peer to accept on `in`, a
+%% destination on `out`). What differs is delivery: a datagram is whole or
+%% absent, a stream is a byte at a time and nothing is ever dropped for being
+%% overtaken. See TR_TCP in csp.h.
+{token, 'T_TCP',        tcp,        'tcp',        'OP_NOP', -1, -1, no}.
+%% A SECOND serial port, by unit number. The console's own UART is claimed by
+%% the board file ({console, {uart0, 38400}}) and the REPL owns it; this is for
+%% the other one. The BOARD has already muxed the pins, so the program names a
+%% unit and not a pin pair -- the same call `i2c 3` and `spi 1` make.
+{token, 'T_UART',       uart,       'uart',       'OP_NOP', -1, -1, no}.
 %% The node's own byte streams, and they are two DIFFERENT ends of one wire:
 %% normally the serial port feeds the interpreter and the interpreter prints
 %% back to it. A buffer on either end taps that wire.
@@ -245,6 +256,10 @@
 {decl, 'D_TIMER',    timer,     'timer',    'DECL_TIMER',    timer}.
 {decl, 'D_FIELD',    field,     'field',    'DECL_FIELD',    field_decl}.
 {decl, 'D_BUFFER',   buffer,    'buffer',   'DECL_BUFFER',   buffer}.
+%% '#' 'route' <src> <dst> -- bytes arriving at one buffer go out another with
+%% no rule in between. Two NAMES and nothing else: both buffers are already
+%% declared, and the route only says which way they are joined.
+{decl, 'D_ROUTE',    route,     'route',    'DECL_ROUTE',    route}.
 
 %% #when <expr> ... #end -- a block gate on a CONDITION, where `#in <state>+` is
 %% one on the state machine.  Deliberately a second word rather than a second
@@ -650,8 +665,9 @@
 %%   udp <port> <ip>                -- out: send to that address and port
 %%   tcp <port>                     -- in: listen on that port, any peer
 %%   tcp <port> <ip>                -- in: listen on that port, accept peer ip
-%%   tcp <port> <ip>                -- out: send to that address and port
-%%   uart <rx-port>':'<rx-pin> <tx-port>':'<tx-pin> <mode>
+%%   tcp <port> <ip>                -- out: connect there and write
+%%   uart <unit>                    -- the board's own baud
+%%   uart <unit> <baud>             -- ...or this one
 %%
 %% PORT FIRST, and the optional address after it. The other order reads better
 %% -- everyone writes 192.168.1.2:5000 -- but it cannot be parsed: an optional
@@ -682,8 +698,13 @@
   {spi_bus,  int},
   {spi_cs,   {pat, port_pin}},
   {spi_cmd,  int},
-  {udp_ip,   int},
-  {udp_port, int},
+  %% UDP and TCP share these: same operands, same meanings. `net_kind` carries
+  %% WHICH keyword matched, which is the only thing that differs.
+  {net_ip,   int},
+  {net_port, int},
+  {net_kind, tok},
+  {uart_unit, int},
+  {uart_baud, int},
   {con_kind, tok}]}.
 
 %% ONE optional block per transport, not a choice between them. A choice would
@@ -700,7 +721,16 @@
   {opt, [{tok, spi}, {int, spi_bus}, {pat, port_pin, spi_cs}, {int, spi_cmd}]},
   %% The optional address is LAST, so `udp <port>` cannot be misread. See the
   %% comment at the top of this pattern for why not the other way round.
-  {opt, [{tok, udp}, {int, udp_port}, {opt, [{int, udp_ip}]}]},
+  %% ONE block for both, with the keyword as a choice. Two separate optionals
+  %% writing the same fields would let `udp 2 tcp 1` match twice and leave the
+  %% count in csp_parse_buffer seeing one -- the second match simply overwrites
+  %% the first. A choice can only fire once.
+  {opt, [{choice, [[{tok, net_kind, udp}],
+                   [{tok, net_kind, tcp}]]},
+         {int, net_port}, {opt, [{int, net_ip}]}]},
+  %% A second serial port. The baud is optional -- without it the board's own
+  %% setting stands, which is what a program that only wants the WIRE means.
+  {opt, [{tok, uart}, {int, uart_unit}, {opt, [{int, uart_baud}]}]},
   %% The two ends of the node's own console wire. No operand: there is exactly
   %% one serial port and exactly one interpreter, so there is nothing to number.
   {opt, [{choice, [[{tok, con_kind, console}],
@@ -710,7 +740,18 @@
  [{[r, res], 8}, {[frameid], -1}, {[opts, vt], 'V_UNSIGNED'},
   {[i2c_bus], -1}, {[i2c_addr], -1}, {[i2c_reg], -1},
   {[spi_bus], -1}, {[spi_cmd], -1},
-  {[udp_ip], 0}, {[udp_port], -1}, {[con_kind], -1}]}.
+  {[net_ip], 0}, {[net_port], -1}, {[net_kind], -1},
+  {[uart_unit], -1}, {[uart_baud], 0}, {[con_kind], -1}]}.
+
+
+%% '#' 'route' <src> <dst>
+{struct, route_param,
+ [{src, str},
+  {dst, str}]}.
+
+{pattern, route, route_param,
+ [{str, src},
+  {str, dst}]}.
 
 
 %% ===========================================================================

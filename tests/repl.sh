@@ -492,7 +492,7 @@ fw() {  # fw <out> <csp>   -- a host firmware carrying that program as its ROM
 	port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c \
 	src/csp_repl.c src/csp_compile.c src/csp_tok.c port/csp_dump.c \
 	src/csp_eeprom.c src/csp_parse.c src/csp_print.c gen/csp_strings.c \
-	src/csp_transport.c src/csp_console.c src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
+	src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
 	"$2.rom.c" -o "$1" >/dev/null 2>&1
 }
 if fw "$D/fw_a" "$D/fpa.csp" && fw "$D/fw_b" "$D/fpb.csp"; then
@@ -544,7 +544,7 @@ if fw "$D/fw_a" "$D/fpa.csp" && fw "$D/fw_b" "$D/fpb.csp"; then
 	    port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c \
 	    src/csp_repl.c src/csp_compile.c src/csp_tok.c port/csp_dump.c \
 	    src/csp_eeprom.c src/csp_parse.c src/csp_print.c gen/csp_strings.c \
-	    src/csp_transport.c src/csp_console.c src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
+	    src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
 	    "$2" "$3" -o "$1" >/dev/null 2>&1
     }
     if fw2 "$D/fw2a" "$D/i1.rom.c" "$D/i2.rom.c" &&
@@ -631,7 +631,7 @@ if ./csp -n -C -O "$D/eo_rom.c" "$D/eo.csp" >/dev/null 2>&1 &&
    gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -DCSP_EXEC_ONLY -Iinclude -Igen -Isrc \
        port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
        src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
-       src/csp_parse.c src/csp_print.c gen/csp_strings.c src/csp_transport.c src/csp_console.c src/csp_flash.c \
+       src/csp_parse.c src/csp_print.c gen/csp_strings.c src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c \
        port/csp_devices.c port/csp_flash_host.c \
        "$D/eo_rom.c" -o "$D/csp_exec" \
        >/dev/null 2>&1; then
@@ -729,13 +729,33 @@ else
     echo "  FAIL line_edit did not build"; fail=$((fail+1))
 fi
 
+# THE SAME FILE, BUILT THE OTHER WAY. CSP_LINE_SIMPLE replaces the editor with a
+# collector on an exec-only node -- no cursor, no history -- and it ships on
+# uno_bare and mega_bare. Nothing else in this suite compiles that path, so
+# without this it is code that two boards run and no test has ever executed.
+#
+# It shares the harness because the two have to AGREE about everything they
+# share: typing, backspace at the end, the refusal of a line that did not fit,
+# and the paste queue. What differs is only that the editor's keys are dropped
+# instead of acted on -- and the failure that matters there is not "editing does
+# not work", it is `[A` appearing in the middle of a command.
+echo "line input (CSP_LINE_SIMPLE):"
+if gcc -Iinclude -Igen -Isrc -O2 -DCSP_LINE_SIMPLE -o "$D/line_input" \
+       tests/line_edit.c src/csp_line.c >/dev/null 2>&1; then
+    got=$("$D/line_input" | tail -1)
+    ck "the collector swallows what the editor would have acted on" \
+       "line input: ok" "$got"
+else
+    echo "  FAIL line_input did not build"; fail=$((fail+1))
+fi
+
 echo "flash guard:"
 # What csp_flash_put must REFUSE. The caller of a flash write is, by definition,
 # the part that gets rewritten next -- a firmware-update mode, a command not
 # written yet -- so the guard lives in csp_flash_put and this proves nothing
 # routes around it. Removing the guard fails four of these and nothing else.
 if gcc -Iinclude -Igen -Isrc -O2 -o "$D/flash_guard" tests/flash_guard.c \
-       src/csp_transport.c src/csp_console.c src/csp_flash.c src/csp_crc.c port/csp_devices.c port/csp_flash_host.c \
+       src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c src/csp_crc.c port/csp_devices.c port/csp_flash_host.c \
        gen/csp_strings.c >/dev/null 2>&1; then
     got=$(cd "$(dirname "$0")/.." && "$D/flash_guard" | tail -1)
     ck "runtime and the last failsafe are refused" "ok, refused" "$got"
@@ -745,7 +765,7 @@ fi
 
 echo "flash geometry:"
 if gcc -Iinclude -Igen -Isrc -O2 -o "$D/flash_geom" tests/flash_geom.c \
-       src/csp_transport.c src/csp_console.c src/csp_flash.c src/csp_crc.c port/csp_devices.c port/csp_flash_host.c \
+       src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c src/csp_crc.c port/csp_devices.c port/csp_flash_host.c \
        gen/csp_strings.c \
        >/dev/null 2>&1; then
     got=$(cd "$(dirname "$0")/.." && "$D/flash_geom" | tail -1)
@@ -996,7 +1016,10 @@ else
 fi
 
 echo "states layout:"
-if gcc -Iinclude -Igen -Isrc -O2 -o "$D/states_layout" tests/states_layout.c >/dev/null 2>&1; then
+# src/csp_states.c, because the accessors live there and depend on nothing but
+# the types -- a layout test that restates the layout tests nothing.
+if gcc -Iinclude -Igen -Isrc -O2 -o "$D/states_layout" tests/states_layout.c \
+       src/csp_states.c >/dev/null 2>&1; then
     ck "csp_states_t packs six names, slot 0 aliases name" "ok, identical" "$("$D/states_layout")"
 else
     echo "  FAIL states_layout did not build"; fail=$((fail+1))
@@ -1277,7 +1300,7 @@ if gcc -g -Wall -Iinclude -Igen -Isrc -Itests/lpcstub -Ichips/nxp/drivers/212x \
        port/csp_lpcopen.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c \
        src/csp_parse.c src/csp_tok.c src/csp_print.c src/csp_repl.c \
        port/csp_dump.c src/csp_eeprom.c gen/csp_strings.c gen/rom_host.c \
-       src/csp_transport.c src/csp_console.c src/csp_flash.c chips/nxp/drivers/212x/flash_212x.c port/csp_devices.c \
+       src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c chips/nxp/drivers/212x/flash_212x.c port/csp_devices.c \
        tests/lpcstub/stub.c >/dev/null 2>&1; then
     ck "the LPC port builds and links against the core" "0" "0"
     # A GPIO pin, an ADC channel (port 15) and a rule -- then list them back.
@@ -1912,7 +1935,7 @@ ubuild() {
 	port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
 	src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
 	src/csp_parse.c src/csp_print.c gen/csp_strings.c src/csp_transport.c \
-	src/csp_console.c \
+	src/csp_console.c src/csp_states.c \
 	src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
 	"$2.rom.c" -o "$1" >/dev/null 2>&1
 }
@@ -2362,8 +2385,13 @@ got=$(( printf '/latch off\n/pause\n'
 	  grep -cE '^[A-E] +=')
 ck "and neither does a paused burst of them" "5" "$got"
 
-# And the rules RAN, so the relayout did not throw the program away: 1111 plus
-# 1..20 where B > i, which B (2222) always is.
+# And the rules RAN, so the relayout did not throw the program away.
+#
+# On "changed", not on a number: `A = A + i ? B > i` fires EVERY cycle, so the
+# value depends on how many went by before /state -- which made the first
+# version of this case pass at 1211 and fail at 1191 on a slower run. What the
+# test is actually for is that the program survived, and "A moved off its
+# initial value" says that without asking the clock anything.
 got=$(( printf '/latch off\n/pause\n'
 	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
 	    printf "A = A + $i ? B > $i\n"
@@ -2371,7 +2399,223 @@ got=$(( printf '/latch off\n/pause\n'
 	printf '/resume\n'; sleep 0.4; printf '/state\n/quit\n' ) |
 	  ./csp -i --no-eeprom "$D/mid.csp" 2>&1 |
 	  grep -E '^A +=' | tr -s ' ' | sed 's/.*= //')
-ck "and the rules that caused it still work" "1211" "$got"
+ck "and the rules that caused it still work" "moved" \
+   "$([ -n "$got" ] && [ "$got" != "1111" ] && echo moved || echo "stuck at $got")"
+
+# --- tcp ---------------------------------------------------------------------
+# UDP's surface with a connection under it: same `<port> [<ip>]`, same two
+# meanings for the address. What differs is DELIVERY, and both differences are
+# tested here.
+echo "tcp:"
+
+got=$(printf '#buffer A:8 in tcp 5000\n#buffer B:8 out tcp 5000 192.168.1.2\n/list\n/quit\n' |
+	  repl ./csp "$D/tcp0.db" | grep '^#buffer')
+ck "tcp lists the way it was written" \
+'#buffer A:8 in tcp 5000  // R
+#buffer B:8 out tcp 5000 192.168.1.2  // R' "$got"
+
+# The two transports share one grammar block with the keyword as a choice, so a
+# line naming BOTH leaves the second as words the pattern never saw -- and the
+# count that refuses two transports cannot see them. The tail check can.
+got=$(printf '#buffer D:8 in udp 2 tcp 1\n/quit\n' | repl ./csp "$D/tcp1.db" |
+	  grep -c 'Error')
+ck "a line naming udp and tcp is refused, not half-taken" "1" "$got"
+
+# END TO END, two programs and a real connection. The node listens, the master
+# dials; then a byte stream crosses in both directions.
+cat > "$D/tnode.csp" <<'CSPEOF'
+#buffer Rx:8 in  tcp 55911
+#field  V:8 Rx[0..7]
+#buffer Tx:8 out tcp 55912 127.0.0.1
+#variable Seen:8 = 0
+Seen = V ? Rx.rx
+Tx.dlc = 2   ? Rx.rx
+Tx = 16706   ? Rx.rx
+Tx.tx = 1    ? Rx.rx
+CSPEOF
+cat > "$D/tmast.csp" <<'CSPEOF'
+#buffer Tx:8 out tcp 55911 127.0.0.1
+#buffer Rx:8 in  tcp 55912
+#field  W:8 Rx[0..7]
+#variable Got:8 = 0
+#timer  T 300 = 1
+Tx.dlc = 1 ? timeout(T)
+Tx = 90    ? timeout(T)
+Tx.tx = 1  ? timeout(T)
+Got = W    ? Rx.rx
+CSPEOF
+( printf '/latch off\n'; sleep 3; printf '/state\n/quit\n' ) |
+    ./csp -i --no-eeprom "$D/tnode.csp" > "$D/tnode.out" 2>&1 &
+npid=$!
+sleep 0.5
+( printf '/latch off\n'; sleep 2.5; printf '/quit\n' ) |
+    ./csp -i --no-eeprom "$D/tmast.csp" > "$D/tmast.out" 2>&1
+wait $npid 2>/dev/null
+# 90 is 'Z' -- what the master sends. If the node saw it, the listen, the
+# accept, the dial and the read all worked.
+ck "a stream crosses two programs over tcp" "90" \
+   "$(grep -E '^Seen ' "$D/tnode.out" | tr -s ' ' | sed 's/.*= //')"
+
+# THE FIRST CHUNK IS NOT LOST. A TCP connection is not up on the cycle it is
+# dialled, and an out buffer used to open its socket with the first byte anyone
+# sent -- which was then written into a half-open socket and dropped. The whole
+# first chunk, gone, on every fresh connection.
+cat > "$D/tfirst.csp" <<'CSPEOF'
+#buffer Rx:8 in tcp 55913
+#field  V:32 big Rx[0..31]
+#variable Seen:32 = 0
+Seen = V ? Rx.rx
+CSPEOF
+cat > "$D/tfsend.csp" <<'CSPEOF'
+#buffer Tx:8 out tcp 55913 127.0.0.1
+#variable Sent:8 = 0
+#timer  T 200 = 1
+Tx.dlc = 4        ? timeout(T) && Sent == 0
+Tx = 1145258561   ? timeout(T) && Sent == 0
+Tx.tx = 1         ? timeout(T) && Sent == 0
+Sent = 1          ? timeout(T)
+CSPEOF
+( printf '/latch off\n'; sleep 3; printf '/state\n/quit\n' ) |
+    ./csp -i --no-eeprom "$D/tfirst.csp" > "$D/tfirst.out" 2>&1 &
+fpid=$!
+sleep 0.5
+( printf '/latch off\n'; sleep 2.5; printf '/quit\n' ) |
+    ./csp -i --no-eeprom "$D/tfsend.csp" >/dev/null 2>&1
+wait $fpid 2>/dev/null
+# 0x44434241 goes out (a buffer assignment writes NATIVE, so bytes 41 42 43 44)
+# and the field reads them `big`, which is 0x41424344 = 1094861636. Four
+# DISTINCT bytes on purpose: a chunk that arrived short, late or reordered comes
+# back as a different number rather than a plausible one.
+ck "and the first chunk survives the dial" "1094861636" \
+   "$(grep -E '^Seen ' "$D/tfirst.out" | tr -s ' ' | sed 's/.*= //')"
+
+# --- #route ------------------------------------------------------------------
+# Bytes arriving at one buffer go out another with NO RULE in between. Two
+# things a rule cannot do: loop (a rule runs once a cycle and a buffer
+# assignment carries four bytes, so a relay written as rules managed about
+# 36 B/s), and chunk by the sink's size -- which is the framing that had to be
+# hand-written before and was written wrong.
+echo "route:"
+
+got=$(printf '#buffer A:8\n#buffer B:8\n#route A B\n/list\n/quit\n' |
+	  repl ./csp "$D/rt0.db" | grep -E '^#(buffer|route)')
+ck "a route lists back with both names" \
+'#buffer A:8  // R
+#buffer B:8  // R
+#route A B  // R' "$got"
+
+# Both ends must be buffers. `#route Keys Led` reads fine and would otherwise
+# pair a byte stream with a pin.
+got=$(printf '#buffer A:8\n#digital L out 13\n#route A L\n/quit\n' |
+	  repl ./csp "$D/rt1.db" | grep -c 'not a buffer')
+ck "a route to something that is not a buffer is refused" "1" "$got"
+
+got=$(printf '#buffer A:8\n#route A A\n/quit\n' | repl ./csp "$D/rt2.db" |
+	  grep -c 'Error')
+ck "and a route to itself is refused" "1" "$got"
+
+# THE WHOLE POINT, end to end and in one process: the interpreter's own output
+# routed straight out a UDP port. No rules. What arrives has to be the COMPLETE
+# text -- which is also what catches an output path that bypasses the character
+# sink the tap hangs off (the host's csp_print_str used to be one fprintf, and
+# a relayed listing arrived as `# Out:64 R`).
+echo "route end to end:"
+cat > "$D/rt.csp" <<'CSPEOF'
+#buffer Out:64 in  repl
+#buffer Net:64 out udp 56400 127.0.0.1
+#route Out Net
+CSPEOF
+if command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import socket,time
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('127.0.0.1',56400))
+s.settimeout(4)
+got=b''
+t=time.time()
+while time.time()-t < 4:
+    try: got += s.recv(256)
+    except socket.timeout: break
+open('$D/rt.seen','wb').write(got)" &
+    spid=$!
+    sleep 0.5
+    ( printf '/latch off\n'; sleep 0.6; printf '/list\n'; sleep 1.5;
+      printf '/quit\n' ) | ./csp -i --no-eeprom "$D/rt.csp" >/dev/null 2>&1
+    wait $spid 2>/dev/null
+    # The listing's own first line, whole. A route that chunked wrong, dropped a
+    # chunk or missed the RODATA words gives something shorter.
+    ck "a route carries the interpreter's output out a port" "1" \
+       "$(grep -c '#buffer Out:64 in repl' "$D/rt.seen" 2>/dev/null || echo 0)"
+else
+    echo "  SKIP no python3 to listen"
+fi
+
+# --- uart --------------------------------------------------------------------
+# A SECOND serial port, by unit number: the board has already muxed the pins,
+# the way `i2c 3` and `spi 1` name a bus. The console's own UART belongs to the
+# REPL and is not this.
+echo "uart:"
+got=$(printf '#buffer A:8 inout uart 1\n#buffer B:8 inout uart 2 115200\n/list\n/quit\n' |
+	  repl ./csp "$D/ua.db" | grep '^#buffer')
+ck "uart lists its unit, and its baud when given" \
+'#buffer A:8 inout uart 1  // R
+#buffer B:8 inout uart 2 115200  // R' "$got"
+
+# The tail check, with a message that is true for a #buffer. ERR_OPTS_AFTER_PIN
+# says "comes BEFORE the pin", which is helpful on a #digital and a falsehood
+# here -- and a wrong message is how a real fault gets read as a typo.
+got=$(printf '#buffer C:8 inout uart 1 tcp 2\n/quit\n' | repl ./csp "$D/ub.db")
+ck "and a second transport after it is refused, in its own words" \
+   "Error: nothing may follow the declaration -- tcp is left over" "$got"
+
+# --- a firmware image, flashed to a node over a route ------------------------
+# The whole thing at once: a node with NO rules and no serial connection, driven
+# from another node's prompt over TCP by two #route lines, receiving a
+# CandySpeak image into its flash. Every byte is CRC-checked by the receiver, so
+# a relay that dropped or reordered one fails rather than half-works.
+#
+# Three things had to be true and none of them were:
+#   - the host's csp_print_str went straight to fprintf, so the tap missed every
+#     RODATA word and a relayed listing came out as `# Out:64 R`
+#   - the console ring had no back-pressure, so a paste larger than 256 bytes
+#     was silently cut
+#   - /upgrade PAUSES the node, and a paused node ran no routes -- so it went
+#     deaf on the very link the image was arriving on
+echo "remote flash:"
+if tools/csp-image -q -o "$D/rimg" examples/arith.csp >/dev/null 2>&1; then
+    cat > "$D/rfnode.csp" <<'CSPEOF'
+#buffer Out:64 in  repl
+#buffer In:64  out repl
+#buffer Rx:64  in  tcp 55941
+#buffer Tx:64  out tcp 55942 127.0.0.1
+#route Rx In
+#route Out Tx
+CSPEOF
+    cat > "$D/rfmast.csp" <<'CSPEOF'
+#buffer Keys:64 in  console
+#buffer Show:64 out console
+#buffer Tx:64   out tcp 55941 127.0.0.1
+#buffer Rx:64   in  tcp 55942
+#route Keys Tx
+#route Rx Show
+CSPEOF
+    head -c 38912 /dev/zero | tr '\000' '\377' > "$D/rf.bin"
+    ( printf '/latch off\n'; sleep 20; printf '/quit\n' ) |
+	./csp -i --no-eeprom --flash="$D/rf.bin" --part=ab "$D/rfnode.csp" \
+	    > "$D/rfnode.out" 2>&1 &
+    rfpid=$!
+    sleep 1.2
+    ( printf '/latch off\n'; sleep 0.8; printf '\035'; sleep 0.5
+      printf '/upgrade A force\n'; cat "$D/rimg.hex"; printf '.\n'
+      sleep 12; printf '/images\n'; sleep 3; printf '\035'; sleep 0.3
+      printf '/quit\n' ) |
+	./csp -i --no-eeprom "$D/rfmast.csp" >/dev/null 2>&1
+    wait $rfpid 2>/dev/null
+    ck "an image reaches a node's flash over a route" \
+       "A: ROM gen=0 size=1324 rules=268" \
+       "$(grep -E '^A: ' "$D/rfnode.out" | tail -1)"
+else
+    echo "  SKIP csp-image did not build an image"
+fi
 
 echo "settings:"
 

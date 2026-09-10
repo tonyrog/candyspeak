@@ -1174,7 +1174,8 @@ static void stm_loop(void)
 #if !defined(CSP_EXEC_ONLY)
     if (!state.line.ready)
 	csp_line_prompt(&state.line);
-    while (stm_uart_available() && csp_line_space(&state.line))
+    while (stm_uart_available() && csp_line_space(&state.line) &&
+	   csp_con_space())
 	csp_con_input(&state, (char)stm_uart_read());
     if (state.line.ready) {
 	csp_process_line(&state, state.line.buf);
@@ -1192,8 +1193,14 @@ static void stm_loop(void)
     else if (!state.paused)
 	state.cycle++;
 
-    if (state.paused)
+    // The routes still run while paused -- they move bytes between transports
+    // and touch nothing the pause protects. /upgrade pauses the node for the
+    // flash write, so without this a node being upgraded OVER a route stops
+    // reading the link the image is arriving on.
+    if (state.paused) {
+	csp_route_run(&state);
 	return;
+    }
 
     csp_input(&state);
     x = state.live ? BAD_INDEX : csp_cycle(&state);

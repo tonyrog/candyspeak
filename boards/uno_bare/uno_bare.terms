@@ -1,0 +1,53 @@
+%% Arduino Uno, WITHOUT the Arduino core -- the same ATmega328P, linked by
+%% avr-gcc from port/csp_avr.c instead of by arduino-cli from HardwareSerial,
+%% Print, malloc and the C++ static-init machinery.
+%%
+%% It is a separate board rather than a flag on `uno` because the two are not
+%% interchangeable: they are different images with different sizes, built by
+%% different toolchains, and a directory that names which one it is is a much
+%% better guard than remembering. `uno` stays exactly as it was; this one is
+%% what the comparison is against.
+%%
+%% WHAT IT IS FOR: an exec-only slave. A part with 32256 usable bytes cannot
+%% hold the compiler, so this node carries a program in ROM and a small command
+%% loop, and the master that talks to it does the compiling. Hence
+%% {define, ['CSP_EXEC_ONLY']} below -- that is a property of the board, not of
+%% how it happened to be built today.
+{board, uno_bare,
+ [{chip, atmega328p},
+
+  %% The crystal on the board, and F_CPU. The UART divisor and the TIMER0 CTC
+  %% reload in port/csp_avr.c are both computed from it, so this is not
+  %% decoration: at the wrong number the console prints garbage and the
+  %% millisecond tick is off by the ratio.
+  {core, 16000000},
+
+  %% The one USART, at the speed the other ports use.
+  {console, {uart0, 38400}},
+
+  %% The instruction/declaration pool, out of 2048 bytes of RAM. csp.h already
+  %% picks 512 for __AVR__; stated here so it is visible next to the part it is
+  %% a fraction of, and so raising it is an edit to the board rather than to a
+  %% #if in a header shared with every other target.
+  {code_budget, 512},
+
+  %% The settings store lives in the runtime STRUCT, so it is RAM spent whether
+  %% anything is stored or not. An entry is 8 + strlen(path) bytes.
+  {settings_bytes, 128},
+
+  %% NO CSP_ARENA_MALLOC, unlike `uno`. Without a heap the arena is one static
+  %% array of exactly CSP_CODE_BUDGET bytes, which is a number the map file
+  %% shows and the link enforces -- on a part with 2K, a pool whose size is only
+  %% known at run time is a pool that is discovered to be too big by hanging.
+  {define, ['CSP_EXEC_ONLY']},
+
+  %% NOT the toolchain -- this board is {toolchain, bare} and links with
+  %% avr-gcc. These two are for `make upload`: the bootloader on the part is
+  %% unchanged, so arduino-cli is still the way in, and it needs to be told
+  %% which protocol to speak and where. `arduino-cli upload -i <hex>` takes a
+  %% prebuilt image and never looks at a sketch.
+  {fqbn, "arduino:avr:uno"},
+  {port, "/dev/serial/by-id/usb-Arduino_Srl_Arduino_Uno_55431313038351C04281-if00"},
+
+  {support_reactive, 0},
+  {use_statistics, 0}]}.

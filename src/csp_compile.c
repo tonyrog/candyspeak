@@ -744,6 +744,7 @@ static rostring_t decl_type_name(decl_t type)
     case DECL_ANALOG:   return ros_analog;
     case DECL_FIELD:    return ros_field;
     case DECL_BUFFER:   return ros_buffer;
+    case DECL_ROUTE:    return ros_route;
     case DECL_STATES:   return ros_states;	
     default:            return ros_undefined;
     }
@@ -2167,7 +2168,8 @@ const csp_func_t* csp_match_func(csp_rt_t* st,
 	    return &st->ufuncs[idx];
 	}
     }
-    if ((idx = csp_match_fn(st, csp_builtin_funcs, csp_num_builtin_funcs, BUILTIN_ROM,
+    if ((idx = csp_match_fn(st, csp_builtin_funcs,
+			    ro_byte(&csp_num_builtin_funcs), BUILTIN_ROM,
 			    name, arity, rarg)) >= 0) {
 	*is_user = 0;
 	*func_idx = idx;
@@ -3889,6 +3891,24 @@ NOINLINE int csp_parse_param(csp_rt_t* st, token_t* tv, int ti, size_t n)
 //
 // Only for the non-array forms: an array's tail IS the rest of the pin spec,
 // and array_pins reads it.
+// Same question, two messages: ERR_OPTS_AFTER_PIN names the pin, which is the
+// helpful thing on a #digital and a falsehood on a #buffer.
+NOINLINE static int check_tail(csp_rt_t* st, token_t* tv, int r, size_t n,
+			       csp_err_t err)
+{
+    if ((r < (int)n) && (tv[r].t != NEWLINE)) {
+	if (csp_set_error(st, err)) {
+	    if (tv[r].t == WORD)
+		csp_set_err_arg_tstr(st, 0, &tv[r].v.str);
+	    else
+		csp_set_err_arg_rostr(st,
+		    0, (rostring_t)ro_ptr(&tok_table[tv[r].t].name));
+	}
+	return -1;
+    }
+    return 0;
+}
+
 NOINLINE static int check_pin_tail(csp_rt_t* st, token_t* tv, int r, size_t n)
 {
     if ((r < (int)n) && (tv[r].t != NEWLINE)) {
@@ -4133,6 +4153,51 @@ NOINLINE int csp_parse_field(csp_rt_t* st, token_t* tv, int ti, size_t n)
 //   #buffer Buf:2                  2 bytes (16 bits)
 //   #buffer F201:8  in  can 0x201  8 bytes, classic frame
 //   #buffer Fbig:64 out can 0x300  64 bytes, CAN FD
+// '#' 'route' <src> <dst>
+//
+// Both buffers must already be declared: a route joins two things, it does not
+// create either. Naming one that is not a buffer is the mistake worth catching
+// -- `#route Keys Led` reads fine and would otherwise pair a stream with a pin.
+NOINLINE int csp_parse_route(csp_rt_t* st, token_t* tv, int ti, size_t n)
+{
+    route_param_t d = {0};
+    xindex_t sx, dx;
+    index_t ix;
+    int i, r;
+
+    if ((r = pmatch(st, tv, ti, n, pat_route, &d, sizeof(d))) < 0) {
+	csp_set_error(st, ERR_SYNTAX);
+	return -1;
+    }
+    if (check_tail(st, tv, r, n, ERR_TRAILING_WORDS) < 0)
+	return -1;
+    if (((sx = csp_lookup_decl(st, &d.src)) == BAD_INDEX) ||
+	(decl(st, INDEX(sx), type) != DECL_BUFFER)) {
+	if (csp_set_error(st, ERR_NOT_A_BUFFER))
+	    csp_set_err_arg_tstr(st, 0, &d.src);
+	return -1;
+    }
+    if (((dx = csp_lookup_decl(st, &d.dst)) == BAD_INDEX) ||
+	(decl(st, INDEX(dx), type) != DECL_BUFFER)) {
+	if (csp_set_error(st, ERR_NOT_A_BUFFER))
+	    csp_set_err_arg_tstr(st, 0, &d.dst);
+	return -1;
+    }
+    if (sx == dx) {
+	csp_set_error(st, ERR_SYNTAX);   // a route to itself is a loop
+	return -1;
+    }
+    {
+	const tstr_t none = { .ptr = NULL, .len = 0 };
+	if ((ix = csp_new_decl(st, &none, DECL_ROUTE, 0)) == BAD_INDEX)
+	    return -1;
+    }
+    i = INDEX(ix);
+    ram_decl_at(st,i)->rt.src = XIDX(sx);
+    ram_decl_at(st,i)->rt.dst = XIDX(dx);
+    return 0;
+}
+
 NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     buffer_param_t d = {0};
@@ -4140,7 +4205,7 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     uint32_t nbytes;
     uint32_t xref;
     uint8_t transport;
-    int i;
+    int i, r;
 
     d.r.res = 8;                 // default 8 bytes (a full classic CAN frame;
 				 // plain buffers default the same, for uniformity)
@@ -4153,13 +4218,23 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     d.frameid = -1;              // no 'can' clause seen
     d.i2c_bus = -1;              // no 'i2c'
     d.spi_bus = -1;              // no 'spi'
-    d.udp_port = -1;             // no 'udp'
+    d.net_port = -1;             // no 'udp' and no 'tcp'
+    d.net_kind = -1;
+    d.uart_unit = -1;            // no 'uart'
     d.con_kind = -1;             // no 'console' and no 'repl'
     d.opts.vt = V_UNSIGNED;      // raw bits -> unsigned by default
-    if (pmatch(st, tv, ti, n, pat_buffer, &d, sizeof(d)) < 0) {
+    if ((r = pmatch(st, tv, ti, n, pat_buffer, &d, sizeof(d))) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
+    // NOTHING MAY BE LEFT OVER. The transport blocks are tried in a fixed
+    // order, so a line naming two of them out of that order -- `udp 2 tcp 1` --
+    // matches the first and leaves the second as words the pattern never saw.
+    // The count below cannot notice that: it sees one transport, because one is
+    // all that matched. Silently dropping half a declaration is the shape this
+    // has taken twice already (an option written after a pin, and this).
+    if (check_tail(st, tv, r, n, ERR_TRAILING_WORDS) < 0)
+	return -1;
     d.is_can = (d.frameid >= 0);
 
     // WHICH TRANSPORT, and at most one. The four optional blocks in the grammar
@@ -4167,7 +4242,8 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     // count is the only place that can notice.
     {
 	int ntr = (d.frameid >= 0) + (d.i2c_bus >= 0) +
-		  (d.spi_bus >= 0) + (d.udp_port >= 0) + (d.con_kind >= 0);
+		  (d.spi_bus >= 0) + (d.net_port >= 0) + (d.uart_unit >= 0) +
+		  (d.con_kind >= 0);
 	if (ntr > 1) {
 	    csp_set_error(st, ERR_SYNTAX);
 	    return -1;
@@ -4175,7 +4251,13 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	if (d.frameid >= 0)        transport = TR_CAN;
 	else if (d.i2c_bus >= 0)   transport = TR_I2C;
 	else if (d.spi_bus >= 0)   transport = TR_SPI;
-	else if (d.udp_port >= 0)  transport = TR_UDP;
+	// One clause, two transports: the keyword the pattern captured is the
+	// only thing that differs. Everything below -- the port range, the
+	// address, the constant pair -- is shared, which is the point of them
+	// having the same surface.
+	else if (d.net_kind == T_UDP)     transport = TR_UDP;
+	else if (d.net_kind == T_TCP)     transport = TR_TCP;
+	else if (d.uart_unit >= 0)        transport = TR_UART;
 	// Which END of the console wire. The pattern captured the keyword itself,
 	// so this is the one place the two are told apart.
 	else if (d.con_kind == T_CONSOLE) transport = TR_CONSOLE;
@@ -4219,14 +4301,25 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	xref = TR_SPI_XREF(d.spi_bus, d.spi_cs.port, d.spi_cs.pin, d.spi_cmd);
 	break;
     case TR_UDP:
-	if (d.udp_port > 0xffff) {
+    case TR_TCP:
+	if (d.net_port > 0xffff) {
 	    csp_set_error(st, ERR_SYNTAX);
 	    return -1;
 	}
-	// No address given is `udp <port>`: listen on that port, any peer. That
-	// is the only form an `in` buffer needs; an `out` without a destination
-	// is caught at setup, where the direction is known.
-	xref = (uint32_t)d.udp_ip;
+	// No address given is `udp <port>` / `tcp <port>`: take that port, any
+	// peer. That is the only form an `in` buffer needs; an `out` without a
+	// destination is caught at setup, where the direction is known.
+	xref = (uint32_t)d.net_ip;
+	break;
+    case TR_UART:
+	// 4 bits of unit and 28 of baud. A baud that does not fit is a typo,
+	// not a rate: 268 Mbaud is past anything a part here can clock.
+	if ((d.uart_unit > 15) || (d.uart_baud < 0) ||
+	    (d.uart_baud > 0x0fffffff)) {
+	    csp_set_error(st, ERR_SYNTAX);
+	    return -1;
+	}
+	xref = TR_UART_XREF(d.uart_unit, d.uart_baud);
 	break;
     default:
 	xref = 0;
@@ -4240,7 +4333,7 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     ram_decl_at(st,i)->dir = d.opts.dir;
     ram_decl_at(st,i)->bf.nbytes = nbytes;
     ram_decl_at(st,i)->bf.transport = transport;
-    if (transport == TR_UDP) {
+    if ((transport == TR_UDP) || (transport == TR_TCP)) {
 	// TWO constants, made side by side: `id` is the address and `id + 1`
 	// the port. new_signed_const always appends, so a pair made with
 	// nothing in between is adjacent -- but that is an assumption about
@@ -4250,7 +4343,7 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	index_t ca, cp;
 	if ((ca = new_signed_const(st, (ivalue_t)xref)) == BAD_INDEX)
 	    return -1;
-	if ((cp = new_signed_const(st, (ivalue_t)d.udp_port)) == BAD_INDEX)
+	if ((cp = new_signed_const(st, (ivalue_t)d.net_port)) == BAD_INDEX)
 	    return -1;
 	if (cp != (index_t)(ca + 1)) {
 	    csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
@@ -5355,6 +5448,9 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 		    break;
 		case DECL_BUFFER:
 		    r = csp_parse_buffer(st, tv, 2, num);
+		    break;
+		case DECL_ROUTE:
+		    r = csp_parse_route(st, tv, 2, num);
 		    break;
 		default:
 		    r = -1;
