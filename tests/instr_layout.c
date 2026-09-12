@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "csp.h"
+#include "csp_layout_raw.h"
 
 static int errors = 0;
 
@@ -33,14 +34,14 @@ static void fail(const char* what, unsigned long got, unsigned long want)
 
 int main(void)
 {
-    csp_instr_t a;
-    csp_instr_t b;
+    csp_instr_raw_t a;
+    csp_instr_raw_t b;
     unsigned r;
 
     // 1. The word is still four bytes with the new arm in the union. A static
     // assert covers this too, but it is the premise of everything below.
-    if (sizeof(csp_instr_t) != 4)
-	fail("sizeof(csp_instr_t)", (unsigned long)sizeof(csp_instr_t), 4);
+    if (sizeof(csp_instr_raw_t) != 4)
+	fail("sizeof(csp_instr_raw_t)", (unsigned long)sizeof(csp_instr_raw_t), 4);
 
     // 2. OP_SETOX is a real, distinct opcode below the section terminator.
     // Inserting it before OP_AVAIL must not have pushed the sentinel into

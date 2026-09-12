@@ -24,30 +24,6 @@ typedef int32_t fixpoint_t;
 // Convert integer to fixed-point
 #define FIX_FROM_INT(i)   ((fixpoint_t)(i) << FIX_SHIFT)
 
-// Fixed-point to integer, toward zero -- what "truncate" has always claimed to
-// mean here. A bare `>> FIX_SHIFT` is an arithmetic shift and therefore FLOOR,
-// which sends -2.5 to -3 while a C cast (the float build's conversion) sends it
-// to -2. Working from the magnitude makes the two builds agree, and negating
-// through uint32_t keeps INT32_MIN out of undefined behaviour.
-static inline int32_t fix_trunc(fixpoint_t f)
-{
-    int neg = (f < 0);
-    uint32_t a = neg ? -(uint32_t)f : (uint32_t)f;
-    int32_t  r = (int32_t)(a >> FIX_SHIFT);
-    return neg ? -r : r;
-}
-
-// Fixed-point to integer, nearest, halves rounded AWAY from zero -- what C's
-// round() does. Adding half before an arithmetic shift would instead round
-// halves toward +infinity, so -2.5 and 2.5 would not be mirror images.
-static inline int32_t fix_round(fixpoint_t f)
-{
-    int neg = (f < 0);
-    uint32_t a = neg ? -(uint32_t)f : (uint32_t)f;
-    int32_t  r = (int32_t)((a + (FIX_SCALE/2)) >> FIX_SHIFT);
-    return neg ? -r : r;
-}
-
 // Convert fixed-point to integer (truncate)
 #define FIX_TO_INT(f)     fix_trunc(f)
 
@@ -58,17 +34,11 @@ static inline int32_t fix_round(fixpoint_t f)
 #define FIX_CONST(x)      ((fixpoint_t)((x) * FIX_SCALE + ((x) >= 0 ? 0.5 : -0.5)))
 
 // Basic arithmetic
-#define FIX_ADD(a, b)     ((a) + (b))
-#define FIX_SUB(a, b)     ((a) - (b))
-#define FIX_NEG(a)        (-(a))
-
-// Multiplication: (a * b) >> 16
-// Use 64-bit intermediate to avoid overflow
-#define FIX_MUL(a, b)     ((fixpoint_t)(((int64_t)(a) * (int64_t)(b)) >> FIX_SHIFT))
-
-// Division: (a << 16) / b
-// Use 64-bit intermediate to avoid overflow
-#define FIX_DIV(a, b)     ((fixpoint_t)(((int64_t)(a) << FIX_SHIFT) / (b)))
+#define FIX_ADD(a, b)     fix_add((a), (b))
+#define FIX_SUB(a, b)     fix_sub((a),(b))
+#define FIX_NEG(a)        fix_neg((a))
+#define FIX_MUL(a, b)     fix_mul((a),(b))
+#define FIX_DIV(a, b)     fix_div((a),(b))
 
 // Comparisons (same as integer comparisons)
 #define FIX_LT(a, b)      ((a) < (b))
@@ -99,32 +69,15 @@ static inline int32_t fix_round(fixpoint_t f)
 //     return (float)f / FIX_SCALE;
 // }
 
-// Integer sqrt for fixed-point (result is Q16.16)
-static inline fixpoint_t fix_sqrt(fixpoint_t x)
-{
-    uint32_t val, result, bit;
-    
-    if (x <= 0) return 0;
+extern int32_t fix_trunc(fixpoint_t f);
+extern int32_t fix_round(fixpoint_t f);
 
-    val = (uint32_t)x;
-    result = 0;
-    bit = 1UL << 30;
+extern fixpoint_t fix_neg(fixpoint_t a);
+extern fixpoint_t fix_add(fixpoint_t a, fixpoint_t b);
+extern fixpoint_t fix_sub(fixpoint_t a, fixpoint_t b);
 
-    // Find highest bit
-    while (bit > val) bit >>= 2;
+extern fixpoint_t fix_mul(fixpoint_t a, fixpoint_t b);
+extern fixpoint_t fix_div(fixpoint_t a, fixpoint_t b);
 
-    while (bit != 0) {
-        if (val >= result + bit) {
-            val -= result + bit;
-            result = (result >> 1) + bit;
-        } else {
-            result >>= 1;
-        }
-        bit >>= 2;
-    }
-
-    // Shift for Q16.16 (input is Q16.16, sqrt needs adjustment)
-    return (fixpoint_t)(result << (FIX_SHIFT / 2));
-}
-
+extern fixpoint_t fix_sqrt(fixpoint_t x);
 #endif // __CSP_FIXPOINT_H__

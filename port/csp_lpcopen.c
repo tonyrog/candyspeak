@@ -871,11 +871,12 @@ static int csp_lpc_adc_read(int ch) { (void)ch; return 0; }
 // unsigned one asks for the plain 0..2^res-1 form instead.
 static int csp_lpc_scale(csp_rt_t* st, index_t ix, int raw)
 {
-    csp_decl_t d = csp_get_decl(st, INDEX(ix));
-    int res = GET_RES(d.res);
-    int sgn = (CSP_MASK(d.vt,TYPE_BITS) != V_UNSIGNED);
+    csp_decl_t d;
+    int res = GET_RES(csp_decl_get_res(&d));
+    int sgn = (CSP_MASK(csp_decl_get_vt(&d),TYPE_BITS) != V_UNSIGNED);
     int v;
 
+    csp_load_decl(st, INDEX(ix), &d);
     if (res < 2) res = 2; else if (res > 16) res = 16;
     if (res >= CSP_LPC_ADC_BITS)
 	v = raw << (res - CSP_LPC_ADC_BITS);

@@ -260,10 +260,17 @@ static inline void* rdvp(const void* p, int rom)
 // string table of 130 bytes the very first RAM decl name landed at position 131
 // and a 7-bit field truncated it to garbage.
 //
-// 9 bits fits inside DECL_COMMON's two spare bits on AVR, so csp_decl_t does not
-// grow. new_string refuses a handle that will not fit rather than truncating it
-// (ERR_STRING_SPACE).
-#define NAMEID_BITS 9
+// EIGHT, not nine: a name id is then a WHOLE BYTE, DECL_HEADER is exactly two,
+// and a states block's six slots are six bytes -- csp_states_name becomes b[1+k]
+// instead of a shift and a mask across a boundary. Nine bits fit the record and
+// nothing else: every one of them straddled.
+//
+// The ceiling is 256 names until extension ids exist, which is BELOW what the
+// larger examples want (cpx_ball2 wants 272). That is the deliberate order:
+// take the byte layout first, then add the extension, rather than carry a field
+// that fits nowhere in order to postpone both. new_string refuses a handle that
+// will not fit rather than truncating it (ERR_STRING_SPACE).
+#define NAMEID_BITS 8
 #define MAX_NAMEIDS (1u << NAMEID_BITS)   // handles 1..MAX_NAMEIDS-1; 0 = no name
 
 // Format version of a generated ROM (rom.c). Baked in by `csp -C` as rom_version
@@ -322,7 +329,7 @@ static inline void* rdvp(const void* p, int rom)
 //       NEW image in an old firmware is the direction that breaks, because
 //       nothing there arms the interrupt and `? Drdy.fired` reads a bit no
 //       sweep ever sets -- a rule that silently never runs.
-#define ROM_FORMAT_VERSION 18
+#define ROM_FORMAT_VERSION 19
 
 // Format version of the SETTINGS store, which is NOT ROM_FORMAT_VERSION and not
 // EEPROM_VERSION either. It needs its own because it is the one part of the
@@ -713,11 +720,24 @@ extern int ro_strcpy(char* dst, rostring_t src, int max);
 // Also the sentinel for an xindex_t: it is XOBJ_GLOBAL with an impossible decl
 // index, so `x == BAD_INDEX` reads the same on both types.
 #define BAD_INDEX   ((index_t)(MAX_INDICES-1))
+
+// Slots in the unpacked-decl cache (csp_rt_t.dcache). ONE is enough because
+// decl() below is a statement expression: the pointer is consumed by the load
+// on the next line, so two decl() reads in one expression can interleave as
+// whole units but never inside one. Raising it only buys room for code that
+// holds a csp_decl_ref pointer itself -- don't.
+#ifndef CSP_DCACHE_N
+#define CSP_DCACHE_N 1
+#endif
 #define PARSE_ERROR -1
 
 // Decode/encode an index_t. `u` suffixes throughout: DECL_BITS is 15, and on a
 // 16-bit int (AVR) a plain `1 << 15` is undefined.
 #define INDEX(n)  ((index_t)((n) & ((1u << DECL_BITS)-1u)))
+// The same mask as two bytes, for a generated micro-csp LIT16 operand. Derived
+// from DECL_BITS like INDEX itself, so the two cannot drift.
+#define INDEX_MASK_LO  ((uint8_t)(((1u << DECL_BITS)-1u) & 0xFFu))
+#define INDEX_MASK_HI  ((uint8_t)((((1u << DECL_BITS)-1u) >> 8) & 0xFFu))
 #define OBJ(n)    ((unsigned)((n) >> DECL_BITS))
 #define MAKE_INDEX(obj,x) ((index_t)(((unsigned)(obj) << DECL_BITS) | \
 				     ((unsigned)(x) & ((1u << DECL_BITS)-1u))))
@@ -1437,227 +1457,17 @@ extern const op_entry_t decl_table[] RODATA;
 // new instruction format
 // general operations OP_ADD ...
 
-#define INSTR_COMMON \
-    opcode_t op:CSP_OPCODE_BITS
-
-// u: the operands are UNSIGNED. Only seven opcodes care -- / % >> < <= > >= --
-// and everything else (+ - * & | ^ == !=) gives the same bits either way.
-//
-// A FLAG and not seven more opcodes: OP_AVAIL is already 60 of the 63 the 6-bit
-// field can hold, so an unsigned mirror of each would not fit. The word has room
-// -- op(6) + three registers(4) is 18 of 32 -- and an image compiled before this
-// existed reads back with u == 0, which is the signed behaviour it had.
-//
-// swap: the operands were EXCHANGED to get here. `a > b` is emitted as `b < a`,
-// which is why there is no OP_GT: the runtime already computes the answer, and
-// four opcodes buy nothing a swap of two register numbers does not.
-//
-// Nothing reads it at RUN time -- it is a note for the LISTING. To render the
-// source back, both halves have to be undone: exchange the operands AND mirror
-// the operator (`LT y=b z=a` -> `a > b`). Doing only one gives `a < b` or
-// `b > a`, which are different programs. See exprbuf_expr.
-//
-// Only the ordered comparisons ever set it. `==` and `!=` are symmetric, so a
-// swap on them would be a bit that never means anything.
-typedef struct PACKED {
-    INSTR_COMMON;
-    unsigned x:REG_BITS;
-    unsigned y:REG_BITS;
-    unsigned z:REG_BITS;
-    unsigned u:1;
-    unsigned swap:1;    // y <-> z: `y < z` was written `z > y`
-} csp_instr_alu_t;
-
-// op = ST | LD | STP | LDP?
-// load or store register from memory
-//
-//   x = mem[y]
-//   x = mem[y,z]
-//   x = mem[part]
-// 
-typedef struct PACKED {
-    INSTR_COMMON;
-    unsigned x:REG_BITS;      // destination register
-    unsigned y:REG_BITS;      // y register when pos, y imm when part (STP)
-    unsigned mem:INDEX_BITS;  // declaration: variable/constant
-} csp_instr_mem_t;
 
 // op EQI - compare 8 bit immediate with memory and store in x
 #define TINY_BITS 6
 #define TINY_MAX ((1 << 5)-1)
 #define TINY_MIN (-(1 << 5))
-typedef struct PACKED {
-    INSTR_COMMON;
-    unsigned x:REG_BITS;      // destination register
-    signed imm:TINY_BITS;     // signed tiny immediate bits
-    unsigned mem:INDEX_BITS;  // declaration: variable/constant
-} csp_instr_memi_t;
-
-// op LI / ARG
-// load immediate LI load small 16 bit signed constant
-typedef struct PACKED {
-    INSTR_COMMON;
-    unsigned x:REG_BITS;
-    signed imm:16;
-} csp_instr_imm_t;
-
-typedef struct PACKED {
-    INSTR_COMMON;
-    unsigned cnd:REG_BITS; // condition register
-    signed   nxt:15;       // relative jump if !cnd (was int16 -- 15 bits is plenty)
-    unsigned implicit:1;   // 1 = bare NORMAL+ rule: list bare, suppress its
-			   // implicit State==INIT||State==NORMAL guard
-} csp_instr_rule_t;
-
-typedef struct PACKED {
-    INSTR_COMMON;
-    unsigned x:REG_BITS;   // body result
-} csp_instr_next_t;
-
-// op INSTATE - #in <state> block gate. A LD of the state variable precedes it;
-// if that register != imm, jump nxt to skip the whole block (sequential path).
-// OP_NINSTATE shares this layout but inverts the test: if x == imm, jump nxt to
-// enter the block (used to OR-chain a multi-state `#in A B C`, see csp_parse_in).
-// implicit: set on the auto NORMAL+ gate wrapping a bare top-level rule, so the
-// listing renders that rule bare instead of emitting a `#in NORMAL` header.
-typedef struct PACKED {
-    INSTR_COMMON;
-    unsigned x:REG_BITS;   // register holding the current State value
-    signed   imm:8;        // target state number
-    signed   nxt:13;       // relative jump (skip block if !=, enter block if ==)
-    unsigned implicit:1;   // 1 = auto NORMAL+ wrap: list the rule bare
-} csp_instr_instate_t;
-
-typedef struct PACKED {
-    INSTR_COMMON;
-    unsigned num:BODY_BITS;   // number of instructions (shares the word with mx)
-    index_t  mx;     // module index
-} csp_instr_enter_t;
-
-// A string segment header. `num` payload slots follow it, holding identifier
-// text; `used` is how many BYTES of them are in use, which is what lets an
-// image say how much string space it carries without a header field (only the
-// last segment's value is ever read).
-typedef struct PACKED {
-    INSTR_COMMON;
-    unsigned num:BODY_BITS;   // payload slots that follow
-    unsigned used:8;          // bytes used in this segment
-} csp_instr_seg_t;
-
-typedef struct PACKED {
-    INSTR_COMMON;
-    unsigned num:BODY_BITS;   // number of instructions (shares the word with mx)
-    index_t  mx;     // module index
-} csp_instr_leave_t;
-
-// Instantiate an object: enter its module body like a call.
-//
-// The entry point is NOT here. It used to be `ent:BODY_BITS`, an ABSOLUTE
-// instruction index in ten bits -- so a module whose ENTER landed past 1023 had
-// its entry truncated silently: 1557 became 533, and the object called into the
-// middle of unrelated code with no error anywhere. The module DECLARATION
-// already carries it as a full index_t, reachable from obj in two steps
-// (obj_entry), which costs nothing at a call and removes the ceiling.
-typedef struct PACKED {
-    INSTR_COMMON;
-    index_t  obj;            // object declaration index
-} csp_instr_new_t;
-
-typedef struct PACKED {
-    INSTR_COMMON;
-    unsigned x:REG_BITS;     // result register
-    unsigned idx:FUNC_BITS;  // function index
-    unsigned usr:1;          // user function
-    unsigned avt:16;         // argument value types 4 bit per argument
-} csp_instr_call_t;
-
-// OP_SETO - point CURRENT at a NAMED object (`safe.State`), for ONE access.
-//
-// An encoded index has a single selector bit -- global or current object -- so a
-// reference to a named object cannot say which one. This instruction says it, and
-// the memory instruction that FOLLOWS reads CURRENT-relative.
-//
-// One-shot: the next memory op consumes it and the runtime puts the object
-// context back (see eval_op). That is what makes it safe to place anywhere. A
-// sticky base register would have to be paired with a restore, and a rule's
-// conditional jump (csp_instr_rule_t.nxt) can skip forward over instructions --
-// so a taken jump could leave the base pointing at the wrong object for whatever
-// ran next. There is nothing to leave stale here.
-typedef struct PACKED {
-    INSTR_COMMON;
-    unsigned obj:16;         // object table index (1..MAX_OBJECT_NUM)
-} csp_instr_seto_t;
-
-// OP_SETOX - the same one-shot as OP_SETO, but for an ARRAY ELEMENT chosen at
-// runtime: `P[Idx]`.
-//
-// NOT an object number. OP_SETO names an object and looks up offs[]; this one
-// shifts the base by an ELEMENT, which is why an array costs no DECL_OBJECT, no
-// offs[] slot and no object[] slot per element:
-//
-//     cbase = offs[cur] + reg * stride
-//
-// and the memory instruction that follows adds the array's own index, so it
-// lands on element `reg`. offs[cur] keeps it correct inside a module, where the
-// array's index is module-relative; at global level offs[0] is 0 and the base
-// is just reg*stride.
-//
-// An array occupies `len` CONSECUTIVE declarations, one per element -- view[] is
-// indexed by declaration index (see st_index), so elements cannot share one
-// declaration without colliding with whatever is declared next. That is a cost
-// (8 bytes per element) and a feature: each element carries its OWN config, so
-// `#analog P[10] out 9:0..9` gives every element its own pin with no special
-// case in setup.
-//
-// stride is members per element: 1 for a scalar array, the module's member count
-// for an array of instances. 6 bits, so an arrayed module tops out at 63
-// members.
-//
-// UNLIKE OP_SETO the operand is not trusted -- a register holds whatever the
-// program computed. `len` is here so the check is the RIGHT one: `P[99]` fails
-// against the array's own length rather than merely staying inside the arena.
-typedef struct PACKED {
-    INSTR_COMMON;
-    unsigned x:REG_BITS;     // register holding the element index
-    unsigned len:16;         // element count, for the bounds check
-    unsigned stride:6;       // declarations per element (1 = scalar array)
-} csp_instr_setox_t;
 #define MAX_ARRAY_STRIDE ((1u << 6) - 1u)
 
-// OP_END_MARK: a self-verifying terminator appended after rom_instr's data. Its
-// crc is a CRC-16 over [the section's data + this marker with crc zeroed], so the
-// instruction section can be verified WITHOUT the header -- scan for OP_END_MARK,
-// its position is the section length, its crc confirms integrity. _res pads so
-// crc lands byte-aligned at bytes 2-3 (INSTR_COMMON is op:6). See rom_scan_end.
-typedef struct PACKED {
-    INSTR_COMMON;            // op == OP_END_MARK (0x3f)
-    unsigned _res:10;        // pad to a 2-byte boundary
-    uint16_t crc;            // section self-CRC (bytes 2-3)
-} csp_instr_end_t;
+// Four bytes; see csp_decl_t above for why this says nothing about them.
+typedef uint8_t csp_instr_t[4];
+// typedef uint8_t csp_instr_t[4];
 
-typedef union {
-    // uint32 need on arduino uno (unsigned is 16 bit?)
-    struct PACKED { INSTR_COMMON; uint32_t rest:26; };
-    csp_instr_enter_t e;
-    csp_instr_seg_t   sg;
-    // A segment's payload slot: four bytes of identifier text, no fields. The
-    // arm exists so the ROM generator can write one and the loader read one
-    // without pretending it is an instruction.
-    struct PACKED { uint8_t b[4]; } raw;
-    csp_instr_leave_t v;
-    csp_instr_new_t n;
-    csp_instr_imm_t i;
-    csp_instr_mem_t m;
-    csp_instr_memi_t mi;
-    csp_instr_call_t f;
-    csp_instr_rule_t r;
-    csp_instr_next_t x;
-    csp_instr_instate_t in;
-    csp_instr_alu_t a;
-    csp_instr_seto_t o;
-    csp_instr_setox_t ox;
-    csp_instr_end_t em;
-} csp_instr_t;
 
 // The instruction word must stay a clean 4 bytes: every format has to fit
 // INSTR_COMMON(6) + a full index_t(16) leaves 10 bits (BODY_BITS) for any packed
@@ -1732,36 +1542,10 @@ typedef enum {
 // correct; the sentence was not.)
 //
 // This was the last spare bit in the header. Nothing free after it.
-#define DECL_HEADER \
-    decl_t type:CSP_DECL_TYPE_BITS; \
-    unsigned cont:1; \
-    unsigned local:1; \
-    pindir_t dir:DIR_BITS; \
-    unsigned name:NAMEID_BITS
 
-#define DECL_TYPE_HEADER \
-    DECL_HEADER; \
-    unsigned vt:TYPE_BITS; \
-    unsigned res:5; \
-    unsigned is_mapped:1; \
-    unsigned bound:1; \
-    unsigned reg:REG_BITS
 
 // The old name, for the arms that carry a value. Kept because it reads well at
 // the top of every one of them and there are a dozen.
-#define DECL_COMMON DECL_TYPE_HEADER
-
-typedef struct PACKED {
-    DECL_COMMON;
-    index_t n;          // number of nodes in module definition
-    index_t ent;        // entry point in instr
-} csp_module_t;
-
-typedef struct PACKED {
-    DECL_COMMON;    
-    index_t  mx;           // module declaration index
-    unsigned m:16;         // index in object table (1..MAX_OBJECT_NUM)
-} csp_object_t;
 
 // A `#states` name. The name itself is in DECL_COMMON; snum is the value the
 // State variable takes and the number OP_INSTATE compares against, so it has to
@@ -1775,132 +1559,35 @@ typedef struct PACKED {
 } csp_statedecl_t;
 */
 
-// Up to 6 state names per declaration: DECL_HEADER (17) + 5 x 9 = 62 of 64 bits.
-//
-// DECL_HEADER, not a hand-copied prefix: `name` is slot 0, so a states block IS
-// a declaration with a name -- the one every other reader already knows how to
-// look at -- and the alias cannot drift, because there is only one definition of
-// it now. What DECL_TYPE_HEADER adds on top (vt, res, is_mapped, bound, reg)
-// lands on name2 and name3; see tests/states_layout.c.
-typedef struct PACKED {
-    DECL_HEADER;                  // type, dir, and slot 0 as `name`
-    unsigned name2:NAMEID_BITS;
-    unsigned name3:NAMEID_BITS;
-    unsigned name4:NAMEID_BITS;
-    unsigned name5:NAMEID_BITS;
-    unsigned name6:NAMEID_BITS;
-} csp_states_t;
-
 // Slots in one states block. Bit fields cannot be indexed, so reading slot k
 // goes through the switch below rather than an array -- which is also why the
 // count lives here and not as a bare 6 in the loops.
 #define CSP_STATES_PER_DECL 6
 
-typedef struct PACKED  {
-    DECL_COMMON;    
-    value_t init;    // init value
-} csp_variable_t;
 
-typedef struct PACKED  {
-    DECL_COMMON;    
-    value_t init;   // constant value
-} csp_constant_t;
 
-typedef struct PACKED  {
-    DECL_COMMON;    
-    unsigned pin:PIN_BITS;
-    unsigned port:PORT_BITS;
-    unsigned pullup:1;
-    unsigned pulldown:1;
-    unsigned irq:3;      // trigger_t; IRQ_NONE = not an interrupt source
-    unsigned soft:1;     // sampling is acceptable -- see decl_opts_t.soft
-} csp_digital_t;
 
-typedef struct PACKED {
-    DECL_COMMON;
-    unsigned pin:PIN_BITS;
-    unsigned port:PORT_BITS;
-    unsigned pwm:1;    // pwm output
-    unsigned endian:2; // |little|big
-    unsigned irq:3;    // trigger_t; IRQ_NONE = not an interrupt source
-    unsigned soft:1;   // sampling is acceptable -- see decl_opts_t.soft
-} csp_analog_t;
+// A declaration is EIGHT BYTES and nothing here says which bit means what --
+// utils/layout.terms does, and gen/csp_layout.h is the only way in. Opaque on
+// purpose: while this was a union of bit-field structs, any site could name a
+// field and gcc's packer was back in charge of the ROM format. Now it cannot
+// compile.
+// A struct and not uint8_t[8]: csp_get_decl returns one BY VALUE, and an array
+// can be neither returned nor assigned. NOT packed -- a struct of uint8_t is
+// already alignment 1, so PACKED would say nothing and only invite the
+// unaligned-access trouble it has caused here before.
+typedef uint8_t csp_decl_t[8];
 
-typedef struct PACKED {
-    DECL_COMMON;
-    unsigned id:INDEX_BITS; // the #buffer this field is a view into
-    unsigned endian:2; // |little|big
-    unsigned bit:9;   // 0-511   // bit start pos
-    unsigned len:5;   // (1-32)  // data length -1
-} csp_field_t;
+// The union it used to be, under its own name and for ONE purpose: the layout
+// tests compare the generated accessors against it field by field, which needs
+// both sides. Nothing in src/ or port/ may use it -- and since csp_decl_t is
+// not this type, nothing accidentally can.
 
-// #buffer. Its size does NOT live in DECL_COMMON.res: that is 5 bits holding
-// bits-1, so anything past 32 bits truncated silently (a 64-bit buffer became
-// 4 bytes). nbytes here is the one source of truth for how big a buffer is.
-typedef struct PACKED {
-    DECL_COMMON;
-    unsigned nbytes:10;     // 1..1023; a CAN FD frame is 64 bytes
-    // 4 bits, not 2: TR_UDP is 5. The word had four spare bits, so this costs
-    // nothing -- csp_bufdecl_t is 8 bytes before and after.
-    unsigned transport:4;   // transport_t: TR_NONE plain RAM, TR_CAN a frame
-    unsigned id:INDEX_BITS; // the constant holding this transport's endpoint:
-			    // a frame id, a packed bus/addr/reg, or an IPv4
-			    // address. See transport_t for the packings.
-			    //
-			    // TR_UDP USES TWO: `id` holds the IPv4 address and
-			    // `id + 1` the port. A constant is 32 bits and this
-			    // endpoint is 48, and a port field here would take
-			    // csp_decl_t from 8 bytes to 12 -- four bytes on
-			    // every declaration of every kind, to carry one
-			    // number for one transport. csp_parse_buffer makes
-			    // the pair with new_signed_const twice and REFUSES
-			    // to compile if they did not come out adjacent, so
-			    // the assumption cannot rot quietly.
-} csp_bufdecl_t;
-
-// #route. Two buffer DECLARATIONS -- resolved to buffer ids at setup, so the
-// pairing survives a rebuild that renumbers nothing and a ROM image that
-// carries the declarations and not the tables.
-typedef struct PACKED {
-    DECL_COMMON;
-    unsigned src:INDEX_BITS;   // where the bytes come from
-    unsigned dst:INDEX_BITS;   // and where they go
-} csp_route_t;
-
-typedef struct PACKED {
-    DECL_COMMON;
-    unsigned long period:28; // timeout value ms (74h max)
-    unsigned _res:1;         // reserved
-    unsigned fired:1;        // timeout occurred this cycle (edge-triggered)
-    unsigned running:1;      // timer is runnig (tx is valid time)
-    unsigned init:1;         // one bit value 1 = start, 0 = stop
-} csp_timer_t;
-
-// DECL_END_MARK: self-verifying terminator appended after rom_decl's data (the
-// counterpart to csp_instr_end_t for the decl section). DECL_COMMON is exactly 4
-// bytes, so crc lands byte-aligned at bytes 4-5. See rom_scan_end.
-typedef struct PACKED {
-    DECL_COMMON;             // type == DECL_END_MARK (0xf)
-    uint16_t crc;            // section self-CRC (bytes 4-5)
-    uint16_t _res;           // pad to 8 bytes
-} csp_decl_end_t;
-
-typedef union {
-    struct PACKED { DECL_COMMON; };
-    csp_module_t   md;
-    csp_object_t   mq;
-    csp_variable_t va;
-    csp_constant_t cn;
-    csp_digital_t  di;
-    csp_analog_t   an;
-    csp_field_t    ca;
-    csp_bufdecl_t  bf;
-    csp_route_t    rt;
-    csp_timer_t    tm;
-    // csp_statedecl_t sd;
-    csp_states_t   s6;
-    csp_decl_end_t em;
-} csp_decl_t;
+// The generated record accessors (utils/layout.terms). HERE and not further
+// down: csp_decl_t and csp_instr_t are both defined by this point, ro_byte --
+// which the _ro half is built on -- is defined far above, and instr_next below
+// is the first thing that reads a field.
+#include "csp_layout.h"
 
 
 // Name position of slot k in a states block, 0 when the slot is padding. Slot 0
@@ -2402,9 +2089,19 @@ typedef struct {
 
 // How many typed lines /undo can take back. Eight bytes each, so the default is
 // 64 bytes of the runtime struct -- nothing on a board with kilobytes of pool,
-// and worth turning down to 1, or off with 0, on one with a few hundred.
+// and worth turning down to 1 on one with a few hundred.
+//
+// Sized by what the build can DO, like CSP_DEFINE_BYTES: an exec-only node has
+// no parser, so no line was ever typed into it and there is nothing to take
+// back. The ring was 66 bytes of a part that has 2048, for a command that
+// could not be reached -- csp_repl.c compiles the whole feature out, but .bss
+// is not garbage-collected per field and the struct carried it anyway.
 #ifndef CSP_UNDO_DEPTH
+#if defined(CSP_EXEC_ONLY)
+#define CSP_UNDO_DEPTH 0
+#else
 #define CSP_UNDO_DEPTH 8
+#endif
 #endif
 
 // Where the four bump cursors stood before a line was accepted. Taking the line
@@ -2419,6 +2116,47 @@ typedef struct {
 
 typedef struct _csp_rt_t
 {
+    // --- HOT BLOCK: the first 64 bytes ---------------------------------
+    // AVR reaches a struct member with `ldd Rd, Z+q` only for q <= 63. Past
+    // that every single access has to build a 16-bit address first (movw +
+    // subi + sbci, six bytes) before it can load anything. csp_rt_t is 1400
+    // bytes, so which members live down here is a code-size decision, not a
+    // cosmetic one -- these are the ones the runtime touches most, ranked by
+    // uses per byte. The static assert below keeps the block inside the
+    // window; adding a member here without checking just pushes the last one
+    // out and quietly costs what it was put here to save.
+    csp_pstate_t ps;             // parse state (counts, error, line)
+    csp_rpair_t* route;
+    index_t    nroute;
+    csp_buf_t*  buf;              // buffer table (own alloc, sized to estimate)
+    index_t    nbuf;              // number of buffers allocated
+    uint8_t*   heap[2];           // heap[DIN] = block base, heap[DOUT] = base + half
+    index_t rom_nd;              // # ROM decls   (RAM decl base)
+    index_t rom_nn;              // # ROM instrs  (RAM instr base)
+    csp_cstate_t* cs;
+    uint8_t cur;                 // current object number (0 = global)
+    uint16_t set_used;           // bytes of settings[] in use
+    index_t cbase;
+    // The GLOBAL State, fixed once the runtime has one. cs->sx is a parse-time
+    // cursor -- between #module and #end it points at the module's own State,
+    // CURRENT-relative -- so anything that runs on a CYCLE, while a module may
+    // be half typed at the prompt, has to use this instead. Deliberately not in
+    // csp_pmark_t: a parse rollback must not move it.
+    // (no state table: states are DECL_STATES declarations, see add_state)
+    index_t gsx;
+    set_group_t* dset;            // mark decl updated during cycle (own alloc, view_cap bits)
+    csp_view_t* view;             // per-leaf view (own alloc, sized to estimate)
+    index_t nio;                 // number of device entries
+    // --- end hot block ---------------------------------------------------
+    // Everything below this line costs six extra bytes of address arithmetic
+    // per access on AVR. See the assert under csp_rt_t for what enforces it.
+    // es is 91 bytes -- it cannot fit in the block, and making it a POINTER into
+    // the block measured WORSE (mega_bare +106, uno_bare +56): gcc already
+    // hoists `st + offsetof(es)` into a register across a function, and loading
+    // a pointer out of RAM costs more than the arithmetic it replaces. Left a
+    // member deliberately; see doc/AVR_CODE_SIZE.md.
+    csp_estate_t es;
+
 
     // RAM code arena (allocated once in csp_rt_init via csp_mem_init). instr[] and
     // decl[] share ONE double-ended pool of CSP_CODE_BUDGET bytes: instructions
@@ -2487,23 +2225,20 @@ typedef struct _csp_rt_t
     // a plain assignment all edit in place and move no cursor, so nothing is
     // pushed and /undo says there is nothing to take back rather than silently
     // withdrawing an older line the user had stopped thinking about.
+#if CSP_UNDO_DEPTH > 0
     csp_undo_t undo[CSP_UNDO_DEPTH];
     uint8_t  undo_n;         // valid entries, 0..CSP_UNDO_DEPTH
     uint8_t  undo_head;      // next slot to write (ring)
+#endif
 
     // All leaf values live in the buffer heap (see doc/DESCRIPTORS.md). Each of
     // these is its own allocation, sized to csp_estimate in csp_rt_start.
-    csp_view_t* view;             // per-leaf view (own alloc, sized to estimate)
     index_t    view_cap;          // leaves view[]/dset hold (csp_estimate.nleaf);
 				  // rt_start reruns on any decl add so it stays >= max st_index
     // ROUTES: pairs of buffer ids, one per #route, built at rt_start. A pair
     // rather than a field on the buffer -- routes are few and buffers are many,
     // so four bytes per ROUTE beats four per buffer.
-    csp_rpair_t* route;
-    index_t    nroute;
-    csp_buf_t*  buf;              // buffer table (own alloc, sized to estimate)
     index_t    buf_cap;          // buffers the table can hold (csp_estimate.nbuf)
-    index_t    nbuf;              // number of buffers allocated
     uint16_t   hp;                // heap bump cursor, bytes. Held rather than
 				  // derived from buf[nbuf-1]: most leaves take
 				  // heap without taking a buffer now, so the
@@ -2514,7 +2249,6 @@ typedef struct _csp_rt_t
     // never sees its own writes -> sequential and reactive yield the same state.
     // ONE allocation holds both halves: heap[DOUT] points at its second half, so
     // only heap[DIN] is owned (freed). heap_cap is the usable bytes per half.
-    uint8_t*   heap[2];           // heap[DIN] = block base, heap[DOUT] = base + half
     uint16_t   heap_cap;          // heap bytes per half (csp_estimate.heap)
     // allow device output latch=0 or disallow latch=1
     uint8_t latch;
@@ -2526,7 +2260,6 @@ typedef struct _csp_rt_t
     uint8_t up_active;
     // check if any node has been set: anyx|anyd == CSP_TRUE
     int8_t  anyd;  // CSP_TRUE|CSP_FALSE
-    set_group_t* dset;            // mark decl updated during cycle (own alloc, view_cap bits)
     
     // Object number -> where that object's members start in the decl index
     // space. Indexed by a REAL object number (1..nq), never by the selector in
@@ -2545,7 +2278,6 @@ typedef struct _csp_rt_t
     // by OP_NEW/OP_LEAVE, by the reactive dispatcher, and one-shot by OP_SETO.
     // Its own field rather than offs[CURRENT], which is what it was while CURRENT
     // was a spare slot in an object-numbered array.
-    index_t cbase;
     // stack used during eval
     int esp;                       // eval stack pointer
     struct PACKED { index_t ix; uint8_t cur; }
@@ -2578,8 +2310,28 @@ typedef struct _csp_rt_t
     // through here. All NULL (rt_init's memset) when no ROM is active, and .idg
     // /.ofs/.edg are NULL when rom_nedg == 0.
     img_p_t rom_p;
-    index_t rom_nd;              // # ROM decls   (RAM decl base)
-    index_t rom_nn;              // # ROM instrs  (RAM instr base)
+    // Unpacked-decl cache. A ROM decl lives in PROGMEM on AVR, where a
+    // bit-field cannot be read through a pointer at all -- the record has to be
+    // copied to RAM before `.type` means anything. csp_decl_ref does that copy
+    // ONCE per index and hands back a pointer to the copy, so the ~140
+    // decl(st,i,fld) sites become a call plus one `ldd Z+q` (q is 0..7, inside
+    // AVR's displacement) instead of an 8-byte struct return that every caller
+    // spills to its own frame. A RAM decl needs no copy and is returned where
+    // it lies.
+    //
+    // Keyed by index+1 so a zeroed struct is a cold cache. ROM is immutable, so
+    // the only invalidation is a new image binding rom_p/rom_nd.
+    //
+    // A returned pointer dies when its slot is reused, which with one slot is
+    // the very next ROM reference. decl() is a statement expression for exactly
+    // that reason -- it loads the field before the enclosing expression goes
+    // on, so `f(decl(st,a,x), decl(st,b,y))` is safe whichever argument gcc
+    // evaluates first. Code that calls csp_decl_ref directly must load before
+    // it calls again. The cache is compiled in on EVERY target, not just AVR,
+    // so host tests run the same eviction.
+    csp_decl_t dcache[CSP_DCACHE_N];
+    index_t    dcache_key[CSP_DCACHE_N];  // index + 1; 0 = empty slot
+    uint8_t    dcache_next;               // round-robin victim (N > 1 only)
     index_t rom_strp;            // # ROM string bytes (RAM string base)
     // Walk cache for csp_str_ofs. A handle is the Nth string, so resolving one
     // means counting length bytes from the start -- and the readers that do it
@@ -2648,10 +2400,8 @@ typedef struct _csp_rt_t
     // renumbers every declaration, so an index would point somewhere else.
     // See doc/EEPROM.md.
     uint8_t  settings[CSP_SETTINGS_BYTES];
-    uint16_t set_used;           // bytes of settings[] in use
     uint8_t  set_dirty;          // changed since the last save (/settings tag)
 
-    csp_pstate_t ps;             // parse state (counts, error, line)
 
     // Everything the TOKENIZER and PARSER need and nothing else does. Grouped so
     // the compiler half has a named surface instead of a dozen loose fields
@@ -2676,8 +2426,6 @@ typedef struct _csp_rt_t
     // NULL is the tier, checkable at runtime: the three places csp_rt.c still
     // asks about it now read "if there is a compiler, and it is mid-module",
     // which is what they always meant.
-    csp_cstate_t* cs;
-    csp_estate_t es;
 
     int list_state;              // during listing: state of the #in block being
                                  // rendered (-1 = none), suppresses State==S in cond
@@ -2685,24 +2433,9 @@ typedef struct _csp_rt_t
                                  // rule -- suppress its State==INIT||State==NORMAL
     uint8_t list_states[MAX_IN_STATES]; // during /list: states of the #in block
     uint8_t list_nstate;         // being rendered -- suppress State==<any of them>
-    // The GLOBAL State, fixed once the runtime has one. cs.sx is a parse-time
-    // cursor -- between #module and #end it points at the module's own State,
-    // CURRENT-relative -- so anything that runs on a CYCLE, while a module may
-    // be half typed at the prompt, has to use this instead. Deliberately not in
-    // csp_pmark_t: a parse rollback must not move it.
-    index_t gsx;
-    // (no state table: states are DECL_STATES declarations, see add_state)
-    index_t mdef;                // module being defined
-    csp_pmark_t mod_mark;        // parse mark taken at #module: a failure before
-				 // #end rewinds the whole module, so the lines
-				 // after it are not silently absorbed into a
-				 // module that can never be closed
-    int     ent;                 // entry op of module in st->instr
-    uint8_t cur;                 // current object number (0 = global)
 
     // calculated by csp_rt_start
     index_t nt;                  // number of timers
-    index_t nio;                 // number of device entries
     index_t nm;                  // number of modules
     // io/timer are sized to the actual program (csp_estimate) and allocated in
     // csp_rt_start -- not MAX_* reserved -- so a program may have as many as it
@@ -2815,6 +2548,21 @@ typedef struct _csp_rt_t
     csp_const_fn uconst;
 } csp_rt_t;
 
+// The hot block must stay inside AVR's `ldd Rd, Z+q` displacement (q <= 63).
+// `nio` is its last member and the block ends at byte 63 exactly, so there is
+// no slack: adding a member, or growing one, pushes something out and quietly
+// costs the six bytes per access it was moved here to save. The fix is never
+// to raise the bound -- it is to take something back out.
+//
+// AVR-only because 64 is an AVR number: host pointers are four times as wide
+// and the same members do not fit. That does NOT make this a target-only
+// check. utils/width_check.sh compiles this tree with avr-gcc and runs inside
+// `make test`, so the assert fires on a workstation, not on a board.
+#if defined(__AVR__)
+CSP_STATIC_ASSERT(offsetof(csp_rt_t, nio) + sizeof(((csp_rt_t*)0)->nio) <= 64,
+		  "csp_rt_t hot block no longer fits AVR's ldd displacement");
+#endif
+
 // The floor every "reset back to the baseline" must respect: the ROM image if
 // one is linked, otherwise what csp_rt_init created. Save and load MUST use the
 // same one, or the patch counts disagree and a restore lands a decl out.
@@ -2833,9 +2581,6 @@ typedef struct _csp_rt_t
 // "clever" bit: never deref a PROGMEM struct directly.)
 #if defined(__AVR__)
 
-static inline csp_decl_t  ro_decl(const csp_decl_t* p)
-{ csp_decl_t d;  memcpy_P(&d, p, sizeof(d)); return d; }
-
 static NOINLINE void ro_copy_decl(const csp_decl_t* p, csp_decl_t* dst)
 {
     memcpy_P(dst, p, sizeof(csp_decl_t));
@@ -2843,8 +2588,8 @@ static NOINLINE void ro_copy_decl(const csp_decl_t* p, csp_decl_t* dst)
 //    ((uint32_t*)dst)[1] = ro_dword(((uint32_t*)p)[1]);
 }
 
-static inline csp_instr_t ro_instr(const csp_instr_t* p)
-{ csp_instr_t v; memcpy_P(&v, p, sizeof(v)); return v; }
+static inline void ro_copy_instr(const csp_instr_t* p, csp_instr_t* dst)
+{ memcpy_P(dst, p, sizeof(*dst)); }
 // NOT static inline, unlike its neighbours: the image header is 60 bytes, so
 // gcc never actually inlines the copy -- it emits an out-of-line body in EVERY
 // translation unit that mentions it, and the linker cannot merge them because
@@ -2860,16 +2605,14 @@ static inline csp_sect_t ro_sect(const csp_sect_t* p)
 { csp_sect_t v; memcpy_P(&v, p, sizeof(v)); return v; }
 
 #elif defined(CSP_RO_POISON)
-#define ro_decl(p)   (*(const csp_decl_t*)csp_ro_real(p))
 #define ro_copy_decl(p,d) (*(d)) = ro_decl(p)
-#define ro_instr(p)  (*(const csp_instr_t*)csp_ro_real(p))
+#define ro_copy_instr(p,d) memcpy((d), csp_ro_real(p), sizeof(csp_instr_t))
 #define ro_header(p) (*(const csp_image_header_t*)csp_ro_real(p))
 #define ro_ref(p)    (*(const csp_image_ref_t*)csp_ro_real(p))
 #define ro_sect(p)   (*(const csp_sect_t*)csp_ro_real(p))
 #else
-#define ro_decl(p)  (*(p))
-#define ro_copy_decl(p,d) (*(d)) = (*(p))
-#define ro_instr(p) (*(p))
+#define ro_copy_decl(p,d) memcpy((d), (p), sizeof(csp_decl_t))
+#define ro_copy_instr(p,d) memcpy((d), (p), sizeof(csp_instr_t))
 #define ro_header(p) (*(p))
 #define ro_ref(p)  (*(p))
 #define ro_sect(p) (*(p))
@@ -2881,8 +2624,13 @@ static inline csp_sect_t ro_sect(const csp_sect_t* p)
 // whose logical index is always >= the base. With no ROM active (rom_n*==0) all
 // of these reduce to plain ram_* access. NOINLINE (defined in csp_rt.c) so the
 // flash-copy is not expanded at every decl()/instr() site (code size on AVR).
-extern csp_decl_t  csp_get_decl(csp_rt_t* st, index_t i);
-extern csp_instr_t csp_get_instr(csp_rt_t* st, index_t n);
+extern void csp_load_decl(csp_rt_t* st, index_t i, csp_decl_t* dst);
+// Same read, but by POINTER into RAM: a RAM decl in place, a ROM decl unpacked
+// into st->dcache. The pointer is valid until CSP_DCACHE_N further DISTINCT ROM
+// decls are referenced -- fine for reading a field out of an expression, never
+// store it. This is what decl(st,i,fld) is built on.
+extern const csp_decl_t* csp_decl_ref(csp_rt_t* st, index_t i);
+extern void csp_load_instr(csp_rt_t* st, index_t n, csp_instr_t* dst);
 
 // one string byte at a raw BYTE OFFSET into the table (length byte or char).
 // For a string, use csp_str_len / csp_str_at, which take a HANDLE; this one is
@@ -2910,8 +2658,10 @@ extern csp_instr_t csp_get_instr(csp_rt_t* st, index_t n);
 // as something with operands to chase.
 static inline index_t instr_next(csp_rt_t* st, index_t i)
 {
-    csp_instr_t ci = csp_get_instr(st, i);
-    return (ci.op == OP_SEGMENT) ? (index_t)(i + ci.sg.num + 1) : (index_t)(i + 1);
+    csp_instr_t ci;
+    csp_load_instr(st, i, &ci);
+    return (csp_instr_get_op(&ci) == OP_SEGMENT)
+	? (index_t)(i + csp_instr_get_sg_num(&ci) + 1) : (index_t)(i + 1);
 }
 
 static inline char* csp_seg_slot(csp_rt_t* st, index_t h, unsigned k)
@@ -2983,10 +2733,12 @@ static inline sindex_t csp_str_skip_fill(csp_rt_t* st, sindex_t ofs)
 {
     while (ofs < (sindex_t)st->ps.strp) {
 	index_t h = st->str_seg[ofs >> CSP_STR_SEG_BITS];
+	csp_instr_t ci;
 	unsigned used;
 	if (h == BAD_INDEX)
 	    break;
-	used = csp_get_instr(st, h).sg.used;
+	csp_load_instr(st, h, &ci);
+	used = csp_instr_get_sg_used(&ci);
 	if ((ofs & CSP_STR_SEG_MASK) < used)
 	    break;
 	ofs = (ofs + CSP_STR_SEG_BYTES) & ~(sindex_t)CSP_STR_SEG_MASK;
@@ -3055,8 +2807,31 @@ static inline char* csp_str_at(csp_rt_t* st, sindex_t h)
 // points at local 0, the topmost slot; local 1 is ram_decl[-1], and so on).
 #define ram_str_at(st, logical)   (*csp_ram_str_at((st), (logical)))
 
-#define decl(st,i,fld)  (csp_get_decl((st),(i)).fld)
-#define instr(st,n,fld) (csp_get_instr((st),(n)).fld)
+// Read one field of declaration `i`, whichever segment it lives in.
+//
+// The field is read by a GENERATED accessor (gen/csp_layout.h, from
+// utils/layout.terms), not by naming a bit-field of csp_decl_t. That is why the
+// field argument is spelled md_n and not md.n: the name is pasted, so every one
+// of these sites goes through the one description the micro-csp field table is
+// built from as well. Neither can drift from the other because there is only
+// one of them.
+//
+// The statement expression is load-bearing, not decoration: it sequences the
+// csp_decl_ref call with the field read so the one-slot cache above cannot be
+// evicted between them. Taking &decl(...) does not compile, which is the point.
+#define decl(st,i,fld) \
+    (__extension__({ const csp_decl_t* d_ = csp_decl_ref((st),(i)); \
+	             csp_decl_get_##fld(d_); }))
+// Read one field of instruction `n`, whichever segment it lives in.
+//
+// Like decl(), the field goes through a GENERATED accessor (gen/csp_layout.h,
+// from utils/layout.terms) rather than naming a bit-field of csp_instr_t --
+// which is why the field is spelled m_x and not m.x. No cache here: an
+// instruction is four bytes, so the copy onto the stack costs less than the
+// slot and the eviction rule a cache would need.
+#define instr(st,n,fld) \
+    (__extension__({ csp_instr_t i_; csp_load_instr((st),(n),&i_); \
+	             csp_instr_get_##fld(&i_); }))
 
 // Parser stack entry - tracks both register and declaration index
 typedef struct PACKED {
@@ -3212,13 +2987,18 @@ static inline char* decl_name(csp_rt_t* st, index_t ix)
     // name is a LOGICAL string position: ROM range -> flash table, else RAM.
     // (On the host RODATA is ordinary memory; an AVR PROGMEM name needs a
     // copy-out API -- deferred.) At base 0 this is plain ram_str access.
-    return csp_str_at(st, csp_get_decl(st, INDEX(ix)).name);
+    csp_decl_t d_;
+    csp_load_decl(st, INDEX(ix), &d_);
+    return csp_str_at(st, csp_decl_get_name(&d_));
 }
 
 // logical string position of a decl's name (for the segment-aware str helpers)
 static inline sindex_t decl_name_pos(csp_rt_t* st, index_t ix)
 {
-    return csp_get_decl(st, INDEX(ix)).name;
+    csp_decl_t d_;
+
+    csp_load_decl(st, INDEX(ix), &d_);
+    return csp_decl_get_name(&d_);
 }
 
 // Length of a decl's name, read segment-aware. decl_name() hands back a raw

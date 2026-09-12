@@ -1,0 +1,299 @@
+%% -*- erlang -*-
+%%
+%% Record layout, as Erlang terms.  Read with file:consult/1.
+%%
+%% WHY THIS FILE EXISTS
+%%
+%% The bit layout of a declaration is currently whatever gcc's bit-field packer
+%% decides, which means the ROM image format is defined by a compiler rather
+%% than by us.  It also means the layout cannot be READ by anything but a C
+%% compiler: micro-csp's field table (mc_decl_fields[] in src/csp_mcsp.c) had to
+%% restate it by hand, because offsetof does not reach a bit-field.  Two
+%% descriptions of one layout is the hazard; this file is the one description.
+%%
+%% From it, utils/gen_layout.erl emits
+%%
+%%   - a C accessor per field, for RAM and for ROM, get and set
+%%   - the mc_field_t table and the MF_* ids micro-csp reads the same fields by
+%%   - a layout fingerprint, so an image built against a different layout is
+%%     refused rather than misread
+%%
+%% Whichever of those a given call site uses, the others cost nothing in the
+%% binary -- an unreferenced static inline is not emitted.  That is what makes
+%% the C/bytecode boundary movable per function: converting setup_routes to
+%% micro-csp while csp_route_run stays C changes no field definition, because
+%% both read this.
+%%
+%% ---------------------------------------------------------------------------
+%% VOCABULARY
+%%
+%%   {family, BaseRecord, CType, AccessorPrefix}
+%%
+%%       Which C type the accessors take and what they are spelled with.  An
+%%       arm inherits its base's.  Without this every accessor would be
+%%       csp_decl_*, which was fine while declarations were the only thing
+%%       described here.
+%%
+%%   {record, Name, Bytes, [Field]}
+%%
+%%       Bytes is the SIZE the record must come out at -- stated, not computed,
+%%       so a field that grows past it is an error here rather than a silent
+%%       overlap on a board.
+%%
+%%   {arm, Prefix, Base, Bytes, [Field]}
+%%
+%%       One arm of the union.  Its fields begin where Base's end, and the
+%%       accessors are named csp_decl_get_<Prefix>_<Field> -- Prefix being the
+%%       union member, so the generated name and the C spelling line up.
+%%
+%%   Field = {Name, Bits}         a field, packed from bit 0 upward
+%%         | {Name, Bits, CType}  the same, with the C type the oracle assigns
+%%                                through (an enum bit-field needs the cast)
+%%         | {Name, Bits, 'T.m'}  a field whose C type is a union: the oracle
+%%                                and the accessor both go through member m.
+%%                                value_t is the only one, and it is why a
+%%                                32-bit payload can be read at all.
+%%         | {Name, Bits, signed}  a SIGNED field.  The accessor sign-extends;
+%%                                read as unsigned, a negative immediate or
+%%                                jump offset comes back as a large positive
+%%                                number that looks like a plausible index.
+%%         | {pad, Bits}          deliberate hole; generates nothing
+%%
+%%       An arm's first entry may be {start, Bit} to place it somewhere other
+%%       than where its base ends -- see s6.
+%%
+%% Fields are packed LEAST SIGNIFICANT BIT FIRST, in the order written, which
+%% is what gcc does on every little-endian target this runs on.  MATCHING GCC IS
+%% A TRANSITIONAL PROPERTY, not a goal: it is what lets the generated accessors
+%% be checked against the existing structs field by field while the tree is
+%% converted.  Once nothing reads csp_decl_t's bit-fields any more, the order
+%% here is free -- and byte-ALIGNING the hot fields is worth 2 bytes per access
+%% site on AVR (see doc/AVR_CODE_SIZE.md), paid for in bits per record.
+%%
+%% ---------------------------------------------------------------------------
+
+%% DECL_TYPE_HEADER: the four bytes every declaration arm begins with.
+%% Widths track csp.h -- CSP_DECL_TYPE_BITS, DIR_BITS, NAMEID_BITS, TYPE_BITS
+%% and REG_BITS -- and the oracle in tests/ is what notices when one moves.
+{family, decl_common,  'csp_decl_t',  "csp_decl_"}.
+{family, instr_common, 'csp_instr_t', "csp_instr_"}.
+
+{record, decl_common, 4,
+ [{type,      4, 'decl_t'},
+  {cont,      1},
+  {local,     1},
+  {dir,       2, 'pindir_t'},
+  {name,      8},
+  %% Byte 2, with one bit to spare; byte 3 below.  Ordered so NOTHING straddles:
+  %% a name is a whole byte, and what a states block aliases is now whole bytes
+  %% too -- res/is_mapped/bound sit inside name2, vt/reg inside name3.
+  {res,       5},
+  {is_mapped, 1},
+  {bound,     1},
+  %% RESERVED, not wired: the ninth bit of `name`, which is what lifts the
+  %% ceiling back to 512 when extension ids are built.  It is named rather than
+  %% padded so it is reserved in the FORMAT -- an image written today carries it
+  %% as zero, or firmware that later honours it reads a name that was never
+  %% meant.  Nothing writes it: csp_new_decl memsets the whole record, so the
+  %% bit is zero by construction rather than by the emitter clearing it.
+  {nx,        1},
+  {vt,        4},
+  {reg,       4}]}.
+
+%% ---------------------------------------------------------------------------
+%% THE ARMS.  Each begins at bit 32, where decl_common ends, and each is four
+%% bytes -- a declaration is eight.  Widths track csp.h; the oracle notices when
+%% one moves.
+
+%% #module: the node count and the entry point.  Plain index_t members in the C
+%% rather than bit-fields, which after a 32-bit header is the same layout.
+{arm, md, decl_common, 8,
+ [{n,   16},
+  {ent, 16}]}.
+
+%% An object instance: which #module it is of, and its slot in the object table.
+{arm, mq, decl_common, 8,
+ [{mx, 16},
+  {m,  16}]}.
+
+%% #variable and #constant carry a value_t, which is a union and not a
+%% bit-field.  Read through .u: the members alias, so the caller's .i or .f sees
+%% the same four bytes.  This is the payload that cannot be a micro-csp cell.
+{arm, va, decl_common, 8,
+ [{init, 32, 'value_t.u'}]}.
+
+{arm, cn, decl_common, 8,
+ [{init, 32, 'value_t.u'}]}.
+
+%% #digital: PIN_BITS 7, PORT_BITS 4.
+{arm, di, decl_common, 8,
+ [{pin,      7},
+  {port,     4},
+  {pullup,   1},
+  {pulldown, 1},
+  {irq,      3},
+  {soft,     1}]}.
+
+%% #analog: the same pin/port, then pwm and the sample options.
+{arm, an, decl_common, 8,
+ [{pin,    7},
+  {port,   4},
+  {pwm,    1},
+  {endian, 2},
+  {irq,    3},
+  {soft,   1}]}.
+
+%% #field: a view into a #buffer.  bit is a BIT position, len a width-1.
+{arm, ca, decl_common, 8,
+ [{id,     16},
+  {endian,  2},
+  {bit,     9},
+  {len,     5}]}.
+
+%% #buffer.  id names the constant holding the transport endpoint; TR_UDP uses
+%% id and id+1, which is why it is an index and not the value itself.
+{arm, bf, decl_common, 8,
+ [{nbytes,    10},
+  {transport,  4},
+  {id,        16}]}.
+
+%% #route: two buffer DECLARATIONS, resolved to buffer ids at setup.
+{arm, rt, decl_common, 8,
+ [{src, 16},
+  {dst, 16}]}.
+
+%% #timer.  period is 28 bits -- 74 hours in ms -- so it is the other payload
+%% too wide for a 16-bit cell.
+{arm, tm, decl_common, 8,
+ [{period,  28},
+  {'_res',     1},
+  {fired,    1},
+  {running,  1},
+  {init,     1}]}.
+
+%% #states: up to six state names in one declaration.  DECL_HEADER is 17 bits,
+%% not DECL_TYPE_HEADER's 32, so this arm STARTS at 17 and deliberately overlaps
+%% what the valued header adds: vt, res, is_mapped and bound land on name2 and
+%% name3, and reg on name3.  That aliasing is the point -- slot 0 IS `name`, so
+%% a states block is a declaration every other reader already understands -- and
+%% it has cost three bugs when it was implied rather than written down.
+%% tests/states_layout.c pins which slot each overlapping field lands in.
+%% Six names in bytes 1..6, and byte 7 holds their extension bits -- one per
+%% slot, two spare.  A states block cannot borrow decl_common's nx: that bit is
+%% byte 2 bit 7, which here is part of name2.  So this arm carries all six.
+%% RESERVED like the other one; zero by construction, since csp_new_decl memsets
+%% the record and nothing writes these.
+{arm, s6, decl_common, 8,
+ [{start, 16},
+  {name2, 8},
+  {name3, 8},
+  {name4, 8},
+  {name5, 8},
+  {name6, 8},
+  {nx,    8}]}.
+
+%% The terminator after a ROM decl section.  crc lands byte-aligned at 4-5,
+%% which rom_scan_end depends on.
+{arm, em, decl_common, 8,
+ [{crc,  16},
+  {'_res', 16}]}.
+
+%% ---------------------------------------------------------------------------
+%% INSTRUCTIONS.  Four bytes, a six-bit opcode and then whatever the arm needs.
+%% Same shape as a declaration -- a union of PACKED bit-field structs -- which
+%% is why the same machinery covers it.  csp_buf_t does NOT belong here: it is
+%% not packed and carries a uint32_t, so the host pads it to twenty bytes where
+%% AVR packs it to sixteen, and a byte table would be wrong on one of them.
+
+{record, instr_common, 4,
+ [{op, 6, 'opcode_t'}]}.
+
+%% ALU: three registers, an unsigned flag and the operand-swap bit.
+{arm, a, instr_common, 4,
+ [{x,    4},
+  {y,    4},
+  {z,    4},
+  {u,    1},
+  {swap, 1}]}.
+
+%% Load/store: two registers and the declaration being addressed.
+{arm, m, instr_common, 4,
+ [{x,   4},
+  {y,   4},
+  {mem, 16}]}.
+
+%% The same with a small signed immediate instead of the second register.
+{arm, mi, instr_common, 4,
+ [{x,   4},
+  {imm, 6, signed},
+  {mem, 16}]}.
+
+%% Load immediate.  Sixteen bits and SIGNED: this is where a literal -1 lives.
+{arm, i, instr_common, 4,
+ [{x,   4},
+  {imm, 16, signed}]}.
+
+%% A rule body: the condition register and the SIGNED offset to the next rule.
+{arm, r, instr_common, 4,
+ [{cnd,      4},
+  {nxt,      15, signed},
+  {implicit,  1}]}.
+
+{arm, x, instr_common, 4,
+ [{x, 4}]}.
+
+%% #in gate: the state number to compare against, and the skip if it does not
+%% match.  Both signed.
+{arm, in, instr_common, 4,
+ [{x,         4},
+  {imm,       8, signed},
+  {nxt,      13, signed},
+  {implicit,  1}]}.
+
+{arm, e, instr_common, 4,
+ [{num, 10},
+  {mx,  16}]}.
+
+%% A string segment in the instruction stream: how many words it spans and how
+%% many bytes of them are used.
+{arm, sg, instr_common, 4,
+ [{num,  10},
+  {used,  8}]}.
+
+{arm, v, instr_common, 4,
+ [{num, 10},
+  {mx,  16}]}.
+
+%% obj is a PLAIN index_t in the C, not a bit-field, and a plain member after a
+%% bit-field starts at the next BYTE boundary rather than the next bit. Without
+%% the pad it lands at bit 6 and reads two bits of the opcode. The oracle caught
+%% exactly that. (enter/leave/end get away without one only because their
+%% bit-fields already fill to a byte boundary.)
+{arm, n, instr_common, 4,
+ [{pad,   2},
+  {obj,  16}]}.
+
+%% A function call: result register, function index, the user-function flag and
+%% four bits of argument type per argument.
+{arm, f, instr_common, 4,
+ [{x,   4},
+  {idx, 5},
+  {usr, 1},
+  {avt, 16}]}.
+
+{arm, o, instr_common, 4,
+ [{obj, 16}]}.
+
+%% The array form of OP_SETO: .ox.x's four bits start where .o.obj's sixteen
+%% do, which is why an emitter that writes one arm for the other produces a
+%% word that looks plausible and is wrong.  See tests/instr_layout.c.
+{arm, ox, instr_common, 4,
+ [{x,      4},
+  {len,   16},
+  {stride, 6}]}.
+
+%% The terminator after a ROM instr section.  crc lands byte-aligned at 2-3,
+%% which rom_scan_end depends on.
+{arm, em, instr_common, 4,
+ [{'_res', 10},
+  {crc,    16}]}.

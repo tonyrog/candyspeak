@@ -1433,29 +1433,12 @@ void print_defines()
     printf("sizeof(op_info_t) = %ld\n", sizeof(op_info_t));
     printf("sizeof(csp_func_t) = %ld\n", sizeof(csp_func_t));    
     
+    // The ARMS are not printed: every declaration arm is eight bytes and every
+    // instruction arm four, by construction -- utils/layout.terms says where
+    // each field sits and gen/csp_layout.h computes it. There is nothing left
+    // for a sizeof to disagree about.
     printf("sizeof(csp_decl_t) = %ld\n", sizeof(csp_decl_t));
-    printf("sizeof(csp_module_t) = %ld\n", sizeof(csp_module_t));
-    printf("sizeof(csp_object_t) = %ld\n", sizeof(csp_object_t));
-    printf("sizeof(csp_variable_t) = %ld\n", sizeof(csp_variable_t));
-    printf("sizeof(csp_constant_t) = %ld\n", sizeof(csp_constant_t));
-    printf("sizeof(csp_digital_t) = %ld\n", sizeof(csp_digital_t));
-    printf("sizeof(csp_analog_t) = %ld\n", sizeof(csp_analog_t));
-    printf("sizeof(csp_field_t) = %ld\n", sizeof(csp_field_t));    
-    printf("sizeof(csp_bufdecl_t) = %ld\n", sizeof(csp_bufdecl_t));    
-    printf("sizeof(csp_timer_t) = %ld\n", sizeof(csp_timer_t));
-
     printf("sizeof(csp_instr_t) = %ld\n", sizeof(csp_instr_t));
-    printf("sizeof(csp_instr_enter_t) = %ld\n", sizeof(csp_instr_enter_t));
-    printf("sizeof(csp_instr_leave_t) = %ld\n", sizeof(csp_instr_leave_t));
-    printf("sizeof(csp_instr_new_t) = %ld\n", sizeof(csp_instr_new_t));
-    printf("sizeof(csp_instr_imm_t) = %ld\n", sizeof(csp_instr_imm_t));        
-    printf("sizeof(csp_instr_mem_t) = %ld\n", sizeof(csp_instr_mem_t));
-    printf("sizeof(csp_instr_memi_t) = %ld\n", sizeof(csp_instr_memi_t));    
-    printf("sizeof(csp_instr_call_t) = %ld\n", sizeof(csp_instr_call_t));
-    printf("sizeof(csp_instr_rule_t) = %ld\n", sizeof(csp_instr_rule_t));
-    printf("sizeof(csp_instr_next_t) = %ld\n", sizeof(csp_instr_next_t));
-    printf("sizeof(csp_instr_instate_t) = %ld\n", sizeof(csp_instr_instate_t));
-    printf("sizeof(csp_instr_alu_t) = %ld\n", sizeof(csp_instr_alu_t));
     printf("sizeof(csp_rt_t) = %ld\n", sizeof(csp_rt_t));
 }
 

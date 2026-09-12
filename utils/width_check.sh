@@ -52,13 +52,31 @@ F="-mmcu=atmega2560 -Os -std=gnu11 -Iinclude -Igen -Isrc -I$TMP
 PAT="conversion to '(int|unsigned int|short int|short unsigned int)' (from '(long int|long unsigned int|long long int|long long unsigned int)'|alters '(long int|long unsigned int|long long int|long long unsigned int)' constant value)"
 
 hits=0
+broke=0
 for f in src/*.c port/csp_avr.c gen/csp_strings.c; do
-    out=$($CC $F -Wconversion -fsyntax-only "$f" 2>&1 | grep -E "$PAT")
+    # Two results from one compile, and they must not be confused. Piping
+    # straight into grep threw the EXIT STATUS away, so a tree that did not
+    # compile for AVR at all still reported "ok" -- including a failed
+    # _Static_assert, which is how csp_rt_t's hot block is checked. Keep the
+    # output, then look at it twice.
+    all=$($CC $F -Wconversion -fsyntax-only "$f" 2>&1)
+    if [ $? -ne 0 ]; then
+	echo "$all" | grep -E "error|assertion" | head -5
+	broke=$((broke + 1))
+	continue
+    fi
+    out=$(echo "$all" | grep -E "$PAT")
     if [ -n "$out" ]; then
 	echo "$out"
 	hits=$((hits + $(echo "$out" | wc -l)))
     fi
 done
+
+if [ "$broke" -ne 0 ]; then
+    echo
+    echo "width_check: $broke file(s) do not COMPILE for avr-gcc (see above)."
+    exit 1
+fi
 
 if [ "$hits" -eq 0 ]; then
     echo "width_check: ok -- nothing 32-bit is truncated by a 16-bit int"

@@ -416,14 +416,14 @@ static void list_pin_spec(csp_rt_t* st, int i, int is_digital)
     unsigned port, start, last;
     uint16_t k;
 
-    port = is_digital ? decl(st,i,di.port) : decl(st,i,an.port);
+    port = is_digital ? decl(st, i, di_port) : decl(st, i, an_port);
     csp_print_uint(port);
     csp_print_char(':');
-    start = last = is_digital ? decl(st,i,di.pin) : decl(st,i,an.pin);
+    start = last = is_digital ? decl(st, i, di_pin) : decl(st, i, an_pin);
     csp_print_uint(start);
     for (k = 1; k < alen; k++) {
-	unsigned q = is_digital ? decl(st,i+k,di.port) : decl(st,i+k,an.port);
-	unsigned p = is_digital ? decl(st,i+k,di.pin)  : decl(st,i+k,an.pin);
+	unsigned q = is_digital ? decl(st, i+k, di_port) : decl(st, i+k, an_port);
+	unsigned p = is_digital ? decl(st, i+k, di_pin)  : decl(st, i+k, an_pin);
 	if ((q == port) && (p == last + 1)) {
 	    last = p;
 	    continue;
@@ -561,7 +561,7 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
     // has to know how many came before it.
     for (f = 0; f < from; f++) {
 	if (instr(st,f,op) == OP_SEGMENT) {
-	    f += instr(st,f,sg.num);      // the loop's f++ steps past the header
+	    f += instr(st, f, sg_num);      // the loop's f++ steps past the header
 	    continue;
 	}
 	if (instr(st,f,op) == OP_RULE)
@@ -572,7 +572,7 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	// its characters look like a gate or a rule, and the listing either
 	// invents a block or -- as it did -- loses the real one that followed.
 	if (instr(st,i,op) == OP_SEGMENT) {
-	    i += instr(st,i,sg.num) + 1;
+	    i += instr(st, i, sg_num) + 1;
 	    continue;
 	}
 	// Close a finished #in block: print `#end` (no number), leave the state.
@@ -609,7 +609,7 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	// an #in gate is `LD State` immediately before its (N)INSTATE run, and
 	// that shape is matched below, so a bare NINSTATE reaching here is a
 	// #when. The condition renders from where the last rule ended.
-	if ((instr(st,i,op) == OP_NINSTATE) && (instr(st,i,in.imm) == 0)) {
+	if ((instr(st,i,op) == OP_NINSTATE) && (instr(st, i, in_imm) == 0)) {
 	    if ((block_end >= 0) && (depth < CSP_MAX_BLOCK)) {
 		stk[depth].end   = block_end;   // remember the block around us
 		stk[depth].gate  = block_gate;
@@ -617,7 +617,7 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 		stk[depth].shown = block_shown;
 		depth++;
 	    }
-	    block_end = i + instr(st,i,in.nxt);
+	    block_end = i + instr(st, i, in_nxt);
 	    block_gate = i;
 	    block_when = rule;         // where the condition's code starts
 	    block_shown = 0;
@@ -651,11 +651,11 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	    int j = i + 1;
 	    int ns = 0;
 	    while ((j < to) && (instr(st,j,op) == OP_NINSTATE)) {
-		if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st,j,in.imm);
+		if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st, j, in_imm);
 		j++;
 	    }
 	    // terminating INSTATE
-	    if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st,j,in.imm);
+	    if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st, j, in_imm);
 	    st->list_nstate = ns;
 	    // With a filter: remembered, not printed -- the header goes out with
 	    // the first rule inside it that survives. Without one: printed now,
@@ -675,7 +675,7 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 		stk[depth].shown = block_shown;
 		depth++;
 	    }
-	    block_end = j + instr(st,j,in.nxt);
+	    block_end = j + instr(st, j, in_nxt);
 	    block_gate = i;
 	    block_when = -1;
 	    block_shown = 0;
@@ -695,7 +695,7 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 		// Already listed inside its own block. Count past it so the
 		// numbering of what follows is unchanged, and resume after the
 		// matching OP_LEAVE (e.num = instructions between the two).
-		int body_n = instr(st,i,e.num);
+		int body_n = instr(st, i, e_num);
 		int j;
 		for (j = i+1; j < i+1+body_n; j++)
 		    if (instr(st,j,op) == OP_RULE)
@@ -703,7 +703,7 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 		i = i + body_n + 2;
 	    }
 	    else {
-		cur_mod = decl_name_pos(st, MAKE_INDEX(0, instr(st,i,e.mx)));
+		cur_mod = decl_name_pos(st, MAKE_INDEX(0, instr(st, i, e_mx)));
 		i++;
 	    }
 	    rule = i;
@@ -742,7 +742,7 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 			for (k = 0; k < st->list_nstate; k++)
 			    rs |= (1u << (st->list_states[k] & 31));
 		    }
-		    else if (instr(st, rule_pos, r.implicit))
+		    else if (instr(st, rule_pos, r_implicit))
 			rs = (1u<<STATE_INIT) | (1u<<STATE_NORMAL);  // bare NORMAL+
 		    else
 			rs = 0xffffffffu;           // module body: ungated, any State
@@ -783,7 +783,7 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	case OP_LD:
 	case OP_LDP:
 	    if (c->nf) {
-		if ((f = lookup_filter(instr(st,i,m.mem), cnd, c->filt, c->nf)) >= 0)
+		if ((f = lookup_filter(instr(st, i, m_mem), cnd, c->filt, c->nf)) >= 0)
 		    fbits |= (1 << f);
 	    }
 	    i++;
@@ -792,14 +792,14 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	case OP_ST:
 	case OP_STP:
 	    if (c->nf) {
-		if ((f = lookup_filter(instr(st,i,m.mem), cnd, c->filt, c->nf)) >= 0)
+		if ((f = lookup_filter(instr(st, i, m_mem), cnd, c->filt, c->nf)) >= 0)
 		    fbits |= (1 << f);
 	    }
 	    i++;
 	    break;
 	case OP_STI:  // immediate store: memory index in the .mi arm
 	    if (c->nf) {
-		if ((f = lookup_filter(instr(st,i,mi.mem), cnd, c->filt, c->nf)) >= 0)
+		if ((f = lookup_filter(instr(st, i, mi_mem), cnd, c->filt, c->nf)) >= 0)
 		    fbits |= (1 << f);
 	    }
 	    i++;
@@ -932,12 +932,13 @@ match:
     // a Mod. prefix. scope != NULL restricts to that module's members.
     for (i = 0; i < st->ps.nd; i++) {
 	index_t ix = MAKE_INDEX(0, i);
-	csp_decl_t d = csp_get_decl(st, i);	
+	csp_decl_t d;
 	int seg = decl_seg(st, i);
 	// A param that has been re-declared lists ONCE, as the override. Its
 	// original says what the program shipped with, which is no longer what
 	// it runs with -- and both lines pasted back would be one declaration
 	// and one setting of it, i.e. the same thing twice.
+	csp_load_decl(st, i, &d);
 	if (csp_param_shadow(st, i) != BAD_INDEX)
 	    continue;
 	// The override itself is tagged P: it lives in RAM (or eeprom, once
@@ -958,7 +959,7 @@ match:
 	// #end past as well. Their VALUES are /state's business, and the fields
 	// are documented rather than listed.
 	if ((st->sys_mod != BAD_INDEX) && (i == (int)INDEX(st->sys_mod))) {
-	    sys_skip = decl(st, i, md.n) + 1;   // members + the #end
+	    sys_skip = decl(st, i, md_n) + 1;   // members + the #end
 	    continue;
 	}
 	if (sys_skip > 0) {
@@ -967,8 +968,8 @@ match:
 	}
 	if ((st->sys_obj != BAD_INDEX) && (i == (int)INDEX(st->sys_obj)))
 	    continue;
-	if (d.type == DECL_MODULE) {
-	    cur_mod = d.name;
+	if (csp_decl_get_type(&d) == DECL_MODULE) {
+	    cur_mod = csp_decl_get_name(&d);
 	    mod_decl = i;
 	    // Held back, not printed. A module whose members and rules were all
 	    // filtered out contributes nothing, and an empty `#module M` / `#end`
@@ -985,7 +986,7 @@ match:
 	    }
 	    continue;
 	}
-	if (d.type == DECL_END) {         // module end or top-level terminator
+	if (csp_decl_get_type(&d) == DECL_END) {         // module end or top-level terminator
 	    if (cur_mod) {
 		if (!scope || csp_str_eq(st, cur_mod, scope, strlen(scope))) {
 		    // The module's RULES, before its #end -- that is where they
@@ -1004,9 +1005,9 @@ match:
 		    // ent at 0 too. The opcode tells the two apart, and it is
 		    // self-validating: whatever instruction 0 holds, if it is
 		    // not an ENTER there is no body to walk.
-		    index_t ent = decl(st, mod_decl, md.ent);
+		    index_t ent = decl(st, mod_decl, md_ent);
 		    int body_n  = (instr(st, ent, op) == OP_ENTER)
-			          ? instr(st, ent, e.num) : 0;
+			          ? instr(st, ent, e_num) : 0;
 		    ctx.filt = filt; ctx.nf = nf;
 		    ctx.cmask = cmask; ctx.bmask = bmask; ctx.smask = smask;
 		    ctx.scope = NULL;    // inside the block: no further narrowing
@@ -1039,7 +1040,7 @@ match:
 	if (state_is_state_var(st, i))
 	    continue;
 	
-	npos = d.name; // decl(st, i, name);
+	npos = csp_decl_get_name(&d); // decl(st, i, name);
 	// A #local has NO name here on purpose -- it lives in the define buffer
 	// until #end and lists as $N -- so the nameless skip below would drop
 	// its declaration line entirely.
@@ -1047,7 +1048,7 @@ match:
 	// names -- so it needs the same exemption a #local does, or it vanishes
 	// from the listing and a program copied off a board comes home with its
 	// routing gone.
-	if ((d.type != DECL_ROUTE) &&
+	if ((csp_decl_get_type(&d) != DECL_ROUTE) &&
 	    !csp_is_local(st, MAKE_INDEX(0, i)) &&
 	    ((npos == 0) || (csp_str_len(st, npos) == 0)))
 	    continue;                // no / empty name
@@ -1058,13 +1059,13 @@ match:
 	if (cur_mod) {
 	    csp_print_blank(); csp_print_blank();
 	}
-	switch (d.type) {
+	switch (csp_decl_get_type(&d)) {
 	case DECL_STATES: {
 	    // One block, up to CSP_STATES_PER_DECL names, listed as the single
 	    // `#states a b c` line it was written as. print_decl_and_name would
 	    // show only the first -- `npos` above is slot 0, which is DECL_COMMON's
 	    // name and therefore just the block's first state.
-	    // csp_decl_t sb = csp_get_decl(st, i);
+	    // csp_decl_t sb; csp_load_decl(st, i, &sb);
 	    int k, shown = 0;
 	    // INIT/NORMAL/FAILSAFE are runtime machinery, like the implicit State
 	    // variable filtered above: a listing that shows them cannot be pasted
@@ -1076,7 +1077,7 @@ match:
 		    continue;
 		if (lookup_state_pos(st, np) <= STATE_FAILSAFE)
 		    continue;
-		if (!shown) { print_decl(d.type); shown = 1; }
+		if (!shown) { print_decl(csp_decl_get_type(&d)); shown = 1; }
 		else csp_print_blank();
 		csp_print_str_at(st, np);
 	    }
@@ -1094,7 +1095,7 @@ match:
 	    // `#variable` would paste back a variable, and the rule below would
 	    // then be a plain assignment: same values, one cycle later at every
 	    // step of a chain.
-	    if (d.local) {
+	    if (csp_decl_get_local(&d)) {
 		csp_print_char('#');
 		csp_print_rostr(ros_local);
 		csp_print_blank();
@@ -1103,29 +1104,29 @@ match:
 		csp_print_uint((uvalue_t)csp_local_number(st, (index_t)i));
 	    }
 	    else
-		print_decl_and_name(st, d.type, cur_mod, npos);
+		print_decl_and_name(st, csp_decl_get_type(&d), cur_mod, npos);
 	    if (alen > 1) {
 		csp_print_char('[');
 		csp_print_uint(alen);
 		csp_print_char(']');
 	    }
 	    csp_print_char(':');
-	    csp_print_uint(GET_RES(d.res));
+	    csp_print_uint(GET_RES(csp_decl_get_res(&d)));
 	    csp_print_blank();
-	    csp_print_rostr(csp_fmt_vtype(d.vt));
+	    csp_print_rostr(csp_fmt_vtype(csp_decl_get_vt(&d)));
 	    // A #local has no init value to show -- what defines it is its
 	    // FORMULA, and that lists as the rule it compiled to, further down.
 	    // Printing `= 0` here would be a lie: the 0 is just what the leaf
 	    // starts at, and pasting it back would bind the local to the constant
 	    // 0 and then refuse the real formula. See TODO: the listing should put
 	    // the formula on this line and suppress that rule.
-	    if (d.local)
+	    if (csp_decl_get_local(&d))
 		;
 	    // list the declaration's init value, not the live state (like #constant
 	    // below); reading a value here would touch leaf storage /list must not.
-	    else if (!d.bound) {
+	    else if (!csp_decl_get_bound(&d)) {
 		csp_print_lit(" = ");
-		list_value(st, d.vt, d.va.init);
+		list_value(st, csp_decl_get_vt(&d), csp_decl_get_va_init(&d));
 	    }
 	    else {
 		// bind <buffer>[<lo>..<hi>] -- a bit-field view, so there is no
@@ -1136,16 +1137,16 @@ match:
 		// for the same reason as on a #field: `big` picks MSB-first bit
 		// numbering, so dropping it changes which bits the pasted
 		// declaration views.
-		if (d.ca.endian != E_NATIVE) {
+		if (csp_decl_get_ca_endian(&d) != E_NATIVE) {
 		    csp_print_blank();
-		    csp_print_rostr(csp_fmt_endian(d.ca.endian));
+		    csp_print_rostr(csp_fmt_endian(csp_decl_get_ca_endian(&d)));
 		}
 		csp_print_lit(" bind ");
-		csp_print_str_at(st, decl_name_pos(st, d.ca.id));
+		csp_print_str_at(st, decl_name_pos(st, csp_decl_get_ca_id(&d)));
 		csp_print_char('[');
-		csp_print_uint(d.ca.bit);
+		csp_print_uint(csp_decl_get_ca_bit(&d));
 		csp_print_lit("..");
-		csp_print_uint(d.ca.bit + d.ca.len);
+		csp_print_uint(csp_decl_get_ca_bit(&d) + csp_decl_get_ca_len(&d));
 		csp_print_char(']');
 	    }
 	    list_eol();
@@ -1160,21 +1161,21 @@ match:
 	    // A #param is a DECL_CONSTANT with `local` set and has to list back
 	    // as `#param` -- pasted back as `#constant` it would fold, and every
 	    // rule reading it would bake in whatever the value happened to be.
-	    if (d.local) {
+	    if (csp_decl_get_local(&d)) {
 		csp_print_char('#');
 		csp_print_rostr(ros_param);
 		csp_print_blank();
 		list_name(st, cur_mod, npos);
 	    }
 	    else
-		print_decl_and_name(st, d.type, cur_mod, npos);
+		print_decl_and_name(st, csp_decl_get_type(&d), cur_mod, npos);
 	    if (alen > 1) {
 		csp_print_char('[');
 		csp_print_uint(alen);
 		csp_print_char(']');
 	    }
 	    csp_print_char(':');
-	    csp_print_uint(GET_RES(d.res));
+	    csp_print_uint(GET_RES(csp_decl_get_res(&d)));
 	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_vtype(decl(st,i,vt)));
 	    csp_print_lit(" = ");
@@ -1183,43 +1184,43 @@ match:
 		csp_print_lit("{ ");
 		for (e = 0; e < alen; e++) {
 		    if (e) csp_print_lit(", ");
-		    list_value(st, decl(st,i,vt), decl(st,i+e,cn.init));
+		    list_value(st, decl(st,i,vt), decl(st, i+e, cn_init));
 		}
 		csp_print_lit(" }");
 	    }
 	    else
-		list_value(st, decl(st,i,vt), decl(st,i,cn.init));
+		list_value(st, decl(st,i,vt), decl(st, i, cn_init));
 	    list_eol();
 	    break;
 	}
 	case DECL_OBJECT:
 	    csp_print_char('#');
-	    csp_print_str_at(st, decl_name_pos(st, decl(st,i,mq.mx)));
+	    csp_print_str_at(st, decl_name_pos(st, decl(st, i, mq_mx)));
 	    csp_print_blank();
 	    csp_print_str_at(st, npos);
 	    list_eol();
 	    break;
 	case DECL_TIMER:
-	    print_decl_and_name(st, d.type, cur_mod, npos);
+	    print_decl_and_name(st, csp_decl_get_type(&d), cur_mod, npos);
 	    csp_print_blank();
-	    csp_print_uint(decl(st,i,tm.period));
+	    csp_print_uint(decl(st, i, tm_period));
 	    // `= 1` is part of the declaration, not decoration: it is what starts
 	    // the timer at boot. Dropped from the listing, a program copied back
 	    // out of a board came home with a timer that never runs.
-	    if (decl(st,i,tm.init))
+	    if (decl(st, i, tm_init))
 		csp_print_lit(" = 1");
 	    list_eol();
 	    break;
 	case DECL_DIGITAL:
-	    print_decl_and_name(st, d.type, cur_mod, npos);
+	    print_decl_and_name(st, csp_decl_get_type(&d), cur_mod, npos);
 	    list_array_len(st, i);
 	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_pindir(decl(st,i,dir)));
-	    if (d.di.pullup) {
+	    if (csp_decl_get_di_pullup(&d)) {
 		csp_print_blank();		
 		csp_print_rostr(ros_pullup);
 	    }
-	    else if (d.di.pulldown) {
+	    else if (csp_decl_get_di_pulldown(&d)) {
 		csp_print_blank();
 		csp_print_rostr(ros_pulldown);
 	    }
@@ -1227,44 +1228,44 @@ match:
 	    // they are read back in. Dropped from the listing, a program copied
 	    // out of a board comes home with its interrupts gone -- the same
 	    // failure a timer's `= 1` used to have.
-	    if (d.di.irq != IRQ_NONE) {
-		if (d.di.soft) {
+	    if (csp_decl_get_di_irq(&d) != IRQ_NONE) {
+		if (csp_decl_get_di_soft(&d)) {
 		    csp_print_blank();
 		    csp_print_rostr(ros_soft);
 		}
 		csp_print_blank();
-		csp_print_rostr(fmt_trigger((trigger_t)d.di.irq));
+		csp_print_rostr(fmt_trigger((trigger_t)csp_decl_get_di_irq(&d)));
 	    }
 	    csp_print_blank();  // port:pin (needed to mod/rewire)
 	    list_pin_spec(st, i, 1);
 	    list_eol();
 	    break;
 	case DECL_ANALOG:
-	    print_decl_and_name(st, d.type, cur_mod, npos);
+	    print_decl_and_name(st, csp_decl_get_type(&d), cur_mod, npos);
 	    list_array_len(st, i);
 	    csp_print_char(':');              // :width (res stored as bits-1)
-	    csp_print_uint(GET_RES(d.an.res));
+	    csp_print_uint(GET_RES(csp_decl_get_res(&d)));
 	    csp_print_blank();
-	    csp_print_rostr(csp_fmt_pindir(d.dir));
+	    csp_print_rostr(csp_fmt_pindir(csp_decl_get_dir(&d)));
 	    // The type, whenever it is not the default. An #analog is SIGNED
 	    // unless it says otherwise, so leaving `unsigned` out of the listing
 	    // is not a cosmetic omission: the line pastes back as a signed one
 	    // and every reading above half scale comes home negative.
-	    if (CSP_MASK(d.vt,TYPE_BITS) != V_INTEGER) {
+	    if (CSP_MASK(csp_decl_get_vt(&d),TYPE_BITS) != V_INTEGER) {
 		csp_print_blank();
-		csp_print_rostr(csp_fmt_vtype(d.vt));
+		csp_print_rostr(csp_fmt_vtype(csp_decl_get_vt(&d)));
 	    }
-	    if (d.an.pwm) {
+	    if (csp_decl_get_an_pwm(&d)) {
 		csp_print_blank();
 		csp_print_rostr(ros_pwm);
 	    }
-	    if (d.an.irq != IRQ_NONE) {
-		if (d.an.soft) {
+	    if (csp_decl_get_an_irq(&d) != IRQ_NONE) {
+		if (csp_decl_get_an_soft(&d)) {
 		    csp_print_blank();
 		    csp_print_rostr(ros_soft);
 		}
 		csp_print_blank();
-		csp_print_rostr(fmt_trigger((trigger_t)d.an.irq));
+		csp_print_rostr(fmt_trigger((trigger_t)csp_decl_get_an_irq(&d)));
 	    }
 	    csp_print_blank();              // port:pin
 	    list_pin_spec(st, i, 0);
@@ -1273,20 +1274,20 @@ match:
 	case DECL_BUFFER:
 	    // #buffer <name>:<size> <dir> [can 0x<id>]. Size is BYTES (bf.nbytes)
 	    // -- see csp_parse_buffer.
-	    print_decl_and_name(st, d.type, cur_mod, npos);
+	    print_decl_and_name(st, csp_decl_get_type(&d), cur_mod, npos);
 	    csp_print_char(':');
-	    csp_print_uint(d.bf.nbytes);
+	    csp_print_uint(csp_decl_get_bf_nbytes(&d));
 	    if (decl(st,i,dir)) {
 		csp_print_blank();
-		csp_print_rostr(csp_fmt_pindir(d.dir));
+		csp_print_rostr(csp_fmt_pindir(csp_decl_get_dir(&d)));
 	    }
 	    // The transport, spelled the way it was typed -- these lines have to
 	    // be RE-ENTERABLE, which is what /list is for. The endpoint lives in
 	    // a constant (two, for UDP: address then port), packed as
 	    // transport_t in csp.h describes.
 	    {
-		uint32_t ep = (uint32_t)decl(st, d.bf.id, cn.init).i;
-		switch (decl(st,i,bf.transport)) {
+		uint32_t ep = (uint32_t)decl(st, csp_decl_get_bf_id(&d), cn_init).i;
+		switch (decl(st, i, bf_transport)) {
 		case TR_CAN:
 		    csp_print_lit(" can ");  // csp_print_hex emits the 0x itself
 		    csp_print_hex(ep);
@@ -1323,11 +1324,11 @@ match:
 		    // reads back the way it was written.
 		    // Two branches, not a conditional: csp_print_lit declares a
 		    // static array for the literal, so it has to see one.
-		    if (d.bf.transport == TR_TCP)
+		    if (csp_decl_get_bf_transport(&d) == TR_TCP)
 			csp_print_lit(" tcp ");
 		    else
 			csp_print_lit(" udp ");
-		    csp_print_uint((uvalue_t)decl(st, d.bf.id + 1, cn.init).i);
+		    csp_print_uint((uvalue_t)decl(st, csp_decl_get_bf_id(&d) + 1, cn_init).i);
 		    if (ep != 0) {
 			csp_print_blank();
 			csp_print_ipv4(ep);
@@ -1361,9 +1362,9 @@ match:
 	    // Two names and nothing else -- exactly the grammar, so the line
 	    // goes back in as it came out.
 	    csp_print_lit("#route ");
-	    csp_print_str_at(st, decl_name_pos(st, MAKE_INDEX(0, d.rt.src)));
+	    csp_print_str_at(st, decl_name_pos(st, MAKE_INDEX(0, csp_decl_get_rt_src(&d))));
 	    csp_print_blank();
-	    csp_print_str_at(st, decl_name_pos(st, MAKE_INDEX(0, d.rt.dst)));
+	    csp_print_str_at(st, decl_name_pos(st, MAKE_INDEX(0, csp_decl_get_rt_dst(&d))));
 	    list_eol();
 	    break;
 	}
@@ -1371,33 +1372,33 @@ match:
 	    // #field <name>:<width> <dir> <type> <frame>[<lo>..<hi>].ca.id is the
 	    // #buffer decl the field is a view into, so the frame is named, not
 	    // repeated as a raw id.
-	    print_decl_and_name(st, d.type, cur_mod, npos);
+	    print_decl_and_name(st, csp_decl_get_type(&d), cur_mod, npos);
 	    csp_print_char(':');
-	    csp_print_uint(d.ca.len+1);
+	    csp_print_uint(csp_decl_get_ca_len(&d)+1);
 	    // Only a REAL direction. A field over a plain RAM buffer has none, and
 	    // csp_fmt_pindir(0) spells that "none" -- which is not a word the
 	    // parser knows, so the listing did not paste back at all. #buffer above
 	    // already guards its own direction the same way.
-	    if (d.dir) {
+	    if (csp_decl_get_dir(&d)) {
 		csp_print_blank();
-		csp_print_rostr(csp_fmt_pindir(d.dir));
+		csp_print_rostr(csp_fmt_pindir(csp_decl_get_dir(&d)));
 	    }
 	    csp_print_blank();
-	    csp_print_rostr(csp_fmt_vtype(d.vt));
+	    csp_print_rostr(csp_fmt_vtype(csp_decl_get_vt(&d)));
 	    // ENDIAN, and it is not cosmetic: `big` selects MSB-first bit
 	    // numbering, so `big F[9]` and `F[9]` name DIFFERENT physical bits.
 	    // Left out, two fields that read different bits listed identically,
 	    // and the listing pasted back as the wrong one.
-	    if (d.ca.endian != E_NATIVE) {
+	    if (csp_decl_get_ca_endian(&d) != E_NATIVE) {
 		csp_print_blank();
-		csp_print_rostr(csp_fmt_endian(d.ca.endian));
+		csp_print_rostr(csp_fmt_endian(csp_decl_get_ca_endian(&d)));
 	    }
 	    csp_print_blank();
-	    csp_print_str_at(st, decl_name_pos(st, d.ca.id));
+	    csp_print_str_at(st, decl_name_pos(st, csp_decl_get_ca_id(&d)));
 	    csp_print_char('[');
-	    csp_print_uint(d.ca.bit);
+	    csp_print_uint(csp_decl_get_ca_bit(&d));
 	    csp_print_lit("..");
-	    csp_print_uint(d.ca.bit + d.ca.len);
+	    csp_print_uint(csp_decl_get_ca_bit(&d) + csp_decl_get_ca_len(&d));
 	    csp_print_char(']');
 	    list_eol();
 	    break;
@@ -1534,8 +1535,8 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
 	if (t == DECL_FIELD) {
 	    // The bit window, named the same way /list writes it. The parent frame
 	    // is not repeated -- /list has it, and the column is 8 wide.
-	    index_t lo = decl(st, di, ca.bit);
-	    index_t hi = lo + decl(st, di, ca.len);
+	    index_t lo = decl(st, di, ca_bit);
+	    index_t hi = lo + decl(st, di, ca_len);
 	    csp_print_char('[');
 	    csp_print_uint(lo);
 	    csp_print_lit("..");
@@ -1642,8 +1643,8 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
     // a working source looks like between edges. `!` says it is not armed, the
     // same mark /list uses for a rule that is switched off.
     {
-	trigger_t trig = (t == DECL_DIGITAL) ? (trigger_t)decl(st,di,di.irq)
-	    : (t == DECL_ANALOG) ? (trigger_t)decl(st,di,an.irq) : IRQ_NONE;
+	trigger_t trig = (t == DECL_DIGITAL) ? (trigger_t)decl(st, di, di_irq)
+	    : (t == DECL_ANALOG) ? (trigger_t)decl(st, di, an_irq) : IRQ_NONE;
 	if (trig != IRQ_NONE) {
 	    int slot = csp_event_slot(st, ix);
 	    value_t* v = csp_dio_slot(st, ix, DIN);
@@ -1665,8 +1666,8 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
 		// cannot arm this one, so a pulse shorter than a cycle is lost.
 		// `soft` in the declaration says that is acceptable and drops
 		// the mark -- which is the whole point of the word.
-		if (!((t == DECL_DIGITAL) ? decl(st,di,di.soft)
-					  : decl(st,di,an.soft)))
+		if (!((t == DECL_DIGITAL) ? decl(st, di, di_soft)
+					  : decl(st, di, an_soft)))
 		    csp_print_char('!');
 	    }
 	    else if (!(st->irq_hw & ((uint32_t)1 << slot)))
@@ -1880,9 +1881,9 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 	int dn, base, j, m, shown = 0;
 	if (decl(st,i,type) != DECL_OBJECT)
 	    continue;
-	mx   = decl(st, i, mq.mx);
-	m    = decl(st, i, mq.m);
-	dn   = decl(st, INDEX(mx), md.n);
+	mx   = decl(st, i, mq_mx);
+	m    = decl(st, i, mq_m);
+	dn   = decl(st, INDEX(mx), md_n);
 	base = INDEX(mx) + 1;
 	// Bind the instance for the whole row block: an encoded index carries a
 	// selector, not an object number, so a member only resolves to THIS

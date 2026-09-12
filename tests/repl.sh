@@ -491,7 +491,7 @@ fw() {  # fw <out> <csp>   -- a host firmware carrying that program as its ROM
     gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -Iinclude -Igen -Isrc \
 	port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c \
 	src/csp_repl.c src/csp_compile.c src/csp_tok.c port/csp_dump.c \
-	src/csp_eeprom.c src/csp_parse.c src/csp_print.c gen/csp_strings.c \
+	src/csp_eeprom.c src/csp_parse.c src/csp_print.c src/csp_fixpoint.c gen/csp_strings.c \
 	src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
 	"$2.rom.c" -o "$1" >/dev/null 2>&1
 }
@@ -543,7 +543,7 @@ if fw "$D/fw_a" "$D/fpa.csp" && fw "$D/fw_b" "$D/fpb.csp"; then
 	gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -Iinclude -Igen -Isrc \
 	    port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c \
 	    src/csp_repl.c src/csp_compile.c src/csp_tok.c port/csp_dump.c \
-	    src/csp_eeprom.c src/csp_parse.c src/csp_print.c gen/csp_strings.c \
+	    src/csp_eeprom.c src/csp_parse.c src/csp_print.c src/csp_fixpoint.c gen/csp_strings.c \
 	    src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
 	    "$2" "$3" -o "$1" >/dev/null 2>&1
     }
@@ -594,7 +594,9 @@ if fw "$D/fw_a" "$D/fpa.csp" && fw "$D/fw_b" "$D/fpb.csp"; then
 	# half-written slot takes the node down with it, which is precisely the
 	# case A/B exists to survive. Corrupt one payload word of the higher
 	# generation and the older, healthy image must win.
-	awk '/\.raw={{/ && !done { sub(/{{[0-9]+/, "{{200"); done=1 } {print}' \
+	# The image is BYTES with the readable form as a comment now, so the
+	# handle is that comment rather than a .raw= designator.
+	awk '/segment payload/ && !done { sub(/{[^,]*/, "{200"); done=1 } {print}' \
 	    "$D/i2.rom.c" > "$D/i2bad.rom.c"
 	if cmp -s "$D/i2.rom.c" "$D/i2bad.rom.c"; then
 	    echo "  FAIL could not corrupt the image"; fail=$((fail+1))
@@ -631,7 +633,7 @@ if ./csp -n -C -O "$D/eo_rom.c" "$D/eo.csp" >/dev/null 2>&1 &&
    gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -DCSP_EXEC_ONLY -Iinclude -Igen -Isrc \
        port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
        src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
-       src/csp_parse.c src/csp_print.c gen/csp_strings.c src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c \
+       src/csp_parse.c src/csp_print.c src/csp_fixpoint.c gen/csp_strings.c src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c \
        port/csp_devices.c port/csp_flash_host.c \
        "$D/eo_rom.c" -o "$D/csp_exec" \
        >/dev/null 2>&1; then
@@ -1298,7 +1300,7 @@ echo "lpcopen:"
 if gcc -g -Wall -Iinclude -Igen -Isrc -Itests/lpcstub -Ichips/nxp/drivers/212x \
        -DCSP_VERSION='"test"' -o "$D/lpc_fw" \
        port/csp_lpcopen.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c \
-       src/csp_parse.c src/csp_tok.c src/csp_print.c src/csp_repl.c \
+       src/csp_parse.c src/csp_tok.c src/csp_print.c src/csp_fixpoint.c src/csp_repl.c \
        port/csp_dump.c src/csp_eeprom.c gen/csp_strings.c gen/rom_host.c \
        src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c chips/nxp/drivers/212x/flash_212x.c port/csp_devices.c \
        tests/lpcstub/stub.c >/dev/null 2>&1; then
@@ -1520,7 +1522,7 @@ open(sys.argv[2], 'wb').write(d)
 PYEOF
 got=$(printf '/quit\n' | repl ./csp "$D/fmt14.db")
 ck "a patch from another ROM format is refused, and says why" \
-   "eeprom rejected: patch is ROM format 14, firmware is 18 -- clear it and re-enter" \
+   "eeprom rejected: patch is ROM format 14, firmware is 19 -- clear it and re-enter" \
    "$got"
 
 # --- transports: declaration, listing and refusal ----------------------------
@@ -1934,7 +1936,7 @@ ubuild() {
     gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -Iinclude -Igen -Isrc \
 	port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
 	src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
-	src/csp_parse.c src/csp_print.c gen/csp_strings.c src/csp_transport.c \
+	src/csp_parse.c src/csp_print.c src/csp_fixpoint.c gen/csp_strings.c src/csp_transport.c \
 	src/csp_console.c src/csp_states.c \
 	src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
 	"$2.rom.c" -o "$1" >/dev/null 2>&1

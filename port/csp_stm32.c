@@ -400,14 +400,15 @@ static int stm_adc_read(uint8_t ch)
 // the LPC port does -- so `#analog X:8 in` means the same thing on both.
 static int stm_scale(csp_rt_t* st, index_t ix, int raw)
 {
-    csp_decl_t d = csp_get_decl(st, INDEX(ix));
-    int res = GET_RES(d.res);
-    int sgn = (CSP_MASK(d.vt,TYPE_BITS) != V_UNSIGNED);
+    csp_decl_t d;
+    int res = GET_RES(csp_decl_get_res(&d));
+    int sgn = (CSP_MASK(csp_decl_get_vt(&d),TYPE_BITS) != V_UNSIGNED);
     int v;
 
     // Clamped the same way the LPC port clamps it: a width outside 2..16 is a
     // shift by more than the type has bits, which is undefined rather than
     // merely wrong.
+    csp_load_decl(st, INDEX(ix), &d);
     if (res < 2) res = 2; else if (res > 16) res = 16;
     if (res >= CSP_STM_ADC_BITS)
 	v = raw << (res - CSP_STM_ADC_BITS);

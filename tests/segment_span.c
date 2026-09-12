@@ -20,12 +20,13 @@
 #include <stdio.h>
 #include <string.h>
 #include "csp.h"
+#include "csp_layout_raw.h"
 
 #define NSLOT 24
 
 int main(void)
 {
-    csp_instr_t tab[NSLOT];
+    csp_instr_raw_t tab[NSLOT];
     int i, seen, bad = 0;
 
     memset(tab, 0, sizeof(tab));
@@ -39,7 +40,7 @@ int main(void)
 
     // Fill the payload with text. Any byte whose low six bits name an opcode
     // would be followed into -- which is what a name does by accident.
-    memset(&tab[2], 'A', 8 * sizeof(csp_instr_t));
+    memset(&tab[2], 'A', 8 * sizeof(csp_instr_raw_t));
 
     // A segment covers header + payload; everything else is one word.
     if ((tab[1].sg.num + 1) != 9) {
@@ -65,9 +66,9 @@ int main(void)
     }
 
     // The header must fit an instruction word, and its fields survive the union.
-    if (sizeof(csp_instr_seg_t) > sizeof(csp_instr_t)) {
+    if (sizeof(csp_instr_seg_t) > sizeof(csp_instr_raw_t)) {
 	printf("csp_instr_seg_t is %d bytes, does not fit a %d-byte word\n",
-	       (int)sizeof(csp_instr_seg_t), (int)sizeof(csp_instr_t));
+	       (int)sizeof(csp_instr_seg_t), (int)sizeof(csp_instr_raw_t));
 	bad = 1;
     }
     // 128 bytes is 32 words, and `used` has to hold 0..128.

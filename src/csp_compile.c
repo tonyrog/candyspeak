@@ -218,7 +218,7 @@ NOINLINE static csp_instr_t* alloc_instr_ptr(csp_rt_t* st,int* pos,opcode_t op)
 	if ((op == OP_NEXT) || (op == OP_ENTER))
 	    st->n_rule_emit++;
     }
-    ip->op = op;
+    csp_instr_set_op(ip, op);
     if (pos != NULL) *pos = i;
     return ip;
 }
@@ -227,9 +227,9 @@ NOINLINE bool_t asm_RULE(csp_rt_t* st, int* pos, reg_t cnd, int nxt)
 {
     csp_instr_t* ip = alloc_instr_ptr(st, pos, OP_RULE);
     if (ip != NULL) {
-	ip->r.cnd = cnd;
-	ip->r.nxt = nxt;
-	ip->r.implicit = st->cs->rule_implicit;   // set for bare NORMAL+ rules
+	csp_instr_set_r_cnd(ip, cnd);
+	csp_instr_set_r_nxt(ip, nxt);
+	csp_instr_set_r_implicit(ip, st->cs->rule_implicit);   // set for bare NORMAL+ rules
 	return 1;
     }
     return 0;
@@ -239,7 +239,7 @@ NOINLINE static bool_t asm_NEXT(csp_rt_t* st, int r)
 {
     csp_instr_t* ip = alloc_instr_ptr(st, NULL, OP_NEXT);
     if (ip != NULL) {
-	ip->x.x = r;
+	csp_instr_set_x_x(ip, r);
 	return 1;
     }
     return 0;
@@ -253,10 +253,10 @@ NOINLINE static bool_t asm_INSTATE(csp_rt_t* st, int* pos, reg_t x, int imm,
 {
     csp_instr_t* ip = alloc_instr_ptr(st, pos, OP_INSTATE);
     if (ip != NULL) {
-	ip->in.x = x;
-	ip->in.imm = imm;
-	ip->in.nxt = 0;   // patched at #end
-	ip->in.implicit = implicit ? 1 : 0;
+	csp_instr_set_in_x(ip, x);
+	csp_instr_set_in_imm(ip, imm);
+	csp_instr_set_in_nxt(ip, 0);   // patched at #end
+	csp_instr_set_in_implicit(ip, implicit ? 1 : 0);
 	return 1;
     }
     return 0;
@@ -270,10 +270,10 @@ NOINLINE static bool_t asm_NINSTATE(csp_rt_t* st, int* pos, reg_t x, int imm)
 {
     csp_instr_t* ip = alloc_instr_ptr(st, pos, OP_NINSTATE);
     if (ip != NULL) {
-	ip->in.x = x;
-	ip->in.imm = imm;
-	ip->in.nxt = 0;   // patched once the block's first instruction is known
-	ip->in.implicit = 0;
+	csp_instr_set_in_x(ip, x);
+	csp_instr_set_in_imm(ip, imm);
+	csp_instr_set_in_nxt(ip, 0);   // patched once the block's first instruction is known
+	csp_instr_set_in_implicit(ip, 0);
 	return 1;
     }
     return 0;
@@ -317,7 +317,7 @@ NOINLINE static void blk_pop(csp_rt_t* st)
     // A module's mark is its OP_ENTER, which csp_parse_end patches with the body
     // length -- not a skip distance. Only a gate is patched here.
     if (b->kind != BLK_MODULE)
-	ram_instr_at(st, b->mark)->in.nxt = st->ps.nn - b->mark;
+	csp_instr_set_in_nxt(ram_instr_at(st, b->mark), st->ps.nn - b->mark);
     st->cs->sdef   = b->sdef;
     st->cs->n_sdef = b->n_sdef;
     memcpy(st->cs->sdefv, b->sdefv, sizeof(b->sdefv));
@@ -363,9 +363,9 @@ NOINLINE static bool_t asm_seto(csp_rt_t* st, xindex_t mem, index_t* out)
 	*out = MAKE_INDEX(CURRENT, XIDX(mem));
 	if ((ip = alloc_instr_ptr(st, NULL, OP_SETOX)) == NULL)
 	    return 0;
-	ip->ox.x      = r;
-	ip->ox.len    = l;
-	ip->ox.stride = 1;                 // scalar array; one decl per element
+	csp_instr_set_ox_x(ip, r);
+	csp_instr_set_ox_len(ip, l);
+	csp_instr_set_ox_stride(ip, 1);                 // scalar array; one decl per element
 	return 1;
     }
     *out = MAKE_INDEX(m ? CURRENT : GLOBAL, XIDX(mem));
@@ -375,7 +375,7 @@ NOINLINE static bool_t asm_seto(csp_rt_t* st, xindex_t mem, index_t* out)
 	csp_instr_t* ip = alloc_instr_ptr(st, NULL, OP_SETO);
 	if (ip == NULL)
 	    return 0;
-	ip->o.obj = m;
+	csp_instr_set_o_obj(ip, m);
     }
     return 1;
 }
@@ -411,9 +411,9 @@ NOINLINE static bool_t asm_mem_part(csp_rt_t* st, opcode_t op, reg_t x,
 	return 0;
     ip = alloc_instr_ptr(st, NULL, op);
     if (ip != NULL) {
-	ip->m.y = part;
-	ip->m.x = x;
-	ip->m.mem = m;
+	csp_instr_set_m_y(ip, part);
+	csp_instr_set_m_x(ip, x);
+	csp_instr_set_m_mem(ip, m);
 	return 1;
     }
     return 0;
@@ -428,9 +428,9 @@ NOINLINE static bool_t asm_memi(csp_rt_t* st, opcode_t op, reg_t x,
 	return 0;
     ip = alloc_instr_ptr(st, NULL, op);
     if (ip != NULL) {
-	ip->mi.x = x;
-	ip->mi.imm = imm;
-	ip->mi.mem = m;
+	csp_instr_set_mi_x(ip, x);
+	csp_instr_set_mi_imm(ip, imm);
+	csp_instr_set_mi_mem(ip, m);
 	return 1;
     }
     return 0;
@@ -472,8 +472,8 @@ NOINLINE static bool_t asm_imm(csp_rt_t* st, opcode_t op, reg_t x, int16_t imm)
 {
     csp_instr_t* ip = alloc_instr_ptr(st, NULL, op);
     if (ip != NULL) {    
-	ip->i.x = x;
-	ip->i.imm = imm;
+	csp_instr_set_i_x(ip, x);
+	csp_instr_set_i_imm(ip, imm);
 	return 1;
     }
     return 0;
@@ -564,11 +564,11 @@ NOINLINE static bool_t asm_alu(csp_rt_t* st, opcode_t op,
     }
     ip = alloc_instr_ptr(st, NULL, op);
     if (ip != NULL) {
-	ip->a.x = x;
-	ip->a.y = y;
-	ip->a.z = z;
-	ip->a.u = (uns != 0);
-	ip->a.swap = (swap != 0);
+	csp_instr_set_a_x(ip, x);
+	csp_instr_set_a_y(ip, y);
+	csp_instr_set_a_z(ip, z);
+	csp_instr_set_a_u(ip, (uns != 0));
+	csp_instr_set_a_swap(ip, (swap != 0));
 	return 1;
     }
     return 0;
@@ -578,10 +578,10 @@ NOINLINE static bool_t asm_CALL(csp_rt_t* st, reg_t x, int func_idx, int is_user
 {
     csp_instr_t* ip = alloc_instr_ptr(st, NULL, OP_CALL);    
     if (ip != NULL) {
-	ip->f.x   = x;
-	ip->f.idx = func_idx;
-	ip->f.usr = is_user;
-	ip->f.avt = argcode;
+	csp_instr_set_f_x(ip, x);
+	csp_instr_set_f_idx(ip, func_idx);
+	csp_instr_set_f_usr(ip, is_user);
+	csp_instr_set_f_avt(ip, argcode);
 	return 1;
     }
     return 0;
@@ -591,8 +591,8 @@ NOINLINE static bool_t asm_ENTER(csp_rt_t* st, int* pos, int n, index_t mx)
 {
     csp_instr_t* ip = alloc_instr_ptr(st, pos, OP_ENTER);        
     if (ip != NULL) {
-	ip->e.num = n;
-	ip->e.mx = mx;
+	csp_instr_set_e_num(ip, n);
+	csp_instr_set_e_mx(ip, mx);
 	return 1;
     }
     return 0;
@@ -602,8 +602,8 @@ NOINLINE static bool_t asm_LEAVE(csp_rt_t* st, int* pos, int n, index_t mx)
 {
     csp_instr_t* ip = alloc_instr_ptr(st, pos, OP_LEAVE);
     if (ip != NULL) {
-	ip->v.num = n;
-	ip->v.mx = mx;
+	csp_instr_set_v_num(ip, n);
+	csp_instr_set_v_mx(ip, mx);
 	return 1;
     }
     return 0;
@@ -615,7 +615,7 @@ NOINLINE static bool_t asm_NEW(csp_rt_t* st, unsigned ent, index_t obj)
     if (ip != NULL) {
     // n.ent is gone: the entry point lives in the module declaration, where it
     // is a full index_t. See csp_instr_new_t.
-	ip->n.obj = obj;
+	csp_instr_set_n_obj(ip, obj);
 	return 1;
     }
     return 0;
@@ -756,9 +756,10 @@ NOINLINE index_t lookup_const(csp_rt_t* st, vtype_t vt, value_t v)
 {
     index_t i;
     for (i = 0; i < st->ps.nd; i++) {
-	csp_decl_t d = csp_get_decl(st, i);
-	if ((d.type == DECL_CONSTANT) && (vt == d.vt)) {
-	    if (decl(st,i,cn.init.u) == v.u)  // binary compare!
+	csp_decl_t d;
+	csp_load_decl(st, i, &d);
+	if ((csp_decl_get_type(&d) == DECL_CONSTANT) && (vt == csp_decl_get_vt(&d))) {
+	    if (decl(st, i, cn_init).u == v.u)  // binary compare!
 		return MAKE_INDEX(0,i);
 	}
     }
@@ -776,7 +777,7 @@ NOINLINE index_t new_signed_const(csp_rt_t* st, ivalue_t v)
     if ((ix = csp_new_decl(st, NULL, DECL_CONSTANT,0)) == BAD_INDEX)
 	return BAD_INDEX;
     i = INDEX(ix);
-    ram_decl_at(st,i)->cn.init.i = v;
+    csp_decl_set_cn_init(ram_decl_at(st,i), (value_t){ .i = v });
     return ix;
 }
 // Lookup for DECLARING a name: only the scope the new decl lands in. A module
@@ -1287,7 +1288,7 @@ NOINLINE static void free_reg(csp_rt_t* st, int r)
 	if ((ix = ap->rmap[r]) != BAD_INDEX) {
 	    ap->rmap[r] = BAD_INDEX;
 	    if (INDEX(ix) >= st->rom_nd)   // is_mapped cache is RAM-only
-		ram_decl_at(st,INDEX(ix))->is_mapped = 0;
+		csp_decl_set_is_mapped(ram_decl_at(st,INDEX(ix)), 0);
 	}
     }
 }
@@ -1353,12 +1354,12 @@ NOINLINE int map_reg(csp_rt_t* st, xindex_t ix)
 	    if (st->cs->ap->rmap[r] == XIDX(ix))
 		return r;  // mapping still valid
 	    // Stale mapping - clear it
-	    ram_decl_at(st,XIDX(ix))->is_mapped = 0;
+	    csp_decl_set_is_mapped(ram_decl_at(st,XIDX(ix)), 0);
 	}
 	dst = alloc_reg(st);
 	if (!rom && !named) {
-	    ram_decl_at(st,XIDX(ix))->is_mapped = 1;
-	    ram_decl_at(st,XIDX(ix))->reg = dst;
+	    csp_decl_set_is_mapped(ram_decl_at(st,XIDX(ix)), 1);
+	    csp_decl_set_reg(ram_decl_at(st,XIDX(ix)), dst);
 	    ap->rmap[dst] = XIDX(ix);
 	}
 	// A constant loads as an immediate; a #param does NOT. It is a
@@ -1368,7 +1369,7 @@ NOINLINE int map_reg(csp_rt_t* st, xindex_t ix)
 	// it in push_var, one layer down.
 	if ((decl(st,XIDX(ix),type) == DECL_CONSTANT) &&
 	    !decl(st,XIDX(ix),local)) {
-	    value_t val = decl(st,XIDX(ix),cn.init);
+	    value_t val = decl(st, XIDX(ix), cn_init);
 	    vtype_t vt = decl(st,XIDX(ix),vt);
 	    if (!csp_load_value(st, dst, vt, val))
 		return -1;
@@ -1469,7 +1470,7 @@ NOINLINE static int push_var(csp_rt_t* st, rentry_t* rstack, int ep,
     if ((decl(st,INDEX(ix),type) == DECL_CONSTANT) &&
 	!decl(st,INDEX(ix),local)) {
 	I = 1;
-	val = decl(st,INDEX(ix),cn.init);
+	val = decl(st, INDEX(ix), cn_init);
     }
     else if ((decl(st,INDEX(ix),type) == DECL_VARIABLE) ||
 	     (decl(st,INDEX(ix),type) == DECL_CONSTANT)) {
@@ -1803,11 +1804,20 @@ NOINLINE value_t eval1(csp_rt_t* st, opcode_t op, value_t y)
 {
     value_t sx, sy, x;
     int leave;
-    csp_instr_t ci = { .a = { .op=op,.x=0,.y=1,.z=2 }};
+    csp_instr_t ci;
+
+    // Built through the setters, not a designated initializer: the record is
+    // laid out by utils/layout.terms now, and a union initializer would put
+    // gcc's packer back in charge of what the ROM looks like.
+    memset(&ci, 0, sizeof(ci));
+    csp_instr_set_op(&ci, op);
+    csp_instr_set_a_x(&ci, 0);
+    csp_instr_set_a_y(&ci, 1);
+    csp_instr_set_a_z(&ci, 2);
     
     sx = st->es.reg[0]; sy = st->es.reg[1];
     st->es.reg[1] = y;
-    eval_op(st, 0, ci, &leave);
+    eval_op(st, 0, &ci, &leave);
     x = st->es.reg[0];
     st->es.reg[0] = sx; st->es.reg[1] = sy;
     return x;
@@ -1821,11 +1831,20 @@ NOINLINE value_t eval2(csp_rt_t* st, opcode_t op, value_t y, value_t z, int uns)
 {
     value_t sx, sy, sz, x;
     int leave;
-    csp_instr_t ci = { .a = { .op=op,.x=0,.y=1,.z=2,.u=(unsigned)(uns!=0) }};
+    csp_instr_t ci;
+
+    // Through the setters, as above: a designated initializer on the union puts
+    // gcc's bit-field packer back in charge of the ROM format.
+    memset(&ci, 0, sizeof(ci));
+    csp_instr_set_op(&ci, op);
+    csp_instr_set_a_x(&ci, 0);
+    csp_instr_set_a_y(&ci, 1);
+    csp_instr_set_a_z(&ci, 2);
+    csp_instr_set_a_u(&ci, (uint8_t)(uns != 0));
 
     sx = st->es.reg[0]; sy = st->es.reg[1]; sz = st->es.reg[2];
     st->es.reg[1] = y; st->es.reg[2] = z;
-    eval_op(st, 0, ci, &leave);
+    eval_op(st, 0, &ci, &leave);
     x = st->es.reg[0];
     st->es.reg[0] = sx; st->es.reg[1] = sy; st->es.reg[2] = sz;    
     return x;
@@ -2381,7 +2400,7 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
 	csp_instr_t* sp = alloc_instr_ptr(st, NULL, OP_SETO);
 	if (sp == NULL)
 	    return -1;
-	sp->o.obj = call_obj;
+	csp_instr_set_o_obj(sp, call_obj);
     }
     if (!asm_CALL(st, dst, func_idx, is_user, argcode))
 	return -1;
@@ -2667,8 +2686,8 @@ next:
 	    // Handle obj.field access
 	    if ((decl(st,INDEX(ix),type) == DECL_OBJECT) &&
 		(tv[i].t == DOT) && (tv[i+1].t == WORD)) {
-		index_t mx = decl(st,INDEX(ix),mq.mx);  // module def
-		ivalue_t dn = decl(st,INDEX(mx),md.n);  // number of elements
+		index_t mx = decl(st, INDEX(ix), mq_mx);  // module def
+		ivalue_t dn = decl(st, INDEX(mx), md_n);  // number of elements
 		index_t jx;
 		tval = tv[i+1].v;
 		if ((jx = lookup_decl_in(st, &tval.str,
@@ -2693,7 +2712,7 @@ next:
 		// A NAMED object. asm_mem_part/asm_memi turn this into an OP_SETO
 		// in front of the access; until then the object rides in the high
 		// half of the xindex.
-		ix = MAKE_XINDEX(decl(st,INDEX(ix),mq.m), XIDX(jx));
+		ix = MAKE_XINDEX(decl(st, INDEX(ix), mq_m), XIDX(jx));
 		i += 2;
 	    }
 	    // Apply module context
@@ -3164,8 +3183,11 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
     }
     st->cs->ent = jx;   // entry point of module being defined
     i = INDEX(ix);
-    ram_decl_at(st,i)->md.n = 0;
-    ram_decl_at(st,i)->md.ent = st->cs->ent;
+    {
+    	csp_decl_t* dp_ = ram_decl_at(st,i);
+	    csp_decl_set_md_n(dp_, 0);
+	    csp_decl_set_md_ent(dp_, st->cs->ent);
+    }
     return 0;
 }
 
@@ -3226,13 +3248,13 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
     }
     if ((ex = csp_new_decl(st, NULL, DECL_END,0)) == BAD_INDEX)
 	return -1;
-    ram_decl_at(st, INDEX(mx))->md.n = (INDEX(ex) - INDEX(mx)) - 1;
+    csp_decl_set_md_n(ram_decl_at(st, INDEX(mx)), (INDEX(ex) - INDEX(mx)) - 1);
     if (!asm_LEAVE(st, &lx, 0, 0))
 	return -1;
     // ent MUST be OP_ENTER!
-    ram_instr_at(st, st->cs->ent)->e.num = (lx - st->cs->ent - 1);
-    ram_instr_at(st, lx)->v.num = instr(st, st->cs->ent, e.num);
-    ram_instr_at(st, lx)->v.mx  = instr(st, st->cs->ent, e.mx);
+    csp_instr_set_e_num(ram_instr_at(st, st->cs->ent), (lx - st->cs->ent - 1));
+    csp_instr_set_v_num(ram_instr_at(st, lx), instr(st, st->cs->ent, e_num));
+    csp_instr_set_v_mx(ram_instr_at(st, lx), instr(st, st->cs->ent, e_mx));
     // stack?
     st->cs->mdef = BAD_INDEX;
     st->cs->ent = 0;
@@ -3290,9 +3312,10 @@ NOINLINE static int array_replicate(csp_rt_t* st, int head, decl_t type,
 	index_t jx;
 	if ((jx = csp_new_decl(st, NULL, type, 0)) == BAD_INDEX)
 	    return -1;
-	*ram_decl_at(st, INDEX(jx)) = *ram_decl_at(st, head);
-	ram_decl_at(st, INDEX(jx))->name = 0;
-	ram_decl_at(st, INDEX(jx))->cont = 1;
+	memcpy(ram_decl_at(st, INDEX(jx)), ram_decl_at(st, head),
+	       sizeof(csp_decl_t));
+	csp_decl_set_name(ram_decl_at(st, INDEX(jx)), 0);
+	csp_decl_set_cont(ram_decl_at(st, INDEX(jx)), 1);
     }
     return 0;
 }
@@ -3310,12 +3333,18 @@ NOINLINE static int set_elem_pin(csp_rt_t* st, int di, decl_t type,
 	return -1;
     }
     if (type == DECL_DIGITAL) {
-	ram_decl_at(st, di)->di.port = (unsigned)port;
-	ram_decl_at(st, di)->di.pin  = (unsigned)p;
+	{
+		csp_decl_t* dp_ = ram_decl_at(st, di);
+		csp_decl_set_di_port(dp_, (unsigned)port);
+		csp_decl_set_di_pin(dp_, (unsigned)p);
+	}
     }
     else {
-	ram_decl_at(st, di)->an.port = (unsigned)port;
-	ram_decl_at(st, di)->an.pin  = (unsigned)p;
+	{
+		csp_decl_t* dp_ = ram_decl_at(st, di);
+		csp_decl_set_an_port(dp_, (unsigned)port);
+		csp_decl_set_an_pin(dp_, (unsigned)p);
+	}
     }
     return 0;
 }
@@ -3417,7 +3446,7 @@ NOINLINE static int param_seed(csp_rt_t* st, const token_t* tv,
 	return 0;
     if (decl(st, INDEX(ix), type) != DECL_CONSTANT)
 	return 0;
-    *vp = decl(st, INDEX(ix), cn.init);
+    *vp = decl(st, INDEX(ix), cn_init);
     return 1;
 }
 
@@ -3470,8 +3499,8 @@ NOINLINE static int asm_decl_init(csp_rt_t* st, const token_t* tv, size_t n,
 	index_t mk = (index_t)(st->cs->dinit_mark - 1);
 	if ((mk >= st->rom_nn) && (mk < (index_t)st->ps.nn) &&
 	    (instr(st, mk, op) == OP_INSTATE) &&
-	    (instr(st, mk, in.imm) == STATE_INIT) &&
-	    ((index_t)(mk + instr(st, mk, in.nxt)) == (index_t)st->ps.nn)) {
+	    (instr(st, mk, in_imm) == STATE_INIT) &&
+	    ((index_t)(mk + instr(st, mk, in_nxt)) == (index_t)st->ps.nn)) {
 	    // PUSH even though no gate was emitted: close_in_block below pops,
 	    // and an unbalanced pop closes the block we are standing in. Before
 	    // installing the INIT context, so the pop restores the outer one.
@@ -3533,10 +3562,13 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
     if ((ix = csp_new_udecl(st,&d.name,DECL_VARIABLE)) == BAD_INDEX)
 	return -1;
     i = INDEX(ix);
-    ram_decl_at(st,i)->vt = d.opts.vt;
-    ram_decl_at(st,i)->res = MAKE_RES(d.r.res);
-    ram_decl_at(st,i)->dir = d.opts.dir;
-    ram_decl_at(st,i)->va.init = d.init;
+    {
+    	csp_decl_t* dp_ = ram_decl_at(st,i);
+	    csp_decl_set_vt(dp_, d.opts.vt);
+	    csp_decl_set_res(dp_, MAKE_RES(d.r.res));
+	    csp_decl_set_dir(dp_, d.opts.dir);
+	    csp_decl_set_va_init(dp_, d.init);
+    }
 
     // optional:  bind <buffer> '[' <bit0> ['..' <bit1>] ']'
     // a bound variable is a bit-field view into a buffer (bits, not bytes)
@@ -3572,14 +3604,17 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	// of the buffer wrote outside it. The buffer is the bound.
 	if ((b0 < 0) || (b1 < b0) || (b0 > MAX_VIEW_BIT) ||
 	    ((b1 - b0) + 1 > MAX_RES_BITS) ||
-	    (b1 >= (ivalue_t)decl(st, INDEX(bx), bf.nbytes) * 8)) {
+	    (b1 >= (ivalue_t)decl(st, INDEX(bx), bf_nbytes) * 8)) {
 	    csp_set_error(st, ERR_NUMBER_RANGE); return -1;
 	}
-	ram_decl_at(st,i)->bound  = 1;
-	ram_decl_at(st,i)->ca.id  = INDEX(bx);
-	ram_decl_at(st,i)->ca.bit = b0;
-	ram_decl_at(st,i)->ca.len = MAKE_FIELD_LEN((b1-b0)+1);
-	ram_decl_at(st,i)->ca.endian = d.opts.endian;
+	{
+		csp_decl_t* dp_ = ram_decl_at(st,i);
+		csp_decl_set_bound(dp_, 1);
+		csp_decl_set_ca_id(dp_, INDEX(bx));
+		csp_decl_set_ca_bit(dp_, b0);
+		csp_decl_set_ca_len(dp_, MAKE_FIELD_LEN((b1-b0)+1));
+		csp_decl_set_ca_endian(dp_, d.opts.endian);
+	}
     }
 
     // Made LAST so the copies inherit everything decided above.
@@ -3595,7 +3630,7 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	value_t seed;
 
 	if (param_seed(st, tv, &d.ini, &seed))
-	    ram_decl_at(st,i)->va.init = seed;
+	    csp_decl_set_va_init(ram_decl_at(st,i), seed);
 	// asm_rule reads a plain `<var> = <rhs>` lvalue back out of the token
 	// vector at rhs.pos-2, and what sits there is DECLARATION syntax
 	// (`:32`, an option). Move the name down against the '=', the way
@@ -3681,11 +3716,14 @@ NOINLINE int csp_parse_local(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	    return -1;
     }
     i = INDEX(ix);
-    ram_decl_at(st,i)->vt = d.opts.vt;
-    ram_decl_at(st,i)->res = MAKE_RES(d.r.res);
-    ram_decl_at(st,i)->dir = d.opts.dir;
-    ram_decl_at(st,i)->local = 1;
-    ram_decl_at(st,i)->va.init.i = 0;
+    {
+    	csp_decl_t* dp_ = ram_decl_at(st,i);
+	    csp_decl_set_vt(dp_, d.opts.vt);
+	    csp_decl_set_res(dp_, MAKE_RES(d.r.res));
+	    csp_decl_set_dir(dp_, d.opts.dir);
+	    csp_decl_set_local(dp_, 1);
+	    csp_decl_set_va_init(dp_, (value_t){ .i = 0 });
+    }
 
     // The formula, as a rule -- but a rule body is `<name> = <expr>`, and what
     // sits between the name and the '=' here is DECLARATION syntax (':8', an
@@ -3727,7 +3765,7 @@ NOINLINE static int init_list(csp_rt_t* st, const token_t* tv, int j, size_t n,
 	}
 	j = r;
 	if (head >= 0)
-	    ram_decl_at(st, head + nv)->cn.init = e.init;
+	    csp_decl_set_cn_init(ram_decl_at(st, head + nv), e.init);
 	nv++;
 	if (e.sep == RBRACE)
 	    break;
@@ -3832,7 +3870,7 @@ NOINLINE static int parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n,
 		return -1;
 	    }
 	    if (INDEX(px) >= st->rom_nd) {          // RAM: write it in place
-		ram_decl_at(st, INDEX(px))->cn.init = d.init;
+		csp_decl_set_cn_init(ram_decl_at(st, INDEX(px)), d.init);
 		set_param_value(st, INDEX(px), d.init);
 		return 0;
 	    }
@@ -3840,10 +3878,13 @@ NOINLINE static int parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n,
 	    if ((ix = csp_new_decl(st, &d.name, DECL_CONSTANT, 0)) == BAD_INDEX)
 		return -1;
 	    i = INDEX(ix);
-	    ram_decl_at(st,i)->vt = d.opts.vt;
-	    ram_decl_at(st,i)->res = MAKE_RES(d.r.res);
-	    ram_decl_at(st,i)->local = 1;
-	    ram_decl_at(st,i)->cn.init = d.init;
+	    {
+	    	csp_decl_t* dp_ = ram_decl_at(st,i);
+		    csp_decl_set_vt(dp_, d.opts.vt);
+		    csp_decl_set_res(dp_, MAKE_RES(d.r.res));
+		    csp_decl_set_local(dp_, 1);
+		    csp_decl_set_cn_init(dp_, d.init);
+	    }
 	    set_param_value(st, INDEX(px), d.init);
 	    return 0;
 	}
@@ -3852,10 +3893,13 @@ NOINLINE static int parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n,
     if ((ix = csp_new_udecl(st,&d.name,DECL_CONSTANT)) == BAD_INDEX)
 	return -1;
     i = INDEX(ix);
-    ram_decl_at(st,i)->vt = d.opts.vt;
-    ram_decl_at(st,i)->res = MAKE_RES(d.r.res);
-    ram_decl_at(st,i)->local = is_param ? 1 : 0;
-    ram_decl_at(st,i)->cn.init = d.init;
+    {
+    	csp_decl_t* dp_ = ram_decl_at(st,i);
+	    csp_decl_set_vt(dp_, d.opts.vt);
+	    csp_decl_set_res(dp_, MAKE_RES(d.r.res));
+	    csp_decl_set_local(dp_, is_param ? 1 : 0);
+	    csp_decl_set_cn_init(dp_, d.init);
+    }
 
     if (array_replicate(st, i, DECL_CONSTANT, alen) < 0)
 	return -1;
@@ -3944,17 +3988,23 @@ NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, int ti, size_t n)
     if ((ix = csp_new_udecl(st, &d.name,DECL_DIGITAL)) == BAD_INDEX)
 	return -1;
     i = INDEX(ix);
-    ram_decl_at(st,i)->res = MAKE_RES(1);
-    ram_decl_at(st,i)->di.pin = d.port_pin.pin;
-    ram_decl_at(st,i)->di.port = d.port_pin.port;
-    ram_decl_at(st,i)->dir = d.opts.dir;
-    ram_decl_at(st,i)->di.pullup = d.opts.pullup;
-    ram_decl_at(st,i)->di.pulldown = d.opts.pulldown;
+    {
+    	csp_decl_t* dp_ = ram_decl_at(st,i);
+	    csp_decl_set_res(dp_, MAKE_RES(1));
+	    csp_decl_set_di_pin(dp_, d.port_pin.pin);
+	    csp_decl_set_di_port(dp_, d.port_pin.port);
+	    csp_decl_set_dir(dp_, d.opts.dir);
+	    csp_decl_set_di_pullup(dp_, d.opts.pullup);
+	    csp_decl_set_di_pulldown(dp_, d.opts.pulldown);
+    }
     // An interrupt is a property of the pin, like the pull. `#digital Drdy in
     // falling 2:13` is the whole of it: the trigger arms the source and the
     // guard is Drdy.fired. See doc/EVENTS.md.
-    ram_decl_at(st,i)->di.irq = d.opts.trig;
-    ram_decl_at(st,i)->di.soft = d.opts.soft;
+    {
+    	csp_decl_t* dp_ = ram_decl_at(st,i);
+	    csp_decl_set_di_irq(dp_, d.opts.trig);
+	    csp_decl_set_di_soft(dp_, d.opts.soft);
+    }
 
     if (array_replicate(st, i, DECL_DIGITAL, alen) < 0)
 	return -1;
@@ -3993,15 +4043,18 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, int ti, size_t n)
     if ((ix = csp_new_udecl(st,&d.name,DECL_ANALOG)) == BAD_INDEX)
 	return -1;
     i = INDEX(ix);
-    ram_decl_at(st,i)->vt = d.opts.vt;
-    ram_decl_at(st,i)->res = MAKE_RES(d.r.res);
-    ram_decl_at(st,i)->an.pin = d.port_pin.pin;
-    ram_decl_at(st,i)->an.port = d.port_pin.port;
-    ram_decl_at(st,i)->dir = d.opts.dir;
-    ram_decl_at(st,i)->an.pwm = d.opts.pwm;
-    ram_decl_at(st,i)->an.endian = d.opts.endian;
-    ram_decl_at(st,i)->an.irq = d.opts.trig;
-    ram_decl_at(st,i)->an.soft = d.opts.soft;
+    {
+    	csp_decl_t* dp_ = ram_decl_at(st,i);
+	    csp_decl_set_vt(dp_, d.opts.vt);
+	    csp_decl_set_res(dp_, MAKE_RES(d.r.res));
+	    csp_decl_set_an_pin(dp_, d.port_pin.pin);
+	    csp_decl_set_an_port(dp_, d.port_pin.port);
+	    csp_decl_set_dir(dp_, d.opts.dir);
+	    csp_decl_set_an_pwm(dp_, d.opts.pwm);
+	    csp_decl_set_an_endian(dp_, d.opts.endian);
+	    csp_decl_set_an_irq(dp_, d.opts.trig);
+	    csp_decl_set_an_soft(dp_, d.opts.soft);
+    }
 
     if (array_replicate(st, i, DECL_ANALOG, alen) < 0)
 	return -1;
@@ -4034,15 +4087,21 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	return -1;
     }
     i = INDEX(tx);
-    ram_decl_at(st,i)->vt = V_UNSIGNED;
-    ram_decl_at(st,i)->res = MAKE_RES(32);
-    ram_decl_at(st,i)->va.init.u = 0;
+    {
+    	csp_decl_t* dp_ = ram_decl_at(st,i);
+	    csp_decl_set_vt(dp_, V_UNSIGNED);
+	    csp_decl_set_res(dp_, MAKE_RES(32));
+	    csp_decl_set_va_init(dp_, (value_t){ .u = 0 });
+    }
 
     i = INDEX(tm);
-    ram_decl_at(st,i)->vt = V_TIMER;
-    ram_decl_at(st,i)->tm.fired = 0;
-    ram_decl_at(st,i)->tm.init = d.init;
-    ram_decl_at(st,i)->tm.period = d.timeout;
+    {
+    	csp_decl_t* dp_ = ram_decl_at(st,i);
+	    csp_decl_set_vt(dp_, V_TIMER);
+	    csp_decl_set_tm_fired(dp_, 0);
+	    csp_decl_set_tm_init(dp_, d.init);
+	    csp_decl_set_tm_period(dp_, d.timeout);
+    }
 
     // `#timer Tick Period = 1` with Period a #param: the period is not a
     // constant, so it becomes `Tick.period = Period` in INIT -- exactly what a
@@ -4055,7 +4114,7 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	value_t seed;
 
 	if (param_seed(st, tv, &d.period, &seed))
-	    ram_decl_at(st,i)->tm.period = seed.u;
+	    csp_decl_set_tm_period(ram_decl_at(st,i), seed.u);
 	b.obj    = d.name;
 	b.fld    = period;         // -> PART_PERIOD, via part_from_tstr
 	b.assign = EQ;
@@ -4128,17 +4187,20 @@ NOINLINE int csp_parse_field(csp_rt_t* st, token_t* tv, int ti, size_t n)
     }
 
     i = INDEX(ix);
-    ram_decl_at(st,i)->res = MAKE_RES(d.r.res); // same as len?
-    ram_decl_at(st,i)->vt = d.opts.vt;
-    ram_decl_at(st,i)->dir = d.opts.dir;
-    ram_decl_at(st,i)->ca.id = INDEX(idx);   // the #buffer decl
-    ram_decl_at(st,i)->ca.bit = d.bit0;
-    ram_decl_at(st,i)->ca.len = MAKE_FIELD_LEN(len);
-    ram_decl_at(st,i)->ca.endian = d.opts.endian;
+    {
+    	csp_decl_t* dp_ = ram_decl_at(st,i);
+	    csp_decl_set_res(dp_, MAKE_RES(d.r.res)); // same as len?
+	    csp_decl_set_vt(dp_, d.opts.vt);
+	    csp_decl_set_dir(dp_, d.opts.dir);
+	    csp_decl_set_ca_id(dp_, INDEX(idx));   // the #buffer decl
+	    csp_decl_set_ca_bit(dp_, d.bit0);
+	    csp_decl_set_ca_len(dp_, MAKE_FIELD_LEN(len));
+	    csp_decl_set_ca_endian(dp_, d.opts.endian);
+    }
     // The field inherits its direction from the frame unless it says otherwise:
     // a frame is read or written as a whole, so per-field dir is rarely wanted.
-    if (ram_decl_at(st,i)->dir == 0)
-	ram_decl_at(st,i)->dir = decl(st, INDEX(idx), dir);
+    if (csp_decl_get_dir(ram_decl_at(st,i)) == 0)
+	csp_decl_set_dir(ram_decl_at(st,i), decl(st, INDEX(idx), dir));
     return 0;
 }
 
@@ -4193,8 +4255,11 @@ NOINLINE int csp_parse_route(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	    return -1;
     }
     i = INDEX(ix);
-    ram_decl_at(st,i)->rt.src = XIDX(sx);
-    ram_decl_at(st,i)->rt.dst = XIDX(dx);
+    {
+    	csp_decl_t* dp_ = ram_decl_at(st,i);
+	    csp_decl_set_rt_src(dp_, XIDX(sx));
+	    csp_decl_set_rt_dst(dp_, XIDX(dx));
+    }
     return 0;
 }
 
@@ -4329,10 +4394,13 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     if ((ix = csp_new_udecl(st, &d.name, DECL_BUFFER)) == BAD_INDEX)
 	return -1;
     i = INDEX(ix);
-    ram_decl_at(st,i)->vt  = d.opts.vt;
-    ram_decl_at(st,i)->dir = d.opts.dir;
-    ram_decl_at(st,i)->bf.nbytes = nbytes;
-    ram_decl_at(st,i)->bf.transport = transport;
+    {
+    	csp_decl_t* dp_ = ram_decl_at(st,i);
+	    csp_decl_set_vt(dp_, d.opts.vt);
+	    csp_decl_set_dir(dp_, d.opts.dir);
+	    csp_decl_set_bf_nbytes(dp_, nbytes);
+	    csp_decl_set_bf_transport(dp_, transport);
+    }
     if ((transport == TR_UDP) || (transport == TR_TCP)) {
 	// TWO constants, made side by side: `id` is the address and `id + 1`
 	// the port. new_signed_const always appends, so a pair made with
@@ -4349,7 +4417,7 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	    csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
 	    return -1;
 	}
-	ram_decl_at(st,i)->bf.id = ca;
+	csp_decl_set_bf_id(ram_decl_at(st,i), ca);
     }
     else if (transport != TR_NONE) {
 	value_t ep;
@@ -4357,7 +4425,7 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	ep.i = (ivalue_t)xref;
 	if ((cx = lookup_const(st, V_INTEGER, ep)) == BAD_INDEX)
 	    cx = new_signed_const(st, ep.i);
-	ram_decl_at(st,i)->bf.id = cx;
+	csp_decl_set_bf_id(ram_decl_at(st,i), cx);
     }
     return 0;
 }
@@ -4459,8 +4527,8 @@ NOINLINE xindex_t lookup_lhs(csp_rt_t* st, const token_t* tv,
     }
     return ix;
 field:
-    mx = decl(st,INDEX(oix),mq.mx);  // module def
-    dn = decl(st,INDEX(mx),md.n);  // number of elements	    
+    mx = decl(st, INDEX(oix), mq_mx);  // module def
+    dn = decl(st, INDEX(mx), md_n);  // number of elements	    
     if ((jx = lookup_decl_in(st, name,
 			     INDEX(mx)+1,INDEX(mx)+1+dn))==BAD_INDEX) {
 	if (csp_set_error(st, ERR_FIELD_NOT_FOUND)) {
@@ -4468,7 +4536,7 @@ field:
 	}
 	return BAD_INDEX;
     }
-    ix = MAKE_XINDEX(decl(st,INDEX(oix),mq.m), XIDX(jx));  // named object
+    ix = MAKE_XINDEX(decl(st, INDEX(oix), mq_m), XIDX(jx));  // named object
     return ix;
 }
 
@@ -4782,7 +4850,7 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 	if (!asm_LI(st, dst, 0))
 	    return -1;
     }
-    ram_instr_at(st,j)->r.nxt = st->ps.nn - j;  // relative offset
+    csp_instr_set_r_nxt(ram_instr_at(st,j), st->ps.nn - j);  // relative offset
     if (!asm_NEXT(st, dst))
 	return -1;
     free_reg(st, dst);
@@ -4807,7 +4875,7 @@ NOINLINE static int asm_state_set(csp_rt_t* st, xindex_t state_ix, int snum)
     dst = alloc_reg(st);                 // dead reg for NEXT's body value
     if (!asm_STI(st, dst, state_ix, snum))
 	return -1;
-    ram_instr_at(st, rpos)->r.nxt = st->ps.nn - rpos;  // skip body when false
+    csp_instr_set_r_nxt(ram_instr_at(st, rpos), st->ps.nn - rpos);  // skip body when false
     if (!asm_NEXT(st, dst))
 	return -1;
     free_reg(st, dst);
@@ -4852,9 +4920,9 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
     // derived tables, which happens after parsing. csp_object_decl covers the
     // gap for anything that runs in between (listing while /pause defers the
     // rebuild).
-    ram_decl_at(st, INDEX(ix))->mq.mx = mx;
+    csp_decl_set_mq_mx(ram_decl_at(st, INDEX(ix)), mx);
     m = st->ps.nq + 1;
-    ram_decl_at(st, INDEX(ix))->mq.m = m;
+    csp_decl_set_mq_m(ram_decl_at(st, INDEX(ix)), m);
     st->ps.nq++;
 
     DBG("object %.*s.%.*s\n", DNAME(st, mx), DNAME(st, ix));    
@@ -4905,10 +4973,10 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	    if (asm_state_set(st, state_ix, 1) < 0)
 		return -1;
 	    // patch the gate to skip the whole INIT block when State != INIT
-	    ram_instr_at(st, mk)->in.nxt = st->ps.nn - mk;
+	    csp_instr_set_in_nxt(ram_instr_at(st, mk), st->ps.nn - mk);
 	}
     }
-    return asm_NEW(st, decl(st,INDEX(mx),md.ent), ix);
+    return asm_NEW(st, decl(st, INDEX(mx), md_ent), ix);
 }
 
 // A bare top-level rule (no explicit #in, not inside a module) runs in the two
@@ -5070,27 +5138,30 @@ NOINLINE index_t make_buf_view(csp_rt_t* st, xindex_t parent,
     // and ca.len can hold. Otherwise the slice wrapped and read past the heap.
     if ((b0 < 0) || (b1 < b0) || (b0 > MAX_VIEW_BIT) ||
 	((b1 - b0) + 1 > MAX_RES_BITS) ||
-	(b1 >= (ivalue_t)decl(st, pi, bf.nbytes) * 8)) {
+	(b1 >= (ivalue_t)decl(st, pi, bf_nbytes) * 8)) {
 	csp_set_error(st, ERR_NUMBER_RANGE);
 	return BAD_INDEX;
     }
     for (i = 0; i < st->ps.nd; i++) {  // dedup
-	if ((ram_decl_at(st,i)->type == DECL_VIEW) &&
-	    (ram_decl_at(st,i)->ca.id == pi) &&
-	    (ram_decl_at(st,i)->ca.bit == b0) &&
-	    (ram_decl_at(st,i)->ca.len == MAKE_FIELD_LEN((b1-b0)+1)))
+	if ((csp_decl_get_type(ram_decl_at(st,i)) == DECL_VIEW) &&
+	    (csp_decl_get_ca_id(ram_decl_at(st,i)) == pi) &&
+	    (csp_decl_get_ca_bit(ram_decl_at(st,i)) == b0) &&
+	    (csp_decl_get_ca_len(ram_decl_at(st,i)) == MAKE_FIELD_LEN((b1-b0)+1)))
 	    return MAKE_INDEX(0, i);
     }
     if ((ix = csp_new_decl(st,&name,DECL_VIEW,0)) == BAD_INDEX)
 	return BAD_INDEX;
     i = INDEX(ix);
-    ram_decl_at(st,i)->vt     = V_UNSIGNED;
-    ram_decl_at(st,i)->dir    = decl(st,pi,dir);
-    ram_decl_at(st,i)->res    = MAKE_RES((b1-b0)+1);
-    ram_decl_at(st,i)->ca.id  = pi;
-    ram_decl_at(st,i)->ca.bit = b0;
-    ram_decl_at(st,i)->ca.len = MAKE_FIELD_LEN((b1-b0)+1);
-    ram_decl_at(st,i)->ca.endian = E_NATIVE;
+    {
+    	csp_decl_t* dp_ = ram_decl_at(st,i);
+	    csp_decl_set_vt(dp_, V_UNSIGNED);
+	    csp_decl_set_dir(dp_, decl(st,pi,dir));
+	    csp_decl_set_res(dp_, MAKE_RES((b1-b0)+1));
+	    csp_decl_set_ca_id(dp_, pi);
+	    csp_decl_set_ca_bit(dp_, b0);
+	    csp_decl_set_ca_len(dp_, MAKE_FIELD_LEN((b1-b0)+1));
+	    csp_decl_set_ca_endian(dp_, E_NATIVE);
+    }
     return ix;
 }
 
@@ -5200,7 +5271,7 @@ NOINLINE static bool_t open_in_block(csp_rt_t* st, const uint8_t* states, int ns
     free_reg(st, cnd);
     l1 = st->ps.nn;                     // block starts right after the chain
     for (k = 0; k < ns - 1; k++)        // NINSTATE jumps forward into the block
-	ram_instr_at(st, npos[k])->in.nxt = l1 - npos[k];
+	csp_instr_set_in_nxt(ram_instr_at(st, npos[k]), l1 - npos[k]);
     for (k = 0; k < ns; k++)
 	st->cs->sdefv[k] = states[k];
     // PUSH BEFORE the new context is installed: what the pop restores is the

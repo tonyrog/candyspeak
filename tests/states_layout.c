@@ -1,6 +1,6 @@
 // The contract behind csp_states_t.
 //
-// A states block packs CSP_STATES_PER_DECL names into one csp_decl_t, and the
+// A states block packs CSP_STATES_PER_DECL names into one csp_decl_raw_t, and the
 // design leans on one structural assumption that nothing would fail to compile
 // over: slot 0 has to sit at exactly the same bits as DECL_COMMON's `name`.
 // That alias is what lets everything reading a plain `d.name` see the block's
@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "csp.h"
+#include "csp_layout_raw.h"
 
 static int errors = 0;
 
@@ -35,15 +36,16 @@ static void fail(const char* what, unsigned long got, unsigned long want)
 
 int main(void)
 {
-    csp_decl_t d;
+    csp_decl_raw_t d;
+    csp_decl_t dop;
     unsigned v[CSP_STATES_PER_DECL];
     int k;
 
     // A block must not be bigger than the declaration it lives in.
-    if (sizeof(csp_states_t) > sizeof(csp_decl_t))
+    if (sizeof(csp_states_t) > sizeof(csp_decl_raw_t))
 	fail("sizeof(csp_states_t)",
 	     (unsigned long)sizeof(csp_states_t),
-	     (unsigned long)sizeof(csp_decl_t));
+	     (unsigned long)sizeof(csp_decl_raw_t));
 
     // Distinct, full-width values so a slot that overlaps another shows up.
     for (k = 0; k < CSP_STATES_PER_DECL; k++)
@@ -58,9 +60,14 @@ int main(void)
     d.s6.name5  = v[4];
     d.s6.name6  = v[5];
 
+    // The runtime takes the OPAQUE csp_decl_t; this file builds the raw union
+    // so it can name the bits. Copied, not cast: the two are the same eight
+    // bytes and memcpy says so without leaning on aliasing rules.
+    memcpy(&dop, &d, sizeof(dop));
+
     // Every slot reads back what was written: no two share bits.
     for (k = 0; k < CSP_STATES_PER_DECL; k++) {
-	unsigned got = (unsigned)csp_states_name(&d, k);
+	unsigned got = (unsigned)csp_states_name(&dop, k);
 	if (got != v[k]) {
 	    char buf[32];
 	    sprintf(buf, "slot %d", k);
@@ -78,25 +85,27 @@ int main(void)
 
     // And the reverse -- writing through DECL_COMMON lands in slot 0.
     d.name = 1;
-    if (csp_states_name(&d, 0) != 1)
+    memcpy(&dop, &d, sizeof(dop));
+    if (csp_states_name(&dop, 0) != 1)
 	fail("DECL_COMMON.name writes slot 0",
-	     (unsigned long)csp_states_name(&d, 0), 1UL);
+	     (unsigned long)csp_states_name(&dop, 0), 1UL);
 
     // An empty slot reads 0, which is what marks padding at the end of a block.
     memset(&d, 0, sizeof(d));
     d.type = DECL_STATES;
+    memcpy(&dop, &d, sizeof(dop));
     for (k = 0; k < CSP_STATES_PER_DECL; k++) {
-	if (csp_states_name(&d, k) != 0) {
+	if (csp_states_name(&dop, k) != 0) {
 	    char buf[32];
 	    sprintf(buf, "empty slot %d", k);
-	    fail(buf, (unsigned long)csp_states_name(&d, k), 0UL);
+	    fail(buf, (unsigned long)csp_states_name(&dop, k), 0UL);
 	}
     }
 
     // Out of range is 0 too, so a loop that overruns cannot read a stale name.
-    if (csp_states_name(&d, CSP_STATES_PER_DECL) != 0)
+    if (csp_states_name(&dop, CSP_STATES_PER_DECL) != 0)
 	fail("slot past the end",
-	     (unsigned long)csp_states_name(&d, CSP_STATES_PER_DECL), 0UL);
+	     (unsigned long)csp_states_name(&dop, CSP_STATES_PER_DECL), 0UL);
 
     // Which DECL_COMMON fields OVERLAP a name, and which do not.
     //
@@ -115,8 +124,9 @@ int main(void)
 	    int q, hit = 0;
 	    memset(&d, 0, sizeof(d));
 	    if (w == 0) d.type = (decl_t)0xf; else d.dir = (pindir_t)3;
+	    memcpy(&dop, &d, sizeof(dop));
 	    for (q = 0; q < CSP_STATES_PER_DECL; q++)
-		if (csp_states_name(&d, q) != 0) hit = 1;
+		if (csp_states_name(&dop, q) != 0) hit = 1;
 	    if (hit) {
 		char buf[64];
 		sprintf(buf, "DECL_COMMON.%s must not touch a slot", shared[w]);
@@ -129,11 +139,15 @@ int main(void)
     // (csp_dump_code's CRC fold, csp_new_decl's clear) is looking at the wrong
     // bits and has to move with it.
     {
+	// With NAMEID_BITS at 8 the aliasing is BYTE-clean: byte 2 is name2 and
+	// byte 3 is name3, so res/is_mapped/bound land wholly in slot 1 and
+	// vt/reg wholly in slot 2. Nothing spans two slots any more, which is
+	// the whole reason a name id became a byte.
 	struct { const char* name; int slot; } over[] = {
-	    { "vt",        1 },
+	    { "vt",        2 },
 	    { "res",       1 },
-	    { "is_mapped", 2 },
-	    { "bound",     2 },
+	    { "is_mapped", 1 },
+	    { "bound",     1 },
 	    { "reg",       2 },
 	};
 	int w;
@@ -147,8 +161,9 @@ int main(void)
 	    case 3: d.bound = 1; break;
 	    case 4: d.reg = 0xf; break;
 	    }
+	    memcpy(&dop, &d, sizeof(dop));
 	    for (q = 0; q < CSP_STATES_PER_DECL; q++) {
-		int touched = (csp_states_name(&d, q) != 0);
+		int touched = (csp_states_name(&dop, q) != 0);
 		if (touched != (q == over[w].slot)) {
 		    char buf[80];
 		    sprintf(buf, "DECL_COMMON.%s vs slot %d", over[w].name, q);

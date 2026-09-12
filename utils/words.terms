@@ -1,0 +1,134 @@
+%% -*- erlang -*-
+%%
+%% Runtime words, as Erlang terms.  Read with file:consult/1.
+%%
+%% WHY THIS IS NOT AN ASSEMBLER
+%%
+%% The obvious shape for a bytecode source is stack operations -- DUP, SWAP,
+%% TOR.  It is also a dead end: a C back end for that can only emit an
+%% interpreter, push and pop written out in C, which is slower and uglier than
+%% what it replaced.  Then there are not two back ends, there is one.
+%%
+%% So the level here is EXPRESSIONS AND STATEMENTS.  The C back end writes
+%% ordinary C straight out of it; the bytecode back end does the stack
+%% scheduling itself, which is a tree-to-postfix walk and belongs in a
+%% generator rather than in whoever writes the word.
+%%
+%% That is what makes the boundary a BUILD decision instead of a source one: a
+%% board with flash to spare links the C and runs at full speed, a board that
+%% is tight links the bytecode, and the word is written once either way.
+%%
+%% ---------------------------------------------------------------------------
+%% VOCABULARY
+%%
+%%   {word, Name, [Arg], CType, [Stmt]}
+%%
+%%       CType is what the C function returns.  Cells are 16 bits, so a word
+%%       cannot return more than that -- the bytecode has no place to put it.
+%%
+%%   Stmt = {local, Name, Expr}      declare and initialise
+%%        | {return, Expr}
+%%        | {'if', Expr, [Stmt]}
+%%        | {'if', Expr, [Stmt], [Stmt]}
+%%        | {set, Name, Expr}        assign a local declared earlier
+%%        | {do, Expr}               for the side effect
+%%        | {while, Expr, [Stmt]}
+%%        | {switch, Expr, [{Const, [Stmt]}], [Stmt]}   cases, then default
+%%
+%%   Expr = {const, N | 'NAME'}      a number, or a C identifier (an enum)
+%%        | {var, Name}              an argument or a local
+%%        | {index, Expr}            INDEX(): strip the object bits. A macro in
+%%                                 C, an AND in bytecode -- and not optional:
+%%                                 leaving it out is a different function.
+%%        | {decl, Expr, Field}      field Field of the declaration at Expr
+%%        | {nd}                     the declaration count
+%%        | {op, Op, A, B}           eq ne lt add sub and or
+%%        | {andthen, A, B}          SHORT-CIRCUIT; C gets &&, bytecode a jump
+%%        | {orthen, A, B}           the same, for ||
+%%        | {call, Fn, [Expr]}       a WORD in this file, or a declared native.
+%%                                 Which it is is decided by the generator, not
+%%                                 spelled here: st is passed implicitly either
+%%                                 way and the call reads the same.
+%%
+%%   {native, CName, NArgs, RetType}
+%%
+%%       An existing C function callable from bytecode.  NArgs EXCLUDES st.
+%%       The generator writes the wrapper: an existing
+%%       void f(csp_rt_t*, uint16_t) is not the type mc_leaf_t is, and casting
+%%       between function types is undefined even where the ABI lines up.
+%%
+%% ---------------------------------------------------------------------------
+
+%% The listing asks this of a declaration index before it renders a name: is
+%% this a #local, whose name belongs to its module rather than to the program?
+%% Small, cold, and made of exactly the parts the listing path is made of -- a
+%% bounds test, two field reads and a short-circuit -- which is why it is the
+%% one the two back ends are proved against first.
+{word, is_local, [ix], 'int',
+ [{local, i, {index, {var, ix}}},
+  {return,
+   {andthen, {op, lt, {var, i}, {nd}},
+    {andthen, {op, eq, {decl, {var, i}, type}, {const, 'DECL_VARIABLE'}},
+              {decl, {var, i}, local}}}}]}.
+
+%% What a #local lists as: its position among the #locals of its module.
+%%
+%% Written WITHOUT a break, which the IR does not have: the downward scan stops
+%% on `start == 0` in the condition instead, which leaves the loop at the same
+%% place for the same reason. That is a fair trade -- a break is a second exit
+%% from a loop, and a code generator that has to get two of them right is a
+%% code generator that gets one of them wrong.
+{word, local_number, [ix], 'int',
+ [{local, i, {index, {var, ix}}},
+  {local, start, {const, 0}},
+  {local, k, {var, i}},
+  {local, n, {const, 0}},
+  {while, {andthen, {op, lt, {const, 0}, {var, k}},
+	            {op, eq, {var, start}, {const, 0}}},
+   [{local, t, {decl, {op, sub, {var, k}, {const, 1}}, type}},
+    {'if', {orthen, {op, eq, {var, t}, {const, 'DECL_MODULE'}},
+	            {op, eq, {var, t}, {const, 'DECL_END'}}},
+     [{set, start, {var, k}}]},
+    {set, k, {op, sub, {var, k}, {const, 1}}}]},
+  {set, k, {var, start}},
+  {while, {op, lt, {var, k}, {var, i}},
+   [{'if', {andthen, {op, eq, {decl, {var, k}, type}, {const, 'DECL_VARIABLE'}},
+	            {decl, {var, k}, local}},
+     [{set, n, {op, add, {var, n}, {const, 1}}}]},
+    {set, k, {op, add, {var, k}, {const, 1}}}]},
+  {return, {op, add, {var, n}, {const, 1}}}]}.
+
+%% SMOKE TEST for the switch back ends -- not a word anything calls yet. It is
+%% here so `switch` is exercised rather than merely implemented; the first real
+%% word that needs one replaces it.
+{word, decl_kind, [ix], 'int',
+ [{local, i, {index, {var, ix}}},
+  {local, r, {const, 0}},
+  {switch, {decl, {var, i}, type},
+   [{'DECL_VARIABLE', [{set, r, {const, 1}}]},
+    {'DECL_CONSTANT', [{set, r, {const, 2}}]},
+    {'DECL_MODULE',   [{set, r, {const, 3}}]}],
+   [{set, r, {const, 9}}]},
+  {return, {var, r}}]}.
+
+%% csp_tag: the one-character kind marker a listing puts in front of a
+%% declaration.  Lives in src/csp_rt.c, takes one argument past st, returns a
+%% value -- the plain shape, and the one most of the listing path has.
+{native, csp_tag, 1, char}.
+
+%% What the listing prints to identify a leaf: a #local has no name of its own
+%% and shows as its number, anything else shows its kind.
+%%
+%% Two calls of two different sorts and it does not say which is which: is_local
+%% is a WORD in this file and becomes a CALL into the shared area, csp_tag is a
+%% C function in csp_rt.c and goes through a generated wrapper.
+%% The tag is fetched BEFORE the call and used after it, and that is the point:
+%% is_local has locals of its own, and without a frame its `i` lands on this
+%% word's `t`. Written the other way round the clobber is invisible, because
+%% both words happen to keep their argument in local 0 -- the test passed a
+%% deliberately broken frame until this was turned round.
+{word, leaf_mark, [ix], 'int',
+ [{local, t, {call, csp_tag, [{var, ix}]}},
+  {'if', {call, is_local, [{var, ix}]},
+   [{return, {const, 36}}]},          %% '$'
+  {return, {var, t}}]}.

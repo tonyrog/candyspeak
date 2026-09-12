@@ -758,8 +758,8 @@ Inte buggar -- saker som byggts men inte setts fungera på järn.
   CSP_STACK_RESERVE i csp.h ar 2048 men anvands bara for att SIZA en
   malloc-arena. En statisk arena ignorerar den helt -- csp_mem_init sager till
   och med "The stack reserve is not lost with it", vilket ar precis det som var
-  fel. Darfor har bridgezone och dl1200 handtrimmade code_budget med
-  kommentarer om kort som hangt: samma bugg, hittad en gang per kort.
+  fel. Darfor har bridgezone och dl1200 handtrimmade code_budget med kommentarer om
+  kort som hangt: samma bugg, tweakad en gang per kort och aldrig kontrollerad.
 
   ATGARDAT: `stackcheck` i Makefile.board, kord vid LANKEN pa varje bare-kort
   (bada ARCH-grenarna). Den laser partens RAM ur den genererade headern
@@ -767,15 +767,15 @@ Inte buggar -- saker som byggts men inte setts fungera på järn.
   ifran under STACK_MIN (4096).
 
   FORSTA KORNINGEN HITTADE ETT TRASIGT KORT: lpc1754 hade 1192 BYTE STACK med
-  code_budget 9216 -- samma varde dl1200 bar innan nagon sankte det till 6144
-  efter en hangning. Sankt till 6144, ger 4264 som dl1200. Det var en
+  code_budget 9216 -- samma varde dl1200 bar innan det sanktes till 6144 efter
+  en hangning. lpc1754 blev kvar dar for att den missades da. Sankt till 6144, ger 4264 som dl1200. Det var en
   langvarigt flaggad misstanke som ingen kunde avgora; nu ar den matt.
 
     mega_bare    4221      dl1200      4264      bridgezone   5064
     crazyflie   93712      lpc1754     4264  (var 1192)
 
-  Tre av dem ar handtrimmade av nagon som fick ett kort att hanga, och alla
-  landar precis over 4096. Det ar battre stod for golvet an interpolationen
+  Tre av dem ar handtrimmade i efterhand efter att kort hangt, och alla landar
+  precis over 4096. Det ar battre stod for golvet an interpolationen
   mellan mina tva matpunkter.
 
   TONYS FRAGA LOSTE DET: "Kan det vara nagon slags setup med stacken?" Testet

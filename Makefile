@@ -57,7 +57,7 @@ CFLAGS=-MMD -MP -MF $(@:.o=.d) $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_AR
 #     tmp/csp_boot -n -C -O rom_host.c examples/empty.csp
 #     tmp/csp_boot -n -C -O rom.c      examples/cpx_rotate.csp
 OBJS = $(addprefix $(OBJDIR)/, \
-	csp_linux.o csp_rt.o csp_crc.o csp_line.o csp_repl.o csp_compile.o csp_tok.o \
+	csp_linux.o csp_rt.o csp_crc.o csp_fixpoint.o csp_line.o csp_repl.o csp_compile.o csp_tok.o \
 	csp_dump.o csp_eeprom.o csp_parse.o csp_print.o csp_strings.o \
 	csp_transport.o csp_console.o csp_states.o \
 	csp_flash.o csp_devices.o csp_flash_host.o rom_host.o)
@@ -154,7 +154,7 @@ csp:	$(OBJS) $(RO_LD)
 CORE_SRC = port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
 	   src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
 	   src/csp_transport.c src/csp_console.c src/csp_states.c \
-	   src/csp_parse.c src/csp_print.c gen/csp_strings.c src/csp_flash.c \
+	   src/csp_parse.c src/csp_print.c src/csp_fixpoint.c gen/csp_strings.c src/csp_flash.c \
 	   port/csp_devices.c port/csp_flash_host.c
 EXEC_SRC = $(CORE_SRC) gen/rom.c
 # csp_repl.c, csp_compile.c and csp_dump.c are still LISTED: each guards itself
@@ -322,6 +322,15 @@ tables:
 patterns:
 	@escript utils/gen_patterns.erl emit
 
+# Record layout -- the accessors, the micro-csp field table and the layout
+# fingerprint, all computed from utils/layout.terms rather than restated.
+layout:
+	@escript utils/gen_layout.erl emit
+
+# Runtime words: the same description compiled to C and to micro-csp bytecode.
+words:
+	@escript utils/gen_words.erl emit
+
 # sources that use the shared RODATA strings need the generated header first
 csp_rt.o csp_repl.o csp_compile.o csp_tok.o csp_strings.o: csp_strings.h
 
@@ -365,12 +374,21 @@ quick:	csp line_edit_check syntax_check strings_check tables_check \
 # a pipe is ignored BY DESIGN and proves nothing.
 # NOT listed in `test` -- tests/repl.sh already builds and runs it, and a second
 # copy would only print the same line twice.
+# micro-csp: the machine and, mainly, the bit-field descriptor table it cannot
+# derive. src/csp_mcsp.c is NOT in CORE_SRC on purpose -- nothing links it yet,
+# and a board should not carry an interpreter it does not run. The test builds
+# it directly, the same way line_edit_check does.
+mcsp_check:
+	@mkdir -p tmp
+	@$(CC) $(INCS) -O2 -o tmp/mcsp tests/mcsp.c src/csp_mcsp.c
+	@tmp/mcsp
+
 line_edit_check:
 	@mkdir -p tmp
 	@$(CC) $(INCS) -O2 -o tmp/line_edit tests/line_edit.c src/csp_line.c
 	@tmp/line_edit | tail -1
 
-test:	csp test_repl syntax_check strings_check tables_check patterns_check sketch_check ro_check width_check
+test:	csp test_repl syntax_check strings_check tables_check patterns_check sketch_check ro_check width_check layout_guard layout_check mcsp_check words_check
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
 
@@ -396,6 +414,33 @@ tables_check:
 
 patterns_check:
 	@escript utils/gen_patterns.erl check
+
+# Two checks, and they are not the same one. The first says the checked-in
+# header is what the terms file generates. The second says the generated
+# accessors agree with the C bit-fields they are replacing, field by field, in
+# both directions -- the bridge that makes the conversion incremental. When the
+# struct's bit-fields are gone, the second goes with them.
+# The two back ends run over the same inputs and must agree. That comparison is
+# the whole claim -- one description, two back ends -- so it is a test and not a
+# note in a file somewhere.
+words_check:
+	@escript utils/gen_words.erl check
+	@mkdir -p tmp
+	@$(CC) $(INCS) -O2 -o tmp/words tests/words.c src/csp_mcsp.c
+	@tmp/words
+
+# Nothing may name a bit-field of csp_decl_t or csp_instr_t directly. That is
+# not a style rule: the layout IS the ROM format, and a site that reads d.type
+# instead of csp_decl_get_type(&d) puts gcc's bit-field packer back in the
+# definition.
+layout_guard:
+	@python3 utils/layout_guard.py
+
+layout_check:
+	@escript utils/gen_layout.erl check
+	@mkdir -p tmp
+	@$(CC) $(INCS) -O2 -o tmp/layout tests/layout.c
+	@tmp/layout
 
 # RODATA read as ordinary memory -- the AVR bug class, caught in the SOURCE.
 #
@@ -597,7 +642,7 @@ $(OBJDIR)/%.o: %.c | gen/csp_strings.h
 
 -include $(OBJS:.o=.d)
 
-.PHONY: ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
+.PHONY: layout layout_guard layout_check words words_check mcsp_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

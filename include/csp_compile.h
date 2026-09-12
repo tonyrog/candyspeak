@@ -59,7 +59,7 @@ extern uint8_t csp_opcode_arity(opcode_t op);
 extern int  add_state(csp_rt_t* st, const tstr_t* name, index_t* blk);
 
 extern vtype_t call_rtype(uint8_t rtype, uint16_t argcode, int arity);
-NOINLINE int eval_op(csp_rt_t* st, int n, csp_instr_t ci, int* leave);
+NOINLINE int eval_op(csp_rt_t* st, int n, const csp_instr_t* ci, int* leave);
 extern uint8_t fn_type(const csp_func_t* fn, int j, int rom);
 extern csp_func_fn func_fn(const csp_func_t* fn, int i, int rom);
 extern uint8_t func_rtype(const csp_func_t* fn, int i, int rom);

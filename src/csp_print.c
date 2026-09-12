@@ -241,34 +241,15 @@ static void exprbuf_uint16(csp_exprbuf_t* bp, uint16_t v);
 // N counts locals from the start of the enclosing scope (the module, or the
 // program for a global local), so a declaration and its uses carry the same
 // number and a listing can be read.
-int csp_local_number(csp_rt_t* st, index_t ix)
-{
-    index_t i = INDEX(ix);
-    index_t start = 0;
-    index_t k;
-    int n = 0;
-
-    for (k = i; k > 0; k--) {
-	decl_t t = decl(st, k-1, type);
-	if ((t == DECL_MODULE) || (t == DECL_END)) {
-	    start = k;
-	    break;
-	}
-    }
-    for (k = start; k < i; k++) {
-	if ((decl(st, k, type) == DECL_VARIABLE) && decl(st, k, local))
-	    n++;
-    }
-    return n + 1;
-}
 
 // True when this leaf is a #local, i.e. lists as $N.
-int csp_is_local(csp_rt_t* st, index_t ix)
-{
-    index_t i = INDEX(ix);
-    return (i < st->ps.nd) &&
-	(decl(st, i, type) == DECL_VARIABLE) && decl(st, i, local);
-}
+//
+// NOT WRITTEN HERE any more: the body is in utils/words.terms, and
+// gen/csp_words.h is one of the two things generated from it -- the other is
+// the same word as micro-csp bytecode. Whether a board links this C or runs
+// the bytecode is a build decision; the word is written once either way.
+// tests/words.c runs both over the same inputs and fails if they disagree.
+#include "csp_words.h"
 
 static uint8_t exprbuf_var(csp_rt_t* st, csp_exprbuf_t* bp, uint16_t ix)
 {
@@ -303,9 +284,9 @@ static uint8_t exprbuf_var(csp_rt_t* st, csp_exprbuf_t* bp, uint16_t ix)
     // what made buffer byte-assignment and `B = A` both look like they did
     // nothing, when the first works and the second is simply one cycle behind.
     if (decl(st, INDEX(ix), type) == DECL_VIEW) {
-	index_t pi   = decl(st, INDEX(ix), ca.id);
-	uint16_t bit = decl(st, INDEX(ix), ca.bit);
-	uint16_t len = (uint16_t)GET_FIELD_LEN(decl(st, INDEX(ix), ca.len));
+	index_t pi   = decl(st, INDEX(ix), ca_id);
+	uint16_t bit = decl(st, INDEX(ix), ca_bit);
+	uint16_t len = (uint16_t)GET_FIELD_LEN(decl(st, INDEX(ix), ca_len));
 
 	exprbuf_str_at(st, bp, decl_name_pos(st, MAKE_INDEX(0, pi)));
 	// Byte form when it IS whole bytes, which is what `Buf[a]` and
@@ -441,33 +422,33 @@ static void exprbuf_alu(csp_exprbuf_t* bp,
     uint8_t* start = exprbuf_ptr(bp);
     if (arity == 1) {
 	exprbuf_rostr(bp, op);
-	exprbuf_wrap(bp, ip->a.y, prio);
+	exprbuf_wrap(bp, csp_instr_get_a_y(ip), prio);
     }
     else { // assume 2
 	// Skip empty operands (from CHG in <- rules)
-	int y_empty = (bp->strlens[bp->reg[ip->a.y]] == 0);
-	int z_empty = (bp->strlens[bp->reg[ip->a.z]] == 0);
+	int y_empty = (bp->strlens[bp->reg[csp_instr_get_a_y(ip)]] == 0);
+	int z_empty = (bp->strlens[bp->reg[csp_instr_get_a_z(ip)]] == 0);
 	if (y_empty && z_empty) {
-	    bp->reg[ip->a.x] = bp->reg[ip->a.y];  // both empty
-	    bp->prio[ip->a.x] = prio;
+	    bp->reg[csp_instr_get_a_x(ip)] = bp->reg[csp_instr_get_a_y(ip)];  // both empty
+	    bp->prio[csp_instr_get_a_x(ip)] = prio;
 	    return;
 	}
 	if (y_empty) {
-	    bp->reg[ip->a.x] = bp->reg[ip->a.z];
-	    bp->prio[ip->a.x] = bp->prio[ip->a.z];
+	    bp->reg[csp_instr_get_a_x(ip)] = bp->reg[csp_instr_get_a_z(ip)];
+	    bp->prio[csp_instr_get_a_x(ip)] = bp->prio[csp_instr_get_a_z(ip)];
 	    return;
 	}
 	if (z_empty) {
-	    bp->reg[ip->a.x] = bp->reg[ip->a.y];
-	    bp->prio[ip->a.x] = bp->prio[ip->a.y];
+	    bp->reg[csp_instr_get_a_x(ip)] = bp->reg[csp_instr_get_a_y(ip)];
+	    bp->prio[csp_instr_get_a_x(ip)] = bp->prio[csp_instr_get_a_y(ip)];
 	    return;
 	}
-	exprbuf_wrap(bp, ip->a.y, prio);
+	exprbuf_wrap(bp, csp_instr_get_a_y(ip), prio);
 	exprbuf_rostr(bp, op);
-	exprbuf_wrap(bp, ip->a.z, prio);
+	exprbuf_wrap(bp, csp_instr_get_a_z(ip), prio);
     }
-    bp->reg[ip->a.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
-    bp->prio[ip->a.x] = prio;
+    bp->reg[csp_instr_get_a_x(ip)] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
+    bp->prio[csp_instr_get_a_x(ip)] = prio;
 }
 
 static void exprbuf_fcall(csp_rt_t* st,
@@ -480,10 +461,10 @@ static void exprbuf_fcall(csp_rt_t* st,
     int fnamelen;
     uint8_t fn;
     uint16_t argtypes;
-    int usr = ip->f.usr;
+    int usr = csp_instr_get_f_usr(ip);
     const csp_func_t* tab = usr ? st->ufuncs : csp_builtin_funcs;
     int rom = usr ? st->ufuncs_rom : BUILTIN_ROM;   // func table in ROM?
-    int idx = ip->f.idx;
+    int idx = csp_instr_get_f_idx(ip);
     int roname;
 
     // rom-aware field reads (host: ro_*==plain, so rom is a no-op there)
@@ -506,7 +487,7 @@ static void exprbuf_fcall(csp_rt_t* st,
     exprbuf_strref(bp, fn);
     exprbuf_char(bp, '(');
     for (i = 0; i < MAX_ARGS; i++) {
-	int a = (ip->f.avt >> i*4) & 0xf;    // actual argument type
+	int a = (csp_instr_get_f_avt(ip) >> i*4) & 0xf;    // actual argument type
 	int d = (argtypes >> i*4) & 0xf;     // declared argument type
 	if (a == 0) break;
 	if (i > 0) exprbuf_char(bp, ',');
@@ -540,9 +521,9 @@ static void exprbuf_fcall(csp_rt_t* st,
 	}
     }
     exprbuf_char(bp, ')');
-    bp->reg[ip->f.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
+    bp->reg[csp_instr_get_f_x(ip)] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
     // printf("FCALL: R%d = '%s'\n", ip->f.x, bp->reg[ip->f.x]);
-    bp->prio[ip->f.x] = 110;
+    bp->prio[csp_instr_get_f_x(ip)] = 110;
 }
 
 // Name of a config part (<var>.<part>). Used by the disassembler and by
@@ -621,7 +602,7 @@ static void exprbuf_store(csp_rt_t* st,
     uint8_t* start;
     uint8_t  var;
 
-    var = exprbuf_var(st, bp, ip->m.mem);
+    var = exprbuf_var(st, bp, csp_instr_get_m_mem(ip));
     start = exprbuf_ptr(bp);
     exprbuf_strref(bp, var);
     if (rimp) { exprbuf_char(bp, '<'); exprbuf_char(bp, '-'); }
@@ -632,20 +613,20 @@ static void exprbuf_store(csp_rt_t* st,
     // is V_STRING and the source is a literal (prio 110, what OP_LI/OP_LIU leave
     // behind), print the string it points at instead of the index. Without this
     // a listing with a string in it cannot be pasted back.
-    if ((decl(st, INDEX(ip->m.mem), vt) == V_STRING) &&
-	(bp->prio[ip->m.x] == 110)) {
+    if ((decl(st, INDEX(csp_instr_get_m_mem(ip)), vt) == V_STRING) &&
+	(bp->prio[csp_instr_get_m_x(ip)] == 110)) {
 	exprbuf_char(bp, '"');
-	if (bp->regi[ip->m.x] > 0)
-	    exprbuf_str_at(st, bp, (sindex_t)bp->regi[ip->m.x]);
+	if (bp->regi[csp_instr_get_m_x(ip)] > 0)
+	    exprbuf_str_at(st, bp, (sindex_t)bp->regi[csp_instr_get_m_x(ip)]);
 	exprbuf_char(bp, '"');
     }
     else
-	exprbuf_strref(bp, bp->reg[ip->m.x]);
+	exprbuf_strref(bp, bp->reg[csp_instr_get_m_x(ip)]);
 
-    bp->reg[ip->m.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
-    bp->prio[ip->m.x] = 5;
+    bp->reg[csp_instr_get_m_x(ip)] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
+    bp->prio[csp_instr_get_m_x(ip)] = 5;
     if (bp->nbody < MAX_BODY)
-	bp->body[bp->nbody++] = bp->reg[ip->m.x];
+	bp->body[bp->nbody++] = bp->reg[csp_instr_get_m_x(ip)];
 }
 
 // STP: config-part assignment (<var>.<part> = rhs). The part is in ip->m.y.
@@ -656,26 +637,26 @@ static void exprbuf_store_part(csp_rt_t* st,
     uint8_t* start;
     uint8_t  var;
 
-    var = exprbuf_var(st, bp, ip->m.mem);
+    var = exprbuf_var(st, bp, csp_instr_get_m_mem(ip));
     start = exprbuf_ptr(bp);
     exprbuf_strref(bp, var);
     exprbuf_char(bp, '.');
-    exprbuf_rostr(bp, csp_part_name((csp_part_t)ip->m.y));
+    exprbuf_rostr(bp, csp_part_name((csp_part_t)csp_instr_get_m_y(ip)));
     exprbuf_char(bp, '=');
     // A direction is written `out` in the source, so list it that way instead of
     // the 2 it compiles to -- otherwise the line reads like a magic number and
     // says nothing about which way the pin turned. Only for a LITERAL right-hand
     // side (prio 110 is what OP_LI/OP_LIU leave behind); an expression that
     // computes a direction has no name to print and stays as written.
-    if (((csp_part_t)ip->m.y == PART_DIR) && (bp->prio[ip->m.x] == 110))
-	exprbuf_rostr(bp, csp_fmt_pindir((uint8_t)bp->regi[ip->m.x]));
+    if (((csp_part_t)csp_instr_get_m_y(ip) == PART_DIR) && (bp->prio[csp_instr_get_m_x(ip)] == 110))
+	exprbuf_rostr(bp, csp_fmt_pindir((uint8_t)bp->regi[csp_instr_get_m_x(ip)]));
     else
-	exprbuf_strref(bp, bp->reg[ip->m.x]);
+	exprbuf_strref(bp, bp->reg[csp_instr_get_m_x(ip)]);
 
-    bp->reg[ip->m.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
-    bp->prio[ip->m.x] = 5;
+    bp->reg[csp_instr_get_m_x(ip)] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
+    bp->prio[csp_instr_get_m_x(ip)] = 5;
     if (bp->nbody < MAX_BODY)
-	bp->body[bp->nbody++] = bp->reg[ip->m.x];
+	bp->body[bp->nbody++] = bp->reg[csp_instr_get_m_x(ip)];
 }
 
 // STI: store immediate to memory (<var> = imm). The immediate is in ip->mi.imm;
@@ -688,7 +669,7 @@ static void exprbuf_store_imm(csp_rt_t* st,
     uint8_t* start;
     uint8_t  var;
 
-    var = exprbuf_var(st, bp, ip->mi.mem);
+    var = exprbuf_var(st, bp, csp_instr_get_mi_mem(ip));
     start = exprbuf_ptr(bp);
     exprbuf_strref(bp, var);
     exprbuf_char(bp, '=');
@@ -700,30 +681,30 @@ static void exprbuf_store_imm(csp_rt_t* st,
     // immediate field almost immediately -- so `A = "hi"` compiled to LI+ST and
     // came out through the other function. A handle is small, STI fits it, and
     // the gap that was always here started showing.
-    if (!exprbuf_state_name(st, bp, ip->mi.mem, ip->mi.imm)) {
-	if (decl(st, INDEX(ip->mi.mem), vt) == V_STRING) {
+    if (!exprbuf_state_name(st, bp, csp_instr_get_mi_mem(ip), csp_instr_get_mi_imm(ip))) {
+	if (decl(st, INDEX(csp_instr_get_mi_mem(ip)), vt) == V_STRING) {
 	    exprbuf_char(bp, '"');
-	    if (ip->mi.imm > 0)
-		exprbuf_str_at(st, bp, (sindex_t)ip->mi.imm);
+	    if (csp_instr_get_mi_imm(ip) > 0)
+		exprbuf_str_at(st, bp, (sindex_t)csp_instr_get_mi_imm(ip));
 	    exprbuf_char(bp, '"');
 	}
 	else
-	    exprbuf_int16(bp, ip->mi.imm);
+	    exprbuf_int16(bp, csp_instr_get_mi_imm(ip));
     }
 
-    bp->reg[ip->mi.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
-    bp->prio[ip->mi.x] = 5;
+    bp->reg[csp_instr_get_mi_x(ip)] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
+    bp->prio[csp_instr_get_mi_x(ip)] = 5;
     if (bp->nbody < MAX_BODY)
-	bp->body[bp->nbody++] = bp->reg[ip->mi.x];
+	bp->body[bp->nbody++] = bp->reg[csp_instr_get_mi_x(ip)];
 }
 
 static void exprbuf_ld(csp_rt_t* st,
 		       csp_exprbuf_t* bp,
 		       csp_instr_t* ip)
 {
-    uint8_t  var = exprbuf_var(st, bp, ip->m.mem);
-    bp->reg[ip->m.x] = var;
-    bp->prio[ip->m.x] = 110;
+    uint8_t  var = exprbuf_var(st, bp, csp_instr_get_m_mem(ip));
+    bp->reg[csp_instr_get_m_x(ip)] = var;
+    bp->prio[csp_instr_get_m_x(ip)] = 110;
 }
 
 // LDP: config-part read (<var>.<part>). The part is in ip->m.y.
@@ -732,21 +713,21 @@ static void exprbuf_ld_part(csp_rt_t* st,
 			    csp_instr_t* ip)
 {
     uint8_t* start;
-    uint8_t  var = exprbuf_var(st, bp, ip->m.mem);
+    uint8_t  var = exprbuf_var(st, bp, csp_instr_get_m_mem(ip));
 
     start = exprbuf_ptr(bp);
     exprbuf_strref(bp, var);
     exprbuf_char(bp, '.');
-    exprbuf_rostr(bp, csp_part_name((csp_part_t)ip->m.y));
-    bp->reg[ip->m.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
-    bp->prio[ip->m.x] = 110;
+    exprbuf_rostr(bp, csp_part_name((csp_part_t)csp_instr_get_m_y(ip)));
+    bp->reg[csp_instr_get_m_x(ip)] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
+    bp->prio[csp_instr_get_m_x(ip)] = 110;
 }
 
 // exprbuf contains rule condition
 static void exprbuf_rule(csp_rt_t* st, csp_exprbuf_t* bp, csp_instr_t* ip)
 {
     if (csp_will_output())
-	exprbuf_print(bp, bp->reg[ip->r.cnd]);
+	exprbuf_print(bp, bp->reg[csp_instr_get_r_cnd(ip)]);
 }
 
 // exprbuf contains rule body - print side-effects then final expression
@@ -758,9 +739,9 @@ static void exprbuf_body(csp_rt_t* st, csp_exprbuf_t* bp, csp_instr_t* ip)
 	exprbuf_print(bp, bp->body[i]);
     }
     // add final expression if different from last body element
-    if (bp->nbody == 0 || bp->body[bp->nbody-1] != bp->reg[ip->x.x]) {
+    if (bp->nbody == 0 || bp->body[bp->nbody-1] != bp->reg[csp_instr_get_x_x(ip)]) {
 	if (bp->nbody > 0) csp_print_char(',');
-	exprbuf_print(bp, bp->reg[ip->x.x]);
+	exprbuf_print(bp, bp->reg[csp_instr_get_x_x(ip)]);
     }
 }
 
@@ -773,11 +754,12 @@ static int reg_consumed(csp_rt_t* st, int i, int reg)
     tok_t t;
 
     for (j = i+1; j < st->ps.nn; j++) {
-	csp_instr_t ipv = csp_get_instr(st, j);
+	csp_instr_t ipv;
 	csp_instr_t* ip = &ipv;
-	switch (ip->op) {
+	csp_load_instr(st, j, &ipv);
+	switch (csp_instr_get_op(ip)) {
 	case OP_SEGMENT:
-	    j += ip->sg.num;   // identifier text, not code
+	    j += csp_instr_get_sg_num(ip);   // identifier text, not code
 	    continue;
 	case OP_NEXT:
 	case OP_RULE:
@@ -786,37 +768,37 @@ static int reg_consumed(csp_rt_t* st, int i, int reg)
 	case OP_STP:
 	case OP_STIMP:
 	case OP_CHG:
-	    if (ip->m.x == reg) return 1;
+	    if (csp_instr_get_m_x(ip) == reg) return 1;
 	    break;
 	case OP_ARG:
-	    if (ip->i.x == reg) return 1;
+	    if (csp_instr_get_i_x(ip) == reg) return 1;
 	    break;
 	case OP_LD:
 	case OP_LDP:
-	    if (ip->m.x == reg) return 0;  // redefined
+	    if (csp_instr_get_m_x(ip) == reg) return 0;  // redefined
 	    break;
 //	case OP_EQI:
-//	    if (ip->mi.x == reg) return 0; // redefined
+//	    if (csp_instr_get_mi_x(ip) == reg) return 0; // redefined
 //	    break;
 	case OP_LI:
 	case OP_LIU:
 	case OP_LIH:
-	    if (ip->i.x == reg) return 0;  // redefined
+	    if (csp_instr_get_i_x(ip) == reg) return 0;  // redefined
 	    break;
 	case OP_CALL:
-	    if (ip->f.x == reg) return 0;  // redefined
+	    if (csp_instr_get_f_x(ip) == reg) return 0;  // redefined
 	    break;
 	case OP_MOV:
 	case OP_CVTIF:
 	case OP_CVTFI:
-	    if (ip->a.y == reg) return 1;
-	    if (ip->a.x == reg) return 0;  // redefined
+	    if (csp_instr_get_a_y(ip) == reg) return 1;
+	    if (csp_instr_get_a_x(ip) == reg) return 0;  // redefined
 	    break;
 	default:
-	    t = (tok_t) ro_byte(&op_tok[ip->op]);
+	    t = (tok_t) ro_byte(&op_tok[csp_instr_get_op(ip)]);
 	    if (op_table_arity(t) >= 0) {
-		if (ip->a.y == reg || ip->a.z == reg) return 1;
-		if (ip->a.x == reg) return 0;  // redefined
+		if (csp_instr_get_a_y(ip) == reg || csp_instr_get_a_z(ip) == reg) return 1;
+		if (csp_instr_get_a_x(ip) == reg) return 0;  // redefined
 	    }
 	    break;
 	}
@@ -847,21 +829,22 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 {
     while(i < st->ps.nn) {
 	tok_t t;
-	csp_instr_t ipv = csp_get_instr(st, i);
+	csp_instr_t ipv;
 	csp_instr_t* ip = &ipv;
-	switch(ip->op) {
+	csp_load_instr(st, i, &ipv);
+	switch(csp_instr_get_op(ip)) {
 	    // Identifier text sitting in the stream. Step the whole run: reading
 	    // the payload as instructions renders characters as operands, and the
 	    // register it interns them into is the one the caller reads back to
 	    // decide whether a rule's condition is the implicit `-1`.
 	case OP_SEGMENT:
-	    i += ip->sg.num;
+	    i += csp_instr_get_sg_num(ip);
 	    break;
 	case OP_SETO:
 	    // Names the object for the NEXT variable rendered. Mirrors the
 	    // runtime's one-shot exactly, so the listing cannot disagree with
 	    // what the instruction stream actually does.
-	    bp->seto = (uint8_t)ip->o.obj;
+	    bp->seto = (uint8_t)csp_instr_get_o_obj(ip);
 	    break;
 	case OP_SETOX:
 	    // The subscript for the NEXT variable rendered -- the one-shot the
@@ -869,7 +852,7 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	    // instructions above, so its rendered text is already interned in
 	    // this register; exprbuf_var puts it between the brackets.
 	    bp->has_setox = 1;
-	    bp->setox = bp->reg[ip->ox.x];
+	    bp->setox = bp->reg[csp_instr_get_ox_x(ip)];
 	    break;
 	    // A BLOCK GATE ENDS THE EXPRESSION. What follows belongs to the block,
 	    // and its first instruction reuses the register the gate's condition
@@ -906,32 +889,32 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	    // and hands back a span for them. Called inside the text below it
 	    // would put the name in twice -- once as characters, once through the
 	    // reference -- and `timeout(T)` listed as `timeout(TT)`.
-	    uint8_t v = exprbuf_var(st, bp, ip->m.mem);
+	    uint8_t v = exprbuf_var(st, bp, csp_instr_get_m_mem(ip));
 	    uint8_t* start = exprbuf_ptr(bp);
 	    exprbuf_rostr(bp, ros_timeout);
 	    exprbuf_char(bp, '(');
 	    exprbuf_strref(bp, v);
 	    exprbuf_char(bp, ')');
-	    bp->reg[ip->m.x] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
-	    bp->prio[ip->m.x] = 110;
+	    bp->reg[csp_instr_get_m_x(ip)] = exprbuf_intern(bp, start, exprbuf_len(bp, start));
+	    bp->prio[csp_instr_get_m_x(ip)] = 110;
 	    break;
 	}
 	case OP_CHG:
 	    // Mark register as "reactive condition" - empty string for AND to skip
-	    bp->reg[ip->m.x] = exprbuf_intern(bp, (uint8_t*)"", 0);
-	    bp->prio[ip->m.x] = 110;
+	    bp->reg[csp_instr_get_m_x(ip)] = exprbuf_intern(bp, (uint8_t*)"", 0);
+	    bp->prio[csp_instr_get_m_x(ip)] = 110;
 	    break;
 	case OP_ARG:
-	    bp->arg[ip->i.imm] = bp->reg[ip->i.x];
-	    bp->argi[ip->i.imm] = bp->regi[ip->i.x];
+	    bp->arg[csp_instr_get_i_imm(ip)] = bp->reg[csp_instr_get_i_x(ip)];
+	    bp->argi[csp_instr_get_i_imm(ip)] = bp->regi[csp_instr_get_i_x(ip)];
 	    break;
 	case OP_CALL:
 	    exprbuf_fcall(st, bp, ip);
 	    // A call result that is not consumed later is a void
 	    // statement (e.g. print) and belongs in the body list.
-	    if (!reg_consumed(st, i, ip->f.x)) {
+	    if (!reg_consumed(st, i, csp_instr_get_f_x(ip))) {
 		if (bp->nbody < MAX_BODY)
-		    bp->body[bp->nbody++] = bp->reg[ip->f.x];
+		    bp->body[bp->nbody++] = bp->reg[csp_instr_get_f_x(ip)];
 	    }
 	    break;
         case OP_LD:
@@ -942,10 +925,10 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	    break;
         case OP_LIU: {
             uint8_t *start = exprbuf_ptr(bp);
-            exprbuf_xuint16(bp, (uint16_t)ip->i.imm);
-	    bp->reg[ip->i.x] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
-	    bp->regi[ip->i.x] = (uint16_t)ip->i.imm;   // keep the number, not the text
-            bp->prio[ip->i.x] = 110;
+            exprbuf_xuint16(bp, (uint16_t)csp_instr_get_i_imm(ip));
+	    bp->reg[csp_instr_get_i_x(ip)] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
+	    bp->regi[csp_instr_get_i_x(ip)] = (uint16_t)csp_instr_get_i_imm(ip);   // keep the number, not the text
+            bp->prio[csp_instr_get_i_x(ip)] = 110;
             break;
 	}
 	    /*
@@ -958,21 +941,21 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	    // of two empty operands collapses to empty in exprbuf_alu). Inside a
 	    // multi-state `#in A B C` block, drop every State==<listed> term the
 	    // same way, so the block's OR-guard vanishes under the #in header.
-	    if (is_state_var(st, ip->mi.mem) &&
-		(((st->list_state >= 0) && (ip->mi.imm == st->list_state)) ||
-		 in_list_states(st, ip->mi.imm) ||
-		 (st->list_implicit && ((ip->mi.imm == STATE_INIT) ||
-					(ip->mi.imm == STATE_NORMAL))))) {
-		bp->reg[ip->a.x] = exprbuf_intern(bp, (uint8_t*)"", 0);
-		bp->prio[ip->a.x] = 110;
+	    if (is_state_var(st, csp_instr_get_mi_mem(ip)) &&
+		(((st->list_state >= 0) && (csp_instr_get_mi_imm(ip) == st->list_state)) ||
+		 in_list_states(st, csp_instr_get_mi_imm(ip)) ||
+		 (st->list_implicit && ((csp_instr_get_mi_imm(ip) == STATE_INIT) ||
+					(csp_instr_get_mi_imm(ip) == STATE_NORMAL))))) {
+		bp->reg[csp_instr_get_a_x(ip)] = exprbuf_intern(bp, (uint8_t*)"", 0);
+		bp->prio[csp_instr_get_a_x(ip)] = 110;
 		break;
 	    }
-	    exprbuf_var(st, bp, ip->mi.mem);
+	    exprbuf_var(st, bp, csp_instr_get_mi_mem(ip));
 	    exprbuf_char(bp, '='); exprbuf_char(bp, '=');
-	    if (!exprbuf_state_name(st, bp, ip->mi.mem, ip->mi.imm))
-		exprbuf_int16(bp, ip->mi.imm);
-	    bp->reg[ip->a.x] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
-	    bp->prio[ip->a.x] = 60;
+	    if (!exprbuf_state_name(st, bp, csp_instr_get_mi_mem(ip), csp_instr_get_mi_imm(ip)))
+		exprbuf_int16(bp, csp_instr_get_mi_imm(ip));
+	    bp->reg[csp_instr_get_a_x(ip)] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
+	    bp->prio[csp_instr_get_a_x(ip)] = 60;
 	    break;
 	}
 	    */
@@ -980,43 +963,45 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
             uint8_t *start = exprbuf_ptr(bp);
 	    uint8_t ih;
 	    
-            exprbuf_xint16(bp, ip->i.imm);
+            exprbuf_xint16(bp, csp_instr_get_i_imm(ip));
 	    ih = exprbuf_intern(bp,start,exprbuf_len(bp, start));
 
             start = exprbuf_ptr(bp);
 	    exprbuf_strref(bp, ih);
 	    exprbuf_char(bp, '.');	    
-	    exprbuf_strref(bp, bp->reg[ip->i.x]);  // from LIU
+	    exprbuf_strref(bp, bp->reg[csp_instr_get_i_x(ip)]);  // from LIU
 	    
-	    bp->reg[ip->i.x] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
-            bp->prio[ip->i.x] = 110;
+	    bp->reg[csp_instr_get_i_x(ip)] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
+            bp->prio[csp_instr_get_i_x(ip)] = 110;
             break;
 	}
         case OP_LI: {
             uint8_t *start = exprbuf_ptr(bp);
-            exprbuf_int16(bp, ip->i.imm);
-	    bp->reg[ip->i.x] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
-	    bp->regi[ip->i.x] = (uint16_t)ip->i.imm;   // keep the number, not the text
-            bp->prio[ip->i.x] = 110;
+            exprbuf_int16(bp, csp_instr_get_i_imm(ip));
+	    bp->reg[csp_instr_get_i_x(ip)] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
+	    bp->regi[csp_instr_get_i_x(ip)] = (uint16_t)csp_instr_get_i_imm(ip);   // keep the number, not the text
+            bp->prio[csp_instr_get_i_x(ip)] = 110;
             break;
 	}
 	case OP_MOV:
 	case OP_CVTIF:   // type conversion is implicit in display
 	case OP_CVTFI: {
-	    bp->reg[ip->a.x] = bp->reg[ip->a.y];
-	    bp->prio[ip->a.x] = bp->prio[ip->a.y];
+	    bp->reg[csp_instr_get_a_x(ip)] = bp->reg[csp_instr_get_a_y(ip)];
+	    bp->prio[csp_instr_get_a_x(ip)] = bp->prio[csp_instr_get_a_y(ip)];
 	    break;
 	}
 	default:
-	    t = (tok_t) ro_byte(&op_tok[ip->op]);
+	    t = (tok_t) ro_byte(&op_tok[csp_instr_get_op(ip)]);
 	    // `a > b` was emitted as `b < a` (csp_instr_alu_t.swap), so putting
 	    // the source back takes BOTH halves: exchange the operands AND mirror
 	    // the operator. Either one alone renders a different program -- `a < b`
 	    // or `b > a` -- and a listing is meant to paste back as source.
-	    if (ip->a.swap) {
-		csp_instr_t sw = *ip;
-		sw.a.y = ip->a.z;
-		sw.a.z = ip->a.y;
+	    if (csp_instr_get_a_swap(ip)) {
+		csp_instr_t sw;
+
+		memcpy(&sw, ip, sizeof(sw));
+		csp_instr_set_a_y(&sw, csp_instr_get_a_z(ip));
+		csp_instr_set_a_z(&sw, csp_instr_get_a_y(ip));
 		t = mirror_tok(t);
 		if (op_table_arity(t) >= 0)
 		    exprbuf_alu(bp, &sw, op_table_name(t),
@@ -1048,7 +1033,7 @@ int csp_print_when(csp_rt_t* st, int from, int gate)
 {
     static csp_exprbuf_t buf;
     void* savef;
-    unsigned r = (unsigned)instr(st, gate, in.x);
+    unsigned r = (unsigned)instr(st, gate, in_x);
 
     exprbuf_init(&buf);
     savef = csp_set_file_output(NULL);
@@ -1075,12 +1060,13 @@ int csp_print_rule(csp_rt_t* st, int i)
     static csp_exprbuf_t buf;
 
     while(i < st->ps.nn) {
-	csp_instr_t ipv = csp_get_instr(st, i);   // ROM or RAM instr, by value
-	if (ipv.op == OP_SEGMENT) {               // identifier text, not code
-	    i += ipv.sg.num + 1;
+	csp_instr_t ipv;   // ROM or RAM instr, by value
+	csp_load_instr(st, i, &ipv);
+	if (csp_instr_get_op(&ipv) == OP_SEGMENT) {               // identifier text, not code
+	    i += csp_instr_get_sg_num(&ipv) + 1;
 	    continue;
 	}
-	if (ipv.op == OP_RULE) {
+	if (csp_instr_get_op(&ipv) == OP_RULE) {
 	    csp_instr_t* ip = &ipv;
 	    void* savef;
 	    exprbuf_init(&buf);
@@ -1088,26 +1074,26 @@ int csp_print_rule(csp_rt_t* st, int i)
 	    // Build condition in buffer, check if non-empty. A bare NORMAL+ rule
 	    // carries an implicit State==INIT||State==NORMAL guard the user never
 	    // wrote -- suppress it (see OP_EQI below) so the rule lists back bare.
-	    st->list_implicit = ip->r.implicit;
+	    st->list_implicit = csp_instr_get_r_implicit(ip);
 	    exprbuf_init(&buf);
 	    savef = csp_set_file_output(NULL);
 	    exprbuf_expr(st, &buf, Lc); // build but don't print
 	    csp_set_file_output(savef);
 	    st->list_implicit = 0;
-	    switch(buf.strlens[buf.reg[ip->r.cnd]]) {
+	    switch(buf.strlens[buf.reg[csp_instr_get_r_cnd(ip)]]) {
 	    case 0:
 		break;
 	    case 2:
-		if ((buf.buf[buf.reg[ip->r.cnd]] == '-') &&
-		    (buf.buf[buf.reg[ip->r.cnd]+1] == '1'))
+		if ((buf.buf[buf.reg[csp_instr_get_r_cnd(ip)]] == '-') &&
+		    (buf.buf[buf.reg[csp_instr_get_r_cnd(ip)]+1] == '1'))
 		    break;		
 	    default:
 		csp_print_lit(" ? ");
-		exprbuf_print(&buf, buf.reg[ip->r.cnd]);
+		exprbuf_print(&buf, buf.reg[csp_instr_get_r_cnd(ip)]);
 	    }
 	    // NO newline here: the caller closes the line, so /list can put its
 	    // R/F tag there as a trailing comment instead of a leading column.
-	    return i + instr(st,i,r.nxt) + 1;
+	    return i + instr(st, i, r_nxt) + 1;
 	}
 	i++;
     }

@@ -497,9 +497,10 @@ void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
 	// it is, 0 = level, and the .csp needs no `- 512` anywhere. `unsigned`
 	// on the declaration asks for the old offset half-scale form instead,
 	// for a program that would rather have a magnitude.
-	csp_decl_t d = csp_get_decl(st, INDEX(ix));
-	int res = GET_RES(d.res);
-	int sgn = (CSP_MASK(d.vt,TYPE_BITS) != V_UNSIGNED);
+	csp_decl_t d;
+	int res = GET_RES(csp_decl_get_res(&d));
+	int sgn = (CSP_MASK(csp_decl_get_vt(&d),TYPE_BITS) != V_UNSIGNED);
+	csp_load_decl(st, INDEX(ix), &d);
 	int mid, lo, hi;
 	if (res < 2) res = 2; else if (res > 16) res = 16;
 	mid = sgn ? 0 : (1 << (res - 1));

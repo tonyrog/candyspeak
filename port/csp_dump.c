@@ -2,6 +2,7 @@
 // but also generate C code for builtin eeprom code
 //
 #include <stdio.h>
+#include <stdarg.h>
 #include <ctype.h>
 #include "csp.h"
 #include "csp_compile.h"
@@ -175,9 +176,9 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     // the payload as instructions is how a name like "State" came out as
     // {instr,12,'LDP',[r5,{ ,9237},9]}, and it broke the dump's own syntax.
     if (instr(st,i,op) == OP_SEGMENT) {
-	unsigned nsl = instr(st,i,sg.num);
+	unsigned nsl = instr(st, i, sg_num);
 	fprintf(f, "%s{instr,%d,'SEGMENT',[{slots,%u},{used,%u}]}%s\n",
-		indent(lev), i, nsl, (unsigned)instr(st,i,sg.used), eot);
+		indent(lev), i, nsl, (unsigned)instr(st, i, sg_used), eot);
 	return (index_t)(i + nsl + 1);
     }
 
@@ -185,8 +186,8 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     switch(instr(st,i,op)) {
     case OP_SETO:
 	fprintf(f, "{instr,%d,'SETO',[%d]}%s\n",
-		i, instr(st,i,o.obj), eot);
-	st->cur = (uint8_t)instr(st,i,o.obj);
+		i, instr(st, i, o_obj), eot);
+	st->cur = (uint8_t)instr(st, i, o_obj);
 	break;
     case OP_SETOX:
 	// No st->cur to borrow: the object is in a register and is not known
@@ -194,8 +195,8 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	// follows renders against the global base -- the honest rendering of
 	// "which element depends on the run".
 	fprintf(f, "{instr,%d,'SETOX',[r%d,{len,%u},{stride,%u}]}%s\n",
-		i, instr(st,i,ox.x), instr(st,i,ox.len),
-		instr(st,i,ox.stride), eot);
+		i, instr(st, i, ox_x), instr(st, i, ox_len),
+		instr(st, i, ox_stride), eot);
 	break;
     case OP_NOP:
 	fprintf(f, "{instr,%d,'NOP'}%s\n",
@@ -203,123 +204,123 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	break;
     case OP_NEXT:
 	fprintf(f, "{instr,%d,'NEXT',[r%d]}%s\n",
-		i, instr(st,i,x.x), eot);
+		i, instr(st, i, x_x), eot);
 	break;
     case OP_LD:
 	fprintf(f, "{instr,%d,'LD',[r%d,",
 		i,
-		instr(st,i,m.x));
-	csp_fprint_tag(f, st, instr(st,i,m.mem));
+		instr(st, i, m_x));
+	csp_fprint_tag(f, st, instr(st, i, m_mem));
 	fprintf(f, "]}%s\n", eot);
 	break;
     case OP_LDP:
 	fprintf(f, "{instr,%d,'LDP',[r%d,",
-		i, instr(st,i,m.x));
-	csp_fprint_tag(f, st, instr(st,i,m.mem));
-	fprintf(f, ",%d]}%s\n", instr(st,i,m.y), eot);
+		i, instr(st, i, m_x));
+	csp_fprint_tag(f, st, instr(st, i, m_mem));
+	fprintf(f, ",%d]}%s\n", instr(st, i, m_y), eot);
 	break;
     case OP_ST:
 	fprintf(f, "{instr,%d,'ST',[r%d,",
-		i, instr(st,i,m.x));
-	csp_fprint_tag(f, st, instr(st,i,m.mem));
+		i, instr(st, i, m_x));
+	csp_fprint_tag(f, st, instr(st, i, m_mem));
 	fprintf(f, "]}%s\n", eot);
 	break;
     case OP_STP:
 	fprintf(f, "{instr,%d,'STP',[r%d,",
-		i, instr(st,i,m.x));
-	csp_fprint_tag(f, st, instr(st,i,m.mem));
-	fprintf(f, ",%d]}%s\n", instr(st,i,m.y),eot);
+		i, instr(st, i, m_x));
+	csp_fprint_tag(f, st, instr(st, i, m_mem));
+	fprintf(f, ",%d]}%s\n", instr(st, i, m_y),eot);
 	break;	
     case OP_STIMP:
 	fprintf(f, "{instr,%d,'STIMP',[r%d,",
-		i, instr(st,i,m.x));
-	csp_fprint_tag(f, st, instr(st,i,m.mem));
+		i, instr(st, i, m_x));
+	csp_fprint_tag(f, st, instr(st, i, m_mem));
 	fprintf(f, "]}%s\n", eot);
 	break;
     case OP_CHG:
 	fprintf(f, "{instr,%d,'CHG',[r%d,",
-		i, instr(st,i,m.x));
-	csp_fprint_tag(f, st, instr(st,i,m.mem));
+		i, instr(st, i, m_x));
+	csp_fprint_tag(f, st, instr(st, i, m_mem));
 	fprintf(f, "]}%s\n", eot);
 	break;
     case OP_TMO:
 	fprintf(f, "{instr,%d,'TMO',[r%d,",
-		i, instr(st,i,m.x));
-	csp_fprint_tag(f, st, instr(st,i,m.mem));
+		i, instr(st, i, m_x));
+	csp_fprint_tag(f, st, instr(st, i, m_mem));
 	fprintf(f, "]}%s\n", eot);
 	break;
     case OP_LI:
 	fprintf(f, "{instr,%d,'LI',[r%d,%d]}%s\n",
 		i,
-		instr(st,i,i.x),
-		instr(st,i,i.imm),
+		instr(st, i, i_x),
+		instr(st, i, i_imm),
 		eot);
 	break;
     case OP_LIU:
 	fprintf(f, "{instr,%d,'LIU',[r%d,%u]}%s\n",
 		i,
-		instr(st,i,i.x),
-		(uint16_t)instr(st,i,i.imm),
+		instr(st, i, i_x),
+		(uint16_t)instr(st, i, i_imm),
 		eot);
 	break;
     case OP_LIH:
 	fprintf(f, "{instr,%d,'LIH',[r%d,16#%04x]}%s\n",
 		i,
-		instr(st,i,i.x),
-		(uint16_t)instr(st,i,i.imm),
+		instr(st, i, i_x),
+		(uint16_t)instr(st, i, i_imm),
 		eot);
 	break;
 /*	
     case OP_EQI:
 	fprintf(f, "{instr,%d,'EQI',[r%d,",
 		i,
-		instr(st,i,mi.x));
-	csp_fprint_tag(f, st, instr(st,i,mi.mem));
-	fprintf(f, ",%d", instr(st,i,mi.imm));
+		instr(st, i, mi_x));
+	csp_fprint_tag(f, st, instr(st, i, mi_mem));
+	fprintf(f, ",%d", instr(st, i, mi_imm));
 	fprintf(f, "]}%s\n", eot);
 	break;
 */
     case OP_STI:  // store immediate to memory (no result register)
 	fprintf(f, "{instr,%d,'STI',[", i);
-	csp_fprint_tag(f, st, instr(st,i,mi.mem));
-	fprintf(f, ",%d", instr(st,i,mi.imm));
+	csp_fprint_tag(f, st, instr(st, i, mi_mem));
+	fprintf(f, ",%d", instr(st, i, mi_imm));
 	fprintf(f, "]}%s\n", eot);
 	break;
     case OP_ARG:
 	fprintf(f, "{instr,%d,'ARG',[r%d,%d]}%s\n",
 		i,
-		instr(st,i,i.x),
-		instr(st,i,i.imm),
+		instr(st, i, i_x),
+		instr(st, i, i_imm),
 		eot);
 	break;
     case OP_CALL:
 	fprintf(f, "{instr,%d,'CALL',[r%d,%s,16#%04x]}%s\n",
 		i,
-		instr(st,i,f.x),
-		(instr(st,i,f.usr) ?
-		 st->ufuncs[instr(st,i,f.idx)].name :
-		 csp_builtin_funcs[instr(st,i,f.idx)].name),
-		instr(st,i,f.avt),	
+		instr(st, i, f_x),
+		(instr(st, i, f_usr) ?
+		 st->ufuncs[instr(st, i, f_idx)].name :
+		 csp_builtin_funcs[instr(st, i, f_idx)].name),
+		instr(st, i, f_avt),	
 		eot);
 	break;
     case OP_RULE:
 	fprintf(f, "{instr,%d,'RULE',[r%d,%d]}%s\n",
 		i,
-		instr(st,i,r.cnd), instr(st,i,r.nxt), eot);
+		instr(st, i, r_cnd), instr(st, i, r_nxt), eot);
 	break;
     case OP_NINSTATE:
 	fprintf(f, "{instr,%d,'NINSTATE',[r%d,%d,%d]}%s\n",
 		i,
-		instr(st,i,in.x), instr(st,i,in.imm), instr(st,i,in.nxt), eot);
+		instr(st, i, in_x), instr(st, i, in_imm), instr(st, i, in_nxt), eot);
 	break;	
     case OP_INSTATE:
 	fprintf(f, "{instr,%d,'INSTATE',[r%d,%d,%d]}%s\n",
 		i,
-		instr(st,i,in.x), instr(st,i,in.imm), instr(st,i,in.nxt), eot);
+		instr(st, i, in_x), instr(st, i, in_imm), instr(st, i, in_nxt), eot);
 	break;
     case OP_ENTER: {
-	index_t mx = instr(st,i,e.mx);
-	int n = instr(st,i,e.num);
+	index_t mx = instr(st, i, e_mx);
+	int n = instr(st, i, e_num);
 	int j;
 	fprintf(f, "{instr,%d,'ENTER','%.*s',[{n,%d}],[\n",
 		i, DNAME(st, mx), n);
@@ -330,17 +331,17 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	return i; // do not update after module block
     }
     case OP_LEAVE: {
-	index_t mx = instr(st,i,v.mx);
-	int n = instr(st,i,v.num);
+	index_t mx = instr(st, i, v_mx);
+	int n = instr(st, i, v_num);
 	fprintf(f, "{instr,%d,'LEAVE','%.*s',[{n,%d}]}%s\n",
 		i, DNAME(st,mx), n, eot);
 	break;
     }
     case OP_NEW: {
-	index_t obj = instr(st,i,n.obj);
-	index_t mx  = decl(st,INDEX(obj),mq.mx);
-	index_t ent = decl(st,INDEX(mx),md.ent);   // from the declaration now
-	unsigned m       = decl(st,INDEX(obj),mq.m);
+	index_t obj = instr(st, i, n_obj);
+	index_t mx  = decl(st, INDEX(obj), mq_mx);
+	index_t ent = decl(st, INDEX(mx), md_ent);   // from the declaration now
+	unsigned m       = decl(st, INDEX(obj), mq_m);
 	fprintf(f, "{instr,%d,'NEW',\"%.*s\",\"%.*s\",[{ent,%d},{obj,%u}]}%s\n",
 		i, DNAME(st, mx), DNAME(st, obj), 
 		INDEX(ent), m, eot);
@@ -352,17 +353,17 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	    fprintf(f, "{instr,%d,'%s',[r%d,r%d]}%s\n",
 		    i,
 		    ro_maybe_ptr(csp_opcode_name(instr(st,i,op))),
-		    instr(st,i,a.x),
-		    instr(st,i,a.y),
+		    instr(st, i, a_x),
+		    instr(st, i, a_y),
 		    eot);
 	    break;	    
 	case 2:
 	    fprintf(f, "{instr,%d,'%s',[r%d,r%d,r%d]}%s\n",
 		    i,
 		    ro_maybe_ptr(csp_opcode_name(instr(st,i,op))),
-		    instr(st,i,a.x),
-		    instr(st,i,a.y),
-		    instr(st,i,a.z),
+		    instr(st, i, a_x),
+		    instr(st, i, a_y),
+		    instr(st, i, a_z),
 		    eot);
 	    break;
 	}
@@ -421,8 +422,8 @@ void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
 {
     int fv, j;
     index_t obj = csp_object_decl(st, m);
-    index_t mx  = decl(st,INDEX(obj),mq.mx);
-    int     n   = decl(st,INDEX(mx),md.n);    
+    index_t mx  = decl(st, INDEX(obj), mq_mx);
+    int     n   = decl(st, INDEX(mx), md_n);    
     
     switch(lang) {
     case ERLANG:
@@ -443,8 +444,9 @@ void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
 	    // A `#states` inside a module body is a member like any other, but it
 	    // holds no per-instance VALUE -- so it is listed by name and number,
 	    // not through csp_dump_var, which would read a leaf that is not there.
-	    csp_decl_t sb = csp_get_decl(st, k);
+	    csp_decl_t sb;
 	    int q;
+	    csp_load_decl(st, k, &sb);
 	    for (q = 0; q < CSP_STATES_PER_DECL; q++) {
 		sindex_t np = csp_states_name(&sb, q);
 		if (np == 0)
@@ -531,7 +533,7 @@ void csp_dump_state(FILE* f, csp_rt_t* st, csp_lang_t lang)
 	switch(decl(st,i,type)) {
 	case DECL_MODULE:
 	    // skip module decl (covered by objects)
-	    i += decl(st,i,md.n) + 1;
+	    i += decl(st, i, md_n) + 1;
 	    break;
 	case DECL_VARIABLE:
 	    csp_dump_var(f,st,"var","",0,i,fo,lang);
@@ -629,7 +631,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     fprintf(f, "%s", indent(lev));
     switch(decl(st,i,type)) {
     case DECL_MODULE: {
-	index_t n = decl(st,i,md.n);
+	index_t n = decl(st, i, md_n);
 	int j;
 	fprintf(f, "{decl,%d,module,'%.*s',[\n", i, DNAME(st, ix));
 	i++;
@@ -647,8 +649,11 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	// silently hide the other five. The number is what a rule's OP_INSTATE
 	// compares against, so print both -- that is what makes this readable
 	// when a `#in` gate does not match.
-	csp_decl_t sb = csp_get_decl(st, i);
-	int k, first = 1;
+	int k, first = 1;	
+	csp_decl_t sb;
+	
+	csp_load_decl(st, i, &sb);
+
 	fprintf(f, "{decl,%d,states,[", i);
 	for (k = 0; k < CSP_STATES_PER_DECL; k++) {
 	    sindex_t np = csp_states_name(&sb, k);
@@ -665,7 +670,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
     case DECL_OBJECT:
 	fprintf(f, "{decl,%d,object,'%.*s','%.*s'}%s\n",
 		i,
-		DNAME(st, decl(st,i,mq.mx)),
+		DNAME(st, decl(st, i, mq_mx)),
 		DNAME(st, ix), eot);
 	break;
     case DECL_VARIABLE:
@@ -684,7 +689,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
 		ro_maybe_ptr(csp_fmt_vtype(vt)),
 		decl(st,i,cont) ? ",{cont,1}" : "");
-	csp_fprint_value(f, st, vt, decl(st,i,va.init));
+	csp_fprint_value(f, st, vt, decl(st, i, va_init));
 	fprintf(f, "},{value,");
 	csp_fprint_value(f, st, vt, csp_value(st, ix));
 	fprintf(f, "}]}%s\n", eot);
@@ -696,7 +701,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
 		ro_maybe_ptr(csp_fmt_vtype(vt)));
-	csp_fprint_value(f, st, vt, decl(st,i,cn.init));
+	csp_fprint_value(f, st, vt, decl(st, i, cn_init));
 	fprintf(f, "},{value,");
 	csp_fprint_value(f, st, vt, csp_value(st, ix));
 	fprintf(f, "}]}%s\n", eot);	
@@ -708,7 +713,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		DNAME(st, ix),
 		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
 		ro_maybe_ptr(csp_fmt_pull(st, i)),
-		decl(st,i,di.port),decl(st,i,di.pin),
+		decl(st, i, di_port),decl(st, i, di_pin),
 		eot);
 	break;
     case DECL_ANALOG:
@@ -720,7 +725,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		ro_maybe_ptr(csp_fmt_vtype(vt)),
 		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
 		ro_maybe_ptr(csp_fmt_pwm(st, i)),
-		decl(st,i,an.port), decl(st,i,an.pin),
+		decl(st, i, an_port), decl(st, i, an_pin),
 		eot);
 	break;
     case DECL_TIMER:
@@ -728,8 +733,8 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	fprintf(f, "{decl,%d,timer,\"%.*s\",[{period,%d},{value,%d}]}%s\n",
 		i,
 		DNAME(st, ix),
-		decl(st,i,tm.period),
-		decl(st,i,tm.init),
+		decl(st, i, tm_period),
+		decl(st, i, tm_init),
 		eot);
 	break;
     case DECL_FIELD:
@@ -739,11 +744,11 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
 		ro_maybe_ptr(csp_fmt_vtype(vt)),
-		ro_maybe_ptr(csp_fmt_endian(decl(st,i,ca.endian))),
+		ro_maybe_ptr(csp_fmt_endian(decl(st, i, ca_endian))),
 		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
-		csp_ivalue(st, decl(st,i,ca.id)),
-		decl(st,i,ca.bit),
-		GET_FIELD_LEN(decl(st,i,ca.len)), eot);
+		csp_ivalue(st, decl(st, i, ca_id)),
+		decl(st, i, ca_bit),
+		GET_FIELD_LEN(decl(st, i, ca_len)), eot);
 	break;
     case DECL_BUFFER:
 	vt = decl(st,i,vt);
@@ -751,11 +756,11 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	fprintf(f, "{decl,%d,buffer,\"%.*s\",[{size,%d},{type,%s},{transport,%d},{id,16#%x}]}%s\n",
 		i,
 		DNAME(st, ix),
-		decl(st,i,bf.nbytes),
+		decl(st, i, bf_nbytes),
 		ro_maybe_ptr(csp_fmt_vtype(vt)),
-		decl(st,i,bf.transport),
-		(decl(st,i,bf.transport) == TR_CAN)
-		    ? (unsigned)csp_ivalue(st, decl(st,i,bf.id)) : 0u,
+		decl(st, i, bf_transport),
+		(decl(st, i, bf_transport) == TR_CAN)
+		    ? (unsigned)csp_ivalue(st, decl(st, i, bf_id)) : 0u,
 		eot);
 	break;
     default:
@@ -831,7 +836,7 @@ void csp_dump(FILE* f, csp_rt_t* st)
 	    continue;              // declared, but not laid out yet
 	fputc(',', f);
 	fprintf(f, "{'%.*s',%d,",
-		DNAME(st, decl(st,INDEX(ix),mq.mx)),
+		DNAME(st, decl(st, INDEX(ix), mq_mx)),
 		st->offs[m]);
 	csp_fprint_tag(f, st, ix);
 	fprintf(f, "}");
@@ -909,6 +914,37 @@ const char* csp_cfmt_vtype(vtype_t vt)
     case V_FIELD: return "V_FIELD";
     default: return "UNDEFINED";
     }
+}
+
+// A record as BYTES, with what it says as a comment on the same line.
+//
+// The image used to be written as a designated initializer on csp_decl_t --
+// which meant the ROM format was whatever gcc's bit-field packer produced at
+// emission time, and an image built by one compiler was not necessarily
+// readable by another. utils/layout.terms owns the layout now, so the emitter
+// writes the bytes it computed and nothing is left for a packer to decide.
+//
+// The readable form is not lost, it moved: a hex dump of an image is still
+// reviewable line by line, which is the only reason anyone looked at the
+// initializer form in the first place.
+static void emit_rec(FILE* f, const void* rec, int n, const char* fmt, ...)
+{
+    const uint8_t* b = (const uint8_t*)rec;
+    va_list ap;
+    int i;
+
+    // ONE brace: the record IS a byte array, so this initialises a row of
+    // decl[N][8] directly. It was two while the type was a struct around the
+    // array -- and getting that wrong does not fail, it builds a WRONG image
+    // out of "excess elements in scalar initializer" warnings.
+    fprintf(f, "  {");
+    for (i = 0; i < n; i++)
+	fprintf(f, "%s0x%02x", (i ? "," : ""), b[i]);
+    fprintf(f, "},  /* ");
+    va_start(ap, fmt);
+    vfprintf(f, fmt, ap);
+    va_end(ap);
+    fprintf(f, " */\n");
 }
 
 const char* csp_cfmt_dtype(decl_t dt)
@@ -1063,16 +1099,18 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	// Segments are not emitted, so they must not be folded either -- the
 	// target's crc_decl is over what the image actually carries.
 	for (di = 0; di < st->ps.nd; di++) {
-	    csp_decl_t d = csp_get_decl(st, di);
+	    csp_decl_t d;
 	    // Normalise the runtime-scratch bits -- but NOT on a states block:
 	    // is_mapped/bound/reg are bits 26..31, which that arm uses as the low
 	    // six of name3. Zeroing them here folded a different third state than
 	    // the one the image actually carries, and the target rejected its own
 	    // decl section. Same aliasing that let `State = c` corrupt a name.
-	    if (d.type != DECL_STATES) {
-		d.is_mapped = 0; d.bound = 0; d.reg = 0;
+	    csp_load_decl(st, di, &d);
+	    if (csp_decl_get_type(&d) != DECL_STATES) {
+		csp_decl_set_is_mapped(&d, 0); csp_decl_set_bound(&d, 0); csp_decl_set_reg(&d, 0);
 	    }
-	    if (d.type == DECL_TIMER) { d.tm.fired=0; d.tm.running=0; d.tm._res=0; }
+	    if (csp_decl_get_type(&d) == DECL_TIMER) { csp_decl_set_tm_fired(&d, 0); csp_decl_set_tm_running(&d, 0); csp_decl_set_tm__res(&d, 0); }
+
 	    crc_decl_data = csp_crc16(crc_decl_data, &d, sizeof(d), 0);
 	}
     }
@@ -1080,7 +1118,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     // section verifies without the header (rom_scan_end).
     {
 	csp_decl_t dm = {0};
-	dm.type = DECL_END_MARK;
+	csp_decl_set_type(&dm, DECL_END_MARK);
 	decl_mark_crc = csp_crc16(crc_decl_data, &dm, sizeof(dm), 0);
     }
 
@@ -1096,9 +1134,30 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	// common fields MUST be written inside the same arm designator as the
 	// type-specific fields -- a trailing ".va={..}" would otherwise clobber
 	// (zero) the common fields set before it (last union initializer wins).
-	csp_decl_t dv = csp_get_decl(st, i);  // RAM decls grow down: use the accessor
+	csp_decl_t dv;  // RAM decls grow down: use the accessor
 	csp_decl_t* dp = &dv;
 	char cmn[128];
+
+	// NORMALISE FIRST, exactly as the CRC fold above does. The image is
+	// written as BYTES now, so a runtime-scratch bit left set goes into the
+	// file -- where the old designated-initializer form simply never named
+	// those fields and they came out zero by omission. Four ROM tests failed
+	// on that: the target folded its own decl section and got a different
+	// number than the header carried.
+	//
+	// NOT on a states block: is_mapped/bound/reg are bits 26..31, which that
+	// arm uses as the low six of name3.
+	csp_load_decl(st, i, &dv);
+	if (csp_decl_get_type(dp) != DECL_STATES) {
+	    csp_decl_set_is_mapped(dp, 0);
+	    csp_decl_set_bound(dp, 0);
+	    csp_decl_set_reg(dp, 0);
+	}
+	if (csp_decl_get_type(dp) == DECL_TIMER) {
+	    csp_decl_set_tm_fired(dp, 0);
+	    csp_decl_set_tm_running(dp, 0);
+	    csp_decl_set_tm__res(dp, 0);
+	}
 
 	// .cont and .local are EMITTED. Both are real data -- an array's length
 	// is recovered by scanning for `cont`, and `local` decides whether a leaf
@@ -1108,37 +1167,37 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	snprintf(cmn, sizeof(cmn),
 		 ".type=%s,.cont=%u,.local=%u,.dir=%u,.name=%u,"
 		 ".vt=%s,.res=%u",
-		 csp_cfmt_dtype(dp->type), dp->cont, dp->local,
-		 dp->dir, dp->name, csp_cfmt_vtype(dp->vt), dp->res);
-	switch(dp->type) {
+		 csp_cfmt_dtype(csp_decl_get_type(dp)), csp_decl_get_cont(dp), csp_decl_get_local(dp),
+		 csp_decl_get_dir(dp), csp_decl_get_name(dp), csp_cfmt_vtype(csp_decl_get_vt(dp)), csp_decl_get_res(dp));
+	switch(csp_decl_get_type(dp)) {
 	case DECL_MODULE:
-	    fprintf(f, "  {.md={%s,.n=%u,.ent=%u}},\n",
-		    cmn, dp->md.n, dp->md.ent);
+	    emit_rec(f, dp, 8, ".md={%s,.n=%u,.ent=%u}",
+		    cmn, csp_decl_get_md_n(dp), csp_decl_get_md_ent(dp));
 	    break;
 	case DECL_OBJECT:
-	    fprintf(f, "  {.mq={%s,.mx=%u,.m=%u}},\n",
-		    cmn, dp->mq.mx, dp->mq.m);
+	    emit_rec(f, dp, 8, ".mq={%s,.mx=%u,.m=%u}",
+		    cmn, csp_decl_get_mq_mx(dp), csp_decl_get_mq_m(dp));
 	    break;
 	case DECL_VARIABLE:
-	    fprintf(f, "  {.va={%s,.init={.u=%u}}},\n", cmn, dp->va.init.u);
+	    emit_rec(f, dp, 8, ".va={%s,.init={.u=%u}}", cmn, csp_decl_get_va_init(dp).u);
 	    break;
 	case DECL_CONSTANT:
-	    fprintf(f, "  {.cn={%s,.init={.u=%u}}},\n", cmn, dp->cn.init.u);
+	    emit_rec(f, dp, 8, ".cn={%s,.init={.u=%u}}", cmn, csp_decl_get_cn_init(dp).u);
 	    break;
 	case DECL_DIGITAL:
 	    // .irq with the rest, not conditionally: a field left out of the arm
 	    // is a field baked as zero AND a crc_decl that no longer matches, the
 	    // trap the buffer's nbytes and the view's ca both fell into.
-	    fprintf(f, "  {.di={%s,.pin=%u,.port=%u,.pullup=%u,.pulldown=%u"
-		    ",.irq=%u,.soft=%u}},\n",
-		    cmn, dp->di.pin, dp->di.port, dp->di.pullup, dp->di.pulldown,
-		    dp->di.irq, dp->di.soft);
+	    emit_rec(f, dp, 8, ".di={%s,.pin=%u,.port=%u,.pullup=%u,.pulldown=%u"
+		     ",.irq=%u,.soft=%u}",
+		    cmn, csp_decl_get_di_pin(dp), csp_decl_get_di_port(dp), csp_decl_get_di_pullup(dp), csp_decl_get_di_pulldown(dp),
+		    csp_decl_get_di_irq(dp), csp_decl_get_di_soft(dp));
 	    break;
 	case DECL_ANALOG:
-	    fprintf(f, "  {.an={%s,.pin=%u,.port=%u,.pwm=%u,.endian=%u"
-		    ",.irq=%u,.soft=%u}},\n",
-		    cmn, dp->an.pin, dp->an.port, dp->an.pwm, dp->an.endian,
-		    dp->an.irq, dp->an.soft);
+	    emit_rec(f, dp, 8, ".an={%s,.pin=%u,.port=%u,.pwm=%u,.endian=%u"
+		     ",.irq=%u,.soft=%u}",
+		    cmn, csp_decl_get_an_pin(dp), csp_decl_get_an_port(dp), csp_decl_get_an_pwm(dp), csp_decl_get_an_endian(dp),
+		    csp_decl_get_an_irq(dp), csp_decl_get_an_soft(dp));
 	    break;
 	case DECL_FIELD:
 	case DECL_VIEW:
@@ -1149,19 +1208,19 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    // -- but not of what it stores. Dropping ca baked a view onto buffer
 	    // 0 at bit 0 with length 1 AND made crc_decl mismatch, exactly as
 	    // omitting nbytes once did for the buffer below.
-	    fprintf(f, "  {.ca={%s,.id=%u,.endian=%u,.bit=%u,.len=%u}},\n",
-		    cmn, dp->ca.id, dp->ca.endian, dp->ca.bit, dp->ca.len);
+	    emit_rec(f, dp, 8, ".ca={%s,.id=%u,.endian=%u,.bit=%u,.len=%u}",
+		    cmn, csp_decl_get_ca_id(dp), csp_decl_get_ca_endian(dp), csp_decl_get_ca_bit(dp), csp_decl_get_ca_len(dp));
 	    break;
 	case DECL_TIMER:
-	    fprintf(f, "  {.tm={%s,.period=%u,.init=%u}},\n",
-		    cmn, (unsigned)dp->tm.period, dp->tm.init);
+	    emit_rec(f, dp, 8, ".tm={%s,.period=%u,.init=%u}",
+		    cmn, (unsigned)csp_decl_get_tm_period(dp), csp_decl_get_tm_init(dp));
 	    break;
 	case DECL_BUFFER:
 	    // The buffer's SIZE (nbytes) lives here, not in cmn.res -- omitting it
 	    // baked a zero-length buffer AND made crc_decl mismatch (the fold sees
 	    // the real nbytes, the emit wrote 0) -> "CRC mismatch in decl section".
-	    fprintf(f, "  {.bf={%s,.nbytes=%u,.transport=%u,.id=%u}},\n",
-		    cmn, dp->bf.nbytes, dp->bf.transport, dp->bf.id);
+	    emit_rec(f, dp, 8, ".bf={%s,.nbytes=%u,.transport=%u,.id=%u}",
+		    cmn, csp_decl_get_bf_nbytes(dp), csp_decl_get_bf_transport(dp), csp_decl_get_bf_id(dp));
 	    break;
 	case DECL_STATES:
 	    // NOT `cmn`, and not the default arm. A states block packs six name
@@ -1170,22 +1229,34 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    // two states with a type and a width. The section CRC is folded over
 	    // the raw bytes, so an image written through the wrong arm fails its
 	    // own check at boot (or, worse, loads with two states quietly wrong).
-	    fprintf(f, "  {.s6={.type=%s,.cont=%u,.local=%u,.dir=%u,"
-		    ".name=%u,.name2=%u,.name3=%u,"
-		    ".name4=%u,.name5=%u,.name6=%u}},\n",
-		    csp_cfmt_dtype(dp->type), dp->cont, dp->local, dp->dir,
-		    dp->s6.name, dp->s6.name2, dp->s6.name3,
-		    dp->s6.name4, dp->s6.name5, dp->s6.name6);
+	    emit_rec(f, dp, 8, ".s6={.type=%s,.cont=%u,.local=%u,.dir=%u,"
+		     ".name=%u,.name2=%u,.name3=%u,"
+		     ".name4=%u,.name5=%u,.name6=%u}",
+		    csp_cfmt_dtype(csp_decl_get_type(dp)), csp_decl_get_cont(dp), csp_decl_get_local(dp), csp_decl_get_dir(dp),
+		    csp_decl_get_name(dp), csp_decl_get_s6_name2(dp),
+		    csp_decl_get_s6_name3(dp), csp_decl_get_s6_name4(dp),
+		    csp_decl_get_s6_name5(dp), csp_decl_get_s6_name6(dp));
 	    break;
 	case DECL_END:    // common fields only (anonymous union arm)
 	case DECL_IN:
 	case DECL_NONE:
 	default:
-	    fprintf(f, "  {%s},\n", cmn);
+	    emit_rec(f, dp, 8, "%s", cmn);
 	    break;
 	}
     }
-    fprintf(f, "  {.em={.type=DECL_END_MARK,.crc=%u,._res=0}},\n", decl_mark_crc);
+    {
+	// The terminator is BUILT, not written out as a literal: it goes through
+	// the same layout description as every record above it, so there is no
+	// second place that decides where a crc lands.
+	csp_decl_t em;
+
+	memset(&em, 0, sizeof(em));
+	csp_decl_set_type(&em, DECL_END_MARK);
+	csp_decl_set_em_crc(&em, decl_mark_crc);
+	emit_rec(f, &em, 8, ".em={.type=DECL_END_MARK,.crc=%u,._res=0}",
+		 decl_mark_crc);
+    }
     fprintf(f, "  },\n");
 
     // Instruction section CRC + OP_END_MARK self-CRC (no canonicalization -- the
@@ -1194,7 +1265,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 			       (size_t)st->ps.nn * sizeof(csp_instr_t), 0);
     {
 	csp_instr_t im = {0};
-	im.op = OP_END_MARK;
+	csp_instr_set_op(&im, OP_END_MARK);
 	instr_mark_crc = csp_crc16(crc_instr_data, &im, sizeof(im), 0);
     }
 
@@ -1207,8 +1278,8 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	// ".op=..,.m={..}" would let the .m arm clobber (zero) op to OP_NOP.
 	csp_instr_t* ip = &st->ram_instr[i];
 	char op[24];
-	snprintf(op, sizeof(op), ".op=OP_%s", ro_maybe_ptr(csp_opcode_name(ip->op)));
-	switch(ip->op) {
+	snprintf(op, sizeof(op), ".op=OP_%s", ro_maybe_ptr(csp_opcode_name(csp_instr_get_op(ip))));
+	switch(csp_instr_get_op(ip)) {
 	    // A string segment: header, then its payload as raw words. The
 	    // payload is identifier TEXT, so it is written byte-exact -- no arm
 	    // designator, because it is not an instruction and has no fields.
@@ -1217,36 +1288,47 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    // so the slots go out in order and the bytes land the same way in
 	    // flash. (Declarations grow down and would have needed reversing.)
 	case OP_SEGMENT: {
-	    unsigned nsl = ip->sg.num, k;
-	    fprintf(f, "  {.sg={%s,.num=%u,.used=%u}},\n",
-		    op, nsl, (unsigned)ip->sg.used);
+	    unsigned nsl = csp_instr_get_sg_num(ip), k;
+	    emit_rec(f, ip, 4, ".sg={%s,.num=%u,.used=%u}",
+		    op, nsl, (unsigned)csp_instr_get_sg_used(ip));
 	    for (k = 1; k <= nsl; k++) {
 		const unsigned char* b =
 		    (const unsigned char*)csp_seg_slot(st, (index_t)i, k);
 		unsigned q;
-		fprintf(f, "  {.raw={{");
-		for (q = 0; q < sizeof(csp_instr_t); q++)
-		    fprintf(f, "%s%u", q ? "," : "", b[q]);
-		fprintf(f, "}}},\n");
+		// A segment payload is identifier TEXT, so print it as text:
+		// 'L','e','d' reads at a glance where 0x4c,0x65,0x64 does not.
+		// Anything unprintable -- and the quote and backslash, which
+		// would need escaping to no purpose -- stays hex.
+		fprintf(f, "  {");
+		for (q = 0; q < sizeof(csp_instr_t); q++) {
+		    int c = b[q];
+		    if (q)
+			fprintf(f, ",");
+		    if (isprint(c) && (c != '\'') && (c != '\\'))
+			fprintf(f, "'%c'", c);
+		    else
+			fprintf(f, "0x%02x", c);
+		}
+		fprintf(f, "},  /* segment payload */\n");
 	    }
 	    i += nsl;                    // the loop's i++ steps past the header
 	    continue;
 	}
 	    // FIXME: OP_ENTER/OP_LEAVE could share format?
 	case OP_ENTER:
-	    fprintf(f, "  {.e={%s,.num=%u,.mx=%u}},\n", op, ip->e.num, ip->e.mx);
+	    emit_rec(f, ip, 4, ".e={%s,.num=%u,.mx=%u}", op, csp_instr_get_e_num(ip), csp_instr_get_e_mx(ip));
 	    break;
 	case OP_LEAVE:
-	    fprintf(f, "  {.v={%s,.num=%u,.mx=%u}},\n", op, ip->v.num, ip->v.mx);
+	    emit_rec(f, ip, 4, ".v={%s,.num=%u,.mx=%u}", op, csp_instr_get_v_num(ip), csp_instr_get_v_mx(ip));
 	    break;
 	case OP_NEW:
-	    fprintf(f, "  {.n={%s,.obj=%u}},\n", op, ip->n.obj);
+	    emit_rec(f, ip, 4, ".n={%s,.obj=%u}", op, csp_instr_get_n_obj(ip));
 	    break;
 	case OP_LI:
 	case OP_LIU:
 	case OP_LIH:
 	case OP_ARG:
-	    fprintf(f, "  {.i={%s,.x=%u,.imm=%d}},\n", op, ip->i.x, ip->i.imm);
+	    emit_rec(f, ip, 4, ".i={%s,.x=%u,.imm=%d}", op, csp_instr_get_i_x(ip), csp_instr_get_i_imm(ip));
 	    break;
 	case OP_ST:
 	case OP_STIMP:
@@ -1260,27 +1342,27 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    // so a field the emitter drops has to be zero in RAM or the image fails
 	    // its own check at boot. Emitting the whole arm is what makes the image
 	    // byte-for-byte st->ram_instr, which is what the CRC assumes.
-	    fprintf(f, "  {.m={%s,.x=%u,.mem=%u,.y=%u}},\n",
-		    op, ip->m.x, ip->m.mem, ip->m.y);
+	    emit_rec(f, ip, 4, ".m={%s,.x=%u,.mem=%u,.y=%u}",
+		    op, csp_instr_get_m_x(ip), csp_instr_get_m_mem(ip), csp_instr_get_m_y(ip));
 	    break;
 	    // case OP_EQI:
 	case OP_STI:	    
-	    fprintf(f, "  {.mi={%s,.x=%u,.mem=%u,.imm=%d}},\n",
-		    op, ip->mi.x, ip->mi.mem, ip->mi.imm);
+	    emit_rec(f, ip, 4, ".mi={%s,.x=%u,.mem=%u,.imm=%d}",
+		    op, csp_instr_get_mi_x(ip), csp_instr_get_mi_mem(ip), csp_instr_get_mi_imm(ip));
 	    break;
 	case OP_CALL:
-	    fprintf(f, "  {.f={%s,.x=%u,.idx=%u,.usr=%u,.avt=0x%04x}},\n",
-		    op, ip->f.x, ip->f.idx, ip->f.usr, ip->f.avt);
+	    emit_rec(f, ip, 4, ".f={%s,.x=%u,.idx=%u,.usr=%u,.avt=0x%04x}",
+		    op, csp_instr_get_f_x(ip), csp_instr_get_f_idx(ip), csp_instr_get_f_usr(ip), csp_instr_get_f_avt(ip));
 	    break;
 	case OP_NEXT:
-	    fprintf(f, "  {.x={%s,.x=%u}},\n", op, ip->x.x);
+	    emit_rec(f, ip, 4, ".x={%s,.x=%u}", op, csp_instr_get_x_x(ip));
 	    break;
 	case OP_SETO:
 	    // Its own arm, not the ALU default: obj is 16 bits and the default
 	    // would write it as x/y/z (4 bits each). Objects 1..15 happen to come
 	    // out right through .a.x, which is exactly the kind of coincidence
 	    // that holds until a program has sixteen of them.
-	    fprintf(f, "  {.o={%s,.obj=%u}},\n", op, ip->o.obj);
+	    emit_rec(f, ip, 4, ".o={%s,.obj=%u}", op, csp_instr_get_o_obj(ip));
 	    break;
 	case OP_SETOX:
 	    // Its own arm for the opposite reason to OP_SETO: the ALU default
@@ -1288,20 +1370,20 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    // same shape as the three CRC mismatches this project has had -- a
 	    // payload the generic arm does not carry. len is the bounds check, so
 	    // dropping it would also have turned every array access unchecked.
-	    fprintf(f, "  {.ox={%s,.x=%u,.len=%u,.stride=%u}},\n",
-		    op, ip->ox.x, ip->ox.len, ip->ox.stride);
+	    emit_rec(f, ip, 4, ".ox={%s,.x=%u,.len=%u,.stride=%u}",
+		    op, csp_instr_get_ox_x(ip), csp_instr_get_ox_len(ip), csp_instr_get_ox_stride(ip));
 	    break;
 	case OP_NINSTATE:
 	case OP_INSTATE:
 	    // .implicit marks the auto NORMAL+ wrap around a bare top-level rule.
 	    // Dropped here it did more than break the CRC: a listing off a ROM would
 	    // have grown an `#in NORMAL ... #end` around rules the user wrote bare.
-	    fprintf(f, "  {.in={%s,.x=%u,.imm=%d,.nxt=%d,.implicit=%u}},\n",
-		    op, ip->in.x, ip->in.imm, ip->in.nxt, ip->in.implicit);
+	    emit_rec(f, ip, 4, ".in={%s,.x=%u,.imm=%d,.nxt=%d,.implicit=%u}",
+		    op, csp_instr_get_in_x(ip), csp_instr_get_in_imm(ip), csp_instr_get_in_nxt(ip), csp_instr_get_in_implicit(ip));
 	    break;
 	case OP_RULE:
-	    fprintf(f, "  {.r={%s,.cnd=%u,.nxt=%d,.implicit=%u}},\n",
-		    op, ip->r.cnd, ip->r.nxt, ip->r.implicit);
+	    emit_rec(f, ip, 4, ".r={%s,.cnd=%u,.nxt=%d,.implicit=%u}",
+		    op, csp_instr_get_r_cnd(ip), csp_instr_get_r_nxt(ip), csp_instr_get_r_implicit(ip));
 	    break;
 	default: // two/three-address-instruction
 	    // All three registers regardless of arity, and both flags: the unused
@@ -1312,12 +1394,20 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    // correctly (the runtime never reads it) but lists `b < a` where the
 	    // source said `a > b`. Either omission also fails the section CRC at
 	    // boot, which is the loud half of the same mistake.
-	    fprintf(f, "  {.a={%s,.x=%u,.y=%u,.z=%u,.u=%u,.swap=%u}},\n",
-		    op, ip->a.x, ip->a.y, ip->a.z, ip->a.u, ip->a.swap);
+	    emit_rec(f, ip, 4, ".a={%s,.x=%u,.y=%u,.z=%u,.u=%u,.swap=%u}",
+		    op, csp_instr_get_a_x(ip), csp_instr_get_a_y(ip), csp_instr_get_a_z(ip), csp_instr_get_a_u(ip), csp_instr_get_a_swap(ip));
 	    break;
 	}
     }
-    fprintf(f, "  {.em={.op=OP_END_MARK,.crc=%u,._res=0}},\n", instr_mark_crc);
+    {
+	csp_instr_t em;
+
+	memset(&em, 0, sizeof(em));
+	csp_instr_set_op(&em, OP_END_MARK);
+	csp_instr_set_em_crc(&em, instr_mark_crc);
+	emit_rec(f, &em, 4, ".em={.op=OP_END_MARK,.crc=%u,._res=0}",
+		 instr_mark_crc);
+    }
     fprintf(f, "  },\n");
 
     // Reactive dependency graph: maps each ROM decl -> the ROM rules that read
@@ -1462,8 +1552,9 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 	// Unlike the REPL's /list this keeps the reserved INIT/NORMAL/FAILSAFE:
 	// this dump is for reading the program the runtime actually holds, not
 	// for producing source you paste back.
-	csp_decl_t sb = csp_get_decl(st, i);
+	csp_decl_t sb;
 	int k;
+	csp_load_decl(st, i, &sb);
 	fprintf(f, "#states");
 	for (k = 0; k < CSP_STATES_PER_DECL; k++) {
 	    sindex_t np = csp_states_name(&sb, k);
@@ -1476,7 +1567,7 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
     }
     case DECL_OBJECT:
 	fprintf(f, "#%.*s %.*s\n",
-		DNAME(st, decl(st,i,mq.mx)),
+		DNAME(st, decl(st, i, mq_mx)),
 		DNAME(st, ix));
 	break;
     case DECL_VARIABLE: {
@@ -1494,7 +1585,7 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 		GET_RES(decl(st,i,res)),
 		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
 		ro_maybe_ptr(csp_fmt_vtype(vt)));
-	csp_fprint_value(f, st, vt, decl(st,i,va.init));
+	csp_fprint_value(f, st, vt, decl(st, i, va_init));
 	fprintf(f, "\n");
 	break;
     }
@@ -1504,7 +1595,7 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
 		ro_maybe_ptr(csp_fmt_vtype(vt)));
-	csp_fprint_value(f, st, vt, decl(st,i,cn.init));
+	csp_fprint_value(f, st, vt, decl(st, i, cn_init));
 	fprintf(f, "\n");	
 	break;
     case DECL_DIGITAL:
@@ -1513,7 +1604,7 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 		DNAME(st, ix),
 		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
 		ro_maybe_ptr(csp_fmt_pull(st, i)),
-		decl(st,i,di.port),decl(st,i,di.pin));
+		decl(st, i, di_port),decl(st, i, di_pin));
 	break;
     case DECL_ANALOG:
 	vt = decl(st,i,vt);
@@ -1523,14 +1614,14 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 		ro_maybe_ptr(csp_fmt_vtype(vt)),
 		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
 		ro_maybe_ptr(csp_fmt_pwm(st, i)),
-		decl(st,i,an.port), decl(st,i,an.pin));
+		decl(st, i, an_port), decl(st, i, an_pin));
 	break;
     case DECL_TIMER:
 	vt = decl(st,i,vt);
 	fprintf(f, "#timer %.*s %d = %d\n",
 		DNAME(st, ix),
-		decl(st,i,tm.period),
-		decl(st,i,tm.init));
+		decl(st, i, tm_period),
+		decl(st, i, tm_init));
 	break;
     case DECL_FIELD:
 	vt = decl(st,i,vt);
@@ -1538,22 +1629,22 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
 		ro_maybe_ptr(csp_fmt_vtype(vt)),
-		ro_maybe_ptr(csp_fmt_endian(decl(st,i,ca.endian))),
+		ro_maybe_ptr(csp_fmt_endian(decl(st, i, ca_endian))),
 		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
-		csp_ivalue(st, decl(st,i,ca.id)),
-		decl(st,i,ca.bit),
-		decl(st,i,ca.bit) + GET_FIELD_LEN(decl(st,i,ca.len)));
+		csp_ivalue(st, decl(st, i, ca_id)),
+		decl(st, i, ca_bit),
+		decl(st, i, ca_bit) + GET_FIELD_LEN(decl(st, i, ca_len)));
 	break;
     case DECL_BUFFER:
 	// #buffer <name>:<size> [dir] [can 0x<id>]. Size is BYTES (bf.nbytes)
 	// -- matching the board lister and the parser.
 	fprintf(f, "#buffer %.*s:%d",
 		DNAME(st, ix),
-		decl(st,i,bf.nbytes));
+		decl(st, i, bf_nbytes));
 	if (decl(st,i,dir))
 	    fprintf(f, " %s", ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))));
-	if (decl(st,i,bf.transport) == TR_CAN)
-	    fprintf(f, " can 0x%x", (unsigned)csp_ivalue(st, decl(st,i,bf.id)));
+	if (decl(st, i, bf_transport) == TR_CAN)
+	    fprintf(f, " can 0x%x", (unsigned)csp_ivalue(st, decl(st, i, bf_id)));
 	fprintf(f, "\n");
 	break;
     default:
@@ -1607,7 +1698,7 @@ void csp_list_rules(FILE* f, csp_rt_t* st)
 	}
 	op = instr(st, i, op);
 	if (op == OP_ENTER) {
-	    fprintf(f, "%s#module %.*s\n", indent(lev), DNAME(st, instr(st,i,e.mx)));
+	    fprintf(f, "%s#module %.*s\n", indent(lev), DNAME(st, instr(st, i, e_mx)));
 	    lev++;
 	    i++;
 	    continue;
@@ -1627,17 +1718,17 @@ void csp_list_rules(FILE* f, csp_rt_t* st)
 	    int j = i + 1, ns = 0, k;
 	    fprintf(f, "%s#in", indent(lev));
 	    while ((j < st->ps.nn) && (instr(st, j, op) == OP_NINSTATE)) {
-		if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st,j,in.imm);
+		if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st, j, in_imm);
 		j++;
 	    }
-	    if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st,j,in.imm);
+	    if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st, j, in_imm);
 	    st->list_nstate = ns;
 	    for (k = 0; k < ns; k++) {
 		sindex_t np = list_state_name_pos(st, st->list_states[k]);
 		fprintf(f, " %s", np ? ro_maybe_ptr(csp_str_at(st, np)) : "?");
 	    }
 	    fprintf(f, "\n");
-	    block_end = j + instr(st, j, in.nxt);
+	    block_end = j + instr(st, j, in_nxt);
 	    lev++;
 	    i = j + 1;
 	    continue;
