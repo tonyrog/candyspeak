@@ -63,6 +63,9 @@ typedef enum {
     MC_NATIVEN= 29,   // <n>      call stack-leaf n: it takes what it wants
     MC_LGET   = 30,   // <k>      push local k
     MC_LSET   = 31,   // <k>      pop into local k
+    MC_BUF    = 32,   // <fld>    TOS = field fld of buf TOS
+    MC_ST     = 33,   // <fld>    TOS = field slf of state TOS
+    MC_VIEW   = 34,   // <fld>    TOS = field fld of view TOS    
     MC_NOPCODE
 } mc_op_t;
 
@@ -162,7 +165,10 @@ typedef struct {
 // dereferencing nothing. Indirect so a test can drive the machine without the
 // runtime linked behind it.
 extern const void* (*mc_decl_hook)(void* ctx, mc_cell_t i);
-extern mc_cell_t   (*mc_nd_hook)(void* ctx);
+extern const void* (*mc_instr_hook)(void* ctx, mc_cell_t i);
+extern const void* (*mc_buf_hook)(void* ctx, mc_cell_t i);
+extern const void* (*mc_view_hook)(void* ctx, mc_cell_t i);
+extern mc_cell_t   (*mc_state_hook)(void* ctx, mc_cell_t i);
 
 extern int csp_mcsp_run(mc_vm_t* vm, uint16_t entry, mc_cell_t* result);
 

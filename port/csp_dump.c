@@ -1109,7 +1109,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    if (csp_decl_get_type(&d) != DECL_STATES) {
 		csp_decl_set_is_mapped(&d, 0); csp_decl_set_bound(&d, 0); csp_decl_set_reg(&d, 0);
 	    }
-	    if (csp_decl_get_type(&d) == DECL_TIMER) { csp_decl_set_tm_fired(&d, 0); csp_decl_set_tm_running(&d, 0); csp_decl_set_tm__res(&d, 0); }
+	    if (csp_decl_get_type(&d) == DECL_TIMER) { csp_decl_set_tm_fired(&d, 0); csp_decl_set_tm_running(&d, 0); /* csp_decl_set_tm__res(&d, 0); */ }
 
 	    crc_decl_data = csp_crc16(crc_decl_data, &d, sizeof(d), 0);
 	}
@@ -1156,7 +1156,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	if (csp_decl_get_type(dp) == DECL_TIMER) {
 	    csp_decl_set_tm_fired(dp, 0);
 	    csp_decl_set_tm_running(dp, 0);
-	    csp_decl_set_tm__res(dp, 0);
+	    /* csp_decl_set_tm__res(dp, 0); */
 	}
 
 	// .cont and .local are EMITTED. Both are real data -- an array's length

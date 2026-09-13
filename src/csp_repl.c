@@ -1525,11 +1525,11 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
     // period/remaining, and the bytes themselves as the value.
     if ((t == DECL_BUFFER) || (t == DECL_FIELD)) {
 	csp_view_t* vw = csp_view(st, ix);
-	csp_buf_t*  b  = &st->buf[vw->buf];
+	csp_buf_t*  b  = &st->buf[csp_view_get_buf(vw)];
 	int n = 0;
 	// Direction belongs to the BUFFER: a field is a window into it and cannot
 	// be read one way while the frame goes the other.
-	csp_print_rojust(csp_fmt_pindir(b->dir), LJUST, STATE_W_DIR);
+	csp_print_rojust(csp_fmt_pindir(csp_buf_get_dir(b)), LJUST, STATE_W_DIR);
 	csp_print_rojust((t == DECL_BUFFER) ? ros_buffer : ros_field,
 			 LJUST, STATE_W_KIND);
 	if (t == DECL_FIELD) {
@@ -1544,7 +1544,7 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
 	    csp_print_char(']');
 	    n = 4 + state_udigits(lo) + state_udigits(hi);
 	}
-	else if (b->transport != TR_NONE) {
+	else if (csp_buf_get_transport(b) != TR_NONE) {
 	    // WHO, then how many bytes last moved. "Who" is whatever identifies
 	    // the far end on that bus -- a frame id, a device address, a chip
 	    // select, a port -- and the full endpoint is in /list rather than
@@ -1553,25 +1553,25 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
 	    // The dlc half is the part that CHANGES: a short frame, a truncated
 	    // datagram or a failed transfer all show up as a length that is not
 	    // the declared size.
-	    switch (b->transport) {
+	    switch (csp_buf_get_transport(b)) {
 	    case TR_I2C:
-		n = csp_print_hex(TR_I2C_ADDR(b->xref));
+		n = csp_print_hex(TR_I2C_ADDR(csp_buf_get_xref(b)));
 		break;
 	    case TR_SPI:
-		n  = csp_print_uint(TR_SPI_PORT(b->xref));
+		n  = csp_print_uint(TR_SPI_PORT(csp_buf_get_xref(b)));
 		csp_print_char(':');
-		n += 1 + csp_print_uint(TR_SPI_PIN(b->xref));
+		n += 1 + csp_print_uint(TR_SPI_PIN(csp_buf_get_xref(b)));
 		break;
 	    case TR_UDP:
-		n = csp_print_uint(b->port);
+		n = csp_print_uint(csp_buf_get_port(b));
 		break;
 	    default:
-		n = csp_print_hex(b->xref);
+		n = csp_print_hex(csp_buf_get_xref(b));
 		break;
 	    }
 	    csp_print_char('/');
-	    csp_print_uint(b->dlc);
-	    n += 1 + state_udigits(b->dlc);
+	    csp_print_uint(csp_buf_get_dlc(b));
+	    n += 1 + state_udigits(csp_buf_get_dlc(b));
 	}
 	state_pad(n, STATE_W_PIN);
 	csp_print_lit("= ");
@@ -1582,23 +1582,23 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
 	    // print: csp_value would hand back the first sizeof(value_t) bytes and
 	    // call it a number, which is how Tx and TxSeq came to show the same
 	    // thing. Committed side (DIN), like every other row.
-	    const uint8_t* p = st->heap[DIN] + b->hp;
+	    const uint8_t* p = st->heap[DIN] + csp_buf_get_hp(b);
 	    uint16_t k;
-	    for (k = 0; k < b->nbytes; k++) {
+	    for (k = 0; k < csp_buf_get_nbytes(b); k++) {
 		if (k) csp_print_blank();
 		csp_print_hex2(p[k]);
 	    }
 	    // Pending traffic, in the same place a timer says FIRED: RX means a
 	    // frame landed this cycle, TX that one goes out at the end of it.
-	    if (b->flags & BUF_F_RX)
+	    if (csp_buf_get_flags(b) & BUF_F_RX)
 		csp_print_lit("  RX");
-	    if (b->flags & (BUF_F_DIRTY|BUF_F_TX))
+	    if (csp_buf_get_flags(b) & (BUF_F_DIRTY|BUF_F_TX))
 		csp_print_lit("  TX");
 	    // The endpoint refused the buffer -- today a UDP port another
 	    // process already holds. Without this there is nothing to tell
 	    // "nobody is sending" from "this program never listened", and the
 	    // one stderr line that says so goes by in the banner.
-	    if (b->flags & BUF_F_DEAD)
+	    if (csp_buf_get_flags(b) & BUF_F_DEAD)
 		csp_print_lit("  DEAD");
 	}
 	list_eol();

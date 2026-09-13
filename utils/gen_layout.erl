@@ -70,7 +70,7 @@ outputs() ->
     %% while declarations were the only record described here.
     Fam = maps:from_list([{N, {CT, P}} || {family, N, CT, P} <- Terms]),
     Base = [lay(R) || R = {record, _, _, _} <- Terms],
-    Arms = [arm(A, Base) || A = {arm, _, _, _, _} <- Terms],
+    Arms = [arm(A, Base) || A = {record, _, _, _, _} <- Terms],
     Laid = [{N, B, T, F, info(N, Terms, Fam)} || {N, B, T, F} <- Base ++ Arms],
     [{?HDR, header(Laid)}, {?ORACLE, oracle(Laid)}].
 
@@ -109,7 +109,7 @@ lay({record, Name, Bytes, Fields}) ->
 %% An arm's fields begin where its base record's end, so the positions come out
 %% absolute and every accessor indexes from the start of the declaration -- the
 %% caller never has to know an arm is an arm.
-arm({arm, Prefix, Base, Bytes, Fields}, Laid) ->
+arm({record, Prefix, Base, Bytes, Fields}, Laid) ->
     {_, _, BaseBits, _} = lists:keyfind(Base, 1, Laid),
     %% {start, N} says this arm begins somewhere OTHER than where its base ends
     %% -- csp_states_t sits on DECL_HEADER's 17 bits and deliberately overlaps
@@ -359,10 +359,8 @@ family_fields(Fam, Laid) ->
 		  || D = {W, Sh, B} <- Descs], ", \\\n"),
      " }\n\n"].
 
-%% MFA_ for declarations, MFI_ for instructions: one letter, and it is the
+%% MFD_ for declarations, MFI_ for instructions: one letter, and it is the
 %% family's own initial rather than a table to keep in step.
-tag(decl_common)  -> "a";
-tag(instr_common) -> "i";
 tag(F)            -> string:slice(atom_to_list(F), 0, 1).
 
 %% The family without its _common suffix: decl_common describes the bytes every

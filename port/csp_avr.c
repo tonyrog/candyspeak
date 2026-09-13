@@ -791,7 +791,9 @@ int main(void) __attribute__((no_instrument_function));
 int main(void)
 {
     index_t x;
+#if !defined(CSP_EXEC_ONLY)    
     uint8_t why;
+#endif
 
 #ifdef CSP_STACK_WATCH
     {
@@ -816,8 +818,10 @@ int main(void)
     // command that quietly did nothing.
     //
     // Read once and cleared, or the next boot reports this one's reason too.
+#if !defined(CSP_EXEC_ONLY)        
     why = MCUSR;
     MCUSR = 0;
+#endif
 
     csp_board_init();
     // CSP_CSTATE, not 0. The third argument is the COMPILER's state, and a full

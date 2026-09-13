@@ -203,6 +203,276 @@ static inline void csp_instr_set_op(csp_instr_t* p, uint8_t v_)
     b_[0] = (uint8_t)((b_[0] & (uint8_t)0xC0U) | (uint8_t)(v_ & 0x3FU));
 }
 
+// buf: ends at bit 128 of 16 bytes
+// STRADDLING: hp, nbytes, port, xref, owner
+static inline uint16_t csp_buf_get_hp(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint16_t)(((uint16_t)b_[0] | ((uint16_t)b_[1] << 8)) & 0xFFFFU);
+}
+static inline uint16_t csp_buf_get_hp_ro(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint16_t)(((uint16_t)ro_byte(&b_[0]) | ((uint16_t)ro_byte(&b_[1]) << 8)) & 0xFFFFU);
+}
+static inline void csp_buf_set_hp(csp_buf_t* p, uint16_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[0] = (uint8_t)v_;
+    b_[1] = (uint8_t)(v_ >> 8);
+}
+static inline uint16_t csp_buf_get_nbytes(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint16_t)(((uint16_t)b_[2] | ((uint16_t)b_[3] << 8)) & 0xFFFFU);
+}
+static inline uint16_t csp_buf_get_nbytes_ro(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint16_t)(((uint16_t)ro_byte(&b_[2]) | ((uint16_t)ro_byte(&b_[3]) << 8)) & 0xFFFFU);
+}
+static inline void csp_buf_set_nbytes(csp_buf_t* p, uint16_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[2] = (uint8_t)v_;
+    b_[3] = (uint8_t)(v_ >> 8);
+}
+static inline uint8_t csp_buf_get_transport(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((b_[4]) & 0xFU);
+}
+static inline uint8_t csp_buf_get_transport_ro(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((ro_byte(&b_[4])) & 0xFU);
+}
+static inline void csp_buf_set_transport(csp_buf_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[4] = (uint8_t)((b_[4] & (uint8_t)0xF0U) | (uint8_t)(v_ & 0xFU));
+}
+static inline uint8_t csp_buf_get_dir(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[4] >> 4)) & 0xFU);
+}
+static inline uint8_t csp_buf_get_dir_ro(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[4]) >> 4)) & 0xFU);
+}
+static inline void csp_buf_set_dir(csp_buf_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[4] = (uint8_t)((b_[4] & (uint8_t)0xFU) | (uint8_t)((v_ << 4) & 0xF0U));
+}
+static inline uint8_t csp_buf_get_flags(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((b_[5]) & 0xFFU);
+}
+static inline uint8_t csp_buf_get_flags_ro(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((ro_byte(&b_[5])) & 0xFFU);
+}
+static inline void csp_buf_set_flags(csp_buf_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[5] = (uint8_t)v_;
+}
+static inline uint8_t csp_buf_get_dlc(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((b_[6]) & 0xFFU);
+}
+static inline uint8_t csp_buf_get_dlc_ro(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((ro_byte(&b_[6])) & 0xFFU);
+}
+static inline void csp_buf_set_dlc(csp_buf_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[6] = (uint8_t)v_;
+}
+static inline uint8_t csp_buf_get_dlc_in(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((b_[7]) & 0xFFU);
+}
+static inline uint8_t csp_buf_get_dlc_in_ro(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((ro_byte(&b_[7])) & 0xFFU);
+}
+static inline void csp_buf_set_dlc_in(csp_buf_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[7] = (uint8_t)v_;
+}
+static inline uint16_t csp_buf_get_port(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint16_t)(((uint16_t)b_[8] | ((uint16_t)b_[9] << 8)) & 0xFFFFU);
+}
+static inline uint16_t csp_buf_get_port_ro(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint16_t)(((uint16_t)ro_byte(&b_[8]) | ((uint16_t)ro_byte(&b_[9]) << 8)) & 0xFFFFU);
+}
+static inline void csp_buf_set_port(csp_buf_t* p, uint16_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[8] = (uint8_t)v_;
+    b_[9] = (uint8_t)(v_ >> 8);
+}
+static inline uint32_t csp_buf_get_xref(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint32_t)(((((uint32_t)b_[10] << 0) | ((uint32_t)b_[11] << 8) | ((uint32_t)b_[12] << 16) | ((uint32_t)b_[13] << 24)) >> 0) & 0xFFFFFFFFU);
+}
+static inline uint32_t csp_buf_get_xref_ro(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint32_t)(((((uint32_t)ro_byte(&b_[10]) << 0) | ((uint32_t)ro_byte(&b_[11]) << 8) | ((uint32_t)ro_byte(&b_[12]) << 16) | ((uint32_t)ro_byte(&b_[13]) << 24)) >> 0) & 0xFFFFFFFFU);
+}
+static inline void csp_buf_set_xref(csp_buf_t* p, uint32_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[10] = (uint8_t)v_;
+    b_[11] = (uint8_t)(v_ >> 8);
+    b_[12] = (uint8_t)(v_ >> 16);
+    b_[13] = (uint8_t)(v_ >> 24);
+}
+static inline uint16_t csp_buf_get_owner(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint16_t)(((uint16_t)b_[14] | ((uint16_t)b_[15] << 8)) & 0xFFFFU);
+}
+static inline uint16_t csp_buf_get_owner_ro(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint16_t)(((uint16_t)ro_byte(&b_[14]) | ((uint16_t)ro_byte(&b_[15]) << 8)) & 0xFFFFU);
+}
+static inline void csp_buf_set_owner(csp_buf_t* p, uint16_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[14] = (uint8_t)v_;
+    b_[15] = (uint8_t)(v_ >> 8);
+}
+
+// view: ends at bit 48 of 6 bytes
+// STRADDLING: pos, buf
+static inline uint8_t csp_view_get_kind(const csp_view_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((b_[0]) & 0x3U);
+}
+static inline uint8_t csp_view_get_kind_ro(const csp_view_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((ro_byte(&b_[0])) & 0x3U);
+}
+static inline void csp_view_set_kind(csp_view_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[0] = (uint8_t)((b_[0] & (uint8_t)0xFCU) | (uint8_t)(v_ & 0x3U));
+}
+static inline uint8_t csp_view_get_vt(const csp_view_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[0] >> 2)) & 0xFU);
+}
+static inline uint8_t csp_view_get_vt_ro(const csp_view_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[0]) >> 2)) & 0xFU);
+}
+static inline void csp_view_set_vt(csp_view_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[0] = (uint8_t)((b_[0] & (uint8_t)0xC3U) | (uint8_t)((v_ << 2) & 0x3CU));
+}
+static inline uint8_t csp_view_get_endian(const csp_view_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[0] >> 6)) & 0x3U);
+}
+static inline uint8_t csp_view_get_endian_ro(const csp_view_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[0]) >> 6)) & 0x3U);
+}
+static inline void csp_view_set_endian(csp_view_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[0] = (uint8_t)((b_[0] & (uint8_t)0x3FU) | (uint8_t)((v_ << 6) & 0xC0U));
+}
+static inline uint8_t csp_view_get_flags(const csp_view_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((b_[1]) & 0x3U);
+}
+static inline uint8_t csp_view_get_flags_ro(const csp_view_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((ro_byte(&b_[1])) & 0x3U);
+}
+static inline void csp_view_set_flags(csp_view_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[1] = (uint8_t)((b_[1] & (uint8_t)0xFCU) | (uint8_t)(v_ & 0x3U));
+}
+static inline uint8_t csp_view_get_len(const csp_view_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[1] >> 2)) & 0x3FU);
+}
+static inline uint8_t csp_view_get_len_ro(const csp_view_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[1]) >> 2)) & 0x3FU);
+}
+static inline void csp_view_set_len(csp_view_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[1] = (uint8_t)((b_[1] & (uint8_t)0x3U) | (uint8_t)((v_ << 2) & 0xFCU));
+}
+static inline uint16_t csp_view_get_pos(const csp_view_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint16_t)(((uint16_t)b_[2] | ((uint16_t)b_[3] << 8)) & 0xFFFFU);
+}
+static inline uint16_t csp_view_get_pos_ro(const csp_view_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint16_t)(((uint16_t)ro_byte(&b_[2]) | ((uint16_t)ro_byte(&b_[3]) << 8)) & 0xFFFFU);
+}
+static inline void csp_view_set_pos(csp_view_t* p, uint16_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[2] = (uint8_t)v_;
+    b_[3] = (uint8_t)(v_ >> 8);
+}
+static inline uint16_t csp_view_get_buf(const csp_view_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint16_t)(((uint16_t)b_[4] | ((uint16_t)b_[5] << 8)) & 0xFFFFU);
+}
+static inline uint16_t csp_view_get_buf_ro(const csp_view_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint16_t)(((uint16_t)ro_byte(&b_[4]) | ((uint16_t)ro_byte(&b_[5]) << 8)) & 0xFFFFU);
+}
+static inline void csp_view_set_buf(csp_view_t* p, uint16_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[4] = (uint8_t)v_;
+    b_[5] = (uint8_t)(v_ >> 8);
+}
+
 // decl_common_md: ends at bit 64 of 8 bytes
 // STRADDLING: n, ent
 static inline uint16_t csp_decl_get_md_n(const csp_decl_t* p)
@@ -328,192 +598,187 @@ static inline void csp_decl_set_cn_init(csp_decl_t* p, value_t v_)
 }
 
 // decl_common_di: ends at bit 49 of 8 bytes
-// STRADDLING: port
-static inline uint8_t csp_decl_get_di_pin(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((b_[4]) & 0x7FU);
-}
-static inline uint8_t csp_decl_get_di_pin_ro(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((ro_byte(&b_[4])) & 0x7FU);
-}
-static inline void csp_decl_set_di_pin(csp_decl_t* p, uint8_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[4] = (uint8_t)((b_[4] & (uint8_t)0x80U) | (uint8_t)(v_ & 0x7FU));
-}
-static inline uint8_t csp_decl_get_di_port(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((((uint8_t)b_[4] | ((uint8_t)b_[5] << 8)) >> 7) & 0xFU);
-}
-static inline uint8_t csp_decl_get_di_port_ro(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((((uint8_t)ro_byte(&b_[4]) | ((uint8_t)ro_byte(&b_[5]) << 8)) >> 7) & 0xFU);
-}
-static inline void csp_decl_set_di_port(csp_decl_t* p, uint8_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[4] = (uint8_t)((b_[4] & (uint8_t)0x7FU) | (uint8_t)((v_ << 7) & 0x80U));
-    b_[5] = (uint8_t)((b_[5] & (uint8_t)0xF8U) | (uint8_t)((v_ >> 1) & 0x7U));
-}
-static inline uint8_t csp_decl_get_di_pullup(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)(((b_[5] >> 3)) & 0x1U);
-}
-static inline uint8_t csp_decl_get_di_pullup_ro(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)(((ro_byte(&b_[5]) >> 3)) & 0x1U);
-}
-static inline void csp_decl_set_di_pullup(csp_decl_t* p, uint8_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[5] = (uint8_t)((b_[5] & (uint8_t)0xF7U) | (uint8_t)((v_ << 3) & 0x8U));
-}
-static inline uint8_t csp_decl_get_di_pulldown(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)(((b_[5] >> 4)) & 0x1U);
-}
-static inline uint8_t csp_decl_get_di_pulldown_ro(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)(((ro_byte(&b_[5]) >> 4)) & 0x1U);
-}
-static inline void csp_decl_set_di_pulldown(csp_decl_t* p, uint8_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[5] = (uint8_t)((b_[5] & (uint8_t)0xEFU) | (uint8_t)((v_ << 4) & 0x10U));
-}
-static inline uint8_t csp_decl_get_di_irq(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)(((b_[5] >> 5)) & 0x7U);
-}
-static inline uint8_t csp_decl_get_di_irq_ro(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)(((ro_byte(&b_[5]) >> 5)) & 0x7U);
-}
-static inline void csp_decl_set_di_irq(csp_decl_t* p, uint8_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[5] = (uint8_t)((b_[5] & (uint8_t)0x1FU) | (uint8_t)((v_ << 5) & 0xE0U));
-}
 static inline uint8_t csp_decl_get_di_soft(const csp_decl_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((b_[6]) & 0x1U);
+    return (uint8_t)((b_[4]) & 0x1U);
 }
 static inline uint8_t csp_decl_get_di_soft_ro(const csp_decl_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((ro_byte(&b_[6])) & 0x1U);
+    return (uint8_t)((ro_byte(&b_[4])) & 0x1U);
 }
 static inline void csp_decl_set_di_soft(csp_decl_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[4] = (uint8_t)((b_[4] & (uint8_t)0xFEU) | (uint8_t)(v_ & 0x1U));
+}
+static inline uint8_t csp_decl_get_di_pin(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[4] >> 1)) & 0x7FU);
+}
+static inline uint8_t csp_decl_get_di_pin_ro(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[4]) >> 1)) & 0x7FU);
+}
+static inline void csp_decl_set_di_pin(csp_decl_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[4] = (uint8_t)((b_[4] & (uint8_t)0x1U) | (uint8_t)((v_ << 1) & 0xFEU));
+}
+static inline uint8_t csp_decl_get_di_port(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((b_[5]) & 0xFU);
+}
+static inline uint8_t csp_decl_get_di_port_ro(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((ro_byte(&b_[5])) & 0xFU);
+}
+static inline void csp_decl_set_di_port(csp_decl_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[5] = (uint8_t)((b_[5] & (uint8_t)0xF0U) | (uint8_t)(v_ & 0xFU));
+}
+static inline uint8_t csp_decl_get_di_irq(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[5] >> 4)) & 0x7U);
+}
+static inline uint8_t csp_decl_get_di_irq_ro(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[5]) >> 4)) & 0x7U);
+}
+static inline void csp_decl_set_di_irq(csp_decl_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[5] = (uint8_t)((b_[5] & (uint8_t)0x8FU) | (uint8_t)((v_ << 4) & 0x70U));
+}
+static inline uint8_t csp_decl_get_di_pullup(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[5] >> 7)) & 0x1U);
+}
+static inline uint8_t csp_decl_get_di_pullup_ro(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[5]) >> 7)) & 0x1U);
+}
+static inline void csp_decl_set_di_pullup(csp_decl_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[5] = (uint8_t)((b_[5] & (uint8_t)0x7FU) | (uint8_t)((v_ << 7) & 0x80U));
+}
+static inline uint8_t csp_decl_get_di_pulldown(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((b_[6]) & 0x1U);
+}
+static inline uint8_t csp_decl_get_di_pulldown_ro(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((ro_byte(&b_[6])) & 0x1U);
+}
+static inline void csp_decl_set_di_pulldown(csp_decl_t* p, uint8_t v_)
 {
     uint8_t* b_ = (uint8_t*)p;
     b_[6] = (uint8_t)((b_[6] & (uint8_t)0xFEU) | (uint8_t)(v_ & 0x1U));
 }
 
 // decl_common_an: ends at bit 50 of 8 bytes
-// STRADDLING: port, irq
-static inline uint8_t csp_decl_get_an_pin(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((b_[4]) & 0x7FU);
-}
-static inline uint8_t csp_decl_get_an_pin_ro(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((ro_byte(&b_[4])) & 0x7FU);
-}
-static inline void csp_decl_set_an_pin(csp_decl_t* p, uint8_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[4] = (uint8_t)((b_[4] & (uint8_t)0x80U) | (uint8_t)(v_ & 0x7FU));
-}
-static inline uint8_t csp_decl_get_an_port(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((((uint8_t)b_[4] | ((uint8_t)b_[5] << 8)) >> 7) & 0xFU);
-}
-static inline uint8_t csp_decl_get_an_port_ro(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((((uint8_t)ro_byte(&b_[4]) | ((uint8_t)ro_byte(&b_[5]) << 8)) >> 7) & 0xFU);
-}
-static inline void csp_decl_set_an_port(csp_decl_t* p, uint8_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[4] = (uint8_t)((b_[4] & (uint8_t)0x7FU) | (uint8_t)((v_ << 7) & 0x80U));
-    b_[5] = (uint8_t)((b_[5] & (uint8_t)0xF8U) | (uint8_t)((v_ >> 1) & 0x7U));
-}
-static inline uint8_t csp_decl_get_an_pwm(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)(((b_[5] >> 3)) & 0x1U);
-}
-static inline uint8_t csp_decl_get_an_pwm_ro(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)(((ro_byte(&b_[5]) >> 3)) & 0x1U);
-}
-static inline void csp_decl_set_an_pwm(csp_decl_t* p, uint8_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[5] = (uint8_t)((b_[5] & (uint8_t)0xF7U) | (uint8_t)((v_ << 3) & 0x8U));
-}
-static inline uint8_t csp_decl_get_an_endian(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)(((b_[5] >> 4)) & 0x3U);
-}
-static inline uint8_t csp_decl_get_an_endian_ro(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)(((ro_byte(&b_[5]) >> 4)) & 0x3U);
-}
-static inline void csp_decl_set_an_endian(csp_decl_t* p, uint8_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[5] = (uint8_t)((b_[5] & (uint8_t)0xCFU) | (uint8_t)((v_ << 4) & 0x30U));
-}
-static inline uint8_t csp_decl_get_an_irq(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((((uint8_t)b_[5] | ((uint8_t)b_[6] << 8)) >> 6) & 0x7U);
-}
-static inline uint8_t csp_decl_get_an_irq_ro(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((((uint8_t)ro_byte(&b_[5]) | ((uint8_t)ro_byte(&b_[6]) << 8)) >> 6) & 0x7U);
-}
-static inline void csp_decl_set_an_irq(csp_decl_t* p, uint8_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[5] = (uint8_t)((b_[5] & (uint8_t)0x3FU) | (uint8_t)((v_ << 6) & 0xC0U));
-    b_[6] = (uint8_t)((b_[6] & (uint8_t)0xFEU) | (uint8_t)((v_ >> 2) & 0x1U));
-}
 static inline uint8_t csp_decl_get_an_soft(const csp_decl_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)(((b_[6] >> 1)) & 0x1U);
+    return (uint8_t)((b_[4]) & 0x1U);
 }
 static inline uint8_t csp_decl_get_an_soft_ro(const csp_decl_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)(((ro_byte(&b_[6]) >> 1)) & 0x1U);
+    return (uint8_t)((ro_byte(&b_[4])) & 0x1U);
 }
 static inline void csp_decl_set_an_soft(csp_decl_t* p, uint8_t v_)
 {
     uint8_t* b_ = (uint8_t*)p;
-    b_[6] = (uint8_t)((b_[6] & (uint8_t)0xFDU) | (uint8_t)((v_ << 1) & 0x2U));
+    b_[4] = (uint8_t)((b_[4] & (uint8_t)0xFEU) | (uint8_t)(v_ & 0x1U));
+}
+static inline uint8_t csp_decl_get_an_pin(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[4] >> 1)) & 0x7FU);
+}
+static inline uint8_t csp_decl_get_an_pin_ro(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[4]) >> 1)) & 0x7FU);
+}
+static inline void csp_decl_set_an_pin(csp_decl_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[4] = (uint8_t)((b_[4] & (uint8_t)0x1U) | (uint8_t)((v_ << 1) & 0xFEU));
+}
+static inline uint8_t csp_decl_get_an_port(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((b_[5]) & 0xFU);
+}
+static inline uint8_t csp_decl_get_an_port_ro(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((ro_byte(&b_[5])) & 0xFU);
+}
+static inline void csp_decl_set_an_port(csp_decl_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[5] = (uint8_t)((b_[5] & (uint8_t)0xF0U) | (uint8_t)(v_ & 0xFU));
+}
+static inline uint8_t csp_decl_get_an_irq(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[5] >> 4)) & 0x7U);
+}
+static inline uint8_t csp_decl_get_an_irq_ro(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[5]) >> 4)) & 0x7U);
+}
+static inline void csp_decl_set_an_irq(csp_decl_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[5] = (uint8_t)((b_[5] & (uint8_t)0x8FU) | (uint8_t)((v_ << 4) & 0x70U));
+}
+static inline uint8_t csp_decl_get_an_pwm(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[5] >> 7)) & 0x1U);
+}
+static inline uint8_t csp_decl_get_an_pwm_ro(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[5]) >> 7)) & 0x1U);
+}
+static inline void csp_decl_set_an_pwm(csp_decl_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[5] = (uint8_t)((b_[5] & (uint8_t)0x7FU) | (uint8_t)((v_ << 7) & 0x80U));
+}
+static inline uint8_t csp_decl_get_an_endian(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((b_[6]) & 0x3U);
+}
+static inline uint8_t csp_decl_get_an_endian_ro(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((ro_byte(&b_[6])) & 0x3U);
+}
+static inline void csp_decl_set_an_endian(csp_decl_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[6] = (uint8_t)((b_[6] & (uint8_t)0xFCU) | (uint8_t)(v_ & 0x3U));
 }
 
 // decl_common_ca: ends at bit 64 of 8 bytes
@@ -687,21 +952,6 @@ static inline void csp_decl_set_tm_period(csp_decl_t* p, uint32_t v_)
     b_[6] = (uint8_t)(v_ >> 16);
     b_[7] = (uint8_t)((b_[7] & (uint8_t)0xF0U) | (uint8_t)((v_ >> 24) & 0xFU));
 }
-static inline uint8_t csp_decl_get_tm__res(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)(((b_[7] >> 4)) & 0x1U);
-}
-static inline uint8_t csp_decl_get_tm__res_ro(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)(((ro_byte(&b_[7]) >> 4)) & 0x1U);
-}
-static inline void csp_decl_set_tm__res(csp_decl_t* p, uint8_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[7] = (uint8_t)((b_[7] & (uint8_t)0xEFU) | (uint8_t)((v_ << 4) & 0x10U));
-}
 static inline uint8_t csp_decl_get_tm_fired(const csp_decl_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
@@ -841,7 +1091,7 @@ static inline void csp_decl_set_s6_nx(csp_decl_t* p, uint8_t v_)
 }
 
 // decl_common_em: ends at bit 64 of 8 bytes
-// STRADDLING: crc, _res
+// STRADDLING: crc
 static inline uint16_t csp_decl_get_em_crc(const csp_decl_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
@@ -857,22 +1107,6 @@ static inline void csp_decl_set_em_crc(csp_decl_t* p, uint16_t v_)
     uint8_t* b_ = (uint8_t*)p;
     b_[4] = (uint8_t)v_;
     b_[5] = (uint8_t)(v_ >> 8);
-}
-static inline uint16_t csp_decl_get_em__res(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint16_t)(((uint16_t)b_[6] | ((uint16_t)b_[7] << 8)) & 0xFFFFU);
-}
-static inline uint16_t csp_decl_get_em__res_ro(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint16_t)(((uint16_t)ro_byte(&b_[6]) | ((uint16_t)ro_byte(&b_[7]) << 8)) & 0xFFFFU);
-}
-static inline void csp_decl_set_em__res(csp_decl_t* p, uint16_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[6] = (uint8_t)v_;
-    b_[7] = (uint8_t)(v_ >> 8);
 }
 
 // instr_common_a: ends at bit 20 of 4 bytes
@@ -1488,23 +1722,7 @@ static inline void csp_instr_set_ox_stride(csp_instr_t* p, uint8_t v_)
 }
 
 // instr_common_em: ends at bit 32 of 4 bytes
-// STRADDLING: _res, crc
-static inline uint16_t csp_instr_get_em__res(const csp_instr_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint16_t)((((uint16_t)b_[0] | ((uint16_t)b_[1] << 8)) >> 6) & 0x3FFU);
-}
-static inline uint16_t csp_instr_get_em__res_ro(const csp_instr_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint16_t)((((uint16_t)ro_byte(&b_[0]) | ((uint16_t)ro_byte(&b_[1]) << 8)) >> 6) & 0x3FFU);
-}
-static inline void csp_instr_set_em__res(csp_instr_t* p, uint16_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[0] = (uint8_t)((b_[0] & (uint8_t)0x3FU) | (uint8_t)((v_ << 6) & 0xC0U));
-    b_[1] = (uint8_t)(v_ >> 2);
-}
+// STRADDLING: crc
 static inline uint16_t csp_instr_get_em_crc(const csp_instr_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
@@ -1523,61 +1741,88 @@ static inline void csp_instr_set_em_crc(csp_instr_t* p, uint16_t v_)
 }
 
 typedef enum {
-    MFA_TYPE = 0,
-    MFA_CONT = 1,
-    MFA_LOCAL = 2,
-    MFA_DIR = 3,
-    MFA_NAME = 4,
-    MFA_RES = 5,
-    MFA_IS_MAPPED = 7,
-    MFA_BOUND = 8,
-    MFA_NX = 9,
-    MFA_VT = 10,
-    MFA_REG = 12,
-    MFA_MD_N = 16,
-    MFA_MD_ENT = 31,
-    MFA_MQ_MX = 16,
-    MFA_MQ_M = 31,
-    MFA_VA_INIT = 18,
-    MFA_CN_INIT = 18,
-    MFA_DI_PIN = 13,
-    MFA_DI_PORT = 19,
-    MFA_DI_PULLUP = 22,
-    MFA_DI_PULLDOWN = 23,
-    MFA_DI_IRQ = 25,
-    MFA_DI_SOFT = 28,
-    MFA_AN_PIN = 13,
-    MFA_AN_PORT = 19,
-    MFA_AN_PWM = 22,
-    MFA_AN_ENDIAN = 24,
-    MFA_AN_IRQ = 26,
-    MFA_AN_SOFT = 32,
-    MFA_CA_ID = 16,
-    MFA_CA_ENDIAN = 29,
-    MFA_CA_BIT = 33,
-    MFA_CA_LEN = 35,
-    MFA_BF_NBYTES = 15,
-    MFA_BF_TRANSPORT = 21,
-    MFA_BF_ID = 27,
-    MFA_RT_SRC = 16,
-    MFA_RT_DST = 31,
-    MFA_TM_PERIOD = 17,
-    MFA_TM__RES = 36,
-    MFA_TM_FIRED = 37,
-    MFA_TM_RUNNING = 38,
-    MFA_TM_INIT = 39,
-    MFA_S6_NAME2 = 6,
-    MFA_S6_NAME3 = 11,
-    MFA_S6_NAME4 = 14,
-    MFA_S6_NAME5 = 20,
-    MFA_S6_NAME6 = 30,
-    MFA_S6_NX = 34,
-    MFA_EM_CRC = 16,
-    MFA_EM__RES = 31,
-    MFA_NFIELD = 40
+    MFB_HP = 0,
+    MFB_NBYTES = 1,
+    MFB_TRANSPORT = 2,
+    MFB_DIR = 3,
+    MFB_FLAGS = 4,
+    MFB_DLC = 5,
+    MFB_DLC_IN = 6,
+    MFB_PORT = 7,
+    MFB_XREF = 8,
+    MFB_OWNER = 9,
+    MFB_NFIELD = 10
+} mf_buf_all_t;
+
+// 10 names over 10 distinct descriptors.
+// Fields wider than 16 bits are in here and a cell is not, so MC_DECL
+// refuses those rather than handing back a quiet truncation.
+#define CSP_BUF_ALL_FIELDS { \
+    { 0, 0, 16 } /* hp */, \
+    { 0, 16, 16 } /* nbytes */, \
+    { 1, 0, 4 } /* transport */, \
+    { 1, 4, 4 } /* dir */, \
+    { 1, 8, 8 } /* flags */, \
+    { 1, 16, 8 } /* dlc */, \
+    { 1, 24, 8 } /* dlc_in */, \
+    { 2, 0, 16 } /* port */, \
+    { 2, 16, 32 } /* xref */, \
+    { 3, 16, 16 } /* owner */ }
+
+typedef enum {
+    MFD_TYPE = 0,
+    MFD_CONT = 1,
+    MFD_LOCAL = 2,
+    MFD_DIR = 3,
+    MFD_NAME = 4,
+    MFD_RES = 5,
+    MFD_IS_MAPPED = 7,
+    MFD_BOUND = 8,
+    MFD_NX = 9,
+    MFD_VT = 10,
+    MFD_REG = 12,
+    MFD_MD_N = 16,
+    MFD_MD_ENT = 29,
+    MFD_MQ_MX = 16,
+    MFD_MQ_M = 29,
+    MFD_VA_INIT = 18,
+    MFD_CN_INIT = 18,
+    MFD_DI_SOFT = 13,
+    MFD_DI_PIN = 19,
+    MFD_DI_PORT = 20,
+    MFD_DI_IRQ = 23,
+    MFD_DI_PULLUP = 25,
+    MFD_DI_PULLDOWN = 26,
+    MFD_AN_SOFT = 13,
+    MFD_AN_PIN = 19,
+    MFD_AN_PORT = 20,
+    MFD_AN_IRQ = 23,
+    MFD_AN_PWM = 25,
+    MFD_AN_ENDIAN = 27,
+    MFD_CA_ID = 16,
+    MFD_CA_ENDIAN = 27,
+    MFD_CA_BIT = 30,
+    MFD_CA_LEN = 32,
+    MFD_BF_NBYTES = 15,
+    MFD_BF_TRANSPORT = 22,
+    MFD_BF_ID = 24,
+    MFD_RT_SRC = 16,
+    MFD_RT_DST = 29,
+    MFD_TM_PERIOD = 17,
+    MFD_TM_FIRED = 33,
+    MFD_TM_RUNNING = 34,
+    MFD_TM_INIT = 35,
+    MFD_S6_NAME2 = 6,
+    MFD_S6_NAME3 = 11,
+    MFD_S6_NAME4 = 14,
+    MFD_S6_NAME5 = 21,
+    MFD_S6_NAME6 = 28,
+    MFD_S6_NX = 31,
+    MFD_EM_CRC = 16,
+    MFD_NFIELD = 36
 } mf_decl_all_t;
 
-// 51 names over 40 distinct descriptors.
+// 49 names over 36 distinct descriptors.
 // Fields wider than 16 bits are in here and a cell is not, so MC_DECL
 // refuses those rather than handing back a quiet truncation.
 #define CSP_DECL_ALL_FIELDS { \
@@ -1594,30 +1839,26 @@ typedef enum {
     { 0, 24, 4 } /* vt */, \
     { 0, 24, 8 } /* s6_name3 */, \
     { 0, 28, 4 } /* reg */, \
-    { 1, 0, 7 } /* di_pin an_pin */, \
+    { 1, 0, 1 } /* di_soft an_soft */, \
     { 1, 0, 8 } /* s6_name4 */, \
     { 1, 0, 10 } /* bf_nbytes */, \
     { 1, 0, 16 } /* md_n mq_mx ca_id rt_src em_crc */, \
     { 1, 0, 28 } /* tm_period */, \
     { 1, 0, 32 } /* va_init cn_init */, \
-    { 1, 7, 4 } /* di_port an_port */, \
+    { 1, 1, 7 } /* di_pin an_pin */, \
+    { 1, 8, 4 } /* di_port an_port */, \
     { 1, 8, 8 } /* s6_name5 */, \
     { 1, 10, 4 } /* bf_transport */, \
-    { 1, 11, 1 } /* di_pullup an_pwm */, \
-    { 1, 12, 1 } /* di_pulldown */, \
-    { 1, 12, 2 } /* an_endian */, \
-    { 1, 13, 3 } /* di_irq */, \
-    { 1, 14, 3 } /* an_irq */, \
+    { 1, 12, 3 } /* di_irq an_irq */, \
     { 1, 14, 16 } /* bf_id */, \
-    { 1, 16, 1 } /* di_soft */, \
-    { 1, 16, 2 } /* ca_endian */, \
+    { 1, 15, 1 } /* di_pullup an_pwm */, \
+    { 1, 16, 1 } /* di_pulldown */, \
+    { 1, 16, 2 } /* an_endian ca_endian */, \
     { 1, 16, 8 } /* s6_name6 */, \
-    { 1, 16, 16 } /* md_ent mq_m rt_dst em__res */, \
-    { 1, 17, 1 } /* an_soft */, \
+    { 1, 16, 16 } /* md_ent mq_m rt_dst */, \
     { 1, 18, 9 } /* ca_bit */, \
     { 1, 24, 8 } /* s6_nx */, \
     { 1, 27, 5 } /* ca_len */, \
-    { 1, 28, 1 } /* tm__res */, \
     { 1, 29, 1 } /* tm_fired */, \
     { 1, 30, 1 } /* tm_running */, \
     { 1, 31, 1 } /* tm_init */ }
@@ -1660,18 +1901,17 @@ typedef enum {
     MFI_OX_X = 1,
     MFI_OX_LEN = 10,
     MFI_OX_STRIDE = 20,
-    MFI_EM__RES = 2,
     MFI_EM_CRC = 15,
     MFI_NFIELD = 22
 } mf_instr_all_t;
 
-// 39 names over 22 distinct descriptors.
+// 38 names over 22 distinct descriptors.
 // Fields wider than 16 bits are in here and a cell is not, so MC_DECL
 // refuses those rather than handing back a quiet truncation.
 #define CSP_INSTR_ALL_FIELDS { \
     { 0, 0, 6 } /* op */, \
     { 0, 6, 4 } /* a_x m_x mi_x i_x r_cnd x_x in_x f_x ox_x */, \
-    { 0, 6, 10 } /* e_num sg_num v_num em__res */, \
+    { 0, 6, 10 } /* e_num sg_num v_num */, \
     { 0, 6, 16 } /* o_obj */, \
     { 0, 8, 16 } /* n_obj */, \
     { 0, 10, 4 } /* a_y m_y */, \
@@ -1692,8 +1932,31 @@ typedef enum {
     { 0, 26, 6 } /* ox_stride */, \
     { 0, 31, 1 } /* in_implicit */ }
 
+typedef enum {
+    MFV_KIND = 0,
+    MFV_VT = 1,
+    MFV_ENDIAN = 2,
+    MFV_FLAGS = 3,
+    MFV_LEN = 4,
+    MFV_POS = 5,
+    MFV_BUF = 6,
+    MFV_NFIELD = 7
+} mf_view_all_t;
+
+// 7 names over 7 distinct descriptors.
+// Fields wider than 16 bits are in here and a cell is not, so MC_DECL
+// refuses those rather than handing back a quiet truncation.
+#define CSP_VIEW_ALL_FIELDS { \
+    { 0, 0, 2 } /* kind */, \
+    { 0, 2, 4 } /* vt */, \
+    { 0, 6, 2 } /* endian */, \
+    { 0, 8, 2 } /* flags */, \
+    { 0, 10, 6 } /* len */, \
+    { 0, 16, 16 } /* pos */, \
+    { 1, 0, 16 } /* buf */ }
+
 // Fingerprint of every field name, position and width above, in order.
 // An image built against a different layout must be refused, not read.
-#define CSP_LAYOUT_FINGERPRINT 0x2D171D56UL
+#define CSP_LAYOUT_FINGERPRINT 0x7B2B4329UL
 
 #endif

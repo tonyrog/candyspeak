@@ -57,6 +57,7 @@ typedef struct PACKED {
     unsigned y:REG_BITS;      // y register when pos, y imm when part (STP)
     unsigned mem:INDEX_BITS;  // declaration: variable/constant
 } csp_instr_mem_t;
+
 typedef struct PACKED {
     INSTR_COMMON;
     unsigned x:REG_BITS;      // destination register
@@ -248,13 +249,13 @@ typedef struct PACKED  {
     value_t init;   // constant value
 } csp_constant_t;
 typedef struct PACKED  {
-    DECL_COMMON;    
+    DECL_COMMON;
+    unsigned soft:1;     // sampling is acceptable -- see decl_opts_t.soft    
     unsigned pin:PIN_BITS;
     unsigned port:PORT_BITS;
+    unsigned irq:3;      // trigger_t; IRQ_NONE = not an interrupt source    
     unsigned pullup:1;
     unsigned pulldown:1;
-    unsigned irq:3;      // trigger_t; IRQ_NONE = not an interrupt source
-    unsigned soft:1;     // sampling is acceptable -- see decl_opts_t.soft
 } csp_digital_t;
 typedef struct PACKED {
     DECL_COMMON;
@@ -290,12 +291,12 @@ typedef struct PACKED {
 
 typedef struct PACKED {
     DECL_COMMON;
+    unsigned soft:1;   // sampling is acceptable -- see decl_opts_t.soft    
     unsigned pin:PIN_BITS;
     unsigned port:PORT_BITS;
+    unsigned irq:3;    // trigger_t; IRQ_NONE = not an interrupt source    
     unsigned pwm:1;    // pwm output
     unsigned endian:2; // |little|big
-    unsigned irq:3;    // trigger_t; IRQ_NONE = not an interrupt source
-    unsigned soft:1;   // sampling is acceptable -- see decl_opts_t.soft
 } csp_analog_t;
 
 typedef struct PACKED {
@@ -356,6 +357,7 @@ typedef struct PACKED {
     uint16_t crc;            // section self-CRC (bytes 4-5)
     uint16_t _res;           // pad to 8 bytes
 } csp_decl_end_t;
+
 typedef union {
     struct PACKED { DECL_COMMON; };
     csp_module_t   md;
@@ -371,5 +373,66 @@ typedef union {
     csp_states_t   s6;
     csp_decl_end_t em;
 } csp_decl_raw_t;
+
+// One per unique buffer. RAM table, filled at start.
+typedef struct PACKED {
+    uint16_t hp;        // heap byte offset
+    uint16_t nbytes;    // size in bytes (up to 1023 -- widened from the freed loc)
+    // ONE byte for both, which pays for dlc_in below at no cost in struct size.
+    // transport_t has eight members and dir has three, so four bits each is
+    // room to spare -- and the transport numbers are ABI, so the ceiling of 16
+    // is a real bound rather than a guess.
+    uint8_t  transport:4;   // transport_t
+    uint8_t  dir:4;         // in/out
+    uint8_t  flags;     // BUF_F_*
+    uint8_t  dlc;       // bytes to send / bytes last received. Starts at nbytes
+			// (the declared frame size) and is never allowed past
+			// it -- the heap has room for no more.
+    // THE LENGTH THAT ARRIVED, held until commit publishes it into dlc.
+    //
+    // Without this, dlc was a live field while the BYTES were double-buffered:
+    // input runs before the rules, so a rule guarded on `.rx` read the NEWEST
+    // length against the PREVIOUS chunk's bytes. On a byte stream that silently
+    // eats a character at every boundary where the next chunk is shorter --
+    // `abcdefghijklmnopqrstuvwxyz` arrived as `...uvwyz`, one letter gone, with
+    // nothing anywhere reporting a loss. CAN has it too: `F201.dlc` in a rule
+    // was the length of a frame the rule had not been shown yet.
+    uint8_t  dlc_in;
+    // UDP's endpoint does not fit in xref: an IPv4 address is already 32 bits
+    // and the port is another 16. Here rather than in the DECLARATION, which a
+    // ROM image carries and which has four spare bits, not sixteen -- the
+    // declaration keeps a string constant and setup_buffer parses it into these
+    // two. Zero for every other transport.
+    uint16_t port;
+    uint32_t xref;      // pin-number / can-id / i2c or spi endpoint / IPv4
+    index_t  owner;     // the decl (with object) whose leaf IS this buffer, or
+			// BAD_INDEX. Set by setup_buffer, which is the only
+			// place that knows both ends. buf_mark_fields used to
+			// find it by scanning every declaration -- a flash read
+			// per decl, per received CAN frame -- and that scan
+			// could only ever match a GLOBAL, since it compared a
+			// decl index against a leaf index. Those agree only
+			// when offs is 0, so a #buffer inside a module was
+			// never marked at all.
+} csp_buf_raw_t;
+
+// One per leaf index_t (indexed by st_index) -- the biggest per-program table
+// (nleaf entries), so every byte here is multiplied by the leaf count. kind/vt/
+// endian pack into one byte (2+4+2), which pays for a 16-bit buf.
+// NOTE: uint8_t bit fields, deliberately NOT a PACKED struct -- packing would
+// misalign `buf` and fault on M0 (see the csp_func_t lesson), and `unsigned:16`
+// after 26 bits would spill to 8 bytes.
+// `buf` is uint16_t: the same width as the nbuf counter (index_t) that produces
+// it, so a buffer id can no longer silently truncate the way uint8_t did.
+typedef struct {
+    uint8_t kind:2;              // view_kind_t
+    uint8_t vt:TYPE_BITS;        // value type (vtype_t 0..11); SLOT reads it from decl
+    uint8_t endian:ENDIAN_BITS;  // HEAP/OWN: vendian_t (native/little/big)
+    uint8_t flags:VIEW_F_BITS;   // VIEW_F_* -- read according to `kind`
+    uint8_t len:VIEW_LEN_BITS;   // HEAP/OWN: number of bits - 1
+    uint16_t pos;                // HEAP: start bit in buffer
+				 // SLOT/OWN: heap BYTE offset of the storage
+    uint16_t buf;                // VIEW_HEAP: buffer id. An owner has none.
+} csp_view_raw_t;
 
 #endif

@@ -16,7 +16,17 @@
 // the layout once; gen/csp_layout.h computes the positions and the accessors
 // from it, and tests/layout.c checks both against the struct they replace.
 const mc_field_t mc_decl_fields[] = CSP_DECL_ALL_FIELDS;
-const uint8_t    mc_decl_nfield = (uint8_t)MFA_NFIELD;
+const uint8_t    mc_decl_nfield = (uint8_t)MFD_NFIELD;
+
+const mc_field_t mc_instr_fields[] = CSP_INSTR_ALL_FIELDS;
+const uint8_t    mc_instr_nfield = (uint8_t)MFI_NFIELD;
+
+const mc_field_t mc_buf_fields[] = CSP_BUF_ALL_FIELDS;
+const uint8_t    mc_buf_nfield = (uint8_t)MFB_NFIELD;
+
+const mc_field_t mc_view_fields[] = CSP_VIEW_ALL_FIELDS;
+const uint8_t    mc_view_nfield = (uint8_t)MFV_NFIELD;
+
 
 // The record is read a BYTE AT A TIME into a uint32_t rather than cast to one.
 // A csp_decl_t is PACKED and may sit at any address in the pool, and a 32-bit
@@ -43,7 +53,10 @@ mc_cell_t mc_field_get(const void* rec, const mc_field_t* f)
 // linking the whole runtime behind it -- the field table is the part that can
 // be quietly wrong, and it deserves a test with nothing else in the way.
 const void* (*mc_decl_hook)(void* ctx, mc_cell_t i);
-mc_cell_t   (*mc_nd_hook)(void* ctx);
+const void* (*mc_instr_hook)(void* ctx, mc_cell_t i);
+const void* (*mc_buf_hook)(void* ctx, mc_cell_t i);
+const void* (*mc_view_hook)(void* ctx, mc_cell_t i);
+mc_cell_t   (*mc_state_hook)(void* ctx, mc_cell_t i);
 
 // THE REFERENCE DOES NOT CACHE TOS. The AVR dispatch holds the top cell in
 // r24:r25 and that is worth real bytes there, but here it buys nothing and
@@ -60,21 +73,21 @@ mc_cell_t   (*mc_nd_hook)(void* ctx);
 
 #define PUSH(v)  do {					\
 	mc_cell_t v_ = (v);				\
-	if (sp <= DS_BASE) return MC_E_STACK;		\
+	if (sp <= DS_BASE) goto e_stack;		\
 	*--sp = v_;					\
     } while (0)
 
 #define POP(lv)  do {					\
-	if (sp >= DS_TOP) return MC_E_STACK;		\
+	if (sp >= DS_TOP) goto e_stack;			\
 	(lv) = *sp++;					\
     } while (0)
 
 #define NEED(n)  do {					\
-	if ((DS_TOP - sp) < (n)) return MC_E_STACK;	\
+	if ((DS_TOP - sp) < (n)) goto e_stack;		\
     } while (0)
 
 #define FETCH8(lv) do {					\
-	if (ip >= vm->code_len) return MC_E_BOUNDS;	\
+	if (ip >= vm->code_len) goto e_bounds;		\
 	(lv) = vm->code[ip++];				\
     } while (0)
 
@@ -90,187 +103,219 @@ int csp_mcsp_run(mc_vm_t* vm, uint16_t entry, mc_cell_t* result)
 
     for (b = 0; b < vm->nargs; b++)
 	PUSH(vm->arg[b]);
-
-    for (;;) {
-	FETCH8(op);
-	switch (op) {
-	case MC_BYE:
-	    NEED(1);
-	    if (result != NULL)
-		*result = sp[0];
-	    return MC_OK;
-	case MC_LIT8:
-	    FETCH8(b);
-	    PUSH((mc_cell_t)b);
-	    break;
-	case MC_LIT16:
-	    FETCH8(b);
-	    a = (mc_cell_t)b;
-	    FETCH8(b);
-	    PUSH((mc_cell_t)(a | ((mc_cell_t)b << 8)));
-	    break;
-	case MC_DROP:
-	    POP(a);
-	    break;
-	case MC_DUP:
-	    NEED(1);
-	    PUSH(sp[0]);
-	    break;
-	case MC_SWAP:
-	    NEED(2);
-	    a = sp[0]; sp[0] = sp[1]; sp[1] = a;
-	    break;
-	case MC_OVER:
-	    NEED(2);
-	    PUSH(sp[1]);
-	    break;
-	case MC_ADD:
-	    NEED(2);
-	    sp[1] = (mc_cell_t)(sp[1] + sp[0]); sp++;
-	    break;
-	case MC_SUB:                       // ( a b -- a-b )
-	    NEED(2);
-	    sp[1] = (mc_cell_t)(sp[1] - sp[0]); sp++;
-	    break;
-	case MC_AND:
-	    NEED(2);
-	    sp[1] = (mc_cell_t)(sp[1] & sp[0]); sp++;
-	    break;
-	case MC_OR:
-	    NEED(2);
-	    sp[1] = (mc_cell_t)(sp[1] | sp[0]); sp++;
-	    break;
-	case MC_INC:
-	    NEED(1); sp[0]++;
-	    break;
-	case MC_DEC:
-	    NEED(1); sp[0]--;
-	    break;
-	case MC_EQ:
-	    NEED(2);
-	    sp[1] = (mc_cell_t)(sp[1] == sp[0]); sp++;
-	    break;
-	case MC_NE:
-	    NEED(2);
-	    sp[1] = (mc_cell_t)(sp[1] != sp[0]); sp++;
-	    break;
-	case MC_LT:                        // UNSIGNED, like the cell
-	    NEED(2);
-	    sp[1] = (mc_cell_t)(sp[1] < sp[0]); sp++;
-	    break;
-	case MC_ZEQ:
-	    NEED(1);
-	    sp[0] = (mc_cell_t)(sp[0] == 0);
-	    break;
-	case MC_JMP:
-	    FETCH8(b);
+next:
+    FETCH8(op);
+    switch (op) {
+    case MC_BYE:
+	NEED(1);
+	goto lbl_result;
+    case MC_LIT8:
+	FETCH8(b);
+	PUSH((mc_cell_t)b);
+	break;
+    case MC_LIT16:
+	FETCH8(b);
+	a = (mc_cell_t)b;
+	FETCH8(b);
+	PUSH((mc_cell_t)(a | ((mc_cell_t)b << 8)));
+	break;
+    case MC_DROP:
+	POP(a);
+	break;
+    case MC_DUP:
+	NEED(1);
+	PUSH(sp[0]);
+	break;
+    case MC_SWAP:
+	NEED(2);
+	a = sp[0]; sp[0] = sp[1]; sp[1] = a;
+	break;
+    case MC_OVER:
+	NEED(2);
+	PUSH(sp[1]);
+	break;
+    case MC_ADD:
+	NEED(2);
+	sp[1] = (mc_cell_t)(sp[1] + sp[0]); sp++;
+	break;
+    case MC_SUB:                       // ( a b -- a-b )
+	NEED(2);
+	sp[1] = (mc_cell_t)(sp[1] - sp[0]); sp++;
+	break;
+    case MC_AND:
+	NEED(2);
+	sp[1] = (mc_cell_t)(sp[1] & sp[0]); sp++;
+	break;
+    case MC_OR:
+	NEED(2);
+	sp[1] = (mc_cell_t)(sp[1] | sp[0]); sp++;
+	break;
+    case MC_INC:
+	NEED(1); sp[0]++;
+	break;
+    case MC_DEC:
+	NEED(1); sp[0]--;
+	break;
+    case MC_EQ:
+	NEED(2);
+	sp[1] = (mc_cell_t)(sp[1] == sp[0]); sp++;
+	break;
+    case MC_NE:
+	NEED(2);
+	sp[1] = (mc_cell_t)(sp[1] != sp[0]); sp++;
+	break;
+    case MC_LT:                        // UNSIGNED, like the cell
+	NEED(2);
+	sp[1] = (mc_cell_t)(sp[1] < sp[0]); sp++;
+	break;
+    case MC_ZEQ:
+	NEED(1);
+	sp[0] = (mc_cell_t)(sp[0] == 0);
+	break;
+    case MC_JMP:
+	FETCH8(b);
+	ip = (uint16_t)(ip + (int8_t)b);
+	break;
+    case MC_JZ:
+	FETCH8(b);
+	POP(a);
+	if (a == 0)
 	    ip = (uint16_t)(ip + (int8_t)b);
-	    break;
-	case MC_JZ:
-	    FETCH8(b);
-	    POP(a);
-	    if (a == 0)
-		ip = (uint16_t)(ip + (int8_t)b);
-	    break;
-	case MC_CALL: {
-	    uint8_t frame;
-	    FETCH8(b);
-	    a = (mc_cell_t)b;
-	    FETCH8(b);
-	    FETCH8(frame);
-	    // Two entries per call: the return address and the frame base. A
-	    // return stack sized for N calls therefore holds N/2 of them, which
-	    // is worth knowing when a port picks the number.
-	    if ((uint8_t)(rp + 2) > vm->rs_size) return MC_E_STACK;
-	    vm->rs[rp++] = ip;
-	    vm->rs[rp++] = lvb;
-	    if ((uint16_t)lvb + frame > vm->lv_size) return MC_E_BOUNDS;
-	    lvb = (uint8_t)(lvb + frame);
-	    ip = (uint16_t)(a | ((uint16_t)b << 8));
-	    break;
-	}
-	case MC_EXIT:
-	    // An empty return stack means this is the word the run started in,
-	    // so its return IS the run's result. A word that ended with BYE
-	    // instead could never be called from another word.
-	    if (rp == 0) {
-		NEED(1);
-		if (result != NULL)
-		    *result = sp[0];
-		return MC_OK;
-	    }
-	    if (rp < 2) return MC_E_STACK;
-	    lvb = (uint8_t)vm->rs[--rp];
-	    ip = vm->rs[--rp];
-	    break;
-	case MC_TOR:
-	    POP(a);
-	    if (rp >= vm->rs_size) return MC_E_STACK;
-	    vm->rs[rp++] = a;
-	    break;
-	case MC_RFROM:
-	    if (rp == 0) return MC_E_STACK;
-	    PUSH((mc_cell_t)vm->rs[--rp]);
-	    break;
-	case MC_RAT:
-	    if (rp == 0) return MC_E_STACK;
-	    PUSH((mc_cell_t)vm->rs[rp - 1]);
-	    break;
-	case MC_DECL: {
-	    const void* d;
-	    FETCH8(b);
-	    NEED(1);
-	    if (b >= mc_decl_nfield) return MC_E_OPCODE;
-	    // A cell is 16 bits; cn.init is 32 and tm.period 28. Refusing is the
-	    // point -- a truncation here would be a plausible wrong number.
-	    if (mc_decl_fields[b].bits > 16) return MC_E_OPCODE;
-	    if (mc_decl_hook == NULL) return MC_E_LEAF;
-	    d = mc_decl_hook(vm->ctx, sp[0]);
-	    if (d == NULL) return MC_E_BOUNDS;
-	    sp[0] = mc_field_get(d, &mc_decl_fields[b]);
-	    break;
-	}
-	case MC_ND:
-	    if (mc_nd_hook == NULL) return MC_E_LEAF;
-	    PUSH(mc_nd_hook(vm->ctx));
-	    break;
-	case MC_NATIVE:
-	    FETCH8(b);
-	    NEED(1);
-	    if ((vm->leaf == NULL) || (b >= vm->nleaf)) return MC_E_LEAF;
-	    sp[0] = vm->leaf[b](vm->ctx, sp[0]);
-	    break;
-	case MC_LGET:
-	    FETCH8(b);
-	    if ((vm->lv == NULL) || ((uint16_t)lvb + b >= vm->lv_size))
-		return MC_E_BOUNDS;
-	    PUSH(vm->lv[lvb + b]);
-	    break;
-	case MC_LSET:
-	    FETCH8(b);
-	    if ((vm->lv == NULL) || ((uint16_t)lvb + b >= vm->lv_size))
-		return MC_E_BOUNDS;
-	    POP(a);
-	    vm->lv[lvb + b] = a;
-	    break;
-	case MC_NATIVEN: {
-	    mc_cell_t* ns;
-	    FETCH8(b);
-	    if ((vm->leafn == NULL) || (b >= vm->nleafn)) return MC_E_LEAF;
-	    ns = vm->leafn[b](vm->ctx, sp);
-	    // The leaf decides its own arity, so nothing here knows what it
-	    // SHOULD have left -- but a stack pointer outside the array is a
-	    // bug in the leaf, and a silent one everywhere else.
-	    if ((ns < DS_BASE) || (ns > DS_TOP)) return MC_E_STACK;
-	    sp = ns;
-	    break;
-	}
-	// MC_INSTR and MC_NN are reserved, not built: the decl field sites in
-	// the tree are what this vocabulary is for, and an opcode that is
-	// always an error is worse than one that is not there. Their NUMBERS
-	// are held so the AVR jump table does not renumber when they arrive.
-	default:
-	    return MC_E_OPCODE;
-	}
+	break;
+    case MC_CALL: {
+	uint8_t frame;
+	FETCH8(b);
+	a = (mc_cell_t)b;
+	FETCH8(b);
+	FETCH8(frame);
+	// Two entries per call: the return address and the frame base. A
+	// return stack sized for N calls therefore holds N/2 of them, which
+	// is worth knowing when a port picks the number.
+	if ((uint8_t)(rp + 2) > vm->rs_size) goto e_stack;
+	vm->rs[rp++] = ip;
+	vm->rs[rp++] = lvb;
+	if ((uint16_t)lvb + frame > vm->lv_size) goto e_bounds;
+	lvb = (uint8_t)(lvb + frame);
+	ip = (uint16_t)(a | ((uint16_t)b << 8));
+	break;
     }
+    case MC_EXIT:
+	// An empty return stack means this is the word the run started in,
+	// so its return IS the run's result. A word that ended with BYE
+	// instead could never be called from another word.
+	if (rp == 0) {
+	    NEED(1);
+	    goto lbl_result;	    
+	}
+	if (rp < 2) goto e_stack;
+	lvb = (uint8_t)vm->rs[--rp];
+	ip = vm->rs[--rp];
+	break;
+    case MC_TOR:
+	POP(a);
+	if (rp >= vm->rs_size) goto e_stack;
+	vm->rs[rp++] = a;
+	break;
+    case MC_RFROM:
+	if (rp == 0) goto e_stack;
+	PUSH((mc_cell_t)vm->rs[--rp]);
+	break;
+    case MC_RAT:
+	if (rp == 0) goto e_stack;
+	PUSH((mc_cell_t)vm->rs[rp - 1]);
+	break;
+    case MC_DECL: {
+	const void* dp;
+	FETCH8(b);
+	NEED(1);
+	if (b >= mc_decl_nfield) goto e_opcode;
+	if (mc_decl_fields[b].bits > 16) goto e_opcode;
+	if (mc_decl_hook == NULL) goto e_leaf;
+	if ((dp = mc_decl_hook(vm->ctx,sp[0])) == NULL) goto e_bounds;
+	sp[0] = mc_field_get(dp, &mc_decl_fields[b]);
+	break;
+    }
+    case MC_INSTR: {
+	const void* dp;
+	FETCH8(b);
+	NEED(1);
+	if (b >= mc_instr_nfield) goto e_opcode;
+	if (mc_instr_fields[b].bits > 16) goto e_opcode;
+	if (mc_instr_hook == NULL) goto e_leaf; 
+	if ((dp = mc_instr_hook(vm->ctx,sp[0])) == NULL) goto e_bounds;
+	sp[0] = mc_field_get(dp, &mc_instr_fields[b]);
+	break;
+    }	    
+    case MC_BUF: {
+	const void* bp;
+	FETCH8(b);
+	NEED(1);
+	if (b >= mc_buf_nfield) goto e_opcode;
+	if (mc_buf_fields[b].bits > 16) goto e_opcode;
+	if (mc_buf_hook == NULL) goto e_leaf;
+	if ((bp = mc_buf_hook(vm->ctx, sp[0])) == NULL) goto e_bounds;
+	sp[0] = mc_field_get(bp, &mc_buf_fields[b]);
+	break;
+    }
+    case MC_VIEW: {
+	const void* bp;
+	FETCH8(b);
+	NEED(1);
+	if (b >= mc_view_nfield) goto e_opcode;
+	if (mc_view_fields[b].bits > 16) goto e_opcode;
+	if (mc_view_hook == NULL) goto e_leaf;
+	if ((bp = mc_view_hook(vm->ctx, sp[0])) == NULL) goto e_bounds;
+	sp[0] = mc_field_get(bp, &mc_view_fields[b]);
+	break;
+    }
+    case MC_ND: b = 0; goto state_hook_b;
+    case MC_NN: b = 1; goto state_hook_b;
+    case MC_ST: FETCH8(b);
+    state_hook_b:
+	if (mc_state_hook == NULL) goto e_leaf;
+	PUSH(mc_state_hook(vm->ctx, b));
+	break;
+    case MC_NATIVE:
+	FETCH8(b);
+	NEED(1);
+	if ((vm->leaf == NULL) || (b >= vm->nleaf)) goto e_leaf;
+	sp[0] = vm->leaf[b](vm->ctx, sp[0]);
+	break;
+    case MC_LGET:
+	FETCH8(b);
+	if ((vm->lv == NULL) || ((uint16_t)lvb + b >= vm->lv_size))
+	    goto e_bounds;
+	PUSH(vm->lv[lvb + b]);
+	break;
+    case MC_LSET:
+	FETCH8(b);
+	if ((vm->lv == NULL) || ((uint16_t)lvb + b >= vm->lv_size))
+	    goto e_bounds;
+	POP(a);
+	vm->lv[lvb + b] = a;
+	break;
+    case MC_NATIVEN: {
+	mc_cell_t* ns;
+	FETCH8(b);
+	if ((vm->leafn == NULL) || (b >= vm->nleafn)) goto e_leaf;
+	ns = vm->leafn[b](vm->ctx, sp);
+	// The leaf decides its own arity, so nothing here knows what it
+	// SHOULD have left -- but a stack pointer outside the array is a
+	// bug in the leaf, and a silent one everywhere else.
+	if ((ns < DS_BASE) || (ns > DS_TOP)) goto e_stack;
+	sp = ns;
+	break;
+    }
+    default: goto e_opcode;
+    }
+    goto next;
+
+lbl_result:
+    if (result != NULL)
+	*result = sp[0];
+    return MC_OK;
+e_opcode: return MC_E_OPCODE;
+e_bounds: return MC_E_BOUNDS;
+e_leaf:   return MC_E_LEAF;
+e_stack:  return MC_E_STACK;
 }

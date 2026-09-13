@@ -40,7 +40,7 @@
 %%       so a field that grows past it is an error here rather than a silent
 %%       overlap on a board.
 %%
-%%   {arm, Prefix, Base, Bytes, [Field]}
+%%   {record, Prefix, Base, Bytes, [Field]}
 %%
 %%       One arm of the union.  Its fields begin where Base's end, and the
 %%       accessors are named csp_decl_get_<Prefix>_<Field> -- Prefix being the
@@ -76,7 +76,6 @@
 %% Widths track csp.h -- CSP_DECL_TYPE_BITS, DIR_BITS, NAMEID_BITS, TYPE_BITS
 %% and REG_BITS -- and the oracle in tests/ is what notices when one moves.
 {family, decl_common,  'csp_decl_t',  "csp_decl_"}.
-{family, instr_common, 'csp_instr_t', "csp_instr_"}.
 
 {record, decl_common, 4,
  [{type,      4, 'decl_t'},
@@ -107,44 +106,46 @@
 
 %% #module: the node count and the entry point.  Plain index_t members in the C
 %% rather than bit-fields, which after a 32-bit header is the same layout.
-{arm, md, decl_common, 8,
+{record, md, decl_common, 8,
  [{n,   16},
   {ent, 16}]}.
 
 %% An object instance: which #module it is of, and its slot in the object table.
-{arm, mq, decl_common, 8,
+{record, mq, decl_common, 8,
  [{mx, 16},
   {m,  16}]}.
 
 %% #variable and #constant carry a value_t, which is a union and not a
 %% bit-field.  Read through .u: the members alias, so the caller's .i or .f sees
 %% the same four bytes.  This is the payload that cannot be a micro-csp cell.
-{arm, va, decl_common, 8,
+{record, va, decl_common, 8,
  [{init, 32, 'value_t.u'}]}.
 
-{arm, cn, decl_common, 8,
+{record, cn, decl_common, 8,
  [{init, 32, 'value_t.u'}]}.
 
 %% #digital: PIN_BITS 7, PORT_BITS 4.
-{arm, di, decl_common, 8,
- [{pin,      7},
+{record, di, decl_common, 8,
+ [{soft,     1},
+  {pin,      7},
   {port,     4},
-  {pullup,   1},
-  {pulldown, 1},
   {irq,      3},
-  {soft,     1}]}.
+  {pullup,   1},
+  {pulldown, 1}
+ ]}.
 
 %% #analog: the same pin/port, then pwm and the sample options.
-{arm, an, decl_common, 8,
- [{pin,    7},
+{record, an, decl_common, 8,
+ [{soft,   1},
+  {pin,    7},
   {port,   4},
-  {pwm,    1},
-  {endian, 2},
   {irq,    3},
-  {soft,   1}]}.
+  {pwm,    1},
+  {endian, 2}
+ ]}.
 
 %% #field: a view into a #buffer.  bit is a BIT position, len a width-1.
-{arm, ca, decl_common, 8,
+{record, ca, decl_common, 8,
  [{id,     16},
   {endian,  2},
   {bit,     9},
@@ -152,21 +153,21 @@
 
 %% #buffer.  id names the constant holding the transport endpoint; TR_UDP uses
 %% id and id+1, which is why it is an index and not the value itself.
-{arm, bf, decl_common, 8,
+{record, bf, decl_common, 8,
  [{nbytes,    10},
   {transport,  4},
   {id,        16}]}.
 
 %% #route: two buffer DECLARATIONS, resolved to buffer ids at setup.
-{arm, rt, decl_common, 8,
+{record, rt, decl_common, 8,
  [{src, 16},
   {dst, 16}]}.
 
 %% #timer.  period is 28 bits -- 74 hours in ms -- so it is the other payload
 %% too wide for a 16-bit cell.
-{arm, tm, decl_common, 8,
+{record, tm, decl_common, 8,
  [{period,  28},
-  {'_res',     1},
+  {pad,      1},
   {fired,    1},
   {running,  1},
   {init,     1}]}.
@@ -183,7 +184,7 @@
 %% byte 2 bit 7, which here is part of name2.  So this arm carries all six.
 %% RESERVED like the other one; zero by construction, since csp_new_decl memsets
 %% the record and nothing writes these.
-{arm, s6, decl_common, 8,
+{record, s6, decl_common, 8,
  [{start, 16},
   {name2, 8},
   {name3, 8},
@@ -194,9 +195,10 @@
 
 %% The terminator after a ROM decl section.  crc lands byte-aligned at 4-5,
 %% which rom_scan_end depends on.
-{arm, em, decl_common, 8,
+{record, em, decl_common, 8,
  [{crc,  16},
-  {'_res', 16}]}.
+  {pad, 16}
+ ]}.
 
 %% ---------------------------------------------------------------------------
 %% INSTRUCTIONS.  Four bytes, a six-bit opcode and then whatever the arm needs.
@@ -205,11 +207,13 @@
 %% not packed and carries a uint32_t, so the host pads it to twenty bytes where
 %% AVR packs it to sixteen, and a byte table would be wrong on one of them.
 
+{family, instr_common, 'csp_instr_t', "csp_instr_"}.
+
 {record, instr_common, 4,
  [{op, 6, 'opcode_t'}]}.
 
 %% ALU: three registers, an unsigned flag and the operand-swap bit.
-{arm, a, instr_common, 4,
+{record, a, instr_common, 4,
  [{x,    4},
   {y,    4},
   {z,    4},
@@ -217,50 +221,50 @@
   {swap, 1}]}.
 
 %% Load/store: two registers and the declaration being addressed.
-{arm, m, instr_common, 4,
+{record, m, instr_common, 4,
  [{x,   4},
   {y,   4},
   {mem, 16}]}.
 
 %% The same with a small signed immediate instead of the second register.
-{arm, mi, instr_common, 4,
+{record, mi, instr_common, 4,
  [{x,   4},
   {imm, 6, signed},
   {mem, 16}]}.
 
 %% Load immediate.  Sixteen bits and SIGNED: this is where a literal -1 lives.
-{arm, i, instr_common, 4,
+{record, i, instr_common, 4,
  [{x,   4},
   {imm, 16, signed}]}.
 
 %% A rule body: the condition register and the SIGNED offset to the next rule.
-{arm, r, instr_common, 4,
+{record, r, instr_common, 4,
  [{cnd,      4},
   {nxt,      15, signed},
   {implicit,  1}]}.
 
-{arm, x, instr_common, 4,
+{record, x, instr_common, 4,
  [{x, 4}]}.
 
 %% #in gate: the state number to compare against, and the skip if it does not
 %% match.  Both signed.
-{arm, in, instr_common, 4,
+{record, in, instr_common, 4,
  [{x,         4},
   {imm,       8, signed},
   {nxt,      13, signed},
   {implicit,  1}]}.
 
-{arm, e, instr_common, 4,
+{record, e, instr_common, 4,
  [{num, 10},
   {mx,  16}]}.
 
 %% A string segment in the instruction stream: how many words it spans and how
 %% many bytes of them are used.
-{arm, sg, instr_common, 4,
+{record, sg, instr_common, 4,
  [{num,  10},
   {used,  8}]}.
 
-{arm, v, instr_common, 4,
+{record, v, instr_common, 4,
  [{num, 10},
   {mx,  16}]}.
 
@@ -269,31 +273,58 @@
 %% the pad it lands at bit 6 and reads two bits of the opcode. The oracle caught
 %% exactly that. (enter/leave/end get away without one only because their
 %% bit-fields already fill to a byte boundary.)
-{arm, n, instr_common, 4,
+{record, n, instr_common, 4,
  [{pad,   2},
   {obj,  16}]}.
 
 %% A function call: result register, function index, the user-function flag and
 %% four bits of argument type per argument.
-{arm, f, instr_common, 4,
+{record, f, instr_common, 4,
  [{x,   4},
   {idx, 5},
   {usr, 1},
   {avt, 16}]}.
 
-{arm, o, instr_common, 4,
+{record, o, instr_common, 4,
  [{obj, 16}]}.
 
 %% The array form of OP_SETO: .ox.x's four bits start where .o.obj's sixteen
 %% do, which is why an emitter that writes one arm for the other produces a
 %% word that looks plausible and is wrong.  See tests/instr_layout.c.
-{arm, ox, instr_common, 4,
+{record, ox, instr_common, 4,
  [{x,      4},
   {len,   16},
   {stride, 6}]}.
 
 %% The terminator after a ROM instr section.  crc lands byte-aligned at 2-3,
 %% which rom_scan_end depends on.
-{arm, em, instr_common, 4,
- [{'_res', 10},
+{record, em, instr_common, 4,
+ [{pad, 10}, %% {'_res', 10},
   {crc,    16}]}.
+
+{family, buf,  'csp_buf_t',  "csp_buf_"}.
+%% csp_buf_t
+{record, buf, 16,
+ [{hp,        16},
+  {nbytes,    16},
+  {transport, 4},
+  {dir,       4},
+  {flags,     8},
+  {dlc,       8},
+  {dlc_in,    8},
+  {port,     16},
+  {xref,     32},   
+  {owner,    16}      %% index_t
+ ]}.
+
+{family, view,  'csp_view_t',  "csp_view_"}.
+%% csp_view_t
+{record, view, 6,
+ [{kind,      2},
+  {vt,        4},  %% type bits
+  {endian,    2},
+  {flags,     2},
+  {len  ,     6},
+  {pos,      16},
+  {buf,      16}
+ ]}.

@@ -34,6 +34,27 @@ static const char tag_tab[] RODATA = {
     [DECL_FIELD] = 'f',
 };
 
+// Maybe generate
+void csp_buf_or_flags(csp_buf_t* bp, uint8_t fs)
+{
+    csp_buf_set_flags(bp, csp_buf_get_flags(bp) | fs);
+}
+
+void csp_buf_and_flags(csp_buf_t* bp, uint8_t fs)
+{
+    csp_buf_set_flags(bp, csp_buf_get_flags(bp) & fs);
+}
+
+uint8_t* buf_heap_din_ptr(csp_rt_t* st, csp_buf_t* bp)
+{
+    return st->heap[DIN] + csp_buf_get_hp(bp);
+}
+
+uint8_t* buf_heap_dout_ptr(csp_rt_t* st, csp_buf_t* bp)
+{
+    return st->heap[DOUT] + csp_buf_get_hp(bp);
+}
+
 // --- stack watch ------------------------------------------------------------
 // Declarations grow DOWN from the arena top; the stack grows DOWN from RAMEND
 // toward the very same address. Nothing enforces a gap between them, and when
@@ -566,9 +587,9 @@ static inline value_t* csp_slot(csp_rt_t* st, csp_view_t* v, dio_t dir)
     // A #local is single-buffered: both directions resolve to the DIN half, so
     // the value a rule writes is readable by the rules after it in the SAME
     // cycle. Everything else keeps the transaction -- read DIN, write DOUT.
-    if (v->flags & VIEW_F_LOCAL)
+    if (csp_view_get_flags(v) & VIEW_F_LOCAL)
 	dir = DIN;
-    return (value_t*)(st->heap[dir] + v->pos);
+    return (value_t*)(st->heap[dir] + csp_view_get_pos(v));
 }
 
 // return pointer to the object/field value slot (VIEW_SLOT only)
@@ -630,7 +651,7 @@ static inline ivalue_t iclip(ivalue_t x, ivalue_t a, ivalue_t b)
 // nw > 1, not nw > 0: v == 0 satisfies v < nw all the way down to nw == 0, so
 // it used to emit six zeros AND then csp_print_uint's "0" -- one digit too many,
 // which is why a fixpoint zero printed as 0.0000000 against 1.500000.
-int csp_print_uintw(uvalue_t v, int nw)
+int csp_print_uintw(uvalue_t v, ivalue_t nw)
 {
     int n = 0;                 // was uninitialised: the leading-zero count was garbage
     while ((nw > 1) && (v < (uvalue_t)nw)) {
@@ -660,7 +681,7 @@ int csp_print_fixpoint(fvalue_t v)
 	n = csp_print_uint(intpart);
     }
     csp_print_char('.'); n++;
-    return n+csp_print_uintw(fracpart, 100000);    
+    return n+csp_print_uintw(fracpart, 100000);
 }
 #endif
 
@@ -1054,11 +1075,11 @@ NOINLINE void csp_enq_elist(csp_rt_t* st, index_t x)
 NOINLINE static uint8_t* heap_base(csp_rt_t* st, csp_view_t* vw, dio_t dir,
 				   uint16_t* bitp, uint8_t* nbytesp)
 {
-    if (vw->kind == VIEW_HEAP) {
-	csp_buf_t* b = &st->buf[vw->buf];
-	*bitp = vw->pos;
-	*nbytesp = (uint8_t)b->nbytes;
-	return st->heap[dir] + b->hp;
+    if (csp_view_get_kind(vw) == VIEW_HEAP) {
+	csp_buf_t* b = &st->buf[csp_view_get_buf(vw)];
+	*bitp = csp_view_get_pos(vw);
+	*nbytesp = (uint8_t)csp_buf_get_nbytes(b);
+	return st->heap[dir] + csp_buf_get_hp(b);
     }
     // NO local redirect here, deliberately. BUF_F_LOCAL was read by csp_slot
     // only, and a #local is a DECL_VARIABLE -- an OWN view, never a SLOT -- so
@@ -1068,8 +1089,9 @@ NOINLINE static uint8_t* heap_base(csp_rt_t* st, csp_view_t* vw, dio_t dir,
     // them. Whether a #local really gets its same-cycle read is a question that
     // predates this and is not answered by the flag.
     *bitp = 0;
-    *nbytesp = (uint8_t)((vw->len + 8) >> 3);   // (len+1 bits) rounded up
-    return st->heap[dir] + vw->pos;
+    // (len+1 bits) rounded up
+    *nbytesp = (uint8_t)((csp_view_get_len(vw)+8)>>3); 
+    return st->heap[dir] + csp_view_get_pos(vw);
 }
 
 NOINLINE static value_t csp_heap_get(csp_rt_t* st, csp_view_t* vw, dio_t dir)
@@ -1079,18 +1101,19 @@ NOINLINE static value_t csp_heap_get(csp_rt_t* st, csp_view_t* vw, dio_t dir)
     uint8_t* p = heap_base(st, vw, dir, &bit, &nbytes);
     value_t v;
     v.u = 0;
-    if (vw->flags & VIEW_F_SIMPLE) {       // whole storage, byte aligned
+    if (csp_view_get_flags(vw) & VIEW_F_SIMPLE) { // whole storage, byte aligned
 	uint8_t n = nbytes;
 	if (n > sizeof(value_t)) n = sizeof(value_t);
 	memcpy(&v, p, n);
     }
     else {
-	csp_bits_get(p, &v.u, bit, vw->len + 1, vw->endian == E_BIG);
+	csp_bits_get(p, &v.u, bit, csp_view_get_len(vw) + 1,
+		     csp_view_get_endian(vw) == E_BIG);
 	// Sign-extend a signed field from its own width up to the container, so a
 	// negative CAN signal reads back negative. get_bits zero-extends; unsigned
 	// fields keep that, as do 32-bit-wide ones (no spare high bits to fill).
-	if (vw->vt == V_INTEGER) {
-	    uint8_t nbits = vw->len + 1;
+	if (csp_view_get_vt(vw) == V_INTEGER) {
+	    uint8_t nbits = csp_view_get_len(vw) + 1;
 	    if ((nbits < 32) && (v.u & ((uvalue_t)1 << (nbits - 1))))
 		v.u |= ~(((uvalue_t)1 << nbits) - 1);
 	}
@@ -1104,13 +1127,14 @@ NOINLINE static void csp_heap_set(csp_rt_t* st, csp_view_t* vw, dio_t dir,
     uint16_t bit;
     uint8_t nbytes;
     uint8_t* p = heap_base(st, vw, dir, &bit, &nbytes);
-    if (vw->flags & VIEW_F_SIMPLE) {       // whole storage, byte aligned
+    if (csp_view_get_flags(vw) & VIEW_F_SIMPLE) {       // whole storage, byte aligned
 	uint8_t n = nbytes;
 	if (n > sizeof(value_t)) n = sizeof(value_t);
 	memcpy(p, &v, n);
     }
     else
-	csp_bits_set(p, v.u, bit, vw->len + 1, vw->endian == E_BIG);
+	csp_bits_set(p, v.u, bit, csp_view_get_len(vw) + 1,
+		     csp_view_get_endian(vw) == E_BIG);
 }
 
 // A digital/analog/timer decl carries vt=V_INTEGER (its value type); the
@@ -1161,36 +1185,41 @@ NOINLINE void csp_view_set_part(csp_rt_t* st, csp_view_t* vw,
     // Endian lives in the view, so it works for either kind.
     else if (part == PART_ENDIAN) {
 	if ((v.i >= E_NATIVE) && (v.i <= E_BIG))
-	    vw->endian = v.i;
+	    csp_view_set_endian(vw, v.i);
     }
     // Everything below reads st->buf[vw->buf], and an OWNER has no buffer --
     // `buf` is not a valid index for one. A #variable has no transport state to
     // set anyway, so this is the right answer as well as the safe one.
-    else if (vw->kind != VIEW_HEAP)
+    else if (csp_view_get_kind(vw) != VIEW_HEAP)
 	return;
     // A frame's transport state lives on the BUFFER, not in a value slot,
     // and is a command rather than a value -- so it is not DIN/DOUT
     // shadowed and does not go through the dirty set.
-    else if (part == PART_DIR)
-	st->buf[vw->buf].dir = v.i;
+    else if (part == PART_DIR) {
+	csp_buf_set_dir(&st->buf[csp_view_get_buf(vw)], v.i);
+    }
+	    
     // Every transport that moves bytes, not TR_CAN alone. `.tx`, `.rx` and
     // `.dlc` describe a transfer, and a transfer is what a transport IS -- the
     // test was written when CAN was the only one.
-    else if (st->buf[vw->buf].transport != TR_NONE) {
-	csp_buf_t* bp = &st->buf[vw->buf];
+    else if (csp_buf_get_transport(&st->buf[csp_view_get_buf(vw)]) != TR_NONE) {
+	csp_buf_t* bp = &st->buf[csp_view_get_buf(vw)];
 	if (part == PART_TX) {
 	    if (v.i)
-		bp->flags |= BUF_F_TX;
+		csp_buf_or_flags(bp, BUF_F_TX);
 	    else
-		bp->flags &= ~BUF_F_TX;
+		csp_buf_and_flags(bp, ~BUF_F_TX);
 	}
 	else if (part == PART_DLC) {
 	    // Clamped, not rejected: the heap holds nbytes and no more, so
 	    // a longer frame would read past the buffer.
 	    ivalue_t n = v.i;
+	    ivalue_t nb;
 	    if (n < 0) n = 0;
-	    if (n > bp->nbytes) n = bp->nbytes;
-	    bp->dlc = (uint8_t)n;
+	    nb=csp_buf_get_nbytes(bp);
+	    if (n > nb)
+		n = nb;
+	    csp_buf_set_dlc(bp, (uint8_t)n);
 	}
     }
 }
@@ -1203,7 +1232,7 @@ NOINLINE void csp_dio_set_part(csp_rt_t* st, index_t ix, value_t v,
     // Anything that is not a plain value_t slot carries only a VALUE -- a
     // bit-field has no pin, port or period. VIEW_OWN joins VIEW_HEAP here: it is
     // the same bit-field access, just over storage it owns rather than borrows.
-    if (vw->kind != VIEW_SLOT) {
+    if (csp_view_get_kind(vw) != VIEW_SLOT) {
 	csp_view_set_part(st, vw, v, part, dir);
 	return;
     }
@@ -1274,35 +1303,36 @@ NOINLINE void csp_view_get_part(csp_rt_t* st, csp_view_t* vw, value_t* vp,
     // PART_VAL, PART_ENDIAN and PART_LEN answer from the view itself; every
     // other case here is buffer state, and reads 0 for a leaf that has none --
     // which is the truth: a #variable has no transport, no frame id, no dlc.
-    csp_buf_t* bp = (vw->kind == VIEW_HEAP) ? &st->buf[vw->buf] : NULL;
+    csp_buf_t* bp = (csp_view_get_kind(vw) == VIEW_HEAP) ?
+	&st->buf[csp_view_get_buf(vw)] : NULL;
     vp->u = 0;
     switch (CSP_MASK(part, PART_BITS)) {
     case PART_VAL: *vp = csp_heap_get(st, vw, dir); break;
 	// Direction is a property of the buffer, so it answers for a plain
 	// #buffer as well as a CAN frame -- and for a #field,  which reads
 	// its frame's direction.
-    case PART_DIR: if (bp) vp->i = bp->dir; break;
+    case PART_DIR: if (bp) vp->i = csp_buf_get_dir(bp); break;
 	// Endianness is a property of the VIEW (a bound field / #field decides
 	// how its bits are laid out), so it answers from there and not from a
 	// value slot -- a heap view has none.
-    case PART_ENDIAN: vp->i = vw->endian; break;
+    case PART_ENDIAN: vp->i = csp_view_get_endian(vw); break;
 	// Frame state, read off the buffer. A #field answers for its frame
 	// too: `A.rx` and `F201.rx` are the same fact.
     case PART_RX:
-	if (bp && (bp->transport != TR_NONE))
-	    vp->i = BOOL(bp->flags & BUF_F_RX);
+	if (bp && (csp_buf_get_transport(bp) != TR_NONE))
+	    vp->i = BOOL(csp_buf_get_flags(bp) & BUF_F_RX);
 	break;
     case PART_TX:
-	if (bp && (bp->transport != TR_NONE))
-	    vp->i = BOOL(bp->flags & BUF_F_TX);
+	if (bp && (csp_buf_get_transport(bp) != TR_NONE))
+	    vp->i = BOOL(csp_buf_get_flags(bp) & BUF_F_TX);
 	break;
     case PART_ID:
-	if (bp && (bp->transport != TR_NONE))
-	    vp->i = (ivalue_t)bp->xref;
+	if (bp && (csp_buf_get_transport(bp) != TR_NONE))
+	    vp->i = (ivalue_t)csp_buf_get_xref(bp);
 	break;
     case PART_DLC:
-	if (bp && (bp->transport != TR_NONE))
-	    vp->i = bp->dlc;
+	if (bp && (csp_buf_get_transport(bp) != TR_NONE))
+	    vp->i = csp_buf_get_dlc(bp);
 	break;
 	// A plain #variable gets an auto-buffer (setup_variable -> setup_buffer),
 	// so a string variable is a HEAP view and lands HERE, not in the value-slot
@@ -1310,7 +1340,7 @@ NOINLINE void csp_view_get_part(csp_rt_t* st, csp_view_t* vw, value_t* vp,
 	// timer, constant). A string CONSTANT does take that path, so both need it.
     case PART_LEN: {
 	value_t sv = csp_heap_get(st, vw, dir);
-	if ((vw->vt == V_STRING) && (sv.s > 0))
+	if ((csp_view_get_vt(vw) == V_STRING) && (sv.s > 0))
 	    vp->i = csp_str_len(st, sv.s);
 	break;	
     }
@@ -1322,7 +1352,8 @@ NOINLINE void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp,
 			       csp_part_t part, dio_t dir)
 {
     csp_view_t* vw = csp_view(st, ix);
-    if (vw->kind != VIEW_SLOT) {  // bit-fields only carry a value, no pin/port
+    // bit-fields only carry a value, no pin/port
+    if (csp_view_get_kind(vw) != VIEW_SLOT) {
 	vp->u = 0;
 	csp_view_get_part(st, vw, vp, part, dir);
     }
@@ -1339,7 +1370,7 @@ NOINLINE void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp,
 NOINLINE void csp_dio_set(csp_rt_t* st, index_t ix, value_t v, dio_t dir)
 {
     csp_view_t* vw = csp_view(st, ix);
-    if (vw->kind != VIEW_SLOT) {
+    if (csp_view_get_kind(vw) != VIEW_SLOT) {
 	csp_heap_set(st, vw, dir, v);
 	return;
     }
@@ -1349,7 +1380,7 @@ NOINLINE void csp_dio_set(csp_rt_t* st, index_t ix, value_t v, dio_t dir)
 NOINLINE void csp_dio_get(csp_rt_t* st, index_t ix, value_t* vp, dio_t dir)
 {
     csp_view_t* vw = csp_view(st, ix);
-    if (vw->kind != VIEW_SLOT) {
+    if (csp_view_get_kind(vw) != VIEW_SLOT) {
 	*vp = csp_heap_get(st, vw, dir);
 	return;
     }
@@ -1814,14 +1845,14 @@ int csp_eval_rule(csp_rt_t* st, int n)
 // its declaration asked for.
 static uint16_t leaf_region(csp_rt_t* st, csp_view_t* v, uint16_t* np)
 {
-    if (v->kind == VIEW_HEAP) {
-	csp_buf_t* b = &st->buf[v->buf];
-	*np = b->nbytes;
-	return b->hp;
+    if (csp_view_get_kind(v) == VIEW_HEAP) {
+	csp_buf_t* b = &st->buf[csp_view_get_buf(v)];
+	*np = csp_buf_get_nbytes(b);
+	return csp_buf_get_hp(b);
     }
-    *np = (v->kind == VIEW_SLOT) ? (uint16_t)sizeof(value_t)
-				 : (uint16_t)((v->len + 8) >> 3);
-    return v->pos;
+    *np = (csp_view_get_kind(v) == VIEW_SLOT) ?
+	(uint16_t)sizeof(value_t) : (uint16_t)((csp_view_get_len(v) + 8) >> 3);
+    return csp_view_get_pos(v);
 }
 
 // mirror dirty leaf storage between the two heaps (everything lives in the heap)
@@ -1848,10 +1879,10 @@ NOINLINE static void heap_dset_copy(csp_rt_t* st, dio_t to, dio_t from)
 		// out: the field changed, the commit ran, and nothing marked it
 		// dirty. Everything downstream was correct and had nothing to
 		// do.
-		if ((to == DIN) && (v->kind == VIEW_HEAP)) {
-		    csp_buf_t* b = &st->buf[v->buf];
-		    if (b->transport != TR_NONE)
-			b->flags |= BUF_F_DIRTY;
+		if ((to == DIN) && (csp_view_get_kind(v) == VIEW_HEAP)) {
+		    csp_buf_t* b = &st->buf[csp_view_get_buf(v)];
+		    if (csp_buf_get_transport(b) != TR_NONE)
+			csp_buf_or_flags(b, BUF_F_DIRTY);
 		}
 	    }
 	    bits >>= 1;
@@ -1881,20 +1912,23 @@ void csp_commit(csp_rt_t* st)
     // the PREVIOUS frame. One cycle of life, then gone.
     for (b = 0; b < st->nbuf; b++) {
 	csp_buf_t* bp = &st->buf[b];
+	uint8_t fs;
 	// Every transport, not TR_CAN alone: this is what turns "arrived" into
 	// "visible this cycle", and it is what makes `? Buf.rx` line up with
 	// the data it describes. A UDP buffer left out here received its bytes
 	// and never announced them.
-	if (bp->transport == TR_NONE)
+	if (csp_buf_get_transport(bp) == TR_NONE)
 	    continue;
-	bp->flags &= ~BUF_F_RX;
-	if (bp->flags & BUF_F_RXPEND) {
-	    bp->flags = (bp->flags & ~BUF_F_RXPEND) | BUF_F_RX;
+	fs = csp_buf_get_flags(bp);
+	fs &= ~BUF_F_RX;
+	if (fs & BUF_F_RXPEND) {
+	    fs = (fs & ~BUF_F_RXPEND) | BUF_F_RX;
 	    // The length lands WITH the bytes. Both halves of a delivery become
 	    // visible to a rule in the same cycle, which is the whole point of
 	    // holding it -- see dlc_in in csp.h.
-	    bp->dlc = bp->dlc_in;
+	    csp_buf_set_dlc(bp, csp_buf_get_dlc_in(bp));
 	}
+	csp_buf_set_flags(bp, fs);
     }
     memset(st->dset, 0, BITSET_GROUPS(st->view_cap) * sizeof(set_group_t));
     st->es.anyd = CSP_FALSE;
@@ -4443,13 +4477,13 @@ NOINLINE static int parent_leaf(csp_rt_t* st, index_t ix);
 static void setup_view_values(csp_view_t* vw, vtype_t vt, index_t buf,
 			      const csp_decl_t* d)
 {
-    vw->kind   = VIEW_HEAP;
-    vw->vt     = vt;
-    vw->buf    = buf;
-    vw->pos    = csp_decl_get_ca_bit(d);
-    vw->len    = csp_decl_get_ca_len(d);      // already len-1
-    vw->endian = csp_decl_get_ca_endian(d);
-    vw->flags  = 0;           // sub-view -> generic bit path
+    csp_view_set_kind(vw, VIEW_HEAP);
+    csp_view_set_vt(vw, vt);
+    csp_view_set_buf(vw,buf);
+    csp_view_set_pos(vw,csp_decl_get_ca_bit(d));
+    csp_view_set_len(vw,csp_decl_get_ca_len(d));      // already len-1
+    csp_view_set_endian(vw, csp_decl_get_ca_endian(d));
+    csp_view_set_flags(vw, 0);           // sub-view -> generic bit path
 }
 
 // Bind a #field to its frame. ca.id is the #buffer decl; that buffer was
@@ -4476,7 +4510,8 @@ NOINLINE static int setup_field(csp_rt_t* st, index_t ix)
 	return -1;
     }
     vw = &st->view[st_index(st, ix)];
-    setup_view_values(vw, csp_decl_get_vt(&d), pv->buf, &d);  // shares the frame's buffer
+    // shares the frame's buffer
+    setup_view_values(vw, csp_decl_get_vt(&d), csp_view_get_buf(pv), &d); 
     return 0;
 }
 
@@ -4509,7 +4544,7 @@ NOINLINE static int setup_field(csp_rt_t* st, index_t ix)
 NOINLINE static void buf_mark_fields(csp_rt_t* st, index_t b)
 {
     int i;
-    index_t own = st->buf[b].owner;
+    index_t own = csp_buf_get_owner(&st->buf[b]);
     // The frame's own leaf first. A frame declared as a plain #buffer (no #field
     // at all -- read with >>= or with bound variables) has nothing in
     // the input list, so without this nothing would be marked, commit would
@@ -4545,7 +4580,8 @@ NOINLINE static void buf_mark_fields(csp_rt_t* st, index_t b)
 	// a flash copy of the whole declaration -- run for every entry in the I/O
 	// list, on every received CAN frame. Two bytes of RAM answer the same
 	// question, and the cheap test now comes first.
-	if ((vw->kind != VIEW_HEAP) || (vw->buf != b))
+	if ((csp_view_get_kind(vw) != VIEW_HEAP) ||
+	    (csp_view_get_buf(vw) != b))
 	    continue;
 	if (csp_heap_get(st, vw, DOUT).u == csp_heap_get(st, vw, DIN).u)
 	    continue;  // this field of the frame is unchanged
@@ -4571,7 +4607,9 @@ int csp_io_active(csp_rt_t* st)
     // the loop keep running with no timers and nothing changing", and a
     // datagram or a sensor read is as good a reason as a frame.
     for (b = 0; b < st->nbuf; b++) {
-	if ((st->buf[b].transport != TR_NONE) && (st->buf[b].dir & DIR_IN))
+	csp_buf_t* bp = &st->buf[b];
+	if ((csp_buf_get_transport(bp) != TR_NONE) &&
+	    (csp_buf_get_dir(bp) & DIR_IN))
 	    return 1;
     }
     return 0;
@@ -4587,14 +4625,17 @@ NOINLINE static void buf_deliver(csp_rt_t* st, index_t b, const uint8_t* data,
 				 uint16_t n)
 {
     csp_buf_t* bp = &st->buf[b];
-
-    if (n > bp->nbytes)
-	n = bp->nbytes;
+    uint16_t nb;
+    nb = csp_buf_get_nbytes(bp);
+    if (n > nb)
+	n = nb;
     // Into the SHADOW, not the committed half: DIN must keep the previous
     // contents so buf_mark_fields can tell what actually changed.
-    memcpy(st->heap[DOUT] + bp->hp, data, n);
-    bp->dlc_in = (uint8_t)((n > 255) ? 255 : n);   // published at commit
-    bp->flags |= BUF_F_RXPEND;         // csp_commit turns this into BUF_F_RX
+    memcpy(st->heap[DOUT] + csp_buf_get_hp(bp), data, n);
+    // published at commit
+    csp_buf_set_dlc_in(bp, (uint8_t)((n > 255) ? 255 : n));
+    // csp_commit turns this into BUF_F_RX
+    csp_buf_or_flags(bp, BUF_F_RXPEND);
     buf_mark_fields(st, b);
 }
 
@@ -4613,18 +4654,22 @@ void csp_can_input(csp_rt_t* st)
 	    return;
 	for (b = 0; b < st->nbuf; b++) {
 	    csp_buf_t* bp = &st->buf[b];
-	    uint8_t n;
-	    if ((bp->transport != TR_CAN) || (bp->xref != id) ||
-		!(bp->dir & DIR_IN))
+	    uint8_t n, nb;
+	    if ((csp_buf_get_transport(bp) != TR_CAN) ||
+		(csp_buf_get_xref(bp) != id) ||
+		!(csp_buf_get_dir(bp) & DIR_IN))
 		continue;
 	    // Into the SHADOW, not the committed half: DIN must keep the previous
 	    // frame so buf_mark_fields can tell what actually changed.
 	    // A short frame updates only the bytes it carried. Clamp per buffer,
 	    // not once: the same id may feed several buffers of different sizes.
-	    n = (len < bp->nbytes) ? len : bp->nbytes;
-	    memcpy(st->heap[DOUT] + bp->hp, data, n);
-	    bp->dlc_in = n;                // what the sender actually sent
-	    bp->flags |= BUF_F_RXPEND;     // csp_commit turns this into BUF_F_RX
+	    nb = csp_buf_get_nbytes(bp);
+	    n = (len < nb) ? len : nb;
+	    memcpy(st->heap[DOUT] + csp_buf_get_hp(bp), data, n);
+	    // what the sender actually sent
+	    csp_buf_set_dlc_in(bp, n);
+	    // csp_commit turns this into BUF_F_RX
+	    csp_buf_or_flags(bp, BUF_F_RXPEND);
 	    buf_mark_fields(st, b);
 	}
     }
@@ -4638,11 +4683,13 @@ void csp_can_output(csp_rt_t* st)
     index_t b;
     for (b = 0; b < st->nbuf; b++) {
 	csp_buf_t* bp = &st->buf[b];
-	if ((bp->transport != TR_CAN) || !(bp->flags & (BUF_F_DIRTY|BUF_F_TX)))
+	if ((csp_buf_get_transport(bp) != TR_CAN) ||
+	    !(csp_buf_get_flags(bp) & (BUF_F_DIRTY|BUF_F_TX)))
 	    continue;
-	bp->flags &= ~(BUF_F_DIRTY|BUF_F_TX);
-	if (bp->dir & DIR_OUT)
-	    csp_can_send(st, bp->xref, st->heap[DIN] + bp->hp, bp->dlc);
+	csp_buf_and_flags(bp, ~(BUF_F_DIRTY|BUF_F_TX));
+	if (csp_buf_get_dir(bp) & DIR_OUT)
+	    csp_can_send(st, csp_buf_get_xref(bp), buf_heap_din_ptr(st,bp),
+			 csp_buf_get_dlc(bp));
     }
 }
 
@@ -4671,37 +4718,39 @@ void csp_buf_input(csp_rt_t* st)
 	// It arms the print tap, and a routed `in repl` buffer is exactly the
 	// one that needs it -- skipping it below left the tap disarmed, so a
 	// node whose output was routed captured nothing at all.
-	if (TR_IS_CON(bp->transport) && (bp->dir & DIR_IN))
-	    con |= (uint8_t)(1 << ((bp->transport == TR_CONSOLE) ? CON_KEYS
+	if (TR_IS_CON(csp_buf_get_transport(bp)) &&
+	    (csp_buf_get_dir(bp) & DIR_IN))
+	    con |= (uint8_t)(1 << ((csp_buf_get_transport(bp) == TR_CONSOLE) ? CON_KEYS
 								: CON_OUT));
 
 	// A ROUTE SOURCE belongs to its route, which drains it in the output
 	// pass. Two owners would mean the chunk taken here is never sent.
-	if (bp->flags & BUF_F_ROUTED)
+	if (csp_buf_get_flags(bp) & BUF_F_ROUTED)
 	    continue;
 
-	if (TR_IS_SYNC(bp->transport)) {
+	if (TR_IS_SYNC(csp_buf_get_transport(bp))) {
 	    uint16_t n;
 	    int r;
 
 	    // Collect a transfer csp_buf_output started, at the earliest, last
 	    // cycle. Nothing to collect is the common case.
-	    if (!(bp->flags & BUF_F_BUSY))
+	    if (!(csp_buf_get_flags(bp) & BUF_F_BUSY))
 		continue;
-	    n = bp->nbytes;
-	    r = (bp->transport == TR_I2C) ? csp_i2c_done(st, bp->xref, &n)
-					  : csp_spi_done(st, bp->xref, &n);
+	    n = csp_buf_get_nbytes(bp);
+	    r = (csp_buf_get_transport(bp) == TR_I2C) ?
+		csp_i2c_done(st, csp_buf_get_xref(bp), &n) :
+		csp_spi_done(st, csp_buf_get_xref(bp), &n);
 	    if (r == 0)
 		continue;              // still in flight; look again next cycle
-	    bp->flags &= ~BUF_F_BUSY;
+	    csp_buf_and_flags(bp, ~BUF_F_BUSY);
 	    // A FAILED transfer is not a delivery. Leaving BUF_F_RXPEND clear
 	    // is what makes `? Imu.rx` false on a bus error, so a rule guarded
 	    // on it keeps the previous reading instead of acting on a
 	    // half-written one.
-	    if ((r > 0) && (bp->dir & DIR_IN))
-		buf_deliver(st, b, st->heap[DOUT] + bp->hp, n);
+	    if ((r > 0) && (csp_buf_get_dir(bp) & DIR_IN))
+		buf_deliver(st, b, buf_heap_dout_ptr(st, bp), n);
 	}
-	else if ((bp->transport == TR_UDP) && (bp->dir & DIR_IN)) {
+	else if ((csp_buf_get_transport(bp) == TR_UDP) && (csp_buf_get_dir(bp) & DIR_IN)) {
 	    index_t p, first = b;
 	    uint16_t last = 0;
 	    int guard, got = 0;
@@ -4720,8 +4769,9 @@ void csp_buf_input(csp_rt_t* st)
 	    // feature.
 	    for (p = 0; p < b; p++) {
 		csp_buf_t* op = &st->buf[p];
-		if ((op->transport == TR_UDP) && (op->dir & DIR_IN) &&
-		    (op->port == bp->port)) {
+		if ((csp_buf_get_transport(op) == TR_UDP) &&
+		    (csp_buf_get_dir(op) & DIR_IN) &&
+		    (csp_buf_get_port(op) == csp_buf_get_port(bp))) {
 		    first = p;
 		    break;
 		}
@@ -4768,43 +4818,48 @@ void csp_buf_input(csp_rt_t* st)
 	    // bytes land, so a datagram from elsewhere cannot overwrite the last
 	    // good one; see the hook's comment in csp.h.
 	    for (guard = 0; guard < CSP_UDP_RX_BURST; guard++) {
-		uint16_t n = bp->nbytes;
-		int r = csp_udp_recv(st, bp->port, bp->xref,
-				     st->heap[DOUT] + bp->hp, &n);
-		if (r < 0)
-		    bp->flags |= BUF_F_DEAD;   // the port was refused: /state
+		uint16_t n = csp_buf_get_nbytes(bp);
+		uint16_t nb;
+		int r = csp_udp_recv(st, csp_buf_get_port(bp),
+				     csp_buf_get_xref(bp),
+				     buf_heap_dout_ptr(st, bp), &n);
+		if (r < 0) // the port was refused: /state
+		    csp_buf_or_flags(bp, BUF_F_DEAD);
 		if (r != 1)
 		    break;
-		last = (n > bp->nbytes) ? bp->nbytes : n;
+		nb = csp_buf_get_nbytes(bp);
+		last = (n > nb) ? nb : n;
 		got = 1;
 	    }
 	    if (got) {
-		bp->dlc_in = (uint8_t)((last > 255) ? 255 : last);
-		bp->flags |= BUF_F_RXPEND;
+		csp_buf_set_dlc_in(bp, (uint8_t)((last > 255) ? 255 : last));
+		csp_buf_or_flags(bp, BUF_F_RXPEND);
 		buf_mark_fields(st, b);
 		// And the other views of this port, with the LENGTH rather than
 		// dlc: dlc saturates at 255 and a datagram may be longer.
 		for (p = b + 1; p < st->nbuf; p++) {
 		    csp_buf_t* op = &st->buf[p];
-		    if ((op->transport == TR_UDP) && (op->dir & DIR_IN) &&
-			(op->port == bp->port))
-			buf_deliver(st, p, st->heap[DOUT] + bp->hp, last);
+		    if ((csp_buf_get_transport(op) == TR_UDP) &&
+			(csp_buf_get_dir(op) & DIR_IN) &&
+			(csp_buf_get_port(op) == csp_buf_get_port(bp)))
+			buf_deliver(st, p, buf_heap_dout_ptr(st,bp), last);
 		}
 	    }
 	}
-	else if ((bp->transport == TR_UART) && (bp->dir & DIR_IN)) {
+	else if ((csp_buf_get_transport(bp) == TR_UART) && (csp_buf_get_dir(bp) & DIR_IN)) {
 	    // A wire, not a connection: it is either carrying bytes or quiet,
 	    // and there is no third answer. Same stream discipline as TCP --
 	    // take what arrived, leave the rest.
-	    uint16_t n = bp->nbytes;
-	    if (csp_uart_recv(st, bp->xref, st->heap[DOUT] + bp->hp, &n) == 1) {
-		bp->dlc_in = (uint8_t)((n > 255) ? 255 : n);
-		bp->flags |= BUF_F_RXPEND;
+	    uint16_t n = csp_buf_get_nbytes(bp);
+	    if (csp_uart_recv(st, csp_buf_get_xref(bp),
+			      buf_heap_dout_ptr(st, bp), &n) == 1) {
+		csp_buf_set_dlc_in(bp, (uint8_t)((n > 255) ? 255 : n));
+		csp_buf_or_flags(bp, BUF_F_RXPEND);
 		buf_mark_fields(st, b);
 	    }
 	}
-	else if (bp->transport == TR_TCP) {
-	    uint16_t n = bp->nbytes;
+	else if (csp_buf_get_transport(bp) == TR_TCP) {
+	    uint16_t n = csp_buf_get_nbytes(bp);
 
 	    // AN OUT BUFFER DIALS FROM THE FIRST CYCLE. A zero-length send means
 	    // "make sure the connection is up" and writes nothing -- without it
@@ -4812,23 +4867,23 @@ void csp_buf_input(csp_rt_t* st)
 	    // not completed by the time it was written, and that byte was lost.
 	    // It showed as `sys.Serial` reaching the far end as `Serial`: a
 	    // whole chunk, gone, on every fresh connection.
-	    if (bp->dir & DIR_OUT)
-		(void)csp_tcp_send(st, bp->xref, bp->port, NULL, 0);
-	    if (!(bp->dir & DIR_IN))
+	    if (csp_buf_get_dir(bp) & DIR_OUT)
+		(void)csp_tcp_send(st, csp_buf_get_xref(bp), csp_buf_get_port(bp), NULL, 0);
+	    if (!(csp_buf_get_dir(bp) & DIR_IN))
 		continue;
 	    // A STREAM: take what has arrived, up to the buffer, and leave the
 	    // rest for the next cycle. No drain loop and no keep-the-last -- a
 	    // byte has no newer version of itself, so nothing here may be thrown
 	    // away the way a datagram is. One read per cycle is also what makes
 	    // the bytes and `.dlc` describe the same delivery.
-	    if (csp_tcp_recv(st, bp->port, bp->xref,
-			     st->heap[DOUT] + bp->hp, &n) == 1) {
-		bp->dlc_in = (uint8_t)((n > 255) ? 255 : n);
-		bp->flags |= BUF_F_RXPEND;
+	    if (csp_tcp_recv(st, csp_buf_get_port(bp), csp_buf_get_xref(bp),
+			     buf_heap_dout_ptr(st, bp), &n) == 1) {
+		csp_buf_set_dlc_in(bp, (uint8_t)((n > 255) ? 255 : n));
+		csp_buf_or_flags(bp, BUF_F_RXPEND);
 		buf_mark_fields(st, b);
 	    }
 	}
-	else if (TR_IS_CON(bp->transport)) {
+	else if (TR_IS_CON(csp_buf_get_transport(bp))) {
 	    // THE CONSOLE WIRE. A STREAM, so this takes as MANY bytes as the
 	    // buffer holds rather than one item, and what is left waits for the
 	    // next cycle. Nothing is dropped for being overtaken the way a
@@ -4838,14 +4893,14 @@ void csp_buf_input(csp_rt_t* st)
 	    // print tap follows a /undo that drops the declaration. Both
 	    // directions count: an `out console` buffer means the ring is being
 	    // written even though nothing is read from it.
-	    int which = (bp->transport == TR_CONSOLE) ? CON_KEYS : CON_OUT;
+	    int which = (csp_buf_get_transport(bp) == TR_CONSOLE) ? CON_KEYS : CON_OUT;
 
-	    if (bp->dir & DIR_IN) {
-		uint16_t n = bp->nbytes;
+	    if (csp_buf_get_dir(bp) & DIR_IN) {
+		uint16_t n = csp_buf_get_nbytes(bp);
 		// The mask was counted above, for routed and unrouted alike.
-		if (csp_con_take(which, st->heap[DOUT] + bp->hp, &n) == 1) {
-		    bp->dlc_in = (uint8_t)((n > 255) ? 255 : n);
-		    bp->flags |= BUF_F_RXPEND;
+		if (csp_con_take(which, buf_heap_dout_ptr(st, bp), &n) == 1) {
+		    csp_buf_set_dlc_in(bp, (uint8_t)((n > 255) ? 255 : n));
+		    csp_buf_or_flags(bp, BUF_F_RXPEND);
 		    buf_mark_fields(st, b);
 		}
 	    }
@@ -4861,14 +4916,14 @@ void csp_buf_input(csp_rt_t* st)
 // throughput went.
 NOINLINE static int route_pull(csp_rt_t* st, csp_buf_t* bp, uint16_t* n)
 {
-    uint8_t* dst = st->heap[DOUT] + bp->hp;
+    uint8_t* dst = buf_heap_dout_ptr(st, bp);
 
-    switch (bp->transport) {
+    switch (csp_buf_get_transport(bp)) {
     case TR_CONSOLE: return csp_con_take(CON_KEYS, dst, n);
     case TR_REPL:    return csp_con_take(CON_OUT, dst, n);
-    case TR_UDP:     return csp_udp_recv(st, bp->port, bp->xref, dst, n);
-    case TR_TCP:     return csp_tcp_recv(st, bp->port, bp->xref, dst, n);
-    case TR_UART:    return csp_uart_recv(st, bp->xref, dst, n);
+    case TR_UDP:     return csp_udp_recv(st, csp_buf_get_port(bp), csp_buf_get_xref(bp), dst, n);
+    case TR_TCP:     return csp_tcp_recv(st, csp_buf_get_port(bp), csp_buf_get_xref(bp), dst, n);
+    case TR_UART:    return csp_uart_recv(st, csp_buf_get_xref(bp), dst, n);
     default:         return 0;
     }
 }
@@ -4879,13 +4934,13 @@ NOINLINE static int route_pull(csp_rt_t* st, csp_buf_t* bp, uint16_t* n)
 NOINLINE static int route_push(csp_rt_t* st, csp_buf_t* bp,
 			       const uint8_t* data, uint16_t n)
 {
-    switch (bp->transport) {
+    switch (csp_buf_get_transport(bp)) {
     case TR_CONSOLE: csp_con_show(data, n); return 0;
     case TR_REPL:    csp_con_feed(st, data, n); return 0;
-    case TR_UDP:     return csp_udp_send(st, bp->xref, bp->port, data, n);
-    case TR_TCP:     return csp_tcp_send(st, bp->xref, bp->port, data, n);
-    case TR_UART:    return csp_uart_send(st, bp->xref, data, n);
-    case TR_CAN:     return csp_can_send(st, bp->xref, data, (uint8_t)n);
+    case TR_UDP:     return csp_udp_send(st, csp_buf_get_xref(bp), csp_buf_get_port(bp), data, n);
+    case TR_TCP:     return csp_tcp_send(st, csp_buf_get_xref(bp), csp_buf_get_port(bp), data, n);
+    case TR_UART:    return csp_uart_send(st, csp_buf_get_xref(bp), data, n);
+    case TR_CAN:     return csp_can_send(st, csp_buf_get_xref(bp), data, (uint8_t)n);
     default:         return -1;
     }
 }
@@ -4915,7 +4970,8 @@ void csp_route_run(csp_rt_t* st)
     for (r = 0; r < st->nroute; r++) {
 	csp_buf_t* src = &st->buf[st->route[r].src];
 	csp_buf_t* dst = &st->buf[st->route[r].dst];
-	uint16_t cap = (src->nbytes < dst->nbytes) ? src->nbytes : dst->nbytes;
+	uint16_t cap = (csp_buf_get_nbytes(src) < csp_buf_get_nbytes(dst)) ?
+	    csp_buf_get_nbytes(src) : csp_buf_get_nbytes(dst);
 	int k;
 
 	for (k = 0; k < CSP_ROUTE_BURST; k++) {
@@ -4925,7 +4981,7 @@ void csp_route_run(csp_rt_t* st)
 	    // hold is simply gone -- the socket's own back-pressure has already
 	    // been given up by then. Relaying a firmware image is what showed
 	    // it: 2690 bytes of hex went in, the far end answered "ERR hex".
-	    if (dst->transport == TR_REPL) {
+	    if (csp_buf_get_transport(dst) == TR_REPL) {
 		uint16_t room = csp_con_room(st, CON_KEYS);
 		if (room == 0)
 		    break;             // the line editor is full: next cycle
@@ -4938,16 +4994,16 @@ void csp_route_run(csp_rt_t* st)
 		n = cap;
 	    // Into the SOURCE's shadow it already went; publish the length the
 	    // same way a delivery does, so a rule sees a whole one next cycle.
-	    src->dlc_in = (uint8_t)((n > 255) ? 255 : n);
-	    src->flags |= BUF_F_RXPEND;
+	    csp_buf_set_dlc_in(src, (uint8_t)((n > 255) ? 255 : n));
+	    csp_buf_or_flags(src, BUF_F_RXPEND);
 	    buf_mark_fields(st, st->route[r].src);
 	    // And into the SINK's committed half, which is what output reads.
-	    memcpy(st->heap[DIN] + dst->hp, st->heap[DOUT] + src->hp, n);
-	    dst->dlc = (uint8_t)((n > 255) ? 255 : n);
-	    if (route_push(st, dst, st->heap[DIN] + dst->hp, n) < 0) {
+	    memcpy(buf_heap_din_ptr(st,dst), buf_heap_dout_ptr(st,src), n);
+	    csp_buf_set_dlc(dst, (uint8_t)((n > 255) ? 255 : n));
+	    if (route_push(st, dst, buf_heap_din_ptr(st, dst), n) < 0) {
 		// Kept, not dropped: the ordinary output pass sends it next
 		// cycle. Waiting here would stall every other buffer too.
-		dst->flags |= BUF_F_TX;
+		csp_buf_or_flags(dst, BUF_F_TX);
 		break;
 	    }
 	}
@@ -4962,25 +5018,27 @@ void csp_buf_output(csp_rt_t* st)
 
     for (b = 0; b < st->nbuf; b++) {
 	csp_buf_t* bp = &st->buf[b];
-
-	switch (bp->transport) {
+	uint8_t tr = csp_buf_get_transport(bp);
+	uint8_t fs = csp_buf_get_flags(bp);
+	uint8_t dir = csp_buf_get_dir(bp);
+	switch (tr) {
 	case TR_UDP:
-	    if (!(bp->flags & (BUF_F_DIRTY|BUF_F_TX)))
+	    if (!(fs & (BUF_F_DIRTY|BUF_F_TX)))
 		continue;
-	    bp->flags &= ~(BUF_F_DIRTY|BUF_F_TX);
-	    if (bp->dir & DIR_OUT)
+	    csp_buf_set_flags(bp, fs & ~(BUF_F_DIRTY|BUF_F_TX));
+	    if (dir & DIR_OUT)
 		// dlc, like CAN. It starts at nbytes, so a buffer nobody sets
 		// it on sends whole as it always did -- but a program CAN now
 		// say how many bytes this datagram carries, which is what makes
 		// a byte stream over UDP expressible at all. Sending the whole
 		// buffer padded with last cycle's bytes is not a length any
 		// receiver can undo.
-		csp_udp_send(st, bp->xref, bp->port,
-			     st->heap[DIN] + bp->hp, bp->dlc);
+		csp_udp_send(st, csp_buf_get_xref(bp), csp_buf_get_port(bp),
+			     buf_heap_din_ptr(st, bp), csp_buf_get_dlc(bp));
 	    break;
 
 	case TR_TCP:
-	    if (!(bp->flags & (BUF_F_DIRTY|BUF_F_TX)))
+	    if (!(fs & (BUF_F_DIRTY|BUF_F_TX)))
 		continue;
 	    // THE FLAGS SURVIVE A FAILED SEND, which is the whole difference
 	    // from UDP. A datagram is fire-and-forget, so clearing first costs
@@ -4990,25 +5048,27 @@ void csp_buf_output(csp_rt_t* st)
 	    //
 	    // dlc, like CAN and UDP: a stream carries what a rule put there, and
 	    // the rest of the buffer is last cycle's bytes.
-	    if (bp->dir & DIR_OUT) {
-		if (csp_tcp_send(st, bp->xref, bp->port,
-				 st->heap[DIN] + bp->hp, bp->dlc) < 0)
+	    if (dir & DIR_OUT) {
+		if (csp_tcp_send(st, csp_buf_get_xref(bp), csp_buf_get_port(bp),
+				 buf_heap_din_ptr(st, bp),
+				 csp_buf_get_dlc(bp)) < 0)
 		    break;              // not written: try again next cycle
 	    }
-	    bp->flags &= ~(BUF_F_DIRTY|BUF_F_TX);
+	    csp_buf_set_flags(bp, fs & ~(BUF_F_DIRTY|BUF_F_TX));
 	    break;
 
 	case TR_UART:
-	    if (!(bp->flags & (BUF_F_DIRTY|BUF_F_TX)))
+	    if (!(fs & (BUF_F_DIRTY|BUF_F_TX)))
 		continue;
 	    // Like TCP: the flags survive a send that did not go, so a port
 	    // whose FIFO is full keeps the bytes rather than dropping them.
-	    if (bp->dir & DIR_OUT) {
-		if (csp_uart_send(st, bp->xref,
-				  st->heap[DIN] + bp->hp, bp->dlc) < 0)
+	    if (dir & DIR_OUT) {
+		if (csp_uart_send(st, csp_buf_get_xref(bp),
+				  buf_heap_din_ptr(st,bp),
+				  csp_buf_get_dlc(bp)) < 0)
 		    break;
 	    }
-	    bp->flags &= ~(BUF_F_DIRTY|BUF_F_TX);
+	    csp_buf_set_flags(bp, fs & ~(BUF_F_DIRTY|BUF_F_TX));
 	    break;
 
 	case TR_CONSOLE:
@@ -5020,14 +5080,14 @@ void csp_buf_output(csp_rt_t* st)
 	    // dlc, not nbytes: a stream carries what a rule put there, and the
 	    // rest of the buffer is last cycle's bytes. Sending those would
 	    // repeat them.
-	    if (!(bp->flags & (BUF_F_DIRTY|BUF_F_TX)))
+	    if (!(fs & (BUF_F_DIRTY|BUF_F_TX)))
 		continue;
-	    bp->flags &= ~(BUF_F_DIRTY|BUF_F_TX);
-	    if (bp->dir & DIR_OUT) {
-		if (bp->transport == TR_CONSOLE)
-		    csp_con_show(st->heap[DIN] + bp->hp, bp->dlc);
+	    csp_buf_set_flags(bp, fs & ~(BUF_F_DIRTY|BUF_F_TX));
+	    if (dir & DIR_OUT) {
+		if (tr == TR_CONSOLE)
+		    csp_con_show(buf_heap_din_ptr(st,bp), csp_buf_get_dlc(bp));
 		else
-		    csp_con_feed(st, st->heap[DIN] + bp->hp, bp->dlc);
+		    csp_con_feed(st, buf_heap_din_ptr(st, bp), csp_buf_get_dlc(bp));
 	    }
 	    break;
 
@@ -5038,27 +5098,29 @@ void csp_buf_output(csp_rt_t* st)
 	    // first every cycle and never drains -- and on a device with
 	    // auto-incrementing registers the two would interleave into
 	    // readings that are half one sample and half the next.
-	    if (bp->flags & BUF_F_BUSY)
+	    if (fs & BUF_F_BUSY)
 		continue;
 	    // An `in` buffer reads every cycle: that is what makes a sensor
 	    // behave like an analog input rather than something to poke. An
 	    // `out` one transfers only when a field changed or a rule asked.
-	    if (!(bp->dir & DIR_IN) && !(bp->flags & (BUF_F_DIRTY|BUF_F_TX)))
+	    if (!(dir & DIR_IN) && !(fs & (BUF_F_DIRTY|BUF_F_TX)))
 		continue;
-	    bp->flags &= ~(BUF_F_DIRTY|BUF_F_TX);
+	    csp_buf_set_flags(bp, fs & ~(BUF_F_DIRTY|BUF_F_TX));
 	    {
-		int rd = (bp->dir & DIR_IN) ? 1 : 0;
+		int rd = (dir & DIR_IN) ? 1 : 0;
 		// Reads land in the SHADOW half and writes come from the
 		// committed one -- the same split every other transport uses,
 		// so a rule that writes a field this cycle sends this cycle's
 		// value and not the one being assembled.
-		uint8_t* p = rd ? (st->heap[DOUT] + bp->hp)
-				: (st->heap[DIN] + bp->hp);
-		int r = (bp->transport == TR_I2C)
-		      ? csp_i2c_start(st, bp->xref, p, bp->nbytes, rd)
-		      : csp_spi_start(st, bp->xref, p, bp->nbytes, rd);
+		uint8_t* p = rd ?
+		    buf_heap_dout_ptr(st,bp) : buf_heap_din_ptr(st,bp);
+		int r = (tr == TR_I2C)
+		    ? csp_i2c_start(st, csp_buf_get_xref(bp), p,
+				    csp_buf_get_nbytes(bp), rd)
+		    : csp_spi_start(st, csp_buf_get_xref(bp), p,
+				    csp_buf_get_nbytes(bp), rd);
 		if (r == 0)
-		    bp->flags |= BUF_F_BUSY;
+		    csp_buf_or_flags(bp, BUF_F_BUSY);
 	    }
 	    break;
 
@@ -5096,21 +5158,23 @@ NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint16_t nbytes,
 {
     index_t b = st->nbuf;
     uint16_t hp;
+    csp_buf_t* bp;
     if (b >= st->buf_cap) {
 	csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
 	return BAD_INDEX;
     }
     if ((hp = csp_heap_alloc(st, nbytes)) == 0xffff)
 	return BAD_INDEX;
-    st->buf[b].hp        = hp;
-    st->buf[b].nbytes    = nbytes;
-    st->buf[b].transport = transport;
-    st->buf[b].xref      = xref;
-    st->buf[b].dir       = dir;
-    st->buf[b].flags     = 0;
-    st->buf[b].dlc       = nbytes;     // send the whole frame unless told less
-    st->buf[b].dlc_in    = nbytes;     // and the same before anything arrives
-    st->buf[b].owner     = BAD_INDEX;  // setup_buffer fills this in; setup_slot
+    bp = &st->buf[b];
+    csp_buf_set_hp(bp, hp);
+    csp_buf_set_nbytes(bp, nbytes);
+    csp_buf_set_transport(bp, transport);
+    csp_buf_set_xref(bp, xref);
+    csp_buf_set_dir(bp, dir);
+    csp_buf_set_flags(bp, 0);
+    csp_buf_set_dlc(bp, nbytes);      // send the whole frame unless told less
+    csp_buf_set_dlc_in(bp, nbytes);   // and the same before anything arrives
+    csp_buf_set_owner(bp, BAD_INDEX); // setup_buffer fills this in; setup_slot
 				       // has no leaf of its own to record
     st->nbuf++;
     return b;
@@ -5154,12 +5218,13 @@ NOINLINE static int setup_buffer(csp_rt_t* st, index_t ix)
 	if ((hp = csp_heap_alloc(st, nbytes)) == 0xffff)
 	    return -1;
 	vw = &st->view[st_index(st, ix)];
-	vw->kind   = VIEW_OWN;
-	vw->vt     = csp_decl_get_vt(&d);
-	vw->pos    = hp;
-	vw->len    = (res > VIEW_MAX_LEN) ? VIEW_MAX : (uint8_t)(res - 1);
-	vw->endian = E_NATIVE;
-	vw->flags  = ((res & 7) == 0) ? VIEW_F_SIMPLE : 0;
+	csp_view_set_kind(vw, VIEW_OWN);
+
+	csp_view_set_vt(vw, csp_decl_get_vt(&d));
+	csp_view_set_pos(vw, hp);
+	csp_view_set_len(vw,(res > VIEW_MAX_LEN) ? VIEW_MAX : (uint8_t)(res - 1));
+	csp_view_set_endian(vw, E_NATIVE);
+	csp_view_set_flags(vw, ((res & 7) == 0) ? VIEW_F_SIMPLE : 0);
 	return 0;
     }
 
@@ -5181,20 +5246,20 @@ NOINLINE static int setup_buffer(csp_rt_t* st, index_t ix)
     }
     if ((b = csp_buf_alloc(st, nbytes, transport, xref, csp_decl_get_dir(&d))) == BAD_INDEX)
 	return -1;
-    st->buf[b].port = port;
-    st->buf[b].owner = ix;             // ix, not the leaf: csp_enq_elist wants
+    csp_buf_set_port(&st->buf[b], port);
+    csp_buf_set_owner(&st->buf[b], ix);   // ix, not the leaf: csp_enq_elist wants
 				       // the object-qualified index
     vw = &st->view[st_index(st, ix)];
-    vw->kind     = VIEW_HEAP;
-    vw->vt       = csp_decl_get_vt(&d);
-    vw->buf    = b;
-    vw->pos    = 0;
+    csp_view_set_kind(vw, VIEW_HEAP);
+    csp_view_set_vt(vw, csp_decl_get_vt(&d));
+    csp_view_set_buf(vw, b);
+    csp_view_set_pos(vw, 0);
     // A whole-frame view would need len up to 511, but len is 8 bits. Cap it:
     // the frame is read and written field by field, and the whole-buffer view
     // only matters for a plain #buffer used as one value.
-    vw->len    = (res > VIEW_MAX_LEN) ? VIEW_MAX : (uint8_t)(res - 1);
-    vw->endian = E_NATIVE;
-    vw->flags  = ((res & 7) == 0) ? VIEW_F_SIMPLE : 0;
+    csp_view_set_len(vw, (res > VIEW_MAX_LEN) ? VIEW_MAX : (uint8_t)(res - 1));
+    csp_view_set_endian(vw, E_NATIVE);
+    csp_view_set_flags(vw, ((res & 7) == 0) ? VIEW_F_SIMPLE : 0);
     return 0;
 }
 
@@ -5232,7 +5297,7 @@ NOINLINE static int setup_variable(csp_rt_t* st, index_t ix)
     csp_load_decl(st, INDEX(ix), &d);
     if (csp_decl_get_bound(&d)) {                            // bit-field view into a buffer
 	csp_view_t* pv = &st->view[parent_leaf(st, ix)];
-	setup_view_values(vw, csp_decl_get_vt(&d), pv->buf, &d);
+	setup_view_values(vw, csp_decl_get_vt(&d), csp_view_get_buf(pv), &d);
 	return 0;
     }
     if (setup_buffer(st, ix) < 0)         // its own storage
@@ -5240,7 +5305,7 @@ NOINLINE static int setup_variable(csp_rt_t* st, index_t ix)
     // A #local is single-buffered -- see VIEW_F_LOCAL. Marked here, after
     // setup_buffer has filled the view in; heap_base and csp_slot do the rest.
     if (csp_decl_get_local(&d))
-	vw->flags |= VIEW_F_LOCAL;
+	csp_view_set_flags(vw, csp_view_get_flags(vw) | VIEW_F_LOCAL);
     csp_heap_set(st, vw, DIN,  csp_decl_get_va_init(&d));
     csp_heap_set(st, vw, DOUT, csp_decl_get_va_init(&d));
     return 0;
@@ -5263,10 +5328,10 @@ NOINLINE static int setup_slot(csp_rt_t* st, index_t ix)
     if ((hp = csp_heap_alloc(st, sizeof(value_t))) == 0xffff)
 	return -1;
     vw = &st->view[st_index(st, ix)];
-    vw->kind  = VIEW_SLOT;
-    vw->vt    = csp_decl_get_vt(&d);
-    vw->pos   = hp;
-    vw->flags = 0;
+    csp_view_set_kind(vw, VIEW_SLOT);
+    csp_view_set_vt(vw, csp_decl_get_vt(&d));
+    csp_view_set_pos(vw, hp);
+    csp_view_set_flags(vw, 0);
     return 0;
 }
 
@@ -5347,8 +5412,8 @@ NOINLINE static index_t buf_of_decl(csp_rt_t* st, index_t di)
     index_t b;
 
     for (b = 0; b < st->nbuf; b++)
-	if ((st->buf[b].owner != BAD_INDEX) &&
-	    ((index_t)INDEX(st->buf[b].owner) == di))
+	if ((csp_buf_get_owner(&st->buf[b]) != BAD_INDEX) &&
+	    ((index_t)INDEX(csp_buf_get_owner(&st->buf[b])) == di))
 	    return b;
     return BAD_INDEX;
 }
@@ -5391,7 +5456,7 @@ NOINLINE static int setup_routes(csp_rt_t* st)
 	st->route[st->nroute].src = sb;
 	st->route[st->nroute].dst = db;
 	st->nroute++;
-	st->buf[sb].flags |= BUF_F_ROUTED;
+	csp_buf_or_flags(&st->buf[sb], BUF_F_ROUTED);
     }
     return 0;
 }
@@ -6324,7 +6389,8 @@ int csp_rt_start(csp_rt_t* st)
 	    // synthetic Buf[a..b] view: translate to a HEAP view into the
 	    // parent buffer (already set up, since it has a lower index)
 	    csp_view_t* pv = &st->view[csp_decl_get_ca_id(&d)];
-	    setup_view_values(&st->view[st_index(st, ix)], csp_decl_get_vt(&d), pv->buf, &d);
+	    setup_view_values(&st->view[st_index(st, ix)], csp_decl_get_vt(&d),
+			      csp_view_get_buf(pv), &d);
 	    break;
 	}
 	case DECL_VARIABLE:

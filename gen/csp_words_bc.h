@@ -10,11 +10,37 @@
 #define CSP_W_LOCAL_NUMBER_ENTRY 34
 #define CSP_W_DECL_KIND_ENTRY 161
 #define CSP_W_LEAF_MARK_ENTRY 227
-#define CSP_WORDS_BC_LEN 249
+#define CSP_W_BUF_OWNER_TAG_ENTRY 249
+#define CSP_WORDS_BC_LEN 280
 
 static mc_cell_t lw_csp_tag(void* c_, mc_cell_t t_)
 {
     return (mc_cell_t)csp_tag((csp_rt_t*)c_, t_);
+}
+static mc_cell_t* lst_nd(void* c_, mc_cell_t* sp_)
+{
+    *--sp_ = (mc_cell_t)((csp_rt_t*)c_)->ps.nd;
+    return sp_;
+}
+static mc_cell_t* lst_nn(void* c_, mc_cell_t* sp_)
+{
+    *--sp_ = (mc_cell_t)((csp_rt_t*)c_)->ps.nn;
+    return sp_;
+}
+static mc_cell_t* lst_nq(void* c_, mc_cell_t* sp_)
+{
+    *--sp_ = (mc_cell_t)((csp_rt_t*)c_)->ps.nq;
+    return sp_;
+}
+static mc_cell_t* lst_nbuf(void* c_, mc_cell_t* sp_)
+{
+    *--sp_ = (mc_cell_t)((csp_rt_t*)c_)->nbuf;
+    return sp_;
+}
+static mc_cell_t* lst_cur(void* c_, mc_cell_t* sp_)
+{
+    *--sp_ = (mc_cell_t)((csp_rt_t*)c_)->cur;
+    return sp_;
 }
 
 static const mc_leaf_t csp_word_leaves[] = {
@@ -22,14 +48,20 @@ static const mc_leaf_t csp_word_leaves[] = {
 };
 #define csp_word_leaves_N  1
 
-// no csp_word_leavesn
-#define csp_word_leavesn     ((const mc_leafn_t*)0)
-#define csp_word_leavesn_N  0
+static const mc_leafn_t csp_word_leavesn[] = {
+    lst_nd,
+    lst_nn,
+    lst_nq,
+    lst_nbuf,
+    lst_cur,
+};
+#define csp_word_leavesn_N  5
 
 #define CSP_W_IS_LOCAL_FRAME 2
 #define CSP_W_LOCAL_NUMBER_FRAME 6
 #define CSP_W_DECL_KIND_FRAME 4
 #define CSP_W_LEAF_MARK_FRAME 2
+#define CSP_W_BUF_OWNER_TAG_FRAME 3
 
 CSP_STATIC_ASSERT((DECL_CONSTANT) <= 255,
 		  "DECL_CONSTANT does not fit a micro-csp LIT8 operand");
@@ -45,38 +77,47 @@ CSP_STATIC_ASSERT((INDEX_MASK_LO) <= 255,
 		  "INDEX_MASK_LO does not fit a micro-csp LIT8 operand");
 
 static const uint8_t csp_words_bc[] = {
-    MC_LSET, 0, MC_LGET, 0, MC_LIT16, INDEX_MASK_LO, INDEX_MASK_HI, MC_AND,
-    MC_LSET, 1, MC_LGET, 1, MC_ND, MC_LT, MC_DUP, MC_JZ,
-    16, MC_DROP, MC_LGET, 1, MC_DECL, MFA_TYPE, MC_LIT8, DECL_VARIABLE,
-    MC_EQ, MC_DUP, MC_JZ, 5, MC_DROP, MC_LGET, 1, MC_DECL,
-    MFA_LOCAL, MC_EXIT, MC_LSET, 0, MC_LGET, 0, MC_LIT16, INDEX_MASK_LO,
-    INDEX_MASK_HI, MC_AND, MC_LSET, 1, MC_LIT8, 0, MC_LSET, 2,
-    MC_LGET, 1, MC_LSET, 3, MC_LIT8, 0, MC_LSET, 4,
-    MC_LIT8, 0, MC_LGET, 3, MC_LT, MC_DUP, MC_JZ, 6,
-    MC_DROP, MC_LGET, 2, MC_LIT8, 0, MC_EQ, MC_JZ, 39,
-    MC_LGET, 3, MC_LIT8, 1, MC_SUB, MC_DECL, MFA_TYPE, MC_LSET,
-    5, MC_LGET, 5, MC_LIT8, DECL_MODULE, MC_EQ, MC_DUP, MC_ZEQ,
-    MC_JZ, 6, MC_DROP, MC_LGET, 5, MC_LIT8, DECL_END, MC_EQ,
-    MC_JZ, 4, MC_LGET, 3, MC_LSET, 2, MC_LGET, 3,
-    MC_LIT8, 1, MC_SUB, MC_LSET, 3, MC_JMP, 201, MC_LGET,
-    2, MC_LSET, 3, MC_LGET, 3, MC_LGET, 1, MC_LT,
-    MC_JZ, 33, MC_LGET, 3, MC_DECL, MFA_TYPE, MC_LIT8, DECL_VARIABLE,
-    MC_EQ, MC_DUP, MC_JZ, 5, MC_DROP, MC_LGET, 3, MC_DECL,
-    MFA_LOCAL, MC_JZ, 7, MC_LGET, 4, MC_LIT8, 1, MC_ADD,
-    MC_LSET, 4, MC_LGET, 3, MC_LIT8, 1, MC_ADD, MC_LSET,
-    3, MC_JMP, 216, MC_LGET, 4, MC_LIT8, 1, MC_ADD,
-    MC_EXIT, MC_LSET, 0, MC_LGET, 0, MC_LIT16, INDEX_MASK_LO, INDEX_MASK_HI,
-    MC_AND, MC_LSET, 1, MC_LIT8, 0, MC_LSET, 2, MC_LGET,
-    1, MC_DECL, MFA_TYPE, MC_LSET, 3, MC_LGET, 3, MC_LIT8,
-    DECL_VARIABLE, MC_EQ, MC_JZ, 6, MC_LIT8, 1, MC_LSET, 2,
-    MC_JMP, 30, MC_LGET, 3, MC_LIT8, DECL_CONSTANT, MC_EQ, MC_JZ,
-    6, MC_LIT8, 2, MC_LSET, 2, MC_JMP, 17, MC_LGET,
-    3, MC_LIT8, DECL_MODULE, MC_EQ, MC_JZ, 6, MC_LIT8, 3,
-    MC_LSET, 2, MC_JMP, 4, MC_LIT8, 9, MC_LSET, 2,
-    MC_LGET, 2, MC_EXIT, MC_LSET, 0, MC_LGET, 0, MC_NATIVE,
-    0, MC_LSET, 1, MC_LGET, 0, MC_CALL, 0, 0,
-    2, MC_JZ, 3, MC_LIT8, 36, MC_EXIT, MC_LGET, 1,
-    MC_EXIT,
-};
+// CSP_W_IS_LOCAL_ENTRY
+MC_LSET,0,MC_LGET,0,MC_LIT16,INDEX_MASK_LO,INDEX_MASK_HI,MC_AND,
+MC_LSET,1,MC_LGET,1,MC_ND,MC_LT,MC_DUP,MC_JZ,
+16,MC_DROP,MC_LGET,1,MC_DECL,MFD_TYPE,MC_LIT8,DECL_VARIABLE,
+MC_EQ,MC_DUP,MC_JZ,5,MC_DROP,MC_LGET,1,MC_DECL,
+MFD_LOCAL,MC_EXIT,
+// CSP_W_LOCAL_NUMBER_ENTRY
+MC_LSET,0,MC_LGET,0,MC_LIT16,INDEX_MASK_LO,INDEX_MASK_HI,MC_AND,
+MC_LSET,1,MC_LIT8,0,MC_LSET,2,MC_LGET,1,
+MC_LSET,3,MC_LIT8,0,MC_LSET,4,MC_LIT8,0,
+MC_LGET,3,MC_LT,MC_DUP,MC_JZ,6,MC_DROP,MC_LGET,
+2,MC_LIT8,0,MC_EQ,MC_JZ,39,MC_LGET,3,
+MC_LIT8,1,MC_SUB,MC_DECL,MFD_TYPE,MC_LSET,5,MC_LGET,
+5,MC_LIT8,DECL_MODULE,MC_EQ,MC_DUP,MC_ZEQ,MC_JZ,6,
+MC_DROP,MC_LGET,5,MC_LIT8,DECL_END,MC_EQ,MC_JZ,4,
+MC_LGET,3,MC_LSET,2,MC_LGET,3,MC_LIT8,1,
+MC_SUB,MC_LSET,3,MC_JMP,201,MC_LGET,2,MC_LSET,
+3,MC_LGET,3,MC_LGET,1,MC_LT,MC_JZ,33,
+MC_LGET,3,MC_DECL,MFD_TYPE,MC_LIT8,DECL_VARIABLE,MC_EQ,MC_DUP,
+MC_JZ,5,MC_DROP,MC_LGET,3,MC_DECL,MFD_LOCAL,MC_JZ,
+7,MC_LGET,4,MC_LIT8,1,MC_ADD,MC_LSET,4,
+MC_LGET,3,MC_LIT8,1,MC_ADD,MC_LSET,3,MC_JMP,
+216,MC_LGET,4,MC_LIT8,1,MC_ADD,MC_EXIT,
+// CSP_W_DECL_KIND_ENTRY
+MC_LSET,0,MC_LGET,0,MC_LIT16,INDEX_MASK_LO,INDEX_MASK_HI,MC_AND,
+MC_LSET,1,MC_LIT8,0,MC_LSET,2,MC_LGET,1,
+MC_DECL,MFD_TYPE,MC_LSET,3,MC_LGET,3,MC_LIT8,DECL_VARIABLE,
+MC_EQ,MC_JZ,6,MC_LIT8,1,MC_LSET,2,MC_JMP,
+30,MC_LGET,3,MC_LIT8,DECL_CONSTANT,MC_EQ,MC_JZ,6,
+MC_LIT8,2,MC_LSET,2,MC_JMP,17,MC_LGET,3,
+MC_LIT8,DECL_MODULE,MC_EQ,MC_JZ,6,MC_LIT8,3,MC_LSET,
+2,MC_JMP,4,MC_LIT8,9,MC_LSET,2,MC_LGET,
+2,MC_EXIT,
+// CSP_W_LEAF_MARK_ENTRY
+MC_LSET,0,MC_LGET,0,MC_NATIVE,0,MC_LSET,1,
+MC_LGET,0,MC_CALL,0,0,2,MC_JZ,3,
+MC_LIT8,36,MC_EXIT,MC_LGET,1,MC_EXIT,
+// CSP_W_BUF_OWNER_TAG_ENTRY
+MC_LSET,0,MC_NATIVEN,3,MC_LSET,1,MC_LGET,0,
+MC_LGET,1,MC_LT,MC_JZ,15,MC_LGET,0,MC_BUF,
+MFB_OWNER,MC_LIT16,INDEX_MASK_LO,INDEX_MASK_HI,MC_AND,MC_LSET,2,MC_LGET,
+2,MC_NATIVE,0,MC_EXIT,MC_LIT8,63,MC_EXIT,};
 
 #endif

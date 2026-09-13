@@ -37,17 +37,17 @@ static void test_fields(void)
 
     memset(&d, 0, sizeof(d));
     csp_decl_set_type(&d, 0x0F);
-    csp_decl_set_name(&d, 0x1FF);
+    csp_decl_set_name(&d, 0xFF);
     csp_decl_set_vt(&d, 0x0A);
 
-    if (mc_field_get(&d, &mc_decl_fields[MFA_TYPE]) != csp_decl_get_type(&d))
-	fail("mc_field_get type", mc_field_get(&d, &mc_decl_fields[MFA_TYPE]),
+    if (mc_field_get(&d, &mc_decl_fields[MFD_TYPE]) != csp_decl_get_type(&d))
+	fail("mc_field_get type", mc_field_get(&d, &mc_decl_fields[MFD_TYPE]),
 	     csp_decl_get_type(&d));
-    if (mc_field_get(&d, &mc_decl_fields[MFA_NAME]) != csp_decl_get_name(&d))
-	fail("mc_field_get name", mc_field_get(&d, &mc_decl_fields[MFA_NAME]),
+    if (mc_field_get(&d, &mc_decl_fields[MFD_NAME]) != csp_decl_get_name(&d))
+	fail("mc_field_get name", mc_field_get(&d, &mc_decl_fields[MFD_NAME]),
 	     csp_decl_get_name(&d));
-    if (mc_field_get(&d, &mc_decl_fields[MFA_VT]) != csp_decl_get_vt(&d))
-	fail("mc_field_get vt", mc_field_get(&d, &mc_decl_fields[MFA_VT]),
+    if (mc_field_get(&d, &mc_decl_fields[MFD_VT]) != csp_decl_get_vt(&d))
+	fail("mc_field_get vt", mc_field_get(&d, &mc_decl_fields[MFD_VT]),
 	     csp_decl_get_vt(&d));
 }
 
@@ -110,10 +110,14 @@ static const void* my_decl(void* ctx, mc_cell_t i)
     return (i == 0) ? &hook_decl : NULL;
 }
 
-static mc_cell_t my_nd(void* ctx)
+static mc_cell_t my_state(void* ctx, mc_cell_t i)
 {
     (void)ctx;
-    return 7;
+    switch(i) {
+    case 0: return 7;  // ND
+    case 1: return 2;  // NN
+    default: return 3; // ?
+    }
 }
 
 static int run(const uint8_t* code, uint16_t len, mc_cell_t* out)
@@ -176,8 +180,8 @@ PROG(p_loop,
 //  0 LIT8 10 | 2 CALL 7,0 frame 0 | 6 BYE | 7 INC | 8 INC | 9 EXIT
 PROG(p_call, MC_LIT8, 10, MC_CALL, 7, 0, 0, MC_BYE, MC_INC, MC_INC, MC_EXIT);
 
-PROG(p_decl, MC_LIT8, 0, MC_DECL, MFA_TYPE, MC_BYE);
-PROG(p_declbad, MC_LIT8, 1, MC_DECL, MFA_TYPE, MC_BYE);
+PROG(p_decl, MC_LIT8, 0, MC_DECL, MFD_TYPE, MC_BYE);
+PROG(p_declbad, MC_LIT8, 1, MC_DECL, MFD_TYPE, MC_BYE);
 
 PROG(p_sum3, MC_LIT8, 1, MC_LIT8, 2, MC_LIT8, 4, MC_NATIVEN, 0, MC_BYE);
 // split leaves ( lo hi ) with hi on top; ADD folds them back to 0x12+0x34.
@@ -225,7 +229,7 @@ static void test_machine(void)
 int main(void)
 {
     mc_decl_hook = my_decl;
-    mc_nd_hook = my_nd;
+    mc_state_hook = my_state;
     test_fields();
     test_machine();
     if (errors == 0)

@@ -19,11 +19,18 @@
 #include "csp_mcsp.h"
 #include "csp_words.h"
 #include "csp_words_bc.h"
+#include "csp_layout_raw.h"
 
-#define NDECL 8
+#define NDECL  8
+#define NINSTR 8
+#define NBUF   4
+#define NVIEW  9
 
-static csp_decl_t table[NDECL];
-static csp_rt_t   state;
+static csp_decl_t  table[NDECL];
+static csp_instr_t instr[NINSTR];
+static csp_buf_t   bufs[NBUF];
+static csp_view_t  views[NVIEW];
+static csp_rt_t    state;
 
 // The runtime's own; not linked here, so both back ends reach the same array.
 //
@@ -55,9 +62,29 @@ static const void* hook_decl(void* ctx, mc_cell_t i)
     return csp_decl_ref((csp_rt_t*)ctx, (index_t)i);
 }
 
-static mc_cell_t hook_nd(void* ctx)
+static const void* hook_instr(void* ctx, mc_cell_t i)
 {
-    return (mc_cell_t)((csp_rt_t*)ctx)->ps.nd;
+    return &instr[i];
+}
+
+
+static const void* hook_buf(void* ctx, mc_cell_t i)
+{
+    return &bufs[i];
+}
+
+static const void* hook_view(void* ctx, mc_cell_t i)
+{
+    return &views[i];
+}
+
+static mc_cell_t hook_state(void* ctx, mc_cell_t i)
+{
+    switch(i) {
+    case 0: return (mc_cell_t)((csp_rt_t*)ctx)->ps.nd;
+    case 1: return (mc_cell_t)((csp_rt_t*)ctx)->ps.nn;
+    default: return 0;
+    }
 }
 
 // The ORIGINAL, break and all, copied from src/csp_print.c before it was
@@ -130,14 +157,39 @@ int main(void)
     };
     static const uint8_t locals[NDECL] = { 0, 0, 1, 1, 0, 1, 1, 0 };
 
+    printf("INFO sizeof(csp_decl_t) = %ld\n", sizeof(csp_decl_t));
+    printf("INFO sizeof(csp_buf_t) = %ld\n", sizeof(csp_buf_t));
+    printf("INFO sizeof(csp_view_t) = %ld\n", sizeof(csp_view_t));    
+    printf("INFO sizeof(table) = %ld = %d*%ld\n",
+	   sizeof(table), NDECL, sizeof(table[0]));
+    printf("INFO sizeof(bufs) = %ld = %d*%ld\n",
+	   sizeof(bufs), NBUF, sizeof(bufs[0]));
+    printf("INFO sizeof(views) = %ld = %d*%ld\n",
+	   sizeof(views), NVIEW, sizeof(views[0]));
+
+    printf("INFO sizeof(csp_decl_raw_t) = %ld\n", sizeof(csp_decl_raw_t));
+    printf("INFO sizeof(csp_buf_raw_t) = %ld\n", sizeof(csp_buf_raw_t));
+    printf("INFO sizeof(csp_view_raw_t) = %ld\n", sizeof(csp_view_raw_t));
+
     mc_decl_hook = hook_decl;
-    mc_nd_hook = hook_nd;
+    mc_instr_hook = NULL;
+    mc_view_hook = hook_view;
+    mc_buf_hook = hook_buf;
+    mc_state_hook = hook_state;
 
     memset(&spare, 0, sizeof(spare));
     csp_decl_set_type(&spare, (uint8_t)DECL_VARIABLE);
     csp_decl_set_local(&spare, 1);
 
     memset(&state, 0, sizeof(state));
+    // A buffer table, so a word can reach one. st->buf is a pointer into the
+    // arena in a real runtime; here it is a static, which is all the word can
+    // tell apart.
+    memset(bufs, 0, sizeof(bufs));
+    for (i = 0; i < NBUF; i++)
+	csp_buf_set_owner(&bufs[i],(index_t)(i + 1));
+    state.buf = bufs;
+    state.nbuf = NBUF;
     for (i = 0; i < NDECL; i++) {
 	memset(&table[i], 0, sizeof(table[i]));
 	csp_decl_set_type(&table[i], (uint8_t)kinds[i]);
@@ -202,6 +254,20 @@ int main(void)
 	    } else if (c != (int)b) {
 		printf("FAIL leaf_mark nd=%d ix=%d: C says %d, bytecode says %u\n",
 		       k, i, c, (unsigned)b);
+		errors++;
+	    }
+
+	    // A buffer field and a runtime count, neither of which a word could
+	    // name before. i runs past NBUF on purpose: the word's own bounds
+	    // test is the thing being compared.
+	    c = csp_buf_owner_tag(&state, (index_t)i);
+	    rc = run_bc(CSP_W_BUF_OWNER_TAG_ENTRY, (mc_cell_t)i, &b);
+	    if (rc != MC_OK) {
+		printf("FAIL buf_owner_tag ix=%d: bytecode stopped, rc=%d\n", i, rc);
+		errors++;
+	    } else if (c != (int)b) {
+		printf("FAIL buf_owner_tag ix=%d: C says %d, bytecode says %u\n",
+		       i, c, (unsigned)b);
 		errors++;
 	    }
 

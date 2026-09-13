@@ -935,24 +935,7 @@ typedef enum {
 #define VIEW_MAX_LEN  (1 << VIEW_LEN_BITS)
 #define VIEW_MAX      (VIEW_MAX_LEN-1)
 
-// One per leaf index_t (indexed by st_index) -- the biggest per-program table
-// (nleaf entries), so every byte here is multiplied by the leaf count. kind/vt/
-// endian pack into one byte (2+4+2), which pays for a 16-bit buf.
-// NOTE: uint8_t bit fields, deliberately NOT a PACKED struct -- packing would
-// misalign `buf` and fault on M0 (see the csp_func_t lesson), and `unsigned:16`
-// after 26 bits would spill to 8 bytes.
-// `buf` is uint16_t: the same width as the nbuf counter (index_t) that produces
-// it, so a buffer id can no longer silently truncate the way uint8_t did.
-typedef struct {
-    uint8_t kind:2;              // view_kind_t
-    uint8_t vt:TYPE_BITS;        // value type (vtype_t 0..11); SLOT reads it from decl
-    uint8_t endian:ENDIAN_BITS;  // HEAP/OWN: vendian_t (native/little/big)
-    uint8_t flags:VIEW_F_BITS;   // VIEW_F_* -- read according to `kind`
-    uint8_t len:VIEW_LEN_BITS;   // HEAP/OWN: number of bits - 1
-    uint16_t pos;                // HEAP: start bit in buffer
-				 // SLOT/OWN: heap BYTE offset of the storage
-    uint16_t buf;                // VIEW_HEAP: buffer id. An owner has none.
-} csp_view_t;
+typedef uint8_t csp_view_t[6];
 
 // csp_buf_t.transport -- what the buffer is bound to on the outside.
 //
@@ -1077,47 +1060,7 @@ typedef struct {
     index_t dst;
 } csp_rpair_t;
 
-// One per unique buffer. RAM table, filled at start.
-typedef struct {
-    uint16_t hp;        // heap byte offset
-    uint16_t nbytes;    // size in bytes (up to 1023 -- widened from the freed loc)
-    // ONE byte for both, which pays for dlc_in below at no cost in struct size.
-    // transport_t has eight members and dir has three, so four bits each is
-    // room to spare -- and the transport numbers are ABI, so the ceiling of 16
-    // is a real bound rather than a guess.
-    uint8_t  transport:4;   // transport_t
-    uint8_t  dir:4;         // in/out
-    uint8_t  flags;     // BUF_F_*
-    uint8_t  dlc;       // bytes to send / bytes last received. Starts at nbytes
-			// (the declared frame size) and is never allowed past
-			// it -- the heap has room for no more.
-    // THE LENGTH THAT ARRIVED, held until commit publishes it into dlc.
-    //
-    // Without this, dlc was a live field while the BYTES were double-buffered:
-    // input runs before the rules, so a rule guarded on `.rx` read the NEWEST
-    // length against the PREVIOUS chunk's bytes. On a byte stream that silently
-    // eats a character at every boundary where the next chunk is shorter --
-    // `abcdefghijklmnopqrstuvwxyz` arrived as `...uvwyz`, one letter gone, with
-    // nothing anywhere reporting a loss. CAN has it too: `F201.dlc` in a rule
-    // was the length of a frame the rule had not been shown yet.
-    uint8_t  dlc_in;
-    // UDP's endpoint does not fit in xref: an IPv4 address is already 32 bits
-    // and the port is another 16. Here rather than in the DECLARATION, which a
-    // ROM image carries and which has four spare bits, not sixteen -- the
-    // declaration keeps a string constant and setup_buffer parses it into these
-    // two. Zero for every other transport.
-    uint16_t port;
-    uint32_t xref;      // pin-number / can-id / i2c or spi endpoint / IPv4
-    index_t  owner;     // the decl (with object) whose leaf IS this buffer, or
-			// BAD_INDEX. Set by setup_buffer, which is the only
-			// place that knows both ends. buf_mark_fields used to
-			// find it by scanning every declaration -- a flash read
-			// per decl, per received CAN frame -- and that scan
-			// could only ever match a GLOBAL, since it compared a
-			// decl index against a leaf index. Those agree only
-			// when offs is 0, so a #buffer inside a module was
-			// never marked at all.
-} csp_buf_t;
+typedef uint8_t csp_buf_t[16];
 
 // csp_buf_t.flags
 #define BUF_F_DIRTY  0x01  // a field changed: an out frame needs sending.
@@ -1466,8 +1409,6 @@ extern const op_entry_t decl_table[] RODATA;
 
 // Four bytes; see csp_decl_t above for why this says nothing about them.
 typedef uint8_t csp_instr_t[4];
-// typedef uint8_t csp_instr_t[4];
-
 
 // The instruction word must stay a clean 4 bytes: every format has to fit
 // INSTR_COMMON(6) + a full index_t(16) leaves 10 bits (BODY_BITS) for any packed
@@ -2581,15 +2522,16 @@ CSP_STATIC_ASSERT(offsetof(csp_rt_t, nio) + sizeof(((csp_rt_t*)0)->nio) <= 64,
 // "clever" bit: never deref a PROGMEM struct directly.)
 #if defined(__AVR__)
 
-static NOINLINE void ro_copy_decl(const csp_decl_t* p, csp_decl_t* dst)
+static inline void ro_copy_decl(const csp_decl_t* p, csp_decl_t* dst)
 {
     memcpy_P(dst, p, sizeof(csp_decl_t));
-//    ((uint32_t*)dst)[0] = ro_dword(((uint32_t*)p)[0]);
-//    ((uint32_t*)dst)[1] = ro_dword(((uint32_t*)p)[1]);
 }
 
 static inline void ro_copy_instr(const csp_instr_t* p, csp_instr_t* dst)
-{ memcpy_P(dst, p, sizeof(*dst)); }
+{
+    memcpy_P(dst, p, sizeof(*dst));
+}
+
 // NOT static inline, unlike its neighbours: the image header is 60 bytes, so
 // gcc never actually inlines the copy -- it emits an out-of-line body in EVERY
 // translation unit that mentions it, and the linker cannot merge them because

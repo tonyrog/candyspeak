@@ -41,7 +41,10 @@
 %%                                 C, an AND in bytecode -- and not optional:
 %%                                 leaving it out is a different function.
 %%        | {decl, Expr, Field}      field Field of the declaration at Expr
+%%        | {instr, Expr, Field}     field Field of the instruction at Expr
+%%        | {buf, Expr, Field}       field Field of the buffer at Expr
 %%        | {nd}                     the declaration count
+%%        | {state, Name}            a declared runtime field
 %%        | {op, Op, A, B}           eq ne lt add sub and or
 %%        | {andthen, A, B}          SHORT-CIRCUIT; C gets &&, bytecode a jump
 %%        | {orthen, A, B}           the same, for ||
@@ -49,6 +52,21 @@
 %%                                 Which it is is decided by the generator, not
 %%                                 spelled here: st is passed implicitly either
 %%                                 way and the call reads the same.
+%%
+%%   {state, Name, CType, Path}
+%%
+%%       A field of the runtime reachable from a word.  C reads st->Path; the
+%%       bytecode gets a leaf that pushes it.  Named rather than spelled at each
+%%       use so a word says WHAT it wants, not where the runtime keeps it.
+%%
+%%   {buffield, Field, CType}
+%%
+%%       A field of a buffer.  C reads st->buf[i].Field.  csp_buf_t is NOT in
+%%       utils/layout.terms and cannot be: it is not packed and carries a
+%%       uint32_t, so the host pads it to twenty bytes where AVR packs it to
+%%       sixteen -- a byte table would be wrong on one of them.  Packing it
+%%       would be worse still, since buf is on the HOT path.  So the bytecode
+%%       reaches it through a generated accessor instead of a byte offset.
 %%
 %%   {native, CName, NArgs, RetType}
 %%
@@ -132,3 +150,29 @@
   {'if', {call, is_local, [{var, ix}]},
    [{return, {const, 36}}]},          %% '$'
   {return, {var, t}}]}.
+
+%% ---------------------------------------------------------------------------
+%% What a word may reach in the runtime.  Declared here so the two back ends
+%% agree on it and so adding one is an edit to this file rather than to both.
+
+{state, nd,   'index_t', "ps.nd"}.
+{state, nn,   'index_t', "ps.nn"}.
+{state, nq,   'index_t', "ps.nq"}.
+{state, nbuf, 'index_t', "nbuf"}.
+{state, cur,  'uint8_t', "cur"}.
+
+%%{buffield, owner,     'index_t'}.
+%%{buffield, transport, 'uint8_t'}.
+%%{buffield, dir,       'uint8_t'}.
+%%{buffield, flags,     'uint8_t'}.
+%%{buffield, nbytes,    'uint16_t'}.
+
+%% A buffer's kind marker for a listing: what the declaration that OWNS it is.
+%% Reaches three things a word could not before -- a buffer field, the runtime's
+%% own count, and a declaration through the index it finds there.
+{word, buf_owner_tag, [b], 'int',
+ [{local, n, {state, nbuf}},
+  {'if', {op, lt, {var, b}, {var, n}},
+   [{local, o, {index, {buf, {var, b}, owner}}},
+    {return, {call, csp_tag, [{var, o}]}}]},
+  {return, {const, 63}}]}.          %% '?' -- no such buffer

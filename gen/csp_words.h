@@ -75,4 +75,17 @@ int csp_leaf_mark(csp_rt_t* st, index_t ix)
 	return t;
 }
 
+int csp_buf_owner_tag(csp_rt_t* st, index_t b)
+{
+	index_t n;
+	index_t o;
+
+	n = st->nbuf;
+	if ((b < n)) {
+		o = INDEX(csp_buf_get_owner(&st->buf[b]));
+		return csp_tag(st, o);
+	}
+	return 63;
+}
+
 #endif

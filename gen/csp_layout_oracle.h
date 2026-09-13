@@ -115,6 +115,148 @@
 	FAIL("op set", (long)(REC).op, 63L); \
     } while (0)
 
+#define CSP_ORACLE_BUF(REC, FAIL) do { \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).hp = 65535; \
+    if ((long)csp_buf_get_hp((const csp_buf_t*)&(REC)) != 65535L) \
+	FAIL("hp", (long)csp_buf_get_hp((const csp_buf_t*)&(REC)), 65535L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_buf_set_hp((csp_buf_t*)&(REC), 65535); \
+    if ((long)(REC).hp != 65535L) \
+	FAIL("hp set", (long)(REC).hp, 65535L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).nbytes = 65535; \
+    if ((long)csp_buf_get_nbytes((const csp_buf_t*)&(REC)) != 65535L) \
+	FAIL("nbytes", (long)csp_buf_get_nbytes((const csp_buf_t*)&(REC)), 65535L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_buf_set_nbytes((csp_buf_t*)&(REC), 65535); \
+    if ((long)(REC).nbytes != 65535L) \
+	FAIL("nbytes set", (long)(REC).nbytes, 65535L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).transport = 15; \
+    if ((long)csp_buf_get_transport((const csp_buf_t*)&(REC)) != 15L) \
+	FAIL("transport", (long)csp_buf_get_transport((const csp_buf_t*)&(REC)), 15L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_buf_set_transport((csp_buf_t*)&(REC), 15); \
+    if ((long)(REC).transport != 15L) \
+	FAIL("transport set", (long)(REC).transport, 15L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).dir = 15; \
+    if ((long)csp_buf_get_dir((const csp_buf_t*)&(REC)) != 15L) \
+	FAIL("dir", (long)csp_buf_get_dir((const csp_buf_t*)&(REC)), 15L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_buf_set_dir((csp_buf_t*)&(REC), 15); \
+    if ((long)(REC).dir != 15L) \
+	FAIL("dir set", (long)(REC).dir, 15L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).flags = 255; \
+    if ((long)csp_buf_get_flags((const csp_buf_t*)&(REC)) != 255L) \
+	FAIL("flags", (long)csp_buf_get_flags((const csp_buf_t*)&(REC)), 255L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_buf_set_flags((csp_buf_t*)&(REC), 255); \
+    if ((long)(REC).flags != 255L) \
+	FAIL("flags set", (long)(REC).flags, 255L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).dlc = 255; \
+    if ((long)csp_buf_get_dlc((const csp_buf_t*)&(REC)) != 255L) \
+	FAIL("dlc", (long)csp_buf_get_dlc((const csp_buf_t*)&(REC)), 255L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_buf_set_dlc((csp_buf_t*)&(REC), 255); \
+    if ((long)(REC).dlc != 255L) \
+	FAIL("dlc set", (long)(REC).dlc, 255L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).dlc_in = 255; \
+    if ((long)csp_buf_get_dlc_in((const csp_buf_t*)&(REC)) != 255L) \
+	FAIL("dlc_in", (long)csp_buf_get_dlc_in((const csp_buf_t*)&(REC)), 255L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_buf_set_dlc_in((csp_buf_t*)&(REC), 255); \
+    if ((long)(REC).dlc_in != 255L) \
+	FAIL("dlc_in set", (long)(REC).dlc_in, 255L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).port = 65535; \
+    if ((long)csp_buf_get_port((const csp_buf_t*)&(REC)) != 65535L) \
+	FAIL("port", (long)csp_buf_get_port((const csp_buf_t*)&(REC)), 65535L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_buf_set_port((csp_buf_t*)&(REC), 65535); \
+    if ((long)(REC).port != 65535L) \
+	FAIL("port set", (long)(REC).port, 65535L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).xref = 4294967295; \
+    if ((long)csp_buf_get_xref((const csp_buf_t*)&(REC)) != 4294967295L) \
+	FAIL("xref", (long)csp_buf_get_xref((const csp_buf_t*)&(REC)), 4294967295L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_buf_set_xref((csp_buf_t*)&(REC), 4294967295); \
+    if ((long)(REC).xref != 4294967295L) \
+	FAIL("xref set", (long)(REC).xref, 4294967295L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).owner = 65535; \
+    if ((long)csp_buf_get_owner((const csp_buf_t*)&(REC)) != 65535L) \
+	FAIL("owner", (long)csp_buf_get_owner((const csp_buf_t*)&(REC)), 65535L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_buf_set_owner((csp_buf_t*)&(REC), 65535); \
+    if ((long)(REC).owner != 65535L) \
+	FAIL("owner set", (long)(REC).owner, 65535L); \
+    } while (0)
+
+#define CSP_ORACLE_VIEW(REC, FAIL) do { \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).kind = 3; \
+    if ((long)csp_view_get_kind((const csp_view_t*)&(REC)) != 3L) \
+	FAIL("kind", (long)csp_view_get_kind((const csp_view_t*)&(REC)), 3L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_view_set_kind((csp_view_t*)&(REC), 3); \
+    if ((long)(REC).kind != 3L) \
+	FAIL("kind set", (long)(REC).kind, 3L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).vt = 15; \
+    if ((long)csp_view_get_vt((const csp_view_t*)&(REC)) != 15L) \
+	FAIL("vt", (long)csp_view_get_vt((const csp_view_t*)&(REC)), 15L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_view_set_vt((csp_view_t*)&(REC), 15); \
+    if ((long)(REC).vt != 15L) \
+	FAIL("vt set", (long)(REC).vt, 15L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).endian = 3; \
+    if ((long)csp_view_get_endian((const csp_view_t*)&(REC)) != 3L) \
+	FAIL("endian", (long)csp_view_get_endian((const csp_view_t*)&(REC)), 3L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_view_set_endian((csp_view_t*)&(REC), 3); \
+    if ((long)(REC).endian != 3L) \
+	FAIL("endian set", (long)(REC).endian, 3L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).flags = 3; \
+    if ((long)csp_view_get_flags((const csp_view_t*)&(REC)) != 3L) \
+	FAIL("flags", (long)csp_view_get_flags((const csp_view_t*)&(REC)), 3L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_view_set_flags((csp_view_t*)&(REC), 3); \
+    if ((long)(REC).flags != 3L) \
+	FAIL("flags set", (long)(REC).flags, 3L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).len = 63; \
+    if ((long)csp_view_get_len((const csp_view_t*)&(REC)) != 63L) \
+	FAIL("len", (long)csp_view_get_len((const csp_view_t*)&(REC)), 63L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_view_set_len((csp_view_t*)&(REC), 63); \
+    if ((long)(REC).len != 63L) \
+	FAIL("len set", (long)(REC).len, 63L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).pos = 65535; \
+    if ((long)csp_view_get_pos((const csp_view_t*)&(REC)) != 65535L) \
+	FAIL("pos", (long)csp_view_get_pos((const csp_view_t*)&(REC)), 65535L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_view_set_pos((csp_view_t*)&(REC), 65535); \
+    if ((long)(REC).pos != 65535L) \
+	FAIL("pos set", (long)(REC).pos, 65535L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).buf = 65535; \
+    if ((long)csp_view_get_buf((const csp_view_t*)&(REC)) != 65535L) \
+	FAIL("buf", (long)csp_view_get_buf((const csp_view_t*)&(REC)), 65535L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_view_set_buf((csp_view_t*)&(REC), 65535); \
+    if ((long)(REC).buf != 65535L) \
+	FAIL("buf set", (long)(REC).buf, 65535L); \
+    } while (0)
+
 #define CSP_ORACLE_DECL_COMMON_MD(REC, FAIL) do { \
     memset(&(REC), 0, sizeof(REC)); \
     (REC).md.n = 65535; \
@@ -169,6 +311,14 @@
 
 #define CSP_ORACLE_DECL_COMMON_DI(REC, FAIL) do { \
     memset(&(REC), 0, sizeof(REC)); \
+    (REC).di.soft = 1; \
+    if ((long)csp_decl_get_di_soft((const csp_decl_t*)&(REC)) != 1L) \
+	FAIL("di.soft", (long)csp_decl_get_di_soft((const csp_decl_t*)&(REC)), 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_decl_set_di_soft((csp_decl_t*)&(REC), 1); \
+    if ((long)(REC).di.soft != 1L) \
+	FAIL("di.soft set", (long)(REC).di.soft, 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
     (REC).di.pin = 127; \
     if ((long)csp_decl_get_di_pin((const csp_decl_t*)&(REC)) != 127L) \
 	FAIL("di.pin", (long)csp_decl_get_di_pin((const csp_decl_t*)&(REC)), 127L); \
@@ -185,6 +335,14 @@
     if ((long)(REC).di.port != 15L) \
 	FAIL("di.port set", (long)(REC).di.port, 15L); \
     memset(&(REC), 0, sizeof(REC)); \
+    (REC).di.irq = 7; \
+    if ((long)csp_decl_get_di_irq((const csp_decl_t*)&(REC)) != 7L) \
+	FAIL("di.irq", (long)csp_decl_get_di_irq((const csp_decl_t*)&(REC)), 7L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_decl_set_di_irq((csp_decl_t*)&(REC), 7); \
+    if ((long)(REC).di.irq != 7L) \
+	FAIL("di.irq set", (long)(REC).di.irq, 7L); \
+    memset(&(REC), 0, sizeof(REC)); \
     (REC).di.pullup = 1; \
     if ((long)csp_decl_get_di_pullup((const csp_decl_t*)&(REC)) != 1L) \
 	FAIL("di.pullup", (long)csp_decl_get_di_pullup((const csp_decl_t*)&(REC)), 1L); \
@@ -200,25 +358,17 @@
     csp_decl_set_di_pulldown((csp_decl_t*)&(REC), 1); \
     if ((long)(REC).di.pulldown != 1L) \
 	FAIL("di.pulldown set", (long)(REC).di.pulldown, 1L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    (REC).di.irq = 7; \
-    if ((long)csp_decl_get_di_irq((const csp_decl_t*)&(REC)) != 7L) \
-	FAIL("di.irq", (long)csp_decl_get_di_irq((const csp_decl_t*)&(REC)), 7L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    csp_decl_set_di_irq((csp_decl_t*)&(REC), 7); \
-    if ((long)(REC).di.irq != 7L) \
-	FAIL("di.irq set", (long)(REC).di.irq, 7L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    (REC).di.soft = 1; \
-    if ((long)csp_decl_get_di_soft((const csp_decl_t*)&(REC)) != 1L) \
-	FAIL("di.soft", (long)csp_decl_get_di_soft((const csp_decl_t*)&(REC)), 1L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    csp_decl_set_di_soft((csp_decl_t*)&(REC), 1); \
-    if ((long)(REC).di.soft != 1L) \
-	FAIL("di.soft set", (long)(REC).di.soft, 1L); \
     } while (0)
 
 #define CSP_ORACLE_DECL_COMMON_AN(REC, FAIL) do { \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).an.soft = 1; \
+    if ((long)csp_decl_get_an_soft((const csp_decl_t*)&(REC)) != 1L) \
+	FAIL("an.soft", (long)csp_decl_get_an_soft((const csp_decl_t*)&(REC)), 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_decl_set_an_soft((csp_decl_t*)&(REC), 1); \
+    if ((long)(REC).an.soft != 1L) \
+	FAIL("an.soft set", (long)(REC).an.soft, 1L); \
     memset(&(REC), 0, sizeof(REC)); \
     (REC).an.pin = 127; \
     if ((long)csp_decl_get_an_pin((const csp_decl_t*)&(REC)) != 127L) \
@@ -236,6 +386,14 @@
     if ((long)(REC).an.port != 15L) \
 	FAIL("an.port set", (long)(REC).an.port, 15L); \
     memset(&(REC), 0, sizeof(REC)); \
+    (REC).an.irq = 7; \
+    if ((long)csp_decl_get_an_irq((const csp_decl_t*)&(REC)) != 7L) \
+	FAIL("an.irq", (long)csp_decl_get_an_irq((const csp_decl_t*)&(REC)), 7L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_decl_set_an_irq((csp_decl_t*)&(REC), 7); \
+    if ((long)(REC).an.irq != 7L) \
+	FAIL("an.irq set", (long)(REC).an.irq, 7L); \
+    memset(&(REC), 0, sizeof(REC)); \
     (REC).an.pwm = 1; \
     if ((long)csp_decl_get_an_pwm((const csp_decl_t*)&(REC)) != 1L) \
 	FAIL("an.pwm", (long)csp_decl_get_an_pwm((const csp_decl_t*)&(REC)), 1L); \
@@ -251,22 +409,6 @@
     csp_decl_set_an_endian((csp_decl_t*)&(REC), 3); \
     if ((long)(REC).an.endian != 3L) \
 	FAIL("an.endian set", (long)(REC).an.endian, 3L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    (REC).an.irq = 7; \
-    if ((long)csp_decl_get_an_irq((const csp_decl_t*)&(REC)) != 7L) \
-	FAIL("an.irq", (long)csp_decl_get_an_irq((const csp_decl_t*)&(REC)), 7L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    csp_decl_set_an_irq((csp_decl_t*)&(REC), 7); \
-    if ((long)(REC).an.irq != 7L) \
-	FAIL("an.irq set", (long)(REC).an.irq, 7L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    (REC).an.soft = 1; \
-    if ((long)csp_decl_get_an_soft((const csp_decl_t*)&(REC)) != 1L) \
-	FAIL("an.soft", (long)csp_decl_get_an_soft((const csp_decl_t*)&(REC)), 1L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    csp_decl_set_an_soft((csp_decl_t*)&(REC), 1); \
-    if ((long)(REC).an.soft != 1L) \
-	FAIL("an.soft set", (long)(REC).an.soft, 1L); \
     } while (0)
 
 #define CSP_ORACLE_DECL_COMMON_CA(REC, FAIL) do { \
@@ -360,14 +502,6 @@
     if ((long)(REC).tm.period != 268435455L) \
 	FAIL("tm.period set", (long)(REC).tm.period, 268435455L); \
     memset(&(REC), 0, sizeof(REC)); \
-    (REC).tm._res = 1; \
-    if ((long)csp_decl_get_tm__res((const csp_decl_t*)&(REC)) != 1L) \
-	FAIL("tm._res", (long)csp_decl_get_tm__res((const csp_decl_t*)&(REC)), 1L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    csp_decl_set_tm__res((csp_decl_t*)&(REC), 1); \
-    if ((long)(REC).tm._res != 1L) \
-	FAIL("tm._res set", (long)(REC).tm._res, 1L); \
-    memset(&(REC), 0, sizeof(REC)); \
     (REC).tm.fired = 1; \
     if ((long)csp_decl_get_tm_fired((const csp_decl_t*)&(REC)) != 1L) \
 	FAIL("tm.fired", (long)csp_decl_get_tm_fired((const csp_decl_t*)&(REC)), 1L); \
@@ -453,14 +587,6 @@
     csp_decl_set_em_crc((csp_decl_t*)&(REC), 65535); \
     if ((long)(REC).em.crc != 65535L) \
 	FAIL("em.crc set", (long)(REC).em.crc, 65535L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    (REC).em._res = 65535; \
-    if ((long)csp_decl_get_em__res((const csp_decl_t*)&(REC)) != 65535L) \
-	FAIL("em._res", (long)csp_decl_get_em__res((const csp_decl_t*)&(REC)), 65535L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    csp_decl_set_em__res((csp_decl_t*)&(REC), 65535); \
-    if ((long)(REC).em._res != 65535L) \
-	FAIL("em._res set", (long)(REC).em._res, 65535L); \
     } while (0)
 
 #define CSP_ORACLE_INSTR_COMMON_A(REC, FAIL) do { \
@@ -794,14 +920,6 @@
     } while (0)
 
 #define CSP_ORACLE_INSTR_COMMON_EM(REC, FAIL) do { \
-    memset(&(REC), 0, sizeof(REC)); \
-    (REC).em._res = 1023; \
-    if ((long)csp_instr_get_em__res((const csp_instr_t*)&(REC)) != 1023L) \
-	FAIL("em._res", (long)csp_instr_get_em__res((const csp_instr_t*)&(REC)), 1023L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    csp_instr_set_em__res((csp_instr_t*)&(REC), 1023); \
-    if ((long)(REC).em._res != 1023L) \
-	FAIL("em._res set", (long)(REC).em._res, 1023L); \
     memset(&(REC), 0, sizeof(REC)); \
     (REC).em.crc = 65535; \
     if ((long)csp_instr_get_em_crc((const csp_instr_t*)&(REC)) != 65535L) \
