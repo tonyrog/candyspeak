@@ -82,6 +82,8 @@ extern index_t csp_io_at_w(csp_rt_t* st, index_t i);
 extern index_t csp_timer_at_w(csp_rt_t* st, index_t i);
 extern int csp_st_index_obj(csp_rt_t* st, index_t m, index_t ix);
 extern index_t csp_object_decl(csp_rt_t* st, index_t m);
+extern int csp_state_name_at(csp_rt_t* st, index_t want);
+extern int csp_num_states(csp_rt_t* st);
 
 // Installs the leaf hooks on a bytecode build, and does nothing on a C
 // one. Call it once, before the first word -- a word that reaches a

@@ -21,6 +21,7 @@ CSP_UNUSED static int csp_cfg_vt(csp_rt_t* st, index_t dt, index_t vt);
 CSP_UNUSED static int csp_buf_owner(csp_rt_t* st, index_t b);
 CSP_UNUSED static int csp_leaf_port(csp_rt_t* st, index_t ix, index_t is_digital);
 CSP_UNUSED static int csp_leaf_pin(csp_rt_t* st, index_t ix, index_t is_digital);
+CSP_UNUSED static int csp_states_slot(csp_rt_t* st, index_t i, index_t k);
 
 int csp_dtype(csp_rt_t* st, index_t ix)
 {
@@ -451,6 +452,73 @@ index_t csp_object_decl(csp_rt_t* st, index_t m)
 		return csp_arr_object(st, m);
 	}
 	return csp_find_object(st, m);
+}
+
+CSP_UNUSED static int csp_states_slot(csp_rt_t* st, index_t i, index_t k)
+{
+	index_t r;
+
+	r = 0;
+	switch (k) {
+	case 0:
+		r = decl(st, i, name);
+		break;
+	case 1:
+		r = decl(st, i, s6_name2);
+		break;
+	case 2:
+		r = decl(st, i, s6_name3);
+		break;
+	case 3:
+		r = decl(st, i, s6_name4);
+		break;
+	case 4:
+		r = decl(st, i, s6_name5);
+		break;
+	case 5:
+		r = decl(st, i, s6_name6);
+		break;
+	}
+	return r;
+}
+
+int csp_state_name_at(csp_rt_t* st, index_t want)
+{
+	index_t i;
+	index_t k;
+	index_t n;
+	index_t np;
+
+	n = 0;
+	i = csp_next_of_type(st, 0, DECL_STATES);
+	k = 0;
+	np = 0;
+	while ((i < st->ps.nd)) {
+		k = 0;
+		while ((k < CSP_STATES_PER_DECL)) {
+			np = csp_states_slot(st, i, k);
+			if ((np != 0)) {
+				if ((n == want)) {
+					return np;
+				}
+				n = (n + 1);
+			}
+			k = (k + 1);
+		}
+		i = csp_next_of_type(st, (i + 1), DECL_STATES);
+	}
+	return 0;
+}
+
+int csp_num_states(csp_rt_t* st)
+{
+	index_t n;
+
+	n = 0;
+	while ((csp_state_name_at(st, n) != 0)) {
+		n = (n + 1);
+	}
+	return n;
 }
 
 #endif

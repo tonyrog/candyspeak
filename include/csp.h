@@ -3034,7 +3034,7 @@ extern int     csp_has_firmware(void);
 // Name position of state `snum`, 0 if there is none; and how many states are
 // declared. Both derive from the DECL_STATES blocks -- there is no state table.
 extern sindex_t state_name_pos(csp_rt_t*, int snum);
-extern int      csp_num_states(csp_rt_t*);
+// csp_num_states is a WORD (utils/words.terms), declared in gen/csp_words.h.
 // State number of the state named at string position `pos`, -1 if none.
 extern int      lookup_state_pos(csp_rt_t*, sindex_t pos);
 extern int     csp_rt_start(csp_rt_t*);

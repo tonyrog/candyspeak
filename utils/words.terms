@@ -568,3 +568,51 @@
  [{'if', {op, lt, {var, m}, {state, obj_cap}},
    [{return, {aget, object, {var, m}}}]},
   {return, {call, find_object, [{var, m}]}}]}.
+
+%% ----------------------------------------------------------------- states
+%%
+%% Six names per DECL_STATES block, numbered densely ACROSS blocks: slot k of
+%% block i is state n only after the padding in earlier blocks is skipped.
+
+%% Slot k of the block at i, 0 when the slot is padding. Six named fields
+%% because a slot is a byte and the layout says which one -- a descriptor
+%% cannot be built from k.
+{aux, states_slot, [i, k], 'int',
+ [{local, r, {const, 0}},
+  {switch, {var, k},
+   [{0, [{set, r, {decl, {var, i}, name}}]},
+    {1, [{set, r, {decl, {var, i}, s6_name2}}]},
+    {2, [{set, r, {decl, {var, i}, s6_name3}}]},
+    {3, [{set, r, {decl, {var, i}, s6_name4}}]},
+    {4, [{set, r, {decl, {var, i}, s6_name5}}]},
+    {5, [{set, r, {decl, {var, i}, s6_name6}}]}],
+   []},
+  {return, {var, r}}]}.
+
+%% THE CURSOR. The name position of state number `want`, or 0 past the end.
+%% Three searches and a count used to go through a walker that took a function
+%% pointer, with a visitor and a struct apiece; they are loops over this now.
+{word, state_name_at, [want], 'int',
+ [{local, n, {const, 0}},
+  {local, i, {call, next_of_type, [{const, 0}, {const, 'DECL_STATES'}]}},
+  {local, k, {const, 0}},
+  {local, np, {const, 0}},
+  {while, {op, lt, {var, i}, {nd}},
+   [{set, k, {const, 0}},
+    {while, {op, lt, {var, k}, {const, 'CSP_STATES_PER_DECL'}},
+     [{set, np, {call, states_slot, [{var, i}, {var, k}]}},
+      {'if', {op, ne, {var, np}, {const, 0}},
+       [{'if', {op, eq, {var, n}, {var, want}},
+	 [{return, {var, np}}]},
+	{set, n, {op, add, {var, n}, {const, 1}}}]},
+      {set, k, {op, add, {var, k}, {const, 1}}}]},
+    {set, i, {call, next_of_type,
+	      [{op, add, {var, i}, {const, 1}}, {const, 'DECL_STATES'}]}}]},
+  {return, {const, 0}}]}.
+
+%% How many are declared -- said in terms of the cursor, not as a second walk.
+{word, num_states, [], 'int',
+ [{local, n, {const, 0}},
+  {while, {op, ne, {call, state_name_at, [{var, n}]}, {const, 0}},
+   [{set, n, {op, add, {var, n}, {const, 1}}}]},
+  {return, {var, n}}]}.

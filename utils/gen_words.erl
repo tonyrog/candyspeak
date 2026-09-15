@@ -760,6 +760,9 @@ wrap([H|T], I, N, Acc) ->
 %% Arguments become locals 0..n-1; declared locals follow. One flat frame.
 bword({word, Name, Args, _CT, Body}, NI) ->
     put(ni, NI), put(self, Name),
+    %% Widths are per WORD: a local called `want` in one is not the one in the
+    %% next, and a stale entry makes the later word read a slot it never wrote.
+    [erase(K) || K <- get_keys(), is_tuple(K), element(1, K) =:= w],
     Env0 = maps:from_list(lists:zip(Args, lists:seq(0, length(Args) - 1))),
     %% PROLOGUE: arguments arrive on the data stack -- the caller pushed them
     %% left to right, so the last one is on top -- and the word moves them into
@@ -856,7 +859,13 @@ bstmt({switch, E, Cases, Default}, Env) ->
     %% comes after it -- built back to front for exactly that reason.
     {Body, _} = lists:foldr(
 		  fun({K, Bc}, {Acc, After}) ->
-			  Test = [?LGET, Tmp, ?LIT8, {cconst, K}, ?EQ],
+			  %% A case key is a C constant OR a plain number; only
+			  %% the first needs a static assert that it fits.
+			  KV = case is_integer(K) of
+				   true  -> K;
+				   false -> {cconst, K}
+			       end,
+			  Test = [?LGET, Tmp, ?LIT8, KV, ?EQ],
 			  Arm = Test ++ [?JZ, rel(length(Bc) + 2)] ++ Bc
 			      ++ [?JMP, rel(After)],
 			  {Arm ++ Acc, After + length(Arm)}

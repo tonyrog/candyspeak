@@ -44,7 +44,10 @@
 #define CSP_W_TIMER_AT_W_ENTRY 1421
 #define CSP_W_ST_INDEX_OBJ_ENTRY 1437
 #define CSP_W_OBJECT_DECL_ENTRY 1449
-#define CSP_WORDS_BC_LEN 1470
+#define CSP_W_STATES_SLOT_ENTRY 1470
+#define CSP_W_STATE_NAME_AT_ENTRY 1575
+#define CSP_W_NUM_STATES_ENTRY 1678
+#define CSP_WORDS_BC_LEN 1705
 
 static mc_cell_t lw_csp_tag(void* c_, mc_cell_t t_)
 {
@@ -198,9 +201,14 @@ static void csp_word_array_set(void* c_, mc_cell_t id_, mc_cell_t i_,
 #define CSP_W_TIMER_AT_W_FRAME 1
 #define CSP_W_ST_INDEX_OBJ_FRAME 2
 #define CSP_W_OBJECT_DECL_FRAME 1
+#define CSP_W_STATES_SLOT_FRAME 4
+#define CSP_W_STATE_NAME_AT_FRAME 5
+#define CSP_W_NUM_STATES_FRAME 1
 
 CSP_STATIC_ASSERT((CFG_SIGNED) <= 255,
 		  "CFG_SIGNED does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((CSP_STATES_PER_DECL) <= 255,
+		  "CSP_STATES_PER_DECL does not fit a micro-csp LIT8 operand");
 CSP_STATIC_ASSERT((CSP_STR_SEG_MASK) <= 255,
 		  "CSP_STR_SEG_MASK does not fit a micro-csp LIT8 operand");
 CSP_STATIC_ASSERT((DECL_ANALOG) <= 255,
@@ -219,6 +227,8 @@ CSP_STATIC_ASSERT((DECL_NONE) <= 255,
 		  "DECL_NONE does not fit a micro-csp LIT8 operand");
 CSP_STATIC_ASSERT((DECL_OBJECT) <= 255,
 		  "DECL_OBJECT does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((DECL_STATES) <= 255,
+		  "DECL_STATES does not fit a micro-csp LIT8 operand");
 CSP_STATIC_ASSERT((DECL_TIMER) <= 255,
 		  "DECL_TIMER does not fit a micro-csp LIT8 operand");
 CSP_STATIC_ASSERT((DECL_VARIABLE) <= 255,
@@ -498,7 +508,41 @@ MC_LGET,1,MC_ADD,MC_EXIT,
 // CSP_W_OBJECT_DECL_ENTRY
 MC_LSET,0,MC_LGET,0,MC_ST,MFS_OBJ_CAP,MC_LT,MC_JZ,
 5,MC_LGET,0,MC_AGET,MFA_OBJECT,MC_EXIT,MC_LGET,0,
-MC_CALL,17,4,1,MC_EXIT,};
+MC_CALL,17,4,1,MC_EXIT,
+// CSP_W_STATES_SLOT_ENTRY
+MC_LSET,1,MC_LSET,0,MC_LIT8,0,MC_LSET,2,
+MC_LGET,1,MC_LSET,3,MC_LGET,3,MC_LIT8,0,
+MC_EQ,MC_JZ,8,MC_LGET,0,MC_DECL,MFD_NAME,MC_LSET,
+2,MC_JMP,75,MC_LGET,3,MC_LIT8,1,MC_EQ,
+MC_JZ,8,MC_LGET,0,MC_DECL,MFD_S6_NAME2,MC_LSET,2,
+MC_JMP,60,MC_LGET,3,MC_LIT8,2,MC_EQ,MC_JZ,
+8,MC_LGET,0,MC_DECL,MFD_S6_NAME3,MC_LSET,2,MC_JMP,
+45,MC_LGET,3,MC_LIT8,3,MC_EQ,MC_JZ,8,
+MC_LGET,0,MC_DECL,MFD_S6_NAME4,MC_LSET,2,MC_JMP,30,
+MC_LGET,3,MC_LIT8,4,MC_EQ,MC_JZ,8,MC_LGET,
+0,MC_DECL,MFD_S6_NAME5,MC_LSET,2,MC_JMP,15,MC_LGET,
+3,MC_LIT8,5,MC_EQ,MC_JZ,8,MC_LGET,0,
+MC_DECL,MFD_S6_NAME6,MC_LSET,2,MC_JMP,0,MC_LGET,2,
+MC_EXIT,
+// CSP_W_STATE_NAME_AT_ENTRY
+MC_LSET,0,MC_LIT8,0,MC_LSET,1,MC_LIT8,0,
+MC_LIT8,DECL_STATES,MC_CALL,185,3,5,MC_LSET,2,
+MC_LIT8,0,MC_LSET,3,MC_LIT8,0,MC_LSET,4,
+MC_LGET,2,MC_ST,MFS_ND,MC_LT,MC_JZ,69,MC_LIT8,
+0,MC_LSET,3,MC_LGET,3,MC_LIT8,CSP_STATES_PER_DECL,MC_LT,
+MC_JZ,43,MC_LGET,2,MC_LGET,3,MC_CALL,190,
+5,5,MC_LSET,4,MC_LGET,4,MC_LIT8,0,
+MC_NE,MC_JZ,17,MC_LGET,1,MC_LGET,0,MC_EQ,
+MC_JZ,3,MC_LGET,4,MC_EXIT,MC_LGET,1,MC_LIT8,
+1,MC_ADD,MC_LSET,1,MC_LGET,3,MC_LIT8,1,
+MC_ADD,MC_LSET,3,MC_JMP,206,MC_LGET,2,MC_LIT8,
+1,MC_ADD,MC_LIT8,DECL_STATES,MC_CALL,185,3,5,
+MC_LSET,2,MC_JMP,180,MC_LIT8,0,MC_EXIT,
+// CSP_W_NUM_STATES_ENTRY
+MC_LIT8,0,MC_LSET,0,MC_LGET,0,MC_CALL,39,
+6,1,MC_LIT8,0,MC_NE,MC_JZ,9,MC_LGET,
+0,MC_LIT8,1,MC_ADD,MC_LSET,0,MC_JMP,236,
+MC_LGET,0,MC_EXIT,};
 
 // C CALLING BYTECODE. One per word, with the same prototype the C back
 // end gives it -- the caller cannot tell which it linked. Arguments go
@@ -717,6 +761,21 @@ index_t csp_object_decl(csp_rt_t* st, index_t m)
 
 	a_[0] = (mc_cell_t)m;
 	return (index_t)csp_word_run(st, CSP_W_OBJECT_DECL_ENTRY, a_, 1, 1);
+}
+
+int csp_state_name_at(csp_rt_t* st, index_t want)
+{
+	mc_cell_t a_[1];
+
+	a_[0] = (mc_cell_t)want;
+	return (int)csp_word_run(st, CSP_W_STATE_NAME_AT_ENTRY, a_, 1, 5);
+}
+
+int csp_num_states(csp_rt_t* st)
+{
+	mc_cell_t a_[1];
+
+	return (int)csp_word_run(st, CSP_W_NUM_STATES_ENTRY, a_, 0, 1);
 }
 
 #endif

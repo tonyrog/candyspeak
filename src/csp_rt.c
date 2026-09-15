@@ -2132,93 +2132,43 @@ index_t csp_cycle(csp_rt_t* st)
 // filled front to back, so the running count IS the state number -- the same
 // derivation state_count uses, kept in one place so the two cannot drift.
 // Returns the number of states visited when the walk runs to the end.
-typedef int (*state_visit_fn)(csp_rt_t*, int snum, sindex_t pos, void* arg);
-
-NOINLINE static int state_walk(csp_rt_t* st, state_visit_fn fn, void* arg)
-{
-    index_t i;
-    int n = 0;
-    for (i = csp_next_of_type(st, 0, DECL_STATES); i < st->ps.nd;
-	 i = csp_next_of_type(st, (index_t)(i + 1), DECL_STATES)) {
-	csp_decl_t d;
-	int k;
-	csp_load_decl(st, i, &d);
-	for (k = 0; k < CSP_STATES_PER_DECL; k++) {
-	    sindex_t np = csp_states_name(&d, k);
-	    if (np == 0)
-		continue;                  // padding at the end of a block
-	    if (fn && fn(st, n, np, arg))
-		return n;                  // visitor claimed this one
-	    n++;
-	}
-    }
-    return n;
-}
-
-struct state_find { const tstr_t* name; sindex_t pos; int snum; };
-
-static int state_by_name(csp_rt_t* st, int snum, sindex_t pos, void* arg)
-{
-    struct state_find* f = (struct state_find*)arg;
-    if (!csp_str_eq(st, pos, f->name->ptr, f->name->len))
-	return 0;
-    f->snum = snum;
-    return 1;
-}
-
-static int state_by_num(csp_rt_t* st, int snum, sindex_t pos, void* arg)
-{
-    struct state_find* f = (struct state_find*)arg;
-    (void)st;
-    if (snum != f->snum)
-	return 0;
-    f->pos = pos;
-    return 1;
-}
+// THE CURSOR, not a walker. csp_state_name_at(st, n) is state n's name
+// position (utils/words.terms), and these four questions are loops over it.
+//
+// It was a function-pointer type, a walker, a struct and three visitors -- 68
+// lines to ask four things about a list that has at most a couple of dozen
+// entries. Each search now reads as what it is.
 
 // State number for `name`, or -1.
 NOINLINE int lookup_state(csp_rt_t* st, const tstr_t* name)
 {
-    struct state_find f;
-    f.name = name; f.pos = 0; f.snum = -1;
-    state_walk(st, state_by_name, &f);
-    return f.snum;
+    int n;
+    sindex_t np;
+
+    for (n = 0; (np = csp_state_name_at(st, (index_t)n)) != 0; n++)
+	if (csp_str_eq(st, np, name->ptr, name->len))
+	    return n;
+    return -1;
 }
 
-// Name position of state `snum`, or 0. The reverse, for listing.
+// Name position of state `snum`, or 0. The reverse, for listing -- and the
+// cursor itself, so there is nothing left to write.
 NOINLINE sindex_t state_name_pos(csp_rt_t* st, int snum)
 {
-    struct state_find f;
-    f.name = NULL; f.pos = 0; f.snum = snum;
-    state_walk(st, state_by_num, &f);
-    return f.pos;
+    return (sindex_t)csp_state_name_at(st, (index_t)snum);
 }
 
-static int state_by_pos(csp_rt_t* st, int snum, sindex_t pos, void* arg)
-{
-    struct state_find* f = (struct state_find*)arg;
-    (void)st; (void)snum;
-    if (pos != f->pos)
-	return 0;
-    f->snum = snum;
-    return 1;
-}
-
-// State number of the state whose NAME is at `pos`. For a listing that is
-// walking the slots of a block and needs each slot's number without searching
-// by text.
+// State number of the state whose NAME is at `pos`. For a listing walking the
+// slots of a block that needs each slot's number without searching by text.
 NOINLINE int lookup_state_pos(csp_rt_t* st, sindex_t pos)
 {
-    struct state_find f;
-    f.name = NULL; f.pos = pos; f.snum = -1;
-    state_walk(st, state_by_pos, &f);
-    return f.snum;
-}
+    int n;
+    sindex_t np;
 
-// How many states are declared.
-NOINLINE int csp_num_states(csp_rt_t* st)
-{
-    return state_walk(st, NULL, NULL);
+    for (n = 0; (np = csp_state_name_at(st, (index_t)n)) != 0; n++)
+	if (np == pos)
+	    return n;
+    return -1;
 }
 // Compare n bytes at a logical string position against a RAM string (memcmp-
 // like: 0 == equal). Segment-aware per byte, so it is PROGMEM-safe on AVR where

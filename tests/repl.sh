@@ -1027,6 +1027,15 @@ else
     echo "  FAIL states_layout did not build"; fail=$((fail+1))
 fi
 
+# ALL SIX SLOTS of a block, end to end. The layout test above pins where each
+# slot sits; this pins that the runtime reads every one of them. Nothing did:
+# a program with six states listed back as five when slot 3 was made to read
+# slot 4, and the whole suite stayed green. Four states is the most any other
+# test declares, and the ones that do never name the fourth.
+got=$(printf '#states a b c d e f\n/list\n' |
+	  timeout 20 ./csp -i --no-eeprom -T 20 2>&1 | sed -n 's/^#states //p')
+ck "all six slots of a states block list back" "a b c d e f  // R" "$got"
+
 # --- arrays -----------------------------------------------------------------
 # `#variable A[3]` is three declarations: the head keeps the name, the tail two
 # carry `cont` and no name at all. A[<const>] folds to the element's own
