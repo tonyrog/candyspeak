@@ -24,6 +24,7 @@
 #include <stddef.h>
 #include <string.h>
 #include "csp.h"
+#include "csp_words.h"
 #include "csp_line.h"
 #include "csp_print.h"
 

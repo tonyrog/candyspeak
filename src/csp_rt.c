@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "csp.h"
+#include "csp_words.h"
 #include "csp_strings.h"   // shared RODATA strings (generated from strings.tab)
 #include "csp_parse.h"
 #include "csp_tok.h"
@@ -35,16 +36,11 @@ static const char tag_tab[] RODATA = {
 };
 
 // Maybe generate
-void csp_buf_or_flags(csp_buf_t* bp, uint8_t fs)
-{
-    csp_buf_set_flags(bp, csp_buf_get_flags(bp) | fs);
-}
 
-void csp_buf_and_flags(csp_buf_t* bp, uint8_t fs)
-{
-    csp_buf_set_flags(bp, csp_buf_get_flags(bp) & fs);
-}
 
+// csp_buf_or_flags and csp_buf_and_flags are WORDS now, and they take the
+// buffer INDEX: every caller derived its pointer from an index it already
+// had, and a pointer is the one thing micro-csp cannot hold.
 uint8_t* buf_heap_din_ptr(csp_rt_t* st, csp_buf_t* bp)
 {
     return st->heap[DIN] + csp_buf_get_hp(bp);
@@ -1019,19 +1015,6 @@ const uint8_t csp_num_builtin_funcs RODATA =
 // The durable record is in the declaration itself (mq.m), so fall back to a scan
 // when the cache cannot answer. The scan is O(nd) and only listing ever takes
 // it; everything on a cycle runs after a rebuild and hits the table.
-index_t csp_object_decl(csp_rt_t* st, unsigned m)
-{
-    index_t i;
-    if (st->object && (m < st->obj_cap))
-	return st->object[m];
-    for (i = 0; i < st->ps.nd; i++) {
-	csp_decl_t d;
-	csp_load_decl(st, i, &d);
-	if ((csp_decl_get_type(&d) == DECL_OBJECT) && (csp_decl_get_mq_m(&d) == m))
-	    return i;
-    }
-    return BAD_INDEX;
-}
 
 // enq all rules that depend on declaration x
 NOINLINE void csp_enq_elist(csp_rt_t* st, index_t x)
@@ -1140,35 +1123,14 @@ NOINLINE static void csp_heap_set(csp_rt_t* st, csp_view_t* vw, dio_t dir,
 // A digital/analog/timer decl carries vt=V_INTEGER (its value type); the
 // union member for its config lives under the decl *type*. Map type -> the
 // vtype the pin/port/dir/... helpers switch on. Plain vars keep their vt.
-NOINLINE static vtype_t decl_cfg_vt(decl_t dt, vtype_t vt)
-{
-    switch (CSP_MASK(dt,CSP_DECL_TYPE_BITS)) {
-    case DECL_DIGITAL: return V_DIGITAL;
-	// An analog reading is SIGNED unless the declaration says otherwise --
-	// the same default a #variable has, and the right one for a sensor that
-	// swings both ways. `unsigned` is the opt-in, for a reading that is a
-	// magnitude or a packed word (an RGB565 pixel) rather than a quantity.
-	// The declaration's vt used to be dropped on this path entirely.
-    case DECL_ANALOG:
-	return (vtype_t)(V_ANALOG |
-			 ((CSP_MASK(vt,TYPE_BITS) == V_UNSIGNED) ? 0
-							         : CFG_SIGNED));
-    case DECL_TIMER:   return V_TIMER;
-    case DECL_FIELD:   return V_FIELD;
-    default:           return vt;
-    }
-}
+// decl_cfg_vt and leaf_cfg_vt are WORDS now (utils/words.terms), and they
+// are three deep: dtype and dvt find the declaration's two fields, cfg_vt
+// decides the layout from them.
 
 // The type a leaf's value SLOT is laid out with. Four callers used to write
 // decl_cfg_vt(decl(st,i,type), decl(st,i,vt)) -- two csp_get_decl calls, each
 // spilling the whole decl to the stack (see setup_buffer). One read serves both
 // fields.
-NOINLINE static vtype_t leaf_cfg_vt(csp_rt_t* st, index_t ix)
-{
-    csp_decl_t d;
-    csp_load_decl(st, INDEX(ix), &d);
-    return decl_cfg_vt(csp_decl_get_type(&d), csp_decl_get_vt(&d));
-}
 
 NOINLINE void csp_string_set_part(csp_rt_t* st, value_t* vslot,
 				  csp_part_t part, value_t v)
@@ -1206,9 +1168,9 @@ NOINLINE void csp_view_set_part(csp_rt_t* st, csp_view_t* vw,
 	csp_buf_t* bp = &st->buf[csp_view_get_buf(vw)];
 	if (part == PART_TX) {
 	    if (v.i)
-		csp_buf_or_flags(bp, BUF_F_TX);
+		csp_buf_or_flags(st, csp_view_get_buf(vw), BUF_F_TX);
 	    else
-		csp_buf_and_flags(bp, ~BUF_F_TX);
+		csp_buf_and_flags(st, csp_view_get_buf(vw), ~BUF_F_TX);
 	}
 	else if (part == PART_DLC) {
 	    // Clamped, not rejected: the heap holds nbytes and no more, so
@@ -1238,7 +1200,7 @@ NOINLINE void csp_dio_set_part(csp_rt_t* st, index_t ix, value_t v,
     }
     else {
 	value_t* vslot = csp_slot(st, vw, dir);
-	vtype_t cvt = leaf_cfg_vt(st, ix);  // read the decl only on this path
+	vtype_t cvt = (vtype_t)csp_leaf_cfg_vt(st, ix);  // read the decl only on this path
 	// A string slot holds a whole position, not bitfields -- it is the one
 	// value type csp_part.h does not describe. Everything else is a row in
 	// the layout table (and a type with no rows writes nothing).
@@ -1359,7 +1321,7 @@ NOINLINE void csp_dio_get_part(csp_rt_t* st, index_t ix, value_t* vp,
     }
     else {
 	value_t* vslot = csp_slot(st, vw, dir);
-	vtype_t cvt = leaf_cfg_vt(st, ix);  // read the decl only on this path
+	vtype_t cvt = (vtype_t)csp_leaf_cfg_vt(st, ix);  // read the decl only on this path
 	if (cvt == V_STRING)                // see csp_dio_set_part
 	    csp_string_get_part(st, vslot, vp, part);
 	else
@@ -1374,7 +1336,7 @@ NOINLINE void csp_dio_set(csp_rt_t* st, index_t ix, value_t v, dio_t dir)
 	csp_heap_set(st, vw, dir, v);
 	return;
     }
-    csp_dio_set_val_part(st, csp_slot(st, vw, dir), leaf_cfg_vt(st, ix), v);
+    csp_dio_set_val_part(st, csp_slot(st, vw, dir), (vtype_t)csp_leaf_cfg_vt(st, ix), v);
 }
 
 NOINLINE void csp_dio_get(csp_rt_t* st, index_t ix, value_t* vp, dio_t dir)
@@ -1384,7 +1346,7 @@ NOINLINE void csp_dio_get(csp_rt_t* st, index_t ix, value_t* vp, dio_t dir)
 	*vp = csp_heap_get(st, vw, dir);
 	return;
     }
-    csp_dio_get_val_part(st, csp_slot(st, vw, dir), leaf_cfg_vt(st, ix), vp);
+    csp_dio_get_val_part(st, csp_slot(st, vw, dir), (vtype_t)csp_leaf_cfg_vt(st, ix), vp);
 }
 
 // A #local is READABLE IN THE CYCLE IT IS WRITTEN -- that is the whole reason it
@@ -1398,12 +1360,8 @@ NOINLINE void csp_dio_get(csp_rt_t* st, index_t ix, value_t* vp, dio_t dir)
 // csp_local_commit was never written. So a #local behaved exactly like a
 // #variable, and a chain of seven -- lib/analog.csp -- put its output seven
 // cycles behind its input.
-static inline int is_local_leaf(csp_rt_t* st, index_t n)
-{
-    index_t i = INDEX(n);
-    return (i < st->ps.nd) &&
-	(decl(st, i, type) == DECL_VARIABLE) && decl(st, i, local);
-}
+// is_local_leaf was csp_is_local written a second time, word for word. One of
+// them is a word now, so there is one of them.
 
 NOINLINE void csp_set_value(csp_rt_t* st, index_t n, value_t v)
 {
@@ -1419,7 +1377,7 @@ NOINLINE void csp_set_value(csp_rt_t* st, index_t n, value_t v)
 #endif
 	csp_dio_set(st, n, v, DOUT);
 	// The commit a #local does not wait for.
-	if (is_local_leaf(st, n))
+	if (csp_is_local(st, n))
 	    csp_dio_set(st, n, v, DIN);
 	st->es.update++;
     }
@@ -1428,11 +1386,18 @@ NOINLINE void csp_set_value(csp_rt_t* st, index_t n, value_t v)
 // A DECL_VARIABLE named "State" holds a state NUMBER; show it symbolically, the
 // way /list does, so "ON" does not read as "3". Same rule as the disassembler's
 // is_state_var: only that name, so a plain "T=1" is never mistaken for a state.
-NOINLINE int state_is_state_var(csp_rt_t* st, int di)
+// ONE of these. csp_print.c carried a second copy, spelled the same way except
+// that it bounded the index and this one did not -- so the runtime read past
+// the declaration table where the listing refused to. The bound comes from
+// dtype now, which is where every question about a declaration starts.
+//
+// Takes a full index: the selector bit is what decl_name_pos needs, and
+// dtype masks it off for the table lookup.
+NOINLINE int state_is_state_var(csp_rt_t* st, index_t ix)
 {
-    if (decl(st, di, type) != DECL_VARIABLE)
+    if (csp_dtype(st, ix) != DECL_VARIABLE)
 	return 0;
-    return csp_str_eq_ro(st, decl_name_pos(st, MAKE_INDEX(0, di)), ros_State, 5);
+    return csp_str_eq_ro(st, decl_name_pos(st, ix), ros_State, 5);
 }
 
 NOINLINE value_t csp_value(csp_rt_t* st, index_t n)
@@ -1882,7 +1847,7 @@ NOINLINE static void heap_dset_copy(csp_rt_t* st, dio_t to, dio_t from)
 		if ((to == DIN) && (csp_view_get_kind(v) == VIEW_HEAP)) {
 		    csp_buf_t* b = &st->buf[csp_view_get_buf(v)];
 		    if (csp_buf_get_transport(b) != TR_NONE)
-			csp_buf_or_flags(b, BUF_F_DIRTY);
+			csp_buf_or_flags(st, csp_view_get_buf(v), BUF_F_DIRTY);
 		}
 	    }
 	    bits >>= 1;
@@ -2173,12 +2138,11 @@ NOINLINE static int state_walk(csp_rt_t* st, state_visit_fn fn, void* arg)
 {
     index_t i;
     int n = 0;
-    for (i = 0; i < st->ps.nd; i++) {
+    for (i = csp_next_of_type(st, 0, DECL_STATES); i < st->ps.nd;
+	 i = csp_next_of_type(st, (index_t)(i + 1), DECL_STATES)) {
 	csp_decl_t d;
 	int k;
 	csp_load_decl(st, i, &d);
-	if (csp_decl_get_type(&d) != DECL_STATES)
-	    continue;
 	for (k = 0; k < CSP_STATES_PER_DECL; k++) {
 	    sindex_t np = csp_states_name(&d, k);
 	    if (np == 0)
@@ -2349,17 +2313,8 @@ NOINLINE index_t lookup_decl_in(csp_rt_t* st, const tstr_t* name,
 // it to print `A[3]` instead of three declarations that all claim to be A.
 //
 // A plain variable answers 1, which is what makes `A` and `A[0]` the same thing.
-NOINLINE uint16_t csp_array_len(csp_rt_t* st, index_t i)
-{
-    int j = INDEX(i) + 1;
-    uint16_t k = 1;
-
-    while ((j < (int)st->ps.nd) && (k < 0xffff) && decl(st, j, cont)) {
-	k++;
-	j++;
-    }
-    return k;
-}
+// csp_array_len is a WORD now: utils/words.terms, and either the generated C
+// or micro-csp bytecode depending on the build. See src/csp_words.c.
 
 NOINLINE index_t csp_lookup_decl(csp_rt_t* st, const tstr_t* name)
 {
@@ -2484,12 +2439,7 @@ NOINLINE int new_string(csp_rt_t* st, char* name, int len)
     st->ps.strp = next;  // allocate
     // Record the high-water mark in the segment this landed in, so an image can
     // say how much string space it holds without a header field.
-    {
-	index_t sh = st->str_seg[r >> CSP_STR_SEG_BITS];
-	if (sh >= st->rom_nn)
-	    csp_instr_set_sg_used(ram_instr_at(st, sh),
-		(uint8_t)(((next - 1) & CSP_STR_SEG_MASK) + 1));
-    }
+    csp_str_seg_stamp(st, st->str_seg[r >> CSP_STR_SEG_BITS], (index_t)next);
     ram_str_at(st, pos) = len;
     if (len > 0)                  // len==0 (empty string) may pass a NULL name
 	memcpy(&ram_str_at(st, pos+1), name, len);
@@ -2595,12 +2545,9 @@ NOINLINE void csp_str_recount(csp_rt_t* st)
     // still carries the `used` it had before -- and that is what a walk (and a
     // saved image) reads to find the end of the text. Left alone it reports
     // names that were just taken back.
-    if (st->nseg && st->ps.strp) {
-	index_t h = st->str_seg[(st->ps.strp - 1) >> CSP_STR_SEG_BITS];
-	if ((h != BAD_INDEX) && (h >= st->rom_nn))
-	    csp_instr_set_sg_used(ram_instr_at(st, h),
-		(uint8_t)(((st->ps.strp - 1) & CSP_STR_SEG_MASK) + 1));
-    }
+    if (st->nseg && st->ps.strp)
+	csp_str_seg_stamp(st, st->str_seg[(st->ps.strp - 1) >> CSP_STR_SEG_BITS],
+			  (index_t)st->ps.strp);
 }
 
 // Find a string in string buffer (ROM + RAM, by logical position)
@@ -2787,45 +2734,27 @@ NOINLINE void* csp_mid_alloc(csp_rt_t* st, size_t n)
 // still walks the gate linearly.
 NOINLINE static int skip_gate(csp_rt_t* st, int ip, int hi)
 {
-    // Only a GLOBAL-State gate (LD reads st->gsx). A module's own #in gates on the
-    // object's per-instance State (a different decl); those keep their gate at the
-    // reactive entry and are handled the old way (their INSTATE falls through).
-    csp_instr_t g, g1;
-
-    if (ip + 1 >= hi)                   // keeps the original short-circuit: no
-	return ip;                      // instruction read when the range is short
-    csp_load_instr(st, ip, &g);
-    csp_load_instr(st, ip+1, &g1);
-    if ((csp_instr_get_op(&g) == OP_LD) && (csp_instr_get_m_mem(&g) == st->gsx) &&
-	((csp_instr_get_op(&g1) == OP_NINSTATE) || (csp_instr_get_op(&g1) == OP_INSTATE))) {
-	int j = ip + 1;
-	while (j < hi) {                      // one read per instruction: the old
-	    csp_instr_t ci_;   // form re-read the word the
-	    opcode_t o = (opcode_t)csp_instr_get_op(&ci_);   // loop
-	    csp_load_instr(st, j, &ci_);
-	    if (o == OP_NINSTATE) { j++; continue; }   // had just looked at
-	    if (o == OP_INSTATE) j++;
-	    break;
-	}
-	return j;
-    }
-    return ip;
+    // Only a GLOBAL-State gate (LD reads st->gsx). A module's own #in gates on
+    // the object's per-instance State (a different decl); those keep their gate
+    // at the reactive entry and are handled the old way (their INSTATE falls
+    // through).
+    //
+    // The run-skipping loop that used to be written out here read its opcode
+    // out of a csp_instr_t BEFORE csp_load_instr filled it, so it tested stack
+    // garbage and left after one step. The walk is gate_end now -- the same
+    // phrases gate_is_in is built from, in utils/words.terms.
+    if (ip + 1 >= hi)               // keeps the original short-circuit: no
+	return ip;                  // instruction read when the range is short
+    if (!csp_is_gate_ld(st, (index_t)ip))
+	return ip;
+    return (int)csp_gate_end(st, (index_t)(ip + 1), (index_t)hi);
 }
 
 // True if instruction i is a #in block gate's LD State (LD st->gsx immediately
 // before an INSTATE/NINSTATE). That LD belongs to the gate, not to a rule's data
 // dependencies -- csp_csr adds the State edge per gated rule from rule_state.
-NOINLINE static int is_gate_ld(csp_rt_t* st, int i)
-{
-    csp_instr_t g;
-    csp_instr_t g1;
-
-    csp_load_instr(st, i, &g);
-    if ((csp_instr_get_op(&g) != OP_LD) || (csp_instr_get_m_mem(&g) != st->gsx) || (i + 1 >= (int)st->ps.nn))
-	return 0;
-    csp_load_instr(st, i+1, &g1);
-    return (csp_instr_get_op(&g1) == OP_INSTATE) || (csp_instr_get_op(&g1) == OP_NINSTATE);
-}
+// is_gate_ld is a WORD now (utils/words.terms), and skip_gate shares it.
+#define is_gate_ld(st, i) csp_is_gate_ld((st), (index_t)(i))
 
 // csp_csr pass 3: add the State -> `ord` edge for a State-gated rule, with the
 // same consecutive-duplicate dedup the instruction fills use. Paired with the
@@ -2854,7 +2783,7 @@ NOINLINE static int number_rules(csp_rt_t* st, int lo, int hi,
     if (rule_ip != NULL) rule_ip[ord] = skip_gate(st, lo, hi);
     ord++;                              // the implicit body at the range base
     for (i = lo; i < hi; i++) {
-	opcode_t o = instr(st, i, op);
+	opcode_t o = csp_iop(st, i);
 	if ((o == OP_NEXT) || (o == OP_ENTER)) {
 	    if (rule_ip != NULL) rule_ip[ord] = skip_gate(st, i+1, hi);
 	    ord++;
@@ -2902,17 +2831,8 @@ NOINLINE static csp_gate_mask_t gate_mask(csp_rt_t* st, int ip, int hi, int* ben
 
 // True if the body starting at `ip` is a bare NORMAL+ rule (its OP_RULE carries
 // the implicit flag). Scans only within the body (up to the closing NEXT).
-NOINLINE static int body_implicit(csp_rt_t* st, int ip, int hi)
-{
-    int i;
-    for (i = ip; i < hi; i++) {
-	csp_instr_t ci;
-	csp_load_instr(st, i, &ci);
-	if (csp_instr_get_op(&ci) == OP_RULE) return csp_instr_get_r_implicit(&ci);
-	if ((csp_instr_get_op(&ci) == OP_NEXT) || (csp_instr_get_op(&ci) == OP_ENTER)) break;
-    }
-    return 0;
-}
+// body_implicit is a WORD now (utils/words.terms).
+#define body_implicit(st, ip, hi) csp_body_implicit((st), (index_t)(ip), (index_t)(hi))
 
 // Fill rule_state[ord] with each rule body's State membership mask, mirroring
 // number_rules' ordinal walk. The mask is the enclosing #in block's states
@@ -2931,7 +2851,7 @@ NOINLINE static int number_rule_states(csp_rt_t* st, int lo, int hi,
     rs[ord] = body_implicit(st, lo, hi) ? normal_plus : mask;
     ord++;
     for (i = lo; i < hi; i++) {
-	opcode_t o = instr(st, i, op);
+	opcode_t o = csp_iop(st, i);
 	if ((o == OP_NEXT) || (o == OP_ENTER)) {
 	    int p = i + 1;
 	    uint16_t gm;
@@ -4268,6 +4188,11 @@ int csp_rt_init(csp_rt_t* st, int reactive, csp_cstate_t* cs)
 	return -1;
     csp_line_init(&st->line);
 
+    // The words from utils/words.terms. On a C build this does nothing; on a
+    // bytecode build it installs the leaf hooks, and a word that runs before
+    // it stops with MC_E_LEAF rather than reading a record through a null.
+    csp_words_init(st);
+
     // The compiler's own tables, initialised on its side of the line. Dropping
     // this call is what lets --gc-sections take the whole compiler with it: the
     
@@ -4635,7 +4560,7 @@ NOINLINE static void buf_deliver(csp_rt_t* st, index_t b, const uint8_t* data,
     // published at commit
     csp_buf_set_dlc_in(bp, (uint8_t)((n > 255) ? 255 : n));
     // csp_commit turns this into BUF_F_RX
-    csp_buf_or_flags(bp, BUF_F_RXPEND);
+    csp_buf_or_flags(st, b, BUF_F_RXPEND);
     buf_mark_fields(st, b);
 }
 
@@ -4669,7 +4594,7 @@ void csp_can_input(csp_rt_t* st)
 	    // what the sender actually sent
 	    csp_buf_set_dlc_in(bp, n);
 	    // csp_commit turns this into BUF_F_RX
-	    csp_buf_or_flags(bp, BUF_F_RXPEND);
+	    csp_buf_or_flags(st, b, BUF_F_RXPEND);
 	    buf_mark_fields(st, b);
 	}
     }
@@ -4686,7 +4611,7 @@ void csp_can_output(csp_rt_t* st)
 	if ((csp_buf_get_transport(bp) != TR_CAN) ||
 	    !(csp_buf_get_flags(bp) & (BUF_F_DIRTY|BUF_F_TX)))
 	    continue;
-	csp_buf_and_flags(bp, ~(BUF_F_DIRTY|BUF_F_TX));
+	csp_buf_and_flags(st, b, ~(BUF_F_DIRTY|BUF_F_TX));
 	if (csp_buf_get_dir(bp) & DIR_OUT)
 	    csp_can_send(st, csp_buf_get_xref(bp), buf_heap_din_ptr(st,bp),
 			 csp_buf_get_dlc(bp));
@@ -4742,7 +4667,7 @@ void csp_buf_input(csp_rt_t* st)
 		csp_spi_done(st, csp_buf_get_xref(bp), &n);
 	    if (r == 0)
 		continue;              // still in flight; look again next cycle
-	    csp_buf_and_flags(bp, ~BUF_F_BUSY);
+	    csp_buf_and_flags(st, b, ~BUF_F_BUSY);
 	    // A FAILED transfer is not a delivery. Leaving BUF_F_RXPEND clear
 	    // is what makes `? Imu.rx` false on a bus error, so a rule guarded
 	    // on it keeps the previous reading instead of acting on a
@@ -4824,7 +4749,7 @@ void csp_buf_input(csp_rt_t* st)
 				     csp_buf_get_xref(bp),
 				     buf_heap_dout_ptr(st, bp), &n);
 		if (r < 0) // the port was refused: /state
-		    csp_buf_or_flags(bp, BUF_F_DEAD);
+		    csp_buf_or_flags(st, b, BUF_F_DEAD);
 		if (r != 1)
 		    break;
 		nb = csp_buf_get_nbytes(bp);
@@ -4833,7 +4758,7 @@ void csp_buf_input(csp_rt_t* st)
 	    }
 	    if (got) {
 		csp_buf_set_dlc_in(bp, (uint8_t)((last > 255) ? 255 : last));
-		csp_buf_or_flags(bp, BUF_F_RXPEND);
+		csp_buf_or_flags(st, b, BUF_F_RXPEND);
 		buf_mark_fields(st, b);
 		// And the other views of this port, with the LENGTH rather than
 		// dlc: dlc saturates at 255 and a datagram may be longer.
@@ -4854,7 +4779,7 @@ void csp_buf_input(csp_rt_t* st)
 	    if (csp_uart_recv(st, csp_buf_get_xref(bp),
 			      buf_heap_dout_ptr(st, bp), &n) == 1) {
 		csp_buf_set_dlc_in(bp, (uint8_t)((n > 255) ? 255 : n));
-		csp_buf_or_flags(bp, BUF_F_RXPEND);
+		csp_buf_or_flags(st, b, BUF_F_RXPEND);
 		buf_mark_fields(st, b);
 	    }
 	}
@@ -4879,7 +4804,7 @@ void csp_buf_input(csp_rt_t* st)
 	    if (csp_tcp_recv(st, csp_buf_get_port(bp), csp_buf_get_xref(bp),
 			     buf_heap_dout_ptr(st, bp), &n) == 1) {
 		csp_buf_set_dlc_in(bp, (uint8_t)((n > 255) ? 255 : n));
-		csp_buf_or_flags(bp, BUF_F_RXPEND);
+		csp_buf_or_flags(st, b, BUF_F_RXPEND);
 		buf_mark_fields(st, b);
 	    }
 	}
@@ -4900,7 +4825,7 @@ void csp_buf_input(csp_rt_t* st)
 		// The mask was counted above, for routed and unrouted alike.
 		if (csp_con_take(which, buf_heap_dout_ptr(st, bp), &n) == 1) {
 		    csp_buf_set_dlc_in(bp, (uint8_t)((n > 255) ? 255 : n));
-		    csp_buf_or_flags(bp, BUF_F_RXPEND);
+		    csp_buf_or_flags(st, b, BUF_F_RXPEND);
 		    buf_mark_fields(st, b);
 		}
 	    }
@@ -4995,7 +4920,7 @@ void csp_route_run(csp_rt_t* st)
 	    // Into the SOURCE's shadow it already went; publish the length the
 	    // same way a delivery does, so a rule sees a whole one next cycle.
 	    csp_buf_set_dlc_in(src, (uint8_t)((n > 255) ? 255 : n));
-	    csp_buf_or_flags(src, BUF_F_RXPEND);
+	    csp_buf_or_flags(st, st->route[r].src, BUF_F_RXPEND);
 	    buf_mark_fields(st, st->route[r].src);
 	    // And into the SINK's committed half, which is what output reads.
 	    memcpy(buf_heap_din_ptr(st,dst), buf_heap_dout_ptr(st,src), n);
@@ -5003,7 +4928,7 @@ void csp_route_run(csp_rt_t* st)
 	    if (route_push(st, dst, buf_heap_din_ptr(st, dst), n) < 0) {
 		// Kept, not dropped: the ordinary output pass sends it next
 		// cycle. Waiting here would stall every other buffer too.
-		csp_buf_or_flags(dst, BUF_F_TX);
+		csp_buf_or_flags(st, st->route[r].dst, BUF_F_TX);
 		break;
 	    }
 	}
@@ -5120,7 +5045,7 @@ void csp_buf_output(csp_rt_t* st)
 		    : csp_spi_start(st, csp_buf_get_xref(bp), p,
 				    csp_buf_get_nbytes(bp), rd);
 		if (r == 0)
-		    csp_buf_or_flags(bp, BUF_F_BUSY);
+		    csp_buf_or_flags(st, b, BUF_F_BUSY);
 	    }
 	    break;
 
@@ -5407,16 +5332,7 @@ NOINLINE static int setup_decl(csp_rt_t* st, index_t ix, const csp_decl_t* d)
 
 // Decl index -> buffer id. A buffer carries its owner and there are few of
 // either, so a scan beats a map that has to be kept in step with both.
-NOINLINE static index_t buf_of_decl(csp_rt_t* st, index_t di)
-{
-    index_t b;
-
-    for (b = 0; b < st->nbuf; b++)
-	if ((csp_buf_get_owner(&st->buf[b]) != BAD_INDEX) &&
-	    ((index_t)INDEX(csp_buf_get_owner(&st->buf[b])) == di))
-	    return b;
-    return BAD_INDEX;
-}
+// buf_of_decl is a WORD now (utils/words.terms), on the buf_owner phrase.
 
 // Resolve every #route once the buffers exist.
 //
@@ -5430,9 +5346,7 @@ NOINLINE static int setup_routes(csp_rt_t* st)
 
     st->nroute = 0;
     st->route = NULL;
-    for (i = 0; i < st->ps.nd; i++)
-	if (decl(st, i, type) == DECL_ROUTE)
-	    n++;
+    n = (int)csp_count_of_type(st, DECL_ROUTE);
     if (n == 0)
 	return 0;
     if ((st->route = (csp_rpair_t*)csp_mid_alloc(st,
@@ -5440,14 +5354,13 @@ NOINLINE static int setup_routes(csp_rt_t* st)
 	csp_set_error(st, ERR_OUT_OF_MEMORY);
 	return -1;
     }
-    for (i = 0; i < st->ps.nd; i++) {
+    for (i = csp_next_of_type(st, 0, DECL_ROUTE); i < st->ps.nd;
+	 i = csp_next_of_type(st, (index_t)(i + 1), DECL_ROUTE)) {
 	csp_decl_t d;
 	index_t sb, db;
-	if (decl(st, i, type) != DECL_ROUTE)
-	    continue;
 	csp_load_decl(st, i, &d);
-	sb = buf_of_decl(st, (index_t)csp_decl_get_rt_src(&d));
-	db = buf_of_decl(st, (index_t)csp_decl_get_rt_dst(&d));
+	sb = csp_buf_of_decl(st, (index_t)csp_decl_get_rt_src(&d));
+	db = csp_buf_of_decl(st, (index_t)csp_decl_get_rt_dst(&d));
 	// A route whose ends did not both become buffers is dropped rather than
 	// half-built. csp_parse_route already refused anything that is not a
 	// #buffer, so this is the belt to that brace.
@@ -5456,7 +5369,7 @@ NOINLINE static int setup_routes(csp_rt_t* st)
 	st->route[st->nroute].src = sb;
 	st->route[st->nroute].dst = db;
 	st->nroute++;
-	csp_buf_or_flags(&st->buf[sb], BUF_F_ROUTED);
+	csp_buf_or_flags(st, sb, BUF_F_ROUTED);
     }
     return 0;
 }
@@ -5575,7 +5488,7 @@ NOINLINE index_t csp_n_rules(csp_rt_t* st)
 {
     index_t i, no = 0;
     for (i = 0; i < st->ps.nn; i = instr_next(st, i)) {
-	if (instr(st, i, op) == OP_RULE)
+	if (csp_iop(st, i) == OP_RULE)
 	    no++;
     }
     return no;
@@ -5595,7 +5508,7 @@ NOINLINE static int build_dis_ip(csp_rt_t* st)
 	any |= (st->dis_rule[i] != 0);
 
     for (i = 0; i < st->ps.nn; i = instr_next(st, i)) {
-	if (instr(st, i, op) != OP_RULE)
+	if (csp_iop(st, i) != OP_RULE)
 	    continue;
 	no++;
 	// Allocate lazily: a program with nothing disabled never pays for the
@@ -5878,7 +5791,7 @@ static int set_declared(csp_rt_t* st, xindex_t ix, csp_part_t part, value_t* vp)
     case DECL_TIMER:   setup_timer_values(&ref, &d);   break;
     default: return 0;
     }
-    csp_part_get(&ref, decl_cfg_vt(csp_decl_get_type(&d), csp_decl_get_vt(&d)), part, vp);
+    csp_part_get(&ref, (vtype_t)csp_leaf_cfg_vt(st, (index_t)XIDX(ix)), part, vp);
     return 1;
 }
 

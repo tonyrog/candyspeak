@@ -343,8 +343,8 @@ ifeq ($(ARCH),avr8)
   # program is optimised at the link. -std=gnu11 because avr-gcc 7 defaults to
   # gnu89, where a declaration after a statement is an error.
   #
-	# -flto
-  XCFLAGS := -std=gnu11  -fno-fat-lto-objects -fuse-linker-plugin \
+  # -flto
+  XCFLAGS := -std=gnu11 -flto -fno-fat-lto-objects -fuse-linker-plugin \
              -mcall-prologues -fno-inline-functions-called-once
   # Linker relaxation: rcall/rjmp instead of call/jmp wherever the target is in
   # range. Must be a LINK flag -- -mrelax in CFLAGS is silently ignored.
@@ -437,7 +437,7 @@ SZ   := $(CROSS)size
 # knows what a GPIO write is -- is picked by architecture above, because that is
 # the whole difference between an LPC build and an STM32 one.
 CORE := src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c src/csp_repl.c \
-        src/csp_parse.c src/csp_tok.c src/csp_print.c src/csp_fixpoint.c gen/csp_strings.c \
+        src/csp_parse.c src/csp_tok.c src/csp_print.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c gen/csp_strings.c \
         src/csp_eeprom.c src/csp_flash.c src/csp_transport.c src/csp_console.c src/csp_states.c
 
 # THE PROGRAM THE BOARD CARRIES IN FLASH.
@@ -523,6 +523,13 @@ CFLAGS := $(CPU) -Os -ffunction-sections -fdata-sections -Wall -Wshift-overflow=
           $(if $(DIAG),-DCSP_BITBANG_DIAG) \
           $(if $(WATCH),-DCSP_STACK_WATCH -finstrument-functions $(WATCH_SKIP)) \
           $(XCFLAGS)
+
+# Per-build additions, the same hook the host Makefile has. NOT XCFLAGS: that
+# one carries -std and the LTO switches, and overriding it from the command
+# line silently drops link-time optimisation -- worth 3716 bytes on uno.
+#
+#   make -f Makefile.board BOARD=uno_bare CFLAGS_EXTRA=-DCSP_WORDS_BC
+CFLAGS += $(CFLAGS_EXTRA)
 
 # A .hex only on AVR. A flat .bin is what a part whose boot ROM is handed a
 # raw image needs; here the bootloader speaks hex, the elf carries its own

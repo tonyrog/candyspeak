@@ -55,6 +55,7 @@ typedef struct PACKED {
     INSTR_COMMON;
     unsigned x:REG_BITS;      // destination register
     unsigned y:REG_BITS;      // y register when pos, y imm when part (STP)
+    unsigned _pad:2;          // aligns mem to a byte; see utils/layout.terms
     unsigned mem:INDEX_BITS;  // declaration: variable/constant
 } csp_instr_mem_t;
 
@@ -70,12 +71,14 @@ typedef struct PACKED {
 typedef struct PACKED {
     INSTR_COMMON;
     unsigned x:REG_BITS;
+    unsigned _pad:6;            // aligns imm to a byte
     signed imm:16;
 } csp_instr_imm_t;
 
 typedef struct PACKED {
     INSTR_COMMON;
     unsigned cnd:REG_BITS; // condition register
+    unsigned _pad:6;       // aligns nxt to a byte
     signed   nxt:15;       // relative jump if !cnd (was int16 -- 15 bits is plenty)
     unsigned implicit:1;   // 1 = bare NORMAL+ rule: list bare, suppress its
 			   // implicit State==INIT||State==NORMAL guard
@@ -112,7 +115,9 @@ typedef struct PACKED {
 // last segment's value is ever read).
 typedef struct PACKED {
     INSTR_COMMON;
+    unsigned _pad1:2;         // aligns num to a byte
     unsigned num:BODY_BITS;   // payload slots that follow
+    unsigned _pad2:6;         // and used to the next one
     unsigned used:8;          // bytes used in this segment
 } csp_instr_seg_t;
 
@@ -157,6 +162,7 @@ typedef struct PACKED {
 // ran next. There is nothing to leave stale here.
 typedef struct PACKED {
     INSTR_COMMON;
+    unsigned _pad:2;         // aligns obj to a byte; see utils/layout.terms
     unsigned obj:16;         // object table index (1..MAX_OBJECT_NUM)
 } csp_instr_seto_t;
 
@@ -190,8 +196,14 @@ typedef struct PACKED {
 // against the array's own length rather than merely staying inside the arena.
 typedef struct PACKED {
     INSTR_COMMON;
+    // PAD so `len` starts on a byte -- every field has to be readable in two
+    // bytes (see utils/layout.terms). The word was already full, so `len`
+    // gave up two bits for it: 16383 elements against a declaration table it
+    // is made of, where `stride` at four bits would not hold an array of
+    // modules.
+    unsigned _pad:2;
+    unsigned len:14;         // element count, for the bounds check
     unsigned x:REG_BITS;     // register holding the element index
-    unsigned len:16;         // element count, for the bounds check
     unsigned stride:6;       // declarations per element (1 = scalar array)
 } csp_instr_setox_t;
 
@@ -316,6 +328,9 @@ typedef struct PACKED {
     // 4 bits, not 2: TR_UDP is 5. The word had four spare bits, so this costs
     // nothing -- csp_bufdecl_t is 8 bytes before and after.
     unsigned transport:4;   // transport_t: TR_NONE plain RAM, TR_CAN a frame
+    // PAD so `id` starts on a byte: every field has to be readable in two
+    // bytes, and the bits were spare anyway.
+    unsigned _pad:2;
     unsigned id:INDEX_BITS; // the constant holding this transport's endpoint:
 			    // a frame id, a packed bus/addr/reg, or an IPv4
 			    // address. See transport_t for the packings.
@@ -398,13 +413,17 @@ typedef struct PACKED {
     // nothing anywhere reporting a loss. CAN has it too: `F201.dlc` in a rule
     // was the length of a frame the rule had not been shown yet.
     uint8_t  dlc_in;
+    // FIRST of the wide members, and on a 32-bit word: micro-csp reads a
+    // field out of ONE word, so a 32-bit value at bit 16 comes back with
+    // its top half quietly zeroed. gen_layout refuses to emit such a
+    // descriptor now; the order here is what keeps it from having to.
+    uint32_t xref;      // pin-number / can-id / i2c or spi endpoint / IPv4
     // UDP's endpoint does not fit in xref: an IPv4 address is already 32 bits
     // and the port is another 16. Here rather than in the DECLARATION, which a
     // ROM image carries and which has four spare bits, not sixteen -- the
     // declaration keeps a string constant and setup_buffer parses it into these
     // two. Zero for every other transport.
     uint16_t port;
-    uint32_t xref;      // pin-number / can-id / i2c or spi endpoint / IPv4
     index_t  owner;     // the decl (with object) whose leaf IS this buffer, or
 			// BAD_INDEX. Set by setup_buffer, which is the only
 			// place that knows both ends. buf_mark_fields used to

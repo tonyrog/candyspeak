@@ -57,7 +57,7 @@ CFLAGS=-MMD -MP -MF $(@:.o=.d) $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_AR
 #     tmp/csp_boot -n -C -O rom_host.c examples/empty.csp
 #     tmp/csp_boot -n -C -O rom.c      examples/cpx_rotate.csp
 OBJS = $(addprefix $(OBJDIR)/, \
-	csp_linux.o csp_rt.o csp_crc.o csp_fixpoint.o csp_line.o csp_repl.o csp_compile.o csp_tok.o \
+	csp_linux.o csp_rt.o csp_crc.o csp_fixpoint.o csp_words.o csp_mcsp.o csp_line.o csp_repl.o csp_compile.o csp_tok.o \
 	csp_dump.o csp_eeprom.o csp_parse.o csp_print.o csp_strings.o \
 	csp_transport.o csp_console.o csp_states.o \
 	csp_flash.o csp_devices.o csp_flash_host.o rom_host.o)
@@ -154,9 +154,46 @@ csp:	$(OBJS) $(RO_LD)
 CORE_SRC = port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
 	   src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
 	   src/csp_transport.c src/csp_console.c src/csp_states.c \
-	   src/csp_parse.c src/csp_print.c src/csp_fixpoint.c gen/csp_strings.c src/csp_flash.c \
+	   src/csp_parse.c src/csp_print.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c \
+	   gen/csp_strings.c src/csp_flash.c \
 	   port/csp_devices.c port/csp_flash_host.c
 EXEC_SRC = $(CORE_SRC) gen/rom.c
+
+# THE BRIDGE, checked on every build rather than once. csp-bc is this same
+# program with the words from utils/words.terms running as micro-csp BYTECODE
+# instead of linked C -- the leaf hooks in src/csp_words.c reaching csp_decl_ref
+# and the buffer table, a real program, a real listing. tests/words.c proves the
+# two back ends agree on synthetic tables; this proves they agree on the
+# runtime, which is the part that has hooks in it.
+#
+# The words carry the listing: $N for a #local is csp_is_local and
+# csp_local_number, so a diff here is a word that did not survive the crossing.
+# NOT $(CFLAGS): that carries -MF $(@:.o=.d), which for a link target spells
+# the output file itself and writes a dependency list over the binary.
+BC_FLAGS = $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC \
+	   -DCSP_HAVE_FLASH -DCSP_CONSOLE_BYTES=256 -w -g $(SAN)
+
+csp-bc: $(CORE_SRC) gen/rom_host.c gen/csp_words_bc.h gen/csp_words_c.h \
+	 gen/csp_words.h gen/csp_layout.h gen/csp_strings.h include/csp_mcsp.h
+	@$(CC) $(BC_FLAGS) -DCSP_WORDS_BC $(CORE_SRC) gen/rom_host.c $(LIBS) -o $@
+
+# --no-eeprom because the EEPROM file is state SHARED between runs, and a
+# check that compares two binaries must not depend on what the previous run
+# left there. -T because the script has live rules: a reactive program that
+# does not settle would hang the build rather than fail it.
+WBC_ARGS = -i --no-eeprom -T 50
+
+words_bc_check: csp csp-bc
+	@mkdir -p tmp
+	@./csp    $(WBC_ARGS) < tests/words_bc.in > tmp/wbc_c.txt  2>&1 || true
+	@./csp-bc $(WBC_ARGS) < tests/words_bc.in > tmp/wbc_bc.txt 2>&1 || true
+	@if cmp -s tmp/wbc_c.txt tmp/wbc_bc.txt; then \
+	    echo "words_bc_check: ok -- C and bytecode print the same listing"; \
+	 else \
+	    echo "words_bc_check: FAIL -- the back ends disagree"; \
+	    diff tmp/wbc_c.txt tmp/wbc_bc.txt | head -20; exit 1; \
+	 fi
+
 # csp_repl.c, csp_compile.c and csp_dump.c are still LISTED: each guards itself
 # to an empty translation unit, so the file list stays the same as ./csp and a
 # missing guard shows up as a link error rather than a silent divergence.
@@ -388,7 +425,7 @@ line_edit_check:
 	@$(CC) $(INCS) -O2 -o tmp/line_edit tests/line_edit.c src/csp_line.c
 	@tmp/line_edit | tail -1
 
-test:	csp test_repl syntax_check strings_check tables_check patterns_check sketch_check ro_check width_check layout_guard layout_check mcsp_check words_check
+test:	csp test_repl syntax_check strings_check tables_check patterns_check sketch_check ro_check width_check layout_guard layout_check mcsp_check words_check words_bc_check
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
 
@@ -642,7 +679,7 @@ $(OBJDIR)/%.o: %.c | gen/csp_strings.h
 
 -include $(OBJS:.o=.d)
 
-.PHONY: layout layout_guard layout_check words words_check mcsp_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
+.PHONY: layout layout_guard layout_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

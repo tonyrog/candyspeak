@@ -173,14 +173,6 @@
     if ((long)(REC).dlc_in != 255L) \
 	FAIL("dlc_in set", (long)(REC).dlc_in, 255L); \
     memset(&(REC), 0, sizeof(REC)); \
-    (REC).port = 65535; \
-    if ((long)csp_buf_get_port((const csp_buf_t*)&(REC)) != 65535L) \
-	FAIL("port", (long)csp_buf_get_port((const csp_buf_t*)&(REC)), 65535L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    csp_buf_set_port((csp_buf_t*)&(REC), 65535); \
-    if ((long)(REC).port != 65535L) \
-	FAIL("port set", (long)(REC).port, 65535L); \
-    memset(&(REC), 0, sizeof(REC)); \
     (REC).xref = 4294967295; \
     if ((long)csp_buf_get_xref((const csp_buf_t*)&(REC)) != 4294967295L) \
 	FAIL("xref", (long)csp_buf_get_xref((const csp_buf_t*)&(REC)), 4294967295L); \
@@ -188,6 +180,14 @@
     csp_buf_set_xref((csp_buf_t*)&(REC), 4294967295); \
     if ((long)(REC).xref != 4294967295L) \
 	FAIL("xref set", (long)(REC).xref, 4294967295L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).port = 65535; \
+    if ((long)csp_buf_get_port((const csp_buf_t*)&(REC)) != 65535L) \
+	FAIL("port", (long)csp_buf_get_port((const csp_buf_t*)&(REC)), 65535L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_buf_set_port((csp_buf_t*)&(REC), 65535); \
+    if ((long)(REC).port != 65535L) \
+	FAIL("port set", (long)(REC).port, 65535L); \
     memset(&(REC), 0, sizeof(REC)); \
     (REC).owner = 65535; \
     if ((long)csp_buf_get_owner((const csp_buf_t*)&(REC)) != 65535L) \
@@ -894,6 +894,14 @@
 
 #define CSP_ORACLE_INSTR_COMMON_OX(REC, FAIL) do { \
     memset(&(REC), 0, sizeof(REC)); \
+    (REC).ox.len = 16383; \
+    if ((long)csp_instr_get_ox_len((const csp_instr_t*)&(REC)) != 16383L) \
+	FAIL("ox.len", (long)csp_instr_get_ox_len((const csp_instr_t*)&(REC)), 16383L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_instr_set_ox_len((csp_instr_t*)&(REC), 16383); \
+    if ((long)(REC).ox.len != 16383L) \
+	FAIL("ox.len set", (long)(REC).ox.len, 16383L); \
+    memset(&(REC), 0, sizeof(REC)); \
     (REC).ox.x = 15; \
     if ((long)csp_instr_get_ox_x((const csp_instr_t*)&(REC)) != 15L) \
 	FAIL("ox.x", (long)csp_instr_get_ox_x((const csp_instr_t*)&(REC)), 15L); \
@@ -901,14 +909,6 @@
     csp_instr_set_ox_x((csp_instr_t*)&(REC), 15); \
     if ((long)(REC).ox.x != 15L) \
 	FAIL("ox.x set", (long)(REC).ox.x, 15L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    (REC).ox.len = 65535; \
-    if ((long)csp_instr_get_ox_len((const csp_instr_t*)&(REC)) != 65535L) \
-	FAIL("ox.len", (long)csp_instr_get_ox_len((const csp_instr_t*)&(REC)), 65535L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    csp_instr_set_ox_len((csp_instr_t*)&(REC), 65535); \
-    if ((long)(REC).ox.len != 65535L) \
-	FAIL("ox.len set", (long)(REC).ox.len, 65535L); \
     memset(&(REC), 0, sizeof(REC)); \
     (REC).ox.stride = 63; \
     if ((long)csp_instr_get_ox_stride((const csp_instr_t*)&(REC)) != 63L) \

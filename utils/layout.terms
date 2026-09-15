@@ -156,6 +156,11 @@
 {record, bf, decl_common, 8,
  [{nbytes,    10},
   {transport,  4},
+  %% PAD so `id` lands on a byte. Every field has to be readable in TWO bytes
+  %% -- mc_field_get reads p[0] and at most p[1], and a third byte would be
+  %% both more code and, for a field at the end of a record, a byte outside it.
+  %% gen_layout refuses a field that needs three.
+  {pad,        2},
   {id,        16}]}.
 
 %% #route: two buffer DECLARATIONS, resolved to buffer ids at setup.
@@ -224,6 +229,11 @@
 {record, m, instr_common, 4,
  [{x,   4},
   {y,   4},
+    %% PAD so the wide field lands on a byte. A 16-bit field at an odd bit
+  %% position makes the accessor do a 32-BIT load: 42 bytes against 8 for
+  %% the aligned form, at every read site. The spare bits were already
+  %% here; they only had to sit in front.
+  {pad,  2},
   {mem, 16}]}.
 
 %% The same with a small signed immediate instead of the second register.
@@ -235,11 +245,21 @@
 %% Load immediate.  Sixteen bits and SIGNED: this is where a literal -1 lives.
 {record, i, instr_common, 4,
  [{x,   4},
+    %% PAD so the wide field lands on a byte. A 16-bit field at an odd bit
+  %% position makes the accessor do a 32-BIT load: 42 bytes against 8 for
+  %% the aligned form, at every read site. The spare bits were already
+  %% here; they only had to sit in front.
+  {pad,  6},
   {imm, 16, signed}]}.
 
 %% A rule body: the condition register and the SIGNED offset to the next rule.
 {record, r, instr_common, 4,
  [{cnd,      4},
+    %% PAD so the wide field lands on a byte. A 16-bit field at an odd bit
+  %% position makes the accessor do a 32-BIT load: 42 bytes against 8 for
+  %% the aligned form, at every read site. The spare bits were already
+  %% here; they only had to sit in front.
+  {pad,       6},
   {nxt,      15, signed},
   {implicit,  1}]}.
 
@@ -261,7 +281,14 @@
 %% A string segment in the instruction stream: how many words it spans and how
 %% many bytes of them are used.
 {record, sg, instr_common, 4,
- [{num,  10},
+ [
+  %% PAD so the wide field lands on a byte. A 16-bit field at an odd bit
+  %% position makes the accessor do a 32-BIT load: 42 bytes against 8 for
+  %% the aligned form, at every read site. The spare bits were already
+  %% here; they only had to sit in front.
+  {pad,   2},
+  {num,  10},
+  {pad,   6},
   {used,  8}]}.
 
 {record, v, instr_common, 4,
@@ -286,14 +313,26 @@
   {avt, 16}]}.
 
 {record, o, instr_common, 4,
- [{obj, 16}]}.
+ [
+  %% PAD so the wide field lands on a byte. A 16-bit field at an odd bit
+  %% position makes the accessor do a 32-BIT load: 42 bytes against 8 for
+  %% the aligned form, at every read site. The spare bits were already
+  %% here; they only had to sit in front.
+  {pad,  2},
+  {obj, 16}]}.
 
 %% The array form of OP_SETO: .ox.x's four bits start where .o.obj's sixteen
 %% do, which is why an emitter that writes one arm for the other produces a
 %% word that looks plausible and is wrong.  See tests/instr_layout.c.
+%% LEN IS FOURTEEN BITS, not sixteen: the word is full (6+4+16+6 = 32) and
+%% something had to give for `len` to start on a byte. It is the length of an
+%% array, bounded by the declaration table it is made of, so 16383 elements is
+%% a ceiling no program reaches -- where `stride` counts declarations per
+%% element and four bits (15) would not be enough for an array of modules.
 {record, ox, instr_common, 4,
- [{x,      4},
-  {len,   16},
+ [{pad,    2},
+  {len,   14},
+  {x,      4},
   {stride, 6}]}.
 
 %% The terminator after a ROM instr section.  crc lands byte-aligned at 2-3,
@@ -312,8 +351,8 @@
   {flags,     8},
   {dlc,       8},
   {dlc_in,    8},
+  {xref,     32},   %% a double: must start on a 32-bit word, see below
   {port,     16},
-  {xref,     32},   
   {owner,    16}      %% index_t
  ]}.
 

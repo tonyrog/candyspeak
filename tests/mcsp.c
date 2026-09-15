@@ -26,29 +26,106 @@ static void fail(const char* what, long got, long want)
 
 // ---------------------------------------------------------------- field table
 
-// The DESCRIPTORS are checked by tests/layout.c, which compares every
-// generated accessor against the C bit-field it replaces. What is left to
-// check here is the other reader: mc_field_get walks (word, shift, bits) while
-// the accessor walks byte offsets, and both are derived from the same row.
-// They must not disagree.
+// The DESCRIPTORS are checked by tests/layout.c, which compares every generated
+// accessor against the C bit-field it replaces. What is left to check here is
+// the OTHER reader: mc_field_get walks {byte, bit, bits} while the accessor is
+// a generated shift and mask, and both come from the same row in layout.terms.
+//
+// Every field, not a chosen few. This was three fields of thirty-six by hand,
+// and a reader that gathered one byte where it needed three passed all three of
+// them -- they were the byte-aligned ones somebody thought to write down. The
+// macro is generated from the same terms file as the readers, so a field cannot
+// be added without arriving here too.
+//
+// A PATTERN rather than one field at a time: with every byte distinct, a wrong
+// byte offset or a wrong bit lands on a different value wherever it is.
+#define PATTERN(REC) do { \
+	unsigned k_; \
+	for (k_ = 0; k_ < sizeof(REC); k_++) \
+	    ((uint8_t*)&(REC))[k_] = (uint8_t)(0x5A + k_ * 0x27); \
+    } while (0)
+
 static void test_fields(void)
 {
-    csp_decl_t d;
+    csp_decl_t  d;
+    csp_instr_t i;
+    csp_buf_t   b;
+    csp_view_t  v;
 
-    memset(&d, 0, sizeof(d));
-    csp_decl_set_type(&d, 0x0F);
-    csp_decl_set_name(&d, 0xFF);
-    csp_decl_set_vt(&d, 0x0A);
+    PATTERN(d); CSP_MCFIELD_DECL(d, fail);
+    PATTERN(i); CSP_MCFIELD_INSTR(i, fail);
+    PATTERN(b); CSP_MCFIELD_BUF(b, fail);
+    PATTERN(v); CSP_MCFIELD_VIEW(v, fail);
+}
 
-    if (mc_field_get(&d, &mc_decl_fields[MFD_TYPE]) != csp_decl_get_type(&d))
-	fail("mc_field_get type", mc_field_get(&d, &mc_decl_fields[MFD_TYPE]),
-	     csp_decl_get_type(&d));
-    if (mc_field_get(&d, &mc_decl_fields[MFD_NAME]) != csp_decl_get_name(&d))
-	fail("mc_field_get name", mc_field_get(&d, &mc_decl_fields[MFD_NAME]),
-	     csp_decl_get_name(&d));
-    if (mc_field_get(&d, &mc_decl_fields[MFD_VT]) != csp_decl_get_vt(&d))
-	fail("mc_field_get vt", mc_field_get(&d, &mc_decl_fields[MFD_VT]),
-	     csp_decl_get_vt(&d));
+// ---------------------------------------------------------------- the writes
+
+// Two fields OVERLAP when their bit ranges do. Declaration arms are unions, so
+// writing tm.period is supposed to change va.init -- those two share the bytes
+// on purpose. What must not change is a field that shares no bit with the one
+// written, and the interesting ones are exactly those that share a BYTE with
+// it: a setter that stores a whole byte takes its neighbour with it, and
+// nothing else in the suite would notice.
+static int overlaps(const mc_field_t* a, const mc_field_t* b)
+{
+    unsigned alo = (unsigned)a->byte * 8 + a->bit;
+    unsigned blo = (unsigned)b->byte * 8 + b->bit;
+
+    return !((alo + a->bits <= blo) || (blo + b->bits <= alo));
+}
+
+static void set_family(const char* fam, const mc_field_t* tab,
+		       uint8_t n, uint8_t nd, void* rec, unsigned size)
+{
+    static mc_cell_t before[64];
+    // Three values, because one is not enough: all-ones would pass a mask that
+    // is too wide, and a single pattern would pass a shift that is off by a
+    // whole field width in a field whose bits happen to repeat.
+    static const mc_cell_t vals[3] = { 0xFFFF, 0xA5A5, 0x0001 };
+    unsigned f, g, k, q;
+    char what[64];
+
+    for (k = 0; k < 3; k++)
+	for (f = nd; f < n; f++) {
+	    mc_cell_t m = (tab[f].bits >= 16)
+		? 0xFFFFu : (mc_cell_t)((1u << tab[f].bits) - 1u);
+	    mc_cell_t want = (mc_cell_t)(vals[k] & m);
+
+	    for (q = 0; q < size; q++)
+		((uint8_t*)rec)[q] = (uint8_t)(0x5A + q * 0x27);
+	    for (g = 0; g < n; g++)
+		before[g] = mc_field_get(rec, &tab[g]);
+
+	    mc_field_set(rec, &tab[f], vals[k]);
+
+	    if (mc_field_get(rec, &tab[f]) != want) {
+		sprintf(what, "%s set[%u] v=%04X", fam, f, (unsigned)vals[k]);
+		fail(what, (long)mc_field_get(rec, &tab[f]), (long)want);
+	    }
+	    for (g = 0; g < n; g++)
+		if ((g != f) && !overlaps(&tab[f], &tab[g]) &&
+		    (mc_field_get(rec, &tab[g]) != before[g])) {
+		    sprintf(what, "%s set[%u] spilled into [%u]", fam, f, g);
+		    fail(what, (long)mc_field_get(rec, &tab[g]), (long)before[g]);
+		}
+	}
+}
+
+static void test_field_set(void)
+{
+    csp_decl_t  d;
+    csp_instr_t i;
+    csp_buf_t   b;
+    csp_view_t  v;
+
+    set_family("decl",  mc_decl_fields,  mc_decl_nfield,  mc_decl_ndouble,
+	       &d, sizeof(d));
+    set_family("instr", mc_instr_fields, mc_instr_nfield, mc_instr_ndouble,
+	       &i, sizeof(i));
+    set_family("buf",   mc_buf_fields,   mc_buf_nfield,   mc_buf_ndouble,
+	       &b, sizeof(b));
+    set_family("view",  mc_view_fields,  mc_view_nfield,  mc_view_ndouble,
+	       &v, sizeof(v));
 }
 
 // ------------------------------------------------------------------- machine
@@ -104,20 +181,23 @@ static const mc_leafn_t leavesn[] = { leafn_sum3, leafn_split, leafn_runaway };
 
 static csp_decl_t hook_decl;
 
+// This file tests the MACHINE, not the words, so the state hook is local: what
+// a real runtime answers is utils/words.terms' business and tests/words.c
+// checks that. Here the numbers only have to be distinguishable.
+static mc_cell_t my_state(void* ctx, mc_cell_t i)
+{
+    (void)ctx;
+    switch (i) {
+    case 0:  return 7;
+    case 1:  return 2;
+    default: return 3;
+    }
+}
+
 static const void* my_decl(void* ctx, mc_cell_t i)
 {
     (void)ctx;
     return (i == 0) ? &hook_decl : NULL;
-}
-
-static mc_cell_t my_state(void* ctx, mc_cell_t i)
-{
-    (void)ctx;
-    switch(i) {
-    case 0: return 7;  // ND
-    case 1: return 2;  // NN
-    default: return 3; // ?
-    }
 }
 
 static int run(const uint8_t* code, uint16_t len, mc_cell_t* out)
@@ -164,7 +244,11 @@ PROG(p_wrap, MC_LIT16, 0xFF, 0xFF, MC_INC, MC_BYE);
 PROG(p_lt,   MC_LIT8, 3, MC_LIT8, 5, MC_LT, MC_BYE);
 PROG(p_ltu,  MC_LIT16, 0x00, 0x80, MC_LIT8, 1, MC_LT, MC_BYE);
 PROG(p_nat,  MC_LIT8, 21, MC_NATIVE, 0, MC_BYE);
-PROG(p_nd,   MC_ND, MC_BYE);
+// MC_ST with the state id the local hook answers. MC_ND was a separate
+// opcode that meant `state 0`, i.e. a hardcoded index into a table the
+// generator builds -- it stopped meaning nd the moment that table stopped
+// listing every field.
+PROG(p_nd,   MC_ST, 0, MC_BYE);
 
 // sum 1..5 through the return stack.  offsets:
 //  0 LIT8 0 | 2 LIT8 5 | 4 TOR | 5 RAT | 6 JZ +7 | 8 RAT | 9 ADD | 10 RFROM
@@ -189,6 +273,27 @@ PROG(p_split, MC_LIT16, 0x34, 0x12, MC_NATIVEN, 1, MC_ADD, MC_BYE);
 PROG(p_badleafn, MC_LIT8, 0, MC_NATIVEN, 9, MC_BYE);
 PROG(p_runaway, MC_LIT8, 0, MC_NATIVEN, 2, MC_BYE);
 
+// DOUBLES. A double is two cells with the high half on top, so a program that
+// leaves one and stops reports only the HIGH cell through MC_BYE -- these
+// therefore reduce to a single cell before finishing.
+PROG(p_dlit,  MC_DLIT, 0x78,0x56,0x34,0x12, MC_DROP, MC_BYE);        // low half
+PROG(p_dlith, MC_DLIT, 0x78,0x56,0x34,0x12, MC_BYE);                 // high half
+PROG(p_s2d,   MC_LIT16, 0x34,0x12, MC_S2D, MC_BYE);                  // high = 0
+PROG(p_dadd,  MC_DLIT, 0xFF,0xFF,0x00,0x00, MC_DLIT, 0x01,0x00,0x00,0x00,
+              MC_DADD, MC_BYE);                                      // carry out
+PROG(p_dsub,  MC_DLIT, 0x00,0x00,0x01,0x00, MC_DLIT, 0x01,0x00,0x00,0x00,
+              MC_DSUB, MC_DROP, MC_BYE);                             // borrow in
+PROG(p_deq,   MC_DLIT, 0x78,0x56,0x34,0x12, MC_DLIT, 0x78,0x56,0x34,0x12,
+              MC_DEQ, MC_BYE);
+PROG(p_dne,   MC_DLIT, 0x78,0x56,0x34,0x12, MC_DLIT, 0x78,0x56,0x34,0x13,
+              MC_DEQ, MC_BYE);
+PROG(p_dlt,   MC_DLIT, 0xFF,0xFF,0x00,0x00, MC_DLIT, 0x00,0x00,0x01,0x00,
+              MC_DLT, MC_BYE);                                       // differ in HIGH
+PROG(p_dge,   MC_DLIT, 0x00,0x00,0x01,0x00, MC_DLIT, 0xFF,0xFF,0x00,0x00,
+              MC_DLT, MC_BYE);
+PROG(p_ddrop, MC_LIT8, 9, MC_DLIT, 0x78,0x56,0x34,0x12, MC_DDROP, MC_BYE);
+PROG(p_dunder, MC_DLIT, 0x01,0x00,0x00,0x00, MC_DADD, MC_BYE);
+
 PROG(p_badop, 200, MC_BYE);
 PROG(p_under, MC_ADD, MC_BYE);
 PROG(p_runoff, MC_LIT8, 1, MC_INC);      // no BYE: runs off the end
@@ -205,6 +310,18 @@ static void test_machine(void)
     expect("lt is unsigned", p_ltu, sizeof(p_ltu), MC_OK, 0);
     expect("native",     p_nat,   sizeof(p_nat),   MC_OK, 42);
     expect("nd hook",    p_nd,    sizeof(p_nd),    MC_OK, 7);
+
+    expect("dlit low half",   p_dlit,  sizeof(p_dlit),  MC_OK, 0x5678);
+    expect("dlit high half",  p_dlith, sizeof(p_dlith), MC_OK, 0x1234);
+    expect("s2d zero-extends", p_s2d,  sizeof(p_s2d),   MC_OK, 0);
+    expect("dadd carries into the high cell", p_dadd, sizeof(p_dadd), MC_OK, 1);
+    expect("dsub borrows from it",  p_dsub,  sizeof(p_dsub),  MC_OK, 0xFFFF);
+    expect("deq",             p_deq,   sizeof(p_deq),   MC_OK, 1);
+    expect("deq sees the high cell", p_dne, sizeof(p_dne), MC_OK, 0);
+    expect("dlt compares both cells", p_dlt, sizeof(p_dlt), MC_OK, 1);
+    expect("and the other way",  p_dge, sizeof(p_dge), MC_OK, 0);
+    expect("ddrop takes two",  p_ddrop, sizeof(p_ddrop), MC_OK, 9);
+    expect("dadd on one double stops", p_dunder, sizeof(p_dunder), MC_E_STACK, 0);
     expect("stack leaf takes three", p_sum3, sizeof(p_sum3), MC_OK, 7);
     expect("stack leaf may push two", p_split, sizeof(p_split), MC_OK, 0x12 + 0x34);
     expect("unknown stack leaf stops", p_badleafn, sizeof(p_badleafn), MC_E_LEAF, 0);
@@ -231,6 +348,7 @@ int main(void)
     mc_decl_hook = my_decl;
     mc_state_hook = my_state;
     test_fields();
+    test_field_set();
     test_machine();
     if (errors == 0)
 	printf("ok\n");

@@ -1,0 +1,23 @@
+#local a = 1
+#variable b = 2
+#constant K = 7
+#module M
+#local c = 3
+#variable d = 4
+#constant J = 9
+#end
+#module N
+#local e = 5
+#variable g = 7
+#end
+#variable Acc[3] = 0
+#states s1 s2 s3
+#in INIT
+  State = s1
+#end
+#in s1 s2
+  b = b + 1
+  State = s2 ? State == s1
+  State = s3 ? State == s2
+#end
+/list

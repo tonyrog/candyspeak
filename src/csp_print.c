@@ -5,6 +5,7 @@
 #include "csp_print.h"
 #include "csp_strings.h"
 #include "csp_tok.h"   // the operator table, through its accessors
+#include "csp_words.h" // the words from utils/words.terms, C or bytecode
 
 // mapping from opcode => token number
 const uint8_t op_tok[] RODATA = {
@@ -553,15 +554,8 @@ rostring_t csp_part_name(csp_part_t part)
 // The per-module (and global) state variable is always the internally-created
 // DECL_VARIABLE named "State". State numbers render symbolically only for it,
 // so a plain "T==1" or "T=1" is never mistaken for a state.
-static int is_state_var(csp_rt_t* st, uint16_t mem)
-{
-    index_t i = INDEX(mem);
-    if (i >= st->ps.nd)
-	return 0;
-    if (decl(st, i, type) != DECL_VARIABLE)
-	return 0;
-    return csp_str_eq_ro(st, decl_name_pos(st, mem), ros_State, 5);
-}
+// The runtime's state_is_state_var, which this used to be a second copy of.
+#define is_state_var(st, mem) state_is_state_var((st), (index_t)(mem))
 
 // True if `snum` is one of the states of the #in block currently being listed --
 // used to drop its State==<s> term from a rule's condition (the #in header shows

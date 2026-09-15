@@ -82,20 +82,24 @@
 %% Small, cold, and made of exactly the parts the listing path is made of -- a
 %% bounds test, two field reads and a short-circuit -- which is why it is the
 %% one the two back ends are proved against first.
-{word, is_local, [ix], 'int',
+%% THE BOTTOM WORD. What a declaration IS, or DECL_NONE when the index names
+%% nothing -- which is the bounds check, in one place, for everything that asks
+%% about a declaration. Three words did the INDEX-and-compare dance themselves
+%% and one of them (decl_kind) did not do the bounds half at all: it read past
+%% the table and switched on whatever was there.
+{word, dtype, [ix], 'int',
  [{local, i, {index, {var, ix}}},
-  {return,
-   {andthen, {op, lt, {var, i}, {nd}},
-    {andthen, {op, eq, {decl, {var, i}, type}, {const, 'DECL_VARIABLE'}},
-              {decl, {var, i}, local}}}}]}.
+  {'if', {op, lt, {var, i}, {nd}},
+   [{return, {decl, {var, i}, type}}]},
+  {return, {const, 'DECL_NONE'}}]}.
 
-%% What a #local lists as: its position among the #locals of its module.
-%%
-%% Written WITHOUT a break, which the IR does not have: the downward scan stops
-%% on `start == 0` in the condition instead, which leaves the loop at the same
-%% place for the same reason. That is a fair trade -- a break is a second exit
-%% from a loop, and a code generator that has to get two of them right is a
-%% code generator that gets one of them wrong.
+%% A #local, i.e. what lists as $N. Built ON dtype rather than beside it: the
+%% bound is already paid by the time this asks the second question.
+{word, is_local, [ix], 'int',
+ [{return, {andthen,
+	    {op, eq, {call, dtype, [{var, ix}]}, {const, 'DECL_VARIABLE'}},
+	    {decl, {index, {var, ix}}, local}}}]}.
+
 {word, local_number, [ix], 'int',
  [{local, i, {index, {var, ix}}},
   {local, start, {const, 0}},
@@ -119,20 +123,30 @@
 %% SMOKE TEST for the switch back ends -- not a word anything calls yet. It is
 %% here so `switch` is exercised rather than merely implemented; the first real
 %% word that needs one replaces it.
-{word, decl_kind, [ix], 'int',
- [{local, i, {index, {var, ix}}},
-  {local, r, {const, 0}},
-  {switch, {decl, {var, i}, type},
+%% The listing's coarse kind. On dtype as well, so an index past the table
+%% answers 9 -- `something else` -- instead of reading a declaration that is
+%% not there.
+{aux, decl_kind, [ix], 'int',
+ [{local, r, {const, 0}},
+  {switch, {call, dtype, [{var, ix}]},
    [{'DECL_VARIABLE', [{set, r, {const, 1}}]},
     {'DECL_CONSTANT', [{set, r, {const, 2}}]},
     {'DECL_MODULE',   [{set, r, {const, 3}}]}],
    [{set, r, {const, 9}}]},
   {return, {var, r}}]}.
 
-%% csp_tag: the one-character kind marker a listing puts in front of a
-%% declaration.  Lives in src/csp_rt.c, takes one argument past st, returns a
-%% value -- the plain shape, and the one most of the listing path has.
 {native, csp_tag, 1, char}.
+
+%% Leaf index -> view index. st_index is the OBJECT context applied: a leaf
+%% inside an object is its declaration index plus the running object's base,
+%% and only the runtime knows what that base is right now.
+{native, st_index, 1, 'int'}.
+
+%% PURE natives: they do not take the runtime. The console is a global, so
+%% printing needs no st -- and the wrapper must not pass one, which is the whole
+%% difference between `pure` and `native`.
+{pure, csp_print_char, 1, 'int'}.
+{pure, csp_print_uint, 1, 'int'}.
 
 %% What the listing prints to identify a leaf: a #local has no name of its own
 %% and shows as its number, anything else shows its kind.
@@ -145,7 +159,7 @@
 %% word's `t`. Written the other way round the clobber is invisible, because
 %% both words happen to keep their argument in local 0 -- the test passed a
 %% deliberately broken frame until this was turned round.
-{word, leaf_mark, [ix], 'int',
+{aux, leaf_mark, [ix], 'int',
  [{local, t, {call, csp_tag, [{var, ix}]}},
   {'if', {call, is_local, [{var, ix}]},
    [{return, {const, 36}}]},          %% '$'
@@ -155,11 +169,50 @@
 %% What a word may reach in the runtime.  Declared here so the two back ends
 %% agree on it and so adding one is an edit to this file rather than to both.
 
-{state, nd,   'index_t', "ps.nd"}.
-{state, nn,   'index_t', "ps.nn"}.
-{state, nq,   'index_t', "ps.nq"}.
-{state, nbuf, 'index_t', "nbuf"}.
-{state, cur,  'uint8_t', "cur"}.
+%% The parse cursors: how much of each pool is in use.
+{state, nd,     'index_t', "ps.nd"}.
+{state, nn,     'index_t', "ps.nn"}.
+{state, nq,     'index_t', "ps.nq"}.
+{state, ns,     'index_t', "ps.ns"}.
+{state, strp,   'index_t', "ps.strp"}.
+
+%% The ROM baseline: where a firmware image ends and typed code begins.
+{state, rom_nd, 'index_t', "rom_nd"}.
+{state, rom_nn, 'index_t', "rom_nn"}.
+
+%% Derived table sizes, all filled by csp_rt_start.
+{state, nbuf,   'index_t', "nbuf"}.
+{state, nroute, 'index_t', "nroute"}.
+{state, nio,    'index_t', "nio"}.
+{state, nt,     'index_t', "nt"}.
+{state, nm,     'index_t', "nm"}.
+
+%% Where the current object is, and which module owns it.
+{state, cur,    'uint8_t', "cur"}.
+{state, cbase,  'index_t', "cbase"}.
+{state, gsx,    'index_t', "gsx"}.
+{state, sys_mod,'index_t', "sys_mod"}.
+{state, sys_obj,'index_t', "sys_obj"}.
+
+%% The middle allocator, and how much of the settings store is spoken for.
+{state, mid,      'index_t',  "mid"}.
+{state, mid_base, 'index_t',  "mid_base"}.
+{state, mid_end,  'index_t',  "mid_end"}.
+{state, set_used, 'uint16_t', "set_used"}.
+{state, obj_cap,  'index_t',  "obj_cap"}.
+
+%% ------------------------------------------------------------ THE TABLES
+%%
+%% {array, Name, ElemType, CPath, BoundField}. The bound is a field of
+%% csp_rt_t beside the table, and the generated accessor checks against it --
+%% which is the whole difference between handing a word a table and handing it
+%% a pointer. Zero out of range, and a write out of range is dropped.
+{array, io,        'index_t', "io",        nio}.
+{array, io_obj,    'uint8_t', "io_obj",    nio}.
+{array, timer,     'index_t', "timer",     nt}.
+{array, timer_obj, 'uint8_t', "timer_obj", nt}.
+{array, offs,      'index_t', "offs",      obj_cap}.
+{array, object,    'index_t', "object",    obj_cap}.
 
 %%{buffield, owner,     'index_t'}.
 %%{buffield, transport, 'uint8_t'}.
@@ -170,9 +223,348 @@
 %% A buffer's kind marker for a listing: what the declaration that OWNS it is.
 %% Reaches three things a word could not before -- a buffer field, the runtime's
 %% own count, and a declaration through the index it finds there.
-{word, buf_owner_tag, [b], 'int',
+{aux, buf_owner_tag, [b], 'int',
  [{local, n, {state, nbuf}},
   {'if', {op, lt, {var, b}, {var, n}},
    [{local, o, {index, {buf, {var, b}, owner}}},
     {return, {call, csp_tag, [{var, o}]}}]},
   {return, {const, 63}}]}.          %% '?' -- no such buffer
+
+%% Does this buffer carry the endpoint we are looking for?  xref is THIRTY-TWO
+%% bits -- a CAN id, an IPv4 address, a packed i2c endpoint -- so everything it
+%% touches becomes a double: the local that holds it, the constant it is
+%% compared against, and the comparison itself.  Nothing in the word says so;
+%% the width comes from utils/layout.terms and the generator follows it.
+{aux, buf_is_xref, [b], 'int',
+ [{local, want, {const, 16#DEADBEEF}},
+  {return, {op, eq, {buf, {var, b}, xref}, {var, want}}}]}.
+
+%% A WRITE, and one that has to leave its neighbours alone. dir shares a byte
+%% with transport, xref is a double (two slots, read-modify-write over four
+%% bytes), and owner sits right after it -- a setter that wrote a byte the field
+%% does not reach would take one of them with it. tests/words.c compares the
+%% whole sixteen-byte record afterwards, not just what this returns.
+{aux, buf_stamp, [b], 'int',
+ [{'if', {op, lt, {var, b}, {state, nbuf}},
+   [{store, {buf, {var, b}, dir}, {const, 3}},
+    {store, {buf, {var, b}, xref}, {const, 16#DEADBEEF}},
+    {store, {buf, {var, b}, owner}, {var, b}},
+    {return, {buf, {var, b}, transport}}]},
+  {return, {const, 255}}]}.
+
+%% Stamp a string segment's high-water mark. The same three lines stood in three
+%% places in csp_rt.c: a segment index that may be BAD_INDEX or may name a ROM
+%% segment -- neither of which can be written -- and the byte position whose
+%% offset inside the segment is the mark.
+%%
+%% The BAD_INDEX test is not redundant with the ROM one: BAD_INDEX is larger
+%% than any real index, so it passes `>= rom_nn` and would be written as if it
+%% were a RAM segment.
+{word, str_seg_stamp, [sh, endp], 'int',
+ [{'if', {andthen, {op, ne, {var, sh}, {const16, 'BAD_INDEX'}},
+	  {op, eq, {op, lt, {var, sh}, {state, rom_nn}}, {const, 0}}},
+   [{store, {instr, {var, sh}, sg_used},
+     {op, add, {op, and_, {op, sub, {var, endp}, {const, 1}},
+		{const, 'CSP_STR_SEG_MASK'}},
+	       {const, 1}}},
+    {return, {const, 1}}]},
+  {return, {const, 0}}]}.
+
+%% How many declarations an array occupies: the head plus every continuation
+%% behind it. The 0xFFFF cap is the array-length field's own ceiling -- past it
+%% the count would wrap and a walk would run off the end of the table.
+{word, array_len, [i], 'uint16_t',
+ [{local, j, {op, add, {index, {var, i}}, {const, 1}}},
+  {local, k, {const, 1}},
+  {while, {andthen, {op, lt, {var, j}, {nd}},
+	   {andthen, {op, lt, {var, k}, {const, 65535}},
+		     {decl, {var, j}, cont}}},
+   [{set, k, {op, add, {var, k}, {const, 1}}},
+    {set, j, {op, add, {var, j}, {const, 1}}}]},
+  {return, {var, k}}]}.
+
+%% ------------------------------------------------------------- #in gates
+%%
+%% A gate is `LD State` followed by a run of OP_NINSTATE and a terminating
+%% OP_INSTATE -- `#in A B C` is an OR-chain. Three questions get asked about
+%% that shape in the runtime, and they share two phrases.
+
+%% j names a gate opcode at all.
+{aux, at_gate, [j], 'int',
+ [{return, {orthen, {op, eq, {call, iop, [{var, j}]}, {const, 'OP_INSTATE'}},
+	    {op, eq, {call, iop, [{var, j}]}, {const, 'OP_NINSTATE'}}}}]}.
+
+%% j names the TERMINATING opcode, and is inside the range.
+{aux, at_instate, [j, to], 'int',
+ [{return, {andthen, {op, lt, {var, j}, {var, to}},
+	    {op, eq, {call, iop, [{var, j}]}, {const, 'OP_INSTATE'}}}}]}.
+
+%% Past the run of OP_NINSTATE.
+{aux, gate_skip, [j, to], 'index_t',
+ [{while, {andthen, {op, lt, {var, j}, {var, to}},
+	   {op, eq, {call, iop, [{var, j}]}, {const, 'OP_NINSTATE'}}},
+   [{set, j, {op, add, {var, j}, {const, 1}}}]},
+  {return, {var, j}}]}.
+
+%% Does the gate at j..to open on a state? One line, on the two phrases.
+{word, gate_is_in, [j, to], 'int',
+ [{return, {call, at_instate,
+	    [{call, gate_skip, [{var, j}, {var, to}]}, {var, to}]}}]}.
+
+%% The index PAST the gate. The terminating OP_INSTATE is consumed when there
+%% is one, so the answer is the skip plus a flag -- `+ at_instate` rather than
+%% a branch, because the flag is already a number.
+{word, gate_end, [j, to], 'index_t',
+ [{local, e, {call, gate_skip, [{var, j}, {var, to}]}},
+  {return, {op, add, {var, e}, {call, at_instate, [{var, e}, {var, to}]}}}]}.
+
+%% True when the instruction at i is a gate's `LD State`. That load belongs to
+%% the gate, not to a rule's data dependencies, which is why csp_csr has to
+%% tell them apart.
+{word, is_gate_ld, [i], 'int',
+ [{return, {andthen,
+	    {andthen, {op, eq, {call, iop, [{var, i}]}, {const, 'OP_LD'}},
+		      {op, eq, {instr, {var, i}, m_mem}, {state, gsx}}},
+	    {andthen, {op, lt, {op, add, {var, i}, {const, 1}}, {nn}},
+		      {call, at_gate, [{op, add, {var, i}, {const, 1}}]}}}}]}.
+
+%% Is the rule body starting at ip an IMPLICIT one? Walks to the body's OP_RULE,
+%% stopping at whatever ends the body first.
+{word, body_implicit, [ip, hi], 'int',
+ [{local, i, {var, ip}},
+  {while, {op, lt, {var, i}, {var, hi}},
+   [{'if', {op, eq, {call, iop, [{var, i}]}, {const, 'OP_RULE'}},
+     [{return, {instr, {var, i}, r_implicit}}]},
+    {'if', {orthen, {op, eq, {call, iop, [{var, i}]}, {const, 'OP_NEXT'}},
+	    {op, eq, {call, iop, [{var, i}]}, {const, 'OP_ENTER'}}},
+     [{return, {const, 0}}]},
+    {set, i, {op, add, {var, i}, {const, 1}}}]},
+  {return, {const, 0}}]}.
+
+
+%% ------------------------------------------------------------ leaves & bufs
+
+%% Which buffer a leaf belongs to. `&st->buf[csp_view_get_buf(csp_view(st,ix))]`
+%% stood in five places; this is the index half of it, which is the half that
+%% can be said without a pointer.
+{word, leaf_buf, [ix], 'int',
+ [{return, {view, {call, st_index, [{var, ix}]}, buf}}]}.
+
+%% The two flag helpers, by INDEX. They took a csp_buf_t* and every caller
+%% derived that pointer from an index it already had -- which is a pointer the
+%% machine cannot hold and did not need. Returning the new flags is free and
+%% saves the caller a second read when it wants one.
+{word, buf_or_flags, [b, fs], 'int',
+ [{local, f, {op, or_, {buf, {var, b}, flags}, {var, fs}}},
+  {store, {buf, {var, b}, flags}, {var, f}},
+  {return, {var, f}}]}.
+
+{word, buf_and_flags, [b, fs], 'int',
+ [{local, f, {op, and_, {buf, {var, b}, flags}, {var, fs}}},
+  {store, {buf, {var, b}, flags}, {var, f}},
+  {return, {var, f}}]}.
+
+%% ---------------------------------------------------------------- phrases
+%%
+%% Small ones, deliberately. A phrase that appears in three places is a word
+%% whether or not it looks like a function, and the deeper words below are
+%% written out of these rather than out of field reads.
+
+%% The vt of a declaration, bounds-checked. The twin of dtype: the two fields
+%% every question about a declaration starts from.
+{aux, dvt, [ix], 'int',
+ [{local, i, {index, {var, ix}}},
+  {'if', {op, lt, {var, i}, {nd}},
+   [{return, {decl, {var, i}, vt}}]},
+  {return, {const, 0}}]}.
+
+%% The type a leaf's value SLOT is laid out with, given the declaration's own
+%% two fields. A device leaf's layout is decided by what it IS; everything else
+%% keeps the type it was declared with.
+%%
+%% The C took CSP_MASK(dt, CSP_DECL_TYPE_BITS) first. CSP_DECL_TYPE_BITS is 4
+%% and `type` is a four-bit field, and both callers passed a field read -- the
+%% mask could not change anything and is gone.
+{aux, cfg_vt, [dt, vt], 'int',
+ [{local, r, {var, vt}},
+  {switch, {var, dt},
+   [{'DECL_DIGITAL', [{set, r, {const, 'V_DIGITAL'}}]},
+    {'DECL_TIMER',   [{set, r, {const, 'V_TIMER'}}]},
+    {'DECL_FIELD',   [{set, r, {const, 'V_FIELD'}}]},
+    %% An analog reading is SIGNED unless the declaration says otherwise --
+    %% the same default a #variable has, and the right one for a sensor that
+    %% swings both ways. `unsigned` is the opt-in.
+    {'DECL_ANALOG',
+     [{'if', {op, eq, {op, and_, {var, vt}, {const, 'TYPE_MASK'}},
+	      {const, 'V_UNSIGNED'}},
+       [{set, r, {const, 'V_ANALOG'}}],
+       [{set, r, {op, or_, {const, 'V_ANALOG'}, {const, 'CFG_SIGNED'}}}]}]}],
+   []},
+  {return, {var, r}}]}.
+
+%% Three deep: dtype and dvt find the fields, cfg_vt decides. Four callers used
+%% to spell the whole thing out.
+{word, leaf_cfg_vt, [ix], 'int',
+ [{return, {call, cfg_vt, [{call, dtype, [{var, ix}]},
+			   {call, dvt, [{var, ix}]}]}}]}.
+
+%% The declaration a buffer belongs to, as a plain index, or BAD_INDEX. The
+%% owner field carries a selector bit that INDEX takes off; buf_of_decl read
+%% the field twice to ask two questions about it.
+{aux, buf_owner, [b], 'int',
+ [{local, o, {buf, {var, b}, owner}},
+  {'if', {op, eq, {var, o}, {const16, 'BAD_INDEX'}},
+   [{return, {const16, 'BAD_INDEX'}}]},
+  {return, {index, {var, o}}}]}.
+
+%% ...and the search back the other way.
+{word, buf_of_decl, [di], 'int',
+ [{local, b, {const, 0}},
+  {while, {op, lt, {var, b}, {state, nbuf}},
+   [{'if', {op, eq, {call, buf_owner, [{var, b}]}, {var, di}},
+     [{return, {var, b}}]},
+    {set, b, {op, add, {var, b}, {const, 1}}}]},
+  {return, {const16, 'BAD_INDEX'}}]}.
+
+%% THE WALK. Six loops in the runtime scan the declaration table for a type and
+%% differ only in what they do when they find one: count them, take the first,
+%% match a second field. The scan is the phrase; the rest is the caller's.
+%%
+%% Answers ps.nd when there is no more, so a caller writes
+%%
+%%   for (i = csp_next_of_type(st, 0, T); i < st->ps.nd;
+%%        i = csp_next_of_type(st, i + 1, T))
+%%
+%% and the loop body never has to ask what it is looking at.
+{word, next_of_type, [from, t], 'index_t',
+ [{local, i, {var, from}},
+  {while, {andthen, {op, lt, {var, i}, {nd}},
+	   {op, ne, {call, dtype, [{var, i}]}, {var, t}}},
+   [{set, i, {op, add, {var, i}, {const, 1}}}]},
+  {return, {var, i}}]}.
+
+%% How many there are. On next_of_type, so the scan is written once.
+{word, count_of_type, [t], 'index_t',
+ [{local, i, {call, next_of_type, [{const, 0}, {var, t}]}},
+  {local, n, {const, 0}},
+  {while, {op, lt, {var, i}, {nd}},
+   [{set, n, {op, add, {var, n}, {const, 1}}},
+    {set, i, {call, next_of_type, [{op, add, {var, i}, {const, 1}}, {var, t}]}}]},
+  {return, {var, n}}]}.
+
+%% The declaration of object instance m. The same scan with a second field to
+%% match -- csp_object_decl keeps the st->object[] cache in front of it, which
+%% is an array and stays in C.
+{word, find_object, [m], 'index_t',
+ [{local, i, {call, next_of_type, [{const, 0}, {const, 'DECL_OBJECT'}]}},
+  {while, {op, lt, {var, i}, {nd}},
+   [{'if', {op, eq, {decl, {var, i}, mq_m}, {var, m}},
+     [{return, {var, i}}]},
+    {set, i, {call, next_of_type,
+	      [{op, add, {var, i}, {const, 1}}, {const, 'DECL_OBJECT'}]}}]},
+  {return, {const16, 'BAD_INDEX'}}]}.
+
+%% The opcode at n, or OP_NOP past the end. The most-read instruction field in
+%% the runtime -- fourteen sites spelled instr(st,n,op) and each one expanded a
+%% load and a field extract inline.
+{word, iop, [n], 'int',
+ [{'if', {op, lt, {var, n}, {nn}},
+   [{return, {instr, {var, n}, op}}]},
+  {return, {const, 'OP_NOP'}}]}.
+
+%% THE STEP. Six loops walk the instruction stream, and every one of them has
+%% to know that a string segment is not one instruction but a run: its header
+%% plus sg_num words. Getting that wrong reads a name's text as code.
+{word, instr_next, [n], 'index_t',
+ [{'if', {op, eq, {call, iop, [{var, n}]}, {const, 'OP_SEGMENT'}},
+   [{return, {op, add, {op, add, {var, n}, {instr, {var, n}, sg_num}},
+	      {const, 1}}}]},
+  {return, {op, add, {var, n}, {const, 1}}}]}.
+
+%% ------------------------------------------------------------ pin listing
+
+%% The port and the pin of a device leaf. Digital and analog keep them in
+%% different fields of the declaration, and list_pin_spec asked the question
+%% four times with the same conditional spelled out each time.
+{aux, leaf_port, [ix, is_digital], 'int',
+ [{'if', {var, is_digital},
+   [{return, {decl, {var, ix}, di_port}}]},
+  {return, {decl, {var, ix}, an_port}}]}.
+
+{aux, leaf_pin, [ix, is_digital], 'int',
+ [{'if', {var, is_digital},
+   [{return, {decl, {var, ix}, di_pin}}]},
+  {return, {decl, {var, ix}, an_pin}}]}.
+
+%% `0:3..7,1:2` -- a run of consecutive pins on one port collapses to a range,
+%% and a break in either port or pin starts a new group. The whole of it is
+%% declaration fields, comparisons and two console calls, so it is a word.
+{word, list_pin_spec, [i, is_digital], 'int',
+ [{local, alen, {call, array_len, [{var, i}]}},
+  {local, port, {call, leaf_port, [{var, i}, {var, is_digital}]}},
+  {local, start, {call, leaf_pin, [{var, i}, {var, is_digital}]}},
+  {local, last, {var, start}},
+  {local, k, {const, 1}},
+  {local, q, {const, 0}},
+  {local, p, {const, 0}},
+  {do, {call, csp_print_uint, [{var, port}]}},
+  {do, {call, csp_print_char, [{const, 58}]}},          %% ':'
+  {do, {call, csp_print_uint, [{var, start}]}},
+  {while, {op, lt, {var, k}, {var, alen}},
+   [{set, q, {call, leaf_port, [{op, add, {var, i}, {var, k}}, {var, is_digital}]}},
+    {set, p, {call, leaf_pin,  [{op, add, {var, i}, {var, k}}, {var, is_digital}]}},
+    {'if', {andthen, {op, eq, {var, q}, {var, port}},
+	    {op, eq, {var, p}, {op, add, {var, last}, {const, 1}}}},
+     [{set, last, {var, p}}],
+     [{'if', {op, ne, {var, last}, {var, start}},
+       [{do, {call, csp_print_char, [{const, 46}]}},    %% '.'
+	{do, {call, csp_print_char, [{const, 46}]}},
+	{do, {call, csp_print_uint, [{var, last}]}}]},
+      {do, {call, csp_print_char, [{const, 44}]}},      %% ','
+      {'if', {op, ne, {var, q}, {var, port}},
+       [{set, port, {var, q}},
+	{do, {call, csp_print_uint, [{var, port}]}},
+	{do, {call, csp_print_char, [{const, 58}]}}]},
+      {do, {call, csp_print_uint, [{var, p}]}},
+      {set, start, {var, p}},
+      {set, last, {var, p}}]},
+    {set, k, {op, add, {var, k}, {const, 1}}}]},
+  {'if', {op, ne, {var, last}, {var, start}},
+   [{do, {call, csp_print_char, [{const, 46}]}},
+    {do, {call, csp_print_char, [{const, 46}]}},
+    {do, {call, csp_print_uint, [{var, last}]}}]},
+  {return, {const, 0}}]}.
+
+%% ----------------------------------------------------------- object context
+
+%% Point the object context at m, the way OP_NEW does. Every pass that walks
+%% per-object data from OUTSIDE a rule ends with ctx_set(0), which is why the
+%% global base has to be offs[0] and not a special case.
+{word, ctx_set_w, [m], 'int',
+ [{store, {state, cur}, {var, m}},
+  {store, {state, cbase}, {aget, offs, {var, m}}},
+  {return, {const, 0}}]}.
+
+%% Entry i of the I/O list, with its object bound. The entry alone is not
+%% enough: a leaf inside an object means nothing until cbase says which
+%% instance, and the two have to be set together or the caller reads the wrong
+%% one.
+{word, io_at_w, [i], 'index_t',
+ [{do, {call, ctx_set_w, [{aget, io_obj, {var, i}}]}},
+  {return, {aget, io, {var, i}}}]}.
+
+{word, timer_at_w, [i], 'index_t',
+ [{do, {call, ctx_set_w, [{aget, timer_obj, {var, i}}]}},
+  {return, {aget, timer, {var, i}}}]}.
+
+%% A leaf of a NAMED object, where the caller has the object number in hand.
+{word, st_index_obj, [m, ix], 'int',
+ [{return, {op, add, {aget, offs, {var, m}}, {var, ix}}}]}.
+
+%% The declaration of object instance m: the table when there is one, the scan
+%% when there is not. obj_cap is zero exactly when object[] is absent, so the
+%% accessor's own bound is the whole test.
+{word, object_decl, [m], 'index_t',
+ [{'if', {op, lt, {var, m}, {state, obj_cap}},
+   [{return, {aget, object, {var, m}}}]},
+  {return, {call, find_object, [{var, m}]}}]}.

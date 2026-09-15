@@ -3,89 +3,94 @@
 #ifndef __CSP_WORDS_H__
 #define __CSP_WORDS_H__
 
-int csp_is_local(csp_rt_t* st, index_t ix)
+// One prototype per word. The BODY is either gen/csp_words_c.h (ordinary
+// C) or gen/csp_words_bc.h (micro-csp bytecode plus a trampoline), and
+// src/csp_words.c picks between them. Nothing else includes either.
+
+// The runtime's tables. Generated from {array, ...} in utils/words.terms;
+// both back ends reach a table through these and nothing else.
+static inline index_t csp_arr_io(csp_rt_t* st, index_t i_)
 {
-	index_t i;
-
-	i = INDEX(ix);
-	return ((i < st->ps.nd) && ((decl(st, i, type) == DECL_VARIABLE) && decl(st, i, local)));
+    return (i_ < (index_t)st->nio) ? st->io[i_] : (index_t)0;
 }
-
-int csp_local_number(csp_rt_t* st, index_t ix)
+static inline void csp_arr_set_io(csp_rt_t* st, index_t i_, index_t v_)
 {
-	index_t i;
-	index_t k;
-	index_t n;
-	index_t start;
-	index_t t;
-
-	i = INDEX(ix);
-	start = 0;
-	k = i;
-	n = 0;
-	while (((0 < k) && (start == 0))) {
-		t = decl(st, (k - 1), type);
-		if (((t == DECL_MODULE) || (t == DECL_END))) {
-			start = k;
-		}
-		k = (k - 1);
-	}
-	k = start;
-	while ((k < i)) {
-		if (((decl(st, k, type) == DECL_VARIABLE) && decl(st, k, local))) {
-			n = (n + 1);
-		}
-		k = (k + 1);
-	}
-	return (n + 1);
+    if (i_ < (index_t)st->nio) st->io[i_] = v_;
 }
-
-int csp_decl_kind(csp_rt_t* st, index_t ix)
+static inline uint8_t csp_arr_io_obj(csp_rt_t* st, index_t i_)
 {
-	index_t i;
-	index_t r;
-
-	i = INDEX(ix);
-	r = 0;
-	switch (decl(st, i, type)) {
-	case DECL_VARIABLE:
-		r = 1;
-		break;
-	case DECL_CONSTANT:
-		r = 2;
-		break;
-	case DECL_MODULE:
-		r = 3;
-		break;
-	default:
-		r = 9;
-		break;
-	}
-	return r;
+    return (i_ < (index_t)st->nio) ? st->io_obj[i_] : (uint8_t)0;
 }
-
-int csp_leaf_mark(csp_rt_t* st, index_t ix)
+static inline void csp_arr_set_io_obj(csp_rt_t* st, index_t i_, uint8_t v_)
 {
-	index_t t;
-
-	t = csp_tag(st, ix);
-	if (csp_is_local(st, ix)) {
-		return 36;
-	}
-	return t;
+    if (i_ < (index_t)st->nio) st->io_obj[i_] = v_;
 }
-
-int csp_buf_owner_tag(csp_rt_t* st, index_t b)
+static inline index_t csp_arr_timer(csp_rt_t* st, index_t i_)
 {
-	index_t n;
-	index_t o;
-
-	n = st->nbuf;
-	if ((b < n)) {
-		o = INDEX(csp_buf_get_owner(&st->buf[b]));
-		return csp_tag(st, o);
-	}
-	return 63;
+    return (i_ < (index_t)st->nt) ? st->timer[i_] : (index_t)0;
 }
+static inline void csp_arr_set_timer(csp_rt_t* st, index_t i_, index_t v_)
+{
+    if (i_ < (index_t)st->nt) st->timer[i_] = v_;
+}
+static inline uint8_t csp_arr_timer_obj(csp_rt_t* st, index_t i_)
+{
+    return (i_ < (index_t)st->nt) ? st->timer_obj[i_] : (uint8_t)0;
+}
+static inline void csp_arr_set_timer_obj(csp_rt_t* st, index_t i_, uint8_t v_)
+{
+    if (i_ < (index_t)st->nt) st->timer_obj[i_] = v_;
+}
+static inline index_t csp_arr_offs(csp_rt_t* st, index_t i_)
+{
+    return (i_ < (index_t)st->obj_cap) ? st->offs[i_] : (index_t)0;
+}
+static inline void csp_arr_set_offs(csp_rt_t* st, index_t i_, index_t v_)
+{
+    if (i_ < (index_t)st->obj_cap) st->offs[i_] = v_;
+}
+static inline index_t csp_arr_object(csp_rt_t* st, index_t i_)
+{
+    return (i_ < (index_t)st->obj_cap) ? st->object[i_] : (index_t)0;
+}
+static inline void csp_arr_set_object(csp_rt_t* st, index_t i_, index_t v_)
+{
+    if (i_ < (index_t)st->obj_cap) st->object[i_] = v_;
+}
+extern int csp_dtype(csp_rt_t* st, index_t ix);
+extern int csp_is_local(csp_rt_t* st, index_t ix);
+extern int csp_local_number(csp_rt_t* st, index_t ix);
+extern int csp_str_seg_stamp(csp_rt_t* st, index_t sh, index_t endp);
+extern uint16_t csp_array_len(csp_rt_t* st, index_t i);
+extern int csp_gate_is_in(csp_rt_t* st, index_t j, index_t to);
+extern index_t csp_gate_end(csp_rt_t* st, index_t j, index_t to);
+extern int csp_is_gate_ld(csp_rt_t* st, index_t i);
+extern int csp_body_implicit(csp_rt_t* st, index_t ip, index_t hi);
+extern int csp_leaf_buf(csp_rt_t* st, index_t ix);
+extern int csp_buf_or_flags(csp_rt_t* st, index_t b, index_t fs);
+extern int csp_buf_and_flags(csp_rt_t* st, index_t b, index_t fs);
+extern int csp_leaf_cfg_vt(csp_rt_t* st, index_t ix);
+extern int csp_buf_of_decl(csp_rt_t* st, index_t di);
+extern index_t csp_next_of_type(csp_rt_t* st, index_t from, index_t t);
+extern index_t csp_count_of_type(csp_rt_t* st, index_t t);
+extern index_t csp_find_object(csp_rt_t* st, index_t m);
+extern int csp_iop(csp_rt_t* st, index_t n);
+extern index_t csp_instr_next(csp_rt_t* st, index_t n);
+extern int csp_list_pin_spec(csp_rt_t* st, index_t i, index_t is_digital);
+extern int csp_ctx_set_w(csp_rt_t* st, index_t m);
+extern index_t csp_io_at_w(csp_rt_t* st, index_t i);
+extern index_t csp_timer_at_w(csp_rt_t* st, index_t i);
+extern int csp_st_index_obj(csp_rt_t* st, index_t m, index_t ix);
+extern index_t csp_object_decl(csp_rt_t* st, index_t m);
+
+// Installs the leaf hooks on a bytecode build, and does nothing on a C
+// one. Call it once, before the first word -- a word that reaches a
+// record with no hook installed stops with MC_E_LEAF rather than
+// answering wrongly.
+extern void csp_words_init(csp_rt_t* st);
+
+// The last micro-csp error, kept because a faulting word returns 0 and 0
+// is a perfectly ordinary answer for most of them. Always 0 on a C build.
+extern uint8_t csp_word_fault;
 
 #endif

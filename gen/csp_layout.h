@@ -204,7 +204,7 @@ static inline void csp_instr_set_op(csp_instr_t* p, uint8_t v_)
 }
 
 // buf: ends at bit 128 of 16 bytes
-// STRADDLING: hp, nbytes, port, xref, owner
+// STRADDLING: hp, nbytes, xref, port, owner
 static inline uint16_t csp_buf_get_hp(const csp_buf_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
@@ -312,39 +312,39 @@ static inline void csp_buf_set_dlc_in(csp_buf_t* p, uint8_t v_)
     uint8_t* b_ = (uint8_t*)p;
     b_[7] = (uint8_t)v_;
 }
-static inline uint16_t csp_buf_get_port(const csp_buf_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint16_t)(((uint16_t)b_[8] | ((uint16_t)b_[9] << 8)) & 0xFFFFU);
-}
-static inline uint16_t csp_buf_get_port_ro(const csp_buf_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint16_t)(((uint16_t)ro_byte(&b_[8]) | ((uint16_t)ro_byte(&b_[9]) << 8)) & 0xFFFFU);
-}
-static inline void csp_buf_set_port(csp_buf_t* p, uint16_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[8] = (uint8_t)v_;
-    b_[9] = (uint8_t)(v_ >> 8);
-}
 static inline uint32_t csp_buf_get_xref(const csp_buf_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint32_t)(((((uint32_t)b_[10] << 0) | ((uint32_t)b_[11] << 8) | ((uint32_t)b_[12] << 16) | ((uint32_t)b_[13] << 24)) >> 0) & 0xFFFFFFFFU);
+    return (uint32_t)(((((uint32_t)b_[8] << 0) | ((uint32_t)b_[9] << 8) | ((uint32_t)b_[10] << 16) | ((uint32_t)b_[11] << 24)) >> 0) & 0xFFFFFFFFU);
 }
 static inline uint32_t csp_buf_get_xref_ro(const csp_buf_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint32_t)(((((uint32_t)ro_byte(&b_[10]) << 0) | ((uint32_t)ro_byte(&b_[11]) << 8) | ((uint32_t)ro_byte(&b_[12]) << 16) | ((uint32_t)ro_byte(&b_[13]) << 24)) >> 0) & 0xFFFFFFFFU);
+    return (uint32_t)(((((uint32_t)ro_byte(&b_[8]) << 0) | ((uint32_t)ro_byte(&b_[9]) << 8) | ((uint32_t)ro_byte(&b_[10]) << 16) | ((uint32_t)ro_byte(&b_[11]) << 24)) >> 0) & 0xFFFFFFFFU);
 }
 static inline void csp_buf_set_xref(csp_buf_t* p, uint32_t v_)
 {
     uint8_t* b_ = (uint8_t*)p;
-    b_[10] = (uint8_t)v_;
-    b_[11] = (uint8_t)(v_ >> 8);
-    b_[12] = (uint8_t)(v_ >> 16);
-    b_[13] = (uint8_t)(v_ >> 24);
+    b_[8] = (uint8_t)v_;
+    b_[9] = (uint8_t)(v_ >> 8);
+    b_[10] = (uint8_t)(v_ >> 16);
+    b_[11] = (uint8_t)(v_ >> 24);
+}
+static inline uint16_t csp_buf_get_port(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint16_t)(((uint16_t)b_[12] | ((uint16_t)b_[13] << 8)) & 0xFFFFU);
+}
+static inline uint16_t csp_buf_get_port_ro(const csp_buf_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint16_t)(((uint16_t)ro_byte(&b_[12]) | ((uint16_t)ro_byte(&b_[13]) << 8)) & 0xFFFFU);
+}
+static inline void csp_buf_set_port(csp_buf_t* p, uint16_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[12] = (uint8_t)v_;
+    b_[13] = (uint8_t)(v_ >> 8);
 }
 static inline uint16_t csp_buf_get_owner(const csp_buf_t* p)
 {
@@ -846,7 +846,7 @@ static inline void csp_decl_set_ca_len(csp_decl_t* p, uint8_t v_)
     b_[7] = (uint8_t)((b_[7] & (uint8_t)0x7U) | (uint8_t)((v_ << 3) & 0xF8U));
 }
 
-// decl_common_bf: ends at bit 62 of 8 bytes
+// decl_common_bf: ends at bit 64 of 8 bytes
 // STRADDLING: nbytes, id
 static inline uint16_t csp_decl_get_bf_nbytes(const csp_decl_t* p)
 {
@@ -882,19 +882,18 @@ static inline void csp_decl_set_bf_transport(csp_decl_t* p, uint8_t v_)
 static inline uint16_t csp_decl_get_bf_id(const csp_decl_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint16_t)(((((uint32_t)b_[5] << 0) | ((uint32_t)b_[6] << 8) | ((uint32_t)b_[7] << 16)) >> 6) & 0xFFFFU);
+    return (uint16_t)(((uint16_t)b_[6] | ((uint16_t)b_[7] << 8)) & 0xFFFFU);
 }
 static inline uint16_t csp_decl_get_bf_id_ro(const csp_decl_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint16_t)(((((uint32_t)ro_byte(&b_[5]) << 0) | ((uint32_t)ro_byte(&b_[6]) << 8) | ((uint32_t)ro_byte(&b_[7]) << 16)) >> 6) & 0xFFFFU);
+    return (uint16_t)(((uint16_t)ro_byte(&b_[6]) | ((uint16_t)ro_byte(&b_[7]) << 8)) & 0xFFFFU);
 }
 static inline void csp_decl_set_bf_id(csp_decl_t* p, uint16_t v_)
 {
     uint8_t* b_ = (uint8_t*)p;
-    b_[5] = (uint8_t)((b_[5] & (uint8_t)0x3FU) | (uint8_t)((v_ << 6) & 0xC0U));
-    b_[6] = (uint8_t)(v_ >> 2);
-    b_[7] = (uint8_t)((b_[7] & (uint8_t)0xC0U) | (uint8_t)((v_ >> 10) & 0x3FU));
+    b_[6] = (uint8_t)v_;
+    b_[7] = (uint8_t)(v_ >> 8);
 }
 
 // decl_common_rt: ends at bit 64 of 8 bytes
@@ -1189,7 +1188,7 @@ static inline void csp_instr_set_a_swap(csp_instr_t* p, uint8_t v_)
     b_[2] = (uint8_t)((b_[2] & (uint8_t)0xF7U) | (uint8_t)((v_ << 3) & 0x8U));
 }
 
-// instr_common_m: ends at bit 30 of 4 bytes
+// instr_common_m: ends at bit 32 of 4 bytes
 // STRADDLING: x, mem
 static inline uint8_t csp_instr_get_m_x(const csp_instr_t* p)
 {
@@ -1225,19 +1224,18 @@ static inline void csp_instr_set_m_y(csp_instr_t* p, uint8_t v_)
 static inline uint16_t csp_instr_get_m_mem(const csp_instr_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint16_t)(((((uint32_t)b_[1] << 0) | ((uint32_t)b_[2] << 8) | ((uint32_t)b_[3] << 16)) >> 6) & 0xFFFFU);
+    return (uint16_t)(((uint16_t)b_[2] | ((uint16_t)b_[3] << 8)) & 0xFFFFU);
 }
 static inline uint16_t csp_instr_get_m_mem_ro(const csp_instr_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint16_t)(((((uint32_t)ro_byte(&b_[1]) << 0) | ((uint32_t)ro_byte(&b_[2]) << 8) | ((uint32_t)ro_byte(&b_[3]) << 16)) >> 6) & 0xFFFFU);
+    return (uint16_t)(((uint16_t)ro_byte(&b_[2]) | ((uint16_t)ro_byte(&b_[3]) << 8)) & 0xFFFFU);
 }
 static inline void csp_instr_set_m_mem(csp_instr_t* p, uint16_t v_)
 {
     uint8_t* b_ = (uint8_t*)p;
-    b_[1] = (uint8_t)((b_[1] & (uint8_t)0x3FU) | (uint8_t)((v_ << 6) & 0xC0U));
-    b_[2] = (uint8_t)(v_ >> 2);
-    b_[3] = (uint8_t)((b_[3] & (uint8_t)0xC0U) | (uint8_t)((v_ >> 10) & 0x3FU));
+    b_[2] = (uint8_t)v_;
+    b_[3] = (uint8_t)(v_ >> 8);
 }
 
 // instr_common_mi: ends at bit 32 of 4 bytes
@@ -1290,7 +1288,7 @@ static inline void csp_instr_set_mi_mem(csp_instr_t* p, uint16_t v_)
     b_[3] = (uint8_t)(v_ >> 8);
 }
 
-// instr_common_i: ends at bit 26 of 4 bytes
+// instr_common_i: ends at bit 32 of 4 bytes
 // STRADDLING: x, imm
 static inline uint8_t csp_instr_get_i_x(const csp_instr_t* p)
 {
@@ -1311,22 +1309,21 @@ static inline void csp_instr_set_i_x(csp_instr_t* p, uint8_t v_)
 static inline int16_t csp_instr_get_i_imm(const csp_instr_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (int16_t)(((uint32_t)(((((uint32_t)b_[1] << 0) | ((uint32_t)b_[2] << 8) | ((uint32_t)b_[3] << 16)) >> 2) & 0xFFFFU) ^ 0x8000UL) - 0x8000UL);
+    return (int16_t)(((uint32_t)(((uint16_t)b_[2] | ((uint16_t)b_[3] << 8)) & 0xFFFFU) ^ 0x8000UL) - 0x8000UL);
 }
 static inline int16_t csp_instr_get_i_imm_ro(const csp_instr_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (int16_t)(((uint32_t)(((((uint32_t)ro_byte(&b_[1]) << 0) | ((uint32_t)ro_byte(&b_[2]) << 8) | ((uint32_t)ro_byte(&b_[3]) << 16)) >> 2) & 0xFFFFU) ^ 0x8000UL) - 0x8000UL);
+    return (int16_t)(((uint32_t)(((uint16_t)ro_byte(&b_[2]) | ((uint16_t)ro_byte(&b_[3]) << 8)) & 0xFFFFU) ^ 0x8000UL) - 0x8000UL);
 }
 static inline void csp_instr_set_i_imm(csp_instr_t* p, int16_t v_)
 {
     uint8_t* b_ = (uint8_t*)p;
-    b_[1] = (uint8_t)((b_[1] & (uint8_t)0x3U) | (uint8_t)((v_ << 2) & 0xFCU));
-    b_[2] = (uint8_t)(v_ >> 6);
-    b_[3] = (uint8_t)((b_[3] & (uint8_t)0xFCU) | (uint8_t)((v_ >> 14) & 0x3U));
+    b_[2] = (uint8_t)v_;
+    b_[3] = (uint8_t)(v_ >> 8);
 }
 
-// instr_common_r: ends at bit 26 of 4 bytes
+// instr_common_r: ends at bit 32 of 4 bytes
 // STRADDLING: cnd, nxt
 static inline uint8_t csp_instr_get_r_cnd(const csp_instr_t* p)
 {
@@ -1347,34 +1344,33 @@ static inline void csp_instr_set_r_cnd(csp_instr_t* p, uint8_t v_)
 static inline int16_t csp_instr_get_r_nxt(const csp_instr_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (int16_t)(((uint32_t)(((((uint32_t)b_[1] << 0) | ((uint32_t)b_[2] << 8) | ((uint32_t)b_[3] << 16)) >> 2) & 0x7FFFU) ^ 0x4000UL) - 0x4000UL);
+    return (int16_t)(((uint32_t)(((uint16_t)b_[2] | ((uint16_t)b_[3] << 8)) & 0x7FFFU) ^ 0x4000UL) - 0x4000UL);
 }
 static inline int16_t csp_instr_get_r_nxt_ro(const csp_instr_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (int16_t)(((uint32_t)(((((uint32_t)ro_byte(&b_[1]) << 0) | ((uint32_t)ro_byte(&b_[2]) << 8) | ((uint32_t)ro_byte(&b_[3]) << 16)) >> 2) & 0x7FFFU) ^ 0x4000UL) - 0x4000UL);
+    return (int16_t)(((uint32_t)(((uint16_t)ro_byte(&b_[2]) | ((uint16_t)ro_byte(&b_[3]) << 8)) & 0x7FFFU) ^ 0x4000UL) - 0x4000UL);
 }
 static inline void csp_instr_set_r_nxt(csp_instr_t* p, int16_t v_)
 {
     uint8_t* b_ = (uint8_t*)p;
-    b_[1] = (uint8_t)((b_[1] & (uint8_t)0x3U) | (uint8_t)((v_ << 2) & 0xFCU));
-    b_[2] = (uint8_t)(v_ >> 6);
-    b_[3] = (uint8_t)((b_[3] & (uint8_t)0xFEU) | (uint8_t)((v_ >> 14) & 0x1U));
+    b_[2] = (uint8_t)v_;
+    b_[3] = (uint8_t)((b_[3] & (uint8_t)0x80U) | (uint8_t)((v_ >> 8) & 0x7FU));
 }
 static inline uint8_t csp_instr_get_r_implicit(const csp_instr_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)(((b_[3] >> 1)) & 0x1U);
+    return (uint8_t)(((b_[3] >> 7)) & 0x1U);
 }
 static inline uint8_t csp_instr_get_r_implicit_ro(const csp_instr_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)(((ro_byte(&b_[3]) >> 1)) & 0x1U);
+    return (uint8_t)(((ro_byte(&b_[3]) >> 7)) & 0x1U);
 }
 static inline void csp_instr_set_r_implicit(csp_instr_t* p, uint8_t v_)
 {
     uint8_t* b_ = (uint8_t*)p;
-    b_[3] = (uint8_t)((b_[3] & (uint8_t)0xFDU) | (uint8_t)((v_ << 1) & 0x2U));
+    b_[3] = (uint8_t)((b_[3] & (uint8_t)0x7FU) | (uint8_t)((v_ << 7) & 0x80U));
 }
 
 // instr_common_x: ends at bit 10 of 4 bytes
@@ -1497,38 +1493,38 @@ static inline void csp_instr_set_e_mx(csp_instr_t* p, uint16_t v_)
     b_[3] = (uint8_t)(v_ >> 8);
 }
 
-// instr_common_sg: ends at bit 24 of 4 bytes
+// instr_common_sg: ends at bit 32 of 4 bytes
 // STRADDLING: num
 static inline uint16_t csp_instr_get_sg_num(const csp_instr_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint16_t)((((uint16_t)b_[0] | ((uint16_t)b_[1] << 8)) >> 6) & 0x3FFU);
+    return (uint16_t)(((uint16_t)b_[1] | ((uint16_t)b_[2] << 8)) & 0x3FFU);
 }
 static inline uint16_t csp_instr_get_sg_num_ro(const csp_instr_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint16_t)((((uint16_t)ro_byte(&b_[0]) | ((uint16_t)ro_byte(&b_[1]) << 8)) >> 6) & 0x3FFU);
+    return (uint16_t)(((uint16_t)ro_byte(&b_[1]) | ((uint16_t)ro_byte(&b_[2]) << 8)) & 0x3FFU);
 }
 static inline void csp_instr_set_sg_num(csp_instr_t* p, uint16_t v_)
 {
     uint8_t* b_ = (uint8_t*)p;
-    b_[0] = (uint8_t)((b_[0] & (uint8_t)0x3FU) | (uint8_t)((v_ << 6) & 0xC0U));
-    b_[1] = (uint8_t)(v_ >> 2);
+    b_[1] = (uint8_t)v_;
+    b_[2] = (uint8_t)((b_[2] & (uint8_t)0xFCU) | (uint8_t)((v_ >> 8) & 0x3U));
 }
 static inline uint8_t csp_instr_get_sg_used(const csp_instr_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((b_[2]) & 0xFFU);
+    return (uint8_t)((b_[3]) & 0xFFU);
 }
 static inline uint8_t csp_instr_get_sg_used_ro(const csp_instr_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((ro_byte(&b_[2])) & 0xFFU);
+    return (uint8_t)((ro_byte(&b_[3])) & 0xFFU);
 }
 static inline void csp_instr_set_sg_used(csp_instr_t* p, uint8_t v_)
 {
     uint8_t* b_ = (uint8_t*)p;
-    b_[2] = (uint8_t)v_;
+    b_[3] = (uint8_t)v_;
 }
 
 // instr_common_v: ends at bit 32 of 4 bytes
@@ -1650,60 +1646,58 @@ static inline void csp_instr_set_f_avt(csp_instr_t* p, uint16_t v_)
     b_[3] = (uint8_t)(v_ >> 8);
 }
 
-// instr_common_o: ends at bit 22 of 4 bytes
+// instr_common_o: ends at bit 24 of 4 bytes
 // STRADDLING: obj
 static inline uint16_t csp_instr_get_o_obj(const csp_instr_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint16_t)(((((uint32_t)b_[0] << 0) | ((uint32_t)b_[1] << 8) | ((uint32_t)b_[2] << 16)) >> 6) & 0xFFFFU);
+    return (uint16_t)(((uint16_t)b_[1] | ((uint16_t)b_[2] << 8)) & 0xFFFFU);
 }
 static inline uint16_t csp_instr_get_o_obj_ro(const csp_instr_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint16_t)(((((uint32_t)ro_byte(&b_[0]) << 0) | ((uint32_t)ro_byte(&b_[1]) << 8) | ((uint32_t)ro_byte(&b_[2]) << 16)) >> 6) & 0xFFFFU);
+    return (uint16_t)(((uint16_t)ro_byte(&b_[1]) | ((uint16_t)ro_byte(&b_[2]) << 8)) & 0xFFFFU);
 }
 static inline void csp_instr_set_o_obj(csp_instr_t* p, uint16_t v_)
 {
     uint8_t* b_ = (uint8_t*)p;
-    b_[0] = (uint8_t)((b_[0] & (uint8_t)0x3FU) | (uint8_t)((v_ << 6) & 0xC0U));
-    b_[1] = (uint8_t)(v_ >> 2);
-    b_[2] = (uint8_t)((b_[2] & (uint8_t)0xC0U) | (uint8_t)((v_ >> 10) & 0x3FU));
+    b_[1] = (uint8_t)v_;
+    b_[2] = (uint8_t)(v_ >> 8);
 }
 
 // instr_common_ox: ends at bit 32 of 4 bytes
-// STRADDLING: x, len
-static inline uint8_t csp_instr_get_ox_x(const csp_instr_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((((uint8_t)b_[0] | ((uint8_t)b_[1] << 8)) >> 6) & 0xFU);
-}
-static inline uint8_t csp_instr_get_ox_x_ro(const csp_instr_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((((uint8_t)ro_byte(&b_[0]) | ((uint8_t)ro_byte(&b_[1]) << 8)) >> 6) & 0xFU);
-}
-static inline void csp_instr_set_ox_x(csp_instr_t* p, uint8_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[0] = (uint8_t)((b_[0] & (uint8_t)0x3FU) | (uint8_t)((v_ << 6) & 0xC0U));
-    b_[1] = (uint8_t)((b_[1] & (uint8_t)0xFCU) | (uint8_t)((v_ >> 2) & 0x3U));
-}
+// STRADDLING: len, x
 static inline uint16_t csp_instr_get_ox_len(const csp_instr_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint16_t)(((((uint32_t)b_[1] << 0) | ((uint32_t)b_[2] << 8) | ((uint32_t)b_[3] << 16)) >> 2) & 0xFFFFU);
+    return (uint16_t)(((uint16_t)b_[1] | ((uint16_t)b_[2] << 8)) & 0x3FFFU);
 }
 static inline uint16_t csp_instr_get_ox_len_ro(const csp_instr_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
-    return (uint16_t)(((((uint32_t)ro_byte(&b_[1]) << 0) | ((uint32_t)ro_byte(&b_[2]) << 8) | ((uint32_t)ro_byte(&b_[3]) << 16)) >> 2) & 0xFFFFU);
+    return (uint16_t)(((uint16_t)ro_byte(&b_[1]) | ((uint16_t)ro_byte(&b_[2]) << 8)) & 0x3FFFU);
 }
 static inline void csp_instr_set_ox_len(csp_instr_t* p, uint16_t v_)
 {
     uint8_t* b_ = (uint8_t*)p;
-    b_[1] = (uint8_t)((b_[1] & (uint8_t)0x3U) | (uint8_t)((v_ << 2) & 0xFCU));
-    b_[2] = (uint8_t)(v_ >> 6);
-    b_[3] = (uint8_t)((b_[3] & (uint8_t)0xFCU) | (uint8_t)((v_ >> 14) & 0x3U));
+    b_[1] = (uint8_t)v_;
+    b_[2] = (uint8_t)((b_[2] & (uint8_t)0xC0U) | (uint8_t)((v_ >> 8) & 0x3FU));
+}
+static inline uint8_t csp_instr_get_ox_x(const csp_instr_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((((uint8_t)b_[2] | ((uint8_t)b_[3] << 8)) >> 6) & 0xFU);
+}
+static inline uint8_t csp_instr_get_ox_x_ro(const csp_instr_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((((uint8_t)ro_byte(&b_[2]) | ((uint8_t)ro_byte(&b_[3]) << 8)) >> 6) & 0xFU);
+}
+static inline void csp_instr_set_ox_x(csp_instr_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[2] = (uint8_t)((b_[2] & (uint8_t)0x3FU) | (uint8_t)((v_ << 6) & 0xC0U));
+    b_[3] = (uint8_t)((b_[3] & (uint8_t)0xFCU) | (uint8_t)((v_ >> 2) & 0x3U));
 }
 static inline uint8_t csp_instr_get_ox_stride(const csp_instr_t* p)
 {
@@ -1741,196 +1735,592 @@ static inline void csp_instr_set_em_crc(csp_instr_t* p, uint16_t v_)
 }
 
 typedef enum {
-    MFB_HP = 0,
-    MFB_NBYTES = 1,
-    MFB_TRANSPORT = 2,
-    MFB_DIR = 3,
-    MFB_FLAGS = 4,
-    MFB_DLC = 5,
-    MFB_DLC_IN = 6,
-    MFB_PORT = 7,
-    MFB_XREF = 8,
-    MFB_OWNER = 9,
-    MFB_NFIELD = 10
+    MFB_HP = 2,
+    MFB_NBYTES = 3,
+    MFB_TRANSPORT = 4,
+    MFB_DIR = 5,
+    MFB_FLAGS = 6,
+    MFB_DLC = 7,
+    MFB_DLC_IN = 8,
+    MFB_XREF = 0,
+    MFB_PORT = 9,
+    MFB_OWNER = 10,
+    MFB_NDOUBLE = 2,
+    MFB_NFIELD = 11
 } mf_buf_all_t;
 
-// 10 names over 10 distinct descriptors.
-// Fields wider than 16 bits are in here and a cell is not, so MC_DECL
-// refuses those rather than handing back a quiet truncation.
+// 10 names over 11 slots, of which the first 2 are the
+// halves of fields wider than a cell.
 #define CSP_BUF_ALL_FIELDS { \
+    { 8, 0, 16 } /* xref lo */, \
+    { 10, 0, 16 } /* xref hi */, \
     { 0, 0, 16 } /* hp */, \
-    { 0, 16, 16 } /* nbytes */, \
-    { 1, 0, 4 } /* transport */, \
-    { 1, 4, 4 } /* dir */, \
-    { 1, 8, 8 } /* flags */, \
-    { 1, 16, 8 } /* dlc */, \
-    { 1, 24, 8 } /* dlc_in */, \
-    { 2, 0, 16 } /* port */, \
-    { 2, 16, 32 } /* xref */, \
-    { 3, 16, 16 } /* owner */ }
+    { 2, 0, 16 } /* nbytes */, \
+    { 4, 0, 4 } /* transport */, \
+    { 4, 4, 4 } /* dir */, \
+    { 5, 0, 8 } /* flags */, \
+    { 6, 0, 8 } /* dlc */, \
+    { 7, 0, 8 } /* dlc_in */, \
+    { 12, 0, 16 } /* port */, \
+    { 14, 0, 16 } /* owner */ }
+
+#define CSP_MCFIELD_BUF(REC, FAIL) do { \
+    if ((long)mc_field_get(&(REC), &mc_buf_fields[MFB_HP]) != \
+	(long)((uint32_t)csp_buf_get_hp((const csp_buf_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("hp", (long)mc_field_get(&(REC), &mc_buf_fields[MFB_HP]), \
+	     (long)((uint32_t)csp_buf_get_hp((const csp_buf_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_buf_fields[MFB_NBYTES]) != \
+	(long)((uint32_t)csp_buf_get_nbytes((const csp_buf_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("nbytes", (long)mc_field_get(&(REC), &mc_buf_fields[MFB_NBYTES]), \
+	     (long)((uint32_t)csp_buf_get_nbytes((const csp_buf_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_buf_fields[MFB_TRANSPORT]) != \
+	(long)((uint32_t)csp_buf_get_transport((const csp_buf_t*)&(REC)) & 0xFUL)) \
+	FAIL("transport", (long)mc_field_get(&(REC), &mc_buf_fields[MFB_TRANSPORT]), \
+	     (long)((uint32_t)csp_buf_get_transport((const csp_buf_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_buf_fields[MFB_DIR]) != \
+	(long)((uint32_t)csp_buf_get_dir((const csp_buf_t*)&(REC)) & 0xFUL)) \
+	FAIL("dir", (long)mc_field_get(&(REC), &mc_buf_fields[MFB_DIR]), \
+	     (long)((uint32_t)csp_buf_get_dir((const csp_buf_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_buf_fields[MFB_FLAGS]) != \
+	(long)((uint32_t)csp_buf_get_flags((const csp_buf_t*)&(REC)) & 0xFFUL)) \
+	FAIL("flags", (long)mc_field_get(&(REC), &mc_buf_fields[MFB_FLAGS]), \
+	     (long)((uint32_t)csp_buf_get_flags((const csp_buf_t*)&(REC)) & 0xFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_buf_fields[MFB_DLC]) != \
+	(long)((uint32_t)csp_buf_get_dlc((const csp_buf_t*)&(REC)) & 0xFFUL)) \
+	FAIL("dlc", (long)mc_field_get(&(REC), &mc_buf_fields[MFB_DLC]), \
+	     (long)((uint32_t)csp_buf_get_dlc((const csp_buf_t*)&(REC)) & 0xFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_buf_fields[MFB_DLC_IN]) != \
+	(long)((uint32_t)csp_buf_get_dlc_in((const csp_buf_t*)&(REC)) & 0xFFUL)) \
+	FAIL("dlc_in", (long)mc_field_get(&(REC), &mc_buf_fields[MFB_DLC_IN]), \
+	     (long)((uint32_t)csp_buf_get_dlc_in((const csp_buf_t*)&(REC)) & 0xFFUL)); \
+    { uint32_t d_; \
+      d_ = (uint32_t)mc_field_get(&(REC), &mc_buf_fields[MFB_XREF]) \
+	   | ((uint32_t)mc_field_get(&(REC), &mc_buf_fields[(MFB_XREF) + 1]) << 16); \
+      if (d_ != (uint32_t)csp_buf_get_xref((const csp_buf_t*)&(REC))) \
+	FAIL("xref", (long)d_, \
+	     (long)(uint32_t)csp_buf_get_xref((const csp_buf_t*)&(REC))); } \
+    if ((long)mc_field_get(&(REC), &mc_buf_fields[MFB_PORT]) != \
+	(long)((uint32_t)csp_buf_get_port((const csp_buf_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("port", (long)mc_field_get(&(REC), &mc_buf_fields[MFB_PORT]), \
+	     (long)((uint32_t)csp_buf_get_port((const csp_buf_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_buf_fields[MFB_OWNER]) != \
+	(long)((uint32_t)csp_buf_get_owner((const csp_buf_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("owner", (long)mc_field_get(&(REC), &mc_buf_fields[MFB_OWNER]), \
+	     (long)((uint32_t)csp_buf_get_owner((const csp_buf_t*)&(REC)) & 0xFFFFUL)); \
+    } while (0)
 
 typedef enum {
-    MFD_TYPE = 0,
-    MFD_CONT = 1,
-    MFD_LOCAL = 2,
-    MFD_DIR = 3,
-    MFD_NAME = 4,
-    MFD_RES = 5,
-    MFD_IS_MAPPED = 7,
-    MFD_BOUND = 8,
-    MFD_NX = 9,
-    MFD_VT = 10,
-    MFD_REG = 12,
-    MFD_MD_N = 16,
-    MFD_MD_ENT = 29,
-    MFD_MQ_MX = 16,
-    MFD_MQ_M = 29,
-    MFD_VA_INIT = 18,
-    MFD_CN_INIT = 18,
-    MFD_DI_SOFT = 13,
-    MFD_DI_PIN = 19,
-    MFD_DI_PORT = 20,
-    MFD_DI_IRQ = 23,
-    MFD_DI_PULLUP = 25,
-    MFD_DI_PULLDOWN = 26,
-    MFD_AN_SOFT = 13,
-    MFD_AN_PIN = 19,
-    MFD_AN_PORT = 20,
-    MFD_AN_IRQ = 23,
-    MFD_AN_PWM = 25,
-    MFD_AN_ENDIAN = 27,
-    MFD_CA_ID = 16,
-    MFD_CA_ENDIAN = 27,
-    MFD_CA_BIT = 30,
-    MFD_CA_LEN = 32,
-    MFD_BF_NBYTES = 15,
-    MFD_BF_TRANSPORT = 22,
-    MFD_BF_ID = 24,
-    MFD_RT_SRC = 16,
-    MFD_RT_DST = 29,
-    MFD_TM_PERIOD = 17,
-    MFD_TM_FIRED = 33,
-    MFD_TM_RUNNING = 34,
-    MFD_TM_INIT = 35,
-    MFD_S6_NAME2 = 6,
-    MFD_S6_NAME3 = 11,
-    MFD_S6_NAME4 = 14,
-    MFD_S6_NAME5 = 21,
-    MFD_S6_NAME6 = 28,
-    MFD_S6_NX = 31,
-    MFD_EM_CRC = 16,
-    MFD_NFIELD = 36
+    MFD_TYPE = 4,
+    MFD_CONT = 5,
+    MFD_LOCAL = 6,
+    MFD_DIR = 7,
+    MFD_NAME = 8,
+    MFD_RES = 9,
+    MFD_IS_MAPPED = 11,
+    MFD_BOUND = 12,
+    MFD_NX = 13,
+    MFD_VT = 14,
+    MFD_REG = 16,
+    MFD_MD_N = 20,
+    MFD_MD_ENT = 30,
+    MFD_MQ_MX = 20,
+    MFD_MQ_M = 30,
+    MFD_VA_INIT = 2,
+    MFD_CN_INIT = 2,
+    MFD_DI_SOFT = 17,
+    MFD_DI_PIN = 21,
+    MFD_DI_PORT = 22,
+    MFD_DI_IRQ = 25,
+    MFD_DI_PULLUP = 26,
+    MFD_DI_PULLDOWN = 27,
+    MFD_AN_SOFT = 17,
+    MFD_AN_PIN = 21,
+    MFD_AN_PORT = 22,
+    MFD_AN_IRQ = 25,
+    MFD_AN_PWM = 26,
+    MFD_AN_ENDIAN = 28,
+    MFD_CA_ID = 20,
+    MFD_CA_ENDIAN = 28,
+    MFD_CA_BIT = 31,
+    MFD_CA_LEN = 33,
+    MFD_BF_NBYTES = 19,
+    MFD_BF_TRANSPORT = 24,
+    MFD_BF_ID = 30,
+    MFD_RT_SRC = 20,
+    MFD_RT_DST = 30,
+    MFD_TM_PERIOD = 0,
+    MFD_TM_FIRED = 34,
+    MFD_TM_RUNNING = 35,
+    MFD_TM_INIT = 36,
+    MFD_S6_NAME2 = 10,
+    MFD_S6_NAME3 = 15,
+    MFD_S6_NAME4 = 18,
+    MFD_S6_NAME5 = 23,
+    MFD_S6_NAME6 = 29,
+    MFD_S6_NX = 32,
+    MFD_EM_CRC = 20,
+    MFD_NDOUBLE = 4,
+    MFD_NFIELD = 37
 } mf_decl_all_t;
 
-// 49 names over 36 distinct descriptors.
-// Fields wider than 16 bits are in here and a cell is not, so MC_DECL
-// refuses those rather than handing back a quiet truncation.
+// 49 names over 37 slots, of which the first 4 are the
+// halves of fields wider than a cell.
 #define CSP_DECL_ALL_FIELDS { \
+    { 4, 0, 16 } /* tm_period lo */, \
+    { 6, 0, 12 } /* tm_period hi */, \
+    { 4, 0, 16 } /* va_init cn_init lo */, \
+    { 6, 0, 16 } /* va_init cn_init hi */, \
     { 0, 0, 4 } /* type */, \
     { 0, 4, 1 } /* cont */, \
     { 0, 5, 1 } /* local */, \
     { 0, 6, 2 } /* dir */, \
-    { 0, 8, 8 } /* name */, \
-    { 0, 16, 5 } /* res */, \
-    { 0, 16, 8 } /* s6_name2 */, \
-    { 0, 21, 1 } /* is_mapped */, \
-    { 0, 22, 1 } /* bound */, \
-    { 0, 23, 1 } /* nx */, \
-    { 0, 24, 4 } /* vt */, \
-    { 0, 24, 8 } /* s6_name3 */, \
-    { 0, 28, 4 } /* reg */, \
-    { 1, 0, 1 } /* di_soft an_soft */, \
-    { 1, 0, 8 } /* s6_name4 */, \
-    { 1, 0, 10 } /* bf_nbytes */, \
-    { 1, 0, 16 } /* md_n mq_mx ca_id rt_src em_crc */, \
-    { 1, 0, 28 } /* tm_period */, \
-    { 1, 0, 32 } /* va_init cn_init */, \
-    { 1, 1, 7 } /* di_pin an_pin */, \
-    { 1, 8, 4 } /* di_port an_port */, \
-    { 1, 8, 8 } /* s6_name5 */, \
-    { 1, 10, 4 } /* bf_transport */, \
-    { 1, 12, 3 } /* di_irq an_irq */, \
-    { 1, 14, 16 } /* bf_id */, \
-    { 1, 15, 1 } /* di_pullup an_pwm */, \
-    { 1, 16, 1 } /* di_pulldown */, \
-    { 1, 16, 2 } /* an_endian ca_endian */, \
-    { 1, 16, 8 } /* s6_name6 */, \
-    { 1, 16, 16 } /* md_ent mq_m rt_dst */, \
-    { 1, 18, 9 } /* ca_bit */, \
-    { 1, 24, 8 } /* s6_nx */, \
-    { 1, 27, 5 } /* ca_len */, \
-    { 1, 29, 1 } /* tm_fired */, \
-    { 1, 30, 1 } /* tm_running */, \
-    { 1, 31, 1 } /* tm_init */ }
+    { 1, 0, 8 } /* name */, \
+    { 2, 0, 5 } /* res */, \
+    { 2, 0, 8 } /* s6_name2 */, \
+    { 2, 5, 1 } /* is_mapped */, \
+    { 2, 6, 1 } /* bound */, \
+    { 2, 7, 1 } /* nx */, \
+    { 3, 0, 4 } /* vt */, \
+    { 3, 0, 8 } /* s6_name3 */, \
+    { 3, 4, 4 } /* reg */, \
+    { 4, 0, 1 } /* di_soft an_soft */, \
+    { 4, 0, 8 } /* s6_name4 */, \
+    { 4, 0, 10 } /* bf_nbytes */, \
+    { 4, 0, 16 } /* md_n mq_mx ca_id rt_src em_crc */, \
+    { 4, 1, 7 } /* di_pin an_pin */, \
+    { 5, 0, 4 } /* di_port an_port */, \
+    { 5, 0, 8 } /* s6_name5 */, \
+    { 5, 2, 4 } /* bf_transport */, \
+    { 5, 4, 3 } /* di_irq an_irq */, \
+    { 5, 7, 1 } /* di_pullup an_pwm */, \
+    { 6, 0, 1 } /* di_pulldown */, \
+    { 6, 0, 2 } /* an_endian ca_endian */, \
+    { 6, 0, 8 } /* s6_name6 */, \
+    { 6, 0, 16 } /* md_ent mq_m bf_id rt_dst */, \
+    { 6, 2, 9 } /* ca_bit */, \
+    { 7, 0, 8 } /* s6_nx */, \
+    { 7, 3, 5 } /* ca_len */, \
+    { 7, 5, 1 } /* tm_fired */, \
+    { 7, 6, 1 } /* tm_running */, \
+    { 7, 7, 1 } /* tm_init */ }
+
+#define CSP_MCFIELD_DECL(REC, FAIL) do { \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_TYPE]) != \
+	(long)((uint32_t)csp_decl_get_type((const csp_decl_t*)&(REC)) & 0xFUL)) \
+	FAIL("type", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_TYPE]), \
+	     (long)((uint32_t)csp_decl_get_type((const csp_decl_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_CONT]) != \
+	(long)((uint32_t)csp_decl_get_cont((const csp_decl_t*)&(REC)) & 0x1UL)) \
+	FAIL("cont", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_CONT]), \
+	     (long)((uint32_t)csp_decl_get_cont((const csp_decl_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_LOCAL]) != \
+	(long)((uint32_t)csp_decl_get_local((const csp_decl_t*)&(REC)) & 0x1UL)) \
+	FAIL("local", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_LOCAL]), \
+	     (long)((uint32_t)csp_decl_get_local((const csp_decl_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_DIR]) != \
+	(long)((uint32_t)csp_decl_get_dir((const csp_decl_t*)&(REC)) & 0x3UL)) \
+	FAIL("dir", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_DIR]), \
+	     (long)((uint32_t)csp_decl_get_dir((const csp_decl_t*)&(REC)) & 0x3UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_NAME]) != \
+	(long)((uint32_t)csp_decl_get_name((const csp_decl_t*)&(REC)) & 0xFFUL)) \
+	FAIL("name", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_NAME]), \
+	     (long)((uint32_t)csp_decl_get_name((const csp_decl_t*)&(REC)) & 0xFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_RES]) != \
+	(long)((uint32_t)csp_decl_get_res((const csp_decl_t*)&(REC)) & 0x1FUL)) \
+	FAIL("res", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_RES]), \
+	     (long)((uint32_t)csp_decl_get_res((const csp_decl_t*)&(REC)) & 0x1FUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_IS_MAPPED]) != \
+	(long)((uint32_t)csp_decl_get_is_mapped((const csp_decl_t*)&(REC)) & 0x1UL)) \
+	FAIL("is_mapped", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_IS_MAPPED]), \
+	     (long)((uint32_t)csp_decl_get_is_mapped((const csp_decl_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_BOUND]) != \
+	(long)((uint32_t)csp_decl_get_bound((const csp_decl_t*)&(REC)) & 0x1UL)) \
+	FAIL("bound", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_BOUND]), \
+	     (long)((uint32_t)csp_decl_get_bound((const csp_decl_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_NX]) != \
+	(long)((uint32_t)csp_decl_get_nx((const csp_decl_t*)&(REC)) & 0x1UL)) \
+	FAIL("nx", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_NX]), \
+	     (long)((uint32_t)csp_decl_get_nx((const csp_decl_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_VT]) != \
+	(long)((uint32_t)csp_decl_get_vt((const csp_decl_t*)&(REC)) & 0xFUL)) \
+	FAIL("vt", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_VT]), \
+	     (long)((uint32_t)csp_decl_get_vt((const csp_decl_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_REG]) != \
+	(long)((uint32_t)csp_decl_get_reg((const csp_decl_t*)&(REC)) & 0xFUL)) \
+	FAIL("reg", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_REG]), \
+	     (long)((uint32_t)csp_decl_get_reg((const csp_decl_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_MD_N]) != \
+	(long)((uint32_t)csp_decl_get_md_n((const csp_decl_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("md_n", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_MD_N]), \
+	     (long)((uint32_t)csp_decl_get_md_n((const csp_decl_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_MD_ENT]) != \
+	(long)((uint32_t)csp_decl_get_md_ent((const csp_decl_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("md_ent", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_MD_ENT]), \
+	     (long)((uint32_t)csp_decl_get_md_ent((const csp_decl_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_MQ_MX]) != \
+	(long)((uint32_t)csp_decl_get_mq_mx((const csp_decl_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("mq_mx", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_MQ_MX]), \
+	     (long)((uint32_t)csp_decl_get_mq_mx((const csp_decl_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_MQ_M]) != \
+	(long)((uint32_t)csp_decl_get_mq_m((const csp_decl_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("mq_m", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_MQ_M]), \
+	     (long)((uint32_t)csp_decl_get_mq_m((const csp_decl_t*)&(REC)) & 0xFFFFUL)); \
+    /* va_init: union member, no cell to compare */ \
+    /* cn_init: union member, no cell to compare */ \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_DI_SOFT]) != \
+	(long)((uint32_t)csp_decl_get_di_soft((const csp_decl_t*)&(REC)) & 0x1UL)) \
+	FAIL("di_soft", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_DI_SOFT]), \
+	     (long)((uint32_t)csp_decl_get_di_soft((const csp_decl_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_DI_PIN]) != \
+	(long)((uint32_t)csp_decl_get_di_pin((const csp_decl_t*)&(REC)) & 0x7FUL)) \
+	FAIL("di_pin", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_DI_PIN]), \
+	     (long)((uint32_t)csp_decl_get_di_pin((const csp_decl_t*)&(REC)) & 0x7FUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_DI_PORT]) != \
+	(long)((uint32_t)csp_decl_get_di_port((const csp_decl_t*)&(REC)) & 0xFUL)) \
+	FAIL("di_port", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_DI_PORT]), \
+	     (long)((uint32_t)csp_decl_get_di_port((const csp_decl_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_DI_IRQ]) != \
+	(long)((uint32_t)csp_decl_get_di_irq((const csp_decl_t*)&(REC)) & 0x7UL)) \
+	FAIL("di_irq", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_DI_IRQ]), \
+	     (long)((uint32_t)csp_decl_get_di_irq((const csp_decl_t*)&(REC)) & 0x7UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_DI_PULLUP]) != \
+	(long)((uint32_t)csp_decl_get_di_pullup((const csp_decl_t*)&(REC)) & 0x1UL)) \
+	FAIL("di_pullup", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_DI_PULLUP]), \
+	     (long)((uint32_t)csp_decl_get_di_pullup((const csp_decl_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_DI_PULLDOWN]) != \
+	(long)((uint32_t)csp_decl_get_di_pulldown((const csp_decl_t*)&(REC)) & 0x1UL)) \
+	FAIL("di_pulldown", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_DI_PULLDOWN]), \
+	     (long)((uint32_t)csp_decl_get_di_pulldown((const csp_decl_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_AN_SOFT]) != \
+	(long)((uint32_t)csp_decl_get_an_soft((const csp_decl_t*)&(REC)) & 0x1UL)) \
+	FAIL("an_soft", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_AN_SOFT]), \
+	     (long)((uint32_t)csp_decl_get_an_soft((const csp_decl_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_AN_PIN]) != \
+	(long)((uint32_t)csp_decl_get_an_pin((const csp_decl_t*)&(REC)) & 0x7FUL)) \
+	FAIL("an_pin", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_AN_PIN]), \
+	     (long)((uint32_t)csp_decl_get_an_pin((const csp_decl_t*)&(REC)) & 0x7FUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_AN_PORT]) != \
+	(long)((uint32_t)csp_decl_get_an_port((const csp_decl_t*)&(REC)) & 0xFUL)) \
+	FAIL("an_port", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_AN_PORT]), \
+	     (long)((uint32_t)csp_decl_get_an_port((const csp_decl_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_AN_IRQ]) != \
+	(long)((uint32_t)csp_decl_get_an_irq((const csp_decl_t*)&(REC)) & 0x7UL)) \
+	FAIL("an_irq", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_AN_IRQ]), \
+	     (long)((uint32_t)csp_decl_get_an_irq((const csp_decl_t*)&(REC)) & 0x7UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_AN_PWM]) != \
+	(long)((uint32_t)csp_decl_get_an_pwm((const csp_decl_t*)&(REC)) & 0x1UL)) \
+	FAIL("an_pwm", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_AN_PWM]), \
+	     (long)((uint32_t)csp_decl_get_an_pwm((const csp_decl_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_AN_ENDIAN]) != \
+	(long)((uint32_t)csp_decl_get_an_endian((const csp_decl_t*)&(REC)) & 0x3UL)) \
+	FAIL("an_endian", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_AN_ENDIAN]), \
+	     (long)((uint32_t)csp_decl_get_an_endian((const csp_decl_t*)&(REC)) & 0x3UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_CA_ID]) != \
+	(long)((uint32_t)csp_decl_get_ca_id((const csp_decl_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("ca_id", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_CA_ID]), \
+	     (long)((uint32_t)csp_decl_get_ca_id((const csp_decl_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_CA_ENDIAN]) != \
+	(long)((uint32_t)csp_decl_get_ca_endian((const csp_decl_t*)&(REC)) & 0x3UL)) \
+	FAIL("ca_endian", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_CA_ENDIAN]), \
+	     (long)((uint32_t)csp_decl_get_ca_endian((const csp_decl_t*)&(REC)) & 0x3UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_CA_BIT]) != \
+	(long)((uint32_t)csp_decl_get_ca_bit((const csp_decl_t*)&(REC)) & 0x1FFUL)) \
+	FAIL("ca_bit", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_CA_BIT]), \
+	     (long)((uint32_t)csp_decl_get_ca_bit((const csp_decl_t*)&(REC)) & 0x1FFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_CA_LEN]) != \
+	(long)((uint32_t)csp_decl_get_ca_len((const csp_decl_t*)&(REC)) & 0x1FUL)) \
+	FAIL("ca_len", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_CA_LEN]), \
+	     (long)((uint32_t)csp_decl_get_ca_len((const csp_decl_t*)&(REC)) & 0x1FUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_BF_NBYTES]) != \
+	(long)((uint32_t)csp_decl_get_bf_nbytes((const csp_decl_t*)&(REC)) & 0x3FFUL)) \
+	FAIL("bf_nbytes", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_BF_NBYTES]), \
+	     (long)((uint32_t)csp_decl_get_bf_nbytes((const csp_decl_t*)&(REC)) & 0x3FFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_BF_TRANSPORT]) != \
+	(long)((uint32_t)csp_decl_get_bf_transport((const csp_decl_t*)&(REC)) & 0xFUL)) \
+	FAIL("bf_transport", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_BF_TRANSPORT]), \
+	     (long)((uint32_t)csp_decl_get_bf_transport((const csp_decl_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_BF_ID]) != \
+	(long)((uint32_t)csp_decl_get_bf_id((const csp_decl_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("bf_id", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_BF_ID]), \
+	     (long)((uint32_t)csp_decl_get_bf_id((const csp_decl_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_RT_SRC]) != \
+	(long)((uint32_t)csp_decl_get_rt_src((const csp_decl_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("rt_src", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_RT_SRC]), \
+	     (long)((uint32_t)csp_decl_get_rt_src((const csp_decl_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_RT_DST]) != \
+	(long)((uint32_t)csp_decl_get_rt_dst((const csp_decl_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("rt_dst", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_RT_DST]), \
+	     (long)((uint32_t)csp_decl_get_rt_dst((const csp_decl_t*)&(REC)) & 0xFFFFUL)); \
+    { uint32_t d_; \
+      d_ = (uint32_t)mc_field_get(&(REC), &mc_decl_fields[MFD_TM_PERIOD]) \
+	   | ((uint32_t)mc_field_get(&(REC), &mc_decl_fields[(MFD_TM_PERIOD) + 1]) << 16); \
+      if (d_ != (uint32_t)csp_decl_get_tm_period((const csp_decl_t*)&(REC))) \
+	FAIL("tm_period", (long)d_, \
+	     (long)(uint32_t)csp_decl_get_tm_period((const csp_decl_t*)&(REC))); } \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_TM_FIRED]) != \
+	(long)((uint32_t)csp_decl_get_tm_fired((const csp_decl_t*)&(REC)) & 0x1UL)) \
+	FAIL("tm_fired", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_TM_FIRED]), \
+	     (long)((uint32_t)csp_decl_get_tm_fired((const csp_decl_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_TM_RUNNING]) != \
+	(long)((uint32_t)csp_decl_get_tm_running((const csp_decl_t*)&(REC)) & 0x1UL)) \
+	FAIL("tm_running", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_TM_RUNNING]), \
+	     (long)((uint32_t)csp_decl_get_tm_running((const csp_decl_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_TM_INIT]) != \
+	(long)((uint32_t)csp_decl_get_tm_init((const csp_decl_t*)&(REC)) & 0x1UL)) \
+	FAIL("tm_init", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_TM_INIT]), \
+	     (long)((uint32_t)csp_decl_get_tm_init((const csp_decl_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME2]) != \
+	(long)((uint32_t)csp_decl_get_s6_name2((const csp_decl_t*)&(REC)) & 0xFFUL)) \
+	FAIL("s6_name2", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME2]), \
+	     (long)((uint32_t)csp_decl_get_s6_name2((const csp_decl_t*)&(REC)) & 0xFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME3]) != \
+	(long)((uint32_t)csp_decl_get_s6_name3((const csp_decl_t*)&(REC)) & 0xFFUL)) \
+	FAIL("s6_name3", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME3]), \
+	     (long)((uint32_t)csp_decl_get_s6_name3((const csp_decl_t*)&(REC)) & 0xFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME4]) != \
+	(long)((uint32_t)csp_decl_get_s6_name4((const csp_decl_t*)&(REC)) & 0xFFUL)) \
+	FAIL("s6_name4", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME4]), \
+	     (long)((uint32_t)csp_decl_get_s6_name4((const csp_decl_t*)&(REC)) & 0xFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME5]) != \
+	(long)((uint32_t)csp_decl_get_s6_name5((const csp_decl_t*)&(REC)) & 0xFFUL)) \
+	FAIL("s6_name5", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME5]), \
+	     (long)((uint32_t)csp_decl_get_s6_name5((const csp_decl_t*)&(REC)) & 0xFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME6]) != \
+	(long)((uint32_t)csp_decl_get_s6_name6((const csp_decl_t*)&(REC)) & 0xFFUL)) \
+	FAIL("s6_name6", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME6]), \
+	     (long)((uint32_t)csp_decl_get_s6_name6((const csp_decl_t*)&(REC)) & 0xFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NX]) != \
+	(long)((uint32_t)csp_decl_get_s6_nx((const csp_decl_t*)&(REC)) & 0xFFUL)) \
+	FAIL("s6_nx", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NX]), \
+	     (long)((uint32_t)csp_decl_get_s6_nx((const csp_decl_t*)&(REC)) & 0xFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_EM_CRC]) != \
+	(long)((uint32_t)csp_decl_get_em_crc((const csp_decl_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("em_crc", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_EM_CRC]), \
+	     (long)((uint32_t)csp_decl_get_em_crc((const csp_decl_t*)&(REC)) & 0xFFFFUL)); \
+    } while (0)
 
 typedef enum {
     MFI_OP = 0,
     MFI_A_X = 1,
-    MFI_A_Y = 5,
-    MFI_A_Z = 11,
-    MFI_A_U = 16,
-    MFI_A_SWAP = 18,
+    MFI_A_Y = 6,
+    MFI_A_Z = 10,
+    MFI_A_U = 14,
+    MFI_A_SWAP = 16,
     MFI_M_X = 1,
-    MFI_M_Y = 5,
-    MFI_M_MEM = 12,
+    MFI_M_Y = 6,
+    MFI_M_MEM = 13,
     MFI_MI_X = 1,
-    MFI_MI_IMM = 7,
-    MFI_MI_MEM = 15,
+    MFI_MI_IMM = 8,
+    MFI_MI_MEM = 13,
     MFI_I_X = 1,
-    MFI_I_IMM = 10,
+    MFI_I_IMM = 13,
     MFI_R_CND = 1,
-    MFI_R_NXT = 9,
-    MFI_R_IMPLICIT = 19,
+    MFI_R_NXT = 12,
+    MFI_R_IMPLICIT = 20,
     MFI_X_X = 1,
     MFI_IN_X = 1,
-    MFI_IN_IMM = 8,
-    MFI_IN_NXT = 17,
-    MFI_IN_IMPLICIT = 21,
+    MFI_IN_IMM = 9,
+    MFI_IN_NXT = 15,
+    MFI_IN_IMPLICIT = 20,
     MFI_E_NUM = 2,
-    MFI_E_MX = 15,
-    MFI_SG_NUM = 2,
-    MFI_SG_USED = 14,
+    MFI_E_MX = 13,
+    MFI_SG_NUM = 3,
+    MFI_SG_USED = 18,
     MFI_V_NUM = 2,
-    MFI_V_MX = 15,
-    MFI_N_OBJ = 4,
+    MFI_V_MX = 13,
+    MFI_N_OBJ = 5,
     MFI_F_X = 1,
-    MFI_F_IDX = 6,
-    MFI_F_USR = 13,
-    MFI_F_AVT = 15,
-    MFI_O_OBJ = 3,
-    MFI_OX_X = 1,
-    MFI_OX_LEN = 10,
-    MFI_OX_STRIDE = 20,
-    MFI_EM_CRC = 15,
-    MFI_NFIELD = 22
+    MFI_F_IDX = 7,
+    MFI_F_USR = 11,
+    MFI_F_AVT = 13,
+    MFI_O_OBJ = 5,
+    MFI_OX_LEN = 4,
+    MFI_OX_X = 17,
+    MFI_OX_STRIDE = 19,
+    MFI_EM_CRC = 13,
+    MFI_NDOUBLE = 0,
+    MFI_NFIELD = 21
 } mf_instr_all_t;
 
-// 38 names over 22 distinct descriptors.
-// Fields wider than 16 bits are in here and a cell is not, so MC_DECL
-// refuses those rather than handing back a quiet truncation.
+// 38 names over 21 slots, of which the first 0 are the
+// halves of fields wider than a cell.
 #define CSP_INSTR_ALL_FIELDS { \
     { 0, 0, 6 } /* op */, \
-    { 0, 6, 4 } /* a_x m_x mi_x i_x r_cnd x_x in_x f_x ox_x */, \
-    { 0, 6, 10 } /* e_num sg_num v_num */, \
-    { 0, 6, 16 } /* o_obj */, \
-    { 0, 8, 16 } /* n_obj */, \
-    { 0, 10, 4 } /* a_y m_y */, \
-    { 0, 10, 5 } /* f_idx */, \
-    { 0, 10, 6 } /* mi_imm */, \
-    { 0, 10, 8 } /* in_imm */, \
-    { 0, 10, 15 } /* r_nxt */, \
-    { 0, 10, 16 } /* i_imm ox_len */, \
-    { 0, 14, 4 } /* a_z */, \
-    { 0, 14, 16 } /* m_mem */, \
-    { 0, 15, 1 } /* f_usr */, \
-    { 0, 16, 8 } /* sg_used */, \
-    { 0, 16, 16 } /* mi_mem e_mx v_mx f_avt em_crc */, \
-    { 0, 18, 1 } /* a_u */, \
-    { 0, 18, 13 } /* in_nxt */, \
-    { 0, 19, 1 } /* a_swap */, \
-    { 0, 25, 1 } /* r_implicit */, \
-    { 0, 26, 6 } /* ox_stride */, \
-    { 0, 31, 1 } /* in_implicit */ }
+    { 0, 6, 4 } /* a_x m_x mi_x i_x r_cnd x_x in_x f_x */, \
+    { 0, 6, 10 } /* e_num v_num */, \
+    { 1, 0, 10 } /* sg_num */, \
+    { 1, 0, 14 } /* ox_len */, \
+    { 1, 0, 16 } /* n_obj o_obj */, \
+    { 1, 2, 4 } /* a_y m_y */, \
+    { 1, 2, 5 } /* f_idx */, \
+    { 1, 2, 6 } /* mi_imm */, \
+    { 1, 2, 8 } /* in_imm */, \
+    { 1, 6, 4 } /* a_z */, \
+    { 1, 7, 1 } /* f_usr */, \
+    { 2, 0, 15 } /* r_nxt */, \
+    { 2, 0, 16 } /* m_mem mi_mem i_imm e_mx v_mx f_avt em_crc */, \
+    { 2, 2, 1 } /* a_u */, \
+    { 2, 2, 13 } /* in_nxt */, \
+    { 2, 3, 1 } /* a_swap */, \
+    { 2, 6, 4 } /* ox_x */, \
+    { 3, 0, 8 } /* sg_used */, \
+    { 3, 2, 6 } /* ox_stride */, \
+    { 3, 7, 1 } /* r_implicit in_implicit */ }
+
+#define CSP_MCFIELD_INSTR(REC, FAIL) do { \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_OP]) != \
+	(long)((uint32_t)csp_instr_get_op((const csp_instr_t*)&(REC)) & 0x3FUL)) \
+	FAIL("op", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_OP]), \
+	     (long)((uint32_t)csp_instr_get_op((const csp_instr_t*)&(REC)) & 0x3FUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_A_X]) != \
+	(long)((uint32_t)csp_instr_get_a_x((const csp_instr_t*)&(REC)) & 0xFUL)) \
+	FAIL("a_x", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_A_X]), \
+	     (long)((uint32_t)csp_instr_get_a_x((const csp_instr_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_A_Y]) != \
+	(long)((uint32_t)csp_instr_get_a_y((const csp_instr_t*)&(REC)) & 0xFUL)) \
+	FAIL("a_y", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_A_Y]), \
+	     (long)((uint32_t)csp_instr_get_a_y((const csp_instr_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_A_Z]) != \
+	(long)((uint32_t)csp_instr_get_a_z((const csp_instr_t*)&(REC)) & 0xFUL)) \
+	FAIL("a_z", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_A_Z]), \
+	     (long)((uint32_t)csp_instr_get_a_z((const csp_instr_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_A_U]) != \
+	(long)((uint32_t)csp_instr_get_a_u((const csp_instr_t*)&(REC)) & 0x1UL)) \
+	FAIL("a_u", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_A_U]), \
+	     (long)((uint32_t)csp_instr_get_a_u((const csp_instr_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_A_SWAP]) != \
+	(long)((uint32_t)csp_instr_get_a_swap((const csp_instr_t*)&(REC)) & 0x1UL)) \
+	FAIL("a_swap", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_A_SWAP]), \
+	     (long)((uint32_t)csp_instr_get_a_swap((const csp_instr_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_M_X]) != \
+	(long)((uint32_t)csp_instr_get_m_x((const csp_instr_t*)&(REC)) & 0xFUL)) \
+	FAIL("m_x", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_M_X]), \
+	     (long)((uint32_t)csp_instr_get_m_x((const csp_instr_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_M_Y]) != \
+	(long)((uint32_t)csp_instr_get_m_y((const csp_instr_t*)&(REC)) & 0xFUL)) \
+	FAIL("m_y", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_M_Y]), \
+	     (long)((uint32_t)csp_instr_get_m_y((const csp_instr_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_M_MEM]) != \
+	(long)((uint32_t)csp_instr_get_m_mem((const csp_instr_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("m_mem", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_M_MEM]), \
+	     (long)((uint32_t)csp_instr_get_m_mem((const csp_instr_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_MI_X]) != \
+	(long)((uint32_t)csp_instr_get_mi_x((const csp_instr_t*)&(REC)) & 0xFUL)) \
+	FAIL("mi_x", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_MI_X]), \
+	     (long)((uint32_t)csp_instr_get_mi_x((const csp_instr_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_MI_IMM]) != \
+	(long)((uint32_t)csp_instr_get_mi_imm((const csp_instr_t*)&(REC)) & 0x3FUL)) \
+	FAIL("mi_imm", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_MI_IMM]), \
+	     (long)((uint32_t)csp_instr_get_mi_imm((const csp_instr_t*)&(REC)) & 0x3FUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_MI_MEM]) != \
+	(long)((uint32_t)csp_instr_get_mi_mem((const csp_instr_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("mi_mem", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_MI_MEM]), \
+	     (long)((uint32_t)csp_instr_get_mi_mem((const csp_instr_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_I_X]) != \
+	(long)((uint32_t)csp_instr_get_i_x((const csp_instr_t*)&(REC)) & 0xFUL)) \
+	FAIL("i_x", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_I_X]), \
+	     (long)((uint32_t)csp_instr_get_i_x((const csp_instr_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_I_IMM]) != \
+	(long)((uint32_t)csp_instr_get_i_imm((const csp_instr_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("i_imm", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_I_IMM]), \
+	     (long)((uint32_t)csp_instr_get_i_imm((const csp_instr_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_R_CND]) != \
+	(long)((uint32_t)csp_instr_get_r_cnd((const csp_instr_t*)&(REC)) & 0xFUL)) \
+	FAIL("r_cnd", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_R_CND]), \
+	     (long)((uint32_t)csp_instr_get_r_cnd((const csp_instr_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_R_NXT]) != \
+	(long)((uint32_t)csp_instr_get_r_nxt((const csp_instr_t*)&(REC)) & 0x7FFFUL)) \
+	FAIL("r_nxt", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_R_NXT]), \
+	     (long)((uint32_t)csp_instr_get_r_nxt((const csp_instr_t*)&(REC)) & 0x7FFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_R_IMPLICIT]) != \
+	(long)((uint32_t)csp_instr_get_r_implicit((const csp_instr_t*)&(REC)) & 0x1UL)) \
+	FAIL("r_implicit", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_R_IMPLICIT]), \
+	     (long)((uint32_t)csp_instr_get_r_implicit((const csp_instr_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_X_X]) != \
+	(long)((uint32_t)csp_instr_get_x_x((const csp_instr_t*)&(REC)) & 0xFUL)) \
+	FAIL("x_x", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_X_X]), \
+	     (long)((uint32_t)csp_instr_get_x_x((const csp_instr_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_IN_X]) != \
+	(long)((uint32_t)csp_instr_get_in_x((const csp_instr_t*)&(REC)) & 0xFUL)) \
+	FAIL("in_x", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_IN_X]), \
+	     (long)((uint32_t)csp_instr_get_in_x((const csp_instr_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_IN_IMM]) != \
+	(long)((uint32_t)csp_instr_get_in_imm((const csp_instr_t*)&(REC)) & 0xFFUL)) \
+	FAIL("in_imm", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_IN_IMM]), \
+	     (long)((uint32_t)csp_instr_get_in_imm((const csp_instr_t*)&(REC)) & 0xFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_IN_NXT]) != \
+	(long)((uint32_t)csp_instr_get_in_nxt((const csp_instr_t*)&(REC)) & 0x1FFFUL)) \
+	FAIL("in_nxt", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_IN_NXT]), \
+	     (long)((uint32_t)csp_instr_get_in_nxt((const csp_instr_t*)&(REC)) & 0x1FFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_IN_IMPLICIT]) != \
+	(long)((uint32_t)csp_instr_get_in_implicit((const csp_instr_t*)&(REC)) & 0x1UL)) \
+	FAIL("in_implicit", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_IN_IMPLICIT]), \
+	     (long)((uint32_t)csp_instr_get_in_implicit((const csp_instr_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_E_NUM]) != \
+	(long)((uint32_t)csp_instr_get_e_num((const csp_instr_t*)&(REC)) & 0x3FFUL)) \
+	FAIL("e_num", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_E_NUM]), \
+	     (long)((uint32_t)csp_instr_get_e_num((const csp_instr_t*)&(REC)) & 0x3FFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_E_MX]) != \
+	(long)((uint32_t)csp_instr_get_e_mx((const csp_instr_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("e_mx", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_E_MX]), \
+	     (long)((uint32_t)csp_instr_get_e_mx((const csp_instr_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_SG_NUM]) != \
+	(long)((uint32_t)csp_instr_get_sg_num((const csp_instr_t*)&(REC)) & 0x3FFUL)) \
+	FAIL("sg_num", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_SG_NUM]), \
+	     (long)((uint32_t)csp_instr_get_sg_num((const csp_instr_t*)&(REC)) & 0x3FFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_SG_USED]) != \
+	(long)((uint32_t)csp_instr_get_sg_used((const csp_instr_t*)&(REC)) & 0xFFUL)) \
+	FAIL("sg_used", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_SG_USED]), \
+	     (long)((uint32_t)csp_instr_get_sg_used((const csp_instr_t*)&(REC)) & 0xFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_V_NUM]) != \
+	(long)((uint32_t)csp_instr_get_v_num((const csp_instr_t*)&(REC)) & 0x3FFUL)) \
+	FAIL("v_num", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_V_NUM]), \
+	     (long)((uint32_t)csp_instr_get_v_num((const csp_instr_t*)&(REC)) & 0x3FFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_V_MX]) != \
+	(long)((uint32_t)csp_instr_get_v_mx((const csp_instr_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("v_mx", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_V_MX]), \
+	     (long)((uint32_t)csp_instr_get_v_mx((const csp_instr_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_N_OBJ]) != \
+	(long)((uint32_t)csp_instr_get_n_obj((const csp_instr_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("n_obj", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_N_OBJ]), \
+	     (long)((uint32_t)csp_instr_get_n_obj((const csp_instr_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_F_X]) != \
+	(long)((uint32_t)csp_instr_get_f_x((const csp_instr_t*)&(REC)) & 0xFUL)) \
+	FAIL("f_x", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_F_X]), \
+	     (long)((uint32_t)csp_instr_get_f_x((const csp_instr_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_F_IDX]) != \
+	(long)((uint32_t)csp_instr_get_f_idx((const csp_instr_t*)&(REC)) & 0x1FUL)) \
+	FAIL("f_idx", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_F_IDX]), \
+	     (long)((uint32_t)csp_instr_get_f_idx((const csp_instr_t*)&(REC)) & 0x1FUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_F_USR]) != \
+	(long)((uint32_t)csp_instr_get_f_usr((const csp_instr_t*)&(REC)) & 0x1UL)) \
+	FAIL("f_usr", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_F_USR]), \
+	     (long)((uint32_t)csp_instr_get_f_usr((const csp_instr_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_F_AVT]) != \
+	(long)((uint32_t)csp_instr_get_f_avt((const csp_instr_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("f_avt", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_F_AVT]), \
+	     (long)((uint32_t)csp_instr_get_f_avt((const csp_instr_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_O_OBJ]) != \
+	(long)((uint32_t)csp_instr_get_o_obj((const csp_instr_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("o_obj", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_O_OBJ]), \
+	     (long)((uint32_t)csp_instr_get_o_obj((const csp_instr_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_OX_LEN]) != \
+	(long)((uint32_t)csp_instr_get_ox_len((const csp_instr_t*)&(REC)) & 0x3FFFUL)) \
+	FAIL("ox_len", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_OX_LEN]), \
+	     (long)((uint32_t)csp_instr_get_ox_len((const csp_instr_t*)&(REC)) & 0x3FFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_OX_X]) != \
+	(long)((uint32_t)csp_instr_get_ox_x((const csp_instr_t*)&(REC)) & 0xFUL)) \
+	FAIL("ox_x", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_OX_X]), \
+	     (long)((uint32_t)csp_instr_get_ox_x((const csp_instr_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_OX_STRIDE]) != \
+	(long)((uint32_t)csp_instr_get_ox_stride((const csp_instr_t*)&(REC)) & 0x3FUL)) \
+	FAIL("ox_stride", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_OX_STRIDE]), \
+	     (long)((uint32_t)csp_instr_get_ox_stride((const csp_instr_t*)&(REC)) & 0x3FUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_EM_CRC]) != \
+	(long)((uint32_t)csp_instr_get_em_crc((const csp_instr_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("em_crc", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_EM_CRC]), \
+	     (long)((uint32_t)csp_instr_get_em_crc((const csp_instr_t*)&(REC)) & 0xFFFFUL)); \
+    } while (0)
 
 typedef enum {
     MFV_KIND = 0,
@@ -1940,23 +2330,54 @@ typedef enum {
     MFV_LEN = 4,
     MFV_POS = 5,
     MFV_BUF = 6,
+    MFV_NDOUBLE = 0,
     MFV_NFIELD = 7
 } mf_view_all_t;
 
-// 7 names over 7 distinct descriptors.
-// Fields wider than 16 bits are in here and a cell is not, so MC_DECL
-// refuses those rather than handing back a quiet truncation.
+// 7 names over 7 slots, of which the first 0 are the
+// halves of fields wider than a cell.
 #define CSP_VIEW_ALL_FIELDS { \
     { 0, 0, 2 } /* kind */, \
     { 0, 2, 4 } /* vt */, \
     { 0, 6, 2 } /* endian */, \
-    { 0, 8, 2 } /* flags */, \
-    { 0, 10, 6 } /* len */, \
-    { 0, 16, 16 } /* pos */, \
-    { 1, 0, 16 } /* buf */ }
+    { 1, 0, 2 } /* flags */, \
+    { 1, 2, 6 } /* len */, \
+    { 2, 0, 16 } /* pos */, \
+    { 4, 0, 16 } /* buf */ }
+
+#define CSP_MCFIELD_VIEW(REC, FAIL) do { \
+    if ((long)mc_field_get(&(REC), &mc_view_fields[MFV_KIND]) != \
+	(long)((uint32_t)csp_view_get_kind((const csp_view_t*)&(REC)) & 0x3UL)) \
+	FAIL("kind", (long)mc_field_get(&(REC), &mc_view_fields[MFV_KIND]), \
+	     (long)((uint32_t)csp_view_get_kind((const csp_view_t*)&(REC)) & 0x3UL)); \
+    if ((long)mc_field_get(&(REC), &mc_view_fields[MFV_VT]) != \
+	(long)((uint32_t)csp_view_get_vt((const csp_view_t*)&(REC)) & 0xFUL)) \
+	FAIL("vt", (long)mc_field_get(&(REC), &mc_view_fields[MFV_VT]), \
+	     (long)((uint32_t)csp_view_get_vt((const csp_view_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_view_fields[MFV_ENDIAN]) != \
+	(long)((uint32_t)csp_view_get_endian((const csp_view_t*)&(REC)) & 0x3UL)) \
+	FAIL("endian", (long)mc_field_get(&(REC), &mc_view_fields[MFV_ENDIAN]), \
+	     (long)((uint32_t)csp_view_get_endian((const csp_view_t*)&(REC)) & 0x3UL)); \
+    if ((long)mc_field_get(&(REC), &mc_view_fields[MFV_FLAGS]) != \
+	(long)((uint32_t)csp_view_get_flags((const csp_view_t*)&(REC)) & 0x3UL)) \
+	FAIL("flags", (long)mc_field_get(&(REC), &mc_view_fields[MFV_FLAGS]), \
+	     (long)((uint32_t)csp_view_get_flags((const csp_view_t*)&(REC)) & 0x3UL)); \
+    if ((long)mc_field_get(&(REC), &mc_view_fields[MFV_LEN]) != \
+	(long)((uint32_t)csp_view_get_len((const csp_view_t*)&(REC)) & 0x3FUL)) \
+	FAIL("len", (long)mc_field_get(&(REC), &mc_view_fields[MFV_LEN]), \
+	     (long)((uint32_t)csp_view_get_len((const csp_view_t*)&(REC)) & 0x3FUL)); \
+    if ((long)mc_field_get(&(REC), &mc_view_fields[MFV_POS]) != \
+	(long)((uint32_t)csp_view_get_pos((const csp_view_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("pos", (long)mc_field_get(&(REC), &mc_view_fields[MFV_POS]), \
+	     (long)((uint32_t)csp_view_get_pos((const csp_view_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_view_fields[MFV_BUF]) != \
+	(long)((uint32_t)csp_view_get_buf((const csp_view_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("buf", (long)mc_field_get(&(REC), &mc_view_fields[MFV_BUF]), \
+	     (long)((uint32_t)csp_view_get_buf((const csp_view_t*)&(REC)) & 0xFFFFUL)); \
+    } while (0)
 
 // Fingerprint of every field name, position and width above, in order.
 // An image built against a different layout must be refused, not read.
-#define CSP_LAYOUT_FINGERPRINT 0x7B2B4329UL
+#define CSP_LAYOUT_FINGERPRINT 0x6AAB4453UL
 
 #endif

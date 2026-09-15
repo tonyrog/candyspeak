@@ -51,6 +51,14 @@ typedef unsigned bool_t;
 #define PORT_BITS 4   // port 0..15    mega is 11 ports, with 8 pins each
 #define PIN_BITS  7   // pin  0..127
 
+// A definition that may have no user in this translation unit and is not a
+// mistake: a generated word the bytecode reaches and the C does not.
+#if defined(__GNUC__)
+#define CSP_UNUSED __attribute__((unused))
+#else
+#define CSP_UNUSED
+#endif
+
 #if defined(__AVR__)
 #include <avr/pgmspace.h>
 #define RODATA          PROGMEM
@@ -329,7 +337,7 @@ static inline void* rdvp(const void* p, int rom)
 //       NEW image in an old firmware is the direction that breaks, because
 //       nothing there arms the interrupt and `? Drdy.fired` reads a bit no
 //       sweep ever sets -- a rule that silently never runs.
-#define ROM_FORMAT_VERSION 19
+#define ROM_FORMAT_VERSION 21
 
 // Format version of the SETTINGS store, which is NOT ROM_FORMAT_VERSION and not
 // EEPROM_VERSION either. It needs its own because it is the one part of the
@@ -584,6 +592,9 @@ extern int ro_strcpy(char* dst, rostring_t src, int max);
 #define MAX_DIS_RULES 128
 #define DIR_BITS 2
 #define TYPE_BITS 4  // supports up to 15 types & objects
+// The same mask as a NAME, so a word can say it: CSP_MASK is a macro over an
+// expression and utils/words.terms can only name a constant.
+#define TYPE_MASK ((1 << TYPE_BITS) - 1)
 #define ENDIAN_BITS 2
 
 // Queue entry: pack obj and ip together
@@ -2598,13 +2609,10 @@ extern void csp_load_instr(csp_rt_t* st, index_t n, csp_instr_t* dst);
 // reactive graph builder, the rule scanners, the ROM emitter. Payload is
 // identifier text, so its opcode nibble is a character, and one in four reads
 // as something with operands to chase.
-static inline index_t instr_next(csp_rt_t* st, index_t i)
-{
-    csp_instr_t ci;
-    csp_load_instr(st, i, &ci);
-    return (csp_instr_get_op(&ci) == OP_SEGMENT)
-	? (index_t)(i + csp_instr_get_sg_num(&ci) + 1) : (index_t)(i + 1);
-}
+// instr_next is a WORD now (utils/words.terms), on the iop phrase. It was
+// `static inline` and expanded at six walk sites; one function is smaller in
+// both back ends, and in the bytecode one it is a call.
+#define instr_next(st, i) csp_instr_next((st), (i))
 
 static inline char* csp_seg_slot(csp_rt_t* st, index_t h, unsigned k)
 {
@@ -2828,19 +2836,15 @@ static inline int st_index(csp_rt_t* st, index_t n)
 // hand. Used off the execution path -- setup, per-object init, listing -- which
 // is where an object other than "global" or "the one running" gets addressed
 // without an OP_SETO to say so.
-static inline int st_index_obj(csp_rt_t* st, unsigned m, index_t ix)
-{
-    return st->offs[m] + ix;
-}
+#define st_index_obj(st, m, ix) csp_st_index_obj((st), (index_t)(m), (ix))
 
 // Point the object context at `m`, the way OP_NEW does. For the passes that walk
 // per-object data from OUTSIDE a rule: setup, the I/O and timer lists, the
 // per-object State step, listing.
-static inline void csp_ctx_set(csp_rt_t* st, unsigned m)
-{
-    st->cur   = (uint8_t)m;
-    st->cbase = st->offs[m];
-}
+// csp_ctx_set, csp_io_at, csp_timer_at and st_index_obj are WORDS now
+// (utils/words.terms) -- they reach st->offs[], st->io[] and st->timer[]
+// through generated accessors that carry each table's own bound.
+#define csp_ctx_set(st, m) ((void)csp_ctx_set_w((st), (index_t)(m)))
 
 // Back to global. Every loop that used csp_ctx_set ends with this, so nothing
 // downstream inherits a base belonging to whichever object happened to be last.
@@ -2852,17 +2856,9 @@ static inline void csp_ctx_reset(csp_rt_t* st)
 
 // Entry i of the I/O / timer list, with its object bound. See the io/io_obj
 // declaration for why the entry alone is not enough.
-static inline index_t csp_io_at(csp_rt_t* st, int i)
-{
-    csp_ctx_set(st, st->io_obj[i]);
-    return st->io[i];
-}
+#define csp_io_at(st, i) csp_io_at_w((st), (index_t)(i))
 
-static inline index_t csp_timer_at(csp_rt_t* st, int i)
-{
-    csp_ctx_set(st, st->timer_obj[i]);
-    return st->timer[i];
-}
+#define csp_timer_at(st, i) csp_timer_at_w((st), (index_t)(i))
 
 // Resolve a leaf index to its view descriptor (see doc/DESCRIPTORS.md).
 // Step 2: table-driven. Every entry is still VIEW_SLOT with slot == st_index,
@@ -3034,7 +3030,7 @@ extern uint16_t csp_crc16(uint16_t crc, const void* data, size_t n, int is_rom);
 extern int     csp_has_firmware(void);
 // Declaration index of object number m, valid even before a rebuild has built
 // the object[] cache (see the definition).
-extern index_t csp_object_decl(csp_rt_t*, unsigned m);
+// csp_object_decl is a WORD (utils/words.terms); gen/csp_words.h declares it.
 // Name position of state `snum`, 0 if there is none; and how many states are
 // declared. Both derive from the DECL_STATES blocks -- there is no state table.
 extern sindex_t state_name_pos(csp_rt_t*, int snum);
@@ -3532,7 +3528,7 @@ extern int csp_check_blocks_closed(csp_rt_t* st);
 extern uint32_t model_state(void);
 // True when decl `di` is the implicit State variable -- the runtime's sticky
 // FAILSAFE gate asks, and so does the listing (which must not print it).
-extern int state_is_state_var(csp_rt_t* st, int di);
+extern int state_is_state_var(csp_rt_t* st, index_t ix);
 extern int lookup_state(csp_rt_t* st, const tstr_t* name);
 // Elements in the array headed by declaration `i` (1 for a plain variable).
 extern uint16_t csp_array_len(csp_rt_t* st, index_t i);
@@ -3585,5 +3581,12 @@ EXTERN_C_END
 #define float   _Pragma("GCC error \"float not allowed\"") float
 #define double  _Pragma("GCC error \"double not allowed\"") double
 #endif
+
+// THE WORDS, last: gen/csp_words.h carries the prototypes and the generated
+// table accessors, and both need csp_rt_t to be complete. Here rather than in
+// every caller -- csp.h already defines macros (csp_io_at, csp_ctx_set) that
+// expand to them, so a file including csp.h has asked for them whether it says
+// so or not.
+#include "csp_words.h"
 
 #endif

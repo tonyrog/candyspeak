@@ -18,6 +18,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "csp.h"
+#include "csp_words.h"
 
 #if defined(__GNUC__)
 #define CSP_WEAK __attribute__((weak))

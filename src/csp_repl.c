@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "csp.h"
+#include "csp_words.h"   // the words from utils/words.terms
 #include "csp_strings.h"   // shared RODATA strings (generated from strings.tab)
 #include "csp_parse.h"
 #include "csp_compile.h"
@@ -323,11 +324,10 @@ static index_t find_module(csp_rt_t* st, const char* name)
 {
     int i;
     int len = (int)strlen(name);
-    for (i = 0; i < st->ps.nd; i++) {
-	if (decl(st, i, type) == DECL_MODULE) {
-	    if (csp_str_eq(st, decl(st,i,name), name, len))
-		return MAKE_INDEX(0, i);
-	}
+    for (i = csp_next_of_type(st, 0, DECL_MODULE); i < st->ps.nd;
+	 i = csp_next_of_type(st, (index_t)(i + 1), DECL_MODULE)) {
+	if (csp_str_eq(st, decl(st,i,name), name, len))
+	    return MAKE_INDEX(0, i);
     }
     return BAD_INDEX;
 }
@@ -410,36 +410,11 @@ static void list_array_len(csp_rt_t* st, int i)
 // order -- and a PORT change both ends the run in progress and prints itself,
 // without which `0:2,1:5,2:6` listed as `0:2,5..7`: three ports collapsed into
 // one range on the strength of the pin numbers alone.
-static void list_pin_spec(csp_rt_t* st, int i, int is_digital)
-{
-    uint16_t alen = csp_array_len(st, i);
-    unsigned port, start, last;
-    uint16_t k;
-
-    port = is_digital ? decl(st, i, di_port) : decl(st, i, an_port);
-    csp_print_uint(port);
-    csp_print_char(':');
-    start = last = is_digital ? decl(st, i, di_pin) : decl(st, i, an_pin);
-    csp_print_uint(start);
-    for (k = 1; k < alen; k++) {
-	unsigned q = is_digital ? decl(st, i+k, di_port) : decl(st, i+k, an_port);
-	unsigned p = is_digital ? decl(st, i+k, di_pin)  : decl(st, i+k, an_pin);
-	if ((q == port) && (p == last + 1)) {
-	    last = p;
-	    continue;
-	}
-	if (last != start) { csp_print_lit(".."); csp_print_uint(last); }
-	csp_print_char(',');
-	if (q != port) {
-	    port = q;
-	    csp_print_uint(port);
-	    csp_print_char(':');
-	}
-	csp_print_uint(p);
-	start = last = p;
-    }
-    if (last != start) { csp_print_lit(".."); csp_print_uint(last); }
-}
+// list_pin_spec is a WORD now (utils/words.terms). The console calls are
+// `pure` natives -- they take no runtime, so the bytecode wrapper does not
+// pass one.
+#define list_pin_spec(st, i, d) \
+    ((void)csp_list_pin_spec((st), (index_t)(i), (index_t)(d)))
 
 // Two spaces per nesting level. A module's members and its rules share it, so a
 // block reads as the unit it is instead of a flat list with a "Mod: " prefix on
@@ -478,12 +453,7 @@ typedef struct {
 // went in, which is the contract /list has to keep for /save and for a ROM.
 // Does the (N)INSTATE run starting at j end in an INSTATE? That is what makes it
 // an `#in` chain rather than a `#when` gate; see the call site.
-static int gate_is_in(csp_rt_t* st, int j, int to)
-{
-    while ((j < to) && (instr(st,j,op) == OP_NINSTATE))
-	j++;
-    return (j < to) && (instr(st,j,op) == OP_INSTATE);
-}
+// gate_is_in is a WORD now: utils/words.terms. See src/csp_words.c.
 
 static void list_when_header(csp_rt_t* st, int from, int gate)
 {
@@ -560,18 +530,18 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
     // Rules are numbered by absolute position, so a range starting part-way in
     // has to know how many came before it.
     for (f = 0; f < from; f++) {
-	if (instr(st,f,op) == OP_SEGMENT) {
+	if (csp_iop(st, f) == OP_SEGMENT) {
 	    f += instr(st, f, sg_num);      // the loop's f++ steps past the header
 	    continue;
 	}
-	if (instr(st,f,op) == OP_RULE)
+	if (csp_iop(st, f) == OP_RULE)
 	    rule_no++;
     }
     while (i < to) {
 	// Identifier text, not code: step the whole run. Read as instructions
 	// its characters look like a gate or a rule, and the listing either
 	// invents a block or -- as it did -- loses the real one that followed.
-	if (instr(st,i,op) == OP_SEGMENT) {
+	if (csp_iop(st, i) == OP_SEGMENT) {
 	    i += instr(st, i, sg_num) + 1;
 	    continue;
 	}
@@ -609,7 +579,7 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	// an #in gate is `LD State` immediately before its (N)INSTATE run, and
 	// that shape is matched below, so a bare NINSTATE reaching here is a
 	// #when. The condition renders from where the last rule ended.
-	if ((instr(st,i,op) == OP_NINSTATE) && (instr(st, i, in_imm) == 0)) {
+	if ((csp_iop(st, i) == OP_NINSTATE) && (instr(st, i, in_imm) == 0)) {
 	    if ((block_end >= 0) && (depth < CSP_MAX_BLOCK)) {
 		stk[depth].end   = block_end;   // remember the block around us
 		stk[depth].gate  = block_gate;
@@ -644,13 +614,13 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	// Testing gsx instead would be wrong: a module's #in gates on the
 	// MODULE's own State, a different declaration, and that block still has
 	// to list as `#in`.
-	if ((instr(st,i,op) == OP_LD) && (i+1 < to) &&
-	    ((instr(st,i+1,op) == OP_NINSTATE) ||
-	     (instr(st,i+1,op) == OP_INSTATE)) &&
-	    gate_is_in(st, i+1, to)) {
+	if ((csp_iop(st, i) == OP_LD) && (i+1 < to) &&
+	    ((csp_iop(st, i+1) == OP_NINSTATE) ||
+	     (csp_iop(st, i+1) == OP_INSTATE)) &&
+	    csp_gate_is_in(st, (index_t)(i+1), (index_t)to)) {
 	    int j = i + 1;
 	    int ns = 0;
-	    while ((j < to) && (instr(st,j,op) == OP_NINSTATE)) {
+	    while ((j < to) && (csp_iop(st, j) == OP_NINSTATE)) {
 		if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st, j, in_imm);
 		j++;
 	    }
@@ -689,7 +659,7 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	    rule = i;
 	    continue;
 	}
-	switch(instr(st,i,op)) {
+	switch(csp_iop(st, i)) {
 	case OP_ENTER:
 	    if (skip_modules) {
 		// Already listed inside its own block. Count past it so the
@@ -698,7 +668,7 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 		int body_n = instr(st, i, e_num);
 		int j;
 		for (j = i+1; j < i+1+body_n; j++)
-		    if (instr(st,j,op) == OP_RULE)
+		    if (csp_iop(st, j) == OP_RULE)
 			rule_no++;
 		i = i + body_n + 2;
 	    }
@@ -1006,7 +976,7 @@ match:
 		    // self-validating: whatever instruction 0 holds, if it is
 		    // not an ENTER there is no body to walk.
 		    index_t ent = decl(st, mod_decl, md_ent);
-		    int body_n  = (instr(st, ent, op) == OP_ENTER)
+		    int body_n  = (csp_iop(st, ent) == OP_ENTER)
 			          ? instr(st, ent, e_num) : 0;
 		    ctx.filt = filt; ctx.nf = nf;
 		    ctx.cmask = cmask; ctx.bmask = bmask; ctx.smask = smask;
@@ -1524,8 +1494,9 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
     // so those are what the columns carry: id/dlc where a timer shows
     // period/remaining, and the bytes themselves as the value.
     if ((t == DECL_BUFFER) || (t == DECL_FIELD)) {
-	csp_view_t* vw = csp_view(st, ix);
-	csp_buf_t*  b  = &st->buf[csp_view_get_buf(vw)];
+	// csp_leaf_buf is the view lookup and the buf field in one -- the view
+	// itself was wanted for nothing else here.
+	csp_buf_t*  b  = &st->buf[csp_leaf_buf(st, ix)];
 	int n = 0;
 	// Direction belongs to the BUFFER: a field is a window into it and cannot
 	// be read one way while the frame goes the other.

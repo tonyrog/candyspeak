@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "csp.h"
+#include "csp_words.h"
 #include "csp_strings.h"   // shared RODATA strings (generated from strings.tab)
 #include "csp_parse.h"
 #include "csp_print.h"
@@ -3498,7 +3499,7 @@ NOINLINE static int asm_decl_init(csp_rt_t* st, const token_t* tv, size_t n,
     if (st->cs->dinit_mark != 0) {
 	index_t mk = (index_t)(st->cs->dinit_mark - 1);
 	if ((mk >= st->rom_nn) && (mk < (index_t)st->ps.nn) &&
-	    (instr(st, mk, op) == OP_INSTATE) &&
+	    (csp_iop(st, mk) == OP_INSTATE) &&
 	    (instr(st, mk, in_imm) == STATE_INIT) &&
 	    ((index_t)(mk + instr(st, mk, in_nxt)) == (index_t)st->ps.nn)) {
 	    // PUSH even though no gate was emitted: close_in_block below pops,

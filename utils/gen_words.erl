@@ -22,7 +22,8 @@
 -mode(compile).
 
 -define(TERMS, "utils/words.terms").
--define(CH,    "gen/csp_words.h").
+-define(PH,    "gen/csp_words.h").
+-define(CH,    "gen/csp_words_c.h").
 -define(BCH,   "gen/csp_words_bc.h").
 
 %% Opcodes -- must track mc_op_t in include/csp_mcsp.h.
@@ -48,8 +49,6 @@
 -define(JZ,'MC_JZ').
 -define(DECL,'MC_DECL').
 -define(INSTR,'MC_INSTR').
--define(ND,'MC_ND').
--define(NN,'MC_NN').
 -define(ZEQ,'MC_ZEQ').
 -define(NATIVE,'MC_NATIVE').
 -define(NATIVEN,'MC_NATIVEN').
@@ -59,6 +58,22 @@
 -define(BUF,'MC_BUF').
 -define(ST, 'MC_ST').
 -define(VIEW,'MC_VIEW').
+%% Wide reads: a field of more than sixteen bits is two adjacent rows in the
+%% field table, and these read both.
+-define(DECL2,'MC_DECL2').   -define(INSTR2,'MC_INSTR2').
+-define(BUF2,'MC_BUF2').     -define(VIEW2,'MC_VIEW2').
+-define(DLIT,'MC_DLIT').     -define(S2D,'MC_S2D').
+-define(DDROP,'MC_DDROP').   -define(DADD,'MC_DADD').
+-define(DSUB,'MC_DSUB').     -define(DEQ,'MC_DEQ').
+-define(DLT,'MC_DLT').
+%% Writes.
+-define(DECLS,'MC_DECLS').   -define(INSTRS,'MC_INSTRS').
+-define(BUFS,'MC_BUFS').     -define(VIEWS,'MC_VIEWS').
+-define(DECLS2,'MC_DECLS2'). -define(INSTRS2,'MC_INSTRS2').
+-define(BUFS2,'MC_BUFS2').   -define(VIEWS2,'MC_VIEWS2').
+-define(STS,'MC_STS').
+%% The runtime's tables.
+-define(AGET,'MC_AGET').     -define(ASET,'MC_ASET').
 
 
 main(["emit"]) ->
@@ -79,17 +94,40 @@ check([{F, T} | R]) ->
 
 outputs() ->
     {ok, Terms} = file:consult(?TERMS),
-    Words = [W || W = {word, _, _, _, _} <- Terms],
-    Nats  = [N || N = {native, _, _, _} <- Terms],
+    %% TWO KINDS OF WORD. A `word` is reachable from C: it gets a prototype
+    %% and, on a bytecode build, a trampoline to cross into the machine. An
+    %% `aux` is reachable only from other words and gets neither -- a wrapper
+    %% on a word nobody outside calls is pure cost, and a deep vocabulary is
+    %% mostly words like that. Source order is kept: an aux is an ordinary word
+    %% to everything below here.
+    Words = [setelement(1, W, word)
+	     || W <- Terms, is_tuple(W), tuple_size(W) =:= 5,
+		(element(1, W) =:= word) orelse (element(1, W) =:= aux)],
+    put(aux, sets:from_list([N || {aux, N, _, _, _} <- Terms])),
+    put(wordlist, Words),
+    %% A `pure` native does NOT take the runtime: csp_print_char is the shape --
+    %% it writes to the console and knows nothing about st. The wrapper passes
+    %% ctx to a `native` and not to a `pure`.
+    Nats  = [N || N = {native, _, _, _} <- Terms]
+	++ [setelement(1, N, native) || N = {pure, _, _, _} <- Terms],
+    put(pures, sets:from_list([F || {pure, F, _, _} <- Terms])),
     Sts   = [T || T = {state, _, _, _} <- Terms],
     Bfs   = [T || T = {buffield, _, _} <- Terms],
+    Arrs  = [T || T = {array, _, _, _, _} <- Terms],
     put(states, maps:from_list([{N, P} || {state, N, _, P} <- Sts])),
     put(buffields, sets:from_list([F || {buffield, F, _} <- Bfs])),
     %% Both back ends need to know which names are words: the C one to spell
     %% the csp_ prefix a word's definition gets, the bytecode one to choose
     %% CALL over NATIVE.
     put(words, sets:from_list([element(2, W) || W <- Words])),
-    [{?CH, cfile(Words)}, {?BCH, bcfile(Words, Nats, Sts, Bfs)}].
+    %% Return width per callable, so {call, ...} knows its own shape: a word
+    %% that answers a 32-bit field is a double to whoever uses the answer.
+    put(retw, maps:from_list(
+		[{N, ctw(CT)} || {word, N, _, CT, _} <- Words] ++
+		[{N, ctw(R)}  || {native, N, _, R} <- Nats] ++
+		[{N, ctw(R)}  || {pure, N, _, R} <- Terms])),
+    [{?PH, pfile(Words, Arrs)}, {?CH, cfile(Words)},
+     {?BCH, bcfile(Words, Nats, Sts, Bfs, Arrs)}].
 
 %% A native is an EXISTING C function, reached from bytecode through a wrapper.
 %% The wrapper is not optional: csp_print_uint is void f(csp_rt_t*, uint16_t),
@@ -118,9 +156,68 @@ banner() ->
 
 %% ------------------------------------------------------------------ C back end
 
-cfile(Words) ->
+%% WHAT A CALLER SEES, and all it sees. The same prototypes whether the board
+%% links the C bodies or runs the bytecode -- that is the whole point of one
+%% description: csp_print.c says csp_is_local(st, ix) and is not entitled to
+%% know which of the two answered.
+pfile(Words, Arrs) ->
     [banner(),
      "#ifndef __CSP_WORDS_H__\n#define __CSP_WORDS_H__\n\n",
+     "// One prototype per word. The BODY is either gen/csp_words_c.h (ordinary\n"
+     "// C) or gen/csp_words_bc.h (micro-csp bytecode plus a trampoline), and\n"
+     "// src/csp_words.c picks between them. Nothing else includes either.\n",
+     arr_accessors(Arrs),
+     [proto(W) || W <- Words, not sets:is_element(element(2, W), get(aux))],
+     "\n// Installs the leaf hooks on a bytecode build, and does nothing on a C\n"
+     "// one. Call it once, before the first word -- a word that reaches a\n"
+     "// record with no hook installed stops with MC_E_LEAF rather than\n"
+     "// answering wrongly.\n"
+     "extern void csp_words_init(csp_rt_t* st);\n\n"
+     "// The last micro-csp error, kept because a faulting word returns 0 and 0\n"
+     "// is a perfectly ordinary answer for most of them. Always 0 on a C build.\n"
+     "extern uint8_t csp_word_fault;\n"
+     "\n#endif\n"].
+
+%% ONE ACCESSOR PAIR PER TABLE, and the bound is in them. st->io[i] written out
+%% at a call site is a read nobody checks; this is the same read with the count
+%% that lives beside the table in csp_rt_t. Out of range answers zero and a
+%% write out of range is dropped, which is what a word can be given when it
+%% cannot be given a pointer.
+arr_accessors([]) -> [];
+arr_accessors(Arrs) ->
+    ["\n// The runtime's tables. Generated from {array, ...} in utils/words.terms;\n"
+     "// both back ends reach a table through these and nothing else.\n",
+     [arr_acc(A) || A <- Arrs]].
+
+arr_acc({array, N, CT, Path, Bound}) ->
+    Nm = atom_to_list(N),
+    io_lib:format(
+      "static inline ~s csp_arr_~s(csp_rt_t* st, index_t i_)\n"
+      "{\n    return (i_ < (index_t)st->~s) ? st->~s[i_] : (~s)0;\n}\n"
+      "static inline void csp_arr_set_~s(csp_rt_t* st, index_t i_, ~s v_)\n"
+      "{\n    if (i_ < (index_t)st->~s) st->~s[i_] = v_;\n}\n",
+      [atom_to_list(CT), Nm, atom_to_list(Bound), Path, atom_to_list(CT),
+       Nm, atom_to_list(CT), atom_to_list(Bound), Path]).
+
+proto({word, Name, Args, CT, _}) ->
+    io_lib:format("extern ~s csp_~s(csp_rt_t* st~s);\n",
+		  [atom_to_list(CT), atom_to_list(Name),
+		   [io_lib:format(", index_t ~s", [A]) || A <- Args]]).
+
+aproto({word, Name, Args, CT, _}) ->
+    io_lib:format("CSP_UNUSED static ~s csp_~s(csp_rt_t* st~s);\n",
+		  [atom_to_list(CT), atom_to_list(Name),
+		   [io_lib:format(", index_t ~s", [A]) || A <- Args]]).
+
+cfile(Words) ->
+    [banner(),
+     "#ifndef __CSP_WORDS_C_H__\n#define __CSP_WORDS_C_H__\n\n",
+     "// The C back end: one ordinary function per word. Included by\n"
+     "// src/csp_words.c when the build does NOT run bytecode.\n\n",
+     "// Forward declarations for the aux words, so which word calls which is\n"
+     "// not a question of what order utils/words.terms happens to list them in.\n",
+     [aproto(W) || W <- Words, sets:is_element(element(2, W), get(aux))],
+     "\n",
      [cword(W) || W <- Words],
      "#endif\n"].
 
@@ -130,10 +227,20 @@ cfile(Words) ->
 %% hand anyway.
 cword({word, Name, Args, CT, Body}) ->
     Locals = clocals(Body),
-    [io_lib:format("~s csp_~s(csp_rt_t* st~s)\n{\n",
+    LW = lwidths(Body),
+    %% An aux word has no prototype, so it must be static. CSP_UNUSED because
+    %% an aux that only the bytecode reaches has no C caller at all, and that
+    %% is not a mistake.
+    [case sets:is_element(Name, get(aux)) of
+	 true  -> "CSP_UNUSED static ";
+	 false -> ""
+     end,
+     io_lib:format("~s csp_~s(csp_rt_t* st~s)\n{\n",
 		   [atom_to_list(CT), atom_to_list(Name),
 		    [io_lib:format(", index_t ~s", [A]) || A <- Args]]),
-     [io_lib:format("\tindex_t ~s;\n", [L]) || L <- Locals],
+     [io_lib:format("\t~s ~s;\n",
+		    [case maps:get(L, LW, 1) of 2 -> "uint32_t"; _ -> "index_t" end, L])
+      || L <- Locals],
      case uses_st(Body) of true -> ""; false -> "\t(void)st;\n" end,
      case Locals of [] -> ""; _ -> "\n" end,
      [cstmt(S, "\t") || S <- Body],
@@ -151,9 +258,15 @@ cl(_)                 -> [].
 %% st, and gcc says so. Cheaper to answer here than to cast the warning away.
 uses_st(X) when is_tuple(X) ->
     case element(1, X) of
-	decl -> true;
-	nd   -> true;
-	call -> true;
+	aget  -> true;
+	decl  -> true;
+	instr -> true;
+	buf   -> true;
+	view  -> true;
+	state -> true;
+	nd    -> true;
+	nn    -> true;
+	call  -> true;
 	_    -> lists:any(fun uses_st/1, tuple_to_list(X))
     end;
 uses_st(L) when is_list(L) -> lists:any(fun uses_st/1, L);
@@ -163,6 +276,10 @@ cstmt({local, N, E}, I) -> [I, atom_to_list(N), " = ", cexp(E), ";\n"];
 cstmt({set, N, E}, I)   -> [I, atom_to_list(N), " = ", cexp(E), ";\n"];
 cstmt({return, E}, I)   -> [I, "return ", cexp(E), ";\n"];
 cstmt({do, E}, I)       -> [I, cexp(E), ";\n"];
+%% A FIELD OR TABLE WRITE. Not cexp's business: an assignment is a statement
+%% here, and the write side reaches a different place than the read side does --
+%% the RAM slot, never the cache a read may have handed back.
+cstmt({store, T, V}, I) -> [I, cstore(T, V), ";\n"];
 cstmt({'if', C, T}, I)  -> [I, "if (", cexp(C), ") {\n", [cstmt(S, I ++ "\t") || S <- T], I, "}\n"];
 cstmt({while, C, B}, I) ->
     [I, "while (", cexp(C), ") {\n", [cstmt(S, I ++ "\t") || S <- B], I, "}\n"];
@@ -184,15 +301,34 @@ cstmt({'if', C, T, F}, I) ->
     [I, "if (", cexp(C), ") {\n", [cstmt(S, I ++ "\t") || S <- T],
      I, "} else {\n", [cstmt(S, I ++ "\t") || S <- F], I, "}\n"].
 
+cstore({decl, E, F}, V) ->
+    ["csp_decl_set_", atom_to_list(F), "(ram_decl_at(st, ", cexp(E), "), ",
+     cexp(V), ")"];
+cstore({instr, E, F}, V) ->
+    ["csp_instr_set_", atom_to_list(F), "(ram_instr_at(st, ", cexp(E), "), ",
+     cexp(V), ")"];
+cstore({buf, E, F}, V) ->
+    ["csp_buf_set_", atom_to_list(F), "(&st->buf[", cexp(E), "], ", cexp(V), ")"];
+cstore({view, E, F}, V) ->
+    ["csp_view_set_", atom_to_list(F), "(&st->view[", cexp(E), "], ", cexp(V), ")"];
+cstore({aget, A, E}, V) ->
+    ["csp_arr_set_", atom_to_list(A), "(st, ", cexp(E), ", ", cexp(V), ")"];
+cstore({state, N}, V) ->
+    ["st->", maps:get(N, get(states)), " = ", cexp(V)].
+
 cexp({const, N}) when is_integer(N) -> integer_to_list(N);
 cexp({const, N})                    -> atom_to_list(N);
+cexp({const16, N})                  -> atom_to_list(N);
 cexp({var, N})                      -> atom_to_list(N);
 cexp({nd})                          -> "st->ps.nd";
+cexp({nn})                          -> "st->ps.nn";
 cexp({state, N})                    -> ["st->", maps:get(N, get(states))];
 cexp({buf, E, F})                   -> ["csp_buf_get_",atom_to_list(F),"(&st->buf[", cexp(E), "])"];
 cexp({view, E, F})                   -> ["csp_view_get_",atom_to_list(F),"(&st->view[", cexp(E), "])"];
 cexp({index, E})                    -> ["INDEX(", cexp(E), ")"];
 cexp({decl, E, F})                  -> ["decl(st, ", cexp(E), ", ", atom_to_list(F), ")"];
+cexp({instr, E, F})                 -> ["instr(st, ", cexp(E), ", ", atom_to_list(F), ")"];
+cexp({aget, A, E})                  -> ["csp_arr_", atom_to_list(A), "(st, ", cexp(E), ")"];
 cexp({op, Op, A, B})                -> ["(", cexp(A), " ", cop(Op), " ", cexp(B), ")"];
 cexp({andthen, A, B})               -> ["(", cexp(A), " && ", cexp(B), ")"];
 cexp({orthen, A, B})                -> ["(", cexp(A), " || ", cexp(B), ")"];
@@ -201,7 +337,115 @@ cexp({call, F, As}) ->
 	    true  -> "csp_" ++ atom_to_list(F);
 	    false -> atom_to_list(F)
 	end,
-    [N, "(st", [[", ", cexp(A)] || A <- As], ")"].
+    %% A `pure` native takes no runtime, here as in the bytecode wrapper.
+    Ctx = case sets:is_element(F, get(pures)) of
+	      true  -> [];
+	      false -> ["st"]
+	  end,
+    [N, "(", string:join(Ctx ++ [lists:flatten(cexp(A)) || A <- As], ", "), ")"].
+
+%% ------------------------------------------------------------- widths
+%%
+%% A cell is sixteen bits. Anything wider is a DOUBLE: two cells, high on top,
+%% the way Forth holds one. None of that is written in utils/words.terms -- the
+%% width comes from the layout, and the generator decides.
+
+stag(decl)  -> {$D, ?DECLS,  ?DECLS2};
+stag(instr) -> {$I, ?INSTRS, ?INSTRS2};
+stag(buf)   -> {$B, ?BUFS,   ?BUFS2};
+stag(view)  -> {$V, ?VIEWS,  ?VIEWS2}.
+
+fld_rd(Rec, Tag, Op1, Op2, E, F, Env) ->
+    Op = case cells(fwidth(Rec, F)) of 1 -> Op1; 2 -> Op2 end,
+    bexp(E, Env) ++ [Op, {field, {Tag, F}}].
+
+%% A field's width, straight out of utils/layout.terms -- the same file the
+%% accessors and the micro-csp field tables come from, so there is no second
+%% place to keep in step. Read once and cached.
+fwidth(Rec, F) ->
+    T = case get(layout) of
+	    undefined -> {ok, X} = file:consult("utils/layout.terms"),
+			 put(layout, X), X;
+	    X -> X
+	end,
+    W = [B || {record, R, _, _, Fs} <- T,
+	      {N, B} <- [fw(Y) || Y <- Fs],
+	      match_field(Rec, R, N, F)]
+	++ [B || {record, R, _, Fs} <- T,
+		 {N, B} <- [fw(Y) || Y <- Fs],
+		 match_field(Rec, R, N, F)],
+    case W of
+	[]      -> 16;                    % not in layout.terms; assume a cell
+	[B | _] -> B
+    end.
+
+fw({N, B})       -> {N, B};
+fw({N, B, _})    -> {N, B}.
+
+%% decl fields are named `md_n` for arm md field n, and `type` for a common
+%% one. The arm is the prefix; a common field has none.
+match_field(Rec, R, N, F) ->
+    RS = atom_to_list(R), NS = atom_to_list(N), FS = atom_to_list(F),
+    Fam = atom_to_list(Rec),
+    case lists:prefix(Fam ++ "_", RS) of
+	true  -> (RS =:= Fam ++ "_common") andalso (NS =:= FS);
+	false -> false
+    end orelse
+    case string:split(RS, "_") of
+	_ -> (RS =/= Fam) andalso (RS ++ "_" ++ NS =:= FS)
+    end orelse
+    ((RS =:= Fam) andalso (NS =:= FS)).
+
+cells(B) when B =< 16 -> 1;
+cells(_)              -> 2.
+
+%% Widen a cell to a double where the other side of an operation is one.
+wide(E, Env, Code) ->
+    case ewidth(E, Env) of
+	1 -> Code ++ [?S2D];
+	2 -> Code
+    end.
+
+dop(eq) -> ?DEQ; dop(lt) -> ?DLT;
+dop(add) -> ?DADD; dop(sub) -> ?DSUB;
+dop(ne) -> ?DEQ;                       % caller inverts; see bop
+dop(Op) -> bop(Op).
+
+ewidth({const, N}, _) when is_integer(N), N =< 65535 -> 1;
+ewidth({const, N}, _) when is_integer(N) -> 2;
+ewidth({const, _}, _) -> 1;
+ewidth({const16, _}, _) -> 1;
+ewidth({var, N}, _) -> case get({w, N}) of undefined -> 1; W -> W end;
+ewidth({index, _}, _) -> 1;
+ewidth({nd}, _) -> 1;
+ewidth({nn}, _) -> 1;
+ewidth({state, _}, _) -> 1;
+ewidth({aget, _, _}, _) -> 1;
+ewidth({decl, _, F}, _)  -> cells(fwidth(decl, F));
+ewidth({instr, _, F}, _) -> cells(fwidth(instr, F));
+ewidth({buf, _, F}, _)   -> cells(fwidth(buf, F));
+ewidth({view, _, F}, _)  -> cells(fwidth(view, F));
+ewidth({op, Op, A, B}, Env) ->
+    case lists:member(Op, [eq, ne, lt]) of
+	true  -> 1;                      % a comparison is a flag, never a double
+	false -> max(ewidth(A, Env), ewidth(B, Env))
+    end;
+ewidth({andthen, _, _}, _) -> 1;
+ewidth({orthen, _, _}, _) -> 1;
+ewidth({call, F, _}, _) -> maps:get(F, get(retw), 1);
+ewidth(_, _) -> 1.
+
+%% A C return type in cells.
+ctw('uint32_t') -> 2;
+ctw(_)          -> 1.
+
+%% Which locals of a word are wide, for the C back end's declarations.
+lwidths(Body) -> maps:from_list(lw(Body)).
+
+lw({local, N, E})      -> [{N, ewidth(E, #{})}];
+lw(X) when is_tuple(X) -> lists:append([lw(E) || E <- tuple_to_list(X)]);
+lw(L) when is_list(L)  -> lists:append([lw(E) || E <- L]);
+lw(_)                  -> [].
 
 cop(eq) -> "=="; cop(ne) -> "!="; cop(lt) -> "<";
 cop(add) -> "+"; cop(sub) -> "-"; cop(and_) -> "&"; cop(or_) -> "|".
@@ -211,11 +455,83 @@ cop(add) -> "+"; cop(sub) -> "-"; cop(and_) -> "&"; cop(or_) -> "|".
 wrappers(Nats, Sts, Bfs) ->
     L = [{"lw_", F} || N = {native, F, _, _} <- Nats, nat_kind(N) =:= leaf]
 	++ [{"lbuf_", F} || {buffield, F, _} <- Bfs],
-    S = [{"ln_", F} || N = {native, F, _, _} <- Nats, nat_kind(N) =:= leafn]
-	++ [{"lst_", N} || {state, N, _, _} <- Sts],
-    [[wrapper(N) || N <- Nats], buf_leaves(Bfs), state_leaves(Sts),
-     "\n", table("csp_word_leaves", "mc_leaf_t", L),
+    S = [{"ln_", F} || N = {native, F, _, _} <- Nats, nat_kind(N) =:= leafn],
+    [[wrapper(N) || N <- Nats], buf_leaves(Bfs),
+     state_hook(Sts, get(wordlist)),
+     "\n", leaf_names(L, "LW_"), leaf_names(S, "LN_"),
+     table("csp_word_leaves", "mc_leaf_t", L),
      table("csp_word_leavesn", "mc_leafn_t", S)].
+
+%% A leaf's index, by NAME. The bytecode is meant to be read -- every other
+%% operand in it already says what it means (MFD_TYPE, MFS_ND, MFA_IO) and a
+%% bare `MC_NATIVE,2` was the one place left where you had to go and count.
+leaf_names([], _) -> [];
+leaf_names(Fs, P) ->
+    [[io_lib:format("#define ~s~s ~p\n",
+		    [P, string:uppercase(atom_to_list(F)), I])
+      || {{_, F}, I} <- lists:zip(Fs, lists:seq(0, length(Fs) - 1))], "\n"].
+
+%% ONLY WHAT A WORD ASKS FOR. The runtime has twenty-two fields in the state
+%% list and the words between them read eight and write two -- but a switch
+%% with every case in it was emitted anyway: 176 bytes of reads nobody makes
+%% and 202 of writes nobody makes, on a part with 32K of flash. The list in
+%% words.terms says what CAN be reached; this says what IS.
+state_hook(Sts, Words) ->
+    Rd = used_states(Words, read),
+    Wr = used_states(Words, write),
+    Live = [T || T = {state, N, _, _} <- Sts, lists:member(N, Rd ++ Wr)],
+    Ids = maps:from_list(lists:zip([N || {state, N, _, _} <- Live],
+				   lists:seq(0, length(Live) - 1))),
+    put(sids, Ids),
+    ["typedef enum {\n",
+     [io_lib:format("    MFS_~s = ~p,\n",
+		    [string:uppercase(atom_to_list(N)), maps:get(N, Ids)])
+      || {state, N, _, _} <- Live],
+     io_lib:format("    MFS_NFIELD = ~p\n} mfs_t;\n\n", [length(Live)]),
+     io_lib:format("// ~p of ~p state fields are reached by a word.\n",
+		   [length(Live), length(Sts)]),
+     hook_read([T || T = {state, N, _, _} <- Live, lists:member(N, Rd)]),
+     hook_write([T || T = {state, N, _, _} <- Live, lists:member(N, Wr)])].
+
+hook_read([]) ->
+    "// No word reads a runtime field.\n"
+    "#define csp_word_state ((mc_cell_t (*)(void*, mc_cell_t))0)\n\n";
+hook_read(Live) ->
+    ["static mc_cell_t csp_word_state(void* c_, mc_cell_t i_)\n{\n"
+     "    switch (i_) {\n",
+     [io_lib:format("    case MFS_~s: return (mc_cell_t)((csp_rt_t*)c_)->~s;\n",
+		    [string:uppercase(atom_to_list(N)), P]) || {state, N, _, P} <- Live],
+     "    default: return 0;\n    }\n}\n"].
+
+hook_write([]) ->
+    "// No word writes a runtime field, so MC_STS has nothing to reach and\n"
+    "// stops with MC_E_LEAF if a stream ever carries one.\n"
+    "#define csp_word_state_set ((void (*)(void*, mc_cell_t, mc_cell_t))0)\n\n";
+hook_write(Live) ->
+    ["\n// Its own switch rather than a table of member offsets: they are\n"
+     "// different widths and different types, and offsetof with a cast is how\n"
+     "// a two-byte field gets a four-byte store.\n"
+     "static void csp_word_state_set(void* c_, mc_cell_t i_, mc_cell_t v_)\n{\n"
+     "    switch (i_) {\n",
+     [io_lib:format("    case MFS_~s: ((csp_rt_t*)c_)->~s = (~s)v_; break;\n",
+		    [string:uppercase(atom_to_list(N)), P, atom_to_list(CT)])
+      || {state, N, CT, P} <- Live],
+     "    default: break;\n    }\n}\n"].
+
+%% Every {state, N} a word reads, and every {store, {state, N}, _} it writes.
+used_states(Words, Kind) ->
+    lists:usort(lists:append([scan_states(B, Kind) || {word, _, _, _, B} <- Words])).
+
+scan_states({store, {state, N}, V}, write) -> [N | scan_states(V, write)];
+scan_states({store, {state, _}, V}, read)  -> scan_states(V, read);
+scan_states({state, N}, read)              -> [N];
+scan_states({nd}, read)                    -> [nd];
+scan_states({nn}, read)                    -> [nn];
+scan_states(X, K) when is_tuple(X) ->
+    lists:append([scan_states(E, K) || E <- tuple_to_list(X)]);
+scan_states(L, K) when is_list(L) ->
+    lists:append([scan_states(E, K) || E <- L]);
+scan_states(_, _) -> [].
 
 %% A zero-length array is a GNU extension, not ISO C, and this header is
 %% included by every port. An empty table is simply not emitted.
@@ -223,24 +539,34 @@ table(Name, Ty, []) ->
     io_lib:format("// no ~s\n#define ~s     ((const ~s*)0)\n"
 		  "#define ~s_N  0\n\n", [Name, Name, Ty, Name]);
 table(Name, Ty, Fs) ->
-    [io_lib:format("static const ~s ~s[] = {\n", [Ty, Name]),
+    [io_lib:format("\nstatic const ~s ~s[] RODATA = {\n", [Ty, Name]),
      [io_lib:format("    ~s~s,\n", [P, F]) || {P, F} <- Fs],
      "};\n",
      io_lib:format("#define ~s_N  ~p\n\n", [Name, length(Fs)])].
 
+%% The context argument, or nothing when the native does not take one.
+ctxarg(F) ->
+    case sets:is_element(F, get(pures)) of
+	true  -> [];
+	false -> ["(csp_rt_t*)c_"]
+    end.
+
 wrapper({native, F, 0, Ret}) ->
-    [io_lib:format("static mc_cell_t lw_~s(void* c_, mc_cell_t t_)\n{\n", [F]),
-     ret_call(Ret, F, ["(csp_rt_t*)c_"]), "}\n"];
+    [io_lib:format("static mc_cell_t lw_~s(void* c_, mc_cell_t t_)\n{\n"
+		   "    (void)c_;\n", [F]),
+     ret_call(Ret, F, ctxarg(F)), "}\n"];
 wrapper({native, F, 1, Ret}) ->
-    [io_lib:format("static mc_cell_t lw_~s(void* c_, mc_cell_t t_)\n{\n", [F]),
-     ret_call(Ret, F, ["(csp_rt_t*)c_", "t_"]), "}\n"];
+    [io_lib:format("static mc_cell_t lw_~s(void* c_, mc_cell_t t_)\n{\n"
+		   "    (void)c_;\n", [F]),
+     ret_call(Ret, F, ctxarg(F) ++ ["t_"]), "}\n"];
 wrapper({native, F, N, Ret}) ->
     %% sp[0] is the top, so the LAST argument is nearest -- sp[N-1] is the
     %% first. The wrapper leaves one cell where N were, and returns where the
     %% stack should stand.
-    Args = ["(csp_rt_t*)c_" |
-	    [io_lib:format("sp_[~p]", [N - I]) || I <- lists:seq(1, N)]],
-    [io_lib:format("static mc_cell_t* ln_~s(void* c_, mc_cell_t* sp_)\n{\n", [F]),
+    Args = ctxarg(F) ++
+	    [io_lib:format("sp_[~p]", [N - I]) || I <- lists:seq(1, N)],
+    [io_lib:format("static mc_cell_t* ln_~s(void* c_, mc_cell_t* sp_)\n{\n"
+		   "    (void)c_;\n", [F]),
      case Ret of
 	 void -> [io_lib:format("    ~s(~s);\n", [F, string:join(Args, ", ")]),
 		  io_lib:format("    sp_ += ~p;\n    sp_[0] = 0;\n", [N - 1])];
@@ -255,20 +581,12 @@ ret_call(void, F, Args) ->
 ret_call(_, F, Args) ->
     [io_lib:format("    return (mc_cell_t)~s(~s);\n", [F, string:join(Args, ", ")])].
 
-%% A state field pushes: nothing in, one cell out, so it is the STACK form --
-%% MC_NATIVEN is two bytes where a nullary MC_NATIVE would need a dummy push
-%% first. A buffer field is one in, one out, which is the plain form.
-state_leaves(Sts) ->
-    [[io_lib:format("static mc_cell_t* lst_~s(void* c_, mc_cell_t* sp_)\n{\n"
-		    "    *--sp_ = (mc_cell_t)((csp_rt_t*)c_)->~s;\n"
-		    "    return sp_;\n}\n", [N, P]) || {state, N, _, P} <- Sts]].
-
 buf_leaves(Bfs) ->
     [[io_lib:format("static mc_cell_t lbuf_~s(void* c_, mc_cell_t i_)\n{\n"
 		    "    return (mc_cell_t)((csp_rt_t*)c_)->buf[i_].~s;\n}\n",
 		    [F, F]) || {buffield, F, _} <- Bfs]].
 
-bcfile(Words, Nats, Sts, Bfs) ->
+bcfile(Words, Nats, Sts, Bfs, Arrs) ->
     NI = nat_index(Nats, Sts, Bfs),
     %% The NAMES have to be known before the layout pass, because that is what
     %% decides word-versus-native at each call site. The offsets in this seed
@@ -297,12 +615,87 @@ bcfile(Words, Nats, Sts, Bfs) ->
       || {N, O} <- Offs],
      io_lib:format("#define CSP_WORDS_BC_LEN ~p\n\n", [length(Code)]),
      wrappers(Nats, Sts, Bfs),
+     array_hook(Arrs, Words),
      [io_lib:format("#define CSP_W_~s_FRAME ~p\n",
 		    [string:uppercase(atom_to_list(N)), F]) || {N, F} <- Frames],
      "\n", asserts(Code), "\n",
-     "static const uint8_t csp_words_bc[] = {\n",
+     "// In FLASH: on AVR a const array without RODATA is .rodata, which the\n"
+     "// linker puts inside .data and startup copies into RAM -- held there\n"
+     "// for the life of the program, for a table that is never written. The\n"
+     "// machine reads it with ro_byte, so it never has to be in RAM at all.\n"
+     "static const uint8_t csp_words_bc[] RODATA = {\n",
      wrap([render(B) || B <- annotate(Code,Offs)]),
-     "};\n\n#endif\n"].
+     "};\n\n",
+     "// C CALLING BYTECODE. One per word, with the same prototype the C back\n"
+     "// end gives it -- the caller cannot tell which it linked. Arguments go\n"
+     "// on the data stack, which is where a word\'s caller leaves them, so the\n"
+     "// entry word is not a special case. csp_word_run is in src/csp_words.c:\n"
+     "// it owns the stacks and is the one place that knows how big they are.\n"
+     "//\n"
+     "// Behind CSP_WORDS_TRAMPOLINES because tests/words.c links BOTH back ends\n"
+     "// into one binary to compare them: there the C bodies already define\n"
+     "// these names, and it calls the machine itself.\n"
+     "#ifdef CSP_WORDS_TRAMPOLINES\n",
+     [tramp(W, FrMap) || W <- Words,
+			 not sets:is_element(element(2, W), get(aux))],
+     "#endif\n\n#endif\n"].
+
+tramp({word, Name, Args, CT, _}, FrMap) ->
+    N = atom_to_list(Name),
+    U = string:uppercase(N),
+    io_lib:format(
+      "~s csp_~s(csp_rt_t* st~s)\n{\n"
+      "\tmc_cell_t a_[~p];\n\n"
+      "~s"
+      "\treturn (~s)csp_word_run(st, CSP_W_~s_ENTRY, a_, ~p, ~p);\n}\n\n",
+      [atom_to_list(CT), N,
+       [io_lib:format(", index_t ~s", [A]) || A <- Args],
+       max(length(Args), 1),
+       [io_lib:format("\ta_[~p] = (mc_cell_t)~s;\n", [I, A])
+	|| {I, A} <- lists:zip(lists:seq(0, length(Args) - 1), Args)],
+       atom_to_list(CT), U, length(Args), maps:get(Name, FrMap)]).
+
+%% ONLY THE TABLES A WORD REACHES, for the same reason the state hook is
+%% trimmed: a switch costs its cases whether or not anything takes them.
+array_hook(Arrs, Words) ->
+    Used = lists:usort(scan_arrays(Words)),
+    Live = [A || A = {array, N, _, _, _} <- Arrs, lists:member(N, Used)],
+    case Live of
+	[] ->
+	    "// No word reaches a runtime table.\n"
+	    "#define csp_word_array     ((mc_cell_t (*)(void*, mc_cell_t, mc_cell_t))0)\n"
+	    "#define csp_word_array_set ((void (*)(void*, mc_cell_t, mc_cell_t, mc_cell_t))0)\n\n";
+	_ ->
+	    ["typedef enum {\n",
+	     [io_lib:format("    MFA_~s = ~p,\n", [string:uppercase(atom_to_list(N)), I])
+	      || {{array, N, _, _, _}, I} <-
+		     lists:zip(Live, lists:seq(0, length(Live) - 1))],
+	     io_lib:format("    MFA_NTABLE = ~p\n} mfa_t;\n\n", [length(Live)]),
+	     io_lib:format("// ~p of ~p tables are reached by a word.\n",
+			   [length(Live), length(Arrs)]),
+	     "static mc_cell_t csp_word_array(void* c_, mc_cell_t id_, mc_cell_t i_)\n"
+	     "{\n    switch (id_) {\n",
+	     [io_lib:format("    case MFA_~s: return (mc_cell_t)csp_arr_~s((csp_rt_t*)c_,"
+			    " (index_t)i_);\n",
+			    [string:uppercase(atom_to_list(N)), atom_to_list(N)])
+	      || {array, N, _, _, _} <- Live],
+	     "    default: return 0;\n    }\n}\n\n",
+	     "static void csp_word_array_set(void* c_, mc_cell_t id_, mc_cell_t i_,\n"
+	     "\t\t\t       mc_cell_t v_)\n{\n    switch (id_) {\n",
+	     [io_lib:format("    case MFA_~s: csp_arr_set_~s((csp_rt_t*)c_, (index_t)i_,"
+			    " (~s)v_); break;\n",
+			    [string:uppercase(atom_to_list(N)), atom_to_list(N),
+			     atom_to_list(CT)])
+	      || {array, N, CT, _, _} <- Live],
+	     "    default: break;\n    }\n}\n\n"]
+    end.
+
+scan_arrays(Words) -> lists:append([sa(B) || {word, _, _, _, B} <- Words]).
+
+sa({aget, A, E})       -> [A | sa(E)];
+sa(X) when is_tuple(X) -> lists:append([sa(E) || E <- tuple_to_list(X)]);
+sa(L) when is_list(L)  -> lists:append([sa(E) || E <- L]);
+sa(_)                  -> [].
 
 %% annotate code with word names
 annotate(Code, Offs) ->
@@ -320,10 +713,20 @@ annotate([], _I, _Offs, Acc) ->
 asserts(Code) ->
     [io_lib:format("CSP_STATIC_ASSERT((~s) <= 255,\n\t\t  \"~s does not fit a"
 		   " micro-csp LIT8 operand\");\n", [A, A])
-     || {cconst, A} <- lists:usort([C || C = {cconst, _} <- Code])].
+     || {cconst, A} <- lists:usort([C || C = {cconst, _} <- Code])]
+	++ [io_lib:format("CSP_STATIC_ASSERT((~s) <= 65535,\n\t\t  \"~s does not fit a"
+			  " micro-csp LIT16 operand\");\n", [A, A])
+	    || {cconst_lo, A} <- lists:usort([C || C = {cconst_lo, _} <- Code])].
 
 render(N) when is_integer(N)  -> integer_to_list(N);
 render({cconst, A})           -> atom_to_list(A);
+%% A symbolic constant too wide for one byte. The token stream is C source, so
+%% the split is spelled in C and stays correct if the macro changes.
+render({cconst_lo, A})        -> ["(uint8_t)((", atom_to_list(A), ") & 0xFF)"];
+render({cconst_hi, A})        -> ["(uint8_t)(((", atom_to_list(A), ") >> 8) & 0xFF)"];
+render({sid, N}) -> "MFS_" ++ string:uppercase(atom_to_list(N));
+render({aid, N}) -> "MFA_" ++ string:uppercase(atom_to_list(N));
+render({lname, P, F}) -> P ++ string:uppercase(atom_to_list(F));
 render({field, {X,F}})        -> "MF"++[X,$_]++string:uppercase(atom_to_list(F));
 render({wlo, F})  -> integer_to_list(maps:get(F, get(offs)) band 16#FF);
 render({whi, F})  -> integer_to_list((maps:get(F, get(offs)) bsr 8) band 16#FF);
@@ -371,15 +774,53 @@ bword({word, Name, Args, _CT, Body}, NI) ->
 
 bstmt({local, N, E}, Env) ->
     K = maps:size(Env),
-    Env2 = maps:put(N, K, Env),
-    {bexp(E, Env) ++ [?LSET, K], Env2};
+    W = ewidth(E, Env),
+    put({w, N}, W),
+    Env2 = case W of
+	       1 -> maps:put(N, K, Env);
+	       2 -> maps:put({hi, N}, K + 1, maps:put(N, K, Env))
+	   end,
+    Code = case W of
+	       1 -> [?LSET, K];
+	       2 -> [?LSET, K + 1, ?LSET, K]
+	   end,
+    {bexp(E, Env) ++ Code, Env2};
 %% set is local without the declaration: the name is already in the frame, so
 %% this only assigns. In C both emit the same line -- the difference is that
 %% `local` is what puts the name at the top of the function.
-bstmt({set, N, E}, Env) -> {bexp(E, Env) ++ [?LSET, maps:get(N, Env)], Env};
+bstmt({set, N, E}, Env) ->
+    case get({w, N}) of
+	2 -> {wide(E, Env, bexp(E, Env))
+	      ++ [?LSET, maps:get({hi, N}, Env), ?LSET, maps:get(N, Env)], Env};
+	_ -> {bexp(E, Env) ++ [?LSET, maps:get(N, Env)], Env}
+    end;
 %% EXIT, not BYE: a word that halted the machine could not be called from
 %% another word, which is what made leaf_mark return nothing at all. The
 %% OUTERMOST exit -- an empty return stack -- is what ends a run.
+%% VALUE DOWN, INDEX ON TOP -- Forth's order for `!`, and the order the two
+%% sub-expressions fall out in anyway.
+bstmt({store, {state, N}, V}, Env) ->
+    {bexp(V, Env) ++ [?STS, {sid, N}], Env};
+bstmt({store, {aget, A, E}, V}, Env) ->
+    {bexp(V, Env) ++ bexp(E, Env) ++ [?ASET, {aid, A}], Env};
+bstmt({store, T, V}, Env) ->
+    {Rec, E, F} = case T of
+		      {decl,  I, Fl} -> {decl,  I, Fl};
+		      {instr, I, Fl} -> {instr, I, Fl};
+		      {buf,   I, Fl} -> {buf,   I, Fl};
+		      {view,  I, Fl} -> {view,  I, Fl}
+		  end,
+    {Tag, Op1, Op2} = stag(Rec),
+    %% THE FIELD decides the width, not the value: storing a cell into a 32-bit
+    %% field widens it, and storing a double into a narrow one drops the half
+    %% that does not fit.
+    {Op, Code} = case {cells(fwidth(Rec, F)), ewidth(V, Env)} of
+		     {1, 1} -> {Op1, bexp(V, Env)};
+		     {1, 2} -> {Op1, bexp(V, Env) ++ [?DROP]};
+		     {2, 1} -> {Op2, bexp(V, Env) ++ [?S2D]};
+		     {2, 2} -> {Op2, bexp(V, Env)}
+		 end,
+    {Code ++ bexp(E, Env) ++ [Op, {field, {Tag, F}}], Env};
 bstmt({return, E}, Env) -> {bexp(E, Env) ++ [?EXIT], Env};
 bstmt({do, E}, Env)     -> {bexp(E, Env) ++ [?DROP], Env};
 bstmt({'if', C, T}, Env) ->
@@ -430,14 +871,30 @@ rel(N) when N >= -128, N =< 127 -> N band 16#FF;
 rel(N) -> io:format("branch out of rel8 range: ~p~n", [N]), halt(1).
 
 bexp({const, N}, _) when is_integer(N), N =< 255 -> [?LIT8, N];
-bexp({const, N}, _) when is_integer(N) -> [?LIT16, N band 255, (N bsr 8) band 255];
+bexp({const, N}, _) when is_integer(N), N =< 65535 ->
+    [?LIT16, N band 255, (N bsr 8) band 255];
+bexp({const, N}, _) when is_integer(N) ->
+    [?DLIT, N band 255, (N bsr 8) band 255,
+	    (N bsr 16) band 255, (N bsr 24) band 255];
 bexp({const, A}, _) -> [?LIT8, {cconst, A}];
-bexp({var, N}, Env) -> [?LGET, maps:get(N, Env)];
-bexp({nd}, _) -> [?ND];
-bexp({nn}, _) -> [?NN];
-bexp({state, N}, _) ->
-    {leafn, I} = maps:get({state, N}, get(ni)),
-    [?NATIVEN, I];
+%% The same, said explicitly for a constant that does not fit a byte. Which it
+%% is cannot be worked out here -- the value lives in a C macro -- so the word
+%% says so, and asserts() checks the claim at compile time either way.
+bexp({const16, A}, _) -> [?LIT16, {cconst_lo, A}, {cconst_hi, A}];
+%% A WIDE local is two slots, and pushing it pushes both -- low first, so the
+%% high cell ends on top the way a double is held.
+bexp({var, N}, Env) ->
+    case get({w, N}) of
+	2 -> [?LGET, maps:get(N, Env), ?LGET, maps:get({hi, N}, Env)];
+	_ -> [?LGET, maps:get(N, Env)]
+    end;
+%% Shorthands for two state fields, not opcodes of their own: MC_ND used to be
+%% `state id 0` written into the machine, which is a hardcoded index into a
+%% GENERATED table -- it broke the moment the table stopped listing every field.
+bexp({nd}, _) -> [?ST, {sid, nd}];
+bexp({nn}, _) -> [?ST, {sid, nn}];
+bexp({state, N}, _) -> [?ST, {sid, N}];
+bexp({aget, A, E}, Env) -> bexp(E, Env) ++ [?AGET, {aid, A}];
 %%bexp({buf, E, F}, Env) ->
 %%    {leaf, I} = maps:get({buf, F}, get(ni)),
 %%    bexp(E, Env) ++ [?NATIVE, I];
@@ -446,12 +903,18 @@ bexp({state, N}, _) ->
 %% different function.
 bexp({index, E}, Env) -> bexp(E, Env) ++ [?LIT16, {cconst, 'INDEX_MASK_LO'},
 					  {cconst, 'INDEX_MASK_HI'}, ?AND];
-bexp({decl, E, F}, Env) -> bexp(E, Env) ++ [?DECL, {field, {$D,F}}];
-bexp({instr, E, F}, Env) -> bexp(E, Env) ++ [?INSTR, {field, {$I,F}}];
-bexp({buf, E, F}, Env) -> bexp(E, Env) ++ [?BUF, {field, {$B,F}}];
-bexp({view, E, F}, Env) -> bexp(E, Env) ++ [?VIEW, {field, {$V,F}}];
+bexp({decl, E, F}, Env)  -> fld_rd(decl,  $D, ?DECL,  ?DECL2,  E, F, Env);
+bexp({instr, E, F}, Env) -> fld_rd(instr, $I, ?INSTR, ?INSTR2, E, F, Env);
+bexp({buf, E, F}, Env)   -> fld_rd(buf,   $B, ?BUF,   ?BUF2,   E, F, Env);
+bexp({view, E, F}, Env)  -> fld_rd(view,  $V, ?VIEW,  ?VIEW2,  E, F, Env);
 
-bexp({op, Op, A, B}, Env) -> bexp(A, Env) ++ bexp(B, Env) ++ [bop(Op)];
+bexp({op, Op, A, B}, Env) ->
+    %% Either side wide makes the whole operation wide, and the narrow side is
+    %% widened to meet it.
+    case max(ewidth(A, Env), ewidth(B, Env)) of
+	1 -> bexp(A, Env) ++ bexp(B, Env) ++ [bop(Op)];
+	2 -> wide(A, Env, bexp(A, Env)) ++ wide(B, Env, bexp(B, Env)) ++ [dop(Op)]
+    end;
 %% Short-circuit: if the left is false the result is already on the stack as 0
 %% and the right is skipped. That is the whole reason andthen is its own node
 %% and not {op, and_, ...} -- the C back end needs && and this needs a jump.
@@ -480,12 +943,12 @@ bexp({call, F, As}, Env) ->
 	    Args ++ [?CALL, {wlo, F}, {whi, F}, {frame, get(self)}];
 	error ->
 	    case maps:find({nat, F}, get(ni)) of
-		{ok, {leaf, I}}  ->
+		{ok, {leaf, _}}  ->
 		    case As of
-			[] -> [?LIT8, 0, ?NATIVE, I];
-			_  -> Args ++ [?NATIVE, I]
+			[] -> [?LIT8, 0, ?NATIVE, {lname, "LW_", F}];
+			_  -> Args ++ [?NATIVE, {lname, "LW_", F}]
 		    end;
-		{ok, {leafn, I}} -> Args ++ [?NATIVEN, I];
+		{ok, {leafn, _}} -> Args ++ [?NATIVEN, {lname, "LN_", F}];
 		error ->
 		    io:format("~s is neither a word nor a declared native.~n"
 			      "  add {native, ~s, <args>, <ret>} to ~s~n",

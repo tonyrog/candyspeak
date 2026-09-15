@@ -5,6 +5,7 @@
 #include <stdarg.h>
 #include <ctype.h>
 #include "csp.h"
+#include "csp_words.h"
 #include "csp_compile.h"
 #include "csp_dump.h"
 #include "csp_print.h"

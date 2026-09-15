@@ -57,8 +57,6 @@ typedef enum {
     MC_RAT    = 23,   // copy top of return stack
     MC_DECL   = 24,   // <fld>    TOS = field fld of declaration TOS
     MC_INSTR  = 25,   // <fld>    TOS = field fld of instruction TOS
-    MC_ND     = 26,   // push the declaration count
-    MC_NN     = 27,   // push the instruction count
     MC_NATIVE = 28,   // <n>      call leaf n: TOS in, TOS out
     MC_NATIVEN= 29,   // <n>      call stack-leaf n: it takes what it wants
     MC_LGET   = 30,   // <k>      push local k
@@ -66,6 +64,57 @@ typedef enum {
     MC_BUF    = 32,   // <fld>    TOS = field fld of buf TOS
     MC_ST     = 33,   // <fld>    TOS = field slf of state TOS
     MC_VIEW   = 34,   // <fld>    TOS = field fld of view TOS    
+    // ---- DOUBLES -------------------------------------------------------
+    //
+    // A double is TWO CELLS with the MOST SIGNIFICANT on top, which is what
+    // Forth does and what makes the carry algorithms read the way the textbook
+    // writes them. sp[0] is the high half, sp[1] the low.
+    //
+    // Separate opcodes rather than letting MC_DECL push one cell or two
+    // depending on the field: the stack effect has to be readable from the
+    // bytecode, not from whatever utils/layout.terms says today.
+    MC_DECL2  = 35,   // <fld>    TOS = declaration index -> wide field
+    MC_INSTR2 = 36,   // <fld>
+    MC_BUF2   = 37,   // <fld>
+    MC_VIEW2  = 38,   // <fld>
+    MC_DLIT   = 39,   // <b0><b1><b2><b3>  push a 32-bit literal
+    MC_S2D    = 40,   // widen the top cell to a double (zero-extended)
+    MC_DDROP  = 41,
+    MC_DADD   = 42,   // ( dl dh el eh -- sl sh )
+    MC_DSUB   = 43,
+    MC_DEQ    = 44,   // two doubles -> ONE cell, 1 or 0
+    MC_DLT    = 45,   // unsigned, like the cell
+
+    // WRITES. `( v i -- )` and `( lo hi i -- )` for a double: the value goes
+    // down first and the index on top, which is Forth's order for `!` and the
+    // order a generated expression falls out in anyway.
+    //
+    // A SECOND set of hooks, not the read ones. A read may come from the decl
+    // cache -- a RAM copy of something in flash -- and writing there would
+    // change a copy that the next cache miss throws away, silently. The write
+    // hooks reach ram_decl_at/ram_instr_at and refuse an index below the ROM
+    // base, which is the only place a write can legally land.
+    MC_DECLS  = 46,   // <fld>
+    MC_INSTRS = 47,   // <fld>
+    MC_BUFS   = 48,   // <fld>
+    MC_VIEWS  = 49,   // <fld>
+    MC_DECLS2 = 50,   // <fld>  ( lo hi i -- )
+    MC_INSTRS2= 51,   // <fld>
+    MC_BUFS2  = 52,   // <fld>
+    MC_VIEWS2 = 53,   // <fld>
+    MC_STS    = 54,   // <sid>  ( v -- )  a runtime-state field
+
+    // A RUNTIME TABLE. st->io[], st->offs[], st->object[] and the rest are
+    // where most of what the runtime does actually lives, and a word could not
+    // reach any of them. Indexed like a state field is named: the id says WHICH
+    // table, the top of the stack says which element.
+    //
+    // The BOUND belongs to the table, not to the caller. Every one of them has
+    // a count beside it in csp_rt_t and the generated accessor checks against
+    // it, so a word cannot read past a table the way C could -- reading out of
+    // range answers zero rather than whatever follows in the arena.
+    MC_AGET   = 55,   // <aid>  ( i -- v )
+    MC_ASET   = 56,   // <aid>  ( v i -- )
     MC_NOPCODE
 } mc_op_t;
 
@@ -100,11 +149,19 @@ typedef mc_cell_t* (*mc_leafn_t)(void* ctx, mc_cell_t* sp);
 // rows are written by hand and are wrong the moment a width in csp.h changes.
 // tests/mcsp.c writes each field through the C struct and reads it back through
 // its row; that round trip is the only thing keeping them honest.
+// BYTE-oriented, not word-oriented. Both can name the same bit, but the word
+// form made the layout obey the reader: a 32-bit field had to start on a
+// multiple of four, and a descriptor always read four bytes whether the record
+// had them or not -- `buf` in a six-byte csp_view_t read two bytes past the
+// end. A byte offset puts the constraint where it belongs (bit + bits <= 32,
+// which a byte-aligned field satisfies by construction) and lets the reader
+// touch only the bytes the field spans. The common case -- byte-aligned, eight
+// bits or fewer -- is then one load and a mask.
 typedef struct {
-    uint8_t word;    // which 32-bit word of the record
-    uint8_t shift;   // bit position within it
-    uint8_t bits;    // width, 1..16 (a cell is 16 bits -- wider fields need
-                     // their own word, not a truncation nobody sees)
+    uint8_t byte;    // byte offset into the record
+    uint8_t bit;     // bit position within that byte, 0..7
+    uint8_t bits;    // width, 1..32 (a cell is 16 bits, so MC_DECL and friends
+                     // refuse anything wider; the double opcodes take it)
 } mc_field_t;
 
 // Field ids for MC_DECL are GENERATED: gen/csp_layout.h carries the MF_* enum
@@ -114,11 +171,33 @@ typedef struct {
 // size so this header does not have to pull the generated one in.
 extern const mc_field_t mc_decl_fields[];
 extern const uint8_t    mc_decl_nfield;
+extern const uint8_t    mc_decl_ndouble;
+extern const mc_field_t mc_instr_fields[];
+extern const uint8_t    mc_instr_nfield;
+extern const uint8_t    mc_instr_ndouble;
+extern const mc_field_t mc_buf_fields[];
+extern const uint8_t    mc_buf_nfield;
+extern const uint8_t    mc_buf_ndouble;
+extern const mc_field_t mc_view_fields[];
+extern const uint8_t    mc_view_nfield;
+extern const uint8_t    mc_view_ndouble;
 
 // Read one field out of a record already in RAM. Pure, and deliberately so:
 // this is the part that can be wrong in a way nothing else notices, and a pure
 // function is one a test can hammer without a runtime around it.
 extern mc_cell_t mc_field_get(const void* rec, const mc_field_t* f);
+
+// The same field, written. Read-modify-write over the bytes the field spans
+// and nothing else -- a neighbour sharing a byte must come back unchanged,
+// which is what tests/mcsp.c checks by writing every field of a record in turn
+// and reading all the others back.
+extern void mc_field_set(void* rec, const mc_field_t* f, mc_cell_t v);
+
+// A field WIDER than a cell has no reader of its own: it is two adjacent rows,
+// low half then high, and MC_DECL2 reads tab[b] and tab[b+1]. Those rows come
+// FIRST in each table, so mc_*_ndouble is the line between what may be read as
+// a cell and what may not -- checked in both directions, which a width test in
+// the row could only do in one.
 
 // Everything the machine needs. The caller owns the stacks, so a port decides
 // what it can afford -- and on a board where the pool and the stack are the
@@ -165,6 +244,21 @@ typedef struct {
 // dereferencing nothing. Indirect so a test can drive the machine without the
 // runtime linked behind it.
 extern const void* (*mc_decl_hook)(void* ctx, mc_cell_t i);
+// The WRITABLE record, which is never the one a read may hand back: see the
+// note on MC_DECLS. NULL where the index names something that cannot be
+// written -- a ROM declaration, or nothing at all.
+extern void* (*mc_decl_wr)(void* ctx, mc_cell_t i);
+extern void* (*mc_instr_wr)(void* ctx, mc_cell_t i);
+extern void* (*mc_buf_wr)(void* ctx, mc_cell_t i);
+extern void* (*mc_view_wr)(void* ctx, mc_cell_t i);
+extern void  (*mc_state_set)(void* ctx, mc_cell_t i, mc_cell_t v);
+
+// The runtime's tables, by id. Bounds live in the generated accessors these
+// call, so an out-of-range read is zero and an out-of-range write is dropped --
+// there is no pointer for a word to get wrong.
+extern mc_cell_t (*mc_array_hook)(void* ctx, mc_cell_t id, mc_cell_t ix);
+extern void      (*mc_array_set)(void* ctx, mc_cell_t id, mc_cell_t ix,
+				 mc_cell_t v);
 extern const void* (*mc_instr_hook)(void* ctx, mc_cell_t i);
 extern const void* (*mc_buf_hook)(void* ctx, mc_cell_t i);
 extern const void* (*mc_view_hook)(void* ctx, mc_cell_t i);

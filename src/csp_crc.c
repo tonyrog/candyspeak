@@ -10,6 +10,7 @@
 // header was folded with, so this is not a place to be clever.
 
 #include "csp.h"
+#include "csp_words.h"
 
 // CRC-16/CCITT, incremental: folds n bytes into `crc` and returns it, so a
 // caller can chain several regions (str, then decls, then instrs, ...). is_rom

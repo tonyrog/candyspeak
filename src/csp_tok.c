@@ -18,6 +18,7 @@
 #include <string.h>
 
 #include "csp.h"
+#include "csp_words.h"
 #include "csp_strings.h"   // the operator spellings
 #include "csp_tok.h"
 

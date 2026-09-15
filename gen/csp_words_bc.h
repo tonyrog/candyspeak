@@ -6,83 +6,272 @@
 // The same words as bytecode. Locals are SLOTS, not stack juggling: the
 // generator assigns them, so nothing here has to hold a variable with
 // TOR/RAT the way hand-encoding does.
-#define CSP_W_IS_LOCAL_ENTRY 0
-#define CSP_W_LOCAL_NUMBER_ENTRY 34
-#define CSP_W_DECL_KIND_ENTRY 161
-#define CSP_W_LEAF_MARK_ENTRY 227
-#define CSP_W_BUF_OWNER_TAG_ENTRY 249
-#define CSP_WORDS_BC_LEN 280
+#define CSP_W_DTYPE_ENTRY 0
+#define CSP_W_IS_LOCAL_ENTRY 25
+#define CSP_W_LOCAL_NUMBER_ENTRY 49
+#define CSP_W_DECL_KIND_ENTRY 176
+#define CSP_W_LEAF_MARK_ENTRY 236
+#define CSP_W_BUF_OWNER_TAG_ENTRY 258
+#define CSP_W_BUF_IS_XREF_ENTRY 289
+#define CSP_W_BUF_STAMP_ENTRY 310
+#define CSP_W_STR_SEG_STAMP_ENTRY 348
+#define CSP_W_ARRAY_LEN_ENTRY 393
+#define CSP_W_AT_GATE_ENTRY 454
+#define CSP_W_AT_INSTATE_ENTRY 480
+#define CSP_W_GATE_SKIP_ENTRY 503
+#define CSP_W_GATE_IS_IN_ENTRY 539
+#define CSP_W_GATE_END_ENTRY 558
+#define CSP_W_IS_GATE_LD_ENTRY 584
+#define CSP_W_BODY_IMPLICIT_ENTRY 632
+#define CSP_W_LEAF_BUF_ENTRY 703
+#define CSP_W_BUF_OR_FLAGS_ENTRY 712
+#define CSP_W_BUF_AND_FLAGS_ENTRY 734
+#define CSP_W_DVT_ENTRY 756
+#define CSP_W_CFG_VT_ENTRY 781
+#define CSP_W_LEAF_CFG_VT_ENTRY 867
+#define CSP_W_BUF_OWNER_ENTRY 886
+#define CSP_W_BUF_OF_DECL_ENTRY 913
+#define CSP_W_NEXT_OF_TYPE_ENTRY 953
+#define CSP_W_COUNT_OF_TYPE_ENTRY 993
+#define CSP_W_FIND_OBJECT_ENTRY 1041
+#define CSP_W_IOP_ENTRY 1091
+#define CSP_W_INSTR_NEXT_ENTRY 1108
+#define CSP_W_LEAF_PORT_ENTRY 1138
+#define CSP_W_LEAF_PIN_ENTRY 1156
+#define CSP_W_LIST_PIN_SPEC_ENTRY 1174
+#define CSP_W_CTX_SET_W_ENTRY 1390
+#define CSP_W_IO_AT_W_ENTRY 1405
+#define CSP_W_TIMER_AT_W_ENTRY 1421
+#define CSP_W_ST_INDEX_OBJ_ENTRY 1437
+#define CSP_W_OBJECT_DECL_ENTRY 1449
+#define CSP_WORDS_BC_LEN 1470
 
 static mc_cell_t lw_csp_tag(void* c_, mc_cell_t t_)
 {
+    (void)c_;
     return (mc_cell_t)csp_tag((csp_rt_t*)c_, t_);
 }
-static mc_cell_t* lst_nd(void* c_, mc_cell_t* sp_)
+static mc_cell_t lw_st_index(void* c_, mc_cell_t t_)
 {
-    *--sp_ = (mc_cell_t)((csp_rt_t*)c_)->ps.nd;
-    return sp_;
+    (void)c_;
+    return (mc_cell_t)st_index((csp_rt_t*)c_, t_);
 }
-static mc_cell_t* lst_nn(void* c_, mc_cell_t* sp_)
+static mc_cell_t lw_csp_print_char(void* c_, mc_cell_t t_)
 {
-    *--sp_ = (mc_cell_t)((csp_rt_t*)c_)->ps.nn;
-    return sp_;
+    (void)c_;
+    return (mc_cell_t)csp_print_char(t_);
 }
-static mc_cell_t* lst_nq(void* c_, mc_cell_t* sp_)
+static mc_cell_t lw_csp_print_uint(void* c_, mc_cell_t t_)
 {
-    *--sp_ = (mc_cell_t)((csp_rt_t*)c_)->ps.nq;
-    return sp_;
+    (void)c_;
+    return (mc_cell_t)csp_print_uint(t_);
 }
-static mc_cell_t* lst_nbuf(void* c_, mc_cell_t* sp_)
+typedef enum {
+    MFS_ND = 0,
+    MFS_NN = 1,
+    MFS_ROM_NN = 2,
+    MFS_NBUF = 3,
+    MFS_CUR = 4,
+    MFS_CBASE = 5,
+    MFS_GSX = 6,
+    MFS_OBJ_CAP = 7,
+    MFS_NFIELD = 8
+} mfs_t;
+
+// 8 of 22 state fields are reached by a word.
+static mc_cell_t csp_word_state(void* c_, mc_cell_t i_)
 {
-    *--sp_ = (mc_cell_t)((csp_rt_t*)c_)->nbuf;
-    return sp_;
-}
-static mc_cell_t* lst_cur(void* c_, mc_cell_t* sp_)
-{
-    *--sp_ = (mc_cell_t)((csp_rt_t*)c_)->cur;
-    return sp_;
+    switch (i_) {
+    case MFS_ND: return (mc_cell_t)((csp_rt_t*)c_)->ps.nd;
+    case MFS_NN: return (mc_cell_t)((csp_rt_t*)c_)->ps.nn;
+    case MFS_ROM_NN: return (mc_cell_t)((csp_rt_t*)c_)->rom_nn;
+    case MFS_NBUF: return (mc_cell_t)((csp_rt_t*)c_)->nbuf;
+    case MFS_GSX: return (mc_cell_t)((csp_rt_t*)c_)->gsx;
+    case MFS_OBJ_CAP: return (mc_cell_t)((csp_rt_t*)c_)->obj_cap;
+    default: return 0;
+    }
 }
 
-static const mc_leaf_t csp_word_leaves[] = {
+// Its own switch rather than a table of member offsets: they are
+// different widths and different types, and offsetof with a cast is how
+// a two-byte field gets a four-byte store.
+static void csp_word_state_set(void* c_, mc_cell_t i_, mc_cell_t v_)
+{
+    switch (i_) {
+    case MFS_CUR: ((csp_rt_t*)c_)->cur = (uint8_t)v_; break;
+    case MFS_CBASE: ((csp_rt_t*)c_)->cbase = (index_t)v_; break;
+    default: break;
+    }
+}
+
+#define LW_CSP_TAG 0
+#define LW_ST_INDEX 1
+#define LW_CSP_PRINT_CHAR 2
+#define LW_CSP_PRINT_UINT 3
+
+
+static const mc_leaf_t csp_word_leaves[] RODATA = {
     lw_csp_tag,
+    lw_st_index,
+    lw_csp_print_char,
+    lw_csp_print_uint,
 };
-#define csp_word_leaves_N  1
+#define csp_word_leaves_N  4
 
-static const mc_leafn_t csp_word_leavesn[] = {
-    lst_nd,
-    lst_nn,
-    lst_nq,
-    lst_nbuf,
-    lst_cur,
-};
-#define csp_word_leavesn_N  5
+// no csp_word_leavesn
+#define csp_word_leavesn     ((const mc_leafn_t*)0)
+#define csp_word_leavesn_N  0
 
-#define CSP_W_IS_LOCAL_FRAME 2
+typedef enum {
+    MFA_IO = 0,
+    MFA_IO_OBJ = 1,
+    MFA_TIMER = 2,
+    MFA_TIMER_OBJ = 3,
+    MFA_OFFS = 4,
+    MFA_OBJECT = 5,
+    MFA_NTABLE = 6
+} mfa_t;
+
+// 6 of 6 tables are reached by a word.
+static mc_cell_t csp_word_array(void* c_, mc_cell_t id_, mc_cell_t i_)
+{
+    switch (id_) {
+    case MFA_IO: return (mc_cell_t)csp_arr_io((csp_rt_t*)c_, (index_t)i_);
+    case MFA_IO_OBJ: return (mc_cell_t)csp_arr_io_obj((csp_rt_t*)c_, (index_t)i_);
+    case MFA_TIMER: return (mc_cell_t)csp_arr_timer((csp_rt_t*)c_, (index_t)i_);
+    case MFA_TIMER_OBJ: return (mc_cell_t)csp_arr_timer_obj((csp_rt_t*)c_, (index_t)i_);
+    case MFA_OFFS: return (mc_cell_t)csp_arr_offs((csp_rt_t*)c_, (index_t)i_);
+    case MFA_OBJECT: return (mc_cell_t)csp_arr_object((csp_rt_t*)c_, (index_t)i_);
+    default: return 0;
+    }
+}
+
+static void csp_word_array_set(void* c_, mc_cell_t id_, mc_cell_t i_,
+			       mc_cell_t v_)
+{
+    switch (id_) {
+    case MFA_IO: csp_arr_set_io((csp_rt_t*)c_, (index_t)i_, (index_t)v_); break;
+    case MFA_IO_OBJ: csp_arr_set_io_obj((csp_rt_t*)c_, (index_t)i_, (uint8_t)v_); break;
+    case MFA_TIMER: csp_arr_set_timer((csp_rt_t*)c_, (index_t)i_, (index_t)v_); break;
+    case MFA_TIMER_OBJ: csp_arr_set_timer_obj((csp_rt_t*)c_, (index_t)i_, (uint8_t)v_); break;
+    case MFA_OFFS: csp_arr_set_offs((csp_rt_t*)c_, (index_t)i_, (index_t)v_); break;
+    case MFA_OBJECT: csp_arr_set_object((csp_rt_t*)c_, (index_t)i_, (index_t)v_); break;
+    default: break;
+    }
+}
+
+#define CSP_W_DTYPE_FRAME 2
+#define CSP_W_IS_LOCAL_FRAME 1
 #define CSP_W_LOCAL_NUMBER_FRAME 6
-#define CSP_W_DECL_KIND_FRAME 4
+#define CSP_W_DECL_KIND_FRAME 3
 #define CSP_W_LEAF_MARK_FRAME 2
 #define CSP_W_BUF_OWNER_TAG_FRAME 3
+#define CSP_W_BUF_IS_XREF_FRAME 3
+#define CSP_W_BUF_STAMP_FRAME 1
+#define CSP_W_STR_SEG_STAMP_FRAME 2
+#define CSP_W_ARRAY_LEN_FRAME 3
+#define CSP_W_AT_GATE_FRAME 1
+#define CSP_W_AT_INSTATE_FRAME 2
+#define CSP_W_GATE_SKIP_FRAME 2
+#define CSP_W_GATE_IS_IN_FRAME 2
+#define CSP_W_GATE_END_FRAME 3
+#define CSP_W_IS_GATE_LD_FRAME 1
+#define CSP_W_BODY_IMPLICIT_FRAME 3
+#define CSP_W_LEAF_BUF_FRAME 1
+#define CSP_W_BUF_OR_FLAGS_FRAME 3
+#define CSP_W_BUF_AND_FLAGS_FRAME 3
+#define CSP_W_DVT_FRAME 2
+#define CSP_W_CFG_VT_FRAME 4
+#define CSP_W_LEAF_CFG_VT_FRAME 1
+#define CSP_W_BUF_OWNER_FRAME 2
+#define CSP_W_BUF_OF_DECL_FRAME 2
+#define CSP_W_NEXT_OF_TYPE_FRAME 3
+#define CSP_W_COUNT_OF_TYPE_FRAME 3
+#define CSP_W_FIND_OBJECT_FRAME 2
+#define CSP_W_IOP_FRAME 1
+#define CSP_W_INSTR_NEXT_FRAME 1
+#define CSP_W_LEAF_PORT_FRAME 2
+#define CSP_W_LEAF_PIN_FRAME 2
+#define CSP_W_LIST_PIN_SPEC_FRAME 9
+#define CSP_W_CTX_SET_W_FRAME 1
+#define CSP_W_IO_AT_W_FRAME 1
+#define CSP_W_TIMER_AT_W_FRAME 1
+#define CSP_W_ST_INDEX_OBJ_FRAME 2
+#define CSP_W_OBJECT_DECL_FRAME 1
 
+CSP_STATIC_ASSERT((CFG_SIGNED) <= 255,
+		  "CFG_SIGNED does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((CSP_STR_SEG_MASK) <= 255,
+		  "CSP_STR_SEG_MASK does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((DECL_ANALOG) <= 255,
+		  "DECL_ANALOG does not fit a micro-csp LIT8 operand");
 CSP_STATIC_ASSERT((DECL_CONSTANT) <= 255,
 		  "DECL_CONSTANT does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((DECL_DIGITAL) <= 255,
+		  "DECL_DIGITAL does not fit a micro-csp LIT8 operand");
 CSP_STATIC_ASSERT((DECL_END) <= 255,
 		  "DECL_END does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((DECL_FIELD) <= 255,
+		  "DECL_FIELD does not fit a micro-csp LIT8 operand");
 CSP_STATIC_ASSERT((DECL_MODULE) <= 255,
 		  "DECL_MODULE does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((DECL_NONE) <= 255,
+		  "DECL_NONE does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((DECL_OBJECT) <= 255,
+		  "DECL_OBJECT does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((DECL_TIMER) <= 255,
+		  "DECL_TIMER does not fit a micro-csp LIT8 operand");
 CSP_STATIC_ASSERT((DECL_VARIABLE) <= 255,
 		  "DECL_VARIABLE does not fit a micro-csp LIT8 operand");
 CSP_STATIC_ASSERT((INDEX_MASK_HI) <= 255,
 		  "INDEX_MASK_HI does not fit a micro-csp LIT8 operand");
 CSP_STATIC_ASSERT((INDEX_MASK_LO) <= 255,
 		  "INDEX_MASK_LO does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((OP_ENTER) <= 255,
+		  "OP_ENTER does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((OP_INSTATE) <= 255,
+		  "OP_INSTATE does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((OP_LD) <= 255,
+		  "OP_LD does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((OP_NEXT) <= 255,
+		  "OP_NEXT does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((OP_NINSTATE) <= 255,
+		  "OP_NINSTATE does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((OP_NOP) <= 255,
+		  "OP_NOP does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((OP_RULE) <= 255,
+		  "OP_RULE does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((OP_SEGMENT) <= 255,
+		  "OP_SEGMENT does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((TYPE_MASK) <= 255,
+		  "TYPE_MASK does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((V_ANALOG) <= 255,
+		  "V_ANALOG does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((V_DIGITAL) <= 255,
+		  "V_DIGITAL does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((V_FIELD) <= 255,
+		  "V_FIELD does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((V_TIMER) <= 255,
+		  "V_TIMER does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((V_UNSIGNED) <= 255,
+		  "V_UNSIGNED does not fit a micro-csp LIT8 operand");
+CSP_STATIC_ASSERT((BAD_INDEX) <= 65535,
+		  "BAD_INDEX does not fit a micro-csp LIT16 operand");
 
-static const uint8_t csp_words_bc[] = {
-// CSP_W_IS_LOCAL_ENTRY
+// In FLASH: on AVR a const array without RODATA is .rodata, which the
+// linker puts inside .data and startup copies into RAM -- held there
+// for the life of the program, for a table that is never written. The
+// machine reads it with ro_byte, so it never has to be in RAM at all.
+static const uint8_t csp_words_bc[] RODATA = {
+// CSP_W_DTYPE_ENTRY
 MC_LSET,0,MC_LGET,0,MC_LIT16,INDEX_MASK_LO,INDEX_MASK_HI,MC_AND,
-MC_LSET,1,MC_LGET,1,MC_ND,MC_LT,MC_DUP,MC_JZ,
-16,MC_DROP,MC_LGET,1,MC_DECL,MFD_TYPE,MC_LIT8,DECL_VARIABLE,
-MC_EQ,MC_DUP,MC_JZ,5,MC_DROP,MC_LGET,1,MC_DECL,
-MFD_LOCAL,MC_EXIT,
+MC_LSET,1,MC_LGET,1,MC_ST,MFS_ND,MC_LT,MC_JZ,
+5,MC_LGET,1,MC_DECL,MFD_TYPE,MC_EXIT,MC_LIT8,DECL_NONE,
+MC_EXIT,
+// CSP_W_IS_LOCAL_ENTRY
+MC_LSET,0,MC_LGET,0,MC_CALL,0,0,1,
+MC_LIT8,DECL_VARIABLE,MC_EQ,MC_DUP,MC_JZ,9,MC_DROP,MC_LGET,
+0,MC_LIT16,INDEX_MASK_LO,INDEX_MASK_HI,MC_AND,MC_DECL,MFD_LOCAL,MC_EXIT,
 // CSP_W_LOCAL_NUMBER_ENTRY
 MC_LSET,0,MC_LGET,0,MC_LIT16,INDEX_MASK_LO,INDEX_MASK_HI,MC_AND,
 MC_LSET,1,MC_LIT8,0,MC_LSET,2,MC_LGET,1,
@@ -101,23 +290,435 @@ MC_JZ,5,MC_DROP,MC_LGET,3,MC_DECL,MFD_LOCAL,MC_JZ,
 MC_LGET,3,MC_LIT8,1,MC_ADD,MC_LSET,3,MC_JMP,
 216,MC_LGET,4,MC_LIT8,1,MC_ADD,MC_EXIT,
 // CSP_W_DECL_KIND_ENTRY
-MC_LSET,0,MC_LGET,0,MC_LIT16,INDEX_MASK_LO,INDEX_MASK_HI,MC_AND,
-MC_LSET,1,MC_LIT8,0,MC_LSET,2,MC_LGET,1,
-MC_DECL,MFD_TYPE,MC_LSET,3,MC_LGET,3,MC_LIT8,DECL_VARIABLE,
-MC_EQ,MC_JZ,6,MC_LIT8,1,MC_LSET,2,MC_JMP,
-30,MC_LGET,3,MC_LIT8,DECL_CONSTANT,MC_EQ,MC_JZ,6,
-MC_LIT8,2,MC_LSET,2,MC_JMP,17,MC_LGET,3,
-MC_LIT8,DECL_MODULE,MC_EQ,MC_JZ,6,MC_LIT8,3,MC_LSET,
-2,MC_JMP,4,MC_LIT8,9,MC_LSET,2,MC_LGET,
-2,MC_EXIT,
+MC_LSET,0,MC_LIT8,0,MC_LSET,1,MC_LGET,0,
+MC_CALL,0,0,3,MC_LSET,2,MC_LGET,2,
+MC_LIT8,DECL_VARIABLE,MC_EQ,MC_JZ,6,MC_LIT8,1,MC_LSET,
+1,MC_JMP,30,MC_LGET,2,MC_LIT8,DECL_CONSTANT,MC_EQ,
+MC_JZ,6,MC_LIT8,2,MC_LSET,1,MC_JMP,17,
+MC_LGET,2,MC_LIT8,DECL_MODULE,MC_EQ,MC_JZ,6,MC_LIT8,
+3,MC_LSET,1,MC_JMP,4,MC_LIT8,9,MC_LSET,
+1,MC_LGET,1,MC_EXIT,
 // CSP_W_LEAF_MARK_ENTRY
-MC_LSET,0,MC_LGET,0,MC_NATIVE,0,MC_LSET,1,
-MC_LGET,0,MC_CALL,0,0,2,MC_JZ,3,
+MC_LSET,0,MC_LGET,0,MC_NATIVE,LW_CSP_TAG,MC_LSET,1,
+MC_LGET,0,MC_CALL,25,0,2,MC_JZ,3,
 MC_LIT8,36,MC_EXIT,MC_LGET,1,MC_EXIT,
 // CSP_W_BUF_OWNER_TAG_ENTRY
-MC_LSET,0,MC_NATIVEN,3,MC_LSET,1,MC_LGET,0,
+MC_LSET,0,MC_ST,MFS_NBUF,MC_LSET,1,MC_LGET,0,
 MC_LGET,1,MC_LT,MC_JZ,15,MC_LGET,0,MC_BUF,
 MFB_OWNER,MC_LIT16,INDEX_MASK_LO,INDEX_MASK_HI,MC_AND,MC_LSET,2,MC_LGET,
-2,MC_NATIVE,0,MC_EXIT,MC_LIT8,63,MC_EXIT,};
+2,MC_NATIVE,LW_CSP_TAG,MC_EXIT,MC_LIT8,63,MC_EXIT,
+// CSP_W_BUF_IS_XREF_ENTRY
+MC_LSET,0,MC_DLIT,239,190,173,222,MC_LSET,
+2,MC_LSET,1,MC_LGET,0,MC_BUF2,MFB_XREF,MC_LGET,
+1,MC_LGET,2,MC_DEQ,MC_EXIT,
+// CSP_W_BUF_STAMP_ENTRY
+MC_LSET,0,MC_LGET,0,MC_ST,MFS_NBUF,MC_LT,MC_JZ,
+26,MC_LIT8,3,MC_LGET,0,MC_BUFS,MFB_DIR,MC_DLIT,
+239,190,173,222,MC_LGET,0,MC_BUFS2,MFB_XREF,
+MC_LGET,0,MC_LGET,0,MC_BUFS,MFB_OWNER,MC_LGET,0,
+MC_BUF,MFB_TRANSPORT,MC_EXIT,MC_LIT8,255,MC_EXIT,
+// CSP_W_STR_SEG_STAMP_ENTRY
+MC_LSET,1,MC_LSET,0,MC_LGET,0,MC_LIT16,(uint8_t)((BAD_INDEX) & 0xFF),
+(uint8_t)(((BAD_INDEX) >> 8) & 0xFF),MC_NE,MC_DUP,MC_JZ,9,MC_DROP,MC_LGET,0,
+MC_ST,MFS_ROM_NN,MC_LT,MC_LIT8,0,MC_EQ,MC_JZ,18,
+MC_LGET,1,MC_LIT8,1,MC_SUB,MC_LIT8,CSP_STR_SEG_MASK,MC_AND,
+MC_LIT8,1,MC_ADD,MC_LGET,0,MC_INSTRS,MFI_SG_USED,MC_LIT8,
+1,MC_EXIT,MC_LIT8,0,MC_EXIT,
+// CSP_W_ARRAY_LEN_ENTRY
+MC_LSET,0,MC_LGET,0,MC_LIT16,INDEX_MASK_LO,INDEX_MASK_HI,MC_AND,
+MC_LIT8,1,MC_ADD,MC_LSET,1,MC_LIT8,1,MC_LSET,
+2,MC_LGET,1,MC_ST,MFS_ND,MC_LT,MC_DUP,MC_JZ,
+15,MC_DROP,MC_LGET,2,MC_LIT16,255,255,MC_LT,
+MC_DUP,MC_JZ,5,MC_DROP,MC_LGET,1,MC_DECL,MFD_CONT,
+MC_JZ,16,MC_LGET,2,MC_LIT8,1,MC_ADD,MC_LSET,
+2,MC_LGET,1,MC_LIT8,1,MC_ADD,MC_LSET,1,
+MC_JMP,215,MC_LGET,2,MC_EXIT,
+// CSP_W_AT_GATE_ENTRY
+MC_LSET,0,MC_LGET,0,MC_CALL,67,4,1,
+MC_LIT8,OP_INSTATE,MC_EQ,MC_DUP,MC_ZEQ,MC_JZ,10,MC_DROP,
+MC_LGET,0,MC_CALL,67,4,1,MC_LIT8,OP_NINSTATE,
+MC_EQ,MC_EXIT,
+// CSP_W_AT_INSTATE_ENTRY
+MC_LSET,1,MC_LSET,0,MC_LGET,0,MC_LGET,1,
+MC_LT,MC_DUP,MC_JZ,10,MC_DROP,MC_LGET,0,MC_CALL,
+67,4,2,MC_LIT8,OP_INSTATE,MC_EQ,MC_EXIT,
+// CSP_W_GATE_SKIP_ENTRY
+MC_LSET,1,MC_LSET,0,MC_LGET,0,MC_LGET,1,
+MC_LT,MC_DUP,MC_JZ,10,MC_DROP,MC_LGET,0,MC_CALL,
+67,4,2,MC_LIT8,OP_NINSTATE,MC_EQ,MC_JZ,9,
+MC_LGET,0,MC_LIT8,1,MC_ADD,MC_LSET,0,MC_JMP,
+227,MC_LGET,0,MC_EXIT,
+// CSP_W_GATE_IS_IN_ENTRY
+MC_LSET,1,MC_LSET,0,MC_LGET,0,MC_LGET,1,
+MC_CALL,247,1,2,MC_LGET,1,MC_CALL,224,
+1,2,MC_EXIT,
+// CSP_W_GATE_END_ENTRY
+MC_LSET,1,MC_LSET,0,MC_LGET,0,MC_LGET,1,
+MC_CALL,247,1,3,MC_LSET,2,MC_LGET,2,
+MC_LGET,2,MC_LGET,1,MC_CALL,224,1,3,
+MC_ADD,MC_EXIT,
+// CSP_W_IS_GATE_LD_ENTRY
+MC_LSET,0,MC_LGET,0,MC_CALL,67,4,1,
+MC_LIT8,OP_LD,MC_EQ,MC_DUP,MC_JZ,8,MC_DROP,MC_LGET,
+0,MC_INSTR,MFI_M_MEM,MC_ST,MFS_GSX,MC_EQ,MC_DUP,MC_JZ,
+22,MC_DROP,MC_LGET,0,MC_LIT8,1,MC_ADD,MC_ST,
+MFS_NN,MC_LT,MC_DUP,MC_JZ,10,MC_DROP,MC_LGET,0,
+MC_LIT8,1,MC_ADD,MC_CALL,198,1,1,MC_EXIT,
+// CSP_W_BODY_IMPLICIT_ENTRY
+MC_LSET,1,MC_LSET,0,MC_LGET,0,MC_LSET,2,
+MC_LGET,2,MC_LGET,1,MC_LT,MC_JZ,53,MC_LGET,
+2,MC_CALL,67,4,3,MC_LIT8,OP_RULE,MC_EQ,
+MC_JZ,5,MC_LGET,2,MC_INSTR,MFI_R_IMPLICIT,MC_EXIT,MC_LGET,
+2,MC_CALL,67,4,3,MC_LIT8,OP_NEXT,MC_EQ,
+MC_DUP,MC_ZEQ,MC_JZ,10,MC_DROP,MC_LGET,2,MC_CALL,
+67,4,3,MC_LIT8,OP_ENTER,MC_EQ,MC_JZ,3,
+MC_LIT8,0,MC_EXIT,MC_LGET,2,MC_LIT8,1,MC_ADD,
+MC_LSET,2,MC_JMP,196,MC_LIT8,0,MC_EXIT,
+// CSP_W_LEAF_BUF_ENTRY
+MC_LSET,0,MC_LGET,0,MC_NATIVE,LW_ST_INDEX,MC_VIEW,MFV_BUF,
+MC_EXIT,
+// CSP_W_BUF_OR_FLAGS_ENTRY
+MC_LSET,1,MC_LSET,0,MC_LGET,0,MC_BUF,MFB_FLAGS,
+MC_LGET,1,MC_OR,MC_LSET,2,MC_LGET,2,MC_LGET,
+0,MC_BUFS,MFB_FLAGS,MC_LGET,2,MC_EXIT,
+// CSP_W_BUF_AND_FLAGS_ENTRY
+MC_LSET,1,MC_LSET,0,MC_LGET,0,MC_BUF,MFB_FLAGS,
+MC_LGET,1,MC_AND,MC_LSET,2,MC_LGET,2,MC_LGET,
+0,MC_BUFS,MFB_FLAGS,MC_LGET,2,MC_EXIT,
+// CSP_W_DVT_ENTRY
+MC_LSET,0,MC_LGET,0,MC_LIT16,INDEX_MASK_LO,INDEX_MASK_HI,MC_AND,
+MC_LSET,1,MC_LGET,1,MC_ST,MFS_ND,MC_LT,MC_JZ,
+5,MC_LGET,1,MC_DECL,MFD_VT,MC_EXIT,MC_LIT8,0,
+MC_EXIT,
+// CSP_W_CFG_VT_ENTRY
+MC_LSET,1,MC_LSET,0,MC_LGET,1,MC_LSET,2,
+MC_LGET,0,MC_LSET,3,MC_LGET,3,MC_LIT8,DECL_DIGITAL,
+MC_EQ,MC_JZ,6,MC_LIT8,V_DIGITAL,MC_LSET,2,MC_JMP,
+58,MC_LGET,3,MC_LIT8,DECL_TIMER,MC_EQ,MC_JZ,6,
+MC_LIT8,V_TIMER,MC_LSET,2,MC_JMP,45,MC_LGET,3,
+MC_LIT8,DECL_FIELD,MC_EQ,MC_JZ,6,MC_LIT8,V_FIELD,MC_LSET,
+2,MC_JMP,32,MC_LGET,3,MC_LIT8,DECL_ANALOG,MC_EQ,
+MC_JZ,25,MC_LGET,1,MC_LIT8,TYPE_MASK,MC_AND,MC_LIT8,
+V_UNSIGNED,MC_EQ,MC_JZ,6,MC_LIT8,V_ANALOG,MC_LSET,2,
+MC_JMP,7,MC_LIT8,V_ANALOG,MC_LIT8,CFG_SIGNED,MC_OR,MC_LSET,
+2,MC_JMP,0,MC_LGET,2,MC_EXIT,
+// CSP_W_LEAF_CFG_VT_ENTRY
+MC_LSET,0,MC_LGET,0,MC_CALL,0,0,1,
+MC_LGET,0,MC_CALL,244,2,1,MC_CALL,13,
+3,1,MC_EXIT,
+// CSP_W_BUF_OWNER_ENTRY
+MC_LSET,0,MC_LGET,0,MC_BUF,MFB_OWNER,MC_LSET,1,
+MC_LGET,1,MC_LIT16,(uint8_t)((BAD_INDEX) & 0xFF),(uint8_t)(((BAD_INDEX) >> 8) & 0xFF),MC_EQ,MC_JZ,4,
+MC_LIT16,(uint8_t)((BAD_INDEX) & 0xFF),(uint8_t)(((BAD_INDEX) >> 8) & 0xFF),MC_EXIT,MC_LGET,1,MC_LIT16,INDEX_MASK_LO,
+INDEX_MASK_HI,MC_AND,MC_EXIT,
+// CSP_W_BUF_OF_DECL_ENTRY
+MC_LSET,0,MC_LIT8,0,MC_LSET,1,MC_LGET,1,
+MC_ST,MFS_NBUF,MC_LT,MC_JZ,23,MC_LGET,1,MC_CALL,
+118,3,2,MC_LGET,0,MC_EQ,MC_JZ,3,
+MC_LGET,1,MC_EXIT,MC_LGET,1,MC_LIT8,1,MC_ADD,
+MC_LSET,1,MC_JMP,226,MC_LIT16,(uint8_t)((BAD_INDEX) & 0xFF),(uint8_t)(((BAD_INDEX) >> 8) & 0xFF),MC_EXIT,
+// CSP_W_NEXT_OF_TYPE_ENTRY
+MC_LSET,1,MC_LSET,0,MC_LGET,0,MC_LSET,2,
+MC_LGET,2,MC_ST,MFS_ND,MC_LT,MC_DUP,MC_JZ,10,
+MC_DROP,MC_LGET,2,MC_CALL,0,0,3,MC_LGET,
+1,MC_NE,MC_JZ,9,MC_LGET,2,MC_LIT8,1,
+MC_ADD,MC_LSET,2,MC_JMP,227,MC_LGET,2,MC_EXIT,
+// CSP_W_COUNT_OF_TYPE_ENTRY
+MC_LSET,0,MC_LIT8,0,MC_LGET,0,MC_CALL,185,
+3,3,MC_LSET,1,MC_LIT8,0,MC_LSET,2,
+MC_LGET,1,MC_ST,MFS_ND,MC_LT,MC_JZ,22,MC_LGET,
+2,MC_LIT8,1,MC_ADD,MC_LSET,2,MC_LGET,1,
+MC_LIT8,1,MC_ADD,MC_LGET,0,MC_CALL,185,3,
+3,MC_LSET,1,MC_JMP,227,MC_LGET,2,MC_EXIT,
+// CSP_W_FIND_OBJECT_ENTRY
+MC_LSET,0,MC_LIT8,0,MC_LIT8,DECL_OBJECT,MC_CALL,185,
+3,2,MC_LSET,1,MC_LGET,1,MC_ST,MFS_ND,
+MC_LT,MC_JZ,27,MC_LGET,1,MC_DECL,MFD_MQ_M,MC_LGET,
+0,MC_EQ,MC_JZ,3,MC_LGET,1,MC_EXIT,MC_LGET,
+1,MC_LIT8,1,MC_ADD,MC_LIT8,DECL_OBJECT,MC_CALL,185,
+3,2,MC_LSET,1,MC_JMP,222,MC_LIT16,(uint8_t)((BAD_INDEX) & 0xFF),
+(uint8_t)(((BAD_INDEX) >> 8) & 0xFF),MC_EXIT,
+// CSP_W_IOP_ENTRY
+MC_LSET,0,MC_LGET,0,MC_ST,MFS_NN,MC_LT,MC_JZ,
+5,MC_LGET,0,MC_INSTR,MFI_OP,MC_EXIT,MC_LIT8,OP_NOP,
+MC_EXIT,
+// CSP_W_INSTR_NEXT_ENTRY
+MC_LSET,0,MC_LGET,0,MC_CALL,67,4,1,
+MC_LIT8,OP_SEGMENT,MC_EQ,MC_JZ,11,MC_LGET,0,MC_LGET,
+0,MC_INSTR,MFI_SG_NUM,MC_ADD,MC_LIT8,1,MC_ADD,MC_EXIT,
+MC_LGET,0,MC_LIT8,1,MC_ADD,MC_EXIT,
+// CSP_W_LEAF_PORT_ENTRY
+MC_LSET,1,MC_LSET,0,MC_LGET,1,MC_JZ,5,
+MC_LGET,0,MC_DECL,MFD_DI_PORT,MC_EXIT,MC_LGET,0,MC_DECL,
+MFD_AN_PORT,MC_EXIT,
+// CSP_W_LEAF_PIN_ENTRY
+MC_LSET,1,MC_LSET,0,MC_LGET,1,MC_JZ,5,
+MC_LGET,0,MC_DECL,MFD_DI_PIN,MC_EXIT,MC_LGET,0,MC_DECL,
+MFD_AN_PIN,MC_EXIT,
+// CSP_W_LIST_PIN_SPEC_ENTRY
+MC_LSET,1,MC_LSET,0,MC_LGET,0,MC_CALL,137,
+1,9,MC_LSET,2,MC_LGET,0,MC_LGET,1,
+MC_CALL,114,4,9,MC_LSET,3,MC_LGET,0,
+MC_LGET,1,MC_CALL,132,4,9,MC_LSET,4,
+MC_LGET,4,MC_LSET,5,MC_LIT8,1,MC_LSET,6,
+MC_LIT8,0,MC_LSET,7,MC_LIT8,0,MC_LSET,8,
+MC_LGET,3,MC_NATIVE,LW_CSP_PRINT_UINT,MC_DROP,MC_LIT8,58,MC_NATIVE,
+LW_CSP_PRINT_CHAR,MC_DROP,MC_LGET,4,MC_NATIVE,LW_CSP_PRINT_UINT,MC_DROP,MC_LGET,
+6,MC_LGET,2,MC_LT,MC_JZ,121,MC_LGET,0,
+MC_LGET,6,MC_ADD,MC_LGET,1,MC_CALL,114,4,
+9,MC_LSET,7,MC_LGET,0,MC_LGET,6,MC_ADD,
+MC_LGET,1,MC_CALL,132,4,9,MC_LSET,8,
+MC_LGET,7,MC_LGET,3,MC_EQ,MC_DUP,MC_JZ,9,
+MC_DROP,MC_LGET,8,MC_LGET,5,MC_LIT8,1,MC_ADD,
+MC_EQ,MC_JZ,6,MC_LGET,8,MC_LSET,5,MC_JMP,
+61,MC_LGET,5,MC_LGET,4,MC_NE,MC_JZ,15,
+MC_LIT8,46,MC_NATIVE,LW_CSP_PRINT_CHAR,MC_DROP,MC_LIT8,46,MC_NATIVE,
+LW_CSP_PRINT_CHAR,MC_DROP,MC_LGET,5,MC_NATIVE,LW_CSP_PRINT_UINT,MC_DROP,MC_LIT8,
+44,MC_NATIVE,LW_CSP_PRINT_CHAR,MC_DROP,MC_LGET,7,MC_LGET,3,
+MC_NE,MC_JZ,14,MC_LGET,7,MC_LSET,3,MC_LGET,
+3,MC_NATIVE,LW_CSP_PRINT_UINT,MC_DROP,MC_LIT8,58,MC_NATIVE,LW_CSP_PRINT_CHAR,
+MC_DROP,MC_LGET,8,MC_NATIVE,LW_CSP_PRINT_UINT,MC_DROP,MC_LGET,8,
+MC_LSET,4,MC_LGET,8,MC_LSET,5,MC_LGET,6,
+MC_LIT8,1,MC_ADD,MC_LSET,6,MC_JMP,128,MC_LGET,
+5,MC_LGET,4,MC_NE,MC_JZ,15,MC_LIT8,46,
+MC_NATIVE,LW_CSP_PRINT_CHAR,MC_DROP,MC_LIT8,46,MC_NATIVE,LW_CSP_PRINT_CHAR,MC_DROP,
+MC_LGET,5,MC_NATIVE,LW_CSP_PRINT_UINT,MC_DROP,MC_LIT8,0,MC_EXIT,
+// CSP_W_CTX_SET_W_ENTRY
+MC_LSET,0,MC_LGET,0,MC_STS,MFS_CUR,MC_LGET,0,
+MC_AGET,MFA_OFFS,MC_STS,MFS_CBASE,MC_LIT8,0,MC_EXIT,
+// CSP_W_IO_AT_W_ENTRY
+MC_LSET,0,MC_LGET,0,MC_AGET,MFA_IO_OBJ,MC_CALL,110,
+5,1,MC_DROP,MC_LGET,0,MC_AGET,MFA_IO,MC_EXIT,
+// CSP_W_TIMER_AT_W_ENTRY
+MC_LSET,0,MC_LGET,0,MC_AGET,MFA_TIMER_OBJ,MC_CALL,110,
+5,1,MC_DROP,MC_LGET,0,MC_AGET,MFA_TIMER,MC_EXIT,
+// CSP_W_ST_INDEX_OBJ_ENTRY
+MC_LSET,1,MC_LSET,0,MC_LGET,0,MC_AGET,MFA_OFFS,
+MC_LGET,1,MC_ADD,MC_EXIT,
+// CSP_W_OBJECT_DECL_ENTRY
+MC_LSET,0,MC_LGET,0,MC_ST,MFS_OBJ_CAP,MC_LT,MC_JZ,
+5,MC_LGET,0,MC_AGET,MFA_OBJECT,MC_EXIT,MC_LGET,0,
+MC_CALL,17,4,1,MC_EXIT,};
+
+// C CALLING BYTECODE. One per word, with the same prototype the C back
+// end gives it -- the caller cannot tell which it linked. Arguments go
+// on the data stack, which is where a word's caller leaves them, so the
+// entry word is not a special case. csp_word_run is in src/csp_words.c:
+// it owns the stacks and is the one place that knows how big they are.
+//
+// Behind CSP_WORDS_TRAMPOLINES because tests/words.c links BOTH back ends
+// into one binary to compare them: there the C bodies already define
+// these names, and it calls the machine itself.
+#ifdef CSP_WORDS_TRAMPOLINES
+int csp_dtype(csp_rt_t* st, index_t ix)
+{
+	mc_cell_t a_[1];
+
+	a_[0] = (mc_cell_t)ix;
+	return (int)csp_word_run(st, CSP_W_DTYPE_ENTRY, a_, 1, 2);
+}
+
+int csp_is_local(csp_rt_t* st, index_t ix)
+{
+	mc_cell_t a_[1];
+
+	a_[0] = (mc_cell_t)ix;
+	return (int)csp_word_run(st, CSP_W_IS_LOCAL_ENTRY, a_, 1, 1);
+}
+
+int csp_local_number(csp_rt_t* st, index_t ix)
+{
+	mc_cell_t a_[1];
+
+	a_[0] = (mc_cell_t)ix;
+	return (int)csp_word_run(st, CSP_W_LOCAL_NUMBER_ENTRY, a_, 1, 6);
+}
+
+int csp_str_seg_stamp(csp_rt_t* st, index_t sh, index_t endp)
+{
+	mc_cell_t a_[2];
+
+	a_[0] = (mc_cell_t)sh;
+	a_[1] = (mc_cell_t)endp;
+	return (int)csp_word_run(st, CSP_W_STR_SEG_STAMP_ENTRY, a_, 2, 2);
+}
+
+uint16_t csp_array_len(csp_rt_t* st, index_t i)
+{
+	mc_cell_t a_[1];
+
+	a_[0] = (mc_cell_t)i;
+	return (uint16_t)csp_word_run(st, CSP_W_ARRAY_LEN_ENTRY, a_, 1, 3);
+}
+
+int csp_gate_is_in(csp_rt_t* st, index_t j, index_t to)
+{
+	mc_cell_t a_[2];
+
+	a_[0] = (mc_cell_t)j;
+	a_[1] = (mc_cell_t)to;
+	return (int)csp_word_run(st, CSP_W_GATE_IS_IN_ENTRY, a_, 2, 2);
+}
+
+index_t csp_gate_end(csp_rt_t* st, index_t j, index_t to)
+{
+	mc_cell_t a_[2];
+
+	a_[0] = (mc_cell_t)j;
+	a_[1] = (mc_cell_t)to;
+	return (index_t)csp_word_run(st, CSP_W_GATE_END_ENTRY, a_, 2, 3);
+}
+
+int csp_is_gate_ld(csp_rt_t* st, index_t i)
+{
+	mc_cell_t a_[1];
+
+	a_[0] = (mc_cell_t)i;
+	return (int)csp_word_run(st, CSP_W_IS_GATE_LD_ENTRY, a_, 1, 1);
+}
+
+int csp_body_implicit(csp_rt_t* st, index_t ip, index_t hi)
+{
+	mc_cell_t a_[2];
+
+	a_[0] = (mc_cell_t)ip;
+	a_[1] = (mc_cell_t)hi;
+	return (int)csp_word_run(st, CSP_W_BODY_IMPLICIT_ENTRY, a_, 2, 3);
+}
+
+int csp_leaf_buf(csp_rt_t* st, index_t ix)
+{
+	mc_cell_t a_[1];
+
+	a_[0] = (mc_cell_t)ix;
+	return (int)csp_word_run(st, CSP_W_LEAF_BUF_ENTRY, a_, 1, 1);
+}
+
+int csp_buf_or_flags(csp_rt_t* st, index_t b, index_t fs)
+{
+	mc_cell_t a_[2];
+
+	a_[0] = (mc_cell_t)b;
+	a_[1] = (mc_cell_t)fs;
+	return (int)csp_word_run(st, CSP_W_BUF_OR_FLAGS_ENTRY, a_, 2, 3);
+}
+
+int csp_buf_and_flags(csp_rt_t* st, index_t b, index_t fs)
+{
+	mc_cell_t a_[2];
+
+	a_[0] = (mc_cell_t)b;
+	a_[1] = (mc_cell_t)fs;
+	return (int)csp_word_run(st, CSP_W_BUF_AND_FLAGS_ENTRY, a_, 2, 3);
+}
+
+int csp_leaf_cfg_vt(csp_rt_t* st, index_t ix)
+{
+	mc_cell_t a_[1];
+
+	a_[0] = (mc_cell_t)ix;
+	return (int)csp_word_run(st, CSP_W_LEAF_CFG_VT_ENTRY, a_, 1, 1);
+}
+
+int csp_buf_of_decl(csp_rt_t* st, index_t di)
+{
+	mc_cell_t a_[1];
+
+	a_[0] = (mc_cell_t)di;
+	return (int)csp_word_run(st, CSP_W_BUF_OF_DECL_ENTRY, a_, 1, 2);
+}
+
+index_t csp_next_of_type(csp_rt_t* st, index_t from, index_t t)
+{
+	mc_cell_t a_[2];
+
+	a_[0] = (mc_cell_t)from;
+	a_[1] = (mc_cell_t)t;
+	return (index_t)csp_word_run(st, CSP_W_NEXT_OF_TYPE_ENTRY, a_, 2, 3);
+}
+
+index_t csp_count_of_type(csp_rt_t* st, index_t t)
+{
+	mc_cell_t a_[1];
+
+	a_[0] = (mc_cell_t)t;
+	return (index_t)csp_word_run(st, CSP_W_COUNT_OF_TYPE_ENTRY, a_, 1, 3);
+}
+
+index_t csp_find_object(csp_rt_t* st, index_t m)
+{
+	mc_cell_t a_[1];
+
+	a_[0] = (mc_cell_t)m;
+	return (index_t)csp_word_run(st, CSP_W_FIND_OBJECT_ENTRY, a_, 1, 2);
+}
+
+int csp_iop(csp_rt_t* st, index_t n)
+{
+	mc_cell_t a_[1];
+
+	a_[0] = (mc_cell_t)n;
+	return (int)csp_word_run(st, CSP_W_IOP_ENTRY, a_, 1, 1);
+}
+
+index_t csp_instr_next(csp_rt_t* st, index_t n)
+{
+	mc_cell_t a_[1];
+
+	a_[0] = (mc_cell_t)n;
+	return (index_t)csp_word_run(st, CSP_W_INSTR_NEXT_ENTRY, a_, 1, 1);
+}
+
+int csp_list_pin_spec(csp_rt_t* st, index_t i, index_t is_digital)
+{
+	mc_cell_t a_[2];
+
+	a_[0] = (mc_cell_t)i;
+	a_[1] = (mc_cell_t)is_digital;
+	return (int)csp_word_run(st, CSP_W_LIST_PIN_SPEC_ENTRY, a_, 2, 9);
+}
+
+int csp_ctx_set_w(csp_rt_t* st, index_t m)
+{
+	mc_cell_t a_[1];
+
+	a_[0] = (mc_cell_t)m;
+	return (int)csp_word_run(st, CSP_W_CTX_SET_W_ENTRY, a_, 1, 1);
+}
+
+index_t csp_io_at_w(csp_rt_t* st, index_t i)
+{
+	mc_cell_t a_[1];
+
+	a_[0] = (mc_cell_t)i;
+	return (index_t)csp_word_run(st, CSP_W_IO_AT_W_ENTRY, a_, 1, 1);
+}
+
+index_t csp_timer_at_w(csp_rt_t* st, index_t i)
+{
+	mc_cell_t a_[1];
+
+	a_[0] = (mc_cell_t)i;
+	return (index_t)csp_word_run(st, CSP_W_TIMER_AT_W_ENTRY, a_, 1, 1);
+}
+
+int csp_st_index_obj(csp_rt_t* st, index_t m, index_t ix)
+{
+	mc_cell_t a_[2];
+
+	a_[0] = (mc_cell_t)m;
+	a_[1] = (mc_cell_t)ix;
+	return (int)csp_word_run(st, CSP_W_ST_INDEX_OBJ_ENTRY, a_, 2, 2);
+}
+
+index_t csp_object_decl(csp_rt_t* st, index_t m)
+{
+	mc_cell_t a_[1];
+
+	a_[0] = (mc_cell_t)m;
+	return (index_t)csp_word_run(st, CSP_W_OBJECT_DECL_ENTRY, a_, 1, 1);
+}
+
+#endif
 
 #endif

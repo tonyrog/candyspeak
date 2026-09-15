@@ -1,5 +1,6 @@
 // csp_eeprom.c - Binary eeprom save/load (shared between platforms)
 #include "csp.h"
+#include "csp_words.h"
 #include "csp_print.h"
 #include "csp_strings.h"   // ros_str/ros_decl/ros_instr/ros_states section names
 #include <string.h>

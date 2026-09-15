@@ -78,8 +78,14 @@ int main(void)
 	fail("SETOX leaked into a.y", a.a.y, 0);
     if (a.a.z != 0)
 	fail("SETOX leaked into a.z", a.a.z, 0);
-    if (a.a.x != REG_MAX)
-	fail("ox.x does not alias a.x", a.a.x, REG_MAX);
+    // .ox.x NO LONGER ALIASES .a.x. It did while `x` sat first in the arm; `len`
+    // now starts on a byte (every field has to be readable in two bytes, see
+    // utils/layout.terms) and `x` moved past it. That makes the two arms MORE
+    // distinguishable, not less -- an emitter writing the wrong one now leaves
+    // a.x at zero instead of a plausible register number -- and it is pinned
+    // here so the separation is a fact rather than an accident of ordering.
+    if (a.a.x != 0)
+	fail("SETOX reached a.x", a.a.x, 0);
 
     // 5. THE CONFUSION TRAP. The two formats overlap, so emitting one through
     // the other's arm is not caught by the compiler. An object number that does

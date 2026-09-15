@@ -1,13 +1,13 @@
 // Generated CandySpeak image (rom_*) -- do not edit.
 //   source:  examples/empty.csp
 // modified:  Wed Jul 22 21:40:41 2026
-//   version: b
-//   built:   Sep 12 2026 22:36:28
+//   version: boot
+//   built:   Sep 14 2026 21:50:11
 //   size:    33 instr, 11 decl, 61 str, 3 states
 
 #include "csp.h"
-#if ROM_FORMAT_VERSION != 19
-#error "rom.c is stale: generated for ROM format 19, csp.h is newer -- regenerate with 'csp -C'"
+#if ROM_FORMAT_VERSION != 21
+#error "rom.c is stale: generated for ROM format 21, csp.h is newer -- regenerate with 'csp -C'"
 #endif
 
 CSP_IMAGE_TYPE(rom_image_t, 3,12,34,1,1,1);
@@ -35,7 +35,7 @@ static const rom_image_t rom_image_data RODATA = {
   },
   .s_instr = { { CSP_SECT_INSTR }, 136 },
   .instr = {
-  {0x11,0x08,0x3d,0x00},  /* .sg={.op=OP_SEGMENT,.num=32,.used=61} */
+  {0x11,0x20,0x00,0x3d},  /* .sg={.op=OP_SEGMENT,.num=32,.used=61} */
   {0x05,'S','t','a'},  /* segment payload */
   {'t','e',0x04,'I'},  /* segment payload */
   {'N','I','T',0x06},  /* segment payload */
@@ -68,7 +68,7 @@ static const rom_image_t rom_image_data RODATA = {
   {0x00,0x00,0x00,0x00},  /* segment payload */
   {0x00,0x00,0x00,0x00},  /* segment payload */
   {0x00,0x00,0x00,0x00},  /* segment payload */
-  {0x3f,0x00,0x63,0x2f},  /* .em={.op=OP_END_MARK,.crc=12131,._res=0} */
+  {0x3f,0x00,0x31,0xf6},  /* .em={.op=OP_END_MARK,.crc=63025,._res=0} */
   },
   .s_idg = { { CSP_SECT_IDG }, 4 },
   .idg = {0},
@@ -78,12 +78,12 @@ static const rom_image_t rom_image_data RODATA = {
   .edg = {0},
   .hdr = {
     .magic = { CSP_IMAGE_MAGIC0, CSP_IMAGE_MAGIC1, CSP_IMAGE_MAGIC2, CSP_IMAGE_MAGIC3 },
-    .size=352, .version=19, .role=0, .generation=0,
+    .size=352, .version=21, .role=0, .generation=0,
     .n_str=0, .n_decl=11, .n_instr=33, .n_edg=0,
-    .crc_str=65535, .crc_decl=4984, .crc_instr=43945, .crc_graph=0,
+    .crc_str=65535, .crc_decl=4984, .crc_instr=44882, .crc_graph=0,
     .ofs_str=64, .ofs_decl=76, .ofs_instr=180, .ofs_idg=324,
     .ofs_ofs=336, .ofs_edg=348,
-    .crc_hdr=40850 }
+    .crc_hdr=9758 }
 };
 const csp_image_ref_t rom_image RODATA = { (const uint8_t*)&rom_image_data };
 CSP_REGISTER_IMAGE(rom_image_data);

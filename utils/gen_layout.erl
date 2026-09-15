@@ -155,7 +155,7 @@ header(Laid) ->
      "// halves are generated with it and a ROM read cannot be written as a plain\n"
      "// dereference by accident. Include this AFTER csp.h.\n\n",
      [rec(R) || R <- Laid],
-     [family_fields(F, Laid) || F <- families(Laid)],
+     [[family_fields(F, Laid), field_check(F, Laid)] || F <- families(Laid)],
      fingerprint(Laid),
      "#endif\n"].
 
@@ -340,24 +340,96 @@ set_byte(B, M, V) ->
 family_fields(Fam, Laid) ->
     Fs = [{Arm, F} || {Id, _, _, Fields, I = {_, _, _, FN}} <- Laid, FN =:= Fam,
 		      {_, Arm} <- [nm(Id, I)], F <- Fields],
-    Descs = lists:usort([desc(F) || {_, F} <- Fs]),
-    Index = maps:from_list(lists:zip(Descs, lists:seq(0, length(Descs) - 1))),
+    {Wide, Narrow} = lists:partition(fun(G) -> length(G) > 1 end,
+				     lists:usort([descs(F) || {_, F} <- Fs])),
+    Ordered = Wide ++ Narrow,
+    {Index, NSlot} = index_groups(Ordered),
+    NDouble = length(lists:append(Wide)) * 1,
     P = string:uppercase(tag(Fam)),
     ["typedef enum {\n",
      [io_lib:format("    MF~s_~s~s = ~p,\n",
 		    [P, string:uppercase(Arm),
 		     string:uppercase(atom_to_list(element(1, F))),
-		     maps:get(desc(F), Index)]) || {Arm, F} <- Fs],
-     io_lib:format("    MF~s_NFIELD = ~p\n} mf_~s_all_t;\n\n", [P, length(Descs), short(Fam)]),
-     io_lib:format("// ~p names over ~p distinct descriptors.\n",
-		   [length(Fs), length(Descs)]),
-     "// Fields wider than 16 bits are in here and a cell is not, so MC_DECL\n"
-     "// refuses those rather than handing back a quiet truncation.\n",
+		     maps:get(descs(F), Index)]) || {Arm, F} <- Fs],
+     io_lib:format("    MF~s_NDOUBLE = ~p,\n"
+		   "    MF~s_NFIELD = ~p\n} mf_~s_all_t;\n\n",
+		   [P, NDouble, P, NSlot, short(Fam)]),
+     io_lib:format("// ~p names over ~p slots, of which the first ~p are the\n"
+		   "// halves of fields wider than a cell.\n",
+		   [length(Fs), NSlot, NDouble]),
      io_lib:format("#define CSP_~s_ALL_FIELDS { \\\n", [string:uppercase(short(Fam))]),
-     string:join([io_lib:format("    { ~p, ~p, ~p } /* ~s */",
-				[W, Sh, B, string:join(names_for(D, Fs), " ")])
-		  || D = {W, Sh, B} <- Descs], ", \\\n"),
+     string:join(rows(Ordered, Fs), ", \\\n"),
      " }\n\n"].
+
+%% One row per SLOT, with the names that share it. A pair says which half it is:
+%% the low one is the field, the high one is the same field continued.
+rows(Ordered, Fs) ->
+    lists:append(
+      [case G of
+	   [D] ->
+	       [io_lib:format("    { ~p, ~p, ~p } /* ~s */",
+			      [element(1, D), element(2, D), element(3, D),
+			       string:join(names_for(G, Fs), " ")])];
+	   [Lo, Hi] ->
+	       N = string:join(names_for(G, Fs), " "),
+	       [io_lib:format("    { ~p, ~p, ~p } /* ~s lo */",
+			      [element(1, Lo), element(2, Lo), element(3, Lo), N]),
+		io_lib:format("    { ~p, ~p, ~p } /* ~s hi */",
+			      [element(1, Hi), element(2, Hi), element(3, Hi), N])]
+       end || G <- Ordered]).
+
+
+%% The cross-check the machine actually needed. mc_field_get walks {byte, bit,
+%% bits} while the accessors are generated shifts and masks: two readers of one
+%% description, and only a test over EVERY field says they agree. The hand-
+%% written version covered three of thirty-six, and a reader that read one byte
+%% where it should have read three passed it.
+%%
+%% One pattern into the record, then every field both ways -- a wrong byte or a
+%% wrong bit shows up wherever it is, not only where somebody thought to look.
+%% Fields wider than a cell go through mc_field_get2, which is the only thing
+%% that reads them and so the only thing that can be quietly wrong about them.
+field_check(Fam, Laid) ->
+    Fs = [{Arm, RecCT, Pre, F}
+	  || {Id, _, _, Fields, I = {RecCT, _, _, FN}} <- Laid, FN =:= Fam,
+	     {Pre, Arm} <- [nm(Id, I)], F <- Fields],
+    P = string:uppercase(tag(Fam)),
+    ["#define CSP_MCFIELD_", string:uppercase(short(Fam)), "(REC, FAIL) do { \\\n",
+     [check_field(P, "mc_" ++ short(Fam) ++ "_fields", A, R, Pre, F)
+      || {A, R, Pre, F} <- Fs],
+     "    } while (0)\n\n"].
+
+check_field(P, Tab, Arm, RecCT, Pre, {FName, _Pos, Bits, CT}) ->
+    F = atom_to_list(FName),
+    Id = io_lib:format("MF~s_~s~s", [P, string:uppercase(Arm), string:uppercase(F)]),
+    case umember(CT) of
+	{_U, _UM} ->
+	    %% A union member is not a number: the accessor hands back a struct
+	    %% and there is nothing to compare a cell against.
+	    io_lib:format("    /* ~s~s: union member, no cell to compare */ \\\n",
+			  [Arm, F]);
+	none when Bits > 16 ->
+	    %% Two slots, side by side -- the same thing MC_DECL2 does.
+	    io_lib:format(
+	      "    { uint32_t d_; \\\n"
+	      "      d_ = (uint32_t)mc_field_get(&(REC), &~s[~s]) \\\n"
+	      "\t   | ((uint32_t)mc_field_get(&(REC), &~s[(~s) + 1]) << 16); \\\n"
+	      "      if (d_ != (uint32_t)~sget_~s~s((const ~s*)&(REC))) \\\n"
+	      "\tFAIL(\"~s~s\", (long)d_, \\\n"
+	      "\t     (long)(uint32_t)~sget_~s~s((const ~s*)&(REC))); } \\\n",
+	      [Tab, Id, Tab, Id, Pre, Arm, F, RecCT, Arm, F, Pre, Arm, F, RecCT]);
+	none ->
+	    %% The accessor sign-extends where the field is signed; mc_field_get
+	    %% hands back the raw bits. Mask both and they are the same number.
+	    Mask = (1 bsl Bits) - 1,
+	    io_lib:format(
+	      "    if ((long)mc_field_get(&(REC), &~s[~s]) != \\\n"
+	      "\t(long)((uint32_t)~sget_~s~s((const ~s*)&(REC)) & 0x~.16BUL)) \\\n"
+	      "\tFAIL(\"~s~s\", (long)mc_field_get(&(REC), &~s[~s]), \\\n"
+	      "\t     (long)((uint32_t)~sget_~s~s((const ~s*)&(REC)) & 0x~.16BUL)); \\\n",
+	      [Tab, Id, Pre, Arm, F, RecCT, Mask, Arm, F, Tab, Id,
+	       Pre, Arm, F, RecCT, Mask])
+    end.
 
 %% MFD_ for declarations, MFI_ for instructions: one letter, and it is the
 %% family's own initial rather than a table to keep in step.
@@ -372,10 +444,44 @@ short(F) ->
 	_       -> atom_to_list(F)
     end.
 
-desc({_FN, Pos, Bits, _}) -> {Pos div 32, Pos rem 32, Bits}.
+%% {byte, bit, bits}: mc_field_get reads from the BYTE, and gathers only the
+%% bytes the field spans. A byte-aligned field of any width up to 32 is then
+%% placeable anywhere -- the word form demanded a multiple of four and read a
+%% 32-bit xref at bit 16 as sixteen bits, silently. What is left to refuse is a
+%% field whose bits do not fit in one read at all.
+%% TWO BYTES is the whole of a cell-sized read: mc_field_get gathers p[0] and
+%% at most p[1]. A third byte is more code at every access and, for a field in
+%% a record's last byte, a byte outside the record. Pad the layout instead.
+descs({FN, Pos, Bits, _}) when Bits =< 16, (Pos rem 8) + Bits > 16 ->
+    erlang:error({needs_three_bytes, FN, Pos, Bits});
+descs({FN, Pos, Bits, _}) when (Pos rem 8) + Bits > 32 ->
+    erlang:error({wider_than_a_read, FN, Pos, Bits});
+%% A DOUBLE must start on a byte for the same reason, and on ITS byte for the
+%% high half to be two bytes further along.
+descs({FN, Pos, Bits, _}) when Bits > 16, (Pos rem 8) =/= 0 ->
+    erlang:error({double_must_be_byte_aligned, FN, Pos, Bits});
+descs({_FN, Pos, Bits, _}) when Bits > 16 ->
+    %% A field WIDER than a cell is TWO descriptors, not one: the low sixteen
+    %% bits, and the rest sixteen bits along -- same bit position, two bytes
+    %% further in. The pair is laid out adjacent, so reading a double is
+    %% tab[id] and tab[id+1] and there is no arithmetic in the machine at all.
+    [{Pos div 8, Pos rem 8, 16},
+     {(Pos + 16) div 8, Pos rem 8, Bits - 16}];
+descs({_FN, Pos, Bits, _}) ->
+    [{Pos div 8, Pos rem 8, Bits}].
 
-names_for(D, Fs) ->
-    [Arm ++ atom_to_list(element(1, F)) || {Arm, F} <- Fs, desc(F) =:= D].
+%% Slot index per group, pairs FIRST. Two things fall out of that order: the
+%% pair stays adjacent through the deduplication (which works on whole groups,
+%% or an unrelated narrow field could land between a low half and its high), and
+%% one byte -- NDOUBLE -- then separates what may be read as a cell from what may
+%% not. MC_DECL refuses a slot below it and MC_DECL2 refuses one above, which is
+%% a check the old `bits > 16` test could only make in one direction.
+index_groups(Groups) ->
+    lists:foldl(fun(G, {M, N}) -> {M#{G => N}, N + length(G)} end,
+		{#{}, 0}, Groups).
+
+names_for(G, Fs) ->
+    [Arm ++ atom_to_list(element(1, F)) || {Arm, F} <- Fs, descs(F) =:= G].
 
 fingerprint(Laid) ->
     Text = lists:flatten([io_lib:format("~s.~s:~p:~p;", [idname(R), N, P, B])
