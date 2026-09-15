@@ -18,3 +18,10 @@ boards/build/
 private/*/build/
 boards/*/build
 obj/
+
+# Claude Code: the PROJECT rules are tracked (.claude/settings.json and the
+# guard they point at), because the guard only protects a tree it is in -- a
+# fresh clone with no guard is the case it exists for. The LOCAL file is not:
+# it accumulates per-machine approvals with absolute paths and one-off
+# commands, and it grows every session.
+.claude/settings.local.json

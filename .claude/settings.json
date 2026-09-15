@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make *)",
+      "Bash(make)",
+      "Bash(./csp *)",
+      "Bash(/home/tony/work/candyspeak/csp *)",
+      "Bash(gcc *)",
+      "Bash(grep *)",
+      "Bash(arduino-cli *)"
+    ],
+    "deny": [
+      "Bash(rm:*)",
+      "Bash(git checkout:*)",
+      "Bash(git restore:*)",
+      "Bash(git reset:*)",
+      "Bash(git stash:*)",
+      "Bash(git clean:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/guard.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
