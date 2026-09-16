@@ -661,7 +661,35 @@ extern int ro_strcpy(char* dst, rostring_t src, int max);
 // space with the table meant a long program could not report what was wrong
 // with it. Same reasoning as CSP_DEFINE_BYTES.
 //
+// LOAD-TIME DIAGNOSTICS: the texts a node prints when it REFUSES an image -- a
+// bad CRC, a settings section in a format it does not know, a patch built for
+// another ROM version. Fifteen of them, and on uno_bare they were 718 bytes of
+// an image with 32256 to spend.
+//
+// 0 does NOT make the node silent. It keeps every line, in the same place and
+// with the same numbers after it, and replaces the TEXT with the message's
+// number -- "L7 3" where a full build says "eeprom rejected: patch is ROM
+// format 3". A node that refuses its EEPROM still says so and still says which
+// check failed; what it stops carrying is the sentence. doc/LOAD_CODES.md is
+// the table. This is what an exec-only node can afford, for the same reason
+// CSP_ERR_STR_BYTES 0 is: there is no one at the other end reading prose.
+#ifndef CSP_LOAD_DIAG
+#define CSP_LOAD_DIAG 1
+#endif
+
+#if CSP_LOAD_DIAG
+#define LOADTXT(n, s)  s
+#else
+#define LOADTXT(n, s)  "L" #n " "
+#endif
+
 // Three arguments of a name each, and a name is bounded by the line length.
+//
+// 0 is a real setting, and the one an EXEC-ONLY node wants: it has no
+// csp_print_error (nothing calls it, so err_tab and its 1294 bytes of text are
+// garbage-collected out of the image already), so a copied name has nowhere to
+// go. Boards say so with {err_str_bytes, 0}; the buffer then leaves the struct
+// and csp_set_err_arg_* record the error and clear the argument.
 #ifndef CSP_ERR_STR_BYTES
 #define CSP_ERR_STR_BYTES 128
 #endif
@@ -2156,7 +2184,9 @@ typedef struct _csp_rt_t
     // load already call.
     index_t     str_seg[CSP_STR_MAX_SEGS];
     uint8_t     nseg;                    // segments taken
+#if CSP_ERR_STR_BYTES > 0
     char        err_str[CSP_ERR_STR_BYTES]; // error-message %s arguments
+#endif
 #if CSP_DEFINE_BYTES > 0
     // #define names and values -- see the note at CSP_DEFINE_BYTES. Deliberately
     // NOT part of ram_str: it is the buffer a define is meant to relieve.

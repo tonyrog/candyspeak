@@ -525,12 +525,21 @@ void csp_set_err_arg_int(csp_rt_t* st, int i, int ival)
 // board. It has its own buffer now, so the two quantities no longer meet.
 NOINLINE void csp_set_err_arg_tstr(csp_rt_t* st, int i, const tstr_t* str)
 {
+    // CLEARED FIRST. The copy below is conditional -- on space, and on there
+    // being a buffer at all (CSP_ERR_STR_BYTES 0 on an exec-only node) -- and
+    // leaving the slot alone meant csp_print_error read the PREVIOUS message's
+    // pointer for this one's %s.
+    st->ps.err_args[i] = 0;
+#if CSP_ERR_STR_BYTES > 0
     if (st->ps.err_strp >= (uint32_t)str->len + 1) {
 	st->ps.err_strp -= str->len + 1;
 	memcpy(&st->err_str[st->ps.err_strp], str->ptr, str->len);
 	st->err_str[st->ps.err_strp + str->len] = '\0';
 	st->ps.err_args[i] = (uintptr_t)&st->err_str[st->ps.err_strp];
     }
+#else
+    (void)str;
+#endif
 }
 
 // Same, for a RODATA string. Copied byte by byte for the same reason
@@ -538,13 +547,20 @@ NOINLINE void csp_set_err_arg_tstr(csp_rt_t* st, int i, const tstr_t* str)
 // because neither fprintf nor csp_print_error can tell the segments apart.
 NOINLINE void csp_set_err_arg_rostr(csp_rt_t* st, int i, rostring_t str)
 {
-    int len = ro_strlen(str);
+    st->ps.err_args[i] = 0;              // see csp_set_err_arg_tstr
+#if CSP_ERR_STR_BYTES > 0
+    {
+	int len = ro_strlen(str);
 
-    if (st->ps.err_strp >= (uint32_t)len + 1) {
-	st->ps.err_strp -= len + 1;
-	ro_strcpy(&st->err_str[st->ps.err_strp], str, len + 1);
-	st->ps.err_args[i] = (uintptr_t)&st->err_str[st->ps.err_strp];
+	if (st->ps.err_strp >= (uint32_t)len + 1) {
+	    st->ps.err_strp -= len + 1;
+	    ro_strcpy(&st->err_str[st->ps.err_strp], str, len + 1);
+	    st->ps.err_args[i] = (uintptr_t)&st->err_str[st->ps.err_strp];
+	}
     }
+#else
+    (void)str;
+#endif
 }
 
 // Decl name. COPIED into the error temp area rather than pointed at in place:
@@ -554,17 +570,24 @@ NOINLINE void csp_set_err_arg_rostr(csp_rt_t* st, int i, rostring_t str)
 // expect.
 NOINLINE void csp_set_err_arg_ix(csp_rt_t* st, int i, index_t ix)
 {
-    sindex_t pos = decl_name_pos(st, ix);
-    int len = pos ? csp_str_len(st, pos) : 0;
+    st->ps.err_args[i] = 0;              // see csp_set_err_arg_tstr
+#if CSP_ERR_STR_BYTES > 0
+    {
+	sindex_t pos = decl_name_pos(st, ix);
+	int len = pos ? csp_str_len(st, pos) : 0;
 
-    if (st->ps.err_strp >= (uint32_t)len + 1) {
-	int k;
-	st->ps.err_strp -= len + 1;
-	for (k = 0; k < len; k++)
-	    st->err_str[st->ps.err_strp + k] = (char)csp_str_char(st, pos, k);
-	st->err_str[st->ps.err_strp + len] = '\0';
-	st->ps.err_args[i] = (uintptr_t)&st->err_str[st->ps.err_strp];
+	if (st->ps.err_strp >= (uint32_t)len + 1) {
+	    int k;
+	    st->ps.err_strp -= len + 1;
+	    for (k = 0; k < len; k++)
+		st->err_str[st->ps.err_strp + k] = (char)csp_str_char(st, pos, k);
+	    st->err_str[st->ps.err_strp + len] = '\0';
+	    st->ps.err_args[i] = (uintptr_t)&st->err_str[st->ps.err_strp];
+	}
     }
+#else
+    (void)ix;
+#endif
 }
 
 NOINLINE void csp_clr_error(csp_rt_t* st)
@@ -1464,6 +1487,16 @@ NOINLINE int eval_op(csp_rt_t* st, int n, const csp_instr_t* ci, int* leave)
     value_t y = st->es.reg[csp_instr_get_a_y(ci)];
     value_t z = st->es.reg[csp_instr_get_a_z(ci)];
     value_t x;
+    // AND THE OTHER FORMATS' fields, for the same reason: every one of these is
+    // read from five or six arms of the switch below, and a shift-and-mask
+    // written out six times is six copies of it. Reading a field the running
+    // opcode does not use costs a load; the arms that DO use it are the ones
+    // that were paying for it.
+    uint8_t  au   = csp_instr_get_a_u(ci);
+    index_t  mx   = csp_instr_get_m_x(ci);
+    index_t  mmem = csp_instr_get_m_mem(ci);
+    index_t  ix_  = csp_instr_get_i_x(ci);
+    ivalue_t imm  = csp_instr_get_i_imm(ci);
 
     switch(CSP_MASK(csp_instr_get_op(ci), CSP_OPCODE_BITS)) {
     case OP_BNOT: x.i = op_BNOT(y.i); goto store;
@@ -1492,14 +1525,14 @@ NOINLINE int eval_op(csp_rt_t* st, int n, const csp_instr_t* ci, int* leave)
     // says which arm to take; the compiler sets it when either operand's
     // declared type is unsigned (see process_op).
     case OP_DIV:
-	if (csp_instr_get_a_u(ci)) { x.u = op_DIV(y.u, z.u); goto store; }
+	if (au) { x.u = op_DIV(y.u, z.u); goto store; }
 	x.i = op_DIV(y.i, z.i); goto store;
     case OP_REM:
-	if (csp_instr_get_a_u(ci)) { x.u = op_REM(y.u, z.u); goto store; }
+	if (au) { x.u = op_REM(y.u, z.u); goto store; }
 	x.i = op_REM(y.i, z.i); goto store;
     case OP_SLA: x.i = op_SLA(y.i, z.i); goto store;
     case OP_SRA:
-	if (csp_instr_get_a_u(ci)) { x.u = op_SRA(y.u, z.u); goto store; }  // logical shift
+	if (au) { x.u = op_SRA(y.u, z.u); goto store; }  // logical shift
 	x.i = op_SRA(y.i, z.i); goto store;
     case OP_BAND: x.i = op_BAND(y.i, z.i); goto store;
     case OP_BOR: x.i = op_BOR(y.i, z.i); goto store;
@@ -1512,13 +1545,13 @@ NOINLINE int eval_op(csp_rt_t* st, int n, const csp_instr_t* ci, int* leave)
 #if FVALUE_IS_FIXPOINT
     case OP_FLT:
 #endif
-	if (csp_instr_get_a_u(ci)) { x.i = op_LT(y.u, z.u); goto store; }
+	if (au) { x.i = op_LT(y.u, z.u); goto store; }
         x.i = op_LT(y.i, z.i); goto store;
     case OP_LTE:
 #if FVALUE_IS_FIXPOINT
     case OP_FLTE:
 #endif
-	if (csp_instr_get_a_u(ci)) { x.i = op_LTE(y.u, z.u); goto store; }
+	if (au) { x.i = op_LTE(y.u, z.u); goto store; }
         x.i = op_LTE(y.i, z.i); goto store;
     // No OP_GT/OP_GTE arms. `a > b` arrives here as `b < a` with
     // csp_instr_alu_t.swap set for the listing's benefit, so the LT arms above
@@ -1554,10 +1587,10 @@ NOINLINE int eval_op(csp_rt_t* st, int n, const csp_instr_t* ci, int* leave)
     case OP_NOP:
 	break;
     case OP_LD:
-	st->es.reg[csp_instr_get_m_x(ci)] = csp_value(st, csp_instr_get_m_mem(ci));
+	st->es.reg[mx] = csp_value(st, mmem);
 	break;
     case OP_LDP:
-	csp_dio_get_part(st, csp_instr_get_m_mem(ci), &st->es.reg[csp_instr_get_m_x(ci)],
+	csp_dio_get_part(st, mmem, &st->es.reg[mx],
 			 csp_instr_get_m_y(ci), DIN);
 	break;
 //    case OP_EQI:
@@ -1582,36 +1615,36 @@ NOINLINE int eval_op(csp_rt_t* st, int n, const csp_instr_t* ci, int* leave)
     }
     case OP_STIMP:  // same as ST, but marks reactive assignment
     case OP_ST:
-	csp_set_value(st, csp_instr_get_m_mem(ci), st->es.reg[csp_instr_get_m_x(ci)]);
+	csp_set_value(st, mmem, st->es.reg[mx]);
 	break;
     case OP_STP: {
-	index_t mm = csp_instr_get_m_mem(ci);
-	csp_dio_set_part(st, mm, st->es.reg[csp_instr_get_m_x(ci)],
+	index_t mm = mmem;
+	csp_dio_set_part(st, mm, st->es.reg[mx],
 			 csp_instr_get_m_y(ci), DOUT);
 	bitset_set(st->dset, st_index(st, mm));  // config change must commit
 	st->es.anyd = CSP_TRUE;
 	break;	
     }
     case OP_TMO:    // timeout(T): one bit, straight out of the timer's slot
-	st->es.reg[csp_instr_get_m_x(ci)].i = csp_timer_fired(st, csp_instr_get_m_mem(ci));
+	st->es.reg[mx].i = csp_timer_fired(st, mmem);
 	break;
     case OP_CHG: {  // r |= dset[ix]  (force-true on the seed cycle)
-	int i = st_index(st, csp_instr_get_m_mem(ci));
-	st->es.reg[csp_instr_get_m_x(ci)].i |=
+	int i = st_index(st, mmem);
+	st->es.reg[mx].i |=
 	    (st->es.seed_all || bitset_tst(st->dset, i)) ? 1 : 0;
 	break;
     }
     case OP_LI:
-	st->es.reg[csp_instr_get_i_x(ci)].i = csp_instr_get_i_imm(ci);  // sign extend
+	st->es.reg[ix_].i = imm;  // sign extend
 	break;
     case OP_LIU:
-	st->es.reg[csp_instr_get_i_x(ci)].u = (uint16_t)csp_instr_get_i_imm(ci); // zero extend
+	st->es.reg[ix_].u = (uint16_t)imm; // zero extend
 	break;
     case OP_LIH:
-	st->es.reg[csp_instr_get_i_x(ci)].u |= ((uint32_t)(uint16_t)csp_instr_get_i_imm(ci)) << 16;
+	st->es.reg[ix_].u |= ((uint32_t)(uint16_t)imm) << 16;
 	break;
     case OP_ARG:
-	st->es.arg[csp_instr_get_i_imm(ci)] = st->es.reg[csp_instr_get_i_x(ci)];
+	st->es.arg[imm] = st->es.reg[ix_];
 	break;
     case OP_RULE:
 	// Bare NORMAL+ rule (implicit): it has no block gate, so gate it on
@@ -3385,7 +3418,7 @@ NOINLINE int csp_load_image(csp_rt_t* st, const uint8_t* base)
     // (return before rom_* are set) with a message, so the board is usable and
     // the cause is visible instead of a silent crash.
     if (h.version != ROM_FORMAT_VERSION) {
-	csp_print_lit("ROM rejected: format ");
+	csp_print_lit(LOADTXT(11, "ROM rejected: format "));
 	csp_print_uint(h.version);
 	csp_print_lit(", firmware expects ");
 	csp_print_uint(ROM_FORMAT_VERSION);
@@ -3423,12 +3456,12 @@ NOINLINE int csp_load_image(csp_rt_t* st, const uint8_t* base)
 	    h.n_str   = (uint16_t)rns;
 	    h.n_edg   = 0;            // the graph has no marker: drop it, run seq
 	    nd = h.n_decl;
-	    csp_print_line("ROM header CRC bad -- sections verified by walk");
+	    csp_print_line(LOADTXT(12, "ROM header CRC bad -- sections verified by walk"));
 	}
 	else {
-	    csp_print_lit("ROM rejected: CRC mismatch in ");
+	    csp_print_lit(LOADTXT(13, "ROM rejected: CRC mismatch in "));
 	    csp_print_rostr(bad);
-	    csp_print_line(" section (corrupt flash image)");
+	    csp_print_line(LOADTXT(14, " section (corrupt flash image)"));
 	    return -1;
 	}
     }
@@ -3461,7 +3494,7 @@ NOINLINE int csp_load_image(csp_rt_t* st, const uint8_t* base)
     // optimization -- so warn instead of rejecting. (See rom_graph_ok.)
     if (!rom_graph_ok(&p, &h)) {
 	st->rom_nedg = 0;
-	csp_print_line("ROM graph corrupt -- running sequential");
+	csp_print_line(LOADTXT(15, "ROM graph corrupt -- running sequential"));
     }
     // Rebase the parse state onto ROM: RAM starts empty above the ROM sizes.
     // This discards the RAM State/strings csp_rt_init created -- State is now
@@ -5120,8 +5153,14 @@ NOINLINE int setup_variable(csp_rt_t* st, index_t ix)
     // setup_buffer has filled the view in; heap_base and csp_slot do the rest.
     if (csp_decl_get_local(&d))
 	csp_view_set_flags(vw, csp_view_get_flags(vw) | VIEW_F_LOCAL);
-    csp_heap_set(st, vw, DIN,  csp_decl_get_va_init(&d));
-    csp_heap_set(st, vw, DOUT, csp_decl_get_va_init(&d));
+    {
+	// Read once. va_init is 32 bits, so the accessor is four byte loads and
+	// a shift each -- and the two slots get the same value by definition.
+	value_t init = csp_decl_get_va_init(&d);
+
+	csp_heap_set(st, vw, DIN,  init);
+	csp_heap_set(st, vw, DOUT, init);
+    }
     return 0;
 }
 

@@ -1473,6 +1473,10 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	// order and with the same sizes the emission above used: idg[nd], ofs[nd+1],
 	// edg[nedg]. Only when a graph exists (nedg > 0); else baked 0 and skipped.
 	h.crc_graph = 0;
+	// Guarded like the emission above: idg/ofs/edg are not MEMBERS of
+	// csp_estate_t without SUPPORT_REACTIVE, so `nedg > 0` being false is
+	// not enough -- this has to compile, and it did not.
+#if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 	if (nedg > 0) {
 	    h.crc_graph = csp_crc16(0xFFFF, st->es.idg,
 				    (size_t)st->ps.nd * sizeof(index_t), 0);
@@ -1481,6 +1485,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    h.crc_graph = csp_crc16(h.crc_graph, st->es.edg,
 				    (size_t)nedg * sizeof(index_t), 0);
 	}
+#endif
 	h.crc_hdr = csp_crc16(0xFFFF, &h, sizeof(h) - sizeof(uint16_t), 0);
 
 	h.magic[0] = CSP_IMAGE_MAGIC0; h.magic[1] = CSP_IMAGE_MAGIC1;

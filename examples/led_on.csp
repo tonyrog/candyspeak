@@ -1,0 +1,9 @@
+// DIAGNOSTIC, not a demo. No timer: the LED is on from the first cycle.
+//
+// It splits "nothing blinks" in two. If this lights the LED, then the pin
+// map, csp_setup's pinMode and csp_output all work, and what is left is the
+// millisecond clock -- TIMER0 in CTC, which is what a timeout waits for.
+// If it stays dark, the clock is not the question.
+#digital Led out 13
+
+Led = 1 ? 1

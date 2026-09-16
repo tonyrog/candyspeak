@@ -29,11 +29,43 @@
   %% picks 512 for __AVR__; stated here so it is visible next to the part it is
   %% a fraction of, and so raising it is an edit to the board rather than to a
   %% #if in a header shared with every other target.
-  {code_budget, 512},
+  %% 512 was not enough for the smallest useful program. Measured on the host
+  %% with the same image and -m: blink (45 instr, 14 decl) needs 544 -- the ROM
+  %% program is copied into the pool and every derived table is laid out above
+  %% it. At 512 csp_rebuild refused and main stopped, which is what the boot
+  %% marks in port/csp_avr.c now say out loud ("csp i p r e b !").
+  %%
+  %% 768 rather than 544: the 224 above the measurement are what an EEPROM
+  %% patch has to grow into, and the RAM is there -- see the stack line the
+  %% build prints.
+  {code_budget, 768},
 
   %% The settings store lives in the runtime STRUCT, so it is RAM spent whether
   %% anything is stored or not. An entry is 8 + strlen(path) bytes.
   {settings_bytes, 128},
+
+  %% WHAT THE STACK ACTUALLY NEEDS, measured with -fstack-usage rather than
+  %% assumed. The deepest real chain is the boot one --
+  %% main -> csp_load_rom (64) -> csp_load_image (114) -> ro_header (62) = 240;
+  %% rebuild's is 119 and the settings record's 165. 512 is twice the deepest,
+  %% which leaves room for the two interrupt handlers on top of it. The 4096
+  %% default is an ARM figure and this part has 2048 in total, so without this
+  %% the check warned on every build and nobody read it.
+  {stack_min, 512},
+
+  %% NO LOAD-DIAGNOSTIC TEXTS. The fifteen sentences a node prints when it
+  %% refuses an image were 718 bytes here -- on a part with 32256 and a
+  %% compiler that does not fit in it. The node still prints a line and still
+  %% prints the numbers after it; what it prints instead of the sentence is the
+  %% message's own number, and doc/LOAD_CODES.md is the table.
+  {load_diag, false},
+
+  %% NO ERROR-ARGUMENT SCRATCH. An exec-only node reports a CODE: it has no
+  %% csp_print_error to feed (nothing calls it, so err_tab and its 1294 bytes
+  %% of text are already garbage-collected out of this image), so a name copied
+  %% into the scratch would be written and never read. 128 bytes of the 2048,
+  %% on the part where the pool and the stack are fighting over them.
+  {err_str_bytes, 0},
 
   %% NO CSP_ARENA_MALLOC, unlike `uno`. Without a heap the arena is one static
   %% array of exactly CSP_CODE_BUDGET bytes, which is a number the map file
@@ -46,6 +78,14 @@
   %% unchanged, so arduino-cli is still the way in, and it needs to be told
   %% which protocol to speak and where. `arduino-cli upload -i <hex>` takes a
   %% prebuilt image and never looks at a sketch.
+  %% OPTIBOOT sits in the top 512 bytes and is what `arduino-cli upload` writes
+  %% through. So the application has 32256, not 32768 -- and the difference is
+  %% not academic: an image that reaches into this area uploads without
+  %% complaint and comes back dead, because the loader overwrote itself. The
+  %% part number cannot say this (the same chip flashed by ISP has the full
+  %% 32K); the BOARD can, because it is the board that ships with a loader.
+  {bootloader_bytes, 512},
+
   {fqbn, "arduino:avr:uno"},
   {port, "/dev/serial/by-id/usb-Arduino_Srl_Arduino_Uno_55431313038351C04281-if00"},
 

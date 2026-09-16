@@ -692,21 +692,57 @@ uint32_t csp_system_ram_used(void)
 // The cycle
 // ============================================================
 
-void csp_setup(csp_rt_t* st)
+// THE I/O SWEEP, once. csp_input and csp_output walked the same list, looked up
+// the same slot and asked the same question -- only the direction bit and which
+// pair of board routines ran differed. Written out twice that was two copies of
+// the loop; here `want` is DIR_IN or DIR_OUT and the two callers are a line
+// each.
+//
+// The slot lookup is outside the switch: both live arms want the same one, and
+// two copies of the call cost more than the one the default arm now makes for
+// nothing. st->nio holds only #digital and #analog, so that arm is not a path
+// anything takes.
+// IO_CONFIG is the third pass: the pinMode sweep csp_setup runs once at start.
+// Not a direction -- it applies to a pin whichever way it points -- so it is 0,
+// which no direction bit can be.
+#define IO_CONFIG 0
+
+static void io_sweep(csp_rt_t* st, uint8_t want)
 {
     int i;
 
-    csp_board_setup(st);
     for (i = 0; i < st->nio; i++) {
 	index_t ix = csp_io_at(st, i);
-	int j = INDEX(ix);
+	int di = INDEX(ix);
 	value_t* vptr = csp_dio_slot(st, ix, DOUT);
-	switch (decl(st, j, type)) {
-	case DECL_DIGITAL: csp_board_digital_config(vptr); break;
+
+	switch (decl(st, di, type)) {
+	case DECL_DIGITAL:
+	    if (want == IO_CONFIG)
+		csp_board_digital_config(vptr);
+	    else if (value_get_d_dir(vptr) & want) {
+		if (want & DIR_IN) csp_board_digital_input(st, ix, vptr);
+		else               csp_board_digital_output(st, vptr);
+	    }
+	    break;
+	case DECL_ANALOG:
+	    if (want == IO_CONFIG)
+		break;                       // the ADC needs no per-pin mode
+	    if (value_get_a_dir(vptr) & want) {
+		if (want & DIR_IN) csp_board_analog_input(st, ix, vptr);
+		else               csp_board_analog_output(st, di, vptr);
+	    }
+	    break;
 	default: break;
 	}
     }
     csp_ctx_reset(st);
+}
+
+void csp_setup(csp_rt_t* st)
+{
+    csp_board_setup(st);
+    io_sweep(st, IO_CONFIG);
     // AFTER the pin loop: arming an interrupt on a pin still at its reset
     // default arms it on whatever the pin happened to be.
     csp_setup_events(st);
@@ -714,31 +750,8 @@ void csp_setup(csp_rt_t* st)
 
 void csp_input(csp_rt_t* st)
 {
-    int i;
-
     csp_board_start_input(st);
-    for (i = 0; i < st->nio; i++) {
-	index_t ix = csp_io_at(st, i);
-	int di = INDEX(ix);
-	// The slot lookup is hoisted out of the switch: both live arms wanted the
-	// same one, and two copies of it cost more than the one call the default
-	// arm now makes for nothing. st->nio holds only #digital and #analog, so
-	// that arm is not a path anything takes.
-	value_t* vptr = csp_dio_slot(st, ix, DOUT);
-
-	switch (decl(st, di, type)) {
-	case DECL_DIGITAL:
-	    if (value_get_d_dir(vptr) & DIR_IN)
-		csp_board_digital_input(st, ix, vptr);
-	    break;
-	case DECL_ANALOG:
-	    if (value_get_a_dir(vptr) & DIR_IN)
-		csp_board_analog_input(st, ix, vptr);
-	    break;
-	default: break;
-	}
-    }
-    csp_ctx_reset(st);
+    io_sweep(st, DIR_IN);
     csp_can_input(st);
     csp_buf_input(st);
     csp_input_timer(st);
@@ -747,28 +760,9 @@ void csp_input(csp_rt_t* st)
 
 void csp_output(csp_rt_t* st)
 {
-    int i;
-
     if (!st->latch) {
 	csp_board_start_output(st);
-	for (i = 0; i < st->nio; ++i) {
-	    index_t ix = csp_io_at(st, i);
-	    int di = INDEX(ix);
-	    value_t* vptr = csp_dio_slot(st, ix, DOUT);   // see csp_input
-
-	    switch (decl(st, di, type)) {
-	    case DECL_DIGITAL:
-		if (value_get_d_dir(vptr) & DIR_OUT)
-		    csp_board_digital_output(st, vptr);
-		break;
-	    case DECL_ANALOG:
-		if (value_get_a_dir(vptr) & DIR_OUT)
-		    csp_board_analog_output(st, di, vptr);
-		break;
-	    default: break;
-	    }
-	}
-	csp_ctx_reset(st);
+	io_sweep(st, DIR_OUT);
 	csp_can_output(st);
 	csp_buf_output(st);
 	csp_board_stop_output(st);
@@ -793,6 +787,23 @@ static void* crash_ring[CSP_CRASH_TRACE];
 static uint8_t crash_dir[CSP_CRASH_TRACE];
 static uint8_t crash_at;
 static uint16_t crash_magic;
+#endif
+
+// ONE LETTER PER BOOT STEP, flushed as it goes. An exec-only node has no
+// banner and no prompt, so "it did not come up" and "it came up and the
+// program does nothing" looked the same -- and one of the steps below used to
+// stop the board with a bare `for (;;);`, saying nothing at all.
+//
+// Letters and not words: csp_print_char is already linked, the sequence reads
+// as one line, and where it STOPS is the answer.
+//
+//     csp i p r e b s run     a clean boot
+//     csp i p r e b !         csp_rebuild refused -- no memory for the tables
+//     csp i p r               stopped in csp_load_rom
+#if defined(CSP_EXEC_ONLY)
+#define BOOTMARK(c) do { csp_print_char(c); csp_flush(); } while (0)
+#else
+#define BOOTMARK(c) do { } while (0)
 #endif
 
 int main(void) __attribute__((no_instrument_function));
@@ -827,12 +838,28 @@ int main(void)
     // command that quietly did nothing.
     //
     // Read once and cleared, or the next boot reports this one's reason too.
-#if !defined(CSP_EXEC_ONLY)        
+    // CLEARED ON EVERY BUILD, printed only where there is a banner to print it
+    // in. A reset flag left standing is read by the NEXT boot as its own reason
+    // -- and WDRF left standing is worse than cosmetic: with it set, WDE cannot
+    // be cleared, so a part that once reset on the watchdog keeps doing it.
+    // Optiboot clears this before it jumps, but a part flashed by ISP or run in
+    // a simulator has no Optiboot in front of it.
+#if !defined(CSP_EXEC_ONLY)
     why = MCUSR;
-    MCUSR = 0;
 #endif
+    MCUSR = 0;
 
     csp_board_init();
+#if defined(CSP_EXEC_ONLY)
+    // A NODE THAT SAYS NOTHING CANNOT BE DEBUGGED. An exec-only node has no
+    // banner -- there is no prompt for one to introduce -- and that made "the
+    // board is dead" and "the board is running a program that does nothing"
+    // the same observation. One mark here, as soon as there IS a UART, and one
+    // below once the program is up: between them sit the ROM load, the EEPROM
+    // patch and the rebuild, which is where a node that comes back dead stops.
+    csp_print_lit("csp");
+    csp_flush();
+#endif
     // CSP_CSTATE, not 0. The third argument is the COMPILER's state, and a full
     // build has one -- every other port passes it. With NULL here csp_parse's
     // first statement is
@@ -850,6 +877,7 @@ int main(void)
     // and it leaves st->mem NULL and mem_limit 0 -- so carrying on means every
     // allocation downstream hands back a pointer into nothing. Every other port
     // tests this; ignoring it turns "out of memory" into arbitrary corruption.
+    BOOTMARK('i');
     if (csp_rt_init(&state, REACTIVE_DEFAULT, CSP_CSTATE) < 0) {
 	// No arena, so no prompt worth having -- say so and stop rather than
 	// loop printing from a runtime that does not exist.
@@ -862,9 +890,11 @@ int main(void)
     // WHICH image, before one is loaded. sys.Boot lives in the settings store,
     // so the store is read on its own first -- the choice has to be made before
     // csp_load_rom picks. Same order as every other port.
+    BOOTMARK('p');
     if (csp_eeprom_peek(&state) == 0)
 	csp_boot_pick(&state);
 
+    BOOTMARK('r');
     csp_load_rom(&state);
 #if !defined(CSP_NO_EEPROM)
     // csp_clr_error on failure, and it is NOT cosmetic. "No saved state" is the
@@ -878,17 +908,33 @@ int main(void)
     //
     // Every other port has done this since it was written -- csp_arduino.c,
     // csp_lpcopen.c, csp_stm32.c. This one was the exception.
+    BOOTMARK('e');
     if (csp_eeprom_load(&state) != 0)
 	csp_clr_error(&state);
 #endif
     // csp_rebuild, not csp_rt_start alone: rebuild resets the middle bump
     // allocator and lays every derived table out again. Calling start on its
     // own leaves them where the previous layout put them.
-    if (csp_rebuild(&state) < 0)
+    BOOTMARK('b');
+    if (csp_rebuild(&state) < 0) {
+	// SAY SO. This was a bare `for (;;);` -- the one failure in the whole
+	// boot that stopped the board without a word, which is exactly the
+	// shape of a board that never came up at all.
+	BOOTMARK('!');
 	for (;;)
 	    ;                                     // nothing can run: stop
+    }
+    BOOTMARK('s');
     csp_setup(&state);
     state.latch = 0;
+#if defined(CSP_EXEC_ONLY)
+    // UP. Two words and no numbers: csp_print_hex is not otherwise linked into
+    // an exec-only image, and pulling it in for one line cost more than the
+    // line is worth. What a host tool needs from here -- rom_fp, to fingerprint
+    // an EEPROM patch -- it can read out of the image it built.
+    csp_print_lit("run\n");
+    csp_flush();
+#endif
 
     // A BOOT LINE, and it is not decoration.
     //
@@ -1000,6 +1046,23 @@ int main(void)
 	    csp_route_run(&state);
 	    continue;
 	}
+#ifdef CSP_AVR_TICK_MARK
+	// A DOT PER SECOND, straight off csp_time_ms. Not a feature -- build
+	// with -DCSP_AVR_TICK_MARK when a board boots ("csp i p r e b s run")
+	// and then does nothing. Dots mean TIMER0's compare interrupt is
+	// running and the clock a #timer waits on is moving; silence means it
+	// is not, and no timeout can ever come due.
+	{
+	    static uint32_t tick_last;
+	    uint32_t tick_now = csp_time_ms();
+
+	    if ((uint32_t)(tick_now - tick_last) >= 1000) {
+		tick_last = tick_now;
+		csp_print_char('.');
+		csp_flush();
+	    }
+	}
+#endif
 	state.cycle++;
 	csp_input(&state);
 	x = state.live ? BAD_INDEX : csp_cycle(&state);   // /live: I/O, no rules

@@ -655,12 +655,18 @@ ifdef NOLD
 $(B)/firmware.elf: $(OBJ)
 	@$(CC) $(CPU) $(XLDFLAGS) -Wl,--gc-sections -o $@ $(OBJ)
 	@$(SZ) $@
-	@$(SZ) --mcu=$(MCU) -C $@ | awk \
-	   '/^(Program|Data):/ { lbl = $$1; sub(/:/, "", lbl); \
-	      pct = $$4; gsub(/[()]/, "", pct); \
-	      printf "  %-8s %6s bytes  %s\n", lbl, $$2, pct; \
-	      if (pct + 0 > 100) over = over " " lbl } \
-	    END { if (over) printf "  ** DOES NOT FIT on $(MCU):%s over 100%% **\n", over }'
+	@lim=$$($(GEN) --usable-flash-of $(BOARD)); \
+	 $(SZ) --mcu=$(MCU) -C $@ | awk -v lim=$$lim \
+	   '/^Program:/ { prog = $$2 } \
+	    /^Data:/ { data = $$2; dpct = $$4; gsub(/[()]/, "", dpct) } \
+	    END { \
+	      printf "  %-8s %6d bytes  %.1f%% of %d usable\n", \
+		     "Program", prog, prog * 100.0 / lim, lim; \
+	      printf "  %-8s %6d bytes  %s\n", "Data", data, dpct; \
+	      if (prog > lim) \
+		printf "  ** DOES NOT FIT on $(BOARD): %d bytes over the %d it has **\n", \
+		       prog - lim, lim; \
+	      if (dpct + 0 > 100) printf "  ** OUT OF RAM on $(MCU) **\n" }'
 	@$(MAKE) --no-print-directory -f Makefile.board BOARD=$(BOARD) MAP=$(MAP) \
 	    PROG="$(PROG)" $(if $(WATCH),WATCH=1) B=$(B) stackcheck
 
@@ -753,16 +759,22 @@ endif
 # bug, found the expensive way, once per board. The part's RAM comes from the
 # generated header, whichever vendor emitted it; a board that states none is
 # skipped rather than guessed at.
+# The default is an ARM number. A board whose whole RAM is smaller than it can
+# never satisfy it, so the warning fires on every build and stops being read --
+# {stack_min, N} in the board terms is how such a board states a MEASURED floor
+# instead. uno_bare's is 512, against a deepest measured chain of 240.
 STACK_MIN ?= 4096
 
 stackcheck:
-	@ram=$$(sed -n 's/^#define CSP_\(AVR\|LPC\|STM\)_RAM  *//p' $(B)/csp_board.h); \
+	@min=$$(sed -n 's/^#define CSP_STACK_MIN  *//p' $(B)/csp_board.h); \
+	 test -n "$$min" || min=$(STACK_MIN); \
+	 ram=$$(sed -n 's/^#define CSP_\(AVR\|LPC\|STM\)_RAM  *//p' $(B)/csp_board.h); \
 	 used=$$($(SZ) $(B)/firmware.elf | awk 'NR==2{print $$2+$$3}'); \
 	 test -n "$$ram" || exit 0; \
 	 left=$$((ram - used)); \
 	 printf "  %-8s %6s bytes  for the stack\n" "Stack" "$$left"; \
-	 if [ "$$left" -lt "$(STACK_MIN)" ]; then \
-	   echo "  ** ONLY $$left BYTES OF STACK on $(BOARD) -- want $(STACK_MIN) **"; \
+	 if [ "$$left" -lt "$$min" ]; then \
+	   echo "  ** ONLY $$left BYTES OF STACK on $(BOARD) -- want $$min **"; \
 	   echo "     The pool and the stack share RAM. Lower {code_budget, ...}"; \
 	   echo "     in the board terms, or raise STACK_MIN if this board is"; \
 	   echo "     known to need less. A stack that reaches the pool corrupts"; \

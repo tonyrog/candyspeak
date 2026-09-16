@@ -159,6 +159,30 @@ main(["--chip-of", Name]) ->
 		C -> io:format("~s~n", [C])
 	    end
     end;
+%% USABLE flash: the part's, less whatever the bootloader on it holds. Not the
+%% same number, and the difference is what a size check must use.
+%%
+%% `avr-size --mcu=... -C` reports a percentage of the WHOLE flash, because that
+%% is all the part number tells it. An Uno ships with Optiboot in the top 512
+%% bytes and is flashed THROUGH it, so an image that reaches 32710 of 32768
+%% reads as 99.7%% and overwrites the loader that is writing it: the upload
+%% succeeds, the board comes back with no console and runs nothing. That is one
+%% board term ({bootloader_bytes, N}) and one subtraction away from being said
+%% out loud.
+main(["--usable-flash-of", Name]) ->
+    Db = load(),
+    case lookup(Db, board, list_to_atom(Name)) of
+	false -> io:format(standard_error, "no such board '~s'~n", [Name]), halt(1);
+	P ->
+	    C = kv(P, chip, undefined),
+	    G = case C of
+		    undefined -> [];
+		    _ -> case lookup(Db, chip, C) of false -> []; X -> X end
+		end,
+	    Flash = kv(G, flash_kb, 0) * 1024,
+	    Boot  = kv(P, bootloader_bytes, 0),
+	    io:format("~w~n", [Flash - Boot])
+    end;
 %% arm7 or cm3, from the family's entry symbol -- the same fact the linker
 %% script needs, asked a different way.
 %% Where the runtime region starts. What a raw .bin has to be flashed AT, and
@@ -965,6 +989,31 @@ board_header(Name, P, G, Pins, EE) ->
 	 undefined -> [];
 	 SB -> f("#define CSP_SETTINGS_BYTES ~w~n", [SB])
      end,
+     %% Scratch for the %s arguments an error message carries -- struct RAM, the
+     %% same way settings_bytes is. 0 removes the buffer and the copies into it;
+     %% an exec-only node reports a CODE and has no formatter to feed (the whole
+     %% err_tab and its texts are garbage-collected there already), so the
+     %% arguments have nowhere to go anyway.
+     case kv(P, err_str_bytes, undefined) of
+	 undefined -> [];
+	 EB -> f("#define CSP_ERR_STR_BYTES ~w~n", [EB])
+     end,
+     %% The fifteen texts a node prints when it refuses an image. false keeps
+     %% the lines and the numbers and drops the sentences -- see CSP_LOAD_DIAG
+     %% in csp.h and doc/LOAD_CODES.md.
+     case kv(P, load_diag, undefined) of
+	 undefined -> [];
+	 false -> f("#define CSP_LOAD_DIAG 0~n", []);
+	 true -> f("#define CSP_LOAD_DIAG 1~n", [])
+     end,
+     %% What the stack check wants to see left over. 4096 is the default and it
+     %% is an ARM number; a part with 2048 bytes of RAM in total can never
+     %% reach it, so the warning fires on every build and stops being read.
+     %% A board that states one has been MEASURED -- see the note in its terms.
+     case kv(P, stack_min, undefined) of
+	 undefined -> [];
+	 SM -> f("#define CSP_STACK_MIN ~w~n", [SM])
+     end,
      case kv(P, no_eeprom, false) of
 	 true -> f("#define CSP_NO_EEPROM   1~n", []);
 	 _ -> []
@@ -1235,6 +1284,31 @@ avr_board_header(Name, P, G) ->
 	 undefined -> [];
 	 SB -> f("#define CSP_SETTINGS_BYTES ~w~n", [SB])
      end,
+     %% Scratch for the %s arguments an error message carries -- struct RAM, the
+     %% same way settings_bytes is. 0 removes the buffer and the copies into it;
+     %% an exec-only node reports a CODE and has no formatter to feed (the whole
+     %% err_tab and its texts are garbage-collected there already), so the
+     %% arguments have nowhere to go anyway.
+     case kv(P, err_str_bytes, undefined) of
+	 undefined -> [];
+	 EB -> f("#define CSP_ERR_STR_BYTES ~w~n", [EB])
+     end,
+     %% The fifteen texts a node prints when it refuses an image. false keeps
+     %% the lines and the numbers and drops the sentences -- see CSP_LOAD_DIAG
+     %% in csp.h and doc/LOAD_CODES.md.
+     case kv(P, load_diag, undefined) of
+	 undefined -> [];
+	 false -> f("#define CSP_LOAD_DIAG 0~n", []);
+	 true -> f("#define CSP_LOAD_DIAG 1~n", [])
+     end,
+     %% What the stack check wants to see left over. 4096 is the default and it
+     %% is an ARM number; a part with 2048 bytes of RAM in total can never
+     %% reach it, so the warning fires on every build and stops being read.
+     %% A board that states one has been MEASURED -- see the note in its terms.
+     case kv(P, stack_min, undefined) of
+	 undefined -> [];
+	 SM -> f("#define CSP_STACK_MIN ~w~n", [SM])
+     end,
      case kv(P, no_eeprom, false) of
 	 true -> f("#define CSP_NO_EEPROM   1~n", []);
 	 _ -> []
@@ -1276,6 +1350,31 @@ st_board_header(Name, P, G) ->
      case kv(P, settings_bytes, undefined) of
 	 undefined -> [];
 	 SB -> f("#define CSP_SETTINGS_BYTES ~w~n", [SB])
+     end,
+     %% Scratch for the %s arguments an error message carries -- struct RAM, the
+     %% same way settings_bytes is. 0 removes the buffer and the copies into it;
+     %% an exec-only node reports a CODE and has no formatter to feed (the whole
+     %% err_tab and its texts are garbage-collected there already), so the
+     %% arguments have nowhere to go anyway.
+     case kv(P, err_str_bytes, undefined) of
+	 undefined -> [];
+	 EB -> f("#define CSP_ERR_STR_BYTES ~w~n", [EB])
+     end,
+     %% The fifteen texts a node prints when it refuses an image. false keeps
+     %% the lines and the numbers and drops the sentences -- see CSP_LOAD_DIAG
+     %% in csp.h and doc/LOAD_CODES.md.
+     case kv(P, load_diag, undefined) of
+	 undefined -> [];
+	 false -> f("#define CSP_LOAD_DIAG 0~n", []);
+	 true -> f("#define CSP_LOAD_DIAG 1~n", [])
+     end,
+     %% What the stack check wants to see left over. 4096 is the default and it
+     %% is an ARM number; a part with 2048 bytes of RAM in total can never
+     %% reach it, so the warning fires on every build and stops being read.
+     %% A board that states one has been MEASURED -- see the note in its terms.
+     case kv(P, stack_min, undefined) of
+	 undefined -> [];
+	 SM -> f("#define CSP_STACK_MIN ~w~n", [SM])
      end,
      case kv(P, no_eeprom, false) of
 	 true -> f("#define CSP_NO_EEPROM   1~n", []);

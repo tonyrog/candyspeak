@@ -1,0 +1,10 @@
+// Blink -- the smallest program that shows a board is alive.
+//
+// D13 is the LED soldered to an Uno, so this needs no wiring. The timer is
+// what makes it a CandySpeak program rather than a delay loop: T restarts
+// itself on its own timeout, and the LED follows from the same edge.
+#digital Led out 13
+#timer   T 500 = 1        // = 1 starts it at boot
+
+Led = !Led ? timeout(T)
+T   = 1    ? timeout(T)   // rearm, so the timeout repeats

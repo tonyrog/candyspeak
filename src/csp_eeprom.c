@@ -324,11 +324,11 @@ int csp_eeprom_load(csp_rt_t* st)
     // identifier text became OP_SEGMENT runs in the instruction stream, and
     // OP_NEW lost its `ent` field.
     if (hdr.ram.version != ROM_FORMAT_VERSION) {
-	csp_print_lit("eeprom rejected: patch is ROM format ");
+	csp_print_lit(LOADTXT(1, "eeprom rejected: patch is ROM format "));
 	csp_print_uint(hdr.ram.version);
-	csp_print_lit(", firmware is ");
+	csp_print_lit(LOADTXT(2, ", firmware is "));
 	csp_print_uint(ROM_FORMAT_VERSION);
-	csp_print_line(" -- clear it and re-enter");
+	csp_print_line(LOADTXT(3, " -- clear it and re-enter"));
 	goto error;
     }
 
@@ -371,14 +371,14 @@ int csp_eeprom_load(csp_rt_t* st)
 		left -= n;
 	    }
 	    if (hdr.set_ver != CSP_SETTINGS_VERSION)
-		csp_print_line("eeprom: settings in an unknown format -- ignored");
+		csp_print_line(LOADTXT(4, "eeprom: settings in an unknown format -- ignored"));
 	    else
-		csp_print_line("eeprom: settings too large for this build -- ignored");
+		csp_print_line(LOADTXT(5, "eeprom: settings too large for this build -- ignored"));
 	}
 	else if (csp_eeprom_read(st->settings, hdr.set_bytes) < 0)
 	    goto error;
 	else if (csp_crc16(0xFFFF, st->settings, hdr.set_bytes, 0) != hdr.crc_set) {
-	    csp_print_line("eeprom rejected: CRC mismatch in settings section");
+	    csp_print_line(LOADTXT(6, "eeprom rejected: CRC mismatch in settings section"));
 	    st->set_used = 0;
 	}
 	else
@@ -415,9 +415,9 @@ int csp_eeprom_load(csp_rt_t* st)
     // of the firmware fingerprint above, and NAMES the corrupt section. Mismatch
     // -> error path restores the ROM baseline, so a corrupt save never half-loads.
     if ((bad = ram_verify(st, &hdr.ram)) != NULL) {
-	csp_print_lit("eeprom rejected: CRC mismatch in ");
+	csp_print_lit(LOADTXT(7, "eeprom rejected: CRC mismatch in "));
 	csp_print_rostr(bad);
-	csp_print_line(" section");
+	csp_print_line(LOADTXT(8, " section"));
 	goto error;
     }
 
@@ -440,7 +440,7 @@ int csp_eeprom_load(csp_rt_t* st)
     if (hdr.n_dis) {
 	index_t have = csp_n_rules(st);
 	if (hdr.n_dis != (uint16_t)have) {
-	    csp_print_lit("eeprom: disable set dropped (saved for ");
+	    csp_print_lit(LOADTXT(9, "eeprom: disable set dropped (saved for "));
 	    csp_print_uint(hdr.n_dis);
 	    csp_print_lit(" rules, program has ");
 	    csp_print_uint(have);
@@ -451,7 +451,7 @@ int csp_eeprom_load(csp_rt_t* st)
 		goto error;
 	    if (csp_crc16(0xFFFF, st->dis_rule, DIS_BYTES(hdr.n_dis), 0)
 		!= hdr.crc_dis) {
-		csp_print_line("eeprom rejected: CRC mismatch in disable set");
+		csp_print_line(LOADTXT(10, "eeprom rejected: CRC mismatch in disable set"));
 		goto error;
 	    }
 	}
