@@ -11,35 +11,35 @@
 // both back ends reach a table through these and nothing else.
 static inline index_t csp_arr_io(csp_rt_t* st, index_t i_)
 {
-    return (i_ < (index_t)st->nio) ? st->io[i_] : (index_t)0;
+    return (i_ < (index_t)st->io_cap) ? st->io[i_] : (index_t)0;
 }
 static inline void csp_arr_set_io(csp_rt_t* st, index_t i_, index_t v_)
 {
-    if (i_ < (index_t)st->nio) st->io[i_] = v_;
+    if (i_ < (index_t)st->io_cap) st->io[i_] = v_;
 }
 static inline uint8_t csp_arr_io_obj(csp_rt_t* st, index_t i_)
 {
-    return (i_ < (index_t)st->nio) ? st->io_obj[i_] : (uint8_t)0;
+    return (i_ < (index_t)st->io_cap) ? st->io_obj[i_] : (uint8_t)0;
 }
 static inline void csp_arr_set_io_obj(csp_rt_t* st, index_t i_, uint8_t v_)
 {
-    if (i_ < (index_t)st->nio) st->io_obj[i_] = v_;
+    if (i_ < (index_t)st->io_cap) st->io_obj[i_] = v_;
 }
 static inline index_t csp_arr_timer(csp_rt_t* st, index_t i_)
 {
-    return (i_ < (index_t)st->nt) ? st->timer[i_] : (index_t)0;
+    return (i_ < (index_t)st->timer_cap) ? st->timer[i_] : (index_t)0;
 }
 static inline void csp_arr_set_timer(csp_rt_t* st, index_t i_, index_t v_)
 {
-    if (i_ < (index_t)st->nt) st->timer[i_] = v_;
+    if (i_ < (index_t)st->timer_cap) st->timer[i_] = v_;
 }
 static inline uint8_t csp_arr_timer_obj(csp_rt_t* st, index_t i_)
 {
-    return (i_ < (index_t)st->nt) ? st->timer_obj[i_] : (uint8_t)0;
+    return (i_ < (index_t)st->timer_cap) ? st->timer_obj[i_] : (uint8_t)0;
 }
 static inline void csp_arr_set_timer_obj(csp_rt_t* st, index_t i_, uint8_t v_)
 {
-    if (i_ < (index_t)st->nt) st->timer_obj[i_] = v_;
+    if (i_ < (index_t)st->timer_cap) st->timer_obj[i_] = v_;
 }
 static inline index_t csp_arr_offs(csp_rt_t* st, index_t i_)
 {
@@ -57,6 +57,11 @@ static inline void csp_arr_set_object(csp_rt_t* st, index_t i_, index_t v_)
 {
     if (i_ < (index_t)st->obj_cap) st->object[i_] = v_;
 }
+
+#ifdef __cplusplus
+EXTERN_C_BEGIN
+#endif
+
 extern int csp_dtype(csp_rt_t* st, index_t ix);
 extern int csp_is_local(csp_rt_t* st, index_t ix);
 extern int csp_local_number(csp_rt_t* st, index_t ix);
@@ -66,11 +71,11 @@ extern int csp_gate_is_in(csp_rt_t* st, index_t j, index_t to);
 extern index_t csp_gate_end(csp_rt_t* st, index_t j, index_t to);
 extern int csp_is_gate_ld(csp_rt_t* st, index_t i);
 extern int csp_body_implicit(csp_rt_t* st, index_t ip, index_t hi);
-extern int csp_leaf_buf(csp_rt_t* st, index_t ix);
+extern index_t csp_leaf_buf(csp_rt_t* st, index_t ix);
 extern int csp_buf_or_flags(csp_rt_t* st, index_t b, index_t fs);
 extern int csp_buf_and_flags(csp_rt_t* st, index_t b, index_t fs);
 extern int csp_leaf_cfg_vt(csp_rt_t* st, index_t ix);
-extern int csp_buf_of_decl(csp_rt_t* st, index_t di);
+extern index_t csp_buf_of_decl(csp_rt_t* st, index_t di);
 extern index_t csp_next_of_type(csp_rt_t* st, index_t from, index_t t);
 extern index_t csp_count_of_type(csp_rt_t* st, index_t t);
 extern index_t csp_find_object(csp_rt_t* st, index_t m);
@@ -82,8 +87,16 @@ extern index_t csp_io_at_w(csp_rt_t* st, index_t i);
 extern index_t csp_timer_at_w(csp_rt_t* st, index_t i);
 extern int csp_st_index_obj(csp_rt_t* st, index_t m, index_t ix);
 extern index_t csp_object_decl(csp_rt_t* st, index_t m);
+extern int csp_states_slot(csp_rt_t* st, index_t i, index_t k);
+extern int csp_states_set_slot(csp_rt_t* st, index_t i, index_t k, index_t pos);
+extern int csp_states_free_slot(csp_rt_t* st, index_t i);
 extern int csp_state_name_at(csp_rt_t* st, index_t want);
 extern int csp_num_states(csp_rt_t* st);
+extern int csp_lookup_state_pos(csp_rt_t* st, index_t pos);
+extern int csp_add_io(csp_rt_t* st, index_t ix);
+extern int csp_setup_decl_w(csp_rt_t* st, index_t ix);
+extern int csp_sys_module_w(csp_rt_t* st);
+extern index_t csp_add_state_w(csp_rt_t* st, index_t pos, index_t blk);
 
 // Installs the leaf hooks on a bytecode build, and does nothing on a C
 // one. Call it once, before the first word -- a word that reaches a
@@ -94,5 +107,9 @@ extern void csp_words_init(csp_rt_t* st);
 // The last micro-csp error, kept because a faulting word returns 0 and 0
 // is a perfectly ordinary answer for most of them. Always 0 on a C build.
 extern uint8_t csp_word_fault;
+
+#ifdef __cplusplus
+EXTERN_C_END
+#endif
 
 #endif

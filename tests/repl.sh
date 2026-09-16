@@ -491,7 +491,7 @@ fw() {  # fw <out> <csp>   -- a host firmware carrying that program as its ROM
     gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -Iinclude -Igen -Isrc \
 	port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c \
 	src/csp_repl.c src/csp_compile.c src/csp_tok.c port/csp_dump.c \
-	src/csp_eeprom.c src/csp_parse.c src/csp_print.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c gen/csp_strings.c \
+	src/csp_eeprom.c src/csp_parse.c src/csp_print.c src/csp_expr.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c gen/csp_strings.c \
 	src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
 	"$2.rom.c" -o "$1" >/dev/null 2>&1
 }
@@ -543,7 +543,7 @@ if fw "$D/fw_a" "$D/fpa.csp" && fw "$D/fw_b" "$D/fpb.csp"; then
 	gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -Iinclude -Igen -Isrc \
 	    port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c \
 	    src/csp_repl.c src/csp_compile.c src/csp_tok.c port/csp_dump.c \
-	    src/csp_eeprom.c src/csp_parse.c src/csp_print.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c gen/csp_strings.c \
+	    src/csp_eeprom.c src/csp_parse.c src/csp_print.c src/csp_expr.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c gen/csp_strings.c \
 	    src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
 	    "$2" "$3" -o "$1" >/dev/null 2>&1
     }
@@ -633,7 +633,7 @@ if ./csp -n -C -O "$D/eo_rom.c" "$D/eo.csp" >/dev/null 2>&1 &&
    gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -DCSP_EXEC_ONLY -Iinclude -Igen -Isrc \
        port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
        src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
-       src/csp_parse.c src/csp_print.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c gen/csp_strings.c src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c \
+       src/csp_parse.c src/csp_print.c src/csp_expr.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c gen/csp_strings.c src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c \
        port/csp_devices.c port/csp_flash_host.c \
        "$D/eo_rom.c" -o "$D/csp_exec" \
        >/dev/null 2>&1; then
@@ -1036,6 +1036,18 @@ got=$(printf '#states a b c d e f\n/list\n' |
 	  timeout 20 ./csp -i --no-eeprom -T 20 2>&1 | sed -n 's/^#states //p')
 ck "all six slots of a states block list back" "a b c d e f  // R" "$got"
 
+# AND THEY PACK. Six names go in ONE block and the seventh opens a second --
+# that is the whole reason a block holds six. Nothing checked it: a
+# states_free_slot that answered 0 for "full" opened a block per name, every
+# name still listed, and the suite stayed green.
+six=$(printf '#states a b c d e f\n/memory\n' |
+	  timeout 20 ./csp -i --no-eeprom -T 20 2>&1 |
+	  sed -n 's/^ *decl *\([0-9]*\).*/\1/p' | head -1)
+sev=$(printf '#states a b c d e f g\n/memory\n' |
+	  timeout 20 ./csp -i --no-eeprom -T 20 2>&1 |
+	  sed -n 's/^ *decl *\([0-9]*\).*/\1/p' | head -1)
+ck "six states share one block, the seventh opens another" "1 2" "$six $sev"
+
 # --- arrays -----------------------------------------------------------------
 # `#variable A[3]` is three declarations: the head keeps the name, the tail two
 # carry `cont` and no name at all. A[<const>] folds to the element's own
@@ -1309,7 +1321,7 @@ echo "lpcopen:"
 if gcc -g -Wall -Iinclude -Igen -Isrc -Itests/lpcstub -Ichips/nxp/drivers/212x \
        -DCSP_VERSION='"test"' -o "$D/lpc_fw" \
        port/csp_lpcopen.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c \
-       src/csp_parse.c src/csp_tok.c src/csp_print.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c src/csp_repl.c \
+       src/csp_parse.c src/csp_tok.c src/csp_print.c src/csp_expr.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c src/csp_repl.c \
        port/csp_dump.c src/csp_eeprom.c gen/csp_strings.c gen/rom_host.c \
        src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c chips/nxp/drivers/212x/flash_212x.c port/csp_devices.c \
        tests/lpcstub/stub.c >/dev/null 2>&1; then
@@ -1949,7 +1961,7 @@ ubuild() {
     gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -Iinclude -Igen -Isrc \
 	port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
 	src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
-	src/csp_parse.c src/csp_print.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c gen/csp_strings.c src/csp_transport.c \
+	src/csp_parse.c src/csp_print.c src/csp_expr.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c gen/csp_strings.c src/csp_transport.c \
 	src/csp_console.c src/csp_states.c \
 	src/csp_flash.c port/csp_devices.c port/csp_flash_host.c \
 	"$2.rom.c" -o "$1" >/dev/null 2>&1

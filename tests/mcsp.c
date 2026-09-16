@@ -45,6 +45,11 @@ static void fail(const char* what, long got, long want)
 	    ((uint8_t*)&(REC))[k_] = (uint8_t)(0x5A + k_ * 0x27); \
     } while (0)
 
+// value_t's rows. NOT in src/csp_mcsp.c: no opcode reaches a value yet, and a
+// table the machine never reads has no business in every port's flash. When
+// MC_VALUE arrives this moves there with the other four.
+static const mc_field_t mc_value_fields[] = CSP_VALUE_ALL_FIELDS;
+
 static void test_fields(void)
 {
     csp_decl_t  d;
@@ -56,6 +61,7 @@ static void test_fields(void)
     PATTERN(i); CSP_MCFIELD_INSTR(i, fail);
     PATTERN(b); CSP_MCFIELD_BUF(b, fail);
     PATTERN(v); CSP_MCFIELD_VIEW(v, fail);
+    { value_t w; PATTERN(w); CSP_MCFIELD_VALUE(w, fail); }
 }
 
 // ---------------------------------------------------------------- the writes
@@ -117,6 +123,7 @@ static void test_field_set(void)
     csp_instr_t i;
     csp_buf_t   b;
     csp_view_t  v;
+    value_t     w;
 
     set_family("decl",  mc_decl_fields,  mc_decl_nfield,  mc_decl_ndouble,
 	       &d, sizeof(d));
@@ -126,6 +133,8 @@ static void test_field_set(void)
 	       &b, sizeof(b));
     set_family("view",  mc_view_fields,  mc_view_nfield,  mc_view_ndouble,
 	       &v, sizeof(v));
+    set_family("value", mc_value_fields, MFV_NFIELD, MFV_NDOUBLE,
+	       &w, sizeof(w));
 }
 
 // ------------------------------------------------------------------- machine
@@ -235,6 +244,32 @@ static void expect(const char* what, const uint8_t* code, uint16_t len,
 #define PROG(name, ...) \
     static const uint8_t name[] = { __VA_ARGS__ }
 
+// THE LONG BRANCHES. Generated code uses them only where the one-byte
+// displacement does not reach, so a hand-written program is the only place
+// their semantics get stated: the displacement is added to ip AFTER both
+// operand bytes, exactly like the short form.
+//
+//  0 LIT8 1 | 2 JMP16 +4 | 5 DROP | 6 LIT8 9 | 8 BYE | 9 LIT8 7 | 11 BYE
+PROG(p_jmp16, MC_LIT8, 1, MC_JMP16, 4, 0,
+     MC_DROP, MC_LIT8, 9, MC_BYE, MC_LIT8, 7, MC_BYE);
+//  0 LIT8 0 | 2 JZ16 +3 | 5 LIT8 9 | 7 BYE | 8 LIT8 7 | 10 BYE
+PROG(p_jz16, MC_LIT8, 0, MC_JZ16, 3, 0,
+     MC_LIT8, 9, MC_BYE, MC_LIT8, 7, MC_BYE);
+// The same, NOT taken: a non-zero top falls through to the 9.
+PROG(p_jz16n, MC_LIT8, 1, MC_JZ16, 3, 0,
+     MC_LIT8, 9, MC_BYE, MC_LIT8, 7, MC_BYE);
+// BACKWARDS, which is what a relaxed loop edge becomes. Counts to 3.
+//
+//  0 LIT8 0 | 2 LIT8 1 | 4 ADD | 5 DUP | 6 LIT8 3 | 8 LT | 9 JZ +3 |
+// 11 JMP16 -12 | 14 BYE
+//
+// Both displacements are measured from ip AFTER the operands: 11 + 3 = 14,
+// and 14 - 12 = 2. Getting that wrong does not fail, it HANGS -- there is no
+// step budget in the machine -- which is its own reason to state the arithmetic
+// here rather than leave it to be re-derived.
+PROG(p_jmp16b, MC_LIT8, 0,
+     MC_LIT8, 1, MC_ADD, MC_DUP, MC_LIT8, 3, MC_LT, MC_JZ, 3,
+     MC_JMP16, (uint8_t)-12, (uint8_t)-1, MC_BYE);
 PROG(p_add,  MC_LIT8, 5, MC_LIT8, 3, MC_ADD, MC_BYE);
 PROG(p_sub,  MC_LIT8, 5, MC_LIT8, 3, MC_SUB, MC_BYE);
 PROG(p_lit16,MC_LIT16, 0x34, 0x12, MC_BYE);
@@ -328,6 +363,10 @@ static void test_machine(void)
     expect("a leaf that runs the stack off stops", p_runaway,
 	   sizeof(p_runaway), MC_E_STACK, 0);
     expect("loop sums 1..5", p_loop, sizeof(p_loop), MC_OK, 15);
+    expect("jmp16 jumps forward",  p_jmp16,  sizeof(p_jmp16),  MC_OK, 7);
+    expect("jz16 taken",           p_jz16,   sizeof(p_jz16),   MC_OK, 7);
+    expect("jz16 not taken",       p_jz16n,  sizeof(p_jz16n),  MC_OK, 9);
+    expect("jmp16 jumps backward", p_jmp16b, sizeof(p_jmp16b), MC_OK, 3);
     expect("call/exit",  p_call,  sizeof(p_call),  MC_OK, 12);
 
     csp_decl_set_type(&hook_decl, DECL_BUFFER);

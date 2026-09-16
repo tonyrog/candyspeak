@@ -217,9 +217,9 @@ static void csp_neo_begin(void)
 // Called from csp_board_analog_output in both board branches.
 static int csp_neo_write(value_t* vptr)
 {
-    if (vptr->a.port != CSP_NEO_PORT)
+    if (value_get_a_port(vptr) != CSP_NEO_PORT)
 	return 0;
-    csp_neo_pixel(vptr->a.pin, csp_neo_565(vptr->a.val));
+    csp_neo_pixel(value_get_a_pin(vptr), csp_neo_565(value_get_a_val(vptr)));
     csp_neo_dirty = 1;
     return 1;
 }
@@ -477,7 +477,8 @@ void csp_board_stop_output(csp_rt_t* st)
 void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
 {
     int value;
-    if (vptr->a.port == PORT_ACCEL) {   // accelerometer X/Y/Z (raw)
+    uint8_t pin = value_a_get_pin(vptr);
+    if (value_get_a_port(vptr) == PORT_ACCEL) {   // accelerometer X/Y/Z (raw)
 	// Scale to the DECLARED resolution instead of assuming ten bits.
 	// `#analog AccZ:10` and `:16` should differ in precision, not in what
 	// the numbers mean, and the old code hardcoded 0..1023.
@@ -510,19 +511,18 @@ void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
 	    CircuitPlayground.lis.read();
 	    accel_read = 1;
 	}
-	value = (vptr->a.pin == 0) ? CircuitPlayground.lis.x
-	    : (vptr->a.pin == 1) ? CircuitPlayground.lis.y
+	value = (pin == 0) ? CircuitPlayground.lis.x
+	    : (pin == 1) ? CircuitPlayground.lis.y
 	    : CircuitPlayground.lis.z;
 	value = (value >> (16 - res)) + mid;
 	if (value < lo) value = lo; else if (value > hi) value = hi;
     }
-    else if (vptr->a.pin == 8)               // A8 light sensor
+    else if (pin == 8)               // A8 light sensor
 	value = CircuitPlayground.lightSensor();
-    else if (vptr->a.pin == 9)              // A9 thermistor (raw ADC)
+    else if (pin == 9)              // A9 thermistor (raw ADC)
 	value = analogRead(A9);
     else
-	value = analogRead(vptr->a.pin);
-
+	value = analogRead(pin);
     csp_set_ivalue(st, ix, value);    
 }
 
@@ -530,9 +530,9 @@ void csp_board_analog_output(csp_rt_t* st, int di, value_t* vptr)
 {
     if (csp_neo_write(vptr))
 	;                             // an #analog on the NeoPixel port
-    else if (vptr->a.pwm) {
-	int val = map(vptr->a.val, 0, pwm_full_scale(st, di), 0, 255);
-	analogWrite(vptr->a.pin, val);
+    else if (value_get_a_pwm(vptr)) {
+	int val = map(value_get_a_val(vptr), 0, pwm_full_scale(st, di), 0, 255);
+	analogWrite(value_get_a_pin(vptr), val);
     }
 }
 
@@ -575,7 +575,7 @@ void csp_board_stop_output(csp_rt_t* st)
 
 void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
 {
-    csp_set_ivalue(st, ix, analogRead(vptr->a.pin));
+    csp_set_ivalue(st, ix, analogRead(value_get_a_pin(vptr)));
 }
 
 // handle type! accept float as well
@@ -585,9 +585,9 @@ void csp_board_analog_output(csp_rt_t* st, int di, value_t* vptr)
     if (csp_neo_write(vptr))
 	return;                       // an #analog on the NeoPixel port
 #endif
-    if (vptr->a.pwm) {
-	int val = map(vptr->a.val, 0, pwm_full_scale(st, di), 0, 255);
-	analogWrite(vptr->a.pin, val);
+    if (value_get_a_pwm(vptr)) {
+	int val = map(value_get_a_val(vptr), 0, pwm_full_scale(st, di), 0, 255);
+	analogWrite(value_get_a_pin(vptr), val);
     }
 }
 
@@ -596,23 +596,25 @@ void csp_board_analog_output(csp_rt_t* st, int di, value_t* vptr)
 // The generic board routines
 void csp_board_digital_input(csp_rt_t* st, index_t ix, value_t* vptr)
 {
-    int value = digitalRead(vptr->d.pin);
+    int value = digitalRead(value_get_d_pin(vptr));
     csp_set_ivalue(st, ix, value);    
 }
 
 void csp_board_digital_output(csp_rt_t* st, value_t* vptr)
 {
-    if (vptr->d.dir & DIR_IN) {  // in & out
-	pinMode(vptr->d.pin, OUTPUT);
-	digitalWrite(vptr->d.pin, (vptr->d.val & 1));
+    uint8_t pin = value_get_d_pin(vptr);
+    uint8_t dir = value_get_d_dir(vptr);    
+    if (dir & DIR_IN) {  // in & out
+	pinMode(pin, OUTPUT);
+	digitalWrite(pin, value_get_d_val(vptr));
 	// prepare for next input
-	if (vptr->d.pullup)
-	    pinMode(vptr->d.pin, INPUT_PULLUP);
+	if (value_get_d_pullup(vptr))
+	    pinMode(pin, INPUT_PULLUP);
 	else
-	    pinMode(vptr->d.pin, INPUT);
+	    pinMode(pin, INPUT);
     }
     else { // plain out
-	digitalWrite(vptr->d.pin, (vptr->d.val & 1));
+	digitalWrite(pin, value_get_d_val(vptr));
     }
 }
 
@@ -628,16 +630,18 @@ void csp_board_digital_output(csp_rt_t* st, value_t* vptr)
 // mode on a pin someone else owns is worse than leaving it alone.
 void csp_board_digital_config(value_t* vptr)
 {
-    if (vptr->d.dir & DIR_IN) {
-	if (vptr->d.pullup)
-	    pinMode(vptr->d.pin, INPUT_PULLUP);
-	else if (vptr->d.pulldown)
-	    pinMode(vptr->d.pin, INPUT_PULLDOWN);
+    uint8_t dir = value_get_d_dir(vptr);
+    uint8_t pin = value_get_d_pin(vptr);    
+    if (dir & DIR_IN) {
+	if (value_get_d_pullup(vptr))
+	    pinMode(pin, INPUT_PULLUP);
+	else if (value_get_d_pulldown(vptr))
+	    pinMode(pin, INPUT_PULLDOWN);
 	else
-	    pinMode(vptr->d.pin, INPUT);
+	    pinMode(pin, INPUT);
     }
-    else if (vptr->d.dir & DIR_OUT)
-	pinMode(vptr->d.pin, OUTPUT);
+    else if (dir & DIR_OUT)
+	pinMode(pin, OUTPUT);
 }
 
 // The analog counterpart. Only a PWM output owns its pin in a way that has to be
@@ -651,10 +655,12 @@ void csp_board_digital_config(value_t* vptr)
 // a program that writes .dir on one has asked for exactly this.
 void csp_board_analog_config(value_t* vptr)
 {
-    if ((vptr->a.dir & DIR_OUT) && vptr->a.pwm)
-	pinMode(vptr->a.pin, OUTPUT);
-    else if (vptr->a.dir & DIR_IN)
-	pinMode(vptr->a.pin, INPUT);
+    uint8_t dir = value_get_a_dir(vptr);
+    uint8_t pin = value_get_a_pin(vptr);
+    if ((dir & DIR_OUT) && value_get_a_pwm(vptr))
+	pinMode(pin, OUTPUT);
+    else if (dir & DIR_IN)
+	pinMode(pin, INPUT);
 }
 
 // Apply a configuration a rule asked for, and take the request down in BOTH
@@ -673,11 +679,13 @@ static void csp_apply_config(csp_rt_t* st, index_t ix, value_t* vptr, int analog
     csp_dio_slots(st, ix, &iptr, &optr);
     if (analog) {
 	csp_board_analog_config(vptr);
-	iptr->a.cfg = optr->a.cfg = 0;
+	value_set_a_cfg(iptr, 0);
+	value_set_a_cfg(optr, 0);
     }
     else {
 	csp_board_digital_config(vptr);
-	iptr->d.cfg = optr->d.cfg = 0;
+	value_set_d_cfg(iptr, 0);
+	value_set_d_cfg(optr, 0);
     }
 }
 
@@ -707,12 +715,14 @@ void csp_setup(csp_rt_t* st)
 	    csp_board_digital_config(vptr);
 	    break;
 	case DECL_ANALOG:
-	    if ((vptr->a.dir & DIR_IN) && decl(st,j,res))
+	    if ((value_get_a_dir(vptr) & DIR_IN) && decl(st,j,res))
 		res = max(res, decl(st,j,res));
 	    // A PWM output needs the pin driven; an analog input does not need
 	    // any mode at all, so nothing is asserted for it.
-	    if ((vptr->a.dir & DIR_OUT) && !(vptr->a.dir & DIR_IN) && vptr->a.pwm)
-		pinMode(vptr->a.pin, OUTPUT);
+	    if ((value_get_a_dir(vptr) & DIR_OUT) &&
+		!(value_get_a_dir(vptr) & DIR_IN) &&
+		value_get_a_pwm(vptr))
+		pinMode(value_get_a_pin(vptr), OUTPUT);
 	    break;
 	default:
 	    break;
@@ -744,16 +754,16 @@ void csp_input(csp_rt_t* st)
 	    // A rule may have turned this pin round since we last looked. Do it
 	    // before reading, or the first sample after a flip comes off the old
 	    // mode. Both loops check: whichever list the pin is in, it is served.
-	    if (vptr->d.cfg)
+	    if (value_get_d_cfg(vptr))
 		csp_apply_config(st, ix, vptr, 0);
-	    if (vptr->d.dir & DIR_IN)
+	    if (value_get_d_dir(vptr) & DIR_IN)
 		csp_board_digital_input(st, ix, vptr);
 	    break;
 	case DECL_ANALOG:
 	    vptr = csp_dio_slot(st, ix, DOUT);
-	    if (vptr->a.cfg)
+	    if (value_get_a_cfg(vptr))
 		csp_apply_config(st, ix, vptr, 1);
-	    if (vptr->a.dir & DIR_IN) {
+	    if (value_get_a_dir(vptr) & DIR_IN) {
 		csp_board_analog_input(st, ix, vptr);
 	    }
 	    break;
@@ -908,17 +918,17 @@ void csp_output(csp_rt_t* st)
 	    switch(decl(st,di,type)) {
 	    case DECL_DIGITAL:
 		vptr = csp_dio_slot(st, ix, DOUT);
-		if (vptr->d.cfg)
+		if (value_get_d_cfg(vptr))
 		    csp_apply_config(st, ix, vptr, 0);
-		if (vptr->d.dir & DIR_OUT) {
+		if (value_get_d_dir(vptr) & DIR_OUT) {
 		    csp_board_digital_output(st, vptr);
 		}
 		break;
 	    case DECL_ANALOG:
 		vptr = csp_dio_slot(st, ix, DOUT);
-		if (vptr->a.cfg)
+		if (value_get_a_cfg(vptr))
 		    csp_apply_config(st, ix, vptr, 1);
-		if (vptr->a.dir & DIR_OUT)
+		if (value_get_a_dir(vptr) & DIR_OUT)
 		    csp_board_analog_output(st, di, vptr);
 		break;
 	    default:

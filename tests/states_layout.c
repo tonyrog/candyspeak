@@ -21,6 +21,19 @@
 #include "csp.h"
 #include "csp_layout_raw.h"
 
+// THE SLOTS. The runtime reads them through a WORD (csp_states_slot in
+// utils/words.terms) that needs a csp_rt_t and a declaration table; this file
+// has neither, and a layout test that called the thing it is testing would say
+// nothing anyway. One indexed accessor now, but what is written below is the
+// bit-field union -- two independent descriptions of the same six bytes, which
+// is what makes the read-back check mean something.
+static sindex_t slot(const csp_decl_t* d, int k)
+{
+    if (k < 0 || k >= CSP_DECL_N_SN_NAMES)
+	return 0;
+    return (sindex_t)csp_decl_get_sn_names(d, (uint8_t)k);
+}
+
 static int errors = 0;
 
 static void fail(const char* what, unsigned long got, unsigned long want)
@@ -53,12 +66,12 @@ int main(void)
 
     memset(&d, 0, sizeof(d));
     d.type      = DECL_STATES;
-    d.s6.name   = v[0];
-    d.s6.name2  = v[1];
-    d.s6.name3  = v[2];
-    d.s6.name4  = v[3];
-    d.s6.name5  = v[4];
-    d.s6.name6  = v[5];
+    d.sn.name   = v[0];
+    d.sn.name2  = v[1];
+    d.sn.name3  = v[2];
+    d.sn.name4  = v[3];
+    d.sn.name5  = v[4];
+    d.sn.name6  = v[5];
 
     // The runtime takes the OPAQUE csp_decl_t; this file builds the raw union
     // so it can name the bits. Copied, not cast: the two are the same eight
@@ -67,7 +80,7 @@ int main(void)
 
     // Every slot reads back what was written: no two share bits.
     for (k = 0; k < CSP_STATES_PER_DECL; k++) {
-	unsigned got = (unsigned)csp_states_name(&dop, k);
+	unsigned got = (unsigned)slot(&dop, k);
 	if (got != v[k]) {
 	    char buf[32];
 	    sprintf(buf, "slot %d", k);
@@ -86,26 +99,26 @@ int main(void)
     // And the reverse -- writing through DECL_COMMON lands in slot 0.
     d.name = 1;
     memcpy(&dop, &d, sizeof(dop));
-    if (csp_states_name(&dop, 0) != 1)
+    if (slot(&dop, 0) != 1)
 	fail("DECL_COMMON.name writes slot 0",
-	     (unsigned long)csp_states_name(&dop, 0), 1UL);
+	     (unsigned long)slot(&dop, 0), 1UL);
 
     // An empty slot reads 0, which is what marks padding at the end of a block.
     memset(&d, 0, sizeof(d));
     d.type = DECL_STATES;
     memcpy(&dop, &d, sizeof(dop));
     for (k = 0; k < CSP_STATES_PER_DECL; k++) {
-	if (csp_states_name(&dop, k) != 0) {
+	if (slot(&dop, k) != 0) {
 	    char buf[32];
 	    sprintf(buf, "empty slot %d", k);
-	    fail(buf, (unsigned long)csp_states_name(&dop, k), 0UL);
+	    fail(buf, (unsigned long)slot(&dop, k), 0UL);
 	}
     }
 
     // Out of range is 0 too, so a loop that overruns cannot read a stale name.
-    if (csp_states_name(&dop, CSP_STATES_PER_DECL) != 0)
+    if (slot(&dop, CSP_STATES_PER_DECL) != 0)
 	fail("slot past the end",
-	     (unsigned long)csp_states_name(&dop, CSP_STATES_PER_DECL), 0UL);
+	     (unsigned long)slot(&dop, CSP_STATES_PER_DECL), 0UL);
 
     // Which DECL_COMMON fields OVERLAP a name, and which do not.
     //
@@ -126,7 +139,7 @@ int main(void)
 	    if (w == 0) d.type = (decl_t)0xf; else d.dir = (pindir_t)3;
 	    memcpy(&dop, &d, sizeof(dop));
 	    for (q = 0; q < CSP_STATES_PER_DECL; q++)
-		if (csp_states_name(&dop, q) != 0) hit = 1;
+		if (slot(&dop, q) != 0) hit = 1;
 	    if (hit) {
 		char buf[64];
 		sprintf(buf, "DECL_COMMON.%s must not touch a slot", shared[w]);
@@ -163,7 +176,7 @@ int main(void)
 	    }
 	    memcpy(&dop, &d, sizeof(dop));
 	    for (q = 0; q < CSP_STATES_PER_DECL; q++) {
-		int touched = (csp_states_name(&dop, q) != 0);
+		int touched = (slot(&dop, q) != 0);
 		if (touched != (q == over[w].slot)) {
 		    char buf[80];
 		    sprintf(buf, "DECL_COMMON.%s vs slot %d", over[w].name, q);

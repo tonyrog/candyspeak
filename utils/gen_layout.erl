@@ -68,7 +68,9 @@ outputs() ->
     %% A family is the C type an accessor takes and the name it is spelled
     %% with. Without it every accessor would be csp_decl_*, which was fine
     %% while declarations were the only record described here.
-    Fam = maps:from_list([{N, {CT, P}} || {family, N, CT, P} <- Terms]),
+    Fam = maps:from_list([{N, {CT, P}} || {family, N, CT, P, _} <- Terms]),
+    %% The MF<T>_* letter, from the family declaration -- see layout.terms.
+    put(tags, maps:from_list([{N, T} || {family, N, _, _, T} <- Terms])),
     Base = [lay(R) || R = {record, _, _, _} <- Terms],
     Arms = [arm(A, Base) || A = {record, _, _, _, _} <- Terms],
     Laid = [{N, B, T, F, info(N, Terms, Fam)} || {N, B, T, F} <- Base ++ Arms],
@@ -131,6 +133,19 @@ arm({record, Prefix, Base, Bytes, Fields}, Laid) ->
 
 place({pad, Bits}, Pos)        -> {{pad, Pos, Bits, none}, Pos + Bits};
 place({FName, Bits}, Pos)      -> {{FName, Pos, Bits, none}, Pos + Bits};
+%% AN ARRAY FIELD: N elements of Bits, laid end to end. The record carries one
+%% description and the accessors take an index, which is what lets a word reach
+%% element k without a switch with one arm per element.
+%%
+%% Whole BYTES and byte-ALIGNED, both refused otherwise: element k is then byte
+%% base + k*(Bits/8), which is an add, where a bit-offset element would be a
+%% shift chain per access and a straddle to check.
+place({FName, Bits, {array, CT, N}}, Pos) ->
+    case (Bits rem 8 =/= 0) orelse (Pos rem 8 =/= 0) of
+	true  -> erlang:error({array_must_be_byte_aligned, FName, Pos, Bits});
+	false -> ok
+    end,
+    {{FName, Pos, Bits, CT, N}, Pos + Bits * N};
 place({FName, Bits, CT}, Pos)  -> {{FName, Pos, Bits, CT}, Pos + Bits}.
 
 %% Bytes a field touches, and the shift within the first of them.
@@ -220,6 +235,35 @@ umember(CT) ->
 is_signed(signed) -> true;
 is_signed(_)      -> false.
 
+%% AN ARRAY FIELD gets ONE accessor pair that takes an element index, where the
+%% same six names as separate fields needed a switch with six arms at every
+%% reader. Elements are whole bytes and byte-aligned (place/2 refuses anything
+%% else), so element k is byte base + k*stride and nothing has to shift.
+acc(Pre, Arm, RecCT, {FName, Pos, Bits, CT, N}) ->
+    F = atom_to_list(FName),
+    Lo = Pos div 8,
+    W = Bits div 8,
+    [io_lib:format("// ~p elements of ~p bits, from byte ~p.\n", [N, Bits, Lo]),
+     io_lib:format("static inline ~s ~sget_~s~s(const ~s* p, uint8_t k_)\n{\n"
+		   "    const uint8_t* b_ = (const uint8_t*)p + ~p + k_ * ~p;\n",
+		   [atom_to_list(CT), Pre, Arm, F, RecCT, Lo, W]),
+     arr_bytes(W, "b_[~p]", atom_to_list(CT)),
+     "}\n",
+     io_lib:format("static inline ~s ~sget_~s~s_ro(const ~s* p, uint8_t k_)\n{\n"
+		   "    const uint8_t* b_ = (const uint8_t*)p + ~p + k_ * ~p;\n",
+		   [atom_to_list(CT), Pre, Arm, F, RecCT, Lo, W]),
+     arr_bytes(W, "ro_byte(&b_[~p])", atom_to_list(CT)),
+     "}\n",
+     io_lib:format("static inline void ~sset_~s~s(~s* p, uint8_t k_, ~s v_)\n{\n"
+		   "    uint8_t* b_ = (uint8_t*)p + ~p + k_ * ~p;\n",
+		   [Pre, Arm, F, RecCT, atom_to_list(CT), Lo, W]),
+     [io_lib:format("    b_[~p] = (uint8_t)(v_ >> ~p);\n", [K, K * 8])
+      || K <- lists:seq(0, W - 1)],
+     "}\n",
+     %% The count, so a caller loops without restating it.
+     io_lib:format("#define ~sN_~s~s ~p\n",
+		   [string:uppercase(Pre), string:uppercase(Arm),
+		    string:uppercase(F), N])];
 acc(Pre, Arm, RecCT, {FName, Pos, Bits, CT}) ->
     F = atom_to_list(FName),
     {Lo, Sh, N} = span(Pos, Bits),
@@ -238,6 +282,16 @@ sext(_Bits, false, Expr, Ty) -> io_lib:format("(~s)(~s)", [Ty, Expr]);
 sext(Bits, true, Expr, Ty) ->
     io_lib:format("(~s)(((uint32_t)(~s) ^ 0x~.16BUL) - 0x~.16BUL)",
 		  [Ty, Expr, 1 bsl (Bits - 1), 1 bsl (Bits - 1)]).
+
+%% The bytes of one element, little end first -- the same order every other
+%% accessor here assembles in.
+arr_bytes(1, Fmt, Ty) ->
+    [io_lib:format("    return (~s)" ++ Fmt ++ ";\n", [Ty, 0])];
+arr_bytes(W, Fmt, Ty) ->
+    [io_lib:format("    return (~s)(", [Ty]),
+     string:join([io_lib:format("((~s)" ++ Fmt ++ " << ~p)", [Ty, K, K * 8])
+		  || K <- lists:seq(0, W - 1)], "\n\t   | "),
+     ");\n"].
 
 acc_plain(Pre, Arm, RecCT, F, Lo, Sh, N, Bits, Mask, Ty, Sg) ->
     [io_lib:format("static inline ~s ~sget_~s~s(const ~s* p)\n{\n",
@@ -277,7 +331,16 @@ acc_union(Pre, Arm, RecCT, F, Lo, U, UM) ->
      "    uint8_t* b_ = (uint8_t*)p;\n",
      [io_lib:format("    b_[~p] = (uint8_t)(v_.~s >> ~p);\n", [Lo + K, UM, K * 8])
       || K <- lists:seq(0, 3)],
-     "}\n"].
+     "}\n",
+     %% THE RAW PAIR. A union is not a number, and micro-csp only has numbers --
+     %% a word storing an initial value has thirty-two bits and no member name
+     %% to put them under. Same four bytes, said without the union.
+     io_lib:format("static inline uint32_t ~sget_~s~s_u(const ~s* p)\n"
+		   "{\n    return ~sget_~s~s(p).~s;\n}\n",
+		   [Pre, Arm, F, RecCT, Pre, Arm, F, UM]),
+     io_lib:format("static inline void ~sset_~s~s_u(~s* p, uint32_t v_)\n{\n"
+		   "    ~s t_;\n    t_.~s = v_;\n    ~sset_~s~s(p, t_);\n}\n",
+		   [Pre, Arm, F, RecCT, U, UM, Pre, Arm, F])].
 
 %% The shift is done in the WIDE type on purpose. Measured on avr-gcc -Os for a
 %% field spanning two bytes: this form 14 bytes, gcc's own bit-field read 16,
@@ -354,6 +417,18 @@ family_fields(Fam, Laid) ->
      io_lib:format("    MF~s_NDOUBLE = ~p,\n"
 		   "    MF~s_NFIELD = ~p\n} mf_~s_all_t;\n\n",
 		   [P, NDouble, P, NSlot, short(Fam)]),
+     %% WHERE AND HOW WIDE, for the readers that are not accessors. csp_part.h
+     %% is one: it shifts a whole value_t word by a bit position it used to
+     %% spell out, and a field added ahead of another moved every row in it
+     %% without a word from the compiler.
+     [io_lib:format("#define MF~s_~s~s_POS ~p\n"
+		    "#define MF~s_~s~s_BITS ~p\n",
+		    [P, string:uppercase(Arm),
+		     string:uppercase(atom_to_list(element(1, F))), element(2, F),
+		     P, string:uppercase(Arm),
+		     string:uppercase(atom_to_list(element(1, F))), element(3, F)])
+      || {Arm, F} <- Fs],
+     "\n",
      io_lib:format("// ~p names over ~p slots, of which the first ~p are the\n"
 		   "// halves of fields wider than a cell.\n",
 		   [length(Fs), NSlot, NDouble]),
@@ -399,6 +474,23 @@ field_check(Fam, Laid) ->
       || {A, R, Pre, F} <- Fs],
      "    } while (0)\n\n"].
 
+%% An ARRAY field is ONE row that k walks, so the check walks it too: every
+%% element through mc_field_get_k must be what the indexed accessor says. This
+%% is the only thing that pins the stride -- a row describes element zero and
+%% nothing else would notice if k stopped moving.
+check_field(P, Tab, Arm, RecCT, Pre, {FName, _Pos, Bits, _CT, N}) ->
+    F = atom_to_list(FName),
+    Id = io_lib:format("MF~s_~s~s", [P, string:uppercase(Arm), string:uppercase(F)]),
+    Mask = (1 bsl Bits) - 1,
+    io_lib:format(
+      "    { uint8_t k_; \\\n"
+      "      for (k_ = 0; k_ < ~w; k_++) \\\n"
+      "\tif ((long)mc_field_get_k(&(REC), &~s[~s], k_) != \\\n"
+      "\t    (long)((uint32_t)~sget_~s~s((const ~s*)&(REC), k_) & 0x~.16BUL)) \\\n"
+      "\t    FAIL(\"~s~s[k_]\", \\\n"
+      "\t\t (long)mc_field_get_k(&(REC), &~s[~s], k_), \\\n"
+      "\t\t (long)((uint32_t)~sget_~s~s((const ~s*)&(REC), k_) & 0x~.16BUL)); } \\\n",
+      [N, Tab, Id, Pre, Arm, F, RecCT, Mask, Arm, F, Tab, Id, Pre, Arm, F, RecCT, Mask]);
 check_field(P, Tab, Arm, RecCT, Pre, {FName, _Pos, Bits, CT}) ->
     F = atom_to_list(FName),
     Id = io_lib:format("MF~s_~s~s", [P, string:uppercase(Arm), string:uppercase(F)]),
@@ -433,7 +525,10 @@ check_field(P, Tab, Arm, RecCT, Pre, {FName, _Pos, Bits, CT}) ->
 
 %% MFD_ for declarations, MFI_ for instructions: one letter, and it is the
 %% family's own initial rather than a table to keep in step.
-tag(F)            -> string:slice(atom_to_list(F), 0, 1).
+%% The family's letter in MF<T>_*. Declared in layout.terms, not derived: the
+%% first letter collided the moment `value` joined `view`, and each generator
+%% guessed on its own.
+tag(F) -> maps:get(F, get(tags)).
 
 %% The family without its _common suffix: decl_common describes the bytes every
 %% arm shares, but the FAMILY is declarations, and CSP_DECL_ALL_FIELDS is what
@@ -444,6 +539,11 @@ short(F) ->
 	_       -> atom_to_list(F)
     end.
 
+%% AN ARRAY FIELD is ONE row -- element zero. The machine adds k*stride, which
+%% it derives from the width, so the id space carries one entry where six
+%% separate fields would have carried six.
+descs({_FN, Pos, Bits, _CT, _N}) ->
+    [{Pos div 8, Pos rem 8, Bits}];
 %% {byte, bit, bits}: mc_field_get reads from the BYTE, and gathers only the
 %% bytes the field spans. A byte-aligned field of any width up to 32 is then
 %% placeable anywhere -- the word form demanded a multiple of four and read a
@@ -515,6 +615,11 @@ oracle_rec({Id, _Bytes, _Total, Fields, Info}) ->
      string:join([oracle_field(Id, Info, F) || F <- Fields], " \\\n"),
      " \\\n    } while (0)\n\n"].
 
+oracle_field(_Id, _Info, {FName, _Pos, _Bits, _CT, _N}) ->
+    %% An array field has no single value to round-trip; tests/states_layout.c
+    %% is what pins where its elements land.
+    io_lib:format("    /* ~s: array field, see tests/states_layout.c */ \\\n",
+		  [atom_to_list(FName)]);
 oracle_field(Id, Info, {FName, _Pos, Bits, CT}) ->
     F = atom_to_list(FName),
     {Pre, Arm} = nm(Id, Info),
@@ -541,8 +646,11 @@ oracle_field(Id, Info, {FName, _Pos, Bits, CT}) ->
 			      true  -> {-(1 bsl (Bits - 1)), -(1 bsl (Bits - 1))};
 			      false -> {(1 bsl Bits) - 1, (1 bsl Bits) - 1}
 			  end,
+	    %% `float` is a READING of the bits, not a width: the accessor hands
+	    %% back the raw word, and casting the probe to a float would round
+	    %% it to a value neither side ever stored.
 	    Cast = case CT of
-		       none -> ""; signed -> "";
+		       none -> ""; signed -> ""; float -> "";
 		       _ -> "(" ++ atom_to_list(CT) ++ ")"
 		   end,
 	    io_lib:format(

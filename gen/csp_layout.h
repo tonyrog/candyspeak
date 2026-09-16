@@ -473,6 +473,8 @@ static inline void csp_view_set_buf(csp_view_t* p, uint16_t v_)
     b_[5] = (uint8_t)(v_ >> 8);
 }
 
+// value_common: ends at bit 0 of 4 bytes
+
 // decl_common_md: ends at bit 64 of 8 bytes
 // STRADDLING: n, ent
 static inline uint16_t csp_decl_get_md_n(const csp_decl_t* p)
@@ -569,6 +571,16 @@ static inline void csp_decl_set_va_init(csp_decl_t* p, value_t v_)
     b_[6] = (uint8_t)(v_.u >> 16);
     b_[7] = (uint8_t)(v_.u >> 24);
 }
+static inline uint32_t csp_decl_get_va_init_u(const csp_decl_t* p)
+{
+    return csp_decl_get_va_init(p).u;
+}
+static inline void csp_decl_set_va_init_u(csp_decl_t* p, uint32_t v_)
+{
+    value_t t_;
+    t_.u = v_;
+    csp_decl_set_va_init(p, t_);
+}
 
 // decl_common_cn: ends at bit 64 of 8 bytes
 // STRADDLING: init
@@ -595,6 +607,16 @@ static inline void csp_decl_set_cn_init(csp_decl_t* p, value_t v_)
     b_[5] = (uint8_t)(v_.u >> 8);
     b_[6] = (uint8_t)(v_.u >> 16);
     b_[7] = (uint8_t)(v_.u >> 24);
+}
+static inline uint32_t csp_decl_get_cn_init_u(const csp_decl_t* p)
+{
+    return csp_decl_get_cn_init(p).u;
+}
+static inline void csp_decl_set_cn_init_u(csp_decl_t* p, uint32_t v_)
+{
+    value_t t_;
+    t_.u = v_;
+    csp_decl_set_cn_init(p, t_);
 }
 
 // decl_common_di: ends at bit 49 of 8 bytes
@@ -997,93 +1019,35 @@ static inline void csp_decl_set_tm_init(csp_decl_t* p, uint8_t v_)
     b_[7] = (uint8_t)((b_[7] & (uint8_t)0x7FU) | (uint8_t)((v_ << 7) & 0x80U));
 }
 
-// decl_common_s6: ends at bit 64 of 8 bytes
-static inline uint8_t csp_decl_get_s6_name2(const csp_decl_t* p)
+// decl_common_sn: ends at bit 64 of 8 bytes
+// 6 elements of 8 bits, from byte 1.
+static inline uint8_t csp_decl_get_sn_names(const csp_decl_t* p, uint8_t k_)
 {
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((b_[2]) & 0xFFU);
+    const uint8_t* b_ = (const uint8_t*)p + 1 + k_ * 1;
+    return (uint8_t)b_[0];
 }
-static inline uint8_t csp_decl_get_s6_name2_ro(const csp_decl_t* p)
+static inline uint8_t csp_decl_get_sn_names_ro(const csp_decl_t* p, uint8_t k_)
 {
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((ro_byte(&b_[2])) & 0xFFU);
+    const uint8_t* b_ = (const uint8_t*)p + 1 + k_ * 1;
+    return (uint8_t)ro_byte(&b_[0]);
 }
-static inline void csp_decl_set_s6_name2(csp_decl_t* p, uint8_t v_)
+static inline void csp_decl_set_sn_names(csp_decl_t* p, uint8_t k_, uint8_t v_)
 {
-    uint8_t* b_ = (uint8_t*)p;
-    b_[2] = (uint8_t)v_;
+    uint8_t* b_ = (uint8_t*)p + 1 + k_ * 1;
+    b_[0] = (uint8_t)(v_ >> 0);
 }
-static inline uint8_t csp_decl_get_s6_name3(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((b_[3]) & 0xFFU);
-}
-static inline uint8_t csp_decl_get_s6_name3_ro(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((ro_byte(&b_[3])) & 0xFFU);
-}
-static inline void csp_decl_set_s6_name3(csp_decl_t* p, uint8_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[3] = (uint8_t)v_;
-}
-static inline uint8_t csp_decl_get_s6_name4(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((b_[4]) & 0xFFU);
-}
-static inline uint8_t csp_decl_get_s6_name4_ro(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((ro_byte(&b_[4])) & 0xFFU);
-}
-static inline void csp_decl_set_s6_name4(csp_decl_t* p, uint8_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[4] = (uint8_t)v_;
-}
-static inline uint8_t csp_decl_get_s6_name5(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((b_[5]) & 0xFFU);
-}
-static inline uint8_t csp_decl_get_s6_name5_ro(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((ro_byte(&b_[5])) & 0xFFU);
-}
-static inline void csp_decl_set_s6_name5(csp_decl_t* p, uint8_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[5] = (uint8_t)v_;
-}
-static inline uint8_t csp_decl_get_s6_name6(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((b_[6]) & 0xFFU);
-}
-static inline uint8_t csp_decl_get_s6_name6_ro(const csp_decl_t* p)
-{
-    const uint8_t* b_ = (const uint8_t*)p;
-    return (uint8_t)((ro_byte(&b_[6])) & 0xFFU);
-}
-static inline void csp_decl_set_s6_name6(csp_decl_t* p, uint8_t v_)
-{
-    uint8_t* b_ = (uint8_t*)p;
-    b_[6] = (uint8_t)v_;
-}
-static inline uint8_t csp_decl_get_s6_nx(const csp_decl_t* p)
+#define CSP_DECL_N_SN_NAMES 6
+static inline uint8_t csp_decl_get_sn_nx(const csp_decl_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
     return (uint8_t)((b_[7]) & 0xFFU);
 }
-static inline uint8_t csp_decl_get_s6_nx_ro(const csp_decl_t* p)
+static inline uint8_t csp_decl_get_sn_nx_ro(const csp_decl_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
     return (uint8_t)((ro_byte(&b_[7])) & 0xFFU);
 }
-static inline void csp_decl_set_s6_nx(csp_decl_t* p, uint8_t v_)
+static inline void csp_decl_set_sn_nx(csp_decl_t* p, uint8_t v_)
 {
     uint8_t* b_ = (uint8_t*)p;
     b_[7] = (uint8_t)v_;
@@ -1734,6 +1698,387 @@ static inline void csp_instr_set_em_crc(csp_instr_t* p, uint16_t v_)
     b_[3] = (uint8_t)(v_ >> 8);
 }
 
+// value_common_i: ends at bit 32 of 4 bytes
+// STRADDLING: val
+static inline int32_t value_get_i_val(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (int32_t)(((uint32_t)(((((uint32_t)b_[0] << 0) | ((uint32_t)b_[1] << 8) | ((uint32_t)b_[2] << 16) | ((uint32_t)b_[3] << 24)) >> 0) & 0xFFFFFFFFU) ^ 0x80000000UL) - 0x80000000UL);
+}
+static inline int32_t value_get_i_val_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (int32_t)(((uint32_t)(((((uint32_t)ro_byte(&b_[0]) << 0) | ((uint32_t)ro_byte(&b_[1]) << 8) | ((uint32_t)ro_byte(&b_[2]) << 16) | ((uint32_t)ro_byte(&b_[3]) << 24)) >> 0) & 0xFFFFFFFFU) ^ 0x80000000UL) - 0x80000000UL);
+}
+static inline void value_set_i_val(value_t* p, int32_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[0] = (uint8_t)v_;
+    b_[1] = (uint8_t)(v_ >> 8);
+    b_[2] = (uint8_t)(v_ >> 16);
+    b_[3] = (uint8_t)(v_ >> 24);
+}
+
+// value_common_u: ends at bit 32 of 4 bytes
+// STRADDLING: val
+static inline uint32_t value_get_u_val(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint32_t)(((((uint32_t)b_[0] << 0) | ((uint32_t)b_[1] << 8) | ((uint32_t)b_[2] << 16) | ((uint32_t)b_[3] << 24)) >> 0) & 0xFFFFFFFFU);
+}
+static inline uint32_t value_get_u_val_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint32_t)(((((uint32_t)ro_byte(&b_[0]) << 0) | ((uint32_t)ro_byte(&b_[1]) << 8) | ((uint32_t)ro_byte(&b_[2]) << 16) | ((uint32_t)ro_byte(&b_[3]) << 24)) >> 0) & 0xFFFFFFFFU);
+}
+static inline void value_set_u_val(value_t* p, uint32_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[0] = (uint8_t)v_;
+    b_[1] = (uint8_t)(v_ >> 8);
+    b_[2] = (uint8_t)(v_ >> 16);
+    b_[3] = (uint8_t)(v_ >> 24);
+}
+
+// value_common_f: ends at bit 32 of 4 bytes
+// STRADDLING: val
+static inline uint32_t value_get_f_val(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint32_t)(((((uint32_t)b_[0] << 0) | ((uint32_t)b_[1] << 8) | ((uint32_t)b_[2] << 16) | ((uint32_t)b_[3] << 24)) >> 0) & 0xFFFFFFFFU);
+}
+static inline uint32_t value_get_f_val_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint32_t)(((((uint32_t)ro_byte(&b_[0]) << 0) | ((uint32_t)ro_byte(&b_[1]) << 8) | ((uint32_t)ro_byte(&b_[2]) << 16) | ((uint32_t)ro_byte(&b_[3]) << 24)) >> 0) & 0xFFFFFFFFU);
+}
+static inline void value_set_f_val(value_t* p, uint32_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[0] = (uint8_t)v_;
+    b_[1] = (uint8_t)(v_ >> 8);
+    b_[2] = (uint8_t)(v_ >> 16);
+    b_[3] = (uint8_t)(v_ >> 24);
+}
+
+// value_common_s: ends at bit 32 of 4 bytes
+// STRADDLING: val
+static inline int32_t value_get_s_val(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (int32_t)(((uint32_t)(((((uint32_t)b_[0] << 0) | ((uint32_t)b_[1] << 8) | ((uint32_t)b_[2] << 16) | ((uint32_t)b_[3] << 24)) >> 0) & 0xFFFFFFFFU) ^ 0x80000000UL) - 0x80000000UL);
+}
+static inline int32_t value_get_s_val_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (int32_t)(((uint32_t)(((((uint32_t)ro_byte(&b_[0]) << 0) | ((uint32_t)ro_byte(&b_[1]) << 8) | ((uint32_t)ro_byte(&b_[2]) << 16) | ((uint32_t)ro_byte(&b_[3]) << 24)) >> 0) & 0xFFFFFFFFU) ^ 0x80000000UL) - 0x80000000UL);
+}
+static inline void value_set_s_val(value_t* p, int32_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[0] = (uint8_t)v_;
+    b_[1] = (uint8_t)(v_ >> 8);
+    b_[2] = (uint8_t)(v_ >> 16);
+    b_[3] = (uint8_t)(v_ >> 24);
+}
+
+// value_common_t: ends at bit 32 of 4 bytes
+// STRADDLING: period
+static inline uint32_t value_get_t_period(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint32_t)(((((uint32_t)b_[0] << 0) | ((uint32_t)b_[1] << 8) | ((uint32_t)b_[2] << 16) | ((uint32_t)b_[3] << 24)) >> 0) & 0xFFFFFFFU);
+}
+static inline uint32_t value_get_t_period_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint32_t)(((((uint32_t)ro_byte(&b_[0]) << 0) | ((uint32_t)ro_byte(&b_[1]) << 8) | ((uint32_t)ro_byte(&b_[2]) << 16) | ((uint32_t)ro_byte(&b_[3]) << 24)) >> 0) & 0xFFFFFFFU);
+}
+static inline void value_set_t_period(value_t* p, uint32_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[0] = (uint8_t)v_;
+    b_[1] = (uint8_t)(v_ >> 8);
+    b_[2] = (uint8_t)(v_ >> 16);
+    b_[3] = (uint8_t)((b_[3] & (uint8_t)0xF0U) | (uint8_t)((v_ >> 24) & 0xFU));
+}
+static inline uint8_t value_get_t_fired(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[3] >> 5)) & 0x1U);
+}
+static inline uint8_t value_get_t_fired_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[3]) >> 5)) & 0x1U);
+}
+static inline void value_set_t_fired(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[3] = (uint8_t)((b_[3] & (uint8_t)0xDFU) | (uint8_t)((v_ << 5) & 0x20U));
+}
+static inline uint8_t value_get_t_running(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[3] >> 6)) & 0x1U);
+}
+static inline uint8_t value_get_t_running_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[3]) >> 6)) & 0x1U);
+}
+static inline void value_set_t_running(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[3] = (uint8_t)((b_[3] & (uint8_t)0xBFU) | (uint8_t)((v_ << 6) & 0x40U));
+}
+static inline uint8_t value_get_t_val(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[3] >> 7)) & 0x1U);
+}
+static inline uint8_t value_get_t_val_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[3]) >> 7)) & 0x1U);
+}
+static inline void value_set_t_val(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[3] = (uint8_t)((b_[3] & (uint8_t)0x7FU) | (uint8_t)((v_ << 7) & 0x80U));
+}
+
+// value_common_d: ends at bit 18 of 4 bytes
+static inline uint8_t value_get_d_cfg(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((b_[0]) & 0x1U);
+}
+static inline uint8_t value_get_d_cfg_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((ro_byte(&b_[0])) & 0x1U);
+}
+static inline void value_set_d_cfg(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[0] = (uint8_t)((b_[0] & (uint8_t)0xFEU) | (uint8_t)(v_ & 0x1U));
+}
+static inline uint8_t value_get_d_pin(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[0] >> 1)) & 0x7FU);
+}
+static inline uint8_t value_get_d_pin_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[0]) >> 1)) & 0x7FU);
+}
+static inline void value_set_d_pin(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[0] = (uint8_t)((b_[0] & (uint8_t)0x1U) | (uint8_t)((v_ << 1) & 0xFEU));
+}
+static inline uint8_t value_get_d_port(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((b_[1]) & 0xFU);
+}
+static inline uint8_t value_get_d_port_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((ro_byte(&b_[1])) & 0xFU);
+}
+static inline void value_set_d_port(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[1] = (uint8_t)((b_[1] & (uint8_t)0xF0U) | (uint8_t)(v_ & 0xFU));
+}
+static inline uint8_t value_get_d_dir(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[1] >> 4)) & 0x3U);
+}
+static inline uint8_t value_get_d_dir_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[1]) >> 4)) & 0x3U);
+}
+static inline void value_set_d_dir(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[1] = (uint8_t)((b_[1] & (uint8_t)0xCFU) | (uint8_t)((v_ << 4) & 0x30U));
+}
+static inline uint8_t value_get_d_pullup(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[1] >> 6)) & 0x1U);
+}
+static inline uint8_t value_get_d_pullup_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[1]) >> 6)) & 0x1U);
+}
+static inline void value_set_d_pullup(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[1] = (uint8_t)((b_[1] & (uint8_t)0xBFU) | (uint8_t)((v_ << 6) & 0x40U));
+}
+static inline uint8_t value_get_d_pulldown(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[1] >> 7)) & 0x1U);
+}
+static inline uint8_t value_get_d_pulldown_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[1]) >> 7)) & 0x1U);
+}
+static inline void value_set_d_pulldown(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[1] = (uint8_t)((b_[1] & (uint8_t)0x7FU) | (uint8_t)((v_ << 7) & 0x80U));
+}
+static inline uint8_t value_get_d_val(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((b_[2]) & 0x1U);
+}
+static inline uint8_t value_get_d_val_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((ro_byte(&b_[2])) & 0x1U);
+}
+static inline void value_set_d_val(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[2] = (uint8_t)((b_[2] & (uint8_t)0xFEU) | (uint8_t)(v_ & 0x1U));
+}
+static inline uint8_t value_get_d_fired(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[2] >> 1)) & 0x1U);
+}
+static inline uint8_t value_get_d_fired_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[2]) >> 1)) & 0x1U);
+}
+static inline void value_set_d_fired(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[2] = (uint8_t)((b_[2] & (uint8_t)0xFDU) | (uint8_t)((v_ << 1) & 0x2U));
+}
+
+// value_common_a: ends at bit 32 of 4 bytes
+// STRADDLING: val
+static inline uint8_t value_get_a_cfg(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((b_[0]) & 0x1U);
+}
+static inline uint8_t value_get_a_cfg_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((ro_byte(&b_[0])) & 0x1U);
+}
+static inline void value_set_a_cfg(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[0] = (uint8_t)((b_[0] & (uint8_t)0xFEU) | (uint8_t)(v_ & 0x1U));
+}
+static inline uint8_t value_get_a_pin(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[0] >> 1)) & 0x7FU);
+}
+static inline uint8_t value_get_a_pin_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[0]) >> 1)) & 0x7FU);
+}
+static inline void value_set_a_pin(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[0] = (uint8_t)((b_[0] & (uint8_t)0x1U) | (uint8_t)((v_ << 1) & 0xFEU));
+}
+static inline uint8_t value_get_a_port(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((b_[1]) & 0xFU);
+}
+static inline uint8_t value_get_a_port_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)((ro_byte(&b_[1])) & 0xFU);
+}
+static inline void value_set_a_port(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[1] = (uint8_t)((b_[1] & (uint8_t)0xF0U) | (uint8_t)(v_ & 0xFU));
+}
+static inline uint8_t value_get_a_dir(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[1] >> 4)) & 0x3U);
+}
+static inline uint8_t value_get_a_dir_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[1]) >> 4)) & 0x3U);
+}
+static inline void value_set_a_dir(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[1] = (uint8_t)((b_[1] & (uint8_t)0xCFU) | (uint8_t)((v_ << 4) & 0x30U));
+}
+static inline uint8_t value_get_a_pwm(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[1] >> 6)) & 0x1U);
+}
+static inline uint8_t value_get_a_pwm_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[1]) >> 6)) & 0x1U);
+}
+static inline void value_set_a_pwm(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[1] = (uint8_t)((b_[1] & (uint8_t)0xBFU) | (uint8_t)((v_ << 6) & 0x40U));
+}
+static inline uint8_t value_get_a_fired(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[1] >> 7)) & 0x1U);
+}
+static inline uint8_t value_get_a_fired_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[1]) >> 7)) & 0x1U);
+}
+static inline void value_set_a_fired(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[1] = (uint8_t)((b_[1] & (uint8_t)0x7FU) | (uint8_t)((v_ << 7) & 0x80U));
+}
+static inline uint16_t value_get_a_val(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint16_t)(((uint16_t)b_[2] | ((uint16_t)b_[3] << 8)) & 0xFFFFU);
+}
+static inline uint16_t value_get_a_val_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint16_t)(((uint16_t)ro_byte(&b_[2]) | ((uint16_t)ro_byte(&b_[3]) << 8)) & 0xFFFFU);
+}
+static inline void value_set_a_val(value_t* p, uint16_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[2] = (uint8_t)v_;
+    b_[3] = (uint8_t)(v_ >> 8);
+}
+
 typedef enum {
     MFB_HP = 2,
     MFB_NBYTES = 3,
@@ -1748,6 +2093,27 @@ typedef enum {
     MFB_NDOUBLE = 2,
     MFB_NFIELD = 11
 } mf_buf_all_t;
+
+#define MFB_HP_POS 0
+#define MFB_HP_BITS 16
+#define MFB_NBYTES_POS 16
+#define MFB_NBYTES_BITS 16
+#define MFB_TRANSPORT_POS 32
+#define MFB_TRANSPORT_BITS 4
+#define MFB_DIR_POS 36
+#define MFB_DIR_BITS 4
+#define MFB_FLAGS_POS 40
+#define MFB_FLAGS_BITS 8
+#define MFB_DLC_POS 48
+#define MFB_DLC_BITS 8
+#define MFB_DLC_IN_POS 56
+#define MFB_DLC_IN_BITS 8
+#define MFB_XREF_POS 64
+#define MFB_XREF_BITS 32
+#define MFB_PORT_POS 96
+#define MFB_PORT_BITS 16
+#define MFB_OWNER_POS 112
+#define MFB_OWNER_BITS 16
 
 // 10 names over 11 slots, of which the first 2 are the
 // halves of fields wider than a cell.
@@ -1816,54 +2182,141 @@ typedef enum {
     MFD_DIR = 7,
     MFD_NAME = 8,
     MFD_RES = 9,
-    MFD_IS_MAPPED = 11,
-    MFD_BOUND = 12,
-    MFD_NX = 13,
-    MFD_VT = 14,
-    MFD_REG = 16,
-    MFD_MD_N = 20,
-    MFD_MD_ENT = 30,
-    MFD_MQ_MX = 20,
-    MFD_MQ_M = 30,
+    MFD_IS_MAPPED = 10,
+    MFD_BOUND = 11,
+    MFD_NX = 12,
+    MFD_VT = 13,
+    MFD_REG = 14,
+    MFD_MD_N = 17,
+    MFD_MD_ENT = 25,
+    MFD_MQ_MX = 17,
+    MFD_MQ_M = 25,
     MFD_VA_INIT = 2,
     MFD_CN_INIT = 2,
-    MFD_DI_SOFT = 17,
-    MFD_DI_PIN = 21,
-    MFD_DI_PORT = 22,
-    MFD_DI_IRQ = 25,
-    MFD_DI_PULLUP = 26,
-    MFD_DI_PULLDOWN = 27,
-    MFD_AN_SOFT = 17,
-    MFD_AN_PIN = 21,
-    MFD_AN_PORT = 22,
-    MFD_AN_IRQ = 25,
-    MFD_AN_PWM = 26,
-    MFD_AN_ENDIAN = 28,
-    MFD_CA_ID = 20,
-    MFD_CA_ENDIAN = 28,
-    MFD_CA_BIT = 31,
-    MFD_CA_LEN = 33,
-    MFD_BF_NBYTES = 19,
-    MFD_BF_TRANSPORT = 24,
-    MFD_BF_ID = 30,
-    MFD_RT_SRC = 20,
-    MFD_RT_DST = 30,
+    MFD_DI_SOFT = 15,
+    MFD_DI_PIN = 18,
+    MFD_DI_PORT = 19,
+    MFD_DI_IRQ = 21,
+    MFD_DI_PULLUP = 22,
+    MFD_DI_PULLDOWN = 23,
+    MFD_AN_SOFT = 15,
+    MFD_AN_PIN = 18,
+    MFD_AN_PORT = 19,
+    MFD_AN_IRQ = 21,
+    MFD_AN_PWM = 22,
+    MFD_AN_ENDIAN = 24,
+    MFD_CA_ID = 17,
+    MFD_CA_ENDIAN = 24,
+    MFD_CA_BIT = 26,
+    MFD_CA_LEN = 28,
+    MFD_BF_NBYTES = 16,
+    MFD_BF_TRANSPORT = 20,
+    MFD_BF_ID = 25,
+    MFD_RT_SRC = 17,
+    MFD_RT_DST = 25,
     MFD_TM_PERIOD = 0,
-    MFD_TM_FIRED = 34,
-    MFD_TM_RUNNING = 35,
-    MFD_TM_INIT = 36,
-    MFD_S6_NAME2 = 10,
-    MFD_S6_NAME3 = 15,
-    MFD_S6_NAME4 = 18,
-    MFD_S6_NAME5 = 23,
-    MFD_S6_NAME6 = 29,
-    MFD_S6_NX = 32,
-    MFD_EM_CRC = 20,
+    MFD_TM_FIRED = 29,
+    MFD_TM_RUNNING = 30,
+    MFD_TM_INIT = 31,
+    MFD_SN_NAMES = 8,
+    MFD_SN_NX = 27,
+    MFD_EM_CRC = 17,
     MFD_NDOUBLE = 4,
-    MFD_NFIELD = 37
+    MFD_NFIELD = 32
 } mf_decl_all_t;
 
-// 49 names over 37 slots, of which the first 4 are the
+#define MFD_TYPE_POS 0
+#define MFD_TYPE_BITS 4
+#define MFD_CONT_POS 4
+#define MFD_CONT_BITS 1
+#define MFD_LOCAL_POS 5
+#define MFD_LOCAL_BITS 1
+#define MFD_DIR_POS 6
+#define MFD_DIR_BITS 2
+#define MFD_NAME_POS 8
+#define MFD_NAME_BITS 8
+#define MFD_RES_POS 16
+#define MFD_RES_BITS 5
+#define MFD_IS_MAPPED_POS 21
+#define MFD_IS_MAPPED_BITS 1
+#define MFD_BOUND_POS 22
+#define MFD_BOUND_BITS 1
+#define MFD_NX_POS 23
+#define MFD_NX_BITS 1
+#define MFD_VT_POS 24
+#define MFD_VT_BITS 4
+#define MFD_REG_POS 28
+#define MFD_REG_BITS 4
+#define MFD_MD_N_POS 32
+#define MFD_MD_N_BITS 16
+#define MFD_MD_ENT_POS 48
+#define MFD_MD_ENT_BITS 16
+#define MFD_MQ_MX_POS 32
+#define MFD_MQ_MX_BITS 16
+#define MFD_MQ_M_POS 48
+#define MFD_MQ_M_BITS 16
+#define MFD_VA_INIT_POS 32
+#define MFD_VA_INIT_BITS 32
+#define MFD_CN_INIT_POS 32
+#define MFD_CN_INIT_BITS 32
+#define MFD_DI_SOFT_POS 32
+#define MFD_DI_SOFT_BITS 1
+#define MFD_DI_PIN_POS 33
+#define MFD_DI_PIN_BITS 7
+#define MFD_DI_PORT_POS 40
+#define MFD_DI_PORT_BITS 4
+#define MFD_DI_IRQ_POS 44
+#define MFD_DI_IRQ_BITS 3
+#define MFD_DI_PULLUP_POS 47
+#define MFD_DI_PULLUP_BITS 1
+#define MFD_DI_PULLDOWN_POS 48
+#define MFD_DI_PULLDOWN_BITS 1
+#define MFD_AN_SOFT_POS 32
+#define MFD_AN_SOFT_BITS 1
+#define MFD_AN_PIN_POS 33
+#define MFD_AN_PIN_BITS 7
+#define MFD_AN_PORT_POS 40
+#define MFD_AN_PORT_BITS 4
+#define MFD_AN_IRQ_POS 44
+#define MFD_AN_IRQ_BITS 3
+#define MFD_AN_PWM_POS 47
+#define MFD_AN_PWM_BITS 1
+#define MFD_AN_ENDIAN_POS 48
+#define MFD_AN_ENDIAN_BITS 2
+#define MFD_CA_ID_POS 32
+#define MFD_CA_ID_BITS 16
+#define MFD_CA_ENDIAN_POS 48
+#define MFD_CA_ENDIAN_BITS 2
+#define MFD_CA_BIT_POS 50
+#define MFD_CA_BIT_BITS 9
+#define MFD_CA_LEN_POS 59
+#define MFD_CA_LEN_BITS 5
+#define MFD_BF_NBYTES_POS 32
+#define MFD_BF_NBYTES_BITS 10
+#define MFD_BF_TRANSPORT_POS 42
+#define MFD_BF_TRANSPORT_BITS 4
+#define MFD_BF_ID_POS 48
+#define MFD_BF_ID_BITS 16
+#define MFD_RT_SRC_POS 32
+#define MFD_RT_SRC_BITS 16
+#define MFD_RT_DST_POS 48
+#define MFD_RT_DST_BITS 16
+#define MFD_TM_PERIOD_POS 32
+#define MFD_TM_PERIOD_BITS 28
+#define MFD_TM_FIRED_POS 61
+#define MFD_TM_FIRED_BITS 1
+#define MFD_TM_RUNNING_POS 62
+#define MFD_TM_RUNNING_BITS 1
+#define MFD_TM_INIT_POS 63
+#define MFD_TM_INIT_BITS 1
+#define MFD_SN_NAMES_POS 8
+#define MFD_SN_NAMES_BITS 8
+#define MFD_SN_NX_POS 56
+#define MFD_SN_NX_BITS 8
+#define MFD_EM_CRC_POS 32
+#define MFD_EM_CRC_BITS 16
+
+// 45 names over 32 slots, of which the first 4 are the
 // halves of fields wider than a cell.
 #define CSP_DECL_ALL_FIELDS { \
     { 4, 0, 16 } /* tm_period lo */, \
@@ -1874,31 +2327,26 @@ typedef enum {
     { 0, 4, 1 } /* cont */, \
     { 0, 5, 1 } /* local */, \
     { 0, 6, 2 } /* dir */, \
-    { 1, 0, 8 } /* name */, \
+    { 1, 0, 8 } /* name sn_names */, \
     { 2, 0, 5 } /* res */, \
-    { 2, 0, 8 } /* s6_name2 */, \
     { 2, 5, 1 } /* is_mapped */, \
     { 2, 6, 1 } /* bound */, \
     { 2, 7, 1 } /* nx */, \
     { 3, 0, 4 } /* vt */, \
-    { 3, 0, 8 } /* s6_name3 */, \
     { 3, 4, 4 } /* reg */, \
     { 4, 0, 1 } /* di_soft an_soft */, \
-    { 4, 0, 8 } /* s6_name4 */, \
     { 4, 0, 10 } /* bf_nbytes */, \
     { 4, 0, 16 } /* md_n mq_mx ca_id rt_src em_crc */, \
     { 4, 1, 7 } /* di_pin an_pin */, \
     { 5, 0, 4 } /* di_port an_port */, \
-    { 5, 0, 8 } /* s6_name5 */, \
     { 5, 2, 4 } /* bf_transport */, \
     { 5, 4, 3 } /* di_irq an_irq */, \
     { 5, 7, 1 } /* di_pullup an_pwm */, \
     { 6, 0, 1 } /* di_pulldown */, \
     { 6, 0, 2 } /* an_endian ca_endian */, \
-    { 6, 0, 8 } /* s6_name6 */, \
     { 6, 0, 16 } /* md_ent mq_m bf_id rt_dst */, \
     { 6, 2, 9 } /* ca_bit */, \
-    { 7, 0, 8 } /* s6_nx */, \
+    { 7, 0, 8 } /* sn_nx */, \
     { 7, 3, 5 } /* ca_len */, \
     { 7, 5, 1 } /* tm_fired */, \
     { 7, 6, 1 } /* tm_running */, \
@@ -2069,30 +2517,17 @@ typedef enum {
 	(long)((uint32_t)csp_decl_get_tm_init((const csp_decl_t*)&(REC)) & 0x1UL)) \
 	FAIL("tm_init", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_TM_INIT]), \
 	     (long)((uint32_t)csp_decl_get_tm_init((const csp_decl_t*)&(REC)) & 0x1UL)); \
-    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME2]) != \
-	(long)((uint32_t)csp_decl_get_s6_name2((const csp_decl_t*)&(REC)) & 0xFFUL)) \
-	FAIL("s6_name2", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME2]), \
-	     (long)((uint32_t)csp_decl_get_s6_name2((const csp_decl_t*)&(REC)) & 0xFFUL)); \
-    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME3]) != \
-	(long)((uint32_t)csp_decl_get_s6_name3((const csp_decl_t*)&(REC)) & 0xFFUL)) \
-	FAIL("s6_name3", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME3]), \
-	     (long)((uint32_t)csp_decl_get_s6_name3((const csp_decl_t*)&(REC)) & 0xFFUL)); \
-    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME4]) != \
-	(long)((uint32_t)csp_decl_get_s6_name4((const csp_decl_t*)&(REC)) & 0xFFUL)) \
-	FAIL("s6_name4", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME4]), \
-	     (long)((uint32_t)csp_decl_get_s6_name4((const csp_decl_t*)&(REC)) & 0xFFUL)); \
-    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME5]) != \
-	(long)((uint32_t)csp_decl_get_s6_name5((const csp_decl_t*)&(REC)) & 0xFFUL)) \
-	FAIL("s6_name5", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME5]), \
-	     (long)((uint32_t)csp_decl_get_s6_name5((const csp_decl_t*)&(REC)) & 0xFFUL)); \
-    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME6]) != \
-	(long)((uint32_t)csp_decl_get_s6_name6((const csp_decl_t*)&(REC)) & 0xFFUL)) \
-	FAIL("s6_name6", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NAME6]), \
-	     (long)((uint32_t)csp_decl_get_s6_name6((const csp_decl_t*)&(REC)) & 0xFFUL)); \
-    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NX]) != \
-	(long)((uint32_t)csp_decl_get_s6_nx((const csp_decl_t*)&(REC)) & 0xFFUL)) \
-	FAIL("s6_nx", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_S6_NX]), \
-	     (long)((uint32_t)csp_decl_get_s6_nx((const csp_decl_t*)&(REC)) & 0xFFUL)); \
+    { uint8_t k_; \
+      for (k_ = 0; k_ < 6; k_++) \
+	if ((long)mc_field_get_k(&(REC), &mc_decl_fields[MFD_SN_NAMES], k_) != \
+	    (long)((uint32_t)csp_decl_get_sn_names((const csp_decl_t*)&(REC), k_) & 0xFFUL)) \
+	    FAIL("sn_names[k_]", \
+		 (long)mc_field_get_k(&(REC), &mc_decl_fields[MFD_SN_NAMES], k_), \
+		 (long)((uint32_t)csp_decl_get_sn_names((const csp_decl_t*)&(REC), k_) & 0xFFUL)); } \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_SN_NX]) != \
+	(long)((uint32_t)csp_decl_get_sn_nx((const csp_decl_t*)&(REC)) & 0xFFUL)) \
+	FAIL("sn_nx", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_SN_NX]), \
+	     (long)((uint32_t)csp_decl_get_sn_nx((const csp_decl_t*)&(REC)) & 0xFFUL)); \
     if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_EM_CRC]) != \
 	(long)((uint32_t)csp_decl_get_em_crc((const csp_decl_t*)&(REC)) & 0xFFFFUL)) \
 	FAIL("em_crc", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_EM_CRC]), \
@@ -2141,6 +2576,83 @@ typedef enum {
     MFI_NDOUBLE = 0,
     MFI_NFIELD = 21
 } mf_instr_all_t;
+
+#define MFI_OP_POS 0
+#define MFI_OP_BITS 6
+#define MFI_A_X_POS 6
+#define MFI_A_X_BITS 4
+#define MFI_A_Y_POS 10
+#define MFI_A_Y_BITS 4
+#define MFI_A_Z_POS 14
+#define MFI_A_Z_BITS 4
+#define MFI_A_U_POS 18
+#define MFI_A_U_BITS 1
+#define MFI_A_SWAP_POS 19
+#define MFI_A_SWAP_BITS 1
+#define MFI_M_X_POS 6
+#define MFI_M_X_BITS 4
+#define MFI_M_Y_POS 10
+#define MFI_M_Y_BITS 4
+#define MFI_M_MEM_POS 16
+#define MFI_M_MEM_BITS 16
+#define MFI_MI_X_POS 6
+#define MFI_MI_X_BITS 4
+#define MFI_MI_IMM_POS 10
+#define MFI_MI_IMM_BITS 6
+#define MFI_MI_MEM_POS 16
+#define MFI_MI_MEM_BITS 16
+#define MFI_I_X_POS 6
+#define MFI_I_X_BITS 4
+#define MFI_I_IMM_POS 16
+#define MFI_I_IMM_BITS 16
+#define MFI_R_CND_POS 6
+#define MFI_R_CND_BITS 4
+#define MFI_R_NXT_POS 16
+#define MFI_R_NXT_BITS 15
+#define MFI_R_IMPLICIT_POS 31
+#define MFI_R_IMPLICIT_BITS 1
+#define MFI_X_X_POS 6
+#define MFI_X_X_BITS 4
+#define MFI_IN_X_POS 6
+#define MFI_IN_X_BITS 4
+#define MFI_IN_IMM_POS 10
+#define MFI_IN_IMM_BITS 8
+#define MFI_IN_NXT_POS 18
+#define MFI_IN_NXT_BITS 13
+#define MFI_IN_IMPLICIT_POS 31
+#define MFI_IN_IMPLICIT_BITS 1
+#define MFI_E_NUM_POS 6
+#define MFI_E_NUM_BITS 10
+#define MFI_E_MX_POS 16
+#define MFI_E_MX_BITS 16
+#define MFI_SG_NUM_POS 8
+#define MFI_SG_NUM_BITS 10
+#define MFI_SG_USED_POS 24
+#define MFI_SG_USED_BITS 8
+#define MFI_V_NUM_POS 6
+#define MFI_V_NUM_BITS 10
+#define MFI_V_MX_POS 16
+#define MFI_V_MX_BITS 16
+#define MFI_N_OBJ_POS 8
+#define MFI_N_OBJ_BITS 16
+#define MFI_F_X_POS 6
+#define MFI_F_X_BITS 4
+#define MFI_F_IDX_POS 10
+#define MFI_F_IDX_BITS 5
+#define MFI_F_USR_POS 15
+#define MFI_F_USR_BITS 1
+#define MFI_F_AVT_POS 16
+#define MFI_F_AVT_BITS 16
+#define MFI_O_OBJ_POS 8
+#define MFI_O_OBJ_BITS 16
+#define MFI_OX_LEN_POS 8
+#define MFI_OX_LEN_BITS 14
+#define MFI_OX_X_POS 22
+#define MFI_OX_X_BITS 4
+#define MFI_OX_STRIDE_POS 26
+#define MFI_OX_STRIDE_BITS 6
+#define MFI_EM_CRC_POS 16
+#define MFI_EM_CRC_BITS 16
 
 // 38 names over 21 slots, of which the first 0 are the
 // halves of fields wider than a cell.
@@ -2323,16 +2835,231 @@ typedef enum {
     } while (0)
 
 typedef enum {
-    MFV_KIND = 0,
-    MFV_VT = 1,
-    MFV_ENDIAN = 2,
-    MFV_FLAGS = 3,
-    MFV_LEN = 4,
-    MFV_POS = 5,
-    MFV_BUF = 6,
-    MFV_NDOUBLE = 0,
-    MFV_NFIELD = 7
+    MFV_I_VAL = 2,
+    MFV_U_VAL = 2,
+    MFV_F_VAL = 2,
+    MFV_S_VAL = 2,
+    MFV_T_PERIOD = 0,
+    MFV_T_FIRED = 13,
+    MFV_T_RUNNING = 14,
+    MFV_T_VAL = 15,
+    MFV_D_CFG = 4,
+    MFV_D_PIN = 5,
+    MFV_D_PORT = 6,
+    MFV_D_DIR = 7,
+    MFV_D_PULLUP = 8,
+    MFV_D_PULLDOWN = 9,
+    MFV_D_VAL = 10,
+    MFV_D_FIRED = 12,
+    MFV_A_CFG = 4,
+    MFV_A_PIN = 5,
+    MFV_A_PORT = 6,
+    MFV_A_DIR = 7,
+    MFV_A_PWM = 8,
+    MFV_A_FIRED = 9,
+    MFV_A_VAL = 11,
+    MFV_NDOUBLE = 4,
+    MFV_NFIELD = 16
+} mf_value_all_t;
+
+#define MFV_I_VAL_POS 0
+#define MFV_I_VAL_BITS 32
+#define MFV_U_VAL_POS 0
+#define MFV_U_VAL_BITS 32
+#define MFV_F_VAL_POS 0
+#define MFV_F_VAL_BITS 32
+#define MFV_S_VAL_POS 0
+#define MFV_S_VAL_BITS 32
+#define MFV_T_PERIOD_POS 0
+#define MFV_T_PERIOD_BITS 28
+#define MFV_T_FIRED_POS 29
+#define MFV_T_FIRED_BITS 1
+#define MFV_T_RUNNING_POS 30
+#define MFV_T_RUNNING_BITS 1
+#define MFV_T_VAL_POS 31
+#define MFV_T_VAL_BITS 1
+#define MFV_D_CFG_POS 0
+#define MFV_D_CFG_BITS 1
+#define MFV_D_PIN_POS 1
+#define MFV_D_PIN_BITS 7
+#define MFV_D_PORT_POS 8
+#define MFV_D_PORT_BITS 4
+#define MFV_D_DIR_POS 12
+#define MFV_D_DIR_BITS 2
+#define MFV_D_PULLUP_POS 14
+#define MFV_D_PULLUP_BITS 1
+#define MFV_D_PULLDOWN_POS 15
+#define MFV_D_PULLDOWN_BITS 1
+#define MFV_D_VAL_POS 16
+#define MFV_D_VAL_BITS 1
+#define MFV_D_FIRED_POS 17
+#define MFV_D_FIRED_BITS 1
+#define MFV_A_CFG_POS 0
+#define MFV_A_CFG_BITS 1
+#define MFV_A_PIN_POS 1
+#define MFV_A_PIN_BITS 7
+#define MFV_A_PORT_POS 8
+#define MFV_A_PORT_BITS 4
+#define MFV_A_DIR_POS 12
+#define MFV_A_DIR_BITS 2
+#define MFV_A_PWM_POS 14
+#define MFV_A_PWM_BITS 1
+#define MFV_A_FIRED_POS 15
+#define MFV_A_FIRED_BITS 1
+#define MFV_A_VAL_POS 16
+#define MFV_A_VAL_BITS 16
+
+// 23 names over 16 slots, of which the first 4 are the
+// halves of fields wider than a cell.
+#define CSP_VALUE_ALL_FIELDS { \
+    { 0, 0, 16 } /* t_period lo */, \
+    { 2, 0, 12 } /* t_period hi */, \
+    { 0, 0, 16 } /* i_val u_val f_val s_val lo */, \
+    { 2, 0, 16 } /* i_val u_val f_val s_val hi */, \
+    { 0, 0, 1 } /* d_cfg a_cfg */, \
+    { 0, 1, 7 } /* d_pin a_pin */, \
+    { 1, 0, 4 } /* d_port a_port */, \
+    { 1, 4, 2 } /* d_dir a_dir */, \
+    { 1, 6, 1 } /* d_pullup a_pwm */, \
+    { 1, 7, 1 } /* d_pulldown a_fired */, \
+    { 2, 0, 1 } /* d_val */, \
+    { 2, 0, 16 } /* a_val */, \
+    { 2, 1, 1 } /* d_fired */, \
+    { 3, 5, 1 } /* t_fired */, \
+    { 3, 6, 1 } /* t_running */, \
+    { 3, 7, 1 } /* t_val */ }
+
+#define CSP_MCFIELD_VALUE(REC, FAIL) do { \
+    { uint32_t d_; \
+      d_ = (uint32_t)mc_field_get(&(REC), &mc_value_fields[MFV_I_VAL]) \
+	   | ((uint32_t)mc_field_get(&(REC), &mc_value_fields[(MFV_I_VAL) + 1]) << 16); \
+      if (d_ != (uint32_t)value_get_i_val((const value_t*)&(REC))) \
+	FAIL("i_val", (long)d_, \
+	     (long)(uint32_t)value_get_i_val((const value_t*)&(REC))); } \
+    { uint32_t d_; \
+      d_ = (uint32_t)mc_field_get(&(REC), &mc_value_fields[MFV_U_VAL]) \
+	   | ((uint32_t)mc_field_get(&(REC), &mc_value_fields[(MFV_U_VAL) + 1]) << 16); \
+      if (d_ != (uint32_t)value_get_u_val((const value_t*)&(REC))) \
+	FAIL("u_val", (long)d_, \
+	     (long)(uint32_t)value_get_u_val((const value_t*)&(REC))); } \
+    { uint32_t d_; \
+      d_ = (uint32_t)mc_field_get(&(REC), &mc_value_fields[MFV_F_VAL]) \
+	   | ((uint32_t)mc_field_get(&(REC), &mc_value_fields[(MFV_F_VAL) + 1]) << 16); \
+      if (d_ != (uint32_t)value_get_f_val((const value_t*)&(REC))) \
+	FAIL("f_val", (long)d_, \
+	     (long)(uint32_t)value_get_f_val((const value_t*)&(REC))); } \
+    { uint32_t d_; \
+      d_ = (uint32_t)mc_field_get(&(REC), &mc_value_fields[MFV_S_VAL]) \
+	   | ((uint32_t)mc_field_get(&(REC), &mc_value_fields[(MFV_S_VAL) + 1]) << 16); \
+      if (d_ != (uint32_t)value_get_s_val((const value_t*)&(REC))) \
+	FAIL("s_val", (long)d_, \
+	     (long)(uint32_t)value_get_s_val((const value_t*)&(REC))); } \
+    { uint32_t d_; \
+      d_ = (uint32_t)mc_field_get(&(REC), &mc_value_fields[MFV_T_PERIOD]) \
+	   | ((uint32_t)mc_field_get(&(REC), &mc_value_fields[(MFV_T_PERIOD) + 1]) << 16); \
+      if (d_ != (uint32_t)value_get_t_period((const value_t*)&(REC))) \
+	FAIL("t_period", (long)d_, \
+	     (long)(uint32_t)value_get_t_period((const value_t*)&(REC))); } \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_T_FIRED]) != \
+	(long)((uint32_t)value_get_t_fired((const value_t*)&(REC)) & 0x1UL)) \
+	FAIL("t_fired", (long)mc_field_get(&(REC), &mc_value_fields[MFV_T_FIRED]), \
+	     (long)((uint32_t)value_get_t_fired((const value_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_T_RUNNING]) != \
+	(long)((uint32_t)value_get_t_running((const value_t*)&(REC)) & 0x1UL)) \
+	FAIL("t_running", (long)mc_field_get(&(REC), &mc_value_fields[MFV_T_RUNNING]), \
+	     (long)((uint32_t)value_get_t_running((const value_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_T_VAL]) != \
+	(long)((uint32_t)value_get_t_val((const value_t*)&(REC)) & 0x1UL)) \
+	FAIL("t_val", (long)mc_field_get(&(REC), &mc_value_fields[MFV_T_VAL]), \
+	     (long)((uint32_t)value_get_t_val((const value_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_D_CFG]) != \
+	(long)((uint32_t)value_get_d_cfg((const value_t*)&(REC)) & 0x1UL)) \
+	FAIL("d_cfg", (long)mc_field_get(&(REC), &mc_value_fields[MFV_D_CFG]), \
+	     (long)((uint32_t)value_get_d_cfg((const value_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_D_PIN]) != \
+	(long)((uint32_t)value_get_d_pin((const value_t*)&(REC)) & 0x7FUL)) \
+	FAIL("d_pin", (long)mc_field_get(&(REC), &mc_value_fields[MFV_D_PIN]), \
+	     (long)((uint32_t)value_get_d_pin((const value_t*)&(REC)) & 0x7FUL)); \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_D_PORT]) != \
+	(long)((uint32_t)value_get_d_port((const value_t*)&(REC)) & 0xFUL)) \
+	FAIL("d_port", (long)mc_field_get(&(REC), &mc_value_fields[MFV_D_PORT]), \
+	     (long)((uint32_t)value_get_d_port((const value_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_D_DIR]) != \
+	(long)((uint32_t)value_get_d_dir((const value_t*)&(REC)) & 0x3UL)) \
+	FAIL("d_dir", (long)mc_field_get(&(REC), &mc_value_fields[MFV_D_DIR]), \
+	     (long)((uint32_t)value_get_d_dir((const value_t*)&(REC)) & 0x3UL)); \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_D_PULLUP]) != \
+	(long)((uint32_t)value_get_d_pullup((const value_t*)&(REC)) & 0x1UL)) \
+	FAIL("d_pullup", (long)mc_field_get(&(REC), &mc_value_fields[MFV_D_PULLUP]), \
+	     (long)((uint32_t)value_get_d_pullup((const value_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_D_PULLDOWN]) != \
+	(long)((uint32_t)value_get_d_pulldown((const value_t*)&(REC)) & 0x1UL)) \
+	FAIL("d_pulldown", (long)mc_field_get(&(REC), &mc_value_fields[MFV_D_PULLDOWN]), \
+	     (long)((uint32_t)value_get_d_pulldown((const value_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_D_VAL]) != \
+	(long)((uint32_t)value_get_d_val((const value_t*)&(REC)) & 0x1UL)) \
+	FAIL("d_val", (long)mc_field_get(&(REC), &mc_value_fields[MFV_D_VAL]), \
+	     (long)((uint32_t)value_get_d_val((const value_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_D_FIRED]) != \
+	(long)((uint32_t)value_get_d_fired((const value_t*)&(REC)) & 0x1UL)) \
+	FAIL("d_fired", (long)mc_field_get(&(REC), &mc_value_fields[MFV_D_FIRED]), \
+	     (long)((uint32_t)value_get_d_fired((const value_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_A_CFG]) != \
+	(long)((uint32_t)value_get_a_cfg((const value_t*)&(REC)) & 0x1UL)) \
+	FAIL("a_cfg", (long)mc_field_get(&(REC), &mc_value_fields[MFV_A_CFG]), \
+	     (long)((uint32_t)value_get_a_cfg((const value_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_A_PIN]) != \
+	(long)((uint32_t)value_get_a_pin((const value_t*)&(REC)) & 0x7FUL)) \
+	FAIL("a_pin", (long)mc_field_get(&(REC), &mc_value_fields[MFV_A_PIN]), \
+	     (long)((uint32_t)value_get_a_pin((const value_t*)&(REC)) & 0x7FUL)); \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_A_PORT]) != \
+	(long)((uint32_t)value_get_a_port((const value_t*)&(REC)) & 0xFUL)) \
+	FAIL("a_port", (long)mc_field_get(&(REC), &mc_value_fields[MFV_A_PORT]), \
+	     (long)((uint32_t)value_get_a_port((const value_t*)&(REC)) & 0xFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_A_DIR]) != \
+	(long)((uint32_t)value_get_a_dir((const value_t*)&(REC)) & 0x3UL)) \
+	FAIL("a_dir", (long)mc_field_get(&(REC), &mc_value_fields[MFV_A_DIR]), \
+	     (long)((uint32_t)value_get_a_dir((const value_t*)&(REC)) & 0x3UL)); \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_A_PWM]) != \
+	(long)((uint32_t)value_get_a_pwm((const value_t*)&(REC)) & 0x1UL)) \
+	FAIL("a_pwm", (long)mc_field_get(&(REC), &mc_value_fields[MFV_A_PWM]), \
+	     (long)((uint32_t)value_get_a_pwm((const value_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_A_FIRED]) != \
+	(long)((uint32_t)value_get_a_fired((const value_t*)&(REC)) & 0x1UL)) \
+	FAIL("a_fired", (long)mc_field_get(&(REC), &mc_value_fields[MFV_A_FIRED]), \
+	     (long)((uint32_t)value_get_a_fired((const value_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_A_VAL]) != \
+	(long)((uint32_t)value_get_a_val((const value_t*)&(REC)) & 0xFFFFUL)) \
+	FAIL("a_val", (long)mc_field_get(&(REC), &mc_value_fields[MFV_A_VAL]), \
+	     (long)((uint32_t)value_get_a_val((const value_t*)&(REC)) & 0xFFFFUL)); \
+    } while (0)
+
+typedef enum {
+    MFW_KIND = 0,
+    MFW_VT = 1,
+    MFW_ENDIAN = 2,
+    MFW_FLAGS = 3,
+    MFW_LEN = 4,
+    MFW_POS = 5,
+    MFW_BUF = 6,
+    MFW_NDOUBLE = 0,
+    MFW_NFIELD = 7
 } mf_view_all_t;
+
+#define MFW_KIND_POS 0
+#define MFW_KIND_BITS 2
+#define MFW_VT_POS 2
+#define MFW_VT_BITS 4
+#define MFW_ENDIAN_POS 6
+#define MFW_ENDIAN_BITS 2
+#define MFW_FLAGS_POS 8
+#define MFW_FLAGS_BITS 2
+#define MFW_LEN_POS 10
+#define MFW_LEN_BITS 6
+#define MFW_POS_POS 16
+#define MFW_POS_BITS 16
+#define MFW_BUF_POS 32
+#define MFW_BUF_BITS 16
 
 // 7 names over 7 slots, of which the first 0 are the
 // halves of fields wider than a cell.
@@ -2346,38 +3073,38 @@ typedef enum {
     { 4, 0, 16 } /* buf */ }
 
 #define CSP_MCFIELD_VIEW(REC, FAIL) do { \
-    if ((long)mc_field_get(&(REC), &mc_view_fields[MFV_KIND]) != \
+    if ((long)mc_field_get(&(REC), &mc_view_fields[MFW_KIND]) != \
 	(long)((uint32_t)csp_view_get_kind((const csp_view_t*)&(REC)) & 0x3UL)) \
-	FAIL("kind", (long)mc_field_get(&(REC), &mc_view_fields[MFV_KIND]), \
+	FAIL("kind", (long)mc_field_get(&(REC), &mc_view_fields[MFW_KIND]), \
 	     (long)((uint32_t)csp_view_get_kind((const csp_view_t*)&(REC)) & 0x3UL)); \
-    if ((long)mc_field_get(&(REC), &mc_view_fields[MFV_VT]) != \
+    if ((long)mc_field_get(&(REC), &mc_view_fields[MFW_VT]) != \
 	(long)((uint32_t)csp_view_get_vt((const csp_view_t*)&(REC)) & 0xFUL)) \
-	FAIL("vt", (long)mc_field_get(&(REC), &mc_view_fields[MFV_VT]), \
+	FAIL("vt", (long)mc_field_get(&(REC), &mc_view_fields[MFW_VT]), \
 	     (long)((uint32_t)csp_view_get_vt((const csp_view_t*)&(REC)) & 0xFUL)); \
-    if ((long)mc_field_get(&(REC), &mc_view_fields[MFV_ENDIAN]) != \
+    if ((long)mc_field_get(&(REC), &mc_view_fields[MFW_ENDIAN]) != \
 	(long)((uint32_t)csp_view_get_endian((const csp_view_t*)&(REC)) & 0x3UL)) \
-	FAIL("endian", (long)mc_field_get(&(REC), &mc_view_fields[MFV_ENDIAN]), \
+	FAIL("endian", (long)mc_field_get(&(REC), &mc_view_fields[MFW_ENDIAN]), \
 	     (long)((uint32_t)csp_view_get_endian((const csp_view_t*)&(REC)) & 0x3UL)); \
-    if ((long)mc_field_get(&(REC), &mc_view_fields[MFV_FLAGS]) != \
+    if ((long)mc_field_get(&(REC), &mc_view_fields[MFW_FLAGS]) != \
 	(long)((uint32_t)csp_view_get_flags((const csp_view_t*)&(REC)) & 0x3UL)) \
-	FAIL("flags", (long)mc_field_get(&(REC), &mc_view_fields[MFV_FLAGS]), \
+	FAIL("flags", (long)mc_field_get(&(REC), &mc_view_fields[MFW_FLAGS]), \
 	     (long)((uint32_t)csp_view_get_flags((const csp_view_t*)&(REC)) & 0x3UL)); \
-    if ((long)mc_field_get(&(REC), &mc_view_fields[MFV_LEN]) != \
+    if ((long)mc_field_get(&(REC), &mc_view_fields[MFW_LEN]) != \
 	(long)((uint32_t)csp_view_get_len((const csp_view_t*)&(REC)) & 0x3FUL)) \
-	FAIL("len", (long)mc_field_get(&(REC), &mc_view_fields[MFV_LEN]), \
+	FAIL("len", (long)mc_field_get(&(REC), &mc_view_fields[MFW_LEN]), \
 	     (long)((uint32_t)csp_view_get_len((const csp_view_t*)&(REC)) & 0x3FUL)); \
-    if ((long)mc_field_get(&(REC), &mc_view_fields[MFV_POS]) != \
+    if ((long)mc_field_get(&(REC), &mc_view_fields[MFW_POS]) != \
 	(long)((uint32_t)csp_view_get_pos((const csp_view_t*)&(REC)) & 0xFFFFUL)) \
-	FAIL("pos", (long)mc_field_get(&(REC), &mc_view_fields[MFV_POS]), \
+	FAIL("pos", (long)mc_field_get(&(REC), &mc_view_fields[MFW_POS]), \
 	     (long)((uint32_t)csp_view_get_pos((const csp_view_t*)&(REC)) & 0xFFFFUL)); \
-    if ((long)mc_field_get(&(REC), &mc_view_fields[MFV_BUF]) != \
+    if ((long)mc_field_get(&(REC), &mc_view_fields[MFW_BUF]) != \
 	(long)((uint32_t)csp_view_get_buf((const csp_view_t*)&(REC)) & 0xFFFFUL)) \
-	FAIL("buf", (long)mc_field_get(&(REC), &mc_view_fields[MFV_BUF]), \
+	FAIL("buf", (long)mc_field_get(&(REC), &mc_view_fields[MFW_BUF]), \
 	     (long)((uint32_t)csp_view_get_buf((const csp_view_t*)&(REC)) & 0xFFFFUL)); \
     } while (0)
 
 // Fingerprint of every field name, position and width above, in order.
 // An image built against a different layout must be refused, not read.
-#define CSP_LAYOUT_FINGERPRINT 0x6AAB4453UL
+#define CSP_LAYOUT_FINGERPRINT 0x9BE3053DUL
 
 #endif

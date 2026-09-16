@@ -18,10 +18,13 @@ CSP_UNUSED static int csp_at_instate(csp_rt_t* st, index_t j, index_t to);
 CSP_UNUSED static index_t csp_gate_skip(csp_rt_t* st, index_t j, index_t to);
 CSP_UNUSED static int csp_dvt(csp_rt_t* st, index_t ix);
 CSP_UNUSED static int csp_cfg_vt(csp_rt_t* st, index_t dt, index_t vt);
-CSP_UNUSED static int csp_buf_owner(csp_rt_t* st, index_t b);
+CSP_UNUSED static index_t csp_buf_owner(csp_rt_t* st, index_t b);
 CSP_UNUSED static int csp_leaf_port(csp_rt_t* st, index_t ix, index_t is_digital);
 CSP_UNUSED static int csp_leaf_pin(csp_rt_t* st, index_t ix, index_t is_digital);
-CSP_UNUSED static int csp_states_slot(csp_rt_t* st, index_t i, index_t k);
+CSP_UNUSED static int csp_setup_timer_w(csp_rt_t* st, index_t ix);
+CSP_UNUSED static int csp_setup_digital_w(csp_rt_t* st, index_t ix);
+CSP_UNUSED static int csp_setup_analog_w(csp_rt_t* st, index_t ix);
+CSP_UNUSED static int csp_setup_field_w(csp_rt_t* st, index_t ix);
 
 int csp_dtype(csp_rt_t* st, index_t ix)
 {
@@ -92,7 +95,7 @@ CSP_UNUSED static int csp_decl_kind(csp_rt_t* st, index_t ix)
 
 CSP_UNUSED static int csp_leaf_mark(csp_rt_t* st, index_t ix)
 {
-	index_t t;
+	int t;
 
 	t = csp_tag(st, ix);
 	if (csp_is_local(st, ix)) {
@@ -209,7 +212,7 @@ int csp_body_implicit(csp_rt_t* st, index_t ip, index_t hi)
 	return 0;
 }
 
-int csp_leaf_buf(csp_rt_t* st, index_t ix)
+index_t csp_leaf_buf(csp_rt_t* st, index_t ix)
 {
 	return csp_view_get_buf(&st->view[st_index(st, ix)]);
 }
@@ -275,7 +278,7 @@ int csp_leaf_cfg_vt(csp_rt_t* st, index_t ix)
 	return csp_cfg_vt(st, csp_dtype(st, ix), csp_dvt(st, ix));
 }
 
-CSP_UNUSED static int csp_buf_owner(csp_rt_t* st, index_t b)
+CSP_UNUSED static index_t csp_buf_owner(csp_rt_t* st, index_t b)
 {
 	index_t o;
 
@@ -286,7 +289,7 @@ CSP_UNUSED static int csp_buf_owner(csp_rt_t* st, index_t b)
 	return INDEX(o);
 }
 
-int csp_buf_of_decl(csp_rt_t* st, index_t di)
+index_t csp_buf_of_decl(csp_rt_t* st, index_t di)
 {
 	index_t b;
 
@@ -376,10 +379,10 @@ int csp_list_pin_spec(csp_rt_t* st, index_t i, index_t is_digital)
 	index_t alen;
 	index_t k;
 	index_t last;
-	index_t p;
-	index_t port;
-	index_t q;
-	index_t start;
+	int p;
+	int port;
+	int q;
+	int start;
 
 	alen = csp_array_len(st, i);
 	port = csp_leaf_port(st, i, is_digital);
@@ -454,32 +457,29 @@ index_t csp_object_decl(csp_rt_t* st, index_t m)
 	return csp_find_object(st, m);
 }
 
-CSP_UNUSED static int csp_states_slot(csp_rt_t* st, index_t i, index_t k)
+int csp_states_slot(csp_rt_t* st, index_t i, index_t k)
 {
-	index_t r;
+	return csp_decl_get_sn_names(csp_decl_ref(st, i), (uint8_t)k);
+}
 
-	r = 0;
-	switch (k) {
-	case 0:
-		r = decl(st, i, name);
-		break;
-	case 1:
-		r = decl(st, i, s6_name2);
-		break;
-	case 2:
-		r = decl(st, i, s6_name3);
-		break;
-	case 3:
-		r = decl(st, i, s6_name4);
-		break;
-	case 4:
-		r = decl(st, i, s6_name5);
-		break;
-	case 5:
-		r = decl(st, i, s6_name6);
-		break;
+int csp_states_set_slot(csp_rt_t* st, index_t i, index_t k, index_t pos)
+{
+	csp_decl_set_sn_names(ram_decl_at(st, i), (uint8_t)k, pos);
+	return 0;
+}
+
+int csp_states_free_slot(csp_rt_t* st, index_t i)
+{
+	index_t k;
+
+	k = 0;
+	while ((k < CSP_STATES_PER_DECL)) {
+		if ((csp_states_slot(st, i, k) == 0)) {
+			return k;
+		}
+		k = (k + 1);
 	}
-	return r;
+	return -1;
 }
 
 int csp_state_name_at(csp_rt_t* st, index_t want)
@@ -487,7 +487,7 @@ int csp_state_name_at(csp_rt_t* st, index_t want)
 	index_t i;
 	index_t k;
 	index_t n;
-	index_t np;
+	int np;
 
 	n = 0;
 	i = csp_next_of_type(st, 0, DECL_STATES);
@@ -519,6 +519,212 @@ int csp_num_states(csp_rt_t* st)
 		n = (n + 1);
 	}
 	return n;
+}
+
+int csp_lookup_state_pos(csp_rt_t* st, index_t pos)
+{
+	index_t n;
+	int np;
+
+	n = 0;
+	np = csp_state_name_at(st, 0);
+	while ((np != 0)) {
+		if ((np == pos)) {
+			return n;
+		}
+		n = (n + 1);
+		np = csp_state_name_at(st, n);
+	}
+	return -1;
+}
+
+int csp_add_io(csp_rt_t* st, index_t ix)
+{
+	if (((csp_dtype(st, ix) == DECL_FIELD) && ((decl(st, INDEX(ix), dir) & DIR_INOUT) == 0))) {
+		return 0;
+	}
+	if ((st->nio < st->io_cap)) {
+		csp_arr_set_io_obj(st, st->nio, st->cur);
+		csp_arr_set_io(st, st->nio, ix);
+		st->nio = (st->nio + 1);
+	}
+	return 0;
+}
+
+CSP_UNUSED static int csp_setup_timer_w(csp_rt_t* st, index_t ix)
+{
+	int r;
+
+	r = setup_slot(st, ix);
+	if ((r < 0)) {
+		return -1;
+	}
+	setup_timer(st, ix);
+	if ((st->nt < st->timer_cap)) {
+		csp_arr_set_timer_obj(st, st->nt, st->cur);
+		csp_arr_set_timer(st, st->nt, ix);
+		st->nt = (st->nt + 1);
+	}
+	return 0;
+}
+
+CSP_UNUSED static int csp_setup_digital_w(csp_rt_t* st, index_t ix)
+{
+	int r;
+
+	r = setup_slot(st, ix);
+	if ((r < 0)) {
+		return -1;
+	}
+	setup_digital(st, ix);
+	csp_add_io(st, ix);
+	return 0;
+}
+
+CSP_UNUSED static int csp_setup_analog_w(csp_rt_t* st, index_t ix)
+{
+	int r;
+
+	r = setup_slot(st, ix);
+	if ((r < 0)) {
+		return -1;
+	}
+	setup_analog(st, ix);
+	csp_add_io(st, ix);
+	return 0;
+}
+
+CSP_UNUSED static int csp_setup_field_w(csp_rt_t* st, index_t ix)
+{
+	int r;
+
+	r = setup_field(st, ix);
+	if ((r < 0)) {
+		return -1;
+	}
+	csp_add_io(st, ix);
+	return 0;
+}
+
+int csp_setup_decl_w(csp_rt_t* st, index_t ix)
+{
+	int r;
+
+	r = -1;
+	switch (csp_dtype(st, ix)) {
+	case DECL_VARIABLE:
+		r = setup_variable(st, ix);
+		break;
+	case DECL_CONSTANT:
+		r = setup_constant(st, ix);
+		break;
+	case DECL_TIMER:
+		r = csp_setup_timer_w(st, ix);
+		break;
+	case DECL_DIGITAL:
+		r = csp_setup_digital_w(st, ix);
+		break;
+	case DECL_ANALOG:
+		r = csp_setup_analog_w(st, ix);
+		break;
+	case DECL_FIELD:
+		r = csp_setup_field_w(st, ix);
+		break;
+	case DECL_BUFFER:
+		r = setup_buffer(st, ix);
+		break;
+	}
+	if ((r < 0)) {
+		return -1;
+	}
+	return 0;
+}
+
+int csp_sys_module_w(csp_rt_t* st)
+{
+	index_t ex;
+	index_t i;
+	index_t mx;
+	index_t ox;
+
+	mx = sysdecl(st, SYSN_SYS, DECL_MODULE);
+	if ((mx == BAD_INDEX)) {
+		return -1;
+	}
+	csp_decl_set_md_ent(ram_decl_at(st, INDEX(mx)), 0);
+	i = sysdecl(st, SYSN_SERIAL, DECL_VARIABLE);
+	if ((i == BAD_INDEX)) {
+		return -1;
+	}
+	csp_decl_set_vt(ram_decl_at(st, i), V_UNSIGNED);
+	csp_decl_set_res(ram_decl_at(st, i), 31);
+	i = sysdecl(st, SYSN_ID, DECL_CONSTANT);
+	if ((i == BAD_INDEX)) {
+		return -1;
+	}
+	csp_decl_set_vt(ram_decl_at(st, i), V_UNSIGNED);
+	csp_decl_set_res(ram_decl_at(st, i), 31);
+	csp_decl_set_local(ram_decl_at(st, i), 1);
+	i = sysdecl(st, SYSN_NAME, DECL_CONSTANT);
+	if ((i == BAD_INDEX)) {
+		return -1;
+	}
+	csp_decl_set_vt(ram_decl_at(st, i), V_STRING);
+	csp_decl_set_local(ram_decl_at(st, i), 1);
+	i = sysdecl(st, SYSN_IMAGE, DECL_VARIABLE);
+	if ((i == BAD_INDEX)) {
+		return -1;
+	}
+	csp_decl_set_vt(ram_decl_at(st, i), V_UNSIGNED);
+	csp_decl_set_res(ram_decl_at(st, i), 31);
+	i = sysdecl(st, SYSN_BOOT, DECL_CONSTANT);
+	if ((i == BAD_INDEX)) {
+		return -1;
+	}
+	csp_decl_set_vt(ram_decl_at(st, i), V_UNSIGNED);
+	csp_decl_set_res(ram_decl_at(st, i), 31);
+	csp_decl_set_local(ram_decl_at(st, i), 1);
+	csp_decl_set_va_init_u(ram_decl_at(st, i), CSP_BOOT_AUTO);
+	ex = sysdecl(st, SYSN_NONE, DECL_END);
+	if ((ex == BAD_INDEX)) {
+		return -1;
+	}
+	csp_decl_set_md_n(ram_decl_at(st, INDEX(mx)), ((INDEX(ex) - INDEX(mx)) - 1));
+	ox = sysdecl(st, SYSN_SYSOBJ, DECL_OBJECT);
+	if ((ox == BAD_INDEX)) {
+		return -1;
+	}
+	csp_decl_set_mq_mx(ram_decl_at(st, INDEX(ox)), INDEX(mx));
+	csp_decl_set_mq_m(ram_decl_at(st, INDEX(ox)), (st->ps.nq + 1));
+	st->ps.nq = (st->ps.nq + 1);
+	st->sys_obj = INDEX(ox);
+	st->sys_mod = INDEX(mx);
+	return 0;
+}
+
+index_t csp_add_state_w(csp_rt_t* st, index_t pos, index_t blk)
+{
+	index_t b;
+	int k;
+
+	b = blk;
+	k = -1;
+	if ((127 < csp_num_states(st))) {
+		csp_set_error(st, ERR_TOO_MANY_STATES);
+		return BAD_INDEX;
+	}
+	if ((b != BAD_INDEX)) {
+		k = csp_states_free_slot(st, INDEX(b));
+	}
+	if ((k < 0)) {
+		b = new_states_block(st);
+		if ((b == BAD_INDEX)) {
+			return BAD_INDEX;
+		}
+		k = 0;
+	}
+	csp_states_set_slot(st, INDEX(b), k, pos);
+	return b;
 }
 
 #endif

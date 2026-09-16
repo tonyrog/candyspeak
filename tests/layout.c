@@ -45,7 +45,7 @@ int main(void)
     CSP_ORACLE_DECL_COMMON_RT(d, fail);
     CSP_ORACLE_DECL_COMMON_TM(d, fail);
     CSP_ORACLE_DECL_COMMON_EM(d, fail);
-    CSP_ORACLE_DECL_COMMON_S6(d, fail);
+    CSP_ORACLE_DECL_COMMON_SN(d, fail);
 
     // The record must still be the size the terms file says, or a field that
     // fits the description does not fit the storage.
@@ -71,6 +71,27 @@ int main(void)
 	CSP_ORACLE_INSTR_COMMON_X(n, fail);
 	if (sizeof(csp_instr_raw_t) != 4)
 	    fail("csp_instr_t is 4 bytes", (long)sizeof(csp_instr_t), 4);
+    }
+
+    // value_t. Not a declaration and not an instruction: it is the four bytes a
+    // #variable holds, and the arms that MEAN something -- t, d, a -- are bit
+    // packing the same way a declaration is. Same treatment, then.
+    {
+	csp_value_raw_t v;
+
+	CSP_ORACLE_VALUE_COMMON(v, fail);
+	CSP_ORACLE_VALUE_COMMON_I(v, fail);
+	CSP_ORACLE_VALUE_COMMON_U(v, fail);
+	CSP_ORACLE_VALUE_COMMON_F(v, fail);
+	CSP_ORACLE_VALUE_COMMON_S(v, fail);
+	CSP_ORACLE_VALUE_COMMON_T(v, fail);
+	CSP_ORACLE_VALUE_COMMON_D(v, fail);
+	CSP_ORACLE_VALUE_COMMON_A(v, fail);
+	if (sizeof(csp_value_raw_t) != sizeof(value_t))
+	    fail("csp_value_raw_t is value_t", (long)sizeof(csp_value_raw_t),
+		 (long)sizeof(value_t));
+	if (sizeof(value_t) != 4)
+	    fail("value_t is 4 bytes", (long)sizeof(value_t), 4);
     }
 
     if (sizeof(csp_decl_raw_t) != 8)

@@ -257,6 +257,10 @@
 	FAIL("buf set", (long)(REC).buf, 65535L); \
     } while (0)
 
+#define CSP_ORACLE_VALUE_COMMON(REC, FAIL) do { \
+ \
+    } while (0)
+
 #define CSP_ORACLE_DECL_COMMON_MD(REC, FAIL) do { \
     memset(&(REC), 0, sizeof(REC)); \
     (REC).md.n = 65535; \
@@ -527,55 +531,17 @@
 	FAIL("tm.init set", (long)(REC).tm.init, 1L); \
     } while (0)
 
-#define CSP_ORACLE_DECL_COMMON_S6(REC, FAIL) do { \
+#define CSP_ORACLE_DECL_COMMON_SN(REC, FAIL) do { \
+    /* names: array field, see tests/states_layout.c */ \
+ \
     memset(&(REC), 0, sizeof(REC)); \
-    (REC).s6.name2 = 255; \
-    if ((long)csp_decl_get_s6_name2((const csp_decl_t*)&(REC)) != 255L) \
-	FAIL("s6.name2", (long)csp_decl_get_s6_name2((const csp_decl_t*)&(REC)), 255L); \
+    (REC).sn.nx = 255; \
+    if ((long)csp_decl_get_sn_nx((const csp_decl_t*)&(REC)) != 255L) \
+	FAIL("sn.nx", (long)csp_decl_get_sn_nx((const csp_decl_t*)&(REC)), 255L); \
     memset(&(REC), 0, sizeof(REC)); \
-    csp_decl_set_s6_name2((csp_decl_t*)&(REC), 255); \
-    if ((long)(REC).s6.name2 != 255L) \
-	FAIL("s6.name2 set", (long)(REC).s6.name2, 255L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    (REC).s6.name3 = 255; \
-    if ((long)csp_decl_get_s6_name3((const csp_decl_t*)&(REC)) != 255L) \
-	FAIL("s6.name3", (long)csp_decl_get_s6_name3((const csp_decl_t*)&(REC)), 255L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    csp_decl_set_s6_name3((csp_decl_t*)&(REC), 255); \
-    if ((long)(REC).s6.name3 != 255L) \
-	FAIL("s6.name3 set", (long)(REC).s6.name3, 255L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    (REC).s6.name4 = 255; \
-    if ((long)csp_decl_get_s6_name4((const csp_decl_t*)&(REC)) != 255L) \
-	FAIL("s6.name4", (long)csp_decl_get_s6_name4((const csp_decl_t*)&(REC)), 255L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    csp_decl_set_s6_name4((csp_decl_t*)&(REC), 255); \
-    if ((long)(REC).s6.name4 != 255L) \
-	FAIL("s6.name4 set", (long)(REC).s6.name4, 255L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    (REC).s6.name5 = 255; \
-    if ((long)csp_decl_get_s6_name5((const csp_decl_t*)&(REC)) != 255L) \
-	FAIL("s6.name5", (long)csp_decl_get_s6_name5((const csp_decl_t*)&(REC)), 255L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    csp_decl_set_s6_name5((csp_decl_t*)&(REC), 255); \
-    if ((long)(REC).s6.name5 != 255L) \
-	FAIL("s6.name5 set", (long)(REC).s6.name5, 255L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    (REC).s6.name6 = 255; \
-    if ((long)csp_decl_get_s6_name6((const csp_decl_t*)&(REC)) != 255L) \
-	FAIL("s6.name6", (long)csp_decl_get_s6_name6((const csp_decl_t*)&(REC)), 255L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    csp_decl_set_s6_name6((csp_decl_t*)&(REC), 255); \
-    if ((long)(REC).s6.name6 != 255L) \
-	FAIL("s6.name6 set", (long)(REC).s6.name6, 255L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    (REC).s6.nx = 255; \
-    if ((long)csp_decl_get_s6_nx((const csp_decl_t*)&(REC)) != 255L) \
-	FAIL("s6.nx", (long)csp_decl_get_s6_nx((const csp_decl_t*)&(REC)), 255L); \
-    memset(&(REC), 0, sizeof(REC)); \
-    csp_decl_set_s6_nx((csp_decl_t*)&(REC), 255); \
-    if ((long)(REC).s6.nx != 255L) \
-	FAIL("s6.nx set", (long)(REC).s6.nx, 255L); \
+    csp_decl_set_sn_nx((csp_decl_t*)&(REC), 255); \
+    if ((long)(REC).sn.nx != 255L) \
+	FAIL("sn.nx set", (long)(REC).sn.nx, 255L); \
     } while (0)
 
 #define CSP_ORACLE_DECL_COMMON_EM(REC, FAIL) do { \
@@ -928,6 +894,211 @@
     csp_instr_set_em_crc((csp_instr_t*)&(REC), 65535); \
     if ((long)(REC).em.crc != 65535L) \
 	FAIL("em.crc set", (long)(REC).em.crc, 65535L); \
+    } while (0)
+
+#define CSP_ORACLE_VALUE_COMMON_I(REC, FAIL) do { \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).i.val = -2147483648; \
+    if ((long)value_get_i_val((const value_t*)&(REC)) != -2147483648L) \
+	FAIL("i.val", (long)value_get_i_val((const value_t*)&(REC)), -2147483648L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_i_val((value_t*)&(REC), -2147483648); \
+    if ((long)(REC).i.val != -2147483648L) \
+	FAIL("i.val set", (long)(REC).i.val, -2147483648L); \
+    } while (0)
+
+#define CSP_ORACLE_VALUE_COMMON_U(REC, FAIL) do { \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).u.val = 4294967295; \
+    if ((long)value_get_u_val((const value_t*)&(REC)) != 4294967295L) \
+	FAIL("u.val", (long)value_get_u_val((const value_t*)&(REC)), 4294967295L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_u_val((value_t*)&(REC), 4294967295); \
+    if ((long)(REC).u.val != 4294967295L) \
+	FAIL("u.val set", (long)(REC).u.val, 4294967295L); \
+    } while (0)
+
+#define CSP_ORACLE_VALUE_COMMON_F(REC, FAIL) do { \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).f.val = 4294967295; \
+    if ((long)value_get_f_val((const value_t*)&(REC)) != 4294967295L) \
+	FAIL("f.val", (long)value_get_f_val((const value_t*)&(REC)), 4294967295L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_f_val((value_t*)&(REC), 4294967295); \
+    if ((long)(REC).f.val != 4294967295L) \
+	FAIL("f.val set", (long)(REC).f.val, 4294967295L); \
+    } while (0)
+
+#define CSP_ORACLE_VALUE_COMMON_S(REC, FAIL) do { \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).s.val = -2147483648; \
+    if ((long)value_get_s_val((const value_t*)&(REC)) != -2147483648L) \
+	FAIL("s.val", (long)value_get_s_val((const value_t*)&(REC)), -2147483648L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_s_val((value_t*)&(REC), -2147483648); \
+    if ((long)(REC).s.val != -2147483648L) \
+	FAIL("s.val set", (long)(REC).s.val, -2147483648L); \
+    } while (0)
+
+#define CSP_ORACLE_VALUE_COMMON_T(REC, FAIL) do { \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).t.period = 268435455; \
+    if ((long)value_get_t_period((const value_t*)&(REC)) != 268435455L) \
+	FAIL("t.period", (long)value_get_t_period((const value_t*)&(REC)), 268435455L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_t_period((value_t*)&(REC), 268435455); \
+    if ((long)(REC).t.period != 268435455L) \
+	FAIL("t.period set", (long)(REC).t.period, 268435455L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).t.fired = 1; \
+    if ((long)value_get_t_fired((const value_t*)&(REC)) != 1L) \
+	FAIL("t.fired", (long)value_get_t_fired((const value_t*)&(REC)), 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_t_fired((value_t*)&(REC), 1); \
+    if ((long)(REC).t.fired != 1L) \
+	FAIL("t.fired set", (long)(REC).t.fired, 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).t.running = 1; \
+    if ((long)value_get_t_running((const value_t*)&(REC)) != 1L) \
+	FAIL("t.running", (long)value_get_t_running((const value_t*)&(REC)), 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_t_running((value_t*)&(REC), 1); \
+    if ((long)(REC).t.running != 1L) \
+	FAIL("t.running set", (long)(REC).t.running, 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).t.val = 1; \
+    if ((long)value_get_t_val((const value_t*)&(REC)) != 1L) \
+	FAIL("t.val", (long)value_get_t_val((const value_t*)&(REC)), 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_t_val((value_t*)&(REC), 1); \
+    if ((long)(REC).t.val != 1L) \
+	FAIL("t.val set", (long)(REC).t.val, 1L); \
+    } while (0)
+
+#define CSP_ORACLE_VALUE_COMMON_D(REC, FAIL) do { \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).d.cfg = 1; \
+    if ((long)value_get_d_cfg((const value_t*)&(REC)) != 1L) \
+	FAIL("d.cfg", (long)value_get_d_cfg((const value_t*)&(REC)), 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_d_cfg((value_t*)&(REC), 1); \
+    if ((long)(REC).d.cfg != 1L) \
+	FAIL("d.cfg set", (long)(REC).d.cfg, 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).d.pin = 127; \
+    if ((long)value_get_d_pin((const value_t*)&(REC)) != 127L) \
+	FAIL("d.pin", (long)value_get_d_pin((const value_t*)&(REC)), 127L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_d_pin((value_t*)&(REC), 127); \
+    if ((long)(REC).d.pin != 127L) \
+	FAIL("d.pin set", (long)(REC).d.pin, 127L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).d.port = 15; \
+    if ((long)value_get_d_port((const value_t*)&(REC)) != 15L) \
+	FAIL("d.port", (long)value_get_d_port((const value_t*)&(REC)), 15L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_d_port((value_t*)&(REC), 15); \
+    if ((long)(REC).d.port != 15L) \
+	FAIL("d.port set", (long)(REC).d.port, 15L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).d.dir = (pindir_t)3; \
+    if ((long)value_get_d_dir((const value_t*)&(REC)) != 3L) \
+	FAIL("d.dir", (long)value_get_d_dir((const value_t*)&(REC)), 3L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_d_dir((value_t*)&(REC), 3); \
+    if ((long)(REC).d.dir != 3L) \
+	FAIL("d.dir set", (long)(REC).d.dir, 3L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).d.pullup = 1; \
+    if ((long)value_get_d_pullup((const value_t*)&(REC)) != 1L) \
+	FAIL("d.pullup", (long)value_get_d_pullup((const value_t*)&(REC)), 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_d_pullup((value_t*)&(REC), 1); \
+    if ((long)(REC).d.pullup != 1L) \
+	FAIL("d.pullup set", (long)(REC).d.pullup, 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).d.pulldown = 1; \
+    if ((long)value_get_d_pulldown((const value_t*)&(REC)) != 1L) \
+	FAIL("d.pulldown", (long)value_get_d_pulldown((const value_t*)&(REC)), 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_d_pulldown((value_t*)&(REC), 1); \
+    if ((long)(REC).d.pulldown != 1L) \
+	FAIL("d.pulldown set", (long)(REC).d.pulldown, 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).d.val = 1; \
+    if ((long)value_get_d_val((const value_t*)&(REC)) != 1L) \
+	FAIL("d.val", (long)value_get_d_val((const value_t*)&(REC)), 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_d_val((value_t*)&(REC), 1); \
+    if ((long)(REC).d.val != 1L) \
+	FAIL("d.val set", (long)(REC).d.val, 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).d.fired = 1; \
+    if ((long)value_get_d_fired((const value_t*)&(REC)) != 1L) \
+	FAIL("d.fired", (long)value_get_d_fired((const value_t*)&(REC)), 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_d_fired((value_t*)&(REC), 1); \
+    if ((long)(REC).d.fired != 1L) \
+	FAIL("d.fired set", (long)(REC).d.fired, 1L); \
+    } while (0)
+
+#define CSP_ORACLE_VALUE_COMMON_A(REC, FAIL) do { \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).a.cfg = 1; \
+    if ((long)value_get_a_cfg((const value_t*)&(REC)) != 1L) \
+	FAIL("a.cfg", (long)value_get_a_cfg((const value_t*)&(REC)), 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_a_cfg((value_t*)&(REC), 1); \
+    if ((long)(REC).a.cfg != 1L) \
+	FAIL("a.cfg set", (long)(REC).a.cfg, 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).a.pin = 127; \
+    if ((long)value_get_a_pin((const value_t*)&(REC)) != 127L) \
+	FAIL("a.pin", (long)value_get_a_pin((const value_t*)&(REC)), 127L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_a_pin((value_t*)&(REC), 127); \
+    if ((long)(REC).a.pin != 127L) \
+	FAIL("a.pin set", (long)(REC).a.pin, 127L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).a.port = 15; \
+    if ((long)value_get_a_port((const value_t*)&(REC)) != 15L) \
+	FAIL("a.port", (long)value_get_a_port((const value_t*)&(REC)), 15L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_a_port((value_t*)&(REC), 15); \
+    if ((long)(REC).a.port != 15L) \
+	FAIL("a.port set", (long)(REC).a.port, 15L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).a.dir = (pindir_t)3; \
+    if ((long)value_get_a_dir((const value_t*)&(REC)) != 3L) \
+	FAIL("a.dir", (long)value_get_a_dir((const value_t*)&(REC)), 3L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_a_dir((value_t*)&(REC), 3); \
+    if ((long)(REC).a.dir != 3L) \
+	FAIL("a.dir set", (long)(REC).a.dir, 3L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).a.pwm = 1; \
+    if ((long)value_get_a_pwm((const value_t*)&(REC)) != 1L) \
+	FAIL("a.pwm", (long)value_get_a_pwm((const value_t*)&(REC)), 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_a_pwm((value_t*)&(REC), 1); \
+    if ((long)(REC).a.pwm != 1L) \
+	FAIL("a.pwm set", (long)(REC).a.pwm, 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).a.fired = 1; \
+    if ((long)value_get_a_fired((const value_t*)&(REC)) != 1L) \
+	FAIL("a.fired", (long)value_get_a_fired((const value_t*)&(REC)), 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_a_fired((value_t*)&(REC), 1); \
+    if ((long)(REC).a.fired != 1L) \
+	FAIL("a.fired set", (long)(REC).a.fired, 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).a.val = 65535; \
+    if ((long)value_get_a_val((const value_t*)&(REC)) != 65535L) \
+	FAIL("a.val", (long)value_get_a_val((const value_t*)&(REC)), 65535L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_a_val((value_t*)&(REC), 65535); \
+    if ((long)(REC).a.val != 65535L) \
+	FAIL("a.val set", (long)(REC).a.val, 65535L); \
     } while (0)
 
 #endif

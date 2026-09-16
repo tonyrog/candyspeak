@@ -169,31 +169,52 @@ void csp_words_init(csp_rt_t* st)
     csp_word_fault = 0;
 }
 
+// THE RUN A NATIVE INTERRUPTED, or NULL at the outermost level. A native is
+// free to call a word -- new_string calls str_seg_stamp -- and that word runs
+// on these same three arrays. What it may use is what the interrupted run has
+// not: the data stack below its sp, the return stack above its rp, the locals
+// above its lvtop. Without this the nested run starts at the top of each array
+// and writes over the frame of the word still waiting under it, which reads
+// back as a local that silently turned into zero.
+static mc_vm_t* word_active;
+
 static mc_cell_t csp_word_run(csp_rt_t* st, uint16_t entry,
 			      const mc_cell_t* args, uint8_t nargs,
 			      uint8_t frame)
 {
     mc_vm_t vm;
+    mc_vm_t* outer;
     mc_cell_t r;
     int e;
 
-    if (frame > CSP_WORD_LV) {
-	csp_word_fault = MC_E_BOUNDS;
-	return 0;
-    }
     memset(&vm, 0, sizeof(vm));
-    vm.code = csp_words_bc;
-    vm.code_len = (uint16_t)sizeof(csp_words_bc);
     vm.ds = word_ds;  vm.ds_size = CSP_WORD_DS;
     vm.rs = word_rs;  vm.rs_size = CSP_WORD_RS;
     vm.lv = word_lv;  vm.lv_size = CSP_WORD_LV;
+    if ((outer = word_active) != NULL) {
+	vm.ds_size = (uint8_t)(outer->sp - word_ds);
+	vm.rs      = word_rs + outer->rp;
+	vm.rs_size = (uint8_t)(CSP_WORD_RS - outer->rp);
+	vm.lv      = word_lv + outer->lvtop;
+	vm.lv_size = (uint8_t)(CSP_WORD_LV - outer->lvtop);
+    }
+    if (frame > vm.lv_size) {
+	csp_word_fault = MC_E_BOUNDS;
+	return 0;
+    }
+    vm.code = csp_words_bc;
+    vm.code_len = (uint16_t)sizeof(csp_words_bc);
     vm.leaf = csp_word_leaves;    vm.nleaf = csp_word_leaves_N;
     vm.leafn = csp_word_leavesn;  vm.nleafn = csp_word_leavesn_N;
     vm.ctx = st;
     vm.arg = args;
     vm.nargs = nargs;
+    vm.frame = frame;
     r = 0;
-    if ((e = csp_mcsp_run(&vm, entry, &r)) != MC_OK) {
+    word_active = &vm;
+    e = csp_mcsp_run(&vm, entry, &r);
+    word_active = outer;
+    if (e != MC_OK) {
 	csp_word_fault = (uint8_t)e;
 	return 0;
     }

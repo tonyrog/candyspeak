@@ -85,6 +85,46 @@ int csp_print_uint(uvalue_t v)
     return 1;
 }
 
+
+// The setup leaves, stubbed and TRACED. setup_decl is a dispatch, so what it
+// has to get right is which leaf runs for which declaration type -- and a stub
+// that records a letter says that directly, where a return value would not.
+static char  su_log[32];
+static unsigned su_n;
+
+static void su(char c) { if (su_n + 1 < sizeof(su_log)) su_log[su_n++] = c;
+			 su_log[su_n] = 0; }
+
+int  setup_variable(csp_rt_t* st, index_t ix) { (void)st;(void)ix; su('v'); return 0; }
+int  setup_constant(csp_rt_t* st, index_t ix) { (void)st;(void)ix; su('c'); return 0; }
+int  setup_slot(csp_rt_t* st, index_t ix)     { (void)st;(void)ix; su('s'); return 0; }
+void setup_timer(csp_rt_t* st, index_t ix)    { (void)st;(void)ix; su('t'); }
+void setup_digital(csp_rt_t* st, index_t ix)  { (void)st;(void)ix; su('d'); }
+void setup_analog(csp_rt_t* st, index_t ix)   { (void)st;(void)ix; su('a'); }
+int  setup_field(csp_rt_t* st, index_t ix)    { (void)st;(void)ix; su('f'); return 0; }
+int  setup_buffer(csp_rt_t* st, index_t ix)   { (void)st;(void)ix; su('b'); return 0; }
+
+// The runtime leaves the states and sys words reach. Neither is exercised
+// here -- there is no declaration table to grow -- so they answer "no room",
+// which is the arm a word has to handle anyway.
+index_t sysdecl(csp_rt_t* st, index_t name_id, index_t type)
+{
+    (void)st; (void)name_id; (void)type;
+    return BAD_INDEX;
+}
+
+index_t new_states_block(csp_rt_t* st)
+{
+    (void)st;
+    return BAD_INDEX;
+}
+
+int csp_set_error(csp_rt_t* st, csp_err_t e)
+{
+    (void)st; (void)e;
+    return -1;
+}
+
 static const void* hook_decl(void* ctx, mc_cell_t i)
 {
     return csp_decl_ref((csp_rt_t*)ctx, (index_t)i);
@@ -166,8 +206,12 @@ static uint16_t  rs[8];
 // a called word's frame sits ABOVE its caller's.
 static mc_cell_t lv[24];
 
-static int run_bcn(uint16_t entry, const mc_cell_t* args, uint8_t n,
-		   mc_cell_t* out)
+// FRAME is the entry word's local count, which only the generator knows -- it
+// comes from the same header as the entry offset. A called word's frame starts
+// where this one's ends, so a wrong number here hands the callee slots that are
+// still in use.
+static int run_bcn(uint16_t entry, uint8_t frame, const mc_cell_t* args,
+		   uint8_t n, mc_cell_t* out)
 {
     mc_vm_t vm;
 
@@ -189,13 +233,22 @@ static int run_bcn(uint16_t entry, const mc_cell_t* args, uint8_t n,
     memset(lv, 0, sizeof(lv));
     vm.arg = args;
     vm.nargs = n;
+    vm.frame = frame;
     return csp_mcsp_run(&vm, entry, out);
 }
 
-static int run_bc(uint16_t entry, const mc_cell_t arg, mc_cell_t* out)
+static int run_bc1(uint16_t entry, uint8_t frame, const mc_cell_t arg,
+		   mc_cell_t* out)
 {
-    return run_bcn(entry, &arg, 1, out);
+    return run_bcn(entry, frame, &arg, 1, out);
 }
+
+// The two halves of a word's name are spelled once: ENTRY and FRAME come from
+// the same generated header and must not be paired by hand.
+#define run_bc(W, arg, out)      run_bc1(CSP_W_##W##_ENTRY, CSP_W_##W##_FRAME, \
+					 (arg), (out))
+#define run_bcv(W, args, n, out) run_bcn(CSP_W_##W##_ENTRY, CSP_W_##W##_FRAME, \
+					 (args), (n), (out))
 
 // The buffer table, rebuilt from scratch. A word that WRITES has to be run
 // against the same starting point twice -- once as C, once as bytecode -- or
@@ -306,7 +359,7 @@ int main(void)
 	for (i = 0; i <= NDECL; i++) {
 	    int c = csp_is_local(&state, (index_t)i);
 	    mc_cell_t b = 0;
-	    int rc = run_bc(CSP_W_IS_LOCAL_ENTRY, (mc_cell_t)i, &b);
+	    int rc = run_bc(IS_LOCAL, (mc_cell_t)i, &b);
 
 	    if (rc != MC_OK) {
 		printf("FAIL nd=%d ix=%d: bytecode stopped, rc=%d\n", k, i, rc);
@@ -320,7 +373,7 @@ int main(void)
 	    }
 
 	    c = csp_local_number(&state, (index_t)i);
-	    rc = run_bc(CSP_W_LOCAL_NUMBER_ENTRY, (mc_cell_t)i, &b);
+	    rc = run_bc(LOCAL_NUMBER, (mc_cell_t)i, &b);
 	    if (rc != MC_OK) {
 		printf("FAIL local_number nd=%d ix=%d: bytecode stopped, rc=%d\n",
 		       k, i, rc);
@@ -334,7 +387,7 @@ int main(void)
 	    // compare chain, so this is the one place the two structures differ
 	    // most -- which is why it is checked rather than assumed.
 	    c = csp_decl_kind(&state, (index_t)i);
-	    rc = run_bc(CSP_W_DECL_KIND_ENTRY, (mc_cell_t)i, &b);
+	    rc = run_bc(DECL_KIND, (mc_cell_t)i, &b);
 	    if (rc != MC_OK) {
 		printf("FAIL decl_kind ix=%d: bytecode stopped, rc=%d\n", i, rc);
 		errors++;
@@ -351,7 +404,7 @@ int main(void)
 		int t;
 
 		c = csp_leaf_buf(&state, (index_t)i);
-		rc = run_bc(CSP_W_LEAF_BUF_ENTRY, (mc_cell_t)i, &b);
+		rc = run_bc(LEAF_BUF, (mc_cell_t)i, &b);
 		if (rc != MC_OK || c != (int)b) {
 		    printf("FAIL leaf_buf ix=%d: C says %d, bytecode %u (rc=%d)\n",
 			   i, c, (unsigned)b, rc);
@@ -359,7 +412,7 @@ int main(void)
 		}
 
 		c = (int)csp_array_len(&state, (index_t)i);
-		rc = run_bc(CSP_W_ARRAY_LEN_ENTRY, (mc_cell_t)i, &b);
+		rc = run_bc(ARRAY_LEN, (mc_cell_t)i, &b);
 		if (rc != MC_OK || c != (int)b) {
 		    printf("FAIL array_len nd=%d ix=%d: C says %d, bytecode %u"
 			   " (rc=%d)\n", k, i, c, (unsigned)b, rc);
@@ -369,7 +422,7 @@ int main(void)
 		    c = csp_gate_is_in(&state, (index_t)i, (index_t)t);
 		    a2[0] = (mc_cell_t)i;
 		    a2[1] = (mc_cell_t)t;
-		    rc = run_bcn(CSP_W_GATE_IS_IN_ENTRY, a2, 2, &b);
+		    rc = run_bcv(GATE_IS_IN, a2, 2, &b);
 		    if (rc != MC_OK || (c != 0) != (b != 0)) {
 			printf("FAIL gate_is_in j=%d to=%d: C says %d,"
 			       " bytecode %u (rc=%d)\n", i, t, c, (unsigned)b, rc);
@@ -382,7 +435,7 @@ int main(void)
 	    // shared area with a frame; csp_tag is C, so a wrapper. Neither is
 	    // spelled differently in words.terms.
 	    c = csp_leaf_mark(&state, (index_t)i);
-	    rc = run_bc(CSP_W_LEAF_MARK_ENTRY, (mc_cell_t)i, &b);
+	    rc = run_bc(LEAF_MARK, (mc_cell_t)i, &b);
 	    if (rc != MC_OK) {
 		printf("FAIL leaf_mark nd=%d ix=%d: bytecode stopped, rc=%d\n",
 		       k, i, rc);
@@ -397,7 +450,7 @@ int main(void)
 	    // name before. i runs past NBUF on purpose: the word's own bounds
 	    // test is the thing being compared.
 	    c = csp_buf_owner_tag(&state, (index_t)i);
-	    rc = run_bc(CSP_W_BUF_OWNER_TAG_ENTRY, (mc_cell_t)i, &b);
+	    rc = run_bc(BUF_OWNER_TAG, (mc_cell_t)i, &b);
 	    if (rc != MC_OK) {
 		printf("FAIL buf_owner_tag ix=%d: bytecode stopped, rc=%d\n", i, rc);
 		errors++;
@@ -412,7 +465,7 @@ int main(void)
 	    // nothing in the word says so.
 	    if (i < NBUF) {
 		c = csp_buf_is_xref(&state, (index_t)i);
-		rc = run_bc(CSP_W_BUF_IS_XREF_ENTRY, (mc_cell_t)i, &b);
+		rc = run_bc(BUF_IS_XREF, (mc_cell_t)i, &b);
 		if (rc != MC_OK) {
 		    printf("FAIL buf_is_xref ix=%d: bytecode stopped, rc=%d\n", i, rc);
 		    errors++;
@@ -429,6 +482,111 @@ int main(void)
 		       k, i, c, ref_local_number(&state, (index_t)i));
 		errors++;
 	    }
+	}
+    }
+
+    // ------------------------------------------------------------- INDEX()
+    //
+    // A packed index carries an OBJECT selector above the declaration bits,
+    // and INDEX() strips it. Every word that takes one starts by doing that,
+    // and until now every index the tests handed over had the selector clear
+    // -- so the mask was a no-op and breaking it changed nothing.
+    {
+	for (i = 0; i < NDECL; i++) {
+	    index_t plain = (index_t)i;
+	    index_t obj   = MAKE_INDEX(1, i);      // same leaf, inside object 1
+	    mc_cell_t b1 = 0, b2 = 0;
+	    int rc1 = run_bc(DTYPE, plain, &b1);
+	    int rc2 = run_bc(DTYPE, obj,   &b2);
+
+	    if (csp_dtype(&state, plain) != csp_dtype(&state, obj)) {
+		printf("FAIL INDEX ix=%d: C answers %d plain, %d with the"
+		       " object bit\n", i, csp_dtype(&state, plain),
+		       csp_dtype(&state, obj));
+		errors++;
+	    } else if (rc1 != MC_OK || rc2 != MC_OK || b1 != b2) {
+		printf("FAIL INDEX ix=%d: bytecode answers %u plain, %u with"
+		       " the object bit\n", i, (unsigned)b1, (unsigned)b2);
+		errors++;
+	    }
+	}
+    }
+
+    // ------------------------------------------------------- THE DISPATCH
+    //
+    // setup_decl chooses; the leaves do. So what is compared is WHICH leaves
+    // ran, in order -- a return value would say nothing about a dispatch that
+    // picked the wrong arm and got 0 from it anyway.
+    {
+	static const struct { uint8_t t; const char* want; } kind[] = {
+	    { DECL_VARIABLE, "v"  }, { DECL_CONSTANT, "c"  },
+	    { DECL_TIMER,    "st" }, { DECL_DIGITAL,  "sd" },
+	    { DECL_ANALOG,   "sa" }, { DECL_FIELD,    "f"  },
+	    { DECL_BUFFER,   "b"  }, { DECL_END,      ""   },
+	};
+	char c_log[sizeof(su_log)];
+	unsigned q;
+
+	state.timer_cap = 0;             // no list to append to; the arm still runs
+	state.io_cap = 0;
+	for (q = 0; q < sizeof(kind)/sizeof(kind[0]); q++) {
+	    mc_cell_t bv = 0;
+	    int cr, rc2;
+
+	    csp_decl_set_type(&table[0], kind[q].t);
+	    su_n = 0; su_log[0] = 0;
+	    cr = csp_setup_decl_w(&state, 0);
+	    memcpy(c_log, su_log, sizeof(su_log));
+
+	    su_n = 0; su_log[0] = 0;
+	    rc2 = run_bc(SETUP_DECL_W, 0, &bv);
+	    if (rc2 != MC_OK) {
+		printf("FAIL setup_decl type=%u: bytecode stopped, rc=%d\n",
+		       kind[q].t, rc2);
+		errors++;
+	    } else if (strcmp(c_log, kind[q].want) != 0) {
+		printf("FAIL setup_decl type=%u: C ran \"%s\", want \"%s\"\n",
+		       kind[q].t, c_log, kind[q].want);
+		errors++;
+	    } else if (strcmp(c_log, su_log) != 0) {
+		printf("FAIL setup_decl type=%u: C ran \"%s\", bytecode \"%s\"\n",
+		       kind[q].t, c_log, su_log);
+		errors++;
+	    } else if (cr != (int)(int16_t)bv) {
+		printf("FAIL setup_decl type=%u: C returns %d, bytecode %d\n",
+		       kind[q].t, cr, (int)(int16_t)bv);
+		errors++;
+	    }
+	}
+	csp_decl_set_type(&table[0], (uint8_t)kinds[0]);
+    }
+
+    // ------------------------------------------------------------- NEGATIVE
+    //
+    // A cell is UNSIGNED sixteen bits, so a word answering -1 comes back as
+    // 65535 unless the trampoline casts through a signed type of the same
+    // width. The table here declares no DECL_STATES at all, which makes every
+    // lookup miss -- so this is the not-found answer, every time, which is
+    // exactly the one that has to survive the crossing.
+    {
+	int cr = csp_lookup_state_pos(&state, 5);
+	mc_cell_t bv = 0;
+	int rc2 = run_bc(LOOKUP_STATE_POS, 5, &bv);
+
+	if (rc2 != MC_OK) {
+	    printf("FAIL lookup_state_pos: bytecode stopped, rc=%d\n", rc2);
+	    errors++;
+	} else if (cr != -1) {
+	    printf("FAIL lookup_state_pos: C says %d, want -1\n", cr);
+	    errors++;
+	} else if (bv != 0xFFFFu) {
+	    // The RAW pattern, not a sign-extended comparison: extending here
+	    // would prove nothing about what the machine computed. -1 has to
+	    // arrive as a full cell of ones, which is what a LIT8 of -1 would
+	    // NOT give -- that puts 0x00FF in and looks like 255.
+	    printf("FAIL lookup_state_pos: bytecode left %04X, want FFFF\n",
+		   (unsigned)bv);
+	    errors++;
 	}
     }
 
@@ -460,7 +618,7 @@ int main(void)
 
 	    pr_n = 0; pr_buf[0] = 0;
 	    a2[0] = 0; a2[1] = (mc_cell_t)d;
-	    rc = run_bcn(CSP_W_LIST_PIN_SPEC_ENTRY, a2, 2, &b);
+	    rc = run_bcv(LIST_PIN_SPEC, a2, 2, &b);
 	    if (rc != MC_OK) {
 		printf("FAIL list_pin_spec d=%d: bytecode stopped, rc=%d\n", d, rc);
 		errors++;
@@ -523,7 +681,7 @@ int main(void)
 	}
 
 	setup_bufs();
-	rc2 = run_bc(CSP_W_BUF_STAMP_ENTRY, (mc_cell_t)i, &bv);
+	rc2 = run_bc(BUF_STAMP, (mc_cell_t)i, &bv);
 	br = (int)bv;
 	if (rc2 != MC_OK) {
 	    printf("FAIL buf_stamp ix=%d: bytecode stopped, rc=%d\n", i, rc2);

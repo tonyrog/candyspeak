@@ -19,6 +19,7 @@
 #include "csp_parse.h"
 #include "csp_compile.h"
 #include "csp_print.h"
+#include "csp_expr.h"
 // Firmware upgrade mode. Guarded, not unconditional: csp_flash.c is linked
 // everywhere but a flash BACKEND (erase/write/read) is not -- only a part with
 // a driver has one. Without the guard /upgrade would be an undefined reference
@@ -1042,7 +1043,7 @@ match:
 	    // back, because the runtime declares them itself. They occupy the
 	    // first block, so a block with nothing above FAILSAFE prints nothing.
 	    for (k = 0; k < CSP_STATES_PER_DECL; k++) {
-		sindex_t np = csp_states_name(&d, k);
+		sindex_t np = (sindex_t)csp_states_slot(st, i, (index_t)k);
 		if (np == 0)
 		    continue;
 		if (lookup_state_pos(st, np) <= STATE_FAILSAFE)
@@ -1595,8 +1596,16 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
 	// the decl would print the template's pin for every object.
 	value_t* v = csp_dio_slot(st, ix, DIN);
 	int port, pin, dir;
-	if (t == DECL_DIGITAL) { port = v->d.port; pin = v->d.pin; dir = v->d.dir; }
-	else                   { port = v->a.port; pin = v->a.pin; dir = v->a.dir; }
+	if (t == DECL_DIGITAL) {
+	    port = value_get_d_port(v);
+	    pin = value_get_d_pin(v);
+	    dir = value_get_d_dir(v);
+	}
+	else {
+	    port = value_get_a_port(v);
+	    pin = value_get_a_pin(v);
+	    dir = value_get_a_dir(v);
+	}
 	csp_print_rojust(csp_fmt_pindir(dir), LJUST, STATE_W_DIR);
 	if (t == DECL_DIGITAL)
 	    csp_print_rojust(ros_digital, LJUST, STATE_W_KIND);
@@ -1643,7 +1652,8 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
 	    }
 	    else if (!(st->irq_hw & ((uint32_t)1 << slot)))
 		csp_print_char('!');
-	    if ((t == DECL_DIGITAL) ? v->d.fired : v->a.fired)
+	    if ((t == DECL_DIGITAL) ? value_get_d_fired(v) :
+		value_get_a_fired(v))
 		csp_print_lit("  FIRED");
 	}
     }

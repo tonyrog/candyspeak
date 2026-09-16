@@ -142,6 +142,24 @@
 %% and only the runtime knows what that base is right now.
 {native, st_index, 1, 'int'}.
 
+%% The per-type setup leaves. Each takes (st, ix) and does the part that needs
+%% pointers, a value_t or the heap; the DISPATCH between them is a word.
+{native, setup_variable, 1, 'int'}.
+{native, setup_constant, 1, 'int'}.
+{native, setup_slot,     1, 'int'}.
+{native, setup_timer,    1, 'void'}.
+{native, setup_digital,  1, 'void'}.
+{native, setup_analog,   1, 'void'}.
+{native, setup_field,    1, 'int'}.
+{native, setup_buffer,   1, 'int'}.
+
+%% One Sys declaration by name NUMBER. Two arguments, so it is a leafn -- the
+%% first word to use MC_NATIVEN, which the machine has carried unused since the
+%% leaf table was built.
+{native, sysdecl, 2, 'index_t'}.
+{native, new_states_block, 0, 'index_t'}.
+{native, csp_set_error, 1, 'int'}.
+
 %% PURE natives: they do not take the runtime. The console is a global, so
 %% printing needs no st -- and the wrapper must not pass one, which is the whole
 %% difference between `pure` and `native`.
@@ -200,6 +218,8 @@
 {state, mid_end,  'index_t',  "mid_end"}.
 {state, set_used, 'uint16_t', "set_used"}.
 {state, obj_cap,  'index_t',  "obj_cap"}.
+{state, io_cap,    'index_t',  "io_cap"}.
+{state, timer_cap, 'index_t',  "timer_cap"}.
 
 %% ------------------------------------------------------------ THE TABLES
 %%
@@ -207,10 +227,14 @@
 %% csp_rt_t beside the table, and the generated accessor checks against it --
 %% which is the whole difference between handing a word a table and handing it
 %% a pointer. Zero out of range, and a write out of range is dropped.
-{array, io,        'index_t', "io",        nio}.
-{array, io_obj,    'uint8_t', "io_obj",    nio}.
-{array, timer,     'index_t', "timer",     nt}.
-{array, timer_obj, 'uint8_t', "timer_obj", nt}.
+%% Bounded by CAPACITY, not by the live count. The count is the caller's
+%% business -- and a table is APPENDED to at index `nio`, which a bound of
+%% `nio` refuses. Reading past the count gives a stale slot rather than zero,
+%% which is what a read past the count deserves.
+{array, io,        'index_t', "io",        io_cap}.
+{array, io_obj,    'uint8_t', "io_obj",    io_cap}.
+{array, timer,     'index_t', "timer",     timer_cap}.
+{array, timer_obj, 'uint8_t', "timer_obj", timer_cap}.
 {array, offs,      'index_t', "offs",      obj_cap}.
 {array, object,    'index_t', "object",    obj_cap}.
 
@@ -347,7 +371,7 @@
 %% Which buffer a leaf belongs to. `&st->buf[csp_view_get_buf(csp_view(st,ix))]`
 %% stood in five places; this is the index half of it, which is the half that
 %% can be said without a pointer.
-{word, leaf_buf, [ix], 'int',
+{word, leaf_buf, [ix], 'index_t',
  [{return, {view, {call, st_index, [{var, ix}]}, buf}}]}.
 
 %% The two flag helpers, by INDEX. They took a csp_buf_t* and every caller
@@ -411,14 +435,14 @@
 %% The declaration a buffer belongs to, as a plain index, or BAD_INDEX. The
 %% owner field carries a selector bit that INDEX takes off; buf_of_decl read
 %% the field twice to ask two questions about it.
-{aux, buf_owner, [b], 'int',
+{aux, buf_owner, [b], 'index_t',
  [{local, o, {buf, {var, b}, owner}},
   {'if', {op, eq, {var, o}, {const16, 'BAD_INDEX'}},
    [{return, {const16, 'BAD_INDEX'}}]},
   {return, {index, {var, o}}}]}.
 
 %% ...and the search back the other way.
-{word, buf_of_decl, [di], 'int',
+{word, buf_of_decl, [di], 'index_t',
  [{local, b, {const, 0}},
   {while, {op, lt, {var, b}, {state, nbuf}},
    [{'if', {op, eq, {call, buf_owner, [{var, b}]}, {var, di}},
@@ -577,17 +601,23 @@
 %% Slot k of the block at i, 0 when the slot is padding. Six named fields
 %% because a slot is a byte and the layout says which one -- a descriptor
 %% cannot be built from k.
-{aux, states_slot, [i, k], 'int',
- [{local, r, {const, 0}},
-  {switch, {var, k},
-   [{0, [{set, r, {decl, {var, i}, name}}]},
-    {1, [{set, r, {decl, {var, i}, s6_name2}}]},
-    {2, [{set, r, {decl, {var, i}, s6_name3}}]},
-    {3, [{set, r, {decl, {var, i}, s6_name4}}]},
-    {4, [{set, r, {decl, {var, i}, s6_name5}}]},
-    {5, [{set, r, {decl, {var, i}, s6_name6}}]}],
-   []},
-  {return, {var, r}}]}.
+{word, states_slot, [i, k], 'int',
+ [{return, {decl, {var, i}, sn_names, {var, k}}}]}.
+
+{word, states_set_slot, [i, k, pos], 'int',
+ [{store, {decl, {var, i}, sn_names, {var, k}}, {var, pos}},
+  {return, {const, 0}}]}.
+
+%% The first FREE slot of the block at i, or -1 when it is full. add_state
+%% wrote this out as a loop plus a sentinel dance -- run k to the end, then
+%% test whether it got there -- which is two ways of saying one thing.
+{word, states_free_slot, [i], 'int',
+ [{local, k, {const, 0}},
+  {while, {op, lt, {var, k}, {const, 'CSP_STATES_PER_DECL'}},
+   [{'if', {op, eq, {call, states_slot, [{var, i}, {var, k}]}, {const, 0}},
+     [{return, {var, k}}]},
+    {set, k, {op, add, {var, k}, {const, 1}}}]},
+  {return, {const, -1}}]}.
 
 %% THE CURSOR. The name position of state number `want`, or 0 past the end.
 %% Three searches and a count used to go through a walker that took a function
@@ -616,3 +646,176 @@
   {while, {op, ne, {call, state_name_at, [{var, n}]}, {const, 0}},
    [{set, n, {op, add, {var, n}, {const, 1}}}]},
   {return, {var, n}}]}.
+
+%% State number of the state whose NAME is at `pos`, or -1. For a listing
+%% walking the slots of a block that needs each slot's number without searching
+%% by text -- and the first word to answer a NEGATIVE, which a cell holds only
+%% if the trampoline sign-extends it.
+{word, lookup_state_pos, [pos], 'int',
+ [{local, n, {const, 0}},
+  {local, np, {call, state_name_at, [{const, 0}]}},
+  {while, {op, ne, {var, np}, {const, 0}},
+   [{'if', {op, eq, {var, np}, {var, pos}},
+     [{return, {var, n}}]},
+    {set, n, {op, add, {var, n}, {const, 1}}},
+    {set, np, {call, state_name_at, [{var, n}]}}]},
+  {return, {const, -1}}]}.
+
+%% ---------------------------------------------------------------- setup
+
+%% Append a leaf to the I/O list, with the object being built bound to it. A
+%% #field only goes in when it has a direction -- a window with neither in nor
+%% out is not something the I/O pass has anything to do with.
+{word, add_io, [ix], 'int',
+ [{'if', {andthen,
+	  {op, eq, {call, dtype, [{var, ix}]}, {const, 'DECL_FIELD'}},
+	  {op, eq, {op, and_, {decl, {index, {var, ix}}, dir},
+		    {const, 'DIR_INOUT'}}, {const, 0}}},
+   [{return, {const, 0}}]},
+  {'if', {op, lt, {state, nio}, {state, io_cap}},
+   [{store, {aget, io_obj, {state, nio}}, {state, cur}},
+    {store, {aget, io, {state, nio}}, {var, ix}},
+    {store, {state, nio}, {op, add, {state, nio}, {const, 1}}}]},
+  {return, {const, 0}}]}.
+
+%% One per kind, so the dispatch below is a call per arm. Written out inline it
+%% was a single word whose branches ran past the eight-bit relative range the
+%% machine uses -- which rel/1 refused rather than wrapping.
+
+%% A timer: its value slot, its configuration, and a place on the timer list.
+{aux, setup_timer_w, [ix], 'int',
+ [{local, r, {call, setup_slot, [{var, ix}]}},
+  {'if', {op, slt, {var, r}, {const, 0}}, [{return, {const, -1}}]},
+  {do, {call, setup_timer, [{var, ix}]}},
+  {'if', {op, lt, {state, nt}, {state, timer_cap}},
+   [{store, {aget, timer_obj, {state, nt}}, {state, cur}},
+    {store, {aget, timer, {state, nt}}, {var, ix}},
+    {store, {state, nt}, {op, add, {state, nt}, {const, 1}}}]},
+  {return, {const, 0}}]}.
+
+{aux, setup_digital_w, [ix], 'int',
+ [{local, r, {call, setup_slot, [{var, ix}]}},
+  {'if', {op, slt, {var, r}, {const, 0}}, [{return, {const, -1}}]},
+  {do, {call, setup_digital, [{var, ix}]}},
+  {do, {call, add_io, [{var, ix}]}},
+  {return, {const, 0}}]}.
+
+{aux, setup_analog_w, [ix], 'int',
+ [{local, r, {call, setup_slot, [{var, ix}]}},
+  {'if', {op, slt, {var, r}, {const, 0}}, [{return, {const, -1}}]},
+  {do, {call, setup_analog, [{var, ix}]}},
+  {do, {call, add_io, [{var, ix}]}},
+  {return, {const, 0}}]}.
+
+{aux, setup_field_w, [ix], 'int',
+ [{local, r, {call, setup_field, [{var, ix}]}},
+  {'if', {op, slt, {var, r}, {const, 0}}, [{return, {const, -1}}]},
+  {do, {call, add_io, [{var, ix}]}},
+  {return, {const, 0}}]}.
+
+%% What a declaration needs before it can run. A switch on what it IS and one
+%% word per kind: the kinds differ in what they allocate, not in how they are
+%% chosen, and choosing is the part with no pointers in it.
+{word, setup_decl_w, [ix], 'int',
+ [{local, r, {const, -1}},
+  {switch, {call, dtype, [{var, ix}]},
+   [{'DECL_VARIABLE', [{set, r, {call, setup_variable,   [{var, ix}]}}]},
+    {'DECL_CONSTANT', [{set, r, {call, setup_constant,   [{var, ix}]}}]},
+    {'DECL_TIMER',    [{set, r, {call, setup_timer_w,    [{var, ix}]}}]},
+    {'DECL_DIGITAL',  [{set, r, {call, setup_digital_w,  [{var, ix}]}}]},
+    {'DECL_ANALOG',   [{set, r, {call, setup_analog_w,   [{var, ix}]}}]},
+    {'DECL_FIELD',    [{set, r, {call, setup_field_w,    [{var, ix}]}}]},
+    {'DECL_BUFFER',   [{set, r, {call, setup_buffer,     [{var, ix}]}}]}],
+   []},
+  {'if', {op, slt, {var, r}, {const, 0}}, [{return, {const, -1}}]},
+  {return, {const, 0}}]}.
+
+%% ------------------------------------------------------------ the Sys module
+
+%% The built-in namespace, created by the RUNTIME the way State is: a module
+%% with no body, five members and an object. It was ninety lines of C whose
+%% every statement but the names was a field store.
+%%
+%% RES is a WIDTH MINUS ONE (MAKE_RES), so 31 is a 32-bit value.
+{word, sys_module_w, [], 'int',
+ [{local, mx, {call, sysdecl, [{const, 'SYSN_SYS'}, {const, 'DECL_MODULE'}]}},
+  {'if', {op, eq, {var, mx}, {const16, 'BAD_INDEX'}}, [{return, {const, -1}}]},
+  {store, {decl, {index, {var, mx}}, md_ent}, {const, 0}},   %% no body
+
+  %% #variable Serial:32 unsigned
+  {local, i, {call, sysdecl, [{const, 'SYSN_SERIAL'}, {const, 'DECL_VARIABLE'}]}},
+  {'if', {op, eq, {var, i}, {const16, 'BAD_INDEX'}}, [{return, {const, -1}}]},
+  {store, {decl, {var, i}, vt}, {const, 'V_UNSIGNED'}},
+  {store, {decl, {var, i}, res}, {const, 31}},
+
+  %% #param Id:32 unsigned -- DECL_CONSTANT plus local IS a #param
+  {set, i, {call, sysdecl, [{const, 'SYSN_ID'}, {const, 'DECL_CONSTANT'}]}},
+  {'if', {op, eq, {var, i}, {const16, 'BAD_INDEX'}}, [{return, {const, -1}}]},
+  {store, {decl, {var, i}, vt}, {const, 'V_UNSIGNED'}},
+  {store, {decl, {var, i}, res}, {const, 31}},
+  {store, {decl, {var, i}, local}, {const, 1}},
+
+  %% #param Name string
+  {set, i, {call, sysdecl, [{const, 'SYSN_NAME'}, {const, 'DECL_CONSTANT'}]}},
+  {'if', {op, eq, {var, i}, {const16, 'BAD_INDEX'}}, [{return, {const, -1}}]},
+  {store, {decl, {var, i}, vt}, {const, 'V_STRING'}},
+  {store, {decl, {var, i}, local}, {const, 1}},
+
+  %% #variable Image:32 unsigned -- STATUS, what the loader actually booted,
+  %% so a #param would be a field a saved value could contradict.
+  {set, i, {call, sysdecl, [{const, 'SYSN_IMAGE'}, {const, 'DECL_VARIABLE'}]}},
+  {'if', {op, eq, {var, i}, {const16, 'BAD_INDEX'}}, [{return, {const, -1}}]},
+  {store, {decl, {var, i}, vt}, {const, 'V_UNSIGNED'}},
+  {store, {decl, {var, i}, res}, {const, 31}},
+
+  %% #param Boot:32 unsigned -- the REQUEST, loosely coupled to Image on
+  %% purpose: Boot is what was asked for, Image is what happened, and seeing
+  %% that they differ is the diagnosis. CSP_BOOT_AUTO is "no preference".
+  {set, i, {call, sysdecl, [{const, 'SYSN_BOOT'}, {const, 'DECL_CONSTANT'}]}},
+  {'if', {op, eq, {var, i}, {const16, 'BAD_INDEX'}}, [{return, {const, -1}}]},
+  {store, {decl, {var, i}, vt}, {const, 'V_UNSIGNED'}},
+  {store, {decl, {var, i}, res}, {const, 31}},
+  {store, {decl, {var, i}, local}, {const, 1}},
+  {store, {decl, {var, i}, va_init}, {const, 'CSP_BOOT_AUTO'}},
+
+  {local, ex, {call, sysdecl, [{const, 'SYSN_NONE'}, {const, 'DECL_END'}]}},
+  {'if', {op, eq, {var, ex}, {const16, 'BAD_INDEX'}}, [{return, {const, -1}}]},
+  {store, {decl, {index, {var, mx}}, md_n},
+   {op, sub, {op, sub, {index, {var, ex}}, {index, {var, mx}}}, {const, 1}}},
+
+  {local, ox, {call, sysdecl, [{const, 'SYSN_SYSOBJ'}, {const, 'DECL_OBJECT'}]}},
+  {'if', {op, eq, {var, ox}, {const16, 'BAD_INDEX'}}, [{return, {const, -1}}]},
+  {store, {decl, {index, {var, ox}}, mq_mx}, {index, {var, mx}}},
+  %% The object NUMBER, and it is not optional: csp_rt_start renumbers objects
+  %% itself, but the COMPILER reads mq.m to build the xindex for `sys.Id`, and
+  %% ps.nq is what csp_parse_object counts from -- so the first user object
+  %% must get 2 and not collide with this one. Left at 0, every member resolved
+  %% as a GLOBAL index: `sys.Id = 7` wrote over State.
+  {store, {decl, {index, {var, ox}}, mq_m}, {op, add, {state, nq}, {const, 1}}},
+  {store, {state, nq}, {op, add, {state, nq}, {const, 1}}},
+  {store, {state, sys_obj}, {index, {var, ox}}},
+  {store, {state, sys_mod}, {index, {var, mx}}},
+  {return, {const, 0}}]}.
+
+%% The INDEX half of add_state: put an interned name in the open block, or open
+%% a new one. The name itself is a pointer and stays in C -- this starts where
+%% the string already has a position.
+%%
+%% Answers the block the name landed in, or BAD_INDEX. That is what the caller
+%% has to carry to the next state anyway, and it was an out-parameter before.
+{word, add_state_w, [pos, blk], 'index_t',
+ [{local, b, {var, blk}},
+  {local, k, {const, -1}},
+  %% OP_INSTATE carries the number in a signed 8-bit immediate.
+  {'if', {op, lt, {const, 127}, {call, num_states, []}},
+   [{do, {call, csp_set_error, [{const, 'ERR_TOO_MANY_STATES'}]}},
+    {return, {const16, 'BAD_INDEX'}}]},
+  {'if', {op, ne, {var, b}, {const16, 'BAD_INDEX'}},
+   [{set, k, {call, states_free_slot, [{index, {var, b}}]}}]},
+  {'if', {op, slt, {var, k}, {const, 0}},
+   [{set, b, {call, new_states_block, []}},
+    {'if', {op, eq, {var, b}, {const16, 'BAD_INDEX'}},
+     [{return, {const16, 'BAD_INDEX'}}]},
+    {set, k, {const, 0}}]},
+  {do, {call, states_set_slot, [{index, {var, b}}, {var, k}, {var, pos}]}},
+  {return, {var, b}}]}.

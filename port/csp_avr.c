@@ -467,7 +467,7 @@ void csp_board_stop_output(csp_rt_t* st) { (void)st; }
 
 void csp_board_digital_input(csp_rt_t* st, index_t ix, value_t* vptr)
 {
-    csp_set_ivalue(st, ix, pin_read(vptr->d.pin));
+    csp_set_ivalue(st, ix, pin_read(value_get_d_pin(vptr)));
 }
 
 // An inout pin RESTS as an input: it is borrowed for the length of one write
@@ -476,25 +476,29 @@ void csp_board_digital_input(csp_rt_t* st, index_t ix, value_t* vptr)
 void csp_board_digital_output(csp_rt_t* st, value_t* vptr)
 {
     (void)st;
-    if (vptr->d.dir & DIR_IN) {
-	pin_mode_out(vptr->d.pin);
-	pin_write(vptr->d.pin, vptr->d.val & 1);
-	pin_mode_in(vptr->d.pin, vptr->d.pullup);
+    uint8_t pin = value_get_d_pin(vptr);
+    uint8_t dir = value_get_d_dir(vptr);
+    if (dir & DIR_IN) {
+	pin_mode_out(pin);
+	pin_write(pin, value_get_d_val(vptr));
+	pin_mode_in(pin, value_get_d_pullup(vptr));
     }
     else
-	pin_write(vptr->d.pin, vptr->d.val & 1);
+	pin_write(pin, value_get_d_val(vptr));
 }
 
 void csp_board_digital_config(value_t* vptr)
 {
-    if (vptr->d.dir & DIR_IN) {
+    uint8_t dir = value_get_d_dir(vptr);
+    uint8_t pin = value_get_d_pin(vptr);
+    if (dir & DIR_IN) {
 	// No PULLDOWN: the part has none. A program that asks for one gets an
 	// input with no pull rather than a pull the wrong way, which is the
 	// safer of the two wrong answers and the only one available.
-	pin_mode_in(vptr->d.pin, vptr->d.pullup);
+	pin_mode_in(pin, value_get_d_pullup(vptr));
     }
-    else if (vptr->d.dir & DIR_OUT)
-	pin_mode_out(vptr->d.pin);
+    else if (dir & DIR_OUT)
+	pin_mode_out(pin);
 }
 
 // A0 upwards are Arduino pins CSP_AVR_A0 and up, and ADC channels 0 and up --
@@ -502,7 +506,7 @@ void csp_board_digital_config(value_t* vptr)
 // are accepted.
 void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
 {
-    uint8_t pin = vptr->a.pin;
+    uint8_t pin = value_get_a_pin(vptr);
     uint8_t ch  = (pin >= CSP_AVR_A0) ? (uint8_t)(pin - CSP_AVR_A0) : pin;
 
     csp_set_ivalue(st, ix, (ivalue_t)adc_read(ch));
@@ -518,10 +522,13 @@ void csp_board_analog_output(csp_rt_t* st, int di, value_t* vptr)
 
 void csp_board_analog_config(value_t* vptr)
 {
-    if ((vptr->a.dir & DIR_IN) && (vptr->a.pin < CSP_AVR_A0))
-	return;                                   // a channel, not a pin
-    if (vptr->a.dir & DIR_IN)
-	pin_mode_in(vptr->a.pin, 0);
+    uint8_t dir = value_get_a_dir(vptr);
+    if (dir & DIR_IN) {
+	uint8_t pin = value_get_a_pin(vptr);
+	if (pin < CSP_AVR_A0)
+	    return;                                   // a channel, not a pin
+	pin_mode_in(value_get_a_pin(vptr), 0);
+    }
 }
 
 // ============================================================
@@ -717,12 +724,12 @@ void csp_input(csp_rt_t* st)
 	switch (decl(st, di, type)) {
 	case DECL_DIGITAL:
 	    vptr = csp_dio_slot(st, ix, DOUT);
-	    if (vptr->d.dir & DIR_IN)
+	    if (value_get_d_dir(vptr) & DIR_IN)
 		csp_board_digital_input(st, ix, vptr);
 	    break;
 	case DECL_ANALOG:
 	    vptr = csp_dio_slot(st, ix, DOUT);
-	    if (vptr->a.dir & DIR_IN)
+	    if (value_get_a_dir(vptr) & DIR_IN)
 		csp_board_analog_input(st, ix, vptr);
 	    break;
 	default: break;
@@ -748,12 +755,12 @@ void csp_output(csp_rt_t* st)
 	    switch (decl(st, di, type)) {
 	    case DECL_DIGITAL:
 		vptr = csp_dio_slot(st, ix, DOUT);
-		if (vptr->d.dir & DIR_OUT)
+		if (value_get_d_dir(vptr) & DIR_OUT)
 		    csp_board_digital_output(st, vptr);
 		break;
 	    case DECL_ANALOG:
 		vptr = csp_dio_slot(st, ix, DOUT);
-		if (vptr->a.dir & DIR_OUT)
+		if (value_get_a_dir(vptr) & DIR_OUT)
 		    csp_board_analog_output(st, di, vptr);
 		break;
 	    default: break;

@@ -437,7 +437,7 @@ SZ   := $(CROSS)size
 # knows what a GPIO write is -- is picked by architecture above, because that is
 # the whole difference between an LPC build and an STM32 one.
 CORE := src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c src/csp_repl.c \
-        src/csp_parse.c src/csp_tok.c src/csp_print.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c gen/csp_strings.c \
+        src/csp_parse.c src/csp_tok.c src/csp_expr.c src/csp_print.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c gen/csp_strings.c \
         src/csp_eeprom.c src/csp_flash.c src/csp_transport.c src/csp_console.c src/csp_states.c
 
 # THE PROGRAM THE BOARD CARRIES IN FLASH.

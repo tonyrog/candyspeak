@@ -821,7 +821,7 @@ static value_t fn_sign(csp_rt_t* st,uint16_t type, value_t* args, uint8_t nargs)
 int csp_timer_fired(csp_rt_t* st, index_t ix)
 {
     value_t* vptr = csp_dio_slot(st, ix, DIN);
-    return BOOL(vptr->t.fired);
+    return BOOL(value_get_t_fired(vptr));
 }
 
 //  FIXME: if not running?
@@ -832,10 +832,10 @@ static value_t fn_elapsed(csp_rt_t* st,uint16_t type,
     index_t ix = args[0].u; // timer
     index_t tx = ix+1;
     value_t* vptr = csp_dio_slot(st, ix, DIN);
-    if (vptr->t.running)
+    if (value_get_t_running(vptr))
 	ret.u = csp_time_ms() - csp_uvalue(st, tx);
     else
-	ret.u = vptr->t.period;
+	ret.u = value_get_t_period(vptr);
     return ret;
 }
 
@@ -847,10 +847,10 @@ static value_t fn_progress(csp_rt_t* st,uint16_t type,
     index_t ix = args[0].u; // timer
     value_t* vptr = csp_dio_slot(st, ix, DIN);
 
-    if (vptr->t.running) {
+    if (value_get_t_running(vptr)) {
 	index_t tx = ix+1;      // start time
 	uint32_t td = csp_time_ms() - csp_uvalue(st, tx);
-	uint32_t period = vptr->t.period;
+	uint32_t period = value_get_t_period(vptr);
 	ret.f = op_FDIV(op_CVTIF(td), op_CVTIF(period));
     }
     else {
@@ -879,7 +879,7 @@ static value_t fn_rising(csp_rt_t* st,uint16_t type,
     value_t* optr;
 
     csp_dio_slots(st, ty, &iptr, &optr);
-    ret.i = !(optr->d.val & 1) && (iptr->d.val & 1);
+    ret.i = !value_get_d_val(optr) && value_get_d_val(iptr);
     return ret;
 }
 
@@ -892,7 +892,7 @@ static value_t fn_falling(csp_rt_t* st,uint16_t type,
     value_t* optr;
 
     csp_dio_slots(st, ty, &iptr, &optr);
-    ret.i = (optr->d.val & 1) && !(iptr->d.val & 1);
+    ret.i = value_get_d_val(optr) && !value_get_d_val(iptr);
     return ret;
 }
 
@@ -1215,11 +1215,11 @@ NOINLINE void csp_dio_set_val_part(csp_rt_t* st, value_t* vslot,
 				   vtype_t vt, value_t v)
 {
     switch(CSP_MASK(vt, TYPE_BITS)) {
-    case V_TIMER:   vslot->t.val = v.i; break;
-    case V_DIGITAL: vslot->d.val = v.i; break;
-    case V_ANALOG:  vslot->a.val = v.i; break;
+    case V_TIMER:   value_set_t_val(vslot, v.i); break;
+    case V_DIGITAL: value_set_d_val(vslot, v.i); break;
+    case V_ANALOG:  value_set_a_val(vslot, v.i); break;
 	//case V_STRING:  vslot->s = v.i; break;
-    case V_STRING:  vslot->s = v.s; break;		
+    case V_STRING:  value_set_s_val(vslot, v.s); break;		
     default: *vslot = v; break;
     }
 }
@@ -1244,16 +1244,17 @@ NOINLINE void csp_dio_get_val_part(csp_rt_t* st, value_t* vslot,
 				   vtype_t vt, value_t* vp)
 {
     switch(CSP_MASK(vt, TYPE_BITS)) {
-    case V_TIMER:   vp->i = vslot->t.val; break;
-    case V_DIGITAL: vp->i = vslot->d.val & 1; break;
+    case V_TIMER:   vp->i = value_get_t_val(vslot); break;
+    case V_DIGITAL: vp->i = value_get_d_val(vslot); break;
 	// a.val is unsigned:16 and cannot hold a negative, so a signed analog
 	// stores the low 16 bits and gets them sign-extended back here. That
 	// round-trips: csp_dio_set_val_part truncates the same 16 bits.
-    case V_ANALOG:
-	vp->i = (vt & CFG_SIGNED) ? (ivalue_t)(int16_t)vslot->a.val
-	                          : (ivalue_t)vslot->a.val;
+    case V_ANALOG: {
+	uint16_t v = value_get_a_val(vslot);
+	vp->i = (vt & CFG_SIGNED) ? (ivalue_t)((int16_t)v) : (ivalue_t)v;
 	break;
-    case V_STRING:  vp->i = vslot->s; break;
+    }
+    case V_STRING:  vp->i = value_get_s_val(vslot); break;
     default: *vp = *vslot; break;
     }
 }
@@ -2158,18 +2159,7 @@ NOINLINE sindex_t state_name_pos(csp_rt_t* st, int snum)
     return (sindex_t)csp_state_name_at(st, (index_t)snum);
 }
 
-// State number of the state whose NAME is at `pos`. For a listing walking the
-// slots of a block that needs each slot's number without searching by text.
-NOINLINE int lookup_state_pos(csp_rt_t* st, sindex_t pos)
-{
-    int n;
-    sindex_t np;
-
-    for (n = 0; (np = csp_state_name_at(st, (index_t)n)) != 0; n++)
-	if (np == pos)
-	    return n;
-    return -1;
-}
+// lookup_state_pos is a WORD now (utils/words.terms), on the same cursor.
 // Compare n bytes at a logical string position against a RAM string (memcmp-
 // like: 0 == equal). Segment-aware per byte, so it is PROGMEM-safe on AVR where
 // the ROM half of the string table lives in flash.
@@ -2220,12 +2210,12 @@ NOINLINE void csp_print_str_at(csp_rt_t* st, sindex_t pos)
 // ONE namespace real: a `#states` name and a `#variable` name collide here and
 // csp_new_udecl reports it, instead of both existing and the meaning of the
 // token depending on which lookup a call site happens to try first.
-NOINLINE static int states_block_has(csp_rt_t* st, const csp_decl_t* d,
+NOINLINE static int states_block_has(csp_rt_t* st, index_t bi,
 				     const tstr_t* name)
 {
     int k;
     for (k = 0; k < CSP_STATES_PER_DECL; k++) {
-	sindex_t np = csp_states_name(d, k);
+	sindex_t np = (sindex_t)csp_states_slot(st, bi, (index_t)k);
 	if ((np > 0) && csp_str_eq(st, np, name->ptr, name->len))
 	    return k;
     }
@@ -2240,7 +2230,7 @@ NOINLINE index_t lookup_decl_in(csp_rt_t* st, const tstr_t* name,
 	csp_decl_t d;   // one read per node, not three
 	csp_load_decl(st, i, &d);
 	if (csp_decl_get_type(&d) == DECL_STATES) {
-	    if (states_block_has(st, &d, name) >= 0)
+	    if (states_block_has(st, i, name) >= 0)
 		return MAKE_INDEX(0,i);
 	}
 	else if ((csp_decl_get_name(&d) > 0) && csp_str_eq(st, csp_decl_get_name(&d), name->ptr, name->len))
@@ -3917,43 +3907,40 @@ int csp_mem_init(csp_rt_t* st, size_t size)
 // rollback that rewinds the declaration count un-creates those blocks whole,
 // while reaching back into a block an EARLIER line created would survive the
 // rewind and leave the name behind.
+// A fresh, empty states block. next_decl_index hands out the slot and nothing
+// else -- csp_new_decl is what usually clears the record, and this path does
+// not go through it because a states block has no name of its own.
+NOINLINE index_t new_states_block(csp_rt_t* st)
+{
+    index_t ix;
+    csp_decl_t* dp;
+
+    if ((ix = next_decl_index(st)) == BAD_INDEX)
+	return BAD_INDEX;
+    dp = ram_decl_at(st, INDEX(ix));
+    memset(dp, 0, sizeof(*dp));
+    csp_decl_set_type(dp, DECL_STATES);
+    return ix;
+}
+
+// THE NAME is a pointer and the string table takes RAM pointers, so interning
+// stays here. Everything after it is indices and fields, and that half is a
+// WORD -- csp_add_state_w in utils/words.terms, which answers the block the
+// name landed in.
 NOINLINE int add_state(csp_rt_t* st, const tstr_t* name, index_t* blk)
 {
-    int pos, s, k = -1;
-    csp_decl_t* dp;
+    int pos, s;
+    index_t nb;
 
     if ((pos = lookup_string(st, name->ptr, name->len)) < 0) {
 	if ((pos = new_string(st, name->ptr, name->len)) < 0)
 	    return -1;
     }
     s = state_count(st);
-    // OP_INSTATE carries the number in a signed 8-bit immediate.
-    if (s > 127) {
-	csp_set_error(st, ERR_TOO_MANY_STATES);
+    if ((nb = csp_add_state_w(st, (index_t)pos, *blk)) == BAD_INDEX)
 	return -1;
-    }
-    if (*blk != BAD_INDEX) {              // room left in the open block?
-	csp_decl_t d;
-	csp_load_decl(st, INDEX(*blk), &d);
-	for (k = 0; k < CSP_STATES_PER_DECL; k++)
-	    if (csp_states_name(&d, k) == 0)
-		break;
-	if (k == CSP_STATES_PER_DECL)
-	    k = -1;                       // full, open another
-    }
-    if (k < 0) {
-	index_t ix;
-	if ((ix = next_decl_index(st)) == BAD_INDEX)
-	    return -1;
-	dp = ram_decl_at(st, INDEX(ix));
-	memset(dp, 0, sizeof(*dp));
-	csp_decl_set_type(dp, DECL_STATES);
-	*blk = ix;
-	k = 0;
-    }
-    dp = ram_decl_at(st, INDEX(*blk));
-    csp_states_set_name(dp, k, pos);
-    DBG("added state %d slot %d\n", s, k);
+    *blk = nb;
+    DBG("added state %d\n", s);
     return s;
 }
 // The built-in Sys namespace: the node's own identity, in one place every
@@ -3987,104 +3974,39 @@ NOINLINE int add_state(csp_rt_t* st, const tstr_t* name, index_t* blk)
 //   Image   #variable  STATUS: which image csp_load_rom actually booted.
 //   Boot    #param     the REQUEST: which one to boot next time, or
 //                      CSP_BOOT_AUTO for "highest generation".
-NOINLINE static int csp_sys_module(csp_rt_t* st)
+// THE INTERNAL NAMES, by number. A word deals in cells and a rostring_t is a
+// POINTER -- sixty-four bits on a host -- so a word cannot say "this name". It
+// can say "name 3", and this is what 3 means.
+//
+// Seven entries, not the whole string table: a table over all three hundred
+// would be 606 bytes of flash to give seven of them a number.
+static rostring_t const sys_names[] RODATA = {
+    ros_Sys, ros_Serial, ros_Id, ros_Name, ros_Image, ros_Boot, ros_sys
+};
+
+// One declaration of the Sys module, by name NUMBER. Everything csp_sys_module
+// creates is a system declaration, so `sys` is not a parameter -- and the name
+// has to be pulled into RAM either way (new_string memcpy's the text), which is
+// what keeps this on the C side of the line.
+NOINLINE index_t sysdecl(csp_rt_t* st, index_t name_id, index_t type)
 {
-    RO_TSTR(Sys, ros_Sys);
-    RO_TSTR(sys, ros_sys);
-    RO_TSTR(Id, ros_Id);
-    RO_TSTR(Name, ros_Name);
-    RO_TSTR(Serial, ros_Serial);
-    RO_TSTR(Image, ros_Image);
-    RO_TSTR(Boot, ros_Boot);
-    index_t mx, ex, ox;
-    int i;
+    char b[12];
+    tstr_t t;
 
-    if ((mx = csp_new_decl(st, &Sys, DECL_MODULE, 1)) == BAD_INDEX)
-	return -1;
-    csp_decl_set_md_ent(ram_decl_at(st, INDEX(mx)), 0);   // no body -- see above
-
-    if ((i = csp_new_decl(st, &Serial, DECL_VARIABLE, 1)) == BAD_INDEX)
-	return -1;
-    {
-    	csp_decl_t* dp_ = ram_decl_at(st, i);
-	    csp_decl_set_vt(dp_, V_UNSIGNED);
-	    csp_decl_set_res(dp_, MAKE_RES(32));
-    }
-
-    // #param Id:32 unsigned
-    if ((i = csp_new_decl(st, &Id, DECL_CONSTANT, 1)) == BAD_INDEX)
-	return -1;
-    {
-    	csp_decl_t* dp_ = ram_decl_at(st, i);
-	    csp_decl_set_vt(dp_, V_UNSIGNED);
-	    csp_decl_set_res(dp_, MAKE_RES(32));
-	    csp_decl_set_local(dp_, 1);            // DECL_CONSTANT + local == #param
-    }
-
-    // #param Name string
-    if ((i = csp_new_decl(st, &Name, DECL_CONSTANT, 1)) == BAD_INDEX)
-	return -1;
-    {
-    	csp_decl_t* dp_ = ram_decl_at(st, i);
-	    csp_decl_set_vt(dp_, V_STRING);
-	    csp_decl_set_local(dp_, 1);
-    }
-
-    // #variable Image:32 unsigned
-    // STATUS, not a setting: the loader writes which image it actually booted,
-    // so a #param would be a field a saved value could contradict.
-    if ((i = csp_new_decl(st, &Image, DECL_VARIABLE, 1)) == BAD_INDEX)
-	return -1;
-    {
-    	csp_decl_t* dp_ = ram_decl_at(st, i);
-	    csp_decl_set_vt(dp_, V_UNSIGNED);
-	    csp_decl_set_res(dp_, MAKE_RES(32));
-    }
-
-    // #param Boot:32 unsigned
-    // The REQUEST, and the field Image's note asks for: one number cannot both
-    // say what is running and what you would prefer. A #param, so it is stored
-    // as a SETTING -- name-keyed, and therefore surviving both the patch drop
-    // and a reflash, which is what a boot preference has to do.
-    //
-    // LOOSELY COUPLED to Image on purpose. Boot is what was asked for; Image is
-    // what happened. They differ when the wanted image is missing or its header
-    // does not verify, and seeing that they differ is the diagnosis.
-    //
-    // CSP_BOOT_AUTO (255) is "no preference": take the highest generation, the
-    // behaviour that existed before this field. 0 could not mean that -- 0 is a
-    // real image number, the one /images prints first.
-    if ((i = csp_new_decl(st, &Boot, DECL_CONSTANT, 1)) == BAD_INDEX)
-	return -1;
-    {
-    	csp_decl_t* dp_ = ram_decl_at(st, i);
-	    csp_decl_set_vt(dp_, V_UNSIGNED);
-	    csp_decl_set_res(dp_, MAKE_RES(32));
-	    csp_decl_set_local(dp_, 1);            // DECL_CONSTANT + local == #param
-	    csp_decl_set_va_init(dp_, (value_t){ .u = CSP_BOOT_AUTO });
-    }
-
-    if ((ex = csp_new_decl(st, NULL, DECL_END, 1)) == BAD_INDEX)
-	return -1;
-    csp_decl_set_md_n(ram_decl_at(st, INDEX(mx)), (INDEX(ex) - INDEX(mx)) - 1);
-
-    if ((ox = csp_new_decl(st, &sys, DECL_OBJECT, 1)) == BAD_INDEX)
-	return -1;
-    csp_decl_set_mq_mx(ram_decl_at(st, INDEX(ox)), INDEX(mx));
-    // The object NUMBER, and it is not optional. csp_rt_start renumbers the
-    // objects itself, but the COMPILER reads mq.m to build the xindex for
-    // `sys.Id` -- and ps.nq is what csp_parse_object counts from, so the first
-    // user object must get 2 and not collide with this one.
-    //
-    // Left at 0 first time round, every member resolved as a GLOBAL declaration
-    // index: `sys.Id = 7` wrote over State, and `sys.Name` read the whole string
-    // table back.
-    csp_decl_set_mq_m(ram_decl_at(st, INDEX(ox)), st->ps.nq + 1);
-    st->ps.nq++;
-    st->sys_obj = INDEX(ox);
-    st->sys_mod = INDEX(mx);
-    return 0;
+    // SYSN_NONE is not an out-of-range name, it is NO name: the END marker
+    // that closes the module has one, and giving it one costs four bytes of
+    // string space that the #define test counts.
+    if (name_id >= (index_t)(sizeof(sys_names) / sizeof(sys_names[0])))
+	return csp_new_decl(st, NULL, (decl_t)type, 1);
+    t.ptr = b;
+    t.len = ro_strcpy(b, (rostring_t)ro_ptr(&sys_names[name_id]), sizeof(b));
+    return csp_new_decl(st, &t, (decl_t)type, 1);
 }
+
+// csp_sys_module is a WORD now (utils/words.terms). Every statement in it but
+// the seven names was a field store, and the names are numbers now -- see
+// sys_names[] and sysdecl above.
+#define csp_sys_module(st) csp_sys_module_w(st)
 
 NOINLINE static ivalue_t get_md_n(csp_rt_t* st, index_t mx);
 
@@ -4246,16 +4168,16 @@ void csp_set_uconst(csp_rt_t* st, csp_const_fn uconst)
 // and the union is what utils/layout.terms is replacing. Reading through the
 // generated accessors here means this function does not have to change again
 // when the layout becomes ours.
-static void setup_timer_values(value_t* ptr, const csp_decl_t* d)
+static NOINLINE void setup_timer_values(value_t* ptr, const csp_decl_t* d)
 {
-    ptr->t.fired   = 0;
-    ptr->t.val     = csp_decl_get_tm_init(d);
-    ptr->t.running = csp_decl_get_tm_init(d);
-    ptr->t.period  = csp_decl_get_tm_period(d);
+    value_set_t_fired(ptr,   0);
+    value_set_t_val(ptr,     csp_decl_get_tm_init(d));
+    value_set_t_running(ptr, csp_decl_get_tm_init(d));
+    value_set_t_period(ptr,  csp_decl_get_tm_period(d));
 }
 
 // copy config data to value slot config
-NOINLINE static void setup_timer(csp_rt_t* st, index_t ix)
+NOINLINE void setup_timer(csp_rt_t* st, index_t ix)
 {
     value_t* iptr;
     value_t* optr;
@@ -4275,19 +4197,19 @@ NOINLINE static void setup_timer(csp_rt_t* st, index_t ix)
     setup_timer_values(iptr, &d);    
 }
 
-static void setup_analog_values(value_t* ptr, const csp_decl_t* d)
+static NOINLINE void setup_analog_values(value_t* ptr, const csp_decl_t* d)
 {
-    ptr->a.dir  = csp_decl_get_dir(d);
-    ptr->a.pin  = csp_decl_get_an_pin(d);
-    ptr->a.port = csp_decl_get_an_port(d);
-    ptr->a.pwm  = csp_decl_get_an_pwm(d);
+    value_set_a_dir(ptr, csp_decl_get_dir(d));
+    value_set_a_pin(ptr, csp_decl_get_an_pin(d));
+    value_set_a_port(ptr, csp_decl_get_an_port(d));
+    value_set_a_pwm(ptr, csp_decl_get_an_pwm(d));
     // No endian: it stays in the declaration, where .endian reads it from.
     // csp_setup applies this configuration itself, so nothing is pending.    
-    ptr->a.cfg = 0;
+    value_set_a_cfg(ptr, 0);
 }
 
 // copy config data to value slot config
-NOINLINE static void setup_analog(csp_rt_t* st, index_t ix)
+NOINLINE void setup_analog(csp_rt_t* st, index_t ix)
 {
     value_t* iptr;
     value_t* optr;
@@ -4304,22 +4226,22 @@ NOINLINE static void setup_analog(csp_rt_t* st, index_t ix)
     setup_analog_values(iptr, &d);
 }
 
-static void setup_digital_values(value_t* ptr, const csp_decl_t* d)
+static void NOINLINE setup_digital_values(value_t* ptr, const csp_decl_t* d)
 {
-    ptr->d.dir  = csp_decl_get_dir(d);
-    ptr->d.pin  = csp_decl_get_di_pin(d);
-    ptr->d.port = csp_decl_get_di_port(d);
-    ptr->d.pullup = csp_decl_get_di_pullup(d);
-    ptr->d.pulldown = csp_decl_get_di_pulldown(d);
+    value_set_d_dir(ptr, csp_decl_get_dir(d));
+    value_set_d_pin(ptr, csp_decl_get_di_pin(d));
+    value_set_d_port(ptr, csp_decl_get_di_port(d));
+    value_set_d_pullup(ptr, csp_decl_get_di_pullup(d));
+    value_set_d_pulldown(ptr, csp_decl_get_di_pulldown(d));
     // csp_setup applies this configuration itself, so nothing is pending. Left
     // set, it would spend a pinMode on the first cycle saying what setup just
     // said -- and on a slot that was never zeroed it would be whatever was
     // there before.    
-    ptr->d.cfg = 0;
+    value_set_d_cfg(ptr, 0);
 }
 
 // copy config data to value slot config
-NOINLINE static void setup_digital(csp_rt_t* st, index_t ix)
+NOINLINE void setup_digital(csp_rt_t* st, index_t ix)
 {
     value_t* iptr;
     value_t* optr;
@@ -4364,7 +4286,7 @@ static void setup_view_values(csp_view_t* vw, vtype_t vt, index_t buf,
 // Bind a #field to its frame. ca.id is the #buffer decl; that buffer was
 // already allocated by setup_buffer (it has a lower decl index, since the frame
 // must be declared before a field can view it), so this is purely a view.
-NOINLINE static int setup_field(csp_rt_t* st, index_t ix)
+NOINLINE int setup_field(csp_rt_t* st, index_t ix)
 {
     csp_decl_t d; // csp_load_decl(st, INDEX(ix), &d);  // read ONCE -- see setup_buffer
     csp_decl_t dt;
@@ -5065,7 +4987,7 @@ NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint16_t nbytes,
 // have eight of them, seven on the SAME decl: 628 bytes and a 64-byte stack
 // frame for what is a handful of field copies. One local copy is the fix, and
 // it applies to every setup_* here.
-NOINLINE static int setup_buffer(csp_rt_t* st, index_t ix)
+NOINLINE int setup_buffer(csp_rt_t* st, index_t ix)
 {
     csp_decl_t d;
     // Only a real #buffer carries bf.nbytes. This function is shared with the
@@ -5164,7 +5086,7 @@ NOINLINE static int parent_leaf(csp_rt_t* st, index_t ix)
     return p;                                // a global parent (base 0)
 }
 
-NOINLINE static int setup_variable(csp_rt_t* st, index_t ix)
+NOINLINE int setup_variable(csp_rt_t* st, index_t ix)
 {
     csp_decl_t d;
     csp_view_t* vw = &st->view[st_index(st, ix)];
@@ -5193,7 +5115,7 @@ NOINLINE static int setup_variable(csp_rt_t* st, index_t ix)
 // No csp_buf_t. Nothing can view into one of these -- `bind` refuses anything
 // that is not a #buffer -- so the only field such a leaf ever wanted from a
 // buffer was the heap offset, and that is in the view now.
-NOINLINE static int setup_slot(csp_rt_t* st, index_t ix)
+NOINLINE int setup_slot(csp_rt_t* st, index_t ix)
 {
     csp_decl_t d;
     uint16_t hp;
@@ -5214,70 +5136,32 @@ NOINLINE static int setup_slot(csp_rt_t* st, index_t ix)
 // filed by its declared direction is missing from the other phase the moment a
 // rule turns it round, and "every pin can change direction" is the whole point.
 // A #field with no direction is not device I/O at all and stays out.
-NOINLINE static void add_io(csp_rt_t* st, index_t ix)
+// add_io is a WORD now (utils/words.terms): it appends to st->io[] through
+// the generated table accessors, which carry io_cap as their own bound.
+#define add_io(st, ix) ((void)csp_add_io((st), (ix)))
+
+
+// A constant's slot AND its value. Split out because it is the one arm of
+// setup_decl that is pointers and a value_t -- the rest is a dispatch on the
+// declaration's type, which is a word (utils/words.terms).
+NOINLINE int setup_constant(csp_rt_t* st, index_t ix)
 {
+    value_t* iptr;
+    value_t* optr;
     csp_decl_t d;
+
+    if (setup_slot(st, ix) < 0)
+	return -1;
     csp_load_decl(st, INDEX(ix), &d);
-    if ((csp_decl_get_type(&d) == DECL_FIELD) && !(csp_decl_get_dir(&d) & DIR_INOUT))
-	return;
-    if (st->nio < st->io_cap) {  // sized to csp_estimate.nio; guard is belt+braces
-	st->io_obj[st->nio] = st->cur;   // the instance setup is currently building
-	st->io[st->nio++] = ix;
-    }
-}
-
-
-NOINLINE static int setup_decl(csp_rt_t* st, index_t ix, const csp_decl_t* d)
-{
-    switch(csp_decl_get_type(d)) {
-    case DECL_VARIABLE:
-	if (setup_variable(st, ix) < 0)
-	    return -1;	
-	break;
-    case DECL_CONSTANT: {
-	value_t* iptr;
-	value_t* optr;
-	if (setup_slot(st, ix) < 0)
-	    return -1;		
-	csp_dio_slots(st, ix, &iptr, &optr);
-	*iptr = *optr = csp_decl_get_cn_init(d);
-	break;
-    }
-    case DECL_TIMER:
-	if (setup_slot(st, ix) < 0)
-	    return -1;
-	setup_timer(st, ix);
-	if (st->nt < st->timer_cap) {
-	    st->timer_obj[st->nt] = st->cur;
-	    st->timer[st->nt++] = ix;
-	}
-	break;
-    case DECL_DIGITAL:
-	if (setup_slot(st, ix) < 0)
-	    return -1;
-	setup_digital(st, ix);
-	add_io(st, ix);
-	break;
-    case DECL_ANALOG:
-	if (setup_slot(st, ix) < 0)
-	    return -1;
-	setup_analog(st, ix);
-	add_io(st, ix);	
-	break;
-    case DECL_FIELD:
-	if (setup_field(st, ix) < 0)
-	    return -1;
-	add_io(st, ix);
-	break;
-    case DECL_BUFFER:
-	if (setup_buffer(st, ix) < 0)
-	    return -1;	
-	break;
-    default:
-	return -1;	
-    }
+    csp_dio_slots(st, ix, &iptr, &optr);
+    *iptr = *optr = csp_decl_get_cn_init(&d);
     return 0;
 }
+
+// setup_decl is a WORD now (utils/words.terms): a switch on what the
+// declaration IS, one word per kind, and the leaves that need pointers or a
+// value_t stay here as natives.
+#define setup_decl(st, ix, d) ((void)(d), csp_setup_decl_w((st), (ix)))
 
 
 // Decl index -> buffer id. A buffer carries its owner and there are few of
@@ -6406,7 +6290,7 @@ static trigger_t io_trigger(csp_rt_t* st, index_t ix)
 static int io_level(csp_rt_t* st, index_t ix)
 {
     value_t* v = csp_dio_slot(st, ix, DIN);
-    return (int)(v->d.val & 1);
+    return (int) value_get_d_val(v);
 }
 
 void csp_setup_events(csp_rt_t* st)
@@ -6569,9 +6453,10 @@ void csp_input_timer(csp_rt_t* st)
 	value_t* optr;
 
 	csp_dio_slots(st, ix, &iptr, &optr);
-	iptr->t.fired = optr->t.fired = 0;
+	value_set_t_fired(iptr, 0);
+	value_set_t_fired(optr, 0);
 	// tx value: 0=stopped, >0=running (start_time+1)
-	if (iptr->t.running) {
+	if (value_get_t_running(iptr)) {
 	    // The start-time slot is the next declaration, in the same object --
 	    // and "same object" is now just the selector bit riding along, so
 	    // plain +1 says it. It used to need MAKE_INDEX(OBJ(ix), INDEX(ix+1))
@@ -6579,10 +6464,13 @@ void csp_input_timer(csp_rt_t* st)
 	    index_t tx = ix + 1;
 	    value_t* txptr = csp_dio_slot(st, tx, DIN);
 	    uvalue_t t0 = txptr->u;
-	    if ((now_ms - t0) >= iptr->t.period) {
-		iptr->t.running = optr->t.running = 0; // not running
-		iptr->t.val = optr->t.val = 0;         // off
-		iptr->t.fired = optr->t.fired = 1;     // fired
+	    if ((now_ms - t0) >= value_get_t_period(iptr)) {
+		value_set_t_running(iptr, 0);  // not running
+		value_set_t_running(optr, 0);
+		value_set_t_val(optr, 0);      // off
+		value_set_t_val(iptr, 0);      // off
+		value_set_t_fired(optr, 1);    // fired
+		value_set_t_fired(iptr, 1);    // fired
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 		if (st->reactive) {
 		    csp_enq_elist(st, ix);
@@ -6613,21 +6501,24 @@ void csp_output_timer(csp_rt_t* st)
 
 	csp_dio_slots(st, ix, &iptr, &optr);
 
-	if (iptr->t.running) {
+	if (value_get_t_running(iptr)) {
 	    // running - calculate wait time (take minimum)
 	    uvalue_t t0 = csp_dio_slot(st, tx, DIN)->u;
-	    uvalue_t period = iptr->t.period;
+	    uvalue_t period = value_get_t_period(iptr);
 	    uint32_t dt = (now_ms - t0);
 	    uint32_t w = (dt >= period) ? 0 : (period - dt);
 	    if (w < wait_ms)
 		wait_ms = w;
 	}
-	else if (iptr->t.val) {
+	else if (value_get_t_val(iptr)) {
 	    // stopped, and a start was requested
-	    uvalue_t period = iptr->t.period;
+	    uvalue_t period = value_get_t_period(iptr);
 
-	    iptr->t.running = optr->t.running = 1;
-	    iptr->t.fired = optr->t.fired = 0;
+	    value_set_t_running(iptr, 1);  // running
+	    value_set_t_running(optr, 1);
+	    value_set_t_fired(iptr, 0);    // not fired	    
+	    value_set_t_fired(optr, 0);
+
 	    csp_dio_slots(st, tx, &iptr, &optr);
 	    iptr->u = optr->u = now_ms;
 

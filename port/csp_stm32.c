@@ -164,7 +164,9 @@ static int stm_pin_read(uint8_t port, uint8_t pin)
 
 void csp_board_digital_input(csp_rt_t* st, index_t ix, value_t* vptr)
 {
-    csp_set_ivalue(st, ix, stm_pin_read(vptr->d.port, vptr->d.pin));
+    uint8_t port = value_get_d_port(vptr);
+    uint8_t pin = value_get_d_pin(vptr);    
+    csp_set_ivalue(st, ix, stm_pin_read(port, pin));
 }
 
 // An inout pin is borrowed for the length of one write and handed straight back
@@ -172,13 +174,16 @@ void csp_board_digital_input(csp_rt_t* st, index_t ix, value_t* vptr)
 void csp_board_digital_output(csp_rt_t* st, value_t* vptr)
 {
     (void)st;
-    if (vptr->d.dir & DIR_IN) {
-	stm_pin_mode(vptr->d.port, vptr->d.pin, CSP_MODE_OUT, 0);
-	stm_pin_write(vptr->d.port, vptr->d.pin, (vptr->d.val & 1) != 0);
-	stm_pin_mode(vptr->d.port, vptr->d.pin, CSP_MODE_IN, 0);
+    uint8_t port = value_get_d_port(vptr);
+    uint8_t pin = value_get_d_pin(vptr);
+    uint8_t dir = value_get_d_dir(vptr);
+    if (dir & DIR_IN) {
+	stm_pin_mode(port, pin, CSP_MODE_OUT, 0);
+	stm_pin_write(port, pin, value_get_d_val(vptr));
+	stm_pin_mode(port, pin, CSP_MODE_IN, 0);
     }
     else {
-	stm_pin_write(vptr->d.port, vptr->d.pin, (vptr->d.val & 1) != 0);
+	stm_pin_write(port, pin, value_get_d_val(vptr));
     }
 }
 
@@ -190,12 +195,16 @@ void csp_board_digital_output(csp_rt_t* st, value_t* vptr)
 // reason to make the board deal with them.
 void csp_board_digital_config(value_t* vptr)
 {
-    if (vptr->d.dir & DIR_IN) {
-	stm_pin_mode(vptr->d.port, vptr->d.pin, CSP_MODE_IN, 0);
-	stm_pin_pull(vptr->d.port, vptr->d.pin, vptr->d.pullup, vptr->d.pulldown);
+    uint8_t port = value_get_d_port(vptr);
+    uint8_t pin = value_get_d_pin(vptr);
+    uint8_t dir = value_get_d_dir(vptr);    
+    if (dir & DIR_IN) {
+	stm_pin_mode(port, pin, CSP_MODE_IN, 0);
+	stm_pin_pull(port, pin,
+		     value_get_d_pullup(vptr), value_get_d_pulldown(vptr));
     }
-    else if (vptr->d.dir & DIR_OUT) {
-	stm_pin_mode(vptr->d.port, vptr->d.pin, CSP_MODE_OUT, 0);
+    else if (dir & DIR_OUT) {
+	stm_pin_mode(port, pin, CSP_MODE_OUT, 0);
     }
 }
 
@@ -401,14 +410,16 @@ static int stm_adc_read(uint8_t ch)
 static int stm_scale(csp_rt_t* st, index_t ix, int raw)
 {
     csp_decl_t d;
-    int res = GET_RES(csp_decl_get_res(&d));
-    int sgn = (CSP_MASK(csp_decl_get_vt(&d),TYPE_BITS) != V_UNSIGNED);
+    int res, sgn;
     int v;
 
     // Clamped the same way the LPC port clamps it: a width outside 2..16 is a
     // shift by more than the type has bits, which is undefined rather than
     // merely wrong.
     csp_load_decl(st, INDEX(ix), &d);
+    res = GET_RES(csp_decl_get_res(&d));
+    sgn = (CSP_MASK(csp_decl_get_vt(&d),TYPE_BITS) != V_UNSIGNED);
+    
     if (res < 2) res = 2; else if (res > 16) res = 16;
     if (res >= CSP_STM_ADC_BITS)
 	v = raw << (res - CSP_STM_ADC_BITS);
@@ -422,9 +433,10 @@ static int stm_scale(csp_rt_t* st, index_t ix, int raw)
 void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
 {
     int value = 0;
-
-    if (vptr->a.port == CSP_STM_ADC_PORT)
-	value = stm_scale(st, ix, stm_adc_read(vptr->a.pin));
+    uint8_t port = value_get_a_port(vptr);
+    uint8_t pin = value_get_a_pin(vptr);    
+    if (port == CSP_STM_ADC_PORT)
+	value = stm_scale(st, ix, stm_adc_read(pin));
     csp_set_ivalue(st, ix, value);
 }
 
@@ -559,27 +571,32 @@ static void stm_dac_write(uint8_t ch, int val)
 
 void csp_board_analog_output(csp_rt_t* st, int di, value_t* vptr)
 {
-    if (vptr->a.port == CSP_STM_DAC_PORT) {
-	stm_dac_write(vptr->a.pin, vptr->a.val);
+    uint8_t port = value_get_a_port(vptr);
+    uint8_t pin = value_get_a_pin(vptr);
+    uint16_t aval = value_get_a_val(vptr);
+    if (port == CSP_STM_DAC_PORT) {
+	stm_dac_write(pin, aval);
 	return;
     }
-    if (vptr->a.pwm) {
+    if (value_get_a_pwm(vptr)) {
 	// Scale the declared width down to the 0..255 the hook takes, so a
 	// `:16` and a `:8` output differ in precision and not in meaning.
 	int full = (1 << GET_RES(decl(st,di,res))) - 1;
-	int val  = full ? (int)((vptr->a.val * (int)PWM_STEPS) / full) : 0;
-	stm_pwm_write(vptr->a.port, vptr->a.pin, val);
+	int val  = full ? (int)((aval * (int)PWM_STEPS) / full) : 0;
+	stm_pwm_write(port, pin, val);
     }
 }
 
 void csp_board_analog_config(value_t* vptr)
 {
+    uint8_t port = value_get_a_port(vptr);
+    uint8_t pin = value_get_a_pin(vptr);    
     // An ADC pin needs analog mode -- and on STM32 that is a real mode, not a
     // flag: leaving it digital puts the input buffer across the source and the
     // reading sags. A PWM pin was already put in AF mode by the board pin
     // table, so there is nothing to assert here.
-    if ((vptr->a.dir & DIR_IN) && (vptr->a.port != CSP_STM_ADC_PORT))
-	stm_pin_mode(vptr->a.port, vptr->a.pin, CSP_MODE_ANALOG, 0);
+    if ((value_get_a_dir(vptr) & DIR_IN) && (port != CSP_STM_ADC_PORT))
+	stm_pin_mode(port, pin, CSP_MODE_ANALOG, 0);
 }
 
 // ============================================================
@@ -710,11 +727,13 @@ static void csp_apply_config(csp_rt_t* st, index_t ix, value_t* vptr, int analog
     csp_dio_slots(st, ix, &iptr, &optr);
     if (analog) {
 	csp_board_analog_config(vptr);
-	iptr->a.cfg = optr->a.cfg = 0;
+	value_set_a_cfg(iptr, 0);
+	value_set_a_cfg(optr, 0);
     }
     else {
 	csp_board_digital_config(vptr);
-	iptr->d.cfg = optr->d.cfg = 0;
+	value_set_d_cfg(iptr, 0);
+	value_set_d_cfg(optr, 0);	
     }
 }
 
@@ -758,16 +777,16 @@ void csp_input(csp_rt_t* st)
 	switch (decl(st,di,type)) {
 	case DECL_DIGITAL:
 	    vptr = csp_dio_slot(st, ix, DOUT);
-	    if (vptr->d.cfg)
+	    if (value_get_d_cfg(vptr))
 		csp_apply_config(st, ix, vptr, 0);
-	    if (vptr->d.dir & DIR_IN)
+	    if (value_get_d_dir(vptr) & DIR_IN)
 		csp_board_digital_input(st, ix, vptr);
 	    break;
 	case DECL_ANALOG:
 	    vptr = csp_dio_slot(st, ix, DOUT);
-	    if (vptr->a.cfg)
+	    if (value_get_a_cfg(vptr))
 		csp_apply_config(st, ix, vptr, 1);
-	    if (vptr->a.dir & DIR_IN)
+	    if (value_get_a_dir(vptr) & DIR_IN)
 		csp_board_analog_input(st, ix, vptr);
 	    break;
 	default:
@@ -794,16 +813,16 @@ void csp_output(csp_rt_t* st)
 	    switch (decl(st,di,type)) {
 	    case DECL_DIGITAL:
 		vptr = csp_dio_slot(st, ix, DOUT);
-		if (vptr->d.cfg)
+		if (value_get_d_cfg(vptr))
 		    csp_apply_config(st, ix, vptr, 0);
-		if (vptr->d.dir & DIR_OUT)
+		if (value_get_d_dir(vptr) & DIR_OUT)
 		    csp_board_digital_output(st, vptr);
 		break;
 	    case DECL_ANALOG:
 		vptr = csp_dio_slot(st, ix, DOUT);
-		if (vptr->a.cfg)
+		if (value_get_a_cfg(vptr))
 		    csp_apply_config(st, ix, vptr, 1);
-		if (vptr->a.dir & DIR_OUT)
+		if (value_get_a_dir(vptr) & DIR_OUT)
 		    csp_board_analog_output(st, di, vptr);
 		break;
 	    default:
@@ -913,7 +932,8 @@ static IRQn_Type stm_exti_irqn(unsigned line)
 int csp_board_irq_attach(csp_rt_t* st, index_t ix, trigger_t trig, uint8_t slot)
 {
     value_t* v = csp_dio_slot(st, ix, DOUT);
-    unsigned port, line;
+    uint8_t port;
+    unsigned line;
     uint32_t bit;
 
     if (slot >= CSP_MAX_EVENTS)
@@ -922,8 +942,14 @@ int csp_board_irq_attach(csp_rt_t* st, index_t ix, trigger_t trig, uint8_t slot)
     // the same place csp_setup read them to configure the pin, and the same
     // place a rule writing .pin would have changed them.
     switch (decl(st, INDEX(ix), type)) {
-    case DECL_DIGITAL: port = v->d.port; line = v->d.pin; break;
-    case DECL_ANALOG:  port = v->a.port; line = v->a.pin; break;
+    case DECL_DIGITAL:
+	port = value_get_d_port(v);
+	line = value_get_d_pin(v);
+	break;
+    case DECL_ANALOG:
+	port = value_get_a_port(v);
+	line = value_get_a_pin(v);
+	break;
     default: return -1;
     }
     if ((port >= (unsigned)NPORTS) || (line > 15))

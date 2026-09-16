@@ -113,6 +113,40 @@ typedef enum {
     // a count beside it in csp_rt_t and the generated accessor checks against
     // it, so a word cannot read past a table the way C could -- reading out of
     // range answers zero rather than whatever follows in the arena.
+    // SIGNED less-than. MC_LT is unsigned, which is right for an index and
+    // wrong for an answer that can be -1: 0xFFFF < 0 is false as a cell and
+    // true as a number, and a word holding one cannot say which it meant
+    // without saying so.
+    MC_SLT    = 57,   // ( a b -- flag )  signed
+
+    // THE LONG BRANCHES. MC_JZ and MC_JMP carry one signed byte, which is the
+    // common case and a byte cheaper; these carry two. Which form a jump gets
+    // is decided at emission by relaxation -- see utils/gen_words.erl -- and
+    // never by whoever wrote the word.
+    MC_JZ16   = 58,   // <lo><hi>  signed 16-bit displacement
+    MC_JMP16  = 59,
+
+    // The two commonest literals, as one byte instead of two. Not a special
+    // case anyone writes: a peephole in the generator rewrites LIT8 0 and
+    // LIT8 1 into these, which it can only do because the stream is symbolic
+    // until layout -- shortening it used to break every branch after it.
+    MC_ZERO   = 60,
+    MC_ONE    = 61,
+
+    // INDEX(): mask the object bits off a packed declaration index. The
+    // commonest phrase in the generated stream by a distance -- it was
+    // LIT16 lo hi AND, four bytes, eight times -- and the mask is a compile-
+    // time constant of the runtime, not something a word should be carrying.
+    MC_INDEX  = 62,   // ( n -- n & INDEX_MASK )
+
+    // AN ARRAY FIELD: one description, many elements. The field id names
+    // element ZERO and the index comes off the stack, so a run of same-width
+    // byte-aligned fields is reachable without one opcode -- or one switch arm
+    // -- per element. Elements are whole bytes, which the layout generator
+    // refuses to emit otherwise, so element k is byte + k*(bits/8).
+    MC_FLDI   = 63,   // <fam><fld>  ( i k -- v )
+    MC_FLDIS  = 64,   // <fam><fld>  ( v i k -- )
+
     MC_AGET   = 55,   // <aid>  ( i -- v )
     MC_ASET   = 56,   // <aid>  ( v i -- )
     MC_NOPCODE
@@ -185,13 +219,18 @@ extern const uint8_t    mc_view_ndouble;
 // Read one field out of a record already in RAM. Pure, and deliberately so:
 // this is the part that can be wrong in a way nothing else notices, and a pure
 // function is one a test can hammer without a runtime around it.
-extern mc_cell_t mc_field_get(const void* rec, const mc_field_t* f);
+extern mc_cell_t mc_field_get_k(const void* rec, const mc_field_t* f,
+				uint8_t k);
+// Element ZERO, which is every field that is not an array.
+#define mc_field_get(rec, f) mc_field_get_k((rec), (f), 0)
 
 // The same field, written. Read-modify-write over the bytes the field spans
 // and nothing else -- a neighbour sharing a byte must come back unchanged,
 // which is what tests/mcsp.c checks by writing every field of a record in turn
 // and reading all the others back.
-extern void mc_field_set(void* rec, const mc_field_t* f, mc_cell_t v);
+extern void mc_field_set_k(void* rec, const mc_field_t* f, mc_cell_t v,
+			   uint8_t k);
+#define mc_field_set(rec, f, v) mc_field_set_k((rec), (f), (v), 0)
 
 // A field WIDER than a cell has no reader of its own: it is two adjacent rows,
 // low half then high, and MC_DECL2 reads tab[b] and tab[b+1]. Those rows come
@@ -229,6 +268,18 @@ typedef struct {
     // special case with its own convention.
     const mc_cell_t* arg;
     uint8_t          nargs;
+    // WHERE THE MACHINE STANDS, written back before a native runs and stale
+    // at every other moment. A native may call a WORD -- new_string calls
+    // str_seg_stamp -- and that nested run shares these arrays. Without this
+    // it would start at the top of each of them and write over the locals of
+    // the word that is still on the C stack below it.
+    mc_cell_t*     sp;        // data stack pointer; NULL until a native runs
+    uint8_t        rp;        // return stack depth
+    uint8_t        lvtop;     // first local slot NOT spoken for
+    // IN, not out: how many locals the ENTRY word wants. Every other word
+    // learns it from its call site (MC_CALL carries the callee's frame); the
+    // one the run starts in has no call site.
+    uint8_t        frame;
 } mc_vm_t;
 
 // Result codes. A bad token or a stack that ran off its end is a BUG in the
@@ -238,19 +289,42 @@ typedef struct {
 #define MC_E_STACK    -2
 #define MC_E_BOUNDS   -3
 #define MC_E_LEAF     -4
+// A STEP BUDGET, and only where one is asked for. A word that loops forever
+// does not fail a test, it hangs it -- breaking MC_ZERO on purpose turned
+// `while (np != 0)` into a spin at 100% for five minutes, and a mis-counted
+// branch displacement did the same thing earlier. Production pays a counter
+// per dispatch for nothing, so this is opt-in: build with
+// -DCSP_MCSP_STEPS=<n> and a runaway becomes a failure with a name.
+#define MC_E_STEPS    -5
 
 // How the domain words reach the runtime. Set once by whoever wires micro-csp
 // to a csp_rt_t; left NULL, MC_DECL and MC_ND return MC_E_LEAF instead of
 // dereferencing nothing. Indirect so a test can drive the machine without the
 // runtime linked behind it.
-extern const void* (*mc_decl_hook)(void* ctx, mc_cell_t i);
+// THE RECORD HOOKS, as two arrays indexed by family. What the machine needs
+// per family is a hook, a field table and its length -- so those are a table
+// and the sixteen field opcodes share four bodies. The named spellings below
+// are what every install site uses; they are elements of these.
+#define MC_FAM_DECL   0
+#define MC_FAM_INSTR  1
+#define MC_FAM_BUF    2
+#define MC_FAM_VIEW   3
+
+extern const void* (*mc_rd_hook[4])(void* ctx, mc_cell_t i);
 // The WRITABLE record, which is never the one a read may hand back: see the
 // note on MC_DECLS. NULL where the index names something that cannot be
 // written -- a ROM declaration, or nothing at all.
-extern void* (*mc_decl_wr)(void* ctx, mc_cell_t i);
-extern void* (*mc_instr_wr)(void* ctx, mc_cell_t i);
-extern void* (*mc_buf_wr)(void* ctx, mc_cell_t i);
-extern void* (*mc_view_wr)(void* ctx, mc_cell_t i);
+extern void*       (*mc_wr_hook[4])(void* ctx, mc_cell_t i);
+
+#define mc_decl_hook   mc_rd_hook[MC_FAM_DECL]
+#define mc_instr_hook  mc_rd_hook[MC_FAM_INSTR]
+#define mc_buf_hook    mc_rd_hook[MC_FAM_BUF]
+#define mc_view_hook   mc_rd_hook[MC_FAM_VIEW]
+#define mc_decl_wr     mc_wr_hook[MC_FAM_DECL]
+#define mc_instr_wr    mc_wr_hook[MC_FAM_INSTR]
+#define mc_buf_wr      mc_wr_hook[MC_FAM_BUF]
+#define mc_view_wr     mc_wr_hook[MC_FAM_VIEW]
+
 extern void  (*mc_state_set)(void* ctx, mc_cell_t i, mc_cell_t v);
 
 // The runtime's tables, by id. Bounds live in the generated accessors these
@@ -259,9 +333,6 @@ extern void  (*mc_state_set)(void* ctx, mc_cell_t i, mc_cell_t v);
 extern mc_cell_t (*mc_array_hook)(void* ctx, mc_cell_t id, mc_cell_t ix);
 extern void      (*mc_array_set)(void* ctx, mc_cell_t id, mc_cell_t ix,
 				 mc_cell_t v);
-extern const void* (*mc_instr_hook)(void* ctx, mc_cell_t i);
-extern const void* (*mc_buf_hook)(void* ctx, mc_cell_t i);
-extern const void* (*mc_view_hook)(void* ctx, mc_cell_t i);
 extern mc_cell_t   (*mc_state_hook)(void* ctx, mc_cell_t i);
 
 extern int csp_mcsp_run(mc_vm_t* vm, uint16_t entry, mc_cell_t* result);

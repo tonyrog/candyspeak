@@ -840,19 +840,19 @@ typedef struct PACKED {
 // the value slot; pinMode is called from the board layer, which needs to be
 // told. Both slots below are exactly the 32 bits of a value_t with it.
 typedef struct PACKED {
-    unsigned pin:PIN_BITS;
-    unsigned port:PORT_BITS;
-    unsigned dir:DIR_BITS;
-    unsigned pullup:1;
-    unsigned pulldown:1;
-    unsigned cfg:1;     // configuration changed, board must re-apply it
-    unsigned val:15;    // we may shift in bits...?
+    uint8_t cfg:1;     // configuration changed, board must re-apply it    
+    uint8_t pin:PIN_BITS;
+    uint8_t port:PORT_BITS;
+    uint8_t dir:DIR_BITS;
+    uint8_t pullup:1;
+    uint8_t pulldown:1;
+    uint8_t val:1;    // we may shift in bits...?
     // An interrupt. Set by csp_input_event for ONE cycle, read as `Drdy.fired`,
     // and
     // taken from the TOP of val rather than from a new word: only bit 0 of val
     // is ever read (csp_part.h gives PART_VAL the PLC_1 row), so the fifteen
     // above it were free and shift-in still has fourteen left.
-    unsigned fired:1;
+    uint8_t fired:1;
 } dvalue_t;
 
 // No endian here, unlike csp_analog_t further down. The declaration keeps it and
@@ -861,13 +861,13 @@ typedef struct PACKED {
 // MEANS something lives in csp_view_t.endian, which is what a bound field lays
 // itself out with. Those two bits pay for cfg and leave one spare.
 typedef struct PACKED {
-    unsigned pin:PIN_BITS;
-    unsigned port:PORT_BITS;
-    unsigned dir:DIR_BITS;
-    unsigned pwm:1;
-    unsigned cfg:1;    // configuration changed, board must re-apply it
-    unsigned fired:1;  // interrupt: set for ONE cycle, read as `Drdy.fired`
-    unsigned val:16;
+    uint8_t cfg:1;    // configuration changed, board must re-apply it
+    uint8_t pin:PIN_BITS;
+    uint8_t port:PORT_BITS;
+    uint8_t dir:DIR_BITS;
+    uint8_t pwm:1;
+    uint8_t fired:1;  // interrupt: set for ONE cycle, read as `Drdy.fired`
+    uint16_t val:16;
 } avalue_t;
 
 typedef enum  {
@@ -1177,8 +1177,8 @@ typedef union {
     fvalue_t f;  // V_FLOAT
     sindex_t s;  // V_STRING (index into string buf)
     tvalue_t t;  // V_TIMER
-    dvalue_t d;  // V_DIGITAL
-    avalue_t a;  // V_ANALOG
+//    dvalue_t d;  // V_DIGITAL
+//    avalue_t a;  // V_ANALOG
 } value_t;
 
 typedef uint32_t set_group_t;  // bit set element
@@ -1560,12 +1560,14 @@ typedef uint8_t csp_decl_t[8];
 // and it runs once per state at boot, not in a cycle.
 #define CSP_STATES_BIT0 8
 
-extern sindex_t csp_states_name(const csp_decl_t* d, int k);
+// The slots are WORDS now: csp_states_slot reads one and
+// csp_states_set_slot writes one, both by declaration INDEX -- see
+// utils/words.terms. The pointer form is gone with its last caller.
 
 // Write slot k. The counterpart to the reader above, and the only place a slot
 // is assigned -- a states block must never be filled through DECL_COMMON, whose
 // `vt` and `res` fields sit on top of name2 and name3.
-extern void csp_states_set_name(csp_decl_t* d, int k, sindex_t pos);
+
 
 typedef enum {
     ERR_OK = 0,
@@ -1646,17 +1648,17 @@ typedef struct PACKED {
     index_t nd;                  // number of decls
     index_t nq;                  // number of objects
     index_t ns;                  // number of states
-    uint32_t strp;               // string table position in BYTES (grows up)
+    uint16_t strp;               // string table position in BYTES (grows up)
     // How many strings are in the table. A string HANDLE is an index into this
     // count -- handle N is the Nth string -- so this is also the next handle to
     // hand out. Kept alongside strp rather than derived, because new_string
     // needs it on every allocation; anything that moves strp from the outside
     // (ROM load, EEPROM load, /clear, an undo) calls csp_str_recount instead.
-    uint32_t nstr;
-    uint32_t err_strp;           // error scratch cursor (grows down from CSP_ERR_STR_BYTES)
+    uint16_t nstr;
+    uint16_t err_strp;           // error scratch cursor (grows down from CSP_ERR_STR_BYTES)
+    uint16_t line;               // line number when parsing    
     csp_err_t err;               // error code
     uintptr_t err_args[3];       // error arguments for printf
-    uint32_t line;               // line number when parsing
 } csp_pstate_t;
 
 // Full parse mark: csp_pstate_t plus every cursor a parse mutates that does
@@ -3036,7 +3038,8 @@ extern int     csp_has_firmware(void);
 extern sindex_t state_name_pos(csp_rt_t*, int snum);
 // csp_num_states is a WORD (utils/words.terms), declared in gen/csp_words.h.
 // State number of the state named at string position `pos`, -1 if none.
-extern int      lookup_state_pos(csp_rt_t*, sindex_t pos);
+// lookup_state_pos is a WORD (utils/words.terms); gen/csp_words.h declares it.
+#define lookup_state_pos(st, pos) csp_lookup_state_pos((st), (index_t)(pos))
 extern int     csp_rt_start(csp_rt_t*);
 // Re-lay the whole program out (graph + leaf/device setup). Use this rather than
 // calling csp_csr/csp_rt_start separately: they share one bump-allocated region.
@@ -3087,9 +3090,6 @@ extern void    csp_commit(csp_rt_t* st);
 extern void csp_set_value(csp_rt_t* st, index_t n, value_t v);
 extern void csp_set_ivalue(csp_rt_t* st, index_t n, ivalue_t v);
 extern void csp_set_fvalue(csp_rt_t* st, index_t n, fvalue_t v);
-extern void csp_set_dvalue(csp_rt_t* st, index_t n, uvalue_t u);
-extern void csp_set_avalue(csp_rt_t* st, index_t n, uvalue_t u);
-extern void csp_set_tvalue(csp_rt_t* st, index_t n, uvalue_t u);
 
 extern void csp_pstate_save(csp_rt_t* st, csp_pmark_t* pm);
 extern void csp_pstate_restore(csp_rt_t* st, csp_pmark_t* pm);
@@ -3587,6 +3587,42 @@ EXTERN_C_END
 // every caller -- csp.h already defines macros (csp_io_at, csp_ctx_set) that
 // expand to them, so a file including csp.h has asked for them whether it says
 // so or not.
+
+// The per-type setup leaves. Not static any more: setup_decl is a WORD, so the
+// dispatch lives in utils/words.terms and these are what it calls.
+// Sys-module names, by number -- see sys_names[] in csp_rt.c.
+#define SYSN_SYS     0
+#define SYSN_SERIAL  1
+#define SYSN_ID      2
+#define SYSN_NAME    3
+#define SYSN_IMAGE   4
+#define SYSN_BOOT    5
+#define SYSN_SYSOBJ  6
+#define SYSN_NONE    255   /* no name at all -- the END marker */
+// C LINKAGE, again: everything below arrived after the EXTERN_C_END above, so
+// a C++ translation unit was declaring these with mangled names and finding out
+// at link time on the board. gen/csp_words.h opens its own block for the same
+// reason.
+#ifdef __cplusplus
+EXTERN_C_BEGIN
+#endif
+
+extern index_t sysdecl(csp_rt_t* st, index_t name_id, index_t type);
+extern index_t new_states_block(csp_rt_t* st);
+
+extern int  setup_variable(csp_rt_t* st, index_t ix);
+extern int  setup_constant(csp_rt_t* st, index_t ix);
+extern int  setup_slot(csp_rt_t* st, index_t ix);
+extern void setup_timer(csp_rt_t* st, index_t ix);
+extern void setup_digital(csp_rt_t* st, index_t ix);
+extern void setup_analog(csp_rt_t* st, index_t ix);
+extern int  setup_field(csp_rt_t* st, index_t ix);
+extern int  setup_buffer(csp_rt_t* st, index_t ix);
+
+#ifdef __cplusplus
+EXTERN_C_END
+#endif
+
 #include "csp_words.h"
 
 #endif

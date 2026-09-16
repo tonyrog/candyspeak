@@ -58,8 +58,8 @@ CFLAGS=-MMD -MP -MF $(@:.o=.d) $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_AR
 #     tmp/csp_boot -n -C -O rom.c      examples/cpx_rotate.csp
 OBJS = $(addprefix $(OBJDIR)/, \
 	csp_linux.o csp_rt.o csp_crc.o csp_fixpoint.o csp_words.o csp_mcsp.o csp_line.o csp_repl.o csp_compile.o csp_tok.o \
-	csp_dump.o csp_eeprom.o csp_parse.o csp_print.o csp_strings.o \
-	csp_transport.o csp_console.o csp_states.o \
+	csp_dump.o csp_eeprom.o csp_parse.o csp_expr.o csp_print.o \
+	csp_strings.o csp_transport.o csp_console.o csp_states.o \
 	csp_flash.o csp_devices.o csp_flash_host.o rom_host.o)
 
 LIBS =
@@ -154,7 +154,7 @@ csp:	$(OBJS) $(RO_LD)
 CORE_SRC = port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
 	   src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
 	   src/csp_transport.c src/csp_console.c src/csp_states.c \
-	   src/csp_parse.c src/csp_print.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c \
+	   src/csp_parse.c src/csp_expr.c src/csp_print.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c \
 	   gen/csp_strings.c src/csp_flash.c \
 	   port/csp_devices.c port/csp_flash_host.c
 EXEC_SRC = $(CORE_SRC) gen/rom.c
@@ -399,7 +399,7 @@ clean:
 # persistence level -- segment tags, /clear, /undo, and whether a generated ROM
 # image loads back into the firmware that links it. Run `make test` before a
 # commit; this is for the loop in between.
-quick:	csp line_edit_check syntax_check strings_check tables_check \
+test:	csp line_edit_check syntax_check strings_check tables_check \
 	patterns_check sketch_check
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
@@ -417,15 +417,25 @@ quick:	csp line_edit_check syntax_check strings_check tables_check \
 # it directly, the same way line_edit_check does.
 mcsp_check:
 	@mkdir -p tmp
-	@$(CC) $(INCS) -O2 -o tmp/mcsp tests/mcsp.c src/csp_mcsp.c
+	@$(CC) $(INCS) -O2 -DCSP_MCSP_STEPS=200000 -o tmp/mcsp tests/mcsp.c src/csp_mcsp.c
 	@tmp/mcsp
+
+# .part: where each part of a value slot lives. csp_part.h now takes the
+# positions from gen/csp_layout.h, so what is left to go wrong is the PAIRING --
+# PART_PIN naming the pin row -- and the probe is what pins that. It was written
+# without a target of its own and drifted for exactly that reason: `cfg` moved
+# to the front of dvalue_t, every row shifted by a bit, and nothing ran.
+part_check:
+	@mkdir -p tmp
+	@$(CC) $(INCS) -O2 -w -o tmp/part_layout tests/part_layout.c
+	@tmp/part_layout
 
 line_edit_check:
 	@mkdir -p tmp
 	@$(CC) $(INCS) -O2 -o tmp/line_edit tests/line_edit.c src/csp_line.c
 	@tmp/line_edit | tail -1
 
-test:	csp test_repl syntax_check strings_check tables_check patterns_check sketch_check ro_check width_check layout_guard layout_check mcsp_check words_check words_bc_check
+test_before_commit:	csp test_repl syntax_check strings_check tables_check patterns_check sketch_check ro_check width_check layout_guard layout_check part_check mcsp_check words_check words_bc_check
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
 
@@ -463,7 +473,7 @@ patterns_check:
 words_check:
 	@escript utils/gen_words.erl check
 	@mkdir -p tmp
-	@$(CC) $(INCS) -O2 -o tmp/words tests/words.c src/csp_mcsp.c
+	@$(CC) $(INCS) -O2 -DCSP_MCSP_STEPS=200000 -o tmp/words tests/words.c src/csp_mcsp.c
 	@tmp/words
 
 # Nothing may name a bit-field of csp_decl_t or csp_instr_t directly. That is
@@ -679,7 +689,7 @@ $(OBJDIR)/%.o: %.c | gen/csp_strings.h
 
 -include $(OBJS:.o=.d)
 
-.PHONY: layout layout_guard layout_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
+.PHONY: layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

@@ -75,7 +75,12 @@
 %% DECL_TYPE_HEADER: the four bytes every declaration arm begins with.
 %% Widths track csp.h -- CSP_DECL_TYPE_BITS, DIR_BITS, NAMEID_BITS, TYPE_BITS
 %% and REG_BITS -- and the oracle in tests/ is what notices when one moves.
-{family, decl_common,  'csp_decl_t',  "csp_decl_"}.
+%% {family, Name, CType, Prefix, Tag}. The TAG is the letter in MF<T>_* -- the
+%% id space micro-csp indexes -- and it lives here because both generators need
+%% it: gen_layout emits the enum, gen_words emits the operand that selects from
+%% it. Derived from the first letter it collided the moment `value` joined
+%% `view`, and the two generators disagreed silently.
+{family, decl_common,  'csp_decl_t',  "csp_decl_", "d"}.
 
 {record, decl_common, 4,
  [{type,      4, 'decl_t'},
@@ -177,26 +182,25 @@
   {running,  1},
   {init,     1}]}.
 
-%% #states: up to six state names in one declaration.  DECL_HEADER is 17 bits,
-%% not DECL_TYPE_HEADER's 32, so this arm STARTS at 17 and deliberately overlaps
-%% what the valued header adds: vt, res, is_mapped and bound land on name2 and
-%% name3, and reg on name3.  That aliasing is the point -- slot 0 IS `name`, so
-%% a states block is a declaration every other reader already understands -- and
-%% it has cost three bugs when it was implied rather than written down.
-%% tests/states_layout.c pins which slot each overlapping field lands in.
-%% Six names in bytes 1..6, and byte 7 holds their extension bits -- one per
-%% slot, two spare.  A states block cannot borrow decl_common's nx: that bit is
-%% byte 2 bit 7, which here is part of name2.  So this arm carries all six.
-%% RESERVED like the other one; zero by construction, since csp_new_decl memsets
-%% the record and nothing writes these.
-{record, s6, decl_common, 8,
- [{start, 16},
-  {name2, 8},
-  {name3, 8},
-  {name4, 8},
-  {name5, 8},
-  {name6, 8},
-  {nx,    8}]}.
+%% #states: six state names in one declaration, as ONE array field.
+%%
+%% IT STARTS AT BYTE 1, which is where decl_common's `name` is -- so names[0]
+%% IS that name, and a states block is a declaration every other reader already
+%% understands. Said as six separate fields it needed a switch with six arms to
+%% reach element k; said as an array it needs an index.
+%%
+%% The aliasing is the point and it costs three bugs when it is implied rather
+%% than written down: res, is_mapped and bound land inside names[1]; vt and reg
+%% inside names[2]. tests/states_layout.c pins which element each one lands in.
+%%
+%% Byte 7 holds the names' extension bits -- one per slot, two spare. A states
+%% block cannot borrow decl_common's nx: that bit is byte 2 bit 7, which here is
+%% part of names[1]. RESERVED, zero by construction since csp_new_decl memsets
+%% the record and nothing writes it.
+{record, sn, decl_common, 8,
+ [{start,  8},                        %% byte 1 -- where decl_common.name is
+  {names,  8, {array, 'uint8_t', 6}}, %% bytes 1..6, ONE field of six elements
+  {nx,     8}]}.
 
 %% The terminator after a ROM decl section.  crc lands byte-aligned at 4-5,
 %% which rom_scan_end depends on.
@@ -212,7 +216,7 @@
 %% not packed and carries a uint32_t, so the host pads it to twenty bytes where
 %% AVR packs it to sixteen, and a byte table would be wrong on one of them.
 
-{family, instr_common, 'csp_instr_t', "csp_instr_"}.
+{family, instr_common, 'csp_instr_t', "csp_instr_", "i"}.
 
 {record, instr_common, 4,
  [{op, 6, 'opcode_t'}]}.
@@ -341,7 +345,7 @@
  [{pad, 10}, %% {'_res', 10},
   {crc,    16}]}.
 
-{family, buf,  'csp_buf_t',  "csp_buf_"}.
+{family, buf,  'csp_buf_t',  "csp_buf_", "b"}.
 %% csp_buf_t
 {record, buf, 16,
  [{hp,        16},
@@ -356,7 +360,7 @@
   {owner,    16}      %% index_t
  ]}.
 
-{family, view,  'csp_view_t',  "csp_view_"}.
+{family, view,  'csp_view_t',  "csp_view_", "w"}.
 %% csp_view_t
 {record, view, 6,
  [{kind,      2},
@@ -367,3 +371,61 @@
   {pos,      16},
   {buf,      16}
  ]}.
+
+%%
+%% Value record
+%% 
+
+{family, value_common,  'value_t',  "value_", "v"}.
+
+{record, value_common, 4, []}.
+
+{record, i, value_common, 4,
+ [{val, 32, signed}]}.
+
+{record, u, value_common, 4,
+ [{val,   32}]}.
+
+{record, f, value_common, 4,
+ [{val, 32, float}]}.
+
+{record, s, value_common, 4,
+ [{val, 32, signed}]}.
+
+{record, t, value_common, 4,
+ [{period, 28},         %% timeout value ms (74h max)
+  {pad, 1},             %% reserved (auto restart?)
+  {fired, 1},           %% timeout occurred this cycle (edge-triggered)
+  {running, 1},         %% timer is runnig (tx is valid time)
+  {val, 1}              %% one bit value 1 = start, 0 = stop
+ ]}.           
+
+%% #digital: PIN_BITS 7, PORT_BITS 4.
+{record, d, value_common, 4,
+ [
+  {cfg, 1},        %% configuration changed, board must re-apply it
+  {pin, 7},
+  {port, 4},
+  {dir, 2, 'pindir_t'},
+  {pullup, 1},
+  {pulldown, 1},
+  {val, 1},
+  %% An interrupt. Set by csp_input_event for ONE cycle, read as `Drdy.fired`,
+  %% and
+  %% taken from the TOP of val rather than from a new word: only bit 0 of val
+  %% is ever read (csp_part.h gives PART_VAL the PLC_1 row), so the fifteen
+  %% above it were free and shift-in still has fourteen left.
+  {fired, 1}
+ ]}.
+
+{record, a, value_common, 4,
+ [
+  {cfg, 1},      %% configuration changed, board must re-apply it
+  {pin, 7},
+  {port, 4},
+  {dir, 2, 'pindir_t'},
+  {pwm, 1},
+  {fired, 1},    %% interrupt: set for ONE cycle, read as `Drdy.fired`
+  {val, 16}
+ ]}.
+

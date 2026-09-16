@@ -529,7 +529,9 @@ uint32_t csp_system_ram_used(void)
 
 void csp_board_digital_input(csp_rt_t* st, index_t ix, value_t* vptr)
 {
-    int value = Chip_GPIO_GetPinState(LPC_GPIO, vptr->d.port, vptr->d.pin) ? 1 : 0;
+    uint8_t port = value_get_d_port(vptr);
+    uint8_t pin = value_get_d_pin(vptr);
+    int value = Chip_GPIO_GetPinState(LPC_GPIO, port, pin) ? 1 : 0;
     csp_set_ivalue(st, ix, value);
 }
 
@@ -593,15 +595,21 @@ void EINT3_IRQHandler(void)
 int csp_board_irq_attach(csp_rt_t* st, index_t ix, trigger_t trig, uint8_t slot)
 {
     value_t* v = csp_dio_slot(st, ix, DOUT);
-    unsigned port, pin;
+    uint8_t port, pin;
     uint32_t bit;
     LPC_GPIOINT_PORT_T gp;
 
     if (slot >= CSP_MAX_EVENTS)
 	return -1;
     switch (decl(st, INDEX(ix), type)) {
-    case DECL_DIGITAL: port = v->d.port; pin = v->d.pin; break;
-    case DECL_ANALOG:  port = v->a.port; pin = v->a.pin; break;
+    case DECL_DIGITAL:
+	port = value_get_d_port(v);
+	pin = value_get_d_pin(v);
+	break;
+    case DECL_ANALOG:
+	port = value_get_a_port(v);
+	pin = value_get_a_pin(v);
+	break;
     default: return -1;
     }
     // Ports 0 and 2, and nothing else. Refusing is what makes the runtime fall
@@ -735,8 +743,14 @@ int csp_board_irq_attach(csp_rt_t* st, index_t ix, trigger_t trig, uint8_t slot)
     if (slot == 0)
 	memset(lpc_eint_slot, 0xFF, sizeof(lpc_eint_slot));
     switch (decl(st, INDEX(ix), type)) {
-    case DECL_DIGITAL: port = v->d.port; pin = v->d.pin; break;
-    case DECL_ANALOG:  port = v->a.port; pin = v->a.pin; break;
+    case DECL_DIGITAL:
+	port = value_get_d_port(v);
+	pin = value_get_d_pin(v);	
+	break;
+    case DECL_ANALOG:
+	port = value_get_a_port(v);
+	pin = value_get_a_pin(v);
+	break;
     default: return -1;
     }
     if ((n = lpc_eint_of(port, pin)) < 0)
@@ -795,15 +809,17 @@ uint32_t csp_board_irq_take(csp_rt_t* st)
 void csp_board_digital_output(csp_rt_t* st, value_t* vptr)
 {
     (void)st;
-    if (vptr->d.dir & DIR_IN) {
-	Chip_GPIO_SetPinDIROutput(LPC_GPIO, vptr->d.port, vptr->d.pin);
-	Chip_GPIO_SetPinState(LPC_GPIO, vptr->d.port, vptr->d.pin,
-			      (vptr->d.val & 1) != 0);
-	Chip_GPIO_SetPinDIRInput(LPC_GPIO, vptr->d.port, vptr->d.pin);
+    uint8_t port = value_get_d_port(vptr);
+    uint8_t pin = value_get_d_pin(vptr);    
+    if (value_get_d_dir(vptr) & DIR_IN) {
+	Chip_GPIO_SetPinDIROutput(LPC_GPIO, port, pin);
+	Chip_GPIO_SetPinState(LPC_GPIO, port, pin,
+			      (value_get_d_val(vptr) != 0));
+	Chip_GPIO_SetPinDIRInput(LPC_GPIO, port, pin);
     }
     else {
-	Chip_GPIO_SetPinState(LPC_GPIO, vptr->d.port, vptr->d.pin,
-			      (vptr->d.val & 1) != 0);
+	Chip_GPIO_SetPinState(LPC_GPIO, port, pin,
+			      (value_get_d_val(vptr) != 0));
     }
 }
 
@@ -821,10 +837,12 @@ void csp_board_digital_output(csp_rt_t* st, value_t* vptr)
 // works as a plain input until then, which is the safe way to be wrong.
 void csp_board_digital_config(value_t* vptr)
 {
-    if (vptr->d.dir & DIR_IN)
-	Chip_GPIO_SetPinDIRInput(LPC_GPIO, vptr->d.port, vptr->d.pin);
-    else if (vptr->d.dir & DIR_OUT)
-	Chip_GPIO_SetPinDIROutput(LPC_GPIO, vptr->d.port, vptr->d.pin);
+    uint8_t port = value_get_d_port(vptr);
+    uint8_t pin = value_get_d_pin(vptr);        
+    if (value_get_d_dir(vptr) & DIR_IN)
+	Chip_GPIO_SetPinDIRInput(LPC_GPIO, port, pin);
+    else if (value_get_d_dir(vptr) & DIR_OUT)
+	Chip_GPIO_SetPinDIROutput(LPC_GPIO, port, pin);
 }
 
 // ============================================================
@@ -899,7 +917,9 @@ void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
     // a board with a perfectly good ADC map read zero on all four inputs and
     // nothing anywhere reported a problem. The port test now lives in the weak
     // default, which is the only one that needs it.
-    int ch = csp_lpc_adc_channel(vptr->a.port, vptr->a.pin);
+    uint8_t port = value_get_a_port(vptr);
+    uint8_t pin = value_get_a_pin(vptr);
+    int ch = csp_lpc_adc_channel(port, pin);
 
     if (ch >= 0)
 	value = csp_lpc_scale(st, ix, csp_lpc_adc_read(ch));
@@ -908,16 +928,18 @@ void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
 
 void csp_board_analog_output(csp_rt_t* st, int di, value_t* vptr)
 {
-    if (vptr->a.port == CSP_LPC_DAC_PORT) {
-	csp_lpc_dac_write(vptr->a.pin, vptr->a.val);
+    uint8_t port = value_get_a_port(vptr);
+    uint8_t pin = value_get_a_pin(vptr);    
+    if (port == CSP_LPC_DAC_PORT) {
+	csp_lpc_dac_write(pin, value_get_a_val(vptr));
 	return;
     }
-    if (vptr->a.pwm) {
+    if (value_get_a_pwm(vptr)) {
 	// Scale the declared width down to the 0..255 the hook takes, so a
 	// `:16` and a `:8` output differ in precision and not in meaning.
 	int full = (1 << GET_RES(decl(st,di,res))) - 1;
-	int val  = full ? (int)((vptr->a.val * 255) / full) : 0;
-	csp_lpc_pwm_write(vptr->a.port, vptr->a.pin, val);
+	int val  = full ? (int)((value_get_a_val(vptr) * 255) / full) : 0;
+	csp_lpc_pwm_write(port, pin, val);
     }
 }
 
@@ -925,10 +947,13 @@ void csp_board_analog_output(csp_rt_t* st, int di, value_t* vptr)
 // ADC read needs no direction at all -- so an input just re-muxes as analog.
 void csp_board_analog_config(value_t* vptr)
 {
-    if (vptr->a.dir & DIR_IN)
-	csp_lpc_pin_mux(vptr->a.port, vptr->a.pin, 1);
-    else if ((vptr->a.dir & DIR_OUT) && vptr->a.pwm)
-	csp_lpc_pin_mux(vptr->a.port, vptr->a.pin, 0);
+    uint8_t port = value_get_a_port(vptr);
+    uint8_t pin = value_get_a_pin(vptr);
+    uint8_t dir = value_get_a_dir(vptr);
+    if (dir & DIR_IN)
+	csp_lpc_pin_mux(port, pin, 1);
+    else if ((dir & DIR_OUT) && value_get_a_pwm(vptr))
+	csp_lpc_pin_mux(port, pin, 0);
 }
 
 // ============================================================
@@ -980,11 +1005,13 @@ static void csp_apply_config(csp_rt_t* st, index_t ix, value_t* vptr, int analog
     csp_dio_slots(st, ix, &iptr, &optr);
     if (analog) {
 	csp_board_analog_config(vptr);
-	iptr->a.cfg = optr->a.cfg = 0;
+	value_set_a_cfg(iptr, 0);
+	value_set_a_cfg(optr, 0);	
     }
     else {
 	csp_board_digital_config(vptr);
-	iptr->d.cfg = optr->d.cfg = 0;
+	value_set_d_cfg(iptr, 0);
+	value_set_d_cfg(optr, 0);
     }
 }
 
@@ -1008,12 +1035,12 @@ void csp_setup(csp_rt_t* st)
 	value_t* vptr = csp_dio_slot(st, ix, DOUT);
 	switch (decl(st,j,type)) {
 	case DECL_DIGITAL:
-	    csp_lpc_pin_mux(vptr->d.port, vptr->d.pin, 0);
+	    csp_lpc_pin_mux(value_get_d_port(vptr), value_get_d_pin(vptr), 0);
 	    csp_board_digital_config(vptr);
 	    break;
 	case DECL_ANALOG:
-	    csp_lpc_pin_mux(vptr->a.port, vptr->a.pin,
-			    (vptr->a.dir & DIR_IN) ? 1 : 0);
+	    csp_lpc_pin_mux(value_get_a_port(vptr), value_get_a_pin(vptr),
+			    (value_get_a_dir(vptr) & DIR_IN) ? 1 : 0);
 	    break;
 	default:
 	    break;
@@ -1041,16 +1068,16 @@ void csp_input(csp_rt_t* st)
 	    // A rule may have turned this pin round since we last looked. Do it
 	    // BEFORE reading, or the first sample after a flip comes off the old
 	    // mode.
-	    if (vptr->d.cfg)
+	    if (value_get_d_cfg(vptr))
 		csp_apply_config(st, ix, vptr, 0);
-	    if (vptr->d.dir & DIR_IN)
+	    if (value_get_d_dir(vptr) & DIR_IN)
 		csp_board_digital_input(st, ix, vptr);
 	    break;
 	case DECL_ANALOG:
 	    vptr = csp_dio_slot(st, ix, DOUT);
-	    if (vptr->a.cfg)
+	    if (value_get_a_cfg(vptr))
 		csp_apply_config(st, ix, vptr, 1);
-	    if (vptr->a.dir & DIR_IN)
+	    if (value_get_a_dir(vptr) & DIR_IN)
 		csp_board_analog_input(st, ix, vptr);
 	    break;
 	default:
@@ -1078,16 +1105,16 @@ void csp_output(csp_rt_t* st)
 	    switch (decl(st,di,type)) {
 	    case DECL_DIGITAL:
 		vptr = csp_dio_slot(st, ix, DOUT);
-		if (vptr->d.cfg)
+		if (value_get_d_cfg(vptr))
 		    csp_apply_config(st, ix, vptr, 0);
-		if (vptr->d.dir & DIR_OUT)
+		if (value_get_d_dir(vptr) & DIR_OUT)
 		    csp_board_digital_output(st, vptr);
 		break;
 	    case DECL_ANALOG:
 		vptr = csp_dio_slot(st, ix, DOUT);
-		if (vptr->a.cfg)
+		if (value_get_a_cfg(vptr))
 		    csp_apply_config(st, ix, vptr, 1);
-		if (vptr->a.dir & DIR_OUT)
+		if (value_get_a_dir(vptr) & DIR_OUT)
 		    csp_board_analog_output(st, di, vptr);
 		break;
 	    default:

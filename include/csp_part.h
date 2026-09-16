@@ -11,13 +11,13 @@
 // plus a four-way dispatch in csp_dio_*_part whose tail-call branches each got
 // their own epilogue (72 `pop` against 12 `push` in one function).
 //
-// WHY IT IS SAFE TO HAND-WRITE OFFSETS. Normally it is not: the parts are
-// bitfields in different arms of a union, so a wrong number here would corrupt
-// data instead of failing to compile. That is why tests/part_layout.c PROBES
-// the actual structs -- it zeroes a value_t, sets one field to all ones, and
-// reads the word back, so the position and width come from the compiler's own
-// layout. It then checks every row below against that probe. Change PIN_BITS,
-// reorder a struct, add a field: the test fails and names the row.
+// NO HAND-WRITTEN OFFSETS. They were hand-written once and they drifted: `cfg`
+// went in at the FRONT of dvalue_t and avalue_t, which moved every row here by
+// one bit, and nothing failed to compile -- `Sensor.pin` simply read 10 where
+// the pin was 5. The positions now come from utils/layout.terms through
+// gen/csp_layout.h (MFV_<ARM>_<FIELD>_POS and _BITS), the same description the
+// accessors and the micro-csp field table are built from, so a field added
+// ahead of another moves this table with it.
 //
 // WHAT IS NOT HERE. A string is not a bitfield layout (its slot holds a whole
 // position -- see csp_string_get_part), and .dir/.rx/.tx/.id/.dlc live in
@@ -48,6 +48,16 @@ CSP_STATIC_ASSERT(V_ANALOG  == V_TIMER + 2, "layout id assumes V_TIMER..V_ANALOG
 #define PLC_32   7
 #define PL(pos,code) ((uint8_t)((pos) | ((code) << 5)))
 
+// A row from the generated description: position and width of one field of one
+// arm of value_t. The width code is a lookup into csp_pl_mask, so it is chosen
+// here rather than stored -- every width value_t uses has a code, and a new one
+// without a mask lands on PLC_32 and reads too much, which is why PLV_CODE
+// spells them all out instead of ending in a default.
+#define PLV_CODE(w) ((w) == 1 ? PLC_1 : (w) == 2 ? PLC_2 : (w) == 4 ? PLC_4 : \
+		     (w) == 7 ? PLC_7 : (w) == 16 ? PLC_16 : \
+		     (w) == 28 ? PLC_28 : PLC_32)
+#define PLV(F) PL(MFV_##F##_POS, PLV_CODE(MFV_##F##_BITS))
+
 // Masks are looked up, not computed: (1<<w)-1 needs a variable 32-bit shift,
 // which gcc turns into a loop on AVR. This leaves exactly one shift per access.
 static const uint32_t csp_pl_mask[8] RODATA = {
@@ -61,47 +71,49 @@ static const uint8_t csp_part_loc[PL_COUNT * PL_STRIDE] RODATA = {
     // --- tvalue_t ------------------------------------------------------------
     // .running is deliberately absent: it is runtime state the timer owns, not
     // a part a rule may name.
-    [(PL_TIMER   << PART_BITS) | PART_VAL]      = PL(31, PLC_1),
-    [(PL_TIMER   << PART_BITS) | PART_PERIOD]   = PL( 0, PLC_28),
-    [(PL_TIMER   << PART_BITS) | PART_FIRED]    = PL(29, PLC_1),
+    [(PL_TIMER   << PART_BITS) | PART_VAL]      = PLV(T_VAL),
+    [(PL_TIMER   << PART_BITS) | PART_PERIOD]   = PLV(T_PERIOD),
+    [(PL_TIMER   << PART_BITS) | PART_FIRED]    = PLV(T_FIRED),
 
     // --- dvalue_t ------------------------------------------------------------
-    // .val is ONE bit here although the struct field is 16. Reads always masked
-    // to 1 (csp_digital_get_part and csp_dio_get_val_part both did `& 1`), so
-    // nothing observable changes; the write now stops at bit 16 instead of
-    // filling all sixteen. If shift-in ever lands, this row becomes PLC_16.
-    [(PL_DIGITAL << PART_BITS) | PART_VAL]      = PL(16, PLC_1),
-    [(PL_DIGITAL << PART_BITS) | PART_PIN]      = PL( 0, PLC_7),
-    [(PL_DIGITAL << PART_BITS) | PART_PORT]     = PL( 7, PLC_4),
-    [(PL_DIGITAL << PART_BITS) | PART_DIR]      = PL(11, PLC_2),
-    [(PL_DIGITAL << PART_BITS) | PART_PULLUP]   = PL(13, PLC_1),
-    [(PL_DIGITAL << PART_BITS) | PART_PULLDOWN] = PL(14, PLC_1),
-    // An interrupt trigger. Top bit of the word, taken off val -- see dvalue_t.
-    [(PL_DIGITAL << PART_BITS) | PART_FIRED]    = PL(31, PLC_1),
+    // .val is ONE bit. If shift-in ever lands, widen it in layout.terms and
+    // this row follows.
+    [(PL_DIGITAL << PART_BITS) | PART_VAL]      = PLV(D_VAL),
+    [(PL_DIGITAL << PART_BITS) | PART_PIN]      = PLV(D_PIN),
+    [(PL_DIGITAL << PART_BITS) | PART_PORT]     = PLV(D_PORT),
+    [(PL_DIGITAL << PART_BITS) | PART_DIR]      = PLV(D_DIR),
+    [(PL_DIGITAL << PART_BITS) | PART_PULLUP]   = PLV(D_PULLUP),
+    [(PL_DIGITAL << PART_BITS) | PART_PULLDOWN] = PLV(D_PULLDOWN),
+    // An interrupt trigger, taken off val -- see dvalue_t.
+    [(PL_DIGITAL << PART_BITS) | PART_FIRED]    = PLV(D_FIRED),
 
     // --- avalue_t ------------------------------------------------------------
     // No .endian: byte order that means something lives in csp_view_t.endian
     // and is answered from the declaration (see the avalue_t comment).
-    [(PL_ANALOG  << PART_BITS) | PART_VAL]      = PL(16, PLC_16),
-    [(PL_ANALOG  << PART_BITS) | PART_PIN]      = PL( 0, PLC_7),
-    [(PL_ANALOG  << PART_BITS) | PART_PORT]     = PL( 7, PLC_4),
-    [(PL_ANALOG  << PART_BITS) | PART_DIR]      = PL(11, PLC_2),
-    [(PL_ANALOG  << PART_BITS) | PART_PWM]      = PL(13, PLC_1),
-    // An interrupt trigger. The spare bit avalue_t had, between cfg and val.
-    [(PL_ANALOG  << PART_BITS) | PART_FIRED]    = PL(15, PLC_1),
+    [(PL_ANALOG  << PART_BITS) | PART_VAL]      = PLV(A_VAL),
+    [(PL_ANALOG  << PART_BITS) | PART_PIN]      = PLV(A_PIN),
+    [(PL_ANALOG  << PART_BITS) | PART_PORT]     = PLV(A_PORT),
+    [(PL_ANALOG  << PART_BITS) | PART_DIR]      = PLV(A_DIR),
+    [(PL_ANALOG  << PART_BITS) | PART_PWM]      = PLV(A_PWM),
+    // An interrupt trigger. The spare bit avalue_t had, below val.
+    [(PL_ANALOG  << PART_BITS) | PART_FIRED]    = PLV(A_FIRED),
 };
 
-// Position of the `cfg` bit per layout, 0 for a layout that has none. cfg is
-// NOT a per-row flag: writing ANY part except .val is a configuration change
-// and writing .val never is -- that held for all eleven writable parts, so the
-// rule is one line of code instead of a bit in every row. (Bit 0 is a pin
-// number in both layouts that have a cfg, so 0 is free as "none".)
+// Position of the `cfg` bit per layout, PLUS ONE, so that 0 means "this layout
+// has none". Not the position itself: cfg is bit 0 of both layouts that have
+// one, which is the same number a timer would have to say it has no cfg at all.
+//
+// cfg is NOT a per-row flag: writing ANY part except .val is a configuration
+// change and writing .val never is -- that holds for all eleven writable parts,
+// so the rule is one line of code instead of a bit in every row.
 //
 // PART_FIRED is the twelfth and it is the exception: the sweep sets and clears
 // it every cycle, so treating a write as a configuration change would re-apply
 // the pin on every edge. csp_dio_set_part excludes it by name.
 static const uint8_t csp_part_cfg[PL_COUNT] RODATA = {
-    [PL_TIMER] = 0, [PL_DIGITAL] = 15, [PL_ANALOG] = 14
+    [PL_TIMER] = 0,
+    [PL_DIGITAL] = MFV_D_CFG_POS + 1,
+    [PL_ANALOG]  = MFV_A_CFG_POS + 1
 };
 
 // The layout id for a value type, or PL_COUNT (no rows) if it has none.
@@ -164,7 +176,7 @@ static void csp_part_set(value_t* slot, vtype_t vt, csp_part_t part, value_t v)
 	(CSP_MASK(part, PART_BITS) != PART_FIRED)) {
 	cfg = ro_byte(&csp_part_cfg[CSP_PART_LAY(vt)]);
 	if (cfg)
-	    slot->u |= ((uint32_t)1 << cfg);
+	    slot->u |= ((uint32_t)1 << (cfg - 1));
     }
 }
 

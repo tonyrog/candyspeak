@@ -289,19 +289,21 @@ NOINLINE static void close_in_block(csp_rt_t* st);
 // pop can put it back -- an `#in` inside an `#in` has to see the outer one's
 // states again when it closes, and a `#when` in between must not lose them.
 // Returns 0 when the stack is full.
-NOINLINE static int blk_push(csp_rt_t* st, index_t mark, uint8_t kind)
+NOINLINE static int blk_push(csp_cstate_t* cs, index_t mark, uint8_t kind,
+			     uint16_t line)
+			     
 {
     csp_block_t* b;
 
-    if (st->cs->blk_depth >= CSP_MAX_BLOCK)
+    if (cs->blk_depth >= CSP_MAX_BLOCK)
 	return 0;
-    b = &st->cs->blk[st->cs->blk_depth++];
+    b = &cs->blk[cs->blk_depth++];
     b->mark   = mark;
-    b->line   = (uint16_t)st->ps.line;
+    b->line   = line;
     b->kind   = kind;
-    b->sdef   = (int8_t)st->cs->sdef;
-    b->n_sdef = st->cs->n_sdef;
-    memcpy(b->sdefv, st->cs->sdefv, sizeof(b->sdefv));
+    b->sdef   = (int8_t)cs->sdef;
+    b->n_sdef = cs->n_sdef;
+    memcpy(b->sdefv, cs->sdefv, sizeof(b->sdefv));
     return 1;
 }
 
@@ -311,20 +313,21 @@ NOINLINE static int blk_push(csp_rt_t* st, index_t mark, uint8_t kind)
 NOINLINE static void blk_pop(csp_rt_t* st)
 {
     csp_block_t* b;
+    csp_cstate_t* cs = st->cs;
 
-    if (st->cs->blk_depth == 0)
+    if (cs->blk_depth == 0)
 	return;
-    b = &st->cs->blk[--st->cs->blk_depth];
+    b = &cs->blk[--cs->blk_depth];
     // A module's mark is its OP_ENTER, which csp_parse_end patches with the body
     // length -- not a skip distance. Only a gate is patched here.
     if (b->kind != BLK_MODULE)
 	csp_instr_set_in_nxt(ram_instr_at(st, b->mark), st->ps.nn - b->mark);
-    st->cs->sdef   = b->sdef;
-    st->cs->n_sdef = b->n_sdef;
-    memcpy(st->cs->sdefv, b->sdefv, sizeof(b->sdefv));
+    cs->sdef   = b->sdef;
+    cs->n_sdef = b->n_sdef;
+    memcpy(cs->sdefv, b->sdefv, sizeof(b->sdefv));
     // in_marker follows the block we are back INSIDE, not the one just closed.
-    st->cs->in_marker = st->cs->blk_depth
-	? st->cs->blk[st->cs->blk_depth - 1].mark : 0;
+    cs->in_marker = cs->blk_depth
+	? st->cs->blk[cs->blk_depth - 1].mark : 0;
 }
 
 // Narrow a compiler xindex_t to the index_t a memory instruction carries, and
@@ -1215,14 +1218,15 @@ NOINLINE int csp_scan_line(csp_rt_t* st, char* str, token_t* tv, size_t* num_tok
 
 void csp_pstate_save(csp_rt_t* st, csp_pmark_t* pm)
 {
+    csp_cstate_t* cs = st->cs;
     pm->ps          = st->ps;
-    pm->mdef        = st->cs->mdef;
-    pm->ent         = st->cs->ent;
-    pm->sdef        = st->cs->sdef;
-    pm->in_marker   = st->cs->in_marker;
-    pm->blk_depth   = st->cs->blk_depth;
-    pm->save_sx     = st->cs->save_sx;
-    pm->sx          = st->cs->sx;
+    pm->mdef        = cs->mdef;
+    pm->ent         = cs->ent;
+    pm->sdef        = cs->sdef;
+    pm->in_marker   = cs->in_marker;
+    pm->blk_depth   = cs->blk_depth;
+    pm->save_sx     = cs->save_sx;
+    pm->sx          = cs->sx;
     pm->cur         = st->cur;
     pm->n_rule_emit = st->n_rule_emit;
 }
@@ -1232,29 +1236,31 @@ void csp_pstate_save(csp_rt_t* st, csp_pmark_t* pm)
 // the cursors need explicit restoring.
 void csp_pstate_restore(csp_rt_t* st, csp_pmark_t* pm)
 {
+    csp_cstate_t* cs = st->cs;
     // Keep the diagnostics: err/err_args/err_strp describe why we are rewinding
     // and the caller has not necessarily reported them yet. Restoring them would
     // reset err to ERR_OK and the failure would print as "ok".
     csp_err_t err = st->ps.err;
-    uintptr_t a0 = st->ps.err_args[0], a1 = st->ps.err_args[1],
-	      a2 = st->ps.err_args[2];
+    uintptr_t a0 = st->ps.err_args[0];
+    uintptr_t a1 = st->ps.err_args[1];
+    uintptr_t a2 = st->ps.err_args[2];
     uint32_t esp = st->ps.err_strp;
-    uint32_t line = st->ps.line;
+    uint16_t line = st->ps.line;
 
-    st->ps          = pm->ps;
+    st->ps          = pm->ps;  // restore
     st->ps.err      = err;
     st->ps.err_args[0] = a0;
     st->ps.err_args[1] = a1;
     st->ps.err_args[2] = a2;
     st->ps.err_strp = esp;
-    st->ps.line     = line;
-    st->cs->mdef        = pm->mdef;
-    st->cs->ent         = pm->ent;
-    st->cs->sdef        = pm->sdef;
-    st->cs->in_marker   = pm->in_marker;
-    st->cs->blk_depth   = pm->blk_depth;
-    st->cs->save_sx     = pm->save_sx;
-    st->cs->sx          = pm->sx;
+    st->ps.line     = line;   // but keep line
+    cs->mdef        = pm->mdef;
+    cs->ent         = pm->ent;
+    cs->sdef        = pm->sdef;
+    cs->in_marker   = pm->in_marker;
+    cs->blk_depth   = pm->blk_depth;
+    cs->save_sx     = pm->save_sx;
+    cs->sx          = pm->sx;
     st->cur         = pm->cur;
     st->n_rule_emit = pm->n_rule_emit;
 }
@@ -1321,14 +1327,14 @@ NOINLINE static bool_t csp_load_value(csp_rt_t* st, reg_t x, vtype_t vt, value_t
 }
 
 // Add unique variable to var list (for <- parsing)
-NOINLINE static void add_var(csp_rt_t* st, xindex_t ix)
+NOINLINE static void add_var(csp_cstate_t* cs, xindex_t ix)
 {
-    if (st->cs->rimp) {  // only when in RHS in expression x <- a+b+c
+    if (cs->rimp) {  // only when in RHS in expression x <- a+b+c
 	int i;
-	for (i = 0; i < st->cs->nvar; i++)
-	    if (st->cs->var[i] == ix) return;  // already in list
-	if (st->cs->nvar < MAX_VARREFS)
-	    st->cs->var[st->cs->nvar++] = ix;
+	for (i = 0; i < cs->nvar; i++)
+	    if (cs->var[i] == ix) return;  // already in list
+	if (cs->nvar < MAX_VARREFS)
+	    cs->var[cs->nvar++] = ix;
     }
 }
 
@@ -1475,7 +1481,7 @@ NOINLINE static int push_var(csp_rt_t* st, rentry_t* rstack, int ep,
     }
     else if ((decl(st,INDEX(ix),type) == DECL_VARIABLE) ||
 	     (decl(st,INDEX(ix),type) == DECL_CONSTANT)) {
-	add_var(st, ix);
+	add_var(st->cs, ix);
 	if (st->cs->ev) {
 	    ctx_save_t sv;
 	    index_t rx = ctx_enter(st, ix, &sv);
@@ -3178,7 +3184,7 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
     // shut the #when -- the module stayed open and swallowed the rest of the
     // file. The mark is the OP_ENTER, not a gate; blk_pop reads `kind` before
     // touching it.
-    if (!blk_push(st, (index_t)jx, BLK_MODULE)) {
+    if (!blk_push(st->cs, (index_t)jx, BLK_MODULE, st->ps.line)) {
 	csp_set_error(st, ERR_END_MISMATCH);
 	return -1;
     }
@@ -3505,7 +3511,7 @@ NOINLINE static int asm_decl_init(csp_rt_t* st, const token_t* tv, size_t n,
 	    // PUSH even though no gate was emitted: close_in_block below pops,
 	    // and an unbalanced pop closes the block we are standing in. Before
 	    // installing the INIT context, so the pop restores the outer one.
-	    if (!blk_push(st, mk, BLK_IN))
+	    if (!blk_push(st->cs, mk, BLK_IN, st->ps.line))
 		return -1;
 	    st->cs->in_marker = mk;
 	    st->cs->sdefv[0]  = STATE_INIT;
@@ -4994,15 +5000,15 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
 // listing suppresses this implicit State test (csp_print.c OP_EQI) so bare rules
 // list back bare. Module-body rules keep their ENTER/LEAVE gating (sdef stays -1
 // there). Returns 1 if a wrap was applied (caller must clear it after the rule).
-NOINLINE static int wrap_normal_plus(csp_rt_t* st)
+NOINLINE static int wrap_normal_plus(csp_cstate_t* cs)
 {
-    if ((st->cs->sdef >= 0) || (st->cs->mdef != BAD_INDEX))
+    if ((cs->sdef >= 0) || (cs->mdef != BAD_INDEX))
 	return 0;                       // inside #in or a module: no wrap
-    st->cs->sdefv[0] = STATE_INIT;
-    st->cs->sdefv[1] = STATE_NORMAL;
-    st->cs->n_sdef   = 2;
-    st->cs->sdef     = STATE_INIT;          // >= 0 so asm_rule folds the OR condition
-    st->cs->rule_implicit = 1;              // mark the OP_RULE for bare listing
+    cs->sdefv[0] = STATE_INIT;
+    cs->sdefv[1] = STATE_NORMAL;
+    cs->n_sdef   = 2;
+    cs->sdef     = STATE_INIT;          // >= 0 so asm_rule folds the OR condition
+    cs->rule_implicit = 1;              // mark the OP_RULE for bare listing
     return 1;
 }
 
@@ -5033,7 +5039,7 @@ NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, int ti, size_t n)
     }
     while ((np < MAX_BODY_PARTS) && (d.body[np].rhs.len > 0))
 	np++;
-    wrap = wrap_normal_plus(st);
+    wrap = wrap_normal_plus(st->cs);
     if (asm_rule(st, tv, n, BAD_INDEX, d.body, np, &d.cond) < 0)
 	return -1;
     if (wrap) {                         // clear the NORMAL+ context (no gate)
@@ -5277,7 +5283,7 @@ NOINLINE static bool_t open_in_block(csp_rt_t* st, const uint8_t* states, int ns
 	st->cs->sdefv[k] = states[k];
     // PUSH BEFORE the new context is installed: what the pop restores is the
     // block around us, not this one.
-    if (!blk_push(st, (index_t)mk, BLK_IN))
+    if (!blk_push(st->cs, (index_t)mk, BLK_IN, st->ps.line))
 	return 0;
     st->cs->n_sdef  = (uint8_t)ns;
     st->cs->sdef    = states[0];
@@ -5340,7 +5346,7 @@ NOINLINE int csp_parse_when(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	return -1;
     }
     free_reg(st, rc.reg);
-    if (!blk_push(st, (index_t)mk, BLK_WHEN)) {
+    if (!blk_push(st->cs, (index_t)mk, BLK_WHEN, st->ps.line)) {
 	csp_set_error(st, ERR_END_MISMATCH);
 	return -1;
     }

@@ -9,6 +9,7 @@
 #include "csp_compile.h"
 #include "csp_dump.h"
 #include "csp_print.h"
+#include "csp_expr.h"
 
 // NOT tier-gated. This whole file takes FILE* and prints with fprintf, and it is
 // not in the Arduino build at all (CandySpeak/ symlinks csp_rt/csp_compile/
@@ -445,11 +446,9 @@ void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
 	    // A `#states` inside a module body is a member like any other, but it
 	    // holds no per-instance VALUE -- so it is listed by name and number,
 	    // not through csp_dump_var, which would read a leaf that is not there.
-	    csp_decl_t sb;
 	    int q;
-	    csp_load_decl(st, k, &sb);
 	    for (q = 0; q < CSP_STATES_PER_DECL; q++) {
-		sindex_t np = csp_states_name(&sb, q);
+		sindex_t np = (sindex_t)csp_states_slot(st, k, (index_t)q);
 		if (np == 0)
 		    continue;
 		if (lang == ERLANG) {
@@ -650,14 +649,11 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	// silently hide the other five. The number is what a rule's OP_INSTATE
 	// compares against, so print both -- that is what makes this readable
 	// when a `#in` gate does not match.
-	int k, first = 1;	
-	csp_decl_t sb;
-	
-	csp_load_decl(st, i, &sb);
+	int k, first = 1;
 
 	fprintf(f, "{decl,%d,states,[", i);
 	for (k = 0; k < CSP_STATES_PER_DECL; k++) {
-	    sindex_t np = csp_states_name(&sb, k);
+	    sindex_t np = (sindex_t)csp_states_slot(st, (index_t)i, (index_t)k);
 	    if (np == 0)
 		continue;
 	    if (!first) fputc(',', f);
@@ -1230,13 +1226,13 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    // two states with a type and a width. The section CRC is folded over
 	    // the raw bytes, so an image written through the wrong arm fails its
 	    // own check at boot (or, worse, loads with two states quietly wrong).
-	    emit_rec(f, dp, 8, ".s6={.type=%s,.cont=%u,.local=%u,.dir=%u,"
+	    emit_rec(f, dp, 8, ".sn={.type=%s,.cont=%u,.local=%u,.dir=%u,"
 		     ".name=%u,.name2=%u,.name3=%u,"
 		     ".name4=%u,.name5=%u,.name6=%u}",
 		    csp_cfmt_dtype(csp_decl_get_type(dp)), csp_decl_get_cont(dp), csp_decl_get_local(dp), csp_decl_get_dir(dp),
-		    csp_decl_get_name(dp), csp_decl_get_s6_name2(dp),
-		    csp_decl_get_s6_name3(dp), csp_decl_get_s6_name4(dp),
-		    csp_decl_get_s6_name5(dp), csp_decl_get_s6_name6(dp));
+		    csp_decl_get_sn_names(dp, 0), csp_decl_get_sn_names(dp, 1),
+		    csp_decl_get_sn_names(dp, 2), csp_decl_get_sn_names(dp, 3),
+		    csp_decl_get_sn_names(dp, 4), csp_decl_get_sn_names(dp, 5));
 	    break;
 	case DECL_END:    // common fields only (anonymous union arm)
 	case DECL_IN:
@@ -1553,12 +1549,10 @@ index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
 	// Unlike the REPL's /list this keeps the reserved INIT/NORMAL/FAILSAFE:
 	// this dump is for reading the program the runtime actually holds, not
 	// for producing source you paste back.
-	csp_decl_t sb;
 	int k;
-	csp_load_decl(st, i, &sb);
 	fprintf(f, "#states");
 	for (k = 0; k < CSP_STATES_PER_DECL; k++) {
-	    sindex_t np = csp_states_name(&sb, k);
+	    sindex_t np = (sindex_t)csp_states_slot(st, (index_t)i, (index_t)k);
 	    if (np == 0)
 		continue;
 	    fprintf(f, " %.*s", (int)csp_str_len(st, np), ro_maybe_ptr(csp_str_at(st, np)));

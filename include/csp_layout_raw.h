@@ -281,7 +281,7 @@ typedef struct PACKED {
     unsigned m:16;         // index in object table (1..MAX_OBJECT_NUM)
 } csp_object_t;
 
-// Up to 6 state names per declaration: DECL_HEADER (17) + 5 x 9 = 62 of 64 bits.
+// Up to 6 state names per declaration: one byte each, bytes 1..6.
 //
 // DECL_HEADER, not a hand-copied prefix: `name` is slot 0, so a states block IS
 // a declaration with a name -- the one every other reader already knows how to
@@ -289,7 +289,12 @@ typedef struct PACKED {
 // it now. What DECL_TYPE_HEADER adds on top (vt, res, is_mapped, bound, reg)
 // lands on name2 and name3; see tests/states_layout.c.
 typedef struct PACKED {
-    DECL_HEADER;                  // type, dir, and slot 0 as `name`
+    DECL_HEADER;                  // type, dir, and element 0 as `name`
+    // Elements 1..5. The LAYOUT says one array field starting at byte 1, which
+    // is where DECL_HEADER's `name` is -- so element 0 is that name and there
+    // is no special case at slot zero. Here they are five members because this
+    // union is what the oracle compares against, and a bit-field is the only
+    // thing that can name the bits.
     unsigned name2:NAMEID_BITS;
     unsigned name3:NAMEID_BITS;
     unsigned name4:NAMEID_BITS;
@@ -385,9 +390,29 @@ typedef union {
     csp_bufdecl_t  bf;
     csp_route_t    rt;
     csp_timer_t    tm;
-    csp_states_t   s6;
+    csp_states_t   sn;
     csp_decl_end_t em;
 } csp_decl_raw_t;
+
+// value_t arm by arm, for the oracle. The live union in csp.h keeps i/u/f/s as
+// plain scalars -- there is nothing to name inside them -- but the oracle
+// compares FIELDS, so here each of those is a struct with a single member.
+// Same four bytes either way.
+//
+// `f` is the raw WORD and not an fvalue_t: what the layout describes is thirty
+// two bits, and whether they read as a float or as a Q16.16 fixpoint is a
+// question for csp.h. The accessor hands back the bit pattern for the same
+// reason -- a float there would round 0xFFFFFFFF and the check would pass on a
+// number neither side stored.
+typedef union {
+    struct PACKED { ivalue_t val; } i;
+    struct PACKED { uvalue_t val; } u;
+    struct PACKED { uint32_t val; } f;
+    struct PACKED { sindex_t val; } s;
+    tvalue_t t;
+    dvalue_t d;
+    avalue_t a;
+} csp_value_raw_t;
 
 // One per unique buffer. RAM table, filled at start.
 typedef struct PACKED {

@@ -121,7 +121,9 @@ MK_PROBE(d, pullup) MK_PROBE(d, pulldown) MK_PROBE(d, cfg) MK_PROBE(d, val)
 MK_PROBE(a, pin) MK_PROBE(a, port) MK_PROBE(a, dir)
 MK_PROBE(a, pwm) MK_PROBE(a, cfg) MK_PROBE(a, val)
 
-// The cfg bit is not in the row table; it is one byte per layout. Same idea.
+// The cfg bit is not in the row table; it is one byte per layout, holding the
+// position PLUS ONE so that 0 can mean "no cfg" -- cfg is bit 0 of both layouts
+// that have one.
 static void check_cfg(int lay, uint32_t probe)
 {
     int ppos, plen;
@@ -129,13 +131,15 @@ static void check_cfg(int lay, uint32_t probe)
     span(probe, &ppos, &plen);
     if (probe == 0) {                    // layout has no cfg field
 	if (tcfg != 0) {
-	    printf("FAIL %s: cfg bit %d, struct has no cfg\n", lay_name(lay), tcfg);
+	    printf("FAIL %s: cfg bit %d, struct has no cfg\n",
+		   lay_name(lay) , tcfg - 1);
 	    errors++;
 	}
 	return;
     }
-    if (tcfg != ppos) {
-	printf("FAIL %s: cfg bit %d, struct cfg at %d\n", lay_name(lay), tcfg, ppos);
+    if (tcfg != ppos + 1) {
+	printf("FAIL %s: cfg bit %d, struct cfg at %d\n",
+	       lay_name(lay), tcfg - 1, ppos);
 	errors++;
     }
 }
@@ -251,7 +255,7 @@ int main(void)
 	    // and a cfg there would have the board re-apply the pin on every
 	    // edge -- pinMode at the interrupt rate.
 	    want = ((p != PART_VAL) && (p != PART_FIRED));
-	    if (!!(slot.u & (1u << cfg)) != want) {
+	    if (!!(slot.u & (1u << (cfg - 1))) != want) {
 		printf("FAIL %s.%s: cfg %s\n", lay_name(lay), part_name(p),
 		       want ? "not set by a config write" : "set by a .val write");
 		errors++;
