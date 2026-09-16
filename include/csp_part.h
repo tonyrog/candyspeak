@@ -99,9 +99,11 @@ static const uint8_t csp_part_loc[PL_COUNT * PL_STRIDE] RODATA = {
     [(PL_ANALOG  << PART_BITS) | PART_FIRED]    = PLV(A_FIRED),
 };
 
-// Position of the `cfg` bit per layout, PLUS ONE, so that 0 means "this layout
-// has none". Not the position itself: cfg is bit 0 of both layouts that have
-// one, which is the same number a timer would have to say it has no cfg at all.
+// The `cfg` BIT ITSELF, per layout, as a mask over the low byte -- 0 for a
+// layout that has none. A mask and not a position: `1u << pos` with a variable
+// pos is a shift LOOP on AVR, and the bit is a constant of the layout. It also
+// settles what a position could not, since cfg is bit 0 of both layouts that
+// have one and 0 is the answer a timer has to give.
 //
 // cfg is NOT a per-row flag: writing ANY part except .val is a configuration
 // change and writing .val never is -- that holds for all eleven writable parts,
@@ -110,10 +112,16 @@ static const uint8_t csp_part_loc[PL_COUNT * PL_STRIDE] RODATA = {
 // PART_FIRED is the twelfth and it is the exception: the sweep sets and clears
 // it every cycle, so treating a write as a configuration change would re-apply
 // the pin on every edge. csp_dio_set_part excludes it by name.
+// One byte, so the bit has to be in the first one. Both layouts put cfg at bit
+// 0 and there is no reason for a third to differ, but nothing in the layout
+// description enforces it -- so this does.
+CSP_STATIC_ASSERT(MFV_D_CFG_POS < 8, "digital cfg must be in the low byte");
+CSP_STATIC_ASSERT(MFV_A_CFG_POS < 8, "analog cfg must be in the low byte");
+
 static const uint8_t csp_part_cfg[PL_COUNT] RODATA = {
     [PL_TIMER] = 0,
-    [PL_DIGITAL] = MFV_D_CFG_POS + 1,
-    [PL_ANALOG]  = MFV_A_CFG_POS + 1
+    [PL_DIGITAL] = (uint8_t)(1u << MFV_D_CFG_POS),
+    [PL_ANALOG]  = (uint8_t)(1u << MFV_A_CFG_POS)
 };
 
 // The layout id for a value type, or PL_COUNT (no rows) if it has none.
@@ -175,8 +183,7 @@ static void csp_part_set(value_t* slot, vtype_t vt, csp_part_t part, value_t v)
     if ((CSP_MASK(part, PART_BITS) != PART_VAL) &&
 	(CSP_MASK(part, PART_BITS) != PART_FIRED)) {
 	cfg = ro_byte(&csp_part_cfg[CSP_PART_LAY(vt)]);
-	if (cfg)
-	    slot->u |= ((uint32_t)1 << (cfg - 1));
+	slot->u |= cfg;
     }
 }
 

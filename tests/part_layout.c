@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "csp.h"
+#include "csp_layout_raw.h"   // the arms, now that value_t itself has none
 #include "csp_part.h"
 
 static int errors = 0;
@@ -104,15 +105,19 @@ static void check(int lay, csp_part_t part, uint32_t probe, int want_len)
     }
 }
 
-// Probe a field: all ones into that field of a zeroed value_t, word back out.
+// Probe a field: all ones into that field of a zeroed value, word back out.
+//
+// csp_value_raw_t, not value_t: the bit-field arms have left the live union
+// (see include/csp_layout_raw.h) and this is the description that still names
+// them. Same four bytes, which tests/layout.c is what says.
 #define PROBE(arm, fld) (probe_##arm##_##fld())
 #define MK_PROBE(arm, fld)				\
     static uint32_t probe_##arm##_##fld(void)		\
     {							\
-	value_t v;					\
+	csp_value_raw_t v;				\
 	memset(&v, 0, sizeof(v));			\
 	v.arm.fld = (unsigned)~0u;			\
-	return v.u;					\
+	return v.u.val;					\
     }
 
 MK_PROBE(t, period) MK_PROBE(t, fired) MK_PROBE(t, running) MK_PROBE(t, val)
@@ -122,24 +127,23 @@ MK_PROBE(a, pin) MK_PROBE(a, port) MK_PROBE(a, dir)
 MK_PROBE(a, pwm) MK_PROBE(a, cfg) MK_PROBE(a, val)
 
 // The cfg bit is not in the row table; it is one byte per layout, holding the
-// position PLUS ONE so that 0 can mean "no cfg" -- cfg is bit 0 of both layouts
-// that have one.
+// BIT rather than its position -- 0 for a layout with no cfg at all.
 static void check_cfg(int lay, uint32_t probe)
 {
     int ppos, plen;
-    int tcfg = ro_byte(&csp_part_cfg[lay]);
+    unsigned tcfg = ro_byte(&csp_part_cfg[lay]);
     span(probe, &ppos, &plen);
     if (probe == 0) {                    // layout has no cfg field
 	if (tcfg != 0) {
-	    printf("FAIL %s: cfg bit %d, struct has no cfg\n",
-		   lay_name(lay) , tcfg - 1);
+	    printf("FAIL %s: cfg mask 0x%X, struct has no cfg\n",
+		   lay_name(lay), tcfg);
 	    errors++;
 	}
 	return;
     }
-    if (tcfg != ppos + 1) {
-	printf("FAIL %s: cfg bit %d, struct cfg at %d\n",
-	       lay_name(lay), tcfg - 1, ppos);
+    if (tcfg != (1u << ppos)) {
+	printf("FAIL %s: cfg mask 0x%X, struct cfg at bit %d\n",
+	       lay_name(lay), tcfg, ppos);
 	errors++;
     }
 }
@@ -255,7 +259,7 @@ int main(void)
 	    // and a cfg there would have the board re-apply the pin on every
 	    // edge -- pinMode at the interrupt rate.
 	    want = ((p != PART_VAL) && (p != PART_FIRED));
-	    if (!!(slot.u & (1u << (cfg - 1))) != want) {
+	    if (!!(slot.u & cfg) != want) {
 		printf("FAIL %s.%s: cfg %s\n", lay_name(lay), part_name(p),
 		       want ? "not set by a config write" : "set by a .val write");
 		errors++;

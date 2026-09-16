@@ -403,6 +403,14 @@ void csp_line_input(csp_line_t* st, char c)
 	    st->pos = 0;
 	    st->fill = 0;
 	    st->ovf = 0;
+	    // AND THE CURSOR, which this arm forgot while the arm below it did
+	    // not. csp_line_insert writes at buf[cur], so a cursor left at the
+	    // far end of a refused line put the next line's first characters
+	    // THERE -- past the end of the buffer after one of them -- and left
+	    // the refused line's own opening in front. `/list` after a refused
+	    // `A = 1 // ...` ran as `A = 1`.
+	    st->cur = 0;
+	    st->esc = 0;
 	    csp_println();     // the echoed line has no newline yet -- without this
 			       // the complaint lands on the end of the input itself
 	    csp_print_lit("Error: line too long, max ");

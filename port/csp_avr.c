@@ -720,15 +720,18 @@ void csp_input(csp_rt_t* st)
     for (i = 0; i < st->nio; i++) {
 	index_t ix = csp_io_at(st, i);
 	int di = INDEX(ix);
-	value_t* vptr;
+	// The slot lookup is hoisted out of the switch: both live arms wanted the
+	// same one, and two copies of it cost more than the one call the default
+	// arm now makes for nothing. st->nio holds only #digital and #analog, so
+	// that arm is not a path anything takes.
+	value_t* vptr = csp_dio_slot(st, ix, DOUT);
+
 	switch (decl(st, di, type)) {
 	case DECL_DIGITAL:
-	    vptr = csp_dio_slot(st, ix, DOUT);
 	    if (value_get_d_dir(vptr) & DIR_IN)
 		csp_board_digital_input(st, ix, vptr);
 	    break;
 	case DECL_ANALOG:
-	    vptr = csp_dio_slot(st, ix, DOUT);
 	    if (value_get_a_dir(vptr) & DIR_IN)
 		csp_board_analog_input(st, ix, vptr);
 	    break;
@@ -751,15 +754,14 @@ void csp_output(csp_rt_t* st)
 	for (i = 0; i < st->nio; ++i) {
 	    index_t ix = csp_io_at(st, i);
 	    int di = INDEX(ix);
-	    value_t* vptr;
+	    value_t* vptr = csp_dio_slot(st, ix, DOUT);   // see csp_input
+
 	    switch (decl(st, di, type)) {
 	    case DECL_DIGITAL:
-		vptr = csp_dio_slot(st, ix, DOUT);
 		if (value_get_d_dir(vptr) & DIR_OUT)
 		    csp_board_digital_output(st, vptr);
 		break;
 	    case DECL_ANALOG:
-		vptr = csp_dio_slot(st, ix, DOUT);
 		if (value_get_a_dir(vptr) & DIR_OUT)
 		    csp_board_analog_output(st, di, vptr);
 		break;

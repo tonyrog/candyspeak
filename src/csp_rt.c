@@ -2308,11 +2308,18 @@ NOINLINE int str_seg_ensure(csp_rt_t* st, unsigned k)
     csp_mid_note_instr(st, want);
     h = st->ps.nn;
     st->ps.nn = h + CSP_STR_SEG_SLOTS + 1;
-    memset(ram_instr_at(st, h), 0,
-	   (size_t)(CSP_STR_SEG_SLOTS + 1) * sizeof(csp_instr_t));
-    csp_instr_set_op(ram_instr_at(st, h), OP_SEGMENT);
-    csp_instr_set_sg_num(ram_instr_at(st, h), CSP_STR_SEG_SLOTS);
-    csp_instr_set_sg_used(ram_instr_at(st, h), 0);
+    {
+	// HOISTED. ram_instr_at expands to an address computed from two struct
+	// members, and a write through it stops gcc reusing the result -- so a
+	// run of setters recomputes it every time. See doc/AVR_CODE_SIZE.md.
+	// sg_used is not set here: the memset above is what zeroes it, and the
+	// header is the only slot this function writes twice.
+	csp_instr_t* ip_ = ram_instr_at(st, h);
+
+	memset(ip_, 0, (size_t)(CSP_STR_SEG_SLOTS + 1) * sizeof(csp_instr_t));
+	csp_instr_set_op(ip_, OP_SEGMENT);
+	csp_instr_set_sg_num(ip_, CSP_STR_SEG_SLOTS);
+    }
     st->str_seg[k] = h;
     if (k >= st->nseg)
 	st->nseg = (uint8_t)(k + 1);
@@ -2605,14 +2612,17 @@ NOINLINE index_t csp_new_decl(csp_rt_t* st, const tstr_t* name, decl_t type,
     // left bound = 1 behind, and the next variable to take that slot was set up
     // as a bit-field view into a buffer instead of getting storage of its own.
     // It read 0 whatever its initialiser said.
-    memset(ram_decl_at(st,i), 0, sizeof(csp_decl_t));
-    csp_decl_set_type(ram_decl_at(st,i), type);
-    // csp_decl_set_sys(ram_decl_at(st,i), sys);
     {
-    	csp_decl_t* dp_ = ram_decl_at(st,i);
-	    csp_decl_set_name(dp_, pos);
-	    csp_decl_set_res(dp_, MAKE_RES(8*sizeof(value_t)));
-	    csp_decl_set_vt(dp_, V_INTEGER);
+	// One pointer for the whole run, memset included -- ram_decl_at is an
+	// address computed from two struct members, and a write through it
+	// stops gcc reusing it. See doc/AVR_CODE_SIZE.md.
+	csp_decl_t* dp_ = ram_decl_at(st, i);
+
+	memset(dp_, 0, sizeof(csp_decl_t));
+	csp_decl_set_type(dp_, type);
+	csp_decl_set_name(dp_, pos);
+	csp_decl_set_res(dp_, MAKE_RES(8*sizeof(value_t)));
+	csp_decl_set_vt(dp_, V_INTEGER);
     }
     return i;
 }
@@ -4164,98 +4174,92 @@ void csp_set_uconst(csp_rt_t* st, csp_const_fn uconst)
     st->uconst = uconst;
 }
 
+// The three setup_* below differed only in which values routine ran: load the
+// declaration, find the view, and fill BOTH slots -- the committed one and the
+// shadow -- from it. Written out three times that was three copies of the same
+// six lines; here it is one, and each caller is a line.
+static NOINLINE void setup_dio(csp_rt_t* st, index_t ix,
+			       void (*fill)(value_t*, const csp_decl_t*))
+{
+    csp_decl_t d;
+    csp_view_t* v;
+
+    csp_load_decl(st, INDEX(ix), &d);
+    v = csp_view(st, ix);
+    fill(csp_slot(st, v, DOUT), &d);
+    fill(csp_slot(st, v, DIN), &d);
+}
+
 // Takes the DECLARATION, not the arm: an arm is a view of csp_decl_t's union,
 // and the union is what utils/layout.terms is replacing. Reading through the
 // generated accessors here means this function does not have to change again
 // when the layout becomes ours.
+// A RUN OF SETTERS GOES THROUGH A LOCAL. Each setter is a read-modify-write of
+// the slot, and a write through a pointer stops gcc keeping the bytes in
+// registers -- so four of them in a row are four loads and four stores of the
+// same word. Copied in, changed, copied back: one load, one store, and the
+// middle is register work. Same reason as the ram_decl_at runs in
+// doc/AVR_CODE_SIZE.md, and the copy is what keeps the fields this does NOT
+// name (a digital .val that setup is not entitled to clear) exactly as they
+// were.
 static NOINLINE void setup_timer_values(value_t* ptr, const csp_decl_t* d)
 {
-    value_set_t_fired(ptr,   0);
-    value_set_t_val(ptr,     csp_decl_get_tm_init(d));
-    value_set_t_running(ptr, csp_decl_get_tm_init(d));
-    value_set_t_period(ptr,  csp_decl_get_tm_period(d));
+    value_t v = *ptr;
+
+    value_set_t_fired(&v,   0);
+    value_set_t_val(&v,     csp_decl_get_tm_init(d));
+    value_set_t_running(&v, csp_decl_get_tm_init(d));
+    value_set_t_period(&v,  csp_decl_get_tm_period(d));
+    *ptr = v;
 }
 
 // copy config data to value slot config
 NOINLINE void setup_timer(csp_rt_t* st, index_t ix)
 {
-    value_t* iptr;
-    value_t* optr;
-    csp_decl_t d;
-    csp_view_t* v;
-
-    csp_load_decl(st, INDEX(ix), &d);
-    v = csp_view(st, ix);    
-    // clear timeout flag and load config into the timer's value_t buffer.
-    // The start-time slot (tx = ix+1) is an ordinary variable, initialised to 0
-    // by its own setup_variable; the timer arms it at runtime.
-    // csp_dio_slots(st, ix, &iptr, &optr);
-    optr = csp_slot(st, v, DOUT);
-    setup_timer_values(optr, &d);
-    
-    iptr = csp_slot(st, v, DIN);
-    setup_timer_values(iptr, &d);    
+    setup_dio(st, ix, setup_timer_values);
 }
 
 static NOINLINE void setup_analog_values(value_t* ptr, const csp_decl_t* d)
 {
-    value_set_a_dir(ptr, csp_decl_get_dir(d));
-    value_set_a_pin(ptr, csp_decl_get_an_pin(d));
-    value_set_a_port(ptr, csp_decl_get_an_port(d));
-    value_set_a_pwm(ptr, csp_decl_get_an_pwm(d));
+    value_t v = *ptr;
+
+    value_set_a_dir(&v, csp_decl_get_dir(d));
+    value_set_a_pin(&v, csp_decl_get_an_pin(d));
+    value_set_a_port(&v, csp_decl_get_an_port(d));
+    value_set_a_pwm(&v, csp_decl_get_an_pwm(d));
     // No endian: it stays in the declaration, where .endian reads it from.
     // csp_setup applies this configuration itself, so nothing is pending.    
-    value_set_a_cfg(ptr, 0);
+    value_set_a_cfg(&v, 0);
+    *ptr = v;
 }
 
 // copy config data to value slot config
 NOINLINE void setup_analog(csp_rt_t* st, index_t ix)
 {
-    value_t* iptr;
-    value_t* optr;
-    csp_decl_t d;
-    csp_view_t* v;
-
-    csp_load_decl(st, INDEX(ix), &d);
-    v = csp_view(st, ix);    
-    
-    optr = csp_slot(st, v, DOUT);
-    setup_analog_values(optr, &d);
-
-    iptr = csp_slot(st, v, DIN);
-    setup_analog_values(iptr, &d);
+    setup_dio(st, ix, setup_analog_values);
 }
 
 static void NOINLINE setup_digital_values(value_t* ptr, const csp_decl_t* d)
 {
-    value_set_d_dir(ptr, csp_decl_get_dir(d));
-    value_set_d_pin(ptr, csp_decl_get_di_pin(d));
-    value_set_d_port(ptr, csp_decl_get_di_port(d));
-    value_set_d_pullup(ptr, csp_decl_get_di_pullup(d));
-    value_set_d_pulldown(ptr, csp_decl_get_di_pulldown(d));
+    value_t v = *ptr;
+
+    value_set_d_dir(&v, csp_decl_get_dir(d));
+    value_set_d_pin(&v, csp_decl_get_di_pin(d));
+    value_set_d_port(&v, csp_decl_get_di_port(d));
+    value_set_d_pullup(&v, csp_decl_get_di_pullup(d));
+    value_set_d_pulldown(&v, csp_decl_get_di_pulldown(d));
     // csp_setup applies this configuration itself, so nothing is pending. Left
     // set, it would spend a pinMode on the first cycle saying what setup just
     // said -- and on a slot that was never zeroed it would be whatever was
     // there before.    
-    value_set_d_cfg(ptr, 0);
+    value_set_d_cfg(&v, 0);
+    *ptr = v;
 }
 
 // copy config data to value slot config
 NOINLINE void setup_digital(csp_rt_t* st, index_t ix)
 {
-    value_t* iptr;
-    value_t* optr;
-    csp_decl_t d;
-    csp_view_t* v;
-
-    csp_load_decl(st, INDEX(ix), &d);
-    v = csp_view(st, ix);    
-
-    optr = csp_slot(st, v, DOUT);
-    setup_digital_values(optr, &d);
-
-    iptr = csp_slot(st, v, DIN);
-    setup_digital_values(iptr, &d);
+    setup_dio(st, ix, setup_digital_values);
 }
 
 NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint16_t nbytes,
@@ -4271,6 +4275,10 @@ NOINLINE static int parent_leaf(csp_rt_t* st, index_t ix);
 // `ca` comes in BY VALUE, like the config arms do: it is four bytes, it arrives
 // in registers, and it means the caller's whole csp_decl_t does not have to stay
 // alive across the call.
+// NOT through a local, unlike setup_digital_values. Measured on uno_bare: a
+// csp_view_t is six bytes and every field is written, so the two memcpys cost
+// 30 bytes MORE than seven read-modify-writes in place. The local pays only
+// where the record is narrow enough to sit in registers.
 static void setup_view_values(csp_view_t* vw, vtype_t vt, index_t buf,
 			      const csp_decl_t* d)
 {
@@ -4999,8 +5007,13 @@ NOINLINE int setup_buffer(csp_rt_t* st, index_t ix)
     uint16_t port = 0;
     index_t b;
     csp_view_t* vw;
+    // The slot index once, for both exits. NOT the pointer: csp_buf_alloc is
+    // between here and the buffer exit, and a table that moves would take a
+    // held pointer with it.
+    index_t vi;
 
     csp_load_decl(st, INDEX(ix), &d);
+    vi        = st_index(st, ix);
     is_buf    = (csp_decl_get_type(&d) == DECL_BUFFER);
     res       = is_buf ? csp_decl_get_bf_nbytes(&d)*8 : GET_RES(csp_decl_get_res(&d));
     nbytes    = (res + 7) >> 3;
@@ -5014,9 +5027,8 @@ NOINLINE int setup_buffer(csp_rt_t* st, index_t ix)
 	uint16_t hp;
 	if ((hp = csp_heap_alloc(st, nbytes)) == 0xffff)
 	    return -1;
-	vw = &st->view[st_index(st, ix)];
+	vw = &st->view[vi];
 	csp_view_set_kind(vw, VIEW_OWN);
-
 	csp_view_set_vt(vw, csp_decl_get_vt(&d));
 	csp_view_set_pos(vw, hp);
 	csp_view_set_len(vw,(res > VIEW_MAX_LEN) ? VIEW_MAX : (uint8_t)(res - 1));
@@ -5043,10 +5055,15 @@ NOINLINE int setup_buffer(csp_rt_t* st, index_t ix)
     }
     if ((b = csp_buf_alloc(st, nbytes, transport, xref, csp_decl_get_dir(&d))) == BAD_INDEX)
 	return -1;
-    csp_buf_set_port(&st->buf[b], port);
-    csp_buf_set_owner(&st->buf[b], ix);   // ix, not the leaf: csp_enq_elist wants
-				       // the object-qualified index
-    vw = &st->view[st_index(st, ix)];
+    {
+	// Hoisted, like every run of setters -- see doc/AVR_CODE_SIZE.md.
+	csp_buf_t* bp_ = &st->buf[b];
+
+	csp_buf_set_port(bp_, port);
+	csp_buf_set_owner(bp_, ix);   // ix, not the leaf: csp_enq_elist wants
+				      // the object-qualified index
+    }
+    vw = &st->view[vi];
     csp_view_set_kind(vw, VIEW_HEAP);
     csp_view_set_vt(vw, csp_decl_get_vt(&d));
     csp_view_set_buf(vw, b);
