@@ -739,7 +739,15 @@ extern int ro_strcpy(char* dst, rostring_t src, int max);
 #elif defined(ARDUINO) || defined(CSP_SMALL_TARGET)
 #define CSP_DEFINE_BYTES 128
 #else
-#define CSP_DEFINE_BYTES 512
+// 1024 on a HOST, where this is a few hundred bytes of a megabyte-scale arena.
+// 512 was not enough for private/pilot: twenty-one #defines, and adding two
+// command codes tipped it over. The failure is honest ("too many #define names
+// -- max 512 bytes") but it is a limit about the BUILD, not about the program,
+// and a host has no reason to impose a board's.
+//
+// A board still gets 128, or 0 when it has no parser at all -- a #define is a
+// compile-time name and an exec-only node cannot make one.
+#define CSP_DEFINE_BYTES 1024
 #endif
 #endif
 
@@ -3296,6 +3304,17 @@ extern int  csp_io_active(csp_rt_t* st);
 // all. It would overwrite the last good datagram with bytes nothing is going to
 // mark. A port answers with the sender it can see; one that cannot see a sender
 // ignores the argument and says so in its own comment.
+// How many datagram ports one node can bind. In the shared file rather than in
+// a port, because that is where the array it sizes now lives.
+#ifndef CSP_UDP_MAXSOCK
+#define CSP_UDP_MAXSOCK 4
+#endif
+
+// Enumerated in open order, -1 past the end: a port is bound on FIRST USE, so a
+// set collected once at start would be empty. A main loop that waits on
+// descriptors walks this every time round.
+extern int csp_udp_pollfd(int slot);
+
 extern int csp_udp_open(csp_rt_t* st, uint16_t port);
 // Same, but the port is a BUS: several nodes bind it and each gets a copy of
 // every broadcast. A port opens itself on first use, so nothing calls this

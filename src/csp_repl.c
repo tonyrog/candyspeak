@@ -1924,10 +1924,8 @@ static int cmd_settings(csp_rt_t* st, int argc, char* argv[])
 		csp_print_char(s.str[k]);
 	    csp_print_char('"');
 	}
-	else if (s.vt == V_UNSIGNED)
-	    csp_print_uint(s.val.u);
 	else
-	    csp_print_int(s.val.i);
+	    csp_print_value(st, s.vt, s.val);
 	if (status == CSP_SET_ORPHAN)
 	    csp_print_lit("   // orphan");
 	else if (status == CSP_SET_REFUSED)

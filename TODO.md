@@ -82,29 +82,6 @@
 
 # 4. BEKVÄMLIGHET
 
-## `#every <timer>`-block i stället för 24 gånger `? timeout(T)` (Tony 2026-08-11)
-  FRÅGAN som ledde hit: borde `timeout(T)` vara en instruktion, som `changed`?
-  MÄTT FÖRST: `changed()` är INTE en instruktion -- den kompilerar till exakt
-  samma `LI + ARG + CALL` som timeout. OP_CHG finns men emitteras bara på den
-  reaktiva `<-`-vägen. Så båda är anrop: 3 instruktioner, 12 byte per användning.
-  examples/cpx_ball_array.csp har 24 stycken = 288 byte kod och 1200
-  builtin-dispatchar per sekund vid 50 Hz.
-
-  SOM OPCODE: ryms precis i csp_instr_mem_t (op 6 + x 4 + mem 16), alltså 4 byte
-  i stället för 12 -- ~192 byte sparat i den filen. MEN det finns bara TRE
-  opcodes kvar före OP_END_MARK (OP_AVAIL=60, END_MARK=63), och en per builtin
-  är dyrt.
-
-  BÄTTRE, och det Tony egentligen bad om ("undvika upprepning"): ett BLOCK.
-    #every Tick
-      Acc = ...
-      Vel = ...
-    #end
-  Samma form som `#in <state>`: OP_INSTATE gatear ett helt block med en patchad
-  hopplängd, och den maskinen finns. 24 villkor blir ETT, och källan blir
-  läsbarare. De två komponerar, men blocket dominerar -- ta det först och lägg
-  bara till OP_TIMEOUT om anropen fortfarande syns i en mätning efteråt.
-
 ## /compact
   RAM-regler kan komprimeras när `R` eller `E` är avstängda (`!`): reglerna tas
   bort helt. Sparas det efteråt är de permanent borta. Taggarna F/E/R och `!` i

@@ -102,6 +102,25 @@ COREINC  := -I$(abspath include) -I$(abspath gen) -I$(abspath src)
 # program.
 BOARDDIR := $(shell $(GEN) --dir-of $(BOARD))
 PROG     ?= $(wildcard $(BOARDDIR)/pins.csp)
+
+# A DIRECTORY IS A PROGRAM, if it carries a PROG file listing its parts in build
+# order. private/pilot is seven files whose order matters -- pin declarations
+# first, main.csp last -- and spelling that out on every command line is how the
+# list ends up in three places and drifts in two of them.
+#
+#   PROG=private/pilot                  reads private/pilot/PROG
+#   PROG="a.csp b.csp"                  taken literally, as before
+#
+# Expanded HERE and not in a shell, so $(PROG) is a list of real paths by the
+# time anything depends on it: csp_rom.c has it as a prerequisite, and a
+# directory there would make the image depend on a directory's mtime rather
+# than on the sources it holds.
+# `override`, because PROG arrives on the COMMAND LINE and make lets a command
+# line win over every assignment in the file -- a plain `PROG :=` here is read
+# and discarded, silently, and the directory travels on to ./csp as a filename.
+override PROG := $(foreach p,$(PROG),$(if $(wildcard $(p)/PROG),\
+	  $(addprefix $(p)/,$(shell sed -e 's/#.*//' -e '/^[ \t]*$$/d' $(p)/PROG)),\
+	  $(p)))
 ROMDEF   := $(if $(strip $(PROG)),,-DCSP_ROM=rom_empty.c)
 ROMSRC   := $(if $(strip $(PROG)),$(B)/csp_rom.c,)
 
@@ -479,6 +498,25 @@ CORE := src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c src/csp_repl
 #   make -f Makefile.board BOARD=bridgezone PROG=          # the neutral image
 BOARDDIR := $(shell $(GEN) --dir-of $(BOARD))
 PROG     ?= $(wildcard $(BOARDDIR)/pins.csp)
+
+# A DIRECTORY IS A PROGRAM, if it carries a PROG file listing its parts in build
+# order. private/pilot is seven files whose order matters -- pin declarations
+# first, main.csp last -- and spelling that out on every command line is how the
+# list ends up in three places and drifts in two of them.
+#
+#   PROG=private/pilot                  reads private/pilot/PROG
+#   PROG="a.csp b.csp"                  taken literally, as before
+#
+# Expanded HERE and not in a shell, so $(PROG) is a list of real paths by the
+# time anything depends on it: csp_rom.c has it as a prerequisite, and a
+# directory there would make the image depend on a directory's mtime rather
+# than on the sources it holds.
+# `override`, because PROG arrives on the COMMAND LINE and make lets a command
+# line win over every assignment in the file -- a plain `PROG :=` here is read
+# and discarded, silently, and the directory travels on to ./csp as a filename.
+override PROG := $(foreach p,$(PROG),$(if $(wildcard $(p)/PROG),\
+	  $(addprefix $(p)/,$(shell sed -e 's/#.*//' -e '/^[ \t]*$$/d' $(p)/PROG)),\
+	  $(p)))
 
 # `=`, not `:=` -- these are for `make upload` only, and a recursive variable is
 # not expanded until something uses it. Every $(shell $(GEN) ...) at this level

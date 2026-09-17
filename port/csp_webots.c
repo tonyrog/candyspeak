@@ -1083,6 +1083,7 @@ int main(int argc, char** argv)
 	csp_println();
 	csp_flush();
     }
+
     // CSP_CSTATE, not 0. The third argument is the COMPILER's state, and this
     // build has one -- the prompt on 2323 is the whole point. With NULL here
     // csp_parse's first statement is `st->cs->ap = &alloc;`, so the node comes

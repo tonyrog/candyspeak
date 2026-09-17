@@ -61,7 +61,7 @@ OBJS = $(addprefix $(OBJDIR)/, \
 	csp_linux.o csp_rt.o csp_crc.o csp_fixpoint.o csp_words.o csp_mcsp.o csp_line.o csp_repl.o csp_compile.o csp_tok.o \
 	csp_dump.o csp_eeprom.o csp_parse.o csp_expr.o csp_print.o \
 	csp_strings.o csp_transport.o csp_console.o csp_states.o \
-	csp_flash.o csp_devices.o csp_flash_host.o csp_socketcan.o rom_empty.o)
+	csp_flash.o csp_devices.o csp_flash_host.o csp_socketcan.o csp_udp.o rom_empty.o)
 
 LIBS =
 
@@ -157,7 +157,7 @@ CORE_SRC = port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_re
 	   src/csp_transport.c src/csp_console.c src/csp_states.c \
 	   src/csp_parse.c src/csp_expr.c src/csp_print.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c \
 	   gen/csp_strings.c src/csp_flash.c \
-	   port/csp_devices.c port/csp_flash_host.c port/csp_socketcan.c
+	   port/csp_devices.c port/csp_flash_host.c port/csp_socketcan.c port/csp_udp.c
 EXEC_SRC = $(CORE_SRC) gen/rom.c
 
 # THE BRIDGE, checked on every build rather than once. csp-bc is this same
@@ -638,10 +638,11 @@ test_slow: csp
 # The build is skipped with a word rather than an error when it is not there:
 # nothing else in the tree needs Webots, so a machine without it is not broken.
 WEBOTS_HOME ?= /snap/webots/current/usr/share/webots
-WEBOTS_PROG ?= private/pilot/pins/imu.csp private/pilot/pins/flow.csp \
-	       private/pilot/pins/power.csp private/pilot/pins/motors.csp \
-	       private/pilot/pins/link.csp private/pilot/lib/pid.csp \
-	       private/pilot/main.csp
+# A DIRECTORY, not a list: private/pilot/PROG carries the parts in build order,
+# so the order lives with the program instead of being repeated here, on the
+# crazyflie command line, and in whatever builds it next. Makefile.board expands
+# the same spelling -- see the `override PROG` there.
+WEBOTS_PROG ?= private/pilot
 WEBOTS_DIR  := private/pilot/webots/controllers/pilot
 # csp_linux.c is NOT here and csp_webots.c is: they define the same symbols --
 # the board hooks, the sweeps, main -- and a link with both would pick one of
@@ -656,7 +657,17 @@ WEBOTS_SRC  := port/csp_webots.c src/csp_rt.c src/csp_crc.c src/csp_states.c \
 	       src/csp_console.c src/csp_line.c src/csp_eeprom.c \
 	       src/csp_repl.c src/csp_compile.c src/csp_tok.c src/csp_parse.c \
 	       src/csp_expr.c port/csp_dump.c \
-	       gen/csp_strings.c port/csp_devices.c port/csp_socketcan.c
+	       gen/csp_strings.c port/csp_devices.c port/csp_socketcan.c port/csp_udp.c
+
+# The same directory-is-a-program expansion Makefile.board does, for the same
+# reason: ./csp takes files, and the rule below should not care which spelling
+# the caller used.
+override PROG := $(foreach p,$(PROG),$(if $(wildcard $(p)/PROG),\
+	  $(addprefix $(p)/,$(shell sed -e 's/#.*//' -e '/^[ \t]*$$/d' $(p)/PROG)),\
+	  $(p)))
+WEBOTS_PROG := $(foreach p,$(WEBOTS_PROG),$(if $(wildcard $(p)/PROG),\
+	  $(addprefix $(p)/,$(shell sed -e 's/#.*//' -e '/^[ \t]*$$/d' $(p)/PROG)),\
+	  $(p)))
 
 webots: csp
 	@test -d "$(WEBOTS_HOME)" || { \
@@ -671,6 +682,38 @@ webots: csp
 	@sed -n 's|^//   size: *|  rom: |p' $(WEBOTS_DIR)/rom.c
 	@echo "  $(WEBOTS_DIR)/pilot"
 	@echo "  run: webots private/pilot/webots/worlds/pilot.wbt"
+
+# THE CONTROLLER, RUN BY YOU instead of by Webots.
+#
+# The snap is `confinement: strict` and its snap.yaml plugs only `network` --
+# not `network-control` -- so a controller Webots launches cannot open a raw
+# PF_CAN socket:
+#
+#     can: socket: Permission denied
+#
+# `snap connect` cannot fix that: the plug is not declared, so there is nothing
+# to connect. An EXTERN controller is the way out. Webots leaves the robot
+# unattended and waits; the controller is an ordinary process of yours, outside
+# the sandbox, with your CAN interfaces and your permissions.
+#
+#   1. in pilot.wbt:  controller "<extern>"
+#   2. start Webots and let the world run
+#   3. make webots_extern
+#
+# WEBOTS_CONTROLLER_URL names the robot to attach to. ipc:// is the local
+# transport and the robot name has to match the node's -- "Crazyflie" is the
+# PROTO's default `name`.
+WEBOTS_URL  ?= ipc://1234/Crazyflie
+# What the controller is started WITH -- the same flags the world file would
+# have carried in controllerArgs. --can belongs here now: that is the whole
+# reason for running it this way.
+WEBOTS_ARGS ?= --trace=125 --set=RampUp=0.1 --can=vcan0
+
+webots_extern: webots
+	@echo "  WEBOTS_CONTROLLER_URL=$(WEBOTS_URL)"
+	@WEBOTS_CONTROLLER_URL=$(WEBOTS_URL) \
+	 LD_LIBRARY_PATH=$(WEBOTS_HOME)/lib/controller:$$LD_LIBRARY_PATH \
+	 $(WEBOTS_DIR)/pilot $(WEBOTS_ARGS)
 
 # THE WEBOTS PORT, WITHOUT WEBOTS. tests/webots_stub.c answers the controller
 # API, so the port's whole boot -- csp_rt_init, csp_load_rom, csp_rebuild,
@@ -779,7 +822,7 @@ $(OBJDIR)/%.o: %.c | gen/csp_strings.h
 
 -include $(OBJS:.o=.d)
 
-.PHONY: webots webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
+.PHONY: webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first
