@@ -1,0 +1,7 @@
+//
+#timer T 3000 = 1
+
+#when timeout(T)
+      println("TIMEOUT")
+#end
+
