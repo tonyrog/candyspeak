@@ -94,11 +94,15 @@ COREINC  := -I$(abspath include) -I$(abspath gen) -I$(abspath src)
 # to -- arduino-cli compiles only what is in the sketch folder, so the image has
 # to be #included rather than handed to the link. That file has the details.
 #
-# With PROG empty the sketch includes gen/rom_host.c, the neutral image, which
-# is what the bare-metal branch links in the same case.
+# With PROG empty the sketch includes gen/rom_empty.c -- examples/empty.csp
+# compiled, i.e. a node with State and nothing to run -- which is what the
+# bare-metal branch links in the same case. It used to be called rom_host.c,
+# which named the build that happened to need one first rather than what the
+# file IS: a board carrying it is not carrying a host image, it is carrying no
+# program.
 BOARDDIR := $(shell $(GEN) --dir-of $(BOARD))
 PROG     ?= $(wildcard $(BOARDDIR)/pins.csp)
-ROMDEF   := $(if $(strip $(PROG)),,-DCSP_ROM=rom_host.c)
+ROMDEF   := $(if $(strip $(PROG)),,-DCSP_ROM=rom_empty.c)
 ROMSRC   := $(if $(strip $(PROG)),$(B)/csp_rom.c,)
 
 # csp_config.h does `#include CSP_STR(CSP_BOARD)`, so the value is a path, not a
@@ -178,7 +182,20 @@ $(SKETCH)/sketch.yaml: $(TERMS) utils/gen_chips.erl
 # Stamp the flags next to the objects and force one clean build when they move.
 # An ordinary source edit still builds incrementally. The stamp is written
 # AFTER the build, never before: --clean wipes the build path.
-FLAGS_KEY = $(CSPFLAGS)
+# AND PROG, not just the flags.
+#
+# arduino-cli decides for itself what to recompile, and CandySpeak/rom.c reaches
+# its image through a MACRO -- `#include CSP_ROM_STR(CSP_ROM)` -- so switching
+# programs changes a file the sketch never names. The generated csp_rom.c is
+# rebuilt correctly ($(B)/.cspprog sees to that), and arduino-cli then links the
+# object it already had: the board keeps the PREVIOUS program, and the build
+# says nothing about it. `make BOARD=play PROG=examples/traffic_cpx.csp` after a
+# build of something else produced an image of the something else.
+#
+# PROG belongs in the key for exactly the reason the flags do. It is the same
+# trap $(B)/.cspprog answers one step earlier, and the answer is the same:
+# record what was built, and rebuild when it moves.
+FLAGS_KEY = $(CSPFLAGS) PROG=$(PROG)
 
 # -m $(BOARD), not --fqbn: the profile carries the fqbn AND the pinned versions.
 compile: $(B)/csp_board.h $(ROMSRC) $(SKETCH)/sketch.yaml
@@ -449,7 +466,7 @@ CORE := src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c src/csp_repl
 # replaced by /upgrade without rebuilding it.
 #
 # Defaults to the board's own pins.csp when there is one. Without this the
-# firmware links rom_host.c -- the NEUTRAL image, a couple of declarations and
+# firmware links rom_empty.c -- the NEUTRAL image, a couple of declarations and
 # no instructions -- and the board comes up with an empty /list and every pin
 # name undeclared. Which reads as "the ROM failed to load" and is really "there
 # was no ROM": the same symptom, a different place to look.
@@ -471,7 +488,7 @@ UPFQBN = $(shell $(GEN) --fqbn-of $(BOARD))
 UPPORT = $(shell $(GEN) --port-of $(BOARD))
 
 ifeq ($(strip $(PROG)),)
-  CORE   += gen/rom_host.c
+  CORE   += gen/rom_empty.c
 else
   ROMOBJ := $(B)/rom.o
 endif

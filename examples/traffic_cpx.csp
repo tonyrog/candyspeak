@@ -1,0 +1,60 @@
+// Adafruit Circuit Playground Express  example
+#define BLACK 0x0000
+#define GREEN 0x07E0     // r=0  g=63 b=0
+#define BLUE  0x001F     // r=0  g=0  b=31
+#define RED   0xF800     // r=31 g=0  b=0
+#define AMBER 0xFD20
+#define WHITE 0xFFFF
+
+#digital BtnA   in pulldown 0:4      // button A (pressed = 1)
+#digital BtnB   in pulldown 0:5      // button B
+
+#analog Red[3]:16    out unsigned 9:0..2
+#analog Yellow[4]:16 out unsigned 9:3..6
+#analog Green[3]:16  out unsigned 9:7..9
+
+#timer Phase  600
+
+#states  green red redyellow yellow
+#param RedPeriod   = 5000
+#param GreenPeriod = 10000
+#param YelloPeriod = 1000
+#param PhasePeriod = 600
+
+#in INIT
+    State = green
+    Phase.period = PhasePeriod
+    Phase = 1
+#end
+
+#in red
+    Red[0]=RED, Yellow[0]=BLACK, Green[0]=BLACK
+    Red[1]=RED, Yellow[1]=BLACK, Green[1]=BLACK
+    Red[2]=RED, Yellow[2]=BLACK, Green[2]=BLACK
+                Yellow[3]=BLACK
+    State = redyellow, Phase.period = RedPeriod ? timeout(Phase)
+#end
+#in redyellow
+    Red[0]=RED, Yellow[0]=AMBER, Green[0]=BLACK
+    Red[1]=RED, Yellow[1]=AMBER, Green[1]=BLACK
+    Red[2]=RED, Yellow[2]=AMBER, Green[2]=BLACK
+                Yellow[3]=AMBER
+    State = green, Phase.period = GreenPeriod ? timeout(Phase)
+#end
+#in green
+    Red[0]=BLACK, Yellow[0]=BLACK, Green[0]=GREEN
+    Red[1]=BLACK, Yellow[1]=BLACK, Green[1]=GREEN
+    Red[2]=BLACK, Yellow[2]=BLACK, Green[2]=GREEN
+                  Yellow[3]=BLACK
+    State = yellow, Phase.period = YelloPeriod ? timeout(Phase)
+#end
+#in yellow
+    Red[0]=BLACK, Yellow[0]=AMBER, Green[0]=BLACK
+    Red[1]=BLACK, Yellow[1]=AMBER, Green[1]=BLACK
+    Red[2]=BLACK, Yellow[2]=AMBER, Green[2]=BLACK
+                  Yellow[3]=AMBER
+    State = red, Phase.period = RedPeriod ? timeout(Phase)
+#end
+#in red redyellow green yellow
+    Phase = 1 ? timeout(Phase)      // restart the timer each phase
+#end

@@ -659,7 +659,7 @@ Inte buggar -- saker som byggts men inte setts fungera på järn.
       Data       1280 bytes  62.5%
       ** DOES NOT FIT on atmega328p: Program over 100% **
 
-  JAMFORELSE MED SAMMA FLAGGOR (bada exec-only, bada med rom_host, 2026-09-09):
+  JAMFORELSE MED SAMMA FLAGGOR (bada exec-only, bada med rom_empty, 2026-09-09):
 
                                      flash    RAM
     uno (arduino exec)               37558    971     116 %

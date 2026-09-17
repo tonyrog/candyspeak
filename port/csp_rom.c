@@ -21,7 +21,7 @@
 // csp_config.h alone does not compile -- it declares csp_gate_mask_t and the
 // types come from csp.h, which the generated image includes as its first line.
 //
-// PROG= (empty) points it at gen/rom_host.c instead -- the neutral image, two
+// PROG= (empty) points it at gen/rom_empty.c instead -- the neutral image, two
 // declarations and no instructions. That is what a bare-metal board links in
 // the same case, so the two toolchains answer an empty PROG the same way.
 #define CSP_ROM_STR_(x) #x
@@ -35,6 +35,6 @@
 // include searches the including file's own directory before -I, and this file
 // is compiled as CandySpeak/rom.c -- so -DCSP_ROM=rom.c makes it include
 // itself, which gcc reports as a thousand-deep nesting rather than as the
-// mistake it is. csp_rom.c and rom_host.c exist only under -I, which is why
+// mistake it is. csp_rom.c and rom_empty.c exist only under -I, which is why
 // those are the two names used.
 #include CSP_ROM_STR(CSP_ROM)

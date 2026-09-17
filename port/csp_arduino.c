@@ -477,7 +477,7 @@ void csp_board_stop_output(csp_rt_t* st)
 void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
 {
     int value;
-    uint8_t pin = value_a_get_pin(vptr);
+    uint8_t pin = value_get_a_pin(vptr);
     if (value_get_a_port(vptr) == PORT_ACCEL) {   // accelerometer X/Y/Z (raw)
 	// Scale to the DECLARED resolution instead of assuming ten bits.
 	// `#analog AccZ:10` and `:16` should differ in precision, not in what

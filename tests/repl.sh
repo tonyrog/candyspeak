@@ -45,7 +45,7 @@ repl() {
 }
 
 # Link a host binary that carries PROGRAM as its firmware ROM image, the same way
-# a board does: -C generates the image, the image compiles in place of rom_host.c.
+# a board does: -C generates the image, the image compiles in place of rom_empty.c.
 # Without this there is no way to see an F tag at all -- the stock ./csp links the
 # neutral image, so every line it can ever list is RAM.
 #
@@ -1322,7 +1322,7 @@ if gcc -g -Wall -Iinclude -Igen -Isrc -Itests/lpcstub -Ichips/nxp/drivers/212x \
        -DCSP_VERSION='"test"' -o "$D/lpc_fw" \
        port/csp_lpcopen.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c \
        src/csp_parse.c src/csp_tok.c src/csp_print.c src/csp_expr.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c src/csp_repl.c \
-       port/csp_dump.c src/csp_eeprom.c gen/csp_strings.c gen/rom_host.c \
+       port/csp_dump.c src/csp_eeprom.c gen/csp_strings.c gen/rom_empty.c \
        src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c chips/nxp/drivers/212x/flash_212x.c port/csp_devices.c port/csp_socketcan.c \
        tests/lpcstub/stub.c >/dev/null 2>&1; then
     ck "the LPC port builds and links against the core" "0" "0"

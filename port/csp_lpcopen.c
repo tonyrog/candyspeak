@@ -30,7 +30,7 @@
 // BUILDING. There is no Makefile for this yet -- what a build needs is:
 //   - this file, csp_rt.c, csp_compile.c, csp_parse.c, csp_tok.c, csp_print.c,
 //     csp_repl.c, csp_dump.c, csp_eeprom.c, csp_strings.c and a rom.c
-//     (`./csp -n -C -O rom.c prog.csp`, or rom_host.c for an empty image)
+//     (`./csp -n -C -O rom.c prog.csp`, or rom_empty.c for an empty image)
 //   - nxp_lpcopen/<family>/lpc_chip_*/src/*.c and its inc/ on the include path
 //   - nxp_lpcopen/<family>/gcc/cr_startup_*.c and a linker script
 //   - -DCSP_EMBEDDED -DCSP_LPC_FAMILY_xxx -DCORE_Mn (whatever the chip headers

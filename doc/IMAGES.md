@@ -264,7 +264,7 @@ Measured on bridgezone: `.text` 88408 → 87744, `.image.A` 664 bytes at 0x20000
   the slot's first word and the magic sat at +4. The header has to be on the
   first byte — that address is what a flash scan computes and what `/images`
   reports.
-- **`*/rom.o`, not `*rom.o`.** The latter also matches `rom_host.o`, the neutral
+- **`*/rom.o`, not `*rom.o`.** The latter also matches `rom_empty.o`, the neutral
   image linked when `PROG` is empty.
 
 Because the image lands exactly where a flash scan would look, the linked
@@ -310,7 +310,7 @@ what is in the sketch folder and nothing else:
     CandySpeak/rom.c -> port/csp_rom.c        #include CSP_ROM_STR(CSP_ROM)
     CSP_ROM defaults to csp_rom.c, found on -I$(B)
     Makefile.board generates $(B)/csp_rom.c from PROG
-    PROG= instead passes -DCSP_ROM=rom_host.c, found on -Igen
+    PROG= instead passes -DCSP_ROM=rom_empty.c, found on -Igen
 
 `CSP_ROM` is a bare token stringified in the file, the same arrangement as
 `CSP_BOARD` and for the same reason. It must not name a file that exists in the
