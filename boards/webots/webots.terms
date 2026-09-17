@@ -1,0 +1,42 @@
+%% THE CRAZYFLIE, SIMULATED. Same program, same pin files, no hardware.
+%%
+%% This is not a new target in the sense the other boards are -- there is no
+%% chip, no flash budget and no linker script. It is the HOST toolchain with
+%% port/csp_webots.c in place of port/csp_linux.c, and what that port talks to
+%% is Webots' controller API instead of GPIO registers.
+%%
+%% WHY IT EARNS A BOARD FILE ANYWAY: because a board is what says which pins
+%% exist and what they are called, and that question has an answer here too.
+%% private/pilot names `M1 out pwm 0:1` and reads a 14-byte MPU9250 burst; the
+%% port below answers both, out of wb_motor_set_velocity and wb_gyro_get_values.
+%% The program cannot tell, which is the whole point of the exercise -- and the
+%% thing a stimulus file (-F) cannot prove, because a stimulus writes FIELDS and
+%% a sensor writes BYTES.
+%%
+%% The Webots model is Cyberbotics' own Bitcraze Crazyflie PROTO. What it does
+%% not carry -- an accelerometer, a rangefinder pointing DOWN -- goes in its
+%% extensionSlot, in worlds/pilot.wbt here, rather than in a forked PROTO.
+{board, webots,
+ [%% NO {chip, ...}: there is no part. {toolchain, sim} is what says so, and
+  %% gen_chips.erl checks such a board on its DEVICES instead -- see check_sim.
+  {toolchain, sim},
+
+  %% What the model gives us, by the names wb_robot_get_device wants. Stated
+  %% here rather than in the port for the same reason every other board states
+  %% its pins here: the port is the mechanism, the board is the wiring.
+  {device, m1, motor, "m1_motor"},
+  {device, m2, motor, "m2_motor"},
+  {device, m3, motor, "m3_motor"},
+  {device, m4, motor, "m4_motor"},
+  {device, gyro, gyro, "gyro"},
+  {device, acc, accelerometer, "accelerometer"},   %% from the extensionSlot
+  {device, tof, distance, "range_down"},           %% from the extensionSlot
+  {device, gps, gps, "gps"},
+
+  %% 250 Hz, which is what main.csp's RATE says the control loop runs at. The
+  %% Crazyflie world's basicTimeStep is 8 ms (125 Hz); pilot.wbt sets 4.
+  {rate_hz, 250},
+
+  %% A host build: the pool is host-sized and nothing here is counted in bytes.
+  {code_budget, 16384}
+ ]}.

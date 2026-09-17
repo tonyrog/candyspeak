@@ -1143,109 +1143,34 @@ int csp_tcp_pollfd(int slot)
     return -1;
 }
 
-#if defined(CSP_HAS_SOCKETCAN)
-#include <net/if.h>
-#include <sys/ioctl.h>
-#include <linux/can.h>
-#include <linux/can/raw.h>
-
-static int can_fd = -1;
-
+// THE BUS IS IN port/csp_socketcan.c NOW -- csp_webots.c is the second port
+// that wants one, and a socket setup copied is a socket setup that drifts.
+// What stays here is what is LOCAL to this port: the stimulus queue, which is
+// tried first so a test can drive one frame in while a real interface carries
+// the rest.
 int csp_can_init(csp_rt_t* st)
 {
-    struct sockaddr_can addr;
-    struct ifreq ifr;
     (void)st;
-
-    if (can_iface == NULL)
-	return 0;                       // no bus asked for: stay a stub
-    if ((can_fd = socket(PF_CAN, SOCK_RAW, CAN_RAW)) < 0) {
-	perror("can: socket");
-	return -1;
-    }
-    memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, can_iface, IFNAMSIZ-1);
-    if (ioctl(can_fd, SIOCGIFINDEX, &ifr) < 0) {
-	fprintf(stderr, "can: no interface '%s': %s\n",
-		can_iface, strerror(errno));
-	close(can_fd);
-	can_fd = -1;
-	return -1;
-    }
-    memset(&addr, 0, sizeof(addr));
-    addr.can_family  = AF_CAN;
-    addr.can_ifindex = ifr.ifr_ifindex;
-    if (bind(can_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-	perror("can: bind");
-	close(can_fd);
-	can_fd = -1;
-	return -1;
-    }
-    // Non-blocking: csp_can_input polls once per cycle and must never stall it.
-    fcntl(can_fd, F_SETFL, fcntl(can_fd, F_GETFL, 0) | O_NONBLOCK);
-    return 0;
+    return csp_socketcan_open(can_iface);
 }
+
+int csp_can_pollfd(void) { return csp_socketcan_fd(); }
 
 int csp_can_recv(csp_rt_t* st, uint32_t* id, uint8_t* data, uint8_t* len)
 {
-    struct can_frame f;
-    ssize_t n;
     (void)st;
-
-    // Stimulus first, and regardless of whether a bus is open: a test may want
-    // to drive one frame in while a real interface carries the rest.
+    // Stimulus first, and regardless of whether a bus is open. With no
+    // interface the queue IS the bus, which is the path every -F test takes.
     if (inj_pop(id, data, len))
 	return 1;
-    if (can_fd < 0)
-	return 0;
-    if ((n = read(can_fd, &f, sizeof(f))) != (ssize_t)sizeof(f)) {
-	if ((n < 0) && (errno != EAGAIN) && (errno != EWOULDBLOCK))
-	    return -1;
-	return 0;
-    }
-    *id  = f.can_id & (f.can_id & CAN_EFF_FLAG ? CAN_EFF_MASK : CAN_SFF_MASK);
-    *len = f.can_dlc;
-    memcpy(data, f.data, f.can_dlc);
-    return 1;
+    return csp_socketcan_recv(id, data, len);
 }
-
-// The socket, so the main loop can wait on frames instead of spinning.
-int csp_can_pollfd(void) { return can_fd; }
 
 int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
 {
-    struct can_frame f;
     (void)st;
-
-    if (can_fd < 0)
-	return 0;
-    memset(&f, 0, sizeof(f));
-    // Anything that does not fit the 11-bit standard id goes out extended.
-    f.can_id  = (id > CAN_SFF_MASK) ? (id | CAN_EFF_FLAG) : id;
-    f.can_dlc = (len > 8) ? 8 : len;    // classic CAN via this socket type
-    memcpy(f.data, data, f.can_dlc);
-    if (write(can_fd, &f, sizeof(f)) != (ssize_t)sizeof(f))
-	return -1;
-    return 0;
+    return csp_socketcan_send(id, data, len);
 }
-
-#else  /* no SocketCAN: stubs, so CAN still parses and runs dry */
-
-int csp_can_init(csp_rt_t* st) { (void)st; return 0; }
-int csp_can_pollfd(void) { return -1; }
-int csp_can_recv(csp_rt_t* st, uint32_t* id, uint8_t* data, uint8_t* len)
-{
-    (void)st;
-    // No interface, so the stimulus queue IS the bus. This is the path every
-    // -F test takes.
-    return inj_pop(id, data, len);
-}
-int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
-{
-    (void)st; (void)id; (void)data; (void)len;
-    return 0;
-}
-#endif
 
 // NO INTERRUPT BACKEND HERE, on purpose.
 //

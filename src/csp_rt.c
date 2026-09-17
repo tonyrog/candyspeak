@@ -4459,8 +4459,13 @@ int csp_io_active(csp_rt_t* st)
 // Land `n` bytes into a buffer's shadow and mark what changed. Shared by every
 // inbound transport: the arrival mechanism differs, what happens to the bytes
 // afterwards does not.
-NOINLINE static void buf_deliver(csp_rt_t* st, index_t b, const uint8_t* data,
-				 uint16_t n)
+// EXPORTED, because a port is the other caller. csp_webots.c has sensors that
+// arrive as frames and no transport to carry them -- the Webots API is the
+// mechanism -- and without this it would have to re-implement the shadow write,
+// the dlc, the RXPEND flag and buf_mark_fields, which is four chances to get
+// the commit wrong in a file that should only know about gyros.
+NOINLINE void csp_buf_deliver(csp_rt_t* st, index_t b, const uint8_t* data,
+			      uint16_t n)
 {
     csp_buf_t* bp = &st->buf[b];
     uint16_t nb;
@@ -4586,7 +4591,7 @@ void csp_buf_input(csp_rt_t* st)
 	    // on it keeps the previous reading instead of acting on a
 	    // half-written one.
 	    if ((r > 0) && (csp_buf_get_dir(bp) & DIR_IN))
-		buf_deliver(st, b, buf_heap_dout_ptr(st, bp), n);
+		csp_buf_deliver(st, b, buf_heap_dout_ptr(st, bp), n);
 	}
 	else if ((csp_buf_get_transport(bp) == TR_UDP) && (csp_buf_get_dir(bp) & DIR_IN)) {
 	    index_t p, first = b;
@@ -4680,7 +4685,7 @@ void csp_buf_input(csp_rt_t* st)
 		    if ((csp_buf_get_transport(op) == TR_UDP) &&
 			(csp_buf_get_dir(op) & DIR_IN) &&
 			(csp_buf_get_port(op) == csp_buf_get_port(bp)))
-			buf_deliver(st, p, buf_heap_dout_ptr(st,bp), last);
+			csp_buf_deliver(st, p, buf_heap_dout_ptr(st,bp), last);
 		}
 	    }
 	}

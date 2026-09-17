@@ -60,7 +60,7 @@ OBJS = $(addprefix $(OBJDIR)/, \
 	csp_linux.o csp_rt.o csp_crc.o csp_fixpoint.o csp_words.o csp_mcsp.o csp_line.o csp_repl.o csp_compile.o csp_tok.o \
 	csp_dump.o csp_eeprom.o csp_parse.o csp_expr.o csp_print.o \
 	csp_strings.o csp_transport.o csp_console.o csp_states.o \
-	csp_flash.o csp_devices.o csp_flash_host.o rom_host.o)
+	csp_flash.o csp_devices.o csp_flash_host.o csp_socketcan.o rom_host.o)
 
 LIBS =
 
@@ -156,7 +156,7 @@ CORE_SRC = port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_re
 	   src/csp_transport.c src/csp_console.c src/csp_states.c \
 	   src/csp_parse.c src/csp_expr.c src/csp_print.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c \
 	   gen/csp_strings.c src/csp_flash.c \
-	   port/csp_devices.c port/csp_flash_host.c
+	   port/csp_devices.c port/csp_flash_host.c port/csp_socketcan.c
 EXEC_SRC = $(CORE_SRC) gen/rom.c
 
 # THE BRIDGE, checked on every build rather than once. csp-bc is this same
@@ -613,6 +613,95 @@ test_repl: csp
 test_slow: csp
 	@bash tests/slow.sh
 
+# THE SIMULATED BOARD. Not a cross-compile: this is the host toolchain with
+# port/csp_webots.c in place of port/csp_linux.c, linked against Webots'
+# controller library, and it builds into the controller directory Webots looks
+# for a binary in (which must be named after the directory -- that is Webots'
+# rule, not ours).
+#
+#   make webots                          private/pilot
+#   make webots PROG='a.csp b.csp'       something else
+#   webots private/pilot/webots/worlds/pilot.wbt
+#
+# -std=gnu11 IS NOT DECORATION. Webots runs its controllers inside the snap's
+# own runtime, which carries an OLDER glibc than the machine builds against --
+# and a default-std gcc maps atol/strtol to __isoc23_strtol, a GLIBC_2.38
+# symbol. The controller then dies at load with
+#
+#   version `GLIBC_2.38' not found ... WARNING: 'pilot' controller exited
+#
+# which says nothing about the one call that caused it. gnu11 keeps the old
+# names, and is what Makefile.board already passes for its own reasons.
+#
+# WEBOTS_HOME is the snap by default; point it elsewhere for a tarball install.
+# The build is skipped with a word rather than an error when it is not there:
+# nothing else in the tree needs Webots, so a machine without it is not broken.
+WEBOTS_HOME ?= /snap/webots/current/usr/share/webots
+WEBOTS_PROG ?= private/pilot/pins/imu.csp private/pilot/pins/flow.csp \
+	       private/pilot/pins/power.csp private/pilot/pins/motors.csp \
+	       private/pilot/pins/link.csp private/pilot/lib/pid.csp \
+	       private/pilot/main.csp
+WEBOTS_DIR  := private/pilot/webots/controllers/pilot
+# csp_linux.c is NOT here and csp_webots.c is: they define the same symbols --
+# the board hooks, the sweeps, main -- and a link with both would pick one of
+# them by accident. Same list otherwise, minus the compiler (exec-only).
+# THE COMPILER IS IN. Unlike a board, this node has a host's memory -- so it
+# links the parser, the REPL and the dump, and the terminal on port 2323 is a
+# real prompt: /state on a flying drone, a rule added mid-air. That is the whole
+# reason to simulate rather than to replay a log.
+WEBOTS_SRC  := port/csp_webots.c src/csp_rt.c src/csp_crc.c src/csp_states.c \
+	       src/csp_print.c src/csp_fixpoint.c src/csp_words.c \
+	       src/csp_mcsp.c src/csp_transport.c src/csp_flash.c \
+	       src/csp_console.c src/csp_line.c src/csp_eeprom.c \
+	       src/csp_repl.c src/csp_compile.c src/csp_tok.c src/csp_parse.c \
+	       src/csp_expr.c port/csp_dump.c \
+	       gen/csp_strings.c port/csp_devices.c port/csp_socketcan.c
+
+webots: csp
+	@test -d "$(WEBOTS_HOME)" || { \
+	    echo "webots: no Webots at $(WEBOTS_HOME) -- set WEBOTS_HOME"; exit 0; }
+	@mkdir -p $(WEBOTS_DIR)
+	@./csp -n -C -O $(WEBOTS_DIR)/rom.c $(if $(PROG),$(PROG),$(WEBOTS_PROG)) || exit 1
+	@$(CC) $(INCS) -I$(WEBOTS_DIR) -I$(WEBOTS_HOME)/include/controller/c \
+	   -std=gnu11 -O1 -w -DCSP_ARENA_MALLOC -DCSP_VERSION='"webots"' $(CFLAGS_EXTRA) \
+	   $(WEBOTS_SRC) $(WEBOTS_DIR)/rom.c \
+	   -L$(WEBOTS_HOME)/lib/controller -lController -lm \
+	   -o $(WEBOTS_DIR)/pilot
+	@sed -n 's|^//   size: *|  rom: |p' $(WEBOTS_DIR)/rom.c
+	@echo "  $(WEBOTS_DIR)/pilot"
+	@echo "  run: webots private/pilot/webots/worlds/pilot.wbt"
+
+# THE WEBOTS PORT, WITHOUT WEBOTS. tests/webots_stub.c answers the controller
+# API, so the port's whole boot -- csp_rt_init, csp_load_rom, csp_rebuild,
+# csp_setup -- runs here and says what went wrong in a shell rather than in a
+# simulator log. It is how csp_system_ram_avail() returning 0 was found, after
+# the log said only "controller exited with status: 1".
+#
+# It does NOT fly: the gyro reads zero and the drone does not leave the ground.
+# What it proves is that the program loads, the sensor buffers are found by
+# name, and the loop turns.
+webots_check: csp
+	@mkdir -p tmp/webots/webots
+	@for h in robot motor gyro accelerometer distance_sensor gps keyboard device; do \
+	    echo "/* generated by make webots_check; the real ones are Webots' */" \
+	      > tmp/webots/webots/$$h.h; \
+	 done
+	@sed -n '/^typedef int WbDeviceTag/,/^const double\* wb_gps_get_values/p' \
+	    tests/webots_stub.c | sed 's/^\(.*\)$$/\1/' >/dev/null
+	@printf 'typedef int WbDeviceTag;\nvoid wb_robot_init(void);\nvoid wb_robot_cleanup(void);\ndouble wb_robot_get_basic_time_step(void);\ndouble wb_robot_get_time(void);\nint wb_robot_step(int);\nWbDeviceTag wb_robot_get_device(const char*);\n' >> tmp/webots/webots/robot.h
+	@printf 'void wb_motor_set_position(WbDeviceTag, double);\nvoid wb_motor_set_velocity(WbDeviceTag, double);\n' >> tmp/webots/webots/motor.h
+	@printf 'void wb_gyro_enable(WbDeviceTag, int);\nconst double* wb_gyro_get_values(WbDeviceTag);\n' >> tmp/webots/webots/gyro.h
+	@printf 'void wb_accelerometer_enable(WbDeviceTag, int);\nconst double* wb_accelerometer_get_values(WbDeviceTag);\n' >> tmp/webots/webots/accelerometer.h
+	@printf 'void wb_distance_sensor_enable(WbDeviceTag, int);\ndouble wb_distance_sensor_get_value(WbDeviceTag);\n' >> tmp/webots/webots/distance_sensor.h
+	@printf 'void wb_gps_enable(WbDeviceTag, int);\nconst double* wb_gps_get_values(WbDeviceTag);\n' >> tmp/webots/webots/gps.h
+	@printf 'void wb_keyboard_enable(int);\nint wb_keyboard_get_key(void);\n' >> tmp/webots/webots/keyboard.h
+	@printf 'const char* wb_device_get_name(WbDeviceTag);\nint wb_robot_get_number_of_devices(void);\nWbDeviceTag wb_robot_get_device_by_index(int);\n' >> tmp/webots/webots/device.h
+	@./csp -n -C -O tmp/webots/rom.c $(if $(PROG),$(PROG),$(WEBOTS_PROG)) || exit 1
+	@$(CC) $(INCS) -Itmp/webots -O1 -w -DCSP_ARENA_MALLOC \
+	   -DCSP_VERSION='"webots"' $(CFLAGS_EXTRA) $(WEBOTS_SRC) tests/webots_stub.c \
+	   tmp/webots/rom.c -lm -o tmp/webots/pilot
+	@tmp/webots/pilot
+
 # Every BARE-METAL board -- the other half of boards_all, and the half that had
 # no sweep at all until an STM32 port arrived and a shared Makefile variable
 # moved. That edit expanded to nothing in the LPC branches, the link lost
@@ -689,7 +778,7 @@ $(OBJDIR)/%.o: %.c | gen/csp_strings.h
 
 -include $(OBJS:.o=.d)
 
-.PHONY: layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
+.PHONY: webots webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

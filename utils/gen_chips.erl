@@ -1492,7 +1492,32 @@ pin_macro(Muxed, Pins) ->
 check_board(Db, {Name, P}) ->
     case kv(P, toolchain, bare) of
 	arduino_cli -> check_arduino(Db, Name, P);
+	%% A SIMULATED BOARD HAS NO CHIP, and that is not an omission -- there
+	%% is no part, no flash budget and no mux. boards/webots is the host
+	%% toolchain with port/csp_webots.c in place of port/csp_linux.c, and
+	%% what it describes is which DEVICES the model carries. Checking it
+	%% against a chip database would mean inventing a part to name.
+	sim -> check_sim(Name, P);
 	_ -> check_bare(Db, {Name, P})
+    end.
+
+%% What there IS to get wrong on a simulated board: the devices. Each is
+%% {device, Name, Kind, "webots name"}, and the string is what
+%% wb_robot_get_device is handed -- so a typo there is a device that resolves to
+%% nothing and a sensor that reads zero for the life of the run.
+check_sim(Name, P) ->
+    Ds = [D || D = {device, _, _, _} <- P],
+    Bad = [D || D = {device, _, _, S} <- Ds, not is_list(S)],
+    case {Ds, Bad} of
+	{[], _} ->
+	    io:format("~s: ERROR {toolchain, sim} but no {device, ...} lines~n",
+		      [Name]), 1;
+	{_, []} -> 0;
+	{_, _} ->
+	    [io:format("~s: ERROR {device, ~p, ~p, ~p} -- the last field is the "
+		       "name wb_robot_get_device takes, and must be a string~n",
+		       [Name, N, K, S]) || {device, N, K, S} <- Bad],
+	    length(Bad)
     end.
 
 %% An Arduino board mixes no pins: arduino-cli owns the core, the mux and the

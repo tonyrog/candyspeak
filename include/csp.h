@@ -3441,6 +3441,25 @@ extern void csp_con_feed(csp_rt_t* st, const uint8_t* data, uint16_t len);
 // (DMA lands there); it stays put for the life of the program. A port with no
 // DMA is free to do the transfer inside _start and report 1 immediately from
 // _done -- the sequencing is the same, it just costs the loop time.
+// SocketCAN, shared by every port that runs on Linux (port/csp_socketcan.c).
+// The port supplies csp_can_recv/send; these are what it reaches a REAL bus
+// with, and what it falls back FROM -- csp_linux.c tries its -F stimulus queue
+// first, csp_webots.c the keyboard. Opening with a NULL or empty name is not an
+// error: it means no bus was asked for, and a program declaring CAN then parses
+// and runs dry.
+extern int csp_socketcan_open(const char* iface);
+extern int csp_socketcan_fd(void);
+extern int csp_socketcan_recv(uint32_t* id, uint8_t* data, uint8_t* len);
+extern int csp_socketcan_send(uint32_t id, const uint8_t* data, uint8_t len);
+
+// RAW BYTES INTO AN INPUT BUFFER, from whatever brought them. The bytes go to
+// the SHADOW half so the commit can tell what changed, `.rx` is raised by that
+// commit, and the fields are marked -- which is the whole arrival contract, in
+// one call, for a port that has a device but no transport. port/csp_webots.c is
+// the first caller outside the runtime.
+extern void csp_buf_deliver(csp_rt_t* st, index_t b, const uint8_t* data,
+			    uint16_t n);
+
 extern int csp_i2c_start(csp_rt_t* st, uint32_t xref, uint8_t* data,
 			 uint16_t len, int is_read);
 extern int csp_i2c_done(csp_rt_t* st, uint32_t xref, uint16_t* len);
