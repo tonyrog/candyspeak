@@ -43,21 +43,53 @@ inout      	   : {token,{'T_INOUT',TokenLine}}.
 little	           : {token,{'T_LITTLE',TokenLine}}.
 big		   : {token,{'T_BIG',TokenLine}}.
 native     	   : {token,{'T_NATIVE',TokenLine}}.
+pwm                : {token,{'T_PWM',TokenLine}}.
+bind               : {token,{'T_BIND',TokenLine}}.
+pullup             : {token,{'T_PULLUP',TokenLine}}.
+pulldown           : {token,{'T_PULLDOWN',TokenLine}}.
+low                : {token,{'T_LOW',TokenLine}}.
+high               : {token,{'T_HIGH',TokenLine}}.
+low                : {token,{'T_LOW',TokenLine}}.
+both               : {token,{'T_BOTH',TokenLine}}.
+soft               : {token,{'T_SOFT',TokenLine}}.
+ready              : {token,{'T_READY',TokenLine}}.
+rising             : {token,{'T_RISING',TokenLine}}.
+falling            : {token,{'T_FALLING',TokenLine}}.
 can		   : {token,{'T_CAN',TokenLine}}.
 i2c		   : {token,{'T_I2C',TokenLine}}.
 spi		   : {token,{'T_SPI',TokenLine}}.
 udp		   : {token,{'T_UDP',TokenLine}}.
 tcp		   : {token,{'T_TCP',TokenLine}}.
 uart		   : {token,{'T_UART',TokenLine}}.
+console		   : {token,{'T_CONSOLE',TokenLine}}.
+repl		   : {token,{'T_REPL',TokenLine}}.
+%% parts
+val                : {token,{'T_VAL', TokenLine}}.
+pin                : {token,{'T_PIN', TokenLine}}.
+port               : {token,{'T_PORT', TokenLine}}.
+dir                : {token,{'T_DIR', TokenLine}}.
+endian             : {token,{'T_ENDIAN', TokenLine}}.
+period             : {token,{'T_PERIOD', TokenLine}}.
+fired              : {token,{'T_FIRED', TokenLine}}.
+id                 : {token,{'T_ID', TokenLine}}.
+rx                 : {token,{'T_RX', TokenLine}}.
+tx                 : {token,{'T_TX', TokenLine}}.
+len                : {token,{'T_LEN', TokenLine}}.
+
 {L}({L}|{D})*	   : {token,{'WORD',TokenLine,TokenChars}}.
 0[xX]{H}+          : {token,{'INT',TokenLine,TokenChars}}.
 {D}+               : {token,{'INT',TokenLine,TokenChars}}.
 {D}+\.{D}+\.{D}+\.{D}+ : {token,{'INT',TokenLine,TokenChars}}.
 {D}+\.{D}+          : {token,{'FLT',TokenLine,TokenChars}}.
+"(\^.|\.|[^\"])*" : S = lists:sublist(TokenChars,2,TokenLen-2),
+                    {token,{'STR',TokenLine,S}}.
 ==                  : {token,{'EQEQ',TokenLine}}.
 !=                  : {token,{'NEQ',TokenLine}}.
+<-                  : {token,{'RIMP',TokenLine}}.
 <=                  : {token,{'LTEQ',TokenLine}}.
 >=                  : {token,{'GTEQ',TokenLine}}.
+<<=		    : {token,{'LTLTEQ',TokenLine}}.
+>>=		    : {token,{'GTGTEQ',TokenLine}}.
 <<		    : {token,{'LTLT',TokenLine}}.
 >>		    : {token,{'GTGT',TokenLine}}.
 =		    : {token,{'EQ',TokenLine}}.
@@ -68,6 +100,7 @@ uart		   : {token,{'T_UART',TokenLine}}.
 -		    : {token,{'MINUS',TokenLine}}.
 \+		    : {token,{'PLUS',TokenLine}}.
 //.*\n              : {token,{'NEWLINE',TokenLine}}.
+//.*                : skip_token.
 /		    : {token,{'SLASH',TokenLine}}.
 \%		    : {token,{'PERCENT',TokenLine}}.
 \*		    : {token,{'ASTERISK',TokenLine}}.

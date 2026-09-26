@@ -131,22 +131,22 @@
 
 %% #digital: PIN_BITS 7, PORT_BITS 4.
 {record, di, decl_common, 8,
- [{soft,     1},
+ [{soft,     1},     %% sampling is acceptable -- see decl_opts_t.soft    
   {pin,      7},
   {port,     4},
-  {irq,      3},
+  {irq,      3},     %% trigger_t; IRQ_NONE = not an interrupt source    
   {pullup,   1},
   {pulldown, 1}
  ]}.
 
 %% #analog: the same pin/port, then pwm and the sample options.
 {record, an, decl_common, 8,
- [{soft,   1},
+ [{soft,   1},      %% sampling is acceptable -- see decl_opts_t.soft    
   {pin,    7},
   {port,   4},
-  {irq,    3},
-  {pwm,    1},
-  {endian, 2}
+  {irq,    3},      %% trigger_t; IRQ_NONE = not an interrupt source    
+  {pwm,    1},      %% pwm output
+  {endian, 2}       %% |little|big
  ]}.
 
 %% #field: a view into a #buffer.  bit is a BIT position, len a width-1.
@@ -176,11 +176,12 @@
 %% #timer.  period is 28 bits -- 74 hours in ms -- so it is the other payload
 %% too wide for a 16-bit cell.
 {record, tm, decl_common, 8,
- [{period,  28},
-  {pad,      1},
-  {fired,    1},
-  {running,  1},
-  {init,     1}]}.
+ [{period,  28},        %% timeout value ms (74h max)
+  {pad,      1},        %% reserved bit
+  {fired,    1},        %% timeout occurred this cycle (edge-triggered)
+  {running,  1},        %% timer is runnig (tx is valid time)
+  {init,     1}         %% init ?
+ ]}.
 
 %% #states: six state names in one declaration, as ONE array field.
 %%
@@ -363,10 +364,12 @@
 {family, view,  'csp_view_t',  "csp_view_", "w"}.
 %% csp_view_t
 {record, view, 6,
- [{kind,      2},
+ [{kind,      2},  %% VIEW_SLOT, a value_t a heap offset pos,
+                   %% VIEW_HEAP, bit-field at bit pos of buffer buf
+                   %% VIEW_OWN,  bit-field of len+1 bits at heap offset pos
   {vt,        4},  %% type bits
-  {endian,    2},
-  {flags,     2},
+  {endian,    2},  %% NATIVE/LITTLE/BIG
+  {flags,     2},  %% VIEW_F_SIMPLE/VIEW_F_GLOBAL/VIEW_F_LOCAL
   {len  ,     6},
   {pos,      16},
   {buf,      16}

@@ -5,19 +5,19 @@
   #timer T1 1000
 
   #in INIT
-    State = 2
+    State = on
     LED = 1
     T1 = 1
   #end
 
   #in off
-    State = 2
+    State = on
     LED = 1
     T1 = 1
   #end
 
   #in on
-    State = 3
+    State = off
     LED = 0
     T1 = 1
   #end

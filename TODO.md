@@ -1547,3 +1547,12 @@ Inte buggar -- saker som byggts men inte setts fungera på järn.
   FAST layout och konsolen ar en STROM. Antagandet "fast layout tills vidare"
   bar hela vagen for tangenttryckningar, och det ar drain-takten -- inte
   formatet -- som avgor om det bar for utskrifter ocksa.
+
+
+## TRANSLATE TO C
+
+Write a simple candyspeak to C translator, this wil of course remove
+most/all of the candyspeak features, but could be use in case when
+the device is really tiny and you just want the job done.
+
+

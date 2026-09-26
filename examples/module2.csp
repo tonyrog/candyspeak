@@ -11,7 +11,7 @@ c = a + b ? ena
 #variable a:16 in integer
 #variable b:16 in integer
 #variable ena:1 in unsigned = 1
-#variable c out:16 integer
+#variable c:16 out integer
 c = a - b ? ena
 #end
 
