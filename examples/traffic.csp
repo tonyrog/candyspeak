@@ -8,9 +8,12 @@
 #digital Red    out 1
 #digital Yellow out 5
 #digital Green  out 9
-#timer   Phase  500
+#digital Please pulldown in 2  // button to allow longer red light
+#timer   Phase  2000
 #states  green red redyellow yellow
-#param PhasePeriod = 600
+#variable LongRed = 0
+#param PhasePeriod = 2000
+#param PleasePeriod = 4000
 
 #in INIT
     State = green
@@ -20,10 +23,10 @@
 
 #in red
     Red=1, Yellow=0, Green=0
-    State = redyellow ? timeout(Phase)
+    State = redyellow, Phase.period = PhasePeriod ? timeout(Phase)
 #end
 #in redyellow
-    Red=1, Yellow=1, Green=0
+    Red=1, Yellow=1, Green=0, LongRed = 0
     State = green ? timeout(Phase)
 #end
 #in green
@@ -35,5 +38,6 @@
     State = red ? timeout(Phase)
 #end
 #in red redyellow green yellow
+    LongRed=1, Phase.period=PleasePeriod ? !LongRed && Please
     Phase = 1 ? timeout(Phase)      // restart the timer each phase
 #end

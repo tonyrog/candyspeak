@@ -137,6 +137,7 @@ static int cmd_save(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_load(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_images(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_pause(csp_rt_t* st, int argc, char* argv[]);
+static int cmd_step(csp_rt_t* st, int argc, char* argv[]);
 #if defined(CSP_HAVE_FLASH)
 static int cmd_upgrade(csp_rt_t* st, int argc, char* argv[]);
 #endif
@@ -156,6 +157,7 @@ static const csp_cmd_t builtin_cmds[] = {
     { ros_cmd_memory, ros_h_memory,  cmd_memory },
     { ros_cmd_images, ros_h_images,  cmd_images },
     { ros_cmd_pause,  ros_h_pause,   cmd_pause },
+    { ros_cmd_step,   ros_h_step,    cmd_step },
 #if defined(CSP_HAVE_FLASH)
     { ros_cmd_upgrade, ros_h_upgrade, cmd_upgrade },
 #endif
@@ -2240,7 +2242,39 @@ static int cmd_pause(csp_rt_t* st, int argc, char* argv[])
     (void)argc; (void)argv;
     st->paused = 1;
     st->live = 0;
+    st->step_left = 0;
     csp_print_line("Paused (execution stopped; edit/inspect, then /resume)");
+    return CSP_CMD_OK;
+}
+
+// /step [N] -- run N cycles (default 1) and pause again.
+//
+// The point is not convenience, it is that SEVERAL VALUES CAN BELONG TO ONE
+// CYCLE. A `> X = 1' at the prompt runs a cycle by itself, which is what a
+// person poking at one thing wants; a tool with three inputs for the same
+// instant would get three cycles, and then a trace replayed through the program
+// no longer matches the model it came from. /pause, set them all, /step is the
+// sequence that behaves the way hardware does.
+//
+// Implies /pause: stepping from a running program is meaningless, and asking
+// for it is a clear enough statement of intent.
+static int cmd_step(csp_rt_t* st, int argc, char* argv[])
+{
+    long n = 1;
+
+    // argv[0] is the first ARGUMENT, and a bad one is a typo rather than a
+    // request -- same reading as /undo.
+    if (argc >= 1) {
+	const char* p = argv[0];
+	n = 0;
+	while ((*p >= '0') && (*p <= '9'))
+	    n = n * 10 + (*p++ - '0');
+	if ((*p != '\0') || (n < 1) || (n > 0xffff))
+	    return CSP_CMD_ERROR;
+    }
+    st->paused = 1;
+    st->live = 0;
+    st->step_left = (uint16_t)n;
     return CSP_CMD_OK;
 }
 
@@ -2257,6 +2291,7 @@ static int cmd_live(csp_rt_t* st, int argc, char* argv[])
     }
     st->live = 1;
     st->paused = 0;
+    st->step_left = 0;          // a count left over from /step is not owed now
     csp_print_line("Live (rules frozen, I/O running -- poke away; /resume to run)");
     return CSP_CMD_OK;
 }

@@ -1,0 +1,145 @@
+// Generated from home.csp by candyspeak_varp.
+// DO NOT EDIT -- regenerate.
+//
+//     varp bmc --induction <this file>     // prove it
+//     varp bmc <this file>                 // or get a trace
+//
+// FIRST check the model has transitions at all. An inconsistent `next'
+// has none, so everything is unreachable and a proof says nothing:
+//
+//     // drop the `invariant' line, append this, run `varp sat bj'
+//     home_init(0) and home_next(1)
+//
+// must answer `% 1'.
+//
+// States: INIT=0, NORMAL=1, FAILSAFE=2, Home=3, Night=4, Away=5
+
+define INIT 0;
+define NORMAL 1;
+define FAILSAFE 2;
+define Home 3;
+define Night 4;
+define Away 5;
+define DarkBelow 300;
+define FanRun 5;
+define HallHold 3;
+define Hysteresis 10;
+define SetPoint 210;
+
+system home {
+    state St:3;
+    state HallLight:1, KitchenLight:1, LivingLight:1, BathLight:1, OutdoorLamp:1, BathFan__Blue:1, Heater__Orange:1, Siren__Red:1, CoffeeMaker:1, Armed:1, WinWas:1, ArmWas:1;
+    input HallMotion:1, BathMotion:1, FrontDoor:1, LivingWindow:1, NightButton:1, ArmButton:1, Daylight:10, IndoorTemp:10, BedLight:1;
+    // one per guard that could not be translated: free, so
+    // the rule MAY fire. See the note at the top.
+    input u_free0_L80:1, u_free1_L86:1, u_free2_L87:1;
+
+    init  St == INIT and HallLight == 0 and KitchenLight == 0 and LivingLight == 0 and BathLight == 0 and OutdoorLamp == 0 and BathFan__Blue == 0 and Heater__Orange == 0 and Siren__Red == 0 and CoffeeMaker == 0 and Armed == 0 and WinWas == 0 and ArmWas == 0;
+
+    // ---- State --------------------------------------------------
+    next  (St == FAILSAFE) implies (next(St) == FAILSAFE);
+    next  ((St != FAILSAFE) and ((St == Home or St == Night or St == Away) and (((Siren__Red == 1) and (not (Armed == 1))) and (not (ArmWas == 1))))) implies (next(St) == FAILSAFE);
+    next  ((St != FAILSAFE) and not ((St == Home or St == Night or St == Away) and (((Siren__Red == 1) and (not (Armed == 1))) and (not (ArmWas == 1)))) and ((St == Home or St == Night or St == Away) and (((Heater__Orange == 1) and (LivingWindow == 1)) and (WinWas == 1)))) implies (next(St) == FAILSAFE);
+    next  ((St != FAILSAFE) and not ((St == Home or St == Night or St == Away) and (((Siren__Red == 1) and (not (Armed == 1))) and (not (ArmWas == 1)))) and not ((St == Home or St == Night or St == Away) and (((Heater__Orange == 1) and (LivingWindow == 1)) and (WinWas == 1))) and ((St == Home) and (NightButton == 1))) implies (next(St) == Night);
+    next  ((St != FAILSAFE) and not ((St == Home or St == Night or St == Away) and (((Siren__Red == 1) and (not (Armed == 1))) and (not (ArmWas == 1)))) and not ((St == Home or St == Night or St == Away) and (((Heater__Orange == 1) and (LivingWindow == 1)) and (WinWas == 1))) and not ((St == Home) and (NightButton == 1)) and ((St == INIT))) implies (next(St) == Home);
+    next  ((St != FAILSAFE) and not ((St == Home or St == Night or St == Away) and (((Siren__Red == 1) and (not (Armed == 1))) and (not (ArmWas == 1)))) and not ((St == Home or St == Night or St == Away) and (((Heater__Orange == 1) and (LivingWindow == 1)) and (WinWas == 1))) and not ((St == Home) and (NightButton == 1)) and not ((St == INIT)) and (St == INIT)) implies (next(St) == NORMAL);
+    next  ((St != FAILSAFE) and not ((St == Home or St == Night or St == Away) and (((Siren__Red == 1) and (not (Armed == 1))) and (not (ArmWas == 1)))) and not ((St == Home or St == Night or St == Away) and (((Heater__Orange == 1) and (LivingWindow == 1)) and (WinWas == 1))) and not ((St == Home) and (NightButton == 1)) and not ((St == INIT)) and not (St == INIT)) implies (next(St) == St);
+
+    // ---- HallLight:1 -------------------------------------
+    //   78: HallLight = 1 ? HallMotion == 1
+    //   80: HallLight = 0 ? <untranslatable, free as u_free0_L80>
+    //   186: HallLight = 1
+    next  (((St == FAILSAFE))) implies (next(HallLight) == 1);
+    next  (not ((St == FAILSAFE)) and ((St == Home or St == Night or St == Away) and (u_free0_L80 == 1))) implies (next(HallLight) == 0);
+    next  (not ((St == FAILSAFE)) and not ((St == Home or St == Night or St == Away) and (u_free0_L80 == 1)) and ((St == Home or St == Night or St == Away) and (HallMotion == 1))) implies (next(HallLight) == 1);
+    next  (not ((St == FAILSAFE)) and not ((St == Home or St == Night or St == Away) and (u_free0_L80 == 1)) and not ((St == Home or St == Night or St == Away) and (HallMotion == 1))) implies (next(HallLight) == HallLight);
+
+    // ---- KitchenLight:1 ----------------------------------
+    //   113: KitchenLight = 0
+    next  (((St == Night))) implies (next(KitchenLight) == 0);
+    next  (not ((St == Night))) implies (next(KitchenLight) == KitchenLight);
+
+    // ---- LivingLight:1 -----------------------------------
+    //   114: LivingLight = 0
+    next  (((St == Night))) implies (next(LivingLight) == 0);
+    next  (not ((St == Night))) implies (next(LivingLight) == LivingLight);
+
+    // ---- BathLight:1 -------------------------------------
+    //   83: BathLight = 1 ? BathMotion == 1
+    //   86: BathLight = 0 ? <untranslatable, free as u_free1_L86>
+    next  (((St == Home or St == Night or St == Away) and (u_free1_L86 == 1))) implies (next(BathLight) == 0);
+    next  (not ((St == Home or St == Night or St == Away) and (u_free1_L86 == 1)) and ((St == Home or St == Night or St == Away) and (BathMotion == 1))) implies (next(BathLight) == 1);
+    next  (not ((St == Home or St == Night or St == Away) and (u_free1_L86 == 1)) and not ((St == Home or St == Night or St == Away) and (BathMotion == 1))) implies (next(BathLight) == BathLight);
+
+    // ---- OutdoorLamp:1 -----------------------------------
+    //   90: OutdoorLamp = 1 ? (Daylight) < (DarkBelow)
+    //   91: OutdoorLamp = 0 ? (Daylight) > ((DarkBelow) + (50))
+    //   187: OutdoorLamp = 1
+    next  (((St == FAILSAFE))) implies (next(OutdoorLamp) == 1);
+    next  (not ((St == FAILSAFE)) and ((St == Home or St == Night or St == Away) and ((Daylight) > ((DarkBelow) + (50))))) implies (next(OutdoorLamp) == 0);
+    next  (not ((St == FAILSAFE)) and not ((St == Home or St == Night or St == Away) and ((Daylight) > ((DarkBelow) + (50)))) and ((St == Home or St == Night or St == Away) and ((Daylight) < (DarkBelow)))) implies (next(OutdoorLamp) == 1);
+    next  (not ((St == FAILSAFE)) and not ((St == Home or St == Night or St == Away) and ((Daylight) > ((DarkBelow) + (50)))) and not ((St == Home or St == Night or St == Away) and ((Daylight) < (DarkBelow)))) implies (next(OutdoorLamp) == OutdoorLamp);
+
+    // ---- BathFan__Blue:1 ---------------------------------
+    //   84: BathFan__Blue = 1 ? BathMotion == 1
+    //   87: BathFan__Blue = 0 ? <untranslatable, free as u_free2_L87>
+    next  (((St == Home or St == Night or St == Away) and (u_free2_L87 == 1))) implies (next(BathFan__Blue) == 0);
+    next  (not ((St == Home or St == Night or St == Away) and (u_free2_L87 == 1)) and ((St == Home or St == Night or St == Away) and (BathMotion == 1))) implies (next(BathFan__Blue) == 1);
+    next  (not ((St == Home or St == Night or St == Away) and (u_free2_L87 == 1)) and not ((St == Home or St == Night or St == Away) and (BathMotion == 1))) implies (next(BathFan__Blue) == BathFan__Blue);
+
+    // ---- Heater__Orange:1 --------------------------------
+    //   94: Heater__Orange = 1 ? (IndoorTemp) < ((SetPoint) - (Hysteresis))
+    //   95: Heater__Orange = 0 ? (IndoorTemp) > ((SetPoint) + (Hysteresis))
+    //   143: Heater__Orange = 0 ? LivingWindow == 1
+    //   183: Heater__Orange = 0
+    next  (((St == FAILSAFE))) implies (next(Heater__Orange) == 0);
+    next  (not ((St == FAILSAFE)) and ((St == Home or St == Night or St == Away) and (LivingWindow == 1))) implies (next(Heater__Orange) == 0);
+    next  (not ((St == FAILSAFE)) and not ((St == Home or St == Night or St == Away) and (LivingWindow == 1)) and ((St == Home or St == Night or St == Away) and ((IndoorTemp) > ((SetPoint) + (Hysteresis))))) implies (next(Heater__Orange) == 0);
+    next  (not ((St == FAILSAFE)) and not ((St == Home or St == Night or St == Away) and (LivingWindow == 1)) and not ((St == Home or St == Night or St == Away) and ((IndoorTemp) > ((SetPoint) + (Hysteresis)))) and ((St == Home or St == Night or St == Away) and ((IndoorTemp) < ((SetPoint) - (Hysteresis))))) implies (next(Heater__Orange) == 1);
+    next  (not ((St == FAILSAFE)) and not ((St == Home or St == Night or St == Away) and (LivingWindow == 1)) and not ((St == Home or St == Night or St == Away) and ((IndoorTemp) > ((SetPoint) + (Hysteresis)))) and not ((St == Home or St == Night or St == Away) and ((IndoorTemp) < ((SetPoint) - (Hysteresis))))) implies (next(Heater__Orange) == Heater__Orange);
+
+    // ---- Siren__Red:1 ------------------------------------
+    //   146: Siren__Red = 1 ? (Armed == 1) and (FrontDoor == 1)
+    //   147: Siren__Red = 0 ? not (Armed == 1)
+    //   184: Siren__Red = 0
+    next  (((St == FAILSAFE))) implies (next(Siren__Red) == 0);
+    next  (not ((St == FAILSAFE)) and ((St == Home or St == Night or St == Away) and (not (Armed == 1)))) implies (next(Siren__Red) == 0);
+    next  (not ((St == FAILSAFE)) and not ((St == Home or St == Night or St == Away) and (not (Armed == 1))) and ((St == Home or St == Night or St == Away) and ((Armed == 1) and (FrontDoor == 1)))) implies (next(Siren__Red) == 1);
+    next  (not ((St == FAILSAFE)) and not ((St == Home or St == Night or St == Away) and (not (Armed == 1))) and not ((St == Home or St == Night or St == Away) and ((Armed == 1) and (FrontDoor == 1)))) implies (next(Siren__Red) == Siren__Red);
+
+    // ---- CoffeeMaker:1 -----------------------------------
+    //   115: CoffeeMaker = 0
+    //   121: CoffeeMaker = 1 ? (HallMotion == 1) and ((Daylight) > (DarkBelow))
+    //   185: CoffeeMaker = 0
+    next  (((St == FAILSAFE))) implies (next(CoffeeMaker) == 0);
+    next  (not ((St == FAILSAFE)) and ((St == Home) and ((HallMotion == 1) and ((Daylight) > (DarkBelow))))) implies (next(CoffeeMaker) == 1);
+    next  (not ((St == FAILSAFE)) and not ((St == Home) and ((HallMotion == 1) and ((Daylight) > (DarkBelow)))) and ((St == Night))) implies (next(CoffeeMaker) == 0);
+    next  (not ((St == FAILSAFE)) and not ((St == Home) and ((HallMotion == 1) and ((Daylight) > (DarkBelow)))) and not ((St == Night))) implies (next(CoffeeMaker) == CoffeeMaker);
+
+    // ---- Armed:1 -----------------------------------------
+    //   98: Armed = 1 ? (ArmButton == 1) and (not (Armed == 1))
+    //   99: Armed = 0 ? (ArmButton == 1) and (Armed == 1)
+    next  (((St == Home or St == Night or St == Away) and ((ArmButton == 1) and (Armed == 1)))) implies (next(Armed) == 0);
+    next  (not ((St == Home or St == Night or St == Away) and ((ArmButton == 1) and (Armed == 1))) and ((St == Home or St == Night or St == Away) and ((ArmButton == 1) and (not (Armed == 1))))) implies (next(Armed) == 1);
+    next  (not ((St == Home or St == Night or St == Away) and ((ArmButton == 1) and (Armed == 1))) and not ((St == Home or St == Night or St == Away) and ((ArmButton == 1) and (not (Armed == 1))))) implies (next(Armed) == Armed);
+
+    // ---- WinWas:1 ----------------------------------------
+    //   175: WinWas = LivingWindow
+    next  (((St == Home or St == Night or St == Away))) implies (next(WinWas) == LivingWindow);
+    next  (not ((St == Home or St == Night or St == Away))) implies (next(WinWas) == WinWas);
+
+    // ---- ArmWas:1 ----------------------------------------
+    //   176: ArmWas = Armed
+    next  (((St == Home or St == Night or St == Away))) implies (next(ArmWas) == Armed);
+    next  (not ((St == Home or St == Night or St == Away))) implies (next(ArmWas) == ArmWas);
+
+
+    // FAILSAFE is absorbing in the runtime (csp.h: no rule may leave
+    // it, only a reset), so reaching it once is reaching it for ever --
+    // this is a safety property in the strict sense.
+    invariant St != FAILSAFE;
+}
+
+// NOT TRANSLATED (2 rules), because of a timer, a part, a call or an array:
+//   line 60
+//   line 61

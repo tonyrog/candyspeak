@@ -145,6 +145,7 @@ field field
 buffer buffer
 route route
 when when
+annotate annotate
 value value
 pin pin
 port port
@@ -251,6 +252,7 @@ cmd_state state
 cmd_memory memory
 cmd_images images
 cmd_pause pause
+cmd_step step
 cmd_upgrade upgrade
 cmd_live live
 cmd_resume resume
@@ -271,6 +273,7 @@ h_memory Show code/RAM usage
 h_images List the images linked into this firmware
 h_upgrade Receive a CandySpeak image into a flash region (hex lines, . to end)
 h_pause Stop execution (inspect/edit)
+h_step Run N cycles (default 1) and pause again
 h_live Freeze rules, keep I/O (poke hardware)
 h_resume Resume execution (rebuild if edited)
 h_reset Reset to initial values

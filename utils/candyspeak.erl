@@ -12,6 +12,7 @@
 -export([tokens/1, parse/1, build/1, to_c/1]).
 
 -export([check_unit/0, check_examples/0]).
+-export([build_unit/0, build_examples/0]).
 
 start() ->
     io:format("candyspeak <file>\n", []),
@@ -36,15 +37,41 @@ files([]) ->
 check_unit() ->
     lists:foreach(
       fun(Filename) ->
-	      io:format("Check: ~p\n", [Filename]),
-	      parse(Filename)
+	      io:format("Check: ~s ", [Filename]),
+	      case parse(Filename) of
+		  {ok,_} -> io:format(" ok\n");
+		  {error,Error} ->  io:format(" error ~p\n", [Error])
+	      end
       end, filelib:wildcard("../tests/unit/*.csp")).
 
 check_examples() ->
     lists:foreach(
       fun(Filename) ->
-	      io:format("Check: ~p\n", [Filename]),
-	      parse(Filename)
+	      io:format("Check: ~s ", [Filename]),
+	      case parse(Filename) of
+		  {ok,_} -> io:format(" ok\n");
+		  {error,Error} ->  io:format(" error ~p\n", [Error])
+	      end
+      end, filelib:wildcard("../examples/*.csp")).
+
+build_unit() ->
+    lists:foreach(
+      fun(Filename) ->
+	      io:format("Build: ~s ", [Filename]),
+	      case build(Filename) of
+		  {ok,_} -> io:format(" ok\n");
+		  {error,Error} ->  io:format(" error ~p\n", [Error])
+	      end
+      end, filelib:wildcard("../tests/unit/*.csp")).
+
+build_examples() ->
+    lists:foreach(
+      fun(Filename) ->
+	      io:format("Build: ~s ", [Filename]),
+	      case build(Filename) of
+		  {ok,_} -> io:format(" ok\n");
+		  {error,Error} ->  io:format(" error ~p\n", [Error])
+	      end
       end, filelib:wildcard("../examples/*.csp")).
 
 parse(Filename) ->
@@ -144,11 +171,16 @@ build([D={field,_Ln,{'WORD',_,Name},_Res,_Options,_BufId,_Range}|Lines],
 	  [B#{ Name => D }|Bound]);
 build([D={What,_Ln,{'WORD',_,Name},_Array,_Res,_Options,_Expr}|Lines],
       Stack, [Ds|Acc], [B|Bound]) ->
-    case What of
-	variable -> build(Lines, Stack, [[D|Ds]|Acc],[B#{ Name => D }|Bound]);
-	constant -> build(Lines, Stack, [[D|Ds]|Acc],[B#{ Name => D }|Bound]);
-	digital -> build(Lines, Stack, [[D|Ds]|Acc],[B#{ Name => D }|Bound]);
-	analog -> build(Lines, Stack, [[D|Ds]|Acc],[B#{ Name => D }|Bound])
+    case add_identifier(Name, D, B) of
+	{ok, B1} ->
+	    case What of
+		variable -> build(Lines, Stack, [[D|Ds]|Acc],[B1|Bound]);
+		constant -> build(Lines, Stack, [[D|Ds]|Acc],[B1|Bound]);
+		digital -> build(Lines, Stack, [[D|Ds]|Acc],[B1|Bound]);
+		analog -> build(Lines, Stack, [[D|Ds]|Acc],[B1|Bound])
+	    end;
+	Error ->
+	    Error
     end;
 build([D={local,_Ln,{'WORD',_,Name},_Res,_Options,_Expr}|Lines],
       Stack, [Ds|Acc], [B|Bound]) ->
@@ -171,13 +203,45 @@ build([D={define,_Ln,{'WORD',_,Name},_Expr}|Lines],
     build(Lines, Stack, [[D|Ds]|Acc], 
 	  [B#{ Name => D }|Bound]);
 build([{states,_Ln,States}|Lines], Stack, Acc, [B|Bound]) ->
-    B1 = add_states(States, B),
-    build(Lines, Stack, Acc, [B1|Bound]);
+    case add_states(States, B) of
+	{ok, B1} ->
+	    build(Lines, Stack, Acc, [B1|Bound]);
+	Error ->
+	    Error
+    end;
 build([D|Lines], Stack, [Ds|Acc], Bound) ->
     build(Lines, Stack, [[D|Ds]|Acc], Bound);
 build([], [], [Ds], [B]) ->
-    Main = {{'module',0,{'WORD',0,"Main"}},B,lists:reverse(Ds)},
-    {ok, Main}.
+    Decls = lists:reverse(Ds),
+    case check_annotations(Decls, B) of
+	ok ->
+	    Main = {{'module',0,{'WORD',0,"Main"}},B,Decls},
+	    {ok, Main};
+	Error ->
+	    Error
+    end.
+
+%% An #annotate names a target, and a target that does not exist is the same
+%% kind of mistake as a rule naming one -- a tool reading the annotation would
+%% just never find it, and the typo would live forever.
+%%
+%% Checked HERE rather than during the walk so an annotation may precede its
+%% declaration: the map is complete by now.
+%%
+%% The KEYS are not checked, and must not be: the tool named in the annotation
+%% owns that space, and each tool warns about what it does not recognise.
+check_annotations([{annotate,Ln,{'WORD',_,Tool},{'WORD',_,Target},_Items}|T],
+		  Bound) ->
+    case maps:is_key(Target, Bound) orelse
+	 is_state(Target, maps:get(states, Bound, [])) orelse
+	 Target =:= "State" of
+	true  -> check_annotations(T, Bound);
+	false -> {error, {annotate_unknown_target, Tool, Target, Ln}}
+    end;
+check_annotations([_|T], Bound) ->
+    check_annotations(T, Bound);
+check_annotations([], _Bound) ->
+    ok.
 
 -define(INDENT, 2).
 %% prepend N blanks
@@ -350,20 +414,39 @@ assignments_(Indent,Bound,[Expr|List]) ->
 assignments_(_Indent,_Bound,[]) ->
     [].
 
-add_states(States, Bound) ->
-    States0 = maps:get(states, Bound),
-    States1 = add_states_(States, States0),
-    Bound#{ states => States1 }.
+add_identifier(Name, Decl, Bound) ->
+    case maps:find(Name, Bound) of
+	{ok, Decl0} ->
+	    {error, {already_defined, Name, element(2, Decl0)}};
+	error ->
+	    States = maps:get(states, Bound),
+	    case lists:keyfind(Name, 3, States) of
+		false ->
+		    {ok, Bound#{ Name => Decl }};
+		{_, Ln, _} ->
+		    {error, {already_defined, Name, Ln}}
+	    end
+    end.
 
-add_states_([S={'WORD',_,Name}|List], States) ->
-    case is_state(Name, States) of
-	false ->
-	    add_states_(List, States++[S]);
-	_ ->
-	    add_states_(List, States)
+add_states(States, Bound) ->
+    add_states_(States, Bound).
+
+add_states_([S={'WORD',_,Name}|List], Bound) ->
+    case maps:find(Name, Bound) of
+	{ok, Decl0} ->
+	    {error, {already_defined, Name, element(2, Decl0)}};
+	error ->
+	    States = maps:get(states, Bound, []),
+	    case is_state(Name, States) of
+		true ->
+		    {ok, Bound};
+		false ->
+		    Bound1 = Bound#{ states => States++[S] },
+		    add_states_(List, Bound1)
+	    end
     end;
-add_states_([], States) ->
-    States.
+add_states_([], Bound) ->
+    {ok, Bound}.
 
 is_state(Name, States) ->
     case lists:keyfind(Name, 3, States) of

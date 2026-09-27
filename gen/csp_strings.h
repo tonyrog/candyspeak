@@ -273,6 +273,8 @@ extern rochar s_route[6] RODATA;
 #define ros_route ((rostring_t) s_route)
 extern rochar s_when[5] RODATA;
 #define ros_when ((rostring_t) s_when)
+extern rochar s_annotate[9] RODATA;
+#define ros_annotate ((rostring_t) s_annotate)
 extern rochar s_value[6] RODATA;
 #define ros_value ((rostring_t) s_value)
 extern rochar s_pin[4] RODATA;
@@ -485,6 +487,8 @@ extern rochar s_cmd_images[7] RODATA;
 #define ros_cmd_images ((rostring_t) s_cmd_images)
 extern rochar s_cmd_pause[6] RODATA;
 #define ros_cmd_pause ((rostring_t) s_cmd_pause)
+extern rochar s_cmd_step[5] RODATA;
+#define ros_cmd_step ((rostring_t) s_cmd_step)
 extern rochar s_cmd_upgrade[8] RODATA;
 #define ros_cmd_upgrade ((rostring_t) s_cmd_upgrade)
 extern rochar s_cmd_live[5] RODATA;
@@ -525,6 +529,8 @@ extern rochar s_h_upgrade[69] RODATA;
 #define ros_h_upgrade ((rostring_t) s_h_upgrade)
 extern rochar s_h_pause[30] RODATA;
 #define ros_h_pause ((rostring_t) s_h_pause)
+extern rochar s_h_step[41] RODATA;
+#define ros_h_step ((rostring_t) s_h_step)
 extern rochar s_h_live[39] RODATA;
 #define ros_h_live ((rostring_t) s_h_live)
 extern rochar s_h_resume[37] RODATA;

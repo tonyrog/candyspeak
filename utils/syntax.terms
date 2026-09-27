@@ -272,6 +272,23 @@
 %% file:consult/1.  The atom is the same either way.
 {decl, 'D_WHEN',     'when',    'when',     'DECL_NONE',     hand_written}.
 
+%% #annotate <tool> <target> [key[=value] ...] -- metadata for TOOLS, inert here.
+%%
+%% The compiler skips the whole line: it never becomes a declaration, never
+%% reaches a ROM, and costs nothing on a board. It exists so that a tool reading
+%% the SOURCE -- the panel choosing a widget, a tuner naming a range, a model
+%% checker carrying a property in prose -- can keep that next to the declaration
+%% it describes instead of in a separate file that drifts out of step.
+%%
+%% The second word names the TOOL and owns the key space; without it every tool
+%% invents keys the others silently ignore. Neither keys nor values mean anything
+%% to candyspeak, and each tool must warn about what it does not recognise.
+%% utils/candyspeak.erl DOES check the target exists -- an annotation naming a
+%% signal that does not is the same mistake as a rule naming one.
+%%
+%% Hand written for the opposite reason to #when: there is nothing to parse.
+{decl, 'D_ANNOTATE', annotate, 'annotate', 'DECL_NONE', hand_written}.
+
 %% Placeholders: enum members with no table row and no syntax behind them yet.
 %% Keeping them keeps D_LAST -- and so decl_table's size -- where it is.
 {decl, 'D_UART'}.

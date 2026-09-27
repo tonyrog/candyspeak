@@ -6,6 +6,7 @@ Terminals
   'D_WHEN'
   'D_DIGITAL' 'D_ANALOG' 'D_VARIABLE' 'D_LOCAL' 'D_PARAM' 'D_CONSTANT' 
   'D_TIMER' 'D_FIELD' 'D_BUFFER' 'D_DEFINE' 'D_DISABLE' 'D_ENABLE'
+  'D_ANNOTATE'
   'T_INTEGER' 'T_UNSIGNED' 'T_STRING' 'T_FLOAT' 'T_IN'
   'T_OUT' 'T_INOUT' 'T_LITTLE' 'T_BIG' 'T_NATIVE' 'T_PWM' 'T_BIND'
   'T_VAL' 'T_PIN' 'T_PORT' 'T_DIR' 'T_ENDIAN' 'T_PERIOD' 'T_FIRED'
@@ -23,6 +24,7 @@ Terminals
   .
 
 Nonterminals
+  annotate_items annotate_item annotate_value
   file statement declaration rule state_list
   expr array expr_list expr_array buftype pin_list pin_range 
   bit_range rule_list rule_range
@@ -96,6 +98,35 @@ declaration -> 'D_FIELD' xid res options id 'LB' bit_range 'RB' :
 declaration -> 'D_BUFFER' xid res options buftype :
 		   {buffer,line('$1'),'$2','$3','$4','$5'}.
 declaration -> 'D_DEFINE' xid expr : {define,line('$1'),'$2','$3'}.
+
+%% #annotate <tool> <target> [key[=value] ...]
+%%
+%% Inert: the parser carries it, nothing else looks at it, and it never reaches
+%% the compiler or a ROM. It is for tools that read the SOURCE -- the panel's
+%% widget choice, a property for the model checker, a tuning range -- so that
+%% presentation and tooling metadata live next to the declaration they describe
+%% instead of in a separate file that drifts out of step.
+%%
+%% The TOOL name owns the key space: without it every tool invents keys the
+%% others silently ignore. candyspeak validates neither the keys nor the values;
+%% each tool validates its own and must warn on what it does not know.
+%%
+%% What candyspeak DOES check is the target: an annotation naming a signal that
+%% does not exist is the same kind of mistake as a rule naming one, and build/1
+%% already holds the map to catch it.
+declaration -> 'D_ANNOTATE' id id annotate_items :
+		   {annotate,line('$1'),'$2','$3','$4'}.
+
+annotate_items -> '$empty' : [].
+annotate_items -> annotate_item annotate_items : ['$1'|'$2'].
+
+annotate_item -> id 'EQ' annotate_value : {'$1','$3'}.
+annotate_item -> id : {'$1',true}.
+
+annotate_value -> id    : '$1'.
+annotate_value -> 'INT' : '$1'.
+annotate_value -> 'FLT' : '$1'.
+annotate_value -> 'STR' : '$1'.
 declaration -> 'D_END': {'end',line('$1')}.
 
 %% Special Immediates
@@ -173,14 +204,13 @@ buftype -> 'T_UDP' 'INT' 'INT' : [{udp,'$2','$3'}].
 buftype -> 'T_TCP' 'INT' : [{tcp,'$2',udefined}].
 %% tcp <port> <ip>
 buftype -> 'T_TCP' 'INT' 'INT' : [{tcp,'$2','$3'}].
-%% uart <rx-port>':'<rx-pin> <tx-port>':'<tx-pin> mode-bits
-%%  uart 0:25 0:24  [baud-rate][data-bits][parity][stop-bits]
-buftype -> 'T_UART' 'INT' 'COLON' 'INT' 'INT' 'COLON' 'INT' 'INT' :
-	       [{uart,{'$2','$4'},{'$5','$7'},'$8'}].
+%% uart <unit> [<baud>] (default baud = 9600)
+buftype -> 'T_UART' 'INT' : [{uart,'$2',9600}].
+buftype -> 'T_UART' 'INT' 'INT' : [{uart,'$2','$3'}].
 %% plain byte buffer
 buftype -> '$empty' : [].
 
-    
+%% uart config?
 %% Data:4,Parity:4,Stop:4,Baud100:20 = 32
 %% Data      = 5-9  
 %% parity    = N=0|E=1|O=2|M=3|S=4

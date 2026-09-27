@@ -1538,8 +1538,21 @@ typedef enum {
 // A `#states` name. The name itself is in DECL_COMMON; snum is the value the
 // State variable takes and the number OP_INSTATE compares against, so it has to
 // match csp_instr_instate_t.imm -- 8 bits, signed there, and 0..2 are the
-// reserved INIT/NORMAL/FAILSAFE. Numbered per SCOPE: global states from 3, and
-// each module's own states from 3 again, independently.
+// reserved INIT/NORMAL/FAILSAFE.
+//
+// NUMBERED GLOBALLY, BY NAME, from 3. The number belongs to the NAME, not to the
+// scope that declared it: with a global `#states on off' at 3 and 4, a module
+// that declares `on off' gets 3 and 4 as well, while a module with names of its
+// own continues the sequence at 5. That is what makes a name legal in several
+// #states blocks, and it is why a duplicate within one block keeps the first
+// number rather than taking a second slot.
+//
+// The `State' VARIABLE is per object -- a.State and b.State are separate storage
+// -- and only the numbering is shared. utils/candyspeak_varp.erl depends on both
+// halves of that and says so.
+//
+// (This note used to claim each module was numbered "from 3 again,
+// independently". It is not, and nothing ever did that.)
 /*
 typedef struct PACKED {
     DECL_COMMON;
@@ -2282,6 +2295,16 @@ typedef struct _csp_rt_t
 				 // every input so each <- binding fires once to
 				 // establish its initial value (least surprise).
     unsigned paused:1;           // 1 = /pause: driver runs no cycle (inspect/edit)
+    // /step N: cycles still owed while paused. The driver runs one and counts
+    // down, so paused stays set and the run stops again by itself.
+    //
+    // This is what makes a set of values ONE cycle. A `> X = 1' typed at the
+    // prompt runs a cycle of its own, which is right for a person poking at a
+    // thing -- but a tool that has three inputs belonging to the same instant
+    // would get three cycles, and a trace played back that way does not match
+    // the model it came from. /pause, set, /step is the sequence that behaves
+    // like real hardware: every DIN committed at the top of one cycle.
+    uint16_t step_left;
     unsigned live:1;             // 1 = /live: rules frozen but I/O runs, so you can
 				 // poke outputs (> Led=1 drives the pin) and watch
 				 // inputs while the program logic stands still

@@ -2429,6 +2429,54 @@ got=$(( printf '/latch off\n/pause\n'
 ck "and the rules that caused it still work" "moved" \
    "$([ -n "$got" ] && [ "$got" != "1111" ] && echo moved || echo "stuck at $got")"
 
+# --- /step -------------------------------------------------------------------
+#
+# /step N runs exactly N cycles and leaves the run PAUSED. What it is for is that
+# several values can belong to ONE cycle: a `> X = 1' at the prompt runs a cycle
+# of its own, so a tool with three inputs for the same instant would otherwise
+# get three cycles -- and a trace replayed that way no longer matches the model
+# it came from.
+#
+# Measured as a DELTA between two /state readings, not an absolute cycle number:
+# a command that lands in time drives a cycle of its own and one that does not
+# does not, so an absolute figure passes or fails on the scheduler. No /latch off
+# here for the same reason -- it was what made the first version of this flap.
+#
+# EXACTLY N, and the first version was off by one. The command is read further
+# down the same turn as the cycle counter, so on the turn /step arrives the
+# counter has already been passed: the first cycle of the batch ran unnumbered
+# and /step 4 reported three. Counting where step_left is consumed fixes it.
+echo "step:"
+step_delta() {   # $1 = the /step argument (may be empty or invalid)
+    ( printf '/pause\n'; sleep 0.5; printf '/state\n'; sleep 0.5
+      printf '/step %s\n' "$1"; sleep 1.2; printf '/state\n/quit\n' ) |
+	./csp -i --no-eeprom tests/unit/step.csp 2>&1 |
+	grep -oE '^cycle [0-9]+' | sed 's/cycle //' |
+	awk 'NR==1{a=$1} END{print $1-a}'
+}
+ck "/step runs one cycle"        "1" "$(step_delta '')"
+ck "/step 1 runs one"            "1" "$(step_delta 1)"
+ck "/step 4 runs four"           "4" "$(step_delta 4)"
+ck "/step 0 is refused"          "0" "$(step_delta 0)"
+ck "/step with a word is too"    "0" "$(step_delta xy)"
+ck "and so is one past 16 bits"  "0" "$(step_delta 99999)"
+
+# Still paused afterwards: the run stops again by itself, which is what makes it
+# a step rather than a nudge.
+got=$(( printf '/pause\n'; sleep 0.3; printf '/step 2\n'; sleep 1.0;
+	printf '/state\n/quit\n' ) |
+	  ./csp -i --no-eeprom tests/unit/step.csp 2>&1 |
+	  grep -oE 'paused|running' | tail -1)
+ck "and leaves the run paused" "paused" "$got"
+
+# The rules RUN during a step -- `State = Home' in #in INIT is the proof, since
+# nothing but a cycle can move it off INIT.
+got=$(( printf '/pause\n'; sleep 0.3; printf '/step 1\n'; sleep 1.0;
+	printf '/state\n/quit\n' ) |
+	  ./csp -i --no-eeprom tests/unit/step.csp 2>&1 |
+	  grep -E '^State' | tr -s ' ' | sed 's/.*= //')
+ck "and the rules run in a step" "Home" "$got"
+
 # --- tcp ---------------------------------------------------------------------
 # UDP's surface with a connection under it: same `<port> [<ip>]`, same two
 # meanings for the address. What differs is DELIVERY, and both differences are

@@ -415,6 +415,17 @@ static int quit_flag = 0;
 // what `./csp prog.csp` does and is the thing a person means by Ctrl-D after
 // typing a program in. /quit is how you say quit.
 static int stdin_gone = 0;
+// --exit-on-eof turns the above back into a quit.
+//
+// The default is right for a PERSON: Ctrl-D after typing a program in means
+// "run it", not "throw it away". A TOOL driving csp through a pipe has no such
+// intent -- if its end of the pipe is gone, so is the reason to keep running.
+// And it is the only shutdown that survives the tool dying badly: whatever
+// kills it, down to kill -9, the kernel closes the pipe, so this is the one
+// path that cannot be skipped. Without it a panel that loses its VM leaves a
+// csp behind per page load, and /quit never gets sent because nothing is left
+// to send it.
+static int exit_on_eof = 0;
 
 static void serial_poll(csp_rt_t* st, struct pollfd* fds, nfds_t nfds)
 {
@@ -1197,6 +1208,7 @@ static struct option long_options[] = {
     {"memory",       required_argument, 0,  'm'},
     {"pause",        no_argument,       0,  'b'},
     {"uart",         required_argument, 0,  1014},
+    {"exit-on-eof",  no_argument,       0,  1015},
     {"id",           required_argument, 0,  1012},
     {"name",         required_argument, 0,  1013},
     {0,              0,                 0,  0 }
@@ -1218,6 +1230,7 @@ void usage(const char* prog)
     fprintf(stderr, "  -c, --cycles=N       Max cycles (0=unlimited)\n");
     fprintf(stderr, "  -T, --timeout=MS     Max runtime in ms (0=unlimited)\n");
     fprintf(stderr, "      --virtual-time   Jump the clock to the next timer instead of sleeping\n");
+    fprintf(stderr, "      --exit-on-eof    Quit when stdin closes, instead of running on\n");
     fprintf(stderr, "  -Q, --debug-trace    Enable variable tracing\n");
     fprintf(stderr, "  -R, --debug-result   Add result to tracing (Erl)\n");
     fprintf(stderr, "  -s, --state-file=F   State file (Erlang format)\n");
@@ -1247,6 +1260,7 @@ void usage(const char* prog)
     fprintf(stderr, "      --role=ROLE      Image role: rom|failsafe (default rom)\n");
     fprintf(stderr, "      --generation=N   Image generation, higher is newer\n");
     fprintf(stderr, "      --virtual-time   Jump the clock to the next timer instead of sleeping\n");
+    fprintf(stderr, "      --exit-on-eof    Quit when stdin closes, instead of running on\n");
     fprintf(stderr, "      --checksum=BIN   Patch the LPC boot checksum into a .bin and exit\n");
     fprintf(stderr, "      --flash=FILE     Back the simulated flash with FILE, so /upgrade and\n");
     fprintf(stderr, "                       the region guards run without hardware\n");
@@ -1783,6 +1797,9 @@ int main(int argc, char** argv)
 	case 1014:   // --uart=[<unit>:]<device>: give the host a serial port
 	    uart_add(optarg);
 	    break;
+	case 1015:   // --exit-on-eof: quit when stdin closes, see exit_on_eof
+	    exit_on_eof = 1;
+	    break;
 	case 1010:   // --flash=FILE: back the simulated flash with a file
 	    csp_flash_host_file(optarg);
 	    break;
@@ -2210,6 +2227,11 @@ loop:
     else if (!state.paused) {   // frozen while /pause is in effect
 	state.cycle++;
     }
+    // A /step cycle counts too -- see where step_left is consumed below. It is
+    // NOT counted here: the command is read further down this same turn, so on
+    // the turn /step arrives step_left is still 0 at this point and the first
+    // cycle of the batch would run unnumbered. /step 4 ran four cycles and
+    // reported three.
     
     if (max_cycles && state.cycle >= max_cycles) {
 	fprintf(stderr, "max cycles (%u) reached\n", max_cycles);
@@ -2265,6 +2287,11 @@ loop:
 	// reads a whole paste in one sweep and csp_line_done feeds it back one
 	// line per turn, so the tail of a piped session is not dropped.
 	if (stdin_gone && interactive) {
+	    // --exit-on-eof: our driver is gone, so stop rather than settle.
+	    if (exit_on_eof) {
+		disable_raw_mode();
+		goto done;
+	    }
 	    interactive = 0;
 	    pfd[0].fd = -1;
 	    disable_raw_mode();
@@ -2280,8 +2307,19 @@ loop:
     // being upgraded OVER a route would stop reading the very link the image is
     // arriving on. It accepted `/upgrade A force` and then went deaf.
     if (state.paused) {
-	csp_route_run(&state);
-	goto loop;
+	// /step N: run exactly N cycles from here, then stand still again.
+	// Decremented BEFORE the cycle, so the count is what will run and not
+	// what did -- and `paused' stays set, which is the whole point: the
+	// values set while stopped all belong to this one cycle, the way a
+	// board commits every DIN at the top of one.
+	if (state.step_left > 0) {
+	    state.step_left--;
+	    state.cycle++;      // a real cycle, and the steps must be tellable apart
+	}
+	else {
+	    csp_route_run(&state);
+	    goto loop;
+	}
     }
 
     csp_input(&state);

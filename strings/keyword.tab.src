@@ -73,6 +73,7 @@ field field
 buffer buffer
 route route
 when when
+annotate annotate
 value value
 pin pin
 port port

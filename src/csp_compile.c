@@ -5495,6 +5495,15 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 		// condition and gates the block on it. Nothing for the switch.
 		else if (i == D_WHEN)
 		    r = csp_parse_when(st, tv, 2, num);
+		// #annotate is metadata for TOOLS that read the source -- a
+		// widget kind, a tuning range, a property in prose. Skipped
+		// ENTIRELY: not a declaration, never in a ROM, nothing on a
+		// board. The tokens are already scanned, so dropping the line
+		// is all there is to do. utils/candyspeak.erl checks that the
+		// target exists; nothing checks the keys, on purpose -- the
+		// tool named in the annotation owns that space.
+		else if (i == D_ANNOTATE)
+		    r = 0;
 		else
 		switch(decl_table_code(i)) {
 		case DECL_MODULE:
