@@ -209,6 +209,18 @@ build([{states,_Ln,States}|Lines], Stack, Acc, [B|Bound]) ->
 	Error ->
 	    Error
     end;
+build([{annotate,_Ln, {'WORD',_,Tool},{'WORD',_,Target}, Items}|Lines],
+      Stack, Acc, [B|Bound]) ->
+    Kv = maps:from_list([{K, ann_value(V)}
+			 || {{'WORD', _, K}, V} <- Items]),
+    Tools = maps:get(tools, B, #{}),
+    Targets = maps:get(Tool, Tools, #{}),
+    TargetMap = maps:get(Target, Targets, #{}),
+    Targets1 = maps:put(Target, maps:merge(TargetMap, Kv), Targets),
+    Tools1 = maps:put(Tool, Targets1, Tools),
+    B1 = maps:put(tools, Tools1, B),
+    build(Lines, Stack, Acc, [B1|Bound]);
+
 build([D|Lines], Stack, [Ds|Acc], Bound) ->
     build(Lines, Stack, [[D|Ds]|Acc], Bound);
 build([], [], [Ds], [B]) ->
@@ -220,6 +232,15 @@ build([], [], [Ds], [B]) ->
 	Error ->
 	    Error
     end.
+
+%%
+ann_value(true)              -> true;
+ann_value({'WORD', _, V})    -> V;
+ann_value({'INT', _, V})     -> V;
+ann_value({'FLT', _, V})     -> V;
+ann_value({'STR', _, V})     -> V;
+ann_value(V)                 -> V.
+
 
 %% An #annotate names a target, and a target that does not exist is the same
 %% kind of mistake as a rule naming one -- a tool reading the annotation would

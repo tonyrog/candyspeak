@@ -27,6 +27,7 @@
 #digital BedLight     out 11
 #digital BathLight    out 12
 #digital OutdoorLamp  out 13
+#digital ArmedLed     out 18
 
 // the rest of the house
 #digital BathFan__Blue   out 14
@@ -41,9 +42,9 @@
 // not. #annotate says it next to the declaration, the compiler skips the line
 // entirely, and the panel is the tool that owns these keys.
 
-#annotate panel NightButton  kind=push
-#annotate panel ArmButton    kind=push
-#annotate panel HallMotion   kind=push     // motion is a pulse, not a switch
+#annotate panel NightButton  kind=toggle
+#annotate panel ArmButton    kind=toggle
+#annotate panel HallMotion   kind=toggle  // motion is a pulse, not a switch
 #annotate panel BathMotion   kind=push
 
 #annotate panel Siren__Red   kind=action   // it sounds; it does not indicate
@@ -114,8 +115,8 @@
     Heater__Orange = 0 ? IndoorTemp > SetPoint + Hysteresis
 
     // The alarm is a toggle on one button.
-    Armed = 1 ? ArmButton && !Armed
-    Armed = 0 ? ArmButton && Armed
+    Armed = 1, ArmedLed=1 ? ArmButton && !Armed
+    Armed = 0, ArmedLed=0 ? !ArmButton && Armed
 #end
 
 // Goodnight: everything social goes off, the bedroom keeps a reading light.
