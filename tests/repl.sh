@@ -2447,10 +2447,28 @@ ck "and the rules that caused it still work" "moved" \
 # counter has already been passed: the first cycle of the batch ran unnumbered
 # and /step 4 reported three. Counting where step_left is consumed fixes it.
 echo "step:"
+# The fixture lives HERE, not in tests/unit: that directory is the unit suite,
+# and a file there without a .expect is run through parse_test, which consults
+# the -p output as Erlang. That output contains raw source for rules, so a `?'
+# guard makes it a syntax error -- which is how this failed as "FAIL: step" with
+# {invalid_erlang, ... "'?'"}. Several files in tests/unit have the same -p
+# problem and are only hidden by having a .expect.
+cat > "$D/step.csp" <<'CSPEOF'
+#digital Led out 8
+#variable V = 0
+#states Home
+#in INIT
+    State = Home
+#end
+#in Home
+    Led = 1 ? V
+#end
+CSPEOF
+
 step_delta() {   # $1 = the /step argument (may be empty or invalid)
     ( printf '/pause\n'; sleep 0.5; printf '/state\n'; sleep 0.5
       printf '/step %s\n' "$1"; sleep 1.2; printf '/state\n/quit\n' ) |
-	./csp -i --no-eeprom tests/unit/step.csp 2>&1 |
+	./csp -i --no-eeprom "$D/step.csp" 2>&1 |
 	grep -oE '^cycle [0-9]+' | sed 's/cycle //' |
 	awk 'NR==1{a=$1} END{print $1-a}'
 }
@@ -2465,7 +2483,7 @@ ck "and so is one past 16 bits"  "0" "$(step_delta 99999)"
 # a step rather than a nudge.
 got=$(( printf '/pause\n'; sleep 0.3; printf '/step 2\n'; sleep 1.0;
 	printf '/state\n/quit\n' ) |
-	  ./csp -i --no-eeprom tests/unit/step.csp 2>&1 |
+	  ./csp -i --no-eeprom "$D/step.csp" 2>&1 |
 	  grep -oE 'paused|running' | tail -1)
 ck "and leaves the run paused" "paused" "$got"
 
@@ -2473,7 +2491,7 @@ ck "and leaves the run paused" "paused" "$got"
 # nothing but a cycle can move it off INIT.
 got=$(( printf '/pause\n'; sleep 0.3; printf '/step 1\n'; sleep 1.0;
 	printf '/state\n/quit\n' ) |
-	  ./csp -i --no-eeprom tests/unit/step.csp 2>&1 |
+	  ./csp -i --no-eeprom "$D/step.csp" 2>&1 |
 	  grep -E '^State' | tr -s ' ' | sed 's/.*= //')
 ck "and the rules run in a step" "Home" "$got"
 

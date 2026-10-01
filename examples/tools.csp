@@ -1,0 +1,27 @@
+
+#digital Button1 in pulldown 1
+#annotate panel Button1   kind=push
+#annotate panel Button1   x=1 y=2 text="Deep"
+#annotate varp  Button1   hidden=1
+#annotate description Button1 en="Press this button when depressed"
+
+#digital HallMotion   in pulldown 2
+#annotate description HallMotion en="1 = someone in the hall"
+#annotate panel HallMotion   kind=push     // motion is a pulse, not a switch
+
+#digital BathMotion   in pulldown 3
+#annotate panel BathMotion   kind=push
+
+#digital FrontDoor    in pulldown 4
+#annotate description FrontDoor en="1 = open"
+
+#digital LivingWindow in pulldown 5
+#annotate description LivingWindow en="1 = open"
+
+#digital NightButton  in pulldown 6
+#annotate description NightButton en="by the bed: goodnight"
+#annotate panel NightButton  kind=push
+
+#digital ArmButton    in pulldown 7
+#annotate description ArmButton en="arm / disarm the alarm"
+#annotate panel ArmButton    kind=push

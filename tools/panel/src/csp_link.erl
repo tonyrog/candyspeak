@@ -49,6 +49,13 @@ init(Owner, Exe, Files) ->
     %% what csp does when the flag is absent.
     %%
     %% --exit-on-eof: when our end of the pipe goes, so should csp.
+    %%
+    %% NO -b, though it would be the right thing. Starting paused would give the
+    %% trace a known zero point -- without it csp runs INIT and whatever cycles
+    %% fit before the first dump, so a step starts from wherever the scheduler
+    %% was. But `-b -Q' produces NO DUMPS AT ALL (measured: 0 against 3), and
+    %% the dump stream is the panel's only way of seeing anything. Put the -b
+    %% back when that combination works.
     Port = open_port({spawn_executable, Exe},
 		     [{args, ["-i", "--no-eeprom", "-Q", "-Lerlang",
 			      "--exit-on-eof" | Files]},

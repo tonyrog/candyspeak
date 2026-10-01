@@ -27,7 +27,7 @@ run() ->
     expect("widgets derived from declarations",
 	   Widgets =:= [{toggle, "Button", 1}, {lamp, "Led", 1}], Widgets),
 
-    P = spawn(fun() -> csp_panel:run(fake_ws, "panel", Demo) end),
+    P = track_panel(spawn(fun() -> csp_panel:run(fake_ws, "panel", Demo) end)),
     timer:sleep(?SETTLE),
     Before = calls(),
 
@@ -122,9 +122,15 @@ annotate_check() ->
     W = csp_panel:widgets(A),
     Kind = fun(N) -> case [K || {K, N2, _} <- W, N2 =:= N] of
 			 [K] -> K; _ -> none end end,
+    %% BathMotion is the push in home.csp -- motion is a pulse. The buttons are
+    %% switches on purpose: a held mouse button is a mouse button not clicking
+    %% anything else, so an armed house could not be poked at.
     expect("#annotate kind=push overrides the derived toggle",
-	   Kind("NightButton") =:= push andalso Kind("ArmButton") =:= push,
-	   {Kind("NightButton"), Kind("ArmButton")}),
+	   Kind("BathMotion") =:= push, Kind("BathMotion")),
+    expect("#annotate kind=toggle is honoured too",
+	   Kind("ArmButton") =:= toggle andalso
+	   Kind("NightButton") =:= toggle,
+	   {Kind("ArmButton"), Kind("NightButton")}),
     expect("an un-annotated digital in stays a toggle",
 	   Kind("FrontDoor") =:= toggle, Kind("FrontDoor")),
     expect("#annotate kind=action and kind=dial",
@@ -217,11 +223,24 @@ home_checks() ->
 	    C = settle(F, [{"FrontDoor", 1}]),
 	    expect("home: siren silent while disarmed",
 		   maps:get("Siren__Red", C, 1) =:= 0, C),
-	    %% armed, then a door: siren
-	    D = settle(F, [{"ArmButton", 1}], [{"ArmButton", 0},
-					       {"FrontDoor", 1}]),
+	    %% ArmButton is a SWITCH, so it is held on -- `!ArmButton && Armed'
+	    %% disarms on release, which is what a switch should do. Pressing and
+	    %% releasing it (as this test first did) disarms before the door is
+	    %% ever opened.
+	    %%
+	    %% And a switch rather than a push button for a practical reason:
+	    %% holding a mouse button down means not clicking anything else, so
+	    %% an armed house could not be poked at.
+	    D = settle(F, [{"ArmButton", 1}], [{"FrontDoor", 1}]),
 	    expect("home: siren sounds when armed and the door opens",
 		   maps:get("Siren__Red", D, 0) =:= 1, D),
+
+	    %% ...and turning the switch off disarms, siren included
+	    E = settle(F, [{"ArmButton", 1}, {"FrontDoor", 1}],
+		       [{"ArmButton", 0}]),
+	    expect("home: the switch off disarms and silences",
+		   maps:get("Armed", E, 1) =:= 0 andalso
+		   maps:get("Siren__Red", E, 1) =:= 0, E),
 
 	    %% The net must not fire in normal use, and must fire when prevention
 	    %% is missing. Compared by STATE NUMBER against each other rather
@@ -262,7 +281,7 @@ settle(F, Sets1, Sets2) ->
     %% hypothetical: it made the first run of this check read cpx_rotate's
     %% pixels and report that home.csp had no heater.
     flush(),
-    {ok, L} = csp_link:open(csp_exe(), [F]),
+    {ok, L} = csp_link:open(csp_exe(), [F]), track(L),
     Last = steps(L, 3, #{}),                       % reach Home first
     Last1 = apply_sets(L, Sets1, Last),
     Last2 = apply_sets(L, Sets2, Last1),
@@ -297,7 +316,7 @@ array_check() ->
 			   || I <- lists:seq(0, 9)], Px),
 	    %% and the values reach those names
 	    flush(),
-	    {ok, L} = csp_link:open(csp_exe(), [F]),
+	    {ok, L} = csp_link:open(csp_exe(), [F]), track(L),
 	    Vals = collect_px(L, 25, #{}),
 	    csp_link:close(L),
 	    timer:sleep(300),
@@ -345,7 +364,7 @@ traffic_check() ->
     case filelib:is_regular(F) of
 	false -> io:format("skip  traffic (not found)~n");
 	true ->
-	    {ok, L} = csp_link:open(csp_exe(), [F]),
+	    {ok, L} = csp_link:open(csp_exe(), [F]), track(L),
 	    Seen = tick_collect(L, 40, []),
 	    csp_link:close(L),
 	    timer:sleep(300),
@@ -380,14 +399,46 @@ first_event() ->
 		|| X <- calls(), lists:prefix("event ", X)],
     Id.
 
-samples(L) -> [X || X <- L, lists:prefix("cast fillRect", X)].
+%% One batched call per tick, not one fillRect per trace: the column is handed
+%% to a painter function created once in the browser. See csp_panel:painter/1 --
+%% wse:set/4 is rsync, so the old shape cost a round trip per trace per tick.
+samples(L) -> [X || X <- L, lists:prefix("ASYNC cast call", X)].
 
 calls() ->
     wse_log ! {calls, self()},
     receive {calls, L} -> L after 1000 -> [] end.
 
 expect(What, true, _)  -> io:format("ok    ~s~n", [What]);
-expect(What, false, D) -> io:format("FAIL  ~s: ~p~n", [What, D]), halt(1).
+expect(What, false, D) ->
+    io:format("FAIL  ~s: ~p~n", [What, D]),
+    %% halt/1 runs no `after' clause and no linked process's cleanup, so a
+    %% csp started by this test would be left holding a pipe nobody closes --
+    %% and --exit-on-eof does not help, because the VM never closes it. Every
+    %% link opened here is registered; close them before going.
+    close_links(),
+    halt(1).
+
+%% Links opened by the test, so a failure can still take them down. A process
+%% dictionary rather than an argument: expect/3 is called from a dozen places
+%% and none of them should have to carry the bookkeeping.
+track(L) ->
+    put(links, [L | get_or([])]),
+    L.
+
+%% The panel process owns a link of its own, so it has to come down too -- it
+%% is sent `stop', which is what makes its csp_link send /quit.
+track_panel(P) ->
+    put(panels, [P | case get(panels) of undefined -> []; V -> V end]),
+    P.
+
+get_or(D) -> case get(links) of undefined -> D; V -> V end.
+
+close_links() ->
+    [catch (P ! stop) || P <- case get(panels) of undefined -> []; V -> V end],
+    [catch csp_link:close(L) || L <- get_or([])],
+    timer:sleep(400),          % give each one time to send /quit
+    put(links, []),
+    put(panels, []).
 
 logger(Acc) ->
     receive

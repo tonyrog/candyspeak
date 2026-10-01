@@ -394,7 +394,7 @@ void csp_dump_var(FILE* f,csp_rt_t* st,
 {
     // Bind the object so `di` reads out of THIS instance's storage. Listing
     // walks objects from outside any of them, so there is no OP_SETO and no
-    // OP_NEW to have done it.
+    // OP_NEW to have done it. 
     index_t ix = MAKE_INDEX(m ? CURRENT : GLOBAL, di);
     if (m)
 	csp_ctx_set(st, m);
@@ -505,7 +505,7 @@ void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
     }
     switch(lang) {
     case ERLANG:
-	fprintf(f, "%s", "]}\n");
+	fprintf(f, "%s", "]}");
 	break;
     case TEXT:
 	fprintf(f, "\n");    
@@ -520,7 +520,7 @@ void csp_dump_state(FILE* f, csp_rt_t* st, csp_lang_t lang)
 
     switch(lang) {
     case ERLANG:
-	fprintf(f, "{state,%d,[\n", st->cycle);
+	fprintf(f, "{state,%d,[", st->cycle);
 	break;
     case TEXT:
 	fprintf(f, "%d:\n", st->cycle);
@@ -579,12 +579,13 @@ void csp_dump_state(FILE* f, csp_rt_t* st, csp_lang_t lang)
 
     switch(lang) {
     case ERLANG:
-	fprintf(f, "%s", "]}.\n");
+	fprintf(f, "%s", "]}.");
 	break;
     case TEXT:
-	fprintf(f, "\n");
 	break;
     }
+    fputc('\n', f);
+    fflush(f);	
 }
 
 

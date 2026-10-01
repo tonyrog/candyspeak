@@ -248,12 +248,13 @@ build(Ws, Where, Root, File, Widgets, _Ast) ->
     RestNodes = [{Name, control(Ws, Root, W)} || W = {_, Name, _} <- Rest],
     PixNodes = strip(Ws, Root, Pixels),
     Ordered = Rest ++ Pixels,
-    {_Canvas, Ctx} = canvas(Ws, Root, length(Ordered)),
+    {_Canvas, Ctx, Paint} = canvas(Ws, Root, length(Ordered)),
     {ok, Link} = csp_link:open(csp_exe(), [File]),
     erlang:send_after(?PERIOD, self(), tick),
     loop(Ws, Link, #{nodes  => maps:from_list(RestNodes ++ PixNodes),
 		     traces => [{N, K, W, hue(N)} || {K, N, W} <- Ordered],
 		     ctx    => Ctx,
+		     paint  => Paint,
 		     x      => 0,
 		     last   => #{},
 		     sel_id => SelId,
@@ -588,7 +589,26 @@ canvas(Ws, Root, NTraces) ->
 		 "border:1px solid #333"),
     wse:appendChild(Ws, Root, C),
     {ok, Ctx} = wse:call(Ws, C, "getContext", ["2d"]),
-    {C, Ctx}.
+    {C, Ctx, painter(Ws)}.
+
+%%% ONE asynchronous call per tick instead of two synchronous ones per trace.
+%%%
+%%% wse:set/4 and wse:setStyle/3 are rsync -- they wait for the browser to
+%%% answer. Drawing a column as `set(fillStyle)' plus `cast(fillRect)' per trace
+%%% therefore cost one ROUND TRIP per trace per tick: measured at 342 synchronous
+%%% calls a second with 31 widgets at 10 Hz, each one blocking this process.
+%%%
+%%% This is a function created once in the browser that takes the whole column
+%%% as a flat list -- x, y, colour, x, y, colour -- and is invoked with cast,
+%%% which does not wait. Flat rather than nested because wse encodes a list of
+%%% lists as a JSON array of arrays and the marshalling is what we are trying to
+%%% avoid.
+painter(Ws) ->
+    wse:newf(Ws, "ctx,a",
+	     "{ for (var i = 0; i < a.length; i += 3) {"
+	     "    ctx.fillStyle = a[i+2];"
+	     "    ctx.fillRect(a[i], a[i+1], " ++ integer_to_list(?STEP) ++
+	     ", 3); } }").
 
 %% Nothing to drive, so there is no csp and no tick -- just the chooser.
 wait_for_pick(Ws, Where) ->
@@ -777,36 +797,38 @@ draw(Ws, S) ->
 	    draw(Ws, S#{x := 0});
 	false ->
 	    Last = maps:get(last, S),
-	    lists:foldl(
-	      fun({Name, Kind, W, Hue}, Row) ->
-		      V = maps:get(Name, Last, 0),
-		      sample(Ws, Ctx, X, Row * ?ROW_H + 4, Kind, W, V, Hue),
-		      Row + 1
-	      end, 0, maps:get(traces, S)),
+	    {_, Items} =
+		lists:foldl(
+		  fun({Name, Kind, W, Hue}, {Row, Acc}) ->
+			  V = maps:get(Name, Last, 0),
+			  {Y, Col} = sample(X, Row * ?ROW_H + 4, Kind, W, V, Hue),
+			  {Row + 1, Acc ++ [X, Y, Col]}
+		  end, {0, []}, maps:get(traces, S)),
+	    wse:cast(Ws, maps:get(paint, S), "call",
+		     [null, Ctx, wse:array(Items)]),
 	    S#{x := X + ?STEP}
     end.
 
 %% Digital is two levels; analog is a height in the row, so the trace reads as a
 %% waveform rather than a bit. A pixel is drawn as the colour itself -- a strip
 %% of them over time is what a running animation actually looks like.
-sample(Ws, Ctx, X, Top, pixel, _W, V, _Hue) ->
-    wse:set(Ws, Ctx, "fillStyle", rgb565(V)),
-    wse:cast(Ws, Ctx, "fillRect", [X, Top, ?STEP, ?ROW_H - 10]);
-sample(Ws, Ctx, X, Top, Kind, W, V, _Hue) when Kind =:= meter;
-					       Kind =:= slider;
-					       Kind =:= dial;
-					       Kind =:= value;
-					       Kind =:= invalue ->
+%% Returns {Y, Colour} for the painter rather than drawing: see painter/1.
+sample(_X, Top, pixel, _W, V, _Hue) ->
+    {Top, rgb565(V)};
+sample(_X, Top, Kind, W, V, _Hue) when Kind =:= meter;
+				       Kind =:= slider;
+				       Kind =:= dial;
+				       Kind =:= value;
+				       Kind =:= invalue ->
     H = ?ROW_H - 12,
-    Y = Top + H - (H * min(V, full(W)) div max(full(W), 1)),
-    wse:set(Ws, Ctx, "fillStyle", "#3af"),
-    wse:cast(Ws, Ctx, "fillRect", [X, Y, ?STEP, 3]);
+    {Top + H - (H * min(V, full(W)) div max(full(W), 1)), "#3af"};
 %% The lamp's own colour, so a traffic light's three traces are red, yellow and
 %% green rather than three identical stripes.
-sample(Ws, Ctx, X, Top, _Kind, _W, V, {On, _Off}) ->
-    Y = case V of 0 -> Top + ?ROW_H - 14; _ -> Top end,
-    wse:set(Ws, Ctx, "fillStyle", case V of 0 -> "#3a3a4a"; _ -> On end),
-    wse:cast(Ws, Ctx, "fillRect", [X, Y, ?STEP, 3]).
+sample(_X, Top, _Kind, _W, V, {On, _Off}) ->
+    case V of
+	0 -> {Top + ?ROW_H - 14, "#3a3a4a"};
+	_ -> {Top, On}
+    end.
 
 %%% -------------------------------------------------------------------- files
 

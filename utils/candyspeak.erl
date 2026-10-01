@@ -209,7 +209,7 @@ build([{states,_Ln,States}|Lines], Stack, Acc, [B|Bound]) ->
 	Error ->
 	    Error
     end;
-build([{annotate,_Ln, {'WORD',_,Tool},{'WORD',_,Target}, Items}|Lines],
+build([{annotate,Ln, {'WORD',_,Tool},{'WORD',_,Target}, Items}|Lines],
       Stack, Acc, [B|Bound]) ->
     Kv = maps:from_list([{K, ann_value(V)}
 			 || {{'WORD', _, K}, V} <- Items]),
@@ -218,7 +218,12 @@ build([{annotate,_Ln, {'WORD',_,Tool},{'WORD',_,Target}, Items}|Lines],
     TargetMap = maps:get(Target, Targets, #{}),
     Targets1 = maps:put(Target, maps:merge(TargetMap, Kv), Targets),
     Tools1 = maps:put(Tool, Targets1, Tools),
-    B1 = maps:put(tools, Tools1, B),
+    %% The node does not go into Acc -- the tools map is what a tool reads --
+    %% so where it CAME FROM has to be kept for check_annotations: it runs at
+    %% the end (an annotation may precede its declaration) and by then the node
+    %% is gone. Target and line, nothing else; the keys are the tool's business.
+    At = [{Tool, Target, Ln} | maps:get(annotate_at, B, [])],
+    B1 = maps:put(annotate_at, At, maps:put(tools, Tools1, B)),
     build(Lines, Stack, Acc, [B1|Bound]);
 
 build([D|Lines], Stack, [Ds|Acc], Bound) ->
@@ -251,17 +256,18 @@ ann_value(V)                 -> V.
 %%
 %% The KEYS are not checked, and must not be: the tool named in the annotation
 %% owns that space, and each tool warns about what it does not recognise.
-check_annotations([{annotate,Ln,{'WORD',_,Tool},{'WORD',_,Target},_Items}|T],
-		  Bound) ->
+check_annotations(_Decls, Bound) ->
+    %% Oldest first, so a file with two mistakes reports the first one.
+    check_targets(lists:reverse(maps:get(annotate_at, Bound, [])), Bound).
+
+check_targets([{Tool, Target, Ln} | T], Bound) ->
     case maps:is_key(Target, Bound) orelse
 	 is_state(Target, maps:get(states, Bound, [])) orelse
 	 Target =:= "State" of
-	true  -> check_annotations(T, Bound);
+	true  -> check_targets(T, Bound);
 	false -> {error, {annotate_unknown_target, Tool, Target, Ln}}
     end;
-check_annotations([_|T], Bound) ->
-    check_annotations(T, Bound);
-check_annotations([], _Bound) ->
+check_targets([], _Bound) ->
     ok.
 
 -define(INDENT, 2).
