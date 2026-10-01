@@ -1213,8 +1213,8 @@ typedef union {
     fvalue_t f;  // V_FLOAT
     sindex_t s;  // V_STRING (index into string buf)
     tvalue_t t;  // V_TIMER
-//    dvalue_t d;  // V_DIGITAL
-//    avalue_t a;  // V_ANALOG
+    dvalue_t d;  // V_DIGITAL
+    avalue_t a;  // V_ANALOG
 } value_t;
 
 typedef uint32_t set_group_t;  // bit set element

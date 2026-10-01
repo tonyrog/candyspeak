@@ -107,9 +107,9 @@ void csp_fprint_escaped_string(FILE* f, const char* ptr, int len)
 void csp_fprint_value(FILE* f, csp_rt_t* st, vtype_t vt, value_t val)
 {
     switch(vt) {
-    case V_TIMER:
-    case V_DIGITAL:
-    case V_ANALOG:
+    case V_TIMER:    fprintf(f, "%u", val.t.val); break;
+    case V_DIGITAL:  fprintf(f, "%u", val.d.val); break;
+    case V_ANALOG:   fprintf(f, "%u", val.a.val); break;
     case V_INTEGER:  fprintf(f, "%d", val.i); break;
     case V_UNSIGNED: fprintf(f, "16#%x", val.u); break; // fixme lang
     case V_FLOAT:    fprint_fvalue(f, val.f); break;

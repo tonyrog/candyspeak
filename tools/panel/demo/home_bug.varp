@@ -1,0 +1,113 @@
+// home.csp WITH THE WINDOW GUARD REMOVED -- the counterexample this is for.
+//
+//     varp bmc demo/home_bug.varp
+//
+// home.varp is the same system with prevention intact; it proves by
+// 1-induction that FAILSAFE is unreachable. Delete one rule from the program --
+//
+//     Heater__Orange = 0 ? LivingWindow
+//
+// -- and the proof turns into a trace showing exactly how the house gets there.
+//
+// Only the signals the invariants depend on are modelled. Nothing else in
+// home.csp writes Heater, Siren, Armed, WinWas or ArmWas, so a proof about this
+// subsystem is a proof about the house -- the lights and the coffee maker cannot
+// reach into it.
+//
+// THE TRANSLATION, and why it looks the way it does:
+//
+//   candyspeak rules read the COMMITTED state, so a condition reads `X` (the
+//   value at step i-1) and an assignment writes `next(X)`. Sensors are `input`,
+//   which is the value during the step, matching a DIN committed at the top of
+//   the cycle.
+//
+//   Several rules may write the same variable and THE LAST ONE WINS. That
+//   becomes a priority chain: the guard of a later rule is negated in every
+//   earlier branch. Each variable gets one `next` item per case, and the cases
+//   must be TOTAL -- a state left undetermined in some branch is free, and BMC
+//   will happily "find" a violation by choosing it.
+//
+//   FAILSAFE is STICKY in the runtime (csp.h: no rule may leave it, only a
+//   reset), so it is modelled as an absorbing state.
+
+define FAILSAFE 2;
+define HOME     3;
+
+// SetPoint 210, Hysteresis 10 -- the #param defaults
+define SPLO 200;        // below this: heat on
+define SPHI 220;        // above this: heat off
+
+system house {
+    state St:3;                 // 0 INIT, 1 NORMAL, 2 FAILSAFE, user states 3+
+    state Heater, Siren, Armed;
+    state WinWas, ArmWas;       // last cycle's window and alarm
+
+    input Window, Door, ArmBtn;
+    input Temp:10;              // the sensor may read anything
+
+    // Leave the alarm alone, so the counterexample is about the WINDOW and
+    // nothing else. Without this both guards are open to the solver and the
+    // trace mentions the siren too -- true, but two stories at once. `assume`
+    // constrains the world; it is not a property being checked.
+    assume not ArmBtn and not Door;
+
+    init  St == HOME and not Heater and not Siren and not Armed
+	  and not WinWas and not ArmWas;
+
+    // ---- the state machine -------------------------------------------
+    //
+    // Two guards go to FAILSAFE, and they need the violation to PERSIST:
+    // in the cycle the window opens, prevention has already set Heater to 0
+    // but this rule still reads the 1 committed at the end of the previous
+    // cycle. Without && WinWas the net fires every time the window is opened
+    // in a warm house -- it did, in the real program.
+    next  (St == FAILSAFE) implies next(St) == FAILSAFE;          // absorbing
+
+    next  (St != FAILSAFE and ((Heater and Window and WinWas) or
+			       (Siren and not Armed and not ArmWas)))
+	      implies next(St) == FAILSAFE;
+
+    next  (St != FAILSAFE and not ((Heater and Window and WinWas) or
+				   (Siren and not Armed and not ArmWas)))
+	      implies next(St) == St;
+
+    // ---- Heater ------------------------------------------------------
+    //
+    //   Heater = 1 ? Temp < SPLO
+    //   Heater = 0 ? Temp > SPHI
+    //   (the Window guard has been DELETED)
+    //
+    next  (St == FAILSAFE) implies not next(Heater);               // #in FAILSAFE
+    // THE MISSING LINE would be here:
+    //     next (St != FAILSAFE and Window) implies not next(Heater);
+    next  (St != FAILSAFE and Temp > SPHI) implies not next(Heater);
+    next  (St != FAILSAFE and not (Temp > SPHI) and Temp < SPLO)
+	      implies next(Heater);
+    next  (St != FAILSAFE and not (Temp > SPHI) and not (Temp < SPLO))
+	      implies (next(Heater) equ Heater);
+
+    // ---- Siren -------------------------------------------------------
+    //
+    //   Siren = 1 ? Armed and Door
+    //   Siren = 0 ? not Armed        <- last, so highest priority
+    //
+    next  (St == FAILSAFE) implies not next(Siren);                // #in FAILSAFE
+    next  (St != FAILSAFE and not Armed) implies not next(Siren);
+    next  (St != FAILSAFE and Armed and Door) implies next(Siren);
+    next  (St != FAILSAFE and Armed and not Door)
+	      implies (next(Siren) equ Siren);
+
+    // ---- Armed: one button toggles it --------------------------------
+    next  (ArmBtn and not Armed) implies next(Armed);
+    next  (ArmBtn and Armed) implies not next(Armed);
+    next  (not ArmBtn) implies (next(Armed) equ Armed);
+
+    // ---- the one-cycle memories, written last in the block -----------
+    next  next(WinWas) equ Window;
+    next  next(ArmWas) equ Armed;
+
+    // The property. FAILSAFE is absorbing, so reaching it once is reaching it
+    // for ever -- this is a safety property in the strict sense, and a bounded
+    // check that finds no path to it says something about longer runs too.
+    invariant St != FAILSAFE;
+}

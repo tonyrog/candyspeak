@@ -1,0 +1,21 @@
+% The three value_t arms a dump has to read through the right member.
+%
+% Checked here because almost nothing else does: of the 77 expect files exactly
+% ONE (dio) names a pin at all, so csp_fprint_value printing val.i for
+% V_DIGITAL/V_ANALOG/V_TIMER had a single test that could have caught it.
+%
+% val.i reads the union's whole word. For a digital that is cfg/pin/port/dir/
+% pullup below the value bit, so a lit pin on 13 reported a large number; for a
+% timer it is the 28-bit period, so T would read 1000 rather than 0. Reading the
+% same leaf back through a rule was unaffected, which is why it lived in the
+% listing alone.
+%
+% T is 0 on purpose: val on a timer is the START command (layout.terms, value_t
+% arm t), and it is consumed once the timer is running.
+{cycles, 8}.
+{checks, [
+  {final_var, "N", 4},
+  {final_var, "Led", 1},
+  {final_var, "Dac", 300},
+  {final_var, "T", 0}
+]}.

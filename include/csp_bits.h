@@ -32,7 +32,8 @@
 //           value bit n-1-k goes to stream bit pos+k   (MSB first)
 //
 // tests/unit has no reach here (this is below the language), so the equivalence
-// with bitpack.h is proven by tmp/bits/cmp.c -- see tests/repl.sh.
+// with bitpack.h is proven by tests/bits_cmp.c -- see tests/repl.sh. That
+// header now lives in tests/ beside its oracle: it is no longer firmware code.
 
 // THE BYTE-ALIGNED FAST PATH. A field that starts on a byte boundary and is a
 // whole number of bytes needs no bit work at all -- it is a byte move, and the

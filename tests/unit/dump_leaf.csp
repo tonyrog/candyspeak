@@ -1,0 +1,20 @@
+// What csp_fprint_value does with the value_t ARMS, which is a dump concern and
+// not a semantic one -- so nothing else in the suite looks at it.
+//
+// It printed val.i for V_DIGITAL, V_ANALOG and V_TIMER: the union's whole word,
+// which for a digital carries cfg/pin/port/dir/pullup above the value bit and
+// so reported a lit pin as a large number. Reading it back through a rule still
+// worked, which is why the bug lived in the listing alone.
+//
+// Of 77 expect files exactly one (dio) checked a pin at all, so this is the
+// regression test for the arms rather than for the behaviour.
+
+#digital Led    out 13
+#analog  Dac:10 out 0:2
+#timer   T      1000
+#variable N = 0
+
+N = N + 1 ? N < 4
+Led = 1 ? N > 1
+Dac = 300 ? N > 1
+T = 1 ? N > 1
