@@ -24,7 +24,7 @@ Terminals
   .
 
 Nonterminals
-  annotate_items annotate_item annotate_value
+  annotate_items annotate_item annotate_value aid
   file statement declaration rule state_list
   expr array expr_list expr_array buftype pin_list pin_range 
   bit_range rule_list rule_range
@@ -117,13 +117,74 @@ declaration -> 'D_DEFINE' xid expr : {define,line('$1'),'$2','$3'}.
 declaration -> 'D_ANNOTATE' id id annotate_items :
 		   {annotate,line('$1'),'$2','$3','$4'}.
 
+
+%% id in annotate may be any keyword or id
+aid -> id : '$1'.
+    
+aid -> 'D_MODULE'   : make_word('$1').
+aid -> 'D_END'      : make_word('$1').
+aid -> 'D_STATES'   : make_word('$1').
+aid -> 'D_WHEN'     : make_word('$1').
+aid -> 'D_DIGITAL'  : make_word('$1').
+aid -> 'D_ANALOG'   : make_word('$1').
+aid -> 'D_VARIABLE' : make_word('$1').
+aid -> 'D_LOCAL'    : make_word('$1').
+aid -> 'D_PARAM'    : make_word('$1').
+aid -> 'D_CONSTANT' : make_word('$1').
+aid -> 'D_TIMER'    : make_word('$1').
+aid -> 'D_FIELD'    : make_word('$1').
+aid -> 'D_BUFFER'   : make_word('$1').
+aid -> 'D_DEFINE'   : make_word('$1').
+aid -> 'D_DISABLE'  : make_word('$1').
+aid -> 'D_ENABLE'   : make_word('$1').
+aid -> 'D_ANNOTATE' : make_word('$1').
+aid -> 'T_INTEGER'  : make_word('$1').
+aid -> 'T_UNSIGNED' : make_word('$1').
+aid -> 'T_STRING'   : make_word('$1').
+aid -> 'T_FLOAT'    : make_word('$1').
+aid -> 'T_IN'       : make_word('$1').
+aid -> 'T_OUT'      : make_word('$1').
+aid -> 'T_INOUT'    : make_word('$1').
+aid -> 'T_LITTLE'   : make_word('$1').
+aid -> 'T_BIG'      : make_word('$1').
+aid -> 'T_NATIVE'   : make_word('$1').
+aid -> 'T_PWM'      : make_word('$1').
+aid -> 'T_BIND'     : make_word('$1').
+aid -> 'T_VAL'      : make_word('$1').
+aid -> 'T_PIN'      : make_word('$1').
+aid -> 'T_PORT'     : make_word('$1').
+aid -> 'T_DIR'      : make_word('$1').
+aid -> 'T_ENDIAN'   : make_word('$1').
+aid -> 'T_PERIOD'   : make_word('$1').
+aid -> 'T_FIRED'    : make_word('$1').
+aid -> 'T_ID'       : make_word('$1').
+aid -> 'T_RX'       : make_word('$1').
+aid -> 'T_TX'       : make_word('$1').
+aid -> 'T_DLC'      : make_word('$1').
+aid -> 'T_LEN'      : make_word('$1').
+aid -> 'T_PULLUP'   : make_word('$1').
+aid -> 'T_PULLDOWN' : make_word('$1').
+aid -> 'T_CAN'      : make_word('$1').
+aid -> 'T_I2C'      : make_word('$1').
+aid -> 'T_SPI'      : make_word('$1').
+aid -> 'T_UDP'      : make_word('$1').
+aid -> 'T_TCP'      : make_word('$1').
+aid -> 'T_UART'     : make_word('$1').
+aid -> 'T_LOW'      : make_word('$1').
+aid -> 'T_HIGH'     : make_word('$1').
+aid -> 'T_BOTH'     : make_word('$1').
+aid -> 'T_SOFT'     : make_word('$1').
+aid -> 'T_READY'    : make_word('$1').
+aid -> 'T_RISING'   : make_word('$1').
+aid -> 'T_FALLING'  : make_word('$1').
+
 annotate_items -> '$empty' : [].
 annotate_items -> annotate_item annotate_items : ['$1'|'$2'].
 
-annotate_item -> id 'EQ' annotate_value : {'$1','$3'}.
-annotate_item -> id : {'$1',true}.
+annotate_item -> aid 'EQ' annotate_value : {'$1','$3'}.
+annotate_item -> aid : {'$1',true}.
 
-annotate_value -> id    : '$1'.
+annotate_value -> aid    : '$1'.
 annotate_value -> 'INT' : '$1'.
 annotate_value -> 'FLT' : '$1'.
 annotate_value -> 'STR' : '$1'.
@@ -141,28 +202,27 @@ declaration -> id id obj_params :
 id -> 'WORD' : '$1'.
 
 xid -> id : '$1'.
-xid -> 'T_IN' : {'WORD', line('$1'), "in"}.
-xid -> 'T_OUT' : {'WORD', line('$1'), "out"}.
-xid -> 'T_LOW' : {'WORD', line('$1'), "low"}.
-xid -> 'T_READY' : {'WORD', line('$1'), "ready"}.
+xid -> 'T_IN'  : make_word('$1').
+xid -> 'T_OUT' : make_word('$1').
+xid -> 'T_LOW' : make_word('$1').
+xid -> 'T_READY' : make_word('$1').
 
-part -> 'T_VAL' : {'WORD', line('$1'), "val"}.
-part -> 'T_PIN' : {'WORD', line('$1'), "pin"}.
-part -> 'T_PORT' : {'WORD', line('$1'), "port"}.
-part -> 'T_DIR' : {'WORD', line('$1'), "dir"}.
-part -> 'T_PWM' : {'WORD', line('$1'), "pwm"}.
-part -> 'T_ENDIAN' : {'WORD', line('$1'), "enidan"}.
-part -> 'T_PULLUP' : {'WORD', line('$1'), "pullup"}.
-part -> 'T_PULLDOWN' : {'WORD', line('$1'), "pulldown"}.
-part -> 'T_PERIOD' : {'WORD', line('$1'), "period"}.
-part -> 'T_FIRED' : {'WORD', line('$1'), "fired"}.
-part -> 'T_ID' : {'WORD', line('$1'), "id"}.
-part -> 'T_RX' : {'WORD', line('$1'), "rx"}.
-part -> 'T_TX' : {'WORD', line('$1'), "tx"}.
-part -> 'T_DLC' : {'WORD', line('$1'), "dlc"}.
-part -> 'T_LEN' : {'WORD', line('$1'), "len"}.
+part -> 'T_VAL' : make_word('$1').
+part -> 'T_PIN' : make_word('$1').
+part -> 'T_PORT' : make_word('$1').
+part -> 'T_DIR' : make_word('$1').
+part -> 'T_PWM' : make_word('$1').
+part -> 'T_ENDIAN' : make_word('$1').
+part -> 'T_PULLUP' : make_word('$1').
+part -> 'T_PULLDOWN' : make_word('$1').
+part -> 'T_PERIOD' : make_word('$1').
+part -> 'T_FIRED' : make_word('$1').
+part -> 'T_ID' : make_word('$1').
+part -> 'T_RX' : make_word('$1').
+part -> 'T_TX' : make_word('$1').
+part -> 'T_DLC' : make_word('$1').
+part -> 'T_LEN' : make_word('$1').
     
-
 obj_params -> '$empty' : [].
 obj_params -> assignment obj_params : ['$1'|'$2'].
 
@@ -344,3 +404,10 @@ Erlang code.
 
 line([H|_]) -> line(H);
 line(T) when is_tuple(T) -> element(2, T).
+
+make_word({Atom,Ln}) when is_atom(Atom), is_integer(Ln) ->
+    case atom_to_list(Atom) of
+	"T_"++Word -> {'WORD', Ln, string:to_lower(Word)};
+	"D_"++Word -> {'WORD', Ln, string:to_lower(Word)}
+    end.
+

@@ -427,9 +427,25 @@ static int stdin_gone = 0;
 // to send it.
 static int exit_on_eof = 0;
 
+// POLLHUP and not just POLLIN, and the difference is a LEAKED PROCESS.
+//
+// A pipe whose write end closes while we are polling reports POLLHUP with no
+// POLLIN: there is nothing to read, only nothing more to come. Waking on POLLIN
+// alone meant the read below never ran, read() never returned 0, stdin_gone was
+// never set -- and --exit-on-eof, whose whole point is to survive the driver
+// dying, never fired. The panel left one csp behind per page load.
+//
+// It looked like it worked because a PIPED file closes before the first poll:
+// the data is there, POLLIN is set, the drain reads to the end and sees the 0.
+// That is the case every test used.
+//
+// POLLERR for the same reason, and neither has to be asked for -- poll reports
+// both whatever the events mask says.
+#define STDIN_EVENTS (POLLIN | POLLHUP | POLLERR)
+
 static void serial_poll(csp_rt_t* st, struct pollfd* fds, nfds_t nfds)
 {
-    if (nfds > 0 && (fds[0].revents & POLLIN)) {
+    if (nfds > 0 && (fds[0].revents & STDIN_EVENTS)) {
 	struct pollfd more = { STDIN_FILENO, POLLIN, 0 };
 	char c;
 	// Drain everything waiting, the same way a board drains its port -- past

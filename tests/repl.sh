@@ -2495,6 +2495,51 @@ got=$(( printf '/pause\n'; sleep 0.3; printf '/step 1\n'; sleep 1.0;
 	  grep -E '^State' | tr -s ' ' | sed 's/.*= //')
 ck "and the rules run in a step" "Home" "$got"
 
+# --- --exit-on-eof -----------------------------------------------------------
+#
+# The flag exists for ONE case: the tool driving csp dies. Whatever killed it,
+# the kernel closes its end of the pipe, so this is the only shutdown that
+# cannot be skipped -- /quit never gets sent when there is nothing left to send
+# it. The panel in tools/panel is the driver that proved it necessary.
+#
+# And the case that matters is the pipe closing LATE, while csp sits in poll().
+# A closed pipe with nothing in it is POLLHUP and NOT POLLIN, so waking on
+# POLLIN alone never read, never saw the 0, and never set stdin_gone: one csp
+# left running per dead driver. A PIPED FILE hides it completely -- it is closed
+# before the first poll, the data is there, POLLIN is set and the drain reads to
+# the end -- which is why every test here passed while the leak was real.
+echo "exit-on-eof:"
+# A timer that RESTARTS itself, so the program never quiesces: that is what
+# tells "stopped because the pipe closed" from "stopped because it finished".
+# A one-shot timer is not enough -- `T = 1' arms a stopped timer and nothing
+# re-arms it, so the program settles half a second in and the check below would
+# pass with the flag doing nothing.
+cat > "$D/eof.csp" <<'CSPEOF'
+#digital Led out 8
+#timer   T 500
+#in INIT
+    T = 1
+#end
+Led = !Led ? timeout(T)
+T = 1    ? timeout(T)
+CSPEOF
+
+( printf '/state\n'; sleep 0.6 ) |
+    timeout 5 ./csp -i --no-eeprom --exit-on-eof "$D/eof.csp" >/dev/null 2>&1
+ck "a pipe closed LATE ends the run" "0" "$?"
+
+printf '/state\n' |
+    timeout 5 ./csp -i --no-eeprom --exit-on-eof "$D/eof.csp" >/dev/null 2>&1
+ck "and so does one closed before we look" "0" "$?"
+
+# Without the flag the same close must NOT end it. EOF ends the PROMPT: the
+# program runs on to wherever it settles, which is what `./csp prog.csp' does
+# and what a person means by Ctrl-D after typing a program in. 124 is timeout's
+# own code for "it was still running".
+( printf '/state\n'; sleep 0.6 ) |
+    timeout 2 ./csp -i --no-eeprom "$D/eof.csp" >/dev/null 2>&1
+ck "without it, EOF ends the prompt and not the program" "124" "$?"
+
 # --- tcp ---------------------------------------------------------------------
 # UDP's surface with a connection under it: same `<port> [<ip>]`, same two
 # meanings for the address. What differs is DELIVERY, and both differences are

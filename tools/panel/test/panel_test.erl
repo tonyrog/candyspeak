@@ -111,11 +111,293 @@ run() ->
     %%     not -- presentation is not in the language.
     annotate_check(),
 
+    %% 6h. the XY plot: two channels that share an id are one picture, and the
+    %%     canvas drives both of them.
+    plot_check(),
+
+    %% 6i. a #field is a window into a #buffer, which is what lets a socket
+    %%     drive a plot.
+    field_check(),
+
+    %% 6j. the glass and the clock: shape=round, and a tick that can be changed
+    %%     without the afterglow changing length.
+    crt_check(),
+
     %% 7. a program with no inputs at all still runs -- traffic.csp is driven
     %%    by its own timer, so the lamps must change with nobody touching
     %%    anything. That also proves the tick actually advances csp.
     traffic_check(),
     halt(0).
+
+%% demo/xy.csp: two analog inputs, one plot. The things that can go wrong here
+%% are the grouping (two declarations, one widget) and the steering (one pointer,
+%% two values) -- so both are checked against a real csp rather than by eye.
+plot_check() ->
+    {ok, A} = candyspeak:parse("demo/xy.csp"),
+    W = csp_panel:widgets(A),
+    expect("kind=plot on an analog in becomes a steerable plot channel",
+	   W =:= [{plotin, "xin", 10}, {plotin, "yin", 10}], W),
+
+    [G] = csp_panel:plots(A),
+    #{id := Id, x := X, ys := Ys} = G,
+    expect("channels sharing an id are one plot, x and y as annotated",
+	   Id =:= "plot1" andalso maps:get(name, X) =:= "xin" andalso
+	   [maps:get(name, M) || M <- Ys] =:= ["yin"],
+	   {Id, maps:get(name, X), [maps:get(name, M) || M <- Ys]}),
+
+    %% The range is the declared width unless the annotation narrows it, and
+    %% `scale'/`unit' are what a count means in the world -- 1023 counts of a
+    %% 10-bit input at 0.000976 is one volt, which is the number on the knob.
+    expect("the channel's range comes from the declaration",
+	   maps:get(min, X) =:= 0 andalso maps:get(max, X) =:= 1023,
+	   {maps:get(min, X), maps:get(max, X)}),
+    Eng = lists:flatten(csp_panel:eng(600, X)),
+    expect("a scaled channel reads in engineering units",
+	   Eng =:= "600  0.586 ms", Eng),
+    Plain = lists:flatten(csp_panel:eng(600, #{scale => 1, unit => ""})),
+    expect("an unscaled channel is just the count", Plain =:= "600", Plain),
+
+    %% No axis given: the first channel goes across and the rest up. A guess,
+    %% and it says so on stdout -- but it must be THIS guess, because a plot
+    %% drawn the other way round is a picture of something else.
+    Bare = "#analog a:8 in unsigned 0\n#analog b:8 in unsigned 1\n"
+	   "#annotate panel a kind=plot\n#annotate panel b kind=plot\n",
+    Tmp = "/tmp/csp_plot_bare.csp",
+    ok = file:write_file(Tmp, Bare),
+    {ok, A2} = candyspeak:parse(Tmp),
+    [G2] = csp_panel:plots(A2),
+    expect("no axis: the first channel is x, the rest y",
+	   maps:get(name, maps:get(x, G2)) =:= "a" andalso
+	   [maps:get(name, M) || M <- maps:get(ys, G2)] =:= ["b"],
+	   G2),
+
+    %% Only y channels: there is nothing to put across, so the beam sweeps and
+    %% the plot degrades to an ordinary scope rather than drawing a vertical
+    %% line and calling it an XY picture.
+    OnlyY = "#analog c:8 in unsigned 0\n"
+	    "#annotate panel c kind=plot axis=y\n",
+    Tmp2 = "/tmp/csp_plot_y.csp",
+    ok = file:write_file(Tmp2, OnlyY),
+    {ok, A3} = candyspeak:parse(Tmp2),
+    [G3] = csp_panel:plots(A3),
+    expect("a plot with no x channel sweeps instead",
+	   maps:get(x, G3) =:= undefined andalso
+	   [maps:get(name, M) || M <- maps:get(ys, G3)] =:= ["c"], G3),
+
+    %% ...and the whole loop: the canvas drives csp, and csp comes back.
+    flush(),
+    P = track_panel(spawn(fun() -> csp_panel:run(fake_ws, "panel", "demo/xy.csp")
+			  end)),
+    timer:sleep(?SETTLE),
+    Id2 = plot_event(),
+    Before = calls(),
+    %% What the canvas handler sends: one notify per axis, same wire format a
+    %% slider uses. Both land before the next tick commits them.
+    P ! {notify, Id2, local, "xin=600"},
+    P ! {notify, Id2, local, "yin=300"},
+    timer:sleep(?SETTLE),
+    New = calls() -- Before,
+    expect("steering the canvas sets both channels in csp",
+	   [X2 || X2 <- New, string:find(X2, "600  0.586 ms") =/= nomatch]
+	   =/= [] andalso
+	   [X3 || X3 <- New, string:find(X3, "300  0.293 V") =/= nomatch]
+	   =/= [],
+	   [X4 || X4 <- New, string:find(X4, "textContent") =/= nomatch]),
+    expect("the beam is drawn with an afterglow wash each tick",
+	   [X5 || X5 <- New, string:find(X5, "rgba(16,20,16") =/= nomatch]
+	   =/= [], length(New)),
+
+    %% A SEGMENT, not a dot: five numbers per channel, and the pair at the
+    %% front is where the beam was. Ten samples a second is a dotted line as
+    %% dots and the signal as segments.
+    Casts = plot_casts(calls()),
+    expect("the beam is drawn as a segment from the last sample",
+	   Casts =/= [] andalso lists:all(fun(C) -> length(C) =:= 5 end, Casts)
+	   andalso [C || C <- Casts, hd(C) >= 0] =/= [],
+	   lists:sublist(Casts, 3)),
+    expect("the first sample has nothing to draw a segment from",
+	   hd(hd(Casts)) =:= -1, hd(Casts)),
+
+    %% ...and a jump of more than half the width across is a RETRACE, blanked
+    %% the way a scope blanks it: without this a sweep draws a bright diagonal
+    %% back over its own picture every cycle.
+    P ! {notify, Id2, local, "xin=1000"},
+    timer:sleep(?SETTLE),
+    Mid2 = calls(),
+    P ! {notify, Id2, local, "xin=20"},
+    timer:sleep(?SETTLE),
+    Jumped = plot_casts(calls() -- Mid2),
+    expect("a jump across the picture is a retrace, not a line",
+	   [C || C <- Jumped, hd(C) < 0] =/= [], Jumped),
+    P ! stop,
+    timer:sleep(300).
+
+%% The arrays handed to the plot painter, oldest first. Scanned back into terms
+%% rather than matched as text: the point of the check is the NUMBERS.
+plot_casts(L) ->
+    [Items || X <- L,
+	      Rest <- [string:prefix(X, "ASYNC cast call ")], Rest =/= nomatch,
+	      Items <- [cast_array(Rest)], Items =/= none].
+
+cast_array(Text) ->
+    case erl_scan:string(Text ++ ".") of
+	{ok, Toks, _} ->
+	    case erl_parse:parse_term(Toks) of
+		{ok, [null, _Ctx, _W, _H, _Fade, _Round, _Clip,
+		      {array, Items}]} ->
+		    Items;
+		_ -> none
+	    end;
+	_ -> none
+    end.
+
+%% The two things that only matter because the panel is looked at: a round face
+%% and a tick you can turn up. Both have one trap each -- an unknown shape must
+%% not silently draw something, and a faster tick must not wash the trail away.
+crt_check() ->
+    Src = "#analog x:10 in unsigned 0\n#analog y:10 in unsigned 1\n"
+	  "#annotate panel x kind=plot axis=x id=crt shape=round persist=0.95\n"
+	  "#annotate panel y kind=plot axis=y id=crt\n",
+    Tmp = "/tmp/csp_crt.csp",
+    ok = file:write_file(Tmp, Src),
+    {ok, A} = candyspeak:parse(Tmp),
+    [G] = csp_panel:plots(A),
+    %% ...and said on ONE channel: the glass and the phosphor belong to the
+    %% picture, so they must not have to be repeated per channel.
+    expect("shape=round and persist= are settings of the picture",
+	   maps:get(round, G) =:= true andalso maps:get(persist, G) =:= 0.95,
+	   {maps:get(round, G), maps:get(persist, G)}),
+
+    %% A fixture and not demo/xy.csp: the DEFAULT is what is being checked, and
+    %% hanging that on a demo file means the suite breaks the day someone makes
+    %% that demo round -- which is a thing they should be free to do.
+    Plain = "#analog p:10 in unsigned 0\n"
+	    "#annotate panel p kind=plot axis=y id=flat\n",
+    TmpP = "/tmp/csp_crt_plain.csp",
+    ok = file:write_file(TmpP, Plain),
+    {ok, B} = candyspeak:parse(TmpP),
+    [G2] = csp_panel:plots(B),
+    expect("a plot that says nothing is square",
+	   maps:get(round, G2) =:= false, maps:get(round, G2)),
+
+    Bad = "#analog z:10 in unsigned 0\n"
+	  "#annotate panel z kind=plot axis=y id=q shape=oval\n",
+    Tmp2 = "/tmp/csp_crt_bad.csp",
+    ok = file:write_file(Tmp2, Bad),
+    {ok, A3} = candyspeak:parse(Tmp2),
+    [G3] = csp_panel:plots(A3),
+    expect("a shape nobody knows is refused, not guessed at",
+	   maps:get(round, G3) =:= false, maps:get(round, G3)),
+
+    %% The afterglow is a TIME. The same persist= at a four times faster tick
+    %% has to wash four times more gently, or asking for a faster tick would
+    %% take the trail away -- which is when you most want it.
+    Slow = csp_panel:fade(0.9, 100),
+    Fast = csp_panel:fade(0.9, 25),
+    expect("persistence is a time, not a number of frames",
+	   alpha(Slow) > alpha(Fast) andalso alpha(Fast) > 0.0 andalso
+	   abs(alpha(Slow) - 0.1) < 0.001, {Slow, Fast}),
+
+    %% And the starting tick comes from the environment, with garbage refused
+    %% rather than taken as zero -- a zero would be a tick with no wait in it.
+    os:putenv("CSP_PANEL_PERIOD", "25"),
+    P25 = csp_panel:period(),
+    os:putenv("CSP_PANEL_PERIOD", "fort"),
+    Pbad = csp_panel:period(),
+    os:unsetenv("CSP_PANEL_PERIOD"),
+    expect("CSP_PANEL_PERIOD sets the tick, nonsense does not",
+	   P25 =:= 25 andalso Pbad =:= 100, {P25, Pbad}),
+
+    %% The clip follows the glass unless told otherwise. Both ways round, since
+    %% the default is the interesting part: a round face that paints into its
+    %% own corners is a square picture behind a round bezel.
+    expect("a round face clips, a square one does not",
+	   maps:get(clip, G) =:= true andalso maps:get(clip, G2) =:= false,
+	   {maps:get(clip, G), maps:get(clip, G2)}),
+    expect("clip= overrides the glass both ways",
+	   clip_of("shape=round clip=off") =:= false andalso
+	   clip_of("shape=square clip=on") =:= true,
+	   {clip_of("shape=round clip=off"), clip_of("shape=square clip=on")}),
+    %% ...and a value nobody knows falls back to the glass rather than picking
+    %% one: a silent guess here is a picture with a piece missing.
+    expect("a clip nobody knows falls back to the glass",
+	   clip_of("shape=round clip=sometimes") =:= true andalso
+	   clip_of("shape=square clip=sometimes") =:= false,
+	   {clip_of("shape=round clip=sometimes"),
+	    clip_of("shape=square clip=sometimes")}).
+
+%% One plot, built from the annotation text under test.
+clip_of(Opts) ->
+    Src = "#analog c:10 in unsigned 0\n"
+	  "#annotate panel c kind=plot axis=y id=g " ++ Opts ++ "\n",
+    Tmp = "/tmp/csp_clip.csp",
+    ok = file:write_file(Tmp, Src),
+    {ok, A} = candyspeak:parse(Tmp),
+    [G] = csp_panel:plots(A),
+    maps:get(clip, G).
+
+%% The alpha out of "rgba(r,g,b,a)".
+alpha(S) ->
+    [_, A] = string:split(S, ",", trailing),
+    {F, _} = string:to_float(string:trim(A, trailing, ")")),
+    F.
+
+%% A #field reads as an analog channel of the width its window has. WHO OWNS THE
+%% VALUE decides whether the panel may drive it: a buffer with a transport is
+%% filled by that transport, and the panel must not fight the wire.
+field_check() ->
+    Src = "#buffer Sock:4 in tcp 5555\n"
+	  "#buffer Plain:4 in\n"
+	  "#field  Sx:16 unsigned Sock[0..15]\n"
+	  "#field  Wide Plain[0..11]\n"
+	  "#field  Bit  Plain[9]\n",
+    Tmp = "/tmp/csp_field.csp",
+    ok = file:write_file(Tmp, Src),
+    {ok, A} = candyspeak:parse(Tmp),
+    W = csp_panel:widgets(A),
+    expect("a field on a socket is read-only, one on a plain buffer is not",
+	   W =:= [{meter, "Sx", 16}, {slider, "Wide", 12}, {slider, "Bit", 1}],
+	   W),
+
+    %% The declared :width when there is one, else the window itself.
+    expect("the width comes from the window when the field does not say",
+	   [Wd || {_K, _N, Wd} <- W] =:= [16, 12, 1], W),
+
+    %% A field fed from a socket, plotted. This is the whole point: the bytes
+    %% arrive on tcp and the fields are the window onto them.
+    Plot = "#buffer In:4 in tcp 5557\n"
+	   "#field  Px:16 unsigned In[0..15]\n"
+	   "#field  Py:16 In[16..31]\n"
+	   "#annotate panel Px kind=plot axis=x id=scope\n"
+	   "#annotate panel Py kind=plot axis=y id=scope colour=cyan\n",
+    Tmp2 = "/tmp/csp_field_plot.csp",
+    ok = file:write_file(Tmp2, Plot),
+    {ok, A2} = candyspeak:parse(Tmp2),
+    expect("socket-fed fields become plot channels",
+	   csp_panel:widgets(A2) =:= [{plot, "Px", 16}, {plot, "Py", 16}],
+	   csp_panel:widgets(A2)),
+    [G] = csp_panel:plots(A2),
+    X = maps:get(x, G),
+    [Y] = maps:get(ys, G),
+    %% ...and the SWING is the declared one. `Py' has no `unsigned', so it is
+    %% signed -- 0..65535 would draw the top half of the picture and clip
+    %% everything below zero into the bottom edge.
+    expect("an unsigned field swings 0..full, a signed one both ways",
+	   {maps:get(min, X), maps:get(max, X)} =:= {0, 65535} andalso
+	   {maps:get(min, Y), maps:get(max, Y)} =:= {-32768, 32767},
+	   {maps:get(min, X), maps:get(max, X),
+	    maps:get(min, Y), maps:get(max, Y)}),
+    expect("colour= names the beam", maps:get(colour, Y) =:= "#3dd",
+	   maps:get(colour, Y)).
+
+%% The plot canvas's event id, taken from the handler the panel built: the body
+%% carries both the id and the channel name, so the test does not have to count
+%% create_event calls in render order.
+plot_event() ->
+    [B | _] = [X || X <- calls(), string:find(X, "'xin='") =/= nomatch],
+    "Wse.notify(" ++ Rest = string:find(B, "Wse.notify("),
+    {Id, _} = string:to_integer(Rest),
+    Id.
 
 annotate_check() ->
     {ok, A} = candyspeak:parse("demo/home.csp"),

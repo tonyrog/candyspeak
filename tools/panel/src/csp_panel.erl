@@ -15,8 +15,14 @@
 -export([start/0, start/2]).
 -export([run/2, run/3]).
 -export([widgets/1, rgb565/1, hue/1, label_of/1]).   % tests, introspection
+-export([plots/1, eng/2, period/0, fade/2]).         % tests, introspection
 
--define(PERIOD,    100).   % ms between cycles
+-define(PERIOD,    100).   % ms between cycles -- the DEFAULT, see period/0
+%% What the tick rate may be set to, from the bar. 100 ms was chosen for lamps;
+%% a plot wants a good deal more than ten samples a second, and a program with
+%% a 2 s sweep gives twenty points at 100 ms. The top of the range is honest
+%% about what it costs: every tick is a /commit plus one cast per plot.
+-define(PERIODS,   [10, 25, 50, 100, 250]).
 -define(TRACE_W,   720).   % canvas width, px
 -define(ROW_H,      34).   % px per trace row
 -define(STEP,        3).   % px per sample
@@ -27,6 +33,23 @@
 		  "vertical-align:middle;").
 -define(LAMP_ON,  "background:#3f3;box-shadow:0 0 8px #3f3").
 -define(LAMP_OFF, "background:#252525").
+%% The XY plot. SQUARE, because an XY picture is only honest when both axes
+%% are the same length -- a circle in a wide box is an ellipse, and you cannot
+%% tell which it was. Dark green because the afterglow is a phosphor.
+-define(PLOT_W,   240).            % px, square
+-define(PLOT_BG,  {16, 20, 16}).
+-define(PAD,        4).            % inset, so a full-scale dot is a whole dot
+-define(PHOSPHOR, "#5f9").  % the beam, when the annotation names no colour
+%% The glass. `shape=round' is a CRT face: the corners of the value range fall
+%% outside it, which is a choice and not a bug -- a channel at both extremes at
+%% once is off the glass. shape=square keeps all of it, and is the default for
+%% that reason.
+-define(GLASS,    "vertical-align:top;cursor:crosshair;background:").
+-define(FLAT,     "border:1px solid #333;").
+-define(ROUND,    "border-radius:50%;border:3px solid #2b2b2b;"
+		  "box-shadow:0 0 0 4px #141414,"
+		  "0 0 18px rgba(90,255,160,0.13);").
+-define(PERSIST,  0.90).           % how much of the last frame survives a tick
 
 %%% --------------------------------------------------------------- starting
 %%%
@@ -64,6 +87,21 @@ ensure_inets() ->
 	Err                           -> Err
     end.
 
+%% The tick the panel starts at. Settable from the bar while it runs; the
+%% environment is for starting it somewhere other than the default, the way
+%% CSP_EXE and CSP_PANEL_DEMO work.
+period() ->
+    case os:getenv("CSP_PANEL_PERIOD") of
+	false -> ?PERIOD;
+	S     -> case string:to_integer(S) of
+		     {N, _} when is_integer(N), N >= 5, N =< 10000 -> N;
+		     _ ->
+			 io:format("panel: CSP_PANEL_PERIOD=~s is not a number "
+				   "of ms between 5 and 10000~n", [S]),
+			 ?PERIOD
+		 end
+    end.
+
 %%% -------------------------------------------------------------------- entry
 
 run(Ws, Where) ->
@@ -93,7 +131,19 @@ render(Ws, Where, File) ->
 %% language and must not be, so it is said next to the declaration instead.
 widgets(Ast) ->
     Ann = annotations(Ast),
-    [apply_ann(W, Ann) || W <- lists:foldr(fun collect/2, [], Ast)].
+    Bufs = buffers(Ast),
+    [apply_ann(W, Ann)
+     || W <- lists:foldr(fun(D, Acc) -> collect(D, Acc, Bufs) end, [], Ast)].
+
+%% Which buffer each #field looks into, and what that buffer is: its direction,
+%% and whether anything is wired to it. A field cannot be read from its own
+%% declaration alone -- see widget/2.
+buffers(Ast) ->
+    lists:foldl(
+      fun({buffer, _Ln, {'WORD', _, N}, _Sz, Opts, Trans}, M) ->
+	      M#{N => {proplists:get_value(dir, Opts, out), Trans =/= []}};
+	 (_, M) -> M
+      end, #{}, Ast).
 
 %% #annotate panel <target> key=value ... -> #{Target => #{Key => Value}}
 %% Only rows naming THIS tool. The keys are ours to validate: an unknown one is
@@ -117,7 +167,10 @@ ann_value({'STR', _, V})     -> V;
 ann_value(V)                 -> V.
 
 -define(ANN_KEYS, ["kind", "colour", "color", "unit", "min", "max", "hidden",
-		   "label"]).
+		   "label",
+		   %% a plot reads these: which picture, which way, and what a
+		   %% count means in the world. See the plots section below.
+		   "axis", "id", "scale", "persist", "shape", "clip"]).
 
 warn_unknown(Target, Kv, Ln) ->
     case [K || K <- maps:keys(Kv), not lists:member(K, ?ANN_KEYS)] of
@@ -158,25 +211,31 @@ allowed(slider, "slider") -> {ok, slider};
 allowed(slider, "value")  -> {ok, invalue};
 allowed(meter, "value")   -> {ok, value};
 allowed(meter, "meter")   -> {ok, meter};
+%% A plot channel keeps its DIRECTION in the kind: the canvas is the control
+%% for an input (the pointer is the beam), and a picture of the program for an
+%% output. One kind for both would mean a canvas that cannot drive the pin it
+%% is wired to -- the same mistake allowed/2 exists to prevent.
+allowed(slider, "plot")   -> {ok, plotin};
+allowed(meter, "plot")    -> {ok, plot};
 allowed(pixel, "pixel")   -> {ok, pixel};
 allowed(_Kind, _Want)     -> no.
 
 alternatives(toggle) -> ["push", "toggle"];
 alternatives(push)   -> ["push", "toggle"];
 alternatives(lamp)   -> ["lamp", "action"];
-alternatives(slider) -> ["slider", "dial", "value"];
-alternatives(meter)  -> ["meter", "value"];
+alternatives(slider) -> ["slider", "dial", "value", "plot"];
+alternatives(meter)  -> ["meter", "value", "plot"];
 alternatives(pixel)  -> ["pixel"];
 alternatives(_)      -> [].
 
-collect(D, Acc) ->
-    case widget(D) of
+collect(D, Acc, Bufs) ->
+    case widget(D, Bufs) of
 	skip               -> Acc;
 	L when is_list(L)  -> L ++ Acc;      % an array: one widget per element
 	W                  -> [W | Acc]
     end.
 
-widget({digital, _Ln, {'WORD', _, Name}, scalar, _Res, Opts, _Expr}) ->
+widget({digital, _Ln, {'WORD', _, Name}, scalar, _Res, Opts, _Expr}, _B) ->
     case proplists:get_value(dir, Opts) of
 	in -> {toggle, Name, 1};
 	_  -> {lamp, Name, 1}       % out, inout: show it
@@ -187,22 +246,50 @@ widget({digital, _Ln, {'WORD', _, Name}, scalar, _Res, Opts, _Expr}) ->
 %% RGB565 colour rather than a magnitude. That mapping is an assumption about
 %% the board, not something the declaration says, which is why it lives here
 %% and not in widget/1's shape.
-widget({analog, _Ln, {'WORD', _, Name}, scalar, Res, Opts, Expr}) ->
+widget({analog, _Ln, {'WORD', _, Name}, scalar, Res, Opts, Expr}, _B) ->
     analog_widget(Name, width(Res), port_of(Expr),
 		  proplists:get_value(dir, Opts));
 %% An array: `#analog P[10]:16 out unsigned 9:0..9` is ten pixels, not one.
 %% Returned as a LIST, which collect/2 splices -- cpx_rotate.csp declares its
 %% strip this way and had no widgets at all until this clause existed.
 widget({analog, _Ln, {'WORD', _, Name}, {array_size, _, Size}, Res, Opts,
-	Expr}) ->
+	Expr}, _B) ->
     N = width(Size),
     W = width(Res),
     Port = port_of(Expr),
     Dir = proplists:get_value(dir, Opts),
     [analog_widget(Name ++ "[" ++ integer_to_list(I) ++ "]", W, Port, Dir)
      || I <- lists:seq(0, N - 1)];
-widget(_) ->
-    skip.                           % variables, fields, rules: not yet
+%%% A #field is a WINDOW into a #buffer, and a buffer is bytes from somewhere --
+%%% a CAN frame, a UDP datagram, a TCP stream. So a field reads as an analog
+%%% channel of the width its window has, which is what makes a socket able to
+%%% drive a plot.
+%%%
+%%% WHO OWNS THE VALUE decides whether the panel may touch it. A buffer with a
+%%% transport is filled by that transport, and a panel writing over it would be
+%%% fighting the wire -- the same reason a slider's own value is left alone while
+%%% the hand is on it. A buffer with no endpoint has nobody else to fill it, so
+%%% the panel does, exactly as it does for a host pin.
+widget({field, _Ln, {'WORD', _, Name}, Res, _Opts, {'WORD', _, Buf}, Pos},
+       Bufs) ->
+    W = field_width(Res, Pos),
+    case maps:get(Buf, Bufs, {out, false}) of
+	{in, false} -> {slider, Name, W};
+	_           -> {meter, Name, W}
+    end;
+widget(_, _B) ->
+    skip.                           % variables, rules: not yet
+
+%% The declared `:width' when there is one, else the window itself: [0..11] is
+%% twelve bits, and a bare [9] is one.
+field_width({'INT', _, S}, _Pos) ->
+    list_to_integer(S);
+field_width(_Default, {range, _, {'INT', _, Lo}, {'INT', _, Hi}}) ->
+    list_to_integer(Hi) - list_to_integer(Lo) + 1;
+field_width(_Default, {'INT', _, _Bit}) ->
+    1;
+field_width(_Default, _Pos) ->
+    16.
 
 analog_widget(Name, W, 9, _Dir)   -> {pixel, Name, W};
 analog_widget(Name, W, _P, in)    -> {slider, Name, W};
@@ -227,6 +314,214 @@ rgb565(V) ->
 				[R * 255 div 31, G * 255 div 63,
 				 B * 255 div 31])).
 
+%%% --------------------------------------------------------------- plots
+%%%
+%%% The first widget that is not one declaration. Two channels that share `id'
+%%% are one picture, and `axis' says which way each one goes:
+%%%
+%%%     #analog xin:10 in unsigned 0
+%%%     #analog yin:10 in unsigned 1
+%%%     #annotate panel xin kind=plot axis=x id=plot1 scale=0.000976 unit="ms"
+%%%     #annotate panel yin kind=plot axis=y id=plot1 scale=0.000976 unit="V"
+%%%
+%%% The grouping is deliberately NOT in widgets/1. That answers "what is this
+%%% declaration", one tuple per declaration, and everything above depends on
+%%% that shape. The group is read off the same annotations here, next to the
+%%% drawing that needs it.
+
+plots(Ast) ->
+    plot_groups([W || W <- widgets(Ast), is_plot(W)], annotations(Ast),
+		ranges(Ast)).
+
+%%% What a channel's full swing IS, taken from the declaration.
+%%%
+%%% An #analog or a #field without `unsigned' is SIGNED, and a plot that assumes
+%%% 0..full-scale then draws the top half of the picture and clips everything
+%%% below zero into the bottom edge. A sixteen-bit signed field fed from a socket
+%%% is exactly that case.
+%%%
+%%% A one-bit field is the exception: typeless leaves are signed except at :1.
+%%% The annotation's min/max still wins over all of it.
+ranges(Ast) ->
+    lists:foldl(
+      fun({analog, _Ln, {'WORD', _, N}, scalar, Res, Opts, _E}, M) ->
+	      M#{N => swing(width(Res), Opts)};
+	 ({field, _Ln, {'WORD', _, N}, Res, Opts, _Buf, Pos}, M) ->
+	      M#{N => swing(field_width(Res, Pos), Opts)};
+	 (_, M) -> M
+      end, #{}, Ast).
+
+swing(W, Opts) ->
+    case W =:= 1 orelse proplists:get_value(type, Opts) =:= unsigned of
+	true  -> {0, full(W)};
+	false -> {-(1 bsl (W - 1)), (1 bsl (W - 1)) - 1}
+    end.
+
+is_plot({plot, _, _})   -> true;
+is_plot({plotin, _, _}) -> true;
+is_plot(_)              -> false.
+
+plot_groups([], _Ann, _Rng) ->
+    [];
+plot_groups(Plots, Ann, Rng) ->
+    %% First appearance order, not sorted: the groups should come out in the
+    %% order the file declares them, the way every other widget does.
+    Ids = lists:foldl(fun({_K, N, _W}, Acc) ->
+			      Id = group_of(N, Ann),
+			      case lists:member(Id, Acc) of
+				  true  -> Acc;
+				  false -> Acc ++ [Id]
+			      end
+		      end, [], Plots),
+    [group(Id, [P || P <- Plots, group_of(nm(P), Ann) =:= Id], Ann, Rng)
+     || Id <- Ids].
+
+nm({_K, N, _W}) -> N.
+
+%% No id at all is ONE group. Two channels and a plot is the common case and
+%% should not need ceremony to say so.
+group_of(Name, Ann) -> maps:get("id", kv(Name, Ann), "plot").
+
+kv(Name, Ann) -> maps:get(Name, Ann, #{}).
+
+group(Id, Members, Ann, Rng) ->
+    Ms = [member(P, Ann, Rng) || P <- Members],
+    {Xs, Ys, Bare} = by_axis(Ms),
+    {X, Rest} = pick_x(Id, Xs, Bare),
+    Round = shape(Id, gopt("shape", Ms, "square")),
+    #{id => Id, x => X, ys => Ys ++ Rest, sweep => 0, prev => #{},
+      persist => num(gopt("persist", Ms, ?PERSIST)),
+      round => Round,
+      %% The glass decides by default: a round face that paints into its own
+      %% corners is a square picture behind a round bezel. `clip=off' keeps the
+      %% painting square -- which is worth having, because a clip hides a
+      %% reading that has left the glass with nothing to say it did.
+      clip => clip(Id, gopt("clip", Ms, none), Round)}.
+
+member({Kind, Name, W}, Ann, Rng) ->
+    Kv = kv(Name, Ann),
+    {Lo, Hi} = maps:get(Name, Rng, {0, full(W)}),
+    #{name   => Name,
+      kind   => Kind,
+      axis   => axis_of(Name, Kv),
+      %% The declared swing unless the annotation narrows it: a :10 channel
+      %% that only ever moves 300..700 is a dot in the middle of the picture
+      %% otherwise.
+      min    => num(maps:get("min", Kv, Lo)),
+      max    => num(maps:get("max", Kv, Hi)),
+      scale  => num(maps:get("scale", Kv, 1)),
+      unit   => maps:get("unit", Kv, ""),
+      colour => beam(Kv),
+      kv     => Kv}.
+
+axis_of(Name, Kv) ->
+    case maps:get("axis", Kv, none) of
+	none -> none;
+	"x"  -> "x";
+	"y"  -> "y";
+	Bad  -> io:format("panel: ~s: axis=~s is neither x nor y~n", [Name, Bad]),
+		none
+    end.
+
+by_axis(Ms) ->
+    lists:foldr(fun(M, {X, Y, B}) ->
+			case maps:get(axis, M) of
+			    "x" -> {[M | X], Y, B};
+			    "y" -> {X, [M | Y], B};
+			    _   -> {X, Y, [M | B]}
+			end
+		end, {[], [], []}, Ms).
+
+%% An axis nobody named is guessed -- first channel across, the rest up -- and
+%% the guess is SAID. A plot drawn from a silent guess is a picture of something
+%% else, and nothing on screen tells you which.
+pick_x(_Id, [X], Bare) ->
+    {X, Bare};
+pick_x(Id, [], [X | Bare]) ->
+    io:format("panel: ~s: no axis=x, taking ~s as x~n", [Id, maps:get(name, X)]),
+    {X, Bare};
+pick_x(Id, [X | More], Bare) ->
+    io:format("panel: ~s: more than one axis=x, keeping ~s~n",
+	      [Id, maps:get(name, X)]),
+    {X, More ++ Bare};
+%% Only y channels. Then there is nothing to put across, so the beam sweeps:
+%% the plot degrades to an ordinary scope with time along the bottom, which is
+%% the one reading that cannot be wrong. See plot_tick/3.
+pick_x(_Id, [], []) ->
+    {undefined, []}.
+
+%% A setting that belongs to the PICTURE, said on whichever channel the hand
+%% reached first: the phosphor and the glass are not properties of a channel.
+gopt(_Key, [], Default) ->
+    Default;
+gopt(Key, [M | T], Default) ->
+    case maps:get(Key, maps:get(kv, M), none) of
+	none -> gopt(Key, T, Default);
+	V    -> V
+    end.
+
+shape(_Id, "round")  -> true;
+shape(_Id, "square") -> false;
+shape(Id, Other) ->
+    io:format("panel: ~s: shape=~s is neither round nor square~n", [Id, Other]),
+    false.
+
+clip(_Id, none, Round)  -> Round;       % the glass decides
+clip(_Id, "on", _R)     -> true;
+clip(_Id, "off", _R)    -> false;
+clip(Id, Other, Round) ->
+    io:format("panel: ~s: clip=~s is neither on nor off~n", [Id, Other]),
+    Round.
+
+%% colour=green on the channel, else phosphor. The beam is what you watch, so
+%% hue/1's guess-from-the-name is wrong here: `yin' is not yellow.
+beam(Kv) ->
+    case maps:get("colour", Kv, maps:get("color", Kv, none)) of
+	none -> ?PHOSPHOR;
+	Name -> case palette(string:lowercase(Name)) of
+		    {ok, {On, _Off}} -> On;
+		    none             -> ?PHOSPHOR
+		end
+    end.
+
+%% An annotation value arrives as the TEXT that was typed -- scale=0.000976 is
+%% a float, min=0 an integer, and a quoted string is whatever is inside it.
+num(V) when is_integer(V) -> V;
+num(V) when is_float(V)   -> V;
+num(S) when is_list(S)    ->
+    %% {error, Reason} is a two-tuple like {Float, Rest}, so the shape alone does
+    %% not tell them apart -- the guard is what does.
+    case string:to_float(S) of
+	{F, _} when is_float(F) -> F;
+	_ ->
+	    case string:to_integer(S) of
+		{I, _} when is_integer(I) -> I;
+		_                         -> 0
+	    end
+    end;
+num(_) -> 0.
+
+%% Value to pixel, inset by the beam's own radius so a reading at full scale is
+%% a whole dot rather than half of one at the edge.
+pos(V, #{min := Min, max := Max}, Len) ->
+    Span = max(Max - Min, 1),
+    Cl = min(max(V, Min), Max),
+    ?PAD + trunc((Cl - Min) * (Len - 2 * ?PAD) / Span).
+
+px(V, M) -> pos(V, M, ?PLOT_W).
+py(V, M) -> ?PLOT_W - 1 - pos(V, M, ?PLOT_W).
+
+%% The count as csp has it, and -- when the annotation says what a count means
+%% -- what it is in the world. A scale with no unit is still worth printing; a
+%% unit with no scale means the count IS the unit.
+eng(V, #{scale := S, unit := U}) when S == 1 ->
+    case U of
+	"" -> integer_to_list(V);
+	_  -> [integer_to_list(V), " ", U]
+    end;
+eng(V, #{scale := S, unit := U}) ->
+    io_lib:format("~w  ~.3f ~s", [V, V * S, U]).
+
 %%% ---------------------------------------------------------------- rendering
 
 build(Ws, Where, Root, File, [], Ast) ->
@@ -240,21 +535,32 @@ build(Ws, Where, Root, File, [], Ast) ->
 		     "only `digital in` and `digital out` are wired up so far.",
 		     [shorten(File), kinds(Ast)])),
     wait_for_pick(Ws, Where);
-build(Ws, Where, Root, File, Widgets, _Ast) ->
+build(Ws, Where, Root, File, Widgets, Ast) ->
     {SelId, _Sel, Run} = chooser(Ws, Root, File),
-    %% Pixels are one strip, not one row each -- see strip/3.
-    {Pixels, Rest} = lists:partition(fun({K, _, _}) -> K =:= pixel end,
-				     Widgets),
+    %% Two kinds do not get a row of their own: pixels are one strip (strip/3)
+    %% and a plot's channels are one picture (plot_panel/4).
+    {Pixels, Rest0} = lists:partition(fun({K, _, _}) -> K =:= pixel end,
+				      Widgets),
+    {Plots, Rest} = lists:partition(fun is_plot/1, Rest0),
     RestNodes = [{Name, control(Ws, Root, W)} || W = {_, Name, _} <- Rest],
     PixNodes = strip(Ws, Root, Pixels),
-    Ordered = Rest ++ Pixels,
+    {Groups, PlotNodes} = plot_panels(Ws, Root,
+				      plot_groups(Plots, annotations(Ast),
+						  ranges(Ast))),
+    %% A plot channel still gets a TIME trace below. The XY picture says where
+    %% the beam is and nothing about when it got there -- which of the two you
+    %% need depends on what is wrong, so the panel shows both.
+    Ordered = Rest ++ Pixels ++ Plots,
     {_Canvas, Ctx, Paint} = canvas(Ws, Root, length(Ordered)),
     {ok, Link} = csp_link:open(csp_exe(), [File]),
-    erlang:send_after(?PERIOD, self(), tick),
-    loop(Ws, Link, #{nodes  => maps:from_list(RestNodes ++ PixNodes),
+    erlang:send_after(period(), self(), tick),
+    loop(Ws, Link, #{nodes  => maps:from_list(RestNodes ++ PixNodes ++
+						  PlotNodes),
 		     traces => [{N, K, W, hue(N)} || {K, N, W} <- Ordered],
 		     ctx    => Ctx,
 		     paint  => Paint,
+		     plots  => Groups,
+		     period => period(),
 		     x      => 0,
 		     last   => #{},
 		     sel_id => SelId,
@@ -319,8 +625,39 @@ runstep(Ws, Bar) ->
     RunB  = Mk("run",   "mode=run"),
     PauseB = Mk("pause", "mode=step"),
     OneB  = Mk("step",  "step=1"),
+    %% The tick, on the SAME event as the buttons: the loop already tells the
+    %% bar's events from a widget's by the id, and tags its payloads, so this
+    %% needs no second wire. `period=25' lands in control/4 beside `mode=run'.
+    tick_select(Ws, Wrap, Id),
     wse:appendChild(Ws, Bar, Wrap),
     #{event => Id, run => RunB, pause => PauseB, one => OneB}.
+
+tick_select(Ws, Wrap, Id) ->
+    Lbl = wse:createElement(Ws, "span"),
+    wse:setStyle(Ws, Lbl, "margin-left:12px;color:#888;font:12px monospace"),
+    wse:appendChild(Ws, Lbl, wse:createTextNode(Ws, "tick")),
+    wse:appendChild(Ws, Wrap, Lbl),
+    Sel = wse:createElement(Ws, "select"),
+    wse:setStyle(Ws, Sel, "margin-left:6px;font:12px monospace;background:#222;"
+		 "color:#eee;border:1px solid #555;padding:2px"),
+    Now = period(),
+    lists:foreach(
+      fun(Ms) ->
+	      O = wse:createElement(Ws, "option"),
+	      wse:set(Ws, O, "value", Ms),
+	      wse:appendChild(Ws, O, wse:createTextNode(
+					Ws, integer_to_list(Ms) ++ " ms")),
+	      case Ms =:= Now of
+		  true  -> wse:set(Ws, O, "selected", true);
+		  false -> ok
+	      end,
+	      wse:appendChild(Ws, Sel, O)
+      end, lists:usort([Now | ?PERIODS])),
+    F = wse:newf(Ws, "", "{ Wse.notify(" ++ integer_to_list(Id) ++
+	    ", 'period=' + this.value); }"),
+    wse:set(Ws, Sel, "onchange", F),
+    wse:appendChild(Ws, Wrap, Sel),
+    Sel.
 
 btn_style(Active) ->
     ["font:13px monospace;padding:3px 9px;margin-right:4px;"
@@ -485,6 +822,211 @@ cell(Ws, Row, Name) ->
     wse:set(Ws, C, "title", Name),      % hover says which pixel
     wse:appendChild(Ws, Row, C),
     {pixel, C}.
+
+%%% One canvas per group, and ONE painter function shared by all of them -- the
+%%% browser compiles it once, exactly as painter/1 does for the trace.
+plot_panels(_Ws, _Root, []) ->
+    {[], []};
+plot_panels(Ws, Root, Groups) ->
+    Plot = plotter(Ws),
+    lists:foldl(fun(G, {Gs, Ns}) ->
+			{G1, N1} = plot_panel(Ws, Root, G, Plot),
+			{Gs ++ [G1], Ns ++ N1}
+		end, {[], []}, Groups).
+
+plot_panel(Ws, Root, G = #{id := Id, x := X, ys := Ys}, Plot) ->
+    Box = wse:createElement(Ws, "div"),
+    wse:setStyle(Ws, Box, "margin:12px 0;font:14px monospace"),
+    Label = wse:createElement(Ws, "span"),
+    wse:setStyle(Ws, Label, "display:inline-block;width:110px;color:#ccc;"
+		 "vertical-align:top"),
+    wse:appendChild(Ws, Label, wse:createTextNode(Ws, Id)),
+    wse:appendChild(Ws, Box, Label),
+    C = wse:createElement(Ws, "canvas"),
+    wse:set(Ws, C, "width", ?PLOT_W),
+    wse:set(Ws, C, "height", ?PLOT_W),
+    wse:setStyle(Ws, C, [?GLASS, css(?PLOT_BG), ";",
+			 case maps:get(round, G) of
+			     true  -> ?ROUND;
+			     false -> ?FLAT
+			 end]),
+    wse:appendChild(Ws, Box, C),
+    {ok, Ctx} = wse:call(Ws, C, "getContext", ["2d"]),
+    Side = wse:createElement(Ws, "div"),
+    wse:setStyle(Ws, Side, "display:inline-block;margin-left:12px;"
+		 "vertical-align:top"),
+    Members = [{"x", M} || M <- [X], M =/= undefined] ++
+	[{"y", M} || M <- Ys],
+    Nodes = [{maps:get(name, M), {plotval, plot_row(Ws, Side, Ax, M), M}}
+	     || {Ax, M} <- Members],
+    wse:appendChild(Ws, Box, Side),
+    wse:appendChild(Ws, Root, Box),
+    xy_handler(Ws, C, drivable(X, Ys)),
+    {G#{ctx => Ctx, plot => Plot}, Nodes}.
+
+%% axis, name, and the live value beside it -- in engineering units when the
+%% annotation gave enough to work them out.
+plot_row(Ws, Side, Axis, M) ->
+    Row = wse:createElement(Ws, "div"),
+    wse:setStyle(Ws, Row, "margin-bottom:4px"),
+    Tag = wse:createElement(Ws, "span"),
+    wse:setStyle(Ws, Tag, ["color:", maps:get(colour, M),
+			   ";font:12px monospace"]),
+    wse:appendChild(Ws, Tag, wse:createTextNode(
+				Ws, Axis ++ "  " ++ label_of(maps:get(name, M)))),
+    wse:appendChild(Ws, Row, Tag),
+    V = wse:createElement(Ws, "span"),
+    wse:setStyle(Ws, V, "display:block;color:#888;font:12px monospace"),
+    wse:appendChild(Ws, V, wse:createTextNode(Ws, "")),
+    wse:appendChild(Ws, Row, V),
+    wse:appendChild(Ws, Side, Row),
+    V.
+
+%% Which channels the pointer may drive: the ones whose declaration is an INPUT.
+%% A plot of two outputs is a picture and nothing else, and must not pretend
+%% otherwise by moving when you touch it.
+drivable(X, Ys) ->
+    Across = [{across, M} || M <- [X], M =/= undefined,
+			     maps:get(kind, M) =:= plotin],
+    %% One y, not all of them: every y channel reads the same pointer height, so
+    %% driving several from one move would set them all to the same value.
+    Up = case [M || M <- Ys, maps:get(kind, M) =:= plotin] of
+	     [M | _] -> [{up, M}];
+	     []      -> []
+	 end,
+    Across ++ Up.
+
+%%% THE CANVAS IS THE CONTROL: the pointer is the beam, which is what makes an
+%%% XY pair worth steering by hand -- two sliders cannot be moved together.
+%%%
+%%% Both axes go as two separate notifies of "Name=Value", the same wire format
+%%% a slider uses. Inventing a two-value message for this would mean the panel
+%%% could say something you cannot type at the csp prompt, and that is the one
+%%% property that makes it debuggable.
+%%%
+%%% In run mode the values land and the next tick commits them. Under /pause
+%%% they wait and ONE /step commits both -- the instant a board would see, with
+%%% x and y belonging to the same cycle.
+xy_handler(_Ws, _C, []) ->
+    ok;
+xy_handler(Ws, C, Sends) ->
+    {ok, Id} = wse:create_event(Ws),
+    Body = ["{ var r = this.getBoundingClientRect(); ",
+	    [send_js(Id, Ax, M) || {Ax, M} <- Sends], " }"],
+    %% Held, not hovered: a plot you cannot take your hand off is a plot you
+    %% cannot click anything else beside.
+    Move = wse:newf(Ws, "e", lists:flatten(["{ if (this.__xy) ", Body, " }"])),
+    Down = wse:newf(Ws, "e", lists:flatten(["{ this.__xy = 1; ", Body, " }"])),
+    Up = wse:newf(Ws, "e", "{ this.__xy = 0; }"),
+    wse:set(Ws, C, "onmousedown", Down),
+    wse:set(Ws, C, "onmousemove", Move),
+    wse:set(Ws, C, "onmouseup", Up),
+    wse:set(Ws, C, "onmouseleave", Up),
+    ok.
+
+%% The pointer's position as a fraction of the box, mapped onto the channel's
+%% own range -- min..max, not 0..full-scale, so a narrowed plot drives the same
+%% values it displays. Up is UP: the top of the box is max, as on a scope and
+%% unlike a canvas coordinate.
+send_js(Id, Axis, M) ->
+    Min = maps:get(min, M),
+    Max = maps:get(max, M),
+    {Frac, V} = case Axis of
+		    across -> {"(e.clientX - r.left) / (r.width || 1)", "vx"};
+		    up     -> {"(1 - (e.clientY - r.top) / (r.height || 1))",
+			       "vy"}
+		end,
+    %% One variable per axis: both axes are sent from the same function, and a
+    %% second `var v' in it is a redeclaration that reads as a bug even where
+    %% the language allows it.
+    ["var ", V, " = ", n(Min), " + Math.round(", Frac, " * ", n(Max - Min),
+     "); ",
+     V, " = ", V, " < ", n(Min), " ? ", n(Min), " : (", V, " > ", n(Max),
+     " ? ", n(Max), " : ", V, "); ",
+     "Wse.notify(", integer_to_list(Id), ", '", maps:get(name, M),
+     "=' + ", V, "); "].
+
+n(V) when is_integer(V) -> integer_to_list(V);
+n(V) when is_float(V)   -> lists:flatten(io_lib:format("~w", [trunc(V)])).
+
+css({R, G, B}) ->
+    lists:flatten(io_lib:format("rgb(~w,~w,~w)", [R, G, B])).
+
+%%% The afterglow. One cast per plot per tick: a translucent wash of the
+%%% background over the whole canvas, then the graticule, then the beam.
+%%%
+%%% The wash is what a phosphor does -- everything already drawn gets a little
+%%% dimmer, so the beam leaves a trail that fades instead of a line that stays.
+%%% The graticule is redrawn AFTER it, every tick, so it does not fade with the
+%%% trail: a scope's screen is printed, not drawn.
+plotter(Ws) ->
+    %% Five numbers per channel: where the beam WAS, where it is now, and the
+    %% colour. The segment is what turns ten samples a second into a curve
+    %% rather than ten dots -- a 2 s sweep at ?PERIOD is twenty of them, which
+    %% as dots reads as a dotted line and as segments reads as the signal.
+    %%
+    %% x0 < 0 means NO segment: the first sample after a rebuild, and a retrace
+    %% (see seg/2). The dot is drawn either way, so the beam is always visible.
+    %% The graticule follows the glass: rings and a crosshair on a round face,
+    %% a grid on a square one. Drawn after the wash either way, so it does not
+    %% fade with the trail -- a scope's screen is printed, not drawn.
+    %%
+    %% The beam HEAD blooms (shadowBlur), the trail does not: bloom on a stroke
+    %% is the expensive one, and it is the head that reads as a beam. Turned off
+    %% again straight after, or the graticule on the next tick would glow too.
+    %% The CLIP is a path, not a trust: border-radius does clip a canvas in the
+    %% browsers that matter, but nothing in the drawing says so. With it on, the
+    %% wash and the graticule stop at the glass too -- so the corners keep
+    %% whatever the CSS background put there and no beam can reach them.
+    wse:newf(Ws, "ctx,w,h,fade,round,clip,a",
+	     "{ if (clip) { ctx.save(); ctx.beginPath();"
+	     "    ctx.arc(w / 2, h / 2, Math.min(w, h) / 2 - 1, 0, 6.2832);"
+	     "    ctx.clip(); }"
+	     "  ctx.fillStyle = fade; ctx.fillRect(0, 0, w, h);"
+	     "  ctx.strokeStyle = '#203420'; ctx.lineWidth = 1;"
+	     "  if (round) {"
+	     "    var cx = w / 2, cy = h / 2, r = Math.min(w, h) / 2 - 2;"
+	     "    for (var g = 1; g <= 3; g++) {"
+	     "      ctx.beginPath(); ctx.arc(cx, cy, r * g / 3, 0, 6.2832);"
+	     "      ctx.stroke(); }"
+	     "    ctx.beginPath();"
+	     "    ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy);"
+	     "    ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy + r);"
+	     "    ctx.stroke(); }"
+	     "  else {"
+	     "    ctx.beginPath();"
+	     "    for (var k = 1; k < 4; k++) {"
+	     "      var p = Math.round(k * w / 4) + 0.5;"
+	     "      ctx.moveTo(p, 0); ctx.lineTo(p, h);"
+	     "      var q = Math.round(k * h / 4) + 0.5;"
+	     "      ctx.moveTo(0, q); ctx.lineTo(w, q); }"
+	     "    ctx.stroke(); }"
+	     "  for (var i = 0; i < a.length; i += 5) {"
+	     "    var c = a[i+4];"
+	     "    if (a[i] >= 0) {"
+	     "      ctx.strokeStyle = c; ctx.lineWidth = 1.6;"
+	     "      ctx.beginPath(); ctx.moveTo(a[i], a[i+1]);"
+	     "      ctx.lineTo(a[i+2], a[i+3]); ctx.stroke(); }"
+	     "    ctx.fillStyle = c;"
+	     "    ctx.shadowColor = c; ctx.shadowBlur = 7;"
+	     "    ctx.beginPath(); ctx.arc(a[i+2], a[i+3], 2.4, 0, 6.2832);"
+	     "    ctx.fill(); ctx.shadowBlur = 0; }"
+	     "  if (clip) ctx.restore(); }").
+
+%% How much of the last frame survives, as the wash that takes the rest away.
+%% Never zero: a plot that never clears fills in solid and shows nothing.
+%%
+%% Scaled by the TICK, because persistence is a time and not a number of frames.
+%% `persist=0.9' at 100 ms leaves a trail about a second long; without the
+%% scaling the same number at 10 ms would wash it away ten times as fast and the
+%% trail would vanish the moment you asked for a faster tick -- which is exactly
+%% when you want to see it. (1-a) is what survives one frame, so the exponent is
+%% how many of the old frames fit in the new one.
+fade(P, Ms) ->
+    {R, G, B} = ?PLOT_BG,
+    Keep = min(0.999, max(0.0, P)),
+    A = min(1.0, max(0.01, 1.0 - math:pow(Keep, Ms / ?PERIOD))),
+    lists:flatten(io_lib:format("rgba(~w,~w,~w,~.3f)", [R, G, B, A])).
 
 readout(Ws, Row) ->
     T = wse:createElement(Ws, "span"),
@@ -682,7 +1224,7 @@ loop(Ws, Link, S) ->
 		run  -> csp_link:tick(Link);
 		step -> ok
 	    end,
-	    erlang:send_after(?PERIOD, self(), tick),
+	    erlang:send_after(maps:get(period, S, ?PERIOD), self(), tick),
 	    loop(Ws, Link, S1);
 
 	{csp_exit, _Status} -> ok;
@@ -710,6 +1252,13 @@ control(_Ws, Link, S, "step=1") ->
 	run  -> ok
     end,
     S;
+%% A new tick takes effect on the NEXT one: the timer already in flight is left
+%% to arrive, so changing the rate cannot drop a tick or run two at once.
+control(_Ws, _Link, S, "period=" ++ Ms) ->
+    case string:to_integer(Ms) of
+	{N, _} when is_integer(N), N >= 5, N =< 10000 -> S#{period := N};
+	_                                             -> S
+    end;
 control(_Ws, _Link, S, _Other) ->
     S.
 
@@ -768,6 +1317,10 @@ paint1(Ws, {ok, {value, Node}}, V) ->
 %% the slider: csp owning it would fight the hand.
 paint1(_Ws, {ok, {invalue, _Node}}, _V) ->
     ok;
+%% A plot channel's number, in engineering units when the annotation gave enough
+%% to work them out. The beam is drawn on the tick, not here.
+paint1(Ws, {ok, {plotval, Node, M}}, V) ->
+    wse:set(Ws, Node, "textContent", lists:flatten(eng(V, M)));
 paint1(Ws, {ok, {pixel, Node}}, V) ->
     style(Ws, Node, [?PIXEL, "background:", rgb565(V)]);
 %% A slider is an INPUT: csp owning the value would fight the drag, so only the
@@ -806,8 +1359,57 @@ draw(Ws, S) ->
 		  end, {0, []}, maps:get(traces, S)),
 	    wse:cast(Ws, maps:get(paint, S), "call",
 		     [null, Ctx, wse:array(Items)]),
-	    S#{x := X + ?STEP}
+	    Ms = maps:get(period, S, ?PERIOD),
+	    S#{x := X + ?STEP,
+	       plots := [plot_tick(Ws, G, Last, Ms)
+			 || G <- maps:get(plots, S)]}
     end.
+
+%% The beam moves on the TICK, like the trace and for the same reason: csp dumps
+%% only what changed, so a plot driven by dumps stops the moment the program
+%% settles -- and a settled XY reading is still a reading. Drawing here also
+%% means the afterglow decays in wall time, which is what makes it read as one.
+plot_tick(Ws, G = #{x := undefined}, Last, Ms) ->
+    %% No x channel, so the beam sweeps: time along the bottom. See pick_x/3.
+    Sw = maps:get(sweep, G),
+    G1 = cast_plot(Ws, G, ?PAD + (Sw rem (?PLOT_W - 2 * ?PAD)), Last, Ms),
+    G1#{sweep := Sw + 2};
+plot_tick(Ws, G = #{x := X}, Last, Ms) ->
+    cast_plot(Ws, G, px(val(X, Last), X), Last, Ms).
+
+cast_plot(Ws, G = #{ctx := Ctx, plot := Plot, ys := Ys, persist := P,
+		    prev := Prev, round := Rnd, clip := Clip}, Px, Last,
+	  Ms) ->
+    {Items, Prev1} =
+	lists:foldl(
+	  fun(M, {Acc, Pm}) ->
+		  Name = maps:get(name, M),
+		  Py = py(val(M, Last), M),
+		  {X0, Y0} = seg(maps:get(Name, Pm, none), Px),
+		  {Acc ++ [X0, Y0, Px, Py, maps:get(colour, M)],
+		   Pm#{Name => {Px, Py}}}
+	  end, {[], Prev}, Ys),
+    wse:cast(Ws, Plot, "call",
+	     [null, Ctx, ?PLOT_W, ?PLOT_W, fade(P, Ms), Rnd, Clip,
+	      wse:array(Items)]),
+    G#{prev := Prev1}.
+
+%% Where to draw the segment from, or nowhere.
+%%
+%% A jump of more than half the width ACROSS is a retrace, not a signal: a sweep
+%% that reaches the right edge and starts again at the left would otherwise draw
+%% a bright diagonal back over the picture every cycle. A scope blanks that, and
+%% so does this. A jump UP is left alone -- on a square wave the vertical edge
+%% is the signal, and blanking it would hide the only interesting part.
+seg(none, _Px) ->
+    {-1, -1};
+seg({Pxp, Pyp}, Px) ->
+    case abs(Px - Pxp) > ?PLOT_W div 2 of
+	true  -> {-1, -1};
+	false -> {Pxp, Pyp}
+    end.
+
+val(M, Last) -> maps:get(maps:get(name, M), Last, 0).
 
 %% Digital is two levels; analog is a height in the row, so the trace reads as a
 %% waveform rather than a bit. A pixel is drawn as the colour itself -- a strip
@@ -819,7 +1421,9 @@ sample(_X, Top, Kind, W, V, _Hue) when Kind =:= meter;
 				       Kind =:= slider;
 				       Kind =:= dial;
 				       Kind =:= value;
-				       Kind =:= invalue ->
+				       Kind =:= invalue;
+				       Kind =:= plot;
+				       Kind =:= plotin ->
     H = ?ROW_H - 12,
     {Top + H - (H * min(V, full(W)) div max(full(W), 1)), "#3af"};
 %% The lamp's own colour, so a traffic light's three traces are red, yellow and
