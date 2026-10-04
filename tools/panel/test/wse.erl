@@ -14,7 +14,7 @@ id(X)                    -> {id, X}.
 array(L)                 -> {array, L}.   %% as the real wse marshals it
 createElement(_, Tag)    -> ?LOG("createElement ~s", [Tag]),
 			    {node, Tag, erlang:unique_integer([positive])}.
-createTextNode(_, T)     -> {text, T}.
+createTextNode(_, T)     -> ?LOG("createTextNode ~ts", [T]), {text, T}.
 appendChild(_, _, _)     -> ok.
 setStyle(_, _, V)        -> ?LOG("SYNC setStyle ~s", [V]), ok.
 set(_, _, A, V)          -> ?LOG("SYNC set ~p = ~p", [A, V]), ok.

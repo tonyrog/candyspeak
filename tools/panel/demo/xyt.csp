@@ -5,7 +5,7 @@
 #analog yout3:10 out unsigned 3
 #analog yout4:10 out unsigned 4
 
-#timer TSweep 4000 = 1
+#timer TSweep 1000 = 1
 #analog yin1:10 in unsigned 11
 #analog yin2:10 in unsigned 12
 #buffer data:4 in tcp 5555

@@ -116,6 +116,10 @@ declaration -> 'D_DEFINE' xid expr : {define,line('$1'),'$2','$3'}.
 %% already holds the map to catch it.
 declaration -> 'D_ANNOTATE' id id annotate_items :
 		   {annotate,line('$1'),'$2','$3','$4'}.
+%% `*' is the tool itself rather than one signal: `#annotate panel * trace=off'.
+%% What that means is the tool's business, like the keys.
+declaration -> 'D_ANNOTATE' id 'ASTERISK' annotate_items :
+		   {annotate,line('$1'),'$2',{'WORD',line('$3'),"*"},'$4'}.
 
 
 %% id in annotate may be any keyword or id
@@ -188,6 +192,9 @@ annotate_value -> aid    : '$1'.
 annotate_value -> 'INT' : '$1'.
 annotate_value -> 'FLT' : '$1'.
 annotate_value -> 'STR' : '$1'.
+%% A signed channel's range starts below zero: min=-512
+annotate_value -> 'MINUS' 'INT' : {'INT',line('$2'),"-" ++ element(3,'$2')}.
+annotate_value -> 'MINUS' 'FLT' : {'FLT',line('$2'),"-" ++ element(3,'$2')}.
 declaration -> 'D_END': {'end',line('$1')}.
 
 %% Special Immediates

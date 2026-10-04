@@ -123,6 +123,10 @@ run() ->
     %%     without the afterglow changing length.
     crt_check(),
 
+    %% 6k. label, hidden, color, unit, scale, min and max mean the same thing
+    %%     on every widget that can show them.
+    look_check(),
+
     %% 7. a program with no inputs at all still runs -- traffic.csp is driven
     %%    by its own timer, so the lamps must change with nobody touching
     %%    anything. That also proves the tick actually advances csp.
@@ -203,9 +207,9 @@ plot_check() ->
 	   [X3 || X3 <- New, string:find(X3, "300  0.293 V") =/= nomatch]
 	   =/= [],
 	   [X4 || X4 <- New, string:find(X4, "textContent") =/= nomatch]),
-    expect("the beam is drawn with an afterglow wash each tick",
-	   [X5 || X5 <- New, string:find(X5, "rgba(16,20,16") =/= nomatch]
-	   =/= [], length(New)),
+    expect("the beam is drawn with an afterglow decay each tick",
+	   [K || {K, _} <- plot_keeps(New), K > 0.0, K < 1.0] =/= [],
+	   length(New)),
 
     %% A SEGMENT, not a dot: five numbers per channel, and the pair at the
     %% front is where the beam was. Ten samples a second is a dotted line as
@@ -235,17 +239,21 @@ plot_check() ->
 %% The arrays handed to the plot painter, oldest first. Scanned back into terms
 %% rather than matched as text: the point of the check is the NUMBERS.
 plot_casts(L) ->
-    [Items || X <- L,
-	      Rest <- [string:prefix(X, "ASYNC cast call ")], Rest =/= nomatch,
-	      Items <- [cast_array(Rest)], Items =/= none].
+    [Items || {_Keep, Items} <- plot_keeps(L)].
+
+%% {Keep, Items} per plot cast: the decay and the beam it drew.
+plot_keeps(L) ->
+    [KI || X <- L,
+	   Rest <- [string:prefix(X, "ASYNC cast call ")], Rest =/= nomatch,
+	   KI <- [cast_array(Rest)], KI =/= none].
 
 cast_array(Text) ->
     case erl_scan:string(Text ++ ".") of
 	{ok, Toks, _} ->
 	    case erl_parse:parse_term(Toks) of
-		{ok, [null, _Ctx, _W, _H, _Fade, _Round, _Clip,
-		      {array, Items}]} ->
-		    Items;
+		{ok, [null, _Ctx, _W, _H, Keep, _Round, _Clip, _Beam, _Dot,
+		      _Glow, _Step, {array, Items}]} ->
+		    {Keep, Items};
 		_ -> none
 	    end;
 	_ -> none
@@ -292,11 +300,39 @@ crt_check() ->
     %% The afterglow is a TIME. The same persist= at a four times faster tick
     %% has to wash four times more gently, or asking for a faster tick would
     %% take the trail away -- which is when you most want it.
-    Slow = csp_panel:fade(0.9, 100),
-    Fast = csp_panel:fade(0.9, 25),
+    Slow = csp_panel:keep(0.9, 100),
+    Fast = csp_panel:keep(0.9, 25),
     expect("persistence is a time, not a number of frames",
-	   alpha(Slow) > alpha(Fast) andalso alpha(Fast) > 0.0 andalso
-	   abs(alpha(Slow) - 0.1) < 0.001, {Slow, Fast}),
+	   abs(Slow - 0.9) < 0.001 andalso Fast > Slow andalso
+	   abs(math:pow(Fast, 4) - Slow) < 0.001, {Slow, Fast}),
+    expect("persist=0 is no trail, and it never holds forever",
+	   csp_panel:keep(0, 100) == 0.0 andalso csp_panel:keep(1, 100) < 1.0,
+	   {csp_panel:keep(0, 100), csp_panel:keep(1, 100)}),
+
+    %% The decay reaches the background. The browser does it, so the test is
+    %% the same arithmetic: a wash of alpha 0.1 stalls five levels short; a
+    %% truncated multiply cannot stall, because it always takes at least one.
+    Wash = decay(fun(D) -> D - round(0.1 * D) end, 60),
+    Trunc = decay(fun(D) -> trunc(D * 0.9) end, 60),
+    expect("the afterglow decays all the way to the background",
+	   Wash > 0 andalso Trunc =:= 0, {Wash, Trunc}),
+
+    %% The beam: one setting of the picture, said once, like the glass.
+    Thin = "#analog x:10 in unsigned 0\n#analog y:10 in unsigned 1\n"
+	   "#annotate panel x kind=plot axis=x id=t beam=1 dot=0 glow=off "
+	   "line=step\n#annotate panel y kind=plot axis=y id=t\n",
+    TmpT = "/tmp/csp_thin.csp",
+    ok = file:write_file(TmpT, Thin),
+    {ok, AT} = candyspeak:parse(TmpT),
+    [GT] = csp_panel:plots(AT),
+    [GP] = csp_panel:plots(A),
+    expect("beam= dot= glow= line= set the beam",
+	   maps:with([beam, dot, glow, step], GT) =:=
+	   #{beam => 1, dot => 0, glow => false, step => true} andalso
+	   maps:with([beam, dot, glow, step], GP) =:=
+	   #{beam => 1.6, dot => 1.6 * 1.5, glow => true, step => false},
+	   {maps:with([beam, dot, glow, step], GT),
+	    maps:with([beam, dot, glow, step], GP)}),
 
     %% And the starting tick comes from the environment, with garbage refused
     %% rather than taken as zero -- a zero would be a tick with no wait in it.
@@ -326,6 +362,110 @@ crt_check() ->
 	   {clip_of("shape=round clip=sometimes"),
 	    clip_of("shape=square clip=sometimes")}).
 
+%% The look: one reading of the generic keys for every kind. Each of these was
+%% either plot-only or accepted and then ignored before.
+look_check() ->
+    Src = "#digital Lamp out 8\n"
+	  "#digital Btn in 2\n"
+	  "#analog  Temp:10 in 0\n"
+	  "#analog  Level:8 out unsigned 1\n"
+	  "#analog  Gone:8 out unsigned 2\n"
+	  "#analog  Swing:10 out 3\n"
+	  "#annotate panel Lamp color=amber label=\"Kök\"\n"
+	  "#annotate panel Btn  color=\"#0f0\" kind=push\n"
+	  "#annotate panel Temp kind=dial min=-200 max=0x3FF scale=0.1 "
+	  "unit=\"°C\"\n"
+	  "#annotate panel Level color=0x8040ff\n"
+	  "#annotate panel Gone hidden\n",
+    Tmp = "/tmp/csp_look.csp",
+    ok = file:write_file(Tmp, Src),
+    {ok, A} = candyspeak:parse(Tmp),
+    L = csp_panel:looks(A),
+    Get = fun(N, K) -> maps:get(K, maps:get(N, L)) end,
+    expect("color= names a lamp's colour, label= its label",
+	   Get("Lamp", colour) =:= {"#fb2", "#251c0c"} andalso
+	   Get("Lamp", label) =:= "K\x{f6}k",
+	   {Get("Lamp", colour), Get("Lamp", label)}),
+    expect("color= takes #rgb and 0xRRGGBB, and dims the unlit one",
+	   Get("Btn", colour) =:= {"#00ff00", "rgb(0,36,0)"} andalso
+	   element(1, Get("Level", colour)) =:= "#8040ff",
+	   {Get("Btn", colour), Get("Level", colour)}),
+    expect("min= may be negative and max= hex",
+	   {Get("Temp", min), Get("Temp", max)} =:= {-200, 1023},
+	   {Get("Temp", min), Get("Temp", max)}),
+    expect("a signed analog swings both ways without being told",
+	   {Get("Swing", min), Get("Swing", max)} =:= {-512, 511} andalso
+	   {Get("Level", min), Get("Level", max)} =:= {0, 255},
+	   {Get("Swing", min), Get("Swing", max)}),
+    Eng = lists:flatten(csp_panel:eng(215, maps:get("Temp", L))),
+    expect("scale= and unit= on a dial, not only on a plot",
+	   Eng =:= "215  21.500 \x{b0}C", Eng),
+    expect("hidden alone hides, nothing else does",
+	   Get("Gone", hidden) =:= true andalso Get("Lamp", hidden) =:= false,
+	   {Get("Gone", hidden), Get("Lamp", hidden)}),
+    expect("a colour nobody knows falls back to the default",
+	   csp_panel:colour("X", lamp, #{"color" => "mauve"}) =:=
+	   csp_panel:hue("X"), ok),
+
+    %% ...and through the rendering: the hidden one has no row, and the lamp
+    %% lights in the colour it was given rather than the one its name implies.
+    flush(),
+    P = track_panel(spawn(fun() -> csp_panel:run(fake_ws, "panel", Tmp) end)),
+    timer:sleep(?SETTLE),
+    C = calls(),
+    expect("a hidden widget gets no row",
+	   [X || X <- C, string:find(X, "Gone") =/= nomatch] =:= [], ok),
+    expect("the label is what the row says",
+	   [X || X <- C, string:find(X, "createTextNode K") =/= nomatch] =/= [],
+	   [X || X <- C, string:find(X, "createTextNode") =/= nomatch]),
+    P ! stop,
+    timer:sleep(300),
+    trace_check().
+
+%% The logic trace: labelled rows, trace=off per signal, and `* trace=off' for
+%% a panel that is only a GUI.
+trace_check() ->
+    Src = "#digital Lamp out 8\n#digital Quiet out 9\n#digital Btn in 2\n"
+	  "#annotate panel Quiet trace=off\n"
+	  "#annotate panel Lamp label=\"Front\"\n",
+    Tmp = "/tmp/csp_trace.csp",
+    ok = file:write_file(Tmp, Src),
+    flush(),
+    B0 = calls(),
+    P = track_panel(spawn(fun() -> csp_panel:run(fake_ws, "panel", Tmp) end)),
+    timer:sleep(?SETTLE),
+    C = calls() -- B0,
+    P ! stop,
+    timer:sleep(300),
+    Labels = [X || X <- C, string:prefix(X, "ASYNC cast call [null,{ctx},110")
+			       =/= nomatch],
+    expect("the trace is labelled, and trace=off leaves a row out",
+	   case Labels of
+	       [L] -> string:find(L, "Front") =/= nomatch andalso
+		      string:find(L, "Btn") =/= nomatch andalso
+		      string:find(L, "Quiet") =:= nomatch;
+	       _ -> false
+	   end, Labels),
+
+    Off = Src ++ "#annotate panel * trace=off\n",
+    ok = file:write_file(Tmp, Off),
+    {ok, AO} = candyspeak:parse(Tmp),
+    expect("candyspeak accepts * as a target",
+	   element(1, candyspeak:build(Tmp)) =:= ok, candyspeak:build(Tmp)),
+    expect("a `*' key is a default every widget inherits",
+	   lists:all(fun(#{trace := T}) -> T =:= false end,
+		     maps:values(csp_panel:looks(AO))), ok),
+    flush(),
+    B2 = calls(),
+    P2 = track_panel(spawn(fun() -> csp_panel:run(fake_ws, "panel", Tmp) end)),
+    timer:sleep(?SETTLE),
+    C2 = calls() -- B2,
+    P2 ! stop,
+    timer:sleep(300),
+    expect("* trace=off: no trace canvas at all",
+	   [X || X <- C2, string:find(X, "createElement canvas") =/= nomatch]
+	   =:= [], length(C2)).
+
 %% One plot, built from the annotation text under test.
 clip_of(Opts) ->
     Src = "#analog c:10 in unsigned 0\n"
@@ -336,11 +476,8 @@ clip_of(Opts) ->
     [G] = csp_panel:plots(A),
     maps:get(clip, G).
 
-%% The alpha out of "rgba(r,g,b,a)".
-alpha(S) ->
-    [_, A] = string:split(S, ",", trailing),
-    {F, _} = string:to_float(string:trim(A, trailing, ")")),
-    F.
+%% Where a pixel 60 levels above the background ends up after 200 ticks.
+decay(F, D) -> lists:foldl(fun(_, X) -> F(X) end, D, lists:seq(1, 200)).
 
 %% A #field reads as an analog channel of the width its window has. WHO OWNS THE
 %% VALUE decides whether the panel may drive it: a buffer with a transport is
@@ -369,7 +506,7 @@ field_check() ->
 	   "#field  Px:16 unsigned In[0..15]\n"
 	   "#field  Py:16 In[16..31]\n"
 	   "#annotate panel Px kind=plot axis=x id=scope\n"
-	   "#annotate panel Py kind=plot axis=y id=scope colour=cyan\n",
+	   "#annotate panel Py kind=plot axis=y id=scope color=cyan\n",
     Tmp2 = "/tmp/csp_field_plot.csp",
     ok = file:write_file(Tmp2, Plot),
     {ok, A2} = candyspeak:parse(Tmp2),
@@ -387,7 +524,7 @@ field_check() ->
 	   {maps:get(min, Y), maps:get(max, Y)} =:= {-32768, 32767},
 	   {maps:get(min, X), maps:get(max, X),
 	    maps:get(min, Y), maps:get(max, Y)}),
-    expect("colour= names the beam", maps:get(colour, Y) =:= "#3dd",
+    expect("color= names the beam", maps:get(colour, Y) =:= "#3dd",
 	   maps:get(colour, Y)).
 
 %% The plot canvas's event id, taken from the handler the panel built: the body

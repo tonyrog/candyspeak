@@ -263,7 +263,8 @@ check_annotations(_Decls, Bound) ->
 check_targets([{Tool, Target, Ln} | T], Bound) ->
     case maps:is_key(Target, Bound) orelse
 	 is_state(Target, maps:get(states, Bound, [])) orelse
-	 Target =:= "State" of
+	 Target =:= "State" orelse
+	 Target =:= "*" of                      % the tool itself
 	true  -> check_targets(T, Bound);
 	false -> {error, {annotate_unknown_target, Tool, Target, Ln}}
     end;

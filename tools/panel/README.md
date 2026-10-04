@@ -50,10 +50,9 @@ The menu lists every `.csp` in `demo/` and in the tree's `examples/`. Choosing
 one closes that csp, tears the panel down and rebuilds it from the new file's
 declarations, so nothing is shared between programs.
 
-All 66 files in `examples/` parse; 24 of them have digital pins and therefore a
-panel. `traffic.csp` is a good next one to look at. The rest say what they do
-declare and that only `digital` is wired up so far -- an empty panel otherwise
-looks like a failure.
+`traffic.csp` is a good next one to look at. A file with no digital, analog or
+field declarations says what it does declare instead -- an empty panel
+otherwise looks like a failure.
 
 A file can also be passed straight from the page:
 
@@ -74,7 +73,15 @@ direction in them decides the widget:
 
 Add a declaration to the `.csp` file and the widget appears. That is the whole
 of `csp_panel:widgets/1`, and it is why there is no second file to keep in step
-with the program. Variables and fields are each one more clause in it.
+with the program. Fields are wired up too; variables are one more clause.
+
+What the declaration cannot say -- momentary or latching, a dial or a slider, a
+colour, a label, a unit -- is said next to it with `#annotate panel`:
+
+    #annotate panel IndoorTemp kind=dial min=-200 max=400 scale=0.1 unit="°C"
+
+**[doc/panel.md](../../doc/panel.md) is the reference**: every widget, every
+key, which keys apply to which widget, and the XY plot.
 
 The width comes from the declaration's resolution, so `#analog Light:10 in 0:8`
 is a 0..1023 slider without anyone saying so.
@@ -89,7 +96,7 @@ A slider is an **input**, so csp does not own its position: the readout follows
 the program but the control stays where your hand left it. Otherwise dragging it
 would fight the cycle that writes it back.
 
-**Lamps take their colour from the name.** `Red`, `Yellow`, `Green`, `Blue`,
+**Lamps take their colour from the name** unless `color=` says otherwise. `Red`, `Yellow`, `Green`, `Blue`,
 `White` and the Swedish spellings are recognised anywhere in the name; anything
 else is red, which is what a bare indicator LED usually is. The declaration says
 `out 5` and nothing about colour, so the name is the only thing that knows -- and
