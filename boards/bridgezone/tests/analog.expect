@@ -1,0 +1,13 @@
+{modes, [seq]}.
+{stimulus, "boards/bridgezone/tests/analog.dat"}.
+{cycles, 150}.
+%% 512 counts of a 10-bit input is 32768 on the 16-bit scale the outputs
+%% work in, and a dimmer driven by an analog value takes the VALUE as its
+%% level, not the step it maps to (get_pwm_high: `if (an) return an').
+%% Back out on the 10-bit PWM pin that is 512 again.
+{checks, [
+  {final_object_var, "Output.o2", "o2.State", 4},
+  {final_object_var, "Output.o2", "o2.Duty", 32768},
+  {final_object_var, "Drive.d2", "d2.Step", 9},
+  {final_var, "Pout2", 512}
+]}.

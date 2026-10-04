@@ -1,0 +1,8 @@
+// A springback key toggles an on/off output: Din1 -> Dout1 (channel 7).
+//
+// The program is main.csp, imported below; the rest of this file is the
+// configuration, as config.csp is on a boat. The key is
+// driven from toggle.dat through -F, the way the pin would be.
+#import "../main.csp"
+> in1.Flags = INPUT_ACTIVE | INPUT_DIGITAL | INPUT_SPRINGBACK
+> in1.Out = 0x0040

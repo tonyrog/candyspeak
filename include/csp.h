@@ -739,15 +739,19 @@ extern int ro_strcpy(char* dst, rostring_t src, int max);
 #elif defined(ARDUINO) || defined(CSP_SMALL_TARGET)
 #define CSP_DEFINE_BYTES 128
 #else
-// 1024 on a HOST, where this is a few hundred bytes of a megabyte-scale arena.
+// Large on a HOST, where this is a few hundred bytes of a megabyte-scale arena.
 // 512 was not enough for private/pilot: twenty-one #defines, and adding two
 // command codes tipped it over. The failure is honest ("too many #define names
 // -- max 512 bytes") but it is a limit about the BUILD, not about the program,
 // and a host has no reason to impose a board's.
 //
+// 2048 since boards/bridgezone: a module's #local names ride in the same
+// buffer while the module is parsed, and its Output state machine has sixty of
+// them on top of the program's defines.
+//
 // A board still gets 128, or 0 when it has no parser at all -- a #define is a
 // compile-time name and an exec-only node cannot make one.
-#define CSP_DEFINE_BYTES 1024
+#define CSP_DEFINE_BYTES 2048
 #endif
 #endif
 
@@ -1688,6 +1692,11 @@ typedef enum {
     // More interrupt sources than the pending word has bits. Not a syntax
     // error: it is raised while arming, where the count is first known.
     ERR_TOO_MANY_EVENTS,
+    ERR_TOO_MANY_PARTS,
+    ERR_MODULE_TOO_LONG,
+    ERR_NO_IMPORT,
+    ERR_IMPORT_WHERE,
+    ERR_IMPORT_MISSING,
 } csp_err_t;
 
 // parser state, save state before parse
@@ -1826,6 +1835,18 @@ typedef struct {
                                  // after it are not silently absorbed into a
                                  // module that can never be closed
     int     ent;                 // entry op of module in st->instr
+    uint16_t def_mark;           // def_used at #module: #end rolls the module's
+                                 // #local names back to here
+#if defined(CSP_HAVE_IMPORT)
+    // An #import the compiler has read and the port has not yet loaded. The
+    // compiler cannot load it itself: it sits inside csp_parse, which is not
+    // re-entrant, and the file system belongs to the port. So the line leaves
+    // the request here and whoever called csp_parse runs csp_import_run.
+    uint8_t imp_pending;
+    char    imp_root[CSP_IMPORT_ROOT];  // "" for a bare name or a quoted path
+    char    imp_path[CSP_IMPORT_PATH];
+    uint8_t imp_quoted;                 // the path was a "string"
+#endif
     // temp var list during <- parsing (own scratch, set by csp_rt_init).
     // xindex_t: an entry becomes an OP_CHG on the variable, and `x <- safe.a`
     // has to watch safe's field, not the module template's.
@@ -3045,6 +3066,10 @@ static inline int decl_name_empty(csp_rt_t* st, index_t ix)
 
 // `cs` is the compiler's state, or NULL for a node that only runs images.
 extern int     csp_rt_init(csp_rt_t*,  int reactive, csp_cstate_t* cs);
+// Load the #import the last parsed line asked for (cs->imp_*). The port's: it
+// owns the file system. 0 loaded or already loaded, -1 with an error set,
+// -2 when a line inside the imported file failed and has been reported.
+extern int     csp_import_run(csp_rt_t* st);
 extern int     csp_mem_init(csp_rt_t*, size_t size);
 // Memory an already-parsed program needs, computed WITHOUT running csp_rt_start
 // (mirrors its global+object walk, counting only). Lets /memory and -b show the

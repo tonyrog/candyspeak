@@ -1,0 +1,8 @@
+// Helper for import.csp: not a test of its own (tests/unit/import/ is not
+// scanned). Imports its neighbour by a path relative to ITSELF, not to the
+// file that imported it.
+#import "step.csp"
+#module Counter
+  #variable N
+  N = N + Step
+#end

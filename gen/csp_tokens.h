@@ -95,7 +95,7 @@ typedef enum {
     D_ANNOTATE,
     D_UART,
     D_SOCKET,
-    D_MOD,
+    D_IMPORT,
     D_LAST,
 } dtok_t;
 
@@ -186,6 +186,7 @@ typedef enum {
     DECL_ENT(D_ROUTE,DECL_ROUTE,s_route), \
     DECL_ENT(D_WHEN,DECL_NONE,s_when), \
     DECL_ENT(D_ANNOTATE,DECL_NONE,s_annotate), \
+    DECL_ENT(D_IMPORT,DECL_NONE,s_import), \
     DECL_ENT(D_LAST,DECL_NONE,s_null),
 
 // Names for tok_name(), indexed by tok_t.

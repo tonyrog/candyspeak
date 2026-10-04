@@ -1453,7 +1453,10 @@ adc_chan(F) ->
 catch_int(S) -> case string:to_integer(S) of {N, ""} -> N; _ -> false end.
 
 adc_map(Muxed) ->
-    Ch = [{Pin, C} || {Pin, F} <- Muxed, (C = adc_chan(F)) =/= false],
+    %% The binding as a generator: inside the filter, newer OTP warns that it is
+    %% deprecated -- on stderr, into the $(shell) that Makefile.board reads B
+    %% from, and every board build then failed on a path full of the warning.
+    Ch = [{Pin, C} || {Pin, F} <- Muxed, C <- [adc_chan(F)], C =/= false],
     case Ch of
 	[] -> [];
 	_ ->

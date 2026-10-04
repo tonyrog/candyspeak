@@ -60,7 +60,7 @@ enum {
     P_CHOICE,     // alternatives: P_CHOICNE, <n>, P_ALT,<len1> P_ALT_END, ...alt1..., <len2>, ...alt2...    P_CHOICE_END,
     P_ALT,        // alternatives: P_ALT, <n>, <len1>, ...alt1..., <len2>, ...alt2...
     P_REP,        // repeat: P_REP, <len>, ...pattern...
-    P_ARRAY,      // setup array: P_ARRAY, <base_offset>, <element_size>
+    P_ARRAY,      // setup array: P_ARRAY, <base_offset>, <element_size>, <count>, <first>
     P_PAT,        // sub pattern: P_PAT, pat_id, <offset>
 };
 

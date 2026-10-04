@@ -1,0 +1,3 @@
+# Closed at 100 ms and left closed. One pulse is 600 ms, three are 1800.
+0      Din2=0
+100    Din2=1

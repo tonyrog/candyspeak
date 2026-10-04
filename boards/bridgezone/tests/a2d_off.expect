@@ -1,0 +1,9 @@
+{modes, [seq]}.
+{stimulus, "boards/bridgezone/tests/a2d_off.dat"}.
+{cycles, 750}.
+%% 100 counts is 6400, under AnMin 16384: released, and a switch released is
+%% off.
+{checks, [
+  {final_var, "Dout4", 0},
+  {final_object_var, "Input.in6", "in6.ALvl", 0}
+]}.

@@ -1,0 +1,7 @@
+{cycles, 3}.
+{checks, [
+  {final_var, "Q", 0},
+  {final_var, "R", 0},
+  {final_var, "W", -2147483648},
+  {final_var, "F", 0.0}
+]}.

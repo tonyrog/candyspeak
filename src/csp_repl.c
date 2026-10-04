@@ -2835,6 +2835,19 @@ static int csp_process_immediate(csp_rt_t* st, char* line)
     return 0;
 }
 
+#if defined(CSP_HAVE_IMPORT)
+// #import: port/csp_linux.c has the files and replaces this. A host program
+// that links the REPL without that port has nothing to read them from. Here,
+// beside its only caller, and not in csp_transport.c: tests link that file
+// without the runtime, and this needs csp_set_error.
+__attribute__((weak)) int csp_import_run(csp_rt_t* st)
+{
+    st->cs->imp_pending = 0;
+    csp_set_error(st, ERR_NO_IMPORT);
+    return -1;
+}
+#endif
+
 // Process persistent definition (# declaration or rule)
 static int csp_process_persistent(csp_rt_t* st, char* line)
 {
@@ -2858,6 +2871,22 @@ static int csp_process_persistent(csp_rt_t* st, char* line)
 	    csp_pstate_restore(st, &pm);
 	return -1;
     }
+#if defined(CSP_HAVE_IMPORT)
+    // `#import` at the prompt: the line only asked; load it now that csp_parse
+    // is done. -2 means a line inside the file failed and has said so.
+    if (st->cs->imp_pending) {
+	int r = csp_import_run(st);
+	if (r < 0) {
+	    if (r == -1) {
+		csp_print_lit("Error: ");
+		csp_print_error(st);
+		csp_println();
+	    }
+	    csp_clr_error(st);
+	    return -1;
+	}
+    }
+#endif
     // A new declaration grows the leaf space, so once started we must re-run
     // rt_start now to keep view/dset/buf/heap sized to it (a stale, too-small
     // view would be read out of bounds). Values re-init as they always do on a

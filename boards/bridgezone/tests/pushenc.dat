@@ -1,0 +1,9 @@
+# A short press turns it on and ARMS the encoder. Pressed again while armed,
+# it steps -- the other way from last time, so up from the start -- every
+# 300 ms while held, and the press itself is not a press: it does not turn
+# the dimmer off. 300..1290 held: steps at 600, 900 and 1200.
+0      Din1=0
+100    Din1=1
+150    Din1=0
+300    Din1=1
+1290   Din1=0

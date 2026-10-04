@@ -1,0 +1,4 @@
+# The pot to half and left there. lib/analog samples every 500 ms and reports
+# a change of more than one count.
+0      Ain1=0
+100    Ain1=512

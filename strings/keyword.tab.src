@@ -74,6 +74,7 @@ buffer buffer
 route route
 when when
 annotate annotate
+import import
 value value
 pin pin
 port port

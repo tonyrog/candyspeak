@@ -819,7 +819,7 @@ NOINLINE int is_module_local(csp_rt_t* st, xindex_t di)
 
 // The declaration keyword table. Compiler-only: nothing else looks a
 // declaration name up. Rows generated from utils/syntax.terms, which also
-// generates the dtok_t enum indexing them -- D_UART, D_SOCKET and D_MOD are
+// generates the dtok_t enum indexing them -- D_UART and D_SOCKET are
 // enum members with no row, and stay that way so D_LAST does not move.
 const op_entry_t decl_table[] RODATA = {
     CSP_DECL_TABLE
@@ -3177,6 +3177,9 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
     }
 
     st->cs->mdef = ix;  // current module being defined
+#if CSP_DEFINE_BYTES > 0
+    st->cs->def_mark = st->def_used;    // see the note at def_add_local
+#endif
     if (!asm_ENTER(st, &jx, 0, ix))
 	return -1;
     // ON THE SAME STACK as #in and #when. A module IS a block that `#end`
@@ -3259,13 +3262,32 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
     if (!asm_LEAVE(st, &lx, 0, 0))
 	return -1;
     // ent MUST be OP_ENTER!
+    //
+    // e_num is a narrow field. Too long a body WRAPPED in it, and the ENTER
+    // then skipped to somewhere inside the module: no error, and an `#in INIT'
+    // that never ran. Written, read back, and refused if it did not survive.
     csp_instr_set_e_num(ram_instr_at(st, st->cs->ent), (lx - st->cs->ent - 1));
+    if (instr(st, st->cs->ent, e_num) != (unsigned)(lx - st->cs->ent - 1)) {
+	csp_instr_t probe;
+	memset(&probe, 0, sizeof(probe));
+	csp_instr_set_e_num(&probe, 0xffff);
+	if (csp_set_error(st, ERR_MODULE_TOO_LONG)) {
+	    csp_set_err_arg_int(st, 0, lx - st->cs->ent - 1);
+	    csp_set_err_arg_int(st, 1, csp_instr_get_e_num(&probe));
+	}
+	return -1;
+    }
     csp_instr_set_v_num(ram_instr_at(st, lx), instr(st, st->cs->ent, e_num));
     csp_instr_set_v_mx(ram_instr_at(st, lx), instr(st, st->cs->ent, e_mx));
     // stack?
     st->cs->mdef = BAD_INDEX;
     st->cs->ent = 0;
     st->cs->sx   = st->cs->save_sx;
+#if CSP_DEFINE_BYTES > 0
+    // The module's #local names end with it. The note at def_add_local said so
+    // and nothing did it: two modules could not both have a `#local Now'.
+    st->def_used = st->cs->def_mark;
+#endif
     blk_pop(st);
     return 0;
 }
@@ -3652,6 +3674,7 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 }
 
 NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, int ti, size_t n);
+NOINLINE int csp_parse_import(csp_rt_t* st, token_t* tv, int ti, size_t n);
 
 // '#' 'local' <name>[':' <size>] [<opt>+] '=' <expr>
 //
@@ -5358,6 +5381,56 @@ NOINLINE int csp_parse_when(csp_rt_t* st, token_t* tv, int ti, size_t n)
 // since it. The mirror of close_in_block, and the same one-line patch.
 
 
+// '#' 'import' <name> | <root> "<path>" | "<path>"
+//
+// Reads the line and leaves the request in cs->imp_*; it loads nothing. The
+// caller of csp_parse runs csp_import_run once the line is done -- csp_parse is
+// not re-entrant, and the file system is the port's (csp_rt.c/csp_compile.c
+// never touch one). See utils/syntax.terms for what the three forms mean.
+//
+// At the top level only. An import inside a module would splice another file's
+// declarations into it, which nobody means.
+static int copy_name(csp_rt_t* st, char* dst, size_t max, const token_t* t)
+{
+    if ((size_t)t->v.str.len >= max) {
+	csp_set_error(st, ERR_NAME_TOO_LONG);
+	return -1;
+    }
+    memcpy(dst, t->v.str.ptr, t->v.str.len);
+    dst[t->v.str.len] = '\0';
+    return 0;
+}
+
+NOINLINE int csp_parse_import(csp_rt_t* st, token_t* tv, int ti, size_t n)
+{
+    int k = (int)n;
+    while ((k > ti) && (tv[k-1].t == NEWLINE))
+	k--;                                    // the tokens that say something
+    if ((st->cs->blk_depth > 0) || (st->cs->mdef != BAD_INDEX)) {
+	csp_set_error(st, ERR_IMPORT_WHERE);
+	return -1;
+    }
+    if (!(((k - ti) == 1) && ((tv[ti].t == WORD) || (tv[ti].t == STR))) &&
+	!(((k - ti) == 2) && (tv[ti].t == WORD) && (tv[ti+1].t == STR))) {
+	csp_set_error(st, ERR_SYNTAX);
+	return -1;
+    }
+#if defined(CSP_HAVE_IMPORT)
+    st->cs->imp_root[0] = '\0';
+    st->cs->imp_quoted = (tv[k-1].t == STR);
+    if (((k - ti) == 2) &&
+	(copy_name(st, st->cs->imp_root, sizeof(st->cs->imp_root), &tv[ti]) < 0))
+	return -1;
+    if (copy_name(st, st->cs->imp_path, sizeof(st->cs->imp_path), &tv[k-1]) < 0)
+	return -1;
+    st->cs->imp_pending = 1;
+    return 0;
+#else
+    csp_set_error(st, ERR_NO_IMPORT);
+    return -1;
+#endif
+}
+
 // #in <state> [<state> ...]  -- a block that runs in ANY of the listed states.
 // Multiple states OR together (see open_in_block). A single state is the common
 // case and emits exactly one OP_INSTATE, byte-identical to the pre-multi format.
@@ -5376,7 +5449,8 @@ NOINLINE int csp_parse_in(csp_rt_t* st, token_t* tv, int ti, size_t n)
     for (i = ti; (i < (int)n) && (tv[i].t == WORD); i++) {
 	int s;
 	if (ns >= MAX_IN_STATES) {
-	    csp_set_error(st, ERR_SYNTAX);
+	    if (csp_set_error(st, ERR_TOO_MANY_PARTS))
+		csp_set_err_arg_int(st, 0, MAX_IN_STATES);
 	    return -1;
 	}
 	if ((s = lookup_state(st, &tv[i].v.str)) < 0) {
@@ -5466,21 +5540,25 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 	    r = csp_parse_define(st, tv, 2, num);
 	}
 	else if ((tv[0].t == HASH) && (tv[1].t == WORD)) {
-	    int i;
+	    int i = find_decl_entry(tv[1].v.str.ptr,tv[1].v.str.len);
 	    // `#variable out = 0`: `out` is a direction keyword, so the scanner
 	    // hands it over as a token and not a WORD -- pmatch's {str, name}
 	    // then simply does not match and the whole line reports "syntax
 	    // error", which sends the reader to look at the punctuation. Nine
 	    // words behave this way (out, in, pwm, pullup, can, big, little,
 	    // integer, unsigned); say which one it was.
-	    if ((num > 2) && (tv[2].t != WORD) && (tv[2].t != NEWLINE) &&
-		(tv[2].t < T_LAST)) {
+	    //
+	    // Not after #when: what follows it is a CONDITION, not a name, and
+	    // `#when !Busy' was refused as "! is a reserved word".
+	    if ((i != D_WHEN) && (i != D_IMPORT) && (num > 2) &&
+		(tv[2].t != WORD) &&
+		(tv[2].t != NEWLINE) && (tv[2].t < T_LAST)) {
 		if (csp_set_error(st, ERR_RESERVED_NAME))
 		    csp_set_err_arg_rostr(st,
 			0, (rostring_t)ro_ptr(&tok_table[tv[2].t].name));
 		return -1;
 	    }
-	    if ((i = find_decl_entry(tv[1].v.str.ptr,tv[1].v.str.len)) >= 0) {
+	    if (i >= 0) {
 		// decl_table is indexed BY the keyword token, so `i` IS the
 		// dtok. #local maps to DECL_VARIABLE exactly as #variable does
 		// -- they differ by a bit, not a type -- so it has to be told
@@ -5504,6 +5582,8 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 		// tool named in the annotation owns that space.
 		else if (i == D_ANNOTATE)
 		    r = 0;
+		else if (i == D_IMPORT)
+		    r = csp_parse_import(st, tv, 2, num);
 		else
 		switch(decl_table_code(i)) {
 		case DECL_MODULE:

@@ -1,0 +1,14 @@
+// Division by zero is 0, and so is the remainder -- it used to be a SIGFPE on
+// the host and a fault on a board, taking the whole runtime down because one
+// rule divided by a parameter nobody had set. INT_MIN / -1 traps the same way
+// on x86; it wraps, as + and * do.
+#variable Z = 0
+#variable M = -2147483647
+#variable Q = 0
+#variable R = 0
+#variable W = 0
+#variable F float = 0.0
+Q = 7 / Z
+R = 7 % Z
+W = (M - 1) / -1
+F = 2.5 / (Z * 1.0)

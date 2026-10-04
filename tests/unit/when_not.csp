@@ -1,0 +1,12 @@
+// A #when condition is an expression, so it may start with `!', `(' or `-'.
+// It was refused as "! is a reserved word and cannot be a name": the check
+// meant for `#variable out' ran after #when too.
+#variable B = 0
+#variable C = 0
+#variable D = 0
+#when !B
+  C = 1
+#end
+#when (B == 0) && !(B > 0)
+  D = 2
+#end

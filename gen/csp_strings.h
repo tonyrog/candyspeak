@@ -125,6 +125,16 @@ extern rochar s_err_reserved_name[43] RODATA;
 #define ros_err_reserved_name ((rostring_t) s_err_reserved_name)
 extern rochar s_err_many_events[37] RODATA;
 #define ros_err_many_events ((rostring_t) s_err_many_events)
+extern rochar s_err_many_parts[37] RODATA;
+#define ros_err_many_parts ((rostring_t) s_err_many_parts)
+extern rochar s_err_module_long[41] RODATA;
+#define ros_err_module_long ((rostring_t) s_err_module_long)
+extern rochar s_err_no_import[45] RODATA;
+#define ros_err_no_import ((rostring_t) s_err_no_import)
+extern rochar s_err_import_where[60] RODATA;
+#define ros_err_import_where ((rostring_t) s_err_import_where)
+extern rochar s_err_import_missing[31] RODATA;
+#define ros_err_import_missing ((rostring_t) s_err_import_missing)
 extern rochar s_err_opts_after_pin[74] RODATA;
 #define ros_err_opts_after_pin ((rostring_t) s_err_opts_after_pin)
 extern rochar s_err_block_open[39] RODATA;
@@ -275,6 +285,8 @@ extern rochar s_when[5] RODATA;
 #define ros_when ((rostring_t) s_when)
 extern rochar s_annotate[9] RODATA;
 #define ros_annotate ((rostring_t) s_annotate)
+extern rochar s_import[7] RODATA;
+#define ros_import ((rostring_t) s_import)
 extern rochar s_value[6] RODATA;
 #define ros_value ((rostring_t) s_value)
 extern rochar s_pin[4] RODATA;

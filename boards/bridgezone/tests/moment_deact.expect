@@ -1,0 +1,6 @@
+{modes, [seq]}.
+{stimulus, "boards/bridgezone/tests/moment_deact.dat"}.
+%% ...and 1.2 s is inside the 300 ms after the release: still on, in deact.
+%% That is the C: a release sets DEACTIVATE, and DEACT waits deact_tm.
+{cycles, 120}.
+{checks, [ {final_var, "Dout2", 1}, {final_object_var, "Output.o8", "o8.State", 8} ]}.

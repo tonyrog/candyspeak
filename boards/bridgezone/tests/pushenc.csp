@@ -1,0 +1,6 @@
+// A push dimmer: one springback key on Din1 does on/off AND brightness.
+// Dimmer on Pout1, 20 steps (the default step table, 5% each).
+#import "../main.csp"
+> in1.Flags = INPUT_ACTIVE | INPUT_DIGITAL | INPUT_SPRINGBACK | INPUT_PUSH_ENCODER
+> in1.Out = 0x0001
+> o1.Type = TYPE_DIMMER

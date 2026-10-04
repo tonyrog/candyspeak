@@ -302,7 +302,8 @@ enc({choice, Alts}, Ctx, Ind, S) ->
      ++ [{Ind, ["P_CHOICE_END"]}], S1};
 enc({rep, F, From, Items}, Ctx, Ind, S) ->
     {Body0, S1} = enc_list(Items, Ctx, Ind + 1, S),
-    Body = [{Ind + 1, ["P_ARRAY", aoff(F, From, Ctx), esize(F, Ctx)]}]
+    Body = [{Ind + 1, ["P_ARRAY", aoff(F, From, Ctx), esize(F, Ctx),
+		       ecount(F, From, Ctx), integer_to_list(From)]}]
 	   ++ Body0 ++ [{Ind + 1, ["P_REP_END"]}],
     {[{Ind, ["P_REP", len(Body)]} | Body], S1}.
 
@@ -322,6 +323,19 @@ aoff(F, 0, #{struct := S}) ->
     ["csp_offsetof(", ctname(S), ", ", atom_to_list(F), ")"];
 aoff(F, N, #{struct := S}) ->
     ["csp_offsetof(", ctname(S), ", ", atom_to_list(F), "[", integer_to_list(N), "])"].
+
+%% How many elements the repetition may still fill: the array's size less where
+%% it starts. P_REP stops there with ERR_TOO_MANY_PARTS. Without it a tenth
+%% `, X = 1' in a rule wrote straight past rule_param_t on the stack.
+ecount(F, From, #{struct := S, structs := Structs}) ->
+    {S, Fields} = lists:keyfind(S, 1, Structs),
+    {F, {array, _E, Max}} = lists:keyfind(F, 1, Fields),
+    %% followed by From itself, so the error can name the whole array's size
+    %% and not what was left of it. Two ITEMS: len/1 counts items as bytes.
+    case From of
+	0 -> ["(", val(Max), ")"];
+	_ -> ["(", val(Max), ")-", integer_to_list(From)]
+    end.
 
 esize(F, #{struct := S, structs := Structs}) ->
     {S, Fields} = lists:keyfind(S, 1, Structs),

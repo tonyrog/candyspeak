@@ -1,0 +1,7 @@
+// A potentiometer on Ain1 dims Pout2. The output is on from power-up
+// (OUTPUT_FLAG_ONDEF), so the pot is all there is to it.
+#import "../main.csp"
+> in5.Flags = INPUT_ACTIVE | INPUT_ANALOG
+> in5.Out = 0x0002
+> o2.Type = TYPE_DIMMER
+> o2.Flags = OUTPUT_FLAG_OUTACT | OUTPUT_FLAG_ONDEF

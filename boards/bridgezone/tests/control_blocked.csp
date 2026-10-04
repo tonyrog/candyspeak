@@ -1,0 +1,9 @@
+// A control channel. Din4 is a springback key on Pout4 (channel 4), but the
+// output is CTL_AND: it only turns on while its control counter is above
+// Ctlk. Din3, a switch, is that control.
+#import "../main.csp"
+> in4.Flags = INPUT_ACTIVE | INPUT_DIGITAL | INPUT_SPRINGBACK
+> in4.Out = 0x0008
+> in3.Flags = INPUT_ACTIVE | INPUT_DIGITAL
+> in3.Ctl = 0x0008
+> d4.CtlType = CTL_AND

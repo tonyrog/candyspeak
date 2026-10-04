@@ -293,7 +293,18 @@
 %% Keeping them keeps D_LAST -- and so decl_table's size -- where it is.
 {decl, 'D_UART'}.
 {decl, 'D_SOCKET'}.
-{decl, 'D_MOD'}.
+
+%% #import <name> | #import <root> "<path>" | #import "<path>" -- load another
+%% source file, once. A COMPILE-TIME thing: the compiler only reads the line and
+%% leaves the request for the port, which owns the file system (see
+%% csp_import_run). A board has none and says so.
+%%
+%%   #import analog            analog.csp, searched for in the roots in order
+%%   #import lib "analog.csp"  exactly that file in the root named lib
+%%   #import "pins.csp"        relative to the importing file, no search
+%%
+%% In the old D_MOD placeholder's slot, so D_LAST does not move.
+{decl, 'D_IMPORT',   import,    'import',   'DECL_NONE',     hand_written}.
 
 {decl, 'D_LAST',     undefined, 'null',     'DECL_NONE',     undefined}.
 

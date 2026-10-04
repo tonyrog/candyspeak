@@ -1,0 +1,15 @@
+{modes, [seq]}.
+{stimulus, "boards/bridgezone/tests/pulse.dat"}.
+%% 10 ms a cycle on the beat: 250 cycles is 2.5 s, well past three pulses.
+{cycles, 250}.
+%% done_fn REPEAT with done_repeat 2 is the first pulse and two more. The
+%% repeat counter is armed when the output is activated and counted down in
+%% the wait; at 0 the wait ends in STOP and the output is off -- although the
+%% switch is still closed, because nothing re-activates an output that is
+%% not off.
+{checks, [
+  {final_object_var, "Output.o2", "o2.State", 3},
+  {final_object_var, "Output.o2", "o2.Duty", 0},
+  {final_object_var, "Output.o2", "o2.Repeat", 0},
+  {final_var, "Pout2", 0}
+]}.

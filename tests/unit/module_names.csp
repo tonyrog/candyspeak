@@ -1,0 +1,24 @@
+// Two modules may use the same member names. Both of these failed:
+//
+//  - a #local in each: the names ride in the #define buffer, which #end was
+//    supposed to roll back and did not -- "local Now is already defined"
+//  - a #param in each: the second was taken at start-up for a saved value of
+//    the FIRST (a param override is found by name) and written through a
+//    global index -- onto the program's State, and every loose rule after it
+//    stopped
+#module A
+  #param Flags = 3
+  #local Now = Flags + 1
+  #variable Seen
+  Seen = Now
+#end
+#module B
+  #param Flags = 0x20
+  #local Now = Flags + 2
+  #variable Seen
+  Seen = Now
+#end
+#A a
+#B b
+#variable G = 0
+G = 7

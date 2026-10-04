@@ -1,0 +1,12 @@
+// A PULSE output that repeats: ramp up, hold, ramp down, wait -- three times
+// in all, then off. Started by a switch (not springback) on Din2 -> Pout2.
+#import "../main.csp"
+> in2.Flags = INPUT_ACTIVE | INPUT_DIGITAL
+> in2.Out = 0x0002
+> o2.Type = TYPE_PULSE
+> o2.RampupTm = 100
+> o2.SustainTm = 200
+> o2.RampdownTm = 100
+> o2.WaitTm = 200
+> o2.DoneFn = PULSE_REPEAT
+> o2.DoneRepeat = 2

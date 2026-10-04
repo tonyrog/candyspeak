@@ -1,0 +1,683 @@
+// BridgeZone -- the PDB application, ported from seazone/apps/pdb/pdb_main.c.
+//
+//   ./csp boards/bridgezone/config.csp       (config imports this file)
+//   make -f Makefile.board BOARD=bridgezone PROG=boards/bridgezone
+//   escript tests/run_tests.escript boards/bridgezone/tests
+//
+// Ten real output channels, each a copy of the same state machine, driven by
+// eight local inputs through bit masks:
+//
+//   channel  1-4   Pout1..4   PWM              o1..o4
+//   channel  5-6   Aout1..2   analog (PWM)     o5..o6
+//   channel  7-10  Dout1..4   digital          o7..o10
+//   input    33-36 Din1..4                     in1..in4
+//   input    37-40 Ain1..4    via lib/analog   in5..in8
+//
+// An input's `Out' mask names the outputs it drives -- bit N is channel N+1,
+// exactly as the CANopen parameter did -- and `Ctl' names the outputs whose
+// control counter it moves. What each input DOES to them (toggle, hold, dim,
+// step) is its `Flags'; what each output does when driven (on/off, dimmer,
+// pulse, interval, moment) is its `Type'. config.csp is where a particular
+// boat's wiring is written down. This file is the machinery.
+//
+// THE OUTPUT STATE MACHINE (process_output_channel):
+//
+//   off -> delay -> rampup -> sustain | on
+//   sustain -> rampdown | wait          on -> (an input) -> deact
+//   deact -> rampdown | wait
+//   wait -> off (stop, repeat done) | delay (restart, repeat left)
+//
+// Each channel is TWO instances: dN, the Drive, works out what the inputs
+// ask of it (steps, dimmer level, control counter), and oN, the Output, is
+// the state machine. One module would not fit: a module body is limited to
+// 1023 instructions.
+//
+// The C has three more states -- ACTIVATE, REACTIVATE, DEACTIVATE -- that do
+// a couple of assignments and fall straight through to the next. Here those
+// assignments are made where the state would have been set, as one rule: an
+// #in block can name at most eight states, and these are the eight that wait.
+// The C falls through several states in one call; here every transition is a
+// cycle. The blocks are written in fall-through order, so where a transition
+// lands in a later block the cycle may carry on into it -- but nothing here
+// depends on that, a state costs at most one cycle.
+//
+// NOT PORTED: the CAN protocol (MPDO, remote inputs on other nodes, alarms,
+// block/unblock, backlight, the output watchdog fed over CAN), DMX, the Kelly
+// and Marinco drivers, EEPROM save/restore of state, step and control
+// (ONMEM/STPMST/CTLMEM -- the settings store covers the #params), power down,
+// CoCo, and done_fn START_i, which starts ANOTHER output and so needs one
+// instance to reach a later one. A START_i is treated as STOP and says so
+// nowhere -- set done_fn to 0, 1 or 2.
+//
+// DIFFERENT FROM THE C, on purpose or by necessity:
+//   - an input reaches its output four cycles later (4 ms), one per hop:
+//     pin, input, drive, output
+//   - every delay and ramp has the resolution of the beat (10 ms)
+//   - a local input steps by one: two inputs stepping the same output, or
+//     moving the same control counter, in the very same cycle count once
+//   - two analog inputs on one output in the same cycle: the higher wins (the
+//     C: the last)
+//   - ANALOG_DIGITAL is an event when the level CHANGES; the C re-sends the
+//     press on every report above the threshold
+//   - get_pwm_high clamps (step << 16) / step_max, which the C overflows to 0
+//     at step == step_max
+//   - no 8-sample average in front of lib/analog (no runtime-indexed arrays)
+//   - the power-cut time is a #param, CutTm, not the fixed POWER_CUT_TMO
+//   - CTL_OR and CTL_XOR do nothing, as in the C: only CTL_AND gates
+
+#import "pins.csp"
+#import analog
+
+// --- pds_proto.h ---------------------------------------------------------
+#define TYPE_NONE      0x00
+#define TYPE_ONOFF     0x01
+#define TYPE_DIMMER    0x02
+#define TYPE_INTERVAL  0x03
+#define TYPE_MOMENT    0x04
+#define TYPE_PULSE     0x05
+#define TYPE_EXTERNAL  0x06
+#define TYPE_ALWAYSON  0x07
+
+#define PULSE_STOP     0
+#define PULSE_RESTART  1
+#define PULSE_REPEAT   2
+
+#define CTL_NONE       0
+#define CTL_AND        1
+
+#constant PRIO_OFF = 0
+#constant PRIO_HIGH = 1
+#constant PRIO_MEDIUM = 2
+#constant PRIO_LOW = 3
+#constant PRIO_WARN = 4
+
+#constant INPUT_ACTIVE = 0x0001
+#constant INPUT_ANALOG = 0x0002
+#constant INPUT_DIGITAL = 0x0004
+#constant INPUT_ANALOG_DIGITAL = 0x0010
+#constant INPUT_SPRINGBACK = 0x0020
+#constant INPUT_PUSH_ENCODER = 0x0040
+#constant INPUT_INC_ENCODER = 0x0080
+#constant INPUT_DEC_ENCODER = 0x0100
+#constant INPUT_OFF_ONLY = 0x0200
+#constant INPUT_ON_ONLY = 0x0400
+#constant INPUT_DIGITAL_ENCODER = 0x0800
+#constant INPUT_DIGITAL_INVERT = 0x1000
+
+#constant OUTPUT_FLAG_CTLINV = 0x0008
+#constant OUTPUT_FLAG_OUTACT = 0x0020
+#constant OUTPUT_FLAG_ONDEF = 0x0200
+#constant OUTPUT_FLAG2_CUTACT = 0x0001
+#constant OUTPUT_FLAG2_STPWRAP = 0x0002
+#constant OUTPUT_FLAG2_STPOFF = 0x0004
+
+#define MAX_PWM        0xFFFF
+#define MAX_STEP       19
+#define MAX_TIME_MS    1800000
+#define PENCODER_T0    500      // push encoder: hold this long to start stepping
+#define PENCODER_T1    300      // ...then one step this often
+
+// --- the beat -----------------------------------------------------------------
+// The C's main loop never sleeps, so a delay or a ramp written against the
+// clock just happens. Here every wait is `tick() - Mark >= T', and the runtime
+// cannot see that anyone is waiting: with nothing else due it sleeps -- or,
+// on the virtual clock of a test, jumps straight to the next stimulus. A
+// free-running timer is what tells it to come back. Its period is the
+// resolution of every delay and ramp below.
+#timer Beat 10 = 1
+Beat = 1 ? timeout(Beat)
+
+// --- battery level (process_battery_level) ---------------------------------
+// In the C the voltage arrives as a CAN message. Here it is a variable to be
+// written by whatever measures it -- a #field on a frame, an analog input, the
+// prompt. 0 means "not known", and nothing is cut while it is.
+#variable Vin100:16 unsigned = 0      // volts * 100
+#param VinHigh:16 unsigned = 0        // below: cut HIGH, MEDIUM and LOW outputs
+#param VinMedium:16 unsigned = 0      // below: cut MEDIUM and LOW
+#param VinLow:16 unsigned = 0         // below: cut LOW
+#param VinWarn:16 unsigned = 0        // below: warning only
+#param CutTm = 60000                  // ms below a level before the cut (POWER_CUT_TMO)
+#variable VinPrio:8 unsigned = PRIO_OFF
+
+// The else-if chain of the C, written in the other order so the last rule that
+// holds decides. Each level only counts when it is below the one under it.
+VinPrio = PRIO_OFF
+VinPrio = PRIO_WARN   ? Vin100 != 0 && VinWarn != 0 && VinLow <= VinWarn && Vin100 < VinWarn
+VinPrio = PRIO_LOW    ? Vin100 != 0 && VinLow != 0 && VinMedium <= VinLow && Vin100 < VinLow
+VinPrio = PRIO_MEDIUM ? Vin100 != 0 && VinMedium != 0 && VinHigh <= VinMedium && Vin100 < VinMedium
+VinPrio = PRIO_HIGH   ? Vin100 != 0 && VinHigh != 0 && Vin100 < VinHigh
+
+// --- analog inputs ---------------------------------------------------------
+// lib/analog.csp is the C's adc_update (CiA 401): it reports a sample when it
+// moved by more than `delta', crossed a limit, and so on, at most every
+// `delay_tm' and not inside `inhibit_tm' after the last report.
+//
+// FED IN 10-BIT COUNTS, not shifted to 16 bits as the C did. `value' in the
+// module is a signed :16, so a full-scale sample shifted up would arrive
+// negative. delta=1 here is the C's delta=64 on a sample shifted by 6: more
+// than one LSB.
+//
+// Not ported: the C's 8-sample running average in front of it. There are no
+// runtime-indexed arrays yet to hold the window.
+#Analog a1
+#Analog a2
+#Analog a3
+#Analog a4
+a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
+> a1.delta = 1
+> a2.delta = 1
+> a3.delta = 1
+> a4.delta = 1
+
+// --- Input (select_input, process_push_encoder, process_input_out/ctl) ------
+//
+// Every cycle an input works out what happened to it -- a digital edge, a new
+// analog sample, encoder steps -- and turns that into REQUEST MASKS: its own
+// `Out' (or `Ctl') where something is asked of those outputs, zero where not.
+// The outputs read the masks. Nothing here knows the state of any output, and
+// that is what the C does too: the input says "pressed", the output decides
+// whether pressed means on or off.
+//
+// A cycle reads the state as it was and writes the state as it will be: a
+// variable assigned here is seen by everyone NEXT cycle. What has to be known
+// in the same cycle is a #local. So the masks are one cycle long and one cycle
+// late, which is the C's own `imask', processed on the next pass.
+#module Input
+  #param Flags:16 unsigned = 0          // INPUT_x; without INPUT_ACTIVE it is off
+  #param Out:16 unsigned = 0            // outputs driven, bit N = channel N+1
+  #param Ctl:16 unsigned = 0            // outputs whose control counter it moves
+  #param AnMin = 0                      // analog clamp, or the A2D off-threshold
+  #param AnMax = MAX_PWM                // analog clamp, or the A2D on-threshold
+  #param AnOffs = 0
+  #param AnScale = 0x0100               // 8.8 fixpoint, 0x100 = 1.0
+
+  // wired from outside
+  #variable Dig:1 = 0                   // the pin, for a digital input
+  #variable An = 0                      // the sample 0..MAX_PWM, for an analog one
+  #variable AnMark = 0                  // moves each time the converter reports
+
+  #variable Lvl:1 = 0                   // v_io: the level after invert/threshold
+  #variable ALvl:1 = 0                  // the A2D threshold's own level
+  #variable DigPrev:1 = 0
+  #variable MarkPrev = 0
+  #variable VTime = 0                   // v_time
+  #variable Penc:1 = 0                  // push encoder armed
+  #variable Pdir:1 = 0                  // ...stepping up
+  #variable Prun:1 = 0                  // ...stepping
+  #variable Ctrl:1 = 0                  // INPUT_STATE_CTRL
+
+  // what the outputs read, valid for one cycle
+  #variable V = 0                       // v_analog: scaled, offset, clamped
+  #variable TogOn:16 unsigned = 0       // springback press: on if off
+  #variable TogOff:16 unsigned = 0      // springback press: off if on
+  #variable OnReq:16 unsigned = 0       // switch closed
+  #variable OffReq:16 unsigned = 0      // switch opened
+  #variable RelReq:16 unsigned = 0      // springback released (ends a MOMENT)
+  #variable AnMask:16 unsigned = 0      // V is a new analog value
+  #variable StepUp:16 unsigned = 0      // one encoder step up
+  #variable StepDn:16 unsigned = 0      // one encoder step down
+  #variable CtlUp:16 unsigned = 0       // control counter +1
+  #variable CtlDn:16 unsigned = 0       // control counter -1
+
+  #local Now = tick()
+  #local Live = (Flags & INPUT_ACTIVE) != 0 && (Out | Ctl) != 0
+  #local Inv = (Flags & INPUT_DIGITAL_INVERT) != 0
+  #local A2D = (Flags & INPUT_ANALOG_DIGITAL) != 0
+  #local Spring = (Flags & INPUT_SPRINGBACK) != 0
+  #local OnOnly = (Flags & INPUT_ON_ONLY) != 0
+  #local OffOnly = (Flags & INPUT_OFF_ONLY) != 0
+  #local DigEnc = (Flags & INPUT_DIGITAL_ENCODER) != 0
+  #local Dec = (Flags & INPUT_DEC_ENCODER) != 0
+  #local IncDec = (Flags & (INPUT_INC_ENCODER | INPUT_DEC_ENCODER)) != 0
+  #local PushEnc = Spring && (Flags & (INPUT_PUSH_ENCODER | INPUT_INC_ENCODER | INPUT_DEC_ENCODER)) != 0
+
+  // --- select_input ---
+  // A digital input is an event on ANY change, as the C's default interrupt
+  // mask has it.
+  //
+  // ANALOG_DIGITAL: above AnMax is pressed, below AnMin released, between them
+  // nothing. The C repeats the press on EVERY report above AnMax, so a
+  // springback toggle flips each time the converter reports; here it is an
+  // event when the level changes, which is what a threshold is for.
+  #local AnNew = AnMark != MarkPrev
+  #local AnV = ((An * AnScale) >> 8) + AnOffs
+  #local DEv = Live && (Flags & INPUT_DIGITAL) != 0 && Dig != DigPrev
+  #local AOn = Live && A2D && AnNew && AnV >= AnMax && !ALvl
+  #local AOff = Live && A2D && AnNew && AnV <= AnMin && ALvl
+  #local Ev0 = DEv || AOn || AOff
+  #local ELvl = (DEv && Dig != Inv) || (AOn && !Inv) || (AOff && Inv)
+  #local LvlNow = (Ev0 && ELvl) || (!Ev0 && Lvl)
+
+  Lvl = ELvl ? Ev0
+  ALvl = 1 ? AOn
+  ALvl = 0 ? AOff
+  DigPrev = Dig
+  MarkPrev = AnMark
+
+  // --- process_push_encoder ---
+  // First press: an ordinary press, and the encoder arms. Held past T0 it
+  // starts stepping every T1. A press while armed steps -- the other way,
+  // unless INC/DEC fixes the direction -- and is NOT a press. Released and left
+  // for T0, it disarms and the release finally goes through.
+  #local PE = PushEnc && Ev0
+  #local PPressArmed = PE && LvlNow && Penc
+  #local PPressFirst = PE && LvlNow && !Penc
+  #local PRelArmed = PE && !LvlNow && Penc
+  #local Idle = Now - VTime
+  #local PHeld = PushEnc && !PE && Penc && LvlNow
+  #local PStart = PHeld && !Prun && Idle >= PENCODER_T0
+  #local Pulse = (PHeld && Prun && Idle >= PENCODER_T1) || PStart
+  #local PDisarm = PushEnc && !PE && Penc && !LvlNow && Idle >= PENCODER_T0
+
+  Prun = 1 ? PPressArmed || PStart
+  Prun = 0 ? PRelArmed || PDisarm
+  Pdir = !Pdir ? PPressArmed && !IncDec
+  Pdir = 1 ? PPressFirst && (Flags & INPUT_INC_ENCODER) != 0
+  Pdir = 0 ? (PPressFirst && Dec) || PDisarm
+  Penc = 1 ? PPressFirst
+  Penc = 0 ? PDisarm
+  VTime = Now ? Ev0 || Pulse
+
+  // The event that is left: an armed encoder swallows presses and releases,
+  // and its disarming is the release it swallowed.
+  #local Ev = (Ev0 && !PPressArmed && !PRelArmed) || PDisarm
+  #local Press = Ev && ELvl && !DigEnc
+  #local Release = Ev && !ELvl && !DigEnc
+
+  // --- steps: the push encoder, or a key that steps instead of switching ---
+  // A local input steps by one, never more, so a step is a mask bit and not a
+  // number: up or down. (The C's v_step can be larger -- from an encoder on
+  // another node, which is not ported.)
+  StepUp = 0, StepDn = 0
+  StepUp = Out ? (Pulse && Pdir) || (Ev && DigEnc && ELvl && !Dec)
+  StepDn = Out ? (Pulse && !Pdir) || (Ev && DigEnc && ELvl && Dec) || (Ev && DigEnc && !ELvl && !IncDec)
+
+  // --- an analog value ---
+  AnMask = 0
+  AnMask = Out, V = max(min(AnV, AnMax), AnMin) ? Live && (Flags & INPUT_ANALOG) != 0 && !A2D && AnNew
+
+  // --- process_input_out: what the event asks of the outputs ---
+  TogOn = 0, TogOff = 0, OnReq = 0, OffReq = 0, RelReq = 0
+  TogOn = Out ? Press && Spring && !OffOnly
+  TogOff = Out ? Press && Spring && !OnOnly
+  OnReq = Out ? Press && !Spring && !OffOnly
+  OffReq = Out ? Release && !Spring && !OnOnly
+  RelReq = Out ? Release && Spring
+
+  // --- process_input_ctl ---
+  // A springback key toggles its control contribution, a switch holds it.
+  CtlUp = 0, CtlDn = 0
+  CtlUp = Ctl, Ctrl = 1 ? Ev && ELvl && !Ctrl && !OffOnly
+  CtlDn = Ctl, Ctrl = 0 ? Ev && ELvl && Spring && Ctrl && !OnOnly
+  CtlDn = Ctl, Ctrl = 0 ? Ev && !ELvl && !Spring && Ctrl && !OnOnly
+#end
+
+#Input in1
+#Input in2
+#Input in3
+#Input in4
+#Input in5
+#Input in6
+#Input in7
+#Input in8
+
+// The connections are rules, not `<-': a `<-' between instances notices a
+// change in the cycle it is written but reads the value committed the cycle
+// before, so it copies the PREVIOUS value -- and when the source then stays
+// put it never runs again and the copy stays wrong for good. A rule reads
+// every cycle.
+in1.Dig = Din1, in2.Dig = Din2, in3.Dig = Din3, in4.Dig = Din4
+
+// The analog inputs, shifted to 16 bits here -- the scale the outputs and the
+// AnMin/AnMax/AnScale parameters were written for.
+in5.An = a1.output << 6, in5.AnMark = a1.inhibit_mark
+in6.An = a2.output << 6, in6.AnMark = a2.inhibit_mark
+in7.An = a3.output << 6, in7.AnMark = a3.inhibit_mark
+in8.An = a4.output << 6, in8.AnMark = a4.inhibit_mark
+
+// The requests of all inputs together, OR-ed once here so that an output
+// tests one bit instead of eight inputs: the Output module is shared by all
+// ten channels and its body is limited to 1023 instructions. Two inputs
+// stepping, or moving the same control counter, in the very same cycle count
+// once -- the C would have counted both. Only an analog VALUE is read per
+// input, and only from in5..in8, the ones with a converter behind them.
+#local TogOnAll:16 unsigned = in1.TogOn | in2.TogOn | in3.TogOn | in4.TogOn | in5.TogOn | in6.TogOn | in7.TogOn | in8.TogOn
+#local TogOffAll:16 unsigned = in1.TogOff | in2.TogOff | in3.TogOff | in4.TogOff | in5.TogOff | in6.TogOff | in7.TogOff | in8.TogOff
+#local OnAll:16 unsigned = in1.OnReq | in2.OnReq | in3.OnReq | in4.OnReq | in5.OnReq | in6.OnReq | in7.OnReq | in8.OnReq
+#local OffAll:16 unsigned = in1.OffReq | in2.OffReq | in3.OffReq | in4.OffReq | in5.OffReq | in6.OffReq | in7.OffReq | in8.OffReq
+#local RelAll:16 unsigned = in1.RelReq | in2.RelReq | in3.RelReq | in4.RelReq | in5.RelReq | in6.RelReq | in7.RelReq | in8.RelReq
+#local StepUpAll:16 unsigned = in1.StepUp | in2.StepUp | in3.StepUp | in4.StepUp | in5.StepUp | in6.StepUp | in7.StepUp | in8.StepUp
+#local StepDnAll:16 unsigned = in1.StepDn | in2.StepDn | in3.StepDn | in4.StepDn | in5.StepDn | in6.StepDn | in7.StepDn | in8.StepDn
+#local AnAll:16 unsigned = in5.AnMask | in6.AnMask | in7.AnMask | in8.AnMask
+#local CtlUpAll:16 unsigned = in1.CtlUp | in2.CtlUp | in3.CtlUp | in4.CtlUp | in5.CtlUp | in6.CtlUp | in7.CtlUp | in8.CtlUp
+#local CtlDnAll:16 unsigned = in1.CtlDn | in2.CtlDn | in3.CtlDn | in4.CtlDn | in5.CtlDn | in6.CtlDn | in7.CtlDn | in8.CtlDn
+
+// --- Drive: what the inputs do to one output (step_input, analog_input,
+//     encoder_input, get_pwm_high, process_input_ctl) -------------------------
+//
+// The C does all of this inside the output. Here it is a module of its own,
+// one instance per channel -- d1 drives o1 -- for one reason: a module body is
+// limited to 1023 instructions, and the output's state machine and this
+// together are half as much again. So the config of channel k is split the
+// same way: timing, type and pwm on ok, steps and control on dk.
+//
+// Everything an output needs to know is in `Req', one bit per kind of
+// request, plus the values that go with them.
+#define RQ_ON      0x001   // switch closed, or a springback press: on if off
+#define RQ_TOGON   0x002   // springback press: on if off...
+#define RQ_TOGOFF  0x004   // ...and off if on
+#define RQ_OFF     0x008   // switch opened
+#define RQ_REL     0x010   // springback released: ends a MOMENT
+#define RQ_EV      0x020   // Step / High moved (analog or encoder)
+#define RQ_ENC     0x040   // ...and it was the encoder
+#define RQ_MOVED   0x080   // ...and the step really changed
+#define RQ_AN      0x100   // AnIn is a new analog value
+
+#module Drive
+  #param N:8 unsigned = 0               // channel index: bit N, channel N+1
+  #param StepMax = MAX_STEP             // dimmer steps; 255 = 8 bits, 0 = none
+  #param Wrap = 0                       // OUTPUT_FLAG2_STPWRAP: steps wrap round
+  #param CtlType = CTL_NONE
+  #param Ctlk = 0                       // control counts when Control > Ctlk
+  #param CtlInv = 0                     // OUTPUT_FLAG_CTLINV
+
+  #variable Req:16 unsigned             // RQ_x, for one cycle
+  #variable Step
+  #variable High                        // a dimmer's level, from step or analog
+  #variable AnLevel                     // the level an analog value set; 0 after a step
+  #variable AnIn                        // the analog value, for an EXTERNAL output
+  #variable Control
+  #variable Allow:1 = 1                 // the control channel lets it activate
+
+  // An analog value. Only in5..in8 have a converter. Two of them sending to
+  // the same output in the same cycle: the higher wins (the C: the last).
+  #local AnHit = (AnAll >> N & 1) != 0
+  #local AnA = max(((in5.AnMask >> N & 1) != 0) & in5.V, ((in6.AnMask >> N & 1) != 0) & in6.V)
+  #local AnB = max(((in7.AnMask >> N & 1) != 0) & in7.V, ((in8.AnMask >> N & 1) != 0) & in8.V)
+  #local AnV = max(AnA, AnB)
+
+  // analog_input: the value picks the step, and for a dimmer IS the level.
+  // encoder_input: one step up or down, then wrapped or clamped.
+  #local Is255 = StepMax == 255
+  #local StepAn = (Is255 & (AnV >> 8)) | (~Is255 & (((AnV + 1) * StepMax) >> 16))
+  #local StepsEv = ((StepUpAll | StepDnAll) >> N & 1) != 0
+  // A comparison is -1 when true, so `- (x != 0)' adds one -- and keeps the
+  // unsigned mask out of the arithmetic, which max() would refuse.
+  #local Enc = Step - ((StepUpAll >> N & 1) != 0) + ((StepDnAll >> N & 1) != 0)
+  #local M1 = StepMax + 1
+  #local W = (StepMax != 0) & (Wrap != 0)
+  #local StepEnc = (W & (((Enc % M1) + M1) % M1)) | (~W & max(0, min(Enc, StepMax)))
+  #local StepEv = AnHit | StepsEv
+  #local NewStep = min((StepsEv & StepEnc) | (~StepsEv & StepAn), StepMax)
+
+  // get_pwm_high for a dimmer: the analog value if one set it, else the step.
+  // The C's (step << 16) / step_max overflows a 16-bit pwm to ZERO at step ==
+  // step_max -- the brightest step was dark. Clamped here.
+  //
+  // Worked out EVERY cycle and not only when the step moves: a `> d1.StepMax
+  // = 255' in a config file lands after the first cycle, so a level computed
+  // once at start would be the default's.
+  #local Big = StepMax > MAX_STEP
+  #local HTab = min(((Step + 1) * MAX_PWM) / 20, MAX_PWM)
+  #local HLin = min((Step << 16) / max(StepMax, 1), MAX_PWM)
+  #local HStep = (StepMax != 0) & ((~Big & HTab) | (Big & ~Is255 & HLin) | (Is255 & (Step << 8)))
+
+  #local ReqA = ((TogOnAll | OnAll) >> N & 1) | ((TogOnAll >> N & 1) << 1) | ((TogOffAll >> N & 1) << 2) | ((OffAll >> N & 1) << 3) | ((RelAll >> N & 1) << 4)
+  #local ReqB = ((StepEv & 1) << 5) | ((StepsEv & 1) << 6) | ((StepEv & (NewStep != Step) & 1) << 7) | ((AnHit & 1) << 8)
+
+  Req = ReqA | ReqB
+  Step = NewStep ? StepEv
+  AnLevel = AnHit & AnV ? StepEv
+  High = ((AnLevel != 0) & AnLevel) | ((AnLevel == 0) & HStep)
+  AnIn = AnV ? AnHit
+
+  // process_input_ctl: +1 for an input enabling, -1 for one disabling, not
+  // below zero. Two inputs in the very same cycle count once.
+  Control = max(0, Control - ((CtlUpAll >> N & 1) != 0) + ((CtlDnAll >> N & 1) != 0)) ? CtlType != CTL_NONE
+  Allow = (CtlType == CTL_NONE) || (CtlType == CTL_AND && (Control > Ctlk) != (CtlInv != 0))
+#end
+
+#Drive d1
+#Drive d2
+#Drive d3
+#Drive d4
+#Drive d5
+#Drive d6
+#Drive d7
+#Drive d8
+#Drive d9
+#Drive d10
+> d1.N = 0
+> d2.N = 1
+> d3.N = 2
+> d4.N = 3
+> d5.N = 4
+> d6.N = 5
+> d7.N = 6
+> d8.N = 7
+> d9.N = 8
+> d10.N = 9
+
+// --- Output (process_output_channel, activate, deactivate) -----------------
+//
+// Two halves. The loose rules -- every state -- take what its Drive says the
+// inputs ask and make the transitions an input causes. The #in blocks are the
+// timed half: a delay running out, a ramp reaching its end. When an input
+// causes a transition the timed half is held for that cycle (`Busy'), because
+// the C runs process_input before process_output_channel and the input's state
+// is the one that counts.
+//
+// A comparison is -1, all bits, which is what `(c & a) | (~c & b)' -- "a if c
+// else b" -- needs; that is how the C's get_* switches are written here.
+#module Output
+  // Numbers are plain signed 32 bits: min() and max() take no unsigned
+  // argument, and every value here fits with room to spare.
+  #param Type:8 unsigned = TYPE_ONOFF
+  #param Flags:16 unsigned = OUTPUT_FLAG_OUTACT
+  #param Flags2:16 unsigned = 0
+  #param DelayTm = 0                    // ms before the rampup
+  #param RampupTm = 0
+  #param SustainTm = 0                  // ms at the high level (pulse, interval)
+  #param DeactTm = 0                    // ms after deactivation, before the rampdown
+  #param RampdownTm = 0
+  #param WaitTm = 0                     // ms between pulses
+  #param WaitMult = 0                   // interval: wait += step * WaitMult
+  #param DoneFn = PULSE_STOP            // after the wait: stop, restart, repeat
+  #param DoneRepeat = 0
+  #param PwmMin = 0
+  #param PwmMax = MAX_PWM
+  #param Prio = PRIO_OFF                // cut when the battery falls to this
+
+  // from its Drive -- see #Output below
+  #variable Req:16 unsigned
+  #variable Step
+  #variable High
+  #variable AnIn
+  #variable Allow:1
+
+  #variable Duty                        // what the channel is set to, 0..MAX_PWM
+  #variable Repeat
+  #variable Deact:1                     // out->deactivate: the wait ends in STOP
+  #variable Mark                        // time_mark
+  #variable RampMark
+  #variable RampTm = 1
+  #variable Cut:1
+  #variable CutAct:1
+  #variable CutMark
+  #variable Age                         // cycles since start, up to 3
+
+  #states off on delay rampup sustain deact rampdown wait
+
+  #local Now = tick()
+  #local Elapsed = Now - Mark
+  #local IsDim = Type == TYPE_DIMMER
+  #local IsInt = Type == TYPE_INTERVAL
+  #local Blink = IsInt | (Type == TYPE_PULSE)
+  #local Span = max(PwmMax - PwmMin, 1)
+  #local HasUp = RampupTm > 0 && PwmMax > PwmMin
+  #local HasDown = RampdownTm > 0 && PwmMax > PwmMin
+  // get_sustain_state: where a finished rampup lands
+  #local Sus = (SustainTm > 0) | Blink
+  #local OnState = (Sus & sustain) | (~Sus & on)
+
+  // get_pwm_low, get_pwm_high
+  #local PwmLow = (Type == TYPE_PULSE) & PwmMin
+  #local PwmHigh = (IsDim & High) | (IsInt & MAX_PWM) | (~IsDim & ~IsInt & (Type != TYPE_NONE) & PwmMax)
+
+  // get_wait_time, get_done_type
+  #local WaitT = (IsInt & max(0, min(WaitTm + Step * WaitMult, MAX_TIME_MS))) | (~IsInt & WaitTm)
+  #local Stops = (Deact != 0) | (Type == TYPE_MOMENT)
+  #local DoneT = (~Stops & IsInt & PULSE_RESTART) | (~Stops & ~IsInt & DoneFn)
+  #local Again = (DoneT == PULSE_REPEAT && Repeat > 0) || DoneT == PULSE_RESTART
+
+  // The ramp: a fraction 0..1024 of RampTm, so Span * Frac fits in 32 bits.
+  // A ramp that starts part way -- from a dimmed level, or turning round --
+  // starts its clock as far back as that level is along it
+  // (pwm_linear_step_to_pwm).
+  #local Frac = (min(Now - RampMark, RampTm) * 1024) / RampTm
+  #local UpP = PwmMin + ((Span * Frac) >> 10)
+  #local DownP = PwmMax - ((Span * Frac) >> 10)
+  #local RampOver = Now - RampMark >= RampTm
+  #local UpFromLow = Now - ((((max(PwmLow - PwmMin, 0) * 1024) / Span) * RampupTm) >> 10)
+  #local UpFromDuty = Now - ((((max(Duty - PwmMin, 0) * 1024) / Span) * RampupTm) >> 10)
+  #local DownFromDuty = Now - ((((max(PwmMax - Duty, 0) * 1024) / Span) * RampdownTm) >> 10)
+
+  // step_input's last word: a dimmer that is on follows its level, and an
+  // EXTERNAL output simply is the analog value
+  Duty = High ? IsDim && State == on
+  Duty = AnIn ? (Req & RQ_AN) != 0 && Type == TYPE_EXTERNAL
+
+  // --- check_power_cut ---
+  // A minute below the level, then off -- or ON, with CUTACT, for an output
+  // that is the load shedding itself.
+  #local CanAct = State == off || State == rampdown
+  #local CanDea = State != off && State != deact
+  #local Cuttable = Prio != PRIO_OFF && VinPrio != PRIO_OFF && VinPrio != PRIO_WARN && VinPrio <= Prio
+  #local CutDue = Cuttable && Cut && Now - CutMark > CutTm
+  #local CutOn = CutDue && (Flags2 & OUTPUT_FLAG2_CUTACT) != 0 && !CutAct && CanAct
+  #local CutOff = CutDue && (Flags2 & OUTPUT_FLAG2_CUTACT) == 0 && CanDea
+
+  Cut = 0, CutAct = 0 ? Prio != PRIO_OFF && VinPrio == PRIO_OFF
+  Cut = 0 ? Prio != PRIO_OFF && VinPrio != PRIO_OFF && VinPrio != PRIO_WARN && VinPrio > Prio
+  Cut = 1, CutMark = Now ? Cuttable && !Cut
+  CutMark = Now ? CutDue
+  CutAct = 1 ? CutOn
+
+  // --- process_input_out: on, off, toggle ---
+  // A toggle turns on what can be turned on, and only otherwise off. Only one
+  // of the two. STPOFF: an encoder taking the step to 0 turns it off, any
+  // other step on.
+  #local StpOff = (Req & RQ_ENC) != 0 && (Flags2 & OUTPUT_FLAG2_STPOFF) != 0
+  #local Act = ((Req & RQ_ON) != 0 && CanAct) || (StpOff && Step != 0 && CanAct) || CutOn
+  #local Dea1 = ((Req & RQ_OFF) != 0 && CanDea) || (StpOff && Step == 0 && CanDea) || CutOff
+  #local TogDea = (Req & RQ_TOGOFF) != 0 && CanDea && !((Req & RQ_TOGON) != 0 && CanAct)
+  #local Dea = !Act && (Dea1 || TogDea)
+
+  // releasing a springback key ends a MOMENT: straight to deact, past the
+  // need_deactivate test and the rampup turn-round, but its deact delay is
+  // still run
+  #local Moment = (Req & RQ_REL) != 0 && State != off && Type == TYPE_MOMENT
+  // activate(): from a rampdown, turn round and ramp up from where it is;
+  // from off, arm the repeat counter and start the delay (ACTIVATE)
+  #local ActRamp = Act && State == rampdown && HasUp
+  #local ActGo = Act && State == off && Allow
+  // deactivate(): a pulse or an interval stops dead; anything else in its
+  // rampup turns round; otherwise it goes through deact (DEACTIVATE)
+  #local DeaKill = Dea && Blink
+  #local DeaRamp = Dea && !Blink && State == rampup && HasDown
+  #local DeaGo = Dea && !Blink && !DeaRamp
+  // a new step during an interval's wait starts the next pulse now, so the
+  // new wait time is felt at once rather than after the old one
+  #local StepRestart = (Req & RQ_MOVED) != 0 && Blink && State == wait && Again
+  #local Busy = Moment || Act || Dea || StepRestart
+
+  Deact = 1, Mark = Now, State = deact ? Moment
+  RampTm = RampupTm, RampMark = UpFromDuty, State = rampup ? ActRamp
+  Repeat = DoneRepeat, Deact = 0, Mark = Now, State = delay ? ActGo
+  State = off, Duty = 0, Deact = 0 ? DeaKill
+  RampTm = RampdownTm, RampMark = DownFromDuty, State = rampdown ? DeaRamp
+  Deact = 1, Mark = Now, State = deact ? DeaGo
+  Deact = 0, Mark = Now, State = delay ? StepRestart
+
+  #in INIT
+    State = off
+  #end
+
+  // activate_def_output. Not in INIT: a `> o1.Type = ...' in a config file
+  // is visible from the third cycle, and INIT is the first. Age counts there.
+  Age = Age + 1 ? Age < 3
+  Repeat = DoneRepeat, Deact = 0, Mark = Now, State = delay ? Age == 2 && State == off && (Type == TYPE_ALWAYSON || (Flags & OUTPUT_FLAG_ONDEF) != 0)
+
+  // --- the timed half ---
+  #when Busy == 0
+    #in delay
+      Mark = Now, RampTm = RampupTm, RampMark = UpFromLow, State = rampup ? Elapsed >= DelayTm && HasUp
+      Mark = Now, Duty = PwmHigh, State = OnState ? Elapsed >= DelayTm && !HasUp
+    #end
+
+    #in rampup
+      Duty = UpP ? UpP < PwmHigh
+      Mark = Now, Duty = PwmHigh, State = OnState ? RampOver || UpP >= PwmHigh
+    #end
+
+    // an interval with no wait stays high
+    #in sustain
+      Mark = Now, RampTm = RampdownTm, RampMark = DownFromDuty, State = rampdown ? Elapsed >= SustainTm && HasDown
+      Mark = Now ? Elapsed >= SustainTm && !HasDown && IsInt && WaitT == 0
+      Mark = Now, Duty = PwmLow, State = wait ? Elapsed >= SustainTm && !HasDown && !(IsInt && WaitT == 0)
+    #end
+
+    #in deact
+      Mark = Now, RampTm = RampdownTm, RampMark = DownFromDuty, State = rampdown ? Elapsed >= DeactTm && HasDown
+      Mark = Now, Duty = PwmLow, State = wait ? Elapsed >= DeactTm && !HasDown
+    #end
+
+    // Ramps from PwmMax, but holds at PwmHigh until it gets under it: a dimmer
+    // set to half starts its fade from half, not from full.
+    #in rampdown
+      Duty = DownP ? DownP <= PwmHigh
+      Mark = Now, Duty = PwmLow, State = wait ? RampOver || DownP <= PwmLow
+    #end
+
+    // again: count a repeat down (a comparison is -1), or restart
+    #in wait
+      Repeat = Repeat + (DoneT == PULSE_REPEAT), Deact = 0, Mark = Now, State = delay ? Elapsed >= WaitT && Again
+      State = off, Duty = 0, Deact = 0 ? Elapsed >= WaitT && !Again
+    #end
+  #end
+#end
+
+// Each output reads its Drive -- with rules, for the reason given at the inputs.
+#Output o1
+#Output o2
+#Output o3
+#Output o4
+#Output o5
+#Output o6
+#Output o7
+#Output o8
+#Output o9
+#Output o10
+o1.Req = d1.Req, o1.Step = d1.Step, o1.High = d1.High, o1.AnIn = d1.AnIn, o1.Allow = d1.Allow
+o2.Req = d2.Req, o2.Step = d2.Step, o2.High = d2.High, o2.AnIn = d2.AnIn, o2.Allow = d2.Allow
+o3.Req = d3.Req, o3.Step = d3.Step, o3.High = d3.High, o3.AnIn = d3.AnIn, o3.Allow = d3.Allow
+o4.Req = d4.Req, o4.Step = d4.Step, o4.High = d4.High, o4.AnIn = d4.AnIn, o4.Allow = d4.Allow
+o5.Req = d5.Req, o5.Step = d5.Step, o5.High = d5.High, o5.AnIn = d5.AnIn, o5.Allow = d5.Allow
+o6.Req = d6.Req, o6.Step = d6.Step, o6.High = d6.High, o6.AnIn = d6.AnIn, o6.Allow = d6.Allow
+o7.Req = d7.Req, o7.Step = d7.Step, o7.High = d7.High, o7.AnIn = d7.AnIn, o7.Allow = d7.Allow
+o8.Req = d8.Req, o8.Step = d8.Step, o8.High = d8.High, o8.AnIn = d8.AnIn, o8.Allow = d8.Allow
+o9.Req = d9.Req, o9.Step = d9.Step, o9.High = d9.High, o9.AnIn = d9.AnIn, o9.Allow = d9.Allow
+o10.Req = d10.Req, o10.Step = d10.Step, o10.High = d10.High, o10.AnIn = d10.AnIn, o10.Allow = d10.Allow
+
+// --- the pins (pdb_set_duty_cycle) ------------------------------------------
+// A 16-bit duty onto 10-bit PWM, and any duty at all onto a digital output.
+Pout1 = o1.Duty >> 6
+Pout2 = o2.Duty >> 6
+Pout3 = o3.Duty >> 6
+Pout4 = o4.Duty >> 6
+Aout1 = o5.Duty >> 6
+Aout2 = o6.Duty >> 6
+Dout1 = o7.Duty != 0
+Dout2 = o8.Duty != 0
+Dout3 = o9.Duty != 0
+Dout4 = o10.Duty != 0

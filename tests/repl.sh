@@ -3116,6 +3116,71 @@ B=1  // 1 R
 Took back 2 lines
 Nothing to take back' "$got"
 
+echo "limits that used to be silent:"
+
+# Eight parts is the most a rule holds (MAX_BODY_PARTS). A ninth wrote past the
+# parse struct on the stack -- "stack smashing detected" -- and stopping quietly
+# would have been a syntax error pointing at nothing. Exactly eight, followed
+# by a guard, must still parse: the check looks for one MORE part, dry.
+got=$(printf '#variable A = 0\nA=1,A=2,A=3,A=4,A=5,A=6,A=7,A=8 ? A == 0\nA=1,A=2,A=3,A=4,A=5,A=6,A=7,A=8,A=9\n/quit\n' |
+	  repl ./csp "$D/parts.db")
+ck "a rule of eight parts parses, a ninth is refused by name" \
+   'OK
+OK
+Error: too many items on one line -- max 8' "$got"
+
+# #in names at most MAX_IN_STATES; the ninth was a bare "syntax error".
+got=$(printf '#states s1 s2 s3 s4 s5 s6 s7 s8 s9\n#in s1 s2 s3 s4 s5 s6 s7 s8 s9\n/quit\n' |
+	  repl ./csp "$D/instates.db")
+ck "an #in of nine states says what the limit is" \
+   'OK
+Error: too many items on one line -- max 8' "$got"
+
+# A module body longer than OP_ENTER's e_num field WRAPPED in it: the program
+# loaded, and the module's #in INIT never ran. Refused now, with the numbers.
+mlong="$D/mlong.csp"
+{ echo '#module M'; echo '  #variable V'; for i in $(seq 300); do echo "  V = V + $i"; done; echo '#end'; } > "$mlong"
+got=$(./csp -n "$mlong" 2>&1 | sed -e 's/.*csp:[0-9]* //' -e 's/is [0-9]* instr/is N instr/')
+ck "a module body too long for its ENTER is refused" \
+   'module body is N instructions -- max 1023' "$got"
+
+echo "#import:"
+
+# A file that is not there says which request it was.
+got=$(printf '#import nosuchthing\n#import lib "nope.csp"\n#import "gone.csp"\n/quit\n' |
+	  repl ./csp "$D/imp1.db")
+ck "an #import that finds nothing names what was asked for" \
+   'Error: cannot import nosuchthing: no such file
+Error: cannot import lib "nope.csp": no such file
+Error: cannot import "gone.csp": no such file' "$got"
+
+# Top level only: inside a module it would splice a file into it.
+got=$(printf '#module M\n#import analog\n/quit\n' | repl ./csp "$D/imp2.db")
+ck "#import inside a module is refused" \
+   'OK
+Error: #import goes at the top level, not inside a block or module
+Module aborted' "$got"
+
+# At the prompt too, and once: the second asks for a file already in.
+got=$(printf '#import analog\n#import lib "analog.csp"\n#Analog a\n/quit\n' |
+	  repl ./csp "$D/imp3.db")
+ck "#import at the prompt loads a file, once" \
+   'OK
+OK
+OK' "$got"
+
+# What -C put into the image, and --deps for make: every file, imports
+# included; the deps in an order where each comes after what it imports.
+got=$(./csp -n -C -O "$D/imp.c" --deps="$D/imp.d" tests/unit/import.csp >/dev/null 2>&1
+      sed -n 's/^\/\/ *loaded: *//p; s/^\/\/            //p' "$D/imp.c" | sed -n '1,4p' |
+	  sed 's/  */ /g'; head -1 "$D/imp.d")
+ck "the -C banner lists what was loaded and why; --deps lists it for make" \
+   'tests/unit/import.csp (command line)
+tests/unit/import/counter.csp #import "import/counter.csp"
+tests/unit/import/step.csp #import "step.csp"
+lib/analog.csp #import analog [lib]
+'"$D"'/imp.c: tests/unit/import/step.csp tests/unit/import/counter.csp lib/analog.csp tests/unit/import.csp' "$got"
+
 echo "================================================"
 echo "repl: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

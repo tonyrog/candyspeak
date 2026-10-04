@@ -158,15 +158,26 @@ $(B)/csp_board.h: $(TERMS) utils/gen_chips.erl
 # program, and the build says nothing about it. Recording the names and
 # rewriting the stamp only when they move gives the rule something to depend on
 # -- the same trap, and the same answer, as .cspflags below.
+#
+# #import pulls in files PROG does not name, so csp writes what it actually
+# loaded to csp_rom.cspd (--deps; not .d, which gcc already writes for the .o)
+# and make reads it back: editing an imported file rebuilds the image like
+# editing a named one. The same list, in an order where
+# each file comes after what it imports, is what rom.csp is made of -- PROG
+# alone would leave out everything imported. board is pinned to this board's
+# directory, so `#import x' in a program kept elsewhere finds this board's x.
 $(B)/csp_rom.c: $(PROG) $(B)/.cspprog csp
 	@mkdir -p $(B)
-	@./csp -n -C -O $@ $(PROG)
+	@./csp -n -C -O $@ --deps=$(B)/csp_rom.cspd --root=board=$(BOARDDIR) $(PROG)
 	@sed -n 's|^//   size: *|  rom: |p' $@
 	@{ echo "// The program in this image, in build order."; \
 	   echo "// PROG = $(PROG)"; \
-	   for f in $(PROG); do echo ""; echo "// ---- $$f"; cat "$$f"; done; \
+	   for f in $$(sed -n 's|^$@: *||p' $(B)/csp_rom.cspd); do \
+	       echo ""; echo "// ---- $$f"; cat "$$f"; done; \
 	 } > $(dir $@)rom.csp
 	@echo "  src: $(dir $@)rom.csp"
+
+-include $(B)/csp_rom.cspd
 
 # Touched only when the list actually changes, so an unrelated build does not
 # recompile the image.
@@ -663,15 +674,21 @@ $(B)/$(BOARD).ld: $(TERMS) utils/gen_chips.erl
 # NAMES, and switching from one program to another usually leaves the image
 # newer than its new source, so make finds nothing to do and the firmware keeps
 # the program before it -- silently. `make prog_check` is the test.
+#
+# --deps and --root=board for the same reasons as csp_rom.c in the arduino
+# branch: an #import is a file PROG does not name.
 $(B)/rom.c: $(PROG) $(B)/.cspprog csp $(B)/csp_board.h
 	@mkdir -p $(B)
-	@./csp -n -C -O $@ $(PROG)
+	@./csp -n -C -O $@ --deps=$(B)/rom.cspd --root=board=$(BOARDDIR) $(PROG)
 	@sed -n 's|^//   size: *|  rom: |p' $@
 	@{ echo "// The program in this image, in build order."; \
 	   echo "// PROG = $(PROG)"; \
-	   for f in $(PROG); do echo ""; echo "// ---- $$f"; cat "$$f"; done; \
+	   for f in $$(sed -n 's|^$@: *||p' $(B)/rom.cspd); do \
+	       echo ""; echo "// ---- $$f"; cat "$$f"; done; \
 	 } > $(dir $@)rom.csp
 	@echo "  src: $(dir $@)rom.csp"
+
+-include $(B)/rom.cspd
 
 $(B)/.cspprog: FORCE
 	@mkdir -p $(B)

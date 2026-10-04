@@ -1,0 +1,6 @@
+{cycles, 4}.
+{checks, [
+  %% Step is 2, from step.csp through counter.csp: N counts 0, 2, 4, 6
+  {final_object_var, "Counter.c", "c.N", 6},
+  {final_object_var, "Analog.a", "a.output", 0}
+]}.

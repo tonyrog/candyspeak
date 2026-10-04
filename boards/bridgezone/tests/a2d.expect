@@ -1,0 +1,8 @@
+{modes, [seq]}.
+{stimulus, "boards/bridgezone/tests/a2d.dat"}.
+{cycles, 550}.
+%% 500 counts is 32000: below AnMax, above AnMin. The output stays ON.
+{checks, [
+  {final_var, "Dout4", 1},
+  {final_object_var, "Input.in6", "in6.ALvl", 1}
+]}.

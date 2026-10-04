@@ -999,6 +999,12 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     if (meta) {
 	if (meta->src)     fprintf(f, "//   source:  %s\n", meta->src);
 	if (meta->src)     fprintf(f, "// modified:  %s\n", meta->modified);	
+	if (meta->loaded) {
+	    int k;
+	    for (k = 0; k < meta->nloaded; k++)
+		fprintf(f, "// %s %s\n", (k == 0) ? "  loaded: " : "          ",
+			meta->loaded[k]);
+	}
 	if (meta->version) fprintf(f, "//   version: %s\n", meta->version);
 	if (meta->date)    fprintf(f, "//   built:   %s\n", meta->date);
     }

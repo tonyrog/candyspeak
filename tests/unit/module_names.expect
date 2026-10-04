@@ -1,0 +1,6 @@
+{cycles, 4}.
+{checks, [
+  {final_var, "G", 7},
+  {final_object_var, "A.a", "a.Seen", 4},
+  {final_object_var, "B.b", "b.Seen", 34}
+]}.

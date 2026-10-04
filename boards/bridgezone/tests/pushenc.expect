@@ -1,0 +1,12 @@
+{modes, [seq]}.
+{stimulus, "boards/bridgezone/tests/pushenc.dat"}.
+%% 2.5 s: past the release, and past the T0 after it that disarms the encoder
+%% and lets the (swallowed) release through -- which must not turn it off.
+{cycles, 250}.
+{checks, [
+  {final_object_var, "Drive.d1", "d1.Step", 3},
+  {final_object_var, "Output.o1", "o1.State", 4},
+  %% step 3 of the table is 20%: (3+1) * 65535 / 20
+  {final_object_var, "Output.o1", "o1.Duty", 13107},
+  {final_object_var, "Input.in1", "in1.Penc", 0}
+]}.

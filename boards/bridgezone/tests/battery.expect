@@ -1,0 +1,9 @@
+{modes, [seq]}.
+{stimulus, "boards/bridgezone/tests/battery.dat"}.
+%% Low from 1000 ms; CutTm 2000 later, at about 3 s, it goes. 4 s is past it.
+{cycles, 400}.
+{checks, [
+  {final_var, "VinPrio", 3},
+  {final_object_var, "Output.o9", "o9.State", 3},
+  {final_var, "Dout3", 0}
+]}.

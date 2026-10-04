@@ -1,0 +1,66 @@
+// BridgeZone configuration -- which input drives which output, and how.
+//
+//   ./csp boards/bridgezone/config.csp
+//
+// This is what the CANopen parameters used to set (cocli, eeprom). Each line
+// sets one parameter of one instance and may as well be typed at the prompt;
+// /save keeps them. main.csp is the machinery and says nothing about a boat.
+//
+//   inN   an input:   Flags (INPUT_x), Out, Ctl, AnMin, AnMax, AnOffs, AnScale
+//   oN    an output:  Type, Flags, Flags2, DelayTm, RampupTm, SustainTm,
+//                     DeactTm, RampdownTm, WaitTm, WaitMult, DoneFn,
+//                     DoneRepeat, PwmMin, PwmMax, Prio
+//   dN    the input side of output N:
+//                     StepMax, Wrap, CtlType, Ctlk, CtlInv
+//   aN    the converter behind Ain N (lib/analog.csp): delta, delay_tm, ...
+//
+// Out and Ctl are masks: bit N-1 is channel N.
+//
+//   channel  1-4   Pout1..4   o1..o4      input  33-36  Din1..4  in1..in4
+//   channel  5-6   Aout1..2   o5..o6      input  37-40  Ain1..4  in5..in8
+//   channel  7-10  Dout1..4   o7..o10
+//
+#import "main.csp"
+
+// An example, to start from: a push dimmer, two switched lights, a pump on a
+// timer, a pot and a float switch.
+
+// Din1: push dimmer for the saloon light on Pout1. Short press on/off; press
+// again and hold to dim, the other way each time.
+> in1.Flags = INPUT_ACTIVE | INPUT_DIGITAL | INPUT_SPRINGBACK | INPUT_PUSH_ENCODER
+> in1.Out = 0x0001
+> o1.Type = TYPE_DIMMER
+> o1.RampupTm = 300
+> o1.RampdownTm = 600
+
+// Din2: springback key toggling the deck lights on Dout1 and Dout2 together.
+> in2.Flags = INPUT_ACTIVE | INPUT_DIGITAL | INPUT_SPRINGBACK
+> in2.Out = 0x00C0
+
+// Din3: bilge pump switch on Dout3. While closed the pump runs 20 s every
+// 2 minutes.
+> in3.Flags = INPUT_ACTIVE | INPUT_DIGITAL
+> in3.Out = 0x0100
+> o9.Type = TYPE_PULSE
+> o9.SustainTm = 20000
+> o9.WaitTm = 100000
+> o9.DoneFn = PULSE_RESTART
+
+// Ain1: a pot dimming the cabin light on Pout2, on from power-up.
+> in5.Flags = INPUT_ACTIVE | INPUT_ANALOG
+> in5.Out = 0x0002
+> o2.Type = TYPE_DIMMER
+> o2.Flags = OUTPUT_FLAG_OUTACT | OUTPUT_FLAG_ONDEF
+
+// Ain2: a float switch read as a level, alarm horn on Dout4. Above 3/4 of
+// the range it sounds, below 1/4 it stops, and between the two it keeps
+// doing what it was doing.
+> in6.Flags = INPUT_ACTIVE | INPUT_ANALOG_DIGITAL
+> in6.Out = 0x0200
+> in6.AnMin = 0x4000
+> in6.AnMax = 0xC000
+
+// The deck lights go first when the battery runs down.
+> o7.Prio = PRIO_LOW
+> o8.Prio = PRIO_LOW
+> VinLow = 1180

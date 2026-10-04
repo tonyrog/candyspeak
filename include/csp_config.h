@@ -105,6 +105,15 @@ typedef uint16_t csp_gate_mask_t;
 #define MAX_GATE_STATES ((int)(8 * sizeof(csp_gate_mask_t)))
 
 #ifndef MAX_IN_STATES
+// #import needs a file system, which a host has and a board does not. On a
+// board the keyword still parses -- and says what it cannot do.
+#if !defined(CSP_HAVE_IMPORT) && !defined(CSP_BOARD) && !defined(ARDUINO) && \
+    !defined(CSP_EXEC_ONLY)
+#define CSP_HAVE_IMPORT 1
+#endif
+#define CSP_IMPORT_ROOT 16    // longest root name in `#import <root> "path"`
+#define CSP_IMPORT_PATH 160   // longest path or name in an #import
+
 #define MAX_IN_STATES 8   // max states in one `#in A B C ...` OR-list
 #endif
 

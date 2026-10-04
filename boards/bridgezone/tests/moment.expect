@@ -1,0 +1,5 @@
+{modes, [seq]}.
+{stimulus, "boards/bridgezone/tests/moment.dat"}.
+%% Released at 1000 ms; DeactTm 300 later it is off. 1.5 s is past both.
+{cycles, 150}.
+{checks, [ {final_var, "Dout2", 0} ]}.

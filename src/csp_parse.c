@@ -135,11 +135,15 @@ typedef struct {
     void* data;
     const uint8_t* dend;  // one past the end of the data struct (bounds backtracking)
     uint8_t ez;   // element size (set by P_ARRAY) (max element size=255!)
+    uint8_t en;   // how many elements the array holds (set by P_ARRAY)
+    uint8_t e0;   // index the repetition started at (set by P_ARRAY)
+    uint8_t dry;  // >0: match only, write nothing (a P_REP past its array)
     int ix;       // one-level repetition arrary index
     int eo;       // element offset
     uint8_t cont_stack[MAX_CONT_DEPTH];  // continuation stop-set stack
     int cont_sp;  // continuation stack pointer
 } pmatch_st_t;
+
 
 // Check if token matches stop-set or any continuation sets
 static int stop_match(pmatch_st_t* pst, int sid, uint8_t tok)
@@ -277,6 +281,19 @@ static inline decl_opts_t fetch_opts(void* data, int off)
     return *((decl_opts_t*)((uint8_t*)data + off));
 }
 
+// The options a capture starts from. In a dry match the cursor may point past
+// the struct, so there is nothing there to read.
+static decl_opts_t dry_opts(pmatch_st_t* pst, int off)
+{
+    decl_opts_t z;
+    if (pst->dry) {
+	memset(&z, 0, sizeof(z));
+	return z;
+    }
+    return fetch_opts(pst->data, pst->eo+off);
+}
+#define DRY_OPTS(pst, off) dry_opts((pst), (off))
+
 // Find expression boundary: first stop token at paren depth 0
 static int scan_expr_end(pmatch_st_t* pst, const token_t* tv, int ti,
 			 size_t n, int sid)
@@ -312,7 +329,8 @@ NOINLINE static int pmatch_expr_s(pmatch_st_t* pst, const token_t* tv, int ti,
     DBG("expr_s: (%d), num=%ld, set=%d\n", ti, num, sid);
     range.pos = ti;
     range.len = num;
-    store_expr(pst->data, pst->eo+off, range);
+    if (!pst->dry)
+	store_expr(pst->data, pst->eo+off, range);
     return ti + num;
 }
 
@@ -355,7 +373,8 @@ static int pmatch_const_s(pmatch_st_t* pst, const token_t* tv, int ti,
     default:
 	return -1;
     }
-    store_val(pst->data, pst->eo+off, result.val);
+    if (!pst->dry)
+	store_val(pst->data, pst->eo+off, result.val);
     return ti + num;
 }
 
@@ -412,7 +431,8 @@ next:
 	    indent(l), ti, (char*)tok_table[tok].name, val_off, off);
 	if ((ti >= (int)n) || (tv[ti].t != tok))
 	    return -1;
-	store_int(pst->data, off, tok);
+	if (!pst->dry)
+	    store_int(pst->data, off, tok);
 	ti++;
 	break;
     }
@@ -437,7 +457,7 @@ next:
 	uint8_t opts_off = PB(pi++);
 	uint8_t val_off  = PB(pi++);
 	uint8_t sid      = PB(pi++);
-	decl_opts_t opts = fetch_opts(pst->data, pst->eo+opts_off);
+	decl_opts_t opts = DRY_OPTS(pst, opts_off);
 	DBG("%sP_CONST_S: (%d) opts_off=%d, val_off=%d, vt=%d\n",indent(l),ti,
 	    opts_off, val_off, opts.vt);
 	if ((ti = pmatch_const_s(pst,tv,ti,n,opts.vt,val_off,sid)) < 0)
@@ -452,7 +472,8 @@ next:
 	    tv[ti].v.str.len, tv[ti].v.str.ptr, val_off, off);
 	if ((ti >= (int)n) || (tv[ti].t != WORD))
 	    return -1;
-	store_str(pst->data, off, &tv[ti].v.str);
+	if (!pst->dry)
+	    store_str(pst->data, off, &tv[ti].v.str);
 	ti++;
 	break;
     }
@@ -469,10 +490,11 @@ next:
     case P_OPTS: {
 	// Parse options, store at offset
 	uint8_t val_off = PB(pi++);
-	decl_opts_t opts = fetch_opts(pst->data, pst->eo+val_off);
+	decl_opts_t opts = DRY_OPTS(pst, val_off);
 	DBG("%sP_OPTS: (%d) val_off=%d\n", indent(l), ti, val_off);
 	opts = parse_opts(pst->st, tv, &ti, n, opts);
-	store_opts(pst->data, pst->eo+val_off, opts);
+	if (!pst->dry)
+	    store_opts(pst->data, pst->eo+val_off, opts);
 	break;
     }
     case P_OPT: {
@@ -498,6 +520,9 @@ next:
 	uint8_t saved[64];
 	size_t  avail = (const uint8_t*)pst->dend - (const uint8_t*)pst->data;
 	size_t  slen  = avail < sizeof(saved) ? avail : sizeof(saved);
+
+	if (pst->dry)       // nothing is written, so nothing to put back --
+	    slen = 0;       // and data may point past dend, where avail is junk
 	
 	DBG("%sP_CHOICE: (%d) num_alts=%d\n", indent(l),
 	    ti, num_alts);
@@ -546,6 +571,8 @@ next:
     case P_ARRAY: {  // normally used inside P_REP
 	pst->eo = PB(pi++);  // base offset
 	pst->ez = PB(pi++);  // element size
+	pst->en = PB(pi++);  // element count
+	pst->e0 = PB(pi++);  // first index
 	DBG("%sP_ARRAY: (%d), eo=%d, ez=%d\n", indent(l), ti,
 	    pst->eo, pst->ez);
 	break;
@@ -557,10 +584,13 @@ next:
 	int ix = 0;
 	pst->eo = 0;
 	pst->ez = 0;
+	pst->en = 0;
 	if (PB(pi) == P_ARRAY) {
 	    pi++;
 	    pst->eo = PB(pi++);  // base offset
 	    pst->ez = PB(pi++);  // element size
+	    pst->en = PB(pi++);  // element count
+	    pst->e0 = PB(pi++);  // first index
 	}
 	DBG("%sP_REP: (%d) n=%ld, len=%d, ez=%d\n", indent(l),
 	    ti, n, len, pst->ez);
@@ -570,6 +600,23 @@ next:
 	    // fixme pass ix to pmatch to allow data to store
 	    // array elements
 	    pst->ix = ix;
+	    // The array is full. Stopping quietly would leave the rest of the
+	    // line unmatched and report a syntax error that points at nothing;
+	    // going on writes past the struct -- a tenth `, X = 1' in a rule
+	    // smashed the stack. Say what the limit is.
+	    //
+	    // Full is only an error if one MORE element is there: a rule with
+	    // exactly the maximum and then `? cond' must still parse. So the
+	    // next one is matched dry -- nothing stored -- to find out.
+	    if (pst->ez && (ix >= pst->en)) {
+		pst->dry++;
+		r = pmatch_(pst, tv, ti, n, l+1, &pat[pi]);
+		pst->dry--;
+		if (r <= 0) break;
+		if (csp_set_error(pst->st, ERR_TOO_MANY_PARTS))
+		    csp_set_err_arg_int(pst->st, 0, pst->e0 + pst->en);
+		return -1;
+	    }
 	    r = pmatch_(pst, tv, ti, n, l+1, &pat[pi]);
 	    if (r <= 0) break;  // no match or empty match
 	    ti = r;
@@ -632,6 +679,9 @@ int pmatch(csp_rt_t* st, const token_t* tv, int ti, size_t n,
     pst.data = data;
     pst.dend = (const uint8_t*)data + data_size;  // never save/restore past this
     pst.ez   = 0;     // element size (P_ARRAY)
+    pst.en   = 0;     // element count (P_ARRAY)
+    pst.e0   = 0;
+    pst.dry  = 0;
     pst.ix   = 0;
     pst.eo   = 0;     // current element offset (P_REP)
     pst.cont_sp = 0;  // continuation stack empty

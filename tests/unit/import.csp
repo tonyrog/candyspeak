@@ -1,0 +1,18 @@
+// #import, all three forms, and each file loaded ONCE however often it is
+// asked for:
+//
+//   "import/counter.csp"   relative to this file; it imports "step.csp"
+//                          relative to itself
+//   analog                 a name, found in the lib root
+//   lib "analog.csp"       the same file by root and path -- already loaded,
+//                          so this loads nothing (a second #module Analog
+//                          would be an error)
+#import "import/counter.csp"
+#import "import/counter.csp"
+#import analog
+#import lib "analog.csp"
+
+#Counter c
+#Analog a
+#variable Seen = 0
+Seen = c.N

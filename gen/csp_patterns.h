@@ -158,9 +158,9 @@ extern const uint8_t csp_pattern_data[] RODATA;
 #define PATOFF_ROUTE 364
 #define PATOFF_BODY 369
 #define PATOFF_RULE 438
-#define PATOFF_OBJECT 465
-#define PATOFF_PACK_FIELD 484
-#define PATOFF_PACK 496
+#define PATOFF_OBJECT 467
+#define PATOFF_PACK_FIELD 488
+#define PATOFF_PACK 500
 
 // Each pattern as a pointer into the one array -- compile-time
 // constants, so a pmatch call site reads as it did when these were
@@ -422,8 +422,8 @@ const uint8_t csp_pattern_data[] RODATA = {
     P_END,
     // pat_rule @ 438
     P_PAT, (PATOFF_BODY >> 8), (PATOFF_BODY & 0xff), csp_offsetof(rule_param_t, body), STOP_RULE_BODY_CONT,
-    P_REP, 11,
-        P_ARRAY, csp_offsetof(rule_param_t, body[1]), sizeof(rule_body_part_t),
+    P_REP, 13,
+        P_ARRAY, csp_offsetof(rule_param_t, body[1]), sizeof(rule_body_part_t), (MAX_BODY_PARTS)-1, 1,
         P_TOK, COMMA,
         P_PAT, (PATOFF_BODY >> 8), (PATOFF_BODY & 0xff), 0, STOP_RULE_BODY_CONT,
         P_REP_END,
@@ -432,24 +432,24 @@ const uint8_t csp_pattern_data[] RODATA = {
         P_EXPR_S, csp_offsetof(rule_param_t, cond), STOP_RULE_COND,
         P_OPT_END,
     P_END,
-    // pat_object @ 465
+    // pat_object @ 467
     P_STR, csp_offsetof(object_param_t, mod_name),
     P_STR, csp_offsetof(object_param_t, obj_name),
-    P_OPT, 12,
-        P_REP, 9,
-            P_ARRAY, csp_offsetof(object_param_t, inits), sizeof(rule_body_part_t),
+    P_OPT, 14,
+        P_REP, 11,
+            P_ARRAY, csp_offsetof(object_param_t, inits), sizeof(rule_body_part_t), (MAX_INITS), 0,
             P_PAT, (PATOFF_BODY >> 8), (PATOFF_BODY & 0xff), 0, STOP_OBJECT_BODY_CONT,
             P_REP_END,
         P_OPT_END,
     P_END,
-    // pat_pack_field @ 484
+    // pat_pack_field @ 488
     P_EXPR_S, csp_offsetof(pack_field_t, val), STOP_PACK_FIELD_VAL,
     P_OPT, 6,
         P_TOK, COLON,
         P_INTEGER_S, csp_offsetof(pack_field_t, bits), STOP_PACK_FIELD_BITS,
         P_OPT_END,
     P_END,
-    // pat_pack @ 496
+    // pat_pack @ 500
     P_STR, csp_offsetof(pack_param_t, buffer),
     P_CHOICE, 2,
         P_ALT, 4,
@@ -460,8 +460,8 @@ const uint8_t csp_pattern_data[] RODATA = {
             P_ALT_END,
     P_CHOICE_END,
     P_TOK, EQ,
-    P_REP, 9,
-        P_ARRAY, csp_offsetof(pack_param_t, field), sizeof(pack_field_t),
+    P_REP, 11,
+        P_ARRAY, csp_offsetof(pack_param_t, field), sizeof(pack_field_t), (MAX_PACK), 0,
         P_PAT, (PATOFF_PACK_FIELD >> 8), (PATOFF_PACK_FIELD & 0xff), 0, STOP_PACK_PACK_FIELD_CONT,
         P_REP_END,
     P_OPT, 6,

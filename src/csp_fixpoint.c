@@ -24,8 +24,11 @@ fixpoint_t fix_mul(fixpoint_t a, fixpoint_t b)
 
 // Division: (a << 16) / b
 // Use 64-bit intermediate to avoid overflow
+// b == 0 is 0, as the integer division is: a trap is no answer (csp_rt.c).
 fixpoint_t fix_div(fixpoint_t a, fixpoint_t b)
 {
+    if (b == 0)
+	return 0;
     return (fixpoint_t)(((int64_t)(a) << FIX_SHIFT) / (b));
 }
 

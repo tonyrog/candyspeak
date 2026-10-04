@@ -1,0 +1,8 @@
+// Ain2 as a threshold switch for Dout4: on above AnMax, off below AnMin, and
+// between the two nothing -- hysteresis, so a level resting on one threshold
+// cannot chatter. The thresholds are on the 16-bit scale (counts << 6).
+#import "../main.csp"
+> in6.Flags = INPUT_ACTIVE | INPUT_ANALOG_DIGITAL
+> in6.Out = 0x0200
+> in6.AnMin = 0x4000
+> in6.AnMax = 0xC000

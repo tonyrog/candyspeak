@@ -328,6 +328,59 @@ source. That is the trade: `#constant` is a declaration you can see and re-read,
 Use `#constant` for a value you want to inspect at the prompt, and `#define` for
 the flag bits and masks that are only ever a way of writing a number.
 
+### Imports
+
+```
+#import <name>              // <name>.csp, searched for in every root
+#import <root> "<path>"     // exactly that file in the named root
+#import "<path>"            // relative to the importing file, no search
+```
+
+Loads another source file at this point, as if its lines were written here.
+Each file is loaded **once**, however many times and by however many files it
+is asked for: two files may both import `analog`, and an import of a file
+already given on the command line loads nothing.
+
+```
+#import "pins.csp"          // this board's pins, beside this file
+#import analog              // lib/analog.csp
+#import lib "analog.csp"    // the same file again -- nothing happens
+```
+
+A **root** is a named directory. Two are built in:
+
+| root    | directory |
+|---------|-----------|
+| `board` | the nearest directory holding a `pins.csp`, from the first file given upwards |
+| `lib`   | `lib/` beside the `csp` binary |
+
+More come from `--root=name=dir` on the command line and from `CSP_PATH`
+(`name=dir:name=dir`). A bare name tries the roots in that order —
+`--root`, `CSP_PATH`, `board`, `lib` — and the first by a name wins, so a board
+can carry its own version of a library file, and either built-in can be
+moved. A quoted path does not search: it names one file, relative to the file
+that imports it, so `boards/x/main.csp` can import `"pins.csp"` whatever
+directory csp is run from.
+
+An `#import` goes at the top level, never inside a `#module`, `#in` or
+`#when`.
+
+**It is a compile-time thing.** The file system belongs to the host: an image
+built with `-C` carries the code, not the imports, and a board's prompt
+answers `#import reads files, and this build has none`. What did go in is
+listed at the top of the generated file, with how each one came in:
+
+```
+//   loaded:  boards/bridgezone/config.csp             (command line)
+//            boards/bridgezone/main.csp               #import "main.csp"
+//            boards/bridgezone/pins.csp               #import "pins.csp"
+//            lib/analog.csp                           #import analog  [lib]
+```
+
+`--deps=FILE` writes the same files as a make rule for the `-O` file, each
+after what it imports, so a build depends on every file that went in and not
+only on the ones it named. `Makefile.board` uses it.
+
 ### Locals
 
 ```
@@ -2590,6 +2643,7 @@ pandoc doc/manual_en.md -o doc/manual_en.pdf \
 #buffer <name>:<bytes> [type]           // shared storage (size in BYTES)
 #buffer <name>:<bytes> [in|out] can <id>  // CAN frame (size in BYTES)
 #field <name>:<bits> [type] [big|little] <frame>[<a>..<b>]  // field of a frame
+#import <name> | <root> "<path>" | "<path>"   // load a file once (host only)
 #states <name> ...                      // INIT/NORMAL/FAILSAFE implicit
 #module <name> ... #end
 ```

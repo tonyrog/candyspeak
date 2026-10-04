@@ -1,0 +1,8 @@
+// Load shedding. Dout3 (channel 9) is on from power-up and LOW priority:
+// when the battery falls below VinLow for CutTm -- a minute, 2 s here --
+// it is turned off.
+#import "../main.csp"
+> o9.Flags = OUTPUT_FLAG_OUTACT | OUTPUT_FLAG_ONDEF
+> o9.Prio = PRIO_LOW
+> VinLow = 1200
+> CutTm = 2000

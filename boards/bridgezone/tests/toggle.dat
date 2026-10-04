@@ -1,0 +1,8 @@
+# Press, release: on. Press, release: off again. Press, release: on.
+0      Din1=0
+100    Din1=1
+200    Din1=0
+1000   Din1=1
+1100   Din1=0
+2000   Din1=1
+2100   Din1=0

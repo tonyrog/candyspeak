@@ -1,0 +1,12 @@
+{modes, [seq]}.
+{stimulus, "boards/bridgezone/tests/toggle.dat"}.
+{cycles, 300}.
+%% Three presses of a springback key: on, off, on. A press turns ON what can
+%% be turned on and only otherwise OFF -- the C's need_activate, then
+%% need_deactivate -- and a release does nothing to an on/off output.
+{checks, [
+  {final_object_var, "Output.o7", "o7.Duty", 65535},
+  {final_var, "Dout1", 1},
+  %% the other digital outputs are not wired to it
+  {final_var, "Dout2", 0}
+]}.

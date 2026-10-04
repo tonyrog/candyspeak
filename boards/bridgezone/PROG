@@ -1,0 +1,4 @@
+# The program the board carries: PROG=boards/bridgezone. config.csp imports
+# main.csp, which imports pins.csp and lib/analog.csp -- the -C banner lists
+# what came in and how.
+config.csp

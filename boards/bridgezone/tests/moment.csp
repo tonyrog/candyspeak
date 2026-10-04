@@ -1,0 +1,7 @@
+// MOMENT: on while the springback key is held, off when it is let go.
+// Din3 -> Dout2 (channel 8). Let go, it holds for DeactTm and then drops.
+#import "../main.csp"
+> in3.Flags = INPUT_ACTIVE | INPUT_DIGITAL | INPUT_SPRINGBACK
+> in3.Out = 0x0080
+> o8.Type = TYPE_MOMENT
+> o8.DeactTm = 300

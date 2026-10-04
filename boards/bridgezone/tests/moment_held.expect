@@ -1,0 +1,4 @@
+{modes, [seq]}.
+{stimulus, "boards/bridgezone/tests/moment_held.dat"}.
+{cycles, 100}.
+{checks, [ {final_var, "Dout2", 1} ]}.

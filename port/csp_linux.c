@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <limits.h>       // PATH_MAX, for #import
 
 // SocketCAN is a Linux kernel facility; nothing else has it.
 #if defined(__linux__) && !defined(CSP_NO_SOCKETCAN)
@@ -46,6 +47,42 @@ static const char* eeprom_file = "eeprom.db";
 static const char* can_iface = NULL;   // --can=vcan0; NULL = no bus, stubs
 static const char* src_file = NULL;   // first .csp on the command line (ROM banner)
 static char src_modified[26];
+
+#if defined(CSP_HAVE_IMPORT)
+// #import. A ROOT is a named directory: `#import lib "analog.csp"` names one,
+// `#import analog` tries them all in order. In order: --root on the command
+// line, then CSP_PATH ("name=dir:name=dir"), then the two built in -- board,
+// the nearest directory with a pins.csp above the first file given, and lib,
+// the tree's own lib/ next to this binary. The first root by a name wins, so
+// either can be moved.
+#define MAX_IMPORT_ROOTS  16
+#define MAX_IMPORTED      256
+typedef struct {
+    char name[CSP_IMPORT_ROOT];
+    char dir[PATH_MAX];
+} imp_root_t;
+static imp_root_t imp_roots[MAX_IMPORT_ROOTS];
+static int        imp_nroots = 0;
+
+// Every file loaded, by its real path, so an #import of one already in --
+// given on the command line, or imported by another file -- loads nothing.
+// The `how' is what the -C banner prints next to it.
+static char*       imp_path[MAX_IMPORTED];
+static char*       imp_how[MAX_IMPORTED];
+static const char* imp_line[MAX_IMPORTED];   // "path  how", for the banner
+static int         imp_n = 0;
+
+static const char* imp_cur_file = NULL;      // a "path" is relative to this
+
+// The same files in the order they FINISHED loading: each after everything it
+// imports, so concatenated they read as one program. That is the order
+// --deps writes and rom.csp is built in; the banner keeps the order they were
+// asked for, which is the one that says who pulled what in.
+static const char* imp_done[MAX_IMPORTED];
+static int         imp_ndone = 0;
+static const char* deps_file = NULL;         // --deps=FILE
+static const char* object_name = NULL;       // -O's argument, the deps target
+#endif
 
 // git version, injected by the Makefile; a plain build still says something.
 #ifndef CSP_VERSION
@@ -1071,6 +1108,9 @@ int parse_file(csp_rt_t* st, const char* name, FILE* fin)
     char buf[MAX_SRC_LINE];
     csp_pmark_t pm;
 
+#if defined(CSP_HAVE_IMPORT)
+    imp_cur_file = name;           // csp_import_run puts the importer's back
+#endif
     st->ps.line = 1;
     while(fgets(buf, (int)sizeof(buf), fin)) {
 	size_t n = strlen(buf);
@@ -1123,6 +1163,15 @@ int parse_file(csp_rt_t* st, const char* name, FILE* fin)
 	    csp_pstate_restore(st, &pm);
 	    return -1;
 	}
+#if defined(CSP_HAVE_IMPORT)
+	// The line was an #import: load it now, between two lines of this
+	// file, and carry on from the next one.
+	if (st->cs->imp_pending) {
+	    int r = csp_import_run(st);
+	    if (r < 0)
+		return r;
+	}
+#endif
     }
     // A #module/#in/#when the file never closed. Reported HERE because this is
     // where "the file ended" is known -- the parser sees only lines, and every
@@ -1137,6 +1186,230 @@ int parse_file(csp_rt_t* st, const char* name, FILE* fin)
     // 512-byte table per source file, for a name nothing can ask for.
     csp_new_decl(st, NULL, DECL_END, 0);
     return 0;
+}
+#endif
+
+#if defined(CSP_HAVE_IMPORT)
+static void imp_root_add(const char* name, size_t nlen, const char* dir)
+{
+    int i;
+    if ((nlen == 0) || (nlen >= CSP_IMPORT_ROOT) || (imp_nroots >= MAX_IMPORT_ROOTS))
+	return;
+    for (i = 0; i < imp_nroots; i++)          // the first by a name wins
+	if ((strlen(imp_roots[i].name) == nlen) &&
+	    (memcmp(imp_roots[i].name, name, nlen) == 0))
+	    return;
+    memcpy(imp_roots[imp_nroots].name, name, nlen);
+    imp_roots[imp_nroots].name[nlen] = '\0';
+    snprintf(imp_roots[imp_nroots].dir, PATH_MAX, "%s", dir);
+    imp_nroots++;
+}
+
+// "name=dir"; anything else is said, not ignored.
+static int imp_root_arg(const char* arg)
+{
+    const char* eq = strchr(arg, '=');
+    if ((eq == NULL) || (eq == arg) || (eq[1] == '\0')) {
+	fprintf(stderr, "--root wants name=dir, not '%s'\n", arg);
+	return -1;
+    }
+    imp_root_add(arg, (size_t)(eq - arg), eq + 1);
+    return 0;
+}
+
+// After the options: CSP_PATH, then the two built in.
+static void imp_roots_finish(const char* first_file)
+{
+    const char* env = getenv("CSP_PATH");
+    char buf[PATH_MAX];
+    ssize_t n;
+
+    while (env && *env) {
+	const char* end = strchr(env, ':');
+	size_t len = end ? (size_t)(end - env) : strlen(env);
+	char item[PATH_MAX];
+	if ((len > 0) && (len < sizeof(item))) {
+	    const char* eq;
+	    memcpy(item, env, len);
+	    item[len] = '\0';
+	    if ((eq = strchr(item, '=')) != NULL)
+		imp_root_add(item, (size_t)(eq - item), eq + 1);
+	}
+	env = end ? end + 1 : NULL;
+    }
+    // board: the nearest directory, from the first file upwards, that holds a
+    // pins.csp -- that is what makes a directory a board's. Not simply the
+    // first file's directory: a test in boards/x/tests/ would make tests/ the
+    // board, and a test there called analog.csp then answered `#import analog'.
+    if (first_file && realpath(first_file, buf)) {
+	char dir[PATH_MAX], probe[PATH_MAX + 16];
+	char* slash;
+	int found = 0;
+	if ((slash = strrchr(buf, '/')) != NULL)
+	    *slash = '\0';
+	strcpy(dir, buf);
+	while (dir[0]) {
+	    snprintf(probe, sizeof(probe), "%s/pins.csp", dir);
+	    if (access(probe, R_OK) == 0) {
+		found = 1;
+		break;
+	    }
+	    if ((slash = strrchr(dir, '/')) == NULL)
+		break;
+	    *slash = '\0';
+	}
+	imp_root_add("board", 5, found ? dir : buf);
+    }
+    // lib/ beside the binary: ./csp sits at the top of the tree.
+    if ((n = readlink("/proc/self/exe", buf, sizeof(buf) - 5)) > 0) {
+	char* slash;
+	buf[n] = '\0';
+	if ((slash = strrchr(buf, '/')) != NULL) {
+	    strcpy(slash, "/lib");
+	    imp_root_add("lib", 3, buf);
+	}
+    }
+}
+
+// Shortest honest spelling: relative to the working directory when it is
+// under it, else the whole path.
+static const char* imp_show(const char* real)
+{
+    static char cwd[PATH_MAX];
+    size_t n;
+    if (getcwd(cwd, sizeof(cwd)) == NULL)
+	return real;
+    n = strlen(cwd);
+    if ((strncmp(real, cwd, n) == 0) && (real[n] == '/'))
+	return real + n + 1;
+    return real;
+}
+
+static int imp_seen(const char* real)
+{
+    int i;
+    for (i = 0; i < imp_n; i++)
+	if (strcmp(imp_path[i], real) == 0)
+	    return 1;
+    return 0;
+}
+
+static void imp_record(const char* real, const char* how)
+{
+    char* line;
+    size_t len;
+    if (imp_n >= MAX_IMPORTED)
+	return;
+    imp_path[imp_n] = strdup(real);
+    imp_how[imp_n]  = strdup(how);
+    len = strlen(imp_show(real)) + 40 + strlen(how) + 4;   // %-40s pads
+    line = malloc(len);
+    snprintf(line, len, "%-40s %s", imp_show(real), how);
+    imp_line[imp_n] = line;
+    imp_n++;
+}
+
+// Where a request points, or 0 when it points nowhere. A path too long for
+// the buffer points nowhere rather than somewhere shorter.
+#define CAND(...) \
+    (snprintf(cand, sizeof(cand), __VA_ARGS__) < (int)sizeof(cand))
+
+static int imp_resolve(const char* root, const char* path, int quoted,
+		       char* real)
+{
+    char cand[PATH_MAX];
+    int i;
+
+    if (root[0]) {                              // <root> "path"
+	for (i = 0; i < imp_nroots; i++) {
+	    if (strcmp(imp_roots[i].name, root) == 0) {
+		return CAND("%s/%s", imp_roots[i].dir, path) &&
+		       (realpath(cand, real) != NULL);
+	    }
+	}
+	return 0;
+    }
+    if (quoted) {                               // "path": beside the importer
+	const char* slash = imp_cur_file ? strrchr(imp_cur_file, '/') : NULL;
+	int ok = ((path[0] == '/') || (slash == NULL)) ?
+	    CAND("%s", path) :
+	    CAND("%.*s/%s", (int)(slash - imp_cur_file), imp_cur_file, path);
+	return ok && (realpath(cand, real) != NULL);
+    }
+    for (i = 0; i < imp_nroots; i++) {          // name: every root, in order
+	if (CAND("%s/%s.csp", imp_roots[i].dir, path) &&
+	    (realpath(cand, real) != NULL))
+	    return 1;
+    }
+    return 0;
+}
+#undef CAND
+
+int csp_import_run(csp_rt_t* st)
+{
+    csp_cstate_t* cs = st->cs;
+    char real[PATH_MAX];
+    char how[PATH_MAX + 64];
+    FILE* f;
+    int line, r;
+    const char* outer;
+
+    cs->imp_pending = 0;
+    if (cs->imp_root[0])
+	snprintf(how, sizeof(how), "#import %s \"%s\"", cs->imp_root, cs->imp_path);
+    else if (cs->imp_quoted)
+	snprintf(how, sizeof(how), "#import \"%s\"", cs->imp_path);
+    else
+	snprintf(how, sizeof(how), "#import %s", cs->imp_path);
+
+    if (!imp_resolve(cs->imp_root, cs->imp_path, cs->imp_quoted, real)) {
+	tstr_t t;
+	t.ptr = how + 8;                        // what was asked, minus "#import "
+	t.len = (int)strlen(t.ptr);
+	if (csp_set_error(st, ERR_IMPORT_MISSING))
+	    csp_set_err_arg_tstr(st, 0, &t);
+	return -1;
+    }
+    if (imp_seen(real))
+	return 0;
+    // A bare name says which root it came from: that is the part a reader
+    // cannot see in the source.
+    if (!cs->imp_root[0] && !cs->imp_quoted) {
+	int i;
+	for (i = 0; i < imp_nroots; i++) {
+	    size_t n = strlen(imp_roots[i].dir);
+	    char rd[PATH_MAX];
+	    if (realpath(imp_roots[i].dir, rd) && (n = strlen(rd)) &&
+		(strncmp(real, rd, n) == 0) && (real[n] == '/')) {
+		size_t l = strlen(how);
+		snprintf(how + l, sizeof(how) - l, "  [%s]", imp_roots[i].name);
+		break;
+	    }
+	}
+    }
+    if ((f = fopen(real, "r")) == NULL) {
+	tstr_t t = { how + 8, (int)strlen(how + 8) };
+	if (csp_set_error(st, ERR_IMPORT_MISSING))
+	    csp_set_err_arg_tstr(st, 0, &t);
+	return -1;
+    }
+    imp_record(real, how);
+    line  = st->ps.line;
+    outer = imp_cur_file;
+    r = parse_file(st, imp_show(real), f);
+    fclose(f);
+    if ((r >= 0) && (imp_ndone < MAX_IMPORTED))
+	imp_done[imp_ndone++] = strdup(imp_show(real));
+    if (r < 0) {
+	if (r != -2) {
+	    fprintf(stderr, "%s:%d ", imp_show(real), st->ps.line);
+	    print_error(st);
+	}
+	r = -2;
+    }
+    st->ps.line  = line;
+    imp_cur_file = outer;
+    return r;
 }
 #endif
 
@@ -1227,6 +1500,8 @@ static struct option long_options[] = {
     {"exit-on-eof",  no_argument,       0,  1015},
     {"id",           required_argument, 0,  1012},
     {"name",         required_argument, 0,  1013},
+    {"root",         required_argument, 0,  1016},
+    {"deps",         required_argument, 0,  1017},
     {0,              0,                 0,  0 }
 };
 
@@ -1275,6 +1550,13 @@ void usage(const char* prog)
     fprintf(stderr, "      --prefix=NAME    Symbol prefix for -C (default rom)\n");
     fprintf(stderr, "      --role=ROLE      Image role: rom|failsafe (default rom)\n");
     fprintf(stderr, "      --generation=N   Image generation, higher is newer\n");
+    fprintf(stderr, "      --root=NAME=DIR  A root for #import NAME \"file\"; also searched by\n");
+    fprintf(stderr, "                       #import file. Built in: board (nearest dir with a\n");
+    fprintf(stderr, "                       pins.csp above the first file) and lib (lib/\n");
+    fprintf(stderr, "                       beside csp); CSP_PATH\n");
+    fprintf(stderr, "                       holds more as name=dir:name=dir\n");
+    fprintf(stderr, "      --deps=FILE      Write every file loaded, imports included, as a\n");
+    fprintf(stderr, "                       make rule for -O's file, each after what it imports\n");
     fprintf(stderr, "      --virtual-time   Jump the clock to the next timer instead of sleeping\n");
     fprintf(stderr, "      --exit-on-eof    Quit when stdin closes, instead of running on\n");
     fprintf(stderr, "      --checksum=BIN   Patch the LPC boot checksum into a .bin and exit\n");
@@ -1816,6 +2098,15 @@ int main(int argc, char** argv)
 	case 1015:   // --exit-on-eof: quit when stdin closes, see exit_on_eof
 	    exit_on_eof = 1;
 	    break;
+#if defined(CSP_HAVE_IMPORT)
+	case 1016:   // --root=name=dir: a root for #import, see imp_roots
+	    if (imp_root_arg(optarg) < 0)
+		exit(1);
+	    break;
+	case 1017:   // --deps=FILE: every file loaded, as a make rule
+	    deps_file = optarg;
+	    break;
+#endif
 	case 1010:   // --flash=FILE: back the simulated flash with a file
 	    csp_flash_host_file(optarg);
 	    break;
@@ -1873,6 +2164,9 @@ int main(int argc, char** argv)
 	    }
 	    break;
 	case 'O':
+#if defined(CSP_HAVE_IMPORT)
+	    object_name = optarg;
+#endif
 	    if ((object_file = fopen(optarg, "w")) == NULL) {
 		fprintf(stderr, "unable to open object file '%s'\n", optarg);
 		exit(1);
@@ -2069,6 +2363,11 @@ int main(int argc, char** argv)
 	exit(1);
     }
 #else
+#if defined(CSP_HAVE_IMPORT)
+    // Before anything is read: the files given, stdin, and the prompt all
+    // import through the same roots.
+    imp_roots_finish((optind < argc) ? argv[optind] : NULL);
+#endif
     if (optind < argc) {
 	struct stat src_stat;
 	src_file = argv[optind];   // first one, for the ROM provenance banner
@@ -2082,6 +2381,15 @@ int main(int argc, char** argv)
 		fprintf(stderr, "unable to open file '%s'\n", argv[optind]);
 		exit(1);
 	    }
+#if defined(CSP_HAVE_IMPORT)
+	    {
+		// Given files count as loaded: an #import of one of them later
+		// loads nothing.
+		char real[PATH_MAX];
+		if (realpath(argv[optind], real) && !imp_seen(real))
+		    imp_record(real, "(command line)");
+	    }
+#endif
 	    if ((r = parse_file(&state, argv[optind], fin)) < 0) {
 		if (r != -2) {          // -2 already said what was wrong
 		    fprintf(stderr, "%s:%d ", argv[optind], state.ps.line);
@@ -2090,6 +2398,10 @@ int main(int argc, char** argv)
 		exit(1);
 	    }
 	    fclose(fin);
+#if defined(CSP_HAVE_IMPORT)
+	    if (imp_ndone < MAX_IMPORTED)
+		imp_done[imp_ndone++] = argv[optind];
+#endif
 	    optind++;
 	    given = 1;
 	}
@@ -2160,6 +2472,27 @@ int main(int argc, char** argv)
 #endif
     }
 
+#if defined(CSP_HAVE_IMPORT)
+    // --deps: what make needs to rebuild the image when ANY of these changes,
+    // not only the files it named. -MP style: an empty rule per file, so one
+    // that is deleted or stops being imported does not break the build.
+    if (deps_file) {
+	FILE* df = fopen(deps_file, "w");
+	int k;
+	if (df == NULL) {
+	    fprintf(stderr, "unable to write '%s'\n", deps_file);
+	    exit(1);
+	}
+	fprintf(df, "%s:", object_name ? object_name : "rom.c");
+	for (k = 0; k < imp_ndone; k++)
+	    fprintf(df, " %s", imp_done[k]);
+	fprintf(df, "\n");
+	for (k = 0; k < imp_ndone; k++)
+	    fprintf(df, "%s:\n", imp_done[k]);
+	fclose(df);
+    }
+#endif
+
     if (debug_parse) {
 	csp_dump(parse_out, &state);
 	csp_list_rules(parse_out, &state);
@@ -2175,6 +2508,13 @@ int main(int argc, char** argv)
 	meta.prefix  = rom_prefix;
 	meta.role    = rom_role;
 	meta.generation = rom_generation;
+#if defined(CSP_HAVE_IMPORT)
+	meta.loaded  = imp_line;
+	meta.nloaded = imp_n;
+#else
+	meta.loaded  = NULL;
+	meta.nloaded = 0;
+#endif
 	csp_dump_code(objf, &state, &meta);
     }
 

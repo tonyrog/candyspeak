@@ -39,6 +39,11 @@ typedef struct {
     // the same role (higher is newer), which is how an A/B pair is told apart.
     unsigned role;
     unsigned generation;
+    // Every file that went into the image, in load order, each with how it
+    // came in -- the command line or the #import that pulled it. NULL/0 when
+    // the build has no #import.
+    const char* const* loaded;
+    int nloaded;
 } csp_rom_meta_t;
 extern void    csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta);
 extern void    csp_dump_tokens(FILE* f,token_t* tv, int n);

@@ -40,5 +40,10 @@ err_no_defines #define is not available in this build
 err_local_scope %s is a #local -- only visible inside its own module
 err_reserved_name %s is a reserved word and cannot be a name
 err_many_events too many interrupt sources -- max %d
+err_many_parts too many items on one line -- max %d
+err_module_long module body is %d instructions -- max %d
+err_no_import #import reads files, and this build has none
+err_import_where #import goes at the top level, not inside a block or module
+err_import_missing cannot import %s: no such file
 err_opts_after_pin option '%s' comes BEFORE the pin -- '#digital D in pullup 2:1', not after
 err_block_open #%s opened on line %d was never closed

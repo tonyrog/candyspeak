@@ -425,6 +425,11 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_OPTS_AFTER_PIN] =         ros_err_opts_after_pin,
     [ERR_BLOCK_OPEN] =             ros_err_block_open,
     [ERR_TOO_MANY_EVENTS] =        ros_err_many_events,
+    [ERR_TOO_MANY_PARTS] =         ros_err_many_parts,
+    [ERR_MODULE_TOO_LONG] =        ros_err_module_long,
+    [ERR_NO_IMPORT] =              ros_err_no_import,
+    [ERR_IMPORT_WHERE] =           ros_err_import_where,
+    [ERR_IMPORT_MISSING] =         ros_err_import_missing,
 };
 
 // err_tab is a designated-initialiser array, so ANY code without a row in it
@@ -1524,11 +1529,20 @@ NOINLINE int eval_op(csp_rt_t* st, int n, const csp_instr_t* ci, int* leave)
     // printed back through the unsigned type) instead of 7. csp_instr_alu_t.u
     // says which arm to take; the compiler sets it when either operand's
     // declared type is unsigned (see process_op).
+    //
+    // DIVISION BY ZERO IS 0, and so is the remainder. A C division by zero is a
+    // trap -- SIGFPE on the host, a fault on a board -- and a rule that divides
+    // by a parameter nobody has set yet took the whole runtime down with it.
+    // INT_MIN / -1 traps the same way on x86; it wraps instead, as + and * do.
     case OP_DIV:
+	if (z.u == 0) { x.u = 0; goto store; }
 	if (au) { x.u = op_DIV(y.u, z.u); goto store; }
+	if (z.i == -1) { x.u = 0u - y.u; goto store; }
 	x.i = op_DIV(y.i, z.i); goto store;
     case OP_REM:
+	if (z.u == 0) { x.u = 0; goto store; }
 	if (au) { x.u = op_REM(y.u, z.u); goto store; }
+	if (z.i == -1) { x.u = 0; goto store; }
 	x.i = op_REM(y.i, z.i); goto store;
     case OP_SLA: x.i = op_SLA(y.i, z.i); goto store;
     case OP_SRA:
@@ -5499,6 +5513,32 @@ static int is_param(const csp_decl_t* d)
 	&& (csp_decl_get_name(d) != 0);
 }
 
+// The module whose body declares `di`, or BAD_INDEX for a global. A module's
+// members are the md_n declarations straight after it.
+//
+// Needed because a param override is found BY NAME, and two modules may each
+// have a `#param Flags': the second is that module's own member, not a saved
+// value for the first. Matched across modules, Output.Flags was applied onto
+// Input.Flags -- through a global index, so the value landed in whatever global
+// slot that index named. It was the program's State, the loose rules stopped,
+// and nothing said why.
+static index_t decl_scope(csp_rt_t* st, index_t di)
+{
+    index_t i = 0;
+    while (i < di) {
+	csp_decl_t d;
+	csp_load_decl(st, i, &d);
+	if (csp_decl_get_type(&d) == DECL_MODULE) {
+	    index_t n = csp_decl_get_md_n(&d);
+	    if (di <= i + n)
+		return i;
+	    i = i + n + 1;          // the body; the loop's i++ steps over #end
+	}
+	i++;
+    }
+    return BAD_INDEX;
+}
+
 // The RAM override declared for param `di`, or BAD_INDEX. A param that has one
 // is not what any listing should show: its cn.init is the value the program
 // SHIPPED with, and the override is the value it runs with.
@@ -5516,7 +5556,8 @@ index_t csp_param_shadow(csp_rt_t* st, index_t di)
     for (i = di + 1; i < st->ps.nd; i++) {
 	csp_decl_t o;
 	csp_load_decl(st, i, &o);
-	if (is_param(&o) && name_eq(st, csp_decl_get_name(&o), csp_decl_get_name(&d)))
+	if (is_param(&o) && name_eq(st, csp_decl_get_name(&o), csp_decl_get_name(&d))
+	    && (decl_scope(st, i) == decl_scope(st, di)))
 	    return i;
     }
     return BAD_INDEX;
@@ -5534,7 +5575,8 @@ index_t csp_param_target(csp_rt_t* st, index_t di)
     for (j = 0; j < di; j++) {
 	csp_decl_t t;
 	csp_load_decl(st, j, &t);
-	if (is_param(&t) && name_eq(st, csp_decl_get_name(&d), csp_decl_get_name(&t)))
+	if (is_param(&t) && name_eq(st, csp_decl_get_name(&d), csp_decl_get_name(&t))
+	    && (decl_scope(st, j) == decl_scope(st, di)))
 	    return j;
     }
     return BAD_INDEX;
