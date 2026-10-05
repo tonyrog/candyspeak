@@ -2710,8 +2710,10 @@ next:
 		// value that lives somewhere when it is really a step in a
 		// calculation. Its own error, because "field not found" would be
 		// a lie: the name is right there.
+		// ...except a `#local ... out', which exists to be read.
 		if (decl(st, INDEX(jx), local) &&
-		    (decl(st, INDEX(jx), type) == DECL_VARIABLE)) {
+		    (decl(st, INDEX(jx), type) == DECL_VARIABLE) &&
+		    (decl(st, INDEX(jx), dir) != DIR_OUT)) {
 		    if (csp_set_error(st, ERR_LOCAL_SCOPE))
 			csp_set_err_arg_tstr(st, 0, &tval.str);
 		    return 0;
@@ -3687,6 +3689,89 @@ NOINLINE int csp_parse_import(csp_rt_t* st, token_t* tv, int ti, size_t n);
 //
 // Its leaf is single-buffered (BUF_F_LOCAL), which is what lets the rules below
 // read the value this cycle instead of the previous one.
+// '#' 'local' <name>[':'<bits>] [<type>] 'in'  -- inside a #module only.
+//
+// A #local whose formula the INSTANCE supplies: `#M m X <- expr`. Same status
+// as any #local -- a formula, settled in the cycle it is computed, readable
+// only inside the module -- but the formula is per instance, so it cannot be
+// compiled into the module body the instances share. csp_parse_object puts
+// it in front of the instance's OP_NEW instead, as a plain rule, and the body
+// that runs straight after it sees this cycle's value.
+//
+// That is what a `<-' into a #variable cannot do between instances: it is
+// gated on "changed this cycle" but reads the value committed the cycle
+// before, so it copies the PREVIOUS value -- and once the source stops moving
+// it never runs again. A local-in has no gate, no copy and no extra cycle.
+//
+// It keeps its NAME, unlike a formula #local: the instance binds it by name,
+// and /list has to give it back.
+//
+// `#local X in = <const>' gives the value an instance that does not bind it
+// reads. Without a default, an instance that leaves it unbound is an error:
+// it would read 0 for ever, which looks like a value and is not one. The
+// default is written by csp_parse_object, in the place a binding would be --
+// never by the module body, which would overwrite a binding in the first
+// cycle.
+//
+// HAS A DEFAULT is recorded as dir = DIR_INOUT: "in, and has a value of its
+// own". There is no spare bit in a declaration, and a local is never both an
+// input and an output in the pin sense, so the two-bit dir field has the room.
+// is_local_in tests DIR_IN as a bit, which both satisfy.
+NOINLINE static int local_in(csp_rt_t* st, token_t* tv, int ti, size_t n,
+			     int dflt, size_t ndflt)
+{
+    variable_param_t d = {0};
+    index_t ix;
+    int i;
+    value_t init;
+
+    init.u = 0;
+    d.r.res = 8*sizeof(ivalue_t);
+    d.opts.vt = default_vt(peek_res(tv, ti, n));
+    if ((pmatch(st, tv, ti, n, pat_variable, &d, sizeof(d)) < 0) ||
+	(d.opts.dir != DIR_IN)) {
+	csp_set_error(st, ERR_SYNTAX);      // no `=` and no `in`: nothing
+	return -1;
+    }
+    if (st->cs->mdef == BAD_INDEX) {
+	csp_set_error(st, ERR_LOCAL_IN_WHERE);
+	return -1;
+    }
+    if (check_res(st, d.r.res) < 0)
+	return -1;
+    if (ndflt > 0) {
+	rentry_t rc;
+	size_t num = ndflt;
+	if (!csp_parse_const_expr(st, &tv[dflt], &num, &rc) || !rc.I ||
+	    (num != ndflt)) {
+	    csp_set_error(st, ERR_SYNTAX);  // a default is a constant
+	    return -1;
+	}
+	init = rc.val;
+	if ((d.opts.vt == V_FLOAT) && (rc.vt == V_INTEGER))
+	    init.f = op_CVTIF(rc.val.i);
+    }
+    if (def_lookup_local(st, &d.name) != BAD_INDEX) {
+	if (csp_set_error(st, ERR_ALREADY_DEFINED)) {
+	    csp_set_err_arg_rostr(st, 0, ros_local);
+	    csp_set_err_arg_tstr(st, 1, &d.name);
+	}
+	return -1;
+    }
+    if ((ix = csp_new_udecl(st, &d.name, DECL_VARIABLE)) == BAD_INDEX)
+	return -1;
+    i = INDEX(ix);
+    {
+    	csp_decl_t* dp_ = ram_decl_at(st,i);
+	    csp_decl_set_vt(dp_, d.opts.vt);
+	    csp_decl_set_res(dp_, MAKE_RES(d.r.res));
+	    csp_decl_set_dir(dp_, (ndflt > 0) ? DIR_INOUT : DIR_IN);
+	    csp_decl_set_local(dp_, 1);
+	    csp_decl_set_va_init(dp_, init);
+    }
+    return 0;
+}
+
 NOINLINE int csp_parse_local(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     variable_param_t d = {0};
@@ -3702,7 +3787,9 @@ NOINLINE int csp_parse_local(csp_rt_t* st, token_t* tv, int ti, size_t n)
     for (j = ti; j < (int)n; j++) {
 	if (tv[j].t == EQ) { eq = j; break; }
     }
-    if ((eq < 0) || (eq + 1 >= (int)n)) {
+    if (eq < 0)                            // `#local X in`: see local_in
+	return local_in(st, tv, ti, n, 0, 0);
+    if (eq + 1 >= (int)n) {
 	csp_set_error(st, ERR_SYNTAX);      // a local with no formula is nothing
 	return -1;
     }
@@ -3710,6 +3797,8 @@ NOINLINE int csp_parse_local(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
+    if (d.opts.dir == DIR_IN)              // `#local X in = <default>`
+	return local_in(st, tv, ti, eq, eq + 1, n - (size_t)(eq + 1));
     if (check_res(st, d.r.res) < 0)
 	return -1;
     // A LOCAL'S NAME DOES NOT GO IN ram_str.
@@ -3730,7 +3819,19 @@ NOINLINE int csp_parse_local(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	}
 	return -1;
     }
-    {
+    // `#local X out = <formula>': the same formula, but it keeps its NAME and
+    // may be read from outside as obj.X -- by a binding on another instance's
+    // line, a rule, a #local of the program. In a module only: a global
+    // #local is already readable everywhere.
+    if (d.opts.dir == DIR_OUT) {
+	if (st->cs->mdef == BAD_INDEX) {
+	    csp_set_error(st, ERR_LOCAL_IN_WHERE);
+	    return -1;
+	}
+	if ((ix = csp_new_udecl(st, &d.name, DECL_VARIABLE)) == BAD_INDEX)
+	    return -1;
+    }
+    else {
 	// A named declaration is still made when there is no define buffer to
 	// hold the name (CSP_DEFINE_BYTES 0): correctness first, space second.
 	//
@@ -4912,6 +5013,25 @@ NOINLINE static int asm_state_set(csp_rt_t* st, xindex_t state_ix, int snum)
     return 0;
 }
 
+// A #local ... in: a NAMED local -- a formula #local has no name -- marked in.
+static int is_local_in(csp_rt_t* st, index_t jx)
+{
+    return (decl(st, jx, type) == DECL_VARIABLE) && decl(st, jx, local) &&
+	(decl(st, jx, dir) & DIR_IN) && (decl(st, jx, name) != 0);
+}
+
+// The member of module mx called `name' when it is a #local ... in, else
+// BAD_INDEX.
+static index_t local_in_member(csp_rt_t* st, index_t mx, const tstr_t* name)
+{
+    index_t dn = decl(st, INDEX(mx), md_n);
+    index_t jx = lookup_decl_in(st, (tstr_t*)name, INDEX(mx) + 1,
+				INDEX(mx) + 1 + dn);
+    if ((jx == BAD_INDEX) || !is_local_in(st, INDEX(jx)))
+	return BAD_INDEX;
+    return INDEX(jx);
+}
+
 NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     object_param_t d = {0};
@@ -4977,7 +5097,24 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	// to the front of d.inits[] (in place, order preserved) so they can go
 	// into ONE grouped rule below.
 	for (k = 0; (k < MAX_INITS) && (d.inits[k].obj.len > 0); k++) {
-	    if (d.inits[k].assign == RIMP) {          // reactive: standing rule
+	    // A #local ... in: its formula, as a plain rule every cycle -- no
+	    // change gate, no INIT gate -- in front of the OP_NEW below, so the
+	    // instance body sees this cycle's value. `=` and `<-` alike: both
+	    // say "this is what X is". local_def lets the one assignment
+	    // through coerce_assign, as csp_parse_local does for its formula.
+	    index_t lx = (d.inits[k].fld.len == 0) ? local_in_member(st, mx,
+						     &d.inits[k].obj) : BAD_INDEX;
+	    if (lx != BAD_INDEX) {
+		rule_body_part_t p = d.inits[k];
+		int r;
+		p.assign = EQ;
+		st->cs->local_def = (index_t)(INDEX(lx) + 1);
+		r = asm_rule(st, tv, n, ix, &p, 1, NULL);
+		st->cs->local_def = 0;
+		if (r < 0)
+		    return -1;
+	    }
+	    else if (d.inits[k].assign == RIMP) {     // reactive: standing rule
 		rule_body_part_t p = d.inits[k];
 		if (asm_rule(st, tv, n, ix, &p, 1, NULL) < 0)
 		    return -1;
@@ -4986,6 +5123,46 @@ NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
 		if (nstatic != k)
 		    d.inits[nstatic] = d.inits[k];
 		nstatic++;
+	    }
+	}
+
+	// A #local ... in this instance leaves unbound is bound to its default
+	// -- written where a binding would be, so the body reads it the same way
+	// -- and one without a default is an error.
+	{
+	    index_t dn = decl(st, INDEX(mx), md_n);
+	    index_t jx;
+	    for (jx = INDEX(mx) + 1; jx <= INDEX(mx) + dn; jx++) {
+		int bound = 0;
+		reg_t c, r;
+		int rpos;
+		if (!is_local_in(st, jx))
+		    continue;
+		for (k = 0; (k < MAX_INITS) && (d.inits[k].obj.len > 0); k++)
+		    if ((d.inits[k].fld.len == 0) &&
+			(local_in_member(st, mx, &d.inits[k].obj) == jx))
+			bound = 1;
+		if (bound)
+		    continue;
+		if (decl(st, jx, dir) != DIR_INOUT) {     // no default: say so
+		    if (csp_set_error(st, ERR_LOCAL_IN_UNBOUND)) {
+			csp_set_err_arg_ix(st, 0, jx);
+			csp_set_err_arg_ix(st, 1, jx);
+		    }
+		    return -1;
+		}
+		c = alloc_reg(st);
+		if (!asm_LI(st, c, -1) || !asm_RULE(st, &rpos, c, 0))
+		    return -1;
+		free_reg(st, c);
+		r = alloc_reg(st);
+		if (!csp_load_int(st, r, decl(st, jx, va_init).i) ||
+		    !asm_mem(st, OP_ST, r, MAKE_XINDEX(m, jx)))
+		    return -1;
+		csp_instr_set_r_nxt(ram_instr_at(st, rpos), st->ps.nn - rpos);
+		if (!asm_NEXT(st, r))
+		    return -1;
+		free_reg(st, r);
 	    }
 	}
 

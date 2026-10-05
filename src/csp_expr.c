@@ -305,7 +305,9 @@ static uint8_t exprbuf_var(csp_rt_t* st, csp_exprbuf_t* bp, uint16_t ix)
 	    exprbuf_char(bp, ']');
 	}
     }
-    else if (csp_is_local(st, ix)) {
+    // A formula #local has no name and lists as $N. A #local ... in keeps
+    // its name -- the instance binds it by that name -- and lists with it.
+    else if (csp_is_local(st, ix) && (decl_name_pos(st, ix) == 0)) {
 	exprbuf_char(bp, '$');
 	exprbuf_uint16(bp, (uint16_t)csp_local_number(st, ix));
     }
@@ -588,6 +590,15 @@ static int exprbuf_state_name(csp_rt_t* st, csp_exprbuf_t* bp,
     return 0;
 }
 
+// How a store renders. BIND while csp_print_binding renders a `#local ... in'
+// binding: the bare member name and `<-', as the object's line writes it --
+// `#M m X <- expr'. RHS while csp_print_formula renders a `#local ... out':
+// the formula alone, for the declaration's own line.
+#define STORE_PLAIN 0
+#define STORE_BIND  1
+#define STORE_RHS   2
+static int store_mode;
+
 static void exprbuf_store(csp_rt_t* st,
 			  csp_exprbuf_t* bp,
 			  csp_instr_t* ip, int rimp)
@@ -595,11 +606,17 @@ static void exprbuf_store(csp_rt_t* st,
     uint8_t* start;
     uint8_t  var;
 
+    if (store_mode == STORE_BIND)
+	bp->seto = 0;                   // X, not m.X
     var = exprbuf_var(st, bp, csp_instr_get_m_mem(ip));
     start = exprbuf_ptr(bp);
-    exprbuf_strref(bp, var);
-    if (rimp) { exprbuf_char(bp, '<'); exprbuf_char(bp, '-'); }
-    else exprbuf_char(bp, '=');
+    if (store_mode != STORE_RHS) {
+	exprbuf_strref(bp, var);
+	if (rimp || (store_mode == STORE_BIND)) {
+	    exprbuf_char(bp, '<'); exprbuf_char(bp, '-');
+	}
+	else exprbuf_char(bp, '=');
+    }
     // A string literal compiles to an OP_LI carrying a POSITION in the string
     // table, and the instruction stream keeps no type -- so on its own the
     // disassembler renders `A = 54`. The destination decl knows better: when it
@@ -662,10 +679,20 @@ static void exprbuf_store_imm(csp_rt_t* st,
     uint8_t* start;
     uint8_t  var;
 
+    // The same three renderings as exprbuf_store: a binding of a small
+    // constant (`#M m X <- 3') compiles to STI, not LI+ST.
+    if (store_mode == STORE_BIND)
+	bp->seto = 0;
     var = exprbuf_var(st, bp, csp_instr_get_mi_mem(ip));
     start = exprbuf_ptr(bp);
-    exprbuf_strref(bp, var);
-    exprbuf_char(bp, '=');
+    if (store_mode != STORE_RHS) {
+	exprbuf_strref(bp, var);
+	if (store_mode == STORE_BIND) {
+	    exprbuf_char(bp, '<'); exprbuf_char(bp, '-');
+	}
+	else
+	    exprbuf_char(bp, '=');
+    }
     // A V_STRING destination means the immediate is a string HANDLE, not a
     // number: render what it names, or a listing cannot be pasted back.
     //
@@ -1039,6 +1066,133 @@ int csp_print_when(csp_rt_t* st, int from, int gate)
     return 0;
 }
 
+
+// The object whose `#local ... in` the rule at OP_RULE `ri' binds, or 0.
+// Recognised by its target and nothing else: a store into a #local ... in
+// member of an object can only have come from a binding, since every other
+// assignment to a local is refused (coerce_assign).
+int csp_rule_binding(csp_rt_t* st, int ri)
+{
+    int i, obj = 0, seto = 0;
+
+    for (i = ri + 1; i < st->ps.nn; i++) {
+	opcode_t op = csp_iop(st, i);
+	if (op == OP_NEXT)
+	    break;
+	if (op == OP_SETO)
+	    seto = (int)instr(st, i, o_obj);
+	else if ((op == OP_ST) || (op == OP_STIMP) || (op == OP_STI) ||
+		 (op == OP_STP)) {
+	    // A small constant compiles to STI (fits_sti), which carries its
+	    // target in the same field.
+	    index_t m = (op == OP_STI) ? INDEX(instr(st, i, mi_mem))
+				       : INDEX(instr(st, i, m_mem));
+	    if (((op != OP_ST) && (op != OP_STI)) || (seto == 0) ||
+		(decl(st, m, type) != DECL_VARIABLE) || !decl(st, m, local) ||
+		!(decl(st, m, dir) & DIR_IN) || (decl(st, m, name) == 0))
+		return 0;
+	    obj = seto;
+	    seto = 0;
+	}
+	else
+	    seto = 0;                   // a SETO names only the next access
+    }
+    return obj;
+}
+
+// A binding as the object's line writes it: `X<-expr'. `i' is where the rule
+// starts, as for csp_print_rule.
+int csp_print_binding(csp_rt_t* st, int i)
+{
+    int r;
+    store_mode = STORE_BIND;
+    r = csp_print_rule(st, i);
+    store_mode = STORE_PLAIN;
+    return r;
+}
+
+// The `#local ... out' whose formula the rule at OP_RULE `ri' is, or -1. Its
+// one store goes to the named out-local itself, with no object in front.
+int csp_rule_defines_out(csp_rt_t* st, int ri)
+{
+    int i, seto = 0, found = -1;
+
+    for (i = ri + 1; i < st->ps.nn; i++) {
+	opcode_t op = csp_iop(st, i);
+	if (op == OP_NEXT)
+	    break;
+	if (op == OP_SETO)
+	    seto = 1;
+	else if ((op == OP_ST) || (op == OP_STI)) {
+	    index_t m = (op == OP_STI) ? INDEX(instr(st, i, mi_mem))
+				       : INDEX(instr(st, i, m_mem));
+	    if (seto || (decl(st, m, type) != DECL_VARIABLE) ||
+		!decl(st, m, local) || (decl(st, m, dir) != DIR_OUT) ||
+		(decl(st, m, name) == 0))
+		return -1;
+	    found = (int)m;
+	    seto = 0;
+	}
+	else if ((op == OP_STIMP) || (op == OP_STP))
+	    return -1;
+	else
+	    seto = 0;
+    }
+    return found;
+}
+
+// A binding that only stores a constant: 1 with the member and the value, 0
+// otherwise. What a default looks like -- csp_parse_object writes one for an
+// instance that leaves a #local ... in unbound -- so the listing can tell it
+// from a binding somebody wrote.
+int csp_rule_const_store(csp_rt_t* st, int ri, index_t* member, value_t* v)
+{
+    int i, stored = 0;
+    value_t r;
+
+    r.u = 0;
+    for (i = ri + 1; i < st->ps.nn; i++) {
+	opcode_t op = csp_iop(st, i);
+	if (op == OP_NEXT)
+	    break;
+	switch (op) {
+	case OP_SETO:
+	    break;
+	case OP_LI:
+	    r.i = (ivalue_t)instr(st, i, i_imm);
+	    break;
+	case OP_LIU:
+	    r.u = (uvalue_t)(uint16_t)instr(st, i, i_imm);
+	    break;
+	case OP_LIH:
+	    r.u |= ((uvalue_t)(uint16_t)instr(st, i, i_imm)) << 16;
+	    break;
+	case OP_ST:
+	    *member = INDEX(instr(st, i, m_mem));
+	    *v = r;
+	    stored++;
+	    break;
+	case OP_STI:
+	    *member = INDEX(instr(st, i, mi_mem));
+	    v->i = (ivalue_t)instr(st, i, mi_imm);
+	    stored++;
+	    break;
+	default:
+	    return 0;
+	}
+    }
+    return stored == 1;
+}
+
+// That formula alone, for the declaration's line.
+int csp_print_formula(csp_rt_t* st, int i)
+{
+    int r;
+    store_mode = STORE_RHS;
+    r = csp_print_rule(st, i);
+    store_mode = STORE_PLAIN;
+    return r;
+}
 
 int csp_print_rule(csp_rt_t* st, int i)
 {

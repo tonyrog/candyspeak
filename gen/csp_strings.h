@@ -135,6 +135,10 @@ extern rochar s_err_import_where[60] RODATA;
 #define ros_err_import_where ((rostring_t) s_err_import_where)
 extern rochar s_err_import_missing[31] RODATA;
 #define ros_err_import_missing ((rostring_t) s_err_import_missing)
+extern rochar s_err_local_in_unbound[86] RODATA;
+#define ros_err_local_in_unbound ((rostring_t) s_err_local_in_unbound)
+extern rochar s_err_local_in_where[39] RODATA;
+#define ros_err_local_in_where ((rostring_t) s_err_local_in_where)
 extern rochar s_err_opts_after_pin[74] RODATA;
 #define ros_err_opts_after_pin ((rostring_t) s_err_opts_after_pin)
 extern rochar s_err_block_open[39] RODATA;

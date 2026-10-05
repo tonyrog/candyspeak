@@ -145,6 +145,12 @@ looks the way it does:
   soon as the program settles -- exactly when you are staring at it wondering
   why. So `csp_panel` draws on its own tick and merges dumps into a `last` map,
   which also makes a trace hold its level instead of dropping to zero.
+* **Only what moved crosses.** csp is started with `--delta`, so a dump after
+  the first carries only the leaves that changed (bridgezone: 34 bytes against
+  12 KB), and csp never dumps nameless `#local`s. The panel then paints only a
+  value that differs from what it already shows: `wse:set` and `setStyle` are
+  synchronous, a browser round trip each, and repainting every pin of every
+  dump was 1800 calls a second -- that was the lag, not the text format.
 * **`/commit` is the tick.** It runs exactly one cycle and prints nothing but
   the dump. `/state` also steps, but adds a page of human text; an empty line
   steps nothing at all.

@@ -379,7 +379,9 @@ ifeq ($(ARCH),avr8)
   # so out loud instead of trusting the link to complain.
   MCU     := $(shell $(GEN) --chip-of $(BOARD))
   CPU     := -mmcu=$(MCU)
-  PORTSRC := port/csp_avr.c
+  PORTSRC := port/csp_avr.c port/csp_io.c
+  # The chip layer behind csp_chip_io.h: pins, the tick, the ADC.
+  DRV     := chips/atmel/drivers/avr/chip_avr.c
   # Code-size flags, and they are worth kilobytes on this architecture rather
   # than the percent they would be worth on an ARM. -mcall-prologues turns each
   # function's register save/restore into two calls into libgcc instead of up to

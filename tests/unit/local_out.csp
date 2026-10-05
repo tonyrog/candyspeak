@@ -1,0 +1,18 @@
+// #local ... in, ... in = default, and ... out, chained through instances in
+// ONE cycle: s1's out feeds s2's in, both feed s3, and a global reads s3's out.
+// Gain has a default; s2 binds it, s1 and s3 do not. A #local is a formula --
+// state is still only what a #variable holds, so Seen is one cycle behind.
+#variable K = 0
+K = K + 1 ? K < 8
+#module Stage
+  #local X in
+  #local Gain in = 2
+  #local Y out = X * Gain
+  #variable Seen
+  Seen = Y
+#end
+#Stage s1 X <- K
+#Stage s2 X <- s1.Y Gain <- 3
+#Stage s3 X <- s2.Y + s1.Y
+#variable Tail = 0
+Tail = s3.Y

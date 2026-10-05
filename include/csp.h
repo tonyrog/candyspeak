@@ -1697,6 +1697,8 @@ typedef enum {
     ERR_NO_IMPORT,
     ERR_IMPORT_WHERE,
     ERR_IMPORT_MISSING,
+    ERR_LOCAL_IN_UNBOUND,
+    ERR_LOCAL_IN_WHERE,
 } csp_err_t;
 
 // parser state, save state before parse

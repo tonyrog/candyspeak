@@ -51,7 +51,7 @@ static char src_modified[26];
 #if defined(CSP_HAVE_IMPORT)
 // #import. A ROOT is a named directory: `#import lib "analog.csp"` names one,
 // `#import analog` tries them all in order. In order: --root on the command
-// line, then CSP_PATH ("name=dir:name=dir"), then the two built in -- board,
+// line, then CSP_ROOTS ("name=dir:name=dir"), then the two built in -- board,
 // the nearest directory with a pins.csp above the first file given, and lib,
 // the tree's own lib/ next to this binary. The first root by a name wins, so
 // either can be moved.
@@ -1217,10 +1217,11 @@ static int imp_root_arg(const char* arg)
     return 0;
 }
 
-// After the options: CSP_PATH, then the two built in.
+// After the options: CSP_ROOTS, then the two built in. Not CSP_PATH:
+// gen_chips.erl reads that one, as plain directories where board terms live.
 static void imp_roots_finish(const char* first_file)
 {
-    const char* env = getenv("CSP_PATH");
+    const char* env = getenv("CSP_ROOTS");
     char buf[PATH_MAX];
     ssize_t n;
 
@@ -1502,6 +1503,7 @@ static struct option long_options[] = {
     {"name",         required_argument, 0,  1013},
     {"root",         required_argument, 0,  1016},
     {"deps",         required_argument, 0,  1017},
+    {"delta",        no_argument,       0,  1018},
     {0,              0,                 0,  0 }
 };
 
@@ -1553,8 +1555,9 @@ void usage(const char* prog)
     fprintf(stderr, "      --root=NAME=DIR  A root for #import NAME \"file\"; also searched by\n");
     fprintf(stderr, "                       #import file. Built in: board (nearest dir with a\n");
     fprintf(stderr, "                       pins.csp above the first file) and lib (lib/\n");
-    fprintf(stderr, "                       beside csp); CSP_PATH\n");
+    fprintf(stderr, "                       beside csp); CSP_ROOTS\n");
     fprintf(stderr, "                       holds more as name=dir:name=dir\n");
+    fprintf(stderr, "      --delta          -Q dumps only what changed since the last dump\n");
     fprintf(stderr, "      --deps=FILE      Write every file loaded, imports included, as a\n");
     fprintf(stderr, "                       make rule for -O's file, each after what it imports\n");
     fprintf(stderr, "      --virtual-time   Jump the clock to the next timer instead of sleeping\n");
@@ -2107,6 +2110,9 @@ int main(int argc, char** argv)
 	    deps_file = optarg;
 	    break;
 #endif
+	case 1018:   // --delta: -Q dumps only what changed, see csp_dump_delta
+	    csp_dump_delta = 1;
+	    break;
 	case 1010:   // --flash=FILE: back the simulated flash with a file
 	    csp_flash_host_file(optarg);
 	    break;
@@ -2495,7 +2501,32 @@ int main(int argc, char** argv)
 
     if (debug_parse) {
 	csp_dump(parse_out, &state);
-	csp_list_rules(parse_out, &state);
+	// The listing is SOURCE, the rest of the file Erlang terms that
+	// file:consult reads back -- tests/csp_test.erl does, for every test
+	// without an .expect. Written bare, the first rule ended the parse: any
+	// file with rules, `#when' or not, failed as "invalid_erlang". So each
+	// line goes in as a comment, readable and out of the reader's way.
+	//
+	// The listing is /list's -- the one that rebuilds #when, #in, modules
+	// and declarations the way they were written -- not a second walk of
+	// its own. csp_dump.c's csp_list_rules was that second walk, and it had
+	// never learned #when: a rule inside one listed without its condition.
+#if !defined(CSP_EXEC_ONLY)   // no /list without the command layer
+	{
+	    FILE* lf = tmpfile();
+	    char line[MAX_SRC_LINE];
+	    char cmd[] = "/list";
+	    if (lf) {
+		void* savef = csp_set_file_output(lf);
+		csp_process_line(&state, cmd);
+		csp_set_file_output(savef);
+		rewind(lf);
+		while (fgets(line, (int)sizeof(line), lf))
+		    fprintf(parse_out, "%%%% %s", line);
+		fclose(lf);
+	    }
+	}
+#endif
     }
 
     if (compile) {

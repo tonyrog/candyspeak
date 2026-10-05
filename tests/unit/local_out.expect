@@ -1,0 +1,10 @@
+{cycles, 9}.
+%% Cycle 8 reads K as 7, committed the cycle before:
+%%   s1.Y = 7*2 = 14, s2.Y = 14*3 = 42, s3.Y = (42+14)*2 = 112
+%% all in that same cycle, and Tail = s3.Y with them.
+{checks, [
+  {final_var, "Tail", 112},
+  {final_object_var, "Stage.s1", "s1.Seen", 14},
+  {final_object_var, "Stage.s2", "s2.Seen", 42},
+  {final_object_var, "Stage.s3", "s3.Seen", 112}
+]}.

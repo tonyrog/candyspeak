@@ -354,9 +354,9 @@ A **root** is a named directory. Two are built in:
 | `board` | the nearest directory holding a `pins.csp`, from the first file given upwards |
 | `lib`   | `lib/` beside the `csp` binary |
 
-More come from `--root=name=dir` on the command line and from `CSP_PATH`
+More come from `--root=name=dir` on the command line and from `CSP_ROOTS`
 (`name=dir:name=dir`). A bare name tries the roots in that order —
-`--root`, `CSP_PATH`, `board`, `lib` — and the first by a name wins, so a board
+`--root`, `CSP_ROOTS`, `board`, `lib` — and the first by a name wins, so a board
 can carry its own version of a library file, and either built-in can be
 moved. A quoted path does not search: it names one file, relative to the file
 that imports it, so `boards/x/main.csp` can import `"pins.csp"` whatever
@@ -1283,6 +1283,61 @@ that name.
 Binding a member to a *global* buffer therefore shares it across instances,
 while binding to a *member* buffer gives each instance its own — which of the
 two you get follows from where the buffer is declared.
+
+#### Formulas Between Instances: `#local ... in` and `#local ... out`
+
+```
+#local <name>[:<bits>] [<type>] in [= <const>]   // the instance supplies it
+#local <name>[:<bits>] [<type>] out = <expr>     // others may read it
+```
+
+Both go inside a `#module`, and both are ordinary `#local`s: a formula, settled
+in the cycle it is computed in. Neither holds state. What a module remembers
+from one cycle to the next is still only what its `#variable`s hold, and a
+`#variable` written in a cycle is still read the next. The two only say where a
+formula comes from and who may read it.
+
+**`in`**: the instance gives the formula, on its `#M` line. **`out`**: the
+module gives the formula, and anyone may read it as `m.X`, including another
+instance's binding.
+
+```
+#module Stage
+  #local X in                 // must be bound
+  #local Gain in = 2          // may be bound; 2 if not
+  #local Y out = X * Gain     // readable as s1.Y, s2.Y, ...
+  #variable Seen
+  Seen = Y
+#end
+
+#Stage s1 X <- K
+#Stage s2 X <- s1.Y Gain <- 3
+#Stage s3 X <- s2.Y + s1.Y
+```
+
+`s2` sees `s1.Y` as it is this cycle, and `s3` sees both. A chain of instances
+costs no extra cycles, so it is wiring and not a pipeline. A binding can only
+name instances declared before it, which rules out a loop. A rule that reads
+`m.Y` **before** `m` in the file gets the value from the previous cycle,
+because `m`'s body has not run yet.
+
+`<-` and `=` mean the same thing in a binding: "this is what X is". An
+instance that leaves a `#local ... in` unbound gets its default. Without a
+default, an unbound one is an error, because it would read 0 forever and that
+looks like a value when it is not one.
+
+**Why not `#variable X in` with `X <- a1.Y`?** A `<-` into a variable is a
+copy. It is taken when the source *changes*, and it reads the value committed
+the cycle before. Between two instances the copy is therefore always one value
+behind, and when the source stops moving the copy is never refreshed, so it
+keeps the second-to-last value forever. A `#local ... in` copies nothing. Its
+formula runs as a plain rule immediately before the instance's body.
+
+`/list` writes back what was written: a default on the declaration
+(`#local Gain:32 integer in = 2`), an out formula on its own line
+(`#local Y:32 integer out = X*Gain`), and on the object's line the bindings
+somebody wrote (`#Stage s2 X<-s1.Y Gain<-3`). It does not list the defaults
+the compiler supplied.
 
 #### Example: Full Adder
 
@@ -2633,6 +2688,10 @@ pandoc doc/manual_en.md -o doc/manual_en.pdf \
 #variable <name>[:<bits>] [type] [= value]              // bits 1..32, typeless = signed
 #variable <name>:<bits> [big|little] bind <buffer>[<a>..<b>]   // bit-field view
 #local <name>[:<bits>] [type] = <expr>   // a named FORMULA, same-cycle, no assign
+#local <name>[:<bits>] [type] in [= c]  // in a module: the instance binds it
+#local <name>[:<bits>] [type] out = <e>  // in a module: readable as obj.name
+#local <name>[:<bits>] [type] in [= c]  // in a module: the instance binds it
+#local <name>[:<bits>] [type] out = <e>  // in a module: readable as obj.name
 #digital <name> [in|out|inout] [pullup|pulldown] [<port>:]<pin>
 #analog <name>[:<resolution>] [in|out] [pwm] [integer|unsigned] [<port>:]<pin>
 #timer <name> <period_ms|param> [= 1]

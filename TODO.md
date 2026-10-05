@@ -1,5 +1,14 @@
 # TODO - Klart-markerat flyttas till DONE.md, inte hit.
 
+## binary form for terms set in Q mode -bin
+
+Binary format in -Q mode to be used by port length mode,
+(must keep quite) these terms may then be sent all the
+way up to the web browser.
+
+## Improve the varp translation
+
+
 # SAVE/COPY IMAGE
 
 /copy A B			-- B can not be running

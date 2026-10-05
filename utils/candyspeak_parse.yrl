@@ -86,6 +86,10 @@ declaration -> 'D_CONSTANT' xid array res options 'EQ' expr_array :
 
 declaration -> 'D_LOCAL' xid res options 'EQ' expr :
 		   {local,line('$1'),'$2','$3','$4','$6'}.
+%% `#local X in' -- the instance binds it, with no default. (`#local X in = c'
+%% and `#local X out = e' are the form above: `options' carries in/out.)
+declaration -> 'D_LOCAL' xid res options :
+		   {local,line('$1'),'$2','$3','$4',undefined}.
 declaration -> 'D_PARAM' xid res options :
 		   {param,line('$1'),'$2','$3','$4',undefined}.
 declaration -> 'D_PARAM' xid res options 'EQ' expr :

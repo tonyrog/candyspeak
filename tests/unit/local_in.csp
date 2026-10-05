@@ -1,0 +1,23 @@
+// #local ... in: a module input that is a FORMULA the instance supplies.
+//
+// a1.Y pulses to 16 for one cycle and then stays at 0. b1 binds X to it.
+// With `#variable X in' and `X <- a1.Y' the binding is gated on "changed this
+// cycle" but reads the value committed the cycle before: it copies the
+// PREVIOUS value, and once a1.Y stops moving it never runs again -- X was left
+// at 16 for good. A local-in is a plain rule in front of the instance: no
+// gate, no copy, and the body sees this cycle's value. b2 chains on b1.
+#module A
+  #variable Y
+  #variable K
+  K = K + 1 ? K < 6
+  Y = 0
+  Y = 16 ? K == 3
+#end
+#module B
+  #local X in
+  #variable Seen
+  Seen = X
+#end
+#A a1
+#B b1 X <- a1.Y
+#B b2 X <- a1.Y * 2 + b1.Seen

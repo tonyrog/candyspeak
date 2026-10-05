@@ -430,6 +430,8 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_NO_IMPORT] =              ros_err_no_import,
     [ERR_IMPORT_WHERE] =           ros_err_import_where,
     [ERR_IMPORT_MISSING] =         ros_err_import_missing,
+    [ERR_LOCAL_IN_UNBOUND] =       ros_err_local_in_unbound,
+    [ERR_LOCAL_IN_WHERE] =         ros_err_local_in_where,
 };
 
 // err_tab is a designated-initialiser array, so ANY code without a row in it

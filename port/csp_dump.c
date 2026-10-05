@@ -387,10 +387,49 @@ void csp_dump_var_name(FILE* f, csp_rt_t* st, int m, index_t di)
     }
 }
 
-void csp_dump_var(FILE* f,csp_rt_t* st,
-		  char* dtype, char* suffix,
-		  int m, int di,
-		  int fv, csp_lang_t lang)
+// --delta: dump only what differs from the last dump. The panel reads this
+// stream sixty times a second, and a full dump of bridgezone is twelve
+// kilobytes of which almost nothing moved; it already merges what it gets into
+// what it had. Off by default: a state file read by the tests is a sequence of
+// WHOLE states, and its last one is what the final checks look at.
+int csp_dump_delta = 0;
+
+static value_t* dl_val;          // the value each leaf had in the last dump
+static uint8_t* dl_have;         // ...and whether it has been dumped at all
+static int      dl_cap;
+static int      dl_first = 1;    // the first dump is whole either way
+
+// 1 when leaf `slot' should be dumped with value v, remembering it.
+static int delta_take(int slot, value_t v)
+{
+    if (!csp_dump_delta)
+	return 1;
+    if (slot >= dl_cap) {
+	int ncap = slot + 256;
+	value_t* nv = realloc(dl_val, ncap * sizeof(value_t));
+	uint8_t* nh = realloc(dl_have, ncap);
+	if (!nv || !nh) {
+	    if (nv) dl_val = nv;
+	    if (nh) dl_have = nh;
+	    return 1;                   // no memory: dump it, like before
+	}
+	memset(nh + dl_cap, 0, ncap - dl_cap);
+	dl_val = nv;
+	dl_have = nh;
+	dl_cap = ncap;
+    }
+    if (dl_have[slot] && (dl_val[slot].u == v.u))
+	return 0;
+    dl_have[slot] = 1;
+    dl_val[slot] = v;
+    return 1;
+}
+
+// Returns 1 when it wrote an entry -- the caller's comma depends on it.
+int csp_dump_var(FILE* f,csp_rt_t* st,
+		 char* dtype, char* suffix,
+		 int m, int di,
+		 int fv, csp_lang_t lang)
 {
     // Bind the object so `di` reads out of THIS instance's storage. Listing
     // walks objects from outside any of them, so there is no OP_SETO and no
@@ -398,6 +437,11 @@ void csp_dump_var(FILE* f,csp_rt_t* st,
     index_t ix = MAKE_INDEX(m ? CURRENT : GLOBAL, di);
     if (m)
 	csp_ctx_set(st, m);
+    if (!delta_take(st_index(st, ix), csp_value(st, ix))) {
+	if (m)
+	    csp_ctx_reset(st);
+	return 0;
+    }
 
     switch(lang) {
     case ERLANG:
@@ -418,24 +462,45 @@ void csp_dump_var(FILE* f,csp_rt_t* st,
     }
     if (m)
 	csp_ctx_reset(st);
+    return 1;
 }
 
-void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
+// A formula #local with no name: a step in a calculation, which nothing outside
+// can name or read. The dump left them in as {var,"o5.",0} -- 950 of the 1426
+// entries in a bridgezone dump, re-sent every cycle because a step like `Now'
+// changes every cycle. /state already skips them. A NAMED local (#local ...
+// in / out) stays: it can be read, so it can be watched.
+static int nameless_local(csp_rt_t* st, int di)
+{
+    return decl(st, di, local) && (decl(st, di, name) == 0);
+}
+
+// Returns 1 when it wrote the object. With --delta an object none of whose
+// members moved is left out; the members are written to a buffer first, since
+// the header has to come before them.
+int csp_dump_object(FILE* out,csp_rt_t* st,int m,int fo,csp_lang_t lang)
 {
     int fv, j;
     index_t obj = csp_object_decl(st, m);
     index_t mx  = decl(st, INDEX(obj), mq_mx);
     int     n   = decl(st, INDEX(mx), md_n);    
-    
-    switch(lang) {
-    case ERLANG:
-	if (!fo) fprintf(f, ",");
-	fprintf(f, "{object,\"%.*s.%.*s\",[",
-		DNAME(st, mx), DNAME(st, obj));
-	break;
-    case TEXT:
-	fprintf(f, "%.*s.%.*s\n", DNAME(st, mx), DNAME(st, obj));
-	break;
+    char*   mbuf = NULL;
+    size_t  mlen = 0;
+    FILE*   f = csp_dump_delta ? open_memstream(&mbuf, &mlen) : out;
+
+    if (f == NULL)
+	f = out;
+    if (f == out) {
+	switch(lang) {
+	case ERLANG:
+	    if (!fo) fprintf(f, ",");
+	    fprintf(f, "{object,\"%.*s.%.*s\",[",
+		    DNAME(st, mx), DNAME(st, obj));
+	    break;
+	case TEXT:
+	    fprintf(f, "%.*s.%.*s\n", DNAME(st, mx), DNAME(st, obj));
+	    break;
+	}
     }
     fv = 1;
     j = 1;
@@ -450,6 +515,8 @@ void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
 	    for (q = 0; q < CSP_STATES_PER_DECL; q++) {
 		sindex_t np = (sindex_t)csp_states_slot(st, k, (index_t)q);
 		if (np == 0)
+		    continue;
+		if (csp_dump_delta && !dl_first)   // names do not change
 		    continue;
 		if (lang == ERLANG) {
 		    if (!fv) fprintf(f, ",");
@@ -468,34 +535,30 @@ void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
 	    break;
 	}
 	case DECL_VARIABLE:
-	    csp_dump_var(f,st,"var","",m,k,fv,lang);
-	    fv = 0;
+	    if (!nameless_local(st, k) &&
+		csp_dump_var(f,st,"var","",m,k,fv,lang))
+		fv = 0;
 	    j++;
 	    break;
 	case DECL_BUFFER:   // a #buffer member: per-instance storage, like a var
-	    csp_dump_var(f,st,"var","",m,k,fv,lang);
-	    fv = 0;
+	    if (csp_dump_var(f,st,"var","",m,k,fv,lang)) fv = 0;
 	    j++;
 	    break;
 	case DECL_DIGITAL:
-	    csp_dump_var(f,st,"digital","",m,k,fv,lang);
-	    fv = 0;
+	    if (csp_dump_var(f,st,"digital","",m,k,fv,lang)) fv = 0;
 	    j++;
 	    break;
 	case DECL_ANALOG:
-	    csp_dump_var(f,st,"analog","",m,k,fv,lang);
-	    fv = 0;
+	    if (csp_dump_var(f,st,"analog","",m,k,fv,lang)) fv = 0;
 	    j++;
 	    break;
 	case DECL_FIELD:    // a #field member: a bit-view, reads like a value
-	    csp_dump_var(f,st,"var","",m,k,fv,lang);
-	    fv = 0;
+	    if (csp_dump_var(f,st,"var","",m,k,fv,lang)) fv = 0;
 	    j++;
 	    break;
 	case DECL_TIMER:
-	    csp_dump_var(f,st,"timer","",m,k,fv,lang);
-	    csp_dump_var(f,st,"var","[t0]",m,k+1,fv,lang);
-	    fv = 0;
+	    if (csp_dump_var(f,st,"timer","",m,k,fv,lang)) fv = 0;
+	    if (csp_dump_var(f,st,"var","[t0]",m,k+1,fv,lang)) fv = 0;
 	    j += 2;
 	    break;
 	default:
@@ -503,14 +566,34 @@ void csp_dump_object(FILE* f,csp_rt_t* st,int m,int fo,csp_lang_t lang)
 	    break;
 	}
     }
+    if (f != out) {                       // --delta: was there anything?
+	fclose(f);
+	if (fv) {                         // nothing moved: no object at all
+	    free(mbuf);
+	    return 0;
+	}
+	switch(lang) {
+	case ERLANG:
+	    if (!fo) fprintf(out, ",");
+	    fprintf(out, "{object,\"%.*s.%.*s\",[",
+		    DNAME(st, mx), DNAME(st, obj));
+	    break;
+	case TEXT:
+	    fprintf(out, "%.*s.%.*s\n", DNAME(st, mx), DNAME(st, obj));
+	    break;
+	}
+	fwrite(mbuf, 1, mlen, out);
+	free(mbuf);
+    }
     switch(lang) {
     case ERLANG:
-	fprintf(f, "%s", "]}");
+	fprintf(out, "%s", "]}");
 	break;
     case TEXT:
-	fprintf(f, "\n");    
+	fprintf(out, "\n");    
 	break;
     }    
+    return 1;
 }
 
 void csp_dump_state(FILE* f, csp_rt_t* st, csp_lang_t lang)
@@ -536,34 +619,30 @@ void csp_dump_state(FILE* f, csp_rt_t* st, csp_lang_t lang)
 	    i += decl(st, i, md_n) + 1;
 	    break;
 	case DECL_VARIABLE:
-	    csp_dump_var(f,st,"var","",0,i,fo,lang);
-	    fo = 0;
+	    if (!nameless_local(st, i) &&
+		csp_dump_var(f,st,"var","",0,i,fo,lang))
+		fo = 0;
 	    i++;
 	    break;
 	case DECL_BUFFER:
-	    csp_dump_var(f,st,"var","",0,i,fo,lang);
-	    fo = 0;
+	    if (csp_dump_var(f,st,"var","",0,i,fo,lang)) fo = 0;
 	    i++;
 	    break;
 	case DECL_FIELD:    // a #field: a bit-view into a buffer, reads like a value
-	    csp_dump_var(f,st,"var","",0,i,fo,lang);
-	    fo = 0;
+	    if (csp_dump_var(f,st,"var","",0,i,fo,lang)) fo = 0;
 	    i++;
 	    break;
 	case DECL_DIGITAL:
-	    csp_dump_var(f,st,"digital","",0,i,fo,lang);
-	    fo = 0;
+	    if (csp_dump_var(f,st,"digital","",0,i,fo,lang)) fo = 0;
 	    i++;
 	    break;
 	case DECL_ANALOG:
-	    csp_dump_var(f,st,"analog","",0,i,fo,lang);
-	    fo = 0;
+	    if (csp_dump_var(f,st,"analog","",0,i,fo,lang)) fo = 0;
 	    i++;
 	    break;
 	case DECL_TIMER:
-	    csp_dump_var(f,st,"timer","",0,i,fo,lang);
-	    csp_dump_var(f,st,"var","[t0]",0,i+1,fo,lang);
-	    fo = 0;
+	    if (csp_dump_var(f,st,"timer","",0,i,fo,lang)) fo = 0;
+	    if (csp_dump_var(f,st,"var","[t0]",0,i+1,fo,lang)) fo = 0;
 	    i += 2;
 	    break;
 	default:
@@ -573,9 +652,10 @@ void csp_dump_state(FILE* f, csp_rt_t* st, csp_lang_t lang)
     }
 
     for (q = 1; q <= st->ps.nq; q++) {
-	csp_dump_object(f,st,q,fo,lang);
-	fo = 0;
+	if (csp_dump_object(f,st,q,fo,lang))
+	    fo = 0;
     }
+    dl_first = 0;
 
     switch(lang) {
     case ERLANG:
@@ -1536,224 +1616,8 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     }
 }
 
-// list declarations
-
-index_t csp_list_decl(FILE* f, csp_rt_t* st, int i)
-{
-    index_t ix = MAKE_INDEX(0,i);
-    int vt = V_INTEGER;
-
-    // An array's tail elements are real declarations but not their own source
-    // line -- the head already listed them as `A[N]`. Printing them would emit
-    // N-1 nameless variables that paste back as garbage.
-    if (decl(st,i,cont))
-	return i+1;
-
-    switch(decl(st,i,type)) {
-    case DECL_MODULE:
-	fprintf(f, "#module %.*s\n", DNAME(st, ix));
-	break;
-    case DECL_END:
-	fprintf(f, "#end\n");
-	break;
-    case DECL_STATES: {
-	// One block lists as the single `#states a b c` line it was written as.
-	// Unlike the REPL's /list this keeps the reserved INIT/NORMAL/FAILSAFE:
-	// this dump is for reading the program the runtime actually holds, not
-	// for producing source you paste back.
-	int k;
-	fprintf(f, "#states");
-	for (k = 0; k < CSP_STATES_PER_DECL; k++) {
-	    sindex_t np = (sindex_t)csp_states_slot(st, (index_t)i, (index_t)k);
-	    if (np == 0)
-		continue;
-	    fprintf(f, " %.*s", (int)csp_str_len(st, np), ro_maybe_ptr(csp_str_at(st, np)));
-	}
-	fputc('\n', f);
-	break;
-    }
-    case DECL_OBJECT:
-	fprintf(f, "#%.*s %.*s\n",
-		DNAME(st, decl(st, i, mq_mx)),
-		DNAME(st, ix));
-	break;
-    case DECL_VARIABLE: {
-	// An array lists as its head with the length back on, so the listing
-	// pastes back as the same array. Without the `[N]` it would come back a
-	// scalar and the elements above it would be gone.
-	uint16_t alen = csp_array_len(st, i);
-	char abuf[10];
-	abuf[0] = '\0';
-	if (alen > 1)
-	    snprintf(abuf, sizeof(abuf), "[%u]", alen);
-	vt = decl(st,i,vt);
-	fprintf(f, "#variable %.*s%s:%d %s %s = ", // show init value
-		DNAME(st, ix), abuf,
-		GET_RES(decl(st,i,res)),
-		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
-		ro_maybe_ptr(csp_fmt_vtype(vt)));
-	csp_fprint_value(f, st, vt, decl(st, i, va_init));
-	fprintf(f, "\n");
-	break;
-    }
-    case DECL_CONSTANT:
-	vt = decl(st,i,vt);	    
-	fprintf(f, "#constant %.*s:%d %s = ",
-		DNAME(st, ix),
-		GET_RES(decl(st,i,res)),
-		ro_maybe_ptr(csp_fmt_vtype(vt)));
-	csp_fprint_value(f, st, vt, decl(st, i, cn_init));
-	fprintf(f, "\n");	
-	break;
-    case DECL_DIGITAL:
-	vt = decl(st,i,vt); // should be unsigned
-	fprintf(f, "#digital %.*s %s %s %d:%d\n",
-		DNAME(st, ix),
-		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
-		ro_maybe_ptr(csp_fmt_pull(st, i)),
-		decl(st, i, di_port),decl(st, i, di_pin));
-	break;
-    case DECL_ANALOG:
-	vt = decl(st,i,vt);
-	fprintf(f,"#analog %.*s:%d %s %s %s %d:%d\n",
-		DNAME(st, ix),
-		GET_RES(decl(st,i,res)),
-		ro_maybe_ptr(csp_fmt_vtype(vt)),
-		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
-		ro_maybe_ptr(csp_fmt_pwm(st, i)),
-		decl(st, i, an_port), decl(st, i, an_pin));
-	break;
-    case DECL_TIMER:
-	vt = decl(st,i,vt);
-	fprintf(f, "#timer %.*s %d = %d\n",
-		DNAME(st, ix),
-		decl(st, i, tm_period),
-		decl(st, i, tm_init));
-	break;
-    case DECL_FIELD:
-	vt = decl(st,i,vt);
-	fprintf(f, "#field %.*s:%d %s %s %s 0x%x[%d:%d]\n",
-		DNAME(st, ix),
-		GET_RES(decl(st,i,res)),
-		ro_maybe_ptr(csp_fmt_vtype(vt)),
-		ro_maybe_ptr(csp_fmt_endian(decl(st, i, ca_endian))),
-		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
-		csp_ivalue(st, decl(st, i, ca_id)),
-		decl(st, i, ca_bit),
-		decl(st, i, ca_bit) + GET_FIELD_LEN(decl(st, i, ca_len)));
-	break;
-    case DECL_BUFFER:
-	// #buffer <name>:<size> [dir] [can 0x<id>]. Size is BYTES (bf.nbytes)
-	// -- matching the board lister and the parser.
-	fprintf(f, "#buffer %.*s:%d",
-		DNAME(st, ix),
-		decl(st, i, bf_nbytes));
-	if (decl(st,i,dir))
-	    fprintf(f, " %s", ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))));
-	if (decl(st, i, bf_transport) == TR_CAN)
-	    fprintf(f, " can 0x%x", (unsigned)csp_ivalue(st, decl(st, i, bf_id)));
-	fprintf(f, "\n");
-	break;
-    default:
-	break;
-    }
-    return i+1;
-}
-
-void csp_list_declarations(FILE* f, csp_rt_t* st)
-{
-    int i = 0;
-    while(i < st->ps.nd)
-	i = csp_list_decl(f, st, i);
-}
 
 
 
-// rules are generate as code
-// here we try to reverse engineer the rules, is there a better way?
-//
-
-int csp_list_rule(csp_rt_t* st, int i)
-{
-    { int r = csp_print_rule(st, i); csp_println(); return r; }
-}
-
-// Name string position of the state numbered snum (0 if none). The last reader
-// of the old flat state table -- states are DECL_STATES blocks now, so it goes
-// through the shared walk like every other lookup. Missing this one is what
-// rendered every `#in` gate as `#in ?`.
-#define list_state_name_pos(st, snum) state_name_pos((st), (snum))
-
-// Reconstruct source-shaped output: #module/#in blocks are recovered from the
-// OP_ENTER/OP_LEAVE and OP_INSTATE markers, rules are indented within them, and
-// the per-rule State==S gate is suppressed (implied by the #in header).
-void csp_list_rules(FILE* f, csp_rt_t* st)
-{
-    int i = 0;
-    int lev = 0;
-    int block_end = -1;
-    void* savef = csp_set_file_output(f);
-
-    while (i < st->ps.nn) {
-	opcode_t op;
-	if ((block_end >= 0) && (i >= block_end)) {   // close finished #in block
-	    if (lev > 0) lev--;
-	    fprintf(f, "%s#end\n", indent(lev));
-	    block_end = -1;
-	    st->list_state = -1;
-	    st->list_nstate = 0;
-	}
-	op = instr(st, i, op);
-	if (op == OP_ENTER) {
-	    fprintf(f, "%s#module %.*s\n", indent(lev), DNAME(st, instr(st, i, e_mx)));
-	    lev++;
-	    i++;
-	    continue;
-	}
-	if (op == OP_LEAVE) {
-	    if (lev > 0) lev--;
-	    fprintf(f, "%s#end\n", indent(lev));
-	    i++;
-	    continue;
-	}
-	// A block gate: LD State ; NINSTATE* ; INSTATE (open_in_block). Emit
-	// `#in <states>` and set list_states so each rule's State guard drops
-	// under the header. The whole gate is consumed, never listed as a rule.
-	if ((op == OP_LD) && (i+1 < st->ps.nn) &&
-	    ((instr(st, i+1, op) == OP_NINSTATE) ||
-	     (instr(st, i+1, op) == OP_INSTATE))) {
-	    int j = i + 1, ns = 0, k;
-	    fprintf(f, "%s#in", indent(lev));
-	    while ((j < st->ps.nn) && (instr(st, j, op) == OP_NINSTATE)) {
-		if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st, j, in_imm);
-		j++;
-	    }
-	    if (ns < MAX_IN_STATES) st->list_states[ns++] = instr(st, j, in_imm);
-	    st->list_nstate = ns;
-	    for (k = 0; k < ns; k++) {
-		sindex_t np = list_state_name_pos(st, st->list_states[k]);
-		fprintf(f, " %s", np ? ro_maybe_ptr(csp_str_at(st, np)) : "?");
-	    }
-	    fprintf(f, "\n");
-	    block_end = j + instr(st, j, in_nxt);
-	    lev++;
-	    i = j + 1;
-	    continue;
-	}
-	if ((op == OP_NEW) || (op == OP_NOP)) {
-	    i++;
-	    continue;
-	}
-	fprintf(f, "%s", indent(lev));   // a rule starts here
-	i = csp_print_rule(st, i);
-	csp_println();
-    }
-    if (block_end >= 0) {   // block runs to the very end
-	if (lev > 0) lev--;
-	fprintf(f, "%s#end\n", indent(lev));
-    }
-    st->list_state = -1;
-    csp_set_file_output(savef);
-}
 
 

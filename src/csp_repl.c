@@ -722,6 +722,16 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 		    if (!(rs & c->smask))
 			show = 0;
 		}
+		// A `#local ... in` binding lists on its object's line (see
+		// DECL_OBJECT), where it was written and where it has to go back:
+		// pasted as a rule of its own it would run AFTER the instance,
+		// a cycle late. It keeps its number all the same.
+		if (show && (rule_pos >= 0) && csp_rule_binding(st, rule_pos))
+		    show = 0;
+		// ...and a #local ... out's formula lists on its declaration.
+		if (show && (rule_pos >= 0) &&
+		    (csp_rule_defines_out(st, rule_pos) >= 0))
+		    show = 0;
 		if (show && (rule_pos >= 0)) {
 		    // Anything above us that is still pending -- the enclosing
 		    // `#module` wrapper -- goes out first. One call site: an `#in`
@@ -807,6 +817,51 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 // csp_print_value: a listing has to be pasteable, and `= World` reads as a
 // reference to something named World. /state leaves them bare -- that is a value
 // column, not source.
+// `X <- expr' for every #local ... in of object m, on its `#M m' line. The
+// rules they compiled to are found by their target (csp_rule_binding); each is
+// an unconditional rule, so it starts at the `LI r,-1' in front of its OP_RULE.
+static void list_bindings(csp_rt_t* st, int m)
+{
+    int ri;
+    for (ri = 0; ri < st->ps.nn; ri++) {
+	if (csp_iop(st, ri) == OP_SEGMENT) {
+	    ri += instr(st, ri, sg_num);    // the loop's ri++ steps past it
+	    continue;
+	}
+	if ((csp_iop(st, ri) == OP_RULE) && (csp_rule_binding(st, ri) == m)) {
+	    int start = ((ri > 0) && (csp_iop(st, ri - 1) == OP_LI)) ? ri - 1 : ri;
+	    index_t mem;
+	    value_t v;
+	    // The default, bound for an instance that left it unbound: saying
+	    // nothing says the same thing, and is what was written.
+	    if (csp_rule_const_store(st, ri, &mem, &v) &&
+		(decl(st, mem, dir) == DIR_INOUT) &&
+		(decl(st, mem, va_init).u == v.u))
+		continue;
+	    csp_print_blank();
+	    csp_print_binding(st, start);
+	}
+    }
+}
+
+// A #local ... out's formula, from the one rule that defines it.
+static void list_formula(csp_rt_t* st, index_t di)
+{
+    int ri;
+    for (ri = 0; ri < st->ps.nn; ri++) {
+	if (csp_iop(st, ri) == OP_SEGMENT) {
+	    ri += instr(st, ri, sg_num);
+	    continue;
+	}
+	if ((csp_iop(st, ri) == OP_RULE) &&
+	    (csp_rule_defines_out(st, ri) == (int)di)) {
+	    int start = ((ri > 0) && (csp_iop(st, ri - 1) == OP_LI)) ? ri - 1 : ri;
+	    csp_print_formula(st, start);
+	    return;
+	}
+    }
+}
+
 static void list_value(csp_rt_t* st, vtype_t vt, value_t val)
 {
     if (vt == V_STRING) {
@@ -1072,9 +1127,15 @@ match:
 		csp_print_char('#');
 		csp_print_rostr(ros_local);
 		csp_print_blank();
-		// $N, matching what the rules below call it.
-		csp_print_char('$');
-		csp_print_uint((uvalue_t)csp_local_number(st, (index_t)i));
+		// A #local ... in keeps its name: the instance binds it by that
+		// name. A formula #local has none -- $N, matching what the rules
+		// below call it.
+		if (npos)
+		    list_name(st, cur_mod, npos);
+		else {
+		    csp_print_char('$');
+		    csp_print_uint((uvalue_t)csp_local_number(st, (index_t)i));
+		}
 	    }
 	    else
 		print_decl_and_name(st, csp_decl_get_type(&d), cur_mod, npos);
@@ -1093,8 +1154,22 @@ match:
 	    // starts at, and pasting it back would bind the local to the constant
 	    // 0 and then refuse the real formula. See TODO: the listing should put
 	    // the formula on this line and suppress that rule.
-	    if (csp_decl_get_local(&d))
-		;
+	    if (csp_decl_get_local(&d)) {
+		if (npos && (csp_decl_get_dir(&d) & DIR_IN)) {   // #local ... in
+		    csp_print_lit(" in");
+		    if (csp_decl_get_dir(&d) == DIR_INOUT) {    // has a default
+			csp_print_lit(" = ");
+			list_value(st, csp_decl_get_vt(&d),
+				   csp_decl_get_va_init(&d));
+		    }
+		}
+		else if (npos && (csp_decl_get_dir(&d) == DIR_OUT)) {
+		    // #local ... out: its formula goes on this line, where it
+		    // was written, and its rule is left out of the rules below.
+		    csp_print_lit(" out = ");
+		    list_formula(st, (index_t)i);
+		}
+	    }
 	    // list the declaration's init value, not the live state (like #constant
 	    // below); reading a value here would touch leaf storage /list must not.
 	    else if (!csp_decl_get_bound(&d)) {
@@ -1171,6 +1246,7 @@ match:
 	    csp_print_str_at(st, decl_name_pos(st, decl(st, i, mq_mx)));
 	    csp_print_blank();
 	    csp_print_str_at(st, npos);
+	    list_bindings(st, decl(st, i, mq_m));
 	    list_eol();
 	    break;
 	case DECL_TIMER:

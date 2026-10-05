@@ -57,7 +57,7 @@ init(Owner, Exe, Files) ->
     %% the dump stream is the panel's only way of seeing anything. Put the -b
     %% back when that combination works.
     Port = open_port({spawn_executable, Exe},
-		     [{args, ["-i", "--no-eeprom", "-Q", "-Lerlang",
+		     [{args, ["-i", "--no-eeprom", "-Q", "-Lerlang", "--delta",
 			      "--exit-on-eof" | Files]},
 		      exit_status, use_stdio, stderr_to_stdout,
 		      {line, 4096}]),

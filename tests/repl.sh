@@ -3181,6 +3181,42 @@ tests/unit/import/step.csp #import "step.csp"
 lib/analog.csp #import analog [lib]
 '"$D"'/imp.c: tests/unit/import/step.csp tests/unit/import/counter.csp lib/analog.csp tests/unit/import.csp' "$got"
 
+echo "#local in:"
+
+# Bound where the object is made, or it is an error: unbound it would read 0
+# for ever. And only in a module: there is no instance anywhere else to bind it.
+got=$(printf '#module B\n#local X in\n#variable S\nS = X\n#end\n#B b\n#local Y in\n/quit\n' |
+	  repl ./csp "$D/li1.db")
+ck "a #local in with no default must be bound, and lives in a module" \
+   'OK
+OK
+OK
+OK
+OK
+Error: X is a #local in with no default -- bind it where the object is made: #M m X <- ...
+Error: #local ... in/out belongs in a #module' "$got"
+
+# The listing gives back what was written: a default on the declaration, an
+# out-local's formula on its own line, and on the object's line only the
+# bindings somebody wrote -- not the default an unbound one is given.
+got=$(printf '/list\n/quit\n' | repl ./csp "$D/li3.db" tests/unit/local_out.csp |
+	  sed 's#  // .*##' | grep -E '#local|#Stage')
+ck "/list writes #local in defaults, out formulas and bindings back" \
+   '  #local X:32 integer in
+  #local Gain:32 integer in = 2
+  #local Y:32 integer out = X*Gain
+#Stage s1 X<-K
+#Stage s2 X<-s1.Y Gain<-3
+#Stage s3 X<-s2.Y+s1.Y' "$got"
+
+# /list gives the binding back on the object's line, where it goes back in:
+# as a rule of its own it would run after the instance, a cycle late.
+got=$(printf '#module B\n#local X in\n#variable S\nS = X\n#end\n#variable G = 3\n#B b X <- G + 1\n/list\n/quit\n' |
+	  repl ./csp "$D/li2.db" | sed 's#  // .*##' | grep -E 'local|#B')
+ck "/list puts a #local in binding on the object line" \
+   '  #local X:32 integer in
+#B b X<-G+1' "$got"
+
 echo "================================================"
 echo "repl: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

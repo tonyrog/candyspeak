@@ -50,8 +50,10 @@
 // nowhere -- set done_fn to 0, 1 or 2.
 //
 // DIFFERENT FROM THE C, on purpose or by necessity:
-//   - an input reaches its output four cycles later (4 ms), one per hop:
-//     pin, input, drive, output
+//   - none in the latency any more: pin, input, drive and output are wired
+//     with #local ... in / out, so a press is decided on in the cycle it is
+//     seen and the state it causes is there the next -- as in the C, which
+//     runs process_input and then process_output_channel in one pass
 //   - every delay and ramp has the resolution of the beat (10 ms)
 //   - a local input steps by one: two inputs stepping the same output, or
 //     moving the same control counter, in the very same cycle count once
@@ -191,10 +193,10 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
   #param AnOffs = 0
   #param AnScale = 0x0100               // 8.8 fixpoint, 0x100 = 1.0
 
-  // wired from outside
-  #variable Dig:1 = 0                   // the pin, for a digital input
-  #variable An = 0                      // the sample 0..MAX_PWM, for an analog one
-  #variable AnMark = 0                  // moves each time the converter reports
+  // bound on the #Input line; an input has a pin OR a converter behind it
+  #local Dig:1 in = 0                   // the pin, for a digital input
+  #local An in = 0                      // the sample 0..MAX_PWM, for an analog one
+  #local AnMark in = 0                  // moves each time the converter reports
 
   #variable Lvl:1 = 0                   // v_io: the level after invert/threshold
   #variable ALvl:1 = 0                  // the A2D threshold's own level
@@ -206,18 +208,6 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
   #variable Prun:1 = 0                  // ...stepping
   #variable Ctrl:1 = 0                  // INPUT_STATE_CTRL
 
-  // what the outputs read, valid for one cycle
-  #variable V = 0                       // v_analog: scaled, offset, clamped
-  #variable TogOn:16 unsigned = 0       // springback press: on if off
-  #variable TogOff:16 unsigned = 0      // springback press: off if on
-  #variable OnReq:16 unsigned = 0       // switch closed
-  #variable OffReq:16 unsigned = 0      // switch opened
-  #variable RelReq:16 unsigned = 0      // springback released (ends a MOMENT)
-  #variable AnMask:16 unsigned = 0      // V is a new analog value
-  #variable StepUp:16 unsigned = 0      // one encoder step up
-  #variable StepDn:16 unsigned = 0      // one encoder step down
-  #variable CtlUp:16 unsigned = 0       // control counter +1
-  #variable CtlDn:16 unsigned = 0       // control counter -1
 
   #local Now = tick()
   #local Live = (Flags & INPUT_ACTIVE) != 0 && (Out | Ctl) != 0
@@ -284,56 +274,48 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
   #local Press = Ev && ELvl && !DigEnc
   #local Release = Ev && !ELvl && !DigEnc
 
-  // --- steps: the push encoder, or a key that steps instead of switching ---
-  // A local input steps by one, never more, so a step is a mask bit and not a
-  // number: up or down. (The C's v_step can be larger -- from an encoder on
-  // another node, which is not ported.)
-  StepUp = 0, StepDn = 0
-  StepUp = Out ? (Pulse && Pdir) || (Ev && DigEnc && ELvl && !Dec)
-  StepDn = Out ? (Pulse && !Pdir) || (Ev && DigEnc && ELvl && Dec) || (Ev && DigEnc && !ELvl && !IncDec)
+  // --- what this cycle asks of the outputs ---
+  // Formulas, not state: each is its mask (Out, or Ctl) where this cycle's
+  // event asks something, 0 where not. A truth value is -1, all bits, so
+  // `Out & (cond)' is Out or 0. Read by the outputs in the same cycle.
 
-  // --- an analog value ---
-  AnMask = 0
-  AnMask = Out, V = max(min(AnV, AnMax), AnMin) ? Live && (Flags & INPUT_ANALOG) != 0 && !A2D && AnNew
+  // steps: the push encoder, or a key that steps instead of switching. A
+  // local input steps by one, never more, so a step is a mask bit: up or
+  // down. (The C's v_step can be larger -- from an encoder on another node,
+  // which is not ported.)
+  #local StepUp:16 unsigned out = Out & ((Pulse && Pdir) || (Ev && DigEnc && ELvl && !Dec))
+  #local StepDn:16 unsigned out = Out & ((Pulse && !Pdir) || (Ev && DigEnc && ELvl && Dec) || (Ev && DigEnc && !ELvl && !IncDec))
 
-  // --- process_input_out: what the event asks of the outputs ---
-  TogOn = 0, TogOff = 0, OnReq = 0, OffReq = 0, RelReq = 0
-  TogOn = Out ? Press && Spring && !OffOnly
-  TogOff = Out ? Press && Spring && !OnOnly
-  OnReq = Out ? Press && !Spring && !OffOnly
-  OffReq = Out ? Release && !Spring && !OnOnly
-  RelReq = Out ? Release && Spring
+  // an analog value, and whether it is new
+  #local V out = max(min(AnV, AnMax), AnMin)          // v_analog
+  #local AnMask:16 unsigned out = Out & (Live && (Flags & INPUT_ANALOG) != 0 && !A2D && AnNew)
 
-  // --- process_input_ctl ---
-  // A springback key toggles its control contribution, a switch holds it.
-  CtlUp = 0, CtlDn = 0
-  CtlUp = Ctl, Ctrl = 1 ? Ev && ELvl && !Ctrl && !OffOnly
-  CtlDn = Ctl, Ctrl = 0 ? Ev && ELvl && Spring && Ctrl && !OnOnly
-  CtlDn = Ctl, Ctrl = 0 ? Ev && !ELvl && !Spring && Ctrl && !OnOnly
+  // process_input_out
+  #local TogOn:16 unsigned out = Out & (Press && Spring && !OffOnly)    // on if off
+  #local TogOff:16 unsigned out = Out & (Press && Spring && !OnOnly)    // off if on
+  #local OnReq:16 unsigned out = Out & (Press && !Spring && !OffOnly)   // closed
+  #local OffReq:16 unsigned out = Out & (Release && !Spring && !OnOnly) // opened
+  #local RelReq:16 unsigned out = Out & (Release && Spring)             // ends a MOMENT
+
+  // process_input_ctl: a springback key toggles its control contribution, a
+  // switch holds it. Ctrl is the state; the masks say when it moves.
+  #local CtlOn = Ev && ELvl && !Ctrl && !OffOnly
+  #local CtlOff = (Ev && ELvl && Spring && Ctrl && !OnOnly) || (Ev && !ELvl && !Spring && Ctrl && !OnOnly)
+  #local CtlUp:16 unsigned out = Ctl & CtlOn
+  #local CtlDn:16 unsigned out = Ctl & CtlOff
+  Ctrl = 1 ? CtlOn
+  Ctrl = 0 ? CtlOff
 #end
 
-#Input in1
-#Input in2
-#Input in3
-#Input in4
-#Input in5
-#Input in6
-#Input in7
-#Input in8
+#Input in1 Dig <- Din1
+#Input in2 Dig <- Din2
+#Input in3 Dig <- Din3
+#Input in4 Dig <- Din4
+#Input in5 An <- a1.output << 6 AnMark <- a1.inhibit_mark
+#Input in6 An <- a2.output << 6 AnMark <- a2.inhibit_mark
+#Input in7 An <- a3.output << 6 AnMark <- a3.inhibit_mark
+#Input in8 An <- a4.output << 6 AnMark <- a4.inhibit_mark
 
-// The connections are rules, not `<-': a `<-' between instances notices a
-// change in the cycle it is written but reads the value committed the cycle
-// before, so it copies the PREVIOUS value -- and when the source then stays
-// put it never runs again and the copy stays wrong for good. A rule reads
-// every cycle.
-in1.Dig = Din1, in2.Dig = Din2, in3.Dig = Din3, in4.Dig = Din4
-
-// The analog inputs, shifted to 16 bits here -- the scale the outputs and the
-// AnMin/AnMax/AnScale parameters were written for.
-in5.An = a1.output << 6, in5.AnMark = a1.inhibit_mark
-in6.An = a2.output << 6, in6.AnMark = a2.inhibit_mark
-in7.An = a3.output << 6, in7.AnMark = a3.inhibit_mark
-in8.An = a4.output << 6, in8.AnMark = a4.inhibit_mark
 
 // The requests of all inputs together, OR-ed once here so that an output
 // tests one bit instead of eight inputs: the Output module is shared by all
@@ -381,13 +363,11 @@ in8.An = a4.output << 6, in8.AnMark = a4.inhibit_mark
   #param Ctlk = 0                       // control counts when Control > Ctlk
   #param CtlInv = 0                     // OUTPUT_FLAG_CTLINV
 
-  #variable Req:16 unsigned             // RQ_x, for one cycle
+  // The state. Req, High, AnIn and Allow, which the output reads, are
+  // formulas of it -- #local ... out, further down, where their parts are.
   #variable Step
-  #variable High                        // a dimmer's level, from step or analog
   #variable AnLevel                     // the level an analog value set; 0 after a step
-  #variable AnIn                        // the analog value, for an EXTERNAL output
   #variable Control
-  #variable Allow:1 = 1                 // the control channel lets it activate
 
   // An analog value. Only in5..in8 have a converter. Two of them sending to
   // the same output in the same cycle: the higher wins (the C: the last).
@@ -425,16 +405,16 @@ in8.An = a4.output << 6, in8.AnMark = a4.inhibit_mark
   #local ReqA = ((TogOnAll | OnAll) >> N & 1) | ((TogOnAll >> N & 1) << 1) | ((TogOffAll >> N & 1) << 2) | ((OffAll >> N & 1) << 3) | ((RelAll >> N & 1) << 4)
   #local ReqB = ((StepEv & 1) << 5) | ((StepsEv & 1) << 6) | ((StepEv & (NewStep != Step) & 1) << 7) | ((AnHit & 1) << 8)
 
-  Req = ReqA | ReqB
+  #local Req:16 unsigned out = ReqA | ReqB                          // RQ_x
+  #local High out = ((AnLevel != 0) & AnLevel) | ((AnLevel == 0) & HStep)  // a dimmer's level
+  #local AnIn out = AnV                       // the analog value, for an EXTERNAL output
   Step = NewStep ? StepEv
   AnLevel = AnHit & AnV ? StepEv
-  High = ((AnLevel != 0) & AnLevel) | ((AnLevel == 0) & HStep)
-  AnIn = AnV ? AnHit
 
   // process_input_ctl: +1 for an input enabling, -1 for one disabling, not
   // below zero. Two inputs in the very same cycle count once.
   Control = max(0, Control - ((CtlUpAll >> N & 1) != 0) + ((CtlDnAll >> N & 1) != 0)) ? CtlType != CTL_NONE
-  Allow = (CtlType == CTL_NONE) || (CtlType == CTL_AND && (Control > Ctlk) != (CtlInv != 0))
+  #local Allow:1 out = (CtlType == CTL_NONE) || (CtlType == CTL_AND && (Control > Ctlk) != (CtlInv != 0))
 #end
 
 #Drive d1
@@ -488,12 +468,15 @@ in8.An = a4.output << 6, in8.AnMark = a4.inhibit_mark
   #param PwmMax = MAX_PWM
   #param Prio = PRIO_OFF                // cut when the battery falls to this
 
-  // from its Drive -- see #Output below
-  #variable Req:16 unsigned
-  #variable Step
-  #variable High
-  #variable AnIn
-  #variable Allow:1
+  // From its Drive, bound on the #Output line. #local ... in: a formula
+  // the instance supplies, so the output sees what its Drive says THIS
+  // cycle -- no copy, no extra cycle, and nothing left behind when the
+  // Drive's value stops moving.
+  #local Req:16 unsigned in
+  #local Step in
+  #local High in
+  #local AnIn in
+  #local Allow:1 in
 
   #variable Duty                        // what the channel is set to, 0..MAX_PWM
   #variable Repeat
@@ -647,27 +630,17 @@ in8.An = a4.output << 6, in8.AnMark = a4.inhibit_mark
   #end
 #end
 
-// Each output reads its Drive -- with rules, for the reason given at the inputs.
-#Output o1
-#Output o2
-#Output o3
-#Output o4
-#Output o5
-#Output o6
-#Output o7
-#Output o8
-#Output o9
-#Output o10
-o1.Req = d1.Req, o1.Step = d1.Step, o1.High = d1.High, o1.AnIn = d1.AnIn, o1.Allow = d1.Allow
-o2.Req = d2.Req, o2.Step = d2.Step, o2.High = d2.High, o2.AnIn = d2.AnIn, o2.Allow = d2.Allow
-o3.Req = d3.Req, o3.Step = d3.Step, o3.High = d3.High, o3.AnIn = d3.AnIn, o3.Allow = d3.Allow
-o4.Req = d4.Req, o4.Step = d4.Step, o4.High = d4.High, o4.AnIn = d4.AnIn, o4.Allow = d4.Allow
-o5.Req = d5.Req, o5.Step = d5.Step, o5.High = d5.High, o5.AnIn = d5.AnIn, o5.Allow = d5.Allow
-o6.Req = d6.Req, o6.Step = d6.Step, o6.High = d6.High, o6.AnIn = d6.AnIn, o6.Allow = d6.Allow
-o7.Req = d7.Req, o7.Step = d7.Step, o7.High = d7.High, o7.AnIn = d7.AnIn, o7.Allow = d7.Allow
-o8.Req = d8.Req, o8.Step = d8.Step, o8.High = d8.High, o8.AnIn = d8.AnIn, o8.Allow = d8.Allow
-o9.Req = d9.Req, o9.Step = d9.Step, o9.High = d9.High, o9.AnIn = d9.AnIn, o9.Allow = d9.Allow
-o10.Req = d10.Req, o10.Step = d10.Step, o10.High = d10.High, o10.AnIn = d10.AnIn, o10.Allow = d10.Allow
+// Each output reads its Drive.
+#Output o1 Req <- d1.Req Step <- d1.Step High <- d1.High AnIn <- d1.AnIn Allow <- d1.Allow
+#Output o2 Req <- d2.Req Step <- d2.Step High <- d2.High AnIn <- d2.AnIn Allow <- d2.Allow
+#Output o3 Req <- d3.Req Step <- d3.Step High <- d3.High AnIn <- d3.AnIn Allow <- d3.Allow
+#Output o4 Req <- d4.Req Step <- d4.Step High <- d4.High AnIn <- d4.AnIn Allow <- d4.Allow
+#Output o5 Req <- d5.Req Step <- d5.Step High <- d5.High AnIn <- d5.AnIn Allow <- d5.Allow
+#Output o6 Req <- d6.Req Step <- d6.Step High <- d6.High AnIn <- d6.AnIn Allow <- d6.Allow
+#Output o7 Req <- d7.Req Step <- d7.Step High <- d7.High AnIn <- d7.AnIn Allow <- d7.Allow
+#Output o8 Req <- d8.Req Step <- d8.Step High <- d8.High AnIn <- d8.AnIn Allow <- d8.Allow
+#Output o9 Req <- d9.Req Step <- d9.Step High <- d9.High AnIn <- d9.AnIn Allow <- d9.Allow
+#Output o10 Req <- d10.Req Step <- d10.Step High <- d10.High AnIn <- d10.AnIn Allow <- d10.Allow
 
 // --- the pins (pdb_set_duty_cycle) ------------------------------------------
 // A 16-bit duty onto 10-bit PWM, and any duty at all onto a digital output.

@@ -89,7 +89,7 @@ build_examples() ->
 %%%   #import lib "analog.csp"  that file in the root named lib
 %%%   #import "pins.csp"        beside the importing file, no search
 %%%
-%%% Roots in order: {roots, [{Name, Dir}]} in Opts (csp's --root), CSP_PATH
+%%% Roots in order: {roots, [{Name, Dir}]} in Opts (csp's --root), CSP_ROOTS
 %%% ("name=dir:name=dir"), board -- the nearest directory with a pins.csp,
 %%% from the first file upwards -- and lib, the tree's own lib/. The first by a
 %%% name wins. Each file is loaded ONCE, by its normalised absolute path.
@@ -173,7 +173,7 @@ exists(F) ->
     end.
 
 roots(First, Opts) ->
-    Env = case os:getenv("CSP_PATH") of
+    Env = case os:getenv("CSP_ROOTS") of
 	      false -> [];
 	      Path  -> [{N, D} || Item <- string:split(Path, ":", all),
 				  [N, D] <- [string:split(Item, "=")],

@@ -1550,9 +1550,17 @@ flush() ->
 
 %% csp only dumps what changed, so merge into `last` rather than replace it.
 %% That is also what makes a trace hold its level between dumps.
+%%
+%% Paint only what DIFFERS from `last'. A dump is not a list of changes: an
+%% object in it comes whole, so bridgezone's 33 objects sent every pin's value
+%% some sixty times a second -- and wse:set and setStyle are SYNCHRONOUS, a
+%% round trip to the browser each. Measured: 1800 calls a second, nearly all
+%% writing what was already there. That was the lag, not the transport.
 update(Ws, S, Vals) ->
-    paint(Ws, S, Vals),
-    S#{last := maps:merge(maps:get(last, S), maps:from_list(Vals))}.
+    Last = maps:get(last, S),
+    paint(Ws, S, [{N, V} || {N, V} <- Vals,
+			    maps:get(N, Last, undefined) =/= V]),
+    S#{last := maps:merge(Last, maps:from_list(Vals))}.
 
 paint(Ws, S, Vals) ->
     Nodes = maps:get(nodes, S),

@@ -1,0 +1,9 @@
+{cycles, 9}.
+{checks, [
+  %% back to 0 with the source -- not stuck at the 16 it saw once
+  {final_object_var, "B.b1", "b1.Seen", 0},
+  {final_object_var, "B.b2", "b2.Seen", 0},
+  %% and it DID see the pulse: cycle 5 is the one after a1.Y went to 16
+  {object_var, 5, "B.b1", "b1.Seen", 16},
+  {object_var, 5, "B.b2", "b2.Seen", 32}
+]}.
