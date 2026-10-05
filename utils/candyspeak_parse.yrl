@@ -6,7 +6,7 @@ Terminals
   'D_WHEN'
   'D_DIGITAL' 'D_ANALOG' 'D_VARIABLE' 'D_LOCAL' 'D_PARAM' 'D_CONSTANT' 
   'D_TIMER' 'D_FIELD' 'D_BUFFER' 'D_DEFINE' 'D_DISABLE' 'D_ENABLE'
-  'D_ANNOTATE'
+  'D_ANNOTATE' 'D_IMPORT'
   'T_INTEGER' 'T_UNSIGNED' 'T_STRING' 'T_FLOAT' 'T_IN'
   'T_OUT' 'T_INOUT' 'T_LITTLE' 'T_BIG' 'T_NATIVE' 'T_PWM' 'T_BIND'
   'T_VAL' 'T_PIN' 'T_PORT' 'T_DIR' 'T_ENDIAN' 'T_PERIOD' 'T_FIRED'
@@ -114,6 +114,14 @@ declaration -> 'D_DEFINE' xid expr : {define,line('$1'),'$2','$3'}.
 %% What candyspeak DOES check is the target: an annotation naming a signal that
 %% does not exist is the same kind of mistake as a rule naming one, and build/1
 %% already holds the map to catch it.
+%% #import <name> | <root> "<path>" | "<path>" -- another source file, loaded
+%% once. The parser only carries the request; candyspeak:parse/1 expands it,
+%% the way csp's port does (port/csp_linux.c, csp_import_run).
+declaration -> 'D_IMPORT' aid : {import,line('$1'),name,element(3,'$2')}.
+declaration -> 'D_IMPORT' aid 'STR' :
+		   {import,line('$1'),{root,element(3,'$2')},element(3,'$3')}.
+declaration -> 'D_IMPORT' 'STR' : {import,line('$1'),quoted,element(3,'$2')}.
+
 declaration -> 'D_ANNOTATE' id id annotate_items :
 		   {annotate,line('$1'),'$2','$3','$4'}.
 %% `*' is the tool itself rather than one signal: `#annotate panel * trace=off'.
@@ -142,6 +150,7 @@ aid -> 'D_DEFINE'   : make_word('$1').
 aid -> 'D_DISABLE'  : make_word('$1').
 aid -> 'D_ENABLE'   : make_word('$1').
 aid -> 'D_ANNOTATE' : make_word('$1').
+aid -> 'D_IMPORT'   : make_word('$1').
 aid -> 'T_INTEGER'  : make_word('$1').
 aid -> 'T_UNSIGNED' : make_word('$1').
 aid -> 'T_STRING'   : make_word('$1').

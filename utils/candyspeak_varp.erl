@@ -37,7 +37,7 @@
 
 -export([file/1, file/2]).
 -export([translate/1, translate/2]).
--export([collect/1, check/2]).         % for tests
+-export([collect/1, collect/2, check/2]).         % for tests
 
 -define(FAILSAFE, 2).
 -define(FIRST_USER_STATE, 3).          % INIT 0, NORMAL 1, FAILSAFE 2
@@ -60,11 +60,15 @@ file(In, Out) ->
 
 translate(In) -> translate(In, []).
 
+%% The whole program, #import included: candyspeak:parse/2 expands the imports
+%% (the same rules as csp), and `sources' marks where each file starts, so a
+%% rule from an imported file is shown as file:line and not as a line number
+%% that means something else in the file being translated.
 translate(In, Opts) ->
-    case candyspeak:parse(In) of
+    case candyspeak:parse(In, [sources]) of
 	{ok, Ast} ->
 	    case modules_in(Ast) of
-		[] -> {ok, emit(In, collect(Ast), Opts)};
+		[] -> {ok, emit(In, collect(Ast, In), Opts)};
 		Ms -> {error, {instances_not_modelled, Ms}}
 	    end;
 	Error -> Error
@@ -99,9 +103,17 @@ modules_in(Ast) ->
 %%% the blocks, so the walk carries the current gate rather than recursing.
 
 collect(Ast) ->
+    collect(Ast, undefined).
+
+%% Top is the file being translated: its own lines are plain numbers.
+collect(Ast, Top) ->
     C = #{sigs => #{}, order => [], states => [], rules => [], gate => all,
-	  consts => #{}},
+	  consts => #{}, top => Top, file => Top},
     finish(lists:foldl(fun item/2, C, Ast)).
+
+%% Where an imported file starts, and where its importer picks up again.
+item({source, _Ln, File}, C) ->
+    C#{file := File};
 
 item({states, _Ln, Names}, C) ->
     C#{states := maps:get(states, C) ++ [N || {'WORD', _, N} <- Names]};
@@ -143,10 +155,30 @@ assign({'=', _Ln, Target, Expr}, Ln, Guard, C) ->
 	  guard  => Guard,
 	  expr   => Expr,
 	  states => maps:get(gate, C),
-	  line   => Ln},
+	  line   => Ln,
+	  file   => imported(C)},
     C#{rules := maps:get(rules, C) ++ [R]};
 assign(_Other, _Ln, _Guard, C) ->
     C.
+
+%% The file a rule came from when it is not the one being translated, else
+%% undefined.
+imported(#{file := F, top := T}) when F =:= T -> undefined;
+imported(#{file := F})                        -> F.
+
+%% A line, as a reader finds it: a plain number in the translated file, and
+%% file:number in one it imports.
+loc(Ln, undefined) -> integer_to_list(Ln);
+loc(Ln, File)      -> [filename:basename(File), ":", integer_to_list(Ln)].
+
+%% The same, as part of a varp identifier: decls.csp line 28 is _decls_L28.
+loc_id(Ln, undefined) -> "_L" ++ integer_to_list(Ln);
+loc_id(Ln, File) ->
+    Base = filename:basename(filename:rootname(File)),
+    "_" ++ [case (C >= $a andalso C =< $z) orelse (C >= $A andalso C =< $Z)
+		 orelse (C >= $0 andalso C =< $9) of
+		true -> C; false -> $_ end || C <- Base]
+	++ "_L" ++ integer_to_list(Ln).
 
 %% `X' or `X.part' -- the latter is not modellable, and is kept as a tagged name
 %% so the rule can be recognised and its target set free.
@@ -203,12 +235,12 @@ finish(C0) ->
 abstract_guards(C) ->
     {Rules, Abs} =
 	lists:mapfoldl(
-	  fun(R = #{guard := G, line := Ln}, Acc) ->
+	  fun(R = #{guard := G, line := Ln, file := F}, Acc) ->
 		  case (G =:= undefined) orelse translatable(G, C) of
 		      true  -> {R, Acc};
 		      false ->
 			  Name = "u_free" ++ integer_to_list(length(Acc)) ++
-			      "_L" ++ integer_to_list(Ln),
+			      loc_id(Ln, F),
 			  {R#{guard := {abstracted, Name, G}},
 			   Acc ++ [{Name, Ln}]}
 		  end
@@ -554,8 +586,8 @@ op(Op)   -> [" ", atom_to_list(Op), " "].
 
 %%% The source line, as a comment above each chain, so the model can be read
 %%% against the program without holding both files open.
-src_of(#{target := T, expr := E, guard := G, line := Ln}, C) ->
-    [integer_to_list(Ln), ": ", T, " = ",
+src_of(#{target := T, expr := E, guard := G, line := Ln, file := F}, C) ->
+    [loc(Ln, F), ": ", T, " = ",
      vexpr(E, C, num),
      case G of
 	 undefined -> "";
@@ -568,7 +600,7 @@ footer(C) ->
 	[] -> "";
 	Rs -> ["\n// NOT TRANSLATED (", integer_to_list(length(Rs)),
 	       " rules), because of a timer, a part, a call or an array:\n",
-	       [["//   line ", integer_to_list(maps:get(line, R)), "\n"]
+	       [["//   line ", loc(maps:get(line, R), maps:get(file, R)), "\n"]
 		|| R <- Rs]]
     end.
 

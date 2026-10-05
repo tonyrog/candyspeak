@@ -614,6 +614,64 @@ varp_gen_check() ->
 		   string:find(T3, "define FAILSAFE 3;") =:= nomatch,
 		   nomatch),
 
+	    %% #import: a program split in two is the SAME program. home.csp cut
+	    %% at its first #states or #in -- declarations before, logic after
+	    %% -- and the logic half importing the rest must translate to exactly
+	    %% the text the whole file does. Same basename in both directories,
+	    %% since the header names the file.
+	    {ok, HomeBin} = file:read_file(F),
+	    HomeLines = string:split(binary_to_list(HomeBin), "\n", all),
+	    {Decls, Logic} =
+		lists:splitwith(fun(L) -> not (lists:prefix("#states", L) orelse
+					       lists:prefix("#in", L)) end,
+				HomeLines),
+	    Join = fun(Ls) -> lists:flatten(lists:join("\n", Ls)) end,
+	    ok = filelib:ensure_dir("/tmp/csp_varp_split/x"),
+	    ok = filelib:ensure_dir("/tmp/csp_varp_whole/x"),
+	    ok = file:write_file("/tmp/csp_varp_split/decls.csp", Join(Decls)),
+	    ok = file:write_file("/tmp/csp_varp_split/home.csp",
+				 Join(["#import \"decls.csp\"" | Logic])),
+	    ok = file:write_file("/tmp/csp_varp_whole/home.csp", HomeBin),
+	    {ok, IoS} = candyspeak_varp:translate("/tmp/csp_varp_split/home.csp"),
+	    {ok, IoW} = candyspeak_varp:translate("/tmp/csp_varp_whole/home.csp"),
+	    %% The rules are all in the logic half, so their line numbers move
+	    %% by the declarations cut out -- that and nothing else.
+	    NoLines = fun(Io) ->
+			      NL1 = re:replace(lists:flatten(Io), "_L[0-9]+", "_L",
+					       [global, {return, list}]),
+			      NL2 = re:replace(NL1, "//   [0-9]+:", "//   N:",
+					       [global, {return, list}]),
+			      re:replace(NL2, "//   line [0-9]+", "//   line N",
+					 [global, {return, list}])
+		      end,
+	    expect("an #import-split program translates to the same model",
+		   Decls =/= [] andalso Logic =/= [] andalso
+		   NoLines(IoS) =:= NoLines(IoW),
+		   {length(Decls), length(Logic)}),
+
+	    %% A rule that lives in an IMPORTED file is shown as file:line, and
+	    %% its free input says the file too: "28" alone would point at a
+	    %% line of the file being translated.
+	    ok = file:write_file("/tmp/csp_varp_split/rules.csp",
+				 "#digital A in 2\n#digital B out 8\n"
+				 "B = 1 ? A == 1 && elapsed(T) > 3\n"),
+	    ok = file:write_file("/tmp/csp_varp_split/top.csp",
+				 "#timer T 100\n#import \"rules.csp\"\n"),
+	    {ok, IoR} = candyspeak_varp:translate("/tmp/csp_varp_split/top.csp"),
+	    TR = lists:flatten(IoR),
+	    expect("a rule from an imported file is located as file:line",
+		   string:find(TR, "rules.csp:3: B = 1") =/= nomatch andalso
+		   string:find(TR, "u_free0_rules_L3") =/= nomatch,
+		   TR),
+
+	    %% ...and a missing import is an error, not a smaller model
+	    ok = file:write_file("/tmp/csp_varp_split/broken.csp",
+				 "#import \"nowhere.csp\"\n#digital L out 8\n"),
+	    expect("an #import that finds nothing fails the translation",
+		   element(1, candyspeak_varp:translate(
+				"/tmp/csp_varp_split/broken.csp")) =:= error,
+		   nomatch),
+
 	    %% ...and a duplicate keeps the first, as the runtime does
 	    Dup = "#states a b c d\n#states d e\n#digital L out 8\n",
 	    Tmp3 = "/tmp/csp_varp_dup.csp",

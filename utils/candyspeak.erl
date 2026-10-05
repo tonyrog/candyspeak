@@ -9,7 +9,7 @@
 
 -export([start/0, start/1]).
 -export([main/1]).
--export([tokens/1, parse/1, build/1, to_c/1]).
+-export([tokens/1, parse/1, parse/2, parse_one/1, build/1, to_c/1]).
 
 -export([check_unit/0, check_examples/0]).
 -export([build_unit/0, build_examples/0]).
@@ -74,7 +74,159 @@ build_examples() ->
 	      end
       end, filelib:wildcard("../examples/*.csp")).
 
+%%% ------------------------------------------------------------------ #import
+%%%
+%%% parse/1 is the whole PROGRAM: the file and everything it imports, as one
+%%% flat list in which each imported file's lines stand where its #import was.
+%%% That is what every caller -- the varp translator, the panel, build/1 --
+%%% wants, and the reason the expansion is here and not in each of them.
+%%% parse_one/1 is a single file, with its #import lines left in.
+%%%
+%%% The same rules as csp's (port/csp_linux.c, csp_import_run), so a program
+%%% means the same thing to both:
+%%%
+%%%   #import analog            analog.csp, the first root that has it
+%%%   #import lib "analog.csp"  that file in the root named lib
+%%%   #import "pins.csp"        beside the importing file, no search
+%%%
+%%% Roots in order: {roots, [{Name, Dir}]} in Opts (csp's --root), CSP_PATH
+%%% ("name=dir:name=dir"), board -- the nearest directory with a pins.csp,
+%%% from the first file upwards -- and lib, the tree's own lib/. The first by a
+%%% name wins. Each file is loaded ONCE, by its normalised absolute path.
+%%%
+%%% Line numbers stay those of the file each line is in. {sources, true} adds
+%%% a {source, 0, File} marker where an imported file starts and where the
+%%% importer resumes, for a caller that has to say WHICH file a line is in;
+%%% without it the list holds nothing a caller of parse/1 did not see before.
+
 parse(Filename) ->
+    parse(Filename, []).
+
+parse(Filename, Opts) ->
+    Roots = roots(Filename, Opts),
+    Mark = proplists:get_bool(sources, Opts),
+    case expand(Filename, {Roots, Mark}, []) of
+	{ok, Ast, _Seen} -> {ok, Ast};
+	Error            -> Error
+    end.
+
+expand(File, Ctx, Seen) ->
+    case parse_one(File) of
+	{ok, Ast} -> expand(Ast, File, Ctx, [real(File) | Seen], []);
+	Error     -> Error
+    end.
+
+expand([{import, Ln, How, What} | T], File, Ctx = {Roots, Mark}, Seen, Acc) ->
+    case resolve(How, What, File, Roots) of
+	{ok, Path} ->
+	    case lists:member(real(Path), Seen) of
+		true ->
+		    expand(T, File, Ctx, Seen, Acc);
+		false ->
+		    case expand(Path, Ctx, Seen) of
+			{ok, Sub, Seen1} when Mark ->
+			    Sub1 = [{source, 0, Path}] ++ Sub ++ [{source, 0, File}],
+			    expand(T, File, Ctx, Seen1, lists:reverse(Sub1, Acc));
+			{ok, Sub, Seen1} ->
+			    expand(T, File, Ctx, Seen1, lists:reverse(Sub, Acc));
+			Error ->
+			    Error
+		    end
+	    end;
+	error ->
+	    Asked = asked(How, What),
+	    io:format("~s:~w: cannot import ~s: no such file\n",
+		      [File, Ln, Asked]),
+	    {error, {import_missing, Asked}}
+    end;
+expand([D | T], File, Ctx, Seen, Acc) ->
+    expand(T, File, Ctx, Seen, [D | Acc]);
+expand([], _File, _Ctx, Seen, Acc) ->
+    {ok, lists:reverse(Acc), Seen}.
+
+asked(name, N)      -> N;
+asked({root, R}, P) -> R ++ " \"" ++ P ++ "\"";
+asked(quoted, P)    -> "\"" ++ P ++ "\"".
+
+resolve(quoted, P, File, _Roots) ->
+    exists(filename:join(filename:dirname(File), P));
+resolve({root, R}, P, _File, Roots) ->
+    case lists:keyfind(R, 1, Roots) of
+	{R, Dir} -> exists(filename:join(Dir, P));
+	false    -> error
+    end;
+resolve(name, N, _File, Roots) ->
+    first([filename:join(Dir, N ++ ".csp") || {_, Dir} <- Roots]).
+
+first([F | Fs]) ->
+    case exists(F) of
+	{ok, _} = Ok -> Ok;
+	error        -> first(Fs)
+    end;
+first([]) ->
+    error.
+
+exists(F) ->
+    case filelib:is_regular(F) of
+	true  -> {ok, F};
+	false -> error
+    end.
+
+roots(First, Opts) ->
+    Env = case os:getenv("CSP_PATH") of
+	      false -> [];
+	      Path  -> [{N, D} || Item <- string:split(Path, ":", all),
+				  [N, D] <- [string:split(Item, "=")],
+				  N =/= "", D =/= ""]
+	  end,
+    Board = [{"board", board_dir(filename:dirname(real(First)))}],
+    Lib = [{"lib", filename:join(tree_dir(), "lib")}],
+    uniq(proplists:get_value(roots, Opts, []) ++ Env ++ Board ++ Lib, []).
+
+uniq([{N, _} = R | T], Acc) ->
+    case lists:keymember(N, 1, Acc) of
+	true  -> uniq(T, Acc);
+	false -> uniq(T, Acc ++ [R])
+    end;
+uniq([], Acc) ->
+    Acc.
+
+%% The nearest directory with a pins.csp, from Dir upwards; Dir itself when
+%% there is none. A test in boards/x/tests/ is boards/x's, not its own board.
+board_dir(Dir) -> board_dir(Dir, Dir).
+
+board_dir(Dir, Start) ->
+    case filelib:is_regular(filename:join(Dir, "pins.csp")) of
+	true -> Dir;
+	false ->
+	    case filename:dirname(Dir) of
+		Dir    -> Start;                 % reached /
+		Parent -> board_dir(Parent, Start)
+	    end
+    end.
+
+%% The top of the tree: this module is utils/ebin/candyspeak.beam, or
+%% utils/candyspeak.beam when compiled in place.
+tree_dir() ->
+    Beam = filename:absname(code:which(?MODULE)),
+    Dir = filename:dirname(Beam),
+    case filename:basename(Dir) of
+	"ebin" -> filename:dirname(filename:dirname(Dir));
+	_      -> filename:dirname(Dir)
+    end.
+
+%% An absolute path with . and .. taken out, so one file reached by two
+%% spellings is seen once.
+real(F) ->
+    norm(filename:split(filename:absname(F)), []).
+
+norm([".." | T], [_ | Acc]) -> norm(T, Acc);
+norm([".." | T], [])        -> norm(T, []);
+norm(["." | T], Acc)        -> norm(T, Acc);
+norm([P | T], Acc)          -> norm(T, [P | Acc]);
+norm([], Acc)               -> filename:join(lists:reverse(Acc)).
+
+parse_one(Filename) ->
     case tokens(Filename) of
 	{ok,Ts} ->
 	    case candyspeak_parse:parse(Ts) of

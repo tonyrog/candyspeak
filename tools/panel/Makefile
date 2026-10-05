@@ -15,9 +15,12 @@ BEAM   = $(SRC:src/%.erl=$(EBIN)/%.beam)
 # candyspeak's scanner and parser. Real targets, not .PHONY: rebuilding leex
 # and yecc on every start costs a couple of seconds and produces the same two
 # files, so they are rebuilt only when the .xrl/.yrl actually change.
+# candyspeak_varp is not the parser, but `make varp' and the tests call it, and
+# left off this list its beam was never rebuilt: the tests ran yesterday's.
 PARSER = $(UTILS)/ebin/candyspeak.beam \
 	 $(UTILS)/ebin/candyspeak_scan.beam \
-	 $(UTILS)/ebin/candyspeak_parse.beam
+	 $(UTILS)/ebin/candyspeak_parse.beam \
+	 $(UTILS)/ebin/candyspeak_varp.beam
 
 all: $(PARSER) $(BEAM)
 

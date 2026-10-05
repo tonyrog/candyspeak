@@ -32,6 +32,7 @@ field              : {token,{'D_FIELD',TokenLine}}.
 buffer             : {token,{'D_BUFFER',TokenLine}}.
 define             : {token,{'D_DEFINE',TokenLine}}.
 annotate           : {token,{'D_ANNOTATE',TokenLine}}.
+import             : {token,{'D_IMPORT',TokenLine}}.
 disable            : {token,{'D_DISABLE',TokenLine}}.
 enable             : {token,{'D_ENABLE',TokenLine}}.
 integer            : {token,{'T_INTEGER',TokenLine}}.
