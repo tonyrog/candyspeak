@@ -1,0 +1,7 @@
+{modes, [seq]}.
+{stimulus, "boards/wintersbone/tests/glitch.dat"}.
+{cycles, 300}.
+{checks, [
+  {final_object_var, "Alarm.pwr", "pwr.Active", 0},
+  {final_var, "Sent", 0}
+]}.

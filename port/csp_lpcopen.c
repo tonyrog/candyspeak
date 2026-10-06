@@ -69,257 +69,24 @@
 #define CSP_CSTATE csp_cstate()
 #endif
 
-// --- which family -----------------------------------------------------------
-// chip.h has already been included by now, so the family can be recognised from
-// what IT defined rather than from a flag we ask the build to pass. The families
-// differ in three places only -- ADC, UART status, EEPROM -- and each is guarded
-// by one of these.
-#if defined(CHIP_LPC177X_8X) || defined(CHIP_LPC40XX)
-#define CSP_LPC_ADC_CLASSIC   1     // Chip_ADC_Init(pADC, &ADC_CLOCK_SETUP_T)
-#define CSP_LPC_UART_LSR      1     // Chip_UART_ReadLineStatus + UART_LSR_*
-#define CSP_LPC_EEPROM_PAGED  1     // Chip_EEPROM_Read/Write(page, offset, ...)
-#define CSP_LPC_GPIOINT       1     // GPIO interrupts on ports 0 and 2
-#elif defined(CHIP_LPC175X_6X)
-// Same peripherals as its 177x/8x sibling with ONE exception that matters here:
-// no EEPROM. eeprom_17xx_40xx.h is in the 175x_6x driver directory, which makes
-// it look otherwise -- but chip_lpc175x_6x.h never defines LPC_EEPROM, so a
-// paged-EEPROM build fails to compile rather than misbehaving. (LPC1754 is this
-// part, and there is a Makefile for it.)
-#define CSP_LPC_ADC_CLASSIC   1
-#define CSP_LPC_UART_LSR      1
-#define CSP_LPC_NO_EEPROM     1
-// And it spells them differently. The 175x library calls the first uart
-// LPC_UART0 and its one converter LPC_ADC; the 18xx/43xx one says LPC_USART0
-// and LPC_ADC0. Both are LPCOpen, neither is wrong, and the default further
-// down happens to be the other family's -- so say it here rather than make
-// every 175x board carry two defines that have nothing to do with the board.
-#define CSP_LPC_UART_DEFAULT  LPC_UART0
-#define CSP_LPC_ADC_DEFAULT   LPC_ADC
-// Any pin on port 0 or 2 can interrupt, with no pin function to select. The
-// 177x/8x above has the same block; the 212x below has none and uses EINT.
-#define CSP_LPC_GPIOINT       1
-#elif defined(CHIP_LPC18XX) || defined(CHIP_LPC43XX)
-#define CSP_LPC_ADC_CLASSIC   1
-#define CSP_LPC_UART_LSR      1
-#define CSP_LPC_EEPROM_MAPPED 1     // memory-mapped at EEPROM_ADDRESS
-#elif defined(CHIP_LPC15XX)
-#define CSP_LPC_ADC_SEQ       1     // sequencer-based ADC, different API
-#define CSP_LPC_UART_STAT     1     // Chip_UART_GetStatus + UART_STAT_*
-#define CSP_LPC_EEPROM_IAP    1     // through the IAP ROM calls
-#elif defined(CHIP_LPC212X)
-// ARM7, and it has to say so. Without a define of its own this family fell
-// through to the `#else` below and was configured as an 11xx: a 12-BIT
-// converter on a part whose ADC is 10 bits, so every reading came back a
-// quarter of its true value with nothing to say why.
-//
-// That is the cost of a final #else that names parts rather than describing a
-// default: it accepts anything, including a family nobody considered.
-#define CSP_LPC_ADC_CLASSIC   1
-#define CSP_LPC_UART_LSR      1
-#define CSP_LPC_ADC_BITS      10    // ADGDR holds 10 bits, left-justified at 6
-#define CSP_LPC_UART_DEFAULT  LPC_UART0
-#define CSP_LPC_ADC_DEFAULT   LPC_ADC
-// No on-chip EEPROM. A board with an I2C part says so in its terms and gets
-// csp_eeprom_i2c.c instead; this only means the chip has none of its own.
-#define CSP_LPC_NO_EEPROM     1
-// NO GPIO INTERRUPTS on this family -- that block arrived with the 17xx. Pin
-// interrupts here are the four EINTs, and they are a PIN FUNCTION: the pin has
-// to be muxed to eintN, which the board file does.
-#define CSP_LPC_EINT          1
-#else                                // 11xx, 11u6x, 13xx
-#define CSP_LPC_ADC_CLASSIC   1
-#define CSP_LPC_UART_LSR      1
-#define CSP_LPC_NO_EEPROM     1     // flash-only parts: /save has nowhere to go
-#endif
-
-// The first argument to Chip_IOCON_PinMux. The 212x header defines it to a null
-// pointer -- that family has no IOCON block, PINSEL is a handful of addresses --
-// and a real LPCOpen chip.h has LPC_IOCON. Same fallback as csp_board.c.
-#if !defined(LPC_IOCON_ARG)
-#define LPC_IOCON_ARG LPC_IOCON
-#endif
-
-// --- board knobs ------------------------------------------------------------
-#ifndef CSP_LPC_UART_DEFAULT
-#define CSP_LPC_UART_DEFAULT  LPC_USART0
-#endif
-#ifndef CSP_LPC_ADC_DEFAULT
-#define CSP_LPC_ADC_DEFAULT   LPC_ADC0
-#endif
-
-#ifndef CSP_LPC_UART
-#define CSP_LPC_UART      CSP_LPC_UART_DEFAULT
-#endif
-#ifndef CSP_LPC_BAUD
-#define CSP_LPC_BAUD      115200
-#endif
-#ifndef CSP_LPC_ADC
-#define CSP_LPC_ADC       CSP_LPC_ADC_DEFAULT
-#endif
-#ifndef CSP_LPC_ADC_RATE
-#define CSP_LPC_ADC_RATE  400000     // ADC clock; 400 kHz is the usual max
-#endif
-#ifndef CSP_LPC_ADC_BITS
-#define CSP_LPC_ADC_BITS  12         // 10 on the 11xx parts
-#endif
-#ifndef CSP_LPC_ADC_PORT
-#define CSP_LPC_ADC_PORT  15         // an #analog here reads an ADC channel
-#endif
-#ifndef CSP_LPC_DAC_PORT
-#define CSP_LPC_DAC_PORT  13         // ...and here it writes the DAC
-#endif
+// The family facts and board knobs: shared with the chip layer.
+#include "csp_lpc.h"
+#include "csp_chip_io.h"
+#include "csp_io.h"
 
 // ============================================================
-// Board hooks -- STUBS. These are the four places board wiring shows through.
-// ============================================================
-
-// STUB: pin muxing. LPCOpen keeps this out of the chip drivers on purpose --
-// which IOCON/SCU function a pin needs is a property of the board, not of the
-// part. Called once per declared device at setup, before anything is driven.
-//
-// A real one looks like (17xx/40xx):
-//     Chip_IOCON_PinMux(LPC_IOCON, port, pin, IOCON_MODE_INACT, IOCON_FUNC0);
-// or (18xx/43xx, where the SCU group is NOT the GPIO port number):
-//     Chip_SCU_PinMuxSet(group, gpin, SCU_MODE_INACT | SCU_MODE_FUNC0);
-//
-// `analog` says the caller wants the pin as an ADC/DAC input rather than GPIO,
-// which on most parts means clearing the digital-mode bit (IOCON_ADMODE_EN).
-// Left empty, a board whose reset-default mux is already GPIO still works --
-// which is why this is a no-op and not an error.
-void csp_lpc_pin_mux(uint8_t port, uint8_t pin, int analog)
-{
-    (void)port; (void)pin; (void)analog;
-}
-
-// STUB: which ADC channel a `port:pin` names. The default is the identity --
-// `15:3` is ADC channel 3 -- which is right whenever the .csp names channels
-// directly. Override it if you would rather name board connector numbers.
-// Return < 0 to refuse the pin; the read then yields 0 rather than sampling a
-// channel nobody asked for.
-// WEAK: a board that states which pins go to the converter replaces this with
-// a real map -- see chips/nxp/drivers/common/csp_board.c, which builds one from
-// boards/<name>.terms so a .csp can name the connector pin rather than the
-// channel number.
-__attribute__((weak))
-int csp_lpc_adc_channel(uint8_t port, uint8_t pin)
-{
-    // The PORT test belongs here and not in the caller. This stub answers only
-    // for the pseudo-port -- `15:3` is channel 3 -- and refuses everything else,
-    // which is what makes a board's real map able to answer for `0:27`.
-    return ((port == CSP_LPC_ADC_PORT) && (pin < 8)) ? (int)pin : -1;
-}
-
-// STUB: PWM output. There is no portable answer here -- 17xx has MCPWM and the
-// timer match outputs, 15xx and 43xx have the SCT, and which one is wired to a
-// given pin is a board fact. `val` is already scaled to 0..255.
-//
-// WEAK, so a chip layer that has a real one replaces it by linking -- see
-// chips/nxp/drivers/212x/pwm_212x.c, which drives both the PWM0 block and the
-// timer match outputs because an LPC2129's one PWM block does not reach every
-// pin a board wants to dim.
-__attribute__((weak))
-void csp_lpc_pwm_write(uint8_t port, uint8_t pin, int val)
-{
-    (void)port; (void)pin; (void)val;
-}
-
-// STUB: DAC output, for an #analog on CSP_LPC_DAC_PORT. On the parts that have
-// one this is genuinely two lines --
-//     Chip_DAC_Init(LPC_DAC);                  (once, at setup)
-//     Chip_DAC_UpdateValue(LPC_DAC, val);      (here, val is 0..1023)
-// -- but dac_*.h is not present on every family, so it stays out of the build
-// until you say which one you are on.
-void csp_lpc_dac_write(uint8_t pin, int val)
-{
-    (void)pin; (void)val;
-}
-
-// STUB: anything the board needs before CandySpeak has memory. Board_Init() in
-// an LPCOpen example does: SystemCoreClockUpdate, clock setup, then the pin mux
-// for the console UART. The UART itself is set up by csp_lpc_uart_init below,
-// so this is for the rest -- power to peripherals, an external oscillator, a
-// PHY reset line.
-void csp_lpc_board_init(void)
-{
-}
-
-// ============================================================
-// Time -- SysTick at 1 kHz
+// Time
 // ============================================================
 //
-// SysTick_Handler is WEAK in the LPCOpen startup files, so defining it here
-// overrides the do-nothing one without touching the vector table.
-//
-// `volatile` is not decoration: the loop below spins on this while an interrupt
-// changes it, and without it the compiler is entitled to hoist the read out.
-
-static volatile uint32_t csp_ticks_ms = 0;
-
-void SysTick_Handler(void)
-{
-    csp_ticks_ms++;
-}
-
-// The same thing under a neutral name, for a chip layer that has no SysTick to
-// hang it on. The ARM7 VIC points a slot at a wrapper that clears the timer's
-// interrupt flag and calls this -- see Chip_Tick_Init in chip_212x.c.
-void csp_tick_isr(void) { csp_ticks_ms++; }
-
-// The tick seam. Declared HERE because it is this file's contract -- the chip
-// layer implements it, and the two families implement it differently:
-// Cortex-M below over SysTick, ARM7 in chip_212x.c over a timer match.
-//
-// Counting UP, deliberately. SysTick's VAL counts DOWN from LOAD and an
-// LPC2000 TC counts up from zero; picking one and making the other pretend
-// would hand csp_time_us a number that runs backwards inside every period.
-void     Chip_Tick_Init(uint32_t hz);
-uint32_t Chip_Tick_Us(void);
-
-// The 1 ms tick, through the seam rather than through SysTick directly: SysTick
-// is a Cortex-M peripheral and this file also serves an ARM7, where the tick is
-// a timer match. Chip_Tick_* is implemented by both -- see chip_212x.h for why
-// the seam counts UP and SysTick does not.
-#if defined(__CORTEX_M)
-static uint32_t tick_reload;
-void Chip_Tick_Init(uint32_t hz)
-{
-    SystemCoreClockUpdate();
-    tick_reload = SystemCoreClock / (hz ? hz : 1000u);
-    SysTick_Config(tick_reload);
-}
-// Microseconds, composed from the ms counter and the fraction of the current
-// period SysTick has left. VAL counts DOWN from LOAD, so elapsed-within-the-
-// period is LOAD - VAL -- an LPC2000 has the number already and this is the
-// side that has to build it.
-//
-// Read ms twice around the counter and retry if it moved: the counter wraps
-// exactly when ms increments, so a naive pair can report a time a whole
-// millisecond early.
-uint32_t Chip_Tick_Us(void)
-{
-    uint32_t ms, val, ms2;
-    do {
-	ms  = csp_ticks_ms;
-	val = tick_reload - SysTick->VAL;
-	ms2 = csp_ticks_ms;
-    } while (ms != ms2);
-    return ms * 1000UL + ((val * 1000UL) / (tick_reload ? tick_reload : 1));
-}
-#endif
-
-static void csp_lpc_systick_init(void)
-{
-    Chip_Tick_Init(1000);
-}
+// The tick is the chip layer's (csp_chip_lpc.c): SysTick on a Cortex-M, a
+// timer match on the ARM7. Started by csp_chip_init.
 
 uint32_t csp_time_ms(void)
 {
-    return csp_ticks_ms;
+    return csp_chip_millis();
 }
 
-// Microseconds, from the SysTick counter between ticks. Read ms twice around
-// the counter read and retry if it moved: the counter wraps exactly when ms
-// increments, so a naive pair can report a time a whole millisecond early.
+// Microseconds, from the tick counter between ticks.
 unsigned long csp_time_us(void)
 {
     return (unsigned long)Chip_Tick_Us();
@@ -327,8 +94,8 @@ unsigned long csp_time_us(void)
 
 static void csp_delay_ms(uint32_t ms)
 {
-    uint32_t t0 = csp_ticks_ms;
-    while ((csp_ticks_ms - t0) < ms)
+    uint32_t t0 = csp_chip_millis();
+    while ((csp_chip_millis() - t0) < ms)
 	__WFI();                       // sleep until the next interrupt
 }
 
@@ -523,17 +290,6 @@ uint32_t csp_system_ram_used(void)
     return (total > ours) ? (total - ours) : 0;
 }
 
-// ============================================================
-// GPIO
-// ============================================================
-
-void csp_board_digital_input(csp_rt_t* st, index_t ix, value_t* vptr)
-{
-    uint8_t port = value_get_d_port(vptr);
-    uint8_t pin = value_get_d_pin(vptr);
-    int value = Chip_GPIO_GetPinState(LPC_GPIO, port, pin) ? 1 : 0;
-    csp_set_ivalue(st, ix, value);
-}
 
 // ============================================================
 // Interrupts -- GPIO on ports 0 and 2
@@ -804,249 +560,20 @@ uint32_t csp_board_irq_take(csp_rt_t* st)
 }
 #endif  // CSP_LPC_EINT
 
-// An inout pin is borrowed for the length of one write and handed straight back
-// as an input, which is what makes a bidirectional line usable from a rule.
-void csp_board_digital_output(csp_rt_t* st, value_t* vptr)
-{
-    (void)st;
-    uint8_t port = value_get_d_port(vptr);
-    uint8_t pin = value_get_d_pin(vptr);    
-    if (value_get_d_dir(vptr) & DIR_IN) {
-	Chip_GPIO_SetPinDIROutput(LPC_GPIO, port, pin);
-	Chip_GPIO_SetPinState(LPC_GPIO, port, pin,
-			      (value_get_d_val(vptr) != 0));
-	Chip_GPIO_SetPinDIRInput(LPC_GPIO, port, pin);
-    }
-    else {
-	Chip_GPIO_SetPinState(LPC_GPIO, port, pin,
-			      (value_get_d_val(vptr) != 0));
-    }
-}
-
-// The single description of what a digital slot's configuration MEANS in
-// hardware. Setup, a rule that writes .dir/.pullup/.pulldown, and anything that
-// forces pins into a known state all come here, so those paths cannot drift
-// apart -- which is how a pin ends up configured one way and driven another.
-//
-// A pin with no direction at all is left alone: the program said nothing about
-// it, and asserting a mode on a pin someone else owns is worse than silence.
-//
-// PULLUPS ARE NOT HERE. They live in IOCON/SCU, not in the GPIO block, and the
-// register layout differs per family -- so `pullup`/`pulldown` on an #digital
-// reach csp_lpc_pin_mux and are yours to apply. A pin declared `in pullup`
-// works as a plain input until then, which is the safe way to be wrong.
-void csp_board_digital_config(value_t* vptr)
-{
-    uint8_t port = value_get_d_port(vptr);
-    uint8_t pin = value_get_d_pin(vptr);        
-    if (value_get_d_dir(vptr) & DIR_IN)
-	Chip_GPIO_SetPinDIRInput(LPC_GPIO, port, pin);
-    else if (value_get_d_dir(vptr) & DIR_OUT)
-	Chip_GPIO_SetPinDIROutput(LPC_GPIO, port, pin);
-}
-
-// ============================================================
-// ADC
-// ============================================================
-
-#if defined(CSP_LPC_ADC_CLASSIC)
-static ADC_CLOCK_SETUP_T csp_adc_setup;
-
-static void csp_lpc_adc_init(void)
-{
-    Chip_ADC_Init(CSP_LPC_ADC, &csp_adc_setup);
-    Chip_ADC_SetSampleRate(CSP_LPC_ADC, &csp_adc_setup, CSP_LPC_ADC_RATE);
-}
-
-// One blocking conversion. Burst mode would be better for several channels --
-// it samples them in the background and this becomes a register read -- but it
-// needs a channel set known up front, and the device list is not fixed until
-// csp_setup has walked it. Start there if the ADC ever shows up in a profile.
-static int csp_lpc_adc_read(int ch)
-{
-    uint16_t data = 0;
-
-    Chip_ADC_EnableChannel(CSP_LPC_ADC, (ADC_CHANNEL_T)ch, ENABLE);
-    Chip_ADC_SetStartMode(CSP_LPC_ADC, ADC_START_NOW, ADC_TRIGGERMODE_RISING);
-    while (Chip_ADC_ReadStatus(CSP_LPC_ADC, ch, ADC_DR_DONE_STAT) != SET)
-	;
-    Chip_ADC_ReadValue(CSP_LPC_ADC, ch, &data);
-    Chip_ADC_EnableChannel(CSP_LPC_ADC, (ADC_CHANNEL_T)ch, DISABLE);
-    return (int)data;
-}
-#else
-// STUB: the LPC15xx ADC is sequencer-based -- Chip_ADC_Init takes flags, then a
-// sequence is configured (Chip_ADC_SetupSequencer) and started, and the result
-// comes from Chip_ADC_GetDataReg. Same shape, different calls; the rest of this
-// file does not care which.
-static void csp_lpc_adc_init(void) { }
-static int csp_lpc_adc_read(int ch) { (void)ch; return 0; }
-#endif
-
-// The ADC gives 12 bits on most of these parts. A declaration says what width it
-// wants (`#analog Pot:10`), so scale rather than assume -- the same rule the
-// accelerometer follows on CPX. Signed is the default for an #analog, so an
-// unsigned one asks for the plain 0..2^res-1 form instead.
-static int csp_lpc_scale(csp_rt_t* st, index_t ix, int raw)
-{
-    csp_decl_t d;
-    int res = GET_RES(csp_decl_get_res(&d));
-    int sgn = (CSP_MASK(csp_decl_get_vt(&d),TYPE_BITS) != V_UNSIGNED);
-    int v;
-
-    csp_load_decl(st, INDEX(ix), &d);
-    if (res < 2) res = 2; else if (res > 16) res = 16;
-    if (res >= CSP_LPC_ADC_BITS)
-	v = raw << (res - CSP_LPC_ADC_BITS);
-    else
-	v = raw >> (CSP_LPC_ADC_BITS - res);
-    if (sgn)
-	v -= (1 << (res - 1));         // 0 = mid scale
-    return v;
-}
-
-void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
-{
-    int value = 0;
-    // Ask the MAP, whatever port the declaration named.
-    //
-    // This used to be gated on `port == CSP_LPC_ADC_PORT` first, which made the
-    // board map unreachable: the whole reason it exists is so a program can say
-    // `in 0:27` -- the screw terminal -- instead of `15:0`, the converter
-    // channel. The gate refused every such pin before the map was consulted, so
-    // a board with a perfectly good ADC map read zero on all four inputs and
-    // nothing anywhere reported a problem. The port test now lives in the weak
-    // default, which is the only one that needs it.
-    uint8_t port = value_get_a_port(vptr);
-    uint8_t pin = value_get_a_pin(vptr);
-    int ch = csp_lpc_adc_channel(port, pin);
-
-    if (ch >= 0)
-	value = csp_lpc_scale(st, ix, csp_lpc_adc_read(ch));
-    csp_set_ivalue(st, ix, value);
-}
-
-void csp_board_analog_output(csp_rt_t* st, int di, value_t* vptr)
-{
-    uint8_t port = value_get_a_port(vptr);
-    uint8_t pin = value_get_a_pin(vptr);    
-    if (port == CSP_LPC_DAC_PORT) {
-	csp_lpc_dac_write(pin, value_get_a_val(vptr));
-	return;
-    }
-    if (value_get_a_pwm(vptr)) {
-	// Scale the declared width down to the 0..255 the hook takes, so a
-	// `:16` and a `:8` output differ in precision and not in meaning.
-	int full = (1 << GET_RES(decl(st,di,res))) - 1;
-	int val  = full ? (int)((value_get_a_val(vptr) * 255) / full) : 0;
-	csp_lpc_pwm_write(port, pin, val);
-    }
-}
-
-// Only a PWM or DAC output owns its pin in a way that has to be asserted -- an
-// ADC read needs no direction at all -- so an input just re-muxes as analog.
-void csp_board_analog_config(value_t* vptr)
-{
-    uint8_t port = value_get_a_port(vptr);
-    uint8_t pin = value_get_a_pin(vptr);
-    uint8_t dir = value_get_a_dir(vptr);
-    if (dir & DIR_IN)
-	csp_lpc_pin_mux(port, pin, 1);
-    else if ((dir & DIR_OUT) && value_get_a_pwm(vptr))
-	csp_lpc_pin_mux(port, pin, 0);
-}
-
-// ============================================================
-// Board lifecycle
-// ============================================================
-
-// WEAK and empty by default: a chip layer with real PWM defines it. Called
-// below, after the pins are muxed and the clock is up.
-__attribute__((weak)) void csp_pwm_init(void) { }
-
-void csp_board_init(void)
-{
-    csp_lpc_board_init();
-    Chip_GPIO_Init(LPC_GPIO);
-    csp_lpc_adc_init();
-    // AFTER the tick exists. On an LPC2000 the PWM period on TIMER0 is
-    // scheduled as TC + period, so TIMER0 has to be running and prescaled
-    // first -- Chip_Tick_Init does that, from main, before this.
-    csp_pwm_init();
-}
-
-void csp_board_setup(csp_rt_t* st)      { (void)st; }
-void csp_board_start_input(csp_rt_t* st)  { (void)st; }
-void csp_board_start_output(csp_rt_t* st) { (void)st; }
-void csp_board_stop_output(csp_rt_t* st)  { (void)st; }
-
 // ============================================================
 // The device loops
 // ============================================================
 //
-// NOTE: csp_setup/csp_input/csp_output below are near-identical to the ones in
-// csp_arduino.c -- the walk over st->nio, the config-request check, the DIN/DOUT
-// slot handling and the ordering are all runtime contract, not board detail.
-// Only the leaf calls differ. Worth pulling into a shared csp_io.c the next time
-// a third port shows up; two copies is the point at which the duplication is
-// visible but still cheaper than an abstraction fitted to a sample of two.
-
-// Apply a configuration a rule asked for, and take the request down in BOTH
-// slots -- the pair is copied on commit, so clearing one leaves a stale request
-// in the other that spends a config call on some later cycle.
-//
-// d.cfg and a.cfg do NOT land on the same bit (digital has pullup/pulldown ahead
-// of it, analog only pwm), so the flag is cleared through the member that set it.
-static void csp_apply_config(csp_rt_t* st, index_t ix, value_t* vptr, int analog)
-{
-    value_t* iptr;
-    value_t* optr;
-
-    csp_dio_slots(st, ix, &iptr, &optr);
-    if (analog) {
-	csp_board_analog_config(vptr);
-	value_set_a_cfg(iptr, 0);
-	value_set_a_cfg(optr, 0);	
-    }
-    else {
-	csp_board_digital_config(vptr);
-	value_set_d_cfg(iptr, 0);
-	value_set_d_cfg(optr, 0);
-    }
-}
+// The pins are swept by port/csp_io.c over csp_chip_* (chips/nxp/drivers/
+// common/csp_chip_lpc.c); what is left here is the runtime's.
 
 void csp_setup(csp_rt_t* st)
 {
-    int i;
-
-    csp_board_setup(st);
     csp_can_init(st);
-
-    // One pass over the device list. Configuration is read from the value SLOT,
-    // not the declaration, so this is the same source of truth the runtime gates
-    // on -- setup_digital has already copied the declaration in by now.
-    //
     // If the same physical pin is declared twice under two names, the LAST one
     // decides its mode, because it configures last. Same "last one wins" the
     // rest of the language patches by.
-    for (i = 0; i < st->nio; i++) {
-	index_t ix = csp_io_at(st, i);       // binds the entry's object
-	int j = INDEX(ix);
-	value_t* vptr = csp_dio_slot(st, ix, DOUT);
-	switch (decl(st,j,type)) {
-	case DECL_DIGITAL:
-	    csp_lpc_pin_mux(value_get_d_port(vptr), value_get_d_pin(vptr), 0);
-	    csp_board_digital_config(vptr);
-	    break;
-	case DECL_ANALOG:
-	    csp_lpc_pin_mux(value_get_a_port(vptr), value_get_a_pin(vptr),
-			    (value_get_a_dir(vptr) & DIR_IN) ? 1 : 0);
-	    break;
-	default:
-	    break;
-	}
-    }
-    csp_ctx_reset(st);
+    csp_io_sweep(st, CSP_IO_CONFIG);
     // AFTER the pin loop: arming an interrupt on a pin still at its reset
     // default arms it on whatever the pin happened to be.
     csp_setup_events(st);
@@ -1054,37 +581,7 @@ void csp_setup(csp_rt_t* st)
 
 void csp_input(csp_rt_t* st)
 {
-    int i;
-
-    csp_board_start_input(st);
-
-    for (i = 0; i < st->nio; i++) {
-	index_t ix = csp_io_at(st, i);
-	int di = INDEX(ix);
-	value_t* vptr;
-	switch (decl(st,di,type)) {
-	case DECL_DIGITAL:
-	    vptr = csp_dio_slot(st, ix, DOUT);
-	    // A rule may have turned this pin round since we last looked. Do it
-	    // BEFORE reading, or the first sample after a flip comes off the old
-	    // mode.
-	    if (value_get_d_cfg(vptr))
-		csp_apply_config(st, ix, vptr, 0);
-	    if (value_get_d_dir(vptr) & DIR_IN)
-		csp_board_digital_input(st, ix, vptr);
-	    break;
-	case DECL_ANALOG:
-	    vptr = csp_dio_slot(st, ix, DOUT);
-	    if (value_get_a_cfg(vptr))
-		csp_apply_config(st, ix, vptr, 1);
-	    if (value_get_a_dir(vptr) & DIR_IN)
-		csp_board_analog_input(st, ix, vptr);
-	    break;
-	default:
-	    break;
-	}
-    }
-    csp_ctx_reset(st);
+    csp_io_sweep(st, DIR_IN);
     csp_can_input(st);
     csp_buf_input(st);   // i2c/spi collections and datagrams
     csp_input_timer(st);
@@ -1093,38 +590,10 @@ void csp_input(csp_rt_t* st)
 
 void csp_output(csp_rt_t* st)
 {
-    int i;
-
     if (!st->latch) {                      // allow output
-	csp_board_start_output(st);
-
-	for (i = 0; i < st->nio; ++i) {
-	    index_t ix = csp_io_at(st, i);
-	    int di = INDEX(ix);
-	    value_t* vptr;
-	    switch (decl(st,di,type)) {
-	    case DECL_DIGITAL:
-		vptr = csp_dio_slot(st, ix, DOUT);
-		if (value_get_d_cfg(vptr))
-		    csp_apply_config(st, ix, vptr, 0);
-		if (value_get_d_dir(vptr) & DIR_OUT)
-		    csp_board_digital_output(st, vptr);
-		break;
-	    case DECL_ANALOG:
-		vptr = csp_dio_slot(st, ix, DOUT);
-		if (value_get_a_cfg(vptr))
-		    csp_apply_config(st, ix, vptr, 1);
-		if (value_get_a_dir(vptr) & DIR_OUT)
-		    csp_board_analog_output(st, di, vptr);
-		break;
-	    default:
-		break;
-	    }
-	}
-	csp_ctx_reset(st);
+	csp_io_sweep(st, DIR_OUT);
 	csp_can_output(st);
 	csp_buf_output(st);  // i2c/spi starts and datagrams
-	csp_board_stop_output(st);
     }
     csp_output_timer(st);
 }
@@ -1526,7 +995,10 @@ void csp_boot_mark(int n);
 static void csp_lpc_setup(void)
 {
     boot_mark(1);
-    csp_lpc_systick_init();
+    // The tick, GPIO, the ADC and PWM: everything csp_chip_io.h promises. The
+    // tick has to run before PWM (TIMER0 on an LPC2000) and before the UART's
+    // delays, so this comes first.
+    csp_chip_init();
     csp_lpc_uart_init();
     // DIAG=1 only. Bit-bangs the console pin as plain GPIO and dumps every
     // register the silence could be hiding in -- over a path that does not use
@@ -1538,8 +1010,6 @@ static void csp_lpc_setup(void)
     boot_mark(2);
 
     serial_output = 1;
-
-    csp_board_init();   // cannot use state: rt_init zeroes it below
 
 #if !defined(CSP_EXEC_ONLY)
     // The CLOCK first, and it is read back from the registers rather than

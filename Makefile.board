@@ -358,6 +358,8 @@ THUMB := $(if $(ARM),-marm,-mthumb)
 # The NXP-only pieces: the boot LED/bit-bang diagnostics and the I2C EEPROM
 # backend. Named here so both LPC branches can say it in one word.
 NXPCOMMON := chips/nxp/drivers/common/csp_board.c \
+             chips/nxp/drivers/common/csp_chip_lpc.c \
+             port/csp_io.c src/csp_lib.c \
              chips/nxp/drivers/common/csp_eeprom_i2c.c
 
 # The STM32F4 branch. No vendor HAL: cmsis-device-f4 is the register map and
@@ -379,7 +381,7 @@ ifeq ($(ARCH),avr8)
   # so out loud instead of trusting the link to complain.
   MCU     := $(shell $(GEN) --chip-of $(BOARD))
   CPU     := -mmcu=$(MCU)
-  PORTSRC := port/csp_avr.c port/csp_io.c
+  PORTSRC := port/csp_avr.c port/csp_io.c src/csp_lib.c
   # The chip layer behind csp_chip_io.h: pins, the tick, the ADC.
   DRV     := chips/atmel/drivers/avr/chip_avr.c
   # Code-size flags, and they are worth kilobytes on this architecture rather
@@ -425,7 +427,7 @@ else ifeq ($(ARCH),cortex_m4)
 else ifeq ($(ARCH),cortex_m3)
   CPU     := -mcpu=cortex-m3 -mthumb
   LPC     := chips/nxp/lpcopen/lpc175x_6x/lpc_chip_175x_6x
-  CHIPINC := -I$(LPC)/inc
+  CHIPINC := -I$(LPC)/inc -Ichips/nxp/drivers/common
   # CSP_HAVE_FLASH: the part has no EEPROM, so /save writes the flash `store`
   # region -- which dl1200.terms has asked for since it was written. Without the
   # define and the driver, csp_lpcopen.c fell through to "no store" and /memory
@@ -441,7 +443,7 @@ else ifeq ($(ARCH),cortex_m3)
                timer_17xx_40xx.c can_17xx_40xx.c)
 else
   CPU     := -mcpu=arm7tdmi $(THUMB)
-  CHIPINC := -Ichips/nxp/drivers/212x
+  CHIPINC := -Ichips/nxp/drivers/212x -Ichips/nxp/drivers/common
   # The family has to NAME itself. csp_lpcopen.c picks its ADC width, UART
   # status style and EEPROM kind from these, and its final #else is written for
   # the 11xx -- so a family with no define of its own is silently configured as

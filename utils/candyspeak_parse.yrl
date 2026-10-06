@@ -39,7 +39,7 @@ Endsymbol '$end'.
 
 Unary 1200 neg. 
 
-Unary 110 'EXCLAMATION' 'TILDE'.
+Unary 1100 'EXCLAMATION' 'TILDE'.
 Left 1000 'ASTERISK' 'SLASH' 'PERCENT'.
 Left 900  'PLUS' 'MINUS'.
 Left 800  'LTLT' 'GTGT'.

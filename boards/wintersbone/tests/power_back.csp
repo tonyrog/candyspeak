@@ -1,0 +1,4 @@
+// A one-second outage: the alarm, then the all-clear. Two messages.
+#import "../main.csp"
+> PwrDelay = 300
+> PwrBack = 300

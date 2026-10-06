@@ -1,0 +1,3 @@
+# The program the board carries: PROG=boards/wintersbone. main.csp imports
+# pins.csp and lib/alarm.csp.
+main.csp

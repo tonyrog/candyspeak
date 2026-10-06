@@ -1,0 +1,8 @@
+{modes, [seq]}.
+{stimulus, "boards/wintersbone/tests/frost.dat"}.
+{cycles, 200}.
+{checks, [
+  {final_var, "TinC", 30},
+  {final_object_var, "Alarm.frost", "frost.Active", 1},
+  {final_var, "Sent", 1}
+]}.

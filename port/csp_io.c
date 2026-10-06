@@ -15,6 +15,7 @@
 
 #include "csp.h"
 #include "csp_chip_io.h"
+#include "csp_lib.h"
 #include "csp_io.h"
 
 // DIR_IN is an enum, so the preprocessor cannot see it: a negative array size
@@ -22,36 +23,29 @@
 typedef char csp_chip_dir_agrees[((CSP_CHIP_IN == DIR_IN) &&
 				  (CSP_CHIP_OUT == DIR_OUT)) ? 1 : -1];
 
-// The declared width, 2..16, and half scale for a signed one (0 for unsigned).
-// One declaration lookup for both: on AVR each decl() is a PROGMEM copy.
-//
-// Clamped because outside 2..16 a shift is by more than the type has bits,
-// which is undefined rather than merely wrong.
-static uint8_t io_shape(csp_rt_t* st, int di, uint16_t* mid)
+// The declared width and signedness, out of ONE declaration lookup -- on AVR
+// each decl() is a PROGMEM copy. The arithmetic itself is csp_lib's, which is
+// what C generated from a .csp uses too.
+static uint8_t io_shape(csp_rt_t* st, int di, uint8_t* sgn)
 {
     const csp_decl_t* d = csp_decl_ref(st, di);
-    int res = GET_RES(csp_decl_get_res(d));
 
-    if (res < 2) res = 2; else if (res > 16) res = 16;
-    *mid = (CSP_MASK(csp_decl_get_vt(d), TYPE_BITS) != V_UNSIGNED) ?
-	(uint16_t)(1u << (res - 1)) : 0;
-    return (uint8_t)res;
+    *sgn = (CSP_MASK(csp_decl_get_vt(d), TYPE_BITS) != V_UNSIGNED);
+    return (uint8_t)GET_RES(csp_decl_get_res(d));
 }
 
 static ivalue_t io_ain(csp_rt_t* st, int di, uint16_t raw)
 {
-    uint16_t mid;
-    uint8_t res = io_shape(st, di, &mid);
-    return (ivalue_t)(raw >> (16 - res)) - (ivalue_t)mid;    // 0 = mid scale
+    uint8_t sgn;
+    uint8_t res = io_shape(st, di, &sgn);
+    return (ivalue_t)csp_lib_ain(raw, res, sgn);
 }
 
-// The mirror of io_ain, so a value read in and written straight back out
-// lands where it came from.
 static uint16_t io_aout(csp_rt_t* st, int di, uint16_t val)
 {
-    uint16_t mid;
-    uint8_t res = io_shape(st, di, &mid);
-    return (uint16_t)((uint16_t)(val + mid) << (16 - res));
+    uint8_t sgn;
+    uint8_t res = io_shape(st, di, &sgn);
+    return csp_lib_aout(val, res, sgn);
 }
 
 static void io_dcfg(value_t* vptr)

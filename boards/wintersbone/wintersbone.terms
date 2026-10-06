@@ -1,0 +1,18 @@
+%% wintersbone -- SMS alarm node on an Arduino MKR NB 1500.
+%%
+%% Two temperatures (in and out), mains present or on battery, four 230 V
+%% relays, and optionally the pressure in a water line. Alarms and remote
+%% control over SMS. See README.md.
+%%
+%% The same part and core as boards/mkrnb1500; a board of its own so the
+%% program it carries (PROG) and its tests have a home.
+{board, wintersbone,
+ [{toolchain, arduino_cli},
+  {chip, samd21g18a},
+  {fqbn, "arduino:samd:mkrnb1500"},
+  {port, "/dev/ttyACM0"},
+  {nm, "arm-none-eabi-nm"},
+  {optimize, "-Os"},
+  {platform, "arduino:samd", "1.8.14"},
+  {support_reactive, 0},
+  {use_statistics, 0}]}.

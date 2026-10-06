@@ -1,0 +1,4 @@
+// The mains goes at 1 s and stays gone: one message, nothing more. OnDelay is
+// cut to 0.5 s so the test is short.
+#import "../main.csp"
+> PwrDelay = 500

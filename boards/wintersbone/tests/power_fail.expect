@@ -1,0 +1,9 @@
+{modes, [seq]}.
+{stimulus, "boards/wintersbone/tests/power_fail.dat"}.
+%% Gone from 1000 ms; OnDelay 500 later the alarm goes, once.
+{cycles, 300}.
+{checks, [
+  {final_object_var, "Alarm.pwr", "pwr.Active", 1},
+  {final_var, "Sent", 1},
+  {final_var, "Mains", 0}
+]}.

@@ -1,0 +1,106 @@
+// csp_lib -- the inner core: what a CandySpeak program means, in plain C.
+//
+// Shared by the runtime and by C generated from a .csp (utils/candyspeak_c.erl),
+// so the two cannot disagree about the arithmetic, a timer or a scaled analog
+// value. No csp_rt_t anywhere: a generated program has no declaration table and
+// needs none.
+//
+//   csp_chip_io.h   the pins, per chip             chips/<vendor>/drivers/
+//   csp_lib.h       the language's semantics        src/csp_lib.c
+//
+// TRUE IS -1, as in Forth and OpenCL: every bit set, so `&` and `|` on truth
+// values are the logical operators too. A comparison yields -1 or 0.
+
+#ifndef __CSP_LIB_H__
+#define __CSP_LIB_H__
+
+#include <stdint.h>
+#include "csp_chip_io.h"
+
+#define CSP_LIB_TRUE  (-1)
+#define CSP_LIB_FALSE 0
+
+// Truth from a C condition.
+#define CSP_LIB_B(c) ((c) ? (int32_t)CSP_LIB_TRUE : (int32_t)CSP_LIB_FALSE)
+
+// ------------------------------------------------------------
+// Arithmetic. Division by zero is 0, and INT32_MIN / -1 wraps instead of
+// trapping: a node in the field must not stop on a sensor that read 0.
+// ------------------------------------------------------------
+
+static inline int32_t csp_lib_div(int32_t a, int32_t b)
+{
+    if (b == 0)  return 0;
+    if (b == -1) return (int32_t)(0u - (uint32_t)a);
+    return a / b;
+}
+
+static inline uint32_t csp_lib_divu(uint32_t a, uint32_t b)
+{
+    return b ? a / b : 0;
+}
+
+static inline int32_t csp_lib_rem(int32_t a, int32_t b)
+{
+    if ((b == 0) || (b == -1)) return 0;
+    return a % b;
+}
+
+static inline uint32_t csp_lib_remu(uint32_t a, uint32_t b)
+{
+    return b ? a % b : 0;
+}
+
+static inline int32_t csp_lib_min(int32_t a, int32_t b) { return (a < b) ? a : b; }
+static inline int32_t csp_lib_max(int32_t a, int32_t b) { return (a > b) ? a : b; }
+static inline int32_t csp_lib_abs(int32_t a) { return (a < 0) ? (int32_t)(0u - (uint32_t)a) : a; }
+
+static inline int32_t csp_lib_clip(int32_t x, int32_t lo, int32_t hi)
+{
+    return (x < lo) ? lo : ((x > hi) ? hi : x);
+}
+
+// ------------------------------------------------------------
+// Analog scaling between a declaration and the chip's sixteen bits.
+// res is the declared width, clamped to 2..16; a signed value is centred, so
+// half scale reads 0.
+// ------------------------------------------------------------
+
+extern int32_t  csp_lib_ain(uint16_t raw, uint8_t res, uint8_t sgn);
+extern uint16_t csp_lib_aout(uint32_t val, uint8_t res, uint8_t sgn);
+
+// ------------------------------------------------------------
+// Timers, with the runtime's semantics:
+//
+//   writing 1 (val) ARMS a stopped timer -- a running one is not restarted;
+//   when period has passed it stops, val goes to 0 and `fired` is true for
+//   exactly one cycle, the one timeout(T) sees.
+//
+// in/out are the committed and the working copy. csp_lib_timer_in runs before
+// the rules, csp_lib_timer_out after the commit -- the same two points as
+// csp_input_timer and csp_output_timer.
+// ------------------------------------------------------------
+
+typedef struct {
+    uint32_t period;      // ms
+    uint32_t t0;          // when it was armed
+    uint8_t  val;         // 1 = asked to run
+    uint8_t  running;
+    uint8_t  fired;       // one cycle: it has just run out
+} csp_timer_t;
+
+extern void csp_lib_timer_in(csp_timer_t* in, csp_timer_t* out, uint32_t now);
+extern void csp_lib_timer_out(csp_timer_t* in, csp_timer_t* out, uint32_t now);
+
+// ------------------------------------------------------------
+// println, one piece at a time. csp_lib_putc is weak: a board without a
+// console prints nowhere, and the host build prints to stdout.
+// ------------------------------------------------------------
+
+extern void csp_lib_putc(char c);
+extern void csp_lib_puts(const char* s);
+extern void csp_lib_puti(int32_t v);
+extern void csp_lib_putu(uint32_t v);
+extern void csp_lib_nl(void);
+
+#endif

@@ -1,0 +1,4 @@
+// A command sets R2On; the active-low module sees its pin go low. The others
+// stay off (high).
+#import "../main.csp"
+> R2On = 1

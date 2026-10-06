@@ -1,0 +1,36 @@
+// wintersbone -- the hardware, and nothing else.
+//
+// Arduino MKR NB 1500. Kept apart from main.csp so a test can import the logic
+// with the same names and drive them from a stimulus file.
+//
+// NOT YET READ ON THE BOARD: port/csp_arduino.c has no I2C (the transport
+// falls back to the weak stubs), so Pmic, Tin and Tout stay at zero there
+// until it does. On the host they are what the stimulus writes.
+
+// Four relays, D1..D4, on an opto-isolated module. Most such modules are
+// ACTIVE LOW -- see main.csp, which writes !R1On.
+#digital Rel1 out 1
+#digital Rel2 out 2
+#digital Rel3 out 3
+#digital Rel4 out 4
+
+// The LiPo, through the board's own divider: 4.3 V full scale. ADC_BATTERY is
+// pin 32 in the MKR variants -- check against variant.h before trusting it.
+#analog Batt:10 unsigned in 32
+
+// Water pressure, a 0.5-4.5 V transducer on 5 V, divided by 2/3 into A1.
+#analog Press:10 unsigned in 16
+
+// The BQ24195 charger: system status register 0x08. Bit 2 is PG_STAT, power
+// good -- USB (that is, the mains adapter) is present.
+#buffer Pmic:1 in i2c 0 0x6B 0x08
+#field  PwrGood:1 Pmic[2]
+
+// Two TMP117, ADDR pin to GND (0x48) inside and to V+ (0x49) outside. Register
+// 0 is the temperature, 16 bits signed big-endian, 7.8125 m°C a step. The
+// part converts continuously from power-up, so a plain register read is all
+// it takes.
+#buffer Tin:2  in i2c 0 0x48 0x00
+#buffer Tout:2 in i2c 0 0x49 0x00
+#field  TinRaw:16 big Tin[0..15]
+#field  ToutRaw:16 big Tout[0..15]
