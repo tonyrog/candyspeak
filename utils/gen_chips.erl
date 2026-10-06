@@ -23,6 +23,7 @@
 %% a {family,...}, and each level only states what it changes. Nothing repeats.
 
 -mode(compile).
+-include_lib("kernel/include/file.hrl").
 
 %% --list [RE], --boards [RE]. The pattern is a regexp over the NAME, because
 %% "which parts are 212x" and "which boards use a 1754" are the questions
@@ -2060,7 +2061,13 @@ term_files() ->
 	    end,
     %% append, NOT flatten: a string IS a list, so flattening a list of file
     %% names concatenates them into one long char list.
-    lists:append(
+    %%
+    %% ONE FILE, ONE ENTRY. With CSP_PATH pointing at this tree every file was
+    %% found twice -- absolute through CSP_PATH, relative through the globs
+    %% below -- and reported as shadowing itself, a hundred-odd lines on every
+    %% one of the eight calls a board build makes. Same file is same device
+    %% and inode; the first spelling is kept, so precedence holds.
+    uniq_files(lists:append(
       [filelib:wildcard(D ++ "/**/*.terms") || D <- Extra] ++
       [filelib:wildcard("private/**/*.terms"),
        filelib:wildcard("chips/*/*.terms"),
@@ -2069,7 +2076,25 @@ term_files() ->
        %% second is what a board with more than one file wants, and it is the
        %% same shape a private repo has.
        filelib:wildcard("boards/*.terms"),
-       filelib:wildcard("boards/*/*.terms")]).
+       filelib:wildcard("boards/*/*.terms")])).
+
+uniq_files(Fs) -> uniq_files(Fs, []).
+
+uniq_files([F | T], Seen) ->
+    A = file_id(F),
+    case lists:member(A, Seen) of
+        true -> uniq_files(T, Seen);
+        false -> [F | uniq_files(T, [A | Seen])]
+    end;
+uniq_files([], _) -> [].
+
+%% The FILE, not its name: device and inode, so a symlinked directory
+%% (tools/panel/bridgezone -> boards/bridgezone) is the same file too.
+file_id(F) ->
+    case file:read_file_info(F) of
+        {ok, #file_info{major_device = D, inode = I}} -> {D, I};
+        _ -> filename:absname(F)
+    end.
 
 load() ->
     Files = term_files(),

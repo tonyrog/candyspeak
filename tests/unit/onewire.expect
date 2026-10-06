@@ -1,0 +1,7 @@
+{modes, [seq]}.
+{stimulus, "tests/unit/onewire.dat"}.
+{cycles, 20}.
+{checks, [
+  %% 344 sixteenths is 21.5 degrees, 215 tenths.
+  {final_var, "UteC", 215}
+]}.

@@ -1,0 +1,3 @@
+# mains present, battery full, then the adapter dies
+0      PwrGood=1 Batt=1000 TinRaw=320
+1000   PwrGood=0

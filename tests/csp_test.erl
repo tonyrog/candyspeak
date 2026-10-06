@@ -101,7 +101,11 @@ eval_test(File, Opts, Mode) ->
     Cmd = io_lib:format("~s ~s~s~s-c ~p -s ~s -R ~s~s 2>&1",
                         [?CSP, RFlag, VFlag, SFlag, Cycles, TmpState,
                          LibStr, File]),
-    _Output = os:cmd(lists:flatten(Cmd)),
+    Output = os:cmd(lists:flatten(Cmd)),
+    %% What the program PRINTED, for {output_has, S} / {output_lacks, S}. Kept
+    %% beside the state rather than in it: the state is what csp dumped, and
+    %% the checks below were written against exactly that shape.
+    put(csp_test_output, Output),
     StateResult = file:consult(TmpState),
     file:delete(TmpState),
     case StateResult of
@@ -283,6 +287,23 @@ run_check({final_object_var, Obj, Var, Expected}, Data) ->
         {error, R} -> {fail, R}
     end;
 
+%% A line the program printed -- what a test of a transport that only TALKS
+%% (sms, a console) has to go on.
+run_check({output_has, S}, _Data) ->
+    case string:find(get(csp_test_output), S) of
+        nomatch -> {fail, {missing_output, S}};
+        _ -> ok
+    end;
+run_check({output_lacks, S}, _Data) ->
+    case string:find(get(csp_test_output), S) of
+        nomatch -> ok;
+        _ -> {fail, {unexpected_output, S}}
+    end;
+run_check({output_count, S, N}, _Data) ->
+    case length(string:split(get(csp_test_output), S, all)) - 1 of
+        N -> ok;
+        Got -> {fail, {output_count, S, {expected, N, got, Got}}}
+    end;
 run_check(Unknown, _Data) ->
     {fail, {unknown_check, Unknown}}.
 

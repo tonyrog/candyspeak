@@ -1026,6 +1026,15 @@ typedef enum {
     // streams
     TR_TCP     = 8,
     TR_UART    = 9,
+    // A cellular modem's text messages. A stream like UART -- a message in is
+    // its text and a newline, bytes out are gathered into messages -- and
+    // xref is the string #param listing the numbers allowed to use it. See
+    // csp_sms_* in csp_transport.c.
+    TR_SMS     = 10,
+    // A 1-Wire device on a pin, by its 64-bit ROM id. Synchronous like I2C:
+    // start converts, done reads. xref is the pin (TR_OW_XREF); the ROM id
+    // is two constants, the first at the buffer's port. See csp_onewire_*.
+    TR_ONEWIRE = 11,
 } transport_t;
 
 // Is this transport an end of the node's own console wire? Both ends share
@@ -1035,7 +1044,8 @@ typedef enum {
 
 // Is this transport one WE start? The two synchronous buses are, and that is
 // the only place the distinction is needed.
-#define TR_IS_SYNC(t)  (((t) == TR_I2C) || ((t) == TR_SPI))
+#define TR_IS_SYNC(t)  (((t) == TR_I2C) || ((t) == TR_SPI) || \
+			((t) == TR_ONEWIRE))
 
 // What makes an interrupt fire. Three bits in csp_digital_t/csp_analog_t; IRQ_NONE
 // is 0 so a declaration that never mentions one is not an interrupt source, and
@@ -1093,6 +1103,9 @@ typedef enum {
 #define TR_I2C_ADDR(x)  (((x) >> 8) & 0xff)
 #define TR_I2C_REG(x)   ((x) & 0xff)
 
+#define TR_OW_XREF(port,pin)  (((uint32_t)(port) << 8) | (uint32_t)(pin))
+#define TR_OW_PORT(x)  (((x) >> 8) & 0x0f)
+#define TR_OW_PIN(x)   ((x) & 0xff)
 #define TR_UART_XREF(unit,baud) (((uint32_t)(unit) << 28) | (uint32_t)(baud))
 #define TR_UART_UNIT(x)  (((x) >> 28) & 0x0f)
 #define TR_UART_BAUD(x)  ((x) & 0x0fffffffu)
@@ -1699,6 +1712,7 @@ typedef enum {
     ERR_IMPORT_MISSING,
     ERR_LOCAL_IN_UNBOUND,
     ERR_LOCAL_IN_WHERE,
+    ERR_SMS_OWNERS,
 } csp_err_t;
 
 // parser state, save state before parse
@@ -3414,6 +3428,29 @@ extern int csp_uart_recv(csp_rt_t* st, uint32_t xref, uint8_t* data,
 extern int csp_uart_send(csp_rt_t* st, uint32_t xref, const uint8_t* data,
 			 uint16_t len);
 
+// SMS (TR_SMS). The runtime side, in csp_transport.c: the sender check against
+// the #param named by `xref`, a message in as one line, bytes out gathered into
+// messages -- an answer to the number that asked, an event to every number on
+// the list -- and a cap on how many go out an hour.
+extern void csp_sms_tick(csp_rt_t* st, uint32_t xref);
+extern int  csp_sms_recv(csp_rt_t* st, uint32_t xref, uint8_t* data,
+			 uint16_t* len);
+extern int  csp_sms_send(csp_rt_t* st, uint32_t xref, const uint8_t* data,
+			 uint16_t len);
+// And the MODEM, which a port provides (weak no-op defaults): one message in
+// -- 1 with `from` and `text` filled and NUL-terminated, 0 for none -- and one
+// out, 0 when it went. Text is plain ASCII; the modem layer converts.
+extern int  csp_sms_modem_recv(char* from, uint16_t from_size,
+			       char* text, uint16_t text_size);
+extern int  csp_sms_modem_send(const char* to, const char* text);
+// Stepped every cycle, whether or not a message is waiting to be taken: the
+// modem's own work (sending, listing) must not stall behind a busy editor.
+extern void csp_sms_modem_poll(void);
+// Counters for /state: messages refused (sender not on the list) and messages
+// not sent (over the hourly cap).
+extern uint32_t csp_sms_refused(void);
+extern uint32_t csp_sms_capped(void);
+
 // NOT A HOOK: a port that can WAIT on its transport says so its own way. The
 // host has csp_can_pollfd() and csp_udp_pollfd(slot) in port/csp_linux.c, used
 // by the loop in that same file and declared nowhere -- a board has no fds and
@@ -3500,6 +3537,26 @@ extern int  csp_con_take(int which, uint8_t* data, uint16_t* len);
 extern void csp_con_show(const uint8_t* data, uint16_t len);
 extern void csp_con_feed(csp_rt_t* st, const uint8_t* data, uint16_t len);
 
+// THE PRINT CONTEXT, for a modem on the interpreter's output. What is printed
+// while a command from a message runs answers that message; what the rules
+// print during the cycle is an event; anything else -- the prompt, the echo,
+// a command typed at the console -- is nobody's business but the console's.
+// The console writes a marker byte into CON_OUT where the context changes, and
+// only while a route from `repl` to `sms` exists (csp_con_sms_wire); every
+// other reader of the tap sees the plain stream it always has.
+#define CON_CTX_LOCAL  0
+#define CON_CTX_CYCLE  1
+#define CON_CTX_SMS    2
+#define CON_MARK(ctx)  ((uint8_t)(0x10 + (ctx)))   // DLE, DC1, DC2
+#define CON_IS_MARK(c) (((uint8_t)(c) >= 0x10) && ((uint8_t)(c) <= 0x12))
+extern void csp_con_ctx(uint8_t ctx);
+extern void csp_con_sms_wire(uint8_t on);
+// A message fed to the interpreter as ONE line, and only into an empty
+// editor: room is all of it or nothing. The line it makes is flagged
+// (st->line.from_sms) until csp_line_done.
+extern uint16_t csp_con_sms_room(csp_rt_t* st);
+extern void csp_con_feed_sms(csp_rt_t* st, const uint8_t* data, uint16_t len);
+
 // I2C and SPI are SYNCHRONOUS -- we are the master -- and the pair is
 // deliberately split so a transfer can overlap the cycle that started it:
 //
@@ -3535,6 +3592,21 @@ extern int csp_i2c_done(csp_rt_t* st, uint32_t xref, uint16_t* len);
 extern int csp_spi_start(csp_rt_t* st, uint32_t xref, uint8_t* data,
 			 uint16_t len, int is_read);
 extern int csp_spi_done(csp_rt_t* st, uint32_t xref, uint16_t* len);
+
+// 1-Wire, the same split as I2C. `rom` is the device's ROM id as the bus
+// sends it: family code first, CRC last. start asks every device on the pin
+// to convert (one conversion serves them all) and returns 0, or -1 with no
+// bus; done answers 0 while the conversion runs (750 ms for a DS18B20 at 12
+// bits), then reads this device's scratchpad -- 1 with the first *len bytes
+// in data, -1 if it did not answer or its CRC was wrong.
+extern int csp_onewire_start(csp_rt_t* st, uint32_t xref, const uint8_t* rom,
+			     uint8_t* data, uint16_t len);
+extern int csp_onewire_done(csp_rt_t* st, uint32_t xref, const uint8_t* rom,
+			    uint8_t* data, uint16_t* len);
+// /onewire: every ROM id on a pin, one call each. Returns the count, or -1
+// with no bus. Weak default: -1.
+extern int csp_onewire_search(uint8_t port, uint8_t pin,
+			      void (*found)(const uint8_t* rom));
 
 // One pass over every buffer with a transport EXCEPT CAN. A driver calls both
 // these and csp_can_input/output, which are a separate pair and not old names

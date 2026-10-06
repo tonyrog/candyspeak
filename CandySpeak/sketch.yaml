@@ -70,7 +70,16 @@ profiles:
       - Adafruit MCP2515 (0.2.1)
       - Adafruit BusIO (1.17.4)
       - Adafruit CAN (0.2.3)
+  tirqarduino:
+    fqbn: arduino:avr:uno
   uno:
     fqbn: arduino:avr:uno
     platforms:
       - platform: arduino:avr (1.8.8)
+  wintersbone:
+    fqbn: arduino:samd:mkrnb1500
+    platforms:
+      - platform: arduino:samd (1.8.14)
+    libraries:
+      - MKRNB (1.6.0)
+      - OneWire (2.3.8)

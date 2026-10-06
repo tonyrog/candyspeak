@@ -4418,6 +4418,8 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     d.net_kind = -1;
     d.uart_unit = -1;            // no 'uart'
     d.con_kind = -1;             // no 'console' and no 'repl'
+    d.sms_kind = -1;             // no 'sms'
+    d.ow_kind = -1;              // no 'onewire'
     d.opts.vt = V_UNSIGNED;      // raw bits -> unsigned by default
     if ((r = pmatch(st, tv, ti, n, pat_buffer, &d, sizeof(d))) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
@@ -4439,7 +4441,7 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     {
 	int ntr = (d.frameid >= 0) + (d.i2c_bus >= 0) +
 		  (d.spi_bus >= 0) + (d.net_port >= 0) + (d.uart_unit >= 0) +
-		  (d.con_kind >= 0);
+		  (d.con_kind >= 0) + (d.sms_kind >= 0) + (d.ow_kind >= 0);
 	if (ntr > 1) {
 	    csp_set_error(st, ERR_SYNTAX);
 	    return -1;
@@ -4458,6 +4460,8 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	// so this is the one place the two are told apart.
 	else if (d.con_kind == T_CONSOLE) transport = TR_CONSOLE;
 	else if (d.con_kind == T_REPL)    transport = TR_REPL;
+	else if (d.sms_kind >= 0)         transport = TR_SMS;
+	else if (d.ow_kind >= 0)          transport = TR_ONEWIRE;
 	else                       transport = TR_NONE;
     }
 
@@ -4517,6 +4521,37 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	}
 	xref = TR_UART_XREF(d.uart_unit, d.uart_baud);
 	break;
+    case TR_SMS: {
+	// The NUMBERS live in a string #param, named here: a list that can be
+	// patched with `>` and kept by /save, so a node in the field gains or
+	// loses a phone without a reflash. Resolved now, while the text is here
+	// to name in the error.
+	index_t ox = csp_lookup_decl(st, &d.sms_owner);
+	int ot;
+	if (ox == BAD_INDEX) {
+	    csp_set_error(st, ERR_SMS_OWNERS);
+	    return -1;
+	}
+	ot = decl(st, INDEX(ox), type);
+	if (((ot != DECL_VARIABLE) && (ot != DECL_CONSTANT)) ||
+	    (CSP_MASK(decl(st, INDEX(ox), vt), TYPE_BITS) != V_STRING)) {
+	    csp_set_error(st, ERR_SMS_OWNERS);
+	    return -1;
+	}
+	xref = (uint32_t)ox;
+	break;
+    }
+    case TR_ONEWIRE:
+	// The FAMILY CODE is the top byte of <hi> and is never 0 -- a ROM id
+	// of all zeros is a typo or a half pasted, and would match nothing on
+	// the bus while looking perfectly declared.
+	if ((d.ow_pin.port > 15) || (d.ow_pin.pin > 255) ||
+	    (((uint32_t)d.ow_hi >> 24) == 0)) {
+	    csp_set_error(st, ERR_SYNTAX);
+	    return -1;
+	}
+	xref = TR_OW_XREF(d.ow_pin.port, d.ow_pin.pin);
+	break;
     default:
 	xref = 0;
 	break;
@@ -4532,7 +4567,24 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	    csp_decl_set_bf_nbytes(dp_, nbytes);
 	    csp_decl_set_bf_transport(dp_, transport);
     }
-    if ((transport == TR_UDP) || (transport == TR_TCP)) {
+    if (transport == TR_ONEWIRE) {
+	// THREE constants, side by side: the pin, then the ROM id's two
+	// halves. Adjacent for the same reason as the UDP pair below, and
+	// checked for the same reason.
+	index_t ca, ch, cl;
+	if ((ca = new_signed_const(st, (ivalue_t)xref)) == BAD_INDEX)
+	    return -1;
+	if ((ch = new_signed_const(st, (ivalue_t)d.ow_hi)) == BAD_INDEX)
+	    return -1;
+	if ((cl = new_signed_const(st, (ivalue_t)d.ow_lo)) == BAD_INDEX)
+	    return -1;
+	if ((ch != (index_t)(ca + 1)) || (cl != (index_t)(ca + 2))) {
+	    csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
+	    return -1;
+	}
+	csp_decl_set_bf_id(ram_decl_at(st,i), ca);
+    }
+    else if ((transport == TR_UDP) || (transport == TR_TCP)) {
 	// TWO constants, made side by side: `id` is the address and `id + 1`
 	// the port. new_signed_const always appends, so a pair made with
 	// nothing in between is adjacent -- but that is an assumption about

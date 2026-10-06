@@ -1,0 +1,15 @@
+// The sms transport through the interpreter: a message from a number on the
+// list runs as a command and is answered to that number; a stranger is not
+// answered at all; only a #param or an `in` variable may be set; a rule's print is an event to
+// every number. tests/unit/sms.dat sends the messages.
+#param Owners string = "+46701234567, +4673-123-45-67"
+#param Limit = 5
+#variable T = 21
+#variable Alarm:1 = 0
+#variable Go:1 in = 0          // declared `in`: a message may set it
+#buffer Sms:160 inout sms Owners
+#buffer Rp:160 inout repl
+#route Sms Rp
+#route Rp Sms
+println("ALARM T=", T) ? Alarm
+Alarm = 0 ? Alarm

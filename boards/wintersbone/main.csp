@@ -3,26 +3,29 @@
 //
 //   ./csp boards/wintersbone/main.csp
 //
-// EVERYTHING IS PRINTED, and that is the SMS interface. The plan (README.md)
-// is an `sms` transport routed through the interpreter:
+// EVERYTHING IS PRINTED, and that is the SMS interface: the modem is routed
+// through the interpreter (see the end of this file), so
 //
-//   #buffer Sms:160 inout sms "+46701234567" "+46731234567"
-//   #buffer Rp:160  inout repl
-//   #route  Sms Rp          // a message is run as if typed
-//   #route  Rp  Sms         // and what is printed goes back
+//   a message from a number in Owners   runs as a command, and what it
+//                                       prints is the answer, to that number
+//   a rule's println                    is an event, to every number
 //
-// so a reply is what the command printed and an alarm is what a rule printed.
-// Until the transport exists the same lines go to the console, and the
-// commands are typed at the prompt:
+// A message may read and may set a #param; nothing else. The same commands
+// work at the console:
 //
 //   > R1On = 1              relay 1 on (remembered across a restart)
-//   > Status = 1            temperatures, power, relays
-//   TinC                    one value
+//   TinC                    one value, back to whoever asked
+//   > Status = 1            the status report -- printed by a rule, so it is
+//                           an event and goes to every number
 //
 // Temperatures are in TENTHS of a degree, voltage in mV, pressure in mbar:
 // integers read fine in an SMS and need no float on the board.
 #import "pins.csp"
 #import alarm
+
+// Who may command the node, and who is told its alarms. Spaces or commas
+// between numbers; change it in the field with `> Owners = "..."` and /save.
+#param Owners string = "+46700000000"
 
 // What the relays should be doing. #param, so a command survives a restart
 // through the settings store.
@@ -60,8 +63,8 @@ Rel4 = !R4On
 #variable Pmbar  = 0
 #variable Mains:1 unsigned = 0
 
-TinC   = TinRaw * 5 / 64            // 7.8125 m°C a step, in tenths
-ToutC  = ToutRaw * 5 / 64
+TinC   = TinRaw * 5 / 8             // 1/16 degree a step, in tenths
+ToutC  = ToutRaw * 5 / 8
 BattmV = Batt * 4300 / 1023
 // 0.5-4.5 V is 0-10 bar; the divider makes 4.5 V read as 3.0 V of 3.3.
 Pmbar  = (Press * 4950 / 1023 - 500) * 5 / 2
@@ -98,9 +101,17 @@ println("FROST inside ", TinC)               ? frost.Send
 println("Frost over ", TinC)                 ? frost.Clear
 
 // The status report, on request: `> Status = 1`.
-#variable Status:1 unsigned = 0
+#variable Status:1 unsigned in = 0   // `in`: an SMS may set it
 println("in ", TinC, " out ", ToutC)            ? Status
 println("mains ", Mains, " batt ", BattmV)      ? Status
 println("relays ", R1On + R2On * 2 + R3On * 4 + R4On * 8) ? Status
 println("pressure ", Pmbar)                     ? Status && PressOn
 Status = 0 ? Status
+
+// The modem, through the interpreter. In: a message is a line typed at the
+// prompt. Out: what the interpreter prints, sorted by the console into
+// answers and events (csp_transport.c).
+#buffer Sms:160 inout sms Owners
+#buffer Rp:160  inout repl
+#route  Sms Rp
+#route  Rp  Sms

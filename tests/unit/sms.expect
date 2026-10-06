@@ -1,0 +1,23 @@
+{modes, [seq]}.
+{stimulus, "tests/unit/sms.dat"}.
+{cycles, 60}.
+{checks, [
+  %% An answer goes to the number that asked, and only to it.
+  {output_has, "sms> +46701234567: 21"},
+  %% A stranger is refused without a word.
+  {output_lacks, "sms> +46709999999"},
+  %% Numbers compare by digits: 0046... is +46..., and dashes go. Spaces
+  %% and commas separate the numbers on the list.
+  {output_has, "sms> 0046731234567: 9"},
+  %% No commands, no stores outside a #param, no rules.
+  {output_count, "sms> +46701234567: denied", 3},
+  {final_var, "T", 21},
+  %% An event goes to the whole list, by the numbers as written there.
+  {output_has, "sms> +46701234567: ALARM T=21"},
+  {output_has, "sms> +4673-123-45-67: ALARM T=21"},
+  %% An immediate print answers the sender -- and Limit is the 9 the other
+  %% owner set.
+  {output_has, "sms> +46701234567: 18"},
+  %% An `in` variable may be set; T, a plain one, was refused above.
+  {final_var, "Go", 1}
+]}.

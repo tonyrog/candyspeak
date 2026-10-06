@@ -68,6 +68,8 @@ typedef enum {
     T_UDP,
     T_TCP,
     T_UART,
+    T_SMS,
+    T_ONEWIRE,
     T_CONSOLE,
     T_REPL,
     T_DISABLE,
@@ -162,6 +164,8 @@ typedef enum {
     TOK_ENT(T_UDP,OP_NOP,s_udp), \
     TOK_ENT(T_TCP,OP_NOP,s_tcp), \
     TOK_ENT(T_UART,OP_NOP,s_uart), \
+    TOK_ENT(T_SMS,OP_NOP,s_sms), \
+    TOK_ENT(T_ONEWIRE,OP_NOP,s_onewire), \
     TOK_ENT(T_CONSOLE,OP_NOP,s_console), \
     TOK_ENT(T_REPL,OP_NOP,s_repl), \
     TOK_ENT(T_DISABLE,OP_NOP,s_disable), \
@@ -253,6 +257,8 @@ typedef enum {
     "T_UDP", \
     "T_TCP", \
     "T_UART", \
+    "T_SMS", \
+    "T_ONEWIRE", \
     "T_CONSOLE", \
     "T_REPL", \
     "T_DISABLE", \

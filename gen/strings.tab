@@ -78,6 +78,7 @@ err_import_where #import goes at the top level, not inside a block or module
 err_import_missing cannot import %s: no such file
 err_local_in_unbound %s is a #local in with no default -- bind it where the object is made: #M m %s <- ...
 err_local_in_where #local ... in/out belongs in a #module
+err_sms_owners `sms` names a string #param listing the allowed numbers: #param Owners string = "+4670..."
 err_opts_after_pin option '%s' comes BEFORE the pin -- '#digital D in pullup 2:1', not after
 err_block_open #%s opened on line %d was never closed
 LP (
@@ -134,6 +135,8 @@ spi spi
 udp udp
 tcp tcp
 uart uart
+sms sms
+onewire onewire
 console console
 repl repl
 disable disable
@@ -258,6 +261,7 @@ cmd_query ?
 cmd_list list
 cmd_state state
 cmd_memory memory
+cmd_onewire onewire
 cmd_images images
 cmd_pause pause
 cmd_step step
@@ -278,6 +282,7 @@ h_help Show this help
 h_list List rules (F=flash E=eeprom-backed R=ram P=patches a #param S=setting)
 h_state Show current values
 h_memory Show code/RAM usage
+h_onewire <port>:<pin> -- list 1-Wire devices as #buffer lines
 h_images List the images linked into this firmware
 h_upgrade Receive a CandySpeak image into a flash region (hex lines, . to end)
 h_pause Stop execution (inspect/edit)

@@ -143,6 +143,8 @@ static int cmd_upgrade(csp_rt_t* st, int argc, char* argv[]);
 #endif
 static int cmd_live(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_resume(csp_rt_t* st, int argc, char* argv[]);
+static int cmd_onewire(csp_rt_t* st, int argc, char* argv[]);
+static uint8_t onewire_port, onewire_pin;   // for the search callback
 
 // name and help point into FLASH (strings.tab); the table itself stays in RAM.
 // Moving the whole table would put the FUNCTION POINTERS in flash too, and
@@ -163,6 +165,7 @@ static const csp_cmd_t builtin_cmds[] = {
 #endif
     { ros_cmd_live,   ros_h_live,    cmd_live },
     { ros_cmd_resume, ros_h_resume,  cmd_resume },
+    { ros_cmd_onewire, ros_h_onewire, cmd_onewire },
     { ros_cmd_reset,  ros_h_reset,   cmd_reset },
     { ros_cmd_clear,  ros_h_clear,   cmd_clear },
     { ros_cmd_undo,   ros_h_undo,    cmd_undo },
@@ -192,6 +195,66 @@ static int cmd_help(csp_rt_t* st, int argc, char* argv[])
 	    csp_println();
 	}
     }
+    return CSP_CMD_OK;
+}
+
+// Half a 1-Wire ROM id, all eight digits: a ROM id is copied by eye from one
+// listing into another, and a dropped leading zero is a different device.
+static void print_rom_half(uint32_t v)
+{
+    int k;
+    csp_print_lit("0x");
+    for (k = 24; k >= 0; k -= 8)
+	csp_print_hex2((uint8_t)(v >> k));
+}
+
+static void onewire_found(const uint8_t* rom)
+{
+    csp_print_lit("#buffer T:2 in onewire ");
+    csp_print_uint(onewire_port);
+    csp_print_char(':');
+    csp_print_uint(onewire_pin);
+    csp_print_blank();
+    print_rom_half(((uint32_t)rom[0] << 24) | ((uint32_t)rom[1] << 16) |
+		   ((uint32_t)rom[2] << 8) | rom[3]);
+    csp_print_blank();
+    print_rom_half(((uint32_t)rom[4] << 24) | ((uint32_t)rom[5] << 16) |
+		   ((uint32_t)rom[6] << 8) | rom[7]);
+    csp_println();
+}
+
+// /onewire <port>:<pin> -- what is on the wire, as lines to paste. A ROM id is
+// on a label nobody keeps, so the bus is asked: Search ROM walks the id tree
+// and every device answers.
+static int cmd_onewire(csp_rt_t* st, int argc, char* argv[])
+{
+    char* colon;
+    int n;
+    (void)st;
+
+    // `0:5` arrives whole or split at the colon, depending on the reader:
+    // take it either way, and `0 5` too.
+    // argv[0] is the first ARGUMENT here, not the command.
+    if ((argc >= 1) && ((colon = strchr(argv[0], ':')) != NULL) && colon[1])
+	onewire_pin = (uint8_t)atoi(colon + 1);
+    else if ((argc >= 3) && (argv[1][0] == ':'))
+	onewire_pin = (uint8_t)atoi(argv[2]);
+    else if ((argc >= 2) && (argv[1][0] >= '0') && (argv[1][0] <= '9'))
+	onewire_pin = (uint8_t)atoi(argv[1]);
+    else {
+	csp_print_line("usage: /onewire <port>:<pin>");
+	return CSP_CMD_OK;
+    }
+    if ((argv[0][0] < '0') || (argv[0][0] > '9')) {
+	csp_print_line("usage: /onewire <port>:<pin>");
+	return CSP_CMD_OK;
+    }
+    onewire_port = (uint8_t)atoi(argv[0]);
+    n = csp_onewire_search(onewire_port, onewire_pin, onewire_found);
+    if (n < 0)
+	csp_print_line("no 1-Wire bus on this board");
+    else if (n == 0)
+	csp_print_line("nothing answered");
     return CSP_CMD_OK;
 }
 
@@ -1172,7 +1235,17 @@ match:
 	    }
 	    // list the declaration's init value, not the live state (like #constant
 	    // below); reading a value here would touch leaf storage /list must not.
+	    //
+	    // The DIRECTION first, where it was written: `in` is what lets a
+	    // message set it, and a module's `in`/`out` fields are its interface
+	    // -- pasted back without them, both are gone.
 	    else if (!csp_decl_get_bound(&d)) {
+		switch (csp_decl_get_dir(&d)) {
+		case DIR_IN:    csp_print_lit(" in"); break;
+		case DIR_OUT:   csp_print_lit(" out"); break;
+		case DIR_INOUT: csp_print_lit(" inout"); break;
+		default: break;
+		}
 		csp_print_lit(" = ");
 		list_value(st, csp_decl_get_vt(&d), csp_decl_get_va_init(&d));
 	    }
@@ -1400,6 +1473,23 @@ match:
 		    break;
 		case TR_REPL:
 		    csp_print_lit(" repl");
+		    break;
+		case TR_SMS:
+		    // The NAME of the list, as written: the endpoint is that
+		    // #param's declaration.
+		    csp_print_lit(" sms ");
+		    csp_print_str_at(st, decl_name_pos(st, (index_t)ep));
+		    break;
+		case TR_ONEWIRE:
+		    // The pin, then the ROM id from the two constants after it.
+		    csp_print_lit(" onewire ");
+		    csp_print_uint(TR_OW_PORT(ep));
+		    csp_print_char(':');
+		    csp_print_uint(TR_OW_PIN(ep));
+		    csp_print_blank();
+		    print_rom_half((uint32_t)decl(st, csp_decl_get_bf_id(&d) + 1, cn_init).i);
+		    csp_print_blank();
+		    print_rom_half((uint32_t)decl(st, csp_decl_get_bf_id(&d) + 2, cn_init).i);
 		    break;
 		default:
 		    break;
@@ -3064,9 +3154,88 @@ static int in_open_block(csp_rt_t* st)
 	   (st->cs->blk_depth > 0);          /* #in/#when */
 }
 
+// A LINE THAT CAME IN A TEXT MESSAGE may read, and may set a #param -- the
+// knobs a program has chosen to expose, which /save keeps -- and nothing else.
+// No command (`/clear` from a stolen phone), no declaration, no rule: the
+// program on the node is not editable from outside, only tunable.
+//
+//   TinC                  an expression: allowed
+//   > println("in ", T)   an immediate with no store: allowed
+//   > R1On = 1            a store to a #param: allowed
+//   > Status = 1          a store to a #variable declared `in`: allowed
+//   > Rel1 = 0            a store to anything else: refused
+//   Rel1 = 0 ? X          a rule: refused
+//
+// Checked on the TEXT, before the parser: a refusal must not depend on what
+// the parser would have made of it.
+static int sms_store_ok(csp_rt_t* st, const char* p)
+{
+    tstr_t name;
+    index_t ix;
+
+    while (*p == ' ') p++;
+    name.ptr = (char*)p;
+    while (((*p >= 'A') && (*p <= 'Z')) || ((*p >= 'a') && (*p <= 'z')) ||
+	   ((*p >= '0') && (*p <= '9')) || (*p == '_'))
+	p++;
+    name.len = (int)(p - name.ptr);
+    while (*p == ' ') p++;
+    if ((*p != '=') || (p[1] == '='))
+	return 1;                              // not a store: a read
+    if ((name.len == 0) || ((ix = csp_lookup_decl(st, &name)) == BAD_INDEX))
+	return 0;
+    // A #param -- a knob the program exposes -- or a #variable declared `in`:
+    // one the program says is set from outside, such as a command flag
+    // (`#variable Status:1 in = 0`, cleared again by a rule).
+    if (decl(st, INDEX(ix), type) == DECL_CONSTANT)
+	return decl(st, INDEX(ix), local);
+    if (decl(st, INDEX(ix), type) == DECL_VARIABLE)
+	return (decl(st, INDEX(ix), dir) & DIR_IN) != 0;
+    return 0;
+}
+
+static int sms_line_ok(csp_rt_t* st, const char* p)
+{
+    const char* q;
+
+    while (*p == ' ') p++;
+    if ((*p == '/') || (*p == '#'))
+	return 0;
+    if (*p == '>')
+	return sms_store_ok(st, p + 1);
+    // A bare line is a rule if it stores or is guarded, and an expression
+    // otherwise. `=` alone stores; `==`, `!=`, `<=` and `>=` compare.
+    for (q = p; *q; q++) {
+	if ((*q == '?') || ((q[0] == '<') && (q[1] == '-')))
+	    return 0;
+	if ((*q == '=') && (q[1] != '=') &&
+	    ((q == p) || ((q[-1] != '=') && (q[-1] != '!') &&
+			  (q[-1] != '<') && (q[-1] != '>'))))
+	    return 0;
+    }
+    return 1;
+}
+
+static int process_sms_line(csp_rt_t* st, char* line)
+{
+    int r = CSP_CMD_OK;
+
+    st->line.from_sms = 0;                     // the recursion below is plain
+    csp_con_ctx(CON_CTX_SMS);
+    if (sms_line_ok(st, line))
+	r = csp_process_line(st, line);
+    else
+	csp_print_line("denied");
+    csp_con_ctx(CON_CTX_LOCAL);
+    return r;
+}
+
 int csp_process_line(csp_rt_t* st, char* line)
 {
     int len;
+
+    if (st->line.from_sms && (line == st->line.buf))
+	return process_sms_line(st, line);
 
     // NO ERROR SURVIVES INTO THE NEXT LINE.
     //

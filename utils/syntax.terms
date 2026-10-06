@@ -192,6 +192,14 @@
 %% the other one. The BOARD has already muxed the pins, so the program names a
 %% unit and not a pin pair -- the same call `i2c 3` and `spi 1` make.
 {token, 'T_UART',       uart,       'uart',       'OP_NOP', -1, -1, no}.
+%% Text messages through a cellular modem. The operand names a string #param
+%% holding the numbers allowed to command the node and to be told its alarms,
+%% so the list can be changed in the field and kept by /save.
+{token, 'T_SMS',        sms,        'sms',        'OP_NOP', -1, -1, no}.
+%% A Dallas/Maxim 1-Wire device -- a DS18B20 on a cable -- on a pin, by its
+%% 64-bit ROM id, written as two 32-bit halves because that is the width of
+%% every integer here. /onewire lists what is on a pin in exactly this form.
+{token, 'T_ONEWIRE',    onewire,    'onewire',    'OP_NOP', -1, -1, no}.
 %% The node's own byte streams, and they are two DIFFERENT ends of one wire:
 %% normally the serial port feeds the interpreter and the interpreter prints
 %% back to it. A buffer on either end taps that wire.
@@ -696,6 +704,8 @@
 %%   tcp <port> <ip>                -- out: connect there and write
 %%   uart <unit>                    -- the board's own baud
 %%   uart <unit> <baud>             -- ...or this one
+%%   sms <param>                    -- a modem; <param> lists the numbers
+%%   onewire <port>:<pin> <hi> <lo> -- a 1-Wire device by its ROM id
 %%
 %% PORT FIRST, and the optional address after it. The other order reads better
 %% -- everyone writes 192.168.1.2:5000 -- but it cannot be parsed: an optional
@@ -733,7 +743,13 @@
   {net_kind, tok},
   {uart_unit, int},
   {uart_baud, int},
-  {con_kind, tok}]}.
+  {con_kind, tok},
+  {sms_kind, tok},
+  {sms_owner, str},
+  {ow_kind, tok},
+  {ow_pin, {pat, port_pin}},
+  {ow_hi, int},
+  {ow_lo, int}]}.
 
 %% ONE optional block per transport, not a choice between them. A choice would
 %% commit on the keyword and then fail inside it, backing the whole thing out
@@ -762,14 +778,21 @@
   %% The two ends of the node's own console wire. No operand: there is exactly
   %% one serial port and exactly one interpreter, so there is nothing to number.
   {opt, [{choice, [[{tok, con_kind, console}],
-                   [{tok, con_kind, repl}]]}]}]}.
+                   [{tok, con_kind, repl}]]}]},
+  %% A modem. The operand is a NAME, not a number: the string #param that lists
+  %% who may talk to the node.
+  {opt, [{tok, sms_kind, sms}, {str, sms_owner}]},
+  %% A 1-Wire device. The ROM id's family code is the first byte of <hi>.
+  {opt, [{tok, ow_kind, onewire}, {pat, port_pin, ow_pin},
+         {int, ow_hi}, {int, ow_lo}]}]}.
 
 {defaults, buffer,
  [{[r, res], 8}, {[frameid], -1}, {[opts, vt], 'V_UNSIGNED'},
   {[i2c_bus], -1}, {[i2c_addr], -1}, {[i2c_reg], -1},
   {[spi_bus], -1}, {[spi_cmd], -1},
   {[net_ip], 0}, {[net_port], -1}, {[net_kind], -1},
-  {[uart_unit], -1}, {[uart_baud], 0}, {[con_kind], -1}]}.
+  {[uart_unit], -1}, {[uart_baud], 0}, {[con_kind], -1}, {[sms_kind], -1},
+  {[ow_kind], -1}]}.
 
 
 %% '#' 'route' <src> <dst>

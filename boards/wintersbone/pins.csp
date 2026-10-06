@@ -3,9 +3,8 @@
 // Arduino MKR NB 1500. Kept apart from main.csp so a test can import the logic
 // with the same names and drive them from a stimulus file.
 //
-// NOT YET READ ON THE BOARD: port/csp_arduino.c has no I2C (the transport
-// falls back to the weak stubs), so Pmic, Tin and Tout stay at zero there
-// until it does. On the host they are what the stimulus writes.
+// The I2C buffers go through Wire (CSP_HAS_I2C in wintersbone.terms). On the
+// host they are what the stimulus writes.
 
 // Four relays, D1..D4, on an opto-isolated module. Most such modules are
 // ACTIVE LOW -- see main.csp, which writes !R1On.
@@ -26,11 +25,14 @@
 #buffer Pmic:1 in i2c 0 0x6B 0x08
 #field  PwrGood:1 Pmic[2]
 
-// Two TMP117, ADDR pin to GND (0x48) inside and to V+ (0x49) outside. Register
-// 0 is the temperature, 16 bits signed big-endian, 7.8125 m°C a step. The
-// part converts continuously from power-up, so a plain register read is all
-// it takes.
-#buffer Tin:2  in i2c 0 0x48 0x00
-#buffer Tout:2 in i2c 0 0x49 0x00
-#field  TinRaw:16 big Tin[0..15]
-#field  ToutRaw:16 big Tout[0..15]
+// Two DS18B20 on one 1-Wire line, D5, with a 4.7k pull-up to 3.3 V. Powered
+// (three wires), not parasite. Each is picked out by its ROM id -- these are
+// PLACEHOLDERS: run `/onewire 0:5` on the board and paste the two lines it
+// prints over them, inside first if you can tell them apart by warming one.
+//
+// The scratchpad's first two bytes are the temperature: signed, little-endian,
+// 1/16 degree a step. One conversion serves both (port/csp_arduino.c).
+#buffer Tin:2  in onewire 0:5 0x28000000 0x00000001
+#buffer Tout:2 in onewire 0:5 0x28000000 0x00000002
+#field  TinRaw:16  Tin[0..15]
+#field  ToutRaw:16 Tout[0..15]

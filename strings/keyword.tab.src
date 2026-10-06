@@ -55,6 +55,8 @@ spi spi
 udp udp
 tcp tcp
 uart uart
+sms sms
+onewire onewire
 console console
 repl repl
 disable disable

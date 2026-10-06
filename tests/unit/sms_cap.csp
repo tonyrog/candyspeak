@@ -1,0 +1,12 @@
+// The hourly cap. A rule that prints every other cycle makes an event every
+// other cycle -- each one a message, since the cycle between is quiet -- and
+// the transport sends CSP_SMS_PER_HOUR (20) of them and drops the rest. The
+// virtual clock moves a millisecond a cycle, so all of it is one hour.
+#param Owners string = "+46701234567"
+#variable N = 0
+#buffer Sms:160 inout sms Owners
+#buffer Rp:160 inout repl
+#route Sms Rp
+#route Rp Sms
+N = N + 1
+println("tick ", N) ? (N % 2) == 0

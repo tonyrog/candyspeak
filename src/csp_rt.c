@@ -432,6 +432,7 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_IMPORT_MISSING] =         ros_err_import_missing,
     [ERR_LOCAL_IN_UNBOUND] =       ros_err_local_in_unbound,
     [ERR_LOCAL_IN_WHERE] =         ros_err_local_in_where,
+    [ERR_SMS_OWNERS] =             ros_err_sms_owners,
 };
 
 // err_tab is a designated-initialiser array, so ANY code without a row in it
@@ -2160,6 +2161,10 @@ index_t csp_cycle(csp_rt_t* st)
     st->es.seed_all = (st->cycle <= 1);
     {
 	index_t x;
+	// What the rules print is an EVENT -- an alarm, to whoever listens on a
+	// modem -- and not the answer to a command. The console tells the two
+	// apart by this, and only when an SMS route is there to care.
+	csp_con_ctx(CON_CTX_CYCLE);
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 	if (st->reactive && ((st->rom_nn == 0) || st->rom_nedg)) {
 	    // The reactive queue is change-driven, so it starts empty. Seed it
@@ -2173,6 +2178,7 @@ index_t csp_cycle(csp_rt_t* st)
 	// After the rules, before the commit: the step out of INIT rides the same
 	// commit as whatever INIT itself wrote, so the two are never half applied.
 	states_advance(st);
+	csp_con_ctx(CON_CTX_LOCAL);
 	return x;
     }
 }
@@ -4554,6 +4560,9 @@ void csp_can_output(csp_rt_t* st)
 
 // --- the other three transports ---------------------------------------------
 
+// Defined with the routes below; the input pass collects through it.
+static int sync_done(csp_rt_t* st, csp_buf_t* bp, uint16_t* n);
+
 // UDP in, and the SYNCHRONOUS collections. Called from a port's csp_input,
 // after csp_can_input.
 //
@@ -4582,6 +4591,11 @@ void csp_buf_input(csp_rt_t* st)
 	    con |= (uint8_t)(1 << ((csp_buf_get_transport(bp) == TR_CONSOLE) ? CON_KEYS
 								: CON_OUT));
 
+	// The modem's own clock -- polling it, and closing a message that has
+	// gone quiet -- runs every cycle whoever drains the buffer.
+	if (csp_buf_get_transport(bp) == TR_SMS)
+	    csp_sms_tick(st, csp_buf_get_xref(bp));
+
 	// A ROUTE SOURCE belongs to its route, which drains it in the output
 	// pass. Two owners would mean the chunk taken here is never sent.
 	if (csp_buf_get_flags(bp) & BUF_F_ROUTED)
@@ -4596,9 +4610,7 @@ void csp_buf_input(csp_rt_t* st)
 	    if (!(csp_buf_get_flags(bp) & BUF_F_BUSY))
 		continue;
 	    n = csp_buf_get_nbytes(bp);
-	    r = (csp_buf_get_transport(bp) == TR_I2C) ?
-		csp_i2c_done(st, csp_buf_get_xref(bp), &n) :
-		csp_spi_done(st, csp_buf_get_xref(bp), &n);
+	    r = sync_done(st, bp, &n);
 	    if (r == 0)
 		continue;              // still in flight; look again next cycle
 	    csp_buf_and_flags(st, b, ~BUF_F_BUSY);
@@ -4705,13 +4717,20 @@ void csp_buf_input(csp_rt_t* st)
 		}
 	    }
 	}
-	else if ((csp_buf_get_transport(bp) == TR_UART) && (csp_buf_get_dir(bp) & DIR_IN)) {
+	else if (((csp_buf_get_transport(bp) == TR_UART) ||
+		  (csp_buf_get_transport(bp) == TR_SMS)) &&
+		 (csp_buf_get_dir(bp) & DIR_IN)) {
 	    // A wire, not a connection: it is either carrying bytes or quiet,
 	    // and there is no third answer. Same stream discipline as TCP --
-	    // take what arrived, leave the rest.
+	    // take what arrived, leave the rest. A modem is the same shape: a
+	    // message arrives as its text and a newline.
 	    uint16_t n = csp_buf_get_nbytes(bp);
-	    if (csp_uart_recv(st, csp_buf_get_xref(bp),
-			      buf_heap_dout_ptr(st, bp), &n) == 1) {
+	    int got = (csp_buf_get_transport(bp) == TR_UART)
+		? csp_uart_recv(st, csp_buf_get_xref(bp),
+				buf_heap_dout_ptr(st, bp), &n)
+		: csp_sms_recv(st, csp_buf_get_xref(bp),
+			       buf_heap_dout_ptr(st, bp), &n);
+	    if (got == 1) {
 		csp_buf_set_dlc_in(bp, (uint8_t)((n > 255) ? 255 : n));
 		csp_buf_or_flags(st, b, BUF_F_RXPEND);
 		buf_mark_fields(st, b);
@@ -4768,6 +4787,60 @@ void csp_buf_input(csp_rt_t* st)
     csp_con_wire(con);
 }
 
+// The synchronous transports, one place each for start and done.
+//
+// A 1-Wire ROM id is two constants, not the buffer's endpoint -- 64 bits do
+// not fit in xref -- so it is fetched here, in the order the bus sends it:
+// family code first.
+static void ow_rom(csp_rt_t* st, csp_buf_t* bp, uint8_t* rom)
+{
+    csp_decl_t d;
+    uint32_t hi, lo;
+    int k;
+
+    csp_load_decl(st, (index_t)csp_buf_get_port(bp), &d);
+    hi = (uint32_t)csp_decl_get_cn_init(&d).i;
+    csp_load_decl(st, (index_t)(csp_buf_get_port(bp) + 1), &d);
+    lo = (uint32_t)csp_decl_get_cn_init(&d).i;
+    for (k = 0; k < 4; k++) {
+	rom[k]     = (uint8_t)(hi >> (24 - 8 * k));
+	rom[4 + k] = (uint8_t)(lo >> (24 - 8 * k));
+    }
+}
+
+NOINLINE static int sync_start(csp_rt_t* st, csp_buf_t* bp, uint8_t* p, int rd)
+{
+    uint32_t x = csp_buf_get_xref(bp);
+    uint16_t n = csp_buf_get_nbytes(bp);
+    uint8_t rom[8];
+
+    switch (csp_buf_get_transport(bp)) {
+    case TR_I2C: return csp_i2c_start(st, x, p, n, rd);
+    case TR_SPI: return csp_spi_start(st, x, p, n, rd);
+    case TR_ONEWIRE:
+	if (!rd)
+	    return -1;               // a reading device; nothing to write
+	ow_rom(st, bp, rom);
+	return csp_onewire_start(st, x, rom, p, n);
+    default:     return -1;
+    }
+}
+
+NOINLINE static int sync_done(csp_rt_t* st, csp_buf_t* bp, uint16_t* n)
+{
+    uint32_t x = csp_buf_get_xref(bp);
+    uint8_t rom[8];
+
+    switch (csp_buf_get_transport(bp)) {
+    case TR_I2C: return csp_i2c_done(st, x, n);
+    case TR_SPI: return csp_spi_done(st, x, n);
+    case TR_ONEWIRE:
+	ow_rom(st, bp, rom);
+	return csp_onewire_done(st, x, rom, buf_heap_dout_ptr(st, bp), n);
+    default:     return -1;
+    }
+}
+
 // One chunk off a buffer's own transport into its shadow. Only the transports
 // that can be ASKED are here: CAN arrives by frame id and is already in the
 // buffer by the time a route looks at it, so a CAN source moves one delivery a
@@ -4783,6 +4856,7 @@ NOINLINE static int route_pull(csp_rt_t* st, csp_buf_t* bp, uint16_t* n)
     case TR_UDP:     return csp_udp_recv(st, csp_buf_get_port(bp), csp_buf_get_xref(bp), dst, n);
     case TR_TCP:     return csp_tcp_recv(st, csp_buf_get_port(bp), csp_buf_get_xref(bp), dst, n);
     case TR_UART:    return csp_uart_recv(st, csp_buf_get_xref(bp), dst, n);
+    case TR_SMS:     return csp_sms_recv(st, csp_buf_get_xref(bp), dst, n);
     default:         return 0;
     }
 }
@@ -4799,6 +4873,7 @@ NOINLINE static int route_push(csp_rt_t* st, csp_buf_t* bp,
     case TR_UDP:     return csp_udp_send(st, csp_buf_get_xref(bp), csp_buf_get_port(bp), data, n);
     case TR_TCP:     return csp_tcp_send(st, csp_buf_get_xref(bp), csp_buf_get_port(bp), data, n);
     case TR_UART:    return csp_uart_send(st, csp_buf_get_xref(bp), data, n);
+    case TR_SMS:     return csp_sms_send(st, csp_buf_get_xref(bp), data, n);
     case TR_CAN:     return csp_can_send(st, csp_buf_get_xref(bp), data, (uint8_t)n);
     default:         return -1;
     }
@@ -4825,6 +4900,7 @@ NOINLINE static int route_push(csp_rt_t* st, csp_buf_t* bp,
 void csp_route_run(csp_rt_t* st)
 {
     index_t r;
+    uint8_t sms_out = 0;
 
     for (r = 0; r < st->nroute; r++) {
 	csp_buf_t* src = &st->buf[st->route[r].src];
@@ -4832,6 +4908,30 @@ void csp_route_run(csp_rt_t* st)
 	uint16_t cap = (csp_buf_get_nbytes(src) < csp_buf_get_nbytes(dst)) ?
 	    csp_buf_get_nbytes(src) : csp_buf_get_nbytes(dst);
 	int k;
+
+	// The interpreter's output going to a modem: the console marks which
+	// of it answers a command and which is an event. See csp_con_ctx.
+	if ((csp_buf_get_transport(src) == TR_REPL) &&
+	    (csp_buf_get_transport(dst) == TR_SMS))
+	    sms_out = 1;
+
+	// A MESSAGE IN, AS ONE LINE. The editor takes it only when empty, so
+	// the line that runs is the message and nothing typed at the console
+	// is mixed into it -- and the line knows where it came from, which is
+	// what restricts it and addresses the answer.
+	if ((csp_buf_get_transport(src) == TR_SMS) &&
+	    (csp_buf_get_transport(dst) == TR_REPL)) {
+	    uint16_t n = csp_con_sms_room(st);
+	    if ((n > 0) && (n > cap))
+		n = cap;
+	    if ((n > 0) && (route_pull(st, src, &n) == 1)) {
+		csp_buf_set_dlc_in(src, (uint8_t)((n > 255) ? 255 : n));
+		csp_buf_or_flags(st, st->route[r].src, BUF_F_RXPEND);
+		buf_mark_fields(st, st->route[r].src);
+		csp_con_feed_sms(st, buf_heap_dout_ptr(st, src), n);
+	    }
+	    continue;
+	}
 
 	for (k = 0; k < CSP_ROUTE_BURST; k++) {
 	    uint16_t n = cap;
@@ -4867,6 +4967,9 @@ void csp_route_run(csp_rt_t* st)
 	    }
 	}
     }
+    // Recomputed every pass, like the console wire mask: it follows a /undo
+    // that drops the route as well as a line that adds one.
+    csp_con_sms_wire(sms_out);
 }
 
 // UDP out, and the STARTS for the synchronous buses. Called from a port's
@@ -4917,14 +5020,19 @@ void csp_buf_output(csp_rt_t* st)
 	    break;
 
 	case TR_UART:
+	case TR_SMS:
 	    if (!(fs & (BUF_F_DIRTY|BUF_F_TX)))
 		continue;
 	    // Like TCP: the flags survive a send that did not go, so a port
 	    // whose FIFO is full keeps the bytes rather than dropping them.
 	    if (dir & DIR_OUT) {
-		if (csp_uart_send(st, csp_buf_get_xref(bp),
-				  buf_heap_din_ptr(st,bp),
-				  csp_buf_get_dlc(bp)) < 0)
+		if (((tr == TR_UART)
+		     ? csp_uart_send(st, csp_buf_get_xref(bp),
+				     buf_heap_din_ptr(st,bp),
+				     csp_buf_get_dlc(bp))
+		     : csp_sms_send(st, csp_buf_get_xref(bp),
+				    buf_heap_din_ptr(st,bp),
+				    csp_buf_get_dlc(bp))) < 0)
 		    break;
 	    }
 	    csp_buf_set_flags(bp, fs & ~(BUF_F_DIRTY|BUF_F_TX));
@@ -4942,6 +5050,14 @@ void csp_buf_output(csp_rt_t* st)
 	    if (!(fs & (BUF_F_DIRTY|BUF_F_TX)))
 		continue;
 	    csp_buf_set_flags(bp, fs & ~(BUF_F_DIRTY|BUF_F_TX));
+	    // A ROUTE SOURCE IS DIRTY BECAUSE IT RECEIVED. An `inout repl` that
+	    // a route reads from got the interpreter's output in its shadow,
+	    // the commit marked it, and feeding that back in as typed made the
+	    // interpreter read its own prompt -- "> > > >" into the line editor,
+	    // one more every cycle. Its route already moves its bytes; only a
+	    // retry (BUF_F_TX) is this pass's business.
+	    if ((fs & BUF_F_ROUTED) && !(fs & BUF_F_TX))
+		break;
 	    if (dir & DIR_OUT) {
 		if (tr == TR_CONSOLE)
 		    csp_con_show(buf_heap_din_ptr(st,bp), csp_buf_get_dlc(bp));
@@ -4952,6 +5068,7 @@ void csp_buf_output(csp_rt_t* st)
 
 	case TR_I2C:
 	case TR_SPI:
+	case TR_ONEWIRE:
 	    // ONE transfer in flight per buffer. Without BUF_F_BUSY a bus
 	    // slower than the cycle gets a second transfer queued on top of the
 	    // first every cycle and never drains -- and on a device with
@@ -4973,11 +5090,7 @@ void csp_buf_output(csp_rt_t* st)
 		// value and not the one being assembled.
 		uint8_t* p = rd ?
 		    buf_heap_dout_ptr(st,bp) : buf_heap_din_ptr(st,bp);
-		int r = (tr == TR_I2C)
-		    ? csp_i2c_start(st, csp_buf_get_xref(bp), p,
-				    csp_buf_get_nbytes(bp), rd)
-		    : csp_spi_start(st, csp_buf_get_xref(bp), p,
-				    csp_buf_get_nbytes(bp), rd);
+		int r = sync_start(st, bp, p, rd);
 		if (r == 0)
 		    csp_buf_or_flags(st, b, BUF_F_BUSY);
 	    }
@@ -5106,6 +5219,10 @@ NOINLINE int setup_buffer(csp_rt_t* st, index_t ix)
 	    csp_load_decl(st, INDEX(csp_decl_get_bf_id(&d)) + 1, &pn);
 	    port = (uint16_t)csp_decl_get_cn_init(&pn).i;
 	}
+	// A 1-Wire ROM id is 64 bits and the buffer has 48 to spare, so it
+	// stays in its two constants and `port` says where they are.
+	else if (transport == TR_ONEWIRE)
+	    port = (uint16_t)(INDEX(csp_decl_get_bf_id(&d)) + 1);
     }
     if ((b = csp_buf_alloc(st, nbytes, transport, xref, csp_decl_get_dir(&d))) == BAD_INDEX)
 	return -1;

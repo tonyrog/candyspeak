@@ -1,0 +1,7 @@
+{modes, [seq]}.
+{virtual_time, true}.
+{cycles, 120}.
+{checks, [
+  {output_count, "sms> +46701234567: tick", 20},
+  {output_has, "sms> +46701234567: tick 2\n"}
+]}.

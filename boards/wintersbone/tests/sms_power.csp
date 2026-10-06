@@ -1,0 +1,4 @@
+// The mains goes: the alarm is an SMS to every number on the list.
+#import "../main.csp"
+> Owners = "+46701111111 +46702222222"
+> PwrDelay = 500

@@ -105,6 +105,31 @@ static uint16_t ring_take(con_ring_t* r, uint8_t* data, uint16_t max)
 
 void csp_con_wire(uint8_t mask) { wired = mask; }
 
+// THE PRINT CONTEXT (see CON_CTX_* in csp.h). Marked in the stream only while
+// a route takes the interpreter's output to a modem, so a remote console over
+// CAN or a pty still reads exactly what it always read.
+static uint8_t con_ctx = CON_CTX_LOCAL;
+static uint8_t sms_wired = 0;
+
+// On the pass that wires it, say where the stream stands: the sink assumes an
+// event until told otherwise, and the console may already be in its own
+// context, printing a prompt.
+void csp_con_sms_wire(uint8_t on)
+{
+    if (on && !sms_wired && (wired & (1 << CON_OUT)))
+	(void)ring_put(&ring[CON_OUT], CON_MARK(con_ctx));
+    sms_wired = on;
+}
+
+void csp_con_ctx(uint8_t ctx)
+{
+    if (ctx == con_ctx)
+	return;
+    con_ctx = ctx;
+    if (sms_wired && (wired & (1 << CON_OUT)))
+	(void)ring_put(&ring[CON_OUT], CON_MARK(ctx));
+}
+
 void csp_repl_tap(char c)
 {
     if (wired & (1 << CON_OUT))
@@ -214,7 +239,40 @@ void csp_con_feed(csp_rt_t* st, const uint8_t* data, uint16_t len)
     }
 }
 
+// A MESSAGE AS ONE LINE: room for it only in an empty editor, so the line that
+// runs is the message alone. A command half-typed at the console is not
+// spliced into it -- the message waits for the next cycle instead.
+uint16_t csp_con_sms_room(csp_rt_t* st)
+{
+    if ((st->line.pos != 0) || (st->line.fill != 0) || st->line.ready)
+	return 0;
+    return csp_line_room(&st->line);
+}
+
+// Fed like any other line, so it is edited, echoed on the console and queued
+// the usual way -- and flagged, which is what csp_process_line reads to
+// restrict it and to put its output in the SMS context. The echo itself
+// happens here, outside the cycle, in the LOCAL context: the console sees the
+// command arrive, the modem does not get it back.
+void csp_con_feed_sms(csp_rt_t* st, const uint8_t* data, uint16_t len)
+{
+    st->line.from_sms = 1;
+    csp_con_feed(st, data, len);
+}
+
 #else  /* no rings: the transports parse and run, and never deliver */
+
+void csp_con_ctx(uint8_t ctx) { (void)ctx; }
+void csp_con_sms_wire(uint8_t on) { (void)on; }
+uint16_t csp_con_sms_room(csp_rt_t* st)
+{
+    (void)st;
+    return 0;
+}
+void csp_con_feed_sms(csp_rt_t* st, const uint8_t* data, uint16_t len)
+{
+    (void)st; (void)data; (void)len;
+}
 
 void csp_con_wire(uint8_t mask) { (void)mask; }
 void csp_repl_tap(char c) { (void)c; }

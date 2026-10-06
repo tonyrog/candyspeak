@@ -1,0 +1,8 @@
+{modes, [seq]}.
+{stimulus, "boards/wintersbone/tests/sms_power.dat"}.
+{cycles, 300}.
+{checks, [
+  {output_has, "sms> +46701111111: POWER OFF, battery 4203 mV"},
+  {output_has, "sms> +46702222222: POWER OFF, battery 4203 mV"},
+  {output_count, "sms> ", 2}
+]}.

@@ -14,5 +14,16 @@
   {nm, "arm-none-eabi-nm"},
   {optimize, "-Os"},
   {platform, "arduino:samd", "1.8.14"},
+  %% Pinned like the platform. Wire comes with the core; MKRNB is Arduino's
+  %% library for the u-blox modem (port/csp_arduino.c, CSP_HAS_SMS).
+  {libraries, [{"MKRNB", "1.6.0"}, {"OneWire", "2.3.8"}]},
+
   {support_reactive, 0},
-  {use_statistics, 0}]}.
+  {use_statistics, 0},
+
+  %% Wire, for the charger; OneWire, for the two DS18B20; the modem, for SMS;
+  %% and the
+  %% console rings that route messages through the interpreter (0 on every
+  %% target by default -- a part with 2K of RAM should not carry them).
+  {define, ['CSP_HAS_I2C', 'CSP_HAS_ONEWIRE', 'CSP_HAS_SMS',
+            {'CSP_CONSOLE_BYTES', 256}]}]}.

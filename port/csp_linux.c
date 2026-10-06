@@ -1694,6 +1694,63 @@ static int input_can_frame(token_t* tv, size_t num, int i)
 //   <name> . <part> = <value>     a part: .pin .port .period .dlc .tx ...
 //   <name> = <value>              the value
 //   can <id> <byte>...            a frame delivered through csp_can_recv
+// --- SMS, on the host ----------------------------------------------------------
+//
+// No modem: a message ARRIVES from the stimulus file, on the cycle its row
+// is due --
+//
+//     2000 sms "+46701234567" "TinC"
+//
+// -- and one GOES as a line on stdout, which is what a test reads:
+//
+//     sms> +46701234567: 213
+//
+// The queue is small because a test sends a few; a row that finds it full
+// loses its message and says so.
+#define HOST_SMS_Q 8
+static char host_sms_from[HOST_SMS_Q][24];
+static char host_sms_text[HOST_SMS_Q][161];
+static int  host_sms_head, host_sms_n;
+
+static void host_sms_copy(char* dst, int size, const tstr_t* s)
+{
+    int n = (s->len < size - 1) ? s->len : size - 1;
+    memcpy(dst, s->ptr, (size_t)n);
+    dst[n] = '\0';
+}
+
+static void host_sms_push(const tstr_t* from, const tstr_t* text)
+{
+    int slot;
+    if (host_sms_n == HOST_SMS_Q) {
+	fprintf(stderr, "sms: host queue full, message dropped\n");
+	return;
+    }
+    slot = (host_sms_head + host_sms_n) % HOST_SMS_Q;
+    host_sms_copy(host_sms_from[slot], sizeof(host_sms_from[slot]), from);
+    host_sms_copy(host_sms_text[slot], sizeof(host_sms_text[slot]), text);
+    host_sms_n++;
+}
+
+int csp_sms_modem_recv(char* from, uint16_t from_size,
+		       char* text, uint16_t text_size)
+{
+    if (host_sms_n == 0)
+	return 0;
+    snprintf(from, from_size, "%s", host_sms_from[host_sms_head]);
+    snprintf(text, text_size, "%s", host_sms_text[host_sms_head]);
+    host_sms_head = (host_sms_head + 1) % HOST_SMS_Q;
+    host_sms_n--;
+    return 1;
+}
+
+int csp_sms_modem_send(const char* to, const char* text)
+{
+    printf("sms> %s: %s\n", to, text);
+    fflush(stdout);
+    return 0;
+}
+
 void cycle_input_values(csp_rt_t* st, token_t* tv, size_t num)
 {
     int i = 1;
@@ -1704,6 +1761,13 @@ void cycle_input_values(csp_rt_t* st, token_t* tv, size_t num)
 	input_delay = tv[1].v.val.i;
     }
     while(i < num) {
+	// `sms "<from>" "<text>"`: a message arrives. T_SMS like T_CAN below.
+	if ((tv[i].t == T_SMS) && ((i+2) < (int)num) &&
+	    (tv[i+1].t == STR) && (tv[i+2].t == STR)) {
+	    host_sms_push(&tv[i+1].v.str, &tv[i+2].v.str);
+	    i += 3;
+	    continue;
+	}
 	// `can` is the KEYWORD T_CAN, not a WORD -- it is the same token the
 	// scanner hands `#buffer F:16 in can 0x20`.
 	if ((tv[i].t == T_CAN) && ((i+1) < (int)num) && (tv[i+1].t == INT)) {
@@ -2683,6 +2747,15 @@ loop:
 	    pfd[0].fd = -1;
 	    disable_raw_mode();
 	}
+    }
+    // A LINE THAT CAME BY ROUTE, with no terminal at all. A message fed to the
+    // interpreter (`#route Sms Rp`) makes a line ready in the editor whether
+    // or not there is a stdin to poll -- and under -F there usually is not,
+    // so the branch above never ran and the command sat there unrun.
+    else if (state.line.ready) {
+	process_serial_line(&state, state.line.buf);
+	csp_line_done(&state.line);
+	if (quit_flag) goto done;
     }
 
     // /pause freezes execution: keep servicing interactive input (above) so

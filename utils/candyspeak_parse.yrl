@@ -12,7 +12,7 @@ Terminals
   'T_VAL' 'T_PIN' 'T_PORT' 'T_DIR' 'T_ENDIAN' 'T_PERIOD' 'T_FIRED'
   'T_ID' 'T_RX' 'T_TX' 'T_DLC' 'T_LEN'
   'T_PULLUP' 'T_PULLDOWN'
-  'T_CAN' 'T_I2C' 'T_SPI' 'T_UDP' 'T_TCP' 'T_UART'
+  'T_CAN' 'T_I2C' 'T_SPI' 'T_UDP' 'T_TCP' 'T_UART' 'T_SMS' 'T_CONSOLE' 'T_REPL' 'T_ONEWIRE'
   'T_LOW' 'T_HIGH' 'T_BOTH'  'T_SOFT' 'T_READY' 'T_RISING' 'T_FALLING'
   'WORD' 'INT' 'FLT' 'STR'
   'EQEQ' 'NEQ' 'LTEQ' 'GTEQ' 'LTLT' 'GTGT' 'LT' 'GT' 
@@ -287,6 +287,14 @@ buftype -> 'T_TCP' 'INT' 'INT' : [{tcp,'$2','$3'}].
 %% uart <unit> [<baud>] (default baud = 9600)
 buftype -> 'T_UART' 'INT' : [{uart,'$2',9600}].
 buftype -> 'T_UART' 'INT' 'INT' : [{uart,'$2','$3'}].
+%% the two ends of the console wire
+buftype -> 'T_CONSOLE' : [{console}].
+buftype -> 'T_REPL' : [{repl}].
+%% sms <param>: a modem; the string #param lists the numbers
+buftype -> 'T_SMS' 'WORD' : [{sms,'$2'}].
+%% onewire <port>:<pin> <rom-hi> <rom-lo>: a 1-Wire device by its ROM id
+buftype -> 'T_ONEWIRE' 'INT' 'COLON' 'INT' 'INT' 'INT' :
+    [{onewire,{'$2','$4'},'$5','$6'}].
 %% plain byte buffer
 buftype -> '$empty' : [].
 

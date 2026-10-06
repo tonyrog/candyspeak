@@ -873,6 +873,88 @@ talking".
 On the host, `--uart=[<unit>:]<device>` gives it a port — a real tty, or a pty
 from `socat` — which is what makes the transport testable without hardware.
 
+#### SMS
+
+    #param  Owners string = "+46701234567 +46731234567"
+    #buffer Sms:160 inout sms Owners
+
+A cellular modem's text messages. The operand is the **name of a string
+`#param`** listing the numbers allowed to use the node: spaces or commas
+between them, no spaces inside one. Because it is a `#param`, the list can be
+changed in the field (`> Owners = "..."`) and kept by `/save`.
+
+A stream, like `uart`. A message from a number on the list arrives as its
+**first line and a newline**. A message from anyone else gets no answer and is
+counted. Bytes written out are gathered into messages: one goes when the output
+has been quiet for a cycle, or at 160 characters. At most `CSP_SMS_PER_HOUR`
+(20) go out an hour, counted per recipient; the rest are dropped. That cap is
+what stops a rule that prints every cycle from emptying the SIM.
+
+Numbers compare by their digits, and a leading `00` is the same as `+`.
+
+**Routed through the interpreter**, the modem becomes a remote prompt:
+
+    #buffer Rp:160 inout repl
+    #route  Sms Rp
+    #route  Rp  Sms
+
+- A message runs as a line typed at the prompt. What it prints is the
+  **answer**, sent to that number only, or "OK" if it printed nothing.
+- What a **rule** prints during the cycle is an **event**, sent to every number
+  on the list. `println("POWER OFF") ? pwr.Send` is an alarm by SMS.
+- The prompt, the echo and anything typed at the console stay on the console.
+- A line that came in a message may **read** (`TinC`, `> println(...)`) and may
+  **set a `#param`** (`> Limit = 9`) or a **`#variable` declared `in`**
+  (`> Status = 1`), and nothing else. `in` is the program saying "this one is
+  set from outside". A `/` command, a declaration, a rule or a store to
+  anything else gets `denied`.
+
+A message is fed only when the line editor is empty, so the line that runs is
+the message and nothing typed at the console is mixed into it.
+
+On the host there is no modem. A stimulus row delivers a message on the cycle
+it is due, and each message sent is a line on stdout:
+
+    2000 sms "+46701234567" "TinC"          (in the -F file)
+    sms> +46701234567: 213                  (on stdout)
+
+On an Arduino MKR NB 1500 the board defines `CSP_HAS_SMS` and the modem is
+driven through Arduino's MKRNB library (`port/csp_arduino.c`).
+
+#### 1-Wire
+
+    #buffer Ute:2 in onewire 0:5 0x28FF641F 0x0716A3C2
+    #field  UteRaw:16 Ute[0..15]
+    UteC = UteRaw * 5 / 8            // tenths of a degree
+
+A Dallas/Maxim 1-Wire device on a pin -- a DS18B20 on a cable, typically --
+picked out by its **64-bit ROM id**, written as two 32-bit halves with the
+family code (0x28 for a DS18B20) first. Several devices share one pin; each
+has its own buffer with its own id.
+
+The buffer gets the first N bytes of the device's **scratchpad**. For a
+DS18B20 the first two are the temperature: signed, little-endian, 1/16 degree
+a step. The CRC is checked over all nine, and a reading that fails it is not
+delivered, so `Ute.rx` stays false and the previous value stands.
+
+It is synchronous, like I2C. One conversion on the wire serves every device on
+it (750 ms at the DS18B20's power-on 12 bits), and each buffer then reads its
+own device. The rules never wait for it. Powered devices only (three wires,
+4.7k pull-up), not parasite power.
+
+**Finding the ids.** They are printed on nothing anyone keeps, so ask the wire:
+
+    > /onewire 0:5
+    #buffer T:2 in onewire 0:5 0x28ff641f 0x0716a3c2
+    #buffer T:2 in onewire 0:5 0x28aa1204 0x5e1603f1
+
+Rename the buffers and paste them in. Warm one sensor in your hand and watch
+which reading moves to tell them apart.
+
+On the host there is no wire: `/onewire` says so, and a test writes the field
+from its stimulus file. On an Arduino board the board defines
+`CSP_HAS_ONEWIRE` (`port/csp_arduino.c`, Paul Stoffregen's OneWire library).
+
 #### The console wire
 
 A node's serial port feeds its interpreter, and the interpreter prints back to

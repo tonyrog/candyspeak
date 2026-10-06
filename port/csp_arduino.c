@@ -57,6 +57,24 @@
 // a CAN library that is not there costs flash and breaks the build.
 // Expects Sandeep Mistry's arduino-CAN API (CAN.begin/parsePacket/beginPacket),
 // which covers the MCP2515 shields and the SAMD/ESP32 built-in controllers.
+// I2C. Opt in per board with CSP_HAS_I2C, like CAN: Wire costs flash a 32K
+// part does not have, and a board with nothing on the bus should not pay.
+#if defined(CSP_HAS_I2C)
+#include <Wire.h>
+#endif
+
+// SMS through the u-blox modem on an MKR NB 1500 (Arduino's MKRNB library).
+// Opt in with CSP_HAS_SMS; the SIM PIN, if the card has one, is CSP_SMS_PIN.
+#if defined(CSP_HAS_SMS)
+#include <MKRNB.h>
+#endif
+
+// 1-Wire (a DS18B20 on a cable), through Paul Stoffregen's OneWire. Opt in
+// with CSP_HAS_ONEWIRE.
+#if defined(CSP_HAS_ONEWIRE)
+#include <OneWire.h>
+#endif
+
 #if defined(CSP_HAS_CAN)
 // Two shapes of controller. CSP_CAN_MCP2515 is one hanging off SPI (the Adafruit
 // Feather RP2040 CAN, MCP2515 + TJA1051): it has to be constructed with its chip
@@ -776,6 +794,392 @@ void csp_input(csp_rt_t* st)
     csp_input_timer(st);
     csp_input_event(st);   // deal out this cycle's interrupt edges
 }
+
+// ============================================================
+// I2C backend
+// ============================================================
+//
+// `#buffer B:n in i2c <bus> <addr> <reg>`: the register is written, then n
+// bytes are read with a REPEATED START, so nothing can move the device's
+// pointer in between. Out is the register followed by the bytes, one
+// transaction.
+//
+// SYNCHRONOUS, as on STM32: csp_i2c_start does the whole transfer and
+// csp_i2c_done only says it is over. A few bytes at 100 kHz is a fraction of
+// a millisecond, and a part that does not answer costs one NACK, not a
+// timeout -- Wire gives up on the address byte.
+//
+// Bus 0 is Wire, bus 1 Wire1 where the variant has a second one. On a MKR
+// board the charger (BQ24195, 0x6B) sits on bus 0 with whatever is on the
+// header.
+
+#if defined(CSP_HAS_I2C)
+
+static TwoWire* i2c_of(uint8_t bus)
+{
+    static uint8_t begun = 0;
+    TwoWire* w = 0;
+
+    if (bus == 0)
+	w = &Wire;
+#if defined(WIRE_INTERFACES_COUNT) && (WIRE_INTERFACES_COUNT > 1)
+    else if (bus == 1)
+	w = &Wire1;
+#endif
+    if (w && !(begun & (1u << bus))) {
+	w->begin();
+	begun |= (uint8_t)(1u << bus);
+    }
+    return w;
+}
+
+int csp_i2c_start(csp_rt_t* st, uint32_t xref, uint8_t* data, uint16_t len,
+		  int is_read)
+{
+    uint8_t addr = (uint8_t)TR_I2C_ADDR(xref);
+    uint8_t reg  = (uint8_t)TR_I2C_REG(xref);
+    TwoWire* w = i2c_of((uint8_t)TR_I2C_BUS(xref));
+    uint16_t i;
+    (void)st;
+
+    if (w == 0)
+	return -1;
+    w->beginTransmission(addr);
+    w->write(reg);
+    if (!is_read) {
+	w->write(data, len);
+	return (w->endTransmission() == 0) ? 0 : -1;
+    }
+    if (w->endTransmission(false) != 0)        // repeated start follows
+	return -1;
+    if (w->requestFrom(addr, (size_t)len) != len)
+	return -1;
+    for (i = 0; i < len; i++)
+	data[i] = (uint8_t)w->read();
+    return 0;
+}
+
+int csp_i2c_done(csp_rt_t* st, uint32_t xref, uint16_t* len)
+{
+    (void)st; (void)xref; (void)len;
+    return 1;                       // _start did the whole transfer
+}
+
+#endif
+
+// ============================================================
+// 1-Wire backend
+// ============================================================
+//
+// `#buffer T:2 in onewire 0:5 0x28FF641F 0x0716A3C2`: the port is ignored
+// (Arduino numbers pins alone), the ROM id selects the device.
+//
+// One conversion per WIRE serves every device on it: start sends Skip ROM +
+// Convert T unless one is already running, done waits it out and then reads
+// this device's scratchpad with Match ROM. A second sensor on the same pin
+// collects from the same conversion, in the same cycle. 750 ms is the
+// DS18B20's 12-bit time, its power-on resolution.
+//
+// Powered devices only (three wires). Parasite power would need the line held
+// strong for the whole conversion, which a pin shared with a second sensor
+// that is being read cannot do.
+
+#if defined(CSP_HAS_ONEWIRE)
+
+#ifndef CSP_OW_BUSES
+#define CSP_OW_BUSES 2
+#endif
+#ifndef CSP_OW_CONV_MS
+#define CSP_OW_CONV_MS 750
+#endif
+
+static OneWire  ow_bus[CSP_OW_BUSES];
+static uint8_t  ow_pin[CSP_OW_BUSES];
+static uint8_t  ow_n;
+static uint8_t  ow_conv[CSP_OW_BUSES];        // a conversion is running
+static uint32_t ow_t0[CSP_OW_BUSES];
+
+static OneWire* ow_of(uint8_t pin, uint8_t* slot)
+{
+    uint8_t i;
+    for (i = 0; i < ow_n; i++)
+	if (ow_pin[i] == pin) {
+	    *slot = i;
+	    return &ow_bus[i];
+	}
+    if (ow_n == CSP_OW_BUSES)
+	return 0;
+    ow_bus[ow_n].begin(pin);
+    ow_pin[ow_n] = pin;
+    ow_conv[ow_n] = 0;
+    *slot = ow_n;
+    return &ow_bus[ow_n++];
+}
+
+int csp_onewire_start(csp_rt_t* st, uint32_t xref, const uint8_t* rom,
+		      uint8_t* data, uint16_t len)
+{
+    uint8_t s;
+    OneWire* w = ow_of((uint8_t)TR_OW_PIN(xref), &s);
+    (void)st; (void)rom; (void)data; (void)len;
+
+    if (w == 0)
+	return -1;
+    if (!ow_conv[s]) {
+	if (!w->reset())
+	    return -1;                     // nobody on the wire
+	w->skip();
+	w->write(0x44, 0);                 // Convert T, every device at once
+	ow_t0[s] = millis();
+	ow_conv[s] = 1;
+    }
+    return 0;
+}
+
+int csp_onewire_done(csp_rt_t* st, uint32_t xref, const uint8_t* rom,
+		     uint8_t* data, uint16_t* len)
+{
+    uint8_t s, i, n;
+    uint8_t pad[9];
+    OneWire* w = ow_of((uint8_t)TR_OW_PIN(xref), &s);
+    (void)st;
+
+    if (w == 0)
+	return -1;
+    if ((uint32_t)(millis() - ow_t0[s]) < CSP_OW_CONV_MS)
+	return 0;                          // still converting
+    ow_conv[s] = 0;                        // the next start converts again
+    if (!w->reset())
+	return -1;
+    w->select(rom);
+    w->write(0xBE);                        // Read Scratchpad
+    w->read_bytes(pad, 9);
+    // A CRC, not a range check: a device that let go of the line half way
+    // reads as all ones, and 0xFFFF is a plausible-looking -0.06 degrees.
+    if (OneWire::crc8(pad, 8) != pad[8])
+	return -1;
+    n = (*len < 9) ? (uint8_t)*len : 9;
+    for (i = 0; i < n; i++)
+	data[i] = pad[i];
+    *len = n;
+    return 1;
+}
+
+int csp_onewire_search(uint8_t port, uint8_t pin,
+		       void (*found)(const uint8_t* rom))
+{
+    uint8_t s, rom[8];
+    int n = 0;
+    OneWire* w = ow_of(pin, &s);
+    (void)port;
+
+    if (w == 0)
+	return -1;
+    w->reset_search();
+    while (w->search(rom))
+	if (OneWire::crc8(rom, 7) == rom[7]) {
+	    found(rom);
+	    n++;
+	}
+    return n;
+}
+
+#endif
+
+// ============================================================
+// SMS backend (csp_sms_modem_recv/send, see csp_transport.c)
+// ============================================================
+//
+// A state machine on the modem's AT channel, ONE command in flight at a time,
+// stepped once a cycle. Nothing here waits for the network: registering takes
+// tens of seconds and a message out a few, and the rules keep running through
+// both. Two things do block, briefly and once each: powering the modem up
+// (NB::begin, at the first poll) and the '>' prompt before a message's text
+// (waitForPrompt, a few milliseconds when the modem is well).
+//
+// Not the library's NB_SMS: its asynchronous listing and sending share one
+// response buffer, and interleaving them -- which a node that answers while
+// it listens has to do -- confuses the two. The AT commands are simple enough
+// to say directly:
+//
+//   AT+CMGL="REC UNREAD"     list what has arrived (polled every few seconds)
+//   AT+CMGD=<i>              delete one once it has been taken
+//   AT+CMGS="<to>" > text ^Z send one
+//
+// Text mode is set by NB::begin. Plain ASCII both ways.
+
+#if defined(CSP_HAS_SMS)
+
+#ifndef CSP_SMS_PIN
+#define CSP_SMS_PIN ""
+#endif
+#ifndef CSP_SMS_POLL_MS
+#define CSP_SMS_POLL_MS 5000
+#endif
+#define SMS_TXQ 4
+
+enum { SMS_OFF, SMS_REG, SMS_IDLE, SMS_LIST, SMS_DEL, SMS_SEND };
+
+static NB       sms_nb;
+static uint8_t  sms_st = SMS_OFF;
+static uint32_t sms_t0;                // last list, or last try to register
+static String   sms_resp;
+static int      sms_del = -1;          // a message to delete next
+static char     sms_txq_to[SMS_TXQ][24];
+static char     sms_txq_text[SMS_TXQ][161];
+static uint8_t  sms_txq_head, sms_txq_n;
+
+// Queued, never sent here: this is called from inside the cycle, and the
+// modem may be in the middle of something. Full means the caller's message is
+// lost, which csp_transport.c's own cap makes rare.
+int csp_sms_modem_send(const char* to, const char* text)
+{
+    uint8_t slot;
+
+    if (sms_txq_n == SMS_TXQ)
+	return -1;
+    slot = (uint8_t)((sms_txq_head + sms_txq_n) % SMS_TXQ);
+    strncpy(sms_txq_to[slot], to, sizeof(sms_txq_to[slot]) - 1);
+    sms_txq_to[slot][sizeof(sms_txq_to[slot]) - 1] = '\0';
+    strncpy(sms_txq_text[slot], text, sizeof(sms_txq_text[slot]) - 1);
+    sms_txq_text[slot][sizeof(sms_txq_text[slot]) - 1] = '\0';
+    sms_txq_n++;
+    return 0;
+}
+
+// The first message in a +CMGL listing:
+//
+//   +CMGL: 3,"REC UNREAD","+46701234567",,"26/10/06,12:00:00+08"
+//   the text
+//
+// Its index (to delete it), the sender and the text's first line.
+static int sms_take(char* from, uint16_t from_size, char* text,
+		    uint16_t text_size)
+{
+    int at = sms_resp.indexOf("+CMGL: ");
+    int q, e, nl, end;
+
+    if (at < 0)
+	return 0;
+    sms_del = sms_resp.substring(at + 7).toInt();
+    q = sms_resp.indexOf("\"REC UNREAD\",\"", at);
+    if (q < 0)
+	return 0;
+    q += 14;
+    e = sms_resp.indexOf('"', q);
+    nl = sms_resp.indexOf('\n', at);
+    if ((e < 0) || (nl < 0))
+	return 0;
+    sms_resp.substring(q, e).toCharArray(from, from_size);
+    end = sms_resp.indexOf('\r', nl + 1);
+    if (end < 0)
+	end = sms_resp.length();
+    sms_resp.substring(nl + 1, end).toCharArray(text, text_size);
+    return 1;
+}
+
+// A message taken off the modem, until csp_sms_modem_recv hands it over.
+static char    sms_rx_from[24];
+static char    sms_rx_text[161];
+static uint8_t sms_rx_have;
+
+int csp_sms_modem_recv(char* from, uint16_t from_size,
+		       char* text, uint16_t text_size)
+{
+    if (!sms_rx_have)
+	return 0;
+    strncpy(from, sms_rx_from, from_size - 1);
+    from[from_size - 1] = '\0';
+    strncpy(text, sms_rx_text, text_size - 1);
+    text[text_size - 1] = '\0';
+    sms_rx_have = 0;
+    return 1;
+}
+
+static int sms_step(char* from, uint16_t from_size,
+		    char* text, uint16_t text_size)
+{
+    int r;
+    uint32_t now = millis();
+
+    switch (sms_st) {
+    case SMS_OFF:
+	// Powers the modem up and starts registering. The power-up blocks
+	// for a few seconds, once; registration is stepped below.
+	sms_nb.begin(CSP_SMS_PIN, true, false);
+	sms_t0 = now;
+	sms_st = SMS_REG;
+	return 0;
+
+    case SMS_REG:
+	r = sms_nb.ready();
+	if (r == 1)
+	    sms_st = SMS_IDLE;
+	else if ((r > 1) && ((uint32_t)(now - sms_t0) > 60000UL))
+	    sms_st = SMS_OFF;                  // a minute of errors: start over
+	return 0;
+
+    case SMS_LIST:
+    case SMS_DEL:
+    case SMS_SEND:
+	if ((r = MODEM.ready()) == 0)
+	    return 0;                          // still in flight
+	if (sms_st == SMS_SEND) {
+	    sms_txq_head = (uint8_t)((sms_txq_head + 1) % SMS_TXQ);
+	    sms_txq_n--;
+	    sms_st = SMS_IDLE;
+	    return 0;
+	}
+	if (sms_st == SMS_DEL) {
+	    sms_st = SMS_IDLE;
+	    return 0;
+	}
+	sms_st = SMS_IDLE;
+	MODEM.setResponseDataStorage(NULL);
+	return (r == 1) ? sms_take(from, from_size, text, text_size) : 0;
+
+    case SMS_IDLE:
+    default:
+	// Out first: an answer is waited for by someone holding a phone.
+	if (sms_txq_n > 0) {
+	    MODEM.sendf("AT+CMGS=\"%s\"", sms_txq_to[sms_txq_head]);
+	    if (MODEM.waitForPrompt(2000) != 1) {
+		// No prompt: drop it rather than wedge the queue behind it.
+		sms_txq_head = (uint8_t)((sms_txq_head + 1) % SMS_TXQ);
+		sms_txq_n--;
+		return 0;
+	    }
+	    MODEM.write((const uint8_t*)sms_txq_text[sms_txq_head],
+			strlen(sms_txq_text[sms_txq_head]));
+	    MODEM.write((uint8_t)26);          // Ctrl-Z ends the text
+	    sms_st = SMS_SEND;
+	    return 0;
+	}
+	if (sms_del >= 0) {
+	    MODEM.sendf("AT+CMGD=%d", sms_del);
+	    sms_del = -1;
+	    sms_st = SMS_DEL;
+	    return 0;
+	}
+	if (!sms_rx_have && ((uint32_t)(now - sms_t0) >= CSP_SMS_POLL_MS)) {
+	    sms_t0 = now;
+	    sms_resp = "";
+	    MODEM.setResponseDataStorage(&sms_resp);
+	    MODEM.send("AT+CMGL=\"REC UNREAD\"");
+	    sms_st = SMS_LIST;
+	}
+	return 0;
+    }
+}
+
+void csp_sms_modem_poll(void)
+{
+    if (sms_step(sms_rx_from, sizeof(sms_rx_from),
+		 sms_rx_text, sizeof(sms_rx_text)) == 1)
+	sms_rx_have = 1;
+}
+
+#endif
 
 // ============================================================
 // CAN backend

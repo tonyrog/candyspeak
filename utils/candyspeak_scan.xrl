@@ -63,6 +63,8 @@ spi		   : {token,{'T_SPI',TokenLine}}.
 udp		   : {token,{'T_UDP',TokenLine}}.
 tcp		   : {token,{'T_TCP',TokenLine}}.
 uart		   : {token,{'T_UART',TokenLine}}.
+sms		   : {token,{'T_SMS',TokenLine}}.
+onewire		   : {token,{'T_ONEWIRE',TokenLine}}.
 console		   : {token,{'T_CONSOLE',TokenLine}}.
 repl		   : {token,{'T_REPL',TokenLine}}.
 %% parts

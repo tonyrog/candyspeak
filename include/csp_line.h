@@ -65,6 +65,8 @@ typedef struct {
     uint8_t  ready;       // a complete line is waiting at the front
     uint8_t  ovf;         // a character was dropped -> refuse the whole line
     uint8_t  need_prompt; // print "> " before the next read
+    uint8_t  from_sms;    // the ready line came in a text message: it runs
+			  // restricted and its output answers the sender
     uint8_t  serial_xoff; // status of soft flow control
 } csp_line_t;
 

@@ -1,0 +1,4 @@
+// Commands by SMS: a reading back to the sender, a relay switched through its
+// #param, a store to anything else refused, a stranger ignored.
+#import "../main.csp"
+> Owners = "+46701111111 +46702222222"

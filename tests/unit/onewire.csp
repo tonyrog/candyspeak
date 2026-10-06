@@ -1,0 +1,8 @@
+// A DS18B20 by ROM id: the declaration parses, lists back as written (all
+// eight digits of each half), and its temperature reads through a #field --
+// signed, 1/16 degree, little-endian, as the device sends it. The host has no
+// bus, so tests/unit/onewire.dat writes the raw value where a reading lands.
+#buffer Ute:2 in onewire 0:5 0x28FF641F 0x0716A3C2
+#field  UteRaw:16 Ute[0..15]
+#variable UteC = 0
+UteC = UteRaw * 5 / 8

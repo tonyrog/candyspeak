@@ -26,6 +26,7 @@ void csp_line_init(csp_line_t* st)
     st->ovf = 0;
     st->esc = 0;
     st->need_prompt = 1;
+    st->from_sms = 0;
 #if !defined(CSP_LINE_SIMPLE)
     st->cur = 0;
     st->refeed = 0;
@@ -81,6 +82,7 @@ void csp_line_done(csp_line_t* st)
     st->pos = 0;
     st->fill = 0;
     st->ready = 0;
+    st->from_sms = 0;       // whatever is queued behind it was typed
 #if !defined(CSP_LINE_SIMPLE)
     st->cur = 0;
     // Cursor keys and history are OFF for the duration. csp_line_input is being
