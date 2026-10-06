@@ -60,7 +60,7 @@ CFLAGS=-MMD -MP -MF $(@:.o=.d) $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_AR
 OBJS = $(addprefix $(OBJDIR)/, \
 	csp_linux.o csp_rt.o csp_crc.o csp_fixpoint.o csp_words.o csp_mcsp.o csp_line.o csp_repl.o csp_compile.o csp_tok.o \
 	csp_dump.o csp_eeprom.o csp_parse.o csp_expr.o csp_print.o \
-	csp_strings.o csp_transport.o csp_console.o csp_states.o \
+	csp_strings.o csp_transport.o csp_sms.o csp_console.o csp_states.o \
 	csp_flash.o csp_devices.o csp_flash_host.o csp_socketcan.o csp_udp.o rom_empty.o)
 
 LIBS =
@@ -154,7 +154,7 @@ csp:	$(OBJS) $(RO_LD)
 # whichever one it just generated.
 CORE_SRC = port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
 	   src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
-	   src/csp_transport.c src/csp_console.c src/csp_states.c \
+	   src/csp_transport.c src/csp_sms.c src/csp_console.c src/csp_states.c \
 	   src/csp_parse.c src/csp_expr.c src/csp_print.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c \
 	   gen/csp_strings.c src/csp_flash.c \
 	   port/csp_devices.c port/csp_flash_host.c port/csp_socketcan.c port/csp_udp.c
@@ -653,7 +653,7 @@ WEBOTS_DIR  := private/pilot/webots/controllers/pilot
 # reason to simulate rather than to replay a log.
 WEBOTS_SRC  := port/csp_webots.c src/csp_rt.c src/csp_crc.c src/csp_states.c \
 	       src/csp_print.c src/csp_fixpoint.c src/csp_words.c \
-	       src/csp_mcsp.c src/csp_transport.c src/csp_flash.c \
+	       src/csp_mcsp.c src/csp_transport.c src/csp_sms.c src/csp_flash.c \
 	       src/csp_console.c src/csp_line.c src/csp_eeprom.c \
 	       src/csp_repl.c src/csp_compile.c src/csp_tok.c src/csp_parse.c \
 	       src/csp_expr.c port/csp_dump.c \

@@ -196,9 +196,9 @@
 %% holding the numbers allowed to command the node and to be told its alarms,
 %% so the list can be changed in the field and kept by /save.
 {token, 'T_SMS',        sms,        'sms',        'OP_NOP', -1, -1, no}.
-%% A Dallas/Maxim 1-Wire device -- a DS18B20 on a cable -- on a pin, by its
-%% 64-bit ROM id, written as two 32-bit halves because that is the width of
-%% every integer here. /onewire lists what is on a pin in exactly this form.
+%% A Dallas/Maxim 1-Wire device -- a DS18B20 on a cable -- on a pin. Which
+%% one is a string #param holding its ROM id: the id belongs to the NODE, not
+%% to the program, so it is set per node and kept by /save.
 {token, 'T_ONEWIRE',    onewire,    'onewire',    'OP_NOP', -1, -1, no}.
 %% The node's own byte streams, and they are two DIFFERENT ends of one wire:
 %% normally the serial port feeds the interpreter and the interpreter prints
@@ -705,7 +705,7 @@
 %%   uart <unit>                    -- the board's own baud
 %%   uart <unit> <baud>             -- ...or this one
 %%   sms <param>                    -- a modem; <param> lists the numbers
-%%   onewire <port>:<pin> <hi> <lo> -- a 1-Wire device by its ROM id
+%%   onewire <port>:<pin> <param>   -- a 1-Wire device; <param> holds its id
 %%
 %% PORT FIRST, and the optional address after it. The other order reads better
 %% -- everyone writes 192.168.1.2:5000 -- but it cannot be parsed: an optional
@@ -748,8 +748,7 @@
   {sms_owner, str},
   {ow_kind, tok},
   {ow_pin, {pat, port_pin}},
-  {ow_hi, int},
-  {ow_lo, int}]}.
+  {ow_rom, str}]}.
 
 %% ONE optional block per transport, not a choice between them. A choice would
 %% commit on the keyword and then fail inside it, backing the whole thing out
@@ -782,9 +781,8 @@
   %% A modem. The operand is a NAME, not a number: the string #param that lists
   %% who may talk to the node.
   {opt, [{tok, sms_kind, sms}, {str, sms_owner}]},
-  %% A 1-Wire device. The ROM id's family code is the first byte of <hi>.
-  {opt, [{tok, ow_kind, onewire}, {pat, port_pin, ow_pin},
-         {int, ow_hi}, {int, ow_lo}]}]}.
+  %% A 1-Wire device. The operand is a NAME: the string #param with its id.
+  {opt, [{tok, ow_kind, onewire}, {pat, port_pin, ow_pin}, {str, ow_rom}]}]}.
 
 {defaults, buffer,
  [{[r, res], 8}, {[frameid], -1}, {[opts, vt], 'V_UNSIGNED'},

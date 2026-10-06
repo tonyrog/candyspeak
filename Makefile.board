@@ -56,6 +56,43 @@ OPT  := $(shell $(GEN) --optimize-of $(BOARD))
 BCFLAGS  := $(shell $(GEN) --cflags-of $(BOARD))
 BLDFLAGS := $(shell $(GEN) --ldflags-of $(BOARD))
 
+# THE SAMD21's EEPROM is the last 2K of its flash, OUTSIDE the sketch's image,
+# so that what /save wrote survives an upload. Three pieces, all here:
+#
+#   chips/microchip/samd21_eeprom.ld   handed to ld as an extra input: places
+#                                      the region and fails the LINK if the
+#                                      sketch grows into it
+#   -DCSP_EEPROM_END_OF_FLASH          port/csp_arduino.c uses it, rather than
+#                                      an array inside the image
+#   the upload WITHOUT -e, through bossac 1.9.1. The core pins bossac
+#                                      1.7.0, which does not erase the pages
+#                                      it writes: without -e it wrote over the
+#                                      old image and failed its verify
+#                                      (2026-10-06, on the board). 1.9.1
+#                                      erases what it writes and leaves the
+#                                      rest. It needs --offset=0x2000 -- the
+#                                      bootloader's 8K -- or it writes from
+#                                      address 0, over the bootloader.
+#
+#   make ... upload ERASE=all   the core's own upload, -e and all: what to do
+#                               when a verify fails, and the end of the saved
+#                               settings
+ACHIP := $(shell $(GEN) --chip-of $(BOARD))
+BOSSAC19 := $(lastword $(sort $(wildcard $(HOME)/.arduino15/packages/arduino/tools/bossac/1.9.1*/bossac)))
+ifneq ($(filter samd21%,$(ACHIP)),)
+  BCFLAGS  += -DCSP_EEPROM_END_OF_FLASH
+  BLDFLAGS += -Wl,$(CURDIR)/chips/microchip/samd21_eeprom.ld
+  ifneq ($(ERASE),all)
+    ifneq ($(BOSSAC19),)
+      # upload.pattern, NOT tools.bossac.upload.pattern: arduino-cli merges the
+      # tool's properties to the top level before it runs the recipe, and an
+      # override of the tools.* key changes nothing. Check with
+      # `arduino-cli upload -v` against a port that does not exist.
+      UPOPTS := --upload-property 'upload.pattern="$(BOSSAC19)" {upload.verbose} --port={serial.port.file} -U -i --offset=0x2000 -w -v "{build.path}/{build.project_name}.bin" -R'
+    endif
+  endif
+endif
+
 # The sketch folder: an .ino and a pile of symlinks back to the sources. No
 # variant in the path -- arduino-cli keys its own cache on the build path, and
 # the flag stamp below covers the rest.
@@ -246,7 +283,7 @@ min:
 	    EXTRA="-DCSP_EXEC_ONLY -DCSP_NO_EEPROM $(EXTRA)"
 
 upload: compile
-	arduino-cli upload -p $(DEV) -m $(PROFILE) --input-dir $(abspath $(CLIB)) $(SKETCH)
+	arduino-cli upload -p $(DEV) -m $(PROFILE) --input-dir $(abspath $(CLIB)) $(UPOPTS) $(SKETCH)
 
 # Text size per symbol, largest first -- the list to read when it does not fit.
 #
@@ -489,7 +526,7 @@ SZ   := $(CROSS)size
 # the whole difference between an LPC build and an STM32 one.
 CORE := src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c src/csp_repl.c \
         src/csp_parse.c src/csp_tok.c src/csp_expr.c src/csp_print.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c gen/csp_strings.c \
-        src/csp_eeprom.c src/csp_flash.c src/csp_transport.c src/csp_console.c src/csp_states.c
+        src/csp_eeprom.c src/csp_flash.c src/csp_transport.c src/csp_sms.c src/csp_console.c src/csp_states.c
 
 # THE PROGRAM THE BOARD CARRIES IN FLASH.
 #

@@ -4401,6 +4401,7 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     uint32_t nbytes;
     uint32_t xref;
     uint8_t transport;
+    index_t ow_rom_ix = BAD_INDEX;   // onewire: the #param with the ROM id
     int i, r;
 
     d.r.res = 8;                 // default 8 bytes (a full classic CAN frame;
@@ -4541,17 +4542,29 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	xref = (uint32_t)ox;
 	break;
     }
-    case TR_ONEWIRE:
-	// The FAMILY CODE is the top byte of <hi> and is never 0 -- a ROM id
-	// of all zeros is a typo or a half pasted, and would match nothing on
-	// the bus while looking perfectly declared.
-	if ((d.ow_pin.port > 15) || (d.ow_pin.pin > 255) ||
-	    (((uint32_t)d.ow_hi >> 24) == 0)) {
+    case TR_ONEWIRE: {
+	// Which device is a string #param: its ROM id belongs to the NODE, set
+	// there and kept by /save, so one program serves every node.
+	index_t rx = csp_lookup_decl(st, &d.ow_rom);
+	int rt;
+	if ((d.ow_pin.port > 15) || (d.ow_pin.pin > 255)) {
 	    csp_set_error(st, ERR_SYNTAX);
 	    return -1;
 	}
+	if (rx == BAD_INDEX) {
+	    csp_set_error(st, ERR_ONEWIRE_ROM);
+	    return -1;
+	}
+	rt = decl(st, INDEX(rx), type);
+	if (((rt != DECL_VARIABLE) && (rt != DECL_CONSTANT)) ||
+	    (CSP_MASK(decl(st, INDEX(rx), vt), TYPE_BITS) != V_STRING)) {
+	    csp_set_error(st, ERR_ONEWIRE_ROM);
+	    return -1;
+	}
+	ow_rom_ix = rx;
 	xref = TR_OW_XREF(d.ow_pin.port, d.ow_pin.pin);
 	break;
+    }
     default:
 	xref = 0;
 	break;
@@ -4568,17 +4581,15 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	    csp_decl_set_bf_transport(dp_, transport);
     }
     if (transport == TR_ONEWIRE) {
-	// THREE constants, side by side: the pin, then the ROM id's two
-	// halves. Adjacent for the same reason as the UDP pair below, and
-	// checked for the same reason.
-	index_t ca, ch, cl;
+	// TWO constants, side by side: the pin, then the #param holding the ROM
+	// id. Adjacent for the same reason as the UDP pair below, and checked
+	// for the same reason.
+	index_t ca, cr;
 	if ((ca = new_signed_const(st, (ivalue_t)xref)) == BAD_INDEX)
 	    return -1;
-	if ((ch = new_signed_const(st, (ivalue_t)d.ow_hi)) == BAD_INDEX)
+	if ((cr = new_signed_const(st, (ivalue_t)ow_rom_ix)) == BAD_INDEX)
 	    return -1;
-	if ((cl = new_signed_const(st, (ivalue_t)d.ow_lo)) == BAD_INDEX)
-	    return -1;
-	if ((ch != (index_t)(ca + 1)) || (cl != (index_t)(ca + 2))) {
+	if (cr != (index_t)(ca + 1)) {
 	    csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
 	    return -1;
 	}

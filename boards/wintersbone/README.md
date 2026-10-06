@@ -43,13 +43,21 @@ before building more than one.
 
 ## The temperature sensors
 
-The ROM ids in `pins.csp` are placeholders. On the board:
+Each sensor's ROM id is a setting of the node, not part of the program. On the
+board:
 
     > /onewire 0:5
+    > ?Rom = "28ff641f0716a3c2"
+    > ?Rom = "28aa12045e1603f1"
 
-prints one `#buffer` line per sensor. Paste them over `Tin` and `Tout` in
-`pins.csp` (keep the names). Hold one sensor in your hand and see which reading
-rises, to know which is inside.
+Type them back in as `TinRom` and `ToutRom` (hold one sensor in your hand and
+see which reading rises, to know which is inside), then `/save`:
+
+    > TinRom = "28ff641f0716a3c2"
+    > ToutRom = "28aa12045e1603f1"
+    > /save
+
+It works by SMS too. Until an id is set that sensor is not read.
 
 ## SMS
 
@@ -63,7 +71,9 @@ The modem is an `sms` transport routed through the interpreter
     #route  Rp  Sms
 
 - **A message from a number in `Owners`** runs as a line typed at the prompt,
-  and what it prints goes back **to that number**. "OK" if it printed nothing.
+  and what it prints goes back **to that number**. A command that sets an `in`
+  variable (`> Status = 1`) gets no answer of its own: what it sets off is
+  the answer.
 - **What a rule prints** (`println(...) ? pwr.Send`) is an event and goes to
   **every** number in `Owners`.
 - **A message from anyone else** gets no answer at all, and is counted.

@@ -1031,9 +1031,9 @@ typedef enum {
     // xref is the string #param listing the numbers allowed to use it. See
     // csp_sms_* in csp_transport.c.
     TR_SMS     = 10,
-    // A 1-Wire device on a pin, by its 64-bit ROM id. Synchronous like I2C:
-    // start converts, done reads. xref is the pin (TR_OW_XREF); the ROM id
-    // is two constants, the first at the buffer's port. See csp_onewire_*.
+    // A 1-Wire device on a pin. Synchronous like I2C: start converts, done
+    // reads. xref is the pin (TR_OW_XREF); the buffer's port is the string
+    // #param holding the device's ROM id. See csp_onewire_*.
     TR_ONEWIRE = 11,
 } transport_t;
 
@@ -1713,6 +1713,7 @@ typedef enum {
     ERR_LOCAL_IN_UNBOUND,
     ERR_LOCAL_IN_WHERE,
     ERR_SMS_OWNERS,
+    ERR_ONEWIRE_ROM,
 } csp_err_t;
 
 // parser state, save state before parse

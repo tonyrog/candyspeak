@@ -1701,7 +1701,8 @@ static int input_can_frame(token_t* tv, size_t num, int i)
 //
 //     2000 sms "+46701234567" "TinC"
 //
-// -- and one GOES as a line on stdout, which is what a test reads:
+// -- and one GOES as a line on the console, printed by the runtime itself
+// (csp_transport.c), which is what a test reads:
 //
 //     sms> +46701234567: 213
 //
@@ -1744,10 +1745,11 @@ int csp_sms_modem_recv(char* from, uint16_t from_size,
     return 1;
 }
 
+// Taken and forgotten: the runtime has already shown it on the console, in the
+// same `sms> <to>: <text>` line a board prints.
 int csp_sms_modem_send(const char* to, const char* text)
 {
-    printf("sms> %s: %s\n", to, text);
-    fflush(stdout);
+    (void)to; (void)text;
     return 0;
 }
 

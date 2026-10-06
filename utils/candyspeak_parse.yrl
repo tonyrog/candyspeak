@@ -292,9 +292,9 @@ buftype -> 'T_CONSOLE' : [{console}].
 buftype -> 'T_REPL' : [{repl}].
 %% sms <param>: a modem; the string #param lists the numbers
 buftype -> 'T_SMS' 'WORD' : [{sms,'$2'}].
-%% onewire <port>:<pin> <rom-hi> <rom-lo>: a 1-Wire device by its ROM id
-buftype -> 'T_ONEWIRE' 'INT' 'COLON' 'INT' 'INT' 'INT' :
-    [{onewire,{'$2','$4'},'$5','$6'}].
+%% onewire <port>:<pin> <param>: a 1-Wire device; the string #param holds its id
+buftype -> 'T_ONEWIRE' 'INT' 'COLON' 'INT' 'WORD' :
+    [{onewire,{'$2','$4'},'$5'}].
 %% plain byte buffer
 buftype -> '$empty' : [].
 

@@ -433,6 +433,7 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_LOCAL_IN_UNBOUND] =       ros_err_local_in_unbound,
     [ERR_LOCAL_IN_WHERE] =         ros_err_local_in_where,
     [ERR_SMS_OWNERS] =             ros_err_sms_owners,
+    [ERR_ONEWIRE_ROM] =            ros_err_onewire_rom,
 };
 
 // err_tab is a designated-initialiser array, so ANY code without a row in it
@@ -4789,23 +4790,31 @@ void csp_buf_input(csp_rt_t* st)
 
 // The synchronous transports, one place each for start and done.
 //
-// A 1-Wire ROM id is two constants, not the buffer's endpoint -- 64 bits do
-// not fit in xref -- so it is fetched here, in the order the bus sends it:
-// family code first.
-static void ow_rom(csp_rt_t* st, csp_buf_t* bp, uint8_t* rom)
+// A 1-Wire ROM id, out of the string #param the buffer names, in the order
+// the bus sends it: family code first. Written the way the device's own
+// label or /onewire writes it -- "28ff641f0716a3c2", and dashes or spaces
+// between the bytes are fine -- so anything that is not a hex digit is
+// skipped. 0 unless exactly sixteen digits: an id not yet set (the empty
+// default) is a sensor not configured, not a sensor called zero.
+static int ow_rom(csp_rt_t* st, csp_buf_t* bp, uint8_t* rom)
 {
-    csp_decl_t d;
-    uint32_t hi, lo;
-    int k;
+    value_t v = csp_value(st, (index_t)csp_buf_get_port(bp));
+    sindex_t h = (sindex_t)v.i;
+    uint8_t len = csp_str_len(st, h);
+    uint8_t i, k = 0;
 
-    csp_load_decl(st, (index_t)csp_buf_get_port(bp), &d);
-    hi = (uint32_t)csp_decl_get_cn_init(&d).i;
-    csp_load_decl(st, (index_t)(csp_buf_get_port(bp) + 1), &d);
-    lo = (uint32_t)csp_decl_get_cn_init(&d).i;
-    for (k = 0; k < 4; k++) {
-	rom[k]     = (uint8_t)(hi >> (24 - 8 * k));
-	rom[4 + k] = (uint8_t)(lo >> (24 - 8 * k));
+    for (i = 0; i < len; i++) {
+	uint8_t c = csp_str_char(st, h, i), x;
+	if ((c >= '0') && (c <= '9'))      x = (uint8_t)(c - '0');
+	else if ((c >= 'a') && (c <= 'f')) x = (uint8_t)(c - 'a' + 10);
+	else if ((c >= 'A') && (c <= 'F')) x = (uint8_t)(c - 'A' + 10);
+	else continue;
+	if (k == 16)
+	    return 0;                      // too long: not an id
+	rom[k / 2] = (uint8_t)((k & 1) ? (rom[k / 2] | x) : (x << 4));
+	k++;
     }
+    return k == 16;
 }
 
 NOINLINE static int sync_start(csp_rt_t* st, csp_buf_t* bp, uint8_t* p, int rd)
@@ -4818,9 +4827,8 @@ NOINLINE static int sync_start(csp_rt_t* st, csp_buf_t* bp, uint8_t* p, int rd)
     case TR_I2C: return csp_i2c_start(st, x, p, n, rd);
     case TR_SPI: return csp_spi_start(st, x, p, n, rd);
     case TR_ONEWIRE:
-	if (!rd)
-	    return -1;               // a reading device; nothing to write
-	ow_rom(st, bp, rom);
+	if (!rd || !ow_rom(st, bp, rom))
+	    return -1;               // nothing to write; or no id set yet
 	return csp_onewire_start(st, x, rom, p, n);
     default:     return -1;
     }
@@ -4835,7 +4843,8 @@ NOINLINE static int sync_done(csp_rt_t* st, csp_buf_t* bp, uint16_t* n)
     case TR_I2C: return csp_i2c_done(st, x, n);
     case TR_SPI: return csp_spi_done(st, x, n);
     case TR_ONEWIRE:
-	ow_rom(st, bp, rom);
+	if (!ow_rom(st, bp, rom))
+	    return -1;               // the id was cleared mid-conversion
 	return csp_onewire_done(st, x, rom, buf_heap_dout_ptr(st, bp), n);
     default:     return -1;
     }
@@ -5219,10 +5228,14 @@ NOINLINE int setup_buffer(csp_rt_t* st, index_t ix)
 	    csp_load_decl(st, INDEX(csp_decl_get_bf_id(&d)) + 1, &pn);
 	    port = (uint16_t)csp_decl_get_cn_init(&pn).i;
 	}
-	// A 1-Wire ROM id is 64 bits and the buffer has 48 to spare, so it
-	// stays in its two constants and `port` says where they are.
-	else if (transport == TR_ONEWIRE)
-	    port = (uint16_t)(INDEX(csp_decl_get_bf_id(&d)) + 1);
+	// 1-Wire: the second constant names the #param holding the ROM id,
+	// and `port` keeps it -- the id itself is read from the #param at
+	// every transfer, so a `>` that changes it takes effect at once.
+	else if (transport == TR_ONEWIRE) {
+	    csp_decl_t pn;
+	    csp_load_decl(st, INDEX(csp_decl_get_bf_id(&d)) + 1, &pn);
+	    port = (uint16_t)csp_decl_get_cn_init(&pn).i;
+	}
     }
     if ((b = csp_buf_alloc(st, nbytes, transport, xref, csp_decl_get_dir(&d))) == BAD_INDEX)
 	return -1;

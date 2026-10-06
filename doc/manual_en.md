@@ -899,7 +899,9 @@ Numbers compare by their digits, and a leading `00` is the same as `+`.
     #route  Rp  Sms
 
 - A message runs as a line typed at the prompt. What it prints is the
-  **answer**, sent to that number only, or "OK" if it printed nothing.
+  **answer**, sent to that number only; nothing at all if it printed
+  nothing. A store to an `in` variable is a command, and its echo stays on
+  the console: what the command sets off is its answer.
 - What a **rule** prints during the cycle is an **event**, sent to every number
   on the list. `println("POWER OFF") ? pwr.Send` is an alarm by SMS.
 - The prompt, the echo and anything typed at the console stay on the console.
@@ -923,33 +925,43 @@ driven through Arduino's MKRNB library (`port/csp_arduino.c`).
 
 #### 1-Wire
 
-    #buffer Ute:2 in onewire 0:5 0x28FF641F 0x0716A3C2
+    #param  UteRom string = ""
+    #buffer Ute:2 in onewire 0:5 UteRom
     #field  UteRaw:16 Ute[0..15]
     UteC = UteRaw * 5 / 8            // tenths of a degree
 
-A Dallas/Maxim 1-Wire device on a pin -- a DS18B20 on a cable, typically --
-picked out by its **64-bit ROM id**, written as two 32-bit halves with the
-family code (0x28 for a DS18B20) first. Several devices share one pin; each
-has its own buffer with its own id.
+A Dallas/Maxim 1-Wire device on a pin -- a DS18B20 on a cable, typically. The
+operand is the **name of a string `#param` holding the device's 64-bit ROM
+id**, because the id belongs to the node and not to the program: one program,
+many nodes, each with its own sensors. Set it at the prompt (or by SMS) and
+keep it with `/save`:
+
+    > UteRom = "28ff641f0716a3c2"
+    > /save
+
+Sixteen hex digits, family code (0x28 for a DS18B20) first; dashes and spaces
+between them are fine. Until the id is set the device is simply not read and
+`Ute.rx` stays false. Several devices share one pin; each has its own buffer
+and its own id.
 
 The buffer gets the first N bytes of the device's **scratchpad**. For a
 DS18B20 the first two are the temperature: signed, little-endian, 1/16 degree
 a step. The CRC is checked over all nine, and a reading that fails it is not
-delivered, so `Ute.rx` stays false and the previous value stands.
+delivered, so the previous value stands.
 
 It is synchronous, like I2C. One conversion on the wire serves every device on
 it (750 ms at the DS18B20's power-on 12 bits), and each buffer then reads its
 own device. The rules never wait for it. Powered devices only (three wires,
 4.7k pull-up), not parasite power.
 
-**Finding the ids.** They are printed on nothing anyone keeps, so ask the wire:
+**Finding the ids.** Ask the wire:
 
     > /onewire 0:5
-    #buffer T:2 in onewire 0:5 0x28ff641f 0x0716a3c2
-    #buffer T:2 in onewire 0:5 0x28aa1204 0x5e1603f1
+    > ?Rom = "28ff641f0716a3c2"
+    > ?Rom = "28aa12045e1603f1"
 
-Rename the buffers and paste them in. Warm one sensor in your hand and watch
-which reading moves to tell them apart.
+Put the right name where the `?` is and type the line back in. Warm one sensor
+in your hand and watch which reading moves to tell them apart.
 
 On the host there is no wire: `/onewire` says so, and a test writes the field
 from its stimulus file. On an Arduino board the board defines

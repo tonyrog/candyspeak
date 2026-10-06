@@ -48,5 +48,6 @@ err_import_missing cannot import %s: no such file
 err_local_in_unbound %s is a #local in with no default -- bind it where the object is made: #M m %s <- ...
 err_local_in_where #local ... in/out belongs in a #module
 err_sms_owners `sms` names a string #param listing the allowed numbers: #param Owners string = "+4670..."
+err_onewire_rom `onewire` names a string #param holding the ROM id: #param TinRom string = "28ff641f0716a3c2"
 err_opts_after_pin option '%s' comes BEFORE the pin -- '#digital D in pullup 2:1', not after
 err_block_open #%s opened on line %d was never closed

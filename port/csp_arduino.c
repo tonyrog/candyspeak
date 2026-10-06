@@ -815,9 +815,48 @@ void csp_input(csp_rt_t* st)
 
 #if defined(CSP_HAS_I2C)
 
+// A SLAVE HOLDING SDA LOW. If the processor resets in the middle of a read,
+// the device on the other end does not: it is still clocking out a byte and
+// keeps SDA low waiting for the clock pulses that never come. Every transfer
+// after that fails -- and a value read over I2C stays at its power-on zero.
+// On wintersbone that zero is the charger's "power good": POWER OFF by SMS,
+// with the mains plugged in.
+//
+// The cure is the one in NXP's I2C specification (UM10204, 3.1.16): clock SCL
+// by hand until the slave lets go -- nine pulses at most, one byte and its
+// acknowledge -- then a STOP. Bus 0 only: the variant names its pins.
+static void i2c_unstick(void)
+{
+#if defined(PIN_WIRE_SDA) && defined(PIN_WIRE_SCL)
+    int k;
+
+    pinMode(PIN_WIRE_SDA, INPUT_PULLUP);
+    pinMode(PIN_WIRE_SCL, INPUT_PULLUP);
+    if (digitalRead(PIN_WIRE_SDA) == HIGH)
+	return;                            // nobody is holding it
+    pinMode(PIN_WIRE_SCL, OUTPUT);
+    for (k = 0; (k < 9) && (digitalRead(PIN_WIRE_SDA) == LOW); k++) {
+	digitalWrite(PIN_WIRE_SCL, LOW);
+	delayMicroseconds(5);
+	digitalWrite(PIN_WIRE_SCL, HIGH);
+	delayMicroseconds(5);
+    }
+    // STOP: SDA rises while SCL is high.
+    pinMode(PIN_WIRE_SDA, OUTPUT);
+    digitalWrite(PIN_WIRE_SDA, LOW);
+    delayMicroseconds(5);
+    digitalWrite(PIN_WIRE_SCL, HIGH);
+    delayMicroseconds(5);
+    pinMode(PIN_WIRE_SDA, INPUT_PULLUP);
+    pinMode(PIN_WIRE_SCL, INPUT_PULLUP);
+#endif
+}
+
+static uint8_t i2c_begun;
+static uint8_t i2c_fails;                  // transfers in a row that failed
+
 static TwoWire* i2c_of(uint8_t bus)
 {
-    static uint8_t begun = 0;
     TwoWire* w = 0;
 
     if (bus == 0)
@@ -826,11 +865,30 @@ static TwoWire* i2c_of(uint8_t bus)
     else if (bus == 1)
 	w = &Wire1;
 #endif
-    if (w && !(begun & (1u << bus))) {
+    if (w && !(i2c_begun & (1u << bus))) {
+	if (bus == 0)
+	    i2c_unstick();
 	w->begin();
-	begun |= (uint8_t)(1u << bus);
+	i2c_begun |= (uint8_t)(1u << bus);
     }
     return w;
+}
+
+// Three failures in a row on bus 0: unstick it and start Wire again. A part
+// that is simply absent fails forever and costs a few microseconds each
+// third try; a bus that a reset left held recovers within three cycles.
+static int i2c_result(uint8_t bus, int ok)
+{
+    if (ok) {
+	if (bus == 0) i2c_fails = 0;
+	return 0;
+    }
+    if ((bus == 0) && (++i2c_fails >= 3)) {
+	i2c_fails = 0;
+	Wire.end();
+	i2c_begun &= (uint8_t)~1u;         // i2c_of unsticks and begins again
+    }
+    return -1;
 }
 
 int csp_i2c_start(csp_rt_t* st, uint32_t xref, uint8_t* data, uint16_t len,
@@ -848,15 +906,15 @@ int csp_i2c_start(csp_rt_t* st, uint32_t xref, uint8_t* data, uint16_t len,
     w->write(reg);
     if (!is_read) {
 	w->write(data, len);
-	return (w->endTransmission() == 0) ? 0 : -1;
+	return i2c_result(TR_I2C_BUS(xref), w->endTransmission() == 0);
     }
     if (w->endTransmission(false) != 0)        // repeated start follows
-	return -1;
+	return i2c_result(TR_I2C_BUS(xref), 0);
     if (w->requestFrom(addr, (size_t)len) != len)
-	return -1;
+	return i2c_result(TR_I2C_BUS(xref), 0);
     for (i = 0; i < len; i++)
 	data[i] = (uint8_t)w->read();
-    return 0;
+    return i2c_result(TR_I2C_BUS(xref), 1);
 }
 
 int csp_i2c_done(csp_rt_t* st, uint32_t xref, uint16_t* len)
@@ -1023,6 +1081,9 @@ enum { SMS_OFF, SMS_REG, SMS_IDLE, SMS_LIST, SMS_DEL, SMS_SEND };
 static NB       sms_nb;
 static uint8_t  sms_st = SMS_OFF;
 static uint32_t sms_t0;                // last list, or last try to register
+static uint32_t sms_busy_t0;           // when the command in flight went out
+static uint32_t sms_tx_at;             // not before this: the next send
+static uint8_t  sms_tries;             // prompts the head message has missed
 static String   sms_resp;
 static int      sms_del = -1;          // a message to delete next
 static char     sms_txq_to[SMS_TXQ][24];
@@ -1122,12 +1183,26 @@ static int sms_step(char* from, uint16_t from_size,
     case SMS_LIST:
     case SMS_DEL:
     case SMS_SEND:
-	if ((r = MODEM.ready()) == 0)
-	    return 0;                          // still in flight
+	if ((r = MODEM.ready()) == 0) {
+	    // A command the modem never answers must not stop SMS for good.
+	    // A minute is longer than any send takes on a live network; after
+	    // it, ESC cancels a half-entered message and the queue moves on.
+	    if ((uint32_t)(now - sms_busy_t0) < 60000UL)
+		return 0;                      // still in flight
+	    if (sms_st == SMS_SEND)
+		MODEM.write((uint8_t)27);
+	    r = 2;                             // treat as an error
+	}
 	if (sms_st == SMS_SEND) {
+	    if (r != 1) {
+		csp_print_lit("sms! the network refused the message to ");
+		csp_print_str(sms_txq_to[sms_txq_head]);
+		csp_println();
+	    }
 	    sms_txq_head = (uint8_t)((sms_txq_head + 1) % SMS_TXQ);
 	    sms_txq_n--;
 	    sms_st = SMS_IDLE;
+	    sms_tx_at = now + 500;             // let the modem settle first
 	    return 0;
 	}
 	if (sms_st == SMS_DEL) {
@@ -1141,24 +1216,52 @@ static int sms_step(char* from, uint16_t from_size,
     case SMS_IDLE:
     default:
 	// Out first: an answer is waited for by someone holding a phone.
-	if (sms_txq_n > 0) {
+	if ((sms_txq_n > 0) && ((int32_t)(now - sms_tx_at) >= 0)) {
 	    MODEM.sendf("AT+CMGS=\"%s\"", sms_txq_to[sms_txq_head]);
 	    if (MODEM.waitForPrompt(2000) != 1) {
-		// No prompt: drop it rather than wedge the queue behind it.
+		// No prompt. Right after a send the modem is often still busy
+		// with it, so this is not yet a failure: try again in two
+		// seconds, three times, and only then give the message up --
+		// out loud, or a status report that never arrives looks like
+		// one that was never asked for.
+		MODEM.write((uint8_t)27);          // ESC: abandon the command
+		if (++sms_tries < 3) {
+		    sms_tx_at = now + 2000;
+		    return 0;
+		}
+		csp_print_lit("sms! modem did not take the message to ");
+		csp_print_str(sms_txq_to[sms_txq_head]);
+		csp_println();
+		sms_tries = 0;
 		sms_txq_head = (uint8_t)((sms_txq_head + 1) % SMS_TXQ);
 		sms_txq_n--;
 		return 0;
 	    }
-	    MODEM.write((const uint8_t*)sms_txq_text[sms_txq_head],
-			strlen(sms_txq_text[sms_txq_head]));
+	    sms_tries = 0;
+	    // ONE CHARACTER AT A TIME, as the library's own NB_SMS does. The
+	    // buffer form of MODEM.write is for binary socket data: it then
+	    // reads back exactly as many echo bytes as it sent, spinning until
+	    // they come. In text mode the modem does not echo a line break as
+	    // one byte -- it answers it with a fresh "> " prompt -- so the count
+	    // is wrong: too many and the leftovers confuse the response that
+	    // follows (a multi-line report never went), too few and the loop
+	    // never ends (the board hung). Single bytes are not echo-counted;
+	    // the echo is read by the ordinary response parsing.
+	    {
+		const char* t = sms_txq_text[sms_txq_head];
+		while (*t)
+		    MODEM.write((uint8_t)*t++);
+	    }
 	    MODEM.write((uint8_t)26);          // Ctrl-Z ends the text
 	    sms_st = SMS_SEND;
+	    sms_busy_t0 = now;
 	    return 0;
 	}
 	if (sms_del >= 0) {
 	    MODEM.sendf("AT+CMGD=%d", sms_del);
 	    sms_del = -1;
 	    sms_st = SMS_DEL;
+	    sms_busy_t0 = now;
 	    return 0;
 	}
 	if (!sms_rx_have && ((uint32_t)(now - sms_t0) >= CSP_SMS_POLL_MS)) {
@@ -1167,6 +1270,7 @@ static int sms_step(char* from, uint16_t from_size,
 	    MODEM.setResponseDataStorage(&sms_resp);
 	    MODEM.send("AT+CMGL=\"REC UNREAD\"");
 	    sms_st = SMS_LIST;
+	    sms_busy_t0 = now;
 	}
 	return 0;
     }
@@ -1487,12 +1591,26 @@ int csp_eeprom_write(const void* buf, size_t len)
 #endif
 #define CSP_FLASH_ROW 256            // SAMD21 erase granularity
 
+#if defined(CSP_EEPROM_END_OF_FLASH)
+// THE LAST ROWS OF FLASH, outside the sketch's image, so an upload leaves them
+// alone: bossac without -e erases only the pages it writes, and these are not
+// among them. Where they start, and the check that the sketch has not grown
+// into them, are in chips/microchip/samd21_eeprom.ld -- the LINK fails rather
+// than the settings quietly turning into code.
+extern "C" const uint8_t __csp_eeprom_start[];
+extern "C" const uint8_t __csp_eeprom_end[];
+#define eeprom_region  __csp_eeprom_start
+#define EE_SIZE        ((uint32_t)(__csp_eeprom_end - __csp_eeprom_start))
+#else
 // const => the linker places this in flash; aligned to the erase unit so erasing
-// it cannot touch anything else.
+// it cannot touch anything else. INSIDE the image, as zeros: every upload
+// rewrites it, so what was saved does not survive a reflash.
 __attribute__((__aligned__(CSP_FLASH_ROW)))
 static const uint8_t eeprom_region[CSP_EEPROM_FLASH_SIZE] = { 0 };
+#define EE_SIZE        ((uint32_t)CSP_EEPROM_FLASH_SIZE)
+#endif
 
-static FlashClass eeprom_flash(eeprom_region, sizeof(eeprom_region));
+static FlashClass eeprom_flash(eeprom_region, EE_SIZE);
 
 static uint32_t ee_pos;        // read cursor (byte offset into the region)
 static uint32_t ee_row_base;   // flash offset that ee_row[0] maps to
@@ -1502,7 +1620,7 @@ static uint8_t  ee_row[CSP_FLASH_ROW];
 
 uint32_t csp_eeprom_capacity(void)
 {
-    return CSP_EEPROM_FLASH_SIZE;
+    return EE_SIZE;
 }
 
 int csp_eeprom_open_read(void)
@@ -1516,7 +1634,7 @@ int csp_eeprom_open_write(void)
 {
     // Erase everything now: we are about to overwrite the whole image anyway,
     // which is exactly why no read-modify-write (and no shadow) is needed.
-    eeprom_flash.erase(eeprom_region, sizeof(eeprom_region));
+    eeprom_flash.erase(eeprom_region, EE_SIZE);
     ee_row_base = 0;
     ee_row_used = 0;
     ee_writing = 1;
@@ -1527,7 +1645,7 @@ int csp_eeprom_read(void* buf, size_t len)
 {
     if (ee_writing)
 	return -1;
-    if (ee_pos + len > CSP_EEPROM_FLASH_SIZE)
+    if (ee_pos + len > EE_SIZE)
 	return -1;
     memcpy(buf, eeprom_region + ee_pos, len);   // memory-mapped: no buffer needed
     ee_pos += len;
@@ -1539,7 +1657,7 @@ int csp_eeprom_write(const void* buf, size_t len)
     const uint8_t* p = (const uint8_t*) buf;
     if (!ee_writing)
 	return -1;
-    if (ee_row_base + ee_row_used + len > CSP_EEPROM_FLASH_SIZE)
+    if (ee_row_base + ee_row_used + len > EE_SIZE)
 	return -1;   // too big to persist: fail loudly rather than wrap
     while (len > 0) {
 	uint32_t n = CSP_FLASH_ROW - ee_row_used;
@@ -1683,6 +1801,22 @@ void setup()
     csp_print_lit(", free ");    csp_print_uint(csp_system_ram_avail());
     csp_print_lit(", struct ");  csp_print_uint((uint32_t)sizeof(csp_rt_t));
     csp_println();
+#if defined(ARDUINO_ARCH_SAMD)
+    // WHY IT STARTED. A board that resets on its own -- a brownout when the
+    // modem sends, a watchdog -- looks from outside like one that is running
+    // and quietly wrong. RCAUSE survives the reset and says which.
+    {
+	uint8_t rc = PM->RCAUSE.reg;
+	csp_print_lit("reset:");
+	if (rc & PM_RCAUSE_POR)   csp_print_lit(" power-on");
+	if (rc & PM_RCAUSE_BOD12) csp_print_lit(" brownout-1.2V");
+	if (rc & PM_RCAUSE_BOD33) csp_print_lit(" brownout-3.3V");
+	if (rc & PM_RCAUSE_EXT)   csp_print_lit(" button");
+	if (rc & PM_RCAUSE_WDT)   csp_print_lit(" watchdog");
+	if (rc & PM_RCAUSE_SYST)  csp_print_lit(" software");
+	csp_println();
+    }
+#endif
 #endif
 
     // A failed init leaves a half-set-up state; say so instead of running into a

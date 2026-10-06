@@ -492,7 +492,7 @@ fw() {  # fw <out> <csp>   -- a host firmware carrying that program as its ROM
 	port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c \
 	src/csp_repl.c src/csp_compile.c src/csp_tok.c port/csp_dump.c \
 	src/csp_eeprom.c src/csp_parse.c src/csp_print.c src/csp_expr.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c gen/csp_strings.c \
-	src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c port/csp_devices.c port/csp_socketcan.c port/csp_udp.c port/csp_flash_host.c \
+	src/csp_transport.c src/csp_sms.c src/csp_console.c src/csp_states.c src/csp_flash.c port/csp_devices.c port/csp_socketcan.c port/csp_udp.c port/csp_flash_host.c \
 	"$2.rom.c" -o "$1" >/dev/null 2>&1
 }
 if fw "$D/fw_a" "$D/fpa.csp" && fw "$D/fw_b" "$D/fpb.csp"; then
@@ -544,7 +544,7 @@ if fw "$D/fw_a" "$D/fpa.csp" && fw "$D/fw_b" "$D/fpb.csp"; then
 	    port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c \
 	    src/csp_repl.c src/csp_compile.c src/csp_tok.c port/csp_dump.c \
 	    src/csp_eeprom.c src/csp_parse.c src/csp_print.c src/csp_expr.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c gen/csp_strings.c \
-	    src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c port/csp_devices.c port/csp_socketcan.c port/csp_udp.c port/csp_flash_host.c \
+	    src/csp_transport.c src/csp_sms.c src/csp_console.c src/csp_states.c src/csp_flash.c port/csp_devices.c port/csp_socketcan.c port/csp_udp.c port/csp_flash_host.c \
 	    "$2" "$3" -o "$1" >/dev/null 2>&1
     }
     if fw2 "$D/fw2a" "$D/i1.rom.c" "$D/i2.rom.c" &&
@@ -633,7 +633,7 @@ if ./csp -n -C -O "$D/eo_rom.c" "$D/eo.csp" >/dev/null 2>&1 &&
    gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -DCSP_EXEC_ONLY -Iinclude -Igen -Isrc \
        port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
        src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
-       src/csp_parse.c src/csp_print.c src/csp_expr.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c gen/csp_strings.c src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c \
+       src/csp_parse.c src/csp_print.c src/csp_expr.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c gen/csp_strings.c src/csp_transport.c src/csp_sms.c src/csp_console.c src/csp_states.c src/csp_flash.c \
        port/csp_devices.c port/csp_socketcan.c port/csp_udp.c port/csp_flash_host.c \
        "$D/eo_rom.c" -o "$D/csp_exec" \
        >/dev/null 2>&1; then
@@ -985,7 +985,10 @@ tirqwrongmux -- cannot reach it' "$got"
 
 # And a board that is right stays right -- the checks above are worthless if
 # they also fire on the two boards that actually claim an interrupt.
-escript utils/gen_chips.erl --check >/dev/null 2>&1
+# CSP_PATH emptied: it searches its directories recursively, and a CSP_PATH
+# pointing at this tree finds the irq fixtures written to $D above -- six
+# "errors" that are the test's own deliberate mistakes.
+CSP_PATH= escript utils/gen_chips.erl --check >/dev/null 2>&1
 ck "the real boards still pass" 0 $?
 
 # --- 20. the part layout -----------------------------------------------------
@@ -1318,12 +1321,13 @@ fi
 # The Arduino port has no equivalent and cannot easily have one; it needs a core
 # that only arduino-cli can supply.
 echo "lpcopen:"
-if gcc -g -Wall -Iinclude -Igen -Isrc -Itests/lpcstub -Ichips/nxp/drivers/212x \
+if gcc -g -Wall -Iinclude -Igen -Isrc -Itests/lpcstub -Ichips/nxp/drivers/212x -Ichips/nxp/drivers/common \
        -DCSP_VERSION='"test"' -o "$D/lpc_fw" \
        port/csp_lpcopen.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c \
        src/csp_parse.c src/csp_tok.c src/csp_print.c src/csp_expr.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c src/csp_repl.c \
        port/csp_dump.c src/csp_eeprom.c gen/csp_strings.c gen/rom_empty.c \
-       src/csp_transport.c src/csp_console.c src/csp_states.c src/csp_flash.c chips/nxp/drivers/212x/flash_212x.c port/csp_devices.c port/csp_socketcan.c port/csp_udp.c \
+       src/csp_transport.c src/csp_sms.c src/csp_console.c src/csp_states.c src/csp_flash.c chips/nxp/drivers/212x/flash_212x.c port/csp_devices.c port/csp_socketcan.c port/csp_udp.c \
+       chips/nxp/drivers/common/csp_chip_lpc.c port/csp_io.c src/csp_lib.c \
        tests/lpcstub/stub.c >/dev/null 2>&1; then
     ck "the LPC port builds and links against the core" "0" "0"
     # A GPIO pin, an ADC channel (port 15) and a rule -- then list them back.
@@ -1961,7 +1965,7 @@ ubuild() {
     gcc -DCSP_VERSION='"test"' -DCSP_ARENA_MALLOC -Iinclude -Igen -Isrc \
 	port/csp_linux.c src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_repl.c \
 	src/csp_compile.c src/csp_tok.c port/csp_dump.c src/csp_eeprom.c \
-	src/csp_parse.c src/csp_print.c src/csp_expr.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c gen/csp_strings.c src/csp_transport.c \
+	src/csp_parse.c src/csp_print.c src/csp_expr.c src/csp_fixpoint.c src/csp_words.c src/csp_mcsp.c gen/csp_strings.c src/csp_transport.c src/csp_sms.c \
 	src/csp_console.c src/csp_states.c \
 	src/csp_flash.c port/csp_devices.c port/csp_socketcan.c port/csp_udp.c port/csp_flash_host.c \
 	"$2.rom.c" -o "$1" >/dev/null 2>&1

@@ -141,6 +141,8 @@ extern rochar s_err_local_in_where[39] RODATA;
 #define ros_err_local_in_where ((rostring_t) s_err_local_in_where)
 extern rochar s_err_sms_owners[91] RODATA;
 #define ros_err_sms_owners ((rostring_t) s_err_sms_owners)
+extern rochar s_err_onewire_rom[94] RODATA;
+#define ros_err_onewire_rom ((rostring_t) s_err_onewire_rom)
 extern rochar s_err_opts_after_pin[74] RODATA;
 #define ros_err_opts_after_pin ((rostring_t) s_err_opts_after_pin)
 extern rochar s_err_block_open[39] RODATA;
@@ -547,7 +549,7 @@ extern rochar s_h_state[20] RODATA;
 #define ros_h_state ((rostring_t) s_h_state)
 extern rochar s_h_memory[20] RODATA;
 #define ros_h_memory ((rostring_t) s_h_memory)
-extern rochar s_h_onewire[53] RODATA;
+extern rochar s_h_onewire[57] RODATA;
 #define ros_h_onewire ((rostring_t) s_h_onewire)
 extern rochar s_h_images[42] RODATA;
 #define ros_h_images ((rostring_t) s_h_images)

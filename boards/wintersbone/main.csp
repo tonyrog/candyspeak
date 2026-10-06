@@ -70,6 +70,11 @@ BattmV = Batt * 4300 / 1023
 Pmbar  = (Press * 4950 / 1023 - 500) * 5 / 2
 Mains  = PwrGood
 
+// The charger's watchdog off, once (pins.csp says why).
+#in INIT
+  PmicCtl = 0x8A
+#end
+
 // Alarms. lib/alarm.csp: the condition must hold OnDelay before it counts and
 // be gone OffDelay before it releases; Repeat bounds the re-sends.
 #Alarm pwr   Repeat=21600000
@@ -104,6 +109,7 @@ println("Frost over ", TinC)                 ? frost.Clear
 #variable Status:1 unsigned in = 0   // `in`: an SMS may set it
 println("in ", TinC, " out ", ToutC)            ? Status
 println("mains ", Mains, " batt ", BattmV)      ? Status
+println("pmic ", Pmic)                          ? Status   // the charger's status byte
 println("relays ", R1On + R2On * 2 + R3On * 4 + R4On * 8) ? Status
 println("pressure ", Pmbar)                     ? Status && PressOn
 Status = 0 ? Status

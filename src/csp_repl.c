@@ -144,7 +144,6 @@ static int cmd_upgrade(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_live(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_resume(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_onewire(csp_rt_t* st, int argc, char* argv[]);
-static uint8_t onewire_port, onewire_pin;   // for the search callback
 
 // name and help point into FLASH (strings.tab); the table itself stays in RAM.
 // Moving the whole table would put the FUNCTION POINTERS in flash too, and
@@ -198,29 +197,16 @@ static int cmd_help(csp_rt_t* st, int argc, char* argv[])
     return CSP_CMD_OK;
 }
 
-// Half a 1-Wire ROM id, all eight digits: a ROM id is copied by eye from one
-// listing into another, and a dropped leading zero is a different device.
-static void print_rom_half(uint32_t v)
-{
-    int k;
-    csp_print_lit("0x");
-    for (k = 24; k >= 0; k -= 8)
-	csp_print_hex2((uint8_t)(v >> k));
-}
-
+// One device found by /onewire, as a line to type back in: the id goes in
+// a string #param per sensor, and only the program knows which -- so the
+// name is left as `?` for whoever pastes it to fill in.
 static void onewire_found(const uint8_t* rom)
 {
-    csp_print_lit("#buffer T:2 in onewire ");
-    csp_print_uint(onewire_port);
-    csp_print_char(':');
-    csp_print_uint(onewire_pin);
-    csp_print_blank();
-    print_rom_half(((uint32_t)rom[0] << 24) | ((uint32_t)rom[1] << 16) |
-		   ((uint32_t)rom[2] << 8) | rom[3]);
-    csp_print_blank();
-    print_rom_half(((uint32_t)rom[4] << 24) | ((uint32_t)rom[5] << 16) |
-		   ((uint32_t)rom[6] << 8) | rom[7]);
-    csp_println();
+    int k;
+    csp_print_lit("> ?Rom = \"");
+    for (k = 0; k < 8; k++)
+	csp_print_hex2(rom[k]);
+    csp_print_line("\"");
 }
 
 // /onewire <port>:<pin> -- what is on the wire, as lines to paste. A ROM id is
@@ -229,6 +215,7 @@ static void onewire_found(const uint8_t* rom)
 static int cmd_onewire(csp_rt_t* st, int argc, char* argv[])
 {
     char* colon;
+    uint8_t onewire_port, onewire_pin;
     int n;
     (void)st;
 
@@ -1481,15 +1468,15 @@ match:
 		    csp_print_str_at(st, decl_name_pos(st, (index_t)ep));
 		    break;
 		case TR_ONEWIRE:
-		    // The pin, then the ROM id from the two constants after it.
+		    // The pin, then the NAME of the #param holding the id: the
+		    // constant after the pin is that declaration.
 		    csp_print_lit(" onewire ");
 		    csp_print_uint(TR_OW_PORT(ep));
 		    csp_print_char(':');
 		    csp_print_uint(TR_OW_PIN(ep));
 		    csp_print_blank();
-		    print_rom_half((uint32_t)decl(st, csp_decl_get_bf_id(&d) + 1, cn_init).i);
-		    csp_print_blank();
-		    print_rom_half((uint32_t)decl(st, csp_decl_get_bf_id(&d) + 2, cn_init).i);
+		    csp_print_str_at(st, decl_name_pos(st,
+			(index_t)decl(st, csp_decl_get_bf_id(&d) + 1, cn_init).i));
 		    break;
 		default:
 		    break;
@@ -3168,11 +3155,13 @@ static int in_open_block(csp_rt_t* st)
 //
 // Checked on the TEXT, before the parser: a refusal must not depend on what
 // the parser would have made of it.
-static int sms_store_ok(csp_rt_t* st, const char* p)
+// The declaration a `> Name = ...` line stores to, or BAD_INDEX when the line
+// is not a store at all (a read, or an immediate with no `=`).
+static index_t sms_store_target(csp_rt_t* st, const char* p, int* is_store)
 {
     tstr_t name;
-    index_t ix;
 
+    *is_store = 0;
     while (*p == ' ') p++;
     name.ptr = (char*)p;
     while (((*p >= 'A') && (*p <= 'Z')) || ((*p >= 'a') && (*p <= 'z')) ||
@@ -3181,8 +3170,21 @@ static int sms_store_ok(csp_rt_t* st, const char* p)
     name.len = (int)(p - name.ptr);
     while (*p == ' ') p++;
     if ((*p != '=') || (p[1] == '='))
-	return 1;                              // not a store: a read
-    if ((name.len == 0) || ((ix = csp_lookup_decl(st, &name)) == BAD_INDEX))
+	return BAD_INDEX;                      // not a store: a read
+    *is_store = 1;
+    if (name.len == 0)
+	return BAD_INDEX;
+    return csp_lookup_decl(st, &name);
+}
+
+static int sms_store_ok(csp_rt_t* st, const char* p)
+{
+    int is_store;
+    index_t ix = sms_store_target(st, p, &is_store);
+
+    if (!is_store)
+	return 1;                              // a read
+    if (ix == BAD_INDEX)
 	return 0;
     // A #param -- a knob the program exposes -- or a #variable declared `in`:
     // one the program says is set from outside, such as a command flag
@@ -3216,16 +3218,41 @@ static int sms_line_ok(csp_rt_t* st, const char* p)
     return 1;
 }
 
+// A store to a #variable declared `in` is a COMMAND, and what it sets off
+// says so itself -- `> Status = 1` is answered by the report. Its own echo
+// ("1") would only arrive first, so it stays on the console. A store to a
+// #param is a SETTING, and its echo is the confirmation worth sending.
+static int sms_is_command(csp_rt_t* st, const char* p)
+{
+    int is_store;
+    index_t ix;
+
+    while (*p == ' ') p++;
+    if (*p != '>')
+	return 0;
+    ix = sms_store_target(st, p + 1, &is_store);
+    return is_store && (ix != BAD_INDEX) &&
+	(decl(st, INDEX(ix), type) == DECL_VARIABLE) &&
+	(decl(st, INDEX(ix), dir) & DIR_IN);
+}
+
 static int process_sms_line(csp_rt_t* st, char* line)
 {
     int r = CSP_CMD_OK;
 
     st->line.from_sms = 0;                     // the recursion below is plain
+    // The answer's context is opened even when it stays empty: that is what
+    // takes this message's sender off the transport's list, so the NEXT
+    // answer goes to the next sender. An empty answer sends nothing.
     csp_con_ctx(CON_CTX_SMS);
-    if (sms_line_ok(st, line))
-	r = csp_process_line(st, line);
-    else
+    if (!sms_line_ok(st, line))
 	csp_print_line("denied");
+    else if (sms_is_command(st, line)) {
+	csp_con_ctx(CON_CTX_LOCAL);            // the echo: console only
+	r = csp_process_line(st, line);
+    }
+    else
+	r = csp_process_line(st, line);
     csp_con_ctx(CON_CTX_LOCAL);
     return r;
 }

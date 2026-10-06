@@ -102,8 +102,7 @@ typedef struct {
     tstr_t sms_owner;
     ivalue_t ow_kind;
     port_pin_t ow_pin;
-    ivalue_t ow_hi;
-    ivalue_t ow_lo;
+    tstr_t ow_rom;
 } buffer_param_t;
 typedef struct {
     tstr_t src;
@@ -161,12 +160,12 @@ extern const uint8_t csp_pattern_data[] RODATA;
 #define PATOFF_TIMER 195
 #define PATOFF_FIELD_DECL 221
 #define PATOFF_BUFFER 257
-#define PATOFF_ROUTE 389
-#define PATOFF_BODY 394
-#define PATOFF_RULE 463
-#define PATOFF_OBJECT 492
-#define PATOFF_PACK_FIELD 513
-#define PATOFF_PACK 525
+#define PATOFF_ROUTE 385
+#define PATOFF_BODY 390
+#define PATOFF_RULE 459
+#define PATOFF_OBJECT 488
+#define PATOFF_PACK_FIELD 509
+#define PATOFF_PACK 521
 
 // Each pattern as a pointer into the one array -- compile-time
 // constants, so a pmatch call site reads as it did when these were
@@ -389,18 +388,17 @@ const uint8_t csp_pattern_data[] RODATA = {
         P_TOK_W, T_SMS, csp_offsetof(buffer_param_t, sms_kind),
         P_STR, csp_offsetof(buffer_param_t, sms_owner),
         P_OPT_END,
-    P_OPT, 15,
+    P_OPT, 11,
         P_TOK_W, T_ONEWIRE, csp_offsetof(buffer_param_t, ow_kind),
         P_PAT, (PATOFF_PORT_PIN >> 8), (PATOFF_PORT_PIN & 0xff), csp_offsetof(buffer_param_t, ow_pin), STOP_BUFFER_PORT_PIN_CONT,
-        P_INTEGER_S, csp_offsetof(buffer_param_t, ow_hi), STOP_BUFFER_OW_HI,
-        P_INTEGER_S, csp_offsetof(buffer_param_t, ow_lo), STOP_BUFFER_OW_LO,
+        P_STR, csp_offsetof(buffer_param_t, ow_rom),
         P_OPT_END,
     P_END,
-    // pat_route @ 389
+    // pat_route @ 385
     P_STR, csp_offsetof(route_param_t, src),
     P_STR, csp_offsetof(route_param_t, dst),
     P_END,
-    // pat_body @ 394
+    // pat_body @ 390
     P_OPT, 63,
         P_STR, csp_offsetof(rule_body_part_t, obj),
         P_OPT, 12,
@@ -436,7 +434,7 @@ const uint8_t csp_pattern_data[] RODATA = {
         P_OPT_END,
     P_EXPR_S, csp_offsetof(rule_body_part_t, rhs), STOP_BODY_RHS,
     P_END,
-    // pat_rule @ 463
+    // pat_rule @ 459
     P_PAT, (PATOFF_BODY >> 8), (PATOFF_BODY & 0xff), csp_offsetof(rule_param_t, body), STOP_RULE_BODY_CONT,
     P_REP, 13,
         P_ARRAY, csp_offsetof(rule_param_t, body[1]), sizeof(rule_body_part_t), (MAX_BODY_PARTS)-1, 1,
@@ -448,7 +446,7 @@ const uint8_t csp_pattern_data[] RODATA = {
         P_EXPR_S, csp_offsetof(rule_param_t, cond), STOP_RULE_COND,
         P_OPT_END,
     P_END,
-    // pat_object @ 492
+    // pat_object @ 488
     P_STR, csp_offsetof(object_param_t, mod_name),
     P_STR, csp_offsetof(object_param_t, obj_name),
     P_OPT, 14,
@@ -458,14 +456,14 @@ const uint8_t csp_pattern_data[] RODATA = {
             P_REP_END,
         P_OPT_END,
     P_END,
-    // pat_pack_field @ 513
+    // pat_pack_field @ 509
     P_EXPR_S, csp_offsetof(pack_field_t, val), STOP_PACK_FIELD_VAL,
     P_OPT, 6,
         P_TOK, COLON,
         P_INTEGER_S, csp_offsetof(pack_field_t, bits), STOP_PACK_FIELD_BITS,
         P_OPT_END,
     P_END,
-    // pat_pack @ 525
+    // pat_pack @ 521
     P_STR, csp_offsetof(pack_param_t, buffer),
     P_CHOICE, 2,
         P_ALT, 4,
