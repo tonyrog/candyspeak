@@ -8,6 +8,10 @@
 # -I/-D build properties -- those stay on the command line -- so what it
 # buys is reproducibility, not fewer flags.
 profiles:
+  coco:
+    fqbn: arduino:avr:pro:cpu=8MHzatmega328
+    platforms:
+      - platform: arduino:avr (1.8.8)
   feather_can:
     fqbn: rp2040:rp2040:adafruit_feather_can
     platforms:

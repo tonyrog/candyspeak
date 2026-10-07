@@ -822,7 +822,7 @@ $(OBJDIR)/%.o: %.c | gen/csp_strings.h
 
 -include $(OBJS:.o=.d)
 
-.PHONY: webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
+.PHONY: clib_host webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first
@@ -839,3 +839,27 @@ boards:
 	     CandySpeak/build/arduino.samd.mkrzero/CandySpeak.ino.elf; echo; \
 	   echo "#endif"; } > csp_boards.h
 	@sed -n '/^\/\* /p;/^#define/p' csp_boards.h
+
+# A translated program on the host, LIVE: the C from utils/candyspeak_c.erl,
+# its link.c when it has one, and port/csp_lib_host.c's -P mode -- a
+# pseudo-terminal in place of the board's Serial. A CoCo on the desk:
+#
+#   make clib_host PROG=boards/coco
+#   tmp/clib_host/main -P                    prints "pty /dev/pts/N"
+#   tools/coco_master.escript /dev/pts/N watch
+#
+# PROG is one .csp, or a directory with a PROG file naming it.
+CLIB_HOST := tmp/clib_host
+CLIB_PROG  = $(foreach p,$(PROG),$(if $(wildcard $(p)/PROG),\
+	      $(addprefix $(p)/,$(shell sed -e 's/\#.*//' -e '/^[ \t]*$$/d' $(p)/PROG)),$(p)))
+CLIB_LINK  = $(wildcard $(dir $(strip $(CLIB_PROG)))link.c)
+
+clib_host:
+	@test $(words $(CLIB_PROG)) = 1 || { echo "PROG: one .csp, got:$(CLIB_PROG)"; exit 1; }
+	@mkdir -p $(CLIB_HOST)
+	@$(MAKE) --no-print-directory -s -C utils
+	@erl -noshell -pa utils -eval 'candyspeak_c:main(["$(strip $(CLIB_PROG))", "$(CLIB_HOST)/csp_prog.c"])'
+	$(CC) -Wall -O1 -DCSP_LIB_HOST -Iinclude -I$(CLIB_HOST) \
+	    $(if $(CLIB_LINK),-I$(dir $(CLIB_LINK)) -DCSP_LIB_LINK=link.c,) \
+	    -o $(CLIB_HOST)/$(basename $(notdir $(strip $(CLIB_PROG)))) \
+	    port/csp_lib_prog.c src/csp_lib.c port/csp_lib_host.c

@@ -72,7 +72,9 @@ run(Csp, Tmp) ->
             io:format("skip ~s: ~s\n", [Base, Why]),
             skip;
         ok ->
-            Gcc = io_lib:format("gcc -Wall -Werror -Wno-overflow -O1 -DCSP_LIB_HOST -Iinclude -o ~s ~s "
+            %% -Wno-tautological-compare: a test that writes `A == A` gets it
+            %% translated word for word, and that is the point of the test.
+            Gcc = io_lib:format("gcc -Wall -Werror -Wno-overflow -Wno-tautological-compare -O1 -DCSP_LIB_HOST -Iinclude -o ~s ~s "
                                 "src/csp_lib.c port/csp_lib_host.c 2>&1",
                                 [Bin, C]),
             case os:cmd(lists:flatten(Gcc)) of

@@ -4159,7 +4159,10 @@ NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, int ti, size_t n)
     ivalue_t alen = 1;
 
     d.r.res = 10;
-    d.opts.vt = V_INTEGER;
+    // UNSIGNED by default, unlike a #variable: a converter delivers counts,
+    // 0..2^res-1. `integer` is the opt-in for a reading about a rest point,
+    // and means centred -- csp_lib_ain puts half scale at 0.
+    d.opts.vt = V_UNSIGNED;
 
     if (array_splice(st, tv, ti, &n, &alen) < 0)
 	return -1;

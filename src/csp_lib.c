@@ -59,6 +59,15 @@ __attribute__((weak)) void csp_lib_putc(char c)
     (void)c;
 }
 
+__attribute__((weak)) int csp_lib_getc(void)
+{
+    return -1;
+}
+
+__attribute__((weak)) void csp_lib_poll(void)
+{
+}
+
 void csp_lib_puts(const char* s)
 {
     while (*s)

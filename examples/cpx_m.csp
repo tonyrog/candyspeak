@@ -16,9 +16,9 @@
 // --- analog sensors ---
 #analog Light:10 in 0:8      // light sensor  (A8)
 #analog Temp:10  in 0:9      // thermistor    (A9)
-#analog AccX:10  in 8:0      // accelerometer X  (scaled ~-512..511)
-#analog AccY:10  in 8:1
-#analog AccZ:10  in 8:2
+#analog AccX:10 integer in 8:0      // accelerometer X  (scaled ~-512..511)
+#analog AccY:10 integer in 8:1
+#analog AccZ:10 integer in 8:2
 
 // --- 10 NeoPixels as RGB565 analog outputs (port 9, pin = index) ---
 #module Pixel

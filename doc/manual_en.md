@@ -500,17 +500,17 @@ Examples:
 #analog HighRes:12 in A:1
 ```
 
-> **A reading is SIGNED unless you say otherwise** — the same default a
-> `#variable` has. A sensor that swings both ways about a rest point reads
-> naturally that way: for an accelerometer 0 is level, and there is no midpoint
-> to subtract in every rule.
+> **A reading is UNSIGNED unless you say otherwise** — unlike a `#variable`.
+> A converter delivers counts, `0` to `2^res - 1`, and a light sensor, a
+> current or a battery voltage reads naturally that way.
 >
-> Say `unsigned` when the value is a bit pattern or a magnitude rather than a
-> quantity — a packed RGB565 pixel sets bit 15 at full red, and reading that
-> back as a negative number helps nobody:
+> Say `integer` for a sensor that swings both ways about a rest point. The
+> reading is then CENTRED: half scale reads `0`, so for an accelerometer 0 is
+> level and there is no midpoint to subtract in every rule. A 10-bit input
+> reads `-512..511`:
 >
 > ```
-> #analog Pixel:16 out unsigned 9:0
+> #analog AccX:10 integer in 8:0
 > ```
 >
 > The value slot is 16 bits wide whichever you choose; the declaration decides
@@ -541,7 +541,7 @@ putting a length after the name:
 #variable Acc[3] = 0
 #constant CT[10] = { -100, -81, -31, 31, 81, 100, 81, 31, -31, -81 }
 #digital  D[5]  in 0:1..3,7,9
-#analog   P[10]:16 out unsigned 9:0..9
+#analog   P[10]:16 out 9:0..9
 ```
 
 An array is **N declarations, one per element** — the head keeps the name, the
@@ -569,7 +569,7 @@ constant declared earlier, and a `string` array takes string elements:
 port and pin, so one line describes ten outputs:
 
 ```
-#analog P[10]:16 out unsigned 9:0..9      // pins 0..9 on port 9
+#analog P[10]:16 out 9:0..9      // pins 0..9 on port 9
 #digital D[5] in 0:1..3,7,9               // pins 1,2,3,7,9 on port 0
 #analog Q[3]:16 out 0:1,4,7               // a plain list, no range
 ```
@@ -2787,7 +2787,7 @@ pandoc doc/manual_en.md -o doc/manual_en.pdf \
 #local <name>[:<bits>] [type] in [= c]  // in a module: the instance binds it
 #local <name>[:<bits>] [type] out = <e>  // in a module: readable as obj.name
 #digital <name> [in|out|inout] [pullup|pulldown] [<port>:]<pin>
-#analog <name>[:<resolution>] [in|out] [pwm] [integer|unsigned] [<port>:]<pin>
+#analog <name>[:<resolution>] [in|out] [pwm] [integer|unsigned] [<port>:]<pin>   // unsigned, or integer = centred
 #timer <name> <period_ms|param> [= 1]
 #constant <name> = <value>
 #param <name>[:<bits>] [type] = <value>  // a constant that does NOT fold:
@@ -2806,7 +2806,7 @@ pandoc doc/manual_en.md -o doc/manual_en.pdf \
 #variable Acc[3] = 0                     // N declarations, one per element
 #constant CT[10] = { -100, -81, 31 }     // init list, one value per element
 #digital  D[5]  in 0:1..3,7,9            // pin list: 1,2,3,7,9
-#analog   P[10]:16 out unsigned 9:0..9   // pin range: one pin per element
+#analog   P[10]:16 out 9:0..9   // pin range: one pin per element
 #digital  E[4]  in 0:2,1:5,2:6,3:7       // a port names the pins after it
 
 x = A[I]                     // runtime index: checked every cycle

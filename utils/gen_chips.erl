@@ -363,6 +363,17 @@ main(["--boards-with", TC]) ->
     ok;
 main(["--toolchain-of", Name]) ->
     io:format("~s~n", [atom_to_list(kv(board_of(Name), toolchain, bare))]);
+main(["--backend-of", Name]) ->
+    io:format("~s~n", [atom_to_list(kv(board_of(Name), backend, runtime))]);
+main(["--programmer-of", Name]) ->
+    io:format("~s~n", [kv(board_of(Name), programmer, "")]);
+main(["--fuses-of", Name]) ->
+    io:format("~s~n", [case lists:keyfind(fuses, 1, board_of(Name)) of
+			   {fuses, Lo, Hi, Ext} ->
+			       io_lib:format("0x~2.16.0B 0x~2.16.0B 0x~2.16.0B",
+					     [Lo, Hi, Ext]);
+			   false -> ""
+		       end]);
 main(["--fqbn-of", Name]) ->
     io:format("~s~n", [kv(board_of(Name), fqbn, "")]);
 main(["--port-of", Name]) ->
@@ -508,6 +519,9 @@ help(_) ->
 	      "       --sketch-yaml <file>~n"
 	      "       --boards-with <tool-chain>~n"
               "       --toolchain-of <name>~n"
+              "       --backend-of <name>~n"
+              "       --programmer-of <name>~n"
+              "       --fuses-of <name>~n"
               "       --fqbn-of <name>~n"
               "       --port-of <name>~n"
               "       --nm-of <name>~n"

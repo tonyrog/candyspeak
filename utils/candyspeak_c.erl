@@ -19,7 +19,7 @@
 %%%   harness drives csp_lib_setup/csp_lib_step (tools/csp_lib_host.c).
 %%%
 %%%   NOT YET: arrays, float, buffers and fields, CAN, events, `.pin` set per
-%%%   instance, changed()/elapsed(). Each is refused by name rather than
+%%%   instance, elapsed(). Each is refused by name rather than
 %%%   translated wrong.
 %%% @end
 -module(candyspeak_c).
@@ -215,8 +215,9 @@ field({local, Ln, {'WORD', _, N}, Res, Opts, _}) ->
     [?IND, ctype(Res, Opts, Ln), " ", N, width(Res), ";\n"];
 field({digital, Ln, {'WORD', _, N}, Arr, _, _, _}) ->
     scalar(Arr, Ln), [?IND, "uint32_t ", N, ":1;\n"];
-field({analog, Ln, {'WORD', _, N}, Arr, Res, Opts, _}) ->
-    scalar(Arr, Ln), [?IND, ctype(Res, Opts, Ln), " ", N, width(Res), ";\n"];
+field({analog, Ln, {'WORD', _, N}, Arr, Res0, Opts, _}) ->
+    Res = analog_res(Res0),
+    scalar(Arr, Ln), [?IND, ctype(Res, analog_opts(Opts), Ln), " ", N, width(Res), ";\n"];
 field({timer, _, {'WORD', _, N}, _, _}) ->
     [?IND, "csp_timer_t ", N, ";\n"];
 field({object, _, {'WORD', _, M}, {'WORD', _, N}, _}) ->
@@ -227,6 +228,17 @@ field(_) -> [].
 
 scalar(scalar, _) -> ok;
 scalar(_, Ln) -> throw({unsupported, "array", Ln}).
+
+%% An #analog is unsigned unless it says `integer`: a converter delivers
+%% counts. The runtime's csp_parse_analog has the same default.
+analog_res(default) -> {'INT', 0, "10"};      % csp_parse_analog's default
+analog_res(Res) -> Res.
+
+analog_opts(Opts) ->
+    case proplists:is_defined(type, Opts) of
+        true -> Opts;
+        false -> [{type, unsigned} | Opts]
+    end.
 
 %% A typeless declaration is signed -- except `:1`, which holds 0 and 1 rather
 %% than 0 and -1, or every `Flag == 1` would be false.
@@ -348,8 +360,8 @@ io1(What, {analog, Ln, {'WORD', _, N}, _, Res, Opts, Pins}) ->
     {Port, Pin} = port_pin(Pins, Ln),
     Dir = proplists:get_value(dir, Opts, in),
     Pwm = case proplists:get_bool(pwm, Opts) of true -> "1"; false -> "0" end,
-    R = case Res of default -> "16"; {'INT', _, W} -> W end,
-    Sgn = case proplists:get_value(type, Opts, integer) of
+    {'INT', _, R} = analog_res(Res),
+    Sgn = case proplists:get_value(type, analog_opts(Opts)) of
               unsigned -> "0"; _ -> "1" end,
     case {What, Dir} of
         {_, inout} -> throw({unsupported, "#analog inout", Ln});
@@ -388,7 +400,7 @@ body(Ds, Ind, Env, Where) ->
 
 stmt({rule, Ln, Assigns, Guard}, Ind, Env, Where) ->
     Gate = case {Where, maps:get(main, Env)} of
-               {top, true} -> ["((in->State == INIT) || (in->State == NORMAL))"];
+               {top, true} -> ["(in->State == INIT || in->State == NORMAL)"];
                _ -> []
            end,
     Cond = case Guard of
@@ -398,10 +410,10 @@ stmt({rule, Ln, Assigns, Guard}, Ind, Env, Where) ->
     Body = [assign(A, Ln, Env) || A <- Assigns],
     guarded(Cond, Body, Ind);
 stmt({{in, _, States}, Ds}, Ind, Env, _Where) ->
-    C = lists:join(" || ", [["(in->State == ", S, ")"] || {'WORD', _, S} <- States]),
+    C = lists:join(" || ", [["in->State == ", S] || {'WORD', _, S} <- States]),
     [Ind, "if (", C, ") {\n", body(Ds, Ind ++ ?IND, Env, block), Ind, "}\n"];
 stmt({{'when', _, Cond}, Ds}, Ind, Env, Where) ->
-    [Ind, "if (", ccond(Cond, Env), ") {\n",
+    [Ind, "if (", unwrap(ccond(Cond, Env)), ") {\n",
      body(Ds, Ind ++ ?IND, Env, Where), Ind, "}\n"];
 stmt({local, _, {'WORD', _, N}, _, Opts, E}, Ind, Env, _Where)
   when E =/= undefined ->
@@ -421,8 +433,30 @@ stmt({enable, Ln, _}, _, _, _) -> throw({unsupported, "#enable", Ln});
 stmt(_, _, _, _) -> [].
 
 guarded([], Body, Ind) -> [[Ind, B] || B <- Body];
-guarded(Cs, Body, Ind) ->
-    [Ind, "if (", lists:join(" && ", Cs), ") {\n",
+guarded([C], Body, Ind) -> guarded1(unwrap(C), Body, Ind);
+guarded(Cs, Body, Ind) -> guarded1(lists:join(" && ", Cs), Body, Ind).
+
+%% The outer parentheses of a lone condition, which `if (...)` supplies.
+unwrap(C) ->
+    case lists:flatten(C) of
+        [$( | T] = F ->
+            case balanced_outer(T, 1) of
+                true -> lists:droplast(T);
+                false -> F
+            end;
+        F -> F
+    end.
+
+%% True if the parenthesis opened at the start closes at the very end.
+balanced_outer([$)], 1) -> true;
+balanced_outer([$( | T], N) -> balanced_outer(T, N + 1);
+balanced_outer([$) | _], 1) -> false;
+balanced_outer([$) | T], N) -> balanced_outer(T, N - 1);
+balanced_outer([_ | T], N) -> balanced_outer(T, N);
+balanced_outer([], _) -> false.
+
+guarded1(C, Body, Ind) ->
+    [Ind, "if (", C, ") {\n",
      [[Ind, ?IND, B] || B <- Body], Ind, "}\n"].
 
 assign({Op, _, {field, Ln, Lhs}, Rhs}, _, Env) when Op =:= '='; Op =:= '<-' ->
@@ -473,7 +507,11 @@ lhs(_, Ln, _) -> throw({unsupported, "left-hand side", Ln}).
 store({timer_val, Path}, Rhs) -> [Path, " = ", timer_val(Rhs), ";\n"];
 store(Path, Rhs) -> [Path, " = ", Rhs, ";\n"].
 
-timer_val(E) -> ["(uint8_t)((", E, ") & 1)"].
+timer_val(E) ->
+    case string:to_integer(lists:flatten(E)) of
+        {I, []} -> integer_to_list(I band 1);
+        _ -> ["(uint8_t)((", E, ") & 1)"]
+    end.
 
 is_formula(Opts) ->
     not lists:member(proplists:get_value(dir, Opts), [in, inout]).
@@ -534,7 +572,36 @@ member(N, F, MSym, Env, E) ->
 %% on an AVR and the runtime computes in 32.
 %% ------------------------------------------------------------------
 
-ccond(E, Env) -> ["(", cexpr(E, Env), ")"].
+ccond(E, Env) -> cbool(E, Env).
+
+%% An expression where only zero or nonzero matters: a guard, an #when, an
+%% operand of && and ||. No CSP_LIB_BOOL, since TRUE is -1 and any nonzero is
+%% as good to an `if`; and no widening cast on a lone name, since nothing is
+%% computed with it.
+cbool({Op, _, _, _} = E, Env) when Op =:= '&&'; Op =:= '||' ->
+    ["(", lists:join([" ", atom_to_list(Op), " "],
+                     [cbool(X, Env) || X <- chain(Op, E)]), ")"];
+cbool({'!', _, A}, Env) -> ["!", bparen(A, Env)];
+cbool({Op, _, L, R}, Env)
+  when Op =:= '<'; Op =:= '<='; Op =:= '>'; Op =:= '>=';
+       Op =:= '=='; Op =:= '!=' ->
+    ["(", cexpr(L, Env), " ", atom_to_list(Op), " ", cexpr(R, Env), ")"];
+cbool({field, Ln, F}, Env) -> ref(F, Ln, Env#{nocast => true});
+cbool({call, Ln, {'WORD', _, F}, Args}, Env)
+  when F =:= "timeout"; F =:= "changed" ->
+    call(F, Args, Ln, Env#{nocast => true});
+cbool(E, Env) -> cexpr(E, Env).
+
+%% a || b || c as one list, not as ((a || b) || c): the operator is
+%% associative, and C reads the flat form the same way.
+chain(Op, {Op, _, L, R}) -> chain(Op, L) ++ chain(Op, R);
+chain(_, E) -> [E].
+
+%% cbool, parenthesised unless it already is or needs none.
+bparen({field, _, _} = E, Env) -> cbool(E, Env);
+bparen({call, _, _, _} = E, Env) -> cbool(E, Env);
+bparen({_, _, _, _} = E, Env) -> cbool(E, Env);
+bparen(E, Env) -> ["(", cbool(E, Env), ")"].
 
 sym(N, Env) -> maps:get(N, maps:get(sym, Env, #{}), undefined).
 
@@ -546,10 +613,10 @@ cexpr({'FLT', Ln, _}, _) -> throw({unsupported, "float", Ln});
 cexpr({'STR', Ln, _}, _) -> throw({unsupported, "string in an expression", Ln});
 cexpr({field, Ln, F}, Env) -> ref(F, Ln, Env);
 cexpr({call, Ln, {'WORD', _, F}, Args}, Env) -> call(F, Args, Ln, Env);
-cexpr({'!', _, A}, Env) -> ["CSP_LIB_B(!", paren(A, Env), ")"];
-cexpr({'~', _, A}, Env) -> ["(~", paren(A, Env), ")"];
-cexpr({'-', _, A}, Env) -> ["(-", paren(A, Env), ")"];
-cexpr({'+', _, A}, Env) -> paren(A, Env);
+cexpr({'!', _, A}, Env) -> ["CSP_LIB_BOOL(!", bparen(A, Env), ")"];
+cexpr({'~', _, A}, Env) -> ["(~", uparen(A, Env), ")"];
+cexpr({'-', _, A}, Env) -> ["(-", uparen(A, Env), ")"];
+cexpr({'+', _, A}, Env) -> uparen(A, Env);
 cexpr({Op, _, L, R}, Env) when Op =:= '/'; Op =:= '%' ->
     F = case {Op, is_unsigned(L, Env) orelse is_unsigned(R, Env)} of
             {'/', false} -> "csp_lib_div";
@@ -558,21 +625,31 @@ cexpr({Op, _, L, R}, Env) when Op =:= '/'; Op =:= '%' ->
             {'%', true} -> "csp_lib_remu"
         end,
     [F, "(", cexpr(L, Env), ", ", cexpr(R, Env), ")"];
-cexpr({Op, _, L, R}, Env) when Op =:= '&&'; Op =:= '||' ->
-    ["CSP_LIB_B(", paren(L, Env), " ", atom_to_list(Op), " ", paren(R, Env), ")"];
+%% cbool of these comes back in parentheses, which is what CSP_LIB_BOOL needs.
+cexpr({Op, _, _, _} = E, Env)
+  when Op =:= '&&'; Op =:= '||'; Op =:= '<'; Op =:= '<='; Op =:= '>';
+       Op =:= '>='; Op =:= '=='; Op =:= '!=' ->
+    ["CSP_LIB_BOOL", cbool(E, Env)];
+cexpr({Op, _, _, _} = E, Env) when Op =:= '&'; Op =:= '|'; Op =:= '^' ->
+    ["(", lists:join([" ", atom_to_list(Op), " "],
+                     [cexpr(X, Env) || X <- chain(Op, E)]), ")"];
 cexpr({Op, _, L, R}, Env)
-  when Op =:= '<'; Op =:= '<='; Op =:= '>'; Op =:= '>=';
-       Op =:= '=='; Op =:= '!=' ->
-    ["CSP_LIB_B(", paren(L, Env), " ", atom_to_list(Op), " ", paren(R, Env), ")"];
-cexpr({Op, _, L, R}, Env)
-  when Op =:= '+'; Op =:= '-'; Op =:= '*'; Op =:= '&'; Op =:= '|';
-       Op =:= '^'; Op =:= '<<'; Op =:= '>>' ->
-    ["(", paren(L, Env), " ", atom_to_list(Op), " ", paren(R, Env), ")"];
+  when Op =:= '+'; Op =:= '-'; Op =:= '*'; Op =:= '<<'; Op =:= '>>' ->
+    ["(", cexpr(L, Env), " ", atom_to_list(Op), " ", cexpr(R, Env), ")"];
 cexpr(E, _) ->
     throw({unsupported, io_lib:format("expression ~p", [element(1, E)]),
            element(2, E)}).
 
 paren(E, Env) -> ["(", cexpr(E, Env), ")"].
+
+%% The operand of a unary operator. A name, a number, a call and a binary
+%% operation all come back from cexpr needing no more parentheses.
+uparen({'INT', _, _} = E, Env) -> cexpr(E, Env);
+uparen({field, _, _} = E, Env) -> cexpr(E, Env);
+uparen({call, _, _, _} = E, Env) -> cexpr(E, Env);
+uparen({_, _, _, _} = E, Env) -> cexpr(E, Env);
+uparen(E, Env) -> paren(E, Env).
+
 
 ref({'WORD', _, N}, Ln, Env) ->
     States = maps:get(states, Env, []),
@@ -584,23 +661,23 @@ ref({'WORD', _, N}, Ln, Env) ->
                 false -> throw({unsupported, "unknown name " ++ N, Ln})
             end;
         {const, _} -> N;
-        {timer, _} -> ["(int32_t)", rd(Env), N, ".val"];
-        {local, D} -> [cast(D), lrd(Env), N];      % a #local is seen at once
+        {timer, _} -> [tcast(Env), rd(Env), N, ".val"];
+        {local, D} -> [cast(D, Env), lrd(Env), N];      % a #local is seen at once
         {object, _, _} -> throw({unsupported, "an object as a value", Ln});
-        {_, D} -> [cast(D), rd(Env), N]
+        {_, D} -> [cast(D, Env), rd(Env), N]
     end;
 ref({part, _, {'WORD', _, T}, {'WORD', _, P}}, Ln, Env) ->
     case sym(T, Env) of
-        {timer, _} -> ["(int32_t)", rd(Env), T, ".", timer_part(P, Ln)];
+        {timer, _} -> [tcast(Env), rd(Env), T, ".", timer_part(P, Ln)];
         _ -> throw({unsupported, "part ." ++ P, Ln})
     end;
 ref({fld, _, {'WORD', _, O}, {'WORD', _, N}}, Ln, Env) ->
     case sym(O, Env) of
         {object, _, MSym} ->
             case maps:get(N, MSym, undefined) of
-                {local, D} -> [cast(D), lrd(Env), O, ".", N];
-                {timer, _} -> ["(int32_t)", rd(Env), O, ".", N, ".val"];
-                {_, D} -> [cast(D), rd(Env), O, ".", N];
+                {local, D} -> [cast(D, Env), lrd(Env), O, ".", N];
+                {timer, _} -> [tcast(Env), rd(Env), O, ".", N, ".val"];
+                {_, D} -> [cast(D, Env), rd(Env), O, ".", N];
                 undefined when N =:= "State" -> [rd(Env), O, ".State"];
                 undefined -> throw({unsupported, O ++ "." ++ N, Ln})
             end;
@@ -609,9 +686,34 @@ ref({fld, _, {'WORD', _, O}, {'WORD', _, N}}, Ln, Env) ->
 ref({index, Ln, _, _}, _, _) -> throw({unsupported, "array index", Ln});
 ref(_, Ln, _) -> throw({unsupported, "reference", Ln}).
 
-cast(D) ->
-    case is_unsigned_decl(D) of
-        true -> "(uint32_t)";
+%% Widening a member to 32 bits before it is computed with. Only a BIT-FIELD
+%% needs it: one narrower than int promotes to int, which is 16 bits on an
+%% AVR. A full int32_t or uint32_t member is already what it would be cast to.
+cast(D, Env) ->
+    case maps:get(nocast, Env, false) orelse not is_bitfield(D) of
+        true -> "";
+        false ->
+            case is_unsigned_decl(D) of
+                true -> "(uint32_t)";
+                false -> "(int32_t)"
+            end
+    end.
+
+is_bitfield({digital, _, _, _, _, _, _}) -> true;
+is_bitfield({variable, _, _, _, Res, _, _}) -> narrow(Res);
+is_bitfield({analog, _, _, _, Res, _, _}) -> narrow(analog_res(Res));
+is_bitfield({param, _, _, Res, _, _}) -> narrow(Res);
+is_bitfield({local, _, _, Res, _, _}) -> narrow(Res);
+is_bitfield(_) -> true.
+
+narrow(default) -> false;
+narrow({'INT', _, "32"}) -> false;
+narrow(_) -> true.
+
+%% A timer's val, fired and running are uint8_t.
+tcast(Env) ->
+    case maps:get(nocast, Env, false) of
+        true -> "";
         false -> "(int32_t)"
     end.
 
@@ -619,7 +721,7 @@ is_unsigned_decl({digital, _, _, _, _, _, _}) -> true;
 is_unsigned_decl(D) when is_tuple(D) ->
     Opts = case D of
                {variable, _, _, _, _, O, _} -> O;
-               {analog, _, _, _, _, O, _} -> O;
+               {analog, _, _, _, _, O, _} -> analog_opts(O);
                {param, _, _, _, O, _} -> O;
                {local, _, _, _, O, _} -> O;
                _ -> []
@@ -657,8 +759,24 @@ is_unsigned(_, _) -> false.
 
 call("timeout", [{field, Ln, {'WORD', _, T}}], _, Env) ->
     case sym(T, Env) of
-        {timer, _} -> ["CSP_LIB_B(", rd(Env), T, ".fired)"];
+        {timer, _} ->
+            case maps:get(nocast, Env, false) of
+                true -> [rd(Env), T, ".fired"];
+                false -> ["CSP_LIB_BOOL(", rd(Env), T, ".fired)"]
+            end;
         _ -> throw({unsupported, "timeout of a non-timer", Ln})
+    end;
+%% changed(X): a store this cycle -- the input sweep or a rule before this one
+%% -- left the working copy different from the committed one. The runtime's
+%% dirty bit, read off the two copies instead of kept beside them. A #local is
+%% compared the same way, committed against working, though it reads working.
+call("changed", [{field, Ln, F}], _, Env) ->
+    W = wr(Env),
+    Cmp = ["(", ref(F, Ln, Env#{lrd => rd(Env), nocast => true}), " != ",
+           ref(F, Ln, Env#{rd => W, lrd => W, nocast => true}), ")"],
+    case maps:get(nocast, Env, false) of
+        true -> Cmp;
+        false -> ["CSP_LIB_BOOL", Cmp]
     end;
 call("tick", [], _, _) -> "(int32_t)csp_now";
 call("cycle", [], _, _) -> "(int32_t)csp_cycle";

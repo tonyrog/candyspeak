@@ -1,0 +1,18 @@
+// CoCo's pins, Arduino numbering -- seazone/apps/pdb/atmega328p/CoCo/CoCo.h.
+// The chip pin is in the comment.
+// pullup: BridgeZone has external pull-ups on these four; the internal one
+// is the same thing again there, and what makes a bare Uno or Minima behave
+// like the board.
+#digital Din1 in pullup 2          // (32) INT0
+#digital Din2 in pullup 3          // (1)  INT1
+#digital Din3 in pullup 18         // (27) A4
+#digital Din4 in pullup 19         // (28) A5
+
+#analog  Ain1:10 in 14      // (23) A0
+#analog  Ain2:10 in 15      // (24) A1
+#analog  Ain3:10 in 16      // (25) A2
+#analog  Ain4:10 in 17      // (26) A3
+
+// To the LPC2129's P0.16, EINT0. High says "something happened", as
+// CoCo.ino's set_lpc_interrupt drove it.
+#digital Wake out 8         // (12)

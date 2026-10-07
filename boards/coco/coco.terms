@@ -1,0 +1,42 @@
+%% CoCo -- the ATmega328P co-controller on BridgeZone.
+%%
+%% It watches inputs while the LPC2129 sleeps and pulls P0.16 (EINT0) to wake
+%% it. 32K of flash and 2K of RAM is too small for the runtime and a program,
+%% so it carries the program TRANSLATED TO C ({backend, c}): utils/
+%% candyspeak_c.erl writes the rules out as C, port/csp_lib_arduino.cpp runs
+%% them on the Arduino core, and nothing else is in the image.
+%%
+%%   make -f Makefile.board BOARD=coco PROG=<prog.csp>          build
+%%   make -f Makefile.board BOARD=coco PROG=<prog.csp> upload   flash over ISP
+%%   make -f Makefile.board BOARD=coco fuses                    once per part
+%%
+%% The same program runs on a plain Uno first: BOARD=uno BACKEND=c.
+{board, coco,
+ [{toolchain, arduino_cli},
+  {backend, c},
+  {chip, atmega328p},
+
+  %% The core's 8 MHz Pro Mini: F_CPU 8000000, the standard variant, which is
+  %% the pin numbering the old CoCo.ino was written against
+  %% (seazone/apps/pdb/atmega328p/hardware/bridge_zone). That board's
+  %% bootloader and crystal fuses are NOT used -- see fuses below.
+  {fqbn, "arduino:avr:pro:cpu=8MHzatmega328"},
+  {platform, "arduino:avr", "1.8.8"},
+  {nm, "avr-nm"},
+  {optimize, "-Os"},
+
+  %% No bootloader: flashed over ISP through a Pololu USB AVR Programmer v2,
+  %% which is an STK500v2 on its first ttyACM (the second is its TTL serial).
+  {programmer, "stk500"},
+  {port, "/dev/ttyACM0"},
+
+  %% Internal 8 MHz RC, no clock divide (lo 0xE2); SPI programming on, no
+  %% boot reset vector (hi 0xD9); BOD off (ext 0xFF). As
+  %% seazone/apps/pdb/atmega328p/CoCo/Makefile has them for its `ispload`.
+  {fuses, 16#E2, 16#D9, 16#FF},
+
+  %% Serial is the console println prints to. Off: on BridgeZone the UART pins
+  %% are not wired to anything listening, and Serial is a kilobyte of flash.
+  %% Set it on the command line (EXTRA=-DCSP_LIB_BAUD=38400) to debug on a
+  %% bench part.
+  {define, [{'CSP_LIB_BAUD', 9600}]}]}.

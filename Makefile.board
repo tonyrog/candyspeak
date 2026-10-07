@@ -97,6 +97,20 @@ endif
 # variant in the path -- arduino-cli keys its own cache on the build path, and
 # the flag stamp below covers the rest.
 SKETCH := CandySpeak
+
+# WHAT RUNS ON THE PART: the runtime with the program as an image (`runtime`),
+# or the program translated to C by utils/candyspeak_c.erl and compiled on its
+# own (`c`) -- no interpreter, no compiler, just the rules. The second is for a
+# part too small for the first: CoCo, the ATmega328P on BridgeZone. A board
+# says {backend, c} in its terms; BACKEND=c tries it on any Arduino board.
+#
+# Its own sketch, CspLib/, and its own build directory, <board>-c: the two
+# images are not interchangeable, and a directory that says which it is beats
+# remembering.
+BACKEND ?= $(shell $(GEN) --backend-of $(BOARD))
+ifeq ($(BACKEND),c)
+  SKETCH := CspLib
+endif
 # Under the board, beside its terms file -- the same place a bare-metal board
 # builds. This was only possible once the sketch stopped symlinking boards/:
 # with CandySpeak/boards -> ../boards, a build path here landed INSIDE the
@@ -107,7 +121,7 @@ SKETCH := CandySpeak
 # the wrong image gets flashed; the bare-metal branch names its build
 # directories after the region map for exactly this reason.
 PROFILE := $(BOARD)$(if $(AVAR),-$(AVAR),)
-B       := $(BUILD_DIR)/$(PROFILE)
+B       := $(BUILD_DIR)/$(PROFILE)$(if $(filter c,$(BACKEND)),-c,)
 # arduino-cli's build path is a SUBdirectory, not $(B) itself: --clean wipes
 # whatever --build-path points at, and the generated csp_board.h lives in $(B).
 # Pointed at the same directory, the clean build deletes the header it is about
@@ -161,9 +175,28 @@ override PROG := $(foreach p,$(PROG),$(if $(wildcard $(p)/PROG),\
 ROMDEF   := $(if $(strip $(PROG)),,-DCSP_ROM=rom_empty.c)
 ROMSRC   := $(if $(strip $(PROG)),$(B)/csp_rom.c,)
 
+# The C backend's program: ONE .csp, imports and all, translated into $(B) where
+# CspLib/prog.c includes it from. Regenerated every build -- the generator does
+# not list what it imported -- and moved into place only when the text changed,
+# so arduino-cli recompiles only when the program did.
+ifeq ($(BACKEND),c)
+  ROMDEF :=
+  ROMSRC := $(B)/csp_prog.c
+endif
+
 # csp_config.h does `#include CSP_STR(CSP_BOARD)`, so the value is a path, not a
 # quoted string -- the stringify happens there. See its comment.
 CSPFLAGS := $(OPT) -I$(BOARDINC) $(COREINC) -DCSP_BOARD=csp_board.h $(ROMDEF) $(BCFLAGS) $(EXTRA)
+# A PROGRAM'S LINK: a link.c beside the .csp is compiled in with it
+# (port/csp_lib_prog.c) and speaks for it -- boards/coco/link.c is CoCo's
+# master protocol. It goes with the program, not the board, so the same
+# program on a Minima has it too.
+ifeq ($(BACKEND),c)
+  LINK := $(wildcard $(dir $(strip $(PROG)))link.c)
+  ifneq ($(LINK),)
+    CSPFLAGS += -I$(abspath $(dir $(LINK))) -DCSP_LIB_LINK=link.c
+  endif
+endif
 
 OPTS = --build-property "compiler.c.extra_flags=$(CSPFLAGS)" \
        --build-property "compiler.cpp.extra_flags=$(CSPFLAGS)" \
@@ -215,6 +248,15 @@ $(B)/csp_rom.c: $(PROG) $(B)/.cspprog csp
 	@echo "  src: $(dir $@)rom.csp"
 
 -include $(B)/csp_rom.cspd
+
+$(B)/csp_prog.c: $(PROG) FORCE
+	@test $(words $(PROG)) = 1 || \
+	 { echo "BACKEND=c takes one .csp in PROG (it may #import the rest), got:$(PROG)"; exit 1; }
+	@mkdir -p $(B)
+	@$(MAKE) --no-print-directory -s -C utils
+	@erl -noshell -pa utils -eval 'candyspeak_c:main(["$(strip $(PROG))", "$@.new"])'
+	@cmp -s $@.new $@ 2>/dev/null || cp $@.new $@
+	@echo "  c: $@"
 
 # Touched only when the list actually changes, so an unrelated build does not
 # recompile the image.
@@ -283,7 +325,26 @@ min:
 	    EXTRA="-DCSP_EXEC_ONLY -DCSP_NO_EEPROM $(EXTRA)"
 
 upload: compile
-	arduino-cli upload -p $(DEV) -m $(PROFILE) --input-dir $(abspath $(CLIB)) $(UPOPTS) $(SKETCH)
+	arduino-cli upload -p $(DEV) -m $(PROFILE) $(if $(ISP),-P $(ISP),) --input-dir $(abspath $(CLIB)) $(UPOPTS) $(SKETCH)
+
+# A part with no bootloader, programmed over ISP: CoCo, on the six pins at the
+# edge of BridgeZone. {programmer, "stk500"} in the terms makes `upload` go
+# through it (a Pololu v2 answers as an STK500v2 on its first ttyACM), and
+# {fuses, Lo, Hi, Ext} is what `fuses` writes -- ONCE per part, and never by
+# burn-bootloader: the core's 8 MHz Pro sets the fuses for an external crystal,
+# which CoCo does not have, and a part set for one is recovered only with a
+# clock fed in from outside.
+ISP   := $(shell $(GEN) --programmer-of $(BOARD))
+FUSES := $(shell $(GEN) --fuses-of $(BOARD))
+AVRDUDE = $$(find $$HOME/.arduino15/packages/arduino/tools/avrdude -name avrdude -type f | sort | tail -1)
+
+fuses:
+	@test -n "$(FUSES)" || { echo "$(BOARD): no {fuses, ...} in its terms"; exit 1; }
+	@dude=$(AVRDUDE); conf=$$(dirname $$dude)/../etc/avrdude.conf; \
+	 set -- $(FUSES); \
+	 echo "$$dude -c $(ISP) -P $(DEV) -p $(ACHIP) lfuse=$$1 hfuse=$$2 efuse=$$3"; \
+	 $$dude -C $$conf -c $(ISP) -P $(DEV) -p $(ACHIP) \
+	     -U lfuse:w:$$1:m -U hfuse:w:$$2:m -U efuse:w:$$3:m
 
 # Text size per symbol, largest first -- the list to read when it does not fit.
 #

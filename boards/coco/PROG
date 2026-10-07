@@ -1,0 +1,3 @@
+# The program the board carries: PROG=boards/coco. main.csp imports
+# pins.csp and lib/analog.csp.
+main.csp

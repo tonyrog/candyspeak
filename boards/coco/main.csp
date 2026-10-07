@@ -1,0 +1,66 @@
+// CoCo -- the ATmega328P beside the LPC2129 on BridgeZone, translated to C.
+//
+// It watches four digital and four analog inputs while the LPC sleeps, and
+// raises Wake when one of them is worth waking for. The original is
+// seazone/apps/pdb/atmega328p/CoCo/CoCo.ino; the analog side is the same
+// CiA 401 logic, lib/analog.csp, that BridgeZone runs on its own inputs.
+//
+//   make -f Makefile.board BOARD=coco PROG=boards/coco upload
+//   tools/coco_master.escript /dev/ttyACM0 watch
+//
+// The master protocol -- SYN, STATUS, CAPTURE, GET, SET on index:subindex --
+// is link.c beside this file, in C: bytes in, a byte back. What it reads and
+// writes is declared here: the #params are the dictionary, DIntf/DValue/AIntf
+// and the Ain values are the status record, and Ack is the master saying it
+// has read it. Over SERIAL to start with, at 9600, as CoCo.ino's USE_SERIAL.
+//
+// NOT YET: SPI, and CAPTURE as its own copy -- it answers what STATUS does.
+
+#import "pins.csp"
+#import analog
+
+// --- the dictionary: digital (CiA 401 0x6000..0x6008) ----------------------
+#param DigEna:1 unsigned = 1         // GLOBAL_INTERRUPT_ENABLED_DIGITAL
+#param Polarity:8 unsigned = 0       // POLARITY_INPUT8
+#param Filter:8 unsigned = 0         // FILTER_CONSTANT_INPUT8: masks a pin off
+#param AnyChange:8 unsigned = 0xFF   // INTERRUPT_MASK_ANY_CHANGE8
+#param LowHigh:8 unsigned = 0        // INTERRUPT_MASK_LOW_TO_HIGH8
+#param HighLow:8 unsigned = 0        // INTERRUPT_MASK_HIGH_TO_LOW8
+
+// --- the dictionary: analog, one #Analog per channel -----------------------
+// Subindex 1..4 of every ADC index is a1..a4. 10-bit counts, as BridgeZone
+// feeds lib/analog; delta 4 as CoCo.ino's setup has it.
+#param AnaEna:1 unsigned = 1         // GLOBAL_INTERRUPT_ENABLED_ANALOG
+#Analog a1
+#Analog a2
+#Analog a3
+#Analog a4
+a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
+> a1.delta = 4
+> a2.delta = 4
+> a3.delta = 4
+> a4.delta = 4
+
+// --- the status record ------------------------------------------------------
+// update_digital(): the pins through polarity and filter, and an edge on a
+// pin in one of the three masks is an interrupt flag. An analog report is
+// lib/analog's own decision, and inhibit_mark moves on every one.
+#variable DValue:8 unsigned = 0
+#variable DIntf:8 unsigned = 0
+#variable AIntf:8 unsigned = 0
+#variable Ack:1 in = 0               // link.c: the record has been read
+
+#local DNew:8 unsigned = ((Din1 | (Din2 << 1) | (Din3 << 2) | (Din4 << 3)) ^ Polarity) & ~Filter
+#local DEv:8 unsigned = ((AnyChange & (DValue ^ DNew)) | (LowHigh & ~DValue & DNew) | (HighLow & DValue & ~DNew)) & -DigEna
+#local AEv:8 unsigned = ((changed(a1.inhibit_mark) & 1) | (changed(a2.inhibit_mark) & 2) | (changed(a3.inhibit_mark) & 4) | (changed(a4.inhibit_mark) & 8)) & -AnaEna
+
+DValue = DNew
+// The flags gather until the master has read them. A read clears what it
+// read, and an event in the same cycle is the first of the next record. Not
+// in INIT: the first look at the pins is where DValue starts, not a change --
+// CoCo.ino's setup scans once with the interrupts off for the same reason.
+DIntf = DIntf | DEv, AIntf = AIntf | AEv ? State == NORMAL && !Ack
+DIntf = DEv, AIntf = AEv, Ack = 0       ? State == NORMAL && Ack
+
+// High while there is something unread, as set_lpc_interrupt drove it.
+Wake = (DIntf | AIntf) != 0

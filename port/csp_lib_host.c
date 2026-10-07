@@ -1,12 +1,21 @@
+#define _GNU_SOURCE        // posix_openpt, ptsname, cfmakeraw
 // The host harness for C generated from a .csp (utils/candyspeak_c.erl).
 //
 //   prog [-F stimulus] [-c cycles]
+//   prog -P [-F stimulus]
 //
 // Runs the program the way `csp -F` does -- the same stimulus format, the same
 // virtual clock, the same stopping rule -- and prints the final value of every
 // scalar as `name=value`, one a line. Comparing that with csp's own last state
 // is the oracle: one .csp, interpreted and translated, must end in the same
 // place.
+//
+// -P runs it LIVE instead, for a program with a link (link.c beside the .csp,
+// compiled in through port/csp_lib_prog.c): the clock is the wall clock, the
+// link's bytes go over a pseudo-terminal whose name is printed first, and a
+// line `Name=value ...` on stdin sets inputs as a stimulus row would. That is
+// a CoCo on the desk: tools/coco_master.escript talks to the pty as to the
+// board.
 //
 // No pins. As in port/csp_linux.c, an input is what the stimulus wrote and an
 // output goes nowhere, so the generated file is built with -DCSP_LIB_HOST and
@@ -16,6 +25,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <poll.h>
+#include <time.h>
+#include <termios.h>
 #include "csp_lib.h"
 #include "csp_lib_host.h"
 
@@ -28,9 +42,25 @@ static uint32_t row_time = 0;
 static int      row_applied = 1;      // the loaded row has been applied
 static int      input_done = 0;
 
+static int      pty = -1;           // -P: the master side
+
 void csp_lib_putc(char c)
 {
-    putchar(c);
+    if (pty >= 0) {
+	ssize_t n = write(pty, &c, 1);
+	(void)n;             // a byte the other end was not there for is gone
+    }
+    else
+	putchar(c);
+}
+
+int csp_lib_getc(void)
+{
+    unsigned char c;
+
+    if ((pty >= 0) && (read(pty, &c, 1) == 1))
+	return c;
+    return -1;
 }
 
 static const csp_lib_name_t* lookup(const char* name, size_t len)
@@ -102,6 +132,77 @@ void csp_lib_host_input(void)
     }
 }
 
+static uint32_t wall_ms(void)
+{
+    static struct timespec t0;
+    struct timespec t;
+
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    if ((t0.tv_sec == 0) && (t0.tv_nsec == 0))
+	t0 = t;
+    return (uint32_t)((t.tv_sec - t0.tv_sec) * 1000 +
+		      (t.tv_nsec - t0.tv_nsec) / 1000000);
+}
+
+// The pty is opened raw: the link's bytes are binary, and a terminal line
+// discipline would turn 0x0A into two of them on the way out.
+static int live(void)
+{
+    char line[MAX_LINE];
+    size_t len = 0;
+    int stdin_open = 1;
+    int slave;
+
+    if (((pty = posix_openpt(O_RDWR | O_NOCTTY)) < 0) ||
+	(grantpt(pty) < 0) || (unlockpt(pty) < 0)) {
+	perror("pty");
+	return 1;
+    }
+    // One slave fd held open by us: without it the master reads EIO between
+    // two runs of the tool on the other end. Raw, so the first open by a tool
+    // that does not set the mode itself gets bytes as they are.
+    if ((slave = open(ptsname(pty), O_RDWR | O_NOCTTY)) >= 0) {
+	struct termios tio;
+	if (tcgetattr(slave, &tio) == 0) {
+	    cfmakeraw(&tio);
+	    (void)tcsetattr(slave, TCSANOW, &tio);
+	}
+    }
+    (void)fcntl(pty, F_SETFL, fcntl(pty, F_GETFL) | O_NONBLOCK);
+    printf("pty %s\n", ptsname(pty));
+    fflush(stdout);
+
+    csp_lib_setup();
+    for (;;) {
+	uint32_t wait;
+	struct pollfd pf[2];
+	int nf = 0;
+
+	vclock = wall_ms();
+	csp_lib_poll();
+	(void)csp_lib_step(vclock, &wait);
+
+	pf[nf].fd = pty; pf[nf].events = POLLIN; nf++;
+	if (stdin_open) {
+	    pf[nf].fd = 0; pf[nf].events = POLLIN; nf++;
+	}
+	(void)poll(pf, nf, 1);
+	if (stdin_open && (nf > 1) && (pf[1].revents & (POLLIN | POLLHUP))) {
+	    char c;
+	    if (read(0, &c, 1) != 1)
+		stdin_open = 0;
+	    else if (c == '\n') {
+		line[len] = '\0';
+		apply(line);
+		len = 0;
+	    }
+	    else if (len + 1 < sizeof(line))
+		line[len++] = c;
+	}
+    }
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     long cycles = -1;
@@ -109,8 +210,12 @@ int main(int argc, char** argv)
     int i;
     const csp_lib_name_t* p;
 
+    int live_mode = 0;
+
     for (i = 1; i < argc; i++) {
-	if ((strcmp(argv[i], "-F") == 0) && (i + 1 < argc)) {
+	if (strcmp(argv[i], "-P") == 0)
+	    live_mode = 1;
+	else if ((strcmp(argv[i], "-F") == 0) && (i + 1 < argc)) {
 	    if ((fin = fopen(argv[++i], "r")) == NULL) {
 		perror(argv[i]);
 		return 1;
@@ -119,12 +224,15 @@ int main(int argc, char** argv)
 	else if ((strcmp(argv[i], "-c") == 0) && (i + 1 < argc))
 	    cycles = strtol(argv[++i], NULL, 0);
 	else {
-	    fprintf(stderr, "usage: %s [-F stimulus] [-c cycles]\n", argv[0]);
+	    fprintf(stderr, "usage: %s [-F stimulus] [-c cycles] | -P [-F stimulus]\n",
+		    argv[0]);
 	    return 1;
 	}
     }
     if (!fin)
 	input_done = 1;
+    if (live_mode)
+	return live();
 
     csp_lib_setup();
     for (;;) {

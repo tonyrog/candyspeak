@@ -5,6 +5,7 @@ csp
 tmp/
 CandySpeak/build/
 CandySpeak/doc/
+CspLib/build/
 design/
 eeprom.db
 tests/actual/
