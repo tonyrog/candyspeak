@@ -1,0 +1,7 @@
+# Switches on and off, one at a time and two together; pots to four levels.
+0      Din1=0 Din2=0 Din3=0 Din4=0 Ain1=0 Ain2=0 Ain3=0 Ain4=0
+100    Din1=1
+200    Din3=1
+300    Din1=0
+400    Din2=1 Din4=1
+500    Ain1=100 Ain2=1023 Ain3=512 Ain4=3

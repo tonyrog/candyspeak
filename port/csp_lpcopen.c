@@ -1113,10 +1113,60 @@ static void serial_xoff_set(csp_rt_t* st, uint8_t on)
 static void serial_hold(csp_rt_t* st)    { serial_xoff_set(st, 1); }
 static void serial_release(csp_rt_t* st) { serial_xoff_set(st, (csp_line_space(&st->line) && csp_con_space()) ? 0 : 1); }
 
+// DIAG=1 on an ARM7: where the first loops go, and what the tick's timer and
+// the VIC look like while they do. A tick that never advances shows up as TC
+// moving with `ms` standing still (the interrupt is not taken) or TC standing
+// still (the timer is not counting); a letter that is the last one printed
+// names the step that did not come back.
+#if defined(CSP_BITBANG_DIAG) && defined(CHIP_LPC212X)
+#define DIAG_LOOPS 4
+static int diag_loop;
+#define DIAG_MARK(c) do { if (diag_loop < DIAG_LOOPS) csp_print_char(c); } while (0)
+
+static void diag_kv(const char* k, uint32_t v)
+{
+    csp_print_str(k);
+    csp_print_char('=');
+    csp_print_hex(v);
+    csp_print_char(' ');
+}
+
+static void diag_regs(void)
+{
+    uint32_t cpsr = DisableIRQ();
+    RestoreIRQ(cpsr);
+    csp_print_char('\n');
+    diag_kv("ms", csp_chip_millis());
+    diag_kv("tc", LPC_TIMER0->TC);
+    diag_kv("pr", LPC_TIMER0->PR);
+    diag_kv("mr2", LPC_TIMER0->MR[2]);
+    diag_kv("ir", LPC_TIMER0->IR);
+    diag_kv("mcr", LPC_TIMER0->MCR);
+    diag_kv("tcr", LPC_TIMER0->TCR);
+    diag_kv("cpsr", cpsr);
+    diag_kv("vicen", *(volatile uint32_t*)0xFFFFF010u);
+    diag_kv("vicirq", *(volatile uint32_t*)0xFFFFF000u);
+    diag_kv("vicraw", *(volatile uint32_t*)0xFFFFF008u);
+    diag_kv("vc0", *(volatile uint32_t*)0xFFFFF200u);
+    diag_kv("vc1", *(volatile uint32_t*)0xFFFFF204u);
+    diag_kv("vc2", *(volatile uint32_t*)0xFFFFF208u);
+    csp_print_char('\n');
+}
+#else
+#define DIAG_MARK(c) ((void)0)
+#endif
+
 static void csp_lpc_loop(void)
 {
     static int first_cycle = 1;
     index_t x;
+
+#if defined(CSP_BITBANG_DIAG) && defined(CHIP_LPC212X)
+    if (diag_loop < DIAG_LOOPS) {
+	diag_regs();
+	diag_loop++;
+    }
+#endif
 
     // A character a second, sent to nobody's request. UNSOLICITED output is the
     // only thing that can tell our transmitter apart from a loop in the wiring:
@@ -1152,6 +1202,7 @@ static void csp_lpc_loop(void)
     // Keep draining while the buffer has room, INCLUDING past a completed line:
     // the spare room is the point, since a line that adds a rule stops to
     // rebuild and the burst still coming in needs somewhere to go.
+    DIAG_MARK('p');
     if (!state.line.ready)
 	csp_line_prompt(&state.line);
     while (csp_lpc_uart_available() && csp_line_space(&state.line) &&
@@ -1187,11 +1238,15 @@ static void csp_lpc_loop(void)
 	return;
     }
 
+    DIAG_MARK('i');
     csp_input(&state);
+    DIAG_MARK('c');
     x = state.live ? BAD_INDEX : csp_cycle(&state);   // ROM (seq) + RAM, one model
     (void)x;
     csp_commit(&state);
+    DIAG_MARK('o');
     csp_output(&state);
+    DIAG_MARK('w');
 
     // A running timer sets wait_ms to time-until-fire, but that must NOT gate
     // the whole loop: continuous inputs have to keep sampling at a steady rate.

@@ -1,0 +1,8 @@
+// testrig.csp: each input to its output.
+//
+// The beat is the test's, not the rig's: with no timer in the program the
+// virtual clock has nothing to wake for and never reaches the stimulus rows.
+// On the board the pins are sampled every cycle anyway.
+#import "../testrig.csp"
+#timer Beat 10 = 1
+Beat = 1 ? timeout(Beat)

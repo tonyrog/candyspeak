@@ -1,9 +1,9 @@
 // CoCo's master protocol: CoCo.ino's command(), over csp_lib_getc/putc.
 //
 // Compiled into the same unit as the translated main.csp (port/
-// csp_lib_prog.c), so it reads csp_in and writes csp_out by member. A write
-// lands in the working copy and the program sees it next cycle, as a value
-// typed at a prompt would.
+// csp_lib_prog.c), so it reaches the program by member: the #params -- the
+// dictionary -- in csp_par, which has one copy and is set at once, and the
+// status record in csp_in, with Ack written into csp_out for the next cycle.
 //
 // ONE BYTE IN, ONE BYTE OUT, and the byte out is the answer to the PREVIOUS
 // byte in -- an SPI slave's shift register, which is what the original was.
@@ -86,13 +86,13 @@ static uint8_t known(uint16_t ix)
 }
 
 // Subindex 1..4 of an ADC index is one channel; 0 and 5.. are not there.
-static Analog_t* channel(Main_t* m, uint8_t sub)
+static Analog_p* channel(uint8_t sub)
 {
     switch (sub) {
-    case 1: return &m->a1;
-    case 2: return &m->a2;
-    case 3: return &m->a3;
-    case 4: return &m->a4;
+    case 1: return &csp_par.a1;
+    case 2: return &csp_par.a2;
+    case 3: return &csp_par.a3;
+    case 4: return &csp_par.a4;
     default: return 0;
     }
 }
@@ -112,23 +112,23 @@ static uint32_t ain(uint8_t sub)
 // *ok is cleared for an index:subindex the dictionary does not have.
 static uint32_t get_value(uint16_t ix, uint8_t sub, int* ok)
 {
-    Analog_t* a = channel(&csp_in, sub);
+    Analog_p* a = channel(sub);
 
     *ok = 1;
     if (sub == 0) {
 	switch (ix) {
-	case INDEX_GLOBAL_INTERRUPT_ENABLED_DIGITAL: return csp_in.DigEna;
-	case INDEX_GLOBAL_INTERRUPT_ENABLED_ANALOG:  return csp_in.AnaEna;
+	case INDEX_GLOBAL_INTERRUPT_ENABLED_DIGITAL: return csp_par.DigEna;
+	case INDEX_GLOBAL_INTERRUPT_ENABLED_ANALOG:  return csp_par.AnaEna;
 	}
     }
     else if (sub == 1) {
 	switch (ix) {
 	case INDEX_READ_INPUT8:                 return csp_in.DValue;
-	case INDEX_POLARITY_INPUT8:             return csp_in.Polarity;
-	case INDEX_FILTER_CONSTANT_INPUT8:      return csp_in.Filter;
-	case INDEX_INTERRUPT_MASK_ANY_CHANGE8:  return csp_in.AnyChange;
-	case INDEX_INTERRUPT_MASK_LOW_TO_HIGH8: return csp_in.LowHigh;
-	case INDEX_INTERRUPT_MASK_HIGH_TO_LOW8: return csp_in.HighLow;
+	case INDEX_POLARITY_INPUT8:             return csp_par.Polarity;
+	case INDEX_FILTER_CONSTANT_INPUT8:      return csp_par.Filter;
+	case INDEX_INTERRUPT_MASK_ANY_CHANGE8:  return csp_par.AnyChange;
+	case INDEX_INTERRUPT_MASK_LOW_TO_HIGH8: return csp_par.LowHigh;
+	case INDEX_INTERRUPT_MASK_HIGH_TO_LOW8: return csp_par.HighLow;
 	}
     }
     if (a) {
@@ -155,21 +155,21 @@ static uint32_t get_value(uint16_t ix, uint8_t sub, int* ok)
 // The read-only entries (READ_INPUT8, ADC_READ16) are not settable.
 static int set_value(uint16_t ix, uint8_t sub, uint32_t v)
 {
-    Analog_t* a = channel(&csp_out, sub);
+    Analog_p* a = channel(sub);
 
     if (sub == 0) {
 	switch (ix) {
-	case INDEX_GLOBAL_INTERRUPT_ENABLED_DIGITAL: csp_out.DigEna = v; return 1;
-	case INDEX_GLOBAL_INTERRUPT_ENABLED_ANALOG:  csp_out.AnaEna = v; return 1;
+	case INDEX_GLOBAL_INTERRUPT_ENABLED_DIGITAL: csp_par.DigEna = v; return 1;
+	case INDEX_GLOBAL_INTERRUPT_ENABLED_ANALOG:  csp_par.AnaEna = v; return 1;
 	}
     }
     else if (sub == 1) {
 	switch (ix) {
-	case INDEX_POLARITY_INPUT8:             csp_out.Polarity = v; return 1;
-	case INDEX_FILTER_CONSTANT_INPUT8:      csp_out.Filter = v; return 1;
-	case INDEX_INTERRUPT_MASK_ANY_CHANGE8:  csp_out.AnyChange = v; return 1;
-	case INDEX_INTERRUPT_MASK_LOW_TO_HIGH8: csp_out.LowHigh = v; return 1;
-	case INDEX_INTERRUPT_MASK_HIGH_TO_LOW8: csp_out.HighLow = v; return 1;
+	case INDEX_POLARITY_INPUT8:             csp_par.Polarity = v; return 1;
+	case INDEX_FILTER_CONSTANT_INPUT8:      csp_par.Filter = v; return 1;
+	case INDEX_INTERRUPT_MASK_ANY_CHANGE8:  csp_par.AnyChange = v; return 1;
+	case INDEX_INTERRUPT_MASK_LOW_TO_HIGH8: csp_par.LowHigh = v; return 1;
+	case INDEX_INTERRUPT_MASK_HIGH_TO_LOW8: csp_par.HighLow = v; return 1;
 	}
     }
     if (a) {

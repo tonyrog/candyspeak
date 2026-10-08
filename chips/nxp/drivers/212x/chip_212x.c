@@ -512,8 +512,18 @@ static void tick_wrapper(void)
     // RELATIVE to the match that just fired, not to TC: TC has moved on by
     // however long the interrupt took to be taken, and adding to it would let
     // that latency accumulate into the clock.
-    LPC_TIMER0->MR[TICK_MR] += TICK_US;
-    csp_tick_isr();
+    //
+    // And CAUGHT UP, one millisecond at a time, while the match is still not
+    // ahead of TC. TC is never reset, so a match register left behind it next
+    // matches when TC wraps -- 71 minutes later. That is what interrupts off
+    // for more than a tick did: the DIAG register dump at boot, an EEPROM read.
+    // The tick stopped at ms=1 with MR2 at 2000 and TC at 142000, and the main
+    // loop then waited for it forever (2026-10-08, BridgeZone). Each step that
+    // is caught up is a millisecond that did pass, so it is counted.
+    do {
+	LPC_TIMER0->MR[TICK_MR] += TICK_US;
+	csp_tick_isr();
+    } while ((int32_t)(LPC_TIMER0->MR[TICK_MR] - LPC_TIMER0->TC) <= 0);
 }
 
 void Chip_Tick_Init(uint32_t hz)

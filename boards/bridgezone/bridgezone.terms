@@ -117,17 +117,6 @@
   {pin, 'P0.16', eint0},
   {irq, 'P0.16', falling},
 
-  %% AND ONE THAT CAN BE REACHED BY HAND. P0.16 goes to the AVR, not to a
-  %% terminal, so there is nothing to pull on it while testing -- P0.30 is Ain4
-  %% on a screw terminal and carries eint3 on function 2.
-  %%
-  %% THIS TAKES Ain4 AWAY: the pin is muxed to the EINT instead of to the
-  %% converter, so `#analog Ain4 in 0:30` reads nothing while this line is here.
-  %% It is here to test the EINT path on a board where the real source cannot be
-  %% driven by hand; take it out and Ain4 comes back.
-  {pin, 'P0.30', eint3},
-  {irq, 'P0.30', falling},
-
   %% --- analog and PWM out ---------------------------------------------------
   %% Two mechanisms, and the pin decides which. PWM0 is the real block -- one
   %% period, a match per channel, no servicing. The MATn.m pins are a timer
@@ -147,7 +136,7 @@
   {pin, 'P0.27', ain0},
   {pin, 'P0.28', ain1},
   {pin, 'P0.29', ain2},
-  %% P0.30 (ain3/Ain4) is muxed to eint3 above -- see the note there.
+  {pin, 'P0.30', ain3},
 
   {enable, [uart0, uart1, can1, can2, i2c0, spi0, adc, pwm, gpio,
 	    timer0, timer1]}]}.

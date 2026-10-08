@@ -31,6 +31,7 @@
 // two-registers-in-one is why the period handler writes the low bits and
 // setup writes the high ones.
 #define EMR_EM(n)      (1u << (n))
+#define EMR_CTL_MASK(n) (3u << (4 + 2*(n)))
 #define EMR_CTL_HIGH(n) (2u << (4 + 2*(n)))   // 2 = set high on match
 
 // --- PWM0 -------------------------------------------------------------------
@@ -40,8 +41,11 @@
 #define PWM0_TC   (*(volatile uint32_t *)(LPC_PWM0_BASE + 0x08))
 #define PWM0_PR   (*(volatile uint32_t *)(LPC_PWM0_BASE + 0x0C))
 #define PWM0_MCR  (*(volatile uint32_t *)(LPC_PWM0_BASE + 0x14))
+// MR0..MR3 sit with the timer registers at 0x18..0x24; MR4..MR6 were added
+// after them, at 0x40..0x48. The old macro put MR1 at 0x40, so MR(2) wrote MR5
+// and MR(5) wrote LER at 0x50 -- Aout2 never came on (2026-10-08).
 #define PWM0_MR(n) (*(volatile uint32_t *)(LPC_PWM0_BASE + \
-		     ((n) == 0 ? 0x18 : 0x40 + ((n)-1)*4)))
+		     ((n) <= 3 ? 0x18 + (n)*4 : 0x40 + ((n)-4)*4)))
 #define PWM0_PCR  (*(volatile uint32_t *)(LPC_PWM0_BASE + 0x4C))
 #define PWM0_LER  (*(volatile uint32_t *)(LPC_PWM0_BASE + 0x50))
 
@@ -59,26 +63,56 @@ static uint32_t pwm0_period;
 
 static uint32_t t0_period, t1_period;
 
-// The period handler for one timer: drive every match-driven pin low and
-// reschedule. RELATIVE to the match that fired, not to TC -- adding to TC would
-// let interrupt latency accumulate into the period.
-static void tmr_period(LPC_TIMER_T *t, uint32_t *period, uint32_t mask)
+// The ON time of each match channel, in timer counts. Kept here and laid down
+// by the period handler, period after period: a match register is an ABSOLUTE
+// count on a timer that never resets, so a value written once is behind TC
+// one period later and never matches again. Written by the output sweep only,
+// that gave one pulse per CYCLE (~10 ms) instead of one per period (1 ms).
+static volatile uint32_t t0_on[1];
+static volatile uint32_t t1_on[3];
+
+// The period handler for one timer: catch the period up, then for each of its
+// `n` channels -- MAT0..MATn-1 -- start the period low and set the match for
+// the new one. A channel fully off has no match at all (a match AT the period
+// end would flash it for the interrupt latency), and one fully on is simply
+// driven high.
+static void tmr_period(LPC_TIMER_T *t, uint32_t period, volatile uint32_t *on,
+		       int n)
 {
+    uint32_t end, emr;
+    int m;
+
     if (!(t->IR & (1u << TMR_PERIOD_MR)))
 	return;
     t->IR = (1u << TMR_PERIOD_MR);
-    t->EMR &= ~mask;                    // all channels low: period starts
-    t->MR[TMR_PERIOD_MR] += *period;
+    // RELATIVE to the match that fired, not to TC -- adding to TC would let
+    // interrupt latency accumulate into the period -- and caught up past TC
+    // whole periods at a time: neither timer resets its count, so a match left
+    // behind TC would next fire when TC wraps, 71 minutes on. See the tick in
+    // chip_212x.c, which fell into exactly this.
+    do
+	t->MR[TMR_PERIOD_MR] += period;
+    while ((int32_t)(t->MR[TMR_PERIOD_MR] - t->TC) <= 0);
+    end = t->MR[TMR_PERIOD_MR];
+
+    emr = t->EMR;
+    for (m = 0; m < n; m++) {
+	emr &= ~(EMR_CTL_MASK(m) | EMR_EM(m));
+	if (on[m] >= period)
+	    emr |= EMR_EM(m);                   // fully on: high, no match
+	else if (on[m] != 0) {
+	    t->MR[m] = end - on[m];             // high from here to the end
+	    emr |= EMR_CTL_HIGH(m);
+	}
+    }
+    t->EMR = emr;
 }
 
 // TIMER0 is ALSO the system clock, and its tick lives on MR2 -- so this handler
 // must not touch TC and must not assume it owns the interrupt. Both handlers
 // are called for every TIMER0 interrupt; each tests its own flag.
-void csp_pwm_timer0_isr(void) { tmr_period(LPC_TIMER0, &t0_period, EMR_EM(0)); }
-void csp_pwm_timer1_isr(void)
-{
-    tmr_period(LPC_TIMER1, &t1_period, EMR_EM(0)|EMR_EM(1)|EMR_EM(2));
-}
+void csp_pwm_timer0_isr(void) { tmr_period(LPC_TIMER0, t0_period, t0_on, 1); }
+void csp_pwm_timer1_isr(void) { tmr_period(LPC_TIMER1, t1_period, t1_on, 3); }
 
 void csp_pwm_init(void)
 {
@@ -100,7 +134,7 @@ void csp_pwm_init(void)
     t1_period = 1000000u / PWM_HZ;
     LPC_TIMER1->MR[TMR_PERIOD_MR] = t1_period;
     LPC_TIMER1->MCR |= (1u << (3 * TMR_PERIOD_MR));      // interrupt on MR3
-    LPC_TIMER1->EMR = EMR_CTL_HIGH(0)|EMR_CTL_HIGH(1)|EMR_CTL_HIGH(2);
+    LPC_TIMER1->EMR = 0;                // every channel off until written
     Chip_VIC_SetHandler(TIMER1_IRQn, csp_pwm_timer1_isr);
     NVIC_EnableIRQ(TIMER1_IRQn);
     Chip_TIMER_Enable(LPC_TIMER1);
@@ -110,7 +144,6 @@ void csp_pwm_init(void)
     t0_period = 1000000u / PWM_HZ;
     LPC_TIMER0->MR[TMR_PERIOD_MR] = LPC_TIMER0->TC + t0_period;
     LPC_TIMER0->MCR |= (1u << (3 * TMR_PERIOD_MR));
-    LPC_TIMER0->EMR |= EMR_CTL_HIGH(0);
 }
 
 // val is 0..255, as csp_board_analog_output scales it.
@@ -136,16 +169,12 @@ void csp_lpc_pwm_write(uint8_t port, uint8_t pin, int val)
 	PWM0_MR(5) = on; PWM0_PCR |= (1u << (8 + 5)); PWM0_LER |= (1u << 5);
 	return;
 
-    // Timer matches. The match is when the pin goes HIGH and the period end
-    // puts it low, so the value written is the OFF time -- period minus duty.
-    case 12: LPC_TIMER1->MR[0] = LPC_TIMER1->MR[TMR_PERIOD_MR] -
-		 (t1_period * (uint32_t)val) / 255u; return;   // MAT1.0
-    case 13: LPC_TIMER1->MR[1] = LPC_TIMER1->MR[TMR_PERIOD_MR] -
-		 (t1_period * (uint32_t)val) / 255u; return;   // MAT1.1
-    case 17: LPC_TIMER1->MR[2] = LPC_TIMER1->MR[TMR_PERIOD_MR] -
-		 (t1_period * (uint32_t)val) / 255u; return;   // MAT1.2
-    case 22: LPC_TIMER0->MR[0] = LPC_TIMER0->MR[TMR_PERIOD_MR] -
-		 (t0_period * (uint32_t)val) / 255u; return;   // MAT0.0
+    // Timer matches: only the ON time is recorded here. The period handler
+    // lays it down from the next period on -- see tmr_period.
+    case 12: t1_on[0] = (t1_period * (uint32_t)val) / 255u; return; // MAT1.0
+    case 13: t1_on[1] = (t1_period * (uint32_t)val) / 255u; return; // MAT1.1
+    case 17: t1_on[2] = (t1_period * (uint32_t)val) / 255u; return; // MAT1.2
+    case 22: t0_on[0] = (t0_period * (uint32_t)val) / 255u; return; // MAT0.0
     default:
 	return;
     }

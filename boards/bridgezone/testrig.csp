@@ -1,0 +1,21 @@
+// BridgeZone on the test rig: every input straight to its output, nothing
+// more, so the hardware can be checked pin by pin.
+//
+//   make -f Makefile.board BOARD=bridgezone PROG=boards/bridgezone/testrig.csp
+//
+//   Din1..4  ->  Dout1..4
+//   Ain1..4  ->  Pout1..4     10 bits in, 10 bits out
+//   Ain1     ->  Aout1
+//   Ain2     ->  Aout2
+//   Din1..4  ->  the four CAN leds, so an input shows even with no load on J3
+//
+// Plain rules on pins.csp and not main.csp configured: main.csp's 28 channel
+// instances do not fit the pool on a 16K LPC2129, and a rig is for finding out
+// whether the pins work, not the state machines.
+#import "pins.csp"
+
+Dout1 = Din1, Dout2 = Din2, Dout3 = Din3, Dout4 = Din4
+Can1Green = Din1, Can2Green = Din2, Can1Yellow = Din3, Can2Yellow = Din4
+
+Pout1 = Ain1, Pout2 = Ain2, Pout3 = Ain3, Pout4 = Ain4
+Aout1 = Ain1, Aout2 = Ain2

@@ -62,6 +62,19 @@ static inline int32_t csp_lib_clip(int32_t x, int32_t lo, int32_t hi)
     return (x < lo) ? lo : ((x > hi) ? hi : x);
 }
 
+// A value cut to `w' bits, as a field of that width would hold it: unsigned
+// keeps the low bits, signed sign-extends them. For a #local that the
+// translation keeps in a C variable rather than a bit-field.
+static inline uint32_t csp_lib_wrapu(uint32_t v, int w)
+{
+    return (w >= 32) ? v : (v & ((1u << w) - 1u));
+}
+
+static inline int32_t csp_lib_wraps(int32_t v, int w)
+{
+    return (w >= 32) ? v : (int32_t)((uint32_t)v << (32 - w)) >> (32 - w);
+}
+
 // ------------------------------------------------------------
 // Analog scaling between a declaration and the chip's sixteen bits.
 // res is the declared width, clamped to 2..16; a signed value is centred, so

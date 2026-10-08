@@ -1,0 +1,17 @@
+{modes, [seq]}.
+{stimulus, "boards/bridgezone/tests/testrig.dat"}.
+{cycles, 300}.
+%% Din1 went on and off again; Din2..4 are on. The pots come out on the PWM
+%% pins as they went in, 10 bits to 10 bits.
+{checks, [
+  {final_var, "Dout1", 0},
+  {final_var, "Dout2", 1},
+  {final_var, "Dout3", 1},
+  {final_var, "Dout4", 1},
+  {final_var, "Pout1", 100},
+  {final_var, "Pout2", 1023},
+  {final_var, "Pout3", 512},
+  {final_var, "Pout4", 3},
+  {final_var, "Aout1", 100},
+  {final_var, "Aout2", 1023}
+]}.
