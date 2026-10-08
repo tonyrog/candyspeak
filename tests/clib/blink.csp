@@ -1,0 +1,10 @@
+// A timer that re-arms itself, a toggle gated on a pulled-up input, and an
+// 8-bit counter that wraps. Btn reads 0 on the host until a stimulus says so.
+// cycles: 30
+#digital Led out 13
+#digital Btn in pullup 2
+#timer Blink 500 = 1
+#variable N:8 unsigned = 250
+Blink = 1 ? timeout(Blink)
+Led = !Led, N = N + 1 ? timeout(Blink) && Btn
+println("n=", N) ? timeout(Blink)

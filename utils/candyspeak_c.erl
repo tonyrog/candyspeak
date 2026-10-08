@@ -18,8 +18,8 @@
 %%%   csp_chip_millis -- Arduino's setup()/loop(), on csp_chip_*. Without it a
 %%%   harness drives csp_lib_setup/csp_lib_step (tools/csp_lib_host.c).
 %%%
-%%%   NOT YET: arrays, float, buffers and fields, CAN, events, `.pin` set per
-%%%   instance, elapsed(). Each is refused by name rather than
+%%%   NOT YET: arrays, float, transports other than `in can', events, `.pin`
+%%%   set per instance. Each is refused by name rather than
 %%%   translated wrong.
 %%% @end
 -module(candyspeak_c).
@@ -82,6 +82,12 @@ gen({{module, _, {'WORD', _, "Main"}}, Bound, Decls}, In) ->
     put(csp_fields, sets:from_list([N || {_, Ds} <- Mains, D <- flat(Ds),
                                          N <- [name_of(D)], N =/= undefined])),
     put(csp_haspar, haspar(Mains)),
+    {_, RuleNo} = number_rules(Decls, {1, #{}}),
+    put(csp_ruleno, RuleNo),
+    put(csp_hascan, has_tree(Mains, fun({buffer, _, _, _, _, [{can, _}]}) -> true;
+                                       (_) -> false end)),
+    put(csp_hasbuf, has_tree(Mains, fun({buffer, _, _, _, _, _}) -> true;
+                                       (_) -> false end)),
     [header(In, States),
      [defines(Ds) || {_, Ds} <- [Main | [maps:get(M, Mods) || M <- Order]]],
      [[struct(M, Ds), pstruct(M, Ds)] || {M, Ds} <- Mains],
@@ -262,6 +268,8 @@ module(Name, Ds, Mods, States, Globals) ->
             module => Name},
     T = [Name, "_t"],
     [init(Name, Ds, Env),
+     can_fn(Name, Ds),
+     rx_fn(Name, Ds),
      walk(Name, "timers_in", "uint32_t now", Ds, Env),
      walk(Name, "timers_out", "uint32_t now", Ds, Env),
      wait_fn(Name, Ds),
@@ -291,6 +299,129 @@ struct(Name, Ds) ->
      "} ", Name, "_t;\n\n"].
 
 %% ------------------------------------------------------------------
+%% Rule numbers, for #disable
+%% ------------------------------------------------------------------
+%%
+%% Rule N is the Nth OP_RULE the compiler lays down, counted through the whole
+%% program in source order: a module's body where its #module stands, an #in or
+%% #when block's rules where the block stands. A rule counts, a #local formula
+%% counts, and so does each binding on an instance line (`X <- A`, `X = 3`). A
+%% `>' patch does not. That is what /list numbers -- check it there.
+%%
+%% Each guard in the C carries its number as CSP_ON(n): a bit test against the
+%% disable mask when the build says -DCSP_LIB_RULES, the constant 1 (and no
+%% code at all) when it does not.
+number_rules([D | T], Acc) -> number_rules(T, number_rule(D, Acc));
+number_rules([], Acc) -> Acc.
+
+number_rule({rule, _, _, _} = R, {N, M}) -> {N + 1, M#{R => N}};
+number_rule({local, _, _, _, Opts, E} = L, {N, M}) when E =/= undefined ->
+    case is_formula(Opts) of
+        true -> {N + 1, M#{L => N}};
+        false -> {N, M}
+    end;
+number_rule({object, _, _, _, Args}, Acc) ->
+    lists:foldl(fun(A, {N, M}) -> {N + 1, M#{A => N}} end, Acc, Args);
+number_rule({{module, _, _}, _, Ds}, Acc) -> number_rules(Ds, Acc);
+number_rule({{in, _, _}, Ds}, Acc) -> number_rules(Ds, Acc);
+number_rule({{'when', _, _}, Ds}, Acc) -> number_rules(Ds, Acc);
+number_rule(_, Acc) -> Acc.
+
+rule_on(Term) -> ["CSP_ON(", integer_to_list(maps:get(Term, get(csp_ruleno))), ")"].
+
+nrules() -> integer_to_list(maps:size(get(csp_ruleno))).
+
+%% `#disable 3 5-7' in the program: the rules start off.
+disables(Decls) ->
+    [[?IND, case Kind of disable -> "csp_lib_disable("; enable -> "csp_lib_enable(" end,
+      integer_to_list(I), ");\n"]
+     || {Kind, _, Items} <- Decls, Kind =:= disable orelse Kind =:= enable,
+        Item <- Items,
+        I <- case Item of
+                 {{'INT', _, A}, {'INT', _, B}} ->
+                     lists:seq(list_to_integer(A), list_to_integer(B));
+                 {'INT', _, A} -> [list_to_integer(A)]
+             end].
+
+%% ------------------------------------------------------------------
+%% Buffers and fields
+%% ------------------------------------------------------------------
+%%
+%% A #buffer is its bytes, its length, and the arrival flags: a frame taken in
+%% lands in the WORKING copy with `rxpend', and the commit makes it `rx' --
+%% readable, data and flag together, for exactly one cycle. The runtime's
+%% BUF_F_RXPEND and BUF_F_RX, in csp_commit. A #field is a view of bits in its
+%% buffer, read and written by csp_bits.h, the same code the runtime uses, so
+%% the bit order -- `big' or not -- cannot differ.
+%%
+%% Only `in can <id>' and a plain buffer with no transport so far.
+buffer_check(Ln, Opts, Tr) ->
+    case {proplists:get_value(dir, Opts), Tr} of
+        {_, []} -> ok;
+        {in, [{can, _}]} -> ok;
+        _ -> throw({unsupported, "#buffer with this transport", Ln})
+    end.
+
+%% A frame from the bus, offered to every `in can' buffer that wants its id.
+can_fn(Name, Ds) ->
+    case has_can(Name) of
+        false -> [];
+        true ->
+            ["static void ", Name, "_can(", Name, "_t* s, uint32_t id, "
+             "const uint8_t* d, uint8_t n)\n{\n",
+             [[?IND, "if (id == ", Id, ") {\n",
+               ?IND, ?IND, "memcpy(s->", N, ".b, d, (n < sizeof(s->", N, ".b)) ? n : sizeof(s->", N, ".b));\n",
+               ?IND, ?IND, "s->", N, ".dlc = n;\n",
+               ?IND, ?IND, "s->", N, ".rxpend = 1;\n",
+               ?IND, "}\n"]
+              || {buffer, _, {'WORD', _, N}, _, _, [{can, {'INT', _, Id}}]} <- Ds],
+             [[?IND, M, "_can(&s->", N, ", id, d, n);\n"]
+              || {object, _, {'WORD', _, M}, {'WORD', _, N}, _} <- Ds, has_can(M)],
+             "}\n\n"]
+    end.
+
+%% After the commit: what arrived this cycle is readable for the next, and
+%% what was readable is no longer.
+rx_fn(Name, Ds) ->
+    case has_buf(Name) of
+        false -> [];
+        true ->
+            ["static void ", Name, "_rx(", Name, "_t* in, ", Name, "_t* out)\n{\n",
+             [[?IND, "in->", N, ".rx = out->", N, ".rx = in->", N, ".rxpend;\n",
+               ?IND, "in->", N, ".rxpend = out->", N, ".rxpend = 0;\n"]
+              || {buffer, _, {'WORD', _, N}, _, _, _} <- Ds],
+             [[?IND, M, "_rx(&in->", N, ", &out->", N, ");\n"]
+              || {object, _, {'WORD', _, M}, {'WORD', _, N}, _} <- Ds, has_buf(M)],
+             "}\n\n"]
+    end.
+
+%% Where a field's bits are: {Buffer, Pos, N, BigEndian, Signed}.
+bits_of({field, _, _, Res, Opts, {'WORD', _, Buf}, Range}) ->
+    {Pos, N} = case Range of
+                   {'INT', _, P} -> {list_to_integer(P),
+                                     case Res of
+                                         {'INT', _, W} -> list_to_integer(W);
+                                         default -> 1
+                                     end};
+                   {range, _, {'INT', _, Lo}, {'INT', _, Hi}} ->
+                       {list_to_integer(Lo), list_to_integer(Hi) - list_to_integer(Lo) + 1}
+               end,
+    Big = lists:member({endian, big}, Opts),
+    Sgn = ctype(Res, Opts, 0) =:= "int32_t",
+    {Buf, Pos, N, Big, Sgn}.
+
+%% A buffer of up to four bytes is also a number: its bytes, low first,
+%% unsigned -- as the runtime reads a #buffer used as a value.
+scalar_bits({buffer, _, _, {'INT', _, Bytes}, _, _}, Ln) ->
+    case list_to_integer(Bytes) of
+        B when B =< 4 -> integer_to_list(8 * B);
+        _ -> throw({unsupported, "a buffer wider than 32 bits as a value", Ln})
+    end.
+
+b01(true) -> "1";
+b01(false) -> "0".
+
+%% ------------------------------------------------------------------
 %% The #params, ONE copy
 %% ------------------------------------------------------------------
 %%
@@ -315,6 +446,20 @@ haspar(Mains) ->
       end, #{}, Mains).
 
 has_par(M) -> maps:get(M, get(csp_haspar), false).
+
+%% Module -> whether it, or an instance it holds, has a declaration Pred is
+%% true of. Mains is in dependency order.
+has_tree(Mains, Pred) ->
+    lists:foldl(
+      fun({M, Ds}, Acc) ->
+              Own = lists:any(Pred, Ds),
+              Sub = lists:any(fun({object, _, {'WORD', _, X}, _, _}) -> maps:get(X, Acc, false);
+                                 (_) -> false end, Ds),
+              Acc#{M => Own orelse Sub}
+      end, #{}, Mains).
+
+has_can(M) -> maps:get(M, get(csp_hascan), false).
+has_buf(M) -> maps:get(M, get(csp_hasbuf), false).
 
 pstruct(Name, Ds) ->
     case has_par(Name) of
@@ -352,6 +497,8 @@ symbols(Ds, Mods) ->
                   {local, _, {'WORD', _, N}, _, _, _} -> Acc#{N => {local, D}};
                   {constant, _, {'WORD', _, N}, _, _, _, _} -> Acc#{N => {const, D}};
                   {define, _, {'WORD', _, N}, _} -> Acc#{N => {const, D}};
+                  {buffer, _, {'WORD', _, N}, _, _, _} -> Acc#{N => {buffer, D}};
+                  {field, _, {'WORD', _, N}, _, _, _, _} -> Acc#{N => {bfield, D}};
                   {object, Ln, {'WORD', _, M}, {'WORD', _, N}, _} ->
                       Acc#{N => {object, M, symbols(module_ds(M, Mods, Ln), Mods)}};
                   _ -> Acc
@@ -373,8 +520,10 @@ field({timer, _, {'WORD', _, N}, _, _}) ->
     [?IND, "csp_timer_t ", N, ";\n"];
 field({object, _, {'WORD', _, M}, {'WORD', _, N}, _}) ->
     [?IND, M, "_t ", N, ";\n"];
-field({buffer, Ln, _, _, _, _}) -> throw({unsupported, "#buffer", Ln});
-field({field, Ln, _, _, _, _, _}) -> throw({unsupported, "#field", Ln});
+field({buffer, Ln, {'WORD', _, N}, {'INT', _, Bytes}, Opts, Tr}) ->
+    buffer_check(Ln, Opts, Tr),
+    [?IND, "struct { uint8_t b[", Bytes, "]; uint8_t dlc, rx, rxpend; } ", N, ";\n"];
+field({field, _, _, _, _, _, _}) -> [];      % a view into its buffer
 field(_) -> [].
 
 scalar(scalar, _) -> ok;
@@ -552,11 +701,12 @@ port_pin(_, Ln) -> throw({unsupported, "pin list", Ln}).
 body(Ds, Ind, Env, Where) ->
     [stmt(D, Ind, Env, Where) || D <- Ds].
 
-stmt({rule, Ln, Assigns, Guard}, Ind, Env, Where) ->
-    Gate = case {Where, maps:get(main, Env)} of
+stmt({rule, Ln, Assigns, Guard} = R, Ind, Env, Where) ->
+    Gate0 = case {Where, maps:get(main, Env)} of
                {top, true} -> ["(in->State == INIT || in->State == NORMAL)"];
                _ -> []
            end,
+    Gate = [rule_on(R) | Gate0],
     Cond = case Guard of
                undefined -> Gate;
                _ -> Gate ++ [ccond(Guard, Env)]
@@ -569,16 +719,19 @@ stmt({{in, _, States}, Ds}, Ind, Env, _Where) ->
 stmt({{'when', _, Cond}, Ds}, Ind, Env, Where) ->
     [Ind, "if (", unwrap(ccond(Cond, Env)), ") {\n",
      body(Ds, Ind ++ ?IND, Env, Where), Ind, "}\n"];
-stmt({local, _, {'WORD', _, N}, Res, Opts, E}, Ind, Env, _Where)
+stmt({local, _, {'WORD', _, N}, Res, Opts, E} = L, Ind, Env, _Where)
   when E =/= undefined ->
     %% `#local Y = f` and `#local Y out = f` are formulas, evaluated where
-    %% they stand; only `#local X in = d` gives a default.
+    %% they stand; only `#local X in = d` gives a default. A formula is a rule
+    %% to #disable too -- and a disabled one held in a C variable reads 0, not
+    %% the value it had: it has no other cycle to remember one from.
     case is_formula(Opts) of
         true ->
-            case is_clocal(maps:get(module, Env), N) of
-                true -> [Ind, cname(N), " = ", wrap(Res, Opts, cexpr(E, Env)), ";\n"];
-                false -> [Ind, "out->", N, " = ", cexpr(E, Env), ";\n"]
-            end;
+            Body = case is_clocal(maps:get(module, Env), N) of
+                       true -> [cname(N), " = ", wrap(Res, Opts, cexpr(E, Env)), ";\n"];
+                       false -> ["out->", N, " = ", cexpr(E, Env), ";\n"]
+                   end,
+            [Ind, "if (", rule_on(L), ") ", Body];
         false -> []
     end;
 stmt({object, Ln, {'WORD', _, M}, {'WORD', _, N}, Args}, Ind, Env, _Where) ->
@@ -586,8 +739,8 @@ stmt({object, Ln, {'WORD', _, M}, {'WORD', _, N}, Args}, Ind, Env, _Where) ->
 stmt({patch, Ln, _}, _, _, _) -> throw({unsupported, "> patch", Ln});
 %% Rules are numbered by the runtime in instruction order; until the
 %% translation numbers them the same way, a program that names one is refused.
-stmt({disable, Ln, _}, _, _, _) -> throw({unsupported, "#disable", Ln});
-stmt({enable, Ln, _}, _, _, _) -> throw({unsupported, "#enable", Ln});
+stmt({disable, _, _}, _, _, _) -> [];       % csp_lib_setup, see disables/1
+stmt({enable, _, _}, _, _, _) -> [];
 stmt(_, _, _, _) -> [].
 
 guarded([], Body, Ind) -> [[Ind, B] || B <- Body];
@@ -640,6 +793,10 @@ cstring(S) -> io_lib:format("~p", [S]).
 lhs({'WORD', _, N}, Ln, Env) ->
     W = wr(Env),
     case sym(N, Env) of
+        {bfield, D} ->
+            {Buf, Pos, Nb, Big, _} = bits_of(D),
+            {bits, [W, Buf, ".b"], integer_to_list(Pos), integer_to_list(Nb), b01(Big)};
+        {buffer, D} -> {bits, [W, N, ".b"], "0", scalar_bits(D, Ln), "0"};
         {timer, _} -> {timer_val, [W, N, ".val"]};
         {const, _} -> throw({unsupported, "store to a constant", Ln});
         undefined when N =:= "State" -> [W, "State"];
@@ -673,6 +830,8 @@ lhs({fld, _, {'WORD', _, O}, {'WORD', _, N}}, Ln, Env) ->
 lhs(_, Ln, _) -> throw({unsupported, "left-hand side", Ln}).
 
 store({timer_val, Path}, Rhs) -> [Path, " = ", timer_val(Rhs), ";\n"];
+store({bits, B, Pos, N, Big}, Rhs) ->
+    ["csp_lib_bits_set(", B, ", ", Pos, ", ", N, ", ", Big, ", ", Rhs, ");\n"];
 store(Path, Rhs) -> [Path, " = ", Rhs, ";\n"].
 
 %% A C local of a declared width keeps to it, as the field would have.
@@ -698,6 +857,10 @@ is_formula(Opts) ->
 
 wr(Env) -> maps:get(wr, Env, "out->").
 
+buf_part("rx", _) -> "rx";
+buf_part("dlc", _) -> "dlc";
+buf_part(P, Ln) -> throw({unsupported, "buffer part ." ++ P, Ln}).
+
 timer_part("period", _) -> "period";
 timer_part("fired", _) -> "fired";
 timer_part("running", _) -> "running";
@@ -717,15 +880,15 @@ object(M, N, Args, Ln, Ind, Env) ->
              {local, {local, _, _, _, Opts, _}} ->
                  case lists:member(proplists:get_value(dir, Opts), [in, inout]) of
                      true ->
-                         [Ind, member(N, F, MSym, Env, E)];
+                         [Ind, "if (", rule_on(A), ") ", member(N, F, MSym, Env, E)];
                      false -> throw({unsupported, "binding a #local out", Ln})
                  end;
              _ when Op =:= '<-' ->
-                 [Ind, member(N, F, MSym, Env, E)];
+                 [Ind, "if (", rule_on(A), ") ", member(N, F, MSym, Env, E)];
              _ ->
-                 [Ind, "if (in->", N, ".State == INIT) ",
+                 [Ind, "if (", rule_on(A), " && in->", N, ".State == INIT) ",
                   member(N, F, MSym, Env, E)]
-         end || {Op, _, {field, _, {'WORD', _, F}}, E} <- Args],
+         end || {Op, _, {field, _, {'WORD', _, F}}, E} = A <- Args],
     Defaults =
         [case E of
              undefined ->
@@ -851,6 +1014,12 @@ uparen(E, Env) -> paren(E, Env).
 ref({'WORD', _, N} = W, Ln, Env) ->
     States = maps:get(states, Env, []),
     case sym(N, Env) of
+        {bfield, D} ->
+            {Buf, Pos, Nb, Big, Sgn} = bits_of(D),
+            ["csp_lib_bits(", rd(Env), Buf, ".b, ", integer_to_list(Pos), ", ",
+             integer_to_list(Nb), ", ", b01(Big), ", ", b01(Sgn), ")"];
+        {buffer, D} ->
+            ["csp_lib_bits(", rd(Env), N, ".b, 0, ", scalar_bits(D, Ln), ", 0, 0)"];
         {global, Inner} -> ref(W, Ln, global_env(N, Inner, Env));
         _ when N =:= "State" -> [rd(Env), "State"];
         undefined ->
@@ -876,6 +1045,10 @@ ref({'WORD', _, N} = W, Ln, Env) ->
 ref({part, _, {'WORD', _, T}, {'WORD', _, P}}, Ln, Env) ->
     case sym(T, Env) of
         {timer, _} -> [tcast(Env), rd(Env), T, ".", timer_part(P, Ln)];
+        {buffer, _} -> ["(int32_t)", rd(Env), T, ".", buf_part(P, Ln)];
+        {bfield, D} ->
+            {Buf, _, _, _, _} = bits_of(D),
+            ["(int32_t)", rd(Env), Buf, ".", buf_part(P, Ln)];
         _ -> throw({unsupported, "part ." ++ P, Ln})
     end;
 ref({fld, _, {'WORD', _, O}, {'WORD', _, _}} = F, Ln, Env) when
@@ -994,6 +1167,15 @@ call("changed", [{field, Ln, F}], _, Env) ->
         true -> Cmp;
         false -> ["CSP_LIB_BOOL", Cmp]
     end;
+%% elapsed(T): how long it has run, or its period once it has stopped -- as
+%% fn_elapsed has it.
+call("elapsed", [{field, Ln, {'WORD', _, T}}], _, Env) ->
+    case sym(T, Env) of
+        {timer, _} ->
+            R = rd(Env),
+            ["(int32_t)(", R, T, ".running ? csp_now - ", R, T, ".t0 : ", R, T, ".period)"];
+        _ -> throw({unsupported, "elapsed of a non-timer", Ln})
+    end;
 call("tick", [], _, _) -> "(int32_t)csp_now";
 call("cycle", [], _, _) -> "(int32_t)csp_cycle";
 call("min", [A, B], _, Env) -> ["csp_lib_min(", cexpr(A, Env), ", ", cexpr(B, Env), ")"];
@@ -1008,7 +1190,11 @@ call(F, _, Ln, _) -> throw({unsupported, F ++ "()", Ln}).
 %% ------------------------------------------------------------------
 
 driver(Mods, Decls) ->
-    ["void csp_lib_setup(void)\n{\n",
+    ["// How many rules there are, for a listing and a range that runs past the\n",
+     "// end -- #disable 2-99 clamps to the last.\n",
+     "const uint16_t csp_lib_nrules = ", nrules(), ";\n\n",
+     "void csp_lib_setup(void)\n{\n",
+     disables(Decls),
      ?IND, "Main_init(&csp_in", case has_par("Main") of true -> ", &csp_par"; false -> "" end, ");\n",
      ?IND, "csp_out = csp_in;\n",
      "#if !defined(CSP_LIB_HOST)\n",
@@ -1028,6 +1214,18 @@ driver(Mods, Decls) ->
      ?IND, ?IND, "csp_out = csp_in;\n",
      ?IND, "}\n",
      ?IND, "Main_timers_in(&csp_in, &csp_out, now);\n",
+     case has_can("Main") of
+         true ->
+             [?IND, "// Frames from the bus: taken into the working copy, readable\n",
+              ?IND, "// after the commit with .rx.\n",
+              ?IND, "{\n",
+              ?IND, ?IND, "uint32_t id;\n",
+              ?IND, ?IND, "uint8_t d[8], n;\n",
+              ?IND, ?IND, "while (csp_chip_can_recv(&id, d, &n))\n",
+              ?IND, ?IND, ?IND, "Main_can(&csp_out, id, d, n);\n",
+              ?IND, "}\n"];
+         false -> []
+     end,
      "#if !defined(CSP_LIB_HOST)\n",
      ?IND, "Main_input(&csp_out);\n",
      "#else\n",
@@ -1036,6 +1234,10 @@ driver(Mods, Decls) ->
      ?IND, "Main_run(&csp_in, &csp_out", case has_par("Main") of true -> ", &csp_par"; false -> "" end, ");\n",
      ?IND, "changed = memcmp(&csp_in, &csp_out, sizeof(csp_in)) != 0;\n",
      ?IND, "csp_in = csp_out;\n",
+     case has_buf("Main") of
+         true -> [?IND, "Main_rx(&csp_in, &csp_out);\n"];
+         false -> []
+     end,
      "#if !defined(CSP_LIB_HOST)\n",
      ?IND, "Main_output(&csp_in);\n",
      "#endif\n",

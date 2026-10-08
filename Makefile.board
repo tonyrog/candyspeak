@@ -431,7 +431,7 @@ else
 # DIAG=1 is in the name for the same reason: it changes CFLAGS but no header, so
 # -MMD would not rebuild anything and a diagnostic build would quietly be the
 # previous image.
-VARIANT := $(shell $(GEN) --map-of $(BOARD) $(MAP))$(if $(ARM),-arm,)$(if $(DIAG),-diag,)$(if $(WATCH),-watch,)
+VARIANT := $(shell $(GEN) --map-of $(BOARD) $(MAP))$(if $(ARM),-arm,)$(if $(DIAG),-diag,)$(if $(WATCH),-watch,)$(if $(filter c,$(BACKEND)),-c,)
 B       := $(BUILD_DIR)/$(VARIANT)
 
 # One fact per query. Parsing the human listing through `head` closed the pipe
@@ -645,6 +645,32 @@ else
 endif
 
 SRC  := $(CORE) $(PORTSRC) $(DRV) $(SYSINIT) $(STARTUP)
+
+# BACKEND=c: the program translated to C and nothing else -- no runtime, no
+# compiler, no ROM image, no console. The generated file carries main()
+# (-DCSP_LIB_MAIN): csp_chip_init, then one step after another. What stays is
+# what the chip needs to run at all -- startup, clocks, the VIC, the tick, the
+# board's pin mux and ADC map, PWM -- and csp_lib, the language's semantics.
+# The program's `>' lines are applied at cycle 2 by the translation itself, so
+# a config file that patches a library program (boards/bridgezone/config.csp)
+# reaches the board this way, which the ROM image does not do.
+#
+#   make -f Makefile.board BOARD=bridgezone BACKEND=c PROG=boards/bridgezone
+#
+# The NXP families (LPC2000 and LPC17xx): the family's drivers less flash and
+# I2C, which serve the runtime's settings store and nothing a program uses.
+ifeq ($(BACKEND),c)
+  ROMOBJ :=
+  LINK   := $(wildcard $(dir $(strip $(PROG)))link.c)
+  SRC    := src/csp_lib.c port/csp_lib_prog.c \
+            chips/nxp/drivers/common/csp_chip_lpc.c \
+            chips/nxp/drivers/common/csp_board.c \
+            $(filter-out %flash_212x.c %flash_175x.c %i2c_212x.c,$(DRV)) \
+            $(SYSINIT) $(STARTUP)
+  XCFLAGS += -DCSP_LIB_MAIN \
+             $(if $(LINK),-I$(dir $(LINK)) -DCSP_LIB_LINK=link.c,)
+endif
+
 OBJ  := $(addprefix $(B)/,$(notdir $(SRC:.c=.o)))
 OBJ  := $(OBJ:.S=.o)
 ifdef VICSRC
@@ -801,6 +827,20 @@ FORCE:
 $(B)/rom.o: $(B)/rom.c
 	@$(CC) $(CFLAGS) -c -o $@ $<
 
+# BACKEND=c: the program, translated. One .csp in PROG, imports and all.
+# Regenerated every build, since the translator does not list what it
+# imported, and moved into place only when the text changed.
+$(B)/csp_prog.c: $(PROG) FORCE
+	@test $(words $(PROG)) = 1 || \
+	 { echo "BACKEND=c takes one .csp in PROG (it may #import the rest), got:$(PROG)"; exit 1; }
+	@mkdir -p $(B)
+	@$(MAKE) --no-print-directory -s -C utils
+	@erl -noshell -pa utils -eval 'candyspeak_c:main(["$(strip $(PROG))", "$@.new"])'
+	@cmp -s $@.new $@ 2>/dev/null || cp $@.new $@
+	@echo "  c: $@"
+
+$(B)/csp_lib_prog.o: $(B)/csp_prog.c
+
 # ./csp is the compiler above. Built by the top-level Makefile; no prerequisites
 # here, so this runs only when the binary is missing.
 csp:
@@ -866,8 +906,15 @@ endif
 # file has to say something about it. 0 says "write zeros there", which is wrong
 # twice: it is not what an erased part reads, and flash only goes 1 -> 0 without
 # an erase. 0xFF says "erased", which is the truth.
+#
+# An EMPTY .data is left out. Its load address is then its RAM address -- ld
+# gives a section with nothing in it no AT() placement -- and objcopy fills
+# from 0 up to it: 1 GB of .bin and 3 GB of .hex for a BACKEND=c program with
+# no initialised data (2026-10-08). Nothing is lost: an empty section has no
+# bytes to carry.
 $(B)/firmware.bin: $(B)/firmware.elf csp
-	@$(OC) -O binary --gap-fill 0xFF $< $@
+	@$(OC) -O binary --gap-fill 0xFF \
+	   $$($(SZ) -A $< | awk '$$1 == ".data" && $$2 == 0 { print "-R .data" }') $< $@
 	@$(if $(NOCHECKSUM),echo "$@: no checksum word on this family",./csp --checksum=$@)
 
 # A .hex as well, and prefer it when flashing. A raw .bin is just bytes: byte 0

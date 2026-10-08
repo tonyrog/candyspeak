@@ -50,4 +50,10 @@ extern void     csp_chip_acfg(uint8_t port, uint8_t pin, uint8_t dir,
 extern uint16_t csp_chip_ain(uint8_t port, uint8_t pin);
 extern void     csp_chip_aout(uint8_t port, uint8_t pin, uint16_t v);
 
+// One received CAN frame, or 0 when there is none waiting. `id' is the
+// identifier as the program writes it (`#buffer B:8 in can 0x30'), `len' the
+// data length, d up to eight bytes. A chip with no CAN -- or a board whose
+// program never asks -- gets the weak one in src/csp_lib.c, which has none.
+extern int      csp_chip_can_recv(uint32_t* id, uint8_t* d, uint8_t* len);
+
 #endif

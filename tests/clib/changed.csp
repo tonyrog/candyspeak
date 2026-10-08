@@ -1,0 +1,18 @@
+// changed(): an input from the stimulus, a variable a rule writes, and the
+// order inside a cycle -- a rule above the write does not see it, one below
+// does. Each counts the cycles it saw a change in.
+// cycles: 40
+#digital Btn in pullup 2
+#variable V:8 unsigned = 0
+#variable Before:8 unsigned = 0
+#variable After:8 unsigned = 0
+#variable Edges:8 unsigned = 0
+#variable Same:8 unsigned = 0
+#variable N:8 unsigned = 0
+
+Before = Before + 1 ? changed(V)
+N = N + 1
+V = (N / 5) & 3
+After = After + 1 ? changed(V)
+Edges = Edges + 1 ? changed(Btn)
+Same = Same + 1 ? !changed(Same) && N < 10

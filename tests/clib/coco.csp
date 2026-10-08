@@ -1,0 +1,7 @@
+// boards/coco, interpreted and translated: digital edges (two masked in, two
+// out), analog moves under and over delta, and the wake pulse each makes.
+// Wakes counts the pulses.
+// cycles: 400
+#import "../../boards/coco/main.csp"
+#variable Wakes:8 unsigned = 0
+Wakes = Wakes + 1 ? changed(Wake) && !Wake

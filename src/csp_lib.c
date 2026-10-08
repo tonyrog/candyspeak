@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include "csp_lib.h"
+#include "csp_bits.h"
 
 static uint8_t lib_res(uint8_t res)
 {
@@ -57,6 +58,45 @@ void csp_lib_timer_out(csp_timer_t* in, csp_timer_t* out, uint32_t now)
 __attribute__((weak)) void csp_lib_putc(char c)
 {
     (void)c;
+}
+
+__attribute__((weak)) int csp_chip_can_recv(uint32_t* id, uint8_t* d,
+					   uint8_t* len)
+{
+    (void)id; (void)d; (void)len;
+    return 0;
+}
+
+int32_t csp_lib_bits(const uint8_t* p, uint16_t pos, uint8_t n, int be, int sgn)
+{
+    uint32_t v;
+
+    csp_bits_get(p, &v, pos, n, be);
+    if (sgn && (n < 32) && (v & ((uint32_t)1 << (n - 1))))
+	v |= ~(((uint32_t)1 << n) - 1);
+    return (int32_t)v;
+}
+
+void csp_lib_bits_set(uint8_t* p, uint16_t pos, uint8_t n, int be, int32_t v)
+{
+    csp_bits_set(p, (uint32_t)v, pos, n, be);
+}
+
+uint32_t csp_lib_off[CSP_LIB_MAX_RULES / 32];
+
+// A number past the last rule is ignored, as is one past the 128 that have a
+// switch: the runtime calls the first an error, but here there is nobody to
+// tell, and a range that overshoots is meant to stop at the end.
+void csp_lib_disable(int n)
+{
+    if ((n >= 1) && (n <= CSP_LIB_MAX_RULES) && (n <= (int)csp_lib_nrules))
+	csp_lib_off[(n - 1) >> 5] |= (uint32_t)1 << ((n - 1) & 31);
+}
+
+void csp_lib_enable(int n)
+{
+    if ((n >= 1) && (n <= CSP_LIB_MAX_RULES))
+	csp_lib_off[(n - 1) >> 5] &= ~((uint32_t)1 << ((n - 1) & 31));
 }
 
 __attribute__((weak)) int csp_lib_getc(void)

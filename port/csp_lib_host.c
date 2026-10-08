@@ -73,10 +73,55 @@ static const csp_lib_name_t* lookup(const char* name, size_t len)
     return NULL;
 }
 
+// CAN frames from the stimulus, `<time> can <id> <byte> ...`, as csp -F has
+// them. A row queues the frame; csp_chip_can_recv hands it over at the next
+// step's poll -- the cycle after the row, which is when the runtime's
+// csp_can_recv takes it too.
+#define CAN_QUEUE 16
+static struct { uint32_t id; uint8_t d[8]; uint8_t n; } can_q[CAN_QUEUE];
+static int can_head, can_tail;
+
+int csp_chip_can_recv(uint32_t* id, uint8_t* d, uint8_t* len)
+{
+    if (can_head == can_tail)
+	return 0;
+    *id = can_q[can_head].id;
+    memcpy(d, can_q[can_head].d, 8);
+    *len = can_q[can_head].n;
+    can_head = (can_head + 1) % CAN_QUEUE;
+    return 1;
+}
+
+static void can_row(char* s)
+{
+    int next = (can_tail + 1) % CAN_QUEUE;
+    uint8_t n = 0;
+
+    if (next == can_head)
+	return;                       // full: the frame is lost, as on a bus
+    can_q[can_tail].id = (uint32_t)strtoul(s, &s, 0);
+    memset(can_q[can_tail].d, 0, 8);
+    while (n < 8) {
+	char* e;
+	unsigned long b = strtoul(s, &e, 0);
+	if (e == s)
+	    break;
+	can_q[can_tail].d[n++] = (uint8_t)b;
+	s = e;
+    }
+    can_q[can_tail].n = n;
+    can_tail = next;
+}
+
 // `<time> name=value ...`. A name the program does not have is skipped, as
 // csp skips it.
 static void apply(char* s)
 {
+    while (isspace((unsigned char)*s)) s++;
+    if ((strncmp(s, "can", 3) == 0) && isspace((unsigned char)s[3])) {
+	can_row(s + 3);
+	return;
+    }
     while (*s) {
 	char* name;
 	size_t len;

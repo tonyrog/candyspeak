@@ -192,6 +192,85 @@ static void csp_lpc_adc_init(void) { }
 static int csp_lpc_adc_read(int ch) { (void)ch; return 0; }
 #endif
 
+// ============================================================
+// CAN
+// ============================================================
+//
+// A board says CSP_CAN_BITRATE to have a bus at all: there is no sensible
+// default. 500k and 250k are both "the usual one" depending on who you ask, and
+// a node that guesses wrong is silent in a way that looks like broken wiring.
+//
+// LPCOpen's shape -- a filter block to initialise, a bit rate set separately, a
+// CAN_MSG_T rather than loose arguments -- on the 17xx/40xx (can_17xx_40xx.c)
+// and on the 212x (can_212x.c), which keeps the same names.
+//
+// The ID CONVENTION IS NOT THE SAME as SocketCAN's, which is what CandySpeak
+// carries. LPCOpen puts the extended-frame flag in bit 30; SocketCAN uses bit
+// 31 for extended and bit 30 for remote. Passing one straight to the other
+// turns every remote frame into an extended one, which is the kind of thing
+// that works on the bench with two nodes agreeing and fails on a real bus.
+#if defined(CSP_CAN_BITRATE) && defined(CSP_CAN_PORT)
+#define CSP_CAN_EFF 0x80000000u        /* SocketCAN: 29-bit id */
+#define CSP_CAN_RTR 0x40000000u        /* SocketCAN: remote frame */
+
+static int csp_can_up;
+
+static void csp_lpc_can_init(void)
+{
+    Chip_CAN_Init(CSP_CAN_PORT, LPC_CANAF, LPC_CANAF_RAM);
+    if (Chip_CAN_SetBitRate(CSP_CAN_PORT, CSP_CAN_BITRATE) != SUCCESS)
+	return;
+    // Accept everything: a #buffer already says which id it wants and the match
+    // happens there. Two places to state it is one too many.
+    Chip_CAN_SetAFMode(LPC_CANAF, CAN_AF_BYBASS_MODE);
+    csp_can_up = 1;
+}
+
+int csp_lpc_can_ok(void) { return csp_can_up; }
+
+// 1 = a frame was read, 0 = nothing pending.
+int csp_chip_can_recv(uint32_t* id, uint8_t* d, uint8_t* len)
+{
+    CAN_MSG_T m;
+    uint32_t i;
+
+    if (!csp_can_up || (Chip_CAN_Receive(CSP_CAN_PORT, &m) != SUCCESS))
+	return 0;
+    *id = m.ID & 0x1fffffffu;
+    if (m.ID & CAN_EXTEND_ID_USAGE)
+	*id |= CSP_CAN_EFF;
+    if (m.Type & CAN_REMOTE_MSG)
+	*id |= CSP_CAN_RTR;
+    *len = (uint8_t)((m.DLC > 8) ? 8 : m.DLC);
+    for (i = 0; i < *len; i++)
+	d[i] = m.Data[i];
+    return 1;
+}
+
+// 0 = sent, -1 = not.
+int csp_chip_can_send(uint32_t id, const uint8_t* d, uint8_t len)
+{
+    CAN_MSG_T m;
+    uint32_t i;
+
+    if (!csp_can_up)
+	return -1;
+    if (len > 8)
+	len = 8;
+    m.ID = id & ((id & CSP_CAN_EFF) ? 0x1fffffffu : 0x7ffu);
+    if (id & CSP_CAN_EFF)
+	m.ID |= CAN_EXTEND_ID_USAGE;
+    m.Type = (id & CSP_CAN_RTR) ? CAN_REMOTE_MSG : 0;
+    m.DLC = len;
+    for (i = 0; i < len; i++)
+	m.Data[i] = d[i];
+    return (Chip_CAN_Send(CSP_CAN_PORT, CAN_BUFFER_1, &m) == SUCCESS) ? 0 : -1;
+}
+#else
+static void csp_lpc_can_init(void) { }
+int csp_lpc_can_ok(void) { return 1; }
+#endif
+
 // WEAK and empty by default: a chip layer with real PWM defines it
 // (pwm_212x.c). Called after the tick is running -- on an LPC2000 the PWM
 // period on TIMER0 is scheduled as TC + period.
@@ -210,6 +289,7 @@ void csp_chip_init(void)
     Chip_GPIO_Init(LPC_GPIO);
     csp_lpc_adc_init();
     csp_pwm_init();
+    csp_lpc_can_init();
 }
 
 uint32_t csp_chip_millis(void)

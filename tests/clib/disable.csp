@@ -1,0 +1,30 @@
+// #disable, interpreted and translated: the rule numbers must agree, or the
+// wrong rules go off. Every kind that takes a number is here -- a rule, a
+// #local formula, a module's rule and one in its #in block, an instance
+// binding -- and some of each are switched off. A rule that runs leaves a
+// mark; a disabled one leaves its variable at 0.
+// cycles: 20
+#timer T 30 = 1
+#variable A = 0
+#variable B = 0
+#variable C = 0
+#variable D = 0
+#local L = A + 10                 // 1
+A = 1                             // 2
+B = 2 ? A == 1                    // 3  off
+#module M
+  #local X in = 0
+  #variable V = 0
+  #variable W = 0
+  #local Y = X * 2                // 4
+  V = Y ? X > 0                   // 5
+  #in INIT
+    W = 7                         // 6  off
+  #end
+#end
+#M m1 X <- A                      // 7
+#M m2 X <- L                      // 8  off
+C = L                             // 9  off
+D = 4 ? timeout(T)                // 10
+T = 1 ? timeout(T)                // 11
+#disable 3 6 8-9

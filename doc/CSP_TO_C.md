@@ -116,6 +116,59 @@ already the program with names resolved, constants folded and the evaluation
 order fixed, and a translator from it is a table -- one C template per opcode,
 the way `utils/words.terms` already describes the opcodes for micro-csp.
 
+### #disable in a translated program (done 2026-10-08)
+
+Every guard carries its rule number, `CSP_ON(n)`, counted the way the runtime
+counts OP_RULEs -- source order, a module's body where `#module` stands, a
+`#local` formula and each instance binding counting as one. `#disable 3 5-7`
+in the program becomes calls in `csp_lib_setup`. With `-DCSP_LIB_RULES` the
+guard tests `csp_lib_off[]` and `csp_lib_disable(n)` / `csp_lib_enable(n)`
+switch a rule while the program runs; without it CSP_ON is 1 and costs nothing.
+On BridgeZone (271 rules) the mask costs 1.1 KB of flash, 16 bytes of RAM.
+`tests/clib/disable.csp` holds the numbering against the runtime's.
+
+That is the half a hybrid needs: a translated program with a small runtime
+beside it, where a rule typed at a prompt replaces a translated one by
+disabling it and running in the interpreter after the C.
+
+### From the instruction stream (the experiment)
+
+`./csp -P` already prints the compiled program as Erlang terms:
+
+```
+{instr,66,'LD',[r0,{v,11}]}.          r0 = in->B
+{instr,67,'LI',[r1,5]}.               r1 = 5
+{instr,68,'LT',[r2,r0,r1]}.           r2 = r0 < r1
+{instr,70,'RULE',[r1,5]}.             if (!r1) goto L75
+{instr,73,'ADD',[r0,r1,r2]}.          r0 = r1 + r2
+{instr,74,'ST',[r0,{v,10}]}.          out->A = r0
+{instr,76,'ENTER','M',[{n,7}],[...    static void M_run(M_t* in, M_t* out)
+{instr,85,'NEW',"M","m1",[{ent,76}]}  M_run(&in->m1, &out->m1)
+```
+
+It is register code, so a translation is one C statement per instruction and a
+label per jump target -- no stack to simulate. What is missing:
+
+- **The declarations in full.** The dump has names, kinds, widths, types and
+  initial values; a translator also needs pins and directions, timers, buffers
+  and fields with their bit positions, the `#local` and `#param` flags, and
+  which declarations belong to which module and instance. Most of it is in the
+  ROM image already; the dump does not print all of it.
+- **One template per opcode**, about 60: loads and stores (global, `cur`, parts),
+  the ALU, RULE / INSTATE / `#when` skips as gotos, ENTER / LEAVE / NEW / NEXT as
+  module functions and calls, CALL through the builtin table to `csp_lib`,
+  SEGMENT for the strings `println` prints.
+- **The addressing.** `{v,11}` is a global, `{cur,v,14}` a member of the
+  instance being run; a `#local` reads the working copy. The struct emission
+  of the pretty translator serves both, so it should be shared, not written
+  twice.
+- **The oracle**, which needs nothing: it already holds any C against `./csp`.
+
+What it shows is that the bytecode IS the semantics -- and its templates are
+the JIT's, written in C instead of machine code. What it does not do is read
+well: `r2 = r0 < r1` is what the program says after the compiler has had it.
+The pretty translation stays the one to read.
+
 ### JIT
 
 CandySpeak is small: a fixed set of opcodes, no loops inside a rule, no

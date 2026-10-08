@@ -613,69 +613,27 @@ void csp_output(csp_rt_t* st)
 // csp_can_init returning 0 with recv always saying "nothing" is a working
 // no-bus node: #buffer ... can declarations compile and simply never fire.
 
-// A board says CSP_CAN_BITRATE to have a bus at all: there is no sensible
-// default. 500k and 250k are both "the usual one" depending on who you ask, and
-// a node that guesses wrong is silent in a way that looks like broken wiring.
+// The controller itself is the chip layer's -- csp_chip_can_recv and _send
+// in chips/nxp/drivers/common/csp_chip_lpc.c, started by csp_chip_init -- so a
+// program translated to C and this runtime drive the same code.
 #if defined(CSP_CAN_BITRATE) && defined(CSP_CAN_PORT)
-
-// LPCOpen's shape: a filter block to initialise, a bit rate set separately, and
-// a CAN_MSG_T rather than loose arguments.
-//
-// The ID CONVENTION IS NOT THE SAME as SocketCAN's, which is what CandySpeak
-// carries. LPCOpen puts the extended-frame flag in bit 30; SocketCAN uses bit
-// 31 for extended and bit 30 for remote. Passing one straight to the other
-// turns every remote frame into an extended one, which is the kind of thing
-// that works on the bench with two nodes agreeing and fails on a real bus.
-#define CSP_CAN_EFF 0x80000000u        /* SocketCAN: 29-bit id */
-#define CSP_CAN_RTR 0x40000000u        /* SocketCAN: remote frame */
 
 int csp_can_init(csp_rt_t* st)
 {
     (void)st;
-    Chip_CAN_Init(CSP_CAN_PORT, LPC_CANAF, LPC_CANAF_RAM);
-    if (Chip_CAN_SetBitRate(CSP_CAN_PORT, CSP_CAN_BITRATE) != SUCCESS)
-	return -1;
-    // Accept everything: a #buffer already says which id it wants and the match
-    // happens there. Two places to state it is one too many.
-    Chip_CAN_SetAFMode(LPC_CANAF, CAN_AF_BYBASS_MODE);
-    return 0;
+    return csp_lpc_can_ok() ? 0 : -1;
 }
 
 int csp_can_recv(csp_rt_t* st, uint32_t* id, uint8_t* data, uint8_t* len)
 {
-    CAN_MSG_T m;
-    uint32_t i;
-
     (void)st;
-    if (Chip_CAN_Receive(CSP_CAN_PORT, &m) != SUCCESS)
-	return 0;                  // nothing pending -- not an error
-    *id = m.ID & 0x1fffffffu;
-    if (m.ID & CAN_EXTEND_ID_USAGE)
-	*id |= CSP_CAN_EFF;
-    if (m.Type & CAN_REMOTE_MSG)
-	*id |= CSP_CAN_RTR;
-    *len = (uint8_t)((m.DLC > 8) ? 8 : m.DLC);
-    for (i = 0; i < *len; i++)
-	data[i] = m.Data[i];
-    return 1;
+    return csp_chip_can_recv(id, data, len);
 }
 
 int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
 {
-    CAN_MSG_T m;
-    uint32_t i;
-
     (void)st;
-    if (len > 8)
-	len = 8;
-    m.ID = id & ((id & CSP_CAN_EFF) ? 0x1fffffffu : 0x7ffu);
-    if (id & CSP_CAN_EFF)
-	m.ID |= CAN_EXTEND_ID_USAGE;
-    m.Type = (id & CSP_CAN_RTR) ? CAN_REMOTE_MSG : 0;
-    m.DLC = len;
-    for (i = 0; i < len; i++)
-	m.Data[i] = data[i];
-    return (Chip_CAN_Send(CSP_CAN_PORT, CAN_BUFFER_1, &m) == SUCCESS) ? 0 : -1;
+    return csp_chip_can_send(id, data, len);
 }
 
 #else

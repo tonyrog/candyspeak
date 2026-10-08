@@ -123,6 +123,8 @@ extern void csp_lpc_pwm_write(uint8_t port, uint8_t pin, int val);
 extern void csp_lpc_dac_write(uint8_t pin, int val);
 extern void csp_lpc_board_init(void);
 extern void csp_pwm_init(void);
+extern int  csp_lpc_can_ok(void);           // the bus came up in csp_chip_init
+extern int  csp_chip_can_send(uint32_t id, const uint8_t* d, uint8_t len);
 
 // The tick seam: Cortex-M implements it over SysTick (csp_chip_lpc.c), the
 // ARM7 over a timer match (chip_212x.c). Counting UP on both -- see
