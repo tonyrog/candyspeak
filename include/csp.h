@@ -973,10 +973,11 @@ typedef enum {
 
 #define VIEW_F_SIMPLE 0x01   // covers the whole storage, byte aligned, native
 #define VIEW_F_GLOBAL 0x02   // VIEW_HEAP: buf id is global (not object-offset)
-#define VIEW_F_LOCAL  0x02   // VIEW_OWN: a #local -- SINGLE-BUFFERED, both
-			     // directions resolve to the DIN half so a rule
-			     // reads back what an earlier rule in the SAME cycle
-			     // wrote. Shares bit 1 with VIEW_F_GLOBAL because
+#define VIEW_F_LOCAL  0x02   // VIEW_OWN: a #local -- SINGLE-BUFFERED, its
+			     // pos is in the DLOCAL region (st->lheap) and both
+			     // directions resolve there, so a rule reads back
+			     // what an earlier rule in the SAME cycle wrote.
+			     // Shares bit 1 with VIEW_F_GLOBAL because
 			     // `kind` already tells the two apart, and the flags
 			     // field has no third bit to spend. It used to be
 			     // BUF_F_LOCAL on the buffer -- which is gone.
@@ -1534,9 +1535,10 @@ typedef enum {
 // existing variable handling applies unchanged and only what cares looks.
 //
 // What it changes: the formula is evaluated once per cycle by a prologue before
-// the rules, its leaf is copied DOUT->DIN right after so a read in the SAME
-// cycle sees it (csp_set_value; the copy was missing for a long time and a
-// chain of locals lagged one cycle per step, exactly like variables), it gets
+// the rules, and a read in the SAME
+// cycle sees it (it has ONE copy, in the DLOCAL region, which both
+// directions read and write -- see VIEW_F_LOCAL; until 2026-08 a chain of
+// locals lagged one cycle per step, exactly like variables), it gets
 // no /state row, its name is not stored at all -- it lists as $N and lives in
 // the compiler's define buffer until #end -- nothing outside the module may
 // read it, and assigning to it is an error.
@@ -2293,6 +2295,12 @@ typedef struct _csp_rt_t
     // ONE allocation holds both halves: heap[DOUT] points at its second half, so
     // only heap[DIN] is owned (freed). heap_cap is the usable bytes per half.
     uint16_t   heap_cap;          // heap bytes per half (csp_estimate.heap)
+    // DLOCAL: a #local is a formula, valid for one cycle and outside the
+    // transaction, so it has one copy and not two. Its region follows the two
+    // halves in the same block: [DIN][DOUT][DLOCAL].
+    uint8_t*   lheap;             // the DLOCAL region (heap[DIN] + 2 * half)
+    uint16_t   lhp;               // its bump cursor
+    uint16_t   lheap_cap;         // its bytes (csp_estimate.lheap)
     // allow device output latch=0 or disallow latch=1
     uint8_t latch;
     // Firmware upgrade mode: while this is set, csp_process_line hands every
@@ -3101,6 +3109,7 @@ typedef struct {
 		      // program now fails in csp_buf_alloc (hp + nbytes >
 		      // heap_cap -> ERR_TOO_MANY_DECLARATIONS), which is the
 		      // same door it would have hit through hp.
+    uint16_t lheap;   // DLOCAL bytes: the #locals, one copy, not doubled
     index_t  nio;     // device entries (digital/analog/field)
     index_t  nt;      // timers (global + per-object)
     index_t  nobj;    // objects (DECL_OBJECT), sizes offs[]/object[]

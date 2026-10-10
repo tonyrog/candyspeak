@@ -1356,11 +1356,11 @@ match:
 	    csp_print_uint(GET_RES(csp_decl_get_res(&d)));
 	    csp_print_blank();
 	    csp_print_rostr(csp_fmt_pindir(csp_decl_get_dir(&d)));
-	    // The type, whenever it is not the default. An #analog is SIGNED
-	    // unless it says otherwise, so leaving `unsigned` out of the listing
-	    // is not a cosmetic omission: the line pastes back as a signed one
-	    // and every reading above half scale comes home negative.
-	    if (CSP_MASK(csp_decl_get_vt(&d),TYPE_BITS) != V_INTEGER) {
+	    // The type, whenever it is not the default. An #analog is UNSIGNED
+	    // unless it says otherwise, so leaving `integer` out of the listing
+	    // is not a cosmetic omission: the line pastes back as an unsigned
+	    // one and a centred reading loses its sign.
+	    if (CSP_MASK(csp_decl_get_vt(&d),TYPE_BITS) != V_UNSIGNED) {
 		csp_print_blank();
 		csp_print_rostr(csp_fmt_vtype(csp_decl_get_vt(&d)));
 	    }

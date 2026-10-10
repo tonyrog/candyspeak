@@ -84,12 +84,13 @@ void csp_lib_bits_set(uint8_t* p, uint16_t pos, uint8_t n, int be, int32_t v)
 
 uint32_t csp_lib_off[CSP_LIB_MAX_RULES / 32];
 
-// A number past the last rule is ignored, as is one past the 128 that have a
-// switch: the runtime calls the first an error, but here there is nobody to
-// tell, and a range that overshoots is meant to stop at the end.
+// A number past the 128 that have a switch is ignored. One past the last rule
+// never comes here: the translator stops a range at csp_lib_nrules. (This file
+// does not read it -- it is linked into the runtime firmware too, which has no
+// generated program to define it.)
 void csp_lib_disable(int n)
 {
-    if ((n >= 1) && (n <= CSP_LIB_MAX_RULES) && (n <= (int)csp_lib_nrules))
+    if ((n >= 1) && (n <= CSP_LIB_MAX_RULES))
 	csp_lib_off[(n - 1) >> 5] |= (uint32_t)1 << ((n - 1) & 31);
 }
 

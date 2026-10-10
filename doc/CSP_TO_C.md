@@ -60,9 +60,9 @@ How a leaf is stored today (`src/csp_rt.c`):
 - every leaf has a 6-byte `csp_view_t`, and its bytes in the heap;
 - the heap is ONE block of `2 * hbytes`, DIN first and DOUT after it, and
   `csp_slot` is `heap[dir] + pos`;
-- a `#local` is already single-buffered -- `VIEW_F_LOCAL` sends both directions
-  to the DIN half (`csp_slot`, set in `setup_variable`) -- but its DOUT half is
-  still allocated, and never used;
+- a `#local` was a pair like any variable, its write mirrored into DIN by
+  `csp_set_value` so the same cycle could read it (`VIEW_F_LOCAL` was tested
+  only by `csp_slot`, which an OWN view never reaches);
 - a `#param` is a `DECL_CONSTANT` with the local bit, set up by `setup_slot`
   as a `VIEW_SLOT` with no flags: double-buffered like a variable.
 
@@ -93,6 +93,13 @@ What it buys, on BridgeZone's `main.csp` (about 1740 leaves: 1160 `#local`,
 Worth having on every board -- it is a quarter of the derived tables -- but it
 does not bring BridgeZone into an LPC2129's 5.7 KB pool. The views are the
 larger half, and a `#local` needs one per INSTANCE.
+
+**Done for `#local` (2026-10-10): the DLOCAL region.** The heap block is
+`[DIN][DOUT][DLOCAL]` now. A `#local` takes its one copy from DLOCAL
+(`csp_lheap_alloc`, sized by `csp_estimate.lheap`), `heap_base` sends both
+directions there, and the commit skips it -- it is still marked dirty, since
+`changed()` reads the dirty set. On BridgeZone's `main.csp` the derived tables
+went from 28.8 KB to 24.2 KB. `#param` is not moved yet.
 
 **The bigger lever is the one the C translation found:** a `#local` lives only
 while its own instance is being evaluated, so all instances of a module can
@@ -131,7 +138,32 @@ That is the half a hybrid needs: a translated program with a small runtime
 beside it, where a rule typed at a prompt replaces a translated one by
 disabling it and running in the interpreter after the C.
 
-### From the instruction stream (the experiment)
+### From the instruction stream: utils/csp_to_c.erl (draft, 2026-10-08)
+
+```
+erl -noshell -pa utils -eval 'csp_to_c:main(["prog.csp", "prog.c"])'
+escript tests/clib_oracle.escript --bytecode [dir ...]
+```
+
+Reads `./csp -P` (a `.csp` is compiled first and its dump kept as `prog.dump`
+beside the C) and writes C against the same `csp_lib.h` contract as
+`candyspeak_c`, so the host harness, `Makefile.board` and the oracle take it
+unchanged. One C statement per instruction, registers as C locals, a label
+per jump target. The dump learned five things on the way: RULE's `implicit`
+State gate, the ALU's `unsigned`, the string table, the disabled rules, and
+the settings store -- the program's `>` lines by path. It also had two bugs:
+`tag_tab` stopped at DECL_FIELD, so a buffer or view printed `{,10}`, and an
+ENTER body with strings in it ran past its LEAVE.
+
+Held against the runtime: tests/clib and tests/unit 59 passed (the source
+translator: 58), BridgeZone 15 of 15. Not yet: buffers and fields, parts
+other than a timer's, arrays, floats, digital `.fired`. On BridgeZone it is
+10.8 KB of text against the source translator's 8.9 -- gcc keeps the
+registers in registers -- and 13 KB of RAM against 4, because every `#local`
+and `#param` is still a field in both copies. The same two changes would
+bring it down the same way.
+
+### From the instruction stream (what it took)
 
 `./csp -P` already prints the compiled program as Erlang terms:
 

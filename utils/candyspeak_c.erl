@@ -331,15 +331,17 @@ rule_on(Term) -> ["CSP_ON(", integer_to_list(maps:get(Term, get(csp_ruleno))), "
 
 nrules() -> integer_to_list(maps:size(get(csp_ruleno))).
 
-%% `#disable 3 5-7' in the program: the rules start off.
+%% `#disable 3 5-7' in the program: the rules start off. A range that runs
+%% past the last rule stops there.
 disables(Decls) ->
+    N = maps:size(get(csp_ruleno)),
     [[?IND, case Kind of disable -> "csp_lib_disable("; enable -> "csp_lib_enable(" end,
       integer_to_list(I), ");\n"]
      || {Kind, _, Items} <- Decls, Kind =:= disable orelse Kind =:= enable,
         Item <- Items,
         I <- case Item of
                  {{'INT', _, A}, {'INT', _, B}} ->
-                     lists:seq(list_to_integer(A), list_to_integer(B));
+                     lists:seq(list_to_integer(A), min(list_to_integer(B), N));
                  {'INT', _, A} -> [list_to_integer(A)]
              end].
 

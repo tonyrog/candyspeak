@@ -272,16 +272,6 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		(uint16_t)instr(st, i, i_imm),
 		eot);
 	break;
-/*	
-    case OP_EQI:
-	fprintf(f, "{instr,%d,'EQI',[r%d,",
-		i,
-		instr(st, i, mi_x));
-	csp_fprint_tag(f, st, instr(st, i, mi_mem));
-	fprintf(f, ",%d", instr(st, i, mi_imm));
-	fprintf(f, "]}%s\n", eot);
-	break;
-*/
     case OP_STI:  // store immediate to memory (no result register)
 	fprintf(f, "{instr,%d,'STI',[", i);
 	csp_fprint_tag(f, st, instr(st, i, mi_mem));
@@ -305,10 +295,15 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		instr(st, i, f_avt),	
 		eot);
 	break;
+    // `implicit' is the State gate a bare rule carries -- it runs in INIT and
+    // NORMAL only, which a rule inside an #in block does not need. Printed
+    // because a reader of this dump cannot tell the two apart otherwise:
+    // utils/csp_to_c.erl translates from it.
     case OP_RULE:
-	fprintf(f, "{instr,%d,'RULE',[r%d,%d]}%s\n",
+	fprintf(f, "{instr,%d,'RULE',[r%d,%d%s]}%s\n",
 		i,
-		instr(st, i, r_cnd), instr(st, i, r_nxt), eot);
+		instr(st, i, r_cnd), instr(st, i, r_nxt),
+		instr(st, i, r_implicit) ? ",implicit" : "", eot);
 	break;
     case OP_NINSTATE:
 	fprintf(f, "{instr,%d,'NINSTATE',[r%d,%d,%d]}%s\n",
@@ -326,9 +321,14 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	int j;
 	fprintf(f, "{instr,%d,'ENTER','%.*s',[{n,%d}],[\n",
 		i, DNAME(st, mx), n);
+	// By SLOT, up to and including the LEAVE at i + n + 1 -- the runtime
+	// skips the body with n + 2. Counting instructions overran it: a SEGMENT
+	// is one instruction and several slots, so a body with strings in it went
+	// on past its LEAVE and swallowed the NEWs after it.
+	j = i + n + 1;
 	i++;
-	for (j = 0; j <= n; j++) // <= include leave!
-	    i = csp_dump_instr(f, lev+1, st, i, (j == n) ? "" : ",");
+	while (i <= j)
+	    i = csp_dump_instr(f, lev+1, st, i, (i == j) ? "" : ",");
 	fprintf(f, "]}%s\n", eot);
 	return i; // do not update after module block
     }
@@ -359,13 +359,16 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		    instr(st, i, a_y),
 		    eot);
 	    break;	    
+	// `unsigned' when the compiler set csp_instr_alu_t.u: the seven
+	// operators that read a sign (/ % >> < <=) take the other arm then.
 	case 2:
-	    fprintf(f, "{instr,%d,'%s',[r%d,r%d,r%d]}%s\n",
+	    fprintf(f, "{instr,%d,'%s',[r%d,r%d,r%d%s]}%s\n",
 		    i,
 		    ro_maybe_ptr(csp_opcode_name(instr(st,i,op))),
 		    instr(st, i, a_x),
 		    instr(st, i, a_y),
 		    instr(st, i, a_z),
+		    instr(st, i, a_u) ? ",unsigned" : "",
 		    eot);
 	    break;
 	}
@@ -906,6 +909,52 @@ void csp_dump(FILE* f, csp_rt_t* st)
     }
     fprintf(f, "]}.\n");    
 
+    // The strings, by handle: what an LI loads when the argument is text
+    // (println("n=", N)), and what the names above were made from.
+    fprintf(f, "{strings,[");
+    {
+	sindex_t h;
+	for (h = 1; csp_str_ofs(st, h) < (sindex_t)st->ps.strp; h++) {
+	    uint8_t len = csp_str_len(st, h), j;
+	    if (h > 1) fputc(',', f);
+	    fprintf(f, "{%u,\"", (unsigned)h);
+	    for (j = 0; j < len; j++) {
+		char c = (char)csp_str_char(st, h, j);
+		if ((c == '"') || (c == '\\')) fputc('\\', f);
+		fputc(c, f);
+	    }
+	    fprintf(f, "\"}");
+	}
+    }
+    fprintf(f, "]}.\n");
+
+    // The settings store: what the program's `>' lines set, by PATH --
+    // `> in5.Flags = ...' is {"in5.Flags",0,5}. The declarations above carry
+    // the source's values, and this dump is taken before the store is laid
+    // over them, so without it a configuration file's lines were not here at
+    // all. Strings are left out: their value is a handle, not text.
+    fprintf(f, "{settings,[");
+    {
+	csp_setting_t sv;
+	for (i = 0, n = 0; csp_settings_get(st, i, &sv); i++) {
+	    if (sv.vt == V_STRING)
+		continue;
+	    if (n++ > 0) fputc(',', f);
+	    fprintf(f, "{\"%.*s\",%u,%d}", sv.plen, sv.path, sv.part, (int)sv.val.i);
+	}
+    }
+    fprintf(f, "]}.\n");
+
+    // The rules the program switched off -- `#disable 3 5-7' in its text, or
+    // since at the prompt. By number, as /list numbers them.
+    fprintf(f, "{disabled,[");
+    for (i = 0, n = 0; i < MAX_DIS_RULES; i++) {
+	if (!bitset_tst(st->dis_rule, i)) continue;
+	if (n++ > 0) fputc(',', f);
+	fprintf(f, "%d", i + 1);
+    }
+    fprintf(f, "]}.\n");
+
     fprintf(f, "{object,[global");
     for (i = 0; i < st->ps.nq; i++) {
 	int m = i+1;
@@ -1429,7 +1478,6 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    emit_rec(f, ip, 4, ".m={%s,.x=%u,.mem=%u,.y=%u}",
 		    op, csp_instr_get_m_x(ip), csp_instr_get_m_mem(ip), csp_instr_get_m_y(ip));
 	    break;
-	    // case OP_EQI:
 	case OP_STI:	    
 	    emit_rec(f, ip, 4, ".mi={%s,.x=%u,.mem=%u,.imm=%d}",
 		    op, csp_instr_get_mi_x(ip), csp_instr_get_mi_mem(ip), csp_instr_get_mi_imm(ip));

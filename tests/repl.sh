@@ -934,13 +934,11 @@ echo "interrupts:"
 got=$(escript utils/gen_chips.erl --irq-of bridgezone |
 	  sed -n 's/^ *\(eint[0-3]\)  \(.*\)/\1 \2/p')
 # `*` is a pin that IS the interrupt; a name in parentheses is what else took
-# it. P0.16 is the AVR's wakeup line and P0.30 is Ain4 muxed to eint3 so the
-# path can be driven by hand -- take that line out of bridgezone.terms and this
-# expectation goes back to `P0.30(ain3)`.
+# it. P0.16 is the AVR's wakeup line; P0.30 is Ain4.
 ck "EINT pins come from the pin table, with what took them" 'eint0 P0.1(rxd0) P0.16*
 eint1 P0.3(sda0) P0.14
 eint2 P0.7(pwm2) P0.15(gpio)
-eint3 P0.9(rxd1) P0.20(gpio) P0.30*' "$got"
+eint3 P0.9(rxd1) P0.20(gpio) P0.30(ain3)' "$got"
 
 # per_bit is a rule, not a list: the EXTI line IS the bit number, so PA1 and
 # PB1 are the same channel and only one of them can be a source.
@@ -1222,18 +1220,18 @@ ck "pin lists and several ports list back" \
 #digital E[4] in 0:2,1:5,2:6,3:7  // R
 #analog D[9]:16 out 1:1..3,2:1,3,5,9:7..9  // R' "$got"
 
-# An #analog is SIGNED by default, so `unsigned` has to survive a listing --
-# without it the line pastes back signed and every reading above half scale
-# comes home negative. Nothing else prints the type, so nothing else caught it.
+# An #analog is UNSIGNED by default, so `integer` has to survive a listing --
+# without it the line pastes back unsigned and a centred reading loses its
+# sign. Nothing else prints the type, so nothing else would catch it.
 cat > "$D/arru.csp" <<'EOF'
-#analog U:16 out unsigned 9:0
-#analog S:16 out 9:1
+#analog U:16 out 9:0
+#analog S:16 out integer 9:1
 EOF
 got=$(printf '/list\n/quit\n' | repl ./csp "$D/arr15.db" --no-eeprom "$D/arru.csp" |
 	  sed -n '/^#analog/p')
-ck "an unsigned analog lists as unsigned" \
-   '#analog U:16 out unsigned 9:0  // R
-#analog S:16 out 9:1  // R' "$got"
+ck "a signed analog lists as integer" \
+   '#analog U:16 out 9:0  // R
+#analog S:16 out integer 9:1  // R' "$got"
 
 # A length and a pin list that disagree is a typo. Silently padding would leave
 # the extra elements on pin 0, which is a real pin on every board here.

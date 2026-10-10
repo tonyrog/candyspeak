@@ -236,12 +236,14 @@ typedef union {
     csp_instr_setox_t ox;
     csp_instr_end_t em;
 } csp_instr_raw_t;
+
 #define DECL_HEADER \
     decl_t type:CSP_DECL_TYPE_BITS; \
     unsigned cont:1; \
     unsigned local:1; \
     pindir_t dir:DIR_BITS; \
     unsigned name:NAMEID_BITS
+
 #define DECL_TYPE_HEADER \
     DECL_HEADER; \
     unsigned res:5; \
@@ -250,6 +252,7 @@ typedef union {
     unsigned nx:1;    /* RESERVED: name's 9th bit; see utils/layout.terms */ \
     unsigned vt:TYPE_BITS; \
     unsigned reg:REG_BITS
+
 #define DECL_COMMON DECL_TYPE_HEADER
 
 typedef struct PACKED  {

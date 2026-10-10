@@ -24,6 +24,10 @@ extern int debug;
 // convert integer to -1 if y != 0  0 otherwise
 #define BOOL(y) (-((y)!=0))
 
+// Every type a memory instruction can name has a letter. The table used to
+// stop at DECL_FIELD, so a #buffer or a view read past its end and the dump
+// printed {,10} or {?,17} -- which is not an Erlang term, and stopped
+// utils/csp_to_c.erl reading the dump at all.
 static const char tag_tab[] RODATA = {
     [DECL_OBJECT] = 'q',
     [DECL_MODULE] = 'm',
@@ -33,6 +37,9 @@ static const char tag_tab[] RODATA = {
     [DECL_ANALOG] = 'a',
     [DECL_TIMER] = 't',
     [DECL_FIELD] = 'f',
+    [DECL_BUFFER] = 'b',
+    [DECL_VIEW] = 'w',
+    [DECL_ROUTE] = 'r',
 };
 
 // Maybe generate
@@ -611,12 +618,6 @@ static inline value_t* csp_slot(csp_rt_t* st, csp_view_t* v, dio_t dir)
     // An owner's heap offset is in the view. This used to load st->buf[v->buf]
     // for the two fields it wanted out of sixteen bytes; now there is no buffer
     // to load, and the access is one add.
-    //
-    // A #local is single-buffered: both directions resolve to the DIN half, so
-    // the value a rule writes is readable by the rules after it in the SAME
-    // cycle. Everything else keeps the transaction -- read DIN, write DOUT.
-    if (csp_view_get_flags(v) & VIEW_F_LOCAL)
-	dir = DIN;
     return (value_t*)(st->heap[dir] + csp_view_get_pos(v));
 }
 
@@ -1096,16 +1097,15 @@ NOINLINE static uint8_t* heap_base(csp_rt_t* st, csp_view_t* vw, dio_t dir,
 	*nbytesp = (uint8_t)csp_buf_get_nbytes(b);
 	return st->heap[dir] + csp_buf_get_hp(b);
     }
-    // NO local redirect here, deliberately. BUF_F_LOCAL was read by csp_slot
-    // only, and a #local is a DECL_VARIABLE -- an OWN view, never a SLOT -- so
-    // the redirect never applied to it and the value path has always been the
-    // ordinary DIN/DOUT transaction. Adding it here broke `#local sum` down to
-    // 0: writes went to DIN and the commit then copied the stale DOUT back over
-    // them. Whether a #local really gets its same-cycle read is a question that
-    // predates this and is not answered by the flag.
     *bitp = 0;
     // (len+1 bits) rounded up
     *nbytesp = (uint8_t)((csp_view_get_len(vw)+8)>>3); 
+    // A #local has ONE copy, in the DLOCAL region, whatever the direction: a
+    // rule after the one that wrote it reads it in the same cycle. The commit
+    // never copies it -- heap_dset_copy skips it -- since the DOUT address its
+    // pos would give lies past the block.
+    if (csp_view_get_flags(vw) & VIEW_F_LOCAL)
+	return st->lheap + csp_view_get_pos(vw);
     return st->heap[dir] + csp_view_get_pos(vw);
 }
 
@@ -1387,14 +1387,10 @@ NOINLINE void csp_dio_get(csp_rt_t* st, index_t ix, value_t* vp, dio_t dir)
 // cycle per step. Every other leaf follows the transaction rule: a rule reads
 // what was committed at the end of the previous cycle.
 //
-// The declaration bit and this comment's promise were both in place; the copy
-// was not. csp.h's DECL_HEADER note says "its leaf is copied DOUT->DIN right
-// after (so a read in the SAME cycle sees it -- see csp_local_commit)", and
-// csp_local_commit was never written. So a #local behaved exactly like a
-// #variable, and a chain of seven -- lib/analog.csp -- put its output seven
-// cycles behind its input.
-// is_local_leaf was csp_is_local written a second time, word for word. One of
-// them is a word now, so there is one of them.
+// So a #local has one copy, in the DLOCAL region, and both directions go to it
+// (heap_base). It is still marked dirty -- changed() reads the dirty set -- but
+// the commit skips it. It used to be a pair like any variable, with the write
+// mirrored into DIN here: twice the bytes for the same value.
 
 NOINLINE void csp_set_value(csp_rt_t* st, index_t n, value_t v)
 {
@@ -1408,10 +1404,7 @@ NOINLINE void csp_set_value(csp_rt_t* st, index_t n, value_t v)
 	if (st->reactive)
 	    csp_enq_elist(st,n);
 #endif
-	csp_dio_set(st, n, v, DOUT);
-	// The commit a #local does not wait for.
-	if (csp_is_local(st, n))
-	    csp_dio_set(st, n, v, DIN);
+	csp_dio_set(st, n, v, DOUT);    // a #local: its one copy, see heap_base
 	st->es.update++;
     }
 }
@@ -1611,11 +1604,7 @@ NOINLINE int eval_op(csp_rt_t* st, int n, const csp_instr_t* ci, int* leave)
 	csp_dio_get_part(st, mmem, &st->es.reg[mx],
 			 csp_instr_get_m_y(ci), DIN);
 	break;
-//    case OP_EQI:
-//	st->es.reg[ci.mi.x].i =
-//	    csp_value(st, ci.mi.mem).i == ci.mi.imm;
-//	break;	
-    case OP_STI: {  // store immediate to memory (mirror of EQI)
+    case OP_STI: {
 	index_t sm = csp_instr_get_mi_mem(ci);
 	value_t v;
 	v.i = csp_instr_get_mi_imm(ci);
@@ -1887,6 +1876,14 @@ NOINLINE static void heap_dset_copy(csp_rt_t* st, dio_t to, dio_t from)
 		csp_view_t* v = &st->view[i];
 		uint16_t n;
 		uint16_t hp = leaf_region(st, v, &n);
+		// A #local is dirty for changed(), but it has no second copy to
+		// commit to: its pos is in DLOCAL.
+		if ((csp_view_get_kind(v) == VIEW_OWN) &&
+		    (csp_view_get_flags(v) & VIEW_F_LOCAL)) {
+		    bits >>= 1;
+		    i++;
+		    continue;
+		}
 		memcpy(st->heap[to] + hp, st->heap[from] + hp, n);
 		// Committing a change into a buffer with a TRANSPORT is what
 		// makes it due for sending -- a frame, a datagram or a bus
@@ -3014,14 +3011,6 @@ int csp_csr(csp_rt_t* st)
 		}
 	    }
 	    break;
-//	case OP_EQI:
-//	    if (current_rule >= 0) {
-//		index_t mem = INDEX(csp_instr_get_mi_mem(&ci));
-//		if (mem < st->ps.nd) {
-//		    st->es.idg[mem]++;
-//		}
-//	    }
-//	    break;
 	case OP_LI:
 	case OP_LIU:
 	    reg_imm[csp_instr_get_i_x(&ci)] = (index_t)csp_instr_get_i_imm(&ci);
@@ -3052,7 +3041,7 @@ int csp_csr(csp_rt_t* st)
 	    break;
 	}
     }
-    // State dependency for every State-gated RAM rule -- replaces the folded EQI's
+    // State dependency for every State-gated RAM rule 
     // edge (gate LD skipped above). One per gated ordinal; over-counting is fine,
     // pass 3 leaves holes (see below).
     {
@@ -3121,14 +3110,6 @@ int csp_csr(csp_rt_t* st)
 		    st->es.edg[wr[mem]++] = ord;
 	    }
 	    break;
-//	case OP_EQI:
-//	    if (current_rule >= 0) {
-//		index_t mem = INDEX(csp_instr_get_mi_mem(&ci));
-//		if (mem < st->ps.nd &&
-//		    (wr[mem] == st->es.ofs[mem] || st->es.edg[wr[mem]-1] != ord))
-//		    st->es.edg[wr[mem]++] = ord;
-//	    }
-//	    break;
 	case OP_LI:
 	case OP_LIU:
 	    reg_imm[csp_instr_get_i_x(&ci)] = (index_t)csp_instr_get_i_imm(&ci);
@@ -3927,6 +3908,8 @@ int csp_mem_init(csp_rt_t* st, size_t size)
     st->dset = NULL;
     st->view_cap = 0;
     st->heap[DIN] = st->heap[DOUT] = NULL;
+    st->lheap = NULL;
+    st->lheap_cap = 0;
     st->buf = NULL;
     st->buf_cap = 0;
     st->heap_cap = 0;
@@ -5132,6 +5115,18 @@ NOINLINE static uint16_t csp_heap_alloc(csp_rt_t* st, uint16_t nbytes)
     return hp;
 }
 
+// The same for the DLOCAL region, which has its own cursor and size.
+NOINLINE static uint16_t csp_lheap_alloc(csp_rt_t* st, uint16_t nbytes)
+{
+    uint16_t hp = (st->lhp + 3) & ~3;
+    if ((uint32_t)hp + nbytes > st->lheap_cap) {
+	csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);
+	return 0xffff;
+    }
+    st->lhp = hp + nbytes;
+    return hp;
+}
+
 // bump-allocate a buffer in the heap, return its id (or BAD_INDEX)
 NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint16_t nbytes,
 				      uint8_t transport, uint32_t xref,
@@ -5201,7 +5196,10 @@ NOINLINE int setup_buffer(csp_rt_t* st, index_t ix)
     // back-reference -- and only a #buffer can be a view parent.
     if (!is_buf) {
 	uint16_t hp;
-	if ((hp = csp_heap_alloc(st, nbytes)) == 0xffff)
+	// A #local takes its one copy from DLOCAL -- see VIEW_F_LOCAL.
+	int local = csp_decl_get_local(&d);
+	hp = local ? csp_lheap_alloc(st, nbytes) : csp_heap_alloc(st, nbytes);
+	if (hp == 0xffff)
 	    return -1;
 	vw = &st->view[vi];
 	csp_view_set_kind(vw, VIEW_OWN);
@@ -5209,7 +5207,8 @@ NOINLINE int setup_buffer(csp_rt_t* st, index_t ix)
 	csp_view_set_pos(vw, hp);
 	csp_view_set_len(vw,(res > VIEW_MAX_LEN) ? VIEW_MAX : (uint8_t)(res - 1));
 	csp_view_set_endian(vw, E_NATIVE);
-	csp_view_set_flags(vw, ((res & 7) == 0) ? VIEW_F_SIMPLE : 0);
+	csp_view_set_flags(vw, (((res & 7) == 0) ? VIEW_F_SIMPLE : 0) |
+			   (local ? VIEW_F_LOCAL : 0));
 	return 0;
     }
 
@@ -5298,12 +5297,8 @@ NOINLINE int setup_variable(csp_rt_t* st, index_t ix)
 	setup_view_values(vw, csp_decl_get_vt(&d), csp_view_get_buf(pv), &d);
 	return 0;
     }
-    if (setup_buffer(st, ix) < 0)         // its own storage
+    if (setup_buffer(st, ix) < 0)         // its own storage (DLOCAL for a #local)
 	return -1;
-    // A #local is single-buffered -- see VIEW_F_LOCAL. Marked here, after
-    // setup_buffer has filled the view in; heap_base and csp_slot do the rest.
-    if (csp_decl_get_local(&d))
-	csp_view_set_flags(vw, csp_view_get_flags(vw) | VIEW_F_LOCAL);
     {
 	// Read once. va_init is 32 bits, so the accessor is four byte loads and
 	// a shift each -- and the two slots get the same value by definition.
@@ -5429,6 +5424,10 @@ NOINLINE static void est_leaf(csp_rt_t* st, int j, csp_estimate_t* e)
 	if (csp_decl_get_bound(&d))                          // bit-field view: shares a buffer
 	    return;
 	nbytes = (GET_RES(csp_decl_get_res(&d)) + 7) >> 3;
+	if (csp_decl_get_local(&d)) {                         // one copy, in DLOCAL
+	    e->lheap += (uint16_t)((nbytes + 3) & ~3u);
+	    return;
+	}
 	break;
     case DECL_BUFFER:
 	nbytes = csp_decl_get_bf_nbytes(&d);                // #buffer: size is in bf.nbytes
@@ -5474,6 +5473,7 @@ NOINLINE void csp_estimate(csp_rt_t* st, csp_estimate_t* e)
     e->nbuf = e->nio = e->nt = 0;
     e->nobj = e->nm = 0;
     e->heap = 0;
+    e->lheap = 0;
 
     for (i = 0; i < (int)nd; i++) {           // globals
 	switch (decl(st,i,type)) {
@@ -6270,17 +6270,18 @@ int csp_rt_start(csp_rt_t* st)
     // rt_start reruns on any decl add (see csp_process_persistent) so view_cap
     // always covers max st_index.
     {
-	size_t hbytes;
+	size_t hbytes, lbytes;
 	csp_estimate(st, &e);
 	// The DIN/DOUT transaction halves are ONE block: heap[DOUT] points at the
 	// second half. 8-aligned so a buffer at the same hp offset is equally
 	// aligned in both halves.
 	hbytes = CSP_A8(e.heap ? e.heap : 8);
+	lbytes = CSP_A8(e.lheap);
 	// Caps cleared BEFORE the allocations, not in the failure path. Any exit
 	// from here on then leaves cap and pointer agreeing, and the five stores
 	// exist once instead of once per path.
-	st->heap[DOUT] = NULL;
-	st->view_cap = 0; st->buf_cap = 0; st->heap_cap = 0;
+	st->heap[DOUT] = st->lheap = NULL;
+	st->view_cap = 0; st->buf_cap = 0; st->heap_cap = 0; st->lheap_cap = 0;
 	st->io_cap = 0; st->timer_cap = 0;
 	st->obj_cap = 0; st->mod_cap = 0;
 	// csp_mid_alloc already records a failed request in mid_full, so the six
@@ -6295,7 +6296,7 @@ int csp_rt_start(csp_rt_t* st)
 	st->dset  = (set_group_t*)csp_mid_alloc(st,
 		     (size_t)BITSET_GROUPS(e.nleaf ? e.nleaf : 1) * sizeof(set_group_t));
 	st->buf   = (csp_buf_t*)csp_mid_alloc(st, (size_t)e.nbuf * sizeof(csp_buf_t));
-	st->heap[DIN] = (uint8_t*)csp_mid_alloc(st, 2 * hbytes);
+	st->heap[DIN] = (uint8_t*)csp_mid_alloc(st, 2 * hbytes + lbytes);
 	st->io     = (index_t*)csp_mid_alloc(st, (size_t)e.nio * sizeof(index_t));
 	st->io_obj = (uint8_t*)csp_mid_alloc(st, (size_t)e.nio);
 	st->timer  = (index_t*)csp_mid_alloc(st, (size_t)e.nt * sizeof(index_t));
@@ -6310,9 +6311,11 @@ int csp_rt_start(csp_rt_t* st)
 	    return -1;              // caps are already zero -- see above
 	}
 	st->heap[DOUT] = st->heap[DIN] + hbytes;   // second half of the same block
+	st->lheap = st->heap[DIN] + 2 * hbytes;    // and DLOCAL after both
 	st->view_cap = e.nleaf;
 	st->buf_cap  = e.nbuf;
 	st->heap_cap = e.heap;
+	st->lheap_cap = e.lheap;
 	st->io_cap   = e.nio;
 	st->timer_cap = e.nt;
 	st->obj_cap  = e.nobj + 1;
@@ -6337,6 +6340,7 @@ int csp_rt_start(csp_rt_t* st)
     st->nm = 0;
     st->nbuf = 0;
     st->nroute = 0;
+    st->lhp = 0;
     st->hp = 0;      // the heap cursor is no longer derivable from buf[nbuf-1]
     st->ps.nq = 0;   // rebuilt from DECL_OBJECT below (parse-time table is not
 		     // restored from ROM); idempotent for a freshly parsed program

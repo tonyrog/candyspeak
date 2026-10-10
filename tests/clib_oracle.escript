@@ -23,6 +23,12 @@
 %% covers more of it as it grows.
 
 main([]) -> main(["tests/clib", "tests/unit"]);
+%% --bytecode: translate the COMPILED program, with utils/csp_to_c.erl, instead
+%% of the source. The same harness and the same comparison -- it holds the
+%% instruction stream against the interpreter running it.
+main(["--bytecode" | Dirs]) ->
+    put(translator, csp_to_c),
+    main(case Dirs of [] -> ["tests/clib", "tests/unit"]; _ -> Dirs end);
 main(Dirs) ->
     Tmp = filename:join("tmp", "clib"),
     ok = filelib:ensure_path(Tmp),
@@ -52,7 +58,7 @@ build_erl(Eb) ->
                          {report, false}]),
     Srcs = [filename:join(Eb, "candyspeak_scan.erl"),
             filename:join(Eb, "candyspeak_parse.erl"),
-            "utils/candyspeak.erl", "utils/candyspeak_c.erl"],
+            "utils/candyspeak.erl", "utils/candyspeak_c.erl", "utils/csp_to_c.erl"],
     lists:foreach(fun(S) -> {ok, _} = compile:file(S, [{outdir, Eb}, report_errors]) end,
                   Srcs),
     ok.
@@ -125,9 +131,13 @@ wrap(Csp, Libs, Tmp) ->
 
 %% The translator says on stderr what it refused; that line is the reason.
 translate(Csp, C) ->
+    Tr = case get(translator) of             % read here: a spawn has its own
+             undefined -> candyspeak_c;      % process dictionary
+             T -> T
+         end,
     {Pid, Ref} = spawn_monitor(
                    fun() ->
-                           exit({done, try candyspeak_c:file(Csp, C)
+                           exit({done, try Tr:file(Csp, C)
                                         catch C1:E1 -> {C1, E1} end})
                    end),
     receive
