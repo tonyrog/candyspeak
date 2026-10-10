@@ -101,6 +101,20 @@ directions there, and the commit skips it -- it is still marked dirty, since
 `changed()` reads the dirty set. On BridgeZone's `main.csp` the derived tables
 went from 28.8 KB to 24.2 KB. `#param` is not moved yet.
 
+**And the shared frame (2026-10-10).** Run sequentially, the formula locals of
+every instance of every module share one frame at the start of DLOCAL, as big
+as the largest module needs. Kept apart: Main's locals, `#local in` and `out`,
+a local watched for change (an OP_CHG on it, or its index passed to a
+function -- `local_watch_scan`), the locals of a module with an instance
+inside it, and everything when the program runs reactively. 24.2 KB to
+20.6 KB. A disabled local formula in the frame reads what another instance
+left there.
+
+On the way: an instance of an earlier module placed after one of a later
+module had leaves overlapping it (offs was a running sum, but a leaf is offs
+plus the member's absolute declaration index). Each object now gets the next
+free range, which also packs the leaves: 19.1 KB.
+
 **The bigger lever is the one the C translation found:** a `#local` lives only
 while its own instance is being evaluated, so all instances of a module can
 share ONE set of local slots -- a scratch area per module, as a C function's

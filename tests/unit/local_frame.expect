@@ -1,0 +1,14 @@
+{modes, [seq, reactive]}.
+{cycles, 12}.
+%% Every instance computes from its own input, though in sequential mode the
+%% locals of all of them sit in one shared frame.
+{checks, [
+  {final_var, "O1", 70},
+  {final_var, "O2", 1010},
+  {final_var, "O3", 113},
+  %% p1's A moves on each step of K (six, and the first-cycle seed); p2's
+  %% only once, 0 -> 101, plus the seed. It once read 56 here -- q1.In's
+  %% value -- because p2's leaves overlapped q1's (see csp_rt_start, offs).
+  {final_var, "H1", 7},
+  {final_var, "H2", 2}
+]}.

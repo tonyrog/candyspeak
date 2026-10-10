@@ -1,0 +1,39 @@
+// Run sequentially, the #locals of every instance of every module share ONE
+// frame: an instance's locals mean nothing outside its own run. Two modules,
+// two instances of one of them, different inputs -- each instance must still
+// see its own formulas. A local that changed() watches keeps a slot of its own,
+// so p2 counts only ITS changes, not p1's.
+#variable K = 0
+K = K + 1 ? K < 6
+#module P
+  #variable In = 0
+  #local A = In + 1
+  #local B = A * 10
+  #variable Out = 0
+  #variable Hits = 0
+  Out = B
+  Hits = Hits + 1 ? changed(A)
+#end
+#module Q
+  #variable In = 0
+  #local C = In * 2
+  #variable Out = 0
+  Out = C + 1
+#end
+#P p1
+#Q q1
+#P p2
+p1.In = K
+p2.In = 100
+q1.In = K + 50
+// The checks read globals, so each result is mirrored out.
+#variable O1 = 0
+#variable O2 = 0
+#variable O3 = 0
+#variable H1 = 0
+#variable H2 = 0
+O1 = p1.Out
+O2 = p2.Out
+O3 = q1.Out
+H1 = p1.Hits
+H2 = p2.Hits

@@ -42,8 +42,8 @@ disasm(<<$J,$A,$M,$\n, HeaderData:?HEADER_DATA_LEN/binary, Crc:16/little,
     CODE_OK = check_section_crc("CODE", n_instr, crc_instr, Header, Sections),
     _GRAPH_OK = check_grapg_crc(Header, Sections),
     %% FIXME: check graph
-    Decl = disasm_decl(DECLS_OK, Sections),
-    Code = disasm_code(CODE_OK, Sections),
+    {Code,Strings} = disasm_code(CODE_OK, Sections),
+    Decl = disasm_decl(DECLS_OK, Strings, Sections),
     {Header, Decl, Code};
 disasm(<<$J,$A,$M,$\n, _/binary>>) ->
     error(bad_file_truncated);
@@ -250,81 +250,146 @@ opcodes() ->
 
 disasm_code(ok, Sections) ->
     {_, Code} = lists:keyfind("CODE", 1, Sections),
-    disasm_code(Code, 0, []).
+    disasm_code(Code, 0, 1, #{ 0 => ""}, []).
 
-disasm_code(<<Instr:32/little, Data/binary>>, Addr, Acc) ->
+disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
     Op = ?get_uint(Instr, 0, ?OPCODE_BITS),
     case maps:get(Op, opcodes()) of
 	{_OpCode, 'end'} ->
-	    lists:reverse(Acc);
+	    {lists:reverse(Acc), Strings};
+	{OpCode, seg} ->
+	    {_Pos, [{num,Num},{used,Used}]} = 
+		decode_bits(Instr, ?OPCODE_BITS, 
+			    [{'_',2},
+			     {num,uint,?BODY_BITS},
+			     {'_', 6},
+			     {used,uint,8}]),
+	    %% Num = ?get_uint(Instr, ?OPCODE_BITS+2, ?BODY_BITS),
+	    %% Used = ?get_uint(Instr, ?OPCODE_BITS+2+?BODY_BITS+6, 8),
+	    <<StringData:(4*Num)/binary, Data1/binary>> = Data,
+	    I = {instr,Addr,OpCode,[{slots,Num},{used,Used},{data,StringData}]},
+	    {Si1, Strings1} = add_strings(Used, StringData, Si, Strings),
+	    add_instr(Data1, Addr, 1+Num, I, Si1, Strings1, Acc);
 	{OpCode, instate} ->
-	    X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
-	    Imm = ?get_int(Instr, ?OPCODE_BITS+?REG_BITS, 8),
-	    Nxt = ?get_int(Instr, ?OPCODE_BITS+?REG_BITS+8, 13),
-	    Imp = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+8+13, 1),
+	    {_Pos,[{x,X},{imm,Imm},{nxt,Nxt},{implicit,Imp}]} =
+		decode_bits(Instr, ?OPCODE_BITS,
+			    [{x, uint, ?REG_BITS},
+			     {imm, int, 8},
+			     {nxt, int, 13},
+			     {implicit, uint, 1}]),
+	    %%X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
+	    %%Imm = ?get_int(Instr, ?OPCODE_BITS+?REG_BITS, 8),
+	    %%Nxt = ?get_int(Instr, ?OPCODE_BITS+?REG_BITS+8, 13),
+	    %%Imp = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+8+13, 1),
 	    Implicit = if Imp =:= 1 -> [implicit]; true -> [] end,
 	    I = {instr, Addr, OpCode, [reg(X),Imm,{nxt,Nxt}|Implicit]},
-	    add_instr(Data, Addr, 1, I, Acc);
+	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, rule} ->
-	    Cnd = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
-	    Nxt = ?get_int(Instr, ?OPCODE_BITS+?REG_BITS+6, 15),
-	    Imp = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+6+15, 1),
+	    {_Pos,[{cnd,Cnd},{nxt,Nxt},{implicit,Imp}]} =
+		decode_bits(Instr, ?OPCODE_BITS,
+			    [{cnd, uint, ?REG_BITS},
+			     {'_', 6},
+			     {nxt, int, 15},
+			     {implicit, uint, 1}]),
+	    %%Cnd = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
+	    %%Nxt = ?get_int(Instr, ?OPCODE_BITS+?REG_BITS+6, 15),
+	    %%Imp = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+6+15, 1),
 	    Implicit = if Imp =:= 1 -> [implicit]; true -> [] end,
 	    I = {instr, Addr, OpCode, [reg(Cnd),Nxt|Implicit]},
-	    add_instr(Data, Addr, 1, I, Acc);
+	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, enter} ->
-	    Num = ?get_uint(Instr, ?OPCODE_BITS, ?BODY_BITS),
-	    Mx  = ?get_uint(Instr, ?OPCODE_BITS+?BODY_BITS, ?INDEX_BITS),
+	    {_Pos,[{num,Num},{mx,Mx}]} =
+		decode_bits(Instr, ?OPCODE_BITS,
+			    [{num, uint, ?BODY_BITS},
+			     {mx,  uint, ?INDEX_BITS}]),
+	    %% Num = ?get_uint(Instr, ?OPCODE_BITS, ?BODY_BITS),
+	    %% Mx  = ?get_uint(Instr, ?OPCODE_BITS+?BODY_BITS, ?INDEX_BITS),
 	    I = {instr,Addr,OpCode,[{mem,Mx},{n,Num}]},
-	    add_instr(Data, Addr, 1, I, Acc);
+	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, leave} ->
-	    Num = ?get_uint(Instr, ?OPCODE_BITS, ?BODY_BITS),
-	    Mx  = ?get_uint(Instr, ?OPCODE_BITS+?BODY_BITS, ?INDEX_BITS),
+	    {_Pos,[{num,Num},{mx,Mx}]} =
+		decode_bits(Instr, ?OPCODE_BITS,
+			    [{num, uint, ?BODY_BITS},
+			     {mx,  uint, ?INDEX_BITS}]),
+	    %% Num = ?get_uint(Instr, ?OPCODE_BITS, ?BODY_BITS),
+	    %% Mx  = ?get_uint(Instr, ?OPCODE_BITS+?BODY_BITS, ?INDEX_BITS),
 	    I = {instr,Addr,OpCode,[{mem,Mx},{n,Num}]},
-	    add_instr(Data, Addr, 1, I, Acc);
+	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, next} ->
-	    X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
+	    {_Pos,[{x,X}]} =
+		decode_bits(Instr, ?OPCODE_BITS,
+			    [{x, uint, ?REG_BITS}]),
+	    %% X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
 	    I = {instr,Addr,OpCode,[reg(X)]},
-	    add_instr(Data, Addr, 1, I, Acc);
+	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, new} ->
-	    Obj = ?get_uint(Instr, ?OPCODE_BITS, ?INDEX_BITS),
+	    {_Pos,[{obj,Obj}]} =
+		decode_bits(Instr, ?OPCODE_BITS,
+			    [{obj, uint, ?INDEX_BITS}]),
+	    %% Obj = ?get_uint(Instr, ?OPCODE_BITS, ?INDEX_BITS),
 	    I = {instr,Addr,OpCode,[{obj,Obj}]},
-	    add_instr(Data, Addr, 1, I, Acc);
+	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, call} ->
-	    X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
-	    Idx = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS, ?FUNC_BITS),
-	    Usr = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+?FUNC_BITS, 1),
-	    Avt = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+?FUNC_BITS+1, 16),
+	    {_Pos,[{x,X},{idx,Idx},{usr,Usr},{avt,Avt}]} =
+		decode_bits(Instr, ?OPCODE_BITS,
+			    [{x, uint, ?REG_BITS},
+			     {idx, uint, ?FUNC_BITS},
+			     {usr, uint, 1},
+			     {avt, uint, 16}]),
+	    %%X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
+	    %%Idx = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS, ?FUNC_BITS),
+	    %%Usr = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+?FUNC_BITS, 1),
+	    %%Avt = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+?FUNC_BITS+1, 16),
 	    I = {inst,Addr,OpCode,[reg(X),{idx,Idx},{usr,Usr},{avt,Avt}]},
-	    add_instr(Data, Addr, 1, I, Acc);
+	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, alu, 1} ->
-	    X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
-	    Y = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS, ?REG_BITS),
-	    _Z = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS, ?REG_BITS),
-	    U = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS+1, 1),
-	    _Swap = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS+2, 1),
+	    {_Pos,[{x,X},{y,Y},{u,U},{swap,_Swap}]} =
+		decode_bits(Instr, ?OPCODE_BITS,
+			    [{x, uint, ?REG_BITS},
+			     {y, uint, ?REG_BITS},
+			     {'_', ?REG_BITS},
+			     {u, uint, 1},
+			     {swap, uint, 1}]),
+	    %%X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
+	    %%Y = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS, ?REG_BITS),
+	    %%_Z = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS, ?REG_BITS),
+	    %%U = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS+1, 1),
+	    %% _Swap = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS+2, 1),
 	    I = if U =:= 0 ->
 			{instr, Addr, OpCode, [reg(X),reg(Y)]};
 		   U =:= 1 ->
 			{instr, Addr, OpCode, [reg(X),reg(Y),unsigned]}
 		end,
-	    add_instr(Data, Addr, 1, I, Acc);
+	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, alu, 2} ->
-	    X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
-	    Y = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS, ?REG_BITS),
-	    Z = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS, ?REG_BITS),
-	    U = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS+1, 1),
-	    _Swap = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS+2, 1),
+	    {_Pos,[{x,X},{y,Y},{z,Z},{u,U},{swap,_Swap}]} =
+		decode_bits(Instr, ?OPCODE_BITS,
+			    [{x, uint, ?REG_BITS},
+			     {y, uint, ?REG_BITS},
+			     {z, uint, ?REG_BITS},
+			     {u, uint, 1},
+			     {swap, uint, 1}]),
+	    %%X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
+	    %%Y = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS, ?REG_BITS),
+	    %%Z = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS, ?REG_BITS),
+	    %%U = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS+1, 1),
+	    %%_Swap = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS+2, 1),
 	    I = if U =:= 0 ->
 			{instr, Addr, OpCode, [reg(X),reg(Y),reg(Z)]};
 		   U =:= 1 ->
 			{instr, Addr, OpCode, [reg(X),reg(Y),reg(Z),unsigned]}
 		end,
-	    add_instr(Data, Addr, 1, I, Acc);
+	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, mem} ->
-	    X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
-	    Y = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS, ?REG_BITS),
-	    Mem = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS+2, ?INDEX_BITS),
+	    {_Pos,[{x,X},{y,Y},{mem,Mem}]} =
+		decode_bits(Instr, ?OPCODE_BITS,
+			    [{x, uint, ?REG_BITS},
+			     {y, uint, ?REG_BITS},
+			     {'_', 2},
+			     {mem, uint, ?INDEX_BITS}]),
+	    %% X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
+	    %% Y = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS, ?REG_BITS),
+	    %% Mem = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS+2, ?INDEX_BITS),
 	    I = case OpCode of
 		    'TMO' -> {instr,Addr,OpCode,[reg(X), {mem,Mem}]};
 		    'CHG' -> {instr,Addr,OpCode,[reg(X), {mem,Mem}]};
@@ -332,10 +397,15 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Acc) ->
 		    'STP' -> {instr, Addr, OpCode, [reg(X), {mem,Mem}, Y]};
 		    _ -> {instr, Addr, OpCode, [reg(X), {mem,Mem}]}
 		end,
-	    add_instr(Data, Addr, 1, I, Acc);
+	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, imm} ->
-	    X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
-	    Imm = ?get_int(Instr, ?OPCODE_BITS+?REG_BITS+6, 16),
+	    {_Pos,[{x,X},{imm,Imm}]} =
+		decode_bits(Instr, ?OPCODE_BITS,
+			    [{x, uint, ?REG_BITS},
+			     {'_',6},
+			     {imm, int, 16}]),
+	    %% X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
+	    %% Imm = ?get_int(Instr, ?OPCODE_BITS+?REG_BITS+6, 16),
 	    I = case OpCode of
 		    'LIU' ->
 			UImm = Imm band ((1 bsl 16)-1),
@@ -346,39 +416,55 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Acc) ->
 		    _ ->
 			{instr, Addr, OpCode, [reg(X), {imm,Imm}]}
 		end,
-	    add_instr(Data, Addr, 1, I, Acc);
+	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, memi} ->
-	    X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
-	    Imm = ?get_int(Instr, ?OPCODE_BITS+?REG_BITS, ?TINY_BITS),
-	    Mem = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+?TINY_BITS,
-			    ?INDEX_BITS),
+	    {_Pos,[{x,X},{imm,Imm},{mem,Mem}]} =
+		decode_bits(Instr, ?OPCODE_BITS,
+			    [{x, uint, ?REG_BITS},
+			     {imm, int, ?TINY_BITS},
+			     {mem, uint, ?INDEX_BITS}]),
+	    %% X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
+	    %% Imm = ?get_int(Instr, ?OPCODE_BITS+?REG_BITS, ?TINY_BITS),
+	    %% Mem = ?get_uint(Instr,?OPCODE_BITS+?REG_BITS+?TINY_BITS,?INDEX_BITS),
 	    I = {instr, Addr, OpCode, [reg(X), {imm,Imm}, {mem,Mem}]},
-	    add_instr(Data, Addr, 1, I, Acc);
-	{OpCode, seg} ->
-	    Num = ?get_uint(Instr, ?OPCODE_BITS+2, ?BODY_BITS),
-	    Used = ?get_uint(Instr, ?OPCODE_BITS+2+?BODY_BITS+6, 8),
-	    <<StringData:(4*Num)/binary, Data1/binary>> = Data,
-	    I = {instr,Addr,OpCode,[{slots,Num},{used,Used},{data,StringData}]},
-	    add_instr(Data1, Addr, 1+Num, I, Acc);
+	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, seto} ->
-	    Obj = ?get_int(Instr, ?OPCODE_BITS+?REG_BITS+2, 16),
+	    {_Pos,[{obj,Obj}]} = 
+		decode_bits(Instr, ?OPCODE_BITS,
+			    [{obj, uint, 16}]),
+	    %% Obj = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+2, 16),
 	    I = {instr,Addr,OpCode,[{obj,Obj}]},
-	    add_instr(Data, Addr, 1, I, Acc);
+	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, setox} ->
-	    Len = ?get_int(Instr, ?OPCODE_BITS+?REG_BITS+2, 14),
-	    X = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+2+14, ?REG_BITS),
-	    Stride = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+2+14+?REG_BITS, 6),
+	    {_Pos,[{len,Len},{x,X},{stride,Stride}]} =
+		decode_bits(Instr, ?OPCODE_BITS,
+			    [{'_', 2},
+			     {len, uint, 14},
+			     {x, uint, ?REG_BITS},
+			     {stride, uint, 6}]),
+	    %% Len = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+2, 14),
+	    %% X = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+2+14, ?REG_BITS),
+	    %% Stride = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+2+14+?REG_BITS, 6),
 	    I = {instr,Addr,OpCode,[reg(X),{len,Len},{stride,Stride}]},
-	    add_instr(Data, Addr, 1, I, Acc);	    
+	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);	    
 	{OpCode, nop} ->
 	    I = {instr,Addr,OpCode},
-	    add_instr(Data, Addr, 1, I, Acc);	    
+	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);	    
 	{OpCode, Format} ->
 	    I = {instr,Addr,OpCode,Format},
-	    add_instr(Data, Addr, 1, I, Acc)
+	    add_instr(Data, Addr, 1, I, Si, Strings, Acc)
     end;
-disasm_code(<<>>, _, Acc) ->
-    lists:reverse(Acc).
+disasm_code(<<>>, _, _Si,Strings, Acc) ->
+    {lists:reverse(Acc), Strings}.
+
+add_strings(0, _, Si, Strings) ->
+    {Si, Strings};    
+add_strings(Used, <<N,String:N/binary, StringData/binary>>, Si, Strings) ->
+    add_strings(Used - (N+1), StringData, Si+1, Strings#{ Si => String }).
+
+add_instr(Data, Addr, Size, I, Si, String, Acc) ->
+    io:format("~w: ~p\n", [Addr, I]),
+    disasm_code(Data, Addr+Size, Si, String, [I|Acc]).
 
 reg(I) ->
     maps:get(I, reg()).
@@ -387,10 +473,6 @@ reg() ->
        4 => r4, 5 => r5, 6 => r6, 7 => r4,
        8 => r8, 9 => r9, 10 => r10, 11 => r11,
        12 => r12, 13 => r13, 14 => r14, 15 => r15 }.
-
-add_instr(Data, Addr, Size, I, Acc) ->
-    io:format("~w: ~p\n", [Addr, I]),
-    disasm_code(Data, Addr+Size, Acc).
 
 -define(CSP_DECL_TYPE_BITS,  4).
 -define(DIR_BITS,  2).
@@ -426,6 +508,38 @@ add_instr(Data, Addr, Size, I, Acc) ->
 -define(DECL_ROUTE, 14).
 -define(DECL_END_MARK, 15).
 
+type() ->
+#{
+  ?V_VOID => void,
+  ?V_INTEGER => integer,
+  ?V_UNSIGNED => unsigned,
+  ?V_FLOAT => float,
+  ?V_STRING => string,
+  ?V_INDEX => index,
+  ?V_NUMBER => number,
+  ?V_ANY => any,
+  ?V_TIMER => timer,
+  ?V_DIGITAL => digital,
+  ?V_ANALOG => analog,
+  ?V_FIELD => field
+}.  
+
+-define(DIR_NONE,  16#00).
+-define(DIR_IN,    16#01).
+-define(DIR_OUT,   16#02).
+-define(DIR_INOUT, 16#03).
+
+dir() ->
+#{
+  ?DIR_NONE  => none,
+  ?DIR_IN    => in,
+  ?DIR_OUT   => out,
+  ?DIR_INOUT => inout
+}.
+
+dir(D) ->
+    maps:get(D band 16#03, dir()).
+
 decl() ->
 #{
   ?DECL_NONE => none,
@@ -445,34 +559,65 @@ decl() ->
   ?DECL_ROUTE => rout,
   ?DECL_END_MARK => end_mark
  }.
+decl(T) ->
+    maps:get(T band 16#f, decl()).
 
-decl_type(T) ->
-    maps:get(T, decl()).
-
-disasm_decl(ok, Sections) ->
+disasm_decl(ok, Strings, Sections) ->
     {_, Decl} = lists:keyfind("DECL", 1, Sections),
-    disasm_decl(Decl, 0, []).
+    disasm_decl(Decl, 0, Strings, []).
 
-disasm_decl(<<Decl:32/little, Decl2:32/little, Data/binary>>, I, Acc) ->
-    Type = ?get_uint(Decl, 0, ?CSP_DECL_TYPE_BITS),
-    Cont = ?get_uint(Decl, ?CSP_DECL_TYPE_BITS, 1),
-    Local = ?get_uint(Decl, ?CSP_DECL_TYPE_BITS+1, 1),
-    Dir = ?get_uint(Decl, ?CSP_DECL_TYPE_BITS+1+1, ?DIR_BITS),
-    Name = ?get_uint(Decl, ?CSP_DECL_TYPE_BITS+1+1+?DIR_BITS, ?NAMEID_BITS),
-    DeclType = decl_type(Type),
-    case DeclType of
-	end_mark -> lists:reverse(Acc);
-	_ ->
-	    D = {decl, I, DeclType, [{dir,Dir},{local,Local},{name,Name}]},
-	    add_decl(Data, I, 1, D, Acc)
+disasm_decl(<<Decl:64/little, Data/binary>>, 
+	    I, Strings, Acc) ->
+    {Pos, [{_, IType}, {_, ICont}, {_, ILocal}, {_, IDir}, {_, IName}]} =
+	 decode_bits(Decl, [{type,uint,?CSP_DECL_TYPE_BITS},
+			    {cont,uint,1},{local,uint,1},{dir,uint,?DIR_BITS},
+			    {name,uint,?NAMEID_BITS}]),
+    Dir = dir(IDir),
+    Name = maps:get(IName, Strings),
+    case decl(IType) of
+	end_mark -> 
+	    lists:reverse(Acc);
+	states ->
+	    {_Pos,[{_,Name2},{_,Name3},{_,Name4},{_,Name5},{_,Name6}]} =
+		decode_bits(Decl, Pos, 
+			[{name2,uint,?NAMEID_BITS},
+			 {name3,uint,?NAMEID_BITS},
+			 {name4,uint,?NAMEID_BITS},
+			 {name5,uint,?NAMEID_BITS},
+			 {name6,uint,?NAMEID_BITS}]),
+	    D = {decl,I,states,Name,[{name2,maps:get(Name2, Strings)},
+				     {name3,maps:get(Name3, Strings)},
+				     {name4,maps:get(Name4, Strings)},
+				     {name5,maps:get(Name5, Strings)},
+				     {name6,maps:get(Name6, Strings)}]},
+	    add_decl(Data, I, 1, D, Strings, Acc);
+	DeclType ->
+	    D = {decl,I,DeclType,Name,[{dir,Dir},{local,ILocal}]},
+	    add_decl(Data, I, 1, D, Strings, Acc)
     end;
-disasm_decl(<<>>, _I, Acc) ->
+disasm_decl(<<>>, _I, _Strings, Acc) ->
     lists:reverse(Acc).    
 
-add_decl(Data, I, Size, D, Acc) ->
+add_decl(Data, I, Size, D, Strings, Acc) ->
     io:format("~w: ~p\n", [I, D]),
-    disasm_decl(Data, I+Size, [D|Acc]).
+    disasm_decl(Data, I+Size, Strings, [D|Acc]).
 
+decode_bits(Bits, Fields) ->
+    decode_bits(Bits, 0, Fields, []).
+decode_bits(Bits, Pos, Fields) ->
+    decode_bits(Bits, Pos, Fields, []).
+
+decode_bits(Bits, Pos, [{'_',Len}|Fields], Acc) -> %% pad
+    decode_bits(Bits, Pos+Len, Fields, Acc);
+decode_bits(Bits, Pos, [{Name,uint,Len}|Fields], Acc) ->
+    decode_bits(Bits, Pos+Len, Fields, 
+		[{Name, ?get_uint(Bits, Pos, Len)}|Acc]);
+decode_bits(Bits, Pos, [{Name,int,Len}|Fields], Acc) ->
+    decode_bits(Bits, Pos+Len, Fields, 
+		[{Name, ?get_int(Bits, Pos, Len)}|Acc]);
+decode_bits(Bits, Pos, [], Acc) ->
+    {Pos, lists:reverse(Acc)}.
+    
 
 check_section_crc(Tag, LenKey, CrcKey, Header, Sections) ->
     %% Crc = crc16(<<S,E,C,T,Len:32/little,SectionData:Len/binary>>),

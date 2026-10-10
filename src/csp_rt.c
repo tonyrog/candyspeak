@@ -3910,6 +3910,7 @@ int csp_mem_init(csp_rt_t* st, size_t size)
     st->heap[DIN] = st->heap[DOUT] = NULL;
     st->lheap = NULL;
     st->lheap_cap = 0;
+    st->lwatch = NULL;
     st->buf = NULL;
     st->buf_cap = 0;
     st->heap_cap = 0;
@@ -5127,6 +5128,67 @@ NOINLINE static uint16_t csp_lheap_alloc(csp_rt_t* st, uint16_t nbytes)
     return hp;
 }
 
+// The #locals something watches for change: an OP_CHG on one (`<-`, `?
+// changed`), or its CURRENT-relative index handed to a function (changed(L),
+// rising(L)). A changed() compares against the value the local had LAST
+// cycle, so such a local has to keep it, and cannot share the frame -- see
+// st->lframe. A constant that happens to equal a local's index costs that
+// local nothing but its own slot.
+NOINLINE static void local_watch_scan(csp_rt_t* st)
+{
+    index_t reg_imm[MAX_REGS];
+    index_t i;
+
+    memset(reg_imm, 0, sizeof(reg_imm));
+    for (i = 0; i < st->ps.nn; i = instr_next(st, i)) {
+	csp_instr_t ci;
+	index_t m = BAD_INDEX;
+	csp_load_instr(st, i, &ci);
+	switch (csp_instr_get_op(&ci)) {
+	case OP_LI:
+	case OP_LIU:
+	    reg_imm[csp_instr_get_i_x(&ci)] = (index_t)csp_instr_get_i_imm(&ci);
+	    break;
+	case OP_ARG:
+	    if (OBJ(reg_imm[csp_instr_get_i_x(&ci)]) == CURRENT)
+		m = INDEX(reg_imm[csp_instr_get_i_x(&ci)]);
+	    break;
+	case OP_CHG:
+	    m = INDEX(csp_instr_get_m_mem(&ci));
+	    break;
+	default:
+	    break;
+	}
+	if (m < st->ps.nd)
+	    bitset_set(st->lwatch, m);
+    }
+}
+
+// A module with an instance among its members runs that instance's body in
+// the middle of its own, so its locals cannot be in the frame the inner one
+// writes.
+NOINLINE static int module_nests(csp_rt_t* st, index_t mx)
+{
+    int j, base = INDEX(mx) + 1, dn = decl(st, INDEX(mx), md_n);
+    for (j = 0; j < dn; j++)
+	if (decl(st, base + j, type) == DECL_OBJECT)
+	    return 1;
+    return 0;
+}
+
+// Whether member declaration j, a #local, goes in the shared frame. Only a
+// formula does: a `#local out` is read from outside, and a `#local in` is
+// bound before its instance runs but holds its default for as long as nothing
+// binds it -- an initial value, so state. The module-level conditions (an
+// instance, not Main; no instance inside) are the caller's.
+NOINLINE static int local_shares(csp_rt_t* st, csp_decl_t* d, index_t j)
+{
+    return !st->reactive && st->lwatch &&
+	(csp_decl_get_type(d) == DECL_VARIABLE) && csp_decl_get_local(d) &&
+	!csp_decl_get_bound(d) && (csp_decl_get_dir(d) == DIR_NONE) &&
+	!bitset_tst(st->lwatch, j);
+}
+
 // bump-allocate a buffer in the heap, return its id (or BAD_INDEX)
 NOINLINE static index_t csp_buf_alloc(csp_rt_t* st, uint16_t nbytes,
 				      uint8_t transport, uint32_t xref,
@@ -5198,7 +5260,12 @@ NOINLINE int setup_buffer(csp_rt_t* st, index_t ix)
 	uint16_t hp;
 	// A #local takes its one copy from DLOCAL -- see VIEW_F_LOCAL.
 	int local = csp_decl_get_local(&d);
-	hp = local ? csp_lheap_alloc(st, nbytes) : csp_heap_alloc(st, nbytes);
+	if (local && (st->lfp != 0xffff) && local_shares(st, &d, INDEX(ix))) {
+	    hp = (st->lfp + 3) & ~3;        // the frame: sized by csp_estimate
+	    st->lfp = hp + nbytes;
+	}
+	else
+	    hp = local ? csp_lheap_alloc(st, nbytes) : csp_heap_alloc(st, nbytes);
 	if (hp == 0xffff)
 	    return -1;
 	vw = &st->view[vi];
@@ -5467,13 +5534,14 @@ NOINLINE void csp_estimate(csp_rt_t* st, csp_estimate_t* e)
 {
     int i, in_module = 0;
     index_t nd = st->ps.nd;
-    int offs = nd;                            // object storage base (== rt_start)
+    int offs = nd;                            // top: one past the last leaf (== rt_start)
 
     e->nleaf = nd;                            // globals occupy leaves [0, nd)
     e->nbuf = e->nio = e->nt = 0;
     e->nobj = e->nm = 0;
     e->heap = 0;
     e->lheap = 0;
+    e->lframe = 0;
 
     for (i = 0; i < (int)nd; i++) {           // globals
 	switch (decl(st,i,type)) {
@@ -5487,7 +5555,7 @@ NOINLINE void csp_estimate(csp_rt_t* st, csp_estimate_t* e)
     }
     for (i = 0; i < (int)nd; i++) {           // objects: offs build + members
 	index_t mx;
-	int dn, base, j, top;
+	int dn, base, j, top, frame;
 	csp_decl_t od;
 	csp_load_decl(st, i, &od);
 	if (csp_decl_get_type(&od) != DECL_OBJECT)
@@ -5495,12 +5563,25 @@ NOINLINE void csp_estimate(csp_rt_t* st, csp_estimate_t* e)
 	mx = csp_decl_get_mq_mx(&od);
 	dn = decl(st, INDEX(mx), md_n);
 	base = INDEX(mx) + 1;                  // members' decl indices: base..base+dn-1
-	top = offs + base + dn;               // one past this object's last leaf
+	top = offs + dn;                      // one past this object's last leaf
 	if (top > (int)e->nleaf) e->nleaf = top;
-	for (j = 0; j < dn; j++)
+	frame = module_nests(st, mx) ? -1 : 0;
+	for (j = 0; j < dn; j++) {
+	    csp_decl_t md;
+	    csp_load_decl(st, base + j, &md);
+	    if ((frame >= 0) && local_shares(st, &md, (index_t)(base + j))) {
+		frame = ((frame + 3) & ~3) +
+		    ((GET_RES(csp_decl_get_res(&md)) + 7) >> 3);
+		continue;
+	    }
 	    est_leaf(st, base + j, e);
+	}
+	frame = (frame + 3) & ~3;             // the own slots after it stay aligned
+	if (frame > (int)e->lframe)
+	    e->lframe = (uint16_t)frame;
 	offs += dn;
     }
+    e->lheap += e->lframe;
 }
 
 // Lay the whole program out again: the reactive graph, then the leaf/device
@@ -6271,6 +6352,13 @@ int csp_rt_start(csp_rt_t* st)
     // always covers max st_index.
     {
 	size_t hbytes, lbytes;
+	// Which locals are watched decides which share the frame, and that
+	// decides the sizes -- so the scan comes first. Without its bitset no
+	// local shares, and the estimate below agrees.
+	st->lwatch = (set_group_t*)csp_mid_alloc(st,
+		      (size_t)BITSET_GROUPS(st->ps.nd ? st->ps.nd : 1) * sizeof(set_group_t));
+	if (st->lwatch)
+	    local_watch_scan(st);
 	csp_estimate(st, &e);
 	// The DIN/DOUT transaction halves are ONE block: heap[DOUT] points at the
 	// second half. 8-aligned so a buffer at the same hp offset is equally
@@ -6340,7 +6428,8 @@ int csp_rt_start(csp_rt_t* st)
     st->nm = 0;
     st->nbuf = 0;
     st->nroute = 0;
-    st->lhp = 0;
+    st->lhp = e.lframe;  // own local slots after the shared frame
+    st->lfp = 0xffff;    // Main's locals never use it
     st->hp = 0;      // the heap cursor is no longer derivable from buf[nbuf-1]
     st->ps.nq = 0;   // rebuilt from DECL_OBJECT below (parse-time table is not
 		     // restored from ROM); idempotent for a freshly parsed program
@@ -6396,13 +6485,21 @@ int csp_rt_start(csp_rt_t* st)
 	}
     }
     // allocate object 1..nq storage
-    offs = st->ps.nd;
+    //
+    // A member's leaf is offs[m] + its DECLARATION index (st_index), and a
+    // module's members start at base = INDEX(mx) + 1, so object m's leaves are
+    // [offs[m] + base, offs[m] + base + dn). offs is set so that range is the
+    // next free one, `top`. It used to be a running sum of dn, which put each
+    // object `base` further along -- and an instance of an EARLIER module
+    // placed after one of a later module landed on top of it: p2.Hits and
+    // q1.In were one leaf (tests/unit/local_frame).
+    offs = st->ps.nd;                    // top: one past the last leaf in use
     for (i = 0; i < st->ps.nq; i++) {
 	int m = i+1;
 	index_t ix = st->object[m];
 	index_t mx = get_mq_m(st, ix);   // get module
 	ivalue_t dn = get_md_n(st, mx);  // number of decl elements
-	st->offs[m] = offs;
+	st->offs[m] = (index_t)(offs - (INDEX(mx) + 1));
 	offs += dn;
 	if (offs > MAX_DECLS) {
 	    // when objects are included
@@ -6425,6 +6522,8 @@ int csp_rt_start(csp_rt_t* st)
 	// instance they are building.
 	st->cur   = m;
 	st->cbase = st->offs[m];
+	// Every instance lays its locals out from the start of the frame.
+	st->lfp = module_nests(st, mx) ? 0xffff : 0;
 
 	for (j = 0; j < dn; j++) {
 	    int dj = base + j;         // decl index
@@ -6473,6 +6572,8 @@ int csp_rt_start(csp_rt_t* st)
 int csp_set_reactive(csp_rt_t* st, int onoff)
 {
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
+    if (st->reactive != (unsigned)(onoff != 0))
+	st->edited = 1;     // the local layout depends on it: rebuild
     st->reactive = onoff;
     return 0;
 #endif

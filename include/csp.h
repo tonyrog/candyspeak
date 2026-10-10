@@ -2298,9 +2298,23 @@ typedef struct _csp_rt_t
     // DLOCAL: a #local is a formula, valid for one cycle and outside the
     // transaction, so it has one copy and not two. Its region follows the two
     // halves in the same block: [DIN][DOUT][DLOCAL].
+    //
+    // Run sequentially, an instance runs from its OP_NEW to its LEAVE without a
+    // break, and its #locals mean nothing outside that stretch. So the locals
+    // of EVERY instance of EVERY module can share one frame at the start of
+    // DLOCAL, as large as the largest module needs -- a C function's locals
+    // are one stack frame whatever the caller. What cannot share keeps a slot
+    // of its own after the frame: Main's locals (Main runs around the NEWs),
+    // a `#local out` (read from outside), a `#local in` (holds its default),
+    // a local something watches for change
+    // (lwatch), the locals of a module with an instance inside it, and all of
+    // them when the program runs reactively (the queue interleaves instances).
     uint8_t*   lheap;             // the DLOCAL region (heap[DIN] + 2 * half)
-    uint16_t   lhp;               // its bump cursor
+    uint16_t   lhp;               // its bump cursor, from the end of the frame
     uint16_t   lheap_cap;         // its bytes (csp_estimate.lheap)
+    uint16_t   lfp;               // frame cursor of the instance being set up;
+				  // 0xffff: this one does not use the frame
+    set_group_t* lwatch;          // decls watched for change (local_watch_scan)
     // allow device output latch=0 or disallow latch=1
     uint8_t latch;
     // Firmware upgrade mode: while this is set, csp_process_line hands every
@@ -3109,7 +3123,9 @@ typedef struct {
 		      // program now fails in csp_buf_alloc (hp + nbytes >
 		      // heap_cap -> ERR_TOO_MANY_DECLARATIONS), which is the
 		      // same door it would have hit through hp.
-    uint16_t lheap;   // DLOCAL bytes: the #locals, one copy, not doubled
+    uint16_t lheap;   // DLOCAL bytes: the #locals, one copy, not doubled,
+		      // the shared frame included
+    uint16_t lframe;  // of which the frame the module instances share
     index_t  nio;     // device entries (digital/analog/field)
     index_t  nt;      // timers (global + per-object)
     index_t  nobj;    // objects (DECL_OBJECT), sizes offs[]/object[]
