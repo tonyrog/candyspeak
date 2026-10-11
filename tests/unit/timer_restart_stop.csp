@@ -1,0 +1,22 @@
+// `T = 1' starts a timer over from now, running or not; `T = 0' stops it.
+// Tk is the clock: one tick every 10 ms on the virtual clock.
+#timer Tk 10 = 1
+#timer T 35
+#timer T2 25
+#variable N = 0                 // ticks
+#variable F = 0                 // times T ran out
+#variable NF = 0                // ...and the tick it last did
+#variable G = 0                 // times T2 ran out
+
+Tk = 1 ? timeout(Tk)
+N = N + 1 ? timeout(Tk)
+
+// Restarted every second tick up to tick 10, so it runs out once, 35 ms after
+// the last restart -- not 35 ms after the first.
+T = 1 ? timeout(Tk) && N % 2 == 0 && N <= 10
+F = F + 1, NF = N ? timeout(T)
+
+// Started, and stopped before it runs out: it never does.
+T2 = 1 ? timeout(Tk) && N == 3
+T2 = 0 ? timeout(Tk) && N == 4
+G = G + 1 ? timeout(T2)

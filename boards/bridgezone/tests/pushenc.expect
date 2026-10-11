@@ -2,7 +2,8 @@
 {stimulus, "boards/bridgezone/tests/pushenc.dat"}.
 %% 2.5 s: past the release, and past the T0 after it that disarms the encoder
 %% and lets the (swallowed) release through -- which must not turn it off.
-{cycles, 250}.
+{time, 2490}.
+{settle, true}.
 {checks, [
   {final_object_var, "Drive.d1", "d1.Step", 3},
   {final_object_var, "Output.o1", "o1.State", 4},

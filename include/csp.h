@@ -869,10 +869,10 @@ typedef int32_t  sindex_t;
 
 typedef struct PACKED {
     unsigned long period:28; // timeout value ms (74h max)
-    unsigned _res:1;         // reserved (auto restart?)
+    unsigned req:1;          // written this cycle: csp_output_timer acts on val
     unsigned fired:1;        // timeout occurred this cycle (edge-triggered)
     unsigned running:1;      // timer is runnig (tx is valid time)
-    unsigned val:1;          // one bit value 1 = start, 0 = stop
+    unsigned val:1;          // one bit value 1 = (re)start, 0 = stop
 } tvalue_t;
 
 // cfg is the request "this pin's configuration changed, apply it to the
@@ -911,21 +911,21 @@ typedef struct PACKED {
 } avalue_t;
 
 typedef enum  {
-    PART_VAL=0,
-    PART_PIN,
-    PART_PORT,
-    PART_DIR,
-    PART_PWM,
-    PART_ENDIAN,
-    PART_PULLUP,
-    PART_PULLDOWN,
-    PART_PERIOD,
-    PART_FIRED,
-    PART_ID,
-    PART_RX,     // TR_CAN buffer: a frame arrived and is now readable (1 cycle)
-    PART_TX,     // TR_CAN buffer: write 1 to force a send this cycle
-    PART_DLC,    // TR_CAN buffer: bytes to send / bytes last received
-    PART_LEN,    // V_STRING: characters in the string. Read-only -- a string
+    PART_VAL = 0,
+    PART_PIN = 1,
+    PART_PORT = 2,
+    PART_DIR  = 3,
+    PART_PWM  = 4,
+    PART_ENDIAN = 5,
+    PART_PULLUP = 6,
+    PART_PULLDOWN = 7,
+    PART_PERIOD = 8,
+    PART_FIRED = 9,
+    PART_ID = 10,
+    PART_RX = 11,  // TR_CAN buffer: a frame arrived and is now readable
+    PART_TX = 12,  // TR_CAN buffer: write 1 to force a send this cycle
+    PART_DLC = 13, // TR_CAN buffer: bytes to send / bytes last received
+    PART_LEN = 14, // V_STRING: characters in the string. Read-only -- a string
 		 // variable holds a POSITION, and lengths are a property of
 		 // what it points at, not of the variable.
     PART_LAST,
@@ -1814,6 +1814,9 @@ typedef struct {
     int8_t  sdef;                // state context to restore when this closes
     uint8_t n_sdef;
     uint8_t sdefv[MAX_IN_STATES];
+    uint16_t def_mark;           // def_used when it opened: #end rolls the
+				 // #local names declared inside back to here,
+				 // which is where their scope ends
 } csp_block_t;
 
 typedef struct {
@@ -1857,8 +1860,6 @@ typedef struct {
                                  // after it are not silently absorbed into a
                                  // module that can never be closed
     int     ent;                 // entry op of module in st->instr
-    uint16_t def_mark;           // def_used at #module: #end rolls the module's
-                                 // #local names back to here
 #if defined(CSP_HAVE_IMPORT)
     // An #import the compiler has read and the port has not yet loaded. The
     // compiler cannot load it itself: it sits inside csp_parse, which is not
@@ -2317,6 +2318,7 @@ typedef struct _csp_rt_t
     uint16_t   lheap_cap;         // its bytes (csp_estimate.lheap)
     uint16_t   lfp;               // frame cursor of the instance being set up;
 				  // 0xffff: this one does not use the frame
+    uint16_t   lframe;            // the frame's bytes: lheap[0, lframe) is shared
     set_group_t* lwatch;          // decls watched for change (local_watch_scan)
     // allow device output latch=0 or disallow latch=1
     uint8_t latch;
@@ -3209,6 +3211,10 @@ extern int  csp_str_eq_ro(csp_rt_t* st, sindex_t pos, rostring_t s, int n);
 // OP_RULE count. Walks the stream, so it is always current -- st->n_rule_no is
 // only as fresh as the last csp_rebuild.
 extern index_t csp_n_rules(csp_rt_t* st);
+// An OP_RULE that is a rule, not a #local's formula or an instance's binding:
+// what #disable and the listing number.
+extern int csp_is_rule(csp_rt_t* st, index_t i);
+extern int csp_rule_binds(csp_rt_t* st, index_t ri);
 extern void csp_print_str_at(csp_rt_t* st, sindex_t pos);
 extern index_t csp_eval(csp_rt_t* st);
 extern index_t csp_eval_range(csp_rt_t* st, index_t start, index_t stop);

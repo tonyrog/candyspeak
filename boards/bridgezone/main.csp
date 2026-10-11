@@ -119,15 +119,11 @@
 #define PENCODER_T0    500      // push encoder: hold this long to start stepping
 #define PENCODER_T1    300      // ...then one step this often
 
-// --- the beat -----------------------------------------------------------------
-// The C's main loop never sleeps, so a delay or a ramp written against the
-// clock just happens. Here every wait is `tick() - Mark >= T', and the runtime
-// cannot see that anyone is waiting: with nothing else due it sleeps -- or,
-// on the virtual clock of a test, jumps straight to the next stimulus. A
-// free-running timer is what tells it to come back. Its period is the
-// resolution of every delay and ramp below.
-#timer Beat 10 = 1
-Beat = 1 ? timeout(Beat)
+// --- time ---------------------------------------------------------------------
+// The C's main loop never sleeps and reads the clock on every pass. Here every
+// wait is a #timer, so the runtime knows when something is due and sleeps
+// until then -- or, on the virtual clock of a test, jumps straight to it.
+// Nothing reads tick(). A ramp runs a 10 ms timer of its own while it ramps.
 
 // --- battery level (process_battery_level) ---------------------------------
 // In the C the voltage arrives as a CAN message. Here it is a variable to be
@@ -202,14 +198,16 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
   #variable ALvl:1 = 0                  // the A2D threshold's own level
   #variable DigPrev:1 = 0
   #variable MarkPrev = 0
-  #variable VTime = 0                   // v_time
+  // v_time: both start over on every event and every step, so "held this
+  // long since the last thing happened" is the one running out
+  #timer PT0 PENCODER_T0
+  #timer PT1 PENCODER_T1
   #variable Penc:1 = 0                  // push encoder armed
   #variable Pdir:1 = 0                  // ...stepping up
   #variable Prun:1 = 0                  // ...stepping
   #variable Ctrl:1 = 0                  // INPUT_STATE_CTRL
 
 
-  #local Now = tick()
   #local Live = (Flags & INPUT_ACTIVE) != 0 && (Out | Ctl) != 0
   #local Inv = (Flags & INPUT_DIGITAL_INVERT) != 0
   #local A2D = (Flags & INPUT_ANALOG_DIGITAL) != 0
@@ -253,11 +251,10 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
   #local PPressArmed = PE && LvlNow && Penc
   #local PPressFirst = PE && LvlNow && !Penc
   #local PRelArmed = PE && !LvlNow && Penc
-  #local Idle = Now - VTime
   #local PHeld = PushEnc && !PE && Penc && LvlNow
-  #local PStart = PHeld && !Prun && Idle >= PENCODER_T0
-  #local Pulse = (PHeld && Prun && Idle >= PENCODER_T1) || PStart
-  #local PDisarm = PushEnc && !PE && Penc && !LvlNow && Idle >= PENCODER_T0
+  #local PStart = PHeld && !Prun && timeout(PT0)
+  #local Pulse = (PHeld && Prun && timeout(PT1)) || PStart
+  #local PDisarm = PushEnc && !PE && Penc && !LvlNow && timeout(PT0)
 
   Prun = 1 ? PPressArmed || PStart
   Prun = 0 ? PRelArmed || PDisarm
@@ -266,7 +263,7 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
   Pdir = 0 ? (PPressFirst && Dec) || PDisarm
   Penc = 1 ? PPressFirst
   Penc = 0 ? PDisarm
-  VTime = Now ? Ev0 || Pulse
+  PT0 = 1, PT1 = 1 ? Ev0 || Pulse
 
   // The event that is left: an armed encoder swallows presses and releases,
   // and its disarming is the release it swallowed.
@@ -311,10 +308,10 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
 #Input in2 Dig <- Din2
 #Input in3 Dig <- Din3
 #Input in4 Dig <- Din4
-#Input in5 An <- a1.output << 6 AnMark <- a1.inhibit_mark
-#Input in6 An <- a2.output << 6 AnMark <- a2.inhibit_mark
-#Input in7 An <- a3.output << 6 AnMark <- a3.inhibit_mark
-#Input in8 An <- a4.output << 6 AnMark <- a4.inhibit_mark
+#Input in5 An <- a1.output << 6 AnMark <- a1.reports
+#Input in6 An <- a2.output << 6 AnMark <- a2.reports
+#Input in7 An <- a3.output << 6 AnMark <- a3.reports
+#Input in8 An <- a4.output << 6 AnMark <- a4.reports
 
 
 // The requests of all inputs together, OR-ed once here so that an output
@@ -481,18 +478,25 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
   #variable Duty                        // what the channel is set to, 0..MAX_PWM
   #variable Repeat
   #variable Deact:1                     // out->deactivate: the wait ends in STOP
-  #variable Mark                        // time_mark
-  #variable RampMark
+  #variable RampOff                     // how far along a ramp it started
   #variable RampTm = 1
   #variable Cut:1
   #variable CutAct:1
-  #variable CutMark
+
+  // time_mark. Every state that waits is entered by a rule that starts Tm
+  // over with that state's wait; the wait is over when Tm has run out.
+  #timer Tm 1
+  // The ramp's clock, started with it and never run out; RampTk paces Duty
+  // while it ramps.
+  #timer RampT MAX_TIME_MS
+  #timer RampTk 10
+  // A minute below the battery level before the cut.
+  #timer CutT 1
   #variable Age                         // cycles since start, up to 3
 
   #states off on delay rampup sustain deact rampdown wait
 
-  #local Now = tick()
-  #local Elapsed = Now - Mark
+  #local Waited = Tm == 0
   #local IsDim = Type == TYPE_DIMMER
   #local IsInt = Type == TYPE_INTERVAL
   #local Blink = IsInt | (Type == TYPE_PULSE)
@@ -515,15 +519,16 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
 
   // The ramp: a fraction 0..1024 of RampTm, so Span * Frac fits in 32 bits.
   // A ramp that starts part way -- from a dimmed level, or turning round --
-  // starts its clock as far back as that level is along it
-  // (pwm_linear_step_to_pwm).
-  #local Frac = (min(Now - RampMark, RampTm) * 1024) / RampTm
+  // starts as far along as that level is (pwm_linear_step_to_pwm): RampOff
+  // ms in when RampT starts.
+  #local Along = elapsed(RampT) + RampOff
+  #local Frac = (min(Along, RampTm) * 1024) / RampTm
   #local UpP = PwmMin + ((Span * Frac) >> 10)
   #local DownP = PwmMax - ((Span * Frac) >> 10)
-  #local RampOver = Now - RampMark >= RampTm
-  #local UpFromLow = Now - ((((max(PwmLow - PwmMin, 0) * 1024) / Span) * RampupTm) >> 10)
-  #local UpFromDuty = Now - ((((max(Duty - PwmMin, 0) * 1024) / Span) * RampupTm) >> 10)
-  #local DownFromDuty = Now - ((((max(PwmMax - Duty, 0) * 1024) / Span) * RampdownTm) >> 10)
+  #local RampOver = Along >= RampTm
+  #local OffUpLow = (((max(PwmLow - PwmMin, 0) * 1024) / Span) * RampupTm) >> 10
+  #local OffUpDuty = (((max(Duty - PwmMin, 0) * 1024) / Span) * RampupTm) >> 10
+  #local OffDownDuty = (((max(PwmMax - Duty, 0) * 1024) / Span) * RampdownTm) >> 10
 
   // step_input's last word: a dimmer that is on follows its level, and an
   // EXTERNAL output simply is the analog value
@@ -536,14 +541,15 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
   #local CanAct = State == off || State == rampdown
   #local CanDea = State != off && State != deact
   #local Cuttable = Prio != PRIO_OFF && VinPrio != PRIO_OFF && VinPrio != PRIO_WARN && VinPrio <= Prio
-  #local CutDue = Cuttable && Cut && Now - CutMark > CutTm
+  #local CutDue = Cuttable && Cut && CutT == 0
   #local CutOn = CutDue && (Flags2 & OUTPUT_FLAG2_CUTACT) != 0 && !CutAct && CanAct
   #local CutOff = CutDue && (Flags2 & OUTPUT_FLAG2_CUTACT) == 0 && CanDea
 
   Cut = 0, CutAct = 0 ? Prio != PRIO_OFF && VinPrio == PRIO_OFF
   Cut = 0 ? Prio != PRIO_OFF && VinPrio != PRIO_OFF && VinPrio != PRIO_WARN && VinPrio > Prio
-  Cut = 1, CutMark = Now ? Cuttable && !Cut
-  CutMark = Now ? CutDue
+  // more than CutTm, as the C has it
+  Cut = 1, CutT.period = CutTm + 1, CutT = 1 ? Cuttable && !Cut
+  CutT = 1 ? CutDue
   CutAct = 1 ? CutOn
 
   // --- process_input_out: on, off, toggle ---
@@ -574,13 +580,13 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
   #local StepRestart = (Req & RQ_MOVED) != 0 && Blink && State == wait && Again
   #local Busy = Moment || Act || Dea || StepRestart
 
-  Deact = 1, Mark = Now, State = deact ? Moment
-  RampTm = RampupTm, RampMark = UpFromDuty, State = rampup ? ActRamp
-  Repeat = DoneRepeat, Deact = 0, Mark = Now, State = delay ? ActGo
+  Deact = 1, Tm.period = DeactTm, Tm = 1, State = deact ? Moment
+  RampTm = RampupTm, RampOff = OffUpDuty, RampT = 1, State = rampup ? ActRamp
+  Repeat = DoneRepeat, Deact = 0, Tm.period = DelayTm, Tm = 1, State = delay ? ActGo
   State = off, Duty = 0, Deact = 0 ? DeaKill
-  RampTm = RampdownTm, RampMark = DownFromDuty, State = rampdown ? DeaRamp
-  Deact = 1, Mark = Now, State = deact ? DeaGo
-  Deact = 0, Mark = Now, State = delay ? StepRestart
+  RampTm = RampdownTm, RampOff = OffDownDuty, RampT = 1, State = rampdown ? DeaRamp
+  Deact = 1, Tm.period = DeactTm, Tm = 1, State = deact ? DeaGo
+  Deact = 0, Tm.period = DelayTm, Tm = 1, State = delay ? StepRestart
 
   #in INIT
     State = off
@@ -589,43 +595,50 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
   // activate_def_output. Not in INIT: a `> o1.Type = ...' in a config file
   // is visible from the third cycle, and INIT is the first. Age counts there.
   Age = Age + 1 ? Age < 3
-  Repeat = DoneRepeat, Deact = 0, Mark = Now, State = delay ? Age == 2 && State == off && (Type == TYPE_ALWAYSON || (Flags & OUTPUT_FLAG_ONDEF) != 0)
+  Repeat = DoneRepeat, Deact = 0, Tm.period = DelayTm, Tm = 1, State = delay ? Age == 2 && State == off && (Type == TYPE_ALWAYSON || (Flags & OUTPUT_FLAG_ONDEF) != 0)
+
+  // The ramp's clock stops with the ramp, however it ended: running on, it
+  // would move Along every millisecond and the board would never sleep.
+  RampT = 0 ? RampT != 0 && State != rampup && State != rampdown
 
   // --- the timed half ---
+  #in rampup rampdown
+    RampTk = 1 ? RampTk == 0            // runs out, and starts again
+  #end
   #when Busy == 0
     #in delay
-      Mark = Now, RampTm = RampupTm, RampMark = UpFromLow, State = rampup ? Elapsed >= DelayTm && HasUp
-      Mark = Now, Duty = PwmHigh, State = OnState ? Elapsed >= DelayTm && !HasUp
+      RampTm = RampupTm, RampOff = OffUpLow, RampT = 1, State = rampup ? Waited && HasUp
+      Tm.period = SustainTm, Tm = 1, Duty = PwmHigh, State = OnState ? Waited && !HasUp
     #end
 
     #in rampup
       Duty = UpP ? UpP < PwmHigh
-      Mark = Now, Duty = PwmHigh, State = OnState ? RampOver || UpP >= PwmHigh
+      Tm.period = SustainTm, Tm = 1, Duty = PwmHigh, State = OnState ? RampOver || UpP >= PwmHigh
     #end
 
     // an interval with no wait stays high
     #in sustain
-      Mark = Now, RampTm = RampdownTm, RampMark = DownFromDuty, State = rampdown ? Elapsed >= SustainTm && HasDown
-      Mark = Now ? Elapsed >= SustainTm && !HasDown && IsInt && WaitT == 0
-      Mark = Now, Duty = PwmLow, State = wait ? Elapsed >= SustainTm && !HasDown && !(IsInt && WaitT == 0)
+      RampTm = RampdownTm, RampOff = OffDownDuty, RampT = 1, State = rampdown ? Waited && HasDown
+      Tm = 1 ? Waited && !HasDown && IsInt && WaitT == 0
+      Tm.period = WaitT, Tm = 1, Duty = PwmLow, State = wait ? Waited && !HasDown && !(IsInt && WaitT == 0)
     #end
 
     #in deact
-      Mark = Now, RampTm = RampdownTm, RampMark = DownFromDuty, State = rampdown ? Elapsed >= DeactTm && HasDown
-      Mark = Now, Duty = PwmLow, State = wait ? Elapsed >= DeactTm && !HasDown
+      RampTm = RampdownTm, RampOff = OffDownDuty, RampT = 1, State = rampdown ? Waited && HasDown
+      Tm.period = WaitT, Tm = 1, Duty = PwmLow, State = wait ? Waited && !HasDown
     #end
 
     // Ramps from PwmMax, but holds at PwmHigh until it gets under it: a dimmer
     // set to half starts its fade from half, not from full.
     #in rampdown
       Duty = DownP ? DownP <= PwmHigh
-      Mark = Now, Duty = PwmLow, State = wait ? RampOver || DownP <= PwmLow
+      Tm.period = WaitT, Tm = 1, Duty = PwmLow, State = wait ? RampOver || DownP <= PwmLow
     #end
 
     // again: count a repeat down (a comparison is -1), or restart
     #in wait
-      Repeat = Repeat + (DoneT == PULSE_REPEAT), Deact = 0, Mark = Now, State = delay ? Elapsed >= WaitT && Again
-      State = off, Duty = 0, Deact = 0 ? Elapsed >= WaitT && !Again
+      Repeat = Repeat + (DoneT == PULSE_REPEAT), Deact = 0, Tm.period = DelayTm, Tm = 1, State = delay ? Waited && Again
+      State = off, Duty = 0, Deact = 0 ? Waited && !Again
     #end
   #end
 #end

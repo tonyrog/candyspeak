@@ -1,9 +1,21 @@
+// A typeless :8 is signed, so 0xF0 reads -16 and widens with its sign; the
+// same bits declared unsigned read 240.
 #variable A:8 = 0x0F
 #variable B:8 = 0xF0
 #variable And = 0
 #variable Or = 0
 #variable Xor = 0
 
+#variable UA:8 unsigned = 0x0F
+#variable UB:8 unsigned = 0xF0
+#variable UAnd = 0
+#variable UOr = 0
+#variable UXor = 0
+
 And = A & B ? 1
 Or = A | B ? 1
 Xor = A ^ B ? 1
+
+UAnd = UA & UB ? 1
+UOr = UA | UB ? 1
+UXor = UA ^ UB ? 1

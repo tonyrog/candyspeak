@@ -44,12 +44,18 @@
   #variable selected:8
   // Last sample value
   #variable last_value:16 unsigned
-  // Last sample time
-  #variable sample_mark
-  // Last output time
-  #variable inhibit_mark
+  // Counts the reports: moves each time output is written, so a reader can
+  // tell a new report from the same value reported again
+  #variable reports
 
-  #local sample_mark0 = tick()
+  // The sample clock, and the inhibit window after a report. Their periods
+  // follow the #params, so a `>' patch or a write over the bus is felt too.
+  #timer sample delay_tm = 1
+  #timer inhibit inhibit_tm
+  sample.period = delay_tm ? sample.period != delay_tm
+  inhibit.period = inhibit_tm ? inhibit.period != inhibit_tm
+  sample = 1 ? timeout(sample)
+
   // scale and offset
   #local value1 = value*scale + offset
 
@@ -86,12 +92,10 @@
   #local mask1 = mask & flags
 
   // The two gates adc.c has and this port did not: sampling rate and the
-  // inhibit window after a trigger.
-  #local due  = (sample_mark0 - sample_mark) >= delay_tm
-  #local free = (inhibit_mark == 0) || ((sample_mark0 - inhibit_mark) >= inhibit_tm)
+  // inhibit window after a trigger. A timer reads 1 while it runs.
+  #local due  = timeout(sample)
+  #local free = inhibit == 0
   #local latch = (mask & ADC_ALWAYS) || (mask1 & ADC_DELTA_BITS) || ((mask1 & ADC_UPPER_LIMIT_EXCEEDED) && !(selected & ADC_UPPER_LIMIT_EXCEEDED)) || ((mask1 & ADC_BELOW_LOWER_LIMIT) && !(selected & ADC_BELOW_LOWER_LIMIT))
-
-  sample_mark = sample_mark0 ? due
 
   #when due && free
   // Inside the A2D band: remember the reading, report nothing. This is the one
@@ -104,6 +108,7 @@
       output = value2
       last_value = value2
       selected   = mask1
-      inhibit_mark = sample_mark0
+      reports    = reports + 1
+      inhibit    = 1
   #end
 #end

@@ -48,6 +48,11 @@ void csp_lib_timer_in(csp_timer_t* in, csp_timer_t* out, uint32_t now)
 
 void csp_lib_timer_out(csp_timer_t* in, csp_timer_t* out, uint32_t now)
 {
+    // Written this cycle: a restart is a stop and then the start below.
+    if (in->req) {
+	in->req = out->req = 0;
+	in->running = out->running = 0;
+    }
     if (!in->running && in->val) {
 	in->running = out->running = 1;
 	in->fired = out->fired = 0;
@@ -98,6 +103,11 @@ void csp_lib_enable(int n)
 {
     if ((n >= 1) && (n <= CSP_LIB_MAX_RULES))
 	csp_lib_off[(n - 1) >> 5] &= ~((uint32_t)1 << ((n - 1) & 31));
+    csp_lib_wake_all();
+}
+
+__attribute__((weak)) void csp_lib_wake_all(void)
+{
 }
 
 __attribute__((weak)) int csp_lib_getc(void)

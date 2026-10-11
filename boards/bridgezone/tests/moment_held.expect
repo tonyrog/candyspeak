@@ -1,4 +1,5 @@
 {modes, [seq]}.
 {stimulus, "boards/bridgezone/tests/moment_held.dat"}.
-{cycles, 100}.
+{time, 990}.
+{settle, true}.
 {checks, [ {final_var, "Dout2", 1} ]}.

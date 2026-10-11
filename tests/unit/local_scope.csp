@@ -1,0 +1,19 @@
+// A #local declared in an #in or #when block is a name for that block only:
+// its formula runs when the block does, and #end ends the name. Two blocks may
+// each have their own, and a rule after the block cannot read it -- it would
+// see a value from the last cycle the block ran (local_scope_out).
+#variable X = 0
+#variable Y = 0
+#variable Z = 0
+
+#when X < 5
+  #local L = X + 1
+  X = L
+  #in NORMAL
+    Y = L * 10
+  #end
+#end
+#when X >= 5
+  #local L = X * 2
+  Z = L
+#end

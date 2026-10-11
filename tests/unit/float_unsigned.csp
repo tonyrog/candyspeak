@@ -1,0 +1,11 @@
+// An unsigned operand in float arithmetic is converted like an integer one.
+// It used to be taken as already a float: an unsigned #analog -- the default
+// since 2026-10-07 -- times a scale factor came out 65536 times too small.
+#analog Vraw:12 in 0:2
+#variable U:12 unsigned = 1000
+#variable A float = 0.0
+#variable V float = 0.0
+#variable Lo = 0
+A = U * 0.25
+V = Vraw * 0.5
+Lo = 1 ? Vraw * 0.5 < 1000.0

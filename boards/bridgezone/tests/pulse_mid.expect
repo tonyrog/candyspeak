@@ -2,7 +2,8 @@
 {stimulus, "boards/bridgezone/tests/pulse_mid.dat"}.
 %% Stopped in the SECOND pulse's hold: activated at ~100 ms, the first pulse
 %% ends at ~700, the second ramps up 700..800 and holds from 800 to 1000.
-{cycles, 90}.
+{time, 890}.
+{settle, true}.
 {checks, [
   {final_object_var, "Output.o2", "o2.State", 7},
   {final_object_var, "Output.o2", "o2.Duty", 65535},

@@ -632,6 +632,25 @@ Examples:
 #timer Timeout 5000
 ```
 
+Writing the timer is what drives it, and every write counts, even of the value
+it already has:
+
+- `T = 1` starts it **over** from now, whether it was running or not;
+- `T = 0` stops it, and it does not run out;
+- when it runs out, `timeout(T)` is true for one cycle and it stops.
+
+So `T = 1 ? timeout(T)` is a free-running clock, and a rule that writes `T = 1`
+on every event is a timeout that only runs out once things have been quiet:
+
+```
+#timer Quiet 500
+Quiet = 1 ? changed(Btn)        // every press starts it over
+Idle = 1 ? timeout(Quiet)       // 500 ms after the LAST press
+```
+
+A rule that writes `T = 1` every cycle keeps starting it over, so it never runs
+out.
+
 ### Interrupts
 
 A pin declaration can name a **trigger**, and then `.fired` is true for exactly
@@ -2457,6 +2476,10 @@ You can name a list or a range, and sweep with a range:
   not exist is almost always a typo. A *range* that overshoots (`2-99`) is read
   as "to the end" and simply clamped.
 - The first 128 rules each carry a switch; rules beyond that always run.
+- A `#local`'s formula and an instance's binding of a `#local` (`#M m X <- A`)
+  are **not** rules: they say what the local *is*, so they take no number and
+  cannot be disabled. `/list` shows them without one. Assigning a member
+  `#variable` on the instance line (`#M m V = 3`) is a rule and is numbered.
 
 ### Direct Evaluation
 
@@ -2871,7 +2894,8 @@ Timer = 1 ? condition               // start timer
 timeout(T)    // true one cycle at timeout
 elapsed(T)    // ms since start
 progress(T)   // 0-100% of period
-T = 1         // start/restart timer
+T = 1         // start the timer over from now
+T = 0         // stop it
 ```
 
 ## Edge Detection

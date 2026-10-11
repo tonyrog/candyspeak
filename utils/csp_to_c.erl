@@ -146,7 +146,7 @@ model(Terms) ->
     M1 = lists:foldl(fun term/2, M0, Terms),
     M1#{main := lists:reverse(maps:get(main, M1)),
         code := lists:reverse(maps:get(code, M1)),
-        ruleno => number_rules(Terms)}.
+        ruleno => number_rules(Terms, maps:get(decls, M1))}.
 
 term({decl, I, module, Name, Members}, M) ->
     Mod = atom_to_list(Name),
@@ -193,13 +193,35 @@ member(_, _, M) -> M.
 
 %% Rule N is the Nth RULE in instruction order -- module bodies included,
 %% where their ENTER stands. The runtime's numbering, by construction.
-number_rules(Terms) ->
-    Is = flat_instrs([T || {instr, _, _, _} = T <- Terms] ++
-                     [T || {instr, _, 'ENTER', _, _, _} = T <- Terms] ++
-                     [T || {instr, _, 'NEW', _, _, _} = T <- Terms] ++
-                     [T || {instr, _, _} = T <- Terms]),
-    Rules = lists:sort([N || {instr, N, 'RULE', _} <- Is]),
+number_rules(Terms, Decls) ->
+    Is = lists:keysort(2, flat_instrs([T || {instr, _, _, _} = T <- Terms] ++
+                                      [T || {instr, _, 'ENTER', _, _, _} = T <- Terms] ++
+                                      [T || {instr, _, 'NEW', _, _, _} = T <- Terms] ++
+                                      [T || {instr, _, _} = T <- Terms])),
+    Rules = rules(Is, Decls),
     maps:from_list(lists:zip(Rules, lists:seq(1, length(Rules)))).
+
+%% The RULEs that are rules. A #local's formula and an instance's binding of a
+%% #local compile to one too, but they say what the local is: no number, and
+%% #disable cannot reach them (the runtime's csp_is_rule). Told apart by the
+%% first store, which goes to a local.
+rules([{instr, N, 'RULE', _} | T], Decls) ->
+    case binds(T, Decls) of
+        true -> rules(T, Decls);
+        false -> [N | rules(T, Decls)]
+    end;
+rules([_ | T], Decls) -> rules(T, Decls);
+rules([], _) -> [].
+
+binds([{instr, _, 'NEXT', _} | _], _) -> false;
+binds([{instr, _, Op, [A, B]} | _], Decls) when Op =:= 'ST'; Op =:= 'STIMP'; Op =:= 'STI' ->
+    Ref = case Op of 'STI' -> A; _ -> B end,
+    case maps:get(element(tuple_size(Ref), Ref), Decls, undefined) of
+        {local, _, _} -> true;
+        _ -> false
+    end;
+binds([_ | T], Decls) -> binds(T, Decls);
+binds([], _) -> false.
 
 flat_instrs(L) ->
     lists:flatmap(fun({instr, _, 'ENTER', _, _, Body} = E) -> [E | Body];
@@ -582,7 +604,9 @@ line(S) -> [?IND, S, "\n"].
 
 %% One instruction -> {C, consts after it}.
 instr({instr, _, 'SEGMENT', _}, C, _, _) -> {[], C};
-instr({instr, _, 'SETO', _}, C, _, _) -> {[], C};      % the next access names it
+%% The next access names it. A load or a store carries the object in its own
+%% reference; a CALL does not, so it is kept for one instruction.
+instr({instr, N, 'SETO', [O]}, C, _, _) -> {[], C#{seto => {N, O}}};
 instr({instr, _, 'NOP'}, C, _, _) -> {[], C};
 instr({instr, _, 'LEAVE', _, _}, C, _, _) -> {[], C};   % the function's end
 instr({instr, _, 'NEXT', _}, C, _, _) -> {"\n", C};     % a rule ends
@@ -591,8 +615,10 @@ instr({instr, _, 'NEW', Mod, Inst, _}, C, Ctx, _) ->
            ", &par->", Inst, ");"]), C};
 instr({instr, _, 'LI', [X, V]}, C, _, _) ->
     {line([r(X), " = ", integer_to_list(V), ";"]), C#{X => V}};
+%% Inside a module a name is CURRENT-relative: the selector bit, 16#8000, is
+%% set and the value only fits unsigned. Kept, as an LI's is, for named/2.
 instr({instr, _, 'LIU', [X, V]}, C, _, _) ->
-    {line([r(X), " = ", integer_to_list(V), ";"]), maps:remove(X, C)};
+    {line([r(X), " = ", integer_to_list(V), ";"]), C#{X => V}};
 instr({instr, _, 'LIH', [X, V]}, C, _, _) ->
     {line([r(X), " = (int32_t)((uint32_t)", r(X), " | ((uint32_t)", integer_to_list(V),
            "u << 16));"]), maps:remove(X, C)};
@@ -613,17 +639,24 @@ instr({instr, _, 'CHG', [X, Ref]}, C, Ctx, M) ->
 instr({instr, _, 'ARG', [X, A]}, C, _, _) ->
     {line(["a", integer_to_list(A), " = ", r(X), ";"]),
      C#{{arg, A} => maps:get(X, C, undefined)}};
-instr({instr, _, 'CALL', [X, F, Types]}, C, Ctx, M) ->
-    {call(r(X), atom_to_list(F), Types, C, Ctx, M), maps:remove(X, C)};
+instr({instr, N, 'CALL', [X, F, Types]}, C, Ctx, M) ->
+    C1 = case maps:get(seto, C, undefined) of
+             {S, O} when S =:= N - 1 -> C#{obj => O};
+             _ -> maps:remove(obj, C)
+         end,
+    {call(r(X), atom_to_list(F), Types, C1, Ctx, M), maps:remove(obj, maps:remove(X, C))};
 instr({instr, N, 'RULE', [X, Nxt | Imp]}, C, Ctx, M) ->
-    No = integer_to_list(maps:get(N, maps:get(ruleno, M))),
+    On = case maps:find(N, maps:get(ruleno, M)) of
+             {ok, No} -> [["CSP_ON(", integer_to_list(No), ")"]];
+             error -> []                % a formula or a binding
+         end,
     Gate = case Imp of
                [implicit] ->
                    S = state_ref(Ctx),
-                   [" && (", S, " == INIT || ", S, " == NORMAL)"];
+                   [["(", S, " == INIT || ", S, " == NORMAL)"]];
                [] -> []
            end,
-    {line(["if (!(CSP_ON(", No, ")", Gate, " && ", r(X), ")) goto L",
+    {line(["if (!(", lists:join(" && ", On ++ Gate ++ [r(X)]), ")) goto L",
            integer_to_list(N + Nxt), ";"]), C};
 instr({instr, N, 'INSTATE', [X, S, Nxt]}, C, _, _) ->
     {line(["if (", r(X), " != ", integer_to_list(S), ") goto L", jump(N, Nxt), ";"]), C};
@@ -763,7 +796,10 @@ read_out(Ref, Ctx, M) ->
 write(Ref, V, Ctx, M) ->
     {_, _, N} = Path = path(Ref, Ctx, M),
     case decl(N, M) of
-        {timer, _, _} -> [copy(Ctx, Path, out), ".val = (uint8_t)(", V, " & 1);"];
+        %% a request, even of the value it has: 1 starts it over, 0 stops it
+        {timer, _, _} ->
+            T = copy(Ctx, Path, out),
+            [T, ".val = (uint8_t)(", V, " & 1); ", T, ".req = 1;"];
         {_, _, _} ->
             case side_of(N, M) of
                 state -> [copy(Ctx, Path, out), " = ", V, ";"];
@@ -798,8 +834,13 @@ nargs(Types) -> length([I || I <- lists:seq(0, 7), argtype(Types, I) =/= 0]).
 named(I, C) ->
     case maps:get({arg, I}, C, undefined) of
         undefined -> throw({unsupported, "a call whose argument is not a name"});
-        D -> D
+        D -> D band 16#7fff             % without the CURRENT selector
     end.
+
+%% A name handed to a call: a member of the object a SETO named, a member
+%% of the module running, or Main's own.
+ref_of(D, #{obj := O}, _M) -> {O, v, D};
+ref_of(D, _, M) -> ref_of(D, M).
 
 ref_of(D, M) ->
     case maps:find(D, maps:get(owner, M)) of
@@ -808,16 +849,18 @@ ref_of(D, M) ->
     end.
 
 call(X, "changed", _, C, Ctx, M) ->
-    Ref = ref_of(named(0, C), M),
+    Ref = ref_of(named(0, C), C, M),
     line([X, " = CSP_LIB_BOOL(", read(Ref, Ctx, M), " != ", read_out(Ref, Ctx, M), ");"]);
 %% fn_rising and fn_falling as the runtime has them, 1 or 0 -- including which
 %% way round, which reads backwards and is worth a look in csp_rt.c.
 call(X, "rising", _, C, Ctx, M) ->
-    Ref = ref_of(named(0, C), M),
+    Ref = ref_of(named(0, C), C, M),
     line([X, " = !", read_out(Ref, Ctx, M), " && ", read(Ref, Ctx, M), ";"]);
 call(X, "falling", _, C, Ctx, M) ->
-    Ref = ref_of(named(0, C), M),
+    Ref = ref_of(named(0, C), C, M),
     line([X, " = ", read_out(Ref, Ctx, M), " && !", read(Ref, Ctx, M), ";"]);
+call(_, "elapsed", _, #{obj := _}, _, _) ->
+    throw({unsupported, "elapsed() of another object's timer"});
 call(X, "elapsed", _, C, Ctx, M) ->
     T = named(0, C),
     B = [rd_base(Ctx, T, M), fname(T, M)],
@@ -908,8 +951,8 @@ names(M) ->
                     end, M) || Mod <- Used],
      "const csp_lib_inst_t csp_lib_insts[] = {\n",
      [[?IND, "{ \"", P, "\", &", Mod, "_mod, &csp_in", C, ", &csp_out", C,
-       ", &csp_loc", C, ", &csp_par", C, " },\n"] || {P, Mod, C} <- Insts],
-     ?IND, "{ 0, 0, 0, 0, 0, 0 }\n};\n",
+       ", &csp_par", C, " },\n"] || {P, Mod, C} <- Insts],
+     ?IND, "{ 0, 0, 0, 0, 0 }\n};\n",
      "#endif\n\n"].
 
 %% Every instance, depth first: {runtime path, module, C member path}.
@@ -928,12 +971,13 @@ insts(Is, Path, Mod, C, M) ->
 
 %% A module's named scalars, numbered from 0, with one getter and one setter
 %% that switch on the number. A nameless one -- d17 -- has no runtime name to
-%% be compared under.
+%% be compared under, and a #local is the module's own: no access from
+%% outside.
 accessor(Mod, Is, M) ->
     Fs0 = [{N, side_of(I, M)}
            || I <- Is, not skip(I, M),
               {Kind, N, _} <- [decl(I, M)], N =/= "",
-              lists:member(Kind, [variable, local, constant, digital, analog])],
+              lists:member(Kind, [variable, constant, digital, analog])],
     Fs = case lists:keymember("State", 1, Fs0) of
              true -> Fs0;
              false -> [{"State", state} | Fs0]
@@ -961,5 +1005,4 @@ accessor(Mod, Is, M) ->
 
 side_ref(Mod, state, get) -> ["((const ", Mod, "_t*)x->in)"];
 side_ref(Mod, state, set) -> ["((", Mod, "_t*)x->out)"];
-side_ref(Mod, local, _) -> ["((", Mod, "_local_t*)x->loc)"];
 side_ref(Mod, param, _) -> ["((", Mod, "_param_t*)x->par)"].

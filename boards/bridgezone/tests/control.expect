@@ -1,6 +1,7 @@
 {modes, [seq]}.
 {stimulus, "boards/bridgezone/tests/control.dat"}.
-{cycles, 100}.
+{time, 990}.
+{settle, true}.
 {checks, [
   {final_object_var, "Drive.d4", "d4.Control", 1},
   {final_object_var, "Output.o4", "o4.State", 4},

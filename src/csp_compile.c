@@ -288,11 +288,12 @@ NOINLINE static void close_in_block(csp_rt_t* st);
 // Push an open block. Saves the STATE CONTEXT the block around us set, so the
 // pop can put it back -- an `#in` inside an `#in` has to see the outer one's
 // states again when it closes, and a `#when` in between must not lose them.
-// Returns 0 when the stack is full.
-NOINLINE static int blk_push(csp_cstate_t* cs, index_t mark, uint8_t kind,
+// It is a SCOPE too: a #local declared inside ends at its #end (see
+// def_add_local). Returns 0 when the stack is full.
+NOINLINE static int blk_push(csp_rt_t* st, index_t mark, uint8_t kind,
 			     uint16_t line)
-			     
 {
+    csp_cstate_t* cs = st->cs;
     csp_block_t* b;
 
     if (cs->blk_depth >= CSP_MAX_BLOCK)
@@ -304,6 +305,9 @@ NOINLINE static int blk_push(csp_cstate_t* cs, index_t mark, uint8_t kind,
     b->sdef   = (int8_t)cs->sdef;
     b->n_sdef = cs->n_sdef;
     memcpy(b->sdefv, cs->sdefv, sizeof(b->sdefv));
+#if CSP_DEFINE_BYTES > 0
+    b->def_mark = st->def_used;
+#endif
     return 1;
 }
 
@@ -325,6 +329,12 @@ NOINLINE static void blk_pop(csp_rt_t* st)
     cs->sdef   = b->sdef;
     cs->n_sdef = b->n_sdef;
     memcpy(cs->sdefv, b->sdefv, sizeof(b->sdefv));
+#if CSP_DEFINE_BYTES > 0
+    // The #local names declared inside end with it -- and a #define, which
+    // lives in the same buffer. Two modules can each have a `#local Now',
+    // and a rule after a #when cannot read the #local it computed.
+    st->def_used = b->def_mark;
+#endif
     // in_marker follows the block we are back INSIDE, not the one just closed.
     cs->in_marker = cs->blk_depth
 	? st->cs->blk[cs->blk_depth - 1].mark : 0;
@@ -1540,13 +1550,17 @@ NOINLINE static int push_reg(rentry_t* rstack, int ep, reg_t r, vtype_t vt,
     return ep+1;
 }
 
-// Convert operand to float (int→float via cvtif)
+// Convert operand to float (int→float via cvtif). An unsigned converts the
+// same way: it shares the integer's representation, and every value a float
+// (Q16.16 or not) can hold is below 2^31. Refused, `Vraw * 0.001465` with an
+// unsigned #analog multiplied the raw counts as if they were already a float.
 NOINLINE static bool_t coerce_to_float(csp_rt_t* st, rentry_t* e)
 {
     rentry_t ent = *e;
 
     if (ent.vt == V_FLOAT) return 1;  // already float
-    if (ent.vt != V_INTEGER) return 0;  // can only convert int
+    if ((ent.vt != V_INTEGER) && (ent.vt != V_UNSIGNED))
+	return 0;                       // can only convert int
 
     // For variables (X=1), load first then convert
     if (ent.X && st->cs->ap) {
@@ -1923,9 +1937,11 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 		rentry_t t = *a; *a = *b; *b = t;
 	    }
 	    if (at == V_FLOAT || bt == V_FLOAT) {
-		if ((at == V_INTEGER) && !coerce_to_float(st, a))
+		if (((at == V_INTEGER) || (at == V_UNSIGNED)) &&
+		    !coerce_to_float(st, a))
 		    return PARSE_ERROR;
-		if ((bt == V_INTEGER) && !coerce_to_float(st, b))
+		if (((bt == V_INTEGER) || (bt == V_UNSIGNED)) &&
+		    !coerce_to_float(st, b))
 		    return PARSE_ERROR;
 		op = float_op((opcode_t)iop);
 	    } else {
@@ -2972,8 +2988,9 @@ NOINLINE static int def_lookup(csp_rt_t* st, const tstr_t* name,
 //
 // It rides in the same buffer as #define, tagged V_INDEX -- "this entry holds a
 // declaration index, not a value" -- and the whole buffer is rolled back to
-// where the module started when #end closes it. Bump in, bump out: the name and
-// the scope end at the same place, which is the point.
+// where the block started when #end closes it: a module's, or an #in's or
+// #when's (blk_pop). Bump in, bump out: the name and the scope end at the same
+// place, which is the point.
 // Whether local names can be held outside ram_str at all.
 NOINLINE int def_add_local_probe(csp_rt_t* st) { (void)st; return 1; }
 
@@ -3179,9 +3196,6 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
     }
 
     st->cs->mdef = ix;  // current module being defined
-#if CSP_DEFINE_BYTES > 0
-    st->cs->def_mark = st->def_used;    // see the note at def_add_local
-#endif
     if (!asm_ENTER(st, &jx, 0, ix))
 	return -1;
     // ON THE SAME STACK as #in and #when. A module IS a block that `#end`
@@ -3189,7 +3203,7 @@ NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
     // shut the #when -- the module stayed open and swallowed the rest of the
     // file. The mark is the OP_ENTER, not a gate; blk_pop reads `kind` before
     // touching it.
-    if (!blk_push(st->cs, (index_t)jx, BLK_MODULE, st->ps.line)) {
+    if (!blk_push(st, (index_t)jx, BLK_MODULE, st->ps.line)) {
 	csp_set_error(st, ERR_END_MISMATCH);
 	return -1;
     }
@@ -3285,12 +3299,7 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
     st->cs->mdef = BAD_INDEX;
     st->cs->ent = 0;
     st->cs->sx   = st->cs->save_sx;
-#if CSP_DEFINE_BYTES > 0
-    // The module's #local names end with it. The note at def_add_local said so
-    // and nothing did it: two modules could not both have a `#local Now'.
-    st->def_used = st->cs->def_mark;
-#endif
-    blk_pop(st);
+    blk_pop(st);                // and the module's #local names with it
     return 0;
 }
 
@@ -3535,7 +3544,7 @@ NOINLINE static int asm_decl_init(csp_rt_t* st, const token_t* tv, size_t n,
 	    // PUSH even though no gate was emitted: close_in_block below pops,
 	    // and an unbalanced pop closes the block we are standing in. Before
 	    // installing the INIT context, so the pop restores the outer one.
-	    if (!blk_push(st->cs, mk, BLK_IN, st->ps.line))
+	    if (!blk_push(st, mk, BLK_IN, st->ps.line))
 		return -1;
 	    st->cs->in_marker = mk;
 	    st->cs->sdefv[0]  = STATE_INIT;
@@ -5549,7 +5558,7 @@ NOINLINE static bool_t open_in_block(csp_rt_t* st, const uint8_t* states, int ns
 	st->cs->sdefv[k] = states[k];
     // PUSH BEFORE the new context is installed: what the pop restores is the
     // block around us, not this one.
-    if (!blk_push(st->cs, (index_t)mk, BLK_IN, st->ps.line))
+    if (!blk_push(st, (index_t)mk, BLK_IN, st->ps.line))
 	return 0;
     st->cs->n_sdef  = (uint8_t)ns;
     st->cs->sdef    = states[0];
@@ -5612,7 +5621,7 @@ NOINLINE int csp_parse_when(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	return -1;
     }
     free_reg(st, rc.reg);
-    if (!blk_push(st->cs, (index_t)mk, BLK_WHEN, st->ps.line)) {
+    if (!blk_push(st, (index_t)mk, BLK_WHEN, st->ps.line)) {
 	csp_set_error(st, ERR_END_MISMATCH);
 	return -1;
     }

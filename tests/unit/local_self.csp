@@ -1,0 +1,12 @@
+// A #local that reads itself reads LAST cycle's value -- an accumulator. Each
+// instance needs its own: in the runtime's shared frame, and in a translation
+// that keeps other locals in C variables, it would read what the instance
+// before it left there.
+#module M
+  #local K in = 1
+  #variable V = 0
+  #local A = A + K
+  V = A
+#end
+#M a
+#M b K <- 100

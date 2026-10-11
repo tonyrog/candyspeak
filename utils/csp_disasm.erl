@@ -85,7 +85,10 @@ decode_sections(Header,
 decode_sections(_Header, <<>>) ->
     [].
 
+-define(MASK(Len), ((1 bsl (Len))-1)).
+
 -define(OPCODE_BITS,      6).
+-define(CSP_DECL_TYPE_BITS,  4).
 -define(BODY_BITS,        10).
 -define(REG_BITS,         4).
 -define(FUNC_BITS,        5).
@@ -95,6 +98,14 @@ decode_sections(_Header, <<>>) ->
 -define(INDEX_BITS,       (?OBJ_BITS+?DECL_BITS)).
 -define(TINY_BITS,        6).
 -define(TYPE_BITS,        4).
+-define(PORT_BITS,        4).
+-define(PIN_BITS,         7).
+-define(DIR_BITS,         2).
+-define(NAMEID_BITS,      8).
+
+-define(OPCODE_MASK, ?MASK(?OPCODE_BITS)).
+-define(REG_MASK, ?MASK(?REG_BITS)).
+-define(PART_MASK, ?MASK(?PART_BITS)).
 
 -define(get_uint(X, Start, Len),
 	(((X) bsr (Start)) band ((1 bsl (Len))-1))).
@@ -105,6 +116,45 @@ decode_sections(_Header, <<>>) ->
 	   true ->
 		-(((bnot ?get_uint(X, Start, Len-1)) band ((1 bsl (Len-1))-1))+1)
 	end).
+
+%% Parts STP/LDP
+-define(PART_VAL, 0).
+-define(PART_PIN, 1).
+-define(PART_PORT, 2).
+-define(PART_DIR, 3).
+-define(PART_PWM, 4).
+-define(PART_ENDIAN, 5).
+-define(PART_PULLUP, 6).
+-define(PART_PULLDOWN, 7).
+-define(PART_PERIOD, 8).
+-define(PART_FIRED, 9).
+-define(PART_ID, 10).
+-define(PART_RX, 11).
+-define(PART_TX, 12).
+-define(PART_DLC, 13).
+-define(PART_LEN, 14).
+
+
+part() ->
+#{
+  ?PART_VAL => val,
+  ?PART_PIN => pin,
+  ?PART_PORT => port,
+  ?PART_DIR => dir,
+  ?PART_PWM => pwm,
+  ?PART_ENDIAN => endian,
+  ?PART_PULLUP => pullup,
+  ?PART_PULLDOWN => pulldown,
+  ?PART_PERIOD => period,
+  ?PART_FIRED => fired,
+  ?PART_ID => id,
+  ?PART_RX => rx,
+  ?PART_TX => tx,
+  ?PART_DLC => dlc,
+  ?PART_LEN => len
+}.
+part(P) ->
+    maps:get(P band ?PART_MASK, part()).
 
 %% Opcodes
 -define(OP_NOP, 0).  %% nothing
@@ -265,8 +315,6 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 			     {num,uint,?BODY_BITS},
 			     {'_', 6},
 			     {used,uint,8}]),
-	    %% Num = ?get_uint(Instr, ?OPCODE_BITS+2, ?BODY_BITS),
-	    %% Used = ?get_uint(Instr, ?OPCODE_BITS+2+?BODY_BITS+6, 8),
 	    <<StringData:(4*Num)/binary, Data1/binary>> = Data,
 	    I = {instr,Addr,OpCode,[{slots,Num},{used,Used},{data,StringData}]},
 	    {Si1, Strings1} = add_strings(Used, StringData, Si, Strings),
@@ -278,10 +326,6 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 			     {imm, int, 8},
 			     {nxt, int, 13},
 			     {implicit, uint, 1}]),
-	    %%X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
-	    %%Imm = ?get_int(Instr, ?OPCODE_BITS+?REG_BITS, 8),
-	    %%Nxt = ?get_int(Instr, ?OPCODE_BITS+?REG_BITS+8, 13),
-	    %%Imp = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+8+13, 1),
 	    Implicit = if Imp =:= 1 -> [implicit]; true -> [] end,
 	    I = {instr, Addr, OpCode, [reg(X),Imm,{nxt,Nxt}|Implicit]},
 	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
@@ -292,9 +336,6 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 			     {'_', 6},
 			     {nxt, int, 15},
 			     {implicit, uint, 1}]),
-	    %%Cnd = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
-	    %%Nxt = ?get_int(Instr, ?OPCODE_BITS+?REG_BITS+6, 15),
-	    %%Imp = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+6+15, 1),
 	    Implicit = if Imp =:= 1 -> [implicit]; true -> [] end,
 	    I = {instr, Addr, OpCode, [reg(Cnd),Nxt|Implicit]},
 	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
@@ -303,8 +344,6 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 		decode_bits(Instr, ?OPCODE_BITS,
 			    [{num, uint, ?BODY_BITS},
 			     {mx,  uint, ?INDEX_BITS}]),
-	    %% Num = ?get_uint(Instr, ?OPCODE_BITS, ?BODY_BITS),
-	    %% Mx  = ?get_uint(Instr, ?OPCODE_BITS+?BODY_BITS, ?INDEX_BITS),
 	    I = {instr,Addr,OpCode,[{mem,Mx},{n,Num}]},
 	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, leave} ->
@@ -312,22 +351,18 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 		decode_bits(Instr, ?OPCODE_BITS,
 			    [{num, uint, ?BODY_BITS},
 			     {mx,  uint, ?INDEX_BITS}]),
-	    %% Num = ?get_uint(Instr, ?OPCODE_BITS, ?BODY_BITS),
-	    %% Mx  = ?get_uint(Instr, ?OPCODE_BITS+?BODY_BITS, ?INDEX_BITS),
 	    I = {instr,Addr,OpCode,[{mem,Mx},{n,Num}]},
 	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, next} ->
 	    {_Pos,[{x,X}]} =
 		decode_bits(Instr, ?OPCODE_BITS,
 			    [{x, uint, ?REG_BITS}]),
-	    %% X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
 	    I = {instr,Addr,OpCode,[reg(X)]},
 	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, new} ->
 	    {_Pos,[{obj,Obj}]} =
 		decode_bits(Instr, ?OPCODE_BITS,
 			    [{obj, uint, ?INDEX_BITS}]),
-	    %% Obj = ?get_uint(Instr, ?OPCODE_BITS, ?INDEX_BITS),
 	    I = {instr,Addr,OpCode,[{obj,Obj}]},
 	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, call} ->
@@ -337,10 +372,6 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 			     {idx, uint, ?FUNC_BITS},
 			     {usr, uint, 1},
 			     {avt, uint, 16}]),
-	    %%X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
-	    %%Idx = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS, ?FUNC_BITS),
-	    %%Usr = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+?FUNC_BITS, 1),
-	    %%Avt = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+?FUNC_BITS+1, 16),
 	    I = {inst,Addr,OpCode,[reg(X),{idx,Idx},{usr,Usr},{avt,Avt}]},
 	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, alu, 1} ->
@@ -351,11 +382,6 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 			     {'_', ?REG_BITS},
 			     {u, uint, 1},
 			     {swap, uint, 1}]),
-	    %%X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
-	    %%Y = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS, ?REG_BITS),
-	    %%_Z = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS, ?REG_BITS),
-	    %%U = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS+1, 1),
-	    %% _Swap = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS+2, 1),
 	    I = if U =:= 0 ->
 			{instr, Addr, OpCode, [reg(X),reg(Y)]};
 		   U =:= 1 ->
@@ -370,11 +396,6 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 			     {z, uint, ?REG_BITS},
 			     {u, uint, 1},
 			     {swap, uint, 1}]),
-	    %%X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
-	    %%Y = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS, ?REG_BITS),
-	    %%Z = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS, ?REG_BITS),
-	    %%U = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS+1, 1),
-	    %%_Swap = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS+2, 1),
 	    I = if U =:= 0 ->
 			{instr, Addr, OpCode, [reg(X),reg(Y),reg(Z)]};
 		   U =:= 1 ->
@@ -388,14 +409,11 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 			     {y, uint, ?REG_BITS},
 			     {'_', 2},
 			     {mem, uint, ?INDEX_BITS}]),
-	    %% X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
-	    %% Y = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS, ?REG_BITS),
-	    %% Mem = ?get_uint(Instr, ?OPCODE_BITS+2*?REG_BITS+2, ?INDEX_BITS),
 	    I = case OpCode of
 		    'TMO' -> {instr,Addr,OpCode,[reg(X), {mem,Mem}]};
 		    'CHG' -> {instr,Addr,OpCode,[reg(X), {mem,Mem}]};
-		    'LDP' -> {instr, Addr, OpCode, [reg(X), {mem,Mem}, Y]};
-		    'STP' -> {instr, Addr, OpCode, [reg(X), {mem,Mem}, Y]};
+		    'LDP' -> {instr, Addr, OpCode, [reg(X),{mem,Mem},part(Y)]};
+		    'STP' -> {instr, Addr, OpCode, [reg(X),{mem,Mem},part(Y)]};
 		    _ -> {instr, Addr, OpCode, [reg(X), {mem,Mem}]}
 		end,
 	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
@@ -405,8 +423,6 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 			    [{x, uint, ?REG_BITS},
 			     {'_',6},
 			     {imm, int, 16}]),
-	    %% X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
-	    %% Imm = ?get_int(Instr, ?OPCODE_BITS+?REG_BITS+6, 16),
 	    I = case OpCode of
 		    'LIU' ->
 			UImm = Imm band ((1 bsl 16)-1),
@@ -424,16 +440,12 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 			    [{x, uint, ?REG_BITS},
 			     {imm, int, ?TINY_BITS},
 			     {mem, uint, ?INDEX_BITS}]),
-	    %% X = ?get_uint(Instr, ?OPCODE_BITS, ?REG_BITS),
-	    %% Imm = ?get_int(Instr, ?OPCODE_BITS+?REG_BITS, ?TINY_BITS),
-	    %% Mem = ?get_uint(Instr,?OPCODE_BITS+?REG_BITS+?TINY_BITS,?INDEX_BITS),
 	    I = {instr, Addr, OpCode, [reg(X), {imm,Imm}, {mem,Mem}]},
 	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, seto} ->
 	    {_Pos,[{obj,Obj}]} = 
 		decode_bits(Instr, ?OPCODE_BITS,
 			    [{obj, uint, 16}]),
-	    %% Obj = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+2, 16),
 	    I = {instr,Addr,OpCode,[{obj,Obj}]},
 	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, setox} ->
@@ -443,9 +455,6 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 			     {len, uint, 14},
 			     {x, uint, ?REG_BITS},
 			     {stride, uint, 6}]),
-	    %% Len = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+2, 14),
-	    %% X = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+2+14, ?REG_BITS),
-	    %% Stride = ?get_uint(Instr, ?OPCODE_BITS+?REG_BITS+2+14+?REG_BITS, 6),
 	    I = {instr,Addr,OpCode,[reg(X),{len,Len},{stride,Stride}]},
 	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);	    
 	{OpCode, nop} ->
@@ -474,10 +483,6 @@ reg() ->
        4 => r4, 5 => r5, 6 => r6, 7 => r4,
        8 => r8, 9 => r9, 10 => r10, 11 => r11,
        12 => r12, 13 => r13, 14 => r14, 15 => r15 }.
-
--define(CSP_DECL_TYPE_BITS,  4).
--define(DIR_BITS,  2).
--define(NAMEID_BITS, 8).
 
 -define(V_VOID,     0).
 -define(V_INTEGER,  1).
@@ -542,6 +547,21 @@ dir() ->
 dir(D) ->
     maps:get(D band 16#03, dir()).
 
+-define(E_NATIVE,    16#00). 
+-define(E_LITTLE,   16#01).
+-define(E_BIG,      16#02).
+-define(E_UNDEFINED, 16#03).
+
+endian() ->
+#{
+  ?E_NATIVE => native,
+  ?E_LITTLE => little,
+  ?E_BIG    => big,
+  ?E_UNDEFINED => undefined
+}.
+endian(E) ->
+    maps:get(E band 16#03, endian()).
+
 decl() ->
 #{
   ?DECL_NONE => none,
@@ -570,15 +590,18 @@ disasm_decl(ok, Strings, Sections) ->
 
 disasm_decl(<<Decl:64/little, Data/binary>>, 
 	    I, Strings, Acc) ->
-    {Pos, [{_, IType}, {_, _ICont}, {_, ILocal}, {_, IDir}, {_, IName}]} =
+    {Pos, [{_, IDeclType}, {_, _ICont}, {_, ILocal}, {_, IDir}, {_, IName}]} =
 	 decode_bits(Decl, [{type,uint,?CSP_DECL_TYPE_BITS},
 			    {cont,uint,1},{local,uint,1},{dir,uint,?DIR_BITS},
 			    {name,uint,?NAMEID_BITS}]),
     Dir = dir(IDir),
     Name = maps:get(IName, Strings),
-    case decl(IType) of
+    case decl(IDeclType) of
 	end_mark -> 
 	    lists:reverse(Acc);
+	'end' ->
+	    D = {decl,I,'end'},
+	    add_decl(Data, I, 1, D, Strings, Acc);	    
 	states ->
 	    {_Pos,[{_,Name2},{_,Name3},{_,Name4},{_,Name5},{_,Name6}]} =
 		decode_bits(Decl, Pos, 
@@ -594,17 +617,17 @@ disasm_decl(<<Decl:64/little, Data/binary>>,
 				     {name6,maps:get(Name6, Strings)}]},
 	    add_decl(Data, I, 1, D, Strings, Acc);
 	module ->
-	    {Pos1, _THeader} = decode_type_header(Decl, Pos),
+	    {32, _THeader} = decode_type_header(Decl, Pos),
 	    {_Pos2, [{n,N},{ent,Ent}]} = 
-		decode_bits(Decl, Pos1, 
+		decode_bits(Decl, 32, 
 			    [{n, uint, ?INDEX_BITS},
 			     {ent, uint, ?INDEX_BITS}]),
 	    D = {decl,I,module,Name,[{n,N},{ent,Ent}]},
 	    add_decl(Data, I, 1, D, Strings, Acc);
 	object ->
-	    {Pos1, _THeader} = decode_type_header(Decl, Pos),
+	    {32, _THeader} = decode_type_header(Decl, Pos),
 	    {_Pos2, [{mx,Mx},{m,M}]} = 
-		decode_bits(Decl, Pos1,
+		decode_bits(Decl, 32,
 			    [{mx, uint, ?INDEX_BITS},
 			     {m, uint, 16}]),
 	    ModuleDecl = find_decl(Mx, Acc),
@@ -612,28 +635,88 @@ disasm_decl(<<Decl:64/little, Data/binary>>,
 	    D = {decl,I,object,ModuleName,Name,[{mx,Mx},{m,M}]},
 	    add_decl(Data, I, 1, D, Strings, Acc);
 	variable ->
-	    {_Pos1, [{res,Res},{is_mapped,_},
-		    {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
+	    {32, [{res,Res},{is_mapped,_},
+		  {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
 		decode_type_header(Decl, Pos),
+	    Type = type(Vt),
+	    Init = decode_value(Decl, 32, Type, Strings),
 	    D = case ILocal of
 		    0 -> {decl,I,variable,Name,[{size,Res+1},
 						{dir,Dir},
-						{type,type(Vt)}]};
+						{type,Type},
+						{init,Init}]};
 		    1 -> {decl,I,local,Name,[{size,Res+1},
 					     {dir,Dir},
-					     {type,type(Vt)}]}
+					     {type,Type},
+					     {init,Init}]}
 		end,
 	    add_decl(Data, I, 1, D, Strings, Acc);
-	convariable ->
-	    {_Pos1, [{res,Res},{is_mapped,_},
-		    {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
+	constant ->
+	    {32, [{res,Res},{is_mapped,_},
+		  {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
 		decode_type_header(Decl, Pos),
+	    Type = type(Vt),
+	    Init = decode_value(Decl, 32, Type, Strings),
 	    D = case ILocal of
 		    0 -> {decl,I,constant,Name,[{size,Res+1},
-						{type,type(Vt)}]};
-		    1 -> {decl,I,paraml,Name,[{size,Res+1},
-					      {type,type(Vt)}]}
+						{type,Type},
+						{init,Init}
+					       ]};
+		    1 -> {decl,I,param,Name,[{size,Res+1},
+					     {type,Type},
+					     {init,Init}
+					    ]}
 		end,
+	    add_decl(Data, I, 1, D, Strings, Acc);
+	digital ->
+	    {32, [{res,Res},{is_mapped,_},
+		  {bound,_},{nx,_},{vt,_Vt},{reg,_}]} = 
+		decode_type_header(Decl, Pos),
+	    %% Type = type(Vt),
+	    [{soft,Soft},{pin,Pin},{port,Port},{irq,Irq},{pullup,Pu},{pulldown,Pd}] = 
+		decode_value(Decl, 32, digital, Strings),
+	    D =  {decl,I,digital,Name,[{size,Res+1},
+				       {dir, Dir},
+				       {pin,Pin},
+				       {port,Port},
+				       {soft,Soft},
+				       {irq,Irq},
+				       {pullup,Pu},
+				       {pulldown,Pd}
+				      ]},
+	    add_decl(Data, I, 1, D, Strings, Acc);
+	analog ->
+	    {32, [{res,Res},{is_mapped,_},
+		  {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
+		decode_type_header(Decl, Pos),
+	    Type = type(Vt),
+	    [{soft,Soft},{pin,Pin},{port,Port},{irq,Irq},
+	     {pwm,Pwm},{endian,Endian}] =
+		decode_value(Decl, 32, analog, Strings),
+	    D =  {decl,I,analog,Name,[{size,Res+1},
+				      {type,Type},
+				      {dir,Dir},
+				      {pin,Pin},
+				      {port,Port},
+				      {soft,Soft},
+				      {irq, Irq},
+				      {pwm,Pwm},
+				      {enidan,endian(Endian)}
+				     ]},
+	    add_decl(Data, I, 1, D, Strings, Acc);
+	timer ->
+	    {32, [{res,Res},{is_mapped,_},
+		  {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
+		decode_type_header(Decl, Pos),
+	    Type = type(Vt),
+	    
+	    [{period,Period},{fired,_},{running,_},{value,Init}] = 
+		decode_value(Decl, 32, timer, Strings),
+	    D =  {decl,I,timer,Name,[{size,Res+1},
+				     {type,Type},
+				     {period,Period},
+				     {init,Init}
+				    ]},
 	    add_decl(Data, I, 1, D, Strings, Acc);
 
 	DeclType ->
@@ -658,6 +741,43 @@ decode_type_header(Decl, Pos) ->
 		 {nx, uint, 1},
 		 {vt, uint, ?TYPE_BITS},
 		 {reg, uint, ?REG_BITS}]).
+
+decode_value(Decl, Pos, integer, _Strings) ->
+    {_Pos1, [{ivalue,Value}]} = decode_bits(Decl, Pos, [{ivalue,int,32}]),
+    Value;
+decode_value(Decl, Pos, unsigned, _Strings) ->
+    {_Pos1, [{uvalue,Value}]} = decode_bits(Decl, Pos, [{uvalue,uint,32}]),
+    Value;
+decode_value(Decl, Pos, float, _Strings) ->
+    {_Pos1, [{fvalue,Value}]} = decode_bits(Decl, Pos, [{fvalue,float,32}]),
+    Value;
+decode_value(Decl, Pos, string, Strings) ->
+    {_Pos1, [{sindex,Index}]} = decode_bits(Decl, Pos, [{sindex,int,32}]),
+    maps:get(Index, Strings);
+decode_value(Decl, Pos, timer, _Strings) ->
+    {_Pos1, Init} = decode_bits(Decl, Pos, [{period,uint,28},
+					    {'_', 1},  %% not used
+					    {fired,uint,1},
+					    {running,uint,1},
+					    {value,uint,1}]),
+    Init;
+decode_value(Decl, Pos, digital, _Strings) ->
+    {_Pos1, Init} = decode_bits(Decl, Pos, [{soft,uint,1},
+					    {pin,uint,?PIN_BITS},
+					    {port,uint,?PORT_BITS},
+					    {irq,uint,3},
+					    {pullup,uint,1},
+					    {pulldown,uint,1}]),
+    Init;
+decode_value(Decl, Pos, analog, _Strings) ->
+    {_Pos1, Init} = decode_bits(Decl, Pos, [{soft,uint,1},
+					    {pin,uint,?PIN_BITS},
+					    {port,uint,?PORT_BITS},
+					    {irq,uint,3},
+					    {pwm,uint,1},
+					    {endian,uint,2}
+					   ]),
+    Init.
 
 
 decode_bits(Bits, Fields) ->
@@ -734,7 +854,6 @@ check_grapg_crc(Header, Sections) ->
 		_ -> badcrc
 	    end
     end.
-
 
 %% CRC-16/CCITT, incremental: folds n bytes into `crc` and returns it, so a
 %% caller can chain several regions (str, then decls, then instrs, ...). is_rom

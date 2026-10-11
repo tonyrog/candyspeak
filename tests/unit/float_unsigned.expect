@@ -1,0 +1,7 @@
+{stimulus, "tests/unit/float_unsigned.dat"}.
+{cycles, 4}.
+{checks, [
+  {final_var, "A", 250.0},
+  {final_var, "V", 950.0},
+  {final_var, "Lo", 1}
+]}.

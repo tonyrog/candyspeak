@@ -249,6 +249,10 @@ static tick_t time_tick(void)
 // clock is a deterministic counter advanced by the main loop (>=1 tick/cycle,
 // jumping wait_ms when waiting for a timer) instead of the wall clock.
 int      virtual_time = 0;
+// --settle: the virtual clock does not jump while the program is still
+// changing, as the real one does not sleep then. Off by default: a program
+// that never settles (a free-running counter) would never reach its timers.
+int      virtual_settle = 0;
 uint32_t vclock = 0;
 
 uint32_t csp_time_ms(void)
@@ -1492,6 +1496,7 @@ static struct option long_options[] = {
     {"role",         required_argument, 0,  1004},
     {"generation",   required_argument, 0,  1005},
     {"virtual-time", no_argument,       0,  1006},
+    {"settle",       no_argument,       0,  1007},
     {"checksum",     required_argument, 0,  1009},
     {"flash",        required_argument, 0,  1010},
     {"part",         required_argument, 0,  1011},
@@ -1523,6 +1528,7 @@ void usage(const char* prog)
     fprintf(stderr, "  -c, --cycles=N       Max cycles (0=unlimited)\n");
     fprintf(stderr, "  -T, --timeout=MS     Max runtime in ms (0=unlimited)\n");
     fprintf(stderr, "      --virtual-time   Jump the clock to the next timer instead of sleeping\n");
+    fprintf(stderr, "      --settle         ...but only once a cycle changed nothing, as on a board\n");
     fprintf(stderr, "      --exit-on-eof    Quit when stdin closes, instead of running on\n");
     fprintf(stderr, "  -Q, --debug-trace    Enable variable tracing\n");
     fprintf(stderr, "  -R, --debug-result   Add result to tracing (Erl)\n");
@@ -1561,6 +1567,7 @@ void usage(const char* prog)
     fprintf(stderr, "      --deps=FILE      Write every file loaded, imports included, as a\n");
     fprintf(stderr, "                       make rule for -O's file, each after what it imports\n");
     fprintf(stderr, "      --virtual-time   Jump the clock to the next timer instead of sleeping\n");
+    fprintf(stderr, "      --settle         ...but only once a cycle changed nothing, as on a board\n");
     fprintf(stderr, "      --exit-on-eof    Quit when stdin closes, instead of running on\n");
     fprintf(stderr, "      --checksum=BIN   Patch the LPC boot checksum into a .bin and exit\n");
     fprintf(stderr, "      --flash=FILE     Back the simulated flash with FILE, so /upgrade and\n");
@@ -2163,6 +2170,9 @@ int main(int argc, char** argv)
 	case 1001: can_iface = optarg; break;
 	case 1014:   // --uart=[<unit>:]<device>: give the host a serial port
 	    uart_add(optarg);
+	    break;
+	case 1007:   // --settle: see virtual_settle
+	    virtual_settle = 1;
 	    break;
 	case 1015:   // --exit-on-eof: quit when stdin closes, see exit_on_eof
 	    exit_on_eof = 1;
@@ -2825,7 +2835,17 @@ loop:
 	    uint32_t inp = input_cycle - vclock;
 	    if (inp < adv) adv = inp;
 	}
-	if ((adv == 0xFFFFFFFFu) || (adv < 1)) adv = 1;
+	// --settle: a cycle that changed something has work runnable NOW, and
+	// the real clock does not sleep on it either (below). Without it the
+	// next step of a chain, Input -> Drive -> Output, runs at the next
+	// timer's time instead of at once.
+	if ((adv == 0xFFFFFFFFu) || (adv < 1) || (virtual_settle && anyd))
+	    adv = 1;
+	// Never past -T: the run ends AT that time, with everything due before
+	// it done and nothing after, wherever the next event would land.
+	if (max_time_ms && ((uint32_t)(vclock - start_time) < max_time_ms) &&
+	    (adv > max_time_ms - (uint32_t)(vclock - start_time)))
+	    adv = max_time_ms - (uint32_t)(vclock - start_time);
 	vclock += adv;
     }
     else if (!interactive && !anyd) {

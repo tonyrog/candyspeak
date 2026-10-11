@@ -397,10 +397,10 @@
 
 {record, t, value_common, 4,
  [{period, 28},         %% timeout value ms (74h max)
-  {pad, 1},             %% reserved (auto restart?)
+  {req, 1},             %% written this cycle: csp_output_timer acts on val
   {fired, 1},           %% timeout occurred this cycle (edge-triggered)
   {running, 1},         %% timer is runnig (tx is valid time)
-  {val, 1}              %% one bit value 1 = start, 0 = stop
+  {val, 1}              %% one bit value 1 = (re)start, 0 = stop
  ]}.           
 
 %% #digital: PIN_BITS 7, PORT_BITS 4.

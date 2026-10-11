@@ -295,7 +295,8 @@ static int is_fvar(index_t ix, int cnd, filter_var_t* fv, int nf)
 // up. Pass no <= 0 for the blank form. A disabled rule gets '!' in place of the
 // trailing space, so the mark sits in its own column and nothing shifts.
 //
-// The NUMBER is 1-based and counts OP_RULE in instruction order. Every rule
+// The NUMBER is 1-based and counts OP_RULE in instruction order, leaving out
+// the formulas and bindings (csp_is_rule). Every rule
 // emits one -- an unguarded rule gets an always-true LI first (see the cnd < 0
 // branch in asm_rule) -- so the sequence has no holes and matches what a user
 // counts on screen. Deliberately NOT the reactive ordinal from number_rules,
@@ -587,7 +588,7 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	    f += instr(st, f, sg_num);      // the loop's f++ steps past the header
 	    continue;
 	}
-	if (csp_iop(st, f) == OP_RULE)
+	if (csp_is_rule(st, f))
 	    rule_no++;
     }
     while (i < to) {
@@ -721,7 +722,7 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 		int body_n = instr(st, i, e_num);
 		int j;
 		for (j = i+1; j < i+1+body_n; j++)
-		    if (csp_iop(st, j) == OP_RULE)
+		    if (csp_is_rule(st, j))
 			rule_no++;
 		i = i + body_n + 2;
 	    }
@@ -736,7 +737,9 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 	    i++; rule = i;
 	    break;
 	case OP_RULE:
-	    cnd=0; rule_pos = i; rule_no++; i++;
+	    cnd=0; rule_pos = i; i++;
+	    if (csp_is_rule(st, rule_pos))
+		rule_no++;
 	    break;
 	case OP_NEXT:
 	    cnd=1; i++;
@@ -775,7 +778,7 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 		// A `#local ... in` binding lists on its object's line (see
 		// DECL_OBJECT), where it was written and where it has to go back:
 		// pasted as a rule of its own it would run AFTER the instance,
-		// a cycle late. It keeps its number all the same.
+		// a cycle late.
 		if (show && (rule_pos >= 0) && csp_rule_binding(st, rule_pos))
 		    show = 0;
 		// ...and a #local ... out's formula lists on its declaration.
@@ -799,9 +802,13 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 			    list_in_header(st, indent);
 			block_shown = 1;
 		    }
-		    list_column(rule_no, instr_seg(st, rule_pos),
-				(rule_no <= MAX_DIS_RULES) &&
-				bitset_tst(st->dis_rule, rule_no-1));
+		    // A formula is not a rule: no number, nothing to disable.
+		    if (csp_rule_binds(st, rule_pos))
+			list_column(0, instr_seg(st, rule_pos), 0);
+		    else
+			list_column(rule_no, instr_seg(st, rule_pos),
+				    (rule_no <= MAX_DIS_RULES) &&
+				    bitset_tst(st->dis_rule, rule_no-1));
 		    // One level deeper inside an #in block, so a listing nests the
 		    // way the source does instead of running flat under the gate.
 		    list_indent(indent + depth + ((block_end >= 0) ? 1 : 0));

@@ -1,0 +1,4 @@
+{cycles, 2}.
+{checks, [
+  {output_has, "variable L is not declared"}
+]}.

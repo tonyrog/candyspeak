@@ -51,11 +51,12 @@ usage() ->
     io:format(standard_error, "usage: ~s [--graph] in.csp [out.c]\n", [?MODULE]),
     halt(2).
 
-%% What each option asks of the translation. --graph is the next step and is
-%% refused until it is there, rather than ignored.
+%% What each option asks of the translation, kept for the walk.
 options(Opts) ->
-    [throw({unsupported, "--graph (not yet)", 0}) || graph <- Opts],
+    put(csp_graph, lists:member(graph, Opts)),
     ok.
+
+graph() -> get(csp_graph) =:= true.
 
 file(In) ->
     file(In, filename:rootname(In) ++ ".c").
@@ -82,7 +83,9 @@ file(In, Out, Opts) ->
 %% The program
 %% ------------------------------------------------------------------
 
-gen({{module, _, {'WORD', _, "Main"}}, Bound, Decls}, In) ->
+gen({{module, _, {'WORD', _, "Main"}}, Bound, Decls0}, In) ->
+    put(csp_scope, 0),
+    Decls = scope(Decls0, #{}),
     Mods = modules(Decls, #{}),
     States = [S || {'WORD', _, S} <- maps:get(states, Bound, [])],
     Main = {"Main", Decls},
@@ -103,16 +106,23 @@ gen({{module, _, {'WORD', _, "Main"}}, Bound, Decls}, In) ->
                 Consts),
     Mains = [{M, maps:get(M, Mods)} || M <- Order] ++ [{"Main", Decls}],
     put(csp_watched, watched(Mains)),
+    put(csp_mods, Mods),
+    put(csp_main_ds, Decls),
     put(csp_fields, sets:from_list([N || {_, Ds} <- Mains, D <- flat(Ds),
                                          N <- [name_of(D)], N =/= undefined])),
     put(csp_haspar, has_tree(Mains, fun is_param/1)),
-    put(csp_hasloc, has_tree(Mains, fun is_lside/1)),
+    put(csp_kept, kept(Mains)),
+    put(csp_hasloc, has_tree(Mains, fun is_lfield/1)),
     {_, RuleNo} = number_rules(Decls, {1, #{}}),
     put(csp_ruleno, RuleNo),
     put(csp_hascan, has_tree(Mains, fun({buffer, _, _, _, _, [{can, _}]}) -> true;
                                        (_) -> false end)),
     put(csp_hasbuf, has_tree(Mains, fun({buffer, _, _, _, _, _}) -> true;
                                        (_) -> false end)),
+    %% In this order: with --graph a module leaves its steps for the driver.
+    ModTexts = [module(M, maps:get(M, Mods), Mods, States, Globals) || M <- Order],
+    MainText = module("Main", Decls, Mods, States, Consts),
+    Driver = driver(Mods, Decls),
     [header(In, States),
      [defines(Ds) || {_, Ds} <- [Main | [maps:get(M, Mods) || M <- Order]]],
      [[struct(M, Ds), side(M, local, Ds), side(M, param, Ds)] || {M, Ds} <- Mains],
@@ -126,20 +136,27 @@ gen({{module, _, {'WORD', _, "Main"}}, Bound, Decls}, In) ->
          false -> []
      end,
      "\n",
-     [module(M, maps:get(M, Mods), Mods, States, Globals) || M <- Order],
-     module("Main", Decls, Mods, States, Consts),
-     driver(Mods, Decls)].
+     ModTexts, MainText, Driver].
 
 %% ------------------------------------------------------------------
-%% Which #locals have one copy
+%% Where a #local lives
 %% ------------------------------------------------------------------
 %%
-%% A #local is on its own side, Name_local_t, with ONE copy: written, it is
-%% readable at once, it takes no part in the commit, and any rule can be run
-%% at any time and find it -- no C variable that lives only while the run
-%% function does. The exception is a local changed() is asked of: that
-%% compares against last cycle's value, so it keeps the committed and working
-%% pair in Name_t, as the runtime gives a watched local a slot of its own.
+%% Three places, from cheapest:
+%%
+%% - A C variable in the run function (is_stack), for a formula nothing needs
+%%   after the function returns. What most locals are, and they cost no RAM.
+%%   Not with --graph, where a step runs again only when woken and must find
+%%   the value it left.
+%% - Name_local_t (is_lfield), ONE copy, for a local that must outlive the
+%%   run: a `#local X in' the instance line binds from outside, an `out' the
+%%   instance's parent reads, a formula that reads itself or a local not yet
+%%   computed this cycle (last cycle's value), a local of the program a module
+%%   reads (kept/1).
+%% - The committed and working pair in Name_t, for a local changed() is asked
+%%   of: that compares against last cycle's value, as the runtime gives a
+%%   watched local a slot of its own.
+%%
 %% By name, across the program -- conservatively.
 watched(Mains) ->
     All = [D || {_, Ds} <- Mains, D <- flat(Ds)],
@@ -153,6 +170,63 @@ watched(Mains) ->
 is_lside({local, _, {'WORD', _, N}, _, _, _}) ->
     not sets:is_element(N, get(csp_watched));
 is_lside(_) -> false.
+
+is_stack({local, _, {'WORD', _, N}, _, Opts, E} = D) ->
+    not graph() andalso E =/= undefined andalso is_formula(Opts) andalso
+        proplists:get_value(dir, Opts) =/= out andalso is_lside(D) andalso
+        not sets:is_element(N, get(csp_kept));
+is_stack(_) -> false.
+
+is_lfield(D) -> is_lside(D) andalso not is_stack(D).
+
+%% The locals that must outlive their run function, by name: one read before
+%% its formula has run this cycle -- by itself, or by something above it --
+%% and one of the program's that a module reads.
+kept(Mains) ->
+    Early = lists:append([early(flat(Ds)) || {_, Ds} <- Mains]),
+    MainLocals = [N || {"Main", Ds} <- Mains, {local, _, {'WORD', _, N}, _, _, _} <- flat(Ds)],
+    InModules = lists:append([reads(D) || {M, Ds} <- Mains, M =/= "Main", D <- flat(Ds)]),
+    sets:from_list(Early ++ [N || N <- MainLocals, lists:member(N, InModules)]).
+
+early(Ds) ->
+    Locals = [N || {local, _, {'WORD', _, N}, _, _, _} <- Ds],
+    {Early, _} =
+        lists:foldl(
+          fun(D, {E, Seen}) ->
+                  E1 = E ++ [X || X <- reads(D), lists:member(X, Locals),
+                                  not lists:member(X, Seen)],
+                  case D of
+                      {local, _, {'WORD', _, N}, _, _, _} -> {E1, [N | Seen]};
+                      _ -> {E1, Seen}
+                  end
+          end, {[], []}, Ds),
+    Early.
+
+reads(D) -> [X || {field, _, {'WORD', _, X}} <- terms(D)].
+
+%% A C variable for a #local: its own name could be a macro or a keyword.
+svar(N) -> ["l_", N].
+
+%% The C variables, at the top of the run function. A local no rule reads is
+%% still written, hence the (void).
+stack_decls(Ds) ->
+    [[[?IND, ctype(Res, Opts, Ln), " ", svar(N), " = 0;\n"],
+      [?IND, "(void)", svar(N), ";\n"]]
+     || {local, Ln, {'WORD', _, N}, Res, Opts, _} = D <- flat(Ds), is_stack(D)].
+
+%% A store into one: the C variable holds 32 bits, so a narrow local is cut to
+%% its width as a bit-field would cut it.
+stack_store(N, Res, Opts, Ln, Rhs) ->
+    case Res of
+        default -> [svar(N), " = ", Rhs, ";\n"];
+        {'INT', _, "32"} -> [svar(N), " = ", Rhs, ";\n"];
+        {'INT', _, W} ->
+            F = case ctype(Res, Opts, Ln) of
+                    "uint32_t" -> "csp_lib_wrapu";
+                    _ -> "csp_lib_wraps"
+                end,
+            [svar(N), " = ", F, "(", Rhs, ", ", W, ");\n"]
+    end.
 
 %% Declarations, with those inside #in and #when blocks.
 flat(Ds) ->
@@ -207,10 +281,18 @@ header(In, States) ->
      "// Sources, the program first and then each import in the order it came in:\n",
      [["//   ", F, "\n"] || F <- sources(In)],
      "\n",
-     "#include <stdint.h>\n#include <string.h>\n#include \"csp_lib.h\"\n",
+     "#include <stddef.h>\n#include <stdint.h>\n#include <string.h>\n#include \"csp_lib.h\"\n",
      "#if defined(CSP_LIB_HOST)\n#include \"csp_lib_host.h\"\n#endif\n\n",
      "// tick() and cycle(): the time of this cycle and its number, from 1.\n",
      "static uint32_t csp_now;\nstatic uint32_t csp_cycle;\n\n",
+     case graph() of
+         true ->
+             ["// A step function, as its module's table holds it: each one is written\n",
+              "// with its module's own types and cast to this.\n",
+              "typedef uint32_t (*csp_rule_fn_t)(void* in, void* out, void* loc, void* par);\n",
+              "typedef void (*csp_diff_fn_t)(void* a, void* b, uint32_t* m);\n\n"];
+         false -> []
+     end,
      "enum {\n",
      [[?IND, S, " = ", integer_to_list(N), ",\n"]
       || {S, N} <- lists:zip(States, lists:seq(0, length(States) - 1))],
@@ -277,32 +359,340 @@ module(Name, Ds, Mods, States, Globals) ->
      io_fn(Name, "input", Ds, Env),
      io_fn(Name, "output", Ds, Env),
      "#endif\n\n",
-     "static void ", Name, "_run(", T, "* in, ", T, "* out", sargs(Name), ")\n{\n",
-     timer_starts(Ds, Env),
-     body(Ds, ?IND, Env, top),
-     ?IND, "// INIT lasts one cycle unless a rule said otherwise; FAILSAFE\n",
+     case graph() of
+         false ->
+             ["static void ", Name, "_run(", T, "* in, ", T, "* out", sargs(Name), ")\n{\n",
+              stack_decls(Ds),
+              timer_starts(Ds, Env),
+              body(Ds, ?IND, Env, top),
+              tail(),
+              "}\n\n"];
+         true ->
+             steps(Name, Ds, Env)
+     end].
+
+%% INIT lasts one cycle unless a rule said otherwise; FAILSAFE is left only by
+%% a reset.
+tail() ->
+    [?IND, "// INIT lasts one cycle unless a rule said otherwise; FAILSAFE\n",
      ?IND, "// is left only by a reset.\n",
      ?IND, "if ((in->State == INIT) && (out->State == INIT))\n",
      ?IND, ?IND, "out->State = NORMAL;\n",
      ?IND, "if (in->State == FAILSAFE)\n",
-     ?IND, ?IND, "out->State = FAILSAFE;\n",
+     ?IND, ?IND, "out->State = FAILSAFE;\n"].
+
+%% ------------------------------------------------------------------
+%% --graph: a function per step
+%% ------------------------------------------------------------------
+%%
+%% Instead of one run function a module gets a function per step -- a rule,
+%% a #local formula, a binding on an instance line, an instance's defaults,
+%% its timer starts and its tail -- each with the gates of the #in and #when
+%% blocks it stands in. What is left between them is the order: the module's
+%% step table, where an entry is a function or a child instance. Walked from
+%% the top it is the run functions (csp_run, with -DCSP_LIB_SEQ); walked
+%% with a bit per (instance, step) it runs only what was woken (csp_react).
+%%
+%% A step function returns which of what it wrote changed, a bit each in the
+%% order of step_writes/2; the driver turns a bit into the steps to wake.
+%%
+%% An instance inside a block would have its steps gated by its parent's
+%% state, which its own functions cannot see; refused for now.
+steps(Name, Ds, Env) ->
+    Ts = case timer_starts(Ds, Env) of
+             [] -> [];
+             Code -> [{fn, Code}]
+         end,
+    All = Ts ++ gsteps(Ds, Env, top, []) ++ [{fn, tail()}],
+    {Fns, Seq, Info, _} =
+        lists:foldl(
+          fun({fn, Code}, {F, S, I, J}) ->
+                  Text = lists:flatten(Code),
+                  W = step_writes(Name, Text),
+                  {[step_fn(Name, J, Text, W) | F], [{fn, J} | S], [{Text, W} | I], J + 1};
+             (Call, {F, S, I, J}) ->
+                  {F, [Call | S], I, J}
+          end, {[], [], [], 0}, All),
+    Steps = lists:reverse(Seq),
+    put({csp_steps, Name}, Steps),
+    put({csp_stepinfo, Name}, list_to_tuple(lists:reverse(Info))),
+    Leaves = diff_leaves(Name),
+    J1 = length(Fns),
+    [lists:reverse(Fns),
+     "static const csp_rule_fn_t ", Name, "_fn[] = {\n",
+     [[?IND, "(csp_rule_fn_t)", Name, "_r", integer_to_list(J), ",\n"]
+      || J <- lists:seq(0, J1 - 1)],
+     "};\n\n",
+     "// Where each step function's bits start in ", Name, "_wmap.\n",
+     "static const uint16_t ", Name, "_wofs[] = {\n",
+     table(lists:reverse(lists:foldl(fun({_, W}, [H | _] = A) -> [H + length(W) | A] end,
+                                     [0], lists:reverse(Info)))),
+     "};\n\n",
+     "// A bit: the field it is, {instance, slot}. The instance is this one plus\n",
+     "// that many, or with the top bit set the one of that number; slot 0xFFFF\n",
+     "// is the step itself, next cycle.\n",
+     "static const uint16_t ", Name, "_wmap[][2] = {\n",
+     case [wmap(Name, X) || {_, W} <- lists:reverse(Info), X <- W] of
+         [] -> [?IND, "{ 0, 0xFFFF }\n"];
+         Ws -> [[?IND, "{ ", A, ", ", B, " },\n"] || {A, B} <- Ws]
+     end,
+     "};\n\n",
+     "static const uint16_t ", Name, "_steps[] = {\n",
+     [[?IND, case St of
+                 {fn, J} -> integer_to_list(J);
+                 {call, M, N} ->
+                     ["0x8000 | ", integer_to_list(child_offset(Name, N)),
+                      ",    // ", N, " ", M]
+             end, case St of {fn, _} -> ",\n"; _ -> "\n" end]
+      || St <- Steps],
+     "};\n\n",
+     "// Which of the instance's own fields differ between two copies, a bit\n",
+     "// each in m[], in declaration order.\n",
+     "static void ", Name, "_diff(", Name, "_t* a, ", Name, "_t* b, uint32_t* m)\n{\n",
+     [[?IND, "m[", integer_to_list(B div 32), "] ", case B rem 32 of 0 -> "="; _ -> "|=" end,
+       " (uint32_t)", differs(["a->", F], ["b->", F], K), " << ", integer_to_list(B rem 32), ";\n"]
+      || {B, {F, K}} <- lists:zip(lists:seq(0, length(Leaves) - 1), Leaves)],
      "}\n\n"].
+
+%% Each step function takes the instance's two copies and its two sides, in
+%% the module's own types; the table holds it as void pointers, which every
+%% ABI here passes alike. A side the module does not have is a void pointer.
+%% A #local it writes is kept as it was on the way in, to tell whether it
+%% changed; a field in the copies is compared against the committed one.
+step_fn(Name, J, Code, W) ->
+    T = [Name, "_t"],
+    WI = lists:zip(lists:seq(0, length(W) - 1), W),
+    ["static uint32_t ", Name, "_r", integer_to_list(J), "(", T, "* in, ", T, "* out, ",
+     case has_loc(Name) of true -> [Name, "_local_t* loc, "]; false -> "void* loc, " end,
+     case has_par(Name) of true -> [Name, "_param_t* par"]; false -> "void* par" end,
+     ")\n{\n",
+     [[?IND, "int32_t w", integer_to_list(B), " = (int32_t)", wpath(X), ";\n"]
+      || {B, {loc, _, _, _} = X} <- WI],
+     ?IND, "(void)in; (void)out; (void)loc; (void)par;\n",
+     Code,
+     ?IND, "return 0",
+     [[" |\n", ?IND, ?IND, "((uint32_t)", wtest(B, X), " << ", integer_to_list(B), ")"]
+      || {B, X} <- WI],
+     ";\n",
+     "}\n\n"].
+
+%% A written field, as {state | loc, Abs, Leaf, Kind}: Abs when it is a
+%% global (csp_out./csp_loc.), Leaf its path down to the field itself, Kind
+%% scalar or blob (a timer, a buffer). `always' is a step that reads the clock
+%% and so has to run every cycle.
+wpath({loc, false, L, _}) -> ["loc->", dots(L)];
+wpath({loc, true, L, _}) -> ["csp_loc.", dots(L)].
+
+wtest(_, always) -> "1";
+wtest(B, {loc, _, _, _} = X) -> ["((int32_t)", wpath(X), " != w", integer_to_list(B), ")"];
+wtest(_, {state, false, L, K}) -> differs(["out->", dots(L)], ["in->", dots(L)], K);
+wtest(_, {state, true, L, K}) -> differs(["csp_out.", dots(L)], ["csp_in.", dots(L)], K).
+
+differs(A, B, blob) -> ["(memcmp(&", A, ", &", B, ", sizeof(", A, ")) != 0)"];
+differs(A, B, scalar) -> ["(", A, " != ", B, ")"].
+
+dots(L) -> lists:join(".", L).
+
+%% What a step's C touches, read off the text: {in | out | loc | par, Abs,
+%% Path, Assigned}. Abs for csp_in. and the like, a global from a module.
+refs(Text) ->
+    P = "(?<![A-Za-z0-9_])(in|out|loc|par)->([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)(\\s*=(?!=))?",
+    G = "(?<![A-Za-z0-9_])csp_(in|out|loc|par)\\.([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)(\\s*=(?!=))?",
+    [{list_to_atom(S), Abs, string:split(Path, ".", all), Eq =/= []}
+     || {Re, Abs} <- [{P, false}, {G, true}],
+        [S, Path | Eq0] <- case re:run(Text, Re, [global, {capture, all_but_first, list}]) of
+                               {match, Ms} -> Ms;
+                               nomatch -> []
+                           end,
+        Eq <- [case Eq0 of [E] -> E; [] -> [] end]].
+
+%% Where a path in module Mod ends up: {ok, Leaf, Kind} for a field of that
+%% side (state: the two copies; loc: the local side), down through instances.
+%% A #param or #constant changes nothing a rule can see happen.
+leaf_of(_Mod, Side, ["State" | _]) when Side =:= state -> {ok, ["State"], scalar};
+leaf_of(Mod, Side, [C | Rest]) ->
+    case [D || D <- mod_ds(Mod), dname(D) =:= C] of
+        [{object, _, {'WORD', _, M}, _, _}] when Rest =/= [] ->
+            case leaf_of(M, Side, Rest) of
+                {ok, L, K} -> {ok, [C | L], K};
+                E -> E
+            end;
+        [{timer, _, _, _, _}] when Side =:= state -> {ok, [C], blob};
+        [{buffer, _, _, _, _, _}] when Side =:= state -> {ok, [C], blob};
+        [{local, _, _, _, _, _} = D] ->
+            case {is_lside(D), Side} of
+                {true, loc} -> {ok, [C], scalar};
+                {false, state} -> {ok, [C], scalar};
+                _ -> error
+            end;
+        [D] when Side =:= state ->
+            case element(1, D) of
+                K when K =:= variable; K =:= digital; K =:= analog -> {ok, [C], scalar};
+                _ -> error
+            end;
+        _ -> error
+    end;
+leaf_of(_, _, _) -> error.
+
+dname({object, _, _, {'WORD', _, N}, _}) -> N;
+dname({timer, _, {'WORD', _, N}, _, _}) -> N;
+dname({buffer, _, {'WORD', _, N}, _, _, _}) -> N;
+dname(D) -> name_of(D).
+
+%% The step's bits: each field it may have changed, in the order it first
+%% names them, and `always' last when it reads the clock.
+step_writes(Name, Text) ->
+    W = [X || {Side, Abs, Path, Eq} <- refs(Text),
+              Side =:= out orelse (Side =:= loc andalso Eq),
+              X <- case leaf_of(case Abs of true -> "Main"; false -> Name end,
+                                case Side of out -> state; loc -> loc end, Path) of
+                       {ok, L, K} -> [{case Side of out -> state; loc -> loc end, Abs, L, K}];
+                       error -> []
+                   end],
+    Always = case re:run(Text, "\\bcsp_(now|cycle)\\b") of
+                 nomatch -> [];
+                 _ -> [always]
+             end,
+    case uniq(W, []) ++ Always of
+        L when length(L) > 32 -> throw({unsupported, "a step that writes more than 32 fields", 0});
+        L -> L
+    end.
+
+%% Where a step's bit lands: {instance, slot} as Name_wmap has it.
+wmap(_, always) -> {"0", "0xFFFF"};
+wmap(Name, {Side, Abs, L, _}) ->
+    {I, M} = case Abs of
+                 true -> {16#8000, "Main"};
+                 false -> {0, Name}
+             end,
+    {D, TM, F} = descend(M, L, 0),
+    Slot = case Side of
+               state -> length(diff_leaves(TM)) + index_of(F, [X || {X, _} <- diff_leaves(TM)]);
+               loc -> 2 * length(diff_leaves(TM)) + index_of(F, loc_leaves(TM))
+           end,
+    {case I of 0 -> integer_to_list(D); _ -> ["0x8000 | ", integer_to_list(D)] end,
+     integer_to_list(Slot)}.
+
+%% Down a path's instances: {how many instances on, the module, the field}.
+descend(M, [F], D) -> {D, M, F};
+descend(M, [C | Rest], D) ->
+    [Sub] = [X || {object, _, {'WORD', _, X}, {'WORD', _, N}, _} <- mod_ds(M), N =:= C],
+    descend(Sub, Rest, D + child_offset(M, C)).
+
+index_of(X, L) -> index_of(X, L, 0).
+index_of(X, [X | _], I) -> I;
+index_of(X, [_ | T], I) -> index_of(X, T, I + 1).
+
+%% A module's #locals on the local side, in order.
+loc_leaves(Name) -> [dname(D) || D <- flat(mod_ds(Name)), is_lside(D)].
+
+%% A module's own fields in its two copies: what M_diff compares.
+diff_leaves(Name) ->
+    [{"State", scalar} |
+     [{dname(D), case element(1, D) of
+                       timer -> blob;
+                       buffer -> blob;
+                       _ -> scalar
+                   end}
+      || D <- flat(mod_ds(Name)), not is_lside(D), not is_param(D),
+         element(1, D) =/= object, field(D) =/= []]].
+
+%% Instances are numbered depth first, so the instances of a module's subtree
+%% follow it in the same order everywhere: child N is a fixed distance on.
+child_offset(Mod, N) ->
+    Kids = [{X, M} || {object, _, {'WORD', _, M}, {'WORD', _, X}, _} <- mod_ds(Mod)],
+    {Before, _} = lists:splitwith(fun({X, _}) -> X =/= N end, Kids),
+    1 + lists:sum([subtree(M) || {_, M} <- Before]).
+
+subtree(Mod) ->
+    1 + lists:sum([subtree(M) || {object, _, {'WORD', _, M}, _, _} <- mod_ds(Mod)]).
+
+mod_ds("Main") -> get(csp_main_ds);
+mod_ds(M) -> maps:get(M, get(csp_mods)).
+
+gsteps(Ds, Env, Where, Gates) ->
+    lists:flatmap(fun(D) -> gstep(D, Env, Where, Gates) end, Ds).
+
+gstep({{in, _, States}, Ds}, Env, _Where, Gates) ->
+    C = lists:join(" || ", [["in->State == ", S] || {'WORD', _, S} <- States]),
+    gsteps(Ds, Env, block, Gates ++ [C]);
+gstep({{'when', _, Cond}, Ds}, Env, Where, Gates) ->
+    gsteps(Ds, Env, Where, Gates ++ [unwrap(ccond(Cond, Env))]);
+gstep({object, Ln, {'WORD', _, M}, {'WORD', _, N}, Args}, Env, _Where, Gates) ->
+    [throw({unsupported, "an instance inside #in/#when with --graph", Ln})
+     || Gates =/= []],
+    {Binds, Defaults, _Call} = object_parts(M, N, Args, Ln, ?IND, Env),
+    [{fn, B} || B <- Binds] ++
+        [{fn, Defaults} || Defaults =/= []] ++
+        [{call, M, N}];
+gstep(D, Env, Where, Gates) ->
+    Ind = lists:append(lists:duplicate(length(Gates) + 1, ?IND)),
+    case lists:flatten(stmt(D, Ind, Env, Where)) of
+        [] -> [];
+        Code -> [{fn, gate(Gates, ?IND, Code)}]
+    end.
+
+%% Code inside one `if' per gate, outermost first.
+gate([], _Ind, Code) -> Code;
+gate([G | Gs], Ind, Code) ->
+    [Ind, "if (", G, ") {\n", gate(Gs, Ind ++ ?IND, Code), Ind, "}\n"].
+
 
 struct(Name, Ds) ->
     ["typedef struct {\n",
      ?IND, "int32_t State;\n",
-     [field(D) || D <- Ds, not is_lside(D), not is_param(D)],
+     [field(D) || D <- flat(Ds), not is_lside(D), not is_param(D)],
      "} ", Name, "_t;\n\n"].
+
+%% ------------------------------------------------------------------
+%% Block scope
+%% ------------------------------------------------------------------
+%%
+%% A #local formula declared in an #in or #when block is the block's own: #end
+%% ends the name, as it does in the runtime (blk_pop rolls the names back). So
+%% each one is renamed apart, N to N_<k>, before anything else looks: two
+%% blocks may both have an N, and a read after the block finds no N at all and
+%% is refused as an unknown name.
+scope(Ds, Ren) -> [scope_d(D, Ren) || D <- Ds].
+
+scope_d({{module, _, _} = H, B, Ds}, _Ren) -> {H, B, scope(Ds, #{})};
+scope_d({{K, Ln, X}, Ds}, Ren) when K =:= in; K =:= 'when' ->
+    Ren1 = lists:foldl(
+             fun(N, R) ->
+                     K1 = get(csp_scope) + 1,
+                     put(csp_scope, K1),
+                     R#{N => N ++ "_" ++ integer_to_list(K1)}
+             end, Ren,
+             [N || {local, _, {'WORD', _, N}, _, Opts, E} <- Ds,
+                   E =/= undefined, is_formula(Opts),
+                   proplists:get_value(dir, Opts) =/= out]),
+    {{K, Ln, subst(X, Ren)}, scope(Ds, Ren1)};
+scope_d(D, Ren) -> subst(D, Ren).
+
+%% A name in an expression, and a #local's own: an instance line's member
+%% names, and `obj.N', are names in another scope and stay as they are.
+subst(T, Ren) when map_size(Ren) =:= 0 -> T;
+subst({field, Ln, {'WORD', L, N}}, Ren) ->
+    {field, Ln, {'WORD', L, maps:get(N, Ren, N)}};
+subst({local, Ln, {'WORD', L, N}, Res, Opts, E}, Ren) ->
+    {local, Ln, {'WORD', L, maps:get(N, Ren, N)}, Res, Opts, subst(E, Ren)};
+subst({object, Ln, M, N, Args}, Ren) ->
+    {object, Ln, M, N, [{Op, L, F, subst(E, Ren)} || {Op, L, F, E} <- Args]};
+subst(T, Ren) when is_tuple(T) -> list_to_tuple(subst(tuple_to_list(T), Ren));
+subst(L, Ren) when is_list(L) -> [subst(X, Ren) || X <- L];
+subst(X, _) -> X.
 
 %% ------------------------------------------------------------------
 %% Rule numbers, for #disable
 %% ------------------------------------------------------------------
 %%
-%% Rule N is the Nth OP_RULE the compiler lays down, counted through the whole
+%% Rule N is the Nth rule the compiler lays down, counted through the whole
 %% program in source order: a module's body where its #module stands, an #in or
-%% #when block's rules where the block stands. A rule counts, a #local formula
-%% counts, and so does each binding on an instance line (`X <- A`, `X = 3`). A
-%% `>' patch does not. That is what /list numbers -- check it there.
+%% #when block's rules where the block stands. A rule counts, and so does an
+%% instance line's assignment to a member #variable (`V <- A`, `V = 3`). A
+%% #local's formula and an instance's binding of a #local do not: they say
+%% what the local is and cannot be disabled (csp_is_rule). Nor does a `>'
+%% patch. That is what /list numbers -- check it there.
 %%
 %% Each guard in the C carries its number as CSP_ON(n): a bit test against the
 %% disable mask when the build says -DCSP_LIB_RULES, the constant 1 (and no
@@ -311,13 +701,15 @@ number_rules([D | T], Acc) -> number_rules(T, number_rule(D, Acc));
 number_rules([], Acc) -> Acc.
 
 number_rule({rule, _, _, _} = R, {N, M}) -> {N + 1, M#{R => N}};
-number_rule({local, _, _, _, Opts, E} = L, {N, M}) when E =/= undefined ->
-    case is_formula(Opts) of
-        true -> {N + 1, M#{L => N}};
-        false -> {N, M}
-    end;
-number_rule({object, _, _, _, Args}, Acc) ->
-    lists:foldl(fun(A, {N, M}) -> {N + 1, M#{A => N}} end, Acc, Args);
+number_rule({object, _, {'WORD', _, Mod}, _, Args}, Acc) ->
+    Locals = [F || {local, _, {'WORD', _, F}, _, _, _} <- flat(mod_ds(Mod))],
+    lists:foldl(fun({_, _, {field, _, {'WORD', _, F}}, _} = A, {N, M}) ->
+                        case lists:member(F, Locals) of
+                            true -> {N, M};
+                            false -> {N + 1, M#{A => N}}
+                        end;
+                   (A, {N, M}) -> {N + 1, M#{A => N}}
+                end, Acc, Args);
 number_rule({{module, _, _}, _, Ds}, Acc) -> number_rules(Ds, Acc);
 number_rule({{in, _, _}, Ds}, Acc) -> number_rules(Ds, Acc);
 number_rule({{'when', _, _}, Ds}, Acc) -> number_rules(Ds, Acc);
@@ -442,9 +834,9 @@ has_loc(M) -> maps:get(M, get(csp_hasloc), false).
 has_tree(Mains, Pred) ->
     lists:foldl(
       fun({M, Ds}, Acc) ->
-              Own = lists:any(Pred, Ds),
+              Own = lists:any(Pred, flat(Ds)),
               Sub = lists:any(fun({object, _, {'WORD', _, X}, _, _}) -> maps:get(X, Acc, false);
-                                 (_) -> false end, Ds),
+                                 (_) -> false end, flat(Ds)),
               Acc#{M => Own orelse Sub}
       end, #{}, Mains).
 
@@ -453,14 +845,14 @@ has_buf(M) -> maps:get(M, get(csp_hasbuf), false).
 
 side(Name, Side, Ds) ->
     {Has, In, T} = case Side of
-                       local -> {fun has_loc/1, fun is_lside/1, "_local_t"};
+                       local -> {fun has_loc/1, fun is_lfield/1, "_local_t"};
                        param -> {fun has_par/1, fun is_param/1, "_param_t"}
                    end,
     case Has(Name) of
         false -> [];
         true ->
             ["typedef struct {\n",
-             [field(D) || D <- Ds, In(D)],
+             [field(D) || D <- flat(Ds), In(D)],
              [[?IND, M, T, " ", N, ";\n"]
               || {object, _, {'WORD', _, M}, {'WORD', _, N}, _} <- Ds, Has(M)],
              "} ", Name, T, ";\n\n"]
@@ -502,7 +894,7 @@ symbols(Ds, Mods) ->
                       Acc#{N => {object, M, symbols(module_ds(M, Mods, Ln), Mods)}};
                   _ -> Acc
               end
-      end, #{}, Ds).
+      end, #{}, flat(Ds)).
 
 field({variable, Ln, {'WORD', _, N}, Arr, Res, Opts, _}) ->
     scalar(Arr, Ln), [?IND, ctype(Res, Opts, Ln), " ", N, width(Res), ";\n"];
@@ -590,7 +982,7 @@ iexpr(E, Env) -> cexpr(E, Env#{rd => "s->", lrd => "s->"}).
 %% the last word, as it has in the runtime.
 timer_starts(Ds, Env) ->
     [[?IND, "if (in->State == INIT) ",
-      store({timer_val, ["out->", N, ".val"]}, cexpr(E, Env))]
+      store({timer_val, ["out->", N]}, cexpr(E, Env))]
      || {timer, _, {'WORD', _, N}, _, E} <- Ds, E =/= undefined].
 
 %% Timers in every instance, depth first.
@@ -720,15 +1112,16 @@ stmt({{'when', _, Cond}, Ds}, Ind, Env, Where) ->
 stmt({local, _, {'WORD', _, N}, _Res, Opts, E} = L, Ind, Env, _Where)
   when E =/= undefined ->
     %% `#local Y = f` and `#local Y out = f` are formulas, evaluated where
-    %% they stand; only `#local X in = d` gives a default. A formula is a rule
-    %% to #disable too, and a disabled one keeps the value it last had.
+    %% they stand; only `#local X in = d` gives a default.
     case is_formula(Opts) of
         true ->
-            Body = case is_lside(L) of
-                       true -> [loc(Env), N, " = ", cexpr(E, Env), ";\n"];
-                       false -> ["out->", N, " = ", cexpr(E, Env), ";\n"]
-                   end,
-            [Ind, "if (", rule_on(L), ") ", Body];
+            case {is_stack(L), is_lside(L)} of
+                {true, _} ->
+                    {local, Ln, _, Res, _, _} = L,
+                    [Ind, stack_store(N, Res, Opts, Ln, cexpr(E, Env))];
+                {_, true} -> [Ind, loc(Env), N, " = ", cexpr(E, Env), ";\n"];
+                {_, false} -> [Ind, "out->", N, " = ", cexpr(E, Env), ";\n"]
+            end;
         false -> []
     end;
 stmt({object, Ln, {'WORD', _, M}, {'WORD', _, N}, Args}, Ind, Env, _Where) ->
@@ -785,7 +1178,7 @@ print_arg(E, Env) ->
 
 cstring(S) -> io_lib:format("~p", [S]).
 
-%% Where a store goes: a path, or {timer_val, Path} for the one-bit `val` of a
+%% Where a store goes: a path, or {timer_val, Timer} for the one-bit `val` of a
 %% timer, which keeps bit 0 the way the runtime's part does.
 lhs({'WORD', _, N}, Ln, Env) ->
     W = wr(Env),
@@ -794,7 +1187,7 @@ lhs({'WORD', _, N}, Ln, Env) ->
             {Buf, Pos, Nb, Big, _} = bits_of(D),
             {bits, [W, Buf, ".b"], integer_to_list(Pos), integer_to_list(Nb), b01(Big)};
         {buffer, D} -> {bits, [W, N, ".b"], "0", scalar_bits(D, Ln), "0"};
-        {timer, _} -> {timer_val, [W, N, ".val"]};
+        {timer, _} -> {timer_val, [W, N]};
         {const, _} -> throw({unsupported, "store to a constant", Ln});
         undefined when N =:= "State" -> [W, "State"];
         undefined -> throw({unsupported, "unknown name " ++ N, Ln});
@@ -819,7 +1212,7 @@ lhs({fld, _, {'WORD', _, O}, {'WORD', _, N}}, Ln, Env) ->
     case sym(O, Env) of
         {object, _, MSym} ->
             case maps:get(N, MSym, undefined) of
-                {timer, _} -> {timer_val, [wr(Env), O, ".", N, ".val"]};
+                {timer, _} -> {timer_val, [wr(Env), O, ".", N]};
                 {var, D} ->
                     case is_param(D) of
                         true -> [par(Env), O, ".", N];
@@ -836,7 +1229,10 @@ lhs({fld, _, {'WORD', _, O}, {'WORD', _, N}}, Ln, Env) ->
     end;
 lhs(_, Ln, _) -> throw({unsupported, "left-hand side", Ln}).
 
-store({timer_val, Path}, Rhs) -> [Path, " = ", timer_val(Rhs), ";\n"];
+%% A write to a timer is a request, even of the value it has: `T = 1' starts
+%% it over, `T = 0' stops it (csp_lib_timer_out). One statement, as it may
+%% stand alone after an `if'.
+store({timer_val, T}, Rhs) -> [T, ".val = ", timer_val(Rhs), ", ", T, ".req = 1;\n"];
 store({bits, B, Pos, N, Big}, Rhs) ->
     ["csp_lib_bits_set(", B, ", ", Pos, ", ", N, ", ", Big, ", ", Rhs, ");\n"];
 store(Path, Rhs) -> [Path, " = ", Rhs, ";\n"].
@@ -868,6 +1264,10 @@ timer_part(P, Ln) -> throw({unsupported, "timer part ." ++ P, Ln}).
 %% field given with `=` is set once, in the instance's own INIT; with `<-` it
 %% follows the expression each cycle.
 object(M, N, Args, Ln, Ind, Env) ->
+    tuple_to_list(object_parts(M, N, Args, Ln, Ind, Env)).
+
+%% {the bindings one by one, the defaults, the call}.
+object_parts(M, N, Args, Ln, Ind, Env) ->
     {object, M, MSym} = sym(N, Env),
     Bound = [F || {_, _, {field, _, {'WORD', _, F}}, _} <- Args],
     Binds =
@@ -875,7 +1275,7 @@ object(M, N, Args, Ln, Ind, Env) ->
              {local, {local, _, _, _, Opts, _}} ->
                  case lists:member(proplists:get_value(dir, Opts), [in, inout]) of
                      true ->
-                         [Ind, "if (", rule_on(A), ") ", member(N, F, MSym, Env, E)];
+                         [Ind, member(N, F, MSym, Env, E)];
                      false -> throw({unsupported, "binding a #local out", Ln})
                  end;
              _ when Op =:= '<-' ->
@@ -898,7 +1298,8 @@ object(M, N, Args, Ln, Ind, Env) ->
          || {F, {local, {local, _, _, _, Opts, E}}} <- maps:to_list(MSym),
             proplists:get_value(dir, Opts) =:= in,
             not lists:member(F, Bound)],
-    [Binds, Defaults, Ind, M, "_run(&in->", N, ", &out->", N, sptrs(M, N, Env), ");\n"].
+    Call = [Ind, M, "_run(&in->", N, ", &out->", N, sptrs(M, N, Env), ");\n"],
+    {Binds, Defaults, Call}.
 
 %% Where member F of instance N is written: its own side.
 member_path(N, F, MSym, Env) ->
@@ -917,7 +1318,7 @@ member_path(N, F, MSym, Env) ->
 member(N, F, MSym, Env, E) ->
     Path = member_path(N, F, MSym, Env),
     case maps:get(F, MSym, undefined) of
-        {timer, _} -> store({timer_val, [Path, ".val"]}, cexpr(E, Env));
+        {timer, _} -> store({timer_val, Path}, cexpr(E, Env));
         _ -> store(Path, cexpr(E, Env))
     end.
 
@@ -1030,9 +1431,10 @@ ref({'WORD', _, N} = W, Ln, Env) ->
         {const, _} -> macro(N);
         {timer, _} -> [tcast(Env), rd(Env), N, ".val"];
         {local, D} ->                               % a #local is seen at once
-            case is_lside(D) of
-                true -> [cast(D, Env), loc(Env), N];
-                false -> [cast(D, Env), lrd(Env), N]
+            case {is_stack(D), is_lside(D)} of
+                {true, _} -> svar(N);                % already 32 bits, its own type
+                {_, true} -> [cast(D, Env), loc(Env), N];
+                {_, false} -> [cast(D, Env), lrd(Env), N]
             end;
         {object, _, _} -> throw({unsupported, "an object as a value", Ln});
         {_, D} ->
@@ -1196,10 +1598,21 @@ driver(Mods, Decls) ->
     ["// How many rules there are, for a listing and a range that runs past the\n",
      "// end -- #disable 2-99 clamps to the last.\n",
      "const uint16_t csp_lib_nrules = ", nrules(), ";\n\n",
+     case graph() of
+         false -> [];
+         true -> rules()
+     end,
      "void csp_lib_setup(void)\n{\n",
      disables(Decls),
      ?IND, "Main_init(&csp_in", main_sides(), ");\n",
      ?IND, "csp_out = csp_in;\n",
+     case graph() of
+         false -> [];
+         true -> ["#if !defined(CSP_LIB_SEQ)\n",
+                  ?IND, "csp_lib_wake_all();      // cycle 1 runs every step\n",
+                  ?IND, "csp_prev = csp_in;\n",
+                  "#endif\n"]
+     end,
      "#if !defined(CSP_LIB_HOST)\n",
      ?IND, "Main_config(&csp_in);\n",
      "#endif\n",
@@ -1215,6 +1628,12 @@ driver(Mods, Decls) ->
      ?IND, "if (csp_cycle == 2) {\n",
      patches(Decls, Mods, "csp_in.", ?IND ++ ?IND),
      ?IND, ?IND, "csp_out = csp_in;\n",
+     case graph() of
+         false -> [];
+         true -> ["#if !defined(CSP_LIB_SEQ)\n",
+                  ?IND, ?IND, "csp_lib_wake_all();      // a patch may be a #param\n",
+                  "#endif\n"]
+     end,
      ?IND, "}\n",
      ?IND, "Main_timers_in(&csp_in, &csp_out, now);\n",
      case has_can("Main") of
@@ -1234,7 +1653,14 @@ driver(Mods, Decls) ->
      "#else\n",
      ?IND, "csp_lib_host_input();\n",
      "#endif\n",
-     ?IND, "Main_run(&csp_in, &csp_out", main_sides(), ");\n",
+     case graph() of
+         false -> [?IND, "Main_run(&csp_in, &csp_out", main_sides(), ");\n"];
+         true -> ["#if defined(CSP_LIB_SEQ)\n",
+                  ?IND, "csp_run(0);\n",
+                  "#else\n",
+                  ?IND, "csp_cycle_steps();\n",
+                  "#endif\n"]
+     end,
      ?IND, "changed = memcmp(&csp_in, &csp_out, sizeof(csp_in)) != 0;\n",
      ?IND, "csp_in = csp_out;\n",
      case has_buf("Main") of
@@ -1260,6 +1686,320 @@ driver(Mods, Decls) ->
      "}\n",
      "#endif\n"].
 
+rules() ->
+    Insts = insts(get(csp_main_ds), get(csp_mods), "", "Main", ""),
+    Used = uniq([M || {_, M, _} <- Insts], []),
+    Ix = maps:from_list(lists:zip(Used, lists:seq(0, length(Used) - 1))),
+    {Nk, Kbase, Common, Extra} = graph(Insts),
+    Xofs = lists:reverse(lists:foldl(fun({_, X}, [H | _] = A) -> [H + length(X) | A] end,
+                                     [0], Extra)),
+    MaxW = lists:max([(length(diff_leaves(M)) + 31) div 32 || M <- Used]),
+    Off = fun(_, "") -> "0";
+             (T, C) -> ["offsetof(", T, ", ", tl(C), ")"]
+          end,
+    %% No side in Main: none anywhere.
+    Base = fun(true, V, F) -> ["(uint8_t*)&", V, " + x->", F];
+              (false, _, _) -> "0"
+           end,
+    Call = ["m->fn[e]((uint8_t*)&csp_in + x->in, (uint8_t*)&csp_out + x->in,\n",
+            ?IND, ?IND, ?IND, "         ", Base(has_loc("Main"), "csp_loc", "loc"), ", ",
+            Base(has_par("Main"), "csp_par", "par"), ")"],
+    [[begin
+          C = maps:get(M, Common),
+          ["// ", M, ": what each slot wakes, from the instance's first step.\n",
+           "static const uint16_t ", M, "_eofs[] = {\n",
+           table(lists:reverse(lists:foldl(fun(E, [H | _] = A) -> [H + length(E) | A] end,
+                                           [0], C))),
+           "};\n\n",
+           "static const uint16_t ", M, "_edg[] = {\n",
+           table(case lists:append(C) of [] -> [0]; L -> L end),
+           "};\n\n"]
+      end || M <- Used],
+     "typedef struct {\n",
+     ?IND, "const csp_rule_fn_t* fn;\n",
+     ?IND, "const uint16_t* wofs;\n",
+     ?IND, "const uint16_t (*wmap)[2];\n",
+     ?IND, "const uint16_t* steps;\n",
+     ?IND, "const uint16_t* eofs;\n",
+     ?IND, "const uint16_t* edg;\n",
+     ?IND, "csp_diff_fn_t diff;\n",
+     ?IND, "uint16_t nsteps;\n",
+     ?IND, "uint8_t nleaves;\n",
+     "} csp_mod_t;\n\n",
+     "typedef struct {\n",
+     ?IND, "uint8_t mod;\n",
+     ?IND, "uint16_t in, loc, par;     // offsets in csp_in (and csp_out), csp_loc, csp_par\n",
+     ?IND, "uint16_t k;                // its first step\n",
+     ?IND, "uint16_t x;                // its own wakes in csp_xs, up to the next one's\n",
+     "} csp_inst_t;\n\n",
+     "static const csp_mod_t csp_mods[] = {\n",
+     [[?IND, "{ ", M, "_fn, ", M, "_wofs, ", M, "_wmap, ", M, "_steps, ", M, "_eofs, ", M, "_edg, (csp_diff_fn_t)", M, "_diff,\n",
+       ?IND, "  sizeof(", M, "_steps) / sizeof(uint16_t), ",
+       integer_to_list(length(diff_leaves(M))), " },\n"]
+      || M <- Used],
+     "};\n\n",
+     "static const csp_inst_t csp_insts[] = {\n",
+     [[?IND, "{ ", integer_to_list(maps:get(M, Ix)), ", ",
+       Off("Main_t", C), ", ",
+       case has_loc(M) of true -> Off("Main_local_t", C); false -> "0" end, ", ",
+       case has_par(M) of true -> Off("Main_param_t", C); false -> "0" end, ", ",
+       integer_to_list(maps:get(I, Kbase)), ", ", integer_to_list(X),
+       " },", case P of "" -> ""; _ -> ["    // ", P] end, "\n"]
+      || {I, {P, M, C}, X} <- lists:zip3(lists:seq(0, length(Insts) - 1), Insts,
+                                         lists:droplast(Xofs))],
+     "};\n\n",
+     "#define CSP_NINST ", integer_to_list(length(Insts)), "\n",
+     "#define CSP_NK ", integer_to_list(Nk), "          // steps, all instances\n",
+     "#define CSP_NX ", integer_to_list(lists:last(Xofs)), "\n",
+     "#define CSP_MAXW ", integer_to_list(MaxW), "\n\n",
+     "#if defined(CSP_LIB_SEQ)\n",
+     "// Instance i and its subtree, step by step. A step with the top bit set\n",
+     "// is a child instance, that many on.\n",
+     "static void csp_run(uint16_t i)\n{\n",
+     ?IND, "const csp_inst_t* x = &csp_insts[i];\n",
+     ?IND, "const csp_mod_t* m = &csp_mods[x->mod];\n",
+     ?IND, "uint16_t s;\n\n",
+     ?IND, "for (s = 0; s < m->nsteps; s++) {\n",
+     ?IND, ?IND, "uint16_t e = m->steps[s];\n",
+     ?IND, ?IND, "if (e & 0x8000)\n",
+     ?IND, ?IND, ?IND, "csp_run(i + (e & 0x7fff));\n",
+     ?IND, ?IND, "else\n",
+     ?IND, ?IND, ?IND, "(void)", Call, ";\n",
+     ?IND, "}\n",
+     "}\n",
+     "#else\n",
+     "// The wakes that are an instance's own, {slot, k}.\n",
+     "static const uint16_t csp_xs[][2] = {\n",
+     case lists:append([X || {_, X} <- Extra]) of
+         [] -> [?IND, "{ 0xFFFF, 0 }\n"];
+         Xs -> [[?IND, "{ ", integer_to_list(Sl), ", ", integer_to_list(E), " },\n"] || {Sl, E} <- Xs]
+     end,
+     "};\n\n",
+     "// A bit per step: this cycle's and the next's. A step woken by one that\n",
+     "// runs before it in the order runs this cycle, one woken by a later step\n",
+     "// the next. Cycle 1 runs them all.\n",
+     "static uint32_t csp_wake[2][(CSP_NK + 31) / 32];\n",
+     "static uint8_t csp_gen;\n",
+     "static uint16_t csp_k;\n",
+     "static Main_t csp_prev;          // csp_in as the steps last saw it\n\n",
+     "static void csp_set(uint16_t t, uint16_t k)\n{\n",
+     ?IND, "uint32_t* w = csp_wake[((k == 0xFFFF) || (t > k)) ? csp_gen : csp_gen ^ 1];\n",
+     ?IND, "w[t >> 5] |= 1u << (t & 31);\n",
+     "}\n\n",
+     "// Slot s of instance i, with step k running (0xFFFF: none yet).\n",
+     "static void csp_edges(uint16_t i, uint16_t s, uint16_t k)\n{\n",
+     ?IND, "const csp_inst_t* x = &csp_insts[i];\n",
+     ?IND, "const csp_mod_t* m = &csp_mods[x->mod];\n",
+     ?IND, "uint16_t e, end;\n\n",
+     ?IND, "for (e = m->eofs[s]; e < m->eofs[s + 1]; e++)\n",
+     ?IND, ?IND, "csp_set(x->k + m->edg[e], k);\n",
+     ?IND, "end = (i + 1 < CSP_NINST) ? x[1].x : CSP_NX;\n",
+     ?IND, "for (e = x->x; e < end; e++)\n",
+     ?IND, ?IND, "if (csp_xs[e][0] == s)\n",
+     ?IND, ?IND, ?IND, "csp_set(csp_xs[e][1], k);\n",
+     "}\n\n",
+     "// What changed in the committed copy since the steps last ran -- the\n",
+     "// commit, a timer, a frame, a patch -- wakes what reads it; what an input\n",
+     "// left in the working copy wakes what reads it there.\n",
+     "static void csp_diff(void)\n{\n",
+     ?IND, "uint16_t i, b;\n",
+     ?IND, "uint32_t m[CSP_MAXW];\n\n",
+     ?IND, "for (i = 0; i < CSP_NINST; i++) {\n",
+     ?IND, ?IND, "const csp_inst_t* x = &csp_insts[i];\n",
+     ?IND, ?IND, "const csp_mod_t* md = &csp_mods[x->mod];\n",
+     ?IND, ?IND, "md->diff((uint8_t*)&csp_in + x->in, (uint8_t*)&csp_prev + x->in, m);\n",
+     ?IND, ?IND, "for (b = 0; b < md->nleaves; b++)\n",
+     ?IND, ?IND, ?IND, "if (m[b >> 5] & (1u << (b & 31)))\n",
+     ?IND, ?IND, ?IND, ?IND, "csp_edges(i, b, 0xFFFF);\n",
+     ?IND, ?IND, "md->diff((uint8_t*)&csp_out + x->in, (uint8_t*)&csp_in + x->in, m);\n",
+     ?IND, ?IND, "for (b = 0; b < md->nleaves; b++)\n",
+     ?IND, ?IND, ?IND, "if (m[b >> 5] & (1u << (b & 31)))\n",
+     ?IND, ?IND, ?IND, ?IND, "csp_edges(i, md->nleaves + b, 0xFFFF);\n",
+     ?IND, "}\n",
+     ?IND, "csp_prev = csp_in;\n",
+     "}\n\n",
+     "static void csp_react(uint16_t i)\n{\n",
+     ?IND, "const csp_inst_t* x = &csp_insts[i];\n",
+     ?IND, "const csp_mod_t* m = &csp_mods[x->mod];\n",
+     ?IND, "uint16_t s;\n\n",
+     ?IND, "for (s = 0; s < m->nsteps; s++) {\n",
+     ?IND, ?IND, "uint16_t e = m->steps[s];\n",
+     ?IND, ?IND, "if (e & 0x8000) {\n",
+     ?IND, ?IND, ?IND, "csp_react(i + (e & 0x7fff));\n",
+     ?IND, ?IND, ?IND, "continue;\n",
+     ?IND, ?IND, "}\n",
+     ?IND, ?IND, "if (csp_wake[csp_gen][csp_k >> 5] & (1u << (csp_k & 31))) {\n",
+     ?IND, ?IND, ?IND, "uint32_t w = ", Call, ";\n",
+     ?IND, ?IND, ?IND, "uint16_t b;\n",
+     ?IND, ?IND, ?IND, "for (b = m->wofs[e]; w; b++, w >>= 1) {\n",
+     ?IND, ?IND, ?IND, ?IND, "uint16_t t = m->wmap[b][0], sl = m->wmap[b][1];\n",
+     ?IND, ?IND, ?IND, ?IND, "if (!(w & 1))\n",
+     ?IND, ?IND, ?IND, ?IND, ?IND, "continue;\n",
+     ?IND, ?IND, ?IND, ?IND, "if (sl == 0xFFFF)\n",
+     ?IND, ?IND, ?IND, ?IND, ?IND, "csp_set(csp_k, csp_k);\n",
+     ?IND, ?IND, ?IND, ?IND, "else\n",
+     ?IND, ?IND, ?IND, ?IND, ?IND, "csp_edges((t & 0x8000) ? (t & 0x7fff) : i + t, sl, csp_k);\n",
+     ?IND, ?IND, ?IND, "}\n",
+     ?IND, ?IND, "}\n",
+     ?IND, ?IND, "csp_k++;\n",
+     ?IND, "}\n",
+     "}\n\n",
+     "void csp_lib_wake_all(void)\n{\n",
+     ?IND, "memset(csp_wake[csp_gen], 0xFF, sizeof(csp_wake[0]));\n",
+     "}\n\n",
+     "static void csp_cycle_steps(void)\n{\n",
+     ?IND, "csp_diff();\n",
+     ?IND, "csp_k = 0;\n",
+     ?IND, "csp_react(0);\n",
+     ?IND, "memset(csp_wake[csp_gen], 0, sizeof(csp_wake[0]));\n",
+     ?IND, "csp_gen ^= 1;\n",
+     "}\n",
+     "#endif\n\n"].
+
+table(L) ->
+    [[?IND, lists:join(", ", [integer_to_list(X) || X <- Row]), ",\n"] || Row <- rows(L, 12)].
+
+rows([], _) -> [];
+rows(L, N) when length(L) =< N -> [L];
+rows(L, N) -> {H, T} = lists:split(N, L), [H | rows(T, N)].
+
+%% What wakes what. The steps are numbered k in the order the run functions
+%% take them, instance by instance. A step reads a field committed (in->)
+%% or as it is being written this cycle (out->, loc->); it writes into out->
+%% and loc->. Then:
+%%
+%%   a field that differs from what the steps last saw wakes every step that
+%%     reads it -- this cycle, before any runs; one an input left different in
+%%     the working copy wakes those that read it as it is being written;
+%%   a field in the copies that a step leaves different from the committed
+%%     one wakes the steps that read it as it is being written -- the later
+%%     ones this cycle, the earlier ones (also woken by the commit) the next;
+%%   a #local a step changes wakes its readers: the later ones this cycle,
+%%     the earlier ones (which read it before it changed) the next.
+%%
+%% And steps that write the same field are woken together, so the last one
+%% in the order still has the last word, as it has when all of them run.
+%%
+%% The steps of an instance's subtree come one after the other, as many for
+%% every instance of the module, so a wake inside the subtree is the same
+%% distance from its first step wherever the instance is: those are kept per
+%% module. What differs -- a parent that reads a child's field, a global --
+%% is kept per instance, as {slot, k}.
+%%
+%% A module's slots: its fields committed, the same being written, then its
+%% #locals. A step's bit names the slot of the field it changed.
+graph(Insts) ->
+    Pcs = list_to_tuple([case P of "" -> []; _ -> string:split(P, ".", all) end
+                         || {P, _, _} <- Insts]),
+    Sched = sched("Main", 0),
+    Info = [{K, I, Mod, element(J + 1, get({csp_stepinfo, Mod}))}
+            || {K, {I, Mod, J}} <- lists:zip(lists:seq(0, length(Sched) - 1), Sched)],
+    Acc0 = {#{}, #{}, #{}},                     % in-readers, cur-readers, writers
+    {InR, CurR, Wr} =
+        lists:foldl(
+          fun({K, I, Mod, {Text, W}}, {A, B, C}) ->
+                  Rs = [{Side, Id, Eq} || {Side, Abs, Path, Eq} <- refs(Text),
+                                          Side =/= par,
+                                          {ok, Id} <- [abs_leaf(Mod, Pcs, I, Side, Abs, Path)]],
+                  A1 = lists:foldl(fun({S, Id, _}, X) when S =:= in; S =:= out -> add(Id, K, X);
+                                      (_, X) -> X end, A, Rs),
+                  B1 = lists:foldl(fun({out, Id, _}, X) -> add(Id, K, X);
+                                      ({loc, Id, false}, X) -> add(Id, K, X);
+                                      (_, X) -> X end, B, Rs),
+                  C1 = lists:foldl(fun(Id, X) -> add(Id, K, X) end, C,
+                                   [wid(Pcs, I, X) || X <- W, X =/= always]),
+                  {A1, B1, C1}
+          end, Acc0, Info),
+    Comp = components(Wr),
+    Exp = fun(Ks) -> lists:usort(lists:flatmap(fun(K) -> maps:get(K, Comp, [K]) end, Ks)) end,
+    Get = fun(Id, M) -> maps:get(Id, M, []) end,
+    {Kbase, _} = kbases("Main", 0, 0, #{}),
+    %% Every instance's slots, absolute: a list of wake lists per instance.
+    Abs = [begin
+               Pc = element(I + 1, Pcs),
+               Ids = [{state, Pc ++ [F]} || {F, _} <- diff_leaves(M)],
+               Ls = [{loc, Pc ++ [F]} || F <- loc_leaves(M)],
+               {I, M, [Exp(Get(Id, InR)) || Id <- Ids] ++ [Exp(Get(Id, CurR)) || Id <- Ids ++ Ls]}
+           end || {I, {_, M, _}} <- lists:zip(lists:seq(0, length(Insts) - 1), Insts)],
+    %% Relative to the instance's first step, inside its subtree.
+    Rel = fun(I, M, Es) ->
+                  B = maps:get(I, Kbase),
+                  N = length(sched(M, 0)),
+                  [E - B || E <- Es, E >= B, E < B + N]
+          end,
+    Mods = uniq([M || {_, M, _} <- Insts], []),
+    Common = maps:from_list(
+               [{M, begin
+                        Per = [[ordsets:from_list(Rel(I, M, Es)) || Es <- Slots]
+                               || {I, M1, Slots} <- Abs, M1 =:= M],
+                        lists:foldl(fun(P, Acc) -> lists:zipwith(fun ordsets:intersection/2, P, Acc) end,
+                                    hd(Per), tl(Per))
+                    end} || M <- Mods]),
+    Extra = [{I, [{S, E} || {S, Es, C} <- lists:zip3(lists:seq(0, length(Slots) - 1), Slots,
+                                                       maps:get(M, Common)),
+                            E <- Es,
+                            not ordsets:is_element(E - maps:get(I, Kbase), C)]}
+             || {I, M, Slots} <- Abs],
+    {length(Sched), Kbase, Common, Extra}.
+
+%% k of the first step of every instance's subtree.
+kbases(Mod, I, K, Acc) ->
+    lists:foldl(fun({fn, _}, {A, X}) -> {A, X + 1};
+                   ({call, M, N}, {A, X}) -> kbases(M, I + child_offset(Mod, N), X, A)
+                end, {Acc#{I => K}, K}, get({csp_steps, Mod})).
+
+%% The schedule: {instance, module, step}, the order csp_run takes them.
+sched(Mod, I) ->
+    lists:flatmap(fun({fn, J}) -> [{I, Mod, J}];
+                     ({call, M, N}) -> sched(M, I + child_offset(Mod, N))
+                  end, get({csp_steps, Mod})).
+
+%% A field by where it is from the top: {state | loc, Path}.
+abs_leaf(Mod, Pcs, I, Side, Abs, Path) ->
+    {M0, Base} = case Abs of
+                     true -> {"Main", []};
+                     false -> {Mod, element(I + 1, Pcs)}
+                 end,
+    S = case Side of loc -> loc; _ -> state end,
+    case leaf_of(M0, S, Path) of
+        {ok, L, _} -> {ok, {S, Base ++ L}};
+        error -> error
+    end.
+
+wid(Pcs, I, {Side, Abs, L, _}) ->
+    Base = case Abs of true -> []; false -> element(I + 1, Pcs) end,
+    {Side, Base ++ L}.
+
+add(Id, K, M) -> maps:update_with(Id, fun(L) -> [K | L] end, [K], M).
+
+%% Steps that write a common field, as k -> every k of its group.
+components(Wr) ->
+    Parent = maps:fold(fun(_, Ks, P) -> unite(lists:usort(Ks), P) end, #{}, Wr),
+    Groups = maps:fold(fun(K, _, G) -> add(find(K, Parent), K, G) end, #{}, Parent),
+    maps:fold(fun(_, Ks, M) ->
+                      S = lists:usort(Ks),
+                      lists:foldl(fun(K, X) -> X#{K => S} end, M, S)
+              end, #{}, Groups).
+
+unite([], P) -> P;
+unite([K | Ks], P0) ->
+    P1 = case maps:is_key(K, P0) of true -> P0; false -> P0#{K => K} end,
+    R = find(K, P1),
+    lists:foldl(fun(X, P) ->
+                        P2 = case maps:is_key(X, P) of true -> P; false -> P#{X => X} end,
+                        Rx = find(X, P2),
+                        case Rx =:= R of
+                            true -> P2;
+                            false -> P2#{Rx => R}
+                        end
+                end, P1, Ks).
+
+find(K, P) ->
+    case maps:get(K, P) of
+        K -> K;
+        Up -> find(Up, P)
+    end.
+
 main_sides() ->
     [case has_loc("Main") of true -> ", &csp_loc"; false -> "" end,
      case has_par("Main") of true -> ", &csp_par"; false -> "" end].
@@ -1284,10 +2024,9 @@ names(Mods, Decls) ->
      [accessor(M, case M of "Main" -> Decls; _ -> maps:get(M, Mods) end) || M <- Used],
      "const csp_lib_inst_t csp_lib_insts[] = {\n",
      [[?IND, "{ \"", P, "\", &", M, "_mod, &csp_in", C, ", &csp_out", C, ", ",
-       case has_loc(M) of true -> ["&csp_loc", C]; false -> "0" end, ", ",
        case has_par(M) of true -> ["&csp_par", C]; false -> "0" end, " },\n"]
       || {P, M, C} <- Insts],
-     ?IND, "{ 0, 0, 0, 0, 0, 0 }\n};\n",
+     ?IND, "{ 0, 0, 0, 0, 0 }\n};\n",
      "#endif\n\n"].
 
 %% Every instance, depth first: {runtime path, module, C member path}.
@@ -1299,13 +2038,15 @@ insts(Ds, Mods, Path, Mod, C) ->
                       (_) -> []
                    end, Ds)].
 
-%% A module's fields, numbered from 0 in declaration order, State first.
+%% A module's fields, numbered from 0 in declaration order, State first. A
+%% #local is the module's own and has no access from outside: it may well be
+%% a C variable that is gone when the run function returns.
 accessor(M, Ds) ->
-    Fs = [{N, case {is_param(D), is_lside(D)} of
-                  {true, _} -> param;
-                  {_, true} -> local;
-                  _ -> state
-              end} || D <- [{state} | Ds], N <- [name_of(D)], N =/= undefined],
+    Fs = [{N, case is_param(D) of
+                  true -> param;
+                  false -> state
+              end} || D <- [{state} | Ds], element(1, D) =/= local,
+                      N <- [name_of(D)], N =/= undefined],
     Cases = lists:zip(lists:seq(0, length(Fs) - 1), Fs),
     ["static const char* const ", M, "_fields[] = {\n",
      [[?IND, "\"", N, "\",\n"] || {N, _} <- Fs],
@@ -1329,7 +2070,6 @@ accessor(M, Ds) ->
 
 side_ref(M, state, get) -> ["((const ", M, "_t*)x->in)"];
 side_ref(M, state, set) -> ["((", M, "_t*)x->out)"];
-side_ref(M, local, _) -> ["((", M, "_local_t*)x->loc)"];
 side_ref(M, param, _) -> ["((", M, "_param_t*)x->par)"].
 
 name_of({state}) -> "State";

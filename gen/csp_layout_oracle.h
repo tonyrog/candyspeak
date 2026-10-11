@@ -950,6 +950,14 @@
     if ((long)(REC).t.period != 268435455L) \
 	FAIL("t.period set", (long)(REC).t.period, 268435455L); \
     memset(&(REC), 0, sizeof(REC)); \
+    (REC).t.req = 1; \
+    if ((long)value_get_t_req((const value_t*)&(REC)) != 1L) \
+	FAIL("t.req", (long)value_get_t_req((const value_t*)&(REC)), 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_t_req((value_t*)&(REC), 1); \
+    if ((long)(REC).t.req != 1L) \
+	FAIL("t.req set", (long)(REC).t.req, 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
     (REC).t.fired = 1; \
     if ((long)value_get_t_fired((const value_t*)&(REC)) != 1L) \
 	FAIL("t.fired", (long)value_get_t_fired((const value_t*)&(REC)), 1L); \

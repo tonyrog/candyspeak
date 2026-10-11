@@ -1,6 +1,7 @@
 {modes, [seq]}.
 {stimulus, "boards/bridgezone/tests/toggle.dat"}.
-{cycles, 300}.
+{time, 2990}.
+{settle, true}.
 %% Three presses of a springback key: on, off, on. A press turns ON what can
 %% be turned on and only otherwise OFF -- the C's need_activate, then
 %% need_deactivate -- and a release does nothing to an on/off output.

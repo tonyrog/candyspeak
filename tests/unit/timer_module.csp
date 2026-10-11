@@ -5,4 +5,4 @@ Done = 1 ? timeout(T)
 #end
 
 #Delay a
-#Delay b T=200
+#Delay b T.period=200

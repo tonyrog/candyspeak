@@ -1,0 +1,5 @@
+{cycles, 6}.
+{checks, [
+  {final_object_var, "M.a", "a.V", 5},
+  {final_object_var, "M.b", "b.V", 500}
+]}.

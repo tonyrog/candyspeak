@@ -1802,6 +1802,21 @@ static inline void value_set_t_period(value_t* p, uint32_t v_)
     b_[2] = (uint8_t)(v_ >> 16);
     b_[3] = (uint8_t)((b_[3] & (uint8_t)0xF0U) | (uint8_t)((v_ >> 24) & 0xFU));
 }
+static inline uint8_t value_get_t_req(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[3] >> 4)) & 0x1U);
+}
+static inline uint8_t value_get_t_req_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[3]) >> 4)) & 0x1U);
+}
+static inline void value_set_t_req(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[3] = (uint8_t)((b_[3] & (uint8_t)0xEFU) | (uint8_t)((v_ << 4) & 0x10U));
+}
 static inline uint8_t value_get_t_fired(const value_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
@@ -2840,9 +2855,10 @@ typedef enum {
     MFV_F_VAL = 2,
     MFV_S_VAL = 2,
     MFV_T_PERIOD = 0,
-    MFV_T_FIRED = 13,
-    MFV_T_RUNNING = 14,
-    MFV_T_VAL = 15,
+    MFV_T_REQ = 13,
+    MFV_T_FIRED = 14,
+    MFV_T_RUNNING = 15,
+    MFV_T_VAL = 16,
     MFV_D_CFG = 4,
     MFV_D_PIN = 5,
     MFV_D_PORT = 6,
@@ -2859,7 +2875,7 @@ typedef enum {
     MFV_A_FIRED = 9,
     MFV_A_VAL = 11,
     MFV_NDOUBLE = 4,
-    MFV_NFIELD = 16
+    MFV_NFIELD = 17
 } mf_value_all_t;
 
 #define MFV_I_VAL_POS 0
@@ -2872,6 +2888,8 @@ typedef enum {
 #define MFV_S_VAL_BITS 32
 #define MFV_T_PERIOD_POS 0
 #define MFV_T_PERIOD_BITS 28
+#define MFV_T_REQ_POS 28
+#define MFV_T_REQ_BITS 1
 #define MFV_T_FIRED_POS 29
 #define MFV_T_FIRED_BITS 1
 #define MFV_T_RUNNING_POS 30
@@ -2909,7 +2927,7 @@ typedef enum {
 #define MFV_A_VAL_POS 16
 #define MFV_A_VAL_BITS 16
 
-// 23 names over 16 slots, of which the first 4 are the
+// 24 names over 17 slots, of which the first 4 are the
 // halves of fields wider than a cell.
 #define CSP_VALUE_ALL_FIELDS { \
     { 0, 0, 16 } /* t_period lo */, \
@@ -2925,6 +2943,7 @@ typedef enum {
     { 2, 0, 1 } /* d_val */, \
     { 2, 0, 16 } /* a_val */, \
     { 2, 1, 1 } /* d_fired */, \
+    { 3, 4, 1 } /* t_req */, \
     { 3, 5, 1 } /* t_fired */, \
     { 3, 6, 1 } /* t_running */, \
     { 3, 7, 1 } /* t_val */ }
@@ -2960,6 +2979,10 @@ typedef enum {
       if (d_ != (uint32_t)value_get_t_period((const value_t*)&(REC))) \
 	FAIL("t_period", (long)d_, \
 	     (long)(uint32_t)value_get_t_period((const value_t*)&(REC))); } \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_T_REQ]) != \
+	(long)((uint32_t)value_get_t_req((const value_t*)&(REC)) & 0x1UL)) \
+	FAIL("t_req", (long)mc_field_get(&(REC), &mc_value_fields[MFV_T_REQ]), \
+	     (long)((uint32_t)value_get_t_req((const value_t*)&(REC)) & 0x1UL)); \
     if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_T_FIRED]) != \
 	(long)((uint32_t)value_get_t_fired((const value_t*)&(REC)) & 0x1UL)) \
 	FAIL("t_fired", (long)mc_field_get(&(REC), &mc_value_fields[MFV_T_FIRED]), \
@@ -3105,6 +3128,6 @@ typedef enum {
 
 // Fingerprint of every field name, position and width above, in order.
 // An image built against a different layout must be refused, not read.
-#define CSP_LAYOUT_FINGERPRINT 0x9BE3053DUL
+#define CSP_LAYOUT_FINGERPRINT 0xAD2DB1C4UL
 
 #endif

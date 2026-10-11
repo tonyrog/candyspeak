@@ -31,16 +31,23 @@ and the translation keeps it -- but only for what needs it:
 |---|---|---|
 | `#variable`, pins, timers | `M_t`, the struct of the module | 2: `csp_in`, `csp_out` |
 | `#param` | `M_param_t`, the same tree shape | 1: `csp_par` |
-| `#local` | `M_local_t`, the same tree shape | 1: `csp_loc` |
+| `#local` formula | a C variable in `M_run` | 0 |
+| `#local in`, `out`, one that reads itself, Main's read by a module | `M_local_t`, the same tree shape | 1: `csp_loc` |
 | `#local` that `changed()` is asked of | `M_t` | 2 |
+| any `#local`, with `--graph` | `M_local_t` | 1 |
 
 A `#local` is readable the moment it is written and takes no part in the
-commit, so one copy. It is a field, not a C variable in `M_run` (which is what
-it was until 2026-10-11): a value that lives only while the run function does
-cannot be read by a rule run on its own, and that is what reactive execution
-needs. A `#param` is not written by the rules, it is set from outside -- so it
-takes no part in the transaction either, and is a side of its own: it is kept,
-a local is recomputed, and a param side could go to flash.
+commit, so at most one copy -- and a formula nothing needs after the run
+function returns needs none: it is a C variable (`l_Name`), cut to its width
+with `csp_lib_wrapu`/`wraps`. What has to outlive the run is a field: a `#local
+in` the parent's instance line binds, an `out` the parent reads, a formula that
+reads its own last value, a local of the program a module reads. With
+`--graph` every local is a field, since a step runs again only when woken and
+must find what it left. A local has no name in the host harness: it is the
+module's own (2026-10-11). A `#param` is not written by the rules, it is set
+from outside -- so it takes no part in the transaction either, and is a side of
+its own: it is kept, a local is recomputed, and a param side could go to
+flash.
 
 What that came to on BridgeZone's `main.csp` (8 inputs, 10 drives, 10 outputs,
 4 analog filters), ARM7 Thumb, `-Os`:
@@ -52,6 +59,7 @@ What that came to on BridgeZone's `main.csp` (8 inputs, 10 drives, 10 outputs,
 | C, `#local` as C locals | 8.5 KB | 5.4 KB |
 | C, and `#param` once | 8.8 KB | 4.2 KB |
 | C, `#local` in `M_local_t` (2026-10-11) | 10.0 KB | 7.3 KB |
+| C, formulas back in C variables; timers, not tick() (2026-10-11) | 10.5 KB | 4.8 KB |
 
 CoCo (`boards/coco`) on an ATmega328P: 1379 B RAM to 589 B.
 
@@ -60,7 +68,8 @@ CoCo (`boards/coco`) on an ATmega328P: 1379 B RAM to 589 B.
 The harness (`port/csp_lib_host.c`) reads and writes scalars by runtime name,
 `"o3.Req"`. Each module lists its fields once and has ONE getter and ONE
 setter that switch on the field number; `csp_lib_insts[]` is every instance
--- its path and its part of `csp_in`, `csp_out`, `csp_loc` and `csp_par`. A
+-- its path and its part of `csp_in`, `csp_out` and `csp_par`; a `#local` has
+no name there. A
 name splits at its last dot into instance and field. See `csp_lib_host.h`.
 Until 2026-10-11 it was two functions per scalar per instance: BridgeZone's
 `main.csp` had 1764 of them, 143 KB of host text; now 10 and 22 KB. Only the
@@ -69,8 +78,61 @@ host build has the table (`CSP_LIB_HOST`).
 ### Options
 
 `candyspeak_c:main(["--graph", In, Out])`, `file(In, Out, Opts)`, and the same
-for `csp_to_c`; `make clib_host CLIB_OPTS=--graph`. `--graph` is refused until
-it is there.
+for `csp_to_c`; `make clib_host CLIB_OPTS=--graph`. `csp_to_c` still refuses
+`--graph`.
+
+### --graph: run what was woken (2026-10-11)
+
+A module gets a function per STEP instead of one run function: a rule, a
+`#local` formula, a binding on an instance line, an instance's defaults, its
+timer starts, its tail (INIT to NORMAL). Each carries the gates of the `#in`
+and `#when` blocks it stands in, and all have the same arguments, so tables
+hold them:
+
+- `M_steps[]` per module: a function, or "child instance n on". Instances are
+  numbered depth first and every instance of a module has as many steps in its
+  subtree, so this is the same for all of them.
+- `csp_insts[]`: module, offsets into `csp_in`/`csp_loc`/`csp_par`, the
+  instance's first step k.
+
+`-DCSP_LIB_SEQ` walks the tables and runs every step: the run functions,
+step for step. Without it a bit per step k says what runs (`csp_react`),
+in the same order. What wakes a step:
+
+- before the steps, `M_diff` per instance compares the committed copy with
+  the one the steps last saw (`csp_prev`) -- the commit, a timer, a frame, a
+  patch -- and the working copy with the committed one -- an input;
+- a step function returns a bit per field it may have changed (a field in
+  the copies compared with the committed one, a `#local` with what it held on
+  the way in); `M_wmap` turns the bit into that field's slot;
+- a step that reads the clock (`tick()`) wakes itself for the next cycle;
+- `csp_lib_wake_all()` wakes everything: cycle 1, the `>` patches (a
+  `#param` is not compared), `csp_lib_enable`, a value set from the harness.
+
+A field's readers are found in the step's C text: `in->X` reads it committed,
+`out->X` and `loc->X` as it is being written. A woken step runs this cycle if
+it comes after the one that woke it, otherwise next cycle. Steps that write
+the same field are woken together, so the last in the order still has the last
+word. Wake lists are kept per module, relative to the instance's first step;
+what differs between instances (a parent reading a child, a global) is a short
+`{slot, k}` list per instance.
+
+The oracle runs both: `--graph` (reactive) and `--graph-seq` give the same
+59/1/34 as the plain translation, and BridgeZone's 15 tests pass in both.
+
+BridgeZone `main.csp`, ARM7 Thumb -Os, text / bss:
+
+| | text | bss |
+|---|---|---|
+| run functions | 10.0 KB | 7.3 KB |
+| step tables, no change bits | 12.6 KB | 7.3 KB |
+| --graph, reactive | 25.5 KB | 8.6 KB |
+
+1683 steps over 33 instances, 285 step functions. The change bits cost
+most: the step functions are 12.2 KB of it. `csp_prev` is a third copy of
+`Main_t` (836 B). On BridgeZone's tests 28 % of the steps run: every module
+has `#local Now = tick()`, which changes every cycle, and what compares
+against it wakes with it -- a program that polls the clock stays awake.
 
 ## Ideas
 
@@ -128,8 +190,8 @@ as the largest module needs. Kept apart: Main's locals, `#local in` and `out`,
 a local watched for change (an OP_CHG on it, or its index passed to a
 function -- `local_watch_scan`), the locals of a module with an instance
 inside it, and everything when the program runs reactively. 24.2 KB to
-20.6 KB. A disabled local formula in the frame reads what another instance
-left there.
+20.6 KB. (A local formula cannot be disabled -- see below -- so nothing
+in the frame is left over from another instance.)
 
 On the way: an instance of an earlier module placed after one of a later
 module had leaves overlapping it (offs was a running sum, but a leaf is offs
@@ -171,8 +233,11 @@ the way `utils/words.terms` already describes the opcodes for micro-csp.
 ### #disable in a translated program (done 2026-10-08)
 
 Every guard carries its rule number, `CSP_ON(n)`, counted the way the runtime
-counts OP_RULEs -- source order, a module's body where `#module` stands, a
-`#local` formula and each instance binding counting as one. `#disable 3 5-7`
+counts OP_RULEs -- source order, a module's body where `#module` stands.
+Since 2026-10-11 a `#local` formula and an instance's binding of a `#local`
+take no number and no CSP_ON: they say what the local is, and the runtime's
+`csp_is_rule` leaves them out of /list's numbers and #disable alike. An
+instance line's assignment to a member `#variable` still counts. `#disable 3 5-7`
 in the program becomes calls in `csp_lib_setup`. With `-DCSP_LIB_RULES` the
 guard tests `csp_lib_off[]` and `csp_lib_disable(n)` / `csp_lib_enable(n)`
 switch a rule while the program runs; without it CSP_ON is 1 and costs nothing.

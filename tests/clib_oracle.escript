@@ -26,6 +26,14 @@ main([]) -> main(["tests/clib", "tests/unit"]);
 %% --bytecode: translate the COMPILED program, with utils/csp_to_c.erl, instead
 %% of the source. The same harness and the same comparison -- it holds the
 %% instruction stream against the interpreter running it.
+%% --graph: translate with a function per step, run as they are woken; the
+%% same answer is expected. --graph-seq: the same, every step every cycle.
+main(["--graph-seq" | Dirs]) ->
+    put(cflags, "-DCSP_LIB_SEQ "),
+    main(["--graph" | Dirs]);
+main(["--graph" | Dirs]) ->
+    put(opts, ["--graph"]),
+    main(case Dirs of [] -> ["tests/clib", "tests/unit"]; _ -> Dirs end);
 main(["--bytecode" | Dirs]) ->
     put(translator, csp_to_c),
     main(case Dirs of [] -> ["tests/clib", "tests/unit"]; _ -> Dirs end);
@@ -65,7 +73,14 @@ build_erl(Eb) ->
 
 run(Csp, Tmp) ->
     Base = filename:basename(Csp, ".csp"),
-    {Cycles, DatFile, Libs} = setup(Csp),
+    {End, DatFile, Libs} = setup(Csp),
+    {CspEnd, CEnd} = case End of
+                         {cycles, N} -> {io_lib:format("-c ~w", [N]), io_lib:format("-c ~w", [N])};
+                         {time, Ms, Settle} ->
+                             Se = case Settle of true -> " --settle"; false -> "" end,
+                             {io_lib:format("-c 0 -T ~w~s", [Ms, Se]),
+                              io_lib:format("-T ~w~s", [Ms, Se])}
+                     end,
     Stim = case DatFile of
                none -> {"--virtual-time", ""};
                Dat -> {"-F " ++ Dat, "-F " ++ Dat}
@@ -80,18 +95,18 @@ run(Csp, Tmp) ->
         ok ->
             %% -Wno-tautological-compare: a test that writes `A == A` gets it
             %% translated word for word, and that is the point of the test.
-            Gcc = io_lib:format("gcc -Wall -Werror -Wno-overflow -Wno-tautological-compare -O1 -DCSP_LIB_HOST -DCSP_LIB_RULES -Iinclude -o ~s ~s "
+            Gcc = io_lib:format("gcc -Wall -Werror -Wno-overflow -Wno-tautological-compare -O1 -DCSP_LIB_HOST -DCSP_LIB_RULES ~s-Iinclude -o ~s ~s "
                                 "src/csp_lib.c port/csp_lib_host.c 2>&1",
-                                [Bin, C]),
+                                [case get(cflags) of undefined -> ""; F -> F end, Bin, C]),
             case os:cmd(lists:flatten(Gcc)) of
                 "" ->
                     os:cmd(lists:flatten(
-                             io_lib:format("./csp ~s -c ~w -s ~s ~s ~s 2>&1",
-                                           [element(1, Stim), Cycles, State,
+                             io_lib:format("./csp ~s ~s -s ~s ~s ~s 2>&1",
+                                           [element(1, Stim), CspEnd, State,
                                             string:join(Libs, " "), Csp]))),
                     Out = os:cmd(lists:flatten(
-                                   io_lib:format("~s ~s -c ~w", [Bin, element(2, Stim),
-                                                                 Cycles]))),
+                                   io_lib:format("~s ~s ~s", [Bin, element(2, Stim),
+                                                              CEnd]))),
                     ok = file:write_file(filename:join(Tmp, Base ++ ".out"), Out),
                     compare(Base, mine(Out), theirs(State));
                 Err ->
@@ -110,11 +125,15 @@ setup(Csp) ->
     Dat = filename:rootname(Csp) ++ ".dat",
     case file:consult(Expect) of
         {ok, Terms} ->
-            {proplists:get_value(cycles, Terms, 20),            % csp_test's default
+            %% {time, Ms} as csp_test has it: run to that time, not a count
+            {case proplists:get_value(time, Terms) of
+                 undefined -> {cycles, proplists:get_value(cycles, Terms, 20)}; % csp_test's default
+                 Ms -> {time, Ms, proplists:get_value(settle, Terms, false)}
+             end,
              proplists:get_value(stimulus, Terms, none),
              proplists:get_value(lib, Terms, [])};
         _ ->
-            {cycles(Csp),
+            {{cycles, cycles(Csp)},
              case filelib:is_regular(Dat) of true -> Dat; false -> none end,
              []}
     end.
@@ -135,9 +154,13 @@ translate(Csp, C) ->
              undefined -> candyspeak_c;      % process dictionary
              T -> T
          end,
+    Opts = case get(opts) of
+               undefined -> [];
+               O -> [graph || "--graph" <- O]
+           end,
     {Pid, Ref} = spawn_monitor(
                    fun() ->
-                           exit({done, try Tr:file(Csp, C)
+                           exit({done, try Tr:file(Csp, C, Opts)
                                         catch C1:E1 -> {C1, E1} end})
                    end),
     receive

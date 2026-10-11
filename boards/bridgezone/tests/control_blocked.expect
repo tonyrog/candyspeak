@@ -1,4 +1,5 @@
 {modes, [seq]}.
 {stimulus, "boards/bridgezone/tests/control_blocked.dat"}.
-{cycles, 60}.
+{time, 590}.
+{settle, true}.
 {checks, [ {final_object_var, "Output.o4", "o4.State", 3}, {final_var, "Pout4", 0} ]}.

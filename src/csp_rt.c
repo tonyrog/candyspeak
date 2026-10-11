@@ -1124,17 +1124,17 @@ NOINLINE static value_t csp_heap_get(csp_rt_t* st, csp_view_t* vw, dio_t dir)
 	if (n > sizeof(value_t)) n = sizeof(value_t);
 	memcpy(&v, p, n);
     }
-    else {
+    else
 	csp_bits_get(p, &v.u, bit, csp_view_get_len(vw) + 1,
 		     csp_view_get_endian(vw) == E_BIG);
-	// Sign-extend a signed field from its own width up to the container, so a
-	// negative CAN signal reads back negative. get_bits zero-extends; unsigned
-	// fields keep that, as do 32-bit-wide ones (no spare high bits to fill).
-	if (csp_view_get_vt(vw) == V_INTEGER) {
-	    uint8_t nbits = csp_view_get_len(vw) + 1;
-	    if ((nbits < 32) && (v.u & ((uvalue_t)1 << (nbits - 1))))
-		v.u |= ~(((uvalue_t)1 << nbits) - 1);
-	}
+    // Sign-extend a signed value from its own width up to the container, so a
+    // negative CAN signal -- or a #variable X:8 = -16 -- reads back negative.
+    // Both paths zero-extend, the byte-aligned one too; unsigned values keep
+    // that, as do 32-bit-wide ones (no spare high bits to fill).
+    if (csp_view_get_vt(vw) == V_INTEGER) {
+	uint8_t nbits = csp_view_get_len(vw) + 1;
+	if ((nbits < 32) && (v.u & ((uvalue_t)1 << (nbits - 1))))
+	    v.u |= ~(((uvalue_t)1 << nbits) - 1);
     }
     return v;
 }
@@ -1250,7 +1250,10 @@ NOINLINE void csp_dio_set_val_part(csp_rt_t* st, value_t* vslot,
 				   vtype_t vt, value_t v)
 {
     switch(CSP_MASK(vt, TYPE_BITS)) {
-    case V_TIMER:   value_set_t_val(vslot, v.i); break;
+    case V_TIMER:                       // a write is a request: see csp_output_timer
+	value_set_t_val(vslot, v.i);
+	value_set_t_req(vslot, 1);
+	break;
     case V_DIGITAL: value_set_d_val(vslot, v.i); break;
     case V_ANALOG:  value_set_a_val(vslot, v.i); break;
 	//case V_STRING:  vslot->s = v.i; break;
@@ -1395,19 +1398,49 @@ NOINLINE void csp_dio_get(csp_rt_t* st, index_t ix, value_t* vp, dio_t dir)
 // the commit skips it. It used to be a pair like any variable, with the write
 // mirrored into DIN here: twice the bytes for the same value.
 
+// A timer is written EVEN WITH THE SAME VALUE: `T = 1' on a running timer
+// starts it over, and the write is what says so (csp_output_timer). Only a
+// slot can be a timer, so a plain variable pays one view read for the test.
+NOINLINE static int is_timer_leaf(csp_rt_t* st, index_t n)
+{
+    return (csp_view_get_kind(csp_view(st, n)) == VIEW_SLOT) &&
+	(csp_leaf_cfg_vt(st, n) == V_TIMER);
+}
+
 NOINLINE void csp_set_value(csp_rt_t* st, index_t n, value_t v)
 {
     value_t cv;
+    int tm;
+
     csp_dio_get(st, n, &cv, DOUT);
-    if (v.u != cv.u) {
+    tm = is_timer_leaf(st, n);
+    if ((v.u != cv.u) || tm) {
 	int i = st_index(st, n);
+	value_t nv;
+	// Compared AS STORED: a :1 pin keeps 1 of the -1 a comparison gives,
+	// a :8 the low byte. Compared as written, `Dout = X != 0` was a change
+	// every cycle and the loop never settled.
+	csp_dio_set(st, n, v, DOUT);    // a #local: its one copy, see heap_base
+	csp_dio_get(st, n, &nv, DOUT);
+	if ((nv.u == cv.u) && !tm)
+	    return;
 	bitset_set(st->dset, i);
-	st->es.anyd = CSP_TRUE;
+	// A #local in the shared frame is not a change: every instance's
+	// formula "changes" the slot the one before it left, and counted, the
+	// loop never settled and a board never slept. What it is this cycle is
+	// all anyone can read. A local with a slot of its own -- an out, one
+	// watched by changed() -- counts like a variable, as in the C, where
+	// those live in the state and the frame's do not.
+	{
+	    csp_view_t* vw = csp_view(st, n);
+	    if (!(csp_view_get_flags(vw) & VIEW_F_LOCAL) ||
+		(csp_view_get_pos(vw) >= st->lframe))
+		st->es.anyd = CSP_TRUE;
+	}
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
 	if (st->reactive)
 	    csp_enq_elist(st,n);
 #endif
-	csp_dio_set(st, n, v, DOUT);    // a #local: its one copy, see heap_base
 	st->es.update++;
     }
 }
@@ -5137,10 +5170,35 @@ NOINLINE static uint16_t csp_lheap_alloc(csp_rt_t* st, uint16_t nbytes)
 // cycle, so such a local has to keep it, and cannot share the frame -- see
 // st->lframe. A constant that happens to equal a local's index costs that
 // local nothing but its own slot.
+//
+// So does a local READ BEFORE ITS FORMULA HAS RUN this cycle -- `#local A =
+// A + K', or one read above where it is computed: that reads last cycle's
+// value too, which in the frame is whatever the instance before left there.
+
+// Whether member m (CURRENT-relative) is stored to between the module's entry
+// `ent' and `ip'. Forward, as the stream can only be walked.
+NOINLINE static int stored_before(csp_rt_t* st, index_t ent, index_t ip, index_t m)
+{
+    index_t i;
+    for (i = ent; i < ip; i = instr_next(st, i)) {
+	csp_instr_t ci;
+	index_t mem;
+	csp_load_instr(st, i, &ci);
+	switch (csp_instr_get_op(&ci)) {
+	case OP_ST:  mem = csp_instr_get_m_mem(&ci); break;
+	case OP_STI: mem = csp_instr_get_mi_mem(&ci); break;
+	default: continue;
+	}
+	if ((OBJ(mem) == CURRENT) && (INDEX(mem) == m))
+	    return 1;
+    }
+    return 0;
+}
+
 NOINLINE static void local_watch_scan(csp_rt_t* st)
 {
     index_t reg_imm[MAX_REGS];
-    index_t i;
+    index_t i, ent = BAD_INDEX;
 
     memset(reg_imm, 0, sizeof(reg_imm));
     for (i = 0; i < st->ps.nn; i = instr_next(st, i)) {
@@ -5148,6 +5206,21 @@ NOINLINE static void local_watch_scan(csp_rt_t* st)
 	index_t m = BAD_INDEX;
 	csp_load_instr(st, i, &ci);
 	switch (csp_instr_get_op(&ci)) {
+	case OP_ENTER:
+	    ent = i;
+	    break;
+	case OP_LEAVE:
+	    ent = BAD_INDEX;
+	    break;
+	case OP_LD: {
+	    index_t mem = csp_instr_get_m_mem(&ci);
+	    if ((ent != BAD_INDEX) && (OBJ(mem) == CURRENT) &&
+		(INDEX(mem) < st->ps.nd) && decl(st, INDEX(mem), local) &&
+		(decl(st, INDEX(mem), type) == DECL_VARIABLE) &&
+		!stored_before(st, ent, i, INDEX(mem)))
+		m = INDEX(mem);
+	    break;
+	}
 	case OP_LI:
 	case OP_LIU:
 	    reg_imm[csp_instr_get_i_x(&ci)] = (index_t)csp_instr_get_i_imm(&ci);
@@ -5605,7 +5678,7 @@ NOINLINE void csp_estimate(csp_rt_t* st, csp_estimate_t* e)
 // Walk the instruction stream and, for every rule whose NUMBER is in dis_rule,
 // set the bit for that rule's OP_RULE ip in dis_ip. Also refreshes n_rule_no.
 //
-// Rule N is the Nth OP_RULE in instruction order, 1-based. Every rule emits
+// Rule N is the Nth OP_RULE that is a rule (csp_is_rule), 1-based. Every rule emits
 // exactly one -- an unguarded rule gets an always-true LI first -- so the
 // sequence has no holes. Note this is NOT the reactive ordinal from
 // number_rules, which also numbers module entries and range-base bodies.
@@ -5617,14 +5690,51 @@ NOINLINE void csp_estimate(csp_rt_t* st, csp_estimate_t* e)
 // Getting that list wrong put a disable bit on an OP_LEAVE, whose skip then
 // swallowed the matching pops and ran the object stack off its end. The
 // OP_RULE ip needs no inference: it is right here in the walk.
+//
+// A #local's formula, an instance's binding and the default an instance gets
+// for a #local ... in it leaves unbound compile to OP_RULE too, but they are
+// not rules: each says what a local IS this cycle. They take no number and
+// #disable cannot switch them off -- a local frozen at its last value would
+// only be confusing.
 NOINLINE index_t csp_n_rules(csp_rt_t* st)
 {
     index_t i, no = 0;
     for (i = 0; i < st->ps.nn; i = instr_next(st, i)) {
-	if (csp_iop(st, i) == OP_RULE)
+	if (csp_is_rule(st, i))
 	    no++;
     }
     return no;
+}
+
+// True for an OP_RULE that binds a local rather than acts (see above). Told
+// apart by its target: a local is stored to only from its own formula or
+// binding, since coerce_assign refuses every other assignment to one.
+// Decided by the FIRST store: `L = f` has one, and a rule that starts by
+// writing a variable can write no local after it.
+NOINLINE int csp_rule_binds(csp_rt_t* st, index_t ri)
+{
+    index_t i, m;
+
+    for (i = ri + 1; i < st->ps.nn; i++) {
+	opcode_t op = csp_iop(st, i);
+	if (op == OP_NEXT)
+	    break;
+	if (op == OP_STI)
+	    m = INDEX(instr(st, i, mi_mem));
+	else if ((op == OP_ST) || (op == OP_STIMP))
+	    m = INDEX(instr(st, i, m_mem));
+	else
+	    continue;
+	// A #param carries the local bit too, and a rule may write one.
+	return (decl(st, m, type) == DECL_VARIABLE) && decl(st, m, local);
+    }
+    return 0;
+}
+
+// An OP_RULE that is a rule: it has a number and #disable reaches it.
+int csp_is_rule(csp_rt_t* st, index_t i)
+{
+    return (csp_iop(st, i) == OP_RULE) && !csp_rule_binds(st, i);
 }
 
 NOINLINE static int build_dis_ip(csp_rt_t* st)
@@ -5641,7 +5751,7 @@ NOINLINE static int build_dis_ip(csp_rt_t* st)
 	any |= (st->dis_rule[i] != 0);
 
     for (i = 0; i < st->ps.nn; i = instr_next(st, i)) {
-	if (csp_iop(st, i) != OP_RULE)
+	if (!csp_is_rule(st, i))
 	    continue;
 	no++;
 	// Allocate lazily: a program with nothing disabled never pays for the
@@ -6440,6 +6550,7 @@ int csp_rt_start(csp_rt_t* st)
     st->nbuf = 0;
     st->nroute = 0;
     st->lhp = e.lframe;  // own local slots after the shared frame
+    st->lframe = e.lframe;
     st->lfp = 0xffff;    // Main's locals never use it
     st->hp = 0;      // the heap cursor is no longer derivable from buf[nbuf-1]
     st->ps.nq = 0;   // rebuilt from DECL_OBJECT below (parse-time table is not
@@ -6852,6 +6963,14 @@ void csp_output_timer(csp_rt_t* st)
 
 	csp_dio_slots(st, ix, &iptr, &optr);
 
+	// Written this cycle: `T = 1' starts it over from now, running or not,
+	// and `T = 0' stops it. A restart is a stop and then the start below.
+	if (value_get_t_req(iptr)) {
+	    value_set_t_req(iptr, 0);
+	    value_set_t_req(optr, 0);
+	    value_set_t_running(iptr, 0);
+	    value_set_t_running(optr, 0);
+	}
 	if (value_get_t_running(iptr)) {
 	    // running - calculate wait time (take minimum)
 	    uvalue_t t0 = csp_dio_slot(st, tx, DIN)->u;
@@ -6862,7 +6981,7 @@ void csp_output_timer(csp_rt_t* st)
 		wait_ms = w;
 	}
 	else if (value_get_t_val(iptr)) {
-	    // stopped, and a start was requested
+	    // stopped, and a start was requested -- or declared, `= 1'
 	    uvalue_t period = value_get_t_period(iptr);
 
 	    value_set_t_running(iptr, 1);  // running

@@ -1,0 +1,8 @@
+// A #local declared in a block is not readable after its #end (local_scope).
+#variable X = 0
+#variable Y = 0
+#when X < 5
+  #local L = X + 1
+  X = L
+#end
+Y = L ? 1

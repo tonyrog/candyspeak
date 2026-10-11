@@ -98,8 +98,23 @@ eval_test(File, Opts, Mode) ->
                 none -> "";
                 SF   -> "-F " ++ SF ++ " "
             end,
-    Cmd = io_lib:format("~s ~s~s~s-c ~p -s ~s -R ~s~s 2>&1",
-                        [?CSP, RFlag, VFlag, SFlag, Cycles, TmpState,
+    %% {time, Ms} ends the run when the clock reaches Ms instead of after a
+    %% number of cycles: a program that sleeps until its next timer runs as
+    %% many cycles as it has events, and the count says nothing about time.
+    %% {settle, true}: the virtual clock jumps only once a cycle changed
+    %% nothing, as a board sleeps only then -- a chain of rules runs at once,
+    %% not at the next timer. Off by default: a program that never settles
+    %% would never reach its timers.
+    Settle = case proplists:get_value(settle, Opts, false) of
+                 true -> " --settle";
+                 _ -> ""
+             end,
+    End = case proplists:get_value(time, Opts) of
+              undefined -> io_lib:format("-c ~p", [Cycles]);
+              Ms -> io_lib:format("-c 0 -T ~p", [Ms])
+          end ++ Settle,
+    Cmd = io_lib:format("~s ~s~s~s~s -s ~s -R ~s~s 2>&1",
+                        [?CSP, RFlag, VFlag, SFlag, End, TmpState,
                          LibStr, File]),
     Output = os:cmd(lists:flatten(Cmd)),
     %% What the program PRINTED, for {output_has, S} / {output_lacks, S}. Kept
@@ -150,10 +165,12 @@ get_object_var(ObjName, VarName, State, Default) ->
     end.
 
 %% Helper: get state at specific cycle
+%% csp dumps a cycle only when something in it changed, so the state AT a
+%% cycle is the last dump at or before it.
 state_at(Cycle, Data) ->
-    case lists:keyfind(Cycle, 2, Data) of
-        {state, Cycle, _} = S -> {ok, S};
-        false -> {error, not_found}
+    case [S || {state, C, _} = S <- Data, C =< Cycle] of
+        [] -> {error, not_found};
+        Ss -> {ok, lists:last(Ss)}
     end.
 
 %% Helper: get last state

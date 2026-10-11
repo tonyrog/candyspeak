@@ -160,8 +160,10 @@ static void apply(char* s)
 	}
 	s++;
 	x = lookup(name, len, &f);
-	if (x)
+	if (x) {
 	    x->mod->set(x, f, (int32_t)strtol(s, &s, 0));
+	    csp_lib_wake_all();      // it may be a #param or a #local
+	}
 	else
 	    (void)strtol(s, &s, 0);
     }
@@ -273,6 +275,8 @@ static int live(void)
 int main(int argc, char** argv)
 {
     long cycles = -1;
+    long max_ms = 0;                    // -T: stop when the clock reaches it
+    int settle = 0;                     // --settle: no jump while it changes
     long n = 0;
     int i;
     const csp_lib_inst_t* x;
@@ -291,9 +295,13 @@ int main(int argc, char** argv)
 	}
 	else if ((strcmp(argv[i], "-c") == 0) && (i + 1 < argc))
 	    cycles = strtol(argv[++i], NULL, 0);
+	else if ((strcmp(argv[i], "-T") == 0) && (i + 1 < argc))
+	    max_ms = strtol(argv[++i], NULL, 0);
+	else if (strcmp(argv[i], "--settle") == 0)
+	    settle = 1;
 	else {
-	    fprintf(stderr, "usage: %s [-F stimulus] [-c cycles] | -P [-F stimulus]\n",
-		    argv[0]);
+	    fprintf(stderr, "usage: %s [-F stimulus] [-c cycles] [-T ms] [--settle]"
+		    " | -P [-F stimulus]\n", argv[0]);
 	    return 1;
 	}
     }
@@ -311,7 +319,9 @@ int main(int argc, char** argv)
 	// Counted from 1, and -c N stops when the count reaches N: N-1 cycles,
 	// as csp -c N runs.
 	n++;
-	if ((cycles >= 0) && (n >= cycles))
+	if ((cycles > 0) && (n >= cycles))
+	    break;
+	if ((max_ms > 0) && (vclock >= (uint32_t)max_ms))
 	    break;
 	changed = csp_lib_step(vclock, &wait);
 
@@ -322,7 +332,12 @@ int main(int argc, char** argv)
 	    uint32_t inp = row_time - vclock;
 	    if (inp < adv) adv = inp;
 	}
-	if ((adv == 0xFFFFFFFFu) || (adv < 1)) adv = 1;
+	if ((adv == 0xFFFFFFFFu) || (adv < 1) || (settle && changed))
+	    adv = 1;
+	// Never past -T, as csp has it.
+	if ((max_ms > 0) && (vclock < (uint32_t)max_ms) &&
+	    (adv > (uint32_t)max_ms - vclock))
+	    adv = (uint32_t)max_ms - vclock;
 	vclock += adv;
 
 	if (!input_done) continue;

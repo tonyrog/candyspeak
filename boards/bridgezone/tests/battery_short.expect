@@ -1,7 +1,8 @@
 {modes, [seq]}.
 {stimulus, "boards/bridgezone/tests/battery_short.dat"}.
 %% 2.5 s: low, but not for CutTm yet. Still on.
-{cycles, 250}.
+{time, 2490}.
+{settle, true}.
 {checks, [
   {final_var, "VinPrio", 3},
   {final_var, "Dout3", 1}

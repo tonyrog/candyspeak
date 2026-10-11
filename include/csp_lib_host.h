@@ -13,8 +13,9 @@
 // the instance "".
 //
 // get reads the committed copy, set writes the working one -- where a
-// stimulus row lands in port/csp_linux.c. A #local or #param has one copy,
-// and both go there.
+// stimulus row lands in port/csp_linux.c. A #param has one copy, and both go
+// there. A #local has no name here: it is the module's own, and the
+// translation is free to keep it in a C variable.
 typedef struct csp_lib_inst_s csp_lib_inst_t;
 
 typedef struct {
@@ -29,7 +30,6 @@ struct csp_lib_inst_s {
     const csp_lib_module_t* mod;
     void* in;     // the committed copy (csp_in's part)
     void* out;    // the working copy
-    void* loc;    // csp_loc's part, or 0
     void* par;    // csp_par's part, or 0
 };
 

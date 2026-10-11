@@ -44,7 +44,7 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
 // --- the status record ------------------------------------------------------
 // update_digital(): the pins through polarity and filter, and an edge on a
 // pin in one of the three masks is an interrupt flag. An analog report is
-// lib/analog's own decision, and inhibit_mark moves on every one.
+// lib/analog's own decision, and `reports` counts every one.
 #variable DValue:8 unsigned = 0
 #variable DIntf:8 unsigned = 0
 #variable AIntf:8 unsigned = 0
@@ -52,7 +52,7 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
 
 #local DNew:8 unsigned = ((Din1 | (Din2 << 1) | (Din3 << 2) | (Din4 << 3)) ^ Polarity) & ~Filter
 #local DEv:8 unsigned = ((AnyChange & (DValue ^ DNew)) | (LowHigh & ~DValue & DNew) | (HighLow & DValue & ~DNew)) & -DigEna
-#local AEv:8 unsigned = ((changed(a1.inhibit_mark) & 1) | (changed(a2.inhibit_mark) & 2) | (changed(a3.inhibit_mark) & 4) | (changed(a4.inhibit_mark) & 8)) & -AnaEna
+#local AEv:8 unsigned = ((changed(a1.reports) & 1) | (changed(a2.reports) & 2) | (changed(a3.reports) & 4) | (changed(a4.reports) & 8)) & -AnaEna
 
 DValue = DNew
 // The flags gather until the master has read them. A read clears what it

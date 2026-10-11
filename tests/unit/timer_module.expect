@@ -1,3 +1,7 @@
+%% Each instance has its own timer, started by its declaration; b's runs at
+%% its own period. (b used to say `T=200', a write of 0 to the timer's one-bit
+%% value that did nothing; with `T = 0' a stop, it would never run out.)
+{virtual_time, true}.
 {cycles, 5}.
 {checks, [
   {final_object_var, "Delay.a", "a.Done", 1},
