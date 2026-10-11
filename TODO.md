@@ -1,5 +1,11 @@
 # TODO - Klart-markerat flyttas till DONE.md, inte hit.
 
+## init of object arrays
+
+  #Input in[i=0..3] Dig <- Din[i]
+  #Input in[i=4..7] An <- a[i-4].output << 6 AnMark <- a[i-4].inhibit_mark
+
+
 ## binary form for terms set in Q mode -bin
 
 Binary format in -Q mode to be used by port length mode,

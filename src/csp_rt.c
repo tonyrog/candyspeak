@@ -617,7 +617,10 @@ static inline value_t* csp_slot(csp_rt_t* st, csp_view_t* v, dio_t dir)
 {
     // An owner's heap offset is in the view. This used to load st->buf[v->buf]
     // for the two fields it wanted out of sixteen bytes; now there is no buffer
-    // to load, and the access is one add.
+    // to load, and the access is one add. A #constant/#param has ONE copy, in
+    // DLOCAL -- see VIEW_F_LOCAL.
+    if (csp_view_get_flags(v) & VIEW_F_LOCAL)
+	return (value_t*)(st->lheap + csp_view_get_pos(v));
     return (value_t*)(st->heap[dir] + csp_view_get_pos(v));
 }
 
@@ -1877,8 +1880,8 @@ NOINLINE static void heap_dset_copy(csp_rt_t* st, dio_t to, dio_t from)
 		uint16_t n;
 		uint16_t hp = leaf_region(st, v, &n);
 		// A #local is dirty for changed(), but it has no second copy to
-		// commit to: its pos is in DLOCAL.
-		if ((csp_view_get_kind(v) == VIEW_OWN) &&
+		// commit to: its pos is in DLOCAL. Nor has a #constant.
+		if ((csp_view_get_kind(v) != VIEW_HEAP) &&
 		    (csp_view_get_flags(v) & VIEW_F_LOCAL)) {
 		    bits >>= 1;
 		    i++;
@@ -5384,20 +5387,28 @@ NOINLINE int setup_variable(csp_rt_t* st, index_t ix)
 // No csp_buf_t. Nothing can view into one of these -- `bind` refuses anything
 // that is not a #buffer -- so the only field such a leaf ever wanted from a
 // buffer was the heap offset, and that is in the view now.
+//
+// A #constant or #param takes ONE copy, from DLOCAL. No rule writes one
+// (ERR_ASSIGN_TO_PARAM), and everything that does -- setup, an override, `>` --
+// wrote the same value to both slots, so the DOUT copy only ever mirrored DIN.
 NOINLINE int setup_slot(csp_rt_t* st, index_t ix)
 {
     csp_decl_t d;
     uint16_t hp;
     csp_view_t* vw;
+    int one;
 
     csp_load_decl(st, INDEX(ix), &d);
-    if ((hp = csp_heap_alloc(st, sizeof(value_t))) == 0xffff)
+    one = (csp_decl_get_type(&d) == DECL_CONSTANT);
+    hp = one ? csp_lheap_alloc(st, sizeof(value_t)) :
+	csp_heap_alloc(st, sizeof(value_t));
+    if (hp == 0xffff)
 	return -1;
     vw = &st->view[st_index(st, ix)];
     csp_view_set_kind(vw, VIEW_SLOT);
     csp_view_set_vt(vw, csp_decl_get_vt(&d));
     csp_view_set_pos(vw, hp);
-    csp_view_set_flags(vw, 0);
+    csp_view_set_flags(vw, one ? VIEW_F_LOCAL : 0);
     return 0;
 }
 
@@ -5503,9 +5514,9 @@ NOINLINE static void est_leaf(csp_rt_t* st, int j, csp_estimate_t* e)
 	e->nt++;                              // timer list entry (setup_timer)
 	nbytes = sizeof(value_t);
 	break;
-    case DECL_CONSTANT:
-	nbytes = sizeof(value_t);
-	break;
+    case DECL_CONSTANT:                       // one copy, in DLOCAL
+	e->lheap += (uint16_t)sizeof(value_t);
+	return;
     case DECL_DIGITAL:
     case DECL_ANALOG:
 	nbytes = sizeof(value_t);

@@ -30,14 +30,17 @@ and the translation keeps it -- but only for what needs it:
 | | Where it lives | Copies |
 |---|---|---|
 | `#variable`, pins, timers | `M_t`, the struct of the module | 2: `csp_in`, `csp_out` |
-| `#param` | `M_p`, the same tree shape | 1: `csp_par` |
-| `#local` read only by its own module | a C variable in `M_run` | 0 -- a register |
-| `#local in`, `out`, read as `x.Name`, or by `changed()` | `M_t` | 2 |
+| `#param` | `M_param_t`, the same tree shape | 1: `csp_par` |
+| `#local` | `M_local_t`, the same tree shape | 1: `csp_loc` |
+| `#local` that `changed()` is asked of | `M_t` | 2 |
 
-A `#local` holds for one cycle: it is a formula, evaluated where it stands. So a
-C local is all it is, and the compiler keeps it in a register when it can. A
-`#param` is not written by the rules, it is set from outside -- so it takes no
-part in the transaction, and a second copy would only hold the same value twice.
+A `#local` is readable the moment it is written and takes no part in the
+commit, so one copy. It is a field, not a C variable in `M_run` (which is what
+it was until 2026-10-11): a value that lives only while the run function does
+cannot be read by a rule run on its own, and that is what reactive execution
+needs. A `#param` is not written by the rules, it is set from outside -- so it
+takes no part in the transaction either, and is a side of its own: it is kept,
+a local is recomputed, and a param side could go to flash.
 
 What that came to on BridgeZone's `main.csp` (8 inputs, 10 drives, 10 outputs,
 4 analog filters), ARM7 Thumb, `-Os`:
@@ -48,8 +51,26 @@ What that came to on BridgeZone's `main.csp` (8 inputs, 10 drives, 10 outputs,
 | C, every name a field in both copies | 9.5 KB | 13.0 KB |
 | C, `#local` as C locals | 8.5 KB | 5.4 KB |
 | C, and `#param` once | 8.8 KB | 4.2 KB |
+| C, `#local` in `M_local_t` (2026-10-11) | 10.0 KB | 7.3 KB |
 
 CoCo (`boards/coco`) on an ATmega328P: 1379 B RAM to 589 B.
+
+### Names for the host harness
+
+The harness (`port/csp_lib_host.c`) reads and writes scalars by runtime name,
+`"o3.Req"`. Each module lists its fields once and has ONE getter and ONE
+setter that switch on the field number; `csp_lib_insts[]` is every instance
+-- its path and its part of `csp_in`, `csp_out`, `csp_loc` and `csp_par`. A
+name splits at its last dot into instance and field. See `csp_lib_host.h`.
+Until 2026-10-11 it was two functions per scalar per instance: BridgeZone's
+`main.csp` had 1764 of them, 143 KB of host text; now 10 and 22 KB. Only the
+host build has the table (`CSP_LIB_HOST`).
+
+### Options
+
+`candyspeak_c:main(["--graph", In, Out])`, `file(In, Out, Opts)`, and the same
+for `csp_to_c`; `make clib_host CLIB_OPTS=--graph`. `--graph` is refused until
+it is there.
 
 ## Ideas
 
@@ -114,6 +135,16 @@ On the way: an instance of an earlier module placed after one of a later
 module had leaves overlapping it (offs was a running sum, but a leaf is offs
 plus the member's absolute declaration index). Each object now gets the next
 free range, which also packs the leaves: 19.1 KB.
+
+`#constant`/`#param` followed (2026-10-11): a `VIEW_SLOT` with `VIEW_F_LOCAL`
+has one `value_t` in DLOCAL instead of a mirrored pair in DIN/DOUT. No rule
+writes one, and setup, an override and `>` always wrote both slots alike.
+`csp_slot` tests the flag. 17.7 KB.
+
+`utils/csp_to_c.erl` mirrors it: a module's `#local`s are in `Name_local_t`,
+one copy, nested per instance like the fields (`loc->s1.Gain`), and
+`Name_run(in, out, loc)`. `Name_t` has no locals. A change test on a local
+(`changed(L)`, `<- L`) is refused: there is no second copy to compare against.
 
 **The bigger lever is the one the C translation found:** a `#local` lives only
 while its own instance is being evaluated, so all instances of a module can

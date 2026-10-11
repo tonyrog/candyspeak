@@ -24,24 +24,49 @@
 %%% @end
 -module(candyspeak_c).
 
--export([file/1, file/2, main/1]).
+-export([file/1, file/2, file/3, main/1]).
 
 -define(IND, "    ").
 
-main([In]) -> main([In, filename:rootname(In) ++ ".c"]);
-main([In, Out]) ->
-    case file(In, Out) of
+%% Flags first, then the files: `--graph In [Out]'.
+main(Args) ->
+    {Flags, Files} = lists:partition(fun("--" ++ _) -> true; (_) -> false end, Args),
+    Opts = [opt(F) || F <- Flags],
+    {In, Out} = case Files of
+                    [I] -> {I, filename:rootname(I) ++ ".c"};
+                    [I, O] -> {I, O};
+                    _ -> usage()
+                end,
+    case file(In, Out, Opts) of
         ok -> halt(0);
         {error, E} -> io:format(standard_error, "~s: ~p\n", [In, E]), halt(1)
     end.
+
+%% graph: every (rule, instance) a case of one switch, for a driver that runs
+%% them in order or as a dependency graph wakes them.
+opt("--graph") -> graph;
+opt(F) -> io:format(standard_error, "unknown option ~s\n", [F]), usage().
+
+usage() ->
+    io:format(standard_error, "usage: ~s [--graph] in.csp [out.c]\n", [?MODULE]),
+    halt(2).
+
+%% What each option asks of the translation. --graph is the next step and is
+%% refused until it is there, rather than ignored.
+options(Opts) ->
+    [throw({unsupported, "--graph (not yet)", 0}) || graph <- Opts],
+    ok.
 
 file(In) ->
     file(In, filename:rootname(In) ++ ".c").
 
 file(In, Out) ->
+    file(In, Out, []).
+
+file(In, Out, Opts) ->
     case candyspeak:build(In) of
         {ok, Main} ->
-            try gen(Main, In) of
+            try options(Opts), gen(Main, In) of
                 Text -> file:write_file(Out, Text)
             catch
                 throw:{unsupported, What, Ln} ->
@@ -77,11 +102,11 @@ gen({{module, _, {'WORD', _, "Main"}}, Bound, Decls}, In) ->
                                         (_, _) -> false end, MainSym)),
                 Consts),
     Mains = [{M, maps:get(M, Mods)} || M <- Order] ++ [{"Main", Decls}],
-    CL = clocals(Mains, States),
-    put(csp_clocals, CL),
+    put(csp_watched, watched(Mains)),
     put(csp_fields, sets:from_list([N || {_, Ds} <- Mains, D <- flat(Ds),
                                          N <- [name_of(D)], N =/= undefined])),
-    put(csp_haspar, haspar(Mains)),
+    put(csp_haspar, has_tree(Mains, fun is_param/1)),
+    put(csp_hasloc, has_tree(Mains, fun is_lside/1)),
     {_, RuleNo} = number_rules(Decls, {1, #{}}),
     put(csp_ruleno, RuleNo),
     put(csp_hascan, has_tree(Mains, fun({buffer, _, _, _, _, [{can, _}]}) -> true;
@@ -90,46 +115,44 @@ gen({{module, _, {'WORD', _, "Main"}}, Bound, Decls}, In) ->
                                        (_) -> false end)),
     [header(In, States),
      [defines(Ds) || {_, Ds} <- [Main | [maps:get(M, Mods) || M <- Order]]],
-     [[struct(M, Ds), pstruct(M, Ds)] || {M, Ds} <- Mains],
+     [[struct(M, Ds), side(M, local, Ds), side(M, param, Ds)] || {M, Ds} <- Mains],
      "static Main_t csp_in, csp_out;\n",
-     case has_par("Main") of
-         true -> "static Main_p csp_par;\n\n";
-         false -> "\n"
+     case has_loc("Main") of
+         true -> "static Main_local_t csp_loc;\n";
+         false -> []
      end,
+     case has_par("Main") of
+         true -> "static Main_param_t csp_par;\n";
+         false -> []
+     end,
+     "\n",
      [module(M, maps:get(M, Mods), Mods, States, Globals) || M <- Order],
      module("Main", Decls, Mods, States, Consts),
      driver(Mods, Decls)].
 
 %% ------------------------------------------------------------------
-%% Which #locals are plain C variables
+%% Which #locals have one copy
 %% ------------------------------------------------------------------
 %%
-%% A #local holds for one cycle: it is a formula, evaluated where it stands and
-%% read after it. So a C local in the run function is all it needs -- no field,
-%% no second copy, and the compiler keeps it in a register when it can. It
-%% stays a FIELD when something outside the run function reads it:
-%%
-%%   - it is `in' (the instance line writes it) or `out' (others read it),
-%%   - it is named as a member anywhere, `x.Name' -- by name, conservatively,
-%%   - changed() is asked of it, which compares the two copies,
-%%   - it is Main's and a module reads it as a global.
-%%
-%% Module name -> the set of its locals that are C variables.
-clocals(Mains, States) ->
+%% A #local is on its own side, Name_local_t, with ONE copy: written, it is
+%% readable at once, it takes no part in the commit, and any rule can be run
+%% at any time and find it -- no C variable that lives only while the run
+%% function does. The exception is a local changed() is asked of: that
+%% compares against last cycle's value, so it keeps the committed and working
+%% pair in Name_t, as the runtime gives a watched local a slot of its own.
+%% By name, across the program -- conservatively.
+watched(Mains) ->
     All = [D || {_, Ds} <- Mains, D <- flat(Ds)],
-    Members = sets:from_list([N || {fld, _, _, {'WORD', _, N}} <- terms(All)]),
-    ModRefs = sets:from_list([N || {M, Ds} <- Mains, M =/= "Main",
-                                   {field, _, {'WORD', _, N}} <- terms(Ds)]),
-    maps:from_list(
-      [{M, sets:from_list(
-             [N || {local, _, {'WORD', _, N}, _, Opts, E} <- flat(Ds),
-                   E =/= undefined,
-                   proplists:get_value(dir, Opts) =:= undefined,
-                   not lists:member(N, States),
-                   not sets:is_element(N, Members),
-                   not sets:is_element(N, changed_of(Ds)),
-                   (M =/= "Main") orelse not sets:is_element(N, ModRefs)])}
-       || {M, Ds} <- Mains]).
+    sets:from_list([N || {call, _, {'WORD', _, "changed"}, [Arg]} <- terms(All),
+                         N <- case Arg of
+                                  {field, _, {'WORD', _, X}} -> [X];
+                                  {fld, _, _, {'WORD', _, X}} -> [X];
+                                  _ -> []
+                              end]).
+
+is_lside({local, _, {'WORD', _, N}, _, _, _}) ->
+    not sets:is_element(N, get(csp_watched));
+is_lside(_) -> false.
 
 %% Declarations, with those inside #in and #when blocks.
 flat(Ds) ->
@@ -141,36 +164,12 @@ terms(T) when is_tuple(T) -> [T | terms(tuple_to_list(T))];
 terms([H | R]) -> terms(H) ++ terms(R);
 terms(_) -> [].
 
-changed_of(Ds) ->
-    sets:from_list([N || {call, _, {'WORD', _, "changed"},
-                          [{field, _, {'WORD', _, N}}]} <- terms(Ds)]).
-
-is_clocal(M, N) ->
-    case get(csp_clocals) of
-        #{M := Set} -> sets:is_element(N, Set);
-        _ -> false
-    end.
-
 %% A #constant or #define is a C macro, named as in the program -- unless a
 %% field somewhere has the same name, which a module may (a member shadows a
 %% global). The macro would then rewrite the field, so it is renamed instead.
 macro(N) ->
     case sets:is_element(N, get(csp_fields)) of
         true -> "c_" ++ N;
-        false -> N
-    end.
-
-%% A C local takes the name the program gave it, unless C or the translation
-%% already uses that word.
-cname(N) ->
-    case lists:member(N, ["in", "out", "now", "s", "w", "auto", "break", "case",
-                          "char", "const", "continue", "default", "do", "double",
-                          "else", "enum", "extern", "float", "for", "goto", "if",
-                          "int", "long", "register", "return", "short", "signed",
-                          "sizeof", "static", "struct", "switch", "typedef",
-                          "union", "unsigned", "void", "volatile", "while",
-                          "free", "abs", "min", "max"]) of
-        true -> N ++ "_";
         false -> N
     end.
 
@@ -278,9 +277,7 @@ module(Name, Ds, Mods, States, Globals) ->
      io_fn(Name, "input", Ds, Env),
      io_fn(Name, "output", Ds, Env),
      "#endif\n\n",
-     "static void ", Name, "_run(", T, "* in, ", T, "* out", parg(Name), ")\n{\n",
-     [[?IND, ctype(Res, Opts, Ln), " ", cname(N), " = 0;\n"]
-      || {local, Ln, {'WORD', _, N}, Res, Opts, _} <- flat(Ds), is_clocal(Name, N)],
+     "static void ", Name, "_run(", T, "* in, ", T, "* out", sargs(Name), ")\n{\n",
      timer_starts(Ds, Env),
      body(Ds, ?IND, Env, top),
      ?IND, "// INIT lasts one cycle unless a rule said otherwise; FAILSAFE\n",
@@ -294,8 +291,7 @@ module(Name, Ds, Mods, States, Globals) ->
 struct(Name, Ds) ->
     ["typedef struct {\n",
      ?IND, "int32_t State;\n",
-     [field(D) || D <- Ds, not is_clocal(Name, name_of(D)),
-                  element(1, D) =/= param],
+     [field(D) || D <- Ds, not is_lside(D), not is_param(D)],
      "} ", Name, "_t;\n\n"].
 
 %% ------------------------------------------------------------------
@@ -431,23 +427,15 @@ b01(false) -> "0".
 %% prompt or a stored setting -- so it has no transaction to take part in, and
 %% the two copies a variable needs would only hold the same value twice. Each
 %% module with params (its own, or in an instance it holds) gets a second
-%% struct, M_p, with the params of every instance in the same tree shape, and
-%% the program has one of them: csp_par. A run function gets `p', its own
-%% node of that tree.
-
-%% Module -> whether it, or anything it instantiates, has a #param.
-haspar(Mains) ->
-    Own = maps:from_list([{M, lists:any(fun(D) -> element(1, D) =:= param end, Ds)}
-                          || {M, Ds} <- Mains]),
-    %% Mains is in dependency order, so an instance's module is decided first.
-    lists:foldl(
-      fun({M, Ds}, Acc) ->
-              Sub = lists:any(fun({object, _, {'WORD', _, X}, _, _}) -> maps:get(X, Acc, false);
-                                 (_) -> false end, Ds),
-              Acc#{M => maps:get(M, Own) orelse Sub}
-      end, #{}, Mains).
+%% struct, M_param_t, with the params of every instance in the same tree
+%% shape, and the program has one of them: csp_par. A run function gets `par',
+%% its own node of that tree. The #locals are a side of their own the same way:
+%% M_local_t, csp_loc, `loc'. They differ in what writes them -- a param is set
+%% from outside and kept, a local is a rule's result -- so they are two sides,
+%% and a param side could go to flash where nothing sets it at run time.
 
 has_par(M) -> maps:get(M, get(csp_haspar), false).
+has_loc(M) -> maps:get(M, get(csp_hasloc), false).
 
 %% Module -> whether it, or an instance it holds, has a declaration Pred is
 %% true of. Mains is in dependency order.
@@ -463,25 +451,34 @@ has_tree(Mains, Pred) ->
 has_can(M) -> maps:get(M, get(csp_hascan), false).
 has_buf(M) -> maps:get(M, get(csp_hasbuf), false).
 
-pstruct(Name, Ds) ->
-    case has_par(Name) of
+side(Name, Side, Ds) ->
+    {Has, In, T} = case Side of
+                       local -> {fun has_loc/1, fun is_lside/1, "_local_t"};
+                       param -> {fun has_par/1, fun is_param/1, "_param_t"}
+                   end,
+    case Has(Name) of
         false -> [];
         true ->
             ["typedef struct {\n",
-             [field(D) || D <- Ds, element(1, D) =:= param],
-             [[?IND, M, "_p ", N, ";\n"]
-              || {object, _, {'WORD', _, M}, {'WORD', _, N}, _} <- Ds, has_par(M)],
-             "} ", Name, "_p;\n\n"]
+             [field(D) || D <- Ds, In(D)],
+             [[?IND, M, T, " ", N, ";\n"]
+              || {object, _, {'WORD', _, M}, {'WORD', _, N}, _} <- Ds, Has(M)],
+             "} ", Name, T, ";\n\n"]
     end.
 
-%% `, M_p* p' after a module's own arguments, when it has params.
-parg(M) ->
-    case has_par(M) of
-        true -> [", ", M, "_p* p"];
-        false -> []
-    end.
+%% `, M_local_t* loc, M_param_t* par' after a module's own arguments, each
+%% when it has that side.
+sargs(M) ->
+    [case has_loc(M) of true -> [", ", M, "_local_t* loc"]; false -> [] end,
+     case has_par(M) of true -> [", ", M, "_param_t* par"]; false -> [] end].
 
-par(Env) -> maps:get(par, Env, "p->").
+%% The same for an instance M named N, from where `Env' stands.
+sptrs(M, N, Env) ->
+    [case has_loc(M) of true -> [", &", loc(Env), N]; false -> [] end,
+     case has_par(M) of true -> [", &", par(Env), N]; false -> [] end].
+
+par(Env) -> maps:get(par, Env, "par->").
+loc(Env) -> maps:get(loc, Env, "loc->").
 
 is_param({param, _, _, _, _, _}) -> true;
 is_param(_) -> false.
@@ -560,19 +557,21 @@ width({'INT', _, W}) -> [":", W].
 %% The declared values. A plain name in an initialiser is read from the struct
 %% being built, which is what makes `#variable Pt = SD` follow a parameter.
 init(Name, Ds, Env) ->
-    ["static void ", Name, "_init(", Name, "_t* s", parg(Name), ")\n{\n",
+    ["static void ", Name, "_init(", Name, "_t* s", sargs(Name), ")\n{\n",
      ?IND, "memset(s, 0, sizeof(*s));\n",
+     case has_loc(Name) of true -> [?IND, "memset(loc, 0, sizeof(*loc));\n"]; false -> [] end,
      [init1(D, Env) || D <- Ds],
      "}\n\n"].
 
 init1({variable, _, {'WORD', _, N}, _, _, _, E}, Env) when E =/= undefined ->
     [?IND, "s->", N, " = ", iexpr(E, Env), ";\n"];
 init1({param, _, {'WORD', _, N}, _, _, E}, Env) when E =/= undefined ->
-    [?IND, "p->", N, " = ", iexpr(E, Env), ";\n"];
-init1({local, _, {'WORD', _, N}, _, Opts, E}, Env) when E =/= undefined ->
+    [?IND, "par->", N, " = ", iexpr(E, Env), ";\n"];
+init1({local, _, {'WORD', _, N}, _, Opts, E} = D, Env) when E =/= undefined ->
     case is_formula(Opts) of
         true -> [];
-        false -> [?IND, "s->", N, " = ", iexpr(E, Env), ";\n"]
+        false -> [?IND, case is_lside(D) of true -> "loc->"; false -> "s->" end,
+                  N, " = ", iexpr(E, Env), ";\n"]
     end;
 init1({timer, _, {'WORD', _, N}, P, E}, Env) ->
     [?IND, "s->", N, ".period = ", iexpr(P, Env), ";\n",
@@ -581,10 +580,7 @@ init1({timer, _, {'WORD', _, N}, P, E}, Env) ->
          _ -> [?IND, "s->", N, ".val = ", timer_val(iexpr(E, Env)), ";\n"]
      end];
 init1({object, _, {'WORD', _, M}, {'WORD', _, N}, _}, _Env) ->
-    [?IND, M, "_init(&s->", N, case has_par(M) of
-                                     true -> [", &p->", N];
-                                     false -> []
-                                 end, ");\n"];
+    [?IND, M, "_init(&s->", N, sptrs(M, N, #{}), ");\n"];
 init1(_, _) -> [].
 
 iexpr(E, Env) -> cexpr(E, Env#{rd => "s->", lrd => "s->"}).
@@ -721,16 +717,15 @@ stmt({{in, _, States}, Ds}, Ind, Env, _Where) ->
 stmt({{'when', _, Cond}, Ds}, Ind, Env, Where) ->
     [Ind, "if (", unwrap(ccond(Cond, Env)), ") {\n",
      body(Ds, Ind ++ ?IND, Env, Where), Ind, "}\n"];
-stmt({local, _, {'WORD', _, N}, Res, Opts, E} = L, Ind, Env, _Where)
+stmt({local, _, {'WORD', _, N}, _Res, Opts, E} = L, Ind, Env, _Where)
   when E =/= undefined ->
     %% `#local Y = f` and `#local Y out = f` are formulas, evaluated where
     %% they stand; only `#local X in = d` gives a default. A formula is a rule
-    %% to #disable too -- and a disabled one held in a C variable reads 0, not
-    %% the value it had: it has no other cycle to remember one from.
+    %% to #disable too, and a disabled one keeps the value it last had.
     case is_formula(Opts) of
         true ->
-            Body = case is_clocal(maps:get(module, Env), N) of
-                       true -> [cname(N), " = ", wrap(Res, Opts, cexpr(E, Env)), ";\n"];
+            Body = case is_lside(L) of
+                       true -> [loc(Env), N, " = ", cexpr(E, Env), ";\n"];
                        false -> ["out->", N, " = ", cexpr(E, Env), ";\n"]
                    end,
             [Ind, "if (", rule_on(L), ") ", Body];
@@ -808,6 +803,11 @@ lhs({'WORD', _, N}, Ln, Env) ->
                 true -> [par(Env), N];
                 false -> [W, N]
             end;
+        {local, D} ->
+            case is_lside(D) of
+                true -> [loc(Env), N];
+                false -> [W, N]
+            end;
         _ -> [W, N]
     end;
 lhs({part, _, {'WORD', _, T}, {'WORD', _, P}}, Ln, Env) ->
@@ -825,6 +825,11 @@ lhs({fld, _, {'WORD', _, O}, {'WORD', _, N}}, Ln, Env) ->
                         true -> [par(Env), O, ".", N];
                         false -> [wr(Env), O, ".", N]
                     end;
+                {local, D} ->
+                    case is_lside(D) of
+                        true -> [loc(Env), O, ".", N];
+                        false -> [wr(Env), O, ".", N]
+                    end;
                 _ -> [wr(Env), O, ".", N]
             end;
         _ -> throw({unsupported, O ++ "." ++ N, Ln})
@@ -835,18 +840,6 @@ store({timer_val, Path}, Rhs) -> [Path, " = ", timer_val(Rhs), ";\n"];
 store({bits, B, Pos, N, Big}, Rhs) ->
     ["csp_lib_bits_set(", B, ", ", Pos, ", ", N, ", ", Big, ", ", Rhs, ");\n"];
 store(Path, Rhs) -> [Path, " = ", Rhs, ";\n"].
-
-%% A C local of a declared width keeps to it, as the field would have.
-wrap(Res, Opts, E) ->
-    case narrow(Res) of
-        false -> E;
-        true ->
-            {'INT', _, W} = Res,
-            case ctype(Res, Opts, 0) of
-                "uint32_t" -> ["csp_lib_wrapu(", E, ", ", W, ")"];
-                _ -> ["csp_lib_wraps(", E, ", ", W, ")"]
-            end
-    end.
 
 timer_val(E) ->
     case string:to_integer(lists:flatten(E)) of
@@ -896,28 +889,33 @@ object(M, N, Args, Ln, Ind, Env) ->
              undefined ->
                  throw({unsupported, F ++ " is a #local in with no default", Ln});
              _ ->
-                 [Ind, "out->", N, ".", F, " = ",
+                 [Ind, member_path(N, F, MSym, Env), " = ",
                   cexpr(E, Env#{sym => MSym, rd => ["in->", N, "."],
                                 lrd => ["out->", N, "."],
-                                par => [par(Env), N, "."]}), ";\n"]
+                                par => [par(Env), N, "."],
+                                loc => [loc(Env), N, "."]}), ";\n"]
          end
          || {F, {local, {local, _, _, _, Opts, E}}} <- maps:to_list(MSym),
             proplists:get_value(dir, Opts) =:= in,
             not lists:member(F, Bound)],
-    [Binds, Defaults, Ind, M, "_run(&in->", N, ", &out->", N,
-     case has_par(M) of
-         true -> [", &", par(Env), N];
-         false -> []
-     end, ");\n"].
+    [Binds, Defaults, Ind, M, "_run(&in->", N, ", &out->", N, sptrs(M, N, Env), ");\n"].
+
+%% Where member F of instance N is written: its own side.
+member_path(N, F, MSym, Env) ->
+    case maps:get(F, MSym, undefined) of
+        {var, D} -> case is_param(D) of
+                        true -> [par(Env), N, ".", F];
+                        false -> ["out->", N, ".", F]
+                    end;
+        {local, D} -> case is_lside(D) of
+                          true -> [loc(Env), N, ".", F];
+                          false -> ["out->", N, ".", F]
+                      end;
+        _ -> ["out->", N, ".", F]
+    end.
 
 member(N, F, MSym, Env, E) ->
-    Path = case maps:get(F, MSym, undefined) of
-               {var, D} -> case is_param(D) of
-                               true -> [par(Env), N, ".", F];
-                               false -> ["out->", N, ".", F]
-                           end;
-               _ -> ["out->", N, ".", F]
-           end,
+    Path = member_path(N, F, MSym, Env),
     case maps:get(F, MSym, undefined) of
         {timer, _} -> store({timer_val, [Path, ".val"]}, cexpr(E, Env));
         _ -> store(Path, cexpr(E, Env))
@@ -965,7 +963,7 @@ sym(N, Env) -> maps:get(N, maps:get(sym, Env, #{}), undefined).
 %% read from Main's copies. A #local there is seen at once, as anywhere.
 global_env(N, Inner, Env) ->
     Env#{sym => #{N => Inner}, rd => "csp_in.", lrd => "csp_out.",
-         wr => "csp_out.", par => "csp_par.", global => true}.
+         wr => "csp_out.", par => "csp_par.", loc => "csp_loc.", global => true}.
 
 rd(Env) -> maps:get(rd, Env, "in->").
 lrd(Env) -> maps:get(lrd, Env, "out->").
@@ -1031,11 +1029,10 @@ ref({'WORD', _, N} = W, Ln, Env) ->
             end;
         {const, _} -> macro(N);
         {timer, _} -> [tcast(Env), rd(Env), N, ".val"];
-        {local, D} ->
-            case is_clocal(maps:get(module, Env, "Main"), N) andalso
-                not maps:is_key(global, Env) of
-                true -> cname(N);
-                false -> [cast(D, Env), lrd(Env), N]     % a #local is seen at once
+        {local, D} ->                               % a #local is seen at once
+            case is_lside(D) of
+                true -> [cast(D, Env), loc(Env), N];
+                false -> [cast(D, Env), lrd(Env), N]
             end;
         {object, _, _} -> throw({unsupported, "an object as a value", Ln});
         {_, D} ->
@@ -1061,7 +1058,11 @@ ref({fld, _, {'WORD', _, O}, {'WORD', _, N}}, Ln, Env) ->
     case sym(O, Env) of
         {object, _, MSym} ->
             case maps:get(N, MSym, undefined) of
-                {local, D} -> [cast(D, Env), lrd(Env), O, ".", N];
+                {local, D} ->
+                    case is_lside(D) of
+                        true -> [cast(D, Env), loc(Env), O, ".", N];
+                        false -> [cast(D, Env), lrd(Env), O, ".", N]
+                    end;
                 {timer, _} -> [tcast(Env), rd(Env), O, ".", N, ".val"];
                 {_, D} ->
                     case is_param(D) of
@@ -1197,7 +1198,7 @@ driver(Mods, Decls) ->
      "const uint16_t csp_lib_nrules = ", nrules(), ";\n\n",
      "void csp_lib_setup(void)\n{\n",
      disables(Decls),
-     ?IND, "Main_init(&csp_in", case has_par("Main") of true -> ", &csp_par"; false -> "" end, ");\n",
+     ?IND, "Main_init(&csp_in", main_sides(), ");\n",
      ?IND, "csp_out = csp_in;\n",
      "#if !defined(CSP_LIB_HOST)\n",
      ?IND, "Main_config(&csp_in);\n",
@@ -1233,7 +1234,7 @@ driver(Mods, Decls) ->
      "#else\n",
      ?IND, "csp_lib_host_input();\n",
      "#endif\n",
-     ?IND, "Main_run(&csp_in, &csp_out", case has_par("Main") of true -> ", &csp_par"; false -> "" end, ");\n",
+     ?IND, "Main_run(&csp_in, &csp_out", main_sides(), ");\n",
      ?IND, "changed = memcmp(&csp_in, &csp_out, sizeof(csp_in)) != 0;\n",
      ?IND, "csp_in = csp_out;\n",
      case has_buf("Main") of
@@ -1259,53 +1260,77 @@ driver(Mods, Decls) ->
      "}\n",
      "#endif\n"].
 
+main_sides() ->
+    [case has_loc("Main") of true -> ", &csp_loc"; false -> "" end,
+     case has_par("Main") of true -> ", &csp_par"; false -> "" end].
+
 %% `> X = v` lines in the program file, applied once.
 patches(Decls, Mods, S, Ind) ->
     Env = #{sym => symbols(Decls, Mods), mods => Mods, states => [],
-            wr => S, rd => S, lrd => S, par => "csp_par."},
+            wr => S, rd => S, lrd => S, par => "csp_par.", loc => "csp_loc."},
     [[Ind, store(lhs(L, Ln, Env), cexpr(R, Env))]
      || {immediate, {'=', _, {field, Ln, L}, R}} <- Decls].
 
 %% For the host harness: every scalar by its runtime name ("m.V" for a member),
 %% read from the committed copy and written into the working one -- where a
-%% stimulus lands in port/csp_linux.c.
+%% stimulus lands in port/csp_linux.c. Not a function per name: a module lists
+%% its fields once and has one getter and one setter, and an instance is its
+%% path and its part of each side. See csp_lib_host.h.
 names(Mods, Decls) ->
-    Vars = leaves(Decls, Mods, ""),
+    Insts = insts(Decls, Mods, "", "Main", ""),
+    Used = uniq([M || {_, M, _} <- Insts], []),
     ["#if defined(CSP_LIB_HOST)\n",
-     "#include \"csp_lib_host.h\"\n",
-     [case Par of
-          false ->
-              ["static int32_t get_", id(N), "(void) { return (int32_t)csp_in.", N, "; }\n",
-               "static void set_", id(N), "(int32_t v) { csp_out.", N, " = v; }\n"];
-          true ->
-              ["static int32_t get_", id(N), "(void) { return (int32_t)csp_par.", N, "; }\n",
-               "static void set_", id(N), "(int32_t v) { csp_par.", N, " = v; }\n"]
-      end || {N, Par} <- Vars],
-     "const csp_lib_name_t csp_lib_names[] = {\n",
-     [[?IND, "{ \"", N, "\", get_", id(N), ", set_", id(N), " },\n"]
-      || {N, _} <- Vars],
-     ?IND, "{ 0, 0, 0 }\n};\n",
+     "#include \"csp_lib_host.h\"\n\n",
+     [accessor(M, case M of "Main" -> Decls; _ -> maps:get(M, Mods) end) || M <- Used],
+     "const csp_lib_inst_t csp_lib_insts[] = {\n",
+     [[?IND, "{ \"", P, "\", &", M, "_mod, &csp_in", C, ", &csp_out", C, ", ",
+       case has_loc(M) of true -> ["&csp_loc", C]; false -> "0" end, ", ",
+       case has_par(M) of true -> ["&csp_par", C]; false -> "0" end, " },\n"]
+      || {P, M, C} <- Insts],
+     ?IND, "{ 0, 0, 0, 0, 0, 0 }\n};\n",
      "#endif\n\n"].
 
-%% The runtime's name is also the C path: "m.V" is csp_in.m.V.
-leaves(Ds, Mods, Pre) -> leaves(Ds, Mods, Pre, "Main").
+%% Every instance, depth first: {runtime path, module, C member path}.
+insts(Ds, Mods, Path, Mod, C) ->
+    [{Path, Mod, C} |
+     lists:flatmap(fun({object, _, {'WORD', _, M}, {'WORD', _, N}, _}) ->
+                           P = case Path of "" -> N; _ -> Path ++ "." ++ N end,
+                           insts(maps:get(M, Mods), Mods, P, M, C ++ "." ++ N);
+                      (_) -> []
+                   end, Ds)].
 
-leaves(Ds, Mods, Pre, Mod) ->
-    lists:flatmap(
-      fun({object, _, {'WORD', _, M}, {'WORD', _, N}, _}) ->
-              leaves(maps:get(M, Mods), Mods, Pre ++ N ++ ".", M);
-         (D) ->
-              case name_of(D) of
-                  undefined -> [];
-                  N ->
-                      case is_clocal(Mod, N) of
-                          true -> [];
-                          false -> [{Pre ++ N, is_param(D)}]
-                      end
-              end
-      end, [{state} | Ds]).
+%% A module's fields, numbered from 0 in declaration order, State first.
+accessor(M, Ds) ->
+    Fs = [{N, case {is_param(D), is_lside(D)} of
+                  {true, _} -> param;
+                  {_, true} -> local;
+                  _ -> state
+              end} || D <- [{state} | Ds], N <- [name_of(D)], N =/= undefined],
+    Cases = lists:zip(lists:seq(0, length(Fs) - 1), Fs),
+    ["static const char* const ", M, "_fields[] = {\n",
+     [[?IND, "\"", N, "\",\n"] || {N, _} <- Fs],
+     "};\n\n",
+     "static int32_t ", M, "_get(const csp_lib_inst_t* x, uint16_t f)\n{\n",
+     ?IND, "switch (f) {\n",
+     [[?IND, "case ", integer_to_list(I), ": return (int32_t)",
+       side_ref(M, Side, get), "->", N, ";\n"] || {I, {N, Side}} <- Cases],
+     ?IND, "}\n",
+     ?IND, "return 0;\n",
+     "}\n\n",
+     "static void ", M, "_set(const csp_lib_inst_t* x, uint16_t f, int32_t v)\n{\n",
+     ?IND, "switch (f) {\n",
+     [[?IND, "case ", integer_to_list(I), ": ",
+       side_ref(M, Side, set), "->", N, " = v; break;\n"] || {I, {N, Side}} <- Cases],
+     ?IND, "}\n",
+     "}\n\n",
+     "static const csp_lib_module_t ", M, "_mod = {\n",
+     ?IND, integer_to_list(length(Fs)), ", ", M, "_fields, ", M, "_get, ", M, "_set\n",
+     "};\n\n"].
 
-id(S) -> [case C of $. -> $_; _ -> C end || C <- S].
+side_ref(M, state, get) -> ["((const ", M, "_t*)x->in)"];
+side_ref(M, state, set) -> ["((", M, "_t*)x->out)"];
+side_ref(M, local, _) -> ["((", M, "_local_t*)x->loc)"];
+side_ref(M, param, _) -> ["((", M, "_param_t*)x->par)"].
 
 name_of({state}) -> "State";
 name_of({variable, _, {'WORD', _, N}, _, _, _, _}) -> N;

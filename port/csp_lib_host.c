@@ -63,13 +63,34 @@ int csp_lib_getc(void)
     return -1;
 }
 
-static const csp_lib_name_t* lookup(const char* name, size_t len)
+// "m.q.V": the instance is everything before the last dot ("" for Main), the
+// field what follows it. Sets *fp to the field number.
+static const csp_lib_inst_t* lookup(const char* name, size_t len, uint16_t* fp)
 {
-    const csp_lib_name_t* p;
+    const csp_lib_inst_t* x;
+    size_t n = len;
+    size_t fl;
+    const char* fn;
+    uint16_t f;
 
-    for (p = csp_lib_names; p->name; p++)
-	if ((strlen(p->name) == len) && (strncmp(p->name, name, len) == 0))
-	    return p;
+    while ((n > 0) && (name[n-1] != '.'))
+	n--;
+    fn = name + n;
+    fl = len - n;
+    if (n > 0)
+	n--;                        // the dot is not the instance's
+    for (x = csp_lib_insts; x->name; x++) {
+	if ((strlen(x->name) != n) || (strncmp(x->name, name, n) != 0))
+	    continue;
+	for (f = 0; f < x->mod->nfield; f++) {
+	    const char* m = x->mod->field[f];
+	    if ((strlen(m) == fl) && (strncmp(m, fn, fl) == 0)) {
+		*fp = f;
+		return x;
+	    }
+	}
+	return NULL;
+    }
     return NULL;
 }
 
@@ -125,7 +146,8 @@ static void apply(char* s)
     while (*s) {
 	char* name;
 	size_t len;
-	const csp_lib_name_t* p;
+	const csp_lib_inst_t* x;
+	uint16_t f;
 
 	while (isspace((unsigned char)*s)) s++;
 	name = s;
@@ -137,9 +159,9 @@ static void apply(char* s)
 	    continue;
 	}
 	s++;
-	p = lookup(name, len);
-	if (p)
-	    p->set((int32_t)strtol(s, &s, 0));
+	x = lookup(name, len, &f);
+	if (x)
+	    x->mod->set(x, f, (int32_t)strtol(s, &s, 0));
 	else
 	    (void)strtol(s, &s, 0);
     }
@@ -253,7 +275,8 @@ int main(int argc, char** argv)
     long cycles = -1;
     long n = 0;
     int i;
-    const csp_lib_name_t* p;
+    const csp_lib_inst_t* x;
+    uint16_t f;
 
     int live_mode = 0;
 
@@ -310,7 +333,9 @@ int main(int argc, char** argv)
     // After a marker, so the dump cannot be confused with what the program
     // printed itself.
     printf("--- state\n");
-    for (p = csp_lib_names; p->name; p++)
-	printf("%s=%ld\n", p->name, (long)p->get());
+    for (x = csp_lib_insts; x->name; x++)
+	for (f = 0; f < x->mod->nfield; f++)
+	    printf("%s%s%s=%ld\n", x->name, x->name[0] ? "." : "",
+		   x->mod->field[f], (long)x->mod->get(x, f));
     return 0;
 }

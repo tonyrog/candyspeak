@@ -86,7 +86,7 @@ static uint8_t known(uint16_t ix)
 }
 
 // Subindex 1..4 of an ADC index is one channel; 0 and 5.. are not there.
-static Analog_p* channel(uint8_t sub)
+static Analog_param_t* channel(uint8_t sub)
 {
     switch (sub) {
     case 1: return &csp_par.a1;
@@ -112,7 +112,7 @@ static uint32_t ain(uint8_t sub)
 // *ok is cleared for an index:subindex the dictionary does not have.
 static uint32_t get_value(uint16_t ix, uint8_t sub, int* ok)
 {
-    Analog_p* a = channel(sub);
+    Analog_param_t* a = channel(sub);
 
     *ok = 1;
     if (sub == 0) {
@@ -155,7 +155,7 @@ static uint32_t get_value(uint16_t ix, uint8_t sub, int* ok)
 // The read-only entries (READ_INPUT8, ADC_READ16) are not settable.
 static int set_value(uint16_t ix, uint8_t sub, uint32_t v)
 {
-    Analog_p* a = channel(sub);
+    Analog_param_t* a = channel(sub);
 
     if (sub == 0) {
 	switch (ix) {

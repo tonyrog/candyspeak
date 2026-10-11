@@ -34,21 +34,46 @@
 %%% @end
 -module(csp_to_c).
 
--export([file/2, main/1]).
+-export([file/2, file/3, main/1]).
 
 -define(IND, "    ").
 
-main([In]) -> main([In, filename:rootname(In) ++ ".c"]);
-main([In, Out]) ->
-    case file(In, Out) of
+%% Flags first, then the files: `--graph In [Out]'.
+main(Args) ->
+    {Flags, Files} = lists:partition(fun("--" ++ _) -> true; (_) -> false end, Args),
+    Opts = [opt(F) || F <- Flags],
+    {In, Out} = case Files of
+                    [I] -> {I, filename:rootname(I) ++ ".c"};
+                    [I, O] -> {I, O};
+                    _ -> usage()
+                end,
+    case file(In, Out, Opts) of
         ok -> halt(0);
         {error, E} -> io:format(standard_error, "~s: ~p\n", [In, E]), halt(1)
     end.
 
+%% graph: every (rule, instance) a case of one switch, for a driver that runs
+%% them in order or as a dependency graph wakes them.
+opt("--graph") -> graph;
+opt(F) -> io:format(standard_error, "unknown option ~s\n", [F]), usage().
+
+usage() ->
+    io:format(standard_error, "usage: ~s [--graph] in.csp [out.c]\n", [?MODULE]),
+    halt(2).
+
+%% What each option asks of the translation. --graph is the next step and is
+%% refused until it is there, rather than ignored.
+options(Opts) ->
+    [throw({unsupported, "--graph (not yet)"}) || graph <- Opts],
+    ok.
+
 file(In, Out) ->
+    file(In, Out, []).
+
+file(In, Out, Opts) ->
     case dump(In, Out) of
         {ok, Terms} ->
-            try gen(model(Terms), In) of
+            try options(Opts), gen(model(Terms), In) of
                 Text -> file:write_file(Out, Text)
             catch
                 throw:{unsupported, What} ->
@@ -214,9 +239,14 @@ gen(M, In) ->
     %% it, so its struct comes first.
     Mods = [Mod || {_, Mod} <- lists:keysort(1, maps:get(order, M, [])), Mod =/= "Sys"],
     [header(In, M),
-     [struct(Mod, maps:get(Mod, maps:get(modules, M)), M) || Mod <- Mods],
+     [[struct(Mod, Is, M), side(Mod, local, Is, M), side(Mod, param, Is, M)]
+      || Mod <- Mods, Is <- [maps:get(Mod, maps:get(modules, M))]],
      struct("Main", maps:get(main, M), M),
-     "static Main_t csp_in, csp_out;\n\n",
+     side("Main", local, maps:get(main, M), M),
+     side("Main", param, maps:get(main, M), M),
+     "static Main_t csp_in, csp_out;\n",
+     "static Main_local_t csp_loc;\n",
+     "static Main_param_t csp_par;\n\n",
      [module(Mod, M) || Mod <- Mods],
      module("Main", M),
      driver(M)].
@@ -239,8 +269,39 @@ struct(Name, Is, M) ->
          true -> [];
          false -> [?IND, "int32_t State;\n"]
      end,
-     [field(I, M) || I <- Is, not skip(I, M)],
+     [field(I, M) || I <- Is, not skip(I, M), lists:member(side_of(I, M), [state, object])],
      "} ", Name, "_t;\n\n"].
+
+%% The two sides that have ONE copy, beside the committed and working pair:
+%%
+%%   Name_local_t  the #locals -- the runtime's DLOCAL. Written, a local is
+%%                 readable at once; it takes no part in the commit.
+%%   Name_param_t  the #params and #constants. No rule writes one: setup, a
+%%                 setting and the instance line do, and a second copy would
+%%                 only hold the same value twice.
+%%
+%% An instance's part nests as its fields do. C has no empty struct, hence
+%% csp_none.
+side(Name, Side, Is, M) ->
+    Fs = [case decl(I, M) of
+              {object, N, Opts} ->
+                  [?IND, proplists:get_value(module, Opts), side_t(Side), " ", N, ";\n"];
+              _ -> field(I, M)
+          end || I <- Is, not skip(I, M), lists:member(side_of(I, M), [Side, object])],
+    ["typedef struct {\n",
+     case Fs of [] -> [?IND, "uint8_t csp_none;\n"]; _ -> Fs end,
+     "} ", Name, side_t(Side), ";\n\n"].
+
+side_t(local) -> "_local_t";
+side_t(param) -> "_param_t".
+
+side_of(I, M) ->
+    case element(1, decl(I, M)) of
+        local -> local;
+        constant -> param;
+        object -> object;
+        _ -> state
+    end.
 
 field(I, M) ->
     N = fname(I, M),
@@ -291,7 +352,8 @@ module(Name, M) ->
          "Main" -> ["#if !defined(CSP_LIB_HOST)\n", io(M), "#endif\n\n"];
          _ -> []
      end,
-     "static void ", Name, "_run(", T, "* in, ", T, "* out)\n{\n",
+     "static void ", Name, "_run(", T, "* in, ", T, "* out, ", Name, "_local_t* loc, ",
+     Name, "_param_t* par)\n{\n",
      body(Code, Ctx, M),
      ?IND, "if ((in->State == INIT) && (out->State == INIT))\n",
      ?IND, ?IND, "out->State = NORMAL;\n",
@@ -302,10 +364,14 @@ module(Name, M) ->
 %% The declared values, and then -- in Main_init, where every path starts --
 %% what the program's `>' lines set, from the settings store.
 init(Name, Is, M) ->
-    ["static void ", Name, "_init(", Name, "_t* s)\n{\n",
+    ["static void ", Name, "_init(", Name, "_t* s, ", Name, "_local_t* l, ",
+     Name, "_param_t* p)\n{\n",
      ?IND, "memset(s, 0, sizeof(*s));\n",
+     ?IND, "memset(l, 0, sizeof(*l));\n",
+     ?IND, "memset(p, 0, sizeof(*p));\n",
      [init1(I, M) || I <- Is, not skip(I, M)],
      case Name of "Main" -> instance_params(M); _ -> [] end,
+     ?IND, "(void)l; (void)p;\n",
      "}\n\n"].
 
 %% The settings store: what the program's `>' lines set, by path. A value
@@ -313,15 +379,36 @@ init(Name, Is, M) ->
 %% `.pin' -- is not translated yet.
 instance_params(M) ->
     [case Part of
-         0 -> [?IND, "s->", Path, " = ", num(V), ";\n"];
+         0 -> [?IND, side_ptr(path_side(Path, M)), Path, " = ", num(V), ";\n"];
          _ -> throw({unsupported, io_lib:format("setting ~s part ~p", [Path, Part])})
      end || {Path, Part, V} <- maps:get(settings, M, [])].
+
+side_ptr(state) -> "s->";
+side_ptr(local) -> "l->";
+side_ptr(param) -> "p->".
+
+%% The side "p1.q.Gain" is on. Walk the instances from Main down.
+path_side(Path, M) ->
+    path_side(string:split(Path, ".", all), maps:get(main, M), M).
+
+path_side([N], Is, M) ->
+    case [I || I <- Is, fname(I, M) =:= N] of
+        [I | _] -> side_of(I, M);
+        [] -> state
+    end;
+path_side([N | Rest], Is, M) ->
+    case [Opts || I <- Is, {object, Q, Opts} <- [decl(I, M)], Q =:= N] of
+        [Opts] -> path_side(Rest, maps:get(proplists:get_value(module, Opts),
+                                           maps:get(modules, M)), M);
+        _ -> state
+    end.
 
 init1(I, M) ->
     N = fname(I, M),
     case decl(I, M) of
         {object, _, Opts} ->
-            [?IND, proplists:get_value(module, Opts), "_init(&s->", N, ");\n"];
+            [?IND, proplists:get_value(module, Opts), "_init(&s->", N, ", &l->", N,
+             ", &p->", N, ");\n"];
         %% `#timer T p = 1' is RUNNING from setup, as the runtime starts it --
         %% so an instance line that writes T in INIT does not stop it.
         {timer, _, Opts} ->
@@ -333,7 +420,7 @@ init1(I, M) ->
         {Kind, _, Opts} when Kind =:= variable; Kind =:= local; Kind =:= constant ->
             case proplists:get_value(init, Opts, 0) of
                 0 -> [];
-                V -> [?IND, "s->", N, " = ", num(V), ";\n"]
+                V -> [?IND, side_ptr(side_of(I, M)), N, " = ", num(V), ";\n"]
             end;
         _ -> []
     end.
@@ -500,7 +587,8 @@ instr({instr, _, 'NOP'}, C, _, _) -> {[], C};
 instr({instr, _, 'LEAVE', _, _}, C, _, _) -> {[], C};   % the function's end
 instr({instr, _, 'NEXT', _}, C, _, _) -> {"\n", C};     % a rule ends
 instr({instr, _, 'NEW', Mod, Inst, _}, C, Ctx, _) ->
-    {line([Mod, "_run(&", rd_base(Ctx), Inst, ", &", wr_base(Ctx), Inst, ");"]), C};
+    {line([Mod, "_run(&", rd_base(Ctx), Inst, ", &", wr_base(Ctx), Inst, ", &loc->", Inst,
+           ", &par->", Inst, ");"]), C};
 instr({instr, _, 'LI', [X, V]}, C, _, _) ->
     {line([r(X), " = ", integer_to_list(V), ";"]), C#{X => V}};
 instr({instr, _, 'LIU', [X, V]}, C, _, _) ->
@@ -613,9 +701,8 @@ state_ref({module, _}) -> "csp_in.State".
 %%   {cur,K,N}                        member N of the instance being run
 %%   {O,K,N}                          member N of object O (after a SETO)
 %%
-%% A read is the committed copy, a write the working one -- except a #local,
-%% which the runtime single-buffers: written, it is readable at once, so it
-%% is written to both.
+%% A read is the committed copy, a write the working one -- except a #local
+%% or a #param, which have one copy each, on their own side.
 
 rd_base(main) -> "in->";
 rd_base({module, _}) -> "in->".
@@ -646,22 +733,42 @@ path({_, N}, _, M) -> {global, fname(N, M), N}.
 copy(_Ctx, {member, P, _}, Which) -> [case Which of in -> "in->"; out -> "out->" end, P];
 copy(Ctx, {_, P, _}, Which) -> [gbase(Ctx, Which), P].
 
+scopy(_Ctx, {member, P, _}, Side) -> [side_arg(Side), "->", P];
+scopy(main, {_, P, _}, Side) -> [side_arg(Side), "->", P];
+scopy({module, _}, {_, P, _}, Side) -> ["csp_", side_arg(Side), ".", P].
+
+side_arg(local) -> "loc";
+side_arg(param) -> "par".
+
 read(Ref, Ctx, M) ->
     {_, _, N} = Path = path(Ref, Ctx, M),
     case decl(N, M) of
         {timer, _, _} -> ["(int32_t)", copy(Ctx, Path, in), ".val"];
-        {local, _, _} -> ["(int32_t)", copy(Ctx, Path, in)];
-        {_, _, _} -> ["(int32_t)", copy(Ctx, Path, in)]
+        {_, _, _} ->
+            case side_of(N, M) of
+                state -> ["(int32_t)", copy(Ctx, Path, in)];
+                Side -> ["(int32_t)", scopy(Ctx, Path, Side)]
+            end
     end.
 
-read_out(Ref, Ctx, M) -> ["(int32_t)", copy(Ctx, path(Ref, Ctx, M), out)].
+%% The working copy, for a change test. A #local has no second copy to
+%% compare against; a #param never changes within the program.
+read_out(Ref, Ctx, M) ->
+    {_, P, N} = Path = path(Ref, Ctx, M),
+    case side_of(N, M) of
+        state -> ["(int32_t)", copy(Ctx, Path, out)];
+        _ -> throw({unsupported, "change test on " ++ P})
+    end.
 
 write(Ref, V, Ctx, M) ->
     {_, _, N} = Path = path(Ref, Ctx, M),
     case decl(N, M) of
         {timer, _, _} -> [copy(Ctx, Path, out), ".val = (uint8_t)(", V, " & 1);"];
-        {local, _, _} -> [copy(Ctx, Path, in), " = ", copy(Ctx, Path, out), " = ", V, ";"];
-        {_, _, _} -> [copy(Ctx, Path, out), " = ", V, ";"]
+        {_, _, _} ->
+            case side_of(N, M) of
+                state -> [copy(Ctx, Path, out), " = ", V, ";"];
+                Side -> [scopy(Ctx, Path, Side), " = ", V, ";"]
+            end
     end.
 
 %% A store of a constant. To the State variable it is sticky: once FAILSAFE,
@@ -746,7 +853,7 @@ driver(M) ->
     ["const uint16_t csp_lib_nrules = ", integer_to_list(maps:size(maps:get(ruleno, M))), ";\n\n",
      "void csp_lib_setup(void)\n{\n",
      [[?IND, "csp_lib_disable(", integer_to_list(N), ");\n"] || N <- maps:get(disabled, M, [])],
-     ?IND, "Main_init(&csp_in);\n",
+     ?IND, "Main_init(&csp_in, &csp_loc, &csp_par);\n",
      ?IND, "csp_out = csp_in;\n",
      "#if !defined(CSP_LIB_HOST)\n",
      ?IND, "Main_config(&csp_in);\n",
@@ -762,7 +869,7 @@ driver(M) ->
      "#else\n",
      ?IND, "csp_lib_host_input();\n",
      "#endif\n",
-     ?IND, "Main_run(&csp_in, &csp_out);\n",
+     ?IND, "Main_run(&csp_in, &csp_out, &csp_loc, &csp_par);\n",
      ?IND, "changed = memcmp(&csp_in, &csp_out, sizeof(csp_in)) != 0;\n",
      ?IND, "csp_in = csp_out;\n",
      "#if !defined(CSP_LIB_HOST)\n",
@@ -787,32 +894,72 @@ driver(M) ->
 %% Every named scalar, by its runtime name, for the host harness and the
 %% oracle. A nameless one -- d17 -- has no runtime name to be compared under.
 names(M) ->
-    Vars = ["State" | leaves(maps:get(main, M), "", M)],
+    Insts = insts(maps:get(main, M), "", "Main", "", M),
+    Used = lists:foldl(fun({_, Mod, _}, Acc) ->
+                               case lists:member(Mod, Acc) of
+                                   true -> Acc;
+                                   false -> Acc ++ [Mod]
+                               end
+                       end, [], Insts),
     ["#if defined(CSP_LIB_HOST)\n",
-     [["static int32_t get_", id(N), "(void) { return (int32_t)csp_in.", N, "; }\n",
-       "static void set_", id(N), "(int32_t v) { csp_out.", N, " = v; }\n"] || N <- Vars],
-     "const csp_lib_name_t csp_lib_names[] = {\n",
-     [[?IND, "{ \"", N, "\", get_", id(N), ", set_", id(N), " },\n"] || N <- Vars],
-     ?IND, "{ 0, 0, 0 }\n};\n",
+     [accessor(Mod, case Mod of
+                        "Main" -> maps:get(main, M);
+                        _ -> maps:get(Mod, maps:get(modules, M))
+                    end, M) || Mod <- Used],
+     "const csp_lib_inst_t csp_lib_insts[] = {\n",
+     [[?IND, "{ \"", P, "\", &", Mod, "_mod, &csp_in", C, ", &csp_out", C,
+       ", &csp_loc", C, ", &csp_par", C, " },\n"] || {P, Mod, C} <- Insts],
+     ?IND, "{ 0, 0, 0, 0, 0, 0 }\n};\n",
      "#endif\n\n"].
 
-leaves(Is, Pre, M) ->
-    lists:flatmap(
-      fun(I) ->
-              case decl(I, M) of
-                  {object, N, Opts} ->
-                      Mod = proplists:get_value(module, Opts),
-                      leaves(maps:get(Mod, maps:get(modules, M)), Pre ++ N ++ ".", M);
-                  {_, "", _} -> [];
-                  {timer, _, _} -> [];
-                  {Kind, N, _} when Kind =:= variable; Kind =:= local; Kind =:= constant;
-                                    Kind =:= digital; Kind =:= analog ->
-                      case skip(I, M) orelse (N =:= "State" andalso Pre =:= "") of
-                          true -> [];
-                          false -> [Pre ++ N]
-                      end;
-                  _ -> []
-              end
-      end, [I || I <- Is, not skip(I, M)]).
+%% Every instance, depth first: {runtime path, module, C member path}.
+insts(Is, Path, Mod, C, M) ->
+    [{Path, Mod, C} |
+     lists:flatmap(fun(I) ->
+                           case decl(I, M) of
+                               {object, N, Opts} ->
+                                   Sub = proplists:get_value(module, Opts),
+                                   P = case Path of "" -> N; _ -> Path ++ "." ++ N end,
+                                   insts(maps:get(Sub, maps:get(modules, M)), P, Sub,
+                                         C ++ "." ++ N, M);
+                               _ -> []
+                           end
+                   end, [I || I <- Is, not skip(I, M)])].
 
-id(S) -> [case Ch of $. -> $_; _ -> Ch end || Ch <- S].
+%% A module's named scalars, numbered from 0, with one getter and one setter
+%% that switch on the number. A nameless one -- d17 -- has no runtime name to
+%% be compared under.
+accessor(Mod, Is, M) ->
+    Fs0 = [{N, side_of(I, M)}
+           || I <- Is, not skip(I, M),
+              {Kind, N, _} <- [decl(I, M)], N =/= "",
+              lists:member(Kind, [variable, local, constant, digital, analog])],
+    Fs = case lists:keymember("State", 1, Fs0) of
+             true -> Fs0;
+             false -> [{"State", state} | Fs0]
+         end,
+    Cases = lists:zip(lists:seq(0, length(Fs) - 1), Fs),
+    ["static const char* const ", Mod, "_fields[] = {\n",
+     [[?IND, "\"", N, "\",\n"] || {N, _} <- Fs],
+     "};\n\n",
+     "static int32_t ", Mod, "_get(const csp_lib_inst_t* x, uint16_t f)\n{\n",
+     ?IND, "switch (f) {\n",
+     [[?IND, "case ", integer_to_list(I), ": return (int32_t)",
+       side_ref(Mod, Side, get), "->", N, ";\n"] || {I, {N, Side}} <- Cases],
+     ?IND, "}\n",
+     ?IND, "return 0;\n",
+     "}\n\n",
+     "static void ", Mod, "_set(const csp_lib_inst_t* x, uint16_t f, int32_t v)\n{\n",
+     ?IND, "switch (f) {\n",
+     [[?IND, "case ", integer_to_list(I), ": ",
+       side_ref(Mod, Side, set), "->", N, " = v; break;\n"] || {I, {N, Side}} <- Cases],
+     ?IND, "}\n",
+     "}\n\n",
+     "static const csp_lib_module_t ", Mod, "_mod = {\n",
+     ?IND, integer_to_list(length(Fs)), ", ", Mod, "_fields, ", Mod, "_get, ", Mod, "_set\n",
+     "};\n\n"].
+
+side_ref(Mod, state, get) -> ["((const ", Mod, "_t*)x->in)"];
+side_ref(Mod, state, set) -> ["((", Mod, "_t*)x->out)"];
+side_ref(Mod, local, _) -> ["((", Mod, "_local_t*)x->loc)"];
+side_ref(Mod, param, _) -> ["((", Mod, "_param_t*)x->par)"].

@@ -91,9 +91,10 @@ decode_sections(_Header, <<>>) ->
 -define(FUNC_BITS,        5).
 -define(PART_BITS,        4).
 -define(OBJ_BITS,         1).
--define(DECL_BITS,       15).
--define(INDEX_BITS,      (?OBJ_BITS+?DECL_BITS)).
--define(TINY_BITS, 6).
+-define(DECL_BITS,        15).
+-define(INDEX_BITS,       (?OBJ_BITS+?DECL_BITS)).
+-define(TINY_BITS,        6).
+-define(TYPE_BITS,        4).
 
 -define(get_uint(X, Start, Len),
 	(((X) bsr (Start)) band ((1 bsl (Len))-1))).
@@ -523,6 +524,8 @@ type() ->
   ?V_ANALOG => analog,
   ?V_FIELD => field
 }.  
+type(Vt) ->
+    maps:get(Vt band 16#f, type()).
 
 -define(DIR_NONE,  16#00).
 -define(DIR_IN,    16#01).
@@ -536,7 +539,6 @@ dir() ->
   ?DIR_OUT   => out,
   ?DIR_INOUT => inout
 }.
-
 dir(D) ->
     maps:get(D band 16#03, dir()).
 
@@ -568,7 +570,7 @@ disasm_decl(ok, Strings, Sections) ->
 
 disasm_decl(<<Decl:64/little, Data/binary>>, 
 	    I, Strings, Acc) ->
-    {Pos, [{_, IType}, {_, ICont}, {_, ILocal}, {_, IDir}, {_, IName}]} =
+    {Pos, [{_, IType}, {_, _ICont}, {_, ILocal}, {_, IDir}, {_, IName}]} =
 	 decode_bits(Decl, [{type,uint,?CSP_DECL_TYPE_BITS},
 			    {cont,uint,1},{local,uint,1},{dir,uint,?DIR_BITS},
 			    {name,uint,?NAMEID_BITS}]),
@@ -591,16 +593,72 @@ disasm_decl(<<Decl:64/little, Data/binary>>,
 				     {name5,maps:get(Name5, Strings)},
 				     {name6,maps:get(Name6, Strings)}]},
 	    add_decl(Data, I, 1, D, Strings, Acc);
+	module ->
+	    {Pos1, _THeader} = decode_type_header(Decl, Pos),
+	    {_Pos2, [{n,N},{ent,Ent}]} = 
+		decode_bits(Decl, Pos1, 
+			    [{n, uint, ?INDEX_BITS},
+			     {ent, uint, ?INDEX_BITS}]),
+	    D = {decl,I,module,Name,[{n,N},{ent,Ent}]},
+	    add_decl(Data, I, 1, D, Strings, Acc);
+	object ->
+	    {Pos1, _THeader} = decode_type_header(Decl, Pos),
+	    {_Pos2, [{mx,Mx},{m,M}]} = 
+		decode_bits(Decl, Pos1,
+			    [{mx, uint, ?INDEX_BITS},
+			     {m, uint, 16}]),
+	    ModuleDecl = find_decl(Mx, Acc),
+	    ModuleName = element(4, ModuleDecl),
+	    D = {decl,I,object,ModuleName,Name,[{mx,Mx},{m,M}]},
+	    add_decl(Data, I, 1, D, Strings, Acc);
+	variable ->
+	    {_Pos1, [{res,Res},{is_mapped,_},
+		    {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
+		decode_type_header(Decl, Pos),
+	    D = case ILocal of
+		    0 -> {decl,I,variable,Name,[{size,Res+1},
+						{dir,Dir},
+						{type,type(Vt)}]};
+		    1 -> {decl,I,local,Name,[{size,Res+1},
+					     {dir,Dir},
+					     {type,type(Vt)}]}
+		end,
+	    add_decl(Data, I, 1, D, Strings, Acc);
+	convariable ->
+	    {_Pos1, [{res,Res},{is_mapped,_},
+		    {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
+		decode_type_header(Decl, Pos),
+	    D = case ILocal of
+		    0 -> {decl,I,constant,Name,[{size,Res+1},
+						{type,type(Vt)}]};
+		    1 -> {decl,I,paraml,Name,[{size,Res+1},
+					      {type,type(Vt)}]}
+		end,
+	    add_decl(Data, I, 1, D, Strings, Acc);
+
 	DeclType ->
 	    D = {decl,I,DeclType,Name,[{dir,Dir},{local,ILocal}]},
 	    add_decl(Data, I, 1, D, Strings, Acc)
     end;
 disasm_decl(<<>>, _I, _Strings, Acc) ->
-    lists:reverse(Acc).    
+    lists:reverse(Acc).
+
+find_decl(Mx, Ds) ->
+    lists:keyfind(Mx, 2, Ds).
 
 add_decl(Data, I, Size, D, Strings, Acc) ->
     io:format("~w: ~p\n", [I, D]),
     disasm_decl(Data, I+Size, Strings, [D|Acc]).
+
+decode_type_header(Decl, Pos) ->
+    decode_bits(Decl, Pos,
+		[{res, uint, 5},
+		 {is_mapped, uint, 1},
+		 {bound, uint, 1},
+		 {nx, uint, 1},
+		 {vt, uint, ?TYPE_BITS},
+		 {reg, uint, ?REG_BITS}]).
+
 
 decode_bits(Bits, Fields) ->
     decode_bits(Bits, 0, Fields, []).
@@ -615,7 +673,7 @@ decode_bits(Bits, Pos, [{Name,uint,Len}|Fields], Acc) ->
 decode_bits(Bits, Pos, [{Name,int,Len}|Fields], Acc) ->
     decode_bits(Bits, Pos+Len, Fields, 
 		[{Name, ?get_int(Bits, Pos, Len)}|Acc]);
-decode_bits(Bits, Pos, [], Acc) ->
+decode_bits(_Bits, Pos, [], Acc) ->
     {Pos, lists:reverse(Acc)}.
     
 

@@ -977,6 +977,9 @@ typedef enum {
 			     // pos is in the DLOCAL region (st->lheap) and both
 			     // directions resolve there, so a rule reads back
 			     // what an earlier rule in the SAME cycle wrote.
+			     // VIEW_SLOT: a #constant/#param, likewise one
+			     // copy in DLOCAL -- nothing but setup and `>`
+			     // writes it, and those wrote both slots alike.
 			     // Shares bit 1 with VIEW_F_GLOBAL because
 			     // `kind` already tells the two apart, and the flags
 			     // field has no third bit to spend. It used to be

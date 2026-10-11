@@ -848,7 +848,8 @@ boards:
 #   tmp/clib_host/main -P                    prints "pty /dev/pts/N"
 #   tools/coco_master.escript /dev/pts/N watch
 #
-# PROG is one .csp, or a directory with a PROG file naming it.
+# PROG is one .csp, or a directory with a PROG file naming it. CLIB_OPTS goes
+# to the translator: CLIB_OPTS=--graph.
 CLIB_HOST := tmp/clib_host
 CLIB_PROG  = $(foreach p,$(PROG),$(if $(wildcard $(p)/PROG),\
 	      $(addprefix $(p)/,$(shell sed -e 's/\#.*//' -e '/^[ \t]*$$/d' $(p)/PROG)),$(p)))
@@ -858,7 +859,7 @@ clib_host:
 	@test $(words $(CLIB_PROG)) = 1 || { echo "PROG: one .csp, got:$(CLIB_PROG)"; exit 1; }
 	@mkdir -p $(CLIB_HOST)
 	@$(MAKE) --no-print-directory -s -C utils
-	@erl -noshell -pa utils -eval 'candyspeak_c:main(["$(strip $(CLIB_PROG))", "$(CLIB_HOST)/csp_prog.c"])'
+	@erl -noshell -pa utils -eval 'candyspeak_c:main([$(foreach o,$(CLIB_OPTS),"$(o)",) "$(strip $(CLIB_PROG))", "$(CLIB_HOST)/csp_prog.c"])'
 	$(CC) -Wall -O1 -DCSP_LIB_HOST -Iinclude -I$(CLIB_HOST) \
 	    $(if $(CLIB_LINK),-I$(dir $(CLIB_LINK)) -DCSP_LIB_LINK=link.c,) \
 	    -o $(CLIB_HOST)/$(basename $(notdir $(strip $(CLIB_PROG)))) \
