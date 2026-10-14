@@ -541,6 +541,8 @@ extern rochar s_cmd_quit[5] RODATA;
 #define ros_cmd_quit ((rostring_t) s_cmd_quit)
 extern rochar s_cmd_exit[5] RODATA;
 #define ros_cmd_exit ((rostring_t) s_cmd_exit)
+extern rochar s_cmd_hang[5] RODATA;
+#define ros_cmd_hang ((rostring_t) s_cmd_hang)
 extern rochar s_h_help[15] RODATA;
 #define ros_h_help ((rostring_t) s_h_help)
 extern rochar s_h_list[72] RODATA;

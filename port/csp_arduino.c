@@ -64,8 +64,9 @@
 #endif
 
 // SMS through the u-blox modem on an MKR NB 1500 (Arduino's MKRNB library).
-// Opt in with CSP_HAS_SMS; the SIM PIN, if the card has one, is CSP_SMS_PIN.
-#if defined(CSP_HAS_SMS)
+// Opt in with CSP_HAS_SMS. The SIM PIN, if the card has one, is the program's:
+// the string #param its `sms` buffer names (csp_sms_pin).
+#if defined(CSP_HAS_SMS) && !defined(CSP_SMS_SIM7080)
 #include <MKRNB.h>
 #endif
 
@@ -118,6 +119,7 @@
 
 #define CSP_EMBEDDED 1
 #include "csp.h"
+#include "csp_lib.h"
 #include "csp_print.h"
 
 // Does this build have a compiler? csp_rt_init wants its state, or NULL for a
@@ -591,9 +593,30 @@ void csp_board_stop_output(csp_rt_t* st)
 #endif
 }
 
+// What analogRead gives without analogReadResolution: 12 bits on an ESP32, 10
+// on the AVR, SAMD, RP2040 and Renesas cores. A board that sets it otherwise
+// says so with CSP_ADC_BITS.
+#ifndef CSP_ADC_BITS
+#if defined(ESP32)
+#define CSP_ADC_BITS 12
+#else
+#define CSP_ADC_BITS 10
+#endif
+#endif
+
+// The reading in the DECLARED width and signedness, as every other port gives
+// it (csp_lib_ain, through port/csp_io.c): left-justified to 16 bits first. An
+// ESP32 handed its 12-bit counts straight through, so a `#analog X:10` read
+// up to 4095 there and up to 1023 on an MKR.
 void csp_board_analog_input(csp_rt_t* st, index_t ix, value_t* vptr)
 {
-    csp_set_ivalue(st, ix, analogRead(value_get_a_pin(vptr)));
+    const csp_decl_t* d = csp_decl_ref(st, INDEX(ix));
+    uint8_t res = (uint8_t)GET_RES(csp_decl_get_res(d));
+    uint8_t sgn = (CSP_MASK(csp_decl_get_vt(d), TYPE_BITS) != V_UNSIGNED);
+    uint32_t raw = (uint32_t)analogRead(value_get_a_pin(vptr));
+
+    csp_set_ivalue(st, ix, (ivalue_t)csp_lib_ain(
+		       (uint16_t)(raw << (16 - CSP_ADC_BITS)), res, sgn));
 }
 
 // handle type! accept float as well
@@ -733,8 +756,11 @@ void csp_setup(csp_rt_t* st)
 	    csp_board_digital_config(vptr);
 	    break;
 	case DECL_ANALOG:
-	    if ((value_get_a_dir(vptr) & DIR_IN) && decl(st,j,res))
-		res = max(res, decl(st,j,res));
+	    // Not max(): on ESP32 that is std::max, which wants both sides of
+	    // one type, and the decl field is a uint8_t.
+	    if ((value_get_a_dir(vptr) & DIR_IN) &&
+		((unsigned)decl(st,j,res) > res))
+		res = (unsigned)decl(st,j,res);
 	    // A PWM output needs the pin driven; an analog input does not need
 	    // any mode at all, so nothing is asserted for it.
 	    if ((value_get_a_dir(vptr) & DIR_OUT) &&
@@ -825,6 +851,16 @@ void csp_input(csp_rt_t* st)
 // The cure is the one in NXP's I2C specification (UM10204, 3.1.16): clock SCL
 // by hand until the slave lets go -- nine pulses at most, one byte and its
 // acknowledge -- then a STOP. Bus 0 only: the variant names its pins.
+// A board whose bus 0 is not on the variant's pins says so: CSP_I2C_SDA and
+// CSP_I2C_SCL (the T-SIM7080G-S3's power manager is on 15/7, the S3's
+// defaults are 8/9). Both the unsticking and Wire.begin use them.
+#if defined(CSP_I2C_SDA) && defined(CSP_I2C_SCL)
+#undef PIN_WIRE_SDA
+#undef PIN_WIRE_SCL
+#define PIN_WIRE_SDA CSP_I2C_SDA
+#define PIN_WIRE_SCL CSP_I2C_SCL
+#endif
+
 static void i2c_unstick(void)
 {
 #if defined(PIN_WIRE_SDA) && defined(PIN_WIRE_SCL)
@@ -868,6 +904,11 @@ static TwoWire* i2c_of(uint8_t bus)
     if (w && !(i2c_begun & (1u << bus))) {
 	if (bus == 0)
 	    i2c_unstick();
+#if defined(CSP_I2C_SDA) && defined(CSP_I2C_SCL)
+	if (bus == 0)
+	    w->begin(CSP_I2C_SDA, CSP_I2C_SCL);
+	else
+#endif
 	w->begin();
 	i2c_begun |= (uint8_t)(1u << bus);
     }
@@ -1051,40 +1092,33 @@ int csp_onewire_search(uint8_t port, uint8_t pin,
 // A state machine on the modem's AT channel, ONE command in flight at a time,
 // stepped once a cycle. Nothing here waits for the network: registering takes
 // tens of seconds and a message out a few, and the rules keep running through
-// both. Two things do block, briefly and once each: powering the modem up
-// (NB::begin, at the first poll) and the '>' prompt before a message's text
-// (waitForPrompt, a few milliseconds when the modem is well).
-//
-// Not the library's NB_SMS: its asynchronous listing and sending share one
-// response buffer, and interleaving them -- which a node that answers while
-// it listens has to do -- confuses the two. The AT commands are simple enough
-// to say directly:
+// both. The AT commands are simple enough to say directly:
 //
 //   AT+CMGL="REC UNREAD"     list what has arrived (polled every few seconds)
 //   AT+CMGD=<i>              delete one once it has been taken
 //   AT+CMGS="<to>" > text ^Z send one
 //
-// Text mode is set by NB::begin. Plain ASCII both ways.
+// Text mode, plain ASCII both ways. Two modems, chosen by the board:
+//
+//   CSP_HAS_SMS                     the u-blox on an MKR NB 1500, through
+//                                   Arduino's MKRNB library
+//   CSP_HAS_SMS + CSP_SMS_SIM7080   a SIMCom SIM7080G on a UART (LilyGO
+//                                   T-SIM7080G-S3), spoken to directly
+//
+// What they share -- the queue out, the message in, reading a +CMGL listing
+// -- comes first.
 
 #if defined(CSP_HAS_SMS)
 
-#ifndef CSP_SMS_PIN
-#define CSP_SMS_PIN ""
-#endif
 #ifndef CSP_SMS_POLL_MS
 #define CSP_SMS_POLL_MS 5000
 #endif
 #define SMS_TXQ 4
 
-enum { SMS_OFF, SMS_REG, SMS_IDLE, SMS_LIST, SMS_DEL, SMS_SEND };
-
-static NB       sms_nb;
-static uint8_t  sms_st = SMS_OFF;
 static uint32_t sms_t0;                // last list, or last try to register
 static uint32_t sms_busy_t0;           // when the command in flight went out
 static uint32_t sms_tx_at;             // not before this: the next send
 static uint8_t  sms_tries;             // prompts the head message has missed
-static String   sms_resp;
 static int      sms_del = -1;          // a message to delete next
 static char     sms_txq_to[SMS_TXQ][24];
 static char     sms_txq_text[SMS_TXQ][161];
@@ -1108,34 +1142,52 @@ int csp_sms_modem_send(const char* to, const char* text)
     return 0;
 }
 
+// The head of the queue is done with, sent or given up.
+static void sms_txq_pop(void)
+{
+    sms_txq_head = (uint8_t)((sms_txq_head + 1) % SMS_TXQ);
+    sms_txq_n--;
+}
+
+// Copy [b, e) into a NUL-terminated buffer of `size`.
+static void sms_copy(char* dst, uint16_t size, const char* b, const char* e)
+{
+    uint16_t k = 0;
+
+    while ((b < e) && (k + 1 < size))
+	dst[k++] = *b++;
+    dst[k] = '\0';
+}
+
 // The first message in a +CMGL listing:
 //
 //   +CMGL: 3,"REC UNREAD","+46701234567",,"26/10/06,12:00:00+08"
 //   the text
 //
 // Its index (to delete it), the sender and the text's first line.
-static int sms_take(char* from, uint16_t from_size, char* text,
-		    uint16_t text_size)
+static int sms_take(const char* r, char* from, uint16_t from_size,
+		    char* text, uint16_t text_size)
 {
-    int at = sms_resp.indexOf("+CMGL: ");
-    int q, e, nl, end;
+    const char* at = strstr(r, "+CMGL: ");
+    const char* q;
+    const char* e;
+    const char* nl;
+    const char* end;
 
-    if (at < 0)
+    if (at == NULL)
 	return 0;
-    sms_del = sms_resp.substring(at + 7).toInt();
-    q = sms_resp.indexOf("\"REC UNREAD\",\"", at);
-    if (q < 0)
+    sms_del = atoi(at + 7);
+    if ((q = strstr(at, "\"REC UNREAD\",\"")) == NULL)
 	return 0;
     q += 14;
-    e = sms_resp.indexOf('"', q);
-    nl = sms_resp.indexOf('\n', at);
-    if ((e < 0) || (nl < 0))
+    e = strchr(q, '"');
+    nl = strchr(at, '\n');
+    if ((e == NULL) || (nl == NULL))
 	return 0;
-    sms_resp.substring(q, e).toCharArray(from, from_size);
-    end = sms_resp.indexOf('\r', nl + 1);
-    if (end < 0)
-	end = sms_resp.length();
-    sms_resp.substring(nl + 1, end).toCharArray(text, text_size);
+    sms_copy(from, from_size, q, e);
+    if ((end = strchr(nl + 1, '\r')) == NULL)
+	end = nl + 1 + strlen(nl + 1);
+    sms_copy(text, text_size, nl + 1, end);
     return 1;
 }
 
@@ -1157,6 +1209,24 @@ int csp_sms_modem_recv(char* from, uint16_t from_size,
     return 1;
 }
 
+#if !defined(CSP_SMS_SIM7080)
+
+// ---- the MKR NB 1500's u-blox, through MKRNB -------------------------------
+//
+// Two things block, briefly and once each: powering the modem up (NB::begin,
+// at the first poll) and the '>' prompt before a message's text
+// (waitForPrompt, a few milliseconds when the modem is well).
+//
+// Not the library's NB_SMS: its asynchronous listing and sending share one
+// response buffer, and interleaving them -- which a node that answers while
+// it listens has to do -- confuses the two. Text mode is set by NB::begin.
+
+enum { SMS_OFF, SMS_REG, SMS_IDLE, SMS_LIST, SMS_DEL, SMS_SEND };
+
+static NB       sms_nb;
+static uint8_t  sms_st = SMS_OFF;
+static String   sms_resp;
+
 static int sms_step(char* from, uint16_t from_size,
 		    char* text, uint16_t text_size)
 {
@@ -1167,7 +1237,7 @@ static int sms_step(char* from, uint16_t from_size,
     case SMS_OFF:
 	// Powers the modem up and starts registering. The power-up blocks
 	// for a few seconds, once; registration is stepped below.
-	sms_nb.begin(CSP_SMS_PIN, true, false);
+	sms_nb.begin(csp_sms_pin(), true, false);
 	sms_t0 = now;
 	sms_st = SMS_REG;
 	return 0;
@@ -1211,7 +1281,8 @@ static int sms_step(char* from, uint16_t from_size,
 	}
 	sms_st = SMS_IDLE;
 	MODEM.setResponseDataStorage(NULL);
-	return (r == 1) ? sms_take(from, from_size, text, text_size) : 0;
+	return (r == 1) ? sms_take(sms_resp.c_str(), from, from_size,
+				      text, text_size) : 0;
 
     case SMS_IDLE:
     default:
@@ -1275,6 +1346,347 @@ static int sms_step(char* from, uint16_t from_size,
 	return 0;
     }
 }
+
+#else
+
+// ---- a SIMCom SIM7080G on a UART --------------------------------------------
+//
+// NOTHING BLOCKS, not even powering it up: every wait -- the module booting,
+// the network, the '>' before a message's text -- is a deadline looked at
+// once a cycle.
+//
+// The board says where it is: CSP_MODEM_RX / CSP_MODEM_TX (the ESP32's side
+// of the UART) and CSP_MODEM_PWR, PWRKEY through the board's transistor, so a
+// HIGH pulse is a press. The module's supply is the board's business too --
+// on the T-SIM7080G-S3 the AXP2101's rails, which pins.csp sets at INIT; the
+// first probe waits long enough for that.
+//
+//   start   UART up, a second for the rails
+//   probe   AT, three times; no answer and PWRKEY is pressed for a second,
+//           four seconds to boot, and probe again
+//   init    ATE0, AT+CMEE=2, AT+CMNB (which LTE: CSP_MODEM_CMNB), AT+CPIN?
+//           (the PIN from SimPin, ONCE -- a wrong one is never retried, three
+//           of those lock the card), AT+CMGF=1
+//   reg     AT+CEREG? every five seconds until home or roaming
+//   idle    send, delete, list; three commands in a row unanswered and it
+//           starts over from the probe -- the module may have restarted
+
+#ifndef CSP_MODEM_BAUD
+#define CSP_MODEM_BAUD 115200
+#endif
+// Which LTE the module looks for: 1 Cat-M, 2 NB-IoT, 3 both. Cat-M, because
+// that is where SMS works: roaming on NB-IoT (Things Mobile on Tele2,
+// 2026-10-14) the module registered and a message to it never arrived; on
+// Cat-M it came at once. The module keeps the setting, but a new one does not
+// have it, so it is said every time.
+#ifndef CSP_MODEM_CMNB
+#define CSP_MODEM_CMNB 1
+#endif
+#define AT_RESP 640
+
+enum { SIM_START, SIM_WAIT, SIM_PROBE, SIM_KEY, SIM_BOOT, SIM_INIT,
+       SIM_REG, SIM_REG_WAIT, SIM_IDLE, SIM_LIST, SIM_DEL, SIM_PROMPT,
+       SIM_SEND };
+
+static uint8_t  sim_st = SIM_START;
+static uint32_t sim_t0;                // when this state's wait began
+static uint8_t  sim_n;                 // tries, or the step of init
+static uint8_t  sim_keys;              // PWRKEY presses without an answer
+static uint8_t  sim_lost;              // commands in a row with no answer
+static uint8_t  sim_pin_sent;          // the PIN went once; never again
+static char     at_resp[AT_RESP];      // what the command in flight has got
+static uint16_t at_len;
+static uint32_t at_until;              // its deadline
+
+static void at_send(const char* cmd, uint32_t ms)
+{
+    while (Serial1.available())        // a stray URC is not this answer
+	(void)Serial1.read();
+    at_len = 0;
+    at_resp[0] = '\0';
+    at_until = millis() + ms;
+    Serial1.print(cmd);
+    Serial1.print('\r');
+}
+
+// The last complete line of the response, if it is a final result code.
+static int at_final(void)
+{
+    int e = at_len, b;
+
+    while ((e > 0) && ((at_resp[e - 1] == '\n') || (at_resp[e - 1] == '\r')))
+	e--;
+    if ((e == at_len) || (e == 0))
+	return 0;                      // the line is not complete yet
+    for (b = e; (b > 0) && (at_resp[b - 1] != '\n'); b--)
+	;
+    if ((e - b == 2) && (strncmp(at_resp + b, "OK", 2) == 0))
+	return 1;
+    if ((strncmp(at_resp + b, "ERROR", 5) == 0) ||
+	(strncmp(at_resp + b, "+CME ERROR", 10) == 0) ||
+	(strncmp(at_resp + b, "+CMS ERROR", 10) == 0))
+	return -1;
+    return 0;
+}
+
+// 1 OK, -1 an error, -2 no answer in time, 0 still waiting.
+static int at_poll(void)
+{
+    int r;
+
+    while (Serial1.available()) {
+	char c = (char)Serial1.read();
+	if (at_len < AT_RESP - 1) {
+	    at_resp[at_len++] = c;
+	    at_resp[at_len] = '\0';
+	}
+	if ((c == '\n') && ((r = at_final()) != 0)) {
+	    sim_lost = 0;
+	    return r;
+	}
+    }
+    if ((int32_t)(millis() - at_until) >= 0) {
+	sim_lost++;
+	return -2;
+    }
+    return 0;
+}
+
+static void sim_go(uint8_t st)
+{
+    sim_st = st;
+    sim_t0 = millis();
+}
+
+static int sms_step(char* from, uint16_t from_size,
+		    char* text, uint16_t text_size)
+{
+    uint32_t now = millis();
+    int r;
+
+    switch (sim_st) {
+    case SIM_START:
+	Serial1.begin(CSP_MODEM_BAUD, SERIAL_8N1, CSP_MODEM_RX, CSP_MODEM_TX);
+	pinMode(CSP_MODEM_PWR, OUTPUT);
+	digitalWrite(CSP_MODEM_PWR, LOW);
+	sim_n = 0;
+	sim_go(SIM_WAIT);                // the rails, then the first probe
+	return 0;
+
+    case SIM_WAIT:
+	if ((uint32_t)(now - sim_t0) < 1000)
+	    return 0;
+	at_send("AT", 500);
+	sim_go(SIM_PROBE);
+	return 0;
+
+    case SIM_PROBE:
+	if ((r = at_poll()) == 0)
+	    return 0;
+	if (r == 1) {
+	    sim_keys = 0;
+	    sim_n = 0;
+	    at_send("ATE0", 1000);
+	    sim_go(SIM_INIT);
+	    return 0;
+	}
+	if (++sim_n < 3) {
+	    at_send("AT", 500);
+	    return 0;
+	}
+	// Silent: press PWRKEY. Three presses with nothing to show for them
+	// and it says so, then keeps trying, slowly.
+	if (++sim_keys == 3) {
+	    csp_print_lit("sms! the modem does not answer");
+	    csp_println();
+	}
+	digitalWrite(CSP_MODEM_PWR, HIGH);
+	sim_go(SIM_KEY);
+	return 0;
+
+    case SIM_KEY:
+	if ((uint32_t)(now - sim_t0) < 1000)
+	    return 0;
+	digitalWrite(CSP_MODEM_PWR, LOW);
+	sim_go(SIM_BOOT);
+	return 0;
+
+    case SIM_BOOT:
+	if ((uint32_t)(now - sim_t0) < ((sim_keys >= 3) ? 60000UL : 4000UL))
+	    return 0;
+	sim_n = 0;
+	at_send("AT", 500);
+	sim_go(SIM_PROBE);
+	return 0;
+
+    case SIM_INIT:
+	if ((r = at_poll()) == 0)
+	    return 0;
+	if (r == -2) {
+	    sim_go(SIM_WAIT);            // gone quiet: probe again
+	    return 0;
+	}
+	switch (sim_n++) {
+	case 0:                          // ATE0 answered
+	    at_send("AT+CMEE=2", 1000);
+	    return 0;
+	case 1:                          // CMEE answered
+	    {
+		char cmd[16];
+		snprintf(cmd, sizeof(cmd), "AT+CMNB=%d", CSP_MODEM_CMNB);
+		at_send(cmd, 2000);
+	    }
+	    return 0;
+	case 2:                          // CMNB answered
+	    at_send("AT+CPIN?", 5000);
+	    return 0;
+	case 3:                          // what the card wants
+	    if (strstr(at_resp, "READY")) {
+		at_send("AT+CMGF=1", 1000);
+		return 0;
+	    }
+	    if (strstr(at_resp, "SIM PIN") && csp_sms_pin()[0] &&
+		!sim_pin_sent) {
+		char cmd[32];
+		snprintf(cmd, sizeof(cmd), "AT+CPIN=\"%s\"", csp_sms_pin());
+		sim_pin_sent = 1;
+		sim_n = 2;               // and ask again
+		at_send(cmd, 10000);
+		return 0;
+	    }
+	    csp_print_lit("sms! SIM: ");
+	    {
+		const char* l = strstr(at_resp, "+C");
+		csp_print_str(l ? l : "no answer");
+	    }
+	    sim_n = 0;
+	    sim_go(SIM_BOOT);            // in a while, again -- never the PIN
+	    sim_keys = 3;
+	    return 0;
+	default:                         // CMGF answered: ready for the network
+	    at_send("AT+CEREG?", 1000);
+	    sim_go(SIM_REG);
+	    return 0;
+	}
+
+    case SIM_REG:
+	if ((r = at_poll()) == 0)
+	    return 0;
+	if ((r == 1) && (strstr(at_resp, ",1") || strstr(at_resp, ",5"))) {
+	    csp_print_lit("sms: modem on the network");
+	    csp_println();
+	    sms_t0 = now;
+	    sim_go(SIM_IDLE);
+	    return 0;
+	}
+	if (sim_lost >= 3) {
+	    sim_go(SIM_WAIT);
+	    return 0;
+	}
+	sim_go(SIM_REG_WAIT);            // not yet: ask again in a while
+	return 0;
+
+    case SIM_REG_WAIT:
+	if ((uint32_t)(now - sim_t0) < 5000)
+	    return 0;
+	at_send("AT+CEREG?", 1000);
+	sim_go(SIM_REG);
+	return 0;
+
+    case SIM_LIST:
+	if ((r = at_poll()) == 0)
+	    return 0;
+	sim_go(SIM_IDLE);
+	return (r == 1) ? sms_take(at_resp, from, from_size, text, text_size) : 0;
+
+    case SIM_DEL:
+	if ((r = at_poll()) != 0)
+	    sim_go(SIM_IDLE);
+	return 0;
+
+    case SIM_PROMPT:
+	// The '>' that asks for the text, with no line end after it.
+	while (Serial1.available()) {
+	    char c = (char)Serial1.read();
+	    if (c == '>') {
+		const char* t = sms_txq_text[sms_txq_head];
+		while (*t)
+		    Serial1.write((uint8_t)*t++);
+		Serial1.write((uint8_t)26);  // Ctrl-Z ends the text
+		at_len = 0;
+		at_resp[0] = '\0';
+		at_until = now + 60000;      // a send on a live network: seconds
+		sim_go(SIM_SEND);
+		return 0;
+	    }
+	}
+	if ((uint32_t)(now - sim_t0) < 5000)
+	    return 0;
+	// No prompt. Right after a send the modem is often still busy with
+	// it: three tries, two seconds apart, and only then given up -- out
+	// loud, or a report that never arrives looks like one never asked for.
+	Serial1.write((uint8_t)27);          // ESC: abandon the command
+	if (++sms_tries < 3) {
+	    sms_tx_at = now + 2000;
+	    sim_go(SIM_IDLE);
+	    return 0;
+	}
+	csp_print_lit("sms! modem did not take the message to ");
+	csp_print_str(sms_txq_to[sms_txq_head]);
+	csp_println();
+	sms_tries = 0;
+	sms_txq_pop();
+	sim_go(SIM_IDLE);
+	return 0;
+
+    case SIM_SEND:
+	if ((r = at_poll()) == 0)
+	    return 0;
+	if (r != 1) {
+	    csp_print_lit("sms! the network refused the message to ");
+	    csp_print_str(sms_txq_to[sms_txq_head]);
+	    csp_println();
+	}
+	sms_tries = 0;
+	sms_txq_pop();
+	sms_tx_at = now + 500;               // let the modem settle first
+	sim_go(SIM_IDLE);
+	return 0;
+
+    case SIM_IDLE:
+    default:
+	if (sim_lost >= 3) {                 // three unanswered: start over
+	    sim_lost = 0;
+	    sim_go(SIM_WAIT);
+	    return 0;
+	}
+	// Out first: an answer is waited for by someone holding a phone.
+	if ((sms_txq_n > 0) && ((int32_t)(now - sms_tx_at) >= 0)) {
+	    char cmd[40];
+	    snprintf(cmd, sizeof(cmd), "AT+CMGS=\"%s\"",
+		     sms_txq_to[sms_txq_head]);
+	    at_send(cmd, 5000);
+	    sim_go(SIM_PROMPT);
+	    return 0;
+	}
+	if (sms_del >= 0) {
+	    char cmd[24];
+	    snprintf(cmd, sizeof(cmd), "AT+CMGD=%d", sms_del);
+	    sms_del = -1;
+	    at_send(cmd, 5000);
+	    sim_go(SIM_DEL);
+	    return 0;
+	}
+	if (!sms_rx_have && ((uint32_t)(now - sms_t0) >= CSP_SMS_POLL_MS)) {
+	    sms_t0 = now;
+	    at_send("AT+CMGL=\"REC UNREAD\"", 10000);
+	    sim_go(SIM_LIST);
+	}
+	return 0;
+    }
+}
+
+#endif
 
 void csp_sms_modem_poll(void)
 {
@@ -1773,6 +2185,40 @@ static void boot_mark(int n)
 #define boot_mark(n) ((void)0)
 #endif
 
+// ============================================================
+// Watchdog
+// ============================================================
+//
+// CSP_WATCHDOG=<seconds>: a loop() that does not come round within that long
+// resets the board. Without one, a node nobody can reach hangs until its
+// battery is flat -- wintersbone on Gotland, 2026-10-12, after a firmware
+// update, on a LiPo that kept the hung processor alive for days. Started at
+// the end of setup(), so a slow boot is not mistaken for a hang; /hang stops
+// the loop on purpose, to see it work.
+//
+// ESP32 only so far: the one board here to try it on. Anywhere else asking for
+// it is a build error rather than a watchdog that silently is not there.
+#if defined(CSP_WATCHDOG)
+#if defined(ESP32)
+#include <esp_task_wdt.h>
+// The task watchdog the core already runs, given our timeout and the loop
+// task -- which the core then feeds after every loop().
+static void wdt_start(void)
+{
+    esp_task_wdt_config_t cfg;
+
+    cfg.timeout_ms = (uint32_t)CSP_WATCHDOG * 1000u;
+    cfg.idle_core_mask = 0;
+    cfg.trigger_panic = true;
+    if (esp_task_wdt_reconfigure(&cfg) != ESP_OK)
+	(void)esp_task_wdt_init(&cfg);
+    enableLoopWDT();
+}
+#else
+#error "CSP_WATCHDOG: no watchdog for this board yet"
+#endif
+#endif
+
 void setup()
 {
     uint32_t t0;
@@ -1814,6 +2260,27 @@ void setup()
 	if (rc & PM_RCAUSE_EXT)   csp_print_lit(" button");
 	if (rc & PM_RCAUSE_WDT)   csp_print_lit(" watchdog");
 	if (rc & PM_RCAUSE_SYST)  csp_print_lit(" software");
+	csp_println();
+    }
+#elif defined(ESP32)
+    // The same question on an ESP32, where the answer is one value. A task
+    // watchdog reset is a panic: the loop was stuck, CSP_WATCHDOG fired.
+    {
+	esp_reset_reason_t rr = esp_reset_reason();
+	csp_print_lit("reset: ");
+	switch (rr) {
+	case ESP_RST_POWERON:  csp_print_lit("power-on"); break;
+	case ESP_RST_EXT:      csp_print_lit("button"); break;
+	case ESP_RST_SW:       csp_print_lit("software"); break;
+	case ESP_RST_PANIC:    csp_print_lit("panic"); break;
+	case ESP_RST_INT_WDT:  csp_print_lit("interrupt watchdog"); break;
+	case ESP_RST_TASK_WDT: csp_print_lit("watchdog"); break;
+	case ESP_RST_WDT:      csp_print_lit("watchdog (other)"); break;
+	case ESP_RST_BROWNOUT: csp_print_lit("brownout"); break;
+	case ESP_RST_DEEPSLEEP: csp_print_lit("deep sleep"); break;
+	case ESP_RST_USB:      csp_print_lit("usb"); break;   // the port's DTR/RTS
+	default:               csp_print_uint((uint32_t)rr); break;
+	}
 	csp_println();
     }
 #endif
@@ -1884,6 +2351,9 @@ void setup()
 
 #if !defined(CSP_EXEC_ONLY)
     csp_print_line("CandySpeak ready");
+#endif
+#if defined(CSP_WATCHDOG)
+    wdt_start();
 #endif
 }
 

@@ -292,6 +292,8 @@ buftype -> 'T_CONSOLE' : [{console}].
 buftype -> 'T_REPL' : [{repl}].
 %% sms <param>: a modem; the string #param lists the numbers
 buftype -> 'T_SMS' 'WORD' : [{sms,'$2'}].
+%% sms <param> <pin>: ...and the string #param with the SIM's PIN
+buftype -> 'T_SMS' 'WORD' 'WORD' : [{sms,'$2','$3'}].
 %% onewire <port>:<pin> <param>: a 1-Wire device; the string #param holds its id
 buftype -> 'T_ONEWIRE' 'INT' 'COLON' 'INT' 'WORD' :
     [{onewire,{'$2','$4'},'$5'}].

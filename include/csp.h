@@ -1108,6 +1108,13 @@ typedef enum {
 #define TR_I2C_REG(x)   ((x) & 0xff)
 
 #define TR_OW_XREF(port,pin)  (((uint32_t)(port) << 8) | (uint32_t)(pin))
+// TR_SMS: the string #param listing the numbers, and the one holding the SIM
+// PIN -- stored plus one, so 0 is "the card has none".
+#define TR_SMS_XREF(owners,pin) ((uint32_t)(owners) | \
+				  ((uint32_t)((pin) + 1) << 16))
+#define TR_SMS_OWNERS(x)      ((index_t)((x) & 0xffff))
+#define TR_SMS_HAS_PIN(x)     (((x) >> 16) != 0)
+#define TR_SMS_PIN(x)         ((index_t)(((x) >> 16) - 1))
 #define TR_OW_PORT(x)  (((x) >> 8) & 0x0f)
 #define TR_OW_PIN(x)   ((x) & 0xff)
 #define TR_UART_XREF(unit,baud) (((uint32_t)(unit) << 28) | (uint32_t)(baud))
@@ -3478,6 +3485,9 @@ extern int  csp_sms_send(csp_rt_t* st, uint32_t xref, const uint8_t* data,
 extern int  csp_sms_modem_recv(char* from, uint16_t from_size,
 			       char* text, uint16_t text_size);
 extern int  csp_sms_modem_send(const char* to, const char* text);
+// The SIM PIN the program names, "" for none: what the modem layer sends with
+// AT+CPIN when the card asks. Kept up to date by csp_sms_tick.
+extern const char* csp_sms_pin(void);
 // Stepped every cycle, whether or not a message is waiting to be taken: the
 // modem's own work (sending, listing) must not stall behind a busy editor.
 extern void csp_sms_modem_poll(void);

@@ -1,0 +1,10 @@
+{modes, [seq]}.
+{stimulus, "apps/wintersbone/tests/power_flicker.dat"}.
+%% Still flickering at the end: the all-clear has gone anyway, once.
+{time, 200000}.
+{checks, [
+  {output_count, "sms> +46700000000: POWER OFF", 1},
+  {output_count, "sms> +46700000000: Power back", 1},
+  {final_object_var, "Alarm.pwr", "pwr.Active", 0},
+  {final_var, "Mains", 1}
+]}.

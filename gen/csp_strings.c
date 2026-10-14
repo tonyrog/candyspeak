@@ -270,6 +270,7 @@ rochar s_cmd_save[] RODATA = "save";
 rochar s_cmd_load[] RODATA = "load";
 rochar s_cmd_quit[] RODATA = "quit";
 rochar s_cmd_exit[] RODATA = "exit";
+rochar s_cmd_hang[] RODATA = "hang";
 rochar s_h_help[] RODATA = "Show this help";
 rochar s_h_list[] RODATA = "List rules (F=flash E=eeprom-backed R=ram P=patches a #param S=setting)";
 rochar s_h_state[] RODATA = "Show current values";

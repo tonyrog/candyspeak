@@ -93,7 +93,7 @@ static int sms_owners(csp_rt_t* st, uint32_t xref, const char* want,
 		      void (*fn)(const char* to, const char* text),
 		      const char* text)
 {
-    value_t v = csp_value(st, (index_t)xref);
+    value_t v = csp_value(st, TR_SMS_OWNERS(xref));
     sindex_t h = (sindex_t)v.i;
     uint8_t len = csp_str_len(st, h);
     char num[CSP_SMS_NUM];
@@ -192,11 +192,34 @@ static void sms_flush_reply(void)
 // Every cycle: take a message off the modem when the last one has been
 // delivered, and send an event that has gone quiet. "Quiet" is a cycle with no
 // new bytes -- a rule printing three lines in one cycle is one message.
+// The SIM PIN, copied out of its #param every tick: short, and a `>` patch
+// of it is then what the modem sees the next time it asks.
+static char sms_pin[12];
+
+const char* csp_sms_pin(void) { return sms_pin; }
+
+static void sms_pin_update(csp_rt_t* st, uint32_t xref)
+{
+    sindex_t h;
+    uint8_t len, i;
+
+    sms_pin[0] = '\0';
+    if (!TR_SMS_HAS_PIN(xref))
+	return;
+    h = (sindex_t)csp_value(st, TR_SMS_PIN(xref)).i;
+    len = csp_str_len(st, h);
+    for (i = 0; (i < len) && (i < sizeof(sms_pin) - 1); i++)
+	sms_pin[i] = (char)csp_str_char(st, h, i);
+    sms_pin[i] = '\0';
+}
+
 void csp_sms_tick(csp_rt_t* st, uint32_t xref)
 {
     char from[CSP_SMS_NUM];
     char text[CSP_SMS_TEXT];
     uint16_t i;
+
+    sms_pin_update(st, xref);
 
     if ((sms_evt_len > 0) && !sms_evt_fresh)
 	sms_flush_event(st, xref);

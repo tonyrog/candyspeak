@@ -1,3 +1,4 @@
-# The program the board carries: PROG=boards/wintersbone. main.csp imports
-# pins.csp and lib/alarm.csp.
-main.csp
+# The program the board carries: PROG=boards/wintersbone. The application
+# lives in apps/wintersbone, the same for every board it runs on; it imports
+# this directory's pins.csp through the `board` root, and lib/alarm.csp.
+../../apps/wintersbone/main.csp

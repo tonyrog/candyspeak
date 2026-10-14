@@ -704,7 +704,8 @@
 %%   tcp <port> <ip>                -- out: connect there and write
 %%   uart <unit>                    -- the board's own baud
 %%   uart <unit> <baud>             -- ...or this one
-%%   sms <param>                    -- a modem; <param> lists the numbers
+%%   sms <param> [<pin>]            -- a modem; <param> lists the numbers,
+%%                                     <pin> the string #param with the SIM PIN
 %%   onewire <port>:<pin> <param>   -- a 1-Wire device; <param> holds its id
 %%
 %% PORT FIRST, and the optional address after it. The other order reads better
@@ -746,6 +747,7 @@
   {con_kind, tok},
   {sms_kind, tok},
   {sms_owner, str},
+  {sms_pin, str},
   {ow_kind, tok},
   {ow_pin, {pat, port_pin}},
   {ow_rom, str}]}.
@@ -780,7 +782,7 @@
                    [{tok, con_kind, repl}]]}]},
   %% A modem. The operand is a NAME, not a number: the string #param that lists
   %% who may talk to the node.
-  {opt, [{tok, sms_kind, sms}, {str, sms_owner}]},
+  {opt, [{tok, sms_kind, sms}, {str, sms_owner}, {opt, [{str, sms_pin}]}]},
   %% A 1-Wire device. The operand is a NAME: the string #param with its id.
   {opt, [{tok, ow_kind, onewire}, {pat, port_pin, ow_pin}, {str, ow_rom}]}]}.
 

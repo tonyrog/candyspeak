@@ -1,5 +1,5 @@
 {modes, [seq]}.
-{stimulus, "boards/wintersbone/tests/power_back.dat"}.
+{stimulus, "apps/wintersbone/tests/power_back.dat"}.
 {cycles, 300}.
 {checks, [
   {final_object_var, "Alarm.pwr", "pwr.Active", 0},

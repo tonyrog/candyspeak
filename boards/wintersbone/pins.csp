@@ -15,7 +15,11 @@
 
 // The LiPo, through the board's own divider: 4.3 V full scale. ADC_BATTERY is
 // pin 32 in the MKR variants -- check against variant.h before trusting it.
+// Batt * BATT_MV_MUL / BATT_MV_DIV is millivolts, which is all the
+// application knows about it.
 #analog Batt:10 unsigned in 32
+#define BATT_MV_MUL 4300
+#define BATT_MV_DIV 1023
 
 // Water pressure, a 0.5-4.5 V transducer on 5 V, divided by 2/3 into A1.
 #analog Press:10 unsigned in 16
@@ -33,6 +37,9 @@
 // off first thing; initVariant does not. Register 5, 0x9A -> 0x8A: watchdog
 // bits 5:4 to 00, charge termination and safety timer left as they were.
 #buffer PmicCtl:1 out i2c 0 0x6B 0x05
+#in INIT
+  PmicCtl = 0x8A
+#end
 
 // Two DS18B20 on one 1-Wire line, D5, with a pull-up to 3.3 V (4.7k; two 10k
 // in parallel do). Powered -- three wires -- not parasite.

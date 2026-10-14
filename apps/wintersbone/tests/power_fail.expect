@@ -1,5 +1,5 @@
 {modes, [seq]}.
-{stimulus, "boards/wintersbone/tests/power_fail.dat"}.
+{stimulus, "apps/wintersbone/tests/power_fail.dat"}.
 %% Gone from 1000 ms; OnDelay 500 later the alarm goes, once.
 {cycles, 300}.
 {checks, [

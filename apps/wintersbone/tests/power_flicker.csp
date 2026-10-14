@@ -1,0 +1,7 @@
+// A weak supply: after a real outage the mains comes back, but the charger's
+// power-good bit drops for a second every few seconds -- what a Raspberry Pi's
+// USB port behind a hub did on simes, 2026-10-12. It is still the mains. The
+// all-clear must go out; before, every drop restarted the alarm's OffDelay and
+// it never did, and the repeat sent POWER OFF again every six hours. The
+// node's own delays: 30 s to POWER OFF, 60 s to Power back.
+#import "../main.csp"

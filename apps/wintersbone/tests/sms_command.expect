@@ -1,5 +1,5 @@
 {modes, [seq]}.
-{stimulus, "boards/wintersbone/tests/sms_command.dat"}.
+{stimulus, "apps/wintersbone/tests/sms_command.dat"}.
 {cycles, 120}.
 {checks, [
   {output_has, "sms> +46701111111: 200"},

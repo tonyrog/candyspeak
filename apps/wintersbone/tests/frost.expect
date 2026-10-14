@@ -1,5 +1,5 @@
 {modes, [seq]}.
-{stimulus, "boards/wintersbone/tests/frost.dat"}.
+{stimulus, "apps/wintersbone/tests/frost.dat"}.
 {cycles, 200}.
 {checks, [
   {final_var, "TinC", 30},

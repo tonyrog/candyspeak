@@ -144,6 +144,9 @@ static int cmd_upgrade(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_live(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_resume(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_onewire(csp_rt_t* st, int argc, char* argv[]);
+#if defined(CSP_WATCHDOG)
+static int cmd_hang(csp_rt_t* st, int argc, char* argv[]);
+#endif
 
 // name and help point into FLASH (strings.tab); the table itself stays in RAM.
 // Moving the whole table would put the FUNCTION POINTERS in flash too, and
@@ -175,8 +178,25 @@ static const csp_cmd_t builtin_cmds[] = {
     { ros_cmd_load,   ros_h_load,    cmd_load },
     { ros_cmd_quit,   ros_h_quit,    cmd_quit },
     { ros_cmd_exit,   NULL,        cmd_quit },
+#if defined(CSP_WATCHDOG)
+    { ros_cmd_hang,   NULL,        cmd_hang },    // not in /help: a test
+#endif
     { NULL, NULL, NULL }
 };
+
+#if defined(CSP_WATCHDOG)
+// Stop the loop on purpose, so the watchdog's reset can be seen to happen --
+// the only way to know it is there before the day it is needed.
+static int cmd_hang(csp_rt_t* st, int argc, char* argv[])
+{
+    volatile int forever = 1;
+    (void)st; (void)argc; (void)argv;
+    csp_print_line("hanging -- the watchdog should reset the board");
+    while (forever)
+	;
+    return CSP_CMD_OK;
+}
+#endif
 
 static int cmd_help(csp_rt_t* st, int argc, char* argv[])
 {
@@ -1472,7 +1492,11 @@ match:
 		    // The NAME of the list, as written: the endpoint is that
 		    // #param's declaration.
 		    csp_print_lit(" sms ");
-		    csp_print_str_at(st, decl_name_pos(st, (index_t)ep));
+		    csp_print_str_at(st, decl_name_pos(st, TR_SMS_OWNERS(ep)));
+		    if (TR_SMS_HAS_PIN(ep)) {
+			csp_print_blank();
+			csp_print_str_at(st, decl_name_pos(st, TR_SMS_PIN(ep)));
+		    }
 		    break;
 		case TR_ONEWIRE:
 		    // The pin, then the NAME of the #param holding the id: the

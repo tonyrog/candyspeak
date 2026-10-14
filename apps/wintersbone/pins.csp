@@ -1,0 +1,8 @@
+// The board the tests run on: the MKR NB 1500's pins.csp, as it is.
+//
+// main.csp imports `board "pins.csp"`. A build names the board directory as
+// that root; csp on the host, with no root given, takes the nearest directory
+// above the first file that has a pins.csp -- this one, for the tests in
+// tests/. So the tests stimulate the names a real board declares, and a board
+// that renames one breaks them.
+#import "../../boards/wintersbone/pins.csp"

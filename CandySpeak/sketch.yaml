@@ -87,3 +87,9 @@ profiles:
     libraries:
       - MKRNB (1.6.0)
       - OneWire (2.3.8)
+  wintersbone_s3:
+    fqbn: esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,CDCOnBoot=cdc,USBMode=hwcdc,PartitionScheme=app3M_fat9M_16MB
+    platforms:
+      - platform: esp32:esp32 (3.3.11)
+    libraries:
+      - OneWire (2.3.8)

@@ -2,3 +2,4 @@
 #import "../main.csp"
 > PwrDelay = 300
 > PwrBack = 300
+> PwrGone = 300

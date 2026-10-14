@@ -17,6 +17,11 @@
 #include <stdint.h>
 #include "csp_chip_io.h"
 
+// C linkage from a C++ caller -- an Arduino sketch is compiled as C++.
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define CSP_LIB_TRUE  (-1)
 #define CSP_LIB_FALSE 0
 
@@ -174,5 +179,9 @@ extern int  csp_lib_step(uint32_t now, uint32_t* wait);
 // csp_lib_putc. Both are weak no-ops in src/csp_lib.c.
 extern void csp_lib_poll(void);
 extern int  csp_lib_getc(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

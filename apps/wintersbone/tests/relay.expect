@@ -1,5 +1,5 @@
 {modes, [seq]}.
-{stimulus, "boards/wintersbone/tests/relay.dat"}.
+{stimulus, "apps/wintersbone/tests/relay.dat"}.
 {cycles, 20}.
 {checks, [
   {final_var, "Rel1", 1},

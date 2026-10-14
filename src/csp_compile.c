@@ -4551,7 +4551,21 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	    csp_set_error(st, ERR_SMS_OWNERS);
 	    return -1;
 	}
-	xref = (uint32_t)ox;
+	// The SIM PIN, if the card has one: a string #param too, so it belongs
+	// to the node -- set there and kept by /save -- and never to the build.
+	if (d.sms_pin.len > 0) {
+	    index_t px = csp_lookup_decl(st, &d.sms_pin);
+	    if ((px == BAD_INDEX) ||
+		(((ot = decl(st, INDEX(px), type)) != DECL_VARIABLE) &&
+		 (ot != DECL_CONSTANT)) ||
+		(CSP_MASK(decl(st, INDEX(px), vt), TYPE_BITS) != V_STRING)) {
+		csp_set_error(st, ERR_SMS_OWNERS);
+		return -1;
+	    }
+	    xref = TR_SMS_XREF(ox, px);
+	}
+	else
+	    xref = (uint32_t)ox;
 	break;
     }
     case TR_ONEWIRE: {

@@ -1,0 +1,5 @@
+// The adapter drops out for 0.2 s, under OnDelay: no message. PwrGone is cut
+// to 0.1 s so the drop reaches the alarm, and it is OnDelay that stops it.
+#import "../main.csp"
+> PwrDelay = 500
+> PwrGone = 100

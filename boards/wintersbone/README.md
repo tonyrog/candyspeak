@@ -5,15 +5,20 @@ and outside, notices when the mains adapter goes and the node is running on its
 battery, switches four 230 V relays, and optionally watches the pressure in a
 water line. Alarms go out, and commands come in, by SMS.
 
-    ./csp boards/wintersbone/main.csp                  run it on the host
-    escript tests/run_tests.escript boards/wintersbone/tests
-    make -f Makefile.board BOARD=wintersbone           build for the board
+    ./csp apps/wintersbone/main.csp                    run it on the host
+    escript tests/run_tests.escript apps/wintersbone/tests
+    make -f Makefile.board BOARD=wintersbone PROG=boards/wintersbone
+                                                        build for the board
+
+The application is in `apps/wintersbone`, the same for every board it runs on;
+this directory is the MKR NB 1500 it runs on here.
 
 | File | What it is |
 |---|---|
 | `pins.csp` | the hardware: relays, battery, pressure, the charger and two DS18B20 |
-| `main.csp` | the logic: measurements, four alarms, relays, the status report |
-| `tests/` | power fail, power back, a glitch under the delay, frost, a relay |
+| `PROG` | the program the board carries: `apps/wintersbone/main.csp` |
+| `apps/wintersbone/main.csp` | the logic: measurements, four alarms, relays, the status report |
+| `apps/wintersbone/tests/` | power fail, power back, flicker, a glitch under the delay, frost, a relay, SMS |
 
 ## Hardware
 
@@ -109,8 +114,9 @@ stdout.
 The modem side is `port/csp_arduino.c` (`CSP_HAS_SMS`, Arduino's MKRNB
 library): one AT command in flight at a time, stepped once a cycle, so neither
 registering nor sending stops the rules. Unread messages are listed every 5 s
-(`CSP_SMS_POLL_MS`) and deleted once taken. If the SIM has a PIN, give it as
-`{'CSP_SMS_PIN', "\"1234\""}` in `wintersbone.terms`.
+(`CSP_SMS_POLL_MS`) and deleted once taken. If the SIM has a PIN, set it on
+the node -- `> SimPin = "1234"` and `/save` -- not in the build: it belongs to
+the card in that node, like the 1-Wire ids.
 
 Not yet tried against a real network. Things that may need a look:
 

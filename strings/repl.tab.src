@@ -23,6 +23,7 @@ cmd_save save
 cmd_load load
 cmd_quit quit
 cmd_exit exit
+cmd_hang hang
 h_help Show this help
 h_list List rules (F=flash E=eeprom-backed R=ram P=patches a #param S=setting)
 h_state Show current values
