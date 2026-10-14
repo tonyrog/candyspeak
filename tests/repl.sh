@@ -1304,6 +1304,51 @@ else
     echo "  FAIL #local ROM did not build"; fail=$((fail+1))
 fi
 
+# An image's names after a reset to the baseline. The floor every reset uses,
+# CSP_BASE_STRP, took rom_strp -- left at 0 when strings moved into segments --
+# so a reset cut the image's text at what csp_rt_init had made (61 bytes), and
+# from there every unused byte at the end of a string segment counted as an
+# empty name: the names after it slid along by that many. On wintersbone_s3 the
+# settings then matched the wrong declarations (2026-10-14). The reset here is
+# a stale EEPROM -- a format-11 patch, rejected past its header, which is what
+# rolls back to the floor. Twenty-four names to need a second segment.
+cat > "$D/romnames.csp" <<'EOF'
+#variable LongName01 = 1
+#variable LongName02 = 2
+#variable LongName03 = 3
+#variable LongName04 = 4
+#variable LongName05 = 5
+#variable LongName06 = 6
+#variable LongName07 = 7
+#variable LongName08 = 8
+#variable LongName09 = 9
+#variable LongName10 = 10
+#variable LongName11 = 11
+#variable LongName12 = 12
+#variable LongName13 = 13
+#variable LongName14 = 14
+#variable LongName15 = 15
+#variable LongName16 = 16
+#variable LongName17 = 17
+#variable LongName18 = 18
+#variable LongName19 = 19
+#variable LongName20 = 20
+#variable LongName21 = 21
+#variable LongName22 = 22
+#variable LongName23 = 23
+#variable LongName24 = 24
+EOF
+printf '%b' '\x43\x53\x50\x00\x0b\x00\x01\x00\x00\x00\xff\xff\x1e\x26\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x15\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x54\x14\x00\x00\xff\xff\x2d\xae' > "$D/stale.db"
+if build_rom "$D/romnames.csp" "$D/romnames_fw"; then
+    got=$(printf '/list\n/quit\n' | repl "$D/romnames_fw" "$D/stale.db" |
+	      grep -E '^#variable LongName(14|24):' | sed 's#  // .*##')
+    ck "an image's names survive a reset to the baseline" \
+       '#variable LongName14:32 integer = 14
+#variable LongName24:32 integer = 24' "$got"
+else
+    echo "  FAIL romnames ROM did not build"; fail=$((fail+1))
+fi
+
 # --- the LPC / LPCOpen port -------------------------------------------------
 # csp_lpcopen.c against stubbed chip drivers (tests/lpcstub). No LPC toolchain
 # is involved: the stub declares the LPCOpen functions with the signatures the

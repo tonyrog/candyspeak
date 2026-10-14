@@ -1,0 +1,4 @@
+# The program the board carries: PROG=boards/wintersbone_s3. The application
+# is apps/wintersbone, the same as on the MKR; it imports this directory's
+# pins.csp through the `board` root.
+../../apps/wintersbone/main.csp

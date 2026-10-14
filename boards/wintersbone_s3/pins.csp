@@ -1,0 +1,104 @@
+// LilyGO T-SIM7080G-S3: ESP32-S3, SIMCom SIM7080G, AXP2101 power manager.
+// The names apps/wintersbone/main.csp expects, on this board.
+//
+// From LilyGO's README (github.com/Xinyuan-LilyGO/LilyGo-T-SIM7080G) -- check
+// against the schematic before anything carrying 230 V is wired to it:
+//
+//   AXP2101 I2C   SDA 15, SCL 7, IRQ 6     (the build's CSP_I2C_SDA / SCL)
+//   modem         RXD 4, TXD 5, PWR 41, DTR 42, RI 3 (the build's
+//                 CSP_MODEM_RX / TX / PWR)
+//   PSRAM         35..37, taken
+//   camera, SD    1, 2, 8..14, 16..18, 21, 38..40, 47, 48 -- free with
+//                 neither fitted, which they are not here
+//
+// DECLARATIONS AND ONE INIT BLOCK, no loose rules: a rule outside an #in runs
+// in INIT and NORMAL only.
+
+// Four relays, active low like the MKR's module.
+#digital Rel1 out 11
+#digital Rel2 out 12
+#digital Rel3 out 13
+#digital Rel4 out 14
+
+// Four analog inputs on ADC1 (GPIO 1..10, the one that works with the radio
+// on). Press is the first, as the application reads it; Ain2..Ain4 are for
+// the current through the relays, not read by anything yet. 10 bits, so the
+// application's 0-1023 scaling holds.
+#analog Press:10 unsigned in 1
+#analog Ain2:10 unsigned in 2
+#analog Ain3:10 unsigned in 9
+#analog Ain4:10 unsigned in 10
+
+// THE AXP2101, 0x34 on bus 0. Status 1 (0x00) bit 5 is VBUS good: the USB
+// supply -- the mains adapter -- is there and usable. Pmic is the name the
+// status report prints, whatever the part.
+#buffer Pmic:1 in i2c 0 0x34 0x00
+#field  PwrGood:1 Pmic[5]
+// Bit 3: a battery is there. Without one Batt below reads whatever the pin
+// floats to -- 600 to 2300 mV on this board, 2026-10-14.
+#field  BattIn:1 Pmic[3]
+
+// The battery in millivolts, already: 0x34 holds the top five bits, 0x35 the
+// low eight. Big-endian, so the low 13 bits of the pair are [3..15].
+#buffer PmuVbat:2 in i2c 0 0x34 0x34
+#field  Batt:13 unsigned big PmuVbat[3..15]
+#define BATT_MV_MUL 1
+#define BATT_MV_DIV 1
+
+// THE MODEM'S SUPPLY, and the battery ADC. DC3 at 3.0 V is the SIM7080G's own
+// (0x84 = 0x66), on in 0x80 bit 2; BLDO1 (1.8 V, 0x96 = 13) is the level
+// shifter between it and the ESP32 -- LilyGO: never off, or the two cannot
+// talk -- and BLDO2 (3.3 V, 0x97 = 28) the GPS antenna, on in 0x90 bits 4 and
+// 5. The values are what LilyGO's own firmware had set, read off this board
+// (2026-10-14). After a total loss of power the PMU starts from its defaults,
+// and this puts them back. Channel control (0x30) bit 0 is the battery ADC;
+// off, 0x34/0x35 read nothing. Bit 1 is the TS pin's, below.
+//
+// ONLY ONCE A REAL READING IS IN. An i2c read starts in the output pass and
+// lands in the next input, so at INIT every `in` buffer here still reads 0 --
+// and `PmuDcSet = PmuDcOn | 0x04` there wrote 0x04 to 0x80: DC3 on and DC1,
+// the ESP32's own 3.3 V, off. The board switched itself off (2026-10-14).
+// DC1 is on whenever this runs at all, so bit 0 of 0x80 says the read came.
+// Each write goes out only while what it sets is missing, so once. Voltages
+// are declared, and so written, before the switches that turn them on.
+#buffer PmuDc3V:1   out i2c 0 0x34 0x84
+#buffer PmuBldo1V:1 out i2c 0 0x34 0x96
+#buffer PmuBldo2V:1 out i2c 0 0x34 0x97
+#buffer PmuDcOn:1   in  i2c 0 0x34 0x80
+#buffer PmuDcSet:1  out i2c 0 0x34 0x80
+#buffer PmuLdoOn:1  in  i2c 0 0x34 0x90
+#buffer PmuLdoSet:1 out i2c 0 0x34 0x90
+#buffer PmuAdc:1    in  i2c 0 0x34 0x30
+#buffer PmuAdcSet:1 out i2c 0 0x34 0x30
+// Battery detection (0x68 bit 0) and charging (0x18 bit 1): both on from the
+// factory, but the PMU keeps what it was last told, and other firmware may
+// have told it otherwise. The charge voltage (0x64 = 3, 4.2 V) and current
+// (0x62 = 9, 300 mA) are left alone: read off this board, right for a LiPo.
+// THE TS PIN, OFF. The AXP2101 reads a battery thermistor on it, and this
+// board has none: left on, the charge LED blinks and charging is refused
+// (LilyGO). Off is TS control (0x50) low nibble 0x1, and ADC channel 1
+// (0x30 bit 1) cleared -- XPowersLib's disableTSPinMeasure.
+#buffer PmuTs:1     in  i2c 0 0x34 0x50
+#buffer PmuTsSet:1  out i2c 0 0x34 0x50
+#buffer PmuDet:1    in  i2c 0 0x34 0x68
+#buffer PmuDetSet:1 out i2c 0 0x34 0x68
+#buffer PmuChg:1    in  i2c 0 0x34 0x18
+#buffer PmuChgSet:1 out i2c 0 0x34 0x18
+
+#in INIT NORMAL
+  PmuDc3V = 0x66, PmuDcSet = PmuDcOn | 0x04 ? (PmuDcOn & 0x01) != 0 && (PmuDcOn & 0x04) == 0
+  PmuBldo1V = 13, PmuBldo2V = 28, PmuLdoSet = PmuLdoOn | 0x30 ? (PmuDcOn & 0x01) != 0 && (PmuLdoOn & 0x30) != 0x30
+  PmuAdcSet = (PmuAdc | 0x01) & 0xFD ? (PmuDcOn & 0x01) != 0 && (PmuAdc & 0x03) != 0x01
+  PmuTsSet = (PmuTs & 0xF0) | 0x10 ? (PmuDcOn & 0x01) != 0 && (PmuTs & 0x0F) != 0x01
+  PmuDetSet = PmuDet | 1 ? (PmuDcOn & 0x01) != 0 && (PmuDet & 0x01) == 0
+  PmuChgSet = PmuChg | 2 ? (PmuDcOn & 0x01) != 0 && (PmuChg & 0x02) == 0
+#end
+
+// Two DS18B20 on one 1-Wire line, GPIO 21, as on the MKR's D5: ids set on the
+// node with `> TinRom = "..."` and /save.
+#param  TinRom  string = ""
+#param  ToutRom string = ""
+#buffer Tin:2  in onewire 0:21 TinRom
+#buffer Tout:2 in onewire 0:21 ToutRom
+#field  TinRaw:16  Tin[0..15]
+#field  ToutRaw:16 Tout[0..15]

@@ -1,0 +1,35 @@
+%% wintersbone_s3 -- the SMS alarm node on a LilyGO T-SIM7080G-S3.
+%%
+%% ESP32-S3 (16 MB flash, 8 MB octal PSRAM), a SIMCom SIM7080G (Cat-M and
+%% NB-IoT) and an AXP2101 power manager. The application is
+%% apps/wintersbone, as on boards/wintersbone; pins.csp here is what it reads
+%% and drives on this board.
+%%
+%% Two serial ports on the USB side: the ESP32-S3's own USB (console and
+%% upload, /dev/ttyACM0) and the modem's (ttyUSB0..3, AT on ttyUSB3) -- the
+%% second only while the modem is powered.
+{board, wintersbone_s3,
+ [{toolchain, arduino_cli},
+  {chip, esp32s3},
+  %% The console on the S3's own USB (hwcdc, on from boot), the 16 MB flash
+  %% and the octal PSRAM the board has; 3 MB for the sketch.
+  {fqbn, "esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,CDCOnBoot=cdc,USBMode=hwcdc,PartitionScheme=app3M_fat9M_16MB"},
+  {port, "/dev/ttyACM0"},
+  {nm, "xtensa-esp32s3-elf-nm"},
+  {optimize, "-Os"},
+  {platform, "esp32:esp32", "3.3.11"},
+  {libraries, [{"OneWire", "2.3.8"}]},
+
+  {support_reactive, 0},
+  {use_statistics, 0},
+
+  %% Wire for the AXP2101 -- on 15/7, not the S3's default pins -- OneWire
+  %% for the temperatures, the console rings the SMS route uses, and the
+  %% SIM7080G on its UART: RX 4 and TX 5 on the ESP32's side, PWRKEY 41.
+  %% A watchdog: eight seconds without a loop() and the board resets.
+  {define, ['CSP_HAS_I2C', 'CSP_HAS_ONEWIRE',
+            {'CSP_I2C_SDA', 15}, {'CSP_I2C_SCL', 7},
+            {'CSP_CONSOLE_BYTES', 256},
+            'CSP_HAS_SMS', 'CSP_SMS_SIM7080',
+            {'CSP_MODEM_RX', 4}, {'CSP_MODEM_TX', 5}, {'CSP_MODEM_PWR', 41},
+            {'CSP_WATCHDOG', 8}]}]}.

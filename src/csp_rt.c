@@ -3522,11 +3522,9 @@ NOINLINE int csp_load_image(csp_rt_t* st, const uint8_t* base)
     }
     st->rom_nd   = nd;
     st->rom_nn   = h.n_instr;
-    // 0: an image has no flat string section any more. Identifier text came in
-    // with the DECLARATIONS, as DECL_SEGMENT runs, so there is no ROM/RAM split
-    // in the string space -- the header's n_str is how many BYTES of those
-    // segments are used, which is where ps.strp picks up below.
-    st->rom_strp = 0;
+    // An image has no flat string section any more: identifier text comes in
+    // the image's INSTRUCTIONS, as OP_SEGMENT runs. rom_strp is set below,
+    // once the segments have been found and measured.
     st->rom_nedg = h.n_edg;
     // A corrupt graph is recoverable where a corrupt section above is not: drop
     // the baked graph and let csp_cycle fall back to full sequential (rom_nedg
@@ -3542,10 +3540,19 @@ NOINLINE int csp_load_image(csp_rt_t* st, const uint8_t* base)
     // (INIT/NORMAL name offsets) still resolves correctly through the flash.
     st->ps.nd   = st->rom_nd;
     st->ps.nn   = st->rom_nn;
-    // Not rom_strp (0) -- the image's names are in its segments. Derive how much
-    // is used from the LAST one: every earlier segment is full, so the total is
-    // (nseg-1) whole segments plus that one's high-water mark.
+    // The image's names are in its segments. Derive how much is used from the
+    // LAST one: every earlier segment is full, so the total is (nseg-1) whole
+    // segments plus that one's high-water mark.
     csp_str_resize(st);
+    // AND THAT IS THE ROM's TEXT, the floor every "back to the baseline" --
+    // /clear, /undo, a failed EEPROM load -- resets ps.strp to (CSP_BASE_STRP).
+    // It was left at 0, so the floor was what csp_rt_init had made before the
+    // image came in (61 bytes on wintersbone_s3): a reset cut the image's text
+    // there, csp_str_skip_fill stopped skipping segment tails beyond it, and
+    // every unused byte at the end of a segment counted as an empty name.
+    // Names after the first short segment shifted by that many -- six, the
+    // board's /list showing PmuDcSet's record as "PmuVbat" (2026-10-14).
+    st->rom_strp = st->ps.strp;
     csp_str_recount(st);              // count the ROM's strings into ps.nstr
     st->gsx = 0;                      // State is ROM decl 0
     if (st->cs)

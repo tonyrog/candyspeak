@@ -18,43 +18,49 @@ file(Filename) ->
     end.
 
 source(_Strings, Decl, Code) ->
-    {ok, Ds} = decl(Decl),
-    {ok, Cs} = instr(Code), %% build rule ast
-    {Ds, Cs}.
+    {ok, Ds={As,Dmap}} = decl(Decl),
+    {ok, Cs} = instr(Code, Ds), %% build rule ast
+    {As, Dmap, Cs}.
 
 decl(Decl) ->
     decl(Decl, #{}, [], [[]]).
 
-decl([D={decl,MAddr,module,Name,MParams}|Ds], DMap, Stack, Acc) ->
+decl([D={decl,_Addr,module,_Name,_MParams}|Ds], DMap, Stack, Acc) ->
     decl(Ds, DMap, [D|Stack], [[]|Acc]);
-decl([D={decl,Addr,object,Module,Name,Params}|Ds], DMap, Stack, [Acc|Acc0]) ->
-    decl(Ds, DMap#{ Name => D }, Stack, [[D|Acc]|Acc0]);
-decl([D={decl,Addr,Type,Name,Params}|Ds], DMap, Stack, [Acc|Acc0]) ->
-    decl(Ds, DMap#{ Name => D }, Stack, [[D|Acc]|Acc0]);
-decl([D={decl,Addr,'end'}], DMap, [], [Acc0]) ->
-    {ok, {lists:reverse(Acc0), DMap}};
-decl([D={decl,Addr,'end'}|Ds], DMap,
-     [S={decl,MAddr,module,Name,MParams}|Stack], [Acc|Acc0]) ->
-    MDecl = lists:reverse(Acc),
-    decl(Ds, DMap#{ Name => {decl,MAddr,module,Name,MParams++MDecl} },
+decl([D={decl,Addr,object,_Module,Name,_Params}|Ds], DMap, Stack, [Acc|Acc0]) ->
+    decl(Ds, DMap#{ Name => Addr, Addr => D }, Stack, [[D|Acc]|Acc0]);
+decl([D={decl,Addr,_Type,Name,_Params}|Ds], DMap, Stack, [Acc|Acc0]) ->
+    decl(Ds, DMap#{ Name => Addr, Addr => D }, Stack, [[D|Acc]|Acc0]);
+decl([{decl,_Addr,'end'}], Dmap, [], [Acc0]) ->
+    As = [element(2, Di) || Di <- lists:reverse(Acc0)],
+    {ok, {As, Dmap}};
+decl([{decl,_Addr,'end'}|Ds], DMap,
+     [{decl,Addr,module,Name,_MParams}|Stack], [Acc|Acc0]) ->
+    As = [element(2, Di) || Di <- lists:reverse(Acc)],
+    %% do we need MParams?
+    Mod = {decl,Addr,module,Name,As},
+    decl(Ds, DMap#{ Name => Addr, Addr => Mod },
 	 Stack, Acc0).
 
-instr(Code) ->
-    instr(Code, #{}, #{}, []).
+%% Is = list of declararaion indices and Mem contain 
+%%  simple mem index to declaration and name to declaraiont
+instr(Code, {_Ds, Dmap}) ->
+    instr(Code, #{}, Dmap, []).
 
-instr([I={instr,Addr,'SEGMENT',_Params}|Is], Reg, Mem, Acc) ->
+instr([{instr,_Addr,'SEGMENT',_Params}|Is], Reg, Dmap, Acc) ->
     %% drop segments, we already have all strings
-    instr(Is, Reg, Mem, Acc);
+    instr(Is, Reg, Dmap, Acc);
 
-instr([I={instr, Addr, 'LD',  [Rx, {mem,I}]} | Is], Reg, Mem, Acc) ->
-    Reg1 = maps:put(Rx, {'WORD', 0, maps:get(I, Mem)}, Reg),
-    instr(Is, Reg1, Mem, Acc);
-instr([I={instr, Addr, 'LI',  [Rx, {imm,V}]} | Is], Reg, Mem, Acc) ->
+instr([{instr, _Addr, 'LD',  [Rx, {mem,I}]} | Is], Reg, Dmap, Acc) ->
+    Name = element(4, maps:get(I, Dmap)),
+    Reg1 = maps:put(Rx, {'WORD', 0, Name}, Reg),
+    instr(Is, Reg1, Dmap, Acc);
+instr([{instr, _Addr, 'LI',  [Rx, {imm,V}]} | Is], Reg, Dmap, Acc) ->
     Reg1 = maps:put(Rx, {'INT', 0, V}, Reg),
-    instr(Is, Reg1, Mem, Acc);
-instr([I={instr, Addr, Op, Params}|Is], Reg, Mem, Acc) ->
-    instr(Is, Reg, Mem, [I|Acc]);
-instr([], _Reg, _Mem, Acc) ->
+    instr(Is, Reg1, Dmap, Acc);
+instr([I={instr, _Addr, _Op, _Params}|Is], Reg, Dmap, Acc) ->
+    instr(Is, Reg, Dmap, [I|Acc]);
+instr([], _Reg, _Dmap, Acc) ->
     {ok, lists:reverse(Acc)}.
 
     
