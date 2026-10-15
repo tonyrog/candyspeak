@@ -597,9 +597,7 @@ add_instr(Data, Addr, Size, I, Si, String, Acc) ->
 
 disasm_decl(ok, Strings, Sections) ->
     {_, Decl} = lists:keyfind("DECL", 1, Sections),
-    Ds = arrays(disasm_decl(Decl, 0, Strings, [])),
-    [io:format("~w: ~p\n", [element(2, D), D]) || D <- Ds],
-    Ds.
+    disasm_decl(Decl, 0, Strings, []).  %% arrays()
 
 %% An array is one entry, the way the source declares it: `#analog P[10]:16 out
 %% unsigned 9:0..9` is {decl,I,analog,"P",[{len,10},...,{elems,[...]}]}. What
@@ -612,6 +610,8 @@ disasm_decl(ok, Strings, Sections) ->
 %% it, nameless and flagged cont -- see array_replicate in csp_compile.c. That
 %% is a storage detail and this is where it stops: should the image one day
 %% hold an array as one declaration, only the decoding above has to change.
+-if(not_used).
+
 arrays([]) -> [];
 arrays([H | T]) ->
     {Es, Rest} = lists:splitwith(fun(D) -> cont(D) =:= 1 end, T),
@@ -650,14 +650,15 @@ with_opts(D, Opts) ->
 	L when is_list(L) -> setelement(tuple_size(D), D, Opts);
 	_                 -> D
     end.
+-endif.
+
 
 disasm_decl(<<Decl:64/little, Data/binary>>, 
 	    I, Strings, Acc) ->
-    {Pos, [{_, IDeclType}, {_, ICont}, {_, ILocal}, {_, IDir}, {_, IName}]} =
+    {Pos, [{_, IDeclType}, {_, _ICont}, {_, ILocal}, {_, IDir}, {_, IName}]} =
 	 decode_bits(Decl, [{type,uint,?DECL_TYPE_BITS},
 			    {cont,uint,1},{local,uint,1},{dir,uint,?DIR_BITS},
 			    {name,uint,?NAMEID_BITS}]),
-    Dir = dir(IDir),
     Name = maps:get(IName, Strings),
     case decl(IDeclType) of
 	end_mark -> 
@@ -698,81 +699,21 @@ disasm_decl(<<Decl:64/little, Data/binary>>,
 	    D = {decl,I,object,ModuleName,Name,[{mx,Mx},{m,M}]},
 	    add_decl(Data, I, 1, D, Strings, Acc);
 	variable ->
-	    {32, [{res,Res},{is_mapped,_},
-		  {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
-		decode_type_header(Decl, Pos),
-	    Type = type(Vt),
-	    Init = decode_value(Decl, 32, Type, Strings),
-	    D = case ILocal of
-		    0 -> {decl,I,variable,Name,[{size,Res+1},
-						{dir,Dir},
-						{type,Type},
-						{cont,ICont},
-						{init,Init}]};
-		    1 -> {decl,I,local,Name,[{size,Res+1},
-					     {dir,Dir},
-					     {type,Type},
-					     {cont,ICont},
-					     {init,Init}]}
-		end,
-	    add_decl(Data, I, 1, D, Strings, Acc);
+	    {LType, Params} = disasm_elem(variable,ILocal,IDir,Pos,Decl,Strings),
+	    D = {decl,I,LType,Name,[]},
+	    disasm_array(Data, I, 1, D, Strings, [Params], Acc);
 	constant ->
-	    {32, [{res,Res},{is_mapped,_},
-		  {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
-		decode_type_header(Decl, Pos),
-	    Type = type(Vt),
-	    Init = decode_value(Decl, 32, Type, Strings),
-	    D = case ILocal of
-		    0 -> {decl,I,constant,Name,[{size,Res+1},
-						{type,Type},
-						{cont,ICont},
-						{init,Init}
-					       ]};
-		    1 -> {decl,I,param,Name,[{size,Res+1},
-					     {type,Type},
-					     {cont,ICont},
-					     {init,Init}
-					    ]}
-		end,
-	    add_decl(Data, I, 1, D, Strings, Acc);
+	    {LType, Params} = disasm_elem(constant,ILocal,IDir,Pos,Decl,Strings),
+	    D = {decl,I,LType,Name,[]},
+	    disasm_array(Data, I, 1, D, Strings, [Params], Acc);
 	digital ->
-	    {32, [{res,Res},{is_mapped,_},
-		  {bound,_},{nx,_},{vt,_Vt},{reg,_}]} = 
-		decode_type_header(Decl, Pos),
-	    %% Type = type(Vt),
-	    [{soft,Soft},{pin,Pin},{port,Port},{irq,Irq},{pullup,Pu},{pulldown,Pd}] = 
-		decode_value(Decl, 32, digital, Strings),
-	    D =  {decl,I,digital,Name,[{size,Res+1},
-				       {cont,ICont},
-				       {dir, Dir},
-				       {pin,Pin},
-				       {port,Port},
-				       {soft,Soft},
-				       {irq,Irq},
-				       {pullup,Pu},
-				       {pulldown,Pd}
-				      ]},
-	    add_decl(Data, I, 1, D, Strings, Acc);
+	    {digital, Params} = disasm_elem(digital,ILocal,IDir,Pos,Decl,Strings),
+	    D = {decl,I,digital,Name,[]},
+	    disasm_array(Data, I, 1, D, Strings, [Params], Acc);
 	analog ->
-	    {32, [{res,Res},{is_mapped,_},
-		  {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
-		decode_type_header(Decl, Pos),
-	    Type = type(Vt),
-	    [{soft,Soft},{pin,Pin},{port,Port},{irq,Irq},
-	     {pwm,Pwm},{endian,Endian}] =
-		decode_value(Decl, 32, analog, Strings),
-	    D =  {decl,I,analog,Name,[{size,Res+1},
-				      {type,Type},
-				      {cont,ICont},
-				      {dir,Dir},
-				      {pin,Pin},
-				      {port,Port},
-				      {soft,Soft},
-				      {irq, Irq},
-				      {pwm,Pwm},
-				      {endian,endian(Endian)}
-				     ]},
-	    add_decl(Data, I, 1, D, Strings, Acc);
+	    {analog, Params} = disasm_elem(analog,ILocal,IDir,Pos,Decl,Strings),
+	    D = {decl,I,analog,Name,[]},
+	    disasm_array(Data, I, 1, D, Strings, [Params], Acc);
 	timer ->
 	    {32, [{res,Res},{is_mapped,_},
 		  {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
@@ -786,20 +727,130 @@ disasm_decl(<<Decl:64/little, Data/binary>>,
 				     {period,Period},
 				     {init,Init}
 				    ]},
-	    add_decl(Data, I, 1, D, Strings, Acc);
+	    drop_empty_decl(Data, I, 1, D, Strings, Acc);
 
 	DeclType ->
-	    D = {decl,I,DeclType,Name,[{dir,Dir},{local,ILocal}]},
+	    D = {decl,I,DeclType,Name,[{dir,dir(IDir)},{local,ILocal}]},
 	    add_decl(Data, I, 1, D, Strings, Acc)
     end;
 disasm_decl(<<>>, _I, _Strings, Acc) ->
     lists:reverse(Acc).
+
+disasm_elem(variable,ILocal,IDir,Pos,Decl,Strings) ->
+    {32, [{res,Res},{is_mapped,_},
+	  {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
+	decode_type_header(Decl, Pos),
+    Type = type(Vt),
+    Init = decode_value(Decl, 32, Type, Strings),
+    case ILocal of
+	0 -> {variable,[{size,Res+1},
+			{dir,dir(IDir)},
+			{type,Type},
+			{init,Init}]};
+	1 -> {local,[{size,Res+1},
+		     {dir,dir(IDir)},
+		     {type,Type},
+		     {init,Init}]}
+    end;
+disasm_elem(constant,ILocal,_IDir,Pos,Decl,Strings) ->    
+    {32, [{res,Res},{is_mapped,_},
+	  {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
+	decode_type_header(Decl, Pos),
+    Type = type(Vt),
+    Init = decode_value(Decl, 32, Type, Strings),
+    case ILocal of
+	0 -> {constant,[{size,Res+1},
+			{type,Type},
+			{init,Init}
+		       ]};
+	1 -> {param,[{size,Res+1},
+		     {type,Type},
+		     {init,Init}
+		    ]}
+    end;
+disasm_elem(digital,_ILocal,IDir,Pos,Decl,Strings) ->        
+    {32, [{res,Res},{is_mapped,_},
+	  {bound,_},{nx,_},{vt,_Vt},{reg,_}]} = 
+	decode_type_header(Decl, Pos),
+    %% Type = type(Vt),
+    [{soft,Soft},{pin,Pin},{port,Port},{irq,Irq},{pullup,Pu},{pulldown,Pd}] = 
+	decode_value(Decl, 32, digital, Strings),
+    {digital,[{size,Res+1},
+	      {dir, dir(IDir)},
+	      {pin,Pin},
+	      {port,Port},
+	      {soft,Soft},
+	      {irq,Irq},
+	      {pullup,Pu},
+	      {pulldown,Pd}
+	     ]};
+disasm_elem(analog,_ILocal,IDir,Pos,Decl,Strings) ->
+    {32, [{res,Res},{is_mapped,_},
+	  {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
+	decode_type_header(Decl, Pos),
+    Type = type(Vt),
+    [{soft,Soft},{pin,Pin},{port,Port},{irq,Irq},
+     {pwm,Pwm},{endian,Endian}] =
+	decode_value(Decl, 32, analog, Strings),
+    {analog,[{size,Res+1},
+	     {type,Type},
+	     {dir,dir(IDir)},
+	     {pin,Pin},
+	     {port,Port},
+	     {soft,Soft},
+	     {irq, Irq},
+	     {pwm,Pwm},
+	     {endian,endian(Endian)}
+	    ]}.
 
 find_decl(Mx, Ds) ->
     lists:keyfind(Mx, 2, Ds).
 
 add_decl(Data, I, Size, D, Strings, Acc) ->
     disasm_decl(Data, I+Size, Strings, [D|Acc]).
+
+%% Drop decl if next name = 0 (crash otherwise)
+drop_empty_decl(<<Decl:64/little, Data/binary>>, I, Size, D, Strings, Acc) ->
+    {_Pos, [{_, _IDeclType}, {_, _ICont}, {_, _ILocal}, {_, _IDir}, {_, 0}]} =
+	decode_bits(Decl, [{type,uint,?DECL_TYPE_BITS},
+			   {cont,uint,1},{local,uint,1},{dir,uint,?DIR_BITS},
+			   {name,uint,?NAMEID_BITS}]),
+    D1 = add_params(D, [{slots, 2}]),
+    disasm_decl(Data, I+Size+1, Strings, [D1|Acc]).
+
+disasm_array(Data = <<Decl:64/little, Data1/binary>>,
+	      I, Size, D, Strings, Elems, Acc) ->
+    {Pos, [{_, IDeclType}, {_, ICont}, {_, ILocal}, {_, IDir}, {_, IName}]} =
+	decode_bits(Decl, [{type,uint,?DECL_TYPE_BITS},
+			   {cont,uint,1},{local,uint,1},{dir,uint,?DIR_BITS},
+			   {name,uint,?NAMEID_BITS}]),
+    DType = decl(IDeclType),
+    if DType =:= element(3, D), ICont =:= 1, IName =:= 0 ->
+	    %% yes this slot is collected, part of array
+	    {_,Params} = disasm_elem(DType,ILocal,IDir,Pos,Decl,Strings),
+	    disasm_array(Data1,I+1,Size+1,D,Strings,[Params|Elems],Acc);
+       ICont =:= 0 ->
+	    D1 = if Size > 1 ->
+			 {Params0,Es} = make_elems(lists:reverse(Elems)),
+			 Params = [{len,Size},{slots,Size}] ++
+			     Params0 ++ [{elems,Es}],
+			 add_params(D, Params);
+		    true -> D
+		 end,
+	    disasm_decl(Data, I+1, Strings, [D1|Acc])
+    end.
+	    
+add_params({decl,I,Type,Name,Params}, NewParams) ->
+    {decl,I,Type,Name,Params++NewParams}.
+
+make_elems(Elems) ->
+    I = intersect_elems(Elems),
+    {I, [ (Es -- I) || Es <- Elems]}.
+
+intersect_elems([A,B|Bs]) -> intersect_elems(Bs, A -- (A -- B)).
+intersect_elems([A|Bs], I) -> intersect_elems(Bs, (A -- (A -- I)));
+intersect_elems([], I) -> I.
+    
 
 decode_type_header(Decl, Pos) ->
     decode_bits(Decl, Pos,
