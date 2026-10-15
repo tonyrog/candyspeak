@@ -152,27 +152,20 @@ emit(Owner, Text) ->
 
 %% {var,Name,V} | {digital,Name,V} | {analog,Name,V} | {object,Name,[...]}
 %%
-%% An ARRAY arrives as the name once and then one entry per further element with
-%% an EMPTY name: `#analog P[10]:16` is {analog,"P",V0} followed by nine
-%% {analog,"",Vn}. Name them P[0]..P[9] here so everything above deals in plain
-%% names, and a panel widget can be addressed per element.
-flat(Vals) -> number(lists:flatten([fv(V) || V <- Vals]), undefined, 0).
+%% An ARRAY element after the first arrives named with its subscript:
+%% `#analog P[10]:16` is {analog,"P",V0} and then {analog,"P[1]",V1} and on.
+%% The head cannot be told from a scalar, so it is kept under its bare name AND
+%% offered as [0]; the widget side asks for whichever it declared.
+flat(Vals) -> lists:append([head(E) || E <- lists:flatten([fv(V) || V <- Vals])]).
 
 fv({object, _Name, Inner}) -> [fv(V) || V <- Inner];
 fv({_Kind, Name, Value})   -> [{Name, Value}];
 fv(_)                      -> [].
 
-number([], _Base, _N) ->
-    [];
-number([{"", V} | T], Base, N) when Base =/= undefined ->
-    [{elem(Base, N), V} | number(T, Base, N + 1)];
-number([{"", _V} | T], undefined, N) ->
-    %% an unnamed entry with nothing before it: nothing to attach it to
-    number(T, undefined, N);
-number([{Name, V} | T], _Base, _N) ->
-    %% A named entry may be element 0 of an array or a plain scalar -- we
-    %% cannot tell from the dump, so keep the bare name AND offer it as [0].
-    %% The widget side asks for whichever it declared.
-    [{Name, V}, {elem(Name, 0), V} | number(T, Name, 1)].
+head({Name, V}) ->
+    case lists:member($[, Name) of
+	true  -> [{Name, V}];
+	false -> [{Name, V}, {elem(Name, 0), V}]
+    end.
 
 elem(Base, N) -> Base ++ "[" ++ integer_to_list(N) ++ "]".

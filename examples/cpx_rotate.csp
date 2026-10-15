@@ -23,8 +23,6 @@
 
 #param StepPeriod  = 50
 #param ColorPeriod = 100
-#param StepDir = 1
-#param ColorDir = 1
 
 // 50 Hz. Every rule below is gated on this, so one timeout is one physics step
 // and the whole state advances together.
@@ -37,9 +35,9 @@
 #timer StepTick StepPeriod = 1
 #timer ColorTick ColorPeriod = 1
 #variable Pi unsigned = 0
-#variable Pt = StepDir
+#variable Pt = 1
 #variable Ci unsigned = 0
-#variable Ct = ColorDir
+#variable Ct = 1
 
 #constant WHITE = 0xFFFF
 #constant RED   = 0xF8E0
@@ -50,14 +48,20 @@
 #constant COLOR[5] = { RED, GREEN, BLUE, AMBER, WHITE }
 #variable Color:16 = WHITE
 
-P[(Pi + 9) % 10]  = 0 ? timeout(StepTick)
-P[(Pi + 10) % 10] = 0 ? timeout(StepTick)
-P[(Pi + 1) % 10]  = 0 ? timeout(StepTick)
-P[(Pi + 2) % 10]  = 0 ? timeout(StepTick)
-P[Pi % 10]        = Color ? timeout(StepTick)
+P[((Pi%10)+18)%10] = 0 ? timeout(StepTick)
+P[((Pi%10)+19)%10] = 0 ? timeout(StepTick)
+P[((Pi%10)+10)%10] = Color ? timeout(StepTick)
+P[((Pi%10)+11)%10] = 0 ? timeout(StepTick)
+P[((Pi%10)+12)%10] = 0 ? timeout(StepTick)
 
 StepTick = 1, Pi=Pi+Pt ? timeout(StepTick)
-ColorTick = 1, Color=COLOR[Ci % 5], Ci = Ci+Ct ? timeout(ColorTick)
+ColorTick = 1, Color=COLOR[((Ci % 5)+5)%5], Ci = Ci+Ct ? timeout(ColorTick)
 
-Pt = -Pt ? BtnA
-Ct = -Ct ? BtnB
+#variable Ap = 0
+#variable Bp = 0
+
+Pt = -Pt, Ap=1 ? BtnA && !Ap
+Ap=0 ? !BtnA && Ap
+
+Ct = -Ct, Bp=1 ? BtnB && !Bp
+Bp=0 ? !BtnB && Bp

@@ -401,7 +401,7 @@ clean:
 # image loads back into the firmware that links it. Run `make test` before a
 # commit; this is for the loop in between.
 test:	csp line_edit_check syntax_check strings_check tables_check \
-	patterns_check sketch_check
+	patterns_check sketch_check disasm_check
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
 
@@ -430,6 +430,13 @@ part_check:
 	@mkdir -p tmp
 	@$(CC) $(INCS) -O2 -w -o tmp/part_layout tests/part_layout.c
 	@tmp/part_layout
+
+# The disassembler on every kind of array: one entry each, with a len, and
+# what differs per element under elems -- not the continuations it is stored as.
+disasm_check: csp
+	@$(MAKE) --no-print-directory -s -C utils
+	@tools/csp-image -q -o tmp/disasm_arrays tests/disasm/arrays.csp
+	@escript tests/disasm/check.escript tmp/disasm_arrays.img
 
 line_edit_check:
 	@mkdir -p tmp
@@ -822,7 +829,7 @@ $(OBJDIR)/%.o: %.c | gen/csp_strings.h
 
 -include $(OBJS:.o=.d)
 
-.PHONY: clib_host webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
+.PHONY: disasm_check clib_host webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

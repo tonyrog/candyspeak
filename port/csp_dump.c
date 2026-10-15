@@ -380,14 +380,24 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 
 // `m` is a REAL object number (0 = global), not the selector bit of an encoded
 // index -- the index cannot carry one any more, so the caller passes it.
+//
+// An array element after the first is a continuation with no name of its own,
+// so it is printed as its head's name and subscript, `P[3]`. It used to come
+// out as "", which only meant something next to the elements before it -- and
+// a --delta dump leaves those out, so the panel put every change on P[0..].
 void csp_dump_var_name(FILE* f, csp_rt_t* st, int m, index_t di)
 {
-    if (m == GLOBAL)
-	fprintf(f, "%.*s", DNAME(st, di));
-    else {
+    index_t hd = di;
+
+    while (decl(st, hd, cont) && (hd > 0))
+	hd--;
+    if (m != GLOBAL) {
 	index_t obj = csp_object_decl(st, m);
-	fprintf(f, "%.*s.%.*s", DNAME(st, obj), DNAME(st, di));
+	fprintf(f, "%.*s.", DNAME(st, obj));
     }
+    fprintf(f, "%.*s", DNAME(st, hd));
+    if (hd != di)
+	fprintf(f, "[%d]", (int)(di - hd));
 }
 
 // --delta: dump only what differs from the last dump. The panel reads this

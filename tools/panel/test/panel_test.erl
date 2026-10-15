@@ -794,12 +794,34 @@ array_check() ->
 	    %% and the values reach those names
 	    flush(),
 	    {ok, L} = csp_link:open(csp_exe(), [F]), track(L),
-	    Vals = collect_px(L, 25, #{}),
+	    {Vals, Lit} = lit_px(L, Px, 25, #{}, []),
 	    csp_link:close(L),
 	    timer:sleep(300),
 	    expect("array elements get values from the dump",
 		   length([1 || N <- Px, maps:is_key(N, Vals)]) =:= 10,
-		   maps:keys(Vals))
+		   maps:keys(Vals)),
+	    %% One pixel is lit at a time and it travels. The dump is a --delta,
+	    %% so an element that changes alone has to say which one it is: when
+	    %% it came out unnamed the lit pixel stayed put and others stuck on.
+	    expect("one pixel lit at a time",
+		   lists:all(fun(Ns) -> length(Ns) =< 1 end, Lit), Lit),
+	    expect("the lit pixel travels",
+		   length(lists:usort(lists:append(Lit))) >= 5, Lit)
+    end.
+
+%% After each tick: the merged values, and which pixels are non-zero.
+lit_px(_L, _Px, 0, Acc, Lit) -> {Acc, lists:reverse(Lit)};
+lit_px(L, Px, N, Acc, Lit) ->
+    csp_link:tick(L),
+    timer:sleep(60),
+    Acc1 = merge_all(Acc),
+    On = [P || P <- Px, maps:get(P, Acc1, 0) =/= 0],
+    lit_px(L, Px, N - 1, Acc1, [On | Lit]).
+
+%% Every dump that has arrived, in order: a tick can run more than one cycle.
+merge_all(Acc) ->
+    receive {csp_state, _, V} -> merge_all(maps:merge(Acc, maps:from_list(V)))
+    after 0 -> Acc
     end.
 
 flush() ->
@@ -808,15 +830,6 @@ flush() ->
 	{csp_exit, _}     -> flush()
     after 0 -> ok
     end.
-
-collect_px(_L, 0, Acc) -> Acc;
-collect_px(L, N, Acc) ->
-    csp_link:tick(L),
-    timer:sleep(60),
-    Acc1 = receive {csp_state, _, V} -> maps:merge(Acc, maps:from_list(V))
-	   after 0 -> Acc
-	   end,
-    collect_px(L, N - 1, Acc1).
 
 analog_checks() ->
     Cpx = "../../examples/cpx_ball.csp",

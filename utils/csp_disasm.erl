@@ -597,7 +597,59 @@ add_instr(Data, Addr, Size, I, Si, String, Acc) ->
 
 disasm_decl(ok, Strings, Sections) ->
     {_, Decl} = lists:keyfind("DECL", 1, Sections),
-    disasm_decl(Decl, 0, Strings, []).
+    Ds = arrays(disasm_decl(Decl, 0, Strings, [])),
+    [io:format("~w: ~p\n", [element(2, D), D]) || D <- Ds],
+    Ds.
+
+%% An array is one entry, the way the source declares it: `#analog P[10]:16 out
+%% unsigned 9:0..9` is {decl,I,analog,"P",[{len,10},...,{elems,[...]}]}. What
+%% every element shares is listed once, what differs (a pin, a constant's
+%% value) per element under elems, in order -- left out when nothing differs.
+%% The elements occupy I..I+len-1, which is what an OP_SETOX bounds-checks
+%% against.
+%%
+%% In the image an array is still a head and len-1 continuations right after
+%% it, nameless and flagged cont -- see array_replicate in csp_compile.c. That
+%% is a storage detail and this is where it stops: should the image one day
+%% hold an array as one declaration, only the decoding above has to change.
+arrays([]) -> [];
+arrays([H | T]) ->
+    {Es, Rest} = lists:splitwith(fun(D) -> cont(D) =:= 1 end, T),
+    [array(H, Es) | arrays(Rest)].
+
+array(H, []) ->
+    with_opts(H, props(H));
+array(H, Es) ->
+    Ps = [props(D) || D <- [H | Es]],
+    Common = [P || P <- props(H),
+		   lists:all(fun(Q) -> lists:member(P, Q) end, Ps)],
+    Each = [[P || P <- Q, not lists:member(P, Common)] || Q <- Ps],
+    Elems = case lists:all(fun(E) -> E =:= [] end, Each) of
+		true  -> [];                    % identical: len says it all
+		false -> [{elems, Each}]
+	    end,
+    with_opts(H, [{len, length(Ps)} | Common] ++ Elems).
+
+props(D) -> [P || P <- opts(D), element(1, P) =/= cont].
+
+cont(D) ->
+    case lists:keyfind(cont, 1, opts(D)) of
+	{cont, C} -> C;
+	false     -> 0
+    end.
+
+%% The option list is the last element; {decl,I,'end'} has none.
+opts(D) ->
+    case element(tuple_size(D), D) of
+	L when is_list(L) -> L;
+	_                 -> []
+    end.
+
+with_opts(D, Opts) ->
+    case element(tuple_size(D), D) of
+	L when is_list(L) -> setelement(tuple_size(D), D, Opts);
+	_                 -> D
+    end.
 
 disasm_decl(<<Decl:64/little, Data/binary>>, 
 	    I, Strings, Acc) ->
@@ -718,7 +770,7 @@ disasm_decl(<<Decl:64/little, Data/binary>>,
 				      {soft,Soft},
 				      {irq, Irq},
 				      {pwm,Pwm},
-				      {enidan,endian(Endian)}
+				      {endian,endian(Endian)}
 				     ]},
 	    add_decl(Data, I, 1, D, Strings, Acc);
 	timer ->
@@ -747,7 +799,6 @@ find_decl(Mx, Ds) ->
     lists:keyfind(Mx, 2, Ds).
 
 add_decl(Data, I, Size, D, Strings, Acc) ->
-    io:format("~w: ~p\n", [I, D]),
     disasm_decl(Data, I+Size, Strings, [D|Acc]).
 
 decode_type_header(Decl, Pos) ->
