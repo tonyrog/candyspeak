@@ -62,5 +62,3 @@ instr([I={instr, _Addr, _Op, _Params}|Is], Reg, Dmap, Acc) ->
     instr(Is, Reg, Dmap, [I|Acc]);
 instr([], _Reg, _Dmap, Acc) ->
     {ok, lists:reverse(Acc)}.
-
-    

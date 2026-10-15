@@ -601,7 +601,7 @@ disasm_decl(ok, Strings, Sections) ->
 
 disasm_decl(<<Decl:64/little, Data/binary>>, 
 	    I, Strings, Acc) ->
-    {Pos, [{_, IDeclType}, {_, _ICont}, {_, ILocal}, {_, IDir}, {_, IName}]} =
+    {Pos, [{_, IDeclType}, {_, ICont}, {_, ILocal}, {_, IDir}, {_, IName}]} =
 	 decode_bits(Decl, [{type,uint,?DECL_TYPE_BITS},
 			    {cont,uint,1},{local,uint,1},{dir,uint,?DIR_BITS},
 			    {name,uint,?NAMEID_BITS}]),
@@ -655,10 +655,12 @@ disasm_decl(<<Decl:64/little, Data/binary>>,
 		    0 -> {decl,I,variable,Name,[{size,Res+1},
 						{dir,Dir},
 						{type,Type},
+						{cont,ICont},
 						{init,Init}]};
 		    1 -> {decl,I,local,Name,[{size,Res+1},
 					     {dir,Dir},
 					     {type,Type},
+					     {cont,ICont},
 					     {init,Init}]}
 		end,
 	    add_decl(Data, I, 1, D, Strings, Acc);
@@ -671,10 +673,12 @@ disasm_decl(<<Decl:64/little, Data/binary>>,
 	    D = case ILocal of
 		    0 -> {decl,I,constant,Name,[{size,Res+1},
 						{type,Type},
+						{cont,ICont},
 						{init,Init}
 					       ]};
 		    1 -> {decl,I,param,Name,[{size,Res+1},
 					     {type,Type},
+					     {cont,ICont},
 					     {init,Init}
 					    ]}
 		end,
@@ -687,6 +691,7 @@ disasm_decl(<<Decl:64/little, Data/binary>>,
 	    [{soft,Soft},{pin,Pin},{port,Port},{irq,Irq},{pullup,Pu},{pulldown,Pd}] = 
 		decode_value(Decl, 32, digital, Strings),
 	    D =  {decl,I,digital,Name,[{size,Res+1},
+				       {cont,ICont},
 				       {dir, Dir},
 				       {pin,Pin},
 				       {port,Port},
@@ -706,6 +711,7 @@ disasm_decl(<<Decl:64/little, Data/binary>>,
 		decode_value(Decl, 32, analog, Strings),
 	    D =  {decl,I,analog,Name,[{size,Res+1},
 				      {type,Type},
+				      {cont,ICont},
 				      {dir,Dir},
 				      {pin,Pin},
 				      {port,Port},
