@@ -1,0 +1,51 @@
+// Integer version of mandelbrot
+#define SCALE   8
+#define MAX_ITER 100
+#define X_MIN  -25*SCALE
+#define X_MAX   15*SCALE
+#define Y_MIN  -15*SCALE
+#define Y_MAX   15*SCALE
+#define WIDTH   78
+#define HEIGHT  23
+#define RADIUS  40
+
+#variable X = X_MIN
+#variable Y = Y_MIN
+#variable Re = 0
+#variable Im = 0
+#variable Count = 0
+#local Ys = (Y_MAX - Y_MIN + HEIGHT -1) / HEIGHT
+#local Xs = (X_MAX - X_MIN + WIDTH -1) / WIDTH
+
+// Count = -1  stop to next X, Y position and let Count = 0
+#when (Count == -1)
+  Y = Y+Ys, X = X_MIN, println() ? (X >= X_MAX) && (Y < Y_MAX)
+  X = X+Xs ? (X < X_MAX)
+  #when (Y < Y_MAX)
+    Re=0, Im=0, Count = 0
+  #end
+#end
+
+#when (Count >= 0) && (Count <= MAX_ITER)
+  #local Re1 = (X + (Re*Re-Im*Im)) / SCALE
+  #local Im1 = (Y + 2*Re*Im) / SCALE
+  #local Dist = (Re1*Re1 + Im1*Im1) / SCALE
+  Re = Re1
+  Im = Im1
+  Count = Count+1
+  // print("re1=",Re1,",im1=",Im1),println("dist=", Dist)
+  #when Dist > RADIUS of
+    #when Count < 10
+      print(Count)   
+    #end
+    #when Count >= 10
+      print("#")
+    #end
+    Count = -1
+  #end
+#end
+
+#when (Count > MAX_ITER)
+  print("#")
+  Count = -1
+#end
