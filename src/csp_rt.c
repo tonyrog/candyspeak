@@ -441,6 +441,7 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_LOCAL_IN_WHERE] =         ros_err_local_in_where,
     [ERR_SMS_OWNERS] =             ros_err_sms_owners,
     [ERR_ONEWIRE_ROM] =            ros_err_onewire_rom,
+    [ERR_INDEX_NOT_CONST] =        ros_err_index_not_const,
 };
 
 // err_tab is a designated-initialiser array, so ANY code without a row in it
@@ -1096,7 +1097,9 @@ NOINLINE static uint8_t* heap_base(csp_rt_t* st, csp_view_t* vw, dio_t dir,
 {
     if (csp_view_get_kind(vw) == VIEW_HEAP) {
 	csp_buf_t* b = &st->buf[csp_view_get_buf(vw)];
-	*bitp = csp_view_get_pos(vw);
+	// es.bshift is a runtime subscript's byte (OP_SETOX, bits mode), and
+	// is non-zero only for the one access that follows it.
+	*bitp = csp_view_get_pos(vw) + st->es.bshift;
 	*nbytesp = (uint8_t)csp_buf_get_nbytes(b);
 	return st->heap[dir] + csp_buf_get_hp(b);
     }
@@ -1217,6 +1220,17 @@ NOINLINE void csp_view_set_part(csp_rt_t* st, csp_view_t* vw,
 	    if (n > nb)
 		n = nb;
 	    csp_buf_set_dlc(bp, (uint8_t)n);
+	}
+	// A CAN frame's id is its xref, and reception compares against xref
+	// frame by frame, so `F.id = CanId` in INIT is all it takes to move a
+	// buffer to another id -- the id can be a #param. CAN only: for every
+	// other transport xref packs something else (a pin, an address, the
+	// SMS owners), and writing a number over it would break the link.
+	// This used to fall through for CAN too, so the write compiled and did
+	// nothing.
+	else if ((part == PART_ID) &&
+		 (csp_buf_get_transport(bp) == TR_CAN)) {
+	    csp_buf_set_xref(bp, v.u);
 	}
     }
 }
@@ -1754,6 +1768,14 @@ NOINLINE int eval_op(csp_rt_t* st, int n, const csp_instr_t* ci, int* leave)
 	    csp_set_error(st, ERR_INDEX_RANGE);
 	    return n+1;
 	}
+	// `Frame[BytePos]`: the base stays, the VIEW moves. The access that
+	// follows is the byte at position 0, and len was computed so that every
+	// position it can be moved to is inside the buffer -- so the same
+	// refusal above is the bounds check for this form too.
+	if (csp_instr_get_ox_bits(ci)) {
+	    st->es.bshift = (uint16_t)(ix * csp_instr_get_ox_stride(ci));
+	    return n+1;
+	}
 	// offs[cur], not cbase: inside a module the array's index is
 	// module-relative, and reading offs makes this idempotent -- two SETOX in
 	// a row cannot compound the way `cbase +=` would. At global level
@@ -1845,6 +1867,7 @@ NOINLINE int eval_op(csp_rt_t* st, int n, const csp_instr_t* ci, int* leave)
 	st->cbase   = st->offs[st->cur];
 	st->es.sobj = 0;
     }
+    st->es.bshift = 0;
     return n+1;
 store:
     // One store site for every ALU arm, instead of one per arm.
@@ -1950,12 +1973,26 @@ void csp_undo(csp_rt_t* st)
     memset(st->dset, 0, BITSET_GROUPS(st->view_cap) * sizeof(set_group_t));
 }
 
-// commit changed values to the in buffer
+// Commit changed values to the in buffer, and nothing else. This is what
+// /commit does: it makes pending `>` writes visible, and it runs OUTSIDE a
+// cycle -- so it must not touch the arrival flags. It did: a frame that became
+// `.rx` at the end of one cycle was cleared by the panel's /commit before the
+// next cycle's rules ran, and a rule guarded on `.rx` alone never fired.
+void csp_commit_values(csp_rt_t* st)
+{
+    if (st->es.anyd)
+	heap_dset_copy(st, DIN, DOUT);
+    memset(st->dset, 0, BITSET_GROUPS(st->view_cap) * sizeof(set_group_t));
+    st->es.anyd = CSP_FALSE;
+}
+
+// The end of a cycle: commit the values, and move every transport's arrival
+// on by one cycle.
 void csp_commit(csp_rt_t* st)
 {
     index_t b;
-    if (st->es.anyd)
-	heap_dset_copy(st, DIN, DOUT);
+
+    csp_commit_values(st);
     // Promote arrival flags across the commit. A frame received during
     // csp_input landed in the DOUT shadow, so it becomes readable only now --
     // and `.rx` has to become true now too, or a rule guarded on it would read
@@ -1980,8 +2017,6 @@ void csp_commit(csp_rt_t* st)
 	}
 	csp_buf_set_flags(bp, fs);
     }
-    memset(st->dset, 0, BITSET_GROUPS(st->view_cap) * sizeof(set_group_t));
-    st->es.anyd = CSP_FALSE;
 }
 
 // run eval_rule sequentially over an instruction range [start, stop)

@@ -860,6 +860,14 @@
 
 #define CSP_ORACLE_INSTR_COMMON_OX(REC, FAIL) do { \
     memset(&(REC), 0, sizeof(REC)); \
+    (REC).ox.bits = 1; \
+    if ((long)csp_instr_get_ox_bits((const csp_instr_t*)&(REC)) != 1L) \
+	FAIL("ox.bits", (long)csp_instr_get_ox_bits((const csp_instr_t*)&(REC)), 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_instr_set_ox_bits((csp_instr_t*)&(REC), 1); \
+    if ((long)(REC).ox.bits != 1L) \
+	FAIL("ox.bits set", (long)(REC).ox.bits, 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
     (REC).ox.len = 16383; \
     if ((long)csp_instr_get_ox_len((const csp_instr_t*)&(REC)) != 16383L) \
 	FAIL("ox.len", (long)csp_instr_get_ox_len((const csp_instr_t*)&(REC)), 16383L); \

@@ -1,0 +1,7 @@
+# BOM S3
+
+Relayx4: (10A)
+https://www.electrokit.com/en/4x-relashield-med-strommatning-for-arduino-uno
+
+Relax+Relax+Relax+Relax (30A)
+https://docs.electrokit.com/en/modules/EKM009/index.html

@@ -58,7 +58,7 @@ init(Owner, Exe, Files) ->
     %% back when that combination works.
     Port = open_port({spawn_executable, Exe},
 		     [{args, ["-i", "--no-eeprom", "-Q", "-Lerlang", "--delta",
-			      "--exit-on-eof" | Files]},
+			      "--can=vcan0", "--exit-on-eof" | Files]},
 		      exit_status, use_stdio, stderr_to_stdout,
 		      {line, 4096}]),
     loop(Port, Owner, []).

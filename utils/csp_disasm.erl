@@ -568,13 +568,17 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 	    I = {instr,Addr,OpCode,[{obj,Obj}]},
 	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, setox} ->
-	    {_Pos,[{len,Len},{x,X},{stride,Stride}]} =
+	    %% bits = 1: stride is in BITS and moves the next buffer view
+	    %% (`Frame[BytePos]`), else declarations per array element
+	    {_Pos,[{bits,Bits},{len,Len},{x,X},{stride,Stride}]} =
 		decode_bits(Instr, Pos0,
-			    [{'_', 2},
+			    [{'_', 1},
+			     {bits, uint, 1},
 			     {len, uint, 14},
 			     {x, uint, ?REG_BITS},
 			     {stride, uint, 6}]),
-	    I = {instr,Addr,OpCode,[reg(X),{len,Len},{stride,Stride}]},
+	    I = {instr,Addr,OpCode,[reg(X),{len,Len},{stride,Stride}] ++
+		     [bits || Bits =:= 1]},
 	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);	    
 	{OpCode, nop} ->
 	    I = {instr,Addr,OpCode},
@@ -825,21 +829,34 @@ disasm_array(Data = <<Decl:64/little, Data1/binary>>,
 			   {cont,uint,1},{local,uint,1},{dir,uint,?DIR_BITS},
 			   {name,uint,?NAMEID_BITS}]),
     DType = decl(IDeclType),
-    if DType =:= element(3, D), ICont =:= 1, IName =:= 0 ->
+    HType = stored_type(element(3, D)),
+    if DType =:= HType, ICont =:= 1, IName =:= 0 ->
 	    %% yes this slot is collected, part of array
 	    {_,Params} = disasm_elem(DType,ILocal,IDir,Pos,Decl,Strings),
 	    disasm_array(Data1,I+1,Size+1,D,Strings,[Params|Elems],Acc);
        ICont =:= 0 ->
 	    D1 = if Size > 1 ->
 			 {Params0,Es} = make_elems(lists:reverse(Elems)),
-			 Params = [{len,Size},{slots,Size}] ++
-			     Params0 ++ [{elems,Es}],
+			 %% identical elements: len says it all
+			 EsP = case lists:all(fun(E) -> E =:= [] end, Es) of
+				   true  -> [];
+				   false -> [{elems,Es}]
+			       end,
+			 Params = [{len,Size},{slots,Size}] ++ Params0 ++ EsP,
 			 add_params(D, Params);
-		    true -> D
+		    %% a scalar: its one element's parameters are its own
+		    true -> add_params(D, hd(Elems))
 		 end,
 	    disasm_decl(Data, I+1, Strings, [D1|Acc])
     end.
 	    
+%% The declaration type an element is STORED as. A #param head is shown as
+%% `param` and a #local as `local`, but in the image both are the plain type
+%% with the local bit set -- and so are their continuations.
+stored_type(param) -> constant;
+stored_type(local) -> variable;
+stored_type(Type)  -> Type.
+
 add_params({decl,I,Type,Name,Params}, NewParams) ->
     {decl,I,Type,Name,Params++NewParams}.
 

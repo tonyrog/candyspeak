@@ -334,8 +334,12 @@
 %% array, bounded by the declaration table it is made of, so 16383 elements is
 %% a ceiling no program reaches -- where `stride` counts declarations per
 %% element and four bits (15) would not be enough for an array of modules.
+%% BITS (one of what used to be two pad bits): 0 shifts the base by
+%% DECLARATIONS, for an array; 1 shifts the next buffer view by stride BITS, for
+%% a byte of a buffer chosen at runtime (`Frame[BytePos]`).
 {record, ox, instr_common, 4,
- [{pad,    2},
+ [{pad,    1},
+  {bits,   1},
   {len,   14},
   {x,      4},
   {stride, 6}]}.

@@ -360,6 +360,32 @@ static int is_subscriptable(decl_t t)
 	   (t == DECL_ANALOG)   || (t == DECL_DIGITAL);
 }
 
+// Arm a runtime subscript for the access to `ix`, register r holding the
+// index. asm_seto consumes it. An array counts elements; a byte view of a
+// buffer (`Frame[BytePos]`, the view being the byte at position 0) counts the
+// bytes it can move to without leaving the buffer, so the SETOX's one bounds
+// check covers both.
+//
+// How many positions a subscript on declaration i can take: elements for an
+// array, bytes the view can move to for a buffer byte view.
+NOINLINE static uint16_t subscript_len(csp_rt_t* st, index_t i)
+{
+    if (decl(st, i, type) == DECL_VIEW) {
+	index_t b = decl(st, i, ca_id);
+	unsigned nbits = (unsigned)decl(st, b, bf_nbytes) * 8;
+	unsigned end = decl(st, i, ca_bit) + GET_FIELD_LEN(decl(st, i, ca_len));
+	return (uint16_t)((nbits - end) / 8 + 1);
+    }
+    return csp_array_len(st, i);
+}
+
+NOINLINE static void arm_subscript(csp_rt_t* st, reg_t r, xindex_t ix)
+{
+    st->cs->arr_reg  = r;
+    st->cs->arr_bits = (decl(st, XIDX(ix), type) == DECL_VIEW) ? 8 : 0;
+    st->cs->arr_len  = subscript_len(st, XIDX(ix));
+}
+
 NOINLINE static bool_t asm_seto(csp_rt_t* st, xindex_t mem, index_t* out)
 {
     unsigned m = XOBJ(mem);
@@ -373,13 +399,20 @@ NOINLINE static bool_t asm_seto(csp_rt_t* st, xindex_t mem, index_t* out)
 	csp_instr_t* ip;
 	uint8_t  r = st->cs->arr_reg;
 	uint16_t l = st->cs->arr_len;
+	uint8_t  b = st->cs->arr_bits;
 	st->cs->arr_len = 0;                // one-shot: cleared before we can fail
-	*out = MAKE_INDEX(CURRENT, XIDX(mem));
+	// A byte of a buffer leaves the base alone -- the runtime moves the
+	// view instead -- so the access keeps its own selector.
+	*out = b ? MAKE_INDEX(m ? CURRENT : GLOBAL, XIDX(mem))
+		 : MAKE_INDEX(CURRENT, XIDX(mem));
 	if ((ip = alloc_instr_ptr(st, NULL, OP_SETOX)) == NULL)
 	    return 0;
 	csp_instr_set_ox_x(ip, r);
 	csp_instr_set_ox_len(ip, l);
-	csp_instr_set_ox_stride(ip, 1);                 // scalar array; one decl per element
+	csp_instr_set_ox_bits(ip, b ? 1 : 0);
+	// bits: the stride is in bits; else declarations per element (scalar
+	// array: 1)
+	csp_instr_set_ox_stride(ip, b ? b : 1);
 	return 1;
     }
     *out = MAKE_INDEX(m ? CURRENT : GLOBAL, XIDX(mem));
@@ -1419,8 +1452,7 @@ NOINLINE int csp_load(csp_rt_t* st, rentry_t* rp)
 		// -- so `A[j]` would be handed the register still holding
 		// `A[i]`. Fresh register, arm the subscript, emit the LD.
 		r = alloc_reg(st);
-		st->cs->arr_reg = rp->areg;
-		st->cs->arr_len = csp_array_len(st, XIDX(rp->ix));
+		arm_subscript(st, rp->areg, rp->ix);
 		if (!asm_mem(st, OP_LD, r, rp->ix))
 		    return -1;
 		free_reg(st, rp->areg);   // the SETOX consumed it
@@ -1692,8 +1724,7 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
 	// `P[Idx] = 0` is exactly the shape this fast path exists for, and
 	// skipping it would cost an instruction per store in array-heavy code.
 	if (lhs.A) {
-	    st->cs->arr_reg = lhs.areg;
-	    st->cs->arr_len = csp_array_len(st, XIDX(lhs.ix));
+	    arm_subscript(st, lhs.areg, lhs.ix);
 	}
 	if (!asm_STI(st, 0, lhs.ix, (int8_t)rhs.val.i))
 	    return -1;
@@ -1750,8 +1781,7 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
 	    // `A[i] = rhs`: arm the subscript so asm_seto lays the SETOX down
 	    // in front of the store, exactly as the read path does.
 	    if (lhs.A) {
-		st->cs->arr_reg = lhs.areg;
-		st->cs->arr_len = csp_array_len(st, XIDX(lhs.ix));
+		arm_subscript(st, lhs.areg, lhs.ix);
 	    }
 	    if (!asm_mem(st, op, rhs.reg, lhs.ix))
 		return -1;
@@ -2454,6 +2484,57 @@ void print_stack_used()
 NOINLINE index_t make_buf_view(csp_rt_t* st, xindex_t parent,
 			       ivalue_t b0, ivalue_t b1);
 
+// Is the token a buffer byte position known when the program is built: a
+// number, or a name that folds to one -- a #define or a #constant? 1 and the
+// position, or 0, with no error set. A #param is not: it can change after the
+// build. One token and no arithmetic, on purpose: this runs inside
+// csp_parse_expr, and a nested csp_parse_expr would double the deepest stack
+// path on AVR. Anything else is a RUNTIME subscript, `Frame[BytePos]`.
+NOINLINE static int buf_const_tok(csp_rt_t* st, const token_t* t,
+				  ivalue_t* pos)
+{
+    index_t ix;
+    vtype_t dvt;
+    value_t dval;
+
+    if (t->t == INT) {
+	*pos = t->v.val.i;
+	return 1;
+    }
+    if (t->t != WORD)
+	return 0;
+    ix = csp_lookup_decl(st, &t->v.str);
+    if ((ix != BAD_INDEX) &&
+	(decl(st, INDEX(ix), type) == DECL_CONSTANT) &&
+	!decl(st, INDEX(ix), local)) {
+	*pos = decl(st, INDEX(ix), cn_init).i;
+	return 1;
+    }
+    if ((ix == BAD_INDEX) && def_lookup(st, &t->v.str, &dvt, &dval) &&
+	((dvt == V_INTEGER) || (dvt == V_UNSIGNED))) {
+	*pos = dval.i;
+	return 1;
+    }
+    return 0;
+}
+
+// One END of a byte range, `Buf[a..b]`, at tv[i]. A range's width has to be
+// known when it is built, so both ends must be constants. Returns the index of
+// the token after it, -1 with the error set.
+NOINLINE static int buf_subscript(csp_rt_t* st, const token_t* tv, int i,
+				  int n, ivalue_t* pos)
+{
+    if ((i < n) && buf_const_tok(st, &tv[i], pos))
+	return i + 1;
+    if ((i < n) && (tv[i].t == WORD)) {
+	if (csp_set_error(st, ERR_INDEX_NOT_CONST))
+	    csp_set_err_arg_tstr(st, 0, &tv[i].v.str);
+    }
+    else
+	csp_set_error(st, ERR_SYNTAX);
+    return -1;
+}
+
 NOINLINE int csp_parse_expr(csp_rt_t* st, const token_t* tv, size_t* num_toks,
 		   rentry_t* result)
 {
@@ -2524,7 +2605,7 @@ next:
 	    csp_set_error(st, ERR_SYNTAX);
 	    return 0;
 	}
-	alen = csp_array_len(st, XIDX(aix));
+	alen = subscript_len(st, XIDX(aix));
 	avt  = decl(st,XIDX(aix),vt);
 
 	// A CONSTANT subscript needs no instruction at all: fold it into the
@@ -2539,7 +2620,17 @@ next:
 		return 0;
 	    }
 	    ep--;
-	    aix = MAKE_XINDEX(XOBJ(aix), XIDX(aix) + (index_t)k);
+	    // A buffer byte (`Frame[2*N]`, an expression that still folds) is
+	    // a view of its own at that byte, not the declaration k past it.
+	    if (decl(st, XIDX(aix), type) == DECL_VIEW) {
+		index_t bx = decl(st, XIDX(aix), ca_id);
+		ivalue_t b0 = decl(st, XIDX(aix), ca_bit) + k*8;
+		if ((aix = make_buf_view(st, MAKE_XINDEX(XOBJ(aix), bx),
+					 b0, b0 + 7)) == BAD_INDEX)
+		    return 0;
+	    }
+	    else
+		aix = MAKE_XINDEX(XOBJ(aix), XIDX(aix) + (index_t)k);
 	    if ((i < n) && ((tv[i].t == EQ) || (tv[i].t == RIMP)))
 		ep = push_lval(rstack, ep, aix, avt);
 	    else if ((ep = push_var(st, rstack, ep, aix, avt)) < 0)
@@ -2654,6 +2745,7 @@ next:
 	}
 	else {
 	    vtype_t vt;
+	    ivalue_t p0;         // a constant buffer byte position
 	    // Not a function - regular variable/decl/state lookup.
 	    //
 	    // A state name resolves through csp_lookup_decl too now: states are
@@ -2745,16 +2837,41 @@ next:
 		ix = MAKE_XINDEX(XOBJ_CURRENT, XIDX(ix));
 
 	    // Buf[pos] / Buf[pos0..pos1] -- byte access on a buffer
+	    //
+	    // A position that is not one constant token -- a #param, a
+	    // variable, arithmetic -- is a RUNTIME subscript, `Frame[BytePos]`:
+	    // the access is the byte at position 0 and an OP_SETOX in bits mode
+	    // moves it when the program runs. It opens like an array subscript
+	    // and the RB below closes it the same way.
+	    if ((i+2 < n) && (tv[i].t == LB) &&
+		(decl(st,INDEX(ix),type) == DECL_BUFFER) &&
+		(tv[i+2].t != DOTDOT) &&      // a range: both ends constant
+		!(buf_const_tok(st, &tv[i+1], &p0) && (tv[i+2].t == RB))) {
+		unsigned mo = XOBJ(ix);
+		index_t vx;
+		if (((mo != XOBJ_GLOBAL) && (mo != XOBJ_CURRENT)) ||
+		    (pp >= MAX_PARSE_STACK_DEPTH)) {
+		    csp_set_error(st, ERR_SYNTAX);
+		    return 0;
+		}
+		if ((vx = make_buf_view(st, ix, 0, 7)) == BAD_INDEX)
+		    return 0;
+		ostack[pp++] = MAKE_ARR_MARKER(mo == XOBJ_CURRENT,
+					       INDEX(vx), ep);
+		i++;              // skip '['
+		ptok = LP;        // a subscript opens like a paren
+		goto next;
+	    }
 	    if ((i < n) && (tv[i].t == LB) &&
 		(decl(st,INDEX(ix),type) == DECL_BUFFER)) {
-		ivalue_t p0, p1;
+		ivalue_t p1;
 		i++;                                   // '['
-		if (tv[i].t != INT) { csp_set_error(st, ERR_SYNTAX); return 0; }
-		p0 = p1 = tv[i].v.val.i; i++;
+		if ((i = buf_subscript(st, tv, i, (int)n, &p0)) < 0)
+		    return 0;
+		p1 = p0;
 		if (tv[i].t == DOTDOT) {
-		    i++;
-		    if (tv[i].t != INT) {csp_set_error(st,ERR_SYNTAX); return 0;}
-		    p1 = tv[i].v.val.i; i++;
+		    if ((i = buf_subscript(st, tv, i+1, (int)n, &p1)) < 0)
+			return 0;
 		}
 		if (tv[i].t != RB) { csp_set_error(st, ERR_SYNTAX); return 0; }
 		i++;                                   // ']'
@@ -4713,6 +4830,7 @@ NOINLINE xindex_t lookup_lhs(csp_rt_t* st, const token_t* tv,
 	else if ((lhs->len >= 4) && (tv[lhs->pos+1].t == LB)) {
 	    // Buf[pos] / Buf[pos0..pos1] -- byte access on a buffer
 	    int j = lhs->pos;
+	    int k;
 	    ivalue_t p0, p1;
 	    name = &tv[j].v.str;
 	    if ((ix = csp_lookup_decl(st, name)) == BAD_INDEX) {
@@ -4724,12 +4842,12 @@ NOINLINE xindex_t lookup_lhs(csp_rt_t* st, const token_t* tv,
 		csp_set_error(st, ERR_SYNTAX);
 		return BAD_INDEX;
 	    }
-	    if (tv[j+2].t != INT) { csp_set_error(st, ERR_SYNTAX); return BAD_INDEX; }
-	    p0 = p1 = tv[j+2].v.val.i;
-	    if (tv[j+3].t == DOTDOT) {
-		if (tv[j+4].t != INT) {csp_set_error(st,ERR_SYNTAX);return BAD_INDEX;}
-		p1 = tv[j+4].v.val.i;
-	    }
+	    if ((k = buf_subscript(st, tv, j+2, lhs->pos + lhs->len, &p0)) < 0)
+		return BAD_INDEX;
+	    p1 = p0;
+	    if ((tv[k].t == DOTDOT) &&
+		((k = buf_subscript(st, tv, k+1, lhs->pos + lhs->len, &p1)) < 0))
+		return BAD_INDEX;
 	    return make_buf_view(st, ix, p0*8, (p1+1)*8-1);
 	}
 	else {
@@ -4955,6 +5073,25 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 		    csp_set_error(st, ERR_SYNTAX);
 		    return -1;
 		}
+		// `Frame[BytePos] = rhs`: a runtime byte. The store is to the
+		// byte at position 0 and an OP_SETOX in bits mode moves it --
+		// armed below, after the right side is loaded, like an array's.
+		if (!part[k].idx_bits && !part[k].has_range &&
+		    (part[k].idxe.len > 0)) {
+		    rentry_t rix;
+		    size_t   nix = part[k].idxe.len;
+		    if ((ix = make_buf_view(st, bx, 0, 7)) == BAD_INDEX)
+			return -1;
+		    if (!csp_parse_expr(st, &tv[part[k].idxe.pos], &nix, &rix))
+			return -1;
+		    if (csp_load(st, &rix) < 0)
+			return -1;
+		    aidx = rix.reg;
+		    alen_a = subscript_len(st, XIDX(ix));
+		    if (!coerce_assign(st, ix, &rbody))
+			return -1;
+		    goto have_lhs;
+		}
 		if (part[k].idx_bits) {       // already bit positions
 		    lo = part[k].idx0;
 		    hi = part[k].idx1;
@@ -5033,8 +5170,7 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 	    fits_sti((part[k].assign == RIMP) ? OP_STIMP : OP_ST, &rbody)) {
 	    dst = alloc_reg(st);
 	    if (alen_a) {
-		st->cs->arr_reg = (uint8_t)aidx;
-		st->cs->arr_len = alen_a;
+		arm_subscript(st, (reg_t)aidx, ix);
 	    }
 	    if (!asm_STI(st, dst, ix, (int8_t)rbody.val.i))
 		return -1;
@@ -5055,8 +5191,7 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 		// Armed HERE, after the right side has been loaded: its own LD
 		// would otherwise consume the one-shot meant for this store.
 		if (alen_a) {
-		    st->cs->arr_reg = (uint8_t)aidx;
-		    st->cs->arr_len = alen_a;
+		    arm_subscript(st, (reg_t)aidx, ix);
 		}
 		if (!asm_mem(st, op, dst, ix))
 		    return -1;

@@ -1,0 +1,18 @@
+// `F.id = CanId` in INIT moves a CAN buffer to another frame id, and the id can
+// be a #param -- a node's id is a setting, not something compiled in. The write
+// used to compile and do nothing: csp_view_set_part had no PART_ID case, so the
+// buffer stayed on its declared id and the frame meant for it was dropped.
+#param CanId:32 unsigned = 0x30
+#buffer F:8 in can 0x31
+
+#variable Id = 0
+#variable Seen = 0
+#variable Last = 0
+
+#in INIT
+F.id = CanId
+#end
+
+Id = F.id
+Seen = Seen + 1 ? F.rx
+Last = F[1] ? F.rx

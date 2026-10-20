@@ -1,0 +1,10 @@
+% 0x30 arrives because INIT moved F there; 0x31, the id it was DECLARED with,
+% is now an id nothing listens to and its 99 is dropped.
+{cycles, 10}.
+{modes, [seq]}.
+{stimulus, "tests/unit/can_id_set.dat"}.
+{checks, [
+  {final_var, "Id", 48},
+  {final_var, "Seen", 1},
+  {final_var, "Last", 64}
+]}.

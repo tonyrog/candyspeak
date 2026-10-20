@@ -51,3 +51,4 @@ err_sms_owners `sms` names a string #param listing the allowed numbers: #param O
 err_onewire_rom `onewire` names a string #param holding the ROM id: #param TinRom string = "28ff641f0716a3c2"
 err_opts_after_pin option '%s' comes BEFORE the pin -- '#digital D in pullup 2:1', not after
 err_block_open #%s opened on line %d was never closed
+err_index_not_const a buffer byte range is fixed when the program is built -- %s is not a constant

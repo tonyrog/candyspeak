@@ -1,0 +1,12 @@
+% Two of the three frames carry 0x40 in byte 1; the middle one has it in byte 0,
+% which is not BytePos.
+{cycles, 20}.
+{modes, [seq]}.
+{stimulus, "tests/unit/buffer_index_runtime.dat"}.
+{checks, [
+  {final_var, "Hits", 2},
+  {final_var, "R1", 34},
+  {final_var, "R2", 68},
+  % 0x44 in byte 3, 0x22 in byte 1
+  {final_var, "Whole", 1140859392}
+]}.

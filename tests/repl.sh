@@ -1426,6 +1426,15 @@ got=$(printf 'Kp = 9 ? 1\n/quit\n' | repl ./csp "$D/p4.db" "$D/param.csp")
 ck "a rule assigning to a param is refused" \
    'Error: cannot assign to a #param in a rule -- set it with > name = value' "$got"
 
+# A param can pick ONE byte of a buffer (`F[Kp]`, an OP_SETOX in bits mode),
+# but not an end of a range: a range's width is its view's, and a view is built
+# at compile time. Its own error, where it used to be "syntax error".
+got=$(printf '#buffer F:8\nOut = F[Kp..3] ? 1\n/quit\n' |
+	  repl ./csp "$D/p4.db" "$D/param.csp")
+ck "a param as a buffer range end is refused" \
+   'OK
+Error: a buffer byte range is fixed when the program is built -- Kp is not a constant' "$got"
+
 # /state carries it: a param is exactly the thing whose live value can differ
 # from what the source says.
 got=$(printf '> Kp = 7\n/state\n/quit\n' | repl ./csp "$D/p5.db" "$D/param.csp" |
@@ -2541,6 +2550,34 @@ got=$(( printf '/pause\n'; sleep 0.3; printf '/step 1\n'; sleep 1.0;
 	  ./csp -i --no-eeprom "$D/step.csp" 2>&1 |
 	  grep -E '^State' | tr -s ' ' | sed 's/.*= //')
 ck "and the rules run in a step" "Home" "$got"
+
+# --- /commit keeps .rx -------------------------------------------------------
+#
+# /commit makes pending VALUES visible. It runs between cycles, and it used to
+# be the whole end-of-cycle commit -- which also moves every transport's arrival
+# on by one cycle. A frame that became `.rx` at the end of a cycle was cleared
+# by the next /commit before any rule had read it, so in the panel, which sends
+# /commit on every tick, `N = N + 1 ? F.rx` never fired. A rule that also read
+# the frame's VALUE could still get lucky, which is what hid it.
+#
+# /step and /commit alternate so there is always one between two cycles: that
+# is what the panel does, and here it is not left to the scheduler.
+echo "commit-rx:"
+cat > "$D/commit_rx.csp" <<'CSPEOF'
+#buffer F:8 in can 0x30
+#variable N = 0
+N = N + 1 ? F.rx
+CSPEOF
+printf '0\n10 can 0x30 0x00 0x40\n20\n30\n40\n50\n' > "$D/commit_rx.dat"
+got=$( ( printf '/pause\n'; sleep 0.2
+	 for i in 1 2 3 4 5 6 7 8; do
+	     printf '/step 1\n'; sleep 0.1; printf '/commit\n'; sleep 0.1
+	 done
+	 printf '/state\n'; sleep 0.2; printf '/quit\n' ) |
+	   ./csp -i --no-eeprom --exit-on-eof -F "$D/commit_rx.dat" \
+		 "$D/commit_rx.csp" 2>&1 |
+	   grep -E '^N ' | tr -s ' ' | sed 's/.*= //')
+ck "a /commit between cycles keeps .rx" "1" "$got"
 
 # --- --exit-on-eof -----------------------------------------------------------
 #

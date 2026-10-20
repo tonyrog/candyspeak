@@ -44,7 +44,7 @@ $(UTILS)/candyspeak_parse.erl: $(UTILS)/candyspeak_parse.yrl
 $(UTILS)/ebin/candyspeak.beam: $(UTILS)/ebin/candyspeak_parse.beam
 
 run: all
-	erl $(PA) -eval 'csp_panel:start().'
+	erl -s can $(PA) -eval 'csp_panel:start().'  -config panel.config
 
 # The stub wse must shadow the real one. Each -pa prepends, so the LAST one
 # given wins -- test/ebin goes at the end, not the front.

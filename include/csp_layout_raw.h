@@ -201,7 +201,12 @@ typedef struct PACKED {
     // gave up two bits for it: 16383 elements against a declaration table it
     // is made of, where `stride` at four bits would not hold an array of
     // modules.
-    unsigned _pad:2;
+    unsigned _pad:1;
+    // 0: shift the base by stride DECLARATIONS (an array element). 1: shift
+    // the next buffer view by stride BITS (`Frame[BytePos]`, stride 8) -- the
+    // view is the byte at position 0, and len counts the positions it can move
+    // to without leaving the buffer.
+    unsigned bits:1;
     unsigned len:14;         // element count, for the bounds check
     unsigned x:REG_BITS;     // register holding the element index
     unsigned stride:6;       // declarations per element (1 = scalar array)

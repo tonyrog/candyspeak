@@ -73,6 +73,7 @@ rochar s_err_sms_owners[] RODATA = "`sms` names a string #param listing the allo
 rochar s_err_onewire_rom[] RODATA = "`onewire` names a string #param holding the ROM id: #param TinRom string = \"28ff641f0716a3c2\"";
 rochar s_err_opts_after_pin[] RODATA = "option '%s' comes BEFORE the pin -- '#digital D in pullup 2:1', not after";
 rochar s_err_block_open[] RODATA = "#%s opened on line %d was never closed";
+rochar s_err_index_not_const[] RODATA = "a buffer byte range is fixed when the program is built -- %s is not a constant";
 rochar s_LP[] RODATA = "(";
 rochar s_RP[] RODATA = ")";
 rochar s_COLON[] RODATA = ":";

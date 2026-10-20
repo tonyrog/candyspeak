@@ -1,0 +1,31 @@
+// A buffer byte chosen when the program RUNS: `Frame[BytePos]` with BytePos a
+// #param, a variable or any expression. The access is the byte at position 0
+// and an OP_SETOX in bits mode moves it by 8*index bits; its length is the
+// number of bytes the view can reach, so the same bounds check as an array's.
+//
+// The case it is for: which car a DL1200 sits in is a frame id, a byte and a
+// mask -- settings, written after delivery, never compiled in.
+#param CanId:32 unsigned = 0x30
+#param BytePos = 1
+#param BitMask = 0x40
+
+#buffer Frame:8 in can 0x31
+#in INIT
+Frame.id = CanId
+#end
+
+#local HighBeam:1 = (Frame[BytePos] & BitMask) == BitMask
+#variable Hits = 0
+Hits = Hits + 1 ? Frame.rx && HighBeam
+
+// A variable and an expression as the index, read and written.
+#buffer B:4
+#variable I = 1
+#variable R1 = 0
+#variable R2 = 0
+#variable Whole = 0
+B[I] = 0x22 ? 1
+B[I+2] = 0x44 ? 1
+R1 = B[I] ? 1
+R2 = B[2*I+1] ? 1
+Whole = B ? 1

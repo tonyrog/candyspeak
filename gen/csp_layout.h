@@ -1631,6 +1631,21 @@ static inline void csp_instr_set_o_obj(csp_instr_t* p, uint16_t v_)
 
 // instr_common_ox: ends at bit 32 of 4 bytes
 // STRADDLING: len, x
+static inline uint8_t csp_instr_get_ox_bits(const csp_instr_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[0] >> 7)) & 0x1U);
+}
+static inline uint8_t csp_instr_get_ox_bits_ro(const csp_instr_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[0]) >> 7)) & 0x1U);
+}
+static inline void csp_instr_set_ox_bits(csp_instr_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[0] = (uint8_t)((b_[0] & (uint8_t)0x7FU) | (uint8_t)((v_ << 7) & 0x80U));
+}
 static inline uint16_t csp_instr_get_ox_len(const csp_instr_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
@@ -2552,44 +2567,45 @@ typedef enum {
 typedef enum {
     MFI_OP = 0,
     MFI_A_X = 1,
-    MFI_A_Y = 6,
-    MFI_A_Z = 10,
-    MFI_A_U = 14,
-    MFI_A_SWAP = 16,
+    MFI_A_Y = 7,
+    MFI_A_Z = 11,
+    MFI_A_U = 15,
+    MFI_A_SWAP = 17,
     MFI_M_X = 1,
-    MFI_M_Y = 6,
-    MFI_M_MEM = 13,
+    MFI_M_Y = 7,
+    MFI_M_MEM = 14,
     MFI_MI_X = 1,
-    MFI_MI_IMM = 8,
-    MFI_MI_MEM = 13,
+    MFI_MI_IMM = 9,
+    MFI_MI_MEM = 14,
     MFI_I_X = 1,
-    MFI_I_IMM = 13,
+    MFI_I_IMM = 14,
     MFI_R_CND = 1,
-    MFI_R_NXT = 12,
-    MFI_R_IMPLICIT = 20,
+    MFI_R_NXT = 13,
+    MFI_R_IMPLICIT = 21,
     MFI_X_X = 1,
     MFI_IN_X = 1,
-    MFI_IN_IMM = 9,
-    MFI_IN_NXT = 15,
-    MFI_IN_IMPLICIT = 20,
+    MFI_IN_IMM = 10,
+    MFI_IN_NXT = 16,
+    MFI_IN_IMPLICIT = 21,
     MFI_E_NUM = 2,
-    MFI_E_MX = 13,
-    MFI_SG_NUM = 3,
-    MFI_SG_USED = 18,
+    MFI_E_MX = 14,
+    MFI_SG_NUM = 4,
+    MFI_SG_USED = 19,
     MFI_V_NUM = 2,
-    MFI_V_MX = 13,
-    MFI_N_OBJ = 5,
+    MFI_V_MX = 14,
+    MFI_N_OBJ = 6,
     MFI_F_X = 1,
-    MFI_F_IDX = 7,
-    MFI_F_USR = 11,
-    MFI_F_AVT = 13,
-    MFI_O_OBJ = 5,
-    MFI_OX_LEN = 4,
-    MFI_OX_X = 17,
-    MFI_OX_STRIDE = 19,
-    MFI_EM_CRC = 13,
+    MFI_F_IDX = 8,
+    MFI_F_USR = 12,
+    MFI_F_AVT = 14,
+    MFI_O_OBJ = 6,
+    MFI_OX_BITS = 3,
+    MFI_OX_LEN = 5,
+    MFI_OX_X = 18,
+    MFI_OX_STRIDE = 20,
+    MFI_EM_CRC = 14,
     MFI_NDOUBLE = 0,
-    MFI_NFIELD = 21
+    MFI_NFIELD = 22
 } mf_instr_all_t;
 
 #define MFI_OP_POS 0
@@ -2660,6 +2676,8 @@ typedef enum {
 #define MFI_F_AVT_BITS 16
 #define MFI_O_OBJ_POS 8
 #define MFI_O_OBJ_BITS 16
+#define MFI_OX_BITS_POS 7
+#define MFI_OX_BITS_BITS 1
 #define MFI_OX_LEN_POS 8
 #define MFI_OX_LEN_BITS 14
 #define MFI_OX_X_POS 22
@@ -2669,12 +2687,13 @@ typedef enum {
 #define MFI_EM_CRC_POS 16
 #define MFI_EM_CRC_BITS 16
 
-// 38 names over 21 slots, of which the first 0 are the
+// 39 names over 22 slots, of which the first 0 are the
 // halves of fields wider than a cell.
 #define CSP_INSTR_ALL_FIELDS { \
     { 0, 0, 6 } /* op */, \
     { 0, 6, 4 } /* a_x m_x mi_x i_x r_cnd x_x in_x f_x */, \
     { 0, 6, 10 } /* e_num v_num */, \
+    { 0, 7, 1 } /* ox_bits */, \
     { 1, 0, 10 } /* sg_num */, \
     { 1, 0, 14 } /* ox_len */, \
     { 1, 0, 16 } /* n_obj o_obj */, \
@@ -2831,6 +2850,10 @@ typedef enum {
 	(long)((uint32_t)csp_instr_get_o_obj((const csp_instr_t*)&(REC)) & 0xFFFFUL)) \
 	FAIL("o_obj", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_O_OBJ]), \
 	     (long)((uint32_t)csp_instr_get_o_obj((const csp_instr_t*)&(REC)) & 0xFFFFUL)); \
+    if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_OX_BITS]) != \
+	(long)((uint32_t)csp_instr_get_ox_bits((const csp_instr_t*)&(REC)) & 0x1UL)) \
+	FAIL("ox_bits", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_OX_BITS]), \
+	     (long)((uint32_t)csp_instr_get_ox_bits((const csp_instr_t*)&(REC)) & 0x1UL)); \
     if ((long)mc_field_get(&(REC), &mc_instr_fields[MFI_OX_LEN]) != \
 	(long)((uint32_t)csp_instr_get_ox_len((const csp_instr_t*)&(REC)) & 0x3FFFUL)) \
 	FAIL("ox_len", (long)mc_field_get(&(REC), &mc_instr_fields[MFI_OX_LEN]), \
@@ -3128,6 +3151,6 @@ typedef enum {
 
 // Fingerprint of every field name, position and width above, in order.
 // An image built against a different layout must be refused, not read.
-#define CSP_LAYOUT_FINGERPRINT 0xAD2DB1C4UL
+#define CSP_LAYOUT_FINGERPRINT 0xC2492E74UL
 
 #endif

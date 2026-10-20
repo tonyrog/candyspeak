@@ -2901,7 +2901,7 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 static int cmd_commit(csp_rt_t* st, int argc, char* argv[])
 {
     (void)argv;
-    csp_commit(st);
+    csp_commit_values(st);
     csp_print_line("Committed");
     return CSP_CMD_OK;
 }

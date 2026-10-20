@@ -293,7 +293,11 @@ static uint8_t exprbuf_var(csp_rt_t* st, csp_exprbuf_t* bp, uint16_t ix)
 	// `Buf[a..b]` produce -- the two that have to go back in as they came
 	// out. A slice at a bit boundary comes from a pack, whose own printer
 	// renders the `<<=` line instead, so it never reaches here.
-	if (((bit & 7) == 0) && ((len & 7) == 0)) {
+	//
+	// Not for a runtime subscript, `Buf[Pos]`: the view is the byte at 0
+	// and the SETOX moves it, so the subscript below is the whole story --
+	// printing both listed it as `Buf[0][Pos]`.
+	if (!sx && ((bit & 7) == 0) && ((len & 7) == 0)) {
 	    uint16_t lo = (uint16_t)(bit >> 3);
 	    uint16_t hi = (uint16_t)(lo + (len >> 3) - 1);
 	    exprbuf_char(bp, '[');

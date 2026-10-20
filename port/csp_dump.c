@@ -196,9 +196,10 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 	// until the program runs. `seto` stays false above, so the access that
 	// follows renders against the global base -- the honest rendering of
 	// "which element depends on the run".
-	fprintf(f, "{instr,%d,'SETOX',[r%d,{len,%u},{stride,%u}]}%s\n",
+	fprintf(f, "{instr,%d,'SETOX',[r%d,{len,%u},{stride,%u}%s]}%s\n",
 		i, instr(st, i, ox_x), instr(st, i, ox_len),
-		instr(st, i, ox_stride), eot);
+		instr(st, i, ox_stride),
+		instr(st, i, ox_bits) ? ",bits" : "", eot);
 	break;
     case OP_NOP:
 	fprintf(f, "{instr,%d,'NOP'}%s\n",
@@ -1512,8 +1513,11 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    // same shape as the three CRC mismatches this project has had -- a
 	    // payload the generic arm does not carry. len is the bounds check, so
 	    // dropping it would also have turned every array access unchecked.
-	    emit_rec(f, ip, 4, ".ox={%s,.x=%u,.len=%u,.stride=%u}",
-		    op, csp_instr_get_ox_x(ip), csp_instr_get_ox_len(ip), csp_instr_get_ox_stride(ip));
+	    // .bits too: without it a ROM image's `Frame[BytePos]` would move
+	    // the declaration base instead of the byte.
+	    emit_rec(f, ip, 4, ".ox={%s,.bits=%u,.x=%u,.len=%u,.stride=%u}",
+		    op, csp_instr_get_ox_bits(ip), csp_instr_get_ox_x(ip),
+		    csp_instr_get_ox_len(ip), csp_instr_get_ox_stride(ip));
 	    break;
 	case OP_NINSTATE:
 	case OP_INSTATE:

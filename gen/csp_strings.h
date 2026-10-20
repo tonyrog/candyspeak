@@ -147,6 +147,8 @@ extern rochar s_err_opts_after_pin[74] RODATA;
 #define ros_err_opts_after_pin ((rostring_t) s_err_opts_after_pin)
 extern rochar s_err_block_open[39] RODATA;
 #define ros_err_block_open ((rostring_t) s_err_block_open)
+extern rochar s_err_index_not_const[79] RODATA;
+#define ros_err_index_not_const ((rostring_t) s_err_index_not_const)
 extern rochar s_LP[2] RODATA;
 #define ros_LP ((rostring_t) s_LP)
 extern rochar s_RP[2] RODATA;

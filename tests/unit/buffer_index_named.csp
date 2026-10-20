@@ -1,0 +1,24 @@
+// A buffer's byte index can be a NAME as well as a number: a #define or a
+// #constant, anything that is known when the program is built. It used to take
+// an integer literal only, so `Frame[BYTEPOS]` was a syntax error -- the kind of
+// name a CAN map (frame, bytepos, bitmask) wants to give it.
+//
+// A #param is refused, with its own error: a byte view's position is fixed at
+// compile time and a param can change after the build.
+
+#define LO  0
+#define HI  1
+#constant MID = 1
+
+#buffer Frame:16
+#variable B0 = 0
+#variable B1 = 0
+#variable Rng = 0
+#variable M = 0
+
+Frame[LO] = 52 ? 1           // write through a #define
+Frame[HI] = 18 ? 1
+B0 = Frame[LO] ? 1           // read through a #define
+B1 = Frame[HI] ? 1
+Rng = Frame[LO..HI] ? 1      // a range, both ends named
+M = Frame[MID] ? 1           // and a #constant

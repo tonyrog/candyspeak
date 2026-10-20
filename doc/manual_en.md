@@ -734,6 +734,22 @@ Frame[1] = 18          // second byte
 X = Frame[0..1]        // bytes 0..1 as one value (little-endian)
 ```
 
+The index can be a name as well as a number. A `#define` or a `#constant` is
+known when the program is built and costs nothing extra. A `#param`, a variable
+or any expression picks the byte **when the program runs**:
+
+```
+#param BytePos = 1     // which byte -- a setting, changed after delivery
+#param BitMask = 0x40
+#buffer Frame:8 in can 0x30
+#local HighBeam:1 = (Frame[BytePos] & BitMask) == BitMask
+Frame[I+2] = 0x44      // writes take a runtime index too
+```
+
+A runtime index outside the buffer is an `index out of range` error and the
+access lands on byte 0, as with an array. A **range** (`Frame[a..b]`) needs
+both ends known when the program is built: its width is fixed.
+
 **Binding variables (bit-fields).** Map a variable onto a *bit* range of a
 buffer with `bind`. Writing or reading a bound variable reads/writes the
 underlying buffer bits — they alias the same storage. The buffer must be
@@ -1190,6 +1206,20 @@ On the receive side `.dlc` reads back how many bytes the sender actually sent,
 and `.id` gives the frame id. Both work through the frame or through any field
 of it (`Speed.id` and `F201.id` are the same fact).
 
+The id can also be **written**, which is how it becomes a setting instead of
+something compiled in. The declared id is only where the buffer starts:
+
+```
+#param CanId:32 unsigned = 0x30
+#buffer Frame:8 in can 0x30
+#in INIT
+Frame.id = CanId
+#end
+```
+
+Set `CanId` with `> CanId = 0x31` and `/save`, and the next boot listens on
+0x31.
+
 To react only when a *signal* changes rather than on every frame, guard on
 `changed()` instead — a frame that repeats its contents then prints nothing:
 
@@ -1217,7 +1247,7 @@ println("speed changed") ? changed(Speed)
 
 | Part | Direction | Meaning |
 |------|-----------|---------|
-| `.id` | read | the CAN frame id |
+| `.id` | read/write | the CAN frame id; write it (from a `#param`, in `#in INIT`) to move the buffer to another id |
 | `.rx` | read | a frame arrived and is readable this cycle (one cycle only) |
 | `.tx` | read/write | write 1 to force a send; reads back what was requested |
 | `.dlc` | read/write | bytes to send / bytes last received |
@@ -2842,6 +2872,7 @@ z = A                        // no subscript = element 0
 ```
 #buffer Buf:3               // 3 BYTES of shared storage (size is always bytes)
 Buf[0] = 52                 // byte access (index = byte)
+X = Buf[Pos]                // index from a #param/variable/expression
 X = Buf[0..1]               // byte range -> one value (little-endian)
 
 #variable F:8     bind Buf[0..7]    // bind range = bits

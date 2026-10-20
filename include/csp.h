@@ -1726,6 +1726,10 @@ typedef enum {
     ERR_LOCAL_IN_WHERE,
     ERR_SMS_OWNERS,
     ERR_ONEWIRE_ROM,
+    // `Buf[Lo..Hi]` with an end that is not a constant. One byte can be chosen
+    // at run time (`Buf[Pos]`, OP_SETOX in bits mode), but a range's WIDTH is
+    // the view's, and a view is built at compile time.
+    ERR_INDEX_NOT_CONST,
 } csp_err_t;
 
 // parser state, save state before parse
@@ -1899,6 +1903,10 @@ typedef struct {
     // cannot mean anything else.
     uint8_t  arr_reg;            // register holding the element index
     uint16_t arr_len;            // element count; 0 = no subscript pending
+    // 0: the subscript picks an array element. Otherwise it picks a byte of a
+    // buffer (`Frame[BytePos]`), and this is the stride in bits -- the SETOX
+    // goes out in bits mode. Set with arr_len, by arm_subscript.
+    uint8_t  arr_bits;
     // The #local whose OWN formula is being compiled, +1 so a zeroed struct
     // means "none" (declaration index 0 is a real one). coerce_assign refuses an
     // assignment to any other local; this is what lets the declaration emit the
@@ -1928,6 +1936,10 @@ typedef struct {
     // nothing is pending. The next instruction runs with cur/cbase pointed at the
     // named object, and eval_op's tail puts this back.
     uint8_t  sobj;
+    // Pending one-shot OP_SETOX in BITS mode: how far the next buffer view is
+    // moved, in bits (`Frame[BytePos]`). 0 = nothing pending. heap_base adds
+    // it; eval_op's tail clears it with sobj.
+    uint16_t bshift;
 #if defined(SUPPORT_REACTIVE) && (SUPPORT_REACTIVE==1)
     index_t* rule_ip;            // ordinal -> instruction index (own alloc, n_rule)
     // ordinal -> State membership mask (0 = ungated). The mask's WIDTH is the
@@ -3230,6 +3242,7 @@ extern index_t csp_react(csp_rt_t* st);
 extern index_t csp_cycle(csp_rt_t* st);   // one cycle: mixes ROM/RAM modes
 extern void    csp_undo(csp_rt_t* st);
 extern void    csp_commit(csp_rt_t* st);
+extern void    csp_commit_values(csp_rt_t* st);
 
 extern void csp_set_value(csp_rt_t* st, index_t n, value_t v);
 extern void csp_set_ivalue(csp_rt_t* st, index_t n, ivalue_t v);

@@ -1,0 +1,9 @@
+{cycles, 3}.
+{modes, [seq]}.
+{checks, [
+  {final_var, "B0", 52},
+  {final_var, "B1", 18},
+  % 52 + 256*18
+  {final_var, "Rng", 4660},
+  {final_var, "M", 18}
+]}.
