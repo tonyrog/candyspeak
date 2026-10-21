@@ -1,30 +1,47 @@
+# candyspeak's Erlang tools build into the tree's top-level ebin/, which with
+# ebin/candyspeak.app makes the checkout an OTP application: `-pa ebin` from
+# the top, or the parent directory on ERL_LIBS, and code:lib_dir(candyspeak)
+# finds it. Sources stay here; leex and yecc write their .erl next to the input.
 ERLC="$(shell which erlc)"
-ERLC_FLAGS=-MMD -MP -MF .$<.d -I ../.. +debug_info
+EBIN=../ebin
+ERLC_FLAGS=-MMD -MP -MF .$<.d -I ../.. +debug_info -o $(EBIN)
 YRL_SRC=$(wildcard *.yrl)
 XRL_SRC=$(wildcard *.xrl)
 YRL_XRL_GENERATES=$(YRL_SRC:%.yrl=%.erl) $(XRL_SRC:%.xrl=%.erl)
-ERL_SOURCES=$(YRL_XRL_GENERATES)
-ERL_OBJECTS=$(ERL_SOURCES:%.erl=%.beam)
-ALL_OBJECTS=$(ERL_OBJECTS) candyspeak.beam candyspeak_varp.beam candyspeak_c.beam csp_to_c.beam csp_disasm.beam csp_to_candyspeak.beam
-ERL_MODULES=$(ERL_SOURCES:%.erl=%)
+MODULES=$(YRL_XRL_GENERATES:%.erl=%) candyspeak candyspeak_varp candyspeak_c \
+	csp_to_c csp_disasm csp_to_candyspeak
+ALL_OBJECTS=$(MODULES:%=$(EBIN)/%.beam)
 
-.PRECIOUS: $(YRL_SRC:%.yrl=%.erl) $(XRL_SRC:%.xrl=%.erl)
+empty=
+space=$(empty) $(empty)
+comma=,
 
-all: $(ALL_OBJECTS)
+.PRECIOUS: $(YRL_XRL_GENERATES)
+
+all: $(ALL_OBJECTS) $(EBIN)/candyspeak.app
 
 clean:
-	rm -f $(ALL_OBJECTS) *.core .*.d $(YRL_XRL_GENERATES)
+	rm -f $(ALL_OBJECTS) $(EBIN)/candyspeak.app *.core .*.d $(YRL_XRL_GENERATES)
 
-%.beam: %.erl
+$(EBIN):
+	mkdir -p $@
+
+$(EBIN)/%.beam: %.erl | $(EBIN)
 	$(ERLC) $(ERLC_FLAGS) $<
 
+# candyspeak.erl calls the parser, so it waits for it
+$(EBIN)/candyspeak.beam: $(EBIN)/candyspeak_parse.beam
+
+$(EBIN)/candyspeak.app: Makefile | $(EBIN)
+	@printf '{application,candyspeak,\n [{description,"candyspeak tools: parser, varp, C backend, disassembler"},\n  {vsn,"1"},\n  {modules,[%s]},\n  {registered,[]},\n  {applications,[kernel,stdlib]}]}.\n' \
+	  "$(subst $(space),$(comma),$(strip $(MODULES)))" > $@
+
 %.erl: %.yrl
-	$(ERLC) $<
+	$(ERLC) -o . $<
 
 %.erl: %.xrl
-	$(ERLC) $<
+	$(ERLC) -o . $<
 
 .%.d: ;
 
 -include .*.d
-

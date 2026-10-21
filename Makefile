@@ -866,7 +866,7 @@ clib_host:
 	@test $(words $(CLIB_PROG)) = 1 || { echo "PROG: one .csp, got:$(CLIB_PROG)"; exit 1; }
 	@mkdir -p $(CLIB_HOST)
 	@$(MAKE) --no-print-directory -s -C utils
-	@erl -noshell -pa utils -eval 'candyspeak_c:main([$(foreach o,$(CLIB_OPTS),"$(o)",) "$(strip $(CLIB_PROG))", "$(CLIB_HOST)/csp_prog.c"])'
+	@erl -noshell -pa ebin -eval 'candyspeak_c:main([$(foreach o,$(CLIB_OPTS),"$(o)",) "$(strip $(CLIB_PROG))", "$(CLIB_HOST)/csp_prog.c"])'
 	$(CC) -Wall -O1 -DCSP_LIB_HOST -Iinclude -I$(CLIB_HOST) \
 	    $(if $(CLIB_LINK),-I$(dir $(CLIB_LINK)) -DCSP_LIB_LINK=link.c,) \
 	    -o $(CLIB_HOST)/$(basename $(notdir $(strip $(CLIB_PROG)))) \

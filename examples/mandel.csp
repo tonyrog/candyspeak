@@ -31,7 +31,7 @@
   Re = Re1
   Im = Im1
   Count = Count+1
-  #when Dist > 4.0 of
+  #when Dist > 4.0
     #when Count < 10
       print(Count)   
     #end

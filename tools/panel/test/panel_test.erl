@@ -105,6 +105,7 @@ run() ->
     %%     than `St == 3' -- unless the name is taken, in which case the number
     %%     stays, because defining it twice would shadow the other one.
     varp_gen_check(),
+    varp_model_check(),
 
     %% 6g. #annotate picks the widget where the declaration cannot. Nothing in
     %%     `#digital NightButton in 6' says momentary or latching, and it should
@@ -575,6 +576,59 @@ annotate_check() ->
 	       {error, {annotate_unknown_target, _, "Lde", _}} -> true;
 	       _ -> false
 	   end, candyspeak:build(Tmp2)).
+
+%% What the translator models beyond plain signals: #local formulas, input
+%% buffers, frozen #params, and stores that wrap at the declared width.
+varp_model_check() ->
+    Gen = fun(Name, Src, Opts) ->
+		  Tmp = "/tmp/csp_varp_" ++ Name ++ ".csp",
+		  ok = file:write_file(Tmp, Src),
+		  {ok, Io} = candyspeak_varp:translate(Tmp, Opts),
+		  {Tmp, lists:flatten(Io)}
+	  end,
+    Has = fun(T, S) -> string:find(T, S) =/= nomatch end,
+
+    {_, T1} = Gen("local",
+		  "#digital A in 2\n#digital L out 8\n#variable Prev:1 = 0\n"
+		  "#local Edge:1 = A && !Prev\nPrev = A\nL = 1 ? Edge\n", []),
+    expect("a #local is a macro, and a rule reading it is translated",
+	   Has(T1, "define Edge() ") andalso Has(T1, "? Edge()") andalso
+	   not Has(T1, "u_free"), T1),
+
+    {_, T2} = Gen("buffer",
+		  "#digital L out 8\n#buffer F:8 in can 0x10\n#param Pos = 1\n"
+		  "#local B:1 = (F[Pos] & 0x40) != 0\nL = 1 ? F.rx && B\n", []),
+    expect("an input buffer is free bytes and .rx; a byte index is a choice",
+	   Has(T2, "F_b7:8") andalso Has(T2, "F_rx:1") andalso
+	   Has(T2, "(Pos) == 7 ? F_b7") andalso not Has(T2, "u_free"), T2),
+
+    {_, T3} = Gen("param", "#param P:8 unsigned = 3\n#digital L out 8\n"
+		  "#constant K = 5\nL = 1 ? P == K\n", []),
+    expect("a #param is frozen, a #constant is a define",
+	   Has(T3, "next  next(P) == P;") andalso
+	   not Has(T3, "define P ") andalso Has(T3, "define K 5;"), T3),
+    {_, T4} = Gen("param", "#param P:8 unsigned = 3\n#digital L out 8\n"
+		  "#constant K = 5\nL = 1 ? P == K\n", [{params, fixed}]),
+    expect("{params, fixed} makes a #param its declared number",
+	   Has(T4, "define P 3;") andalso not Has(T4, "next(P)"), T4),
+
+    %% varp compares exactly, so an unwrapped `next(N) == N + 1' has no
+    %% successor at 255 and every path through it is cut off.
+    {Tmp5, T5} = Gen("wrap", "#variable N:8 unsigned = 255\n"
+		     "#variable S:8 = 127\nN = N + 1\nS = S + 1\n", []),
+    expect("a store wraps at the declared width",
+	   Has(T5, "> 255 ? ((N) + (1)) - 256") andalso
+	   Has(T5, "> 127 ? ((S) + (1)) - 256"), T5),
+    case os:find_executable("varp") of
+	false -> io:format("skip  varp run (no varp on PATH)~n");
+	Varp ->
+	    V5 = filename:rootname(Tmp5) ++ ".varp",
+	    ok = file:write_file(V5, T5),
+	    Out = os:cmd(Varp ++ " bmc --runs --k-min 2 --k-max 2"
+			 " --trace false " ++ V5 ++ " 2>&1 | tail -1"),
+	    expect("a counter at 255 still has a next step",
+		   Has(Out, "% 1"), Out)
+    end.
 
 varp_gen_check() ->
     F = "demo/home.csp",

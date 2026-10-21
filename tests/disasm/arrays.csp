@@ -1,0 +1,14 @@
+// Every kind of array, for tests/disasm/check.escript: the disassembler has to
+// show each as ONE entry with a len, and what differs per element under elems.
+#digital D[3] out 0:4..6
+#analog A[2]:10 in 0:1..2
+#variable V[4] = 7
+#param Q[2] = 3
+#constant K[3] = { 1, 2, 3 }
+#variable S = 9
+#module M
+#variable W[2] = 5
+#variable X = 1
+#end
+#M m1
+D[1] = V[2] ? 1

@@ -205,15 +205,9 @@ board_dir(Dir, Start) ->
 	    end
     end.
 
-%% The top of the tree: this module is utils/ebin/candyspeak.beam, or
-%% utils/candyspeak.beam when compiled in place.
+%% The top of the tree: this module is ebin/candyspeak.beam.
 tree_dir() ->
-    Beam = filename:absname(code:which(?MODULE)),
-    Dir = filename:dirname(Beam),
-    case filename:basename(Dir) of
-	"ebin" -> filename:dirname(filename:dirname(Dir));
-	_      -> filename:dirname(Dir)
-    end.
+    filename:dirname(filename:dirname(filename:absname(code:which(?MODULE)))).
 
 %% An absolute path with . and .. taken out, so one file reached by two
 %% spellings is seen once.

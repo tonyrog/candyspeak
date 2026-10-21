@@ -254,7 +254,7 @@ $(B)/csp_prog.c: $(PROG) FORCE
 	 { echo "BACKEND=c takes one .csp in PROG (it may #import the rest), got:$(PROG)"; exit 1; }
 	@mkdir -p $(B)
 	@$(MAKE) --no-print-directory -s -C utils
-	@erl -noshell -pa utils -eval 'candyspeak_c:main(["$(strip $(PROG))", "$@.new"])'
+	@erl -noshell -pa ebin -eval 'candyspeak_c:main(["$(strip $(PROG))", "$@.new"])'
 	@cmp -s $@.new $@ 2>/dev/null || cp $@.new $@
 	@echo "  c: $@"
 
@@ -835,7 +835,7 @@ $(B)/csp_prog.c: $(PROG) FORCE
 	 { echo "BACKEND=c takes one .csp in PROG (it may #import the rest), got:$(PROG)"; exit 1; }
 	@mkdir -p $(B)
 	@$(MAKE) --no-print-directory -s -C utils
-	@erl -noshell -pa utils -eval 'candyspeak_c:main(["$(strip $(PROG))", "$@.new"])'
+	@erl -noshell -pa ebin -eval 'candyspeak_c:main(["$(strip $(PROG))", "$@.new"])'
 	@cmp -s $@.new $@ 2>/dev/null || cp $@.new $@
 	@echo "  c: $@"
 

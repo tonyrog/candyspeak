@@ -251,7 +251,7 @@ disabling it and running in the interpreter after the C.
 ### From the instruction stream: utils/csp_to_c.erl (draft, 2026-10-08)
 
 ```
-erl -noshell -pa utils -eval 'csp_to_c:main(["prog.csp", "prog.c"])'
+erl -noshell -pa ebin -eval 'csp_to_c:main(["prog.csp", "prog.c"])'
 escript tests/clib_oracle.escript --bytecode [dir ...]
 ```
 

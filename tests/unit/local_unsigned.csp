@@ -1,0 +1,12 @@
+// A #local declared `:32 unsigned` compares unsigned. A - 2660 with A = 100
+// wraps to 4294964736 (0xFFFFF600); read as a signed int that is -2560 and
+// `Over > 160` would be false. dl1200's MaxTime ladder reads its over-current
+// this way.
+#variable A:16 unsigned = 100
+#local Over:32 unsigned = A - 2660
+#variable OverV:32 unsigned = 0
+#variable Big = 0
+#variable BigV = 0
+Big = 1 ? Over > 160
+OverV = Over
+BigV = 1 ? OverV > 160

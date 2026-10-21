@@ -34,7 +34,7 @@
   Im = Im1
   Count = Count+1
   // print("re1=",Re1,",im1=",Im1),println("dist=", Dist)
-  #when Dist > RADIUS of
+  #when Dist > RADIUS
     #when Count < 10
       print(Count)   
     #end

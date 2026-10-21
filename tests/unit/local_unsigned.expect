@@ -1,0 +1,6 @@
+{cycles, 5}.
+{checks, [
+  {final_var, "OverV", 4294964736},
+  {final_var, "Big",   1},
+  {final_var, "BigV",  1}
+]}.
