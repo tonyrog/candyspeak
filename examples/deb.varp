@@ -1,0 +1,54 @@
+// Generated from deb.csp by candyspeak_varp.
+// DO NOT EDIT -- regenerate.
+//
+//     varp bmc --induction <this file>     // prove it
+//     varp bmc <this file>                 // or get a trace
+//
+// FIRST check the model has transitions at all. An inconsistent `next'
+// has none, so everything is unreachable and a proof says nothing:
+//
+//     // drop the `invariant' line, append this, run `varp sat bj'
+//     deb_init(0) and deb_next(1)
+//
+// must answer `% 1'.
+//
+// FREE (input, not state): deb
+// Each is written by a rule this translator cannot model --
+// a timer, a part, a call. Left free the model has MORE
+// behaviour than the program, so a PROOF still holds while a
+// counterexample may be spurious. Read one against the source.
+// States: INIT=0, NORMAL=1, FAILSAFE=2
+
+define INIT 0;
+define NORMAL 1;
+define FAILSAFE 2;
+define BW 5;
+
+system deb {
+    state St:2;
+    state deb_count:32/signed;
+    input deb:5/signed, Din:1;
+
+    init  St == INIT and deb_count == 5;
+
+    // ---- State --------------------------------------------------
+    next  (St == FAILSAFE) implies (next(St) == FAILSAFE);
+    next  ((St != FAILSAFE) and (St == INIT)) implies (next(St) == NORMAL);
+    next  ((St != FAILSAFE) and not (St == INIT)) implies (next(St) == St);
+
+    // ---- deb_count:32 -------------------------------------
+    //   17: deb_count = (deb_count) - (1) ? (deb_count) > (0)
+    //   20: deb_count = 5 ? (deb_count) == (0)
+    next  (((St == INIT or St == NORMAL) and ((deb_count) == (0)))) implies (next(deb_count) == 5);
+    next  (not ((St == INIT or St == NORMAL) and ((deb_count) == (0))) and ((St == INIT or St == NORMAL) and ((deb_count) > (0)))) implies (next(deb_count) == (((deb_count) - (1)) < -2147483648 ? ((deb_count) - (1)) + 4294967296 : ((deb_count) - (1))));
+    next  (not ((St == INIT or St == NORMAL) and ((deb_count) == (0))) and not ((St == INIT or St == NORMAL) and ((deb_count) > (0)))) implies (next(deb_count) == deb_count);
+
+
+    // FAILSAFE is absorbing in the runtime (csp.h: no rule may leave
+    // it, only a reset), so reaching it once is reaching it for ever --
+    // this is a safety property in the strict sense.
+    invariant St != FAILSAFE;
+}
+
+// NOT TRANSLATED (1 rules), because of a timer, a part, a call or an array:
+//   line 16

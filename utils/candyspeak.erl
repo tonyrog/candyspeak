@@ -355,6 +355,16 @@ build([{states,_Ln,States}|Lines], Stack, Acc, [B|Bound]) ->
 	Error ->
 	    Error
     end;
+%% `#annotate <tool> <word> "text"' is not about a target: the word and the
+%% text are the tool's (`#annotate varp invariant "..."'), so it is not
+%% checked against the declarations and not merged -- two invariants are two
+%% entries. Kept in order under `strings', Tool => [{Word, Text, Line}].
+build([{annotate,Ln, {'WORD',_,Tool},{'WORD',_,Word}, {'STR',_,Text}}|Lines],
+      Stack, Acc, [B|Bound]) ->
+    Strs = maps:get(strings, B, #{}),
+    Strs1 = maps:put(Tool, maps:get(Tool, Strs, []) ++ [{Word, Text, Ln}],
+		     Strs),
+    build(Lines, Stack, Acc, [maps:put(strings, Strs1, B)|Bound]);
 build([{annotate,Ln, {'WORD',_,Tool},{'WORD',_,Target}, Items}|Lines],
       Stack, Acc, [B|Bound]) ->
     Kv = maps:from_list([{K, ann_value(V)}

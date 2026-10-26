@@ -47,6 +47,20 @@
 %%%     counterexample may be spurious and has to be read against the source.
 %%%     The alternative, dropping the rule, would make the model have LESS
 %%%     behaviour, and then a proof would mean nothing.
+%%%
+%%%     PROPERTIES come from the source, written in candyspeak:
+%%%
+%%%         #annotate varp invariant "(Red+Yellow+Green) <= 1"
+%%%         #annotate varp assume "!(ErrTemp && IsOn)"
+%%%         #annotate varp reach "Out && InDis"
+%%%
+%%%     The string is parsed by candyspeak's own parser and translated as a
+%%%     guard is, so it reads the committed state with the program's names.
+%%%     Every invariant is conjoined with `St != FAILSAFE' into the one
+%%%     invariant item, which is varp's default property; one reach and one
+%%%     eventually at most, picked with `--property <system>_reach'. A name
+%%%     the model does not have is an error, not a free guess: a property
+%%%     over a guess proves nothing.
 %%% @end
 
 -module(candyspeak_varp).
@@ -84,7 +98,10 @@ translate(In, Opts) ->
     case candyspeak:parse(In, [sources]) of
 	{ok, Ast} ->
 	    case modules_in(Ast) of
-		[] -> {ok, emit(In, collect(Ast, In, Opts), Opts)};
+		[] ->
+		    try {ok, emit(In, collect(Ast, In, Opts), Opts)}
+		    catch throw:{varp_annotate, _, _, _} = E -> {error, E}
+		    end;
 		Ms -> {error, {instances_not_modelled, Ms}}
 	    end;
 	Error -> Error
@@ -127,7 +144,7 @@ collect(Ast, Top) ->
 %% Top is the file being translated: its own lines are plain numbers.
 collect(Ast, Top, Opts) ->
     C = #{sigs => #{}, order => [], states => [], rules => [], gate => all,
-	  consts => #{}, locals => #{}, lorder => [], bufs => #{},
+	  consts => #{}, locals => #{}, lorder => [], bufs => #{}, props => [],
 	  top => Top, file => Top,
 	  params => proplists:get_value(params, Opts, free)},
     finish(lists:foldl(fun item/2, C, Ast)).
@@ -196,8 +213,37 @@ item({buffer, _Ln, {'WORD', _, Name}, {'INT', _, Size}, Opts, _Tr}, C) ->
 item({rule, Ln, Assigns, Guard}, C) ->
     lists:foldl(fun(A, Ci) -> assign(A, Ln, Guard, Ci) end, C, Assigns);
 
+%% A property, see the top. Only parsed here: whether it translates depends on
+%% declarations that may come later, so finish/1 checks it.
+item({annotate, Ln, {'WORD', _, "varp"}, {'WORD', _, Kind}, {'STR', _, S}}, C) ->
+    F = imported(C),
+    lists:member(Kind, ["invariant", "assume", "reach", "eventually"]) orelse
+	throw({varp_annotate, loc_text(Ln, F), Kind, unknown_kind}),
+    P = #{kind => Kind, text => S, line => Ln, file => F,
+	  expr => prop_expr(Kind, S, Ln, F)},
+    C#{props := maps:get(props, C) ++ [P]};
+
 item(_Other, C) ->
     C.
+
+%% The string is an expression, so it is handed to the parser as the body of a
+%% #define -- the grammar has one root, and this reuses it. Scanning from Ln
+%% keeps the annotation's line in every error.
+prop_expr(Kind, S, Ln, F) ->
+    Bad = fun(Why) -> throw({varp_annotate, loc_text(Ln, F), Kind, Why}) end,
+    case candyspeak_scan:string("#define P_ " ++ S ++ "\n", Ln) of
+	{ok, Ts, _} ->
+	    case candyspeak_parse:parse(Ts) of
+		{ok, [{define, _, _, E}]} -> E;
+		{ok, _} -> Bad({syntax, S});
+		{error, {_, Mod, Msg}} ->
+		    Bad({syntax, lists:flatten(Mod:format_error(Msg))})
+	    end;
+	{error, {_, Mod, Msg}, _} ->
+	    Bad({syntax, lists:flatten(Mod:format_error(Msg))})
+    end.
+
+loc_text(Ln, F) -> lists:flatten(loc(Ln, F)).
 
 add_const(Name, Expr, C) ->
     case const_of(Expr) of
@@ -299,6 +345,7 @@ finish(C0) ->
     %% not translated.
     C1 = C0#{locals := maps:without(Written, maps:get(locals, C0))},
     C = abstract_guards(C1),
+    check_props(C),
     Rules = maps:get(rules, C),
     %% Only an untranslatable VALUE forces a target free -- we cannot say what
     %% it would be assigned. An untranslatable GUARD has been abstracted to a
@@ -314,6 +361,30 @@ finish(C0) ->
 			    (not maps:is_key(T, Sigs)) orelse
 			    (not storable(maps:get(expr, R),
 					  maps:get(T, Sigs), C))]}.
+
+%% A property must translate as written. Abstracting it the way a guard is
+%% would make it a free guess, and an invariant over a guess proves nothing.
+check_props(C) ->
+    Ps = maps:get(props, C),
+    [throw({varp_annotate, loc_text(L, F), K, {not_modelled, T, unmodelled(E, C)}})
+     || #{kind := K, expr := E, line := L, file := F, text := T} <- Ps,
+	not translatable(E, C)],
+    [throw({varp_annotate, loc_text(L, F), K, more_than_one})
+     || K0 <- ["reach", "eventually"],
+	[_, #{kind := K, line := L, file := F} | _]
+	    <- [[P || P = #{kind := K1} <- Ps, K1 =:= K0]]],
+    ok.
+
+%% The names in E the model has nothing for: a timer, a local some rule
+%% writes, a typo.
+unmodelled(E, C) ->
+    lists:usort([N || N <- names_in(E),
+		      not (maps:is_key(N, maps:get(sigs, C)) orelse
+			   maps:is_key(N, maps:get(consts, C)) orelse
+			   maps:is_key(N, maps:get(locals, C)) orelse
+			   maps:is_key(N, maps:get(bufs, C)) orelse
+			   lists:member(N, maps:get(states, C)) orelse
+			   is_builtin_state(N) orelse N =:= "State")]).
 
 %% A value can be stored when it translates and wraps into the target.
 storable(E, Sig, C) ->
@@ -510,12 +581,35 @@ emit(In, C, _Opts) ->
      local_defs(C),
      "\n", init_item(C),
      "\n", transitions(C),
-     "\n    // FAILSAFE is absorbing in the runtime (csp.h: no rule may leave\n"
-     "    // it, only a reset), so reaching it once is reaching it for ever --\n"
-     "    // this is a safety property in the strict sense.\n"
-     "    invariant St != FAILSAFE;\n",
+     "\n", properties(C),
      "}\n",
      footer(C)].
+
+%% The invariant first: varp's default property is the first one. Each
+%% annotation's source line follows it, so a counterexample can be read back.
+properties(C) ->
+    Ps = maps:get(props, C),
+    Note = fun(#{line := L, file := F, text := T}) ->
+		   ["// line ", loc(L, F), ": ", T, "\n"]
+	   end,
+    Prop = fun(K, P = #{expr := E}) ->
+		   ["    ", K, lists:duplicate(10 - length(K), $\s),
+		    vexpr(E, C, bool), ";   ", Note(P)]
+	   end,
+    ["    // FAILSAFE is absorbing in the runtime (csp.h: no rule may leave\n"
+     "    // it, only a reset), so reaching it once is reaching it for ever --\n"
+     "    // this is a safety property in the strict sense.\n"
+     "    invariant St != FAILSAFE",
+     case [P || P = #{kind := "invariant"} <- Ps] of
+	 [] -> ";\n";
+	 Is -> ["\n",
+		lists:join("\n", [["        and (", vexpr(E, C, bool), ")"]
+				  || #{expr := E} <- Is]),
+		";\n",
+		[["    ", Note(P)] || P <- Is]]
+     end,
+     [Prop(K, P) || K <- ["assume", "reach", "eventually"],
+		    P = #{kind := K1} <- Ps, K1 =:= K]].
 
 %% varp keywords are not available as a system name, and examples/state.csp is
 %% exactly that case -- `system state {' does not parse.

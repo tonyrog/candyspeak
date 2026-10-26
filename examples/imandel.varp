@@ -1,0 +1,69 @@
+// Generated from imandel.csp by candyspeak_varp.
+// DO NOT EDIT -- regenerate.
+//
+//     varp bmc --induction <this file>     // prove it
+//     varp bmc <this file>                 // or get a trace
+//
+// FIRST check the model has transitions at all. An inconsistent `next'
+// has none, so everything is unreachable and a proof says nothing:
+//
+//     // drop the `invariant' line, append this, run `varp sat bj'
+//     imandel_init(0) and imandel_next(1)
+//
+// must answer `% 1'.
+//
+// FREE (input, not state): Im, Re, X, Y
+// Each is written by a rule this translator cannot model --
+// a timer, a part, a call. Left free the model has MORE
+// behaviour than the program, so a PROOF still holds while a
+// counterexample may be spurious. Read one against the source.
+// States: INIT=0, NORMAL=1, FAILSAFE=2
+
+define INIT 0;
+define NORMAL 1;
+define FAILSAFE 2;
+define HEIGHT 23;
+define MAX_ITER 100;
+define RADIUS 40;
+define SCALE 8;
+define WIDTH 78;
+
+system imandel {
+    state St:2;
+    state Count:32/signed;
+    input X:32/signed, Y:32/signed, Re:32/signed, Im:32/signed;
+    // one per guard that could not be translated: free, so
+    // the rule MAY fire. See the note at the top.
+    input u_free0_L22:1, u_free1_L22:1, u_free2_L23:1;
+
+    init  St == INIT and Count == 0;
+
+    // ---- State --------------------------------------------------
+    next  (St == FAILSAFE) implies (next(St) == FAILSAFE);
+    next  ((St != FAILSAFE) and (St == INIT)) implies (next(St) == NORMAL);
+    next  ((St != FAILSAFE) and not (St == INIT)) implies (next(St) == St);
+
+    // ---- Count:32 -----------------------------------------
+    //   25: Count = 0
+    //   35: Count = (Count) + (1)
+    //   44: Count = -(1)
+    //   50: Count = -(1)
+    next  (((St == INIT or St == NORMAL))) implies (next(Count) == -(1));
+    next  (not ((St == INIT or St == NORMAL)) and ((St == INIT or St == NORMAL))) implies (next(Count) == -(1));
+    next  (not ((St == INIT or St == NORMAL)) and not ((St == INIT or St == NORMAL)) and ((St == INIT or St == NORMAL))) implies (next(Count) == (((Count) + (1)) > 2147483647 ? ((Count) + (1)) - 4294967296 : (Count) + (1)));
+    next  (not ((St == INIT or St == NORMAL)) and not ((St == INIT or St == NORMAL)) and not ((St == INIT or St == NORMAL)) and ((St == INIT or St == NORMAL))) implies (next(Count) == 0);
+    next  (not ((St == INIT or St == NORMAL)) and not ((St == INIT or St == NORMAL)) and not ((St == INIT or St == NORMAL)) and not ((St == INIT or St == NORMAL))) implies (next(Count) == Count);
+
+
+    // FAILSAFE is absorbing in the runtime (csp.h: no rule may leave
+    // it, only a reset), so reaching it once is reaching it for ever --
+    // this is a safety property in the strict sense.
+    invariant St != FAILSAFE;
+}
+
+// NOT TRANSLATED (5 rules), because of a timer, a part, a call or an array:
+//   line 22
+//   line 22
+//   line 23
+//   line 33
+//   line 34

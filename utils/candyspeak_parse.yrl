@@ -104,6 +104,11 @@ declaration -> 'D_BUFFER' xid res options buftype :
 declaration -> 'D_DEFINE' xid expr : {define,line('$1'),'$2','$3'}.
 
 %% #annotate <tool> <target> [key[=value] ...]
+%% #annotate <tool> <word> "any chars"
+%%
+%% In the string form the word is the tool's, not a target: `#annotate varp
+%% invariant "Red + Green <= 1"'. What the string means -- candyspeak, another
+%% language -- is the tool's business too.
 %%
 %% Inert: the parser carries it, nothing else looks at it, and it never reaches
 %% the compiler or a ROM. It is for tools that read the SOURCE -- the panel's
@@ -125,6 +130,9 @@ declaration -> 'D_IMPORT' aid : {import,line('$1'),name,element(3,'$2')}.
 declaration -> 'D_IMPORT' aid 'STR' :
 		   {import,line('$1'),{root,element(3,'$2')},element(3,'$3')}.
 declaration -> 'D_IMPORT' 'STR' : {import,line('$1'),quoted,element(3,'$2')}.
+
+declaration -> 'D_ANNOTATE' id id 'STR' :
+		   {annotate,line('$1'),'$2','$3','$4'}.
 
 declaration -> 'D_ANNOTATE' id id annotate_items :
 		   {annotate,line('$1'),'$2','$3','$4'}.
@@ -246,7 +254,8 @@ part -> 'T_LEN' : make_word('$1').
 obj_params -> '$empty' : [].
 obj_params -> assignment obj_params : ['$1'|'$2'].
 
-res -> 'COLON' 'INT' : '$2'.
+%%res -> 'COLON' 'INT' : '$2'.
+res -> 'COLON' expr : '$2'.
 res -> '$empty' : default.
 
 array -> 'LB' 'INT' 'RB' : {array_size,line('$1'),'$2'}.

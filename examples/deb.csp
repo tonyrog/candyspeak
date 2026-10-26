@@ -1,0 +1,20 @@
+// debouncer test
+
+#define BW 5
+
+#variable deb:5 integer = 0
+#variable deb_count = 5
+
+#digital Din in 0:1
+
+// read Din and shift into deb state
+// deb is BW number of bits and is an integer
+// when deb_count == 0 deb is check for 0 = FALSE or -1 = TRUE
+// for a "stable" digital input
+
+#local debl:5 integer = (deb << 1) | Din
+deb = debl ? 1
+deb_count=deb_count-1 ? deb_count > 0
+// The pattern we are looking for is 11111 00000 (if BW=5)
+#local debl_valid = (deb_count == 1) && ((debl==0)||(debl==-1))
+deb_count = 5 ? deb_count == 0

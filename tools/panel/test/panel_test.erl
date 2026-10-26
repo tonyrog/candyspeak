@@ -106,6 +106,7 @@ run() ->
     %%     stays, because defining it twice would shadow the other one.
     varp_gen_check(),
     varp_model_check(),
+    varp_prop_check(),
 
     %% 6g. #annotate picks the widget where the declaration cannot. Nothing in
     %%     `#digital NightButton in 6' says momentary or latching, and it should
@@ -629,6 +630,62 @@ varp_model_check() ->
 	    expect("a counter at 255 still has a next step",
 		   Has(Out, "% 1"), Out)
     end.
+
+%% `#annotate varp <kind> "candyspeak expression"': parsed by candyspeak,
+%% translated as a guard, and an error when the model cannot say it.
+varp_prop_check() ->
+    Light = "#digital Red out 1\n#digital Yellow out 2\n#digital Green out 3\n"
+	"#digital Go in 4\n#variable Phase:2 unsigned = 0\n"
+	"Phase = (Phase + 1) % 3 ? Go\n"
+	"Red = Phase == 0\nYellow = Phase == 1\nGreen = Phase == 2\n",
+    Tr = fun(Name, Anns) ->
+		 Tmp = "/tmp/csp_varp_" ++ Name ++ ".csp",
+		 ok = file:write_file(Tmp, Light ++ Anns),
+		 {Tmp, candyspeak_varp:translate(Tmp)}
+	 end,
+    Has = fun(T, S) -> string:find(T, S) =/= nomatch end,
+
+    {Tmp, {ok, Io}} =
+	Tr("prop", "#annotate varp invariant \"(Red+Yellow+Green) <= 1\"\n"
+	   "#annotate varp invariant \"Phase != 3\"\n"
+	   "#annotate varp assume \"Go\"\n"
+	   "#annotate varp reach \"Green && Phase == 0\"\n"),
+    T = lists:flatten(Io),
+    expect("invariants are conjoined with FAILSAFE, each line noted",
+	   Has(T, "invariant St != FAILSAFE\n        and (") andalso
+	   Has(T, "and ((Phase) != (3));") andalso
+	   Has(T, "// line 11: Phase != 3"), T),
+    expect("assume and reach are their own items",
+	   Has(T, "assume    (Go) != 0;") andalso
+	   Has(T, "reach     ((Green) != 0) and ((Phase) == (0));"), T),
+    case os:find_executable("varp") of
+	false -> io:format("skip  varp run (no varp on PATH)~n");
+	Varp ->
+	    V = filename:rootname(Tmp) ++ ".varp",
+	    ok = file:write_file(V, T),
+	    Ind = os:cmd(Varp ++ " bmc --induction " ++ V ++ " 2>&1 | tail -1"),
+	    expect("the invariant is proved", Has(Ind, "% TRUE"), Ind),
+	    Re = os:cmd(Varp ++ " bmc --k-max 6 --trace false --property "
+			"csp_varp_prop_reach " ++ V ++ " 2>&1 | tail -2"),
+	    expect("reach finds green with the phase wrapped",
+		   Has(Re, "counterexample at k=3"), Re)
+    end,
+
+    Err = fun(Name, Ann) -> element(2, Tr(Name, "#annotate varp " ++ Ann ++ "\n")) end,
+    E1 = Err("e1", "invariant \"Red + Blue <= 1\""),
+    expect("a name the model lacks is an error, with the line",
+	   E1 =:= {error, {varp_annotate, "10", "invariant",
+			   {not_modelled, "Red + Blue <= 1", ["Blue"]}}}, E1),
+    E2 = Err("e2", "never \"Red\""),
+    expect("an unknown kind is an error",
+	   E2 =:= {error, {varp_annotate, "10", "never", unknown_kind}}, E2),
+    E3 = Err("e3", "invariant \"Red Yellow\""),
+    expect("a syntax error in the string is reported at the annotation",
+	   element(1, element(2, E3)) =:= varp_annotate andalso
+	   element(2, element(2, E3)) =:= "10", E3),
+    E4 = Err("e4", "reach \"Red\"\n#annotate varp reach \"Green\""),
+    expect("one reach at most",
+	   E4 =:= {error, {varp_annotate, "11", "reach", more_than_one}}, E4).
 
 varp_gen_check() ->
     F = "demo/home.csp",

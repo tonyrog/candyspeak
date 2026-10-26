@@ -1,0 +1,108 @@
+// Generated from traffic.csp by candyspeak_varp.
+// DO NOT EDIT -- regenerate.
+//
+//     varp bmc --induction <this file>     // prove it
+//     varp bmc <this file>                 // or get a trace
+//
+// FIRST check the model has transitions at all. An inconsistent `next'
+// has none, so everything is unreachable and a proof says nothing:
+//
+//     // drop the `invariant' line, append this, run `varp sat bj'
+//     traffic_init(0) and traffic_next(1)
+//
+// must answer `% 1'.
+//
+// States: INIT=0, NORMAL=1, FAILSAFE=2, green=3, red=4, redyellow=5, yellow=6
+
+define INIT 0;
+define NORMAL 1;
+define FAILSAFE 2;
+define green 3;
+define red 4;
+define redyellow 5;
+define yellow 6;
+
+system traffic {
+    state St:3;
+    state Red:1, Yellow:1, Green:1, LongRed:32/signed;
+    // #param: free in the first step, then never changes
+    state PhasePeriod:32/signed, PleasePeriod:32/signed;
+    input Please:1;
+    // one per guard that could not be translated: free, so
+    // the rule MAY fire. See the note at the top.
+    input u_free0_L26:1, u_free1_L26:1, u_free2_L30:1, u_free3_L34:1, u_free4_L38:1, u_free5_L42:1;
+
+    init  St == INIT and Red == 0 and Yellow == 0 and Green == 0 and LongRed == 0;
+
+    // ---- State --------------------------------------------------
+    next  (St == FAILSAFE) implies (next(St) == FAILSAFE);
+    next  ((St != FAILSAFE) and ((St == yellow) and (u_free4_L38 == 1))) implies (next(St) == red);
+    next  ((St != FAILSAFE) and not ((St == yellow) and (u_free4_L38 == 1)) and ((St == green) and (u_free3_L34 == 1))) implies (next(St) == yellow);
+    next  ((St != FAILSAFE) and not ((St == yellow) and (u_free4_L38 == 1)) and not ((St == green) and (u_free3_L34 == 1)) and ((St == redyellow) and (u_free2_L30 == 1))) implies (next(St) == green);
+    next  ((St != FAILSAFE) and not ((St == yellow) and (u_free4_L38 == 1)) and not ((St == green) and (u_free3_L34 == 1)) and not ((St == redyellow) and (u_free2_L30 == 1)) and ((St == red) and (u_free0_L26 == 1))) implies (next(St) == redyellow);
+    next  ((St != FAILSAFE) and not ((St == yellow) and (u_free4_L38 == 1)) and not ((St == green) and (u_free3_L34 == 1)) and not ((St == redyellow) and (u_free2_L30 == 1)) and not ((St == red) and (u_free0_L26 == 1)) and ((St == INIT))) implies (next(St) == green);
+    next  ((St != FAILSAFE) and not ((St == yellow) and (u_free4_L38 == 1)) and not ((St == green) and (u_free3_L34 == 1)) and not ((St == redyellow) and (u_free2_L30 == 1)) and not ((St == red) and (u_free0_L26 == 1)) and not ((St == INIT)) and (St == INIT)) implies (next(St) == NORMAL);
+    next  ((St != FAILSAFE) and not ((St == yellow) and (u_free4_L38 == 1)) and not ((St == green) and (u_free3_L34 == 1)) and not ((St == redyellow) and (u_free2_L30 == 1)) and not ((St == red) and (u_free0_L26 == 1)) and not ((St == INIT)) and not (St == INIT)) implies (next(St) == St);
+
+    // ---- Red:1 -------------------------------------------
+    //   25: Red = 1
+    //   29: Red = 1
+    //   33: Red = 0
+    //   37: Red = 0
+    next  (((St == yellow))) implies (next(Red) == 0);
+    next  (not ((St == yellow)) and ((St == green))) implies (next(Red) == 0);
+    next  (not ((St == yellow)) and not ((St == green)) and ((St == redyellow))) implies (next(Red) == 1);
+    next  (not ((St == yellow)) and not ((St == green)) and not ((St == redyellow)) and ((St == red))) implies (next(Red) == 1);
+    next  (not ((St == yellow)) and not ((St == green)) and not ((St == redyellow)) and not ((St == red))) implies (next(Red) == Red);
+
+    // ---- Yellow:1 ----------------------------------------
+    //   25: Yellow = 0
+    //   29: Yellow = 1
+    //   33: Yellow = 0
+    //   37: Yellow = 1
+    next  (((St == yellow))) implies (next(Yellow) == 1);
+    next  (not ((St == yellow)) and ((St == green))) implies (next(Yellow) == 0);
+    next  (not ((St == yellow)) and not ((St == green)) and ((St == redyellow))) implies (next(Yellow) == 1);
+    next  (not ((St == yellow)) and not ((St == green)) and not ((St == redyellow)) and ((St == red))) implies (next(Yellow) == 0);
+    next  (not ((St == yellow)) and not ((St == green)) and not ((St == redyellow)) and not ((St == red))) implies (next(Yellow) == Yellow);
+
+    // ---- Green:1 -----------------------------------------
+    //   25: Green = 0
+    //   29: Green = 0
+    //   33: Green = 1
+    //   37: Green = 0
+    next  (((St == yellow))) implies (next(Green) == 0);
+    next  (not ((St == yellow)) and ((St == green))) implies (next(Green) == 1);
+    next  (not ((St == yellow)) and not ((St == green)) and ((St == redyellow))) implies (next(Green) == 0);
+    next  (not ((St == yellow)) and not ((St == green)) and not ((St == redyellow)) and ((St == red))) implies (next(Green) == 0);
+    next  (not ((St == yellow)) and not ((St == green)) and not ((St == redyellow)) and not ((St == red))) implies (next(Green) == Green);
+
+    // ---- LongRed:32 ---------------------------------------
+    //   29: LongRed = 0
+    //   41: LongRed = 1 ? (not ((LongRed) != 0)) and ((Please) != 0)
+    next  (((St == red or St == redyellow or St == green or St == yellow) and ((not ((LongRed) != 0)) and ((Please) != 0)))) implies (next(LongRed) == 1);
+    next  (not ((St == red or St == redyellow or St == green or St == yellow) and ((not ((LongRed) != 0)) and ((Please) != 0))) and ((St == redyellow))) implies (next(LongRed) == 0);
+    next  (not ((St == red or St == redyellow or St == green or St == yellow) and ((not ((LongRed) != 0)) and ((Please) != 0))) and not ((St == redyellow))) implies (next(LongRed) == LongRed);
+
+    // ---- #param -------------------------------------------
+    next  next(PhasePeriod) == PhasePeriod;
+    next  next(PleasePeriod) == PleasePeriod;
+
+    // FAILSAFE is absorbing in the runtime (csp.h: no rule may leave
+    // it, only a reset), so reaching it once is reaching it for ever --
+    // this is a safety property in the strict sense.
+
+    invariant (([LTE 1](Red!=0,Yellow!=0,Green!=0))
+    	      	   || ((Red!=0) && (Yellow!=0)));
+		   
+    invariant (St != FAILSAFE);
+
+
+}
+
+// NOT TRANSLATED (5 rules), because of a timer, a part, a call or an array:
+//   line 20
+//   line 21
+//   line 26
+//   line 41
+//   line 42
