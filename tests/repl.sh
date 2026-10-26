@@ -2551,6 +2551,32 @@ got=$(( printf '/pause\n'; sleep 0.3; printf '/step 1\n'; sleep 1.0;
 	  grep -E '^State' | tr -s ' ' | sed 's/.*= //')
 ck "and the rules run in a step" "Home" "$got"
 
+# --- /clock -----------------------------------------------------------------
+#
+# /clock N holds the clock and moves it N ms; a step then sees exactly the
+# time a replayed trace says passed, not the time it took to type. The timer
+# starts in the INIT step, so 499 ms later it has not run out and 500 ms later
+# it has -- a second of wall time in between changes nothing.
+echo "clock:"
+cat > "$D/clock.csp" <<'CSPEOF'
+#timer T 500 = 1
+#variable X:8 = 0
+X = X + 1 ? timeout(T)
+T = 1 ? timeout(T)
+CSPEOF
+clock_x() {   # $@ = ms before each step after the first
+    ( printf '/pause\n/reset\n/clock 0\n/step\n'
+      for ms in "$@"; do printf '/clock %s\n/step\n' "$ms"; done
+      sleep 1.0; printf '/step\n> X\n/quit\n' ) |
+	./csp -i --no-eeprom "$D/clock.csp" 2>&1 | grep -E '^[0-9]+$' | tail -1
+}
+ck "/clock 499 is short of a 500 ms timer" "0" "$(clock_x 499)"
+ck "and 500 is not, held through a second" "1" "$(clock_x 499 1)"
+got=$(( printf '/pause\n/reset\n/clock 0\n/step\n/resume\n'; sleep 1.2
+	printf '> X\n/quit\n' ) |
+	  ./csp -i --no-eeprom "$D/clock.csp" 2>&1 | grep -E '^[0-9]+$' | tail -1)
+ck "/resume lets it go again" "2" "$got"
+
 # --- /commit keeps .rx -------------------------------------------------------
 #
 # /commit makes pending VALUES visible. It runs between cycles, and it used to

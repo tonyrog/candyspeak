@@ -2,7 +2,9 @@
 %%%
 %%% The owner receives {csp_state, Cycle, [{Name,Value}]} for every state dump
 %%% csp prints, and {csp_fired, Cycle, [{Object, File, Line}]} whenever the set
-%%% of rules that fired changes (--fired; the code view lights them). Note that csp dumps ON CHANGE, not every cycle, so a trace must
+%%% of rules that fired changes (--fired; the code view lights them), and
+%%% {csp_clock, Cycle, Ms} every cycle, Ms being the program's own clock since
+%%% start. Note that csp dumps ON CHANGE, not every cycle, so a trace must
 %%% hold its last value between dumps rather than expect one per tick.
 %%%
 %%% Ticking is ours to drive: /commit runs exactly one cycle and prints nothing
@@ -12,7 +14,7 @@
 -module(csp_link).
 
 -export([open/2, close/1, set/3, tick/1]).
--export([pause/1, resume/1, step/1, step/2]).
+-export([pause/1, resume/1, step/1, step/2, reset/1, clock/2]).
 -export([init/3]).
 
 open(Exe, Files) ->
@@ -31,10 +33,20 @@ tick(L)           -> L ! tick, ok.
 %% anything, and /step N runs exactly N cycles and stops again. That is the
 %% sequence that behaves like hardware, where every DIN is committed at the top
 %% of one cycle, and it is what a replayed model trace needs to match its source.
+%%
+%% A value set while paused is PENDING: a bare /step runs its rules on the old
+%% value and only commits the new one at the end, so the rules see it a step
+%% late. /commit while paused commits without running a cycle, so step/2 sends
+%% it first and a step sees what was set before it -- what a replayed model
+%% trace needs, where step t reads the inputs of step t.
 pause(L)          -> L ! pause, ok.
 resume(L)         -> L ! resume, ok.
 step(L)           -> step(L, 1).
 step(L, N)        -> L ! {step, N}, ok.
+%% Back to the initial values, State INIT, cycle 0. Prints no dump: the next
+%% step's dump says what differs from the last one printed.
+reset(L)          -> L ! reset, ok.
+clock(L, Ms)      -> L ! {clock, Ms}, ok.
 
 init(Owner, Exe, Files) ->
     %% Trap exits so the owner dying becomes a MESSAGE rather than killing us
@@ -86,7 +98,13 @@ loop(Port, Owner, Buf) ->
 	    port_command(Port, "/resume\n"),
 	    loop(Port, Owner, Buf);
 	{step, N} ->
-	    port_command(Port, ["/step ", integer_to_list(N), "\n"]),
+	    port_command(Port, ["/commit\n/step ", integer_to_list(N), "\n"]),
+	    loop(Port, Owner, Buf);
+	reset ->
+	    port_command(Port, "/reset\n"),
+	    loop(Port, Owner, Buf);
+	{clock, Ms} ->
+	    port_command(Port, ["/clock ", integer_to_list(Ms), "\n"]),
 	    loop(Port, Owner, Buf);
 	close ->
 	    shutdown(Port);
@@ -128,7 +146,7 @@ fmt(V) when is_list(V)    -> V.
 feed(Owner, [], Line) ->
     case string:find(Line, "{state,") of
 	nomatch ->
-	    case string:find(Line, "{fired,") of
+	    case one_line(Line, ["{fired,", "{clock,"]) of
 		nomatch -> [];
 		F       -> emit(Owner, F), []
 	    end;
@@ -136,6 +154,13 @@ feed(Owner, [], Line) ->
     end;
 feed(Owner, Buf, Line) ->
     hold(Owner, [strip(Line) | Buf]).
+
+one_line(_Line, []) -> nomatch;
+one_line(Line, [Tag | Tags]) ->
+    case string:find(Line, Tag) of
+	nomatch -> one_line(Line, Tags);
+	F       -> F
+    end.
 
 hold(Owner, Buf = [Last | _]) ->
     case lists:suffix("]}.", Last) of
@@ -152,6 +177,7 @@ emit(Owner, Text) ->
 	    case erl_parse:parse_term(Toks) of
 		{ok, {state, N, Vals}} -> Owner ! {csp_state, N, flat(Vals)};
 		{ok, {fired, N, Rs}}   -> Owner ! {csp_fired, N, Rs};
+		{ok, {clock, N, Ms}}   -> Owner ! {csp_clock, N, Ms};
 		_                      -> ok
 	    end;
 	_ -> ok

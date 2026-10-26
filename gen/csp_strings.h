@@ -517,6 +517,8 @@ extern rochar s_cmd_pause[6] RODATA;
 #define ros_cmd_pause ((rostring_t) s_cmd_pause)
 extern rochar s_cmd_step[5] RODATA;
 #define ros_cmd_step ((rostring_t) s_cmd_step)
+extern rochar s_cmd_clock[6] RODATA;
+#define ros_cmd_clock ((rostring_t) s_cmd_clock)
 extern rochar s_cmd_upgrade[8] RODATA;
 #define ros_cmd_upgrade ((rostring_t) s_cmd_upgrade)
 extern rochar s_cmd_live[5] RODATA;
@@ -563,6 +565,8 @@ extern rochar s_h_pause[30] RODATA;
 #define ros_h_pause ((rostring_t) s_h_pause)
 extern rochar s_h_step[41] RODATA;
 #define ros_h_step ((rostring_t) s_h_step)
+extern rochar s_h_clock[45] RODATA;
+#define ros_h_clock ((rostring_t) s_h_clock)
 extern rochar s_h_live[39] RODATA;
 #define ros_h_live ((rostring_t) s_h_live)
 extern rochar s_h_resume[37] RODATA;

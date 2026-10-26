@@ -2228,6 +2228,8 @@ Start interactive mode with `-i`:
 | `/reset` | Reset to initial values |
 | `/clear` | Drop RAM patches, keep the ROM program |
 | `/pause` | Freeze execution; the prompt stays live |
+| `/step [N]` | Run N cycles (default 1) and pause again |
+| `/clock [N]` | Hold the clock and move it N ms forward, until `/resume` (host only) |
 | `/resume` | Continue (rebuilds first if the program was edited) |
 | `/live` | Freeze the *rules* but keep I/O running |
 | `/latch on` | Hold outputs (freeze current values) |
@@ -2413,6 +2415,22 @@ stays readable even when the patch does not. `doc/EEPROM.md` has the format.
 `/pause` stops the cycle entirely: no input, no rules, no output. The prompt
 keeps working, so you can inspect state and add declarations or rules; the
 rebuild is deferred until `/resume`.
+
+`/clock N` holds the program's clock and moves it N ms forward (`/clock` alone
+just holds it). While paused, a step then sees exactly the time you gave it,
+not the time you took to type — so a timer runs out at the step you say:
+
+```
+#timer T 500 = 1
+/pause
+/clock 499
+/step              # timeout(T) not yet
+/clock 1
+/step              # now
+```
+
+`/resume` lets the clock go again, from where it was held. Only the host build
+(`csp` on Linux) has it; the panel's replay is what it is for.
 
 `/live` freezes only the **rules**. Input is still sampled and output is still
 written, so the hardware stays connected while the program stands still — which

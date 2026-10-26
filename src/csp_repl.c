@@ -138,6 +138,9 @@ static int cmd_load(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_images(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_pause(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_step(csp_rt_t* st, int argc, char* argv[]);
+#if defined(CSP_HAVE_FIRED)
+static int cmd_clock(csp_rt_t* st, int argc, char* argv[]);
+#endif
 #if defined(CSP_HAVE_FLASH)
 static int cmd_upgrade(csp_rt_t* st, int argc, char* argv[]);
 #endif
@@ -162,6 +165,9 @@ static const csp_cmd_t builtin_cmds[] = {
     { ros_cmd_images, ros_h_images,  cmd_images },
     { ros_cmd_pause,  ros_h_pause,   cmd_pause },
     { ros_cmd_step,   ros_h_step,    cmd_step },
+#if defined(CSP_HAVE_FIRED)
+    { ros_cmd_clock,  ros_h_clock,   cmd_clock },
+#endif
 #if defined(CSP_HAVE_FLASH)
     { ros_cmd_upgrade, ros_h_upgrade, cmd_upgrade },
 #endif
@@ -2462,6 +2468,39 @@ static int cmd_step(csp_rt_t* st, int argc, char* argv[])
     return CSP_CMD_OK;
 }
 
+#if defined(CSP_HAVE_FIRED)
+// The held clock. A port that has one (csp_linux.c) returns csp_clock_ms from
+// csp_time_ms while csp_clock_held is set.
+int      csp_clock_held = 0;
+uint32_t csp_clock_ms = 0;
+
+// /clock [N] -- hold the clock and move it N ms forward (default 0: just hold
+// it); /resume lets it go from where it was held. A replayed trace says how
+// much time passes before each step. On the wall clock it is however long a
+// person takes to click, and every timer has run out by then.
+static int cmd_clock(csp_rt_t* st, int argc, char* argv[])
+{
+    long n = 0;
+
+    (void)st;
+    if (argc >= 1) {
+	const char* p = argv[0];
+	if (*p == '\0')
+	    return CSP_CMD_ERROR;
+	while ((*p >= '0') && (*p <= '9'))
+	    n = n * 10 + (*p++ - '0');
+	if ((*p != '\0') || (n > 0xffffff))
+	    return CSP_CMD_ERROR;
+    }
+    if (!csp_clock_held) {
+	csp_clock_ms = csp_time_ms();
+	csp_clock_held = 1;
+    }
+    csp_clock_ms += (uint32_t)n;
+    return CSP_CMD_OK;
+}
+#endif
+
 // /live -- freeze the rules but keep I/O running: inputs keep sampling (watch
 // sensors with /state) and outputs keep being driven (> Led=1 lights the pin) so
 // you can poke at the hardware while the program logic stands still. /resume goes
@@ -2505,6 +2544,9 @@ static int cmd_resume(csp_rt_t* st, int argc, char* argv[])
     }
     st->paused = 0;
     st->live = 0;
+#if defined(CSP_HAVE_FIRED)
+    csp_clock_held = 0;
+#endif
     return CSP_CMD_OK;
 }
 

@@ -283,8 +283,8 @@ The same plot drawn as sharp logic levels instead of a glowing trace:
 At the top are the program chooser (every `.csp` file in `tools/panel/demo/`
 and in `examples/`), **run** / **pause** / **step**, and the **tick** (10, 25,
 50, 100 or 250 ms; the starting value comes from `CSP_PANEL_PERIOD`). While
-paused, values from widgets are held, and one **step** commits all of them in
-the same cycle.
+paused, values from widgets are held, and one **step** commits all of them and
+runs one cycle that sees them (csp_link sends `/commit` before `/step`).
 
 After those come what is shown:
 
@@ -292,13 +292,41 @@ After those come what is shown:
 * **code:** hide, ladder or code.
 * **theme:** dark or light.
 
-Both views start hidden. The choices are kept when you pick another program.
+Both views start hidden, the trace and the code view, and the program starts
+running, unless `panel.config` says otherwise:
+
+```erlang
+{csp_panel,
+ [{mode, pause},            %% run | pause
+  {trace, show},            %% hide | show
+  {code, ladder},           %% hide | ladder | code
+  {theme, light},           %% dark | light
+  {colors, [{true, "#3f3"}, {fired, "#fb3"}]}]}
+```
+
+`colors` sets the code view's highlights, as any css colour: `true` (a contact
+that holds), `fired` (a coil whose rule fired), `next` (the outline of a coil
+whose guard holds), `block` (the `#in`/`#when` header in force), `want` and
+`unwant` (marks, see below). `make run` passes `-config panel.config`.
+
+The choices made on the bar are kept when you pick another program.
 Light mode is the dark panel inverted and turned back to its own hues, on a
 pale blue page. One filter on the root reaches every inline colour, the
 canvases included.
 
-The devices are on the left, the code view to their right, and the trace under
-both. A long rung scrolls inside the code view's column.
+## The layout
+
+Everything is in one window:
+
+* **The top frame**, under the bar, says where the program is. It shows
+  `State` by name, the cycle, and the program's own clock (`time`, from csp,
+  which stands still while paused). Next come the goal with **clear**,
+  **solve** and the bound (see the model, below), then varp's answer, and the
+  table of the program's values that have no widget of their own.
+* **The devices**, on the left, scroll on their own.
+* **The code view**, on the right, scrolls on its own. A long rung scrolls
+  sideways inside it.
+* **The trace**, at the bottom, when shown.
 
 ## The code view
 
@@ -325,14 +353,90 @@ What the colours mean:
 * **Faded row:** the row sits in a block that is not active. A rule outside
   every block counts as `#in INIT NORMAL`, as in csp.
 
-Click a contact that names a one-bit signal to flip that signal, just as its
-switch would.
+### Marks and the model
+
+Click a contact once and it should hold (a solid frame), twice and it should
+not (a dashed frame), three times to forget it. The marks add up to one
+condition, the **goal**, shown in the top frame as candyspeak, with an object's
+names made whole (`m0.X`):
+
+    goal: !(N > 2) && m0.X && !Go
+
+A **signal** is marked the same way, by clicking its label among the devices
+or its cell in a value table. One bit is marked as on (`Siren`) or off
+(`!Siren`). A wider value is marked as equal or not equal to its value at the
+moment of the click (`N == 5`, `!(N == 5)`). So "is Siren ever set" is a click
+on Siren and **solve**.
+
+Marks are kept across tabs. To flip an input, use its widget.
+
+**solve** asks varp whether some run of the program, from `INIT`, reaches the
+goal within the bound (`k ≤ 10` by default; 1, 2, 5, 10, 20 or 50 steps). The
+program is translated by `candyspeak_varp` with the goal as its `reach`, and
+`varp bmc` searches (bounded model checking: try 0 steps, then 1, and so on up
+to the bound). The answer is either "not reachable within k steps", or the
+trace: a column per step, `State` by name. A `-` means any value does. A row
+`L26?` is a guard the model cannot read (a call, a part), left as a free
+choice of whether the rule on line 26 may fire. A trace that uses such a
+choice may not be a run the real program can make.
+
+Timers are modelled. Each step has a row `ms`, the time that passes before it,
+and each timer `T` two: whether it runs (`T`) and how long it has (`T ms`).
+`timeout(T)`, `T.fired`, `T` and `elapsed(T)` are read from them, `T = 1`
+starts it over and `T = 0` stops it, as in the runtime. A timer declared `= 1`
+runs from the setup, before `INIT`. A timer whose period is not a number (a
+`#param` counts, at its declared value) is not modelled.
+
+**▲ ▼** walk the trace one cycle at a time, without touching csp. A line
+says what the cycle is: `step 4 -> 5: +15 ms ErrUsb=1 CanFrame frame =>
+EnDb.Hold=30, ...`, the time and inputs that come in and what changes. The
+code view, the top frame's values and `State` show that cycle as the model
+has it: the state of step 4 with the inputs of step 5, the timers' timeouts
+from the model, and a coil lit where its rule fires. The devices on the left
+stay csp's. A found trace opens on its first cycle; **live** goes back to
+csp's own values, and so does **replay**. **table** shows the whole trace.
+
+**replay** plays a found trace on the running csp. It resets csp to its
+initial values, pauses it and holds its clock (`/clock`). Each **step** then
+sets the trace's inputs for that step, moves the clock by the step's `ms` and
+runs one cycle. The step's column is lit, and a state value csp disagrees with
+turns red and stays red -- which is what a trace through a guard the model
+could not read looks like when the program does not take it.
+
+A frame the trace receives is sent on `vcan0`, the bus csp listens to, with
+the buffer's CAN id (its declaration's, or an unconditional `B.id = X`). It
+goes out a step ahead: csp takes a frame in during one cycle and the rules see
+`.rx` in the next -- which is also why no rule sees a frame in `INIT`, and the
+model says so. A buffer with no fixed id cannot be sent to, and a trace that
+receives on one says so. `make run` starts the `can` application the frames go
+through. `#param`s are taken at their declared values, in the check and in
+solve alike.
+
+**clear** drops the marks and checks the model itself, before you believe an
+answer from it:
+
+* It checks that the model **runs** at all. A model with no transitions makes
+  every goal unreachable, which would mean nothing.
+* It lists what the model **leaves free**: the inputs, any value each step;
+  variables written by rules it cannot model; `#param`s, any value but frozen;
+  the guards that are a free choice; and how many rules are not modelled.
+
+Objects are modelled as the runtime makes them: every member once per
+instance, named as csp names it (`EnDb.Hold`), each instance with its own
+`State`. A binding on the instance line is what it is in the runtime: the
+formula of a `#local ... in`, a rule in every state for `X <- E`, a write in
+the instance's `INIT` for `X = E`, the period for `T.period = P`. Objects
+inside a module work too (`aaaa.a0.S`). A module that is not in the program
+(passed as a separate file) is reported by name. varp is
+found as `~/erlang/varp/priv/varp.sh`, or set `VARP_SH`. A run is limited to 30
+seconds.
 
 How it works:
 
 * **Fired rules come from csp.** csp started with `--fired` prints
   `{fired,Cycle,[{Object,File,Line},...]}.` after the state dump, whenever the
-  set of rules that fired changes. `Object` is `""` for the program itself and
+  set of rules that fired changes, and `{clock,Cycle,Ms}.` every cycle (the
+  top frame's cycle and time). `Object` is `""` for the program itself and
   the instance name for a module's rule, which is one piece of code run once
   per object. The rule is named by where it is written, because instance lines
   add binding rules of their own that no source line spells out. A coil stays
@@ -342,8 +446,9 @@ How it works:
   dumped values. A `#local` is evaluated from its formula. A `#param` is taken
   at its declared value, so a param patched at run time is not seen.
 
-Each view starts with the values that have no widget of their own: the
-variables, and the `#local`s (in italics, worked out by the panel).
+The values that have no widget of their own, the variables and the `#local`s
+(in italics, worked out by the panel), are a table in the top frame. An
+object's tab has its own table.
 
 A program with `#module` gets **tabs**: `main`, then one tab per object. An
 object's tab shows its bindings (`#Add a1 Cin=a0.Cout ...`), its values, and

@@ -3336,6 +3336,10 @@ extern rostring_t csp_part_name(csp_part_t part);
 // backend port (linux/arduino/LPCopen/FreeRTOS)
 extern uint32_t csp_time_ms(void);
 extern unsigned long csp_time_us(void);
+#if defined(CSP_HAVE_FIRED)
+extern int      csp_clock_held;     // /clock, in csp_repl.c
+extern uint32_t csp_clock_ms;
+#endif
 extern void csp_setup(csp_rt_t* st);
 extern void csp_input(csp_rt_t* st);
 

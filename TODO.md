@@ -1,5 +1,29 @@
 # TODO - Klart-markerat flyttas till DONE.md, inte hit.
 
+
+## Panel tool
+
+### ellm connection
+
+- Connect to LLM via ellm, allow for a text window where
+a dialog can be used to create candyspeak code from a prompt
+or update existing code from prompt. Same window can be
+used to do varp queries and prove stauff.
+- Start from scratch blank slate? gradually add code and
+annotations to the candyspeak code.
+
+### connect live system via uart / tcp  (canbus)
+
+Extract code from live node. (no annotations)
+we may store a source version / checksum to match
+a locally stored source version with annoation if needed!
+
+- Allow live update of patches after varp analysis and bug fixes
+- Allow live state (snap shots) view from real executing node
+- Send virtual events to node?
+- Console mini window
+
+
 ## init of object arrays
 
   #Input in[i=0..3] Dig <- Din[i]

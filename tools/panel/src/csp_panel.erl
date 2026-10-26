@@ -24,6 +24,7 @@
 %% a 2 s sweep gives twenty points at 100 ms. The top of the range is honest
 %% about what it costs: every tick is a /commit plus one cast per plot.
 -define(PERIODS,   [10, 25, 50, 100, 250]).
+-define(TRACE_BOX, "flex:none;max-height:35vh;overflow:auto;").  % at the bottom
 -define(TRACE_W,   720).   % trace width, px, right of the labels
 -define(GUTTER,    110).   % px of labels at the left of the trace -- the
 			   % same width as a row's label, so they line up
@@ -732,14 +733,24 @@ build(Ws, Where, Root, File, [], Ast) ->
     wait_for_pick(Ws, Where);
 build(Ws, Where, Root, File, Widgets0, Ast) ->
     {SelId, _Sel, Run} = chooser(Ws, Root, File),
-    %% The devices on the left, the code view to their right, the trace under
-    %% both -- so the rule that lights and the lamp it drives are side by side.
-    %% A long rung scrolls inside its column rather than pushing the column
-    %% under the devices.
-    Main = box(Ws, Root, "display:flex;gap:48px;align-items:flex-start"),
-    Left = box(Ws, Main, "flex:none"),
-    Right = box(Ws, Main, "flex:1;min-width:0;overflow-x:auto"),
-    TraceBox = box(Ws, Root, ""),
+    %% Everything in one window. The TOP frame is where the program is: State,
+    %% cycle and clock, the goal and solve, varp's answer, the values. Under
+    %% it the devices on the left and the code view on the right, each
+    %% scrolling on its own, and the trace at the bottom -- so the rule that
+    %% lights and the lamp it drives are side by side, and neither scrolls
+    %% the other out of view.
+    style(Ws, Root, "display:flex;flex-direction:column;"
+	  "height:calc(100vh - 24px)"),
+    Top = box(Ws, Root, "flex:none;border-bottom:1px solid #333;"
+	      "padding-bottom:4px;margin-bottom:8px"),
+    Status = box(Ws, Top, "display:flex;align-items:center;gap:10px;"
+		 "flex-wrap:wrap;margin-bottom:6px"),
+    StateBox = status_box(Ws, Status, "csp_st"),
+    Clock = status_box(Ws, Status, "csp_clock"),
+    Main = box(Ws, Root, "flex:1;min-height:0;display:flex;gap:32px"),
+    Left = box(Ws, Main, "flex:none;overflow:auto;padding-right:8px"),
+    Right = box(Ws, Main, "flex:1;min-width:0;overflow:auto"),
+    TraceBox = box(Ws, Root, ?TRACE_BOX "display:none"),
     Ann = annotations(Ast),
     Rng = ranges(Ast),
     Looks = looks(Widgets0, Ann, Rng),
@@ -770,13 +781,14 @@ build(Ws, Where, Root, File, Widgets0, Ast) ->
     {Ctx, Paint} = canvas(Ws, TraceBox, [maps:get(N, Looks)
 					 || {_, N, _} <- Ordered]),
     {ok, Src} = candyspeak:parse(File, [sources]),
-    Code = csp_code:new(Ws, Right, {Src, File}),
+    Code = csp_code:new(Ws, #{code => Right, status => Status, top => Top},
+			{Src, File}, colours()),
     {ok, Link} = csp_link:open(csp_exe(), [File]),
     erlang:send_after(period(), self(), tick),
     S0 = #{trace_box => TraceBox, code => Code, run => Run},
     S1 = lists:foldl(fun({K, V}, Si) -> view(Ws, Si, K, V) end, S0,
 		     maps:to_list(views())),
-    loop(Ws, Link, #{nodes  => maps:from_list(RestNodes ++ PixNodes ++
+    S2 = #{nodes  => maps:from_list(RestNodes ++ PixNodes ++
 						  PlotNodes),
 		     traces => [{N, K, maps:get(N, Looks)} || {K, N, _} <- Ordered],
 		     ctx    => Ctx,
@@ -788,9 +800,26 @@ build(Ws, Where, Root, File, Widgets0, Ast) ->
 		     sel_id => SelId,
 		     run    => Run,
 		     mode   => run,
+		     clock  => {0, undefined},
 		     code   => maps:get(code, S1),
 		     trace_box => TraceBox,
-		     where  => Where}).
+		     state_box => StateBox,
+		     clock_box => Clock,
+		     where  => Where},
+    %% {mode, pause} in panel.config: start stopped, ready to step.
+    S3 = case config(mode) of
+	     pause -> control(Ws, Link, S2, "mode=step");
+	     _     -> light_mode(Ws, S2), S2
+	 end,
+    loop(Ws, Link, S3).
+
+status_box(Ws, Row, Id) ->
+    B = wse:createElement(Ws, "span"),
+    wse:set(Ws, B, "id", Id),
+    wse:setStyle(Ws, B, "padding:3px 10px;border:1px solid #555;color:#ddd;"
+		 "font:13px monospace;white-space:pre"),
+    wse:appendChild(Ws, Row, B),
+    {B, wse:newf(Ws, "e,t", "{ e.textContent = t; }")}.
 
 box(Ws, Parent, Style) ->
     D = wse:createElement(Ws, "div"),
@@ -799,21 +828,63 @@ box(Ws, Parent, Style) ->
     D.
 
 %%% What is shown: the trace (hide | show), the code view (hide | ladder |
-%%% code) and the theme (dark | light). Both views start hidden. Kept per
-%%% browser session in the process dictionary, so picking another program
-%%% keeps them -- render/3 starts the page over, and the choice is the
+%%% code) and the theme (dark | light). Both views start hidden unless
+%%% panel.config says otherwise:
+%%%
+%%%     {csp_panel, [{trace, show}, {code, ladder}, {theme, light}]}
+%%%
+%%% Kept per browser session in the process dictionary, so picking another
+%%% program keeps them -- render/3 starts the page over, and the choice is the
 %%% person's, not the program's.
--define(VIEWS, #{"trace" => "hide", "code" => "hide", "theme" => "dark"}).
+-define(VIEWS, [{"trace", ["hide", "show"]},
+		{"code",  ["hide", "ladder", "code"]},
+		{"theme", ["dark", "light"]}]).
 
 views() ->
     case get(csp_panel_views) of
-	undefined -> ?VIEWS;
+	undefined -> configured();
 	V         -> V
+    end.
+
+%% The first of each list unless panel.config names another. A value the bar
+%% has no button for is said, not taken.
+configured() ->
+    maps:from_list(
+      [{K, case config(list_to_atom(K)) of
+	       undefined -> hd(Vals);
+	       V0 ->
+		   V = to_text(V0),
+		   case lists:member(V, Vals) of
+		       true  -> V;
+		       false ->
+			   io:format("panel: panel.config: {~s, ~s} is not one "
+				     "of ~s~n", [K, V, string:join(Vals, ", ")]),
+			   hd(Vals)
+		   end
+	   end} || {K, Vals} <- ?VIEWS]).
+
+%% panel.config's {csp_panel, [...]}. The application is only loaded to make
+%% the environment reachable: -config keeps nothing for one nobody loaded.
+config(Key) ->
+    _ = application:load(csp_panel),
+    case application:get_env(csp_panel, Key) of
+	{ok, V}   -> V;
+	undefined -> undefined
+    end.
+
+%% {colors, [{true, "#3f3"}, {fired, orange}]}: the code view's highlights,
+%% any css colour. See csp_code for the names.
+colours() ->
+    case config(colors) of
+	L when is_list(L) -> maps:from_list([{K, to_text(C)} || {K, C} <- L]);
+	_                 -> #{}
     end.
 
 view(Ws, S, "trace", V) ->
     style(Ws, maps:get(trace_box, S),
-	  case V of "show" -> "display:block"; _ -> "display:none" end),
+	  [?TRACE_BOX, case V of "show" -> "display:block";
+			   _      -> "display:none"
+		       end]),
     view_done(Ws, S, "trace", V);
 view(Ws, S, "code", V) ->
     S1 = S#{code := csp_code:control(Ws, maps:get(code, S), V)},
@@ -915,12 +986,19 @@ runstep(Ws, Bar) ->
 		    wse:appendChild(Ws, Wrap, L),
 		    [{{Key, V}, Mk(V, Key ++ "=" ++ V)} || V <- Vals]
 	    end,
-    Views = Group("trace", "trace", ["hide", "show"]) ++
-	Group("code", "code", ["hide", "ladder", "code"]) ++
-	Group("", "theme", ["dark", "light"]),
+    Views = lists:append([Group(case K of "theme" -> ""; _ -> K end, K, Vals)
+			  || {K, Vals} <- ?VIEWS]),
     wse:appendChild(Ws, Bar, Wrap),
     #{event => Id, run => RunB, pause => PauseB, one => OneB,
       views => maps:from_list(Views)}.
+
+%% Where the program is: its cycle and its own clock, which stand still while
+%% paused.
+clock_text(Cycle, Prog) ->
+    lists:flatten(io_lib:format("cycle ~w   time ~s", [Cycle, secs(Prog)])).
+
+secs(undefined) -> "-";
+secs(Ms)        -> io_lib:format("~.1f s", [Ms / 1000]).
 
 tick_select(Ws, Wrap, Id) ->
     Lbl = wse:createElement(Ws, "span"),
@@ -966,6 +1044,9 @@ row(Ws, Root, {Kind, Name, _W}, Look) ->
     Label = wse:createElement(Ws, "span"),
     wse:setStyle(Ws, Label, "display:inline-block;width:110px;color:#ccc"),
     wse:appendChild(Ws, Label, wse:createTextNode(Ws, maps:get(label, Look))),
+    %% The label is the signal, to mark for the model view (csp_code).
+    wse:set(Ws, Label, "id", "sl_" ++ Name),
+    wse:cast(Ws, Label, "setAttribute", ["data-sig", Name]),
     wse:appendChild(Ws, Row, Label),
     Node = case Kind of
 	       toggle  -> switch(Ws, Row, Name, Look);
@@ -1557,8 +1638,8 @@ loop(Ws, Link, S) ->
 
 	%% ladder / code, from the code view's own bar.
 	{notify, CodeId, _Local, Tag} ->
-	    loop(Ws, Link,
-		 S#{code := csp_code:control(Ws, maps:get(code, S), Tag)});
+	    loop(Ws, Link, code_do(Ws, Link, S,
+				   csp_code:control(Ws, maps:get(code, S), Tag)));
 
 	%% A switch was clicked. We do not track its state ourselves -- we
 	%% toggle against what csp last told us, so the button can never
@@ -1583,6 +1664,14 @@ loop(Ws, Link, S) ->
 	    loop(Ws, Link,
 		 S#{code := csp_code:fired(Ws, maps:get(code, S), Rules)});
 
+	{csp_clock, N, Ms} ->
+	    loop(Ws, Link, S#{clock := {N, Ms}});
+
+	%% varp's answer to the code view's clear or solve.
+	{csp_model, A} ->
+	    loop(Ws, Link, code_do(Ws, Link, S,
+				   csp_code:model(Ws, maps:get(code, S), A)));
+
 	%% Draw on the TICK, not on the dump. csp only dumps what changed, so a
 	%% trace driven by dumps stops moving as soon as the program settles --
 	%% which is exactly when you are staring at it wondering why. Drawing
@@ -1591,6 +1680,7 @@ loop(Ws, Link, S) ->
 	%% program. Drawing still happens, so a held value stays visible as a
 	%% flat line rather than the trace freezing mid-air.
 	tick ->
+	    show_clock(Ws, S),
 	    S1 = (draw(Ws, S))#{code := csp_code:tick(Ws, maps:get(code, S))},
 	    case maps:get(mode, S, run) of
 		run  -> csp_link:tick(Link);
@@ -1603,6 +1693,41 @@ loop(Ws, Link, S) ->
 	{closed, _}         -> csp_link:close(Link);
 	stop                -> csp_link:close(Link)
     end.
+
+%% What the code view asked csp for: a replayed trace's reset, inputs and
+%% steps. A replay runs paused, so the bar says so.
+code_do(Ws, Link, S, Code0) ->
+    {Acts, Code} = csp_code:actions(Code0),
+    lists:foldl(fun(A, Si) -> act(Ws, Link, Si, A) end, S#{code := Code}, Acts).
+
+act(Ws, Link, S = #{mode := run}, pause) -> control(Ws, Link, S, "mode=step");
+act(_Ws, _Link, S, pause)                -> S;
+act(_Ws, Link, S, reset)                 -> csp_link:reset(Link), S;
+act(_Ws, Link, S, {clock, Ms})           -> csp_link:clock(Link, Ms), S;
+act(_Ws, _Link, S, {frame, Id, Bytes})    -> send_frame(Id, Bytes), S;
+act(_Ws, Link, S, {set, N, V})           -> csp_link:set(Link, N, V), S;
+act(_Ws, Link, S, step)                  -> csp_link:step(Link), S.
+
+%% A replayed frame, on the bus csp listens to (--can=vcan0 in csp_link),
+%% through the can application `make run' starts. Synchronous, so it is in
+%% csp's socket before the step that follows it.
+send_frame(Id, Bytes) ->
+    try can:sync_send(can:create(Id, list_to_binary(Bytes))) of
+	_ -> ok
+    catch
+	_:Why -> io:format("panel: frame ~.16# not sent: ~p~n", [Id, Why])
+    end.
+
+%% Once a tick, and only when the text changed.
+show_clock(Ws, #{clock_box := {B, F}, clock := {N, Ms}}) ->
+    T = clock_text(N, Ms),
+    case get(csp_panel_clock) of
+	T -> ok;
+	_ -> put(csp_panel_clock, T),
+	     wse:cast(Ws, F, "call", [null, B, T])
+    end;
+show_clock(_Ws, _S) ->
+    ok.
 
 %% run: let the program go. step: freeze it, so values set from widgets wait for
 %% a /step and are committed together.
@@ -1652,6 +1777,8 @@ flush() ->
     receive
 	{csp_state, _, _} -> flush();
 	{csp_fired, _, _} -> flush();
+	{csp_clock, _, _} -> flush();
+	{csp_model, _}    -> flush();
 	{csp_exit, _}     -> flush();
 	tick              -> flush()
     after 0 -> ok

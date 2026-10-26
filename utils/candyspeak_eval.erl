@@ -13,7 +13,9 @@
 %%%       a state name is its number, numbered as the runtime does.
 %%%
 %%%     What cannot be known from the dump -- a timer's elapsed(), a buffer
-%%%     byte, a call -- is `unknown', and the logic is three-valued around it:
+%%%     byte, a call -- is `unknown' unless Vals says it, as a model trace
+%%%     does ({timeout, T}, {elapsed, T} and {part, B, P} are keys there too),
+%%%     and the logic is three-valued around it:
 %%%     `false && unknown' is false, `true || unknown' is true. Unknown is
 %%%     never guessed.
 %%%
@@ -76,7 +78,17 @@ sig(Kind, Res, Opts) ->
 %% The value, or `unknown'. Vals maps a name to the dumped value.
 eval({'INT', _, S}, _Vals, _E) -> int(S);
 eval({field, _, {'WORD', _, N}}, Vals, E) -> name(N, Vals, E);
-eval({field, _, _}, _Vals, _E) -> unknown;          % part, index, object field
+eval({field, _, {fld, _, {'WORD', _, O}, {'WORD', _, N}}}, Vals, _E) ->
+    case maps:find(O ++ "." ++ N, Vals) of          % an object's member
+	{ok, V} when is_integer(V) -> V;
+	_ -> unknown
+    end;
+eval({field, _, {part, _, {'WORD', _, B}, {'WORD', _, P}}}, Vals, _E) ->
+    maps:get({part, B, P}, Vals, unknown);
+eval({field, _, _}, _Vals, _E) -> unknown;          % index
+eval({call, _, {'WORD', _, F}, [{field, _, {'WORD', _, T}}]}, Vals, _E)
+  when F =:= "timeout"; F =:= "elapsed" ->
+    maps:get({list_to_atom(F), T}, Vals, unknown);
 eval({'!', _, X}, Vals, E) ->
     case truth(X, Vals, E) of
 	unknown -> unknown;

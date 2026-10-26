@@ -258,11 +258,31 @@ static int fired = 0;    // --fired
 int      virtual_settle = 0;
 uint32_t vclock = 0;
 
+// The wall clock less the time it was held by /clock, so it goes on from
+// where it was let go instead of jumping by however long that was.
+static uint32_t clock_skew = 0;
+
 uint32_t csp_time_ms(void)
 {
+    uint32_t now;
+
     if (virtual_time)
 	return vclock;
-    return time_tick() / 1000;
+    now = time_tick() / 1000;
+#if defined(CSP_HAVE_FIRED)
+    {
+	static int was_held = 0;
+	if (csp_clock_held) {
+	    was_held = 1;
+	    return csp_clock_ms;
+	}
+	if (was_held) {
+	    clock_skew = now - csp_clock_ms;
+	    was_held = 0;
+	}
+    }
+#endif
+    return now - clock_skew;
 }
 
 unsigned long csp_time_us(void)
@@ -1577,7 +1597,8 @@ void usage(const char* prog)
     fprintf(stderr, "                       holds more as name=dir:name=dir\n");
     fprintf(stderr, "      --delta          -Q dumps only what changed since the last dump\n");
 #if defined(CSP_HAVE_FIRED)
-    fprintf(stderr, "      --fired          -Lerlang -Q also prints {fired,Cycle,[Rule...]}.\n");
+    fprintf(stderr, "      --fired          -Lerlang -Q also prints {fired,Cycle,[Rule...]} and\n");
+    fprintf(stderr, "                       {clock,Cycle,Ms} every cycle\n");
 #endif
     fprintf(stderr, "      --deps=FILE      Write every file loaded, imports included, as a\n");
     fprintf(stderr, "                       make rule for -O's file, each after what it imports\n");
@@ -2848,8 +2869,14 @@ loop:
 	    csp_dump_state(state_file, &state, lang);
     }
 #if defined(CSP_HAVE_FIRED)
-    if (debug_trace && (lang == ERLANG))
+    if (debug_trace && (lang == ERLANG)) {
 	csp_dump_fired(state_file, &state);
+	// The panel's clock: which cycle, and the time the program sees, ms
+	// since start -- virtual when the clock is, else wall time.
+	if (fired)
+	    fprintf(state_file, "{clock,%d,%u}.\n", (int)state.cycle,
+		    (unsigned)(csp_time_ms() - start_time));
+    }
 #endif
 
     // Advance time. Virtual: jump the clock (>=1 tick/cycle, wait_ms when a

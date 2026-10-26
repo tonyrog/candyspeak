@@ -40,7 +40,21 @@
 %%%
 %%%     WHAT CANNOT BE MODELLED, and what is done about it
 %%%
-%%%     Timers, part access (`T.period'), arrays, `/', shifts and the
+%%%     TIME. A timer is two state variables, u_run_T and u_el_T (ms since it
+%%%     started, its period when it is not running), and one input u_dt, the ms
+%%%     that pass before the step -- the same for every timer, any amount. The
+%%%     input sweep comes first in a cycle, so a timer whose u_el_T + u_dt has
+%%%     reached its period has fired and is off when the rules read it; a write
+%%%     is a request the output sweep acts on, `T = 1' starting it over from
+%%%     zero and `T = 0' stopping it. Declared `= 1' it runs from the setup,
+%%%     before INIT. The period must be a number: a literal, a #define, a
+%%%     #param taken at its value.
+%%%
+%%%     OBJECTS are flattened before anything else (expand/1): every member
+%%%     once per instance as `s1.X', its own State, the instance line's
+%%%     bindings as the runtime makes them.
+%%%
+%%%     Part writes (`T.period = X' in a rule), arrays, `/', shifts and the
 %%%     arithmetic functions are not translated. A variable written by any such rule is emitted as `input'
 %%%     instead of `state': FREE. That is deliberately conservative -- the model
 %%%     then has MORE behaviour than the program, so a proof still holds, while a
@@ -67,10 +81,16 @@
 
 -export([file/1, file/2]).
 -export([translate/1, translate/2]).
+-export([model/2, bmc/3, trace/1]).
 -export([collect/1, collect/2, check/2]).         % for tests
 
 -define(FAILSAFE, 2).
 -define(FIRST_USER_STATE, 3).          % INIT 0, NORMAL 1, FAILSAFE 2
+-define(IS_CMP(Op), (Op =:= '==' orelse Op =:= '!=' orelse Op =:= '<' orelse
+		     Op =:= '<=' orelse Op =:= '>' orelse Op =:= '>=')).
+-define(IS_LOGIC(Op), (Op =:= '&&' orelse Op =:= '||')).
+-define(IS_BITS(Op), (Op =:= '&' orelse Op =:= '|' orelse Op =:= '^')).
+-define(U32, 4294967296).
 
 %%% ------------------------------------------------------------------ entry
 
@@ -95,45 +115,302 @@ translate(In) -> translate(In, []).
 %% rule from an imported file is shown as file:line and not as a line number
 %% that means something else in the file being translated.
 translate(In, Opts) ->
+    case model(In, Opts) of
+	{ok, #{text := Text}} -> {ok, Text};
+	Error                 -> Error
+    end.
+
+%% The text, and what a tool asking varp questions needs to read the answer:
+%% the system's name, and what the model leaves free -- the inputs, the
+%% variables written by rules it cannot model, the frozen #params, and the
+%% guards abstracted to a free choice ({Name, Line}).
+%%
+%% `{reach, "candyspeak expr"}' in Opts is the question: it replaces any
+%% `#annotate varp reach' in the source.
+model(In, Opts) ->
     case candyspeak:parse(In, [sources]) of
-	{ok, Ast} ->
-	    case modules_in(Ast) of
-		[] ->
-		    try {ok, emit(In, collect(Ast, In, Opts), Opts)}
+	{ok, Ast0} ->
+	    case try {ok, expand(Ast0)} catch throw:E0 -> E0 end of
+		{ok, Ast} ->
+		    try collect(Ast, In, Opts) of
+			C ->
+			    {ok, #{text => emit(In, C, Opts),
+				   name => system_name(In),
+				   inputs => inputs(C),
+				   free => maps:get(free, C),
+				   frozen => frozen(C),
+				   types => maps:map(fun(_, #{width := W,
+							      signed := Sg}) ->
+							     {W, Sg}
+						     end, maps:get(sigs, C)),
+				   abstract => maps:get(abstract, C, []),
+				   skipped => length(maps:get(skipped, C)),
+				   states => number_states(C),
+				   timers => [{T, P} || {T, P, _}
+							    <- maps:get(timers, C)],
+				   frames => frames(Ast, C),
+				   names => names(C)}}
 		    catch throw:{varp_annotate, _, _, _} = E -> {error, E}
 		    end;
-		Ms -> {error, {instances_not_modelled, Ms}}
+		{instances_not_modelled, _} = E -> {error, E}
 	    end;
 	Error -> Error
     end.
 
-%%% OBJECT INSTANCES ARE NOT MODELLED, and the translator refuses rather than
-%%% guessing.
+%% The names varp writes that are not the program's: `s1_Seen' for s1.Seen.
+%% A trace's columns are read back with it.
+names(C) ->
+    maps:from_list([{varp_name(N), N}
+		    || N <- maps:keys(maps:get(sigs, C)) ++
+			   [I ++ ".State" || I <- maps:get(insts, C)],
+		       varp_name(N) =/= N] ++
+		   [{tname(K, T), "u_" ++ K ++ "_" ++ T}
+		    || {T, _, _} <- maps:get(timers, C), K <- ["run", "el"],
+		       varp_name(T) =/= T]).
+
+%%% ------------------------------------------------------------ objects
 %%%
-%%% NOT because of state numbering. States are numbered GLOBALLY BY NAME --
-%%% measured: with global `on off' at 3 and 4, a module declaring `on off' gets
-%%% 3 and 4 too, while a module with its own names continues the sequence at 5.
-%%% That is why a name may appear in several #states blocks, and it is what the
-%%% global list here already does. (csp.h's csp_statedecl_t comment says each
+%%% An object is its module's body once per instance, the way the runtime makes
+%%% it: every member renamed `s1.X', the instance's own State, its #states
+%%% numbered from 3 in the module. The instance line's bindings become what
+%%% the runtime makes of them:
+%%%
+%%%   X <- E, X = E   on a `#local X in'  the local's formula (E read outside)
+%%%   X <- E          on a variable       a rule X = E, in every state
+%%%   X = E           on a variable       a rule X = E in the instance's INIT
+%%%   T.period = P    on a timer          its period
+%%%
+%%% A main rule's `s1.X' becomes the name `s1.X', so after this the program is
+%%% flat and translates like any other. {scope, I} marks where an instance's
+%%% body is, for its State and its loose rules.
+expand(Ast) ->
+    {Mods, Rest} = modules(Ast, #{}, []),
+    {Out, _} =
+	lists:mapfoldl(
+	  fun(X = {source, _, F}, _Cur) -> {[X], F};
+	     ({object, Ln, {'WORD', _, M}, {'WORD', _, I}, Binds}, Cur) ->
+		  case maps:find(M, Mods) of
+		      {ok, {F, Body}} ->
+			  {[{source, 0, F}] ++ instance(Ln, I, Body, outside(Binds), Mods) ++
+			       [{source, 0, Cur}], Cur};
+		      error -> throw({instances_not_modelled, [M]})
+		  end;
+	     (X, Cur) -> {[outside(X)], Cur}
+	  end, undefined, Rest),
+    lists:append(Out).
+
+%% A module's body, and the file it is written in, for its lines.
+modules([{module, _, {'WORD', _, M}} | T], Mods, Acc) ->
+    {Body, T1} = body(T, 0, []),
+    F = case [X || {source, _, X} <- Acc] of [Last | _] -> Last; [] -> undefined end,
+    modules(T1, Mods#{M => {F, Body}},
+	    lists:reverse([X || X = {states, _, _} <- Body]) ++ Acc);
+modules([{module, _, {'WORD', _, M}, _} | _], _Mods, _Acc) ->
+    throw({instances_not_modelled, [M]});
+modules([X | T], Mods, Acc) -> modules(T, Mods, [X | Acc]);
+modules([], Mods, Acc) -> {Mods, lists:reverse(Acc)}.
+
+%% Up to the module's own #end: an #in or #when inside opens one of its own.
+body([{'end', _} | T], 0, Acc) -> {lists:reverse(Acc), T};
+body([X = {'end', _} | T], D, Acc) -> body(T, D - 1, [X | Acc]);
+body([X | T], D, Acc) when element(1, X) =:= in; element(1, X) =:= 'when' ->
+    body(T, D + 1, [X | Acc]);
+body([X | T], D, Acc) -> body(T, D, [X | Acc]);
+body([], _D, Acc) -> {lists:reverse(Acc), []}.
+
+%% Outside every module: `s1.X' is a name.
+outside({fld, L, {'WORD', _, I}, {'WORD', _, N}}) -> {'WORD', L, I ++ "." ++ N};
+outside(T) when is_tuple(T) -> list_to_tuple([outside(X) || X <- tuple_to_list(T)]);
+outside(L) when is_list(L), L =/= [], not is_integer(hd(L)) -> [outside(X) || X <- L];
+outside(X) -> X.
+
+-define(IS_DECL(K), (K =:= variable orelse K =:= digital orelse K =:= analog
+		     orelse K =:= timer orelse K =:= local orelse K =:= buffer
+		     orelse K =:= param orelse K =:= constant orelse
+		     K =:= define)).
+
+%% Binds are read where the object is made, and arrive renamed for that.
+instance(Ln, I, Body, Binds, Mods) ->
+    Members = [N || X <- Body, ?IS_DECL(element(1, X)),
+		    {'WORD', _, N} <- [element(3, X)]],
+    Objs = [N || {object, _, _, {'WORD', _, N}, _} <- Body],
+    Q = fun(N) -> I ++ "." ++ N end,
+    Ren = fun R({field, L, {'WORD', L2, N}}) ->
+		  case lists:member(N, Members) orelse N =:= "State" of
+		      true  -> {field, L, {'WORD', L2, Q(N)}};
+		      false -> {field, L, {'WORD', L2, N}}
+		  end;
+	      R({fld, L, {'WORD', _, O}, {'WORD', _, N}}) ->   % an object of ours
+		  case lists:member(O, Objs) of
+		      true  -> {'WORD', L, Q(O ++ "." ++ N)};
+		      false -> {'WORD', L, O ++ "." ++ N}
+		  end;
+	      R({part, L, {'WORD', L2, N}, P}) ->
+		  case lists:member(N, Members) of
+		      true  -> {part, L, {'WORD', L2, Q(N)}, P};
+		      false -> {part, L, {'WORD', L2, N}, P}
+		  end;
+	      R(T) when is_tuple(T) -> list_to_tuple([R(X) || X <- tuple_to_list(T)]);
+	      R(L) when is_list(L), L =/= [], not is_integer(hd(L)) -> [R(X) || X <- L];
+	      R(X) -> X
+	  end,
+    Bound = [{N, E} || {_, _, {field, _, {'WORD', _, N}}, E} <- Binds],
+    Period = [{N, E} || {'=', _, {field, _, {part, _, {'WORD', _, N},
+						 {'WORD', _, "period"}}}, E} <- Binds],
+    Decl = fun({local, L, {'WORD', L2, N}, Res, Opts, E}) ->
+		   E1 = case proplists:get_value(dir, Opts) of
+			    in -> proplists:get_value(N, Bound, E);
+			    _  -> Ren(E)
+			end,
+		   {local, L, {'WORD', L2, Q(N)}, Res, Opts, E1};
+	      ({timer, L, {'WORD', L2, N}, P, Start}) ->
+		   {timer, L, {'WORD', L2, Q(N)},
+		    proplists:get_value(N, Period, Ren(P)), Start};
+	      (X) ->
+		   setelement(3, Ren(X), {'WORD', element(2, element(3, X)),
+					  Q(element(3, element(3, X)))})
+	   end,
+    IsLocal = fun(N) -> lists:any(fun({local, _, {'WORD', _, M}, _, _, _}) -> M =:= N;
+				     (_) -> false end, Body)
+	      end,
+    Set = fun(L, N, E) -> {rule, L, [{'=', L, {field, L, {'WORD', L, Q(N)}}, E}],
+			   undefined}
+	  end,
+    Reactive = [Set(L, N, E) || {'<-', L, {field, _, {'WORD', _, N}}, E} <- Binds,
+				not IsLocal(N)],
+    Static = [Set(L, N, E) || {'=', L, {field, _, {'WORD', _, N}}, E} <- Binds,
+			      not IsLocal(N)],
+    [{scope, I}] ++
+	[Decl(X) || X <- Body, ?IS_DECL(element(1, X))] ++
+	[{in, Ln, always}] ++ Reactive ++ [{'end', Ln}] ++
+	[{in, Ln, {I, ["INIT"]}}] ++ Static ++ [{'end', Ln}] ++
+	lists:append(
+	  [case X of
+	       {in, L, Ns} -> [{in, L, {I, [N || {'WORD', _, N} <- Ns]}}];
+	       {object, L, {'WORD', _, M}, {'WORD', _, I2}, B2} ->
+		   case maps:find(M, Mods) of
+		       {ok, {_, Body2}} ->
+			   B3 = [{Op, Lb, Tgt, Ren(E)} || {Op, Lb, Tgt, E} <- B2],
+			   instance(L, Q(I2), Body2, B3, Mods) ++ [{scope, I}];
+		       error -> throw({instances_not_modelled, [M]})
+		   end;
+	       _ -> [Ren(X)]
+	   end || X <- Body, not ?IS_DECL(element(1, X)),
+		  element(1, X) =/= states]) ++
+	[{scope, ""}].
+
+%% The input buffers on a CAN id a replay can send to: [{Name, Id, Size}]. The
+%% id is the declaration's, or what an unconditional `B.id = X' sets it to.
+frames(Ast, C) ->
+    Bufs = maps:get(bufs, C),
+    Ids = lists:foldl(
+	    fun({buffer, _, {'WORD', _, B}, _, _, Tr}, Acc) ->
+		    case lists:keyfind(can, 1, Tr) of
+			{can, E} -> Acc#{B => rng(E, C)};
+			false    -> Acc
+		    end;
+	       ({rule, _, [{'=', _, {field, _, {part, _, {'WORD', _, B},
+						 {'WORD', _, "id"}}}, E}],
+		 undefined}, Acc) when is_map_key(B, Acc) ->
+		    Acc#{B => rng(E, C)};
+	       (_, Acc) -> Acc
+	    end, #{}, Ast),
+    [{B, Id, maps:get(B, Bufs)} || {B, {ok, {Id, Id}}} <- lists:sort(maps:to_list(Ids)),
+				  is_map_key(B, Bufs)].
+
+system_name(In) -> varp_name(filename:basename(filename:rootname(In))).
+
+%%% ------------------------------------------------------------ asking varp
+%%%
+%%% bmc(Text, Args, VarpSh) writes the model and runs `varp bmc Args' on it.
+%%% The answer:
+%%%
+%%%     {found, K, Rows}    a trace to bound K; Rows = [[{Name, Value}]] from
+%%%                         step 0, Value an integer or '-' (any value does)
+%%%     {none, Out}         no trace up to --k-max (% 0), or varp said UNKNOWN
+%%%     {error, Out}        anything else, varp's last lines as text
+
+bmc(Text, Args, VarpSh) ->
+    Tmp = filename:join(tmp_dir(), "csp_varp_" ++
+			    integer_to_list(erlang:unique_integer([positive])) ++
+			    ".varp"),
+    ok = file:write_file(Tmp, Text),
+    Out = os:cmd(VarpSh ++ " " ++ Args ++ " " ++ Tmp ++ " 2>&1"),
+    file:delete(Tmp),
+    trace(Out).
+
+tmp_dir() ->
+    case os:getenv("TMPDIR") of
+	false -> "/tmp";
+	D     -> D
+    end.
+
+%% varp's printed trace: `bmc: counterexample at k=5' (or `run at'), a header
+%% of names, one row per step, `% 1'.
+trace(Out) ->
+    Lines = string:split(Out, "\n", all),
+    case lists:dropwhile(fun(L) -> string:find(L, "bmc: ") =:= nomatch end,
+			 Lines) of
+	[Verdict, Head | Rest] ->
+	    case string:split(Verdict, "k=") of
+		[_, KText] ->
+		    {K, _} = string:to_integer(KText),
+		    Names = string:lexemes(Head, " "),
+		    Rows = [row(Names, string:lexemes(R, " "))
+			    || R <- Rest, is_row(R)],
+		    {found, K, Rows};
+		_ -> {error, tail(Out)}
+	    end;
+	_ ->
+	    case string:find(Out, "% 0") =/= nomatch orelse
+		string:find(Out, "% UNKNOWN") =/= nomatch of
+		true  -> {none, tail(Out)};
+		false -> {error, tail(Out)}
+	    end
+    end.
+
+is_row(R) ->
+    case string:lexemes(R, " ") of
+	[S | _] -> lists:all(fun(C) -> C >= $0 andalso C =< $9 end, S);
+	[]      -> false
+    end.
+
+%% The step number first; a row may lack the trailing `input' column.
+row(Names, [_Step | Vals]) ->
+    [{N, cell(V)} || {N, V} <- lists:zip(tl(Names),
+					 lists:sublist(Vals, length(Names) - 1)
+					 ++ lists:duplicate(
+					      max(0, length(Names) - 1 -
+						     length(Vals)), "-"))].
+
+cell("-") -> '-';
+cell(V) ->
+    case string:to_integer(V) of
+	{I, ""} -> I;
+	_       -> V
+    end.
+
+tail(Out) ->
+    string:trim(lists:flatten(lists:join("\n", lists:sublist(
+						 lists:reverse(string:split(Out, "\n", all)), 1, 4)))).
+
+%%% States are numbered GLOBALLY BY NAME -- measured: with global `on off' at
+%%% 3 and 4, a module declaring `on off' gets 3 and 4 too, while a module with
+%%% its own names continues the sequence at 5. So a module's #states stay in
+%%% the one list, where the module is written (see expand/1), and only the
+%%% State VARIABLE is per instance. (csp.h's csp_statedecl_t comment says each
 %%% module is numbered "from 3 again, independently" -- the runtime does not do
 %%% that.)
-%%%
-%%% The real gap is per-INSTANCE storage. `#M a' and `#M b' have their own a.V
-%%% and b.V, and this walk sees one `#variable V' and models one variable. Two
-%%% instances would share it, which is a model of a different program -- and the
-%%% consistency check does not notice, because the transition relation is still
-%%% satisfiable.
-%%%
-%%% Doing it properly means one varp `system' per #module and an `instance' per
-%%% object, which is exactly what varp has for it.
-modules_in(Ast) ->
-    [Name || {module, _Ln, {'WORD', _, Name}} <- Ast]
-	++ [Name || {module, _Ln, {'WORD', _, Name}, _} <- Ast].
 
 %%% ---------------------------------------------------------------- collect
 %%%
-%%% The parse tree is a FLAT list in which {in,_,States} and {'end',_} bracket
-%%% the blocks, so the walk carries the current gate rather than recursing.
+%%% The parse tree is a FLAT list in which {in,_,States}, {'when',_,X} and
+%%% {'end',_} bracket the blocks, so the walk carries the open blocks as a
+%%% stack rather than recursing. A rule's gate is the innermost #in; every
+%%% #when around it is part of its guard -- the block runs only while its
+%%% condition holds, read from the committed state like any guard. #when was
+%%% once skipped here, and its #end closed the #in around it: the rules in
+%%% `#when Measuring' ran every cycle in the model.
 
 collect(Ast) ->
     collect(Ast, undefined).
@@ -143,11 +420,20 @@ collect(Ast, Top) ->
 
 %% Top is the file being translated: its own lines are plain numbers.
 collect(Ast, Top, Opts) ->
-    C = #{sigs => #{}, order => [], states => [], rules => [], gate => all,
+    C = #{sigs => #{}, order => [], states => [], rules => [], blocks => [],
 	  consts => #{}, locals => #{}, lorder => [], bufs => #{}, props => [],
-	  top => Top, file => Top,
+	  timers => [], top => Top, file => Top, scope => "", insts => [],
 	  params => proplists:get_value(params, Opts, free)},
-    finish(lists:foldl(fun item/2, C, Ast)).
+    finish(question(proplists:get_value(reach, Opts),
+		    lists:foldl(fun item/2, C, Ast))).
+
+%% A reach asked from outside the source wins over the one written in it.
+question(undefined, C) -> C;
+question(S, C) ->
+    P = #{kind => "reach", text => S, line => 0, file => "goal",
+	  expr => prop_expr("reach", S, 0, "goal")},
+    C#{props := [Q || Q = #{kind := K} <- maps:get(props, C),
+		      K =/= "reach"] ++ [P]}.
 
 %% Where an imported file starts, and where its importer picks up again.
 item({source, _Ln, File}, C) ->
@@ -156,11 +442,24 @@ item({source, _Ln, File}, C) ->
 item({states, _Ln, Names}, C) ->
     C#{states := maps:get(states, C) ++ [N || {'WORD', _, N} <- Names]};
 
-item({in, _Ln, Names}, C) ->
-    C#{gate := [N || {'WORD', _, N} <- Names]};
+%% Where an instance's body starts (see expand/1) and where it ends ("").
+item({scope, I}, C = #{insts := Is}) ->
+    C#{scope := I,
+       insts := case I =:= "" orelse lists:member(I, Is) of
+		    true  -> Is;
+		    false -> Is ++ [I]
+		end};
 
-item({'end', _Ln}, C) ->
-    C#{gate := all};
+item({in, _Ln, X}, C = #{blocks := Bs}) when is_tuple(X); X =:= always ->
+    C#{blocks := [{in, X} | Bs]};
+item({in, _Ln, Names}, C = #{blocks := Bs}) ->
+    C#{blocks := [{in, [N || {'WORD', _, N} <- Names]} | Bs]};
+
+item({'when', _Ln, X}, C = #{blocks := Bs}) ->
+    C#{blocks := [{'when', X} | Bs]};
+
+item({'end', _Ln}, C = #{blocks := Bs}) ->
+    C#{blocks := case Bs of [_ | T] -> T; [] -> [] end};
 
 %% A #constant or #define is a compile-time number: a varp `define'. Note the
 %% arities -- #constant has an array slot, #define has neither type nor width.
@@ -208,8 +507,14 @@ item({buffer, _Ln, {'WORD', _, Name}, {'INT', _, Size}, Opts, _Tr}, C) ->
 	_  -> C
     end;
 
-%% Anything else declared -- timers, buffers, fields, arrays, modules -- is not
-%% modelled. Rules that mention them are caught by unmodellable/1 below.
+%% A timer, see TIME at the top. Its period is resolved in finish/1, when
+%% every #param and #define is known.
+item({timer, _Ln, {'WORD', _, Name}, Period, Start}, C) ->
+    On = case const_of(Start) of {ok, V} -> V =/= 0; none -> false end,
+    C#{timers := maps:get(timers, C) ++ [{Name, Period, On}]};
+
+%% Anything else declared -- fields, arrays, modules -- is not modelled. Rules
+%% that mention them are caught by unmodellable/1 below.
 item({rule, Ln, Assigns, Guard}, C) ->
     lists:foldl(fun(A, Ci) -> assign(A, Ln, Guard, Ci) end, C, Assigns);
 
@@ -234,7 +539,7 @@ prop_expr(Kind, S, Ln, F) ->
     case candyspeak_scan:string("#define P_ " ++ S ++ "\n", Ln) of
 	{ok, Ts, _} ->
 	    case candyspeak_parse:parse(Ts) of
-		{ok, [{define, _, _, E}]} -> E;
+		{ok, [{define, _, _, E}]} -> outside(E);   % s1.X is a name
 		{ok, _} -> Bad({syntax, S});
 		{error, {_, Mod, Msg}} ->
 		    Bad({syntax, lists:flatten(Mod:format_error(Msg))})
@@ -262,14 +567,31 @@ add_sig(Name, Kind, Res, Opts, Expr, C) ->
 
 assign({'=', _Ln, Target, Expr}, Ln, Guard, C) ->
     R = #{target => target_name(Target),
-	  guard  => Guard,
+	  guard  => when_guard(Ln, Guard, C),
 	  expr   => Expr,
-	  states => maps:get(gate, C),
+	  states => gate(C),
+	  scope  => maps:get(scope, C),
 	  line   => Ln,
 	  file   => imported(C)},
     C#{rules := maps:get(rules, C) ++ [R]};
 assign(_Other, _Ln, _Guard, C) ->
     C.
+
+%% The innermost #in, or all states.
+gate(#{blocks := Bs, scope := S}) ->
+    case [Ns || {in, Ns} <- Bs] of
+	[Ns | _]       -> Ns;
+	[] when S =:= "" -> all;
+	[]             -> {S, ["INIT", "NORMAL"]}   % loose in an object
+    end.
+
+%% The guard with every #when around the rule in front of it, outermost first.
+when_guard(Ln, Guard, #{blocks := Bs}) ->
+    Ws = lists:reverse([X || {'when', X} <- Bs]),
+    case Ws ++ [G || G <- [Guard], G =/= undefined, G =/= true] of
+	[]      -> undefined;
+	[G | T] -> lists:foldl(fun(X, Acc) -> {'&&', Ln, Acc, X} end, G, T)
+    end.
 
 %% The file a rule came from when it is not the one being translated, else
 %% undefined.
@@ -337,7 +659,8 @@ signed_of(Kind, Res, [])                       -> width_of(Kind, Res) > 1.
 
 %%% After the walk: work out which signals are WRITTEN, and which of those can
 %%% be modelled at all.
-finish(C0) ->
+finish(C00) ->
+    C0 = timers(C00),
     Written = lists:usort([T || #{target := T} <- maps:get(rules, C0),
 				is_list(T)]),
     %% A local a rule assigns is not a formula any more -- its value depends on
@@ -357,10 +680,35 @@ finish(C0) ->
 			    not storable(E, maps:get(T, Sigs), C)]),
     C#{written => Written, free => Bad,
        skipped => [R || R = #{target := T} <- Rules, T =/= "State",
-			(not is_list(T)) orelse
-			    (not maps:is_key(T, Sigs)) orelse
-			    (not storable(maps:get(expr, R),
-					  maps:get(T, Sigs), C))]}.
+			not modelled_write(R, Sigs, C)]}.
+
+modelled_write(#{target := T, expr := E}, _Sigs, C) when is_list(T),
+							 T =/= "State" ->
+    case is_inst_st(T, C) of
+	true  -> translatable(E, C);
+	false -> modelled_write1(T, E, C)
+    end;
+modelled_write(_R, _Sigs, _C) -> false.
+
+modelled_write1(T, E, C) ->
+    case {maps:find(T, maps:get(sigs, C)), timer(T, C)} of
+	{{ok, Sig}, _}   -> storable(E, Sig, C);
+	{error, {ok, _}} -> translatable(E, C);
+	_                -> false
+    end.
+
+%% The timers whose period is a number -- a literal, a #define, a #param taken
+%% at its value -- as [{Name, Period, On}]. Any other is not modelled, and
+%% reading it is not translated.
+timers(C) ->
+    C#{timers := [{N, P, On} || {N, E, On} <- maps:get(timers, C),
+				{ok, {P, P}} <- [rng(E, C)], P > 0]}.
+
+timer(N, C) ->
+    case lists:keyfind(N, 1, maps:get(timers, C)) of
+	{N, P, On} -> {ok, {P, On}};
+	false      -> error
+    end.
 
 %% A property must translate as written. Abstracting it the way a guard is
 %% would make it a free guess, and an invariant over a guess proves nothing.
@@ -383,6 +731,7 @@ unmodelled(E, C) ->
 			   maps:is_key(N, maps:get(consts, C)) orelse
 			   maps:is_key(N, maps:get(locals, C)) orelse
 			   maps:is_key(N, maps:get(bufs, C)) orelse
+			   timer(N, C) =/= error orelse is_inst_st(N, C) orelse
 			   lists:member(N, maps:get(states, C)) orelse
 			   is_builtin_state(N) orelse N =:= "State")]).
 
@@ -393,25 +742,71 @@ storable(E, Sig, C) ->
 	error   -> false
     end.
 
-%%% Replace every guard we cannot translate -- timeout(), a part, a call -- with
-%%% a fresh free input. The transition then becomes POSSIBLE rather than
+%%% Replace what we cannot translate in a guard -- timeout(), a part, a call --
+%%% with a fresh free input. The transition then becomes POSSIBLE rather than
 %%% determined, which is the standard abstraction and keeps a proof sound: the
 %%% model can do everything the program can, and more.
+%%%
+%%% Only the part that cannot be read is replaced, down through && || and !:
+%%% `Measuring && elapsed(Overload) >= MaxTime' keeps `Measuring' and frees
+%%% the comparison. Freeing the whole guard let the rule fire with Measuring
+%%% off, which the program never does, and every trace through it was a trace
+%%% of something else.
+%%%
+%%% One choice per rule, shared by its assignments: the rule fires whole or not
+%%% at all. A rule with three assignments is three entries here, and a choice
+%%% each let the model set ErrCurr and leave IsOn standing.
 abstract_guards(C) ->
     {Rules, Abs} =
 	lists:mapfoldl(
-	  fun(R = #{guard := G, line := Ln, file := F}, Acc) ->
+	  fun(R = #{guard := G, line := Ln, file := F0, scope := S}, Acc) ->
+		  F = {F0, S},
 		  case (G =:= undefined) orelse translatable(G, C) of
 		      true  -> {R, Acc};
 		      false ->
-			  Name = "u_free" ++ integer_to_list(length(Acc)) ++
-			      loc_id(Ln, F),
-			  {R#{guard := {abstracted, Name, G}},
-			   Acc ++ [{Name, Ln}]}
+			  {G1, {_, Acc1}} = abstract(G, Ln, F, C, {0, Acc}),
+			  {R#{guard := G1}, Acc1}
 		  end
 	  end, [], maps:get(rules, C)),
-    C#{rules := Rules, abstract => Abs}.
+    C#{rules := Rules, abstract => [{N, Ln} || {_Key, N, Ln} <- Abs]}.
 
+%% {Leaf index in the guard, [{Key, Name, Line}]}. The key is where the leaf
+%% is -- file, line, index -- so the same rule's next entry finds the name the
+%% first one was given.
+abstract(G = {Op, L, A, B}, Ln, F, C, Acc) when ?IS_LOGIC(Op) ->
+    case translatable(G, C) of
+	true -> {G, skip(G, Acc)};
+	false ->
+	    {A1, Acc1} = abstract(A, Ln, F, C, Acc),
+	    {B1, Acc2} = abstract(B, Ln, F, C, Acc1),
+	    {{Op, L, A1, B1}, Acc2}
+    end;
+abstract(G = {'!', L, A}, Ln, F, C, Acc) ->
+    case translatable(G, C) of
+	true -> {G, skip(G, Acc)};
+	false ->
+	    {A1, Acc1} = abstract(A, Ln, F, C, Acc),
+	    {{'!', L, A1}, Acc1}
+    end;
+abstract(G, Ln, F, C, {I, Abs}) ->
+    case translatable(G, C) of
+	true -> {G, {I + 1, Abs}};
+	false ->
+	    Key = {F, Ln, I},
+	    case lists:keyfind(Key, 1, Abs) of
+		{Key, Name, _} -> {{abstracted, Name, G}, {I + 1, Abs}};
+		false ->
+		    Name = "u_free" ++ integer_to_list(length(Abs)) ++
+			loc_id(Ln, element(1, F)),
+		    {{abstracted, Name, G}, {I + 1, Abs ++ [{Key, Name, Ln}]}}
+	    end
+    end.
+
+%% A translatable subtree still counts its leaves, so the index of a leaf
+%% after it is the same in every entry of the rule.
+skip({Op, _, A, B}, Acc) when ?IS_LOGIC(Op) -> skip(B, skip(A, Acc));
+skip({'!', _, A}, Acc) -> skip(A, Acc);
+skip(_, {I, Abs}) -> {I + 1, Abs}.
 
 translatable(undefined, _C) -> true;
 translatable(E, C) -> rng(E, C) =/= error.
@@ -422,11 +817,6 @@ translatable(E, C) -> rng(E, C) =/= error.
 %%% widths -- or `error' when it cannot be translated at all. One walk answers
 %%% both, so "translatable" and "has a known range" cannot drift apart.
 
--define(IS_CMP(Op), (Op =:= '==' orelse Op =:= '!=' orelse Op =:= '<' orelse
-		     Op =:= '<=' orelse Op =:= '>' orelse Op =:= '>=')).
--define(IS_LOGIC(Op), (Op =:= '&&' orelse Op =:= '||')).
--define(IS_BITS(Op), (Op =:= '&' orelse Op =:= '|' orelse Op =:= '^')).
--define(U32, 4294967296).
 
 rng({abstracted, _N, _G}, _C) -> {ok, {0, 1}};
 rng({'INT', _, S}, _C) ->
@@ -446,9 +836,21 @@ rng({field, _, {'WORD', _, N}}, C) ->
 	    case lists:member(N, maps:get(states, C)) orelse
 		is_builtin_state(N) orelse N =:= "State" of
 		true  -> {ok, {0, (1 bsl state_bits(C)) - 1}};
-		false -> error
+		false ->
+		    case is_inst_st(N, C) of
+			true  -> {ok, {0, (1 bsl state_bits(C)) - 1}};
+			false -> both(timer(N, C), {ok, 0}, fun(_, _) -> {0, 1} end)
+		    end
 	    end
     end;
+rng({field, _, {part, _, {'WORD', _, T}, {'WORD', _, "period"}}}, C) ->
+    both(timer(T, C), {ok, 0}, fun({P, _}, _) -> {P, P} end);
+rng({field, _, {part, _, {'WORD', _, T}, {'WORD', _, "fired"}}}, C) ->
+    both(timer(T, C), {ok, 0}, fun(_, _) -> {0, 1} end);
+rng({call, _, {'WORD', _, "timeout"}, [{field, _, {'WORD', _, T}}]}, C) ->
+    both(timer(T, C), {ok, 0}, fun(_, _) -> {0, 1} end);
+rng({call, _, {'WORD', _, "elapsed"}, [{field, _, {'WORD', _, T}}]}, C) ->
+    both(timer(T, C), {ok, 0}, fun({P, _}, _) -> {0, P} end);
 rng({field, _, {index, _, {'WORD', _, B}, Ix}}, C) ->
     case is_map_key(B, maps:get(bufs, C)) andalso rng(Ix, C) of
 	{ok, _} -> {ok, {0, 255}};
@@ -578,6 +980,7 @@ emit(In, C, _Opts) ->
      consts(C),
      "\nsystem ", Name, " {\n",
      decls(C),
+     timer_defs(C),
      local_defs(C),
      "\n", init_item(C),
      "\n", transitions(C),
@@ -589,7 +992,9 @@ emit(In, C, _Opts) ->
 %% annotation's source line follows it, so a counterexample can be read back.
 properties(C) ->
     Ps = maps:get(props, C),
-    Note = fun(#{line := L, file := F, text := T}) ->
+    Note = fun(#{file := "goal", text := T}) ->     % asked, see model/2
+		   ["// goal: ", T, "\n"];
+	      (#{line := L, file := F, text := T}) ->
 		   ["// line ", loc(L, F), ": ", T, "\n"]
 	   end,
     Prop = fun(K, P = #{expr := E}) ->
@@ -651,7 +1056,7 @@ free_note(C) ->
 	[] -> "";
 	Fs -> ["// FREE (input, not state): ", lists:join(", ", Fs), "\n"
 	       "// Each is written by a rule this translator cannot model --\n"
-	       "// a timer, a part, a call. Left free the model has MORE\n"
+	       "// a part, a call, an array. Left free the model has MORE\n"
 	       "// behaviour than the program, so a PROOF still holds while a\n"
 	       "// counterexample may be spurious. Read one against the source.\n"]
     end.
@@ -727,10 +1132,11 @@ decls(C) ->
     Frozen = frozen(C),
     States = [N || N <- maps:get(order, C),
 		   lists:member(N, Written), not lists:member(N, Free)],
-    Inputs = [N || N <- maps:get(order, C), not lists:member(N, Frozen),
-		   (not lists:member(N, Written)) orelse lists:member(N, Free)],
+    Inputs = inputs(C),
     Abs = [N || {N, _Ln} <- maps:get(abstract, C, [])],
     ["    state St:", integer_to_list(state_bits(C)), ";\n",
+     [["    state ", inst_st(I), ":", integer_to_list(state_bits(C)),
+       ";   // ", I, ".State\n"] || I <- maps:get(insts, C)],
      group("state", States, Sigs),
      case Frozen of
 	 [] -> "";
@@ -744,6 +1150,16 @@ decls(C) ->
 			 || K <- lists:seq(0, Size - 1)]),
        ", ", varp_name(B ++ "_rx"), ":1;\n"]
       || {B, Size} <- lists:sort(maps:to_list(maps:get(bufs, C)))],
+     case maps:get(timers, C) of
+	 [] -> "";
+	 Ts -> ["    // timers: running, and ms since started (period when not)\n"
+		"    state ",
+		lists:join(", ", [[tname("run", T), ":1, ", tname("el", T), ":",
+				   integer_to_list(bits(P))] || {T, P, _} <- Ts]),
+		";\n"
+		"    // ms that pass before the step, the same for every timer\n"
+		"    input u_dt:", integer_to_list(bits(max_period(C))), ";\n"]
+     end,
      case Abs of
 	 [] -> "";
 	 _  -> ["    // one per guard that could not be translated: free, so\n"
@@ -751,6 +1167,41 @@ decls(C) ->
 		"    input ",
 		lists:join(", ", [[N, ":1"] || N <- Abs]), ";\n"]
      end].
+
+max_period(C) -> lists:max([P || {_, P, _} <- maps:get(timers, C)]).
+
+%% The names of a timer's model: run, el, fire, on, elapsed.
+tname(Kind, T) -> "u_" ++ Kind ++ "_" ++ varp_name(T).
+
+%%% What the program reads of a timer, from its two state variables and the
+%%% time that passes. The input sweep comes first in a cycle: a timer that has
+%%% run its period stops there and has fired, so the rules see it off.
+timer_defs(C) ->
+    case maps:get(timers, C) of
+	[] -> "";
+	Ts ->
+	    ["\n    // timers: timeout(T), T, elapsed(T) in the cycle\n",
+	     [begin
+		  Run = tname("run", T),
+		  Sum = [tname("el", T), " + u_dt"],
+		  Ps = integer_to_list(P),
+		  ["    define ", tname("fire", T), "() ((", Run, " == 1) and (",
+		   Sum, " >= ", Ps, "));\n"
+		   "    define ", tname("on", T), "() ((", Run,
+		   " == 1) and not (", tname("fire", T), "()));\n"
+		   "    define ", tname("elapsed", T), "() ((", Sum, " >= ", Ps,
+		   ") ? ", Ps, " : (", Sum, "));\n"]
+	      end || {T, P, _} <- Ts]]
+    end.
+
+%% Free in every step: read and never written, or written by a rule this
+%% translator cannot model.
+inputs(C) ->
+    Written = maps:get(written, C),
+    Free = maps:get(free, C),
+    Frozen = frozen(C),
+    [N || N <- maps:get(order, C), not lists:member(N, Frozen),
+	  (not lists:member(N, Written)) orelse lists:member(N, Free)].
 
 group(_Kw, [], _Sigs) -> "";
 group(Kw, Names, Sigs) ->
@@ -823,10 +1274,20 @@ init_item(C) ->
     Vs = [N || N <- maps:get(order, C),
 	       lists:member(N, Written), not lists:member(N, Free)],
     ["    init  St == INIT",
+     [[" and ", inst_st(I), " == INIT"] || I <- maps:get(insts, C)],
      [[" and ", varp_name(N), " == ",
        integer_to_list(maps:get(init, maps:get(N, Sigs)))]
       || N <- Vs],
+     [[" and ", tname("run", T), " == ", run0(On), " and ", tname("el", T),
+       " == ", el0(P, On)] || {T, P, On} <- maps:get(timers, C)],
      ";\n"].
+
+%% A timer declared `= 1' is started by the setup, before the INIT cycle.
+run0(true)  -> "1";
+run0(false) -> "0".
+
+el0(_P, true)  -> "0";
+el0(P, false)  -> integer_to_list(P).
 
 %%% ------------------------------------------------------- the next relation
 
@@ -836,7 +1297,10 @@ transitions(C) ->
     Free = maps:get(free, C),
     Vs = [N || N <- maps:get(order, C),
 	       lists:member(N, Written), not lists:member(N, Free)],
-    [state_chain(C), [chain(V, C, Sigs) || V <- Vs],
+    [state_chain(C),
+     [inst_state_chain(I, C) || I <- maps:get(insts, C)],
+     [chain(V, C, Sigs) || V <- Vs],
+     [timer_chain(T, C) || T <- maps:get(timers, C)],
      case frozen(C) of
 	 [] -> "";
 	 Ps -> ["    // ---- #param ", lists:duplicate(43, $-), "\n",
@@ -864,6 +1328,22 @@ state_chain(C) ->
 	      "(St != FAILSAFE)"),
      "\n"].
 
+%% An instance's State: the same three rules, its own variable.
+inst_state_chain(I, C) ->
+    V = inst_st(I),
+    Rules = [R || R = #{target := T, expr := E} <- maps:get(rules, C),
+		  T =:= I ++ ".State", translatable(E, C)],
+    Guards = [full_guard(R, C) || R <- Rules],
+    Exprs  = [["next(", V, ") == ", state_value(R, C)] || R <- Rules],
+    ["    // ---- ", I, ".State ",
+     lists:duplicate(max(1, 44 - length(I)), $-), "\n",
+     "    next  (", V, " == FAILSAFE) implies (next(", V, ") == FAILSAFE);\n",
+     priority(V, lists:reverse(Guards), lists:reverse(Exprs),
+	      [{[V, " == INIT"], ["next(", V, ") == NORMAL"]},
+	       {none,            ["next(", V, ") == ", V]}],
+	      ["(", V, " != FAILSAFE)"]),
+     "\n"].
+
 %% `State = Home' assigns a state NAME, not a number.
 state_value(#{expr := {field, _, {'WORD', _, N}}}, C) ->
     state_text(N, C);
@@ -885,6 +1365,41 @@ chain(V, C, Sigs) ->
      [["    //   ", src_of(R, C), "\n"] || R <- Rules],
      priority(V, lists:reverse(Guards), lists:reverse(Exprs),
 	      [{none, ["next(", varp_name(V), ") == ", varp_name(V)]}], none),
+     "\n"].
+
+%%% A timer's chain. A write is a request the output sweep acts on at the end
+%%% of the cycle: `T = 1' starts it over from now, `T = 0' stops it, and the
+%%% last rule to write it wins as for any variable. Unwritten, it runs on or
+%%% stays stopped.
+timer_chain({T, P, _On}, C) ->
+    Rules = [R || R = #{target := T1, expr := E} <- maps:get(rules, C),
+		  T1 =:= T, translatable(E, C)],
+    Run = tname("run", T),
+    El = tname("el", T),
+    Start = ["(next(", Run, ") == 1) and (next(", El, ") == 0)"],
+    Stop = ["(next(", Run, ") == 0) and (next(", El, ") == ",
+	    integer_to_list(P), ")"],
+    Either = fun(Cond, A, B) ->
+		     ["((", Cond, ") implies (", A, ")) and ((not (", Cond,
+		      ")) implies (", B, "))"]
+	     end,
+    Write = fun(E) ->
+		    case rng(E, C) of
+			{ok, {0, 0}} -> Stop;
+			{ok, {Lo, Hi}} when Lo > 0; Hi < 0 -> Start;
+			_ -> Either(vexpr(E, C, bool), Start, Stop)
+		    end
+	    end,
+    Guards = [full_guard(R, C) || R <- Rules],
+    Exprs = [Write(maps:get(expr, R)) || R <- Rules],
+    Keep = Either([tname("on", T), "()"],
+		  ["(next(", Run, ") == 1) and (next(", El, ") == ", El,
+		   " + u_dt)"], Stop),
+    ["    // ---- timer ", T, " ", integer_to_list(P), " ms ",
+     lists:duplicate(max(1, 40 - length(T)), $-), "\n",
+     [["    //   ", src_of(R, C), "\n"] || R <- Rules],
+     priority(T, lists:reverse(Guards), lists:reverse(Exprs),
+	      [{none, Keep}], none),
      "\n"].
 
 stored(E, Sig, C) ->
@@ -943,10 +1458,19 @@ guard_part(G, C)          -> [paren(vexpr(G, C, bool))].
 
 gate_expr(all, _C) ->
     "St == INIT or St == NORMAL";           % loose: those two states only
+gate_expr(always, _C) -> "1 == 1";
+gate_expr({I, Names}, C) ->
+    lists:join(" or ", [[inst_st(I), " == ", state_num(N, C)] || N <- Names]);
 gate_expr(Names, C) ->
     lists:join(" or ", [["St == ", state_num(N, C)] || N <- Names]).
 
 state_num(N, C) -> state_text(N, C).
+
+%% An instance's State, as varp names it.
+inst_st(I) -> varp_name(I ++ ".State").
+
+is_inst_st(N, C) ->
+    lists:any(fun(I) -> N =:= I ++ ".State" end, maps:get(insts, C)).
 
 %%% ------------------------------------------------------------ expressions
 
@@ -971,8 +1495,11 @@ is_bool({Op, _, _, _}, _C) when ?IS_CMP(Op); ?IS_LOGIC(Op) -> true;
 is_bool({field, _, {'WORD', _, N}}, C) ->
     case maps:find(N, maps:get(locals, C)) of
 	{ok, L} -> is_bool(maps:get(expr, L), C);
-	error   -> false
+	error   -> timer(N, C) =/= error
     end;
+is_bool({field, _, {part, _, {'WORD', _, _T}, {'WORD', _, "fired"}}}, _C) ->
+    true;
+is_bool({call, _, {'WORD', _, "timeout"}, _}, _C) -> true;
 is_bool(_, _C) -> false.
 
 vbool({abstracted, Name, _Orig}, _C) -> [Name, " == 1"];
@@ -981,8 +1508,15 @@ vbool({Op, _, L, R}, C) when ?IS_LOGIC(Op) ->
     [paren(vexpr(L, C, bool)), op(Op), paren(vexpr(R, C, bool))];
 vbool({Op, _, L, R}, C) when ?IS_CMP(Op) ->
     [paren(vexpr(L, C, num)), op(Op), paren(vexpr(R, C, num))];
-vbool({field, _, {'WORD', _, N}}, _C) ->         % a boolean local
-    [varp_name(N), "()"].
+vbool({field, _, {'WORD', _, N}}, C) ->          % a boolean local, a timer
+    case timer(N, C) of
+	{ok, _} -> [tname("on", N), "()"];
+	error   -> [varp_name(N), "()"]
+    end;
+vbool({field, _, {part, _, {'WORD', _, T}, {'WORD', _, "fired"}}}, _C) ->
+    [tname("fire", T), "()"];
+vbool({call, _, {'WORD', _, "timeout"}, [{field, _, {'WORD', _, T}}]}, _C) ->
+    [tname("fire", T), "()"].
 
 vnum({'INT', _, S}, _C) -> S;
 vnum({field, _, {'WORD', _, N}}, C) ->
@@ -1011,8 +1545,15 @@ vnum({field, _, {index, _, {'WORD', _, B}, Ix}}, C) ->
 			end, byte_name(B, 0),
 			lists:seq(max(1, Lo), min(Size - 1, Hi)))
     end;
+%% A frame is seen the cycle after it is taken in, and INIT is the first
+%% cycle: no rule there ever sees one.
 vnum({field, _, {part, _, {'WORD', _, B}, {'WORD', _, "rx"}}}, _C) ->
-    varp_name(B ++ "_rx");
+    ["(St == INIT ? 0 : ", varp_name(B ++ "_rx"), ")"];
+vnum({field, _, {part, _, {'WORD', _, T}, {'WORD', _, "period"}}}, C) ->
+    {ok, {P, _}} = timer(T, C),
+    integer_to_list(P);
+vnum({call, _, {'WORD', _, "elapsed"}, [{field, _, {'WORD', _, T}}]}, _C) ->
+    [tname("elapsed", T), "()"];
 vnum({'-', _, M}, C) -> ["-", paren(vexpr(M, C, num))];
 vnum({Op, _, L, R}, C) when ?IS_BITS(Op) ->
     vbits(Op, L, R, C);
@@ -1027,8 +1568,10 @@ byte_name(B, K) -> varp_name(B ++ "_b" ++ integer_to_list(K)).
 vbits(Op, L, R, C) ->
     {ok, RL} = rng(L, C),
     {ok, RR} = rng(R, C),
-    T = [paren(u32(vexpr(L, C, num), RL)), op(Op),
-	 paren(u32(vexpr(R, C, num), RR))],
+    %% Bracketed whole: varp's `==' binds tighter than `&', as C's does, and
+    %% `next(X) == A & 1' was `(next(X) == A) & 1'.
+    T = paren([paren(u32(vexpr(L, C, num), RL)), op(Op),
+	       paren(u32(vexpr(R, C, num), RR))]),
     case bits_range(Op, RL, RR) of
 	{Lo, _} when Lo >= 0 -> T;
 	_ -> ["((", T, ") >= 2147483648 ? (", T, ") - 4294967296 : (", T, "))"]
@@ -1076,7 +1619,7 @@ footer(C) ->
     case maps:get(skipped, C) of
 	[] -> "";
 	Rs -> ["\n// NOT TRANSLATED (", integer_to_list(length(Rs)),
-	       " rules), because of a timer, a part, a call or an array:\n",
+	       " rules), because of a part, a call or an array:\n",
 	       [["//   line ", loc(maps:get(line, R), maps:get(file, R)), "\n"]
 		|| R <- Rs]]
     end.

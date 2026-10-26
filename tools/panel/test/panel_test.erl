@@ -734,10 +734,10 @@ code_view_check() ->
 	   Ev("!Go && elapsed(T) > 5", #{"Go" => 1}) =:= 0 andalso
 	   Ev("Go && elapsed(T) > 5", #{"Go" => 1}) =:= unknown, nomatch),
 
-    %% --fired, through csp_link. Paused with Go set: the first step brings Go
-    %% in (measured: rules see a pin set at the prompt one step later), the
-    %% second fires Phase's rule (line 7) and `Red = Phase == 0' (8);
-    %% `Red = 0 ? Odd' (9) does not, Phase was 0.
+    %% --fired, through csp_link. Paused with Go set, ONE step sees it --
+    %% csp_link:step/2 commits what was set first -- and fires Phase's rule
+    %% (line 7) and `Red = Phase == 0' (8); `Red = 0 ? Odd' (9) does not,
+    %% Phase was 0.
     flush(),
     {ok, L} = csp_link:open(csp_exe(), [F]), track(L),
     timer:sleep(200),
@@ -746,8 +746,6 @@ code_view_check() ->
     csp_link:set(L, "Go", 1),
     timer:sleep(100),
     flush(),
-    csp_link:step(L),
-    timer:sleep(200),
     csp_link:step(L),
     timer:sleep(300),
     Fired = last_fired(undefined),
@@ -768,7 +766,228 @@ code_view_check() ->
     timer:sleep(250),
     expect("a module's rule is reported per object",
 	   lists:member({"a1", "../../examples/adder3.csp", 8}, Fired2) andalso
-	   lists:member({"", "../../examples/adder3.csp", 23}, Fired2), Fired2).
+	   lists:member({"", "../../examples/adder3.csp", 23}, Fired2), Fired2),
+
+    %% Marks: a contact in an object's tab is named as it is outside it.
+    Mod = "#module M\n  #variable X:1 unsigned in\n"
+	"  #variable Y:1 unsigned out\n  Y = 1 ? X && Go\n#end\n"
+	"#digital Go in 4\n#variable N:4 = 0\n#M m0 X=Go\n"
+	"N = 0 ? N > 2 || Go\n",
+    Fm = "/tmp/csp_code_marks.csp",
+    ok = file:write_file(Fm, Mod),
+    {ok, Am} = candyspeak:parse(Fm),
+    Vm = #{tabs => csp_code:tabs(Am)},
+    Ev2 = fun(Txt) ->
+		  {ok, [{define, _, _, X}]} = candyspeak_parse:parse(
+						element(2, candyspeak_scan:string(
+							     "#define P_ " ++ Txt ++ "\n"))),
+		  X
+	  end,
+    Mx = csp_code:contact_of(Vm, 1, "k1_0"),
+    Mg = csp_code:contact_of(Vm, 1, "k1_1"),
+    Mn = csp_code:contact_of(Vm, 0, "k1_0"),
+    Goal = csp_code:goal_text(#{{1, "k1_0"} => {true, Mx},
+				{1, "k1_1"} => {false, Mg},
+				{0, "k1_0"} => {false, Mn}}),
+    expect("marks add up to one condition, objects' names made whole",
+	   Goal =:= "!(N > 2) && m0.X && !Go", Goal),
+    NotNot = csp_code:goal_text(#{{0, "k1_0"} => {false, Ev2("!Go")}}),
+    expect("a contact `!X' marked false is X, not !!X", NotNot =:= "Go", NotNot),
+    model_check().
+
+%% The model view's side of candyspeak_varp: the question replaces the
+%% source's reach, varp's printed trace reads back as data, and -- when varp
+%% is here -- a goal on traffic.csp is reached, and not within one step.
+model_check() ->
+    Out = "bmc: counterexample at k=2\n"
+	"  step  Green  St  u_free0_L26  input\n"
+	"     0      0   0            -\n"
+	"     1      0   3            1\n"
+	"     2      1   3            1\n% 1\n",
+    T = candyspeak_varp:trace(Out),
+    expect("varp's trace reads back as rows, `-' as any value",
+	   T =:= {found, 2, [[{"Green", 0}, {"St", 0}, {"u_free0_L26", '-'},
+			      {"input", '-'}],
+			     [{"Green", 0}, {"St", 3}, {"u_free0_L26", 1},
+			      {"input", '-'}],
+			     [{"Green", 1}, {"St", 3}, {"u_free0_L26", 1},
+			      {"input", '-'}]]}, T),
+    expect("% 0 is no trace", candyspeak_varp:trace("% 0\n") =:= {none, "% 0"},
+	   candyspeak_varp:trace("% 0\n")),
+    F = "../../examples/traffic.csp",
+    {ok, M} = candyspeak_varp:model(F, [{reach, "LongRed && Please"}]),
+    Text = lists:flatten(maps:get(text, M)),
+    expect("the asked reach is in the model, with what it leaves free",
+	   string:find(Text, "reach     ((LongRed) != 0) and ((Please) != 0);   // goal:") =/= nomatch andalso
+	   maps:get(inputs, M) =:= ["Please"] andalso
+	   lists:keyfind("red", 1, maps:get(states, M)) =:= {"red", 4},
+	   {maps:get(inputs, M), maps:get(states, M)}),
+    Sh = filename:join(os:getenv("HOME"), "erlang/varp/priv/varp.sh"),
+    case filelib:is_regular(Sh) of
+	false -> io:format("skip  varp runs (no ~s)~n", [Sh]);
+	true ->
+	    Ask = fun(K) ->
+			  candyspeak_varp:bmc(
+			    maps:get(text, M), "--timeout 30 bmc --property "
+			    "traffic_reach --k-max " ++ integer_to_list(K), Sh)
+		  end,
+	    R10 = Ask(10),
+	    expect("traffic: LongRed && Please is reached", element(1, R10) =:=
+		       found, R10),
+	    R1 = Ask(1),
+	    expect("...but not within one step", element(1, R1) =:= none, R1),
+	    shift_check(Sh),
+	    timer_check(Sh),
+	    object_check(Sh)
+    end,
+
+    %% Only the part of a guard the model cannot read is free, and one choice
+    %% serves every assignment of the rule.
+    ok = file:write_file("/tmp/csp_varp_abs.csp",
+			 "#variable M:1 = 0\n#variable E:1 = 0\n"
+			 "#variable On:1 = 0\n#timer T 100\n"
+			 "E = 1, On = 0 ? M && progress(T) > 3\n"),
+    {ok, Ma} = candyspeak_varp:model("/tmp/csp_varp_abs.csp", []),
+    Ta = lists:flatten(maps:get(text, Ma)),
+    expect("a guard keeps what translates; one free choice per rule",
+	   maps:get(abstract, Ma) =:= [{"u_free0_L5", 5}] andalso
+	   string:find(Ta, "((M) != 0) and (u_free0_L5 == 1)") =/= nomatch,
+	   {maps:get(abstract, Ma), Ta}),
+
+    %% #when is part of the guard of every rule in it, and its #end closes it
+    %% and not the #in around it.
+    ok = file:write_file("/tmp/csp_varp_when.csp",
+			 "#variable M:1 = 0\n#variable N:4 = 0\n#states A\n"
+			 "#in INIT\n  State = A\n#end\n"
+			 "#in A\n#when M\n  N = 5\n#end\n  N = 1 ? N == 0\n#end\n"),
+    {ok, Mw} = candyspeak_varp:model("/tmp/csp_varp_when.csp", []),
+    Tw = lists:flatten(maps:get(text, Mw)),
+    expect("#when gates its rules; its #end leaves the #in open",
+	   string:find(Tw, "9: N = 5 ? (M) != 0") =/= nomatch andalso
+	   string:find(Tw, "((St == A) and ((M) != 0))") =/= nomatch andalso
+	   string:find(Tw, "((St == A) and ((N) == (0)))") =/= nomatch, Tw),
+
+    %% A signal marked from its label or cell: on for one bit, its value now
+    %% for more.
+    {ok, Ag} = candyspeak:parse("../../examples/traffic.csp"),
+    Vg = #{tabs => csp_code:tabs(Ag), last => #{"LongRed" => 7}},
+    S1 = csp_code:goal_text(#{{sig, "Red"} => {true, csp_code:sig_expr(Vg, "Red")},
+			      {sig, "LongRed"} => {false, csp_code:sig_expr(Vg, "LongRed")}}),
+    expect("signals as marks: `Red', `!(LongRed == 7)'",
+	   S1 =:= "!(LongRed == 7) && Red", S1).
+
+%% A timer is two state variables and the time before each step: declared
+%% `= 1' it is started by the setup, before INIT, and a 500 ms one restarted
+%% on its own timeout counts once per step, however long the step.
+timer_check(Sh) ->
+    F = "/tmp/csp_varp_timer.csp",
+    ok = file:write_file(F, "#timer T 500 = 1\n#variable X:8 = 0\n"
+			 "#variable E:1 = 0\n"
+			 "X = X + 1 ? timeout(T)\nT = 1 ? timeout(T)\n"
+			 "E = 1 ? elapsed(T) >= 200 && elapsed(T) < 300\n"),
+    Ask = fun(Goal, K) ->
+		  {ok, M} = candyspeak_varp:model(F, [{reach, Goal}]),
+		  candyspeak_varp:bmc(maps:get(text, M),
+				      "--timeout 30 bmc --property "
+				      "csp_varp_timer_reach --k-max " ++
+					  integer_to_list(K), Sh)
+	  end,
+    R1 = Ask("X == 2", 1),
+    R2 = Ask("X == 2", 4),
+    expect("timer: two timeouts take two steps of 500 ms or more",
+	   element(1, R1) =:= none andalso element(1, R2) =:= found andalso
+	   element(2, R2) =:= 2 andalso
+	   [D || Row <- tl(element(3, R2)), {"u_dt", D} <- Row,
+		 not (is_integer(D) andalso D >= 500)] =:= [],
+	   {R1, R2}),
+    %% Walking the trace: the cycle 1 -> 2 is the second timeout, read from
+    %% the model's timer and the time that comes in.
+    {ok, Mt} = candyspeak_varp:model(F, [{reach, "X == 2"}]),
+    Vt = #{trace => {element(3, R2), Mt}, look => 1, states => []},
+    Lv = csp_code:look_values(Vt),
+    Lt = csp_code:look_text(Vt),
+    expect("the code view walks a trace: timeout(T) holds, X changes",
+	   maps:get({timeout, "T"}, Lv) =:= 1 andalso maps:get("X", Lv) =:= 1
+	   andalso string:find(Lt, "step 1 -> 2:") =/= nomatch andalso
+	   string:find(Lt, "X=2") =/= nomatch, {Lv, Lt}),
+    RE = Ask("E", 4),
+    expect("timer: elapsed() is read, not guessed",
+	   element(1, RE) =:= found andalso element(2, RE) =:= 1, RE).
+
+%% Objects are flattened: every member once per instance as `a.N', its own
+%% State, a static binding written in the instance's INIT, a timer's period
+%% from its line. Two counters on one module are two counters.
+object_check(Sh) ->
+    F = "/tmp/csp_varp_obj.csp",
+    ok = file:write_file(F, "#module Cnt\n  #states Up\n"
+			 "  #variable N:4 unsigned = 0\n  #variable Go:1 in = 0\n"
+			 "  #timer T 100 = 1\n"
+			 "  #in INIT\n    State = Up\n  #end\n"
+			 "  #in Up\n    N = N + 1, T = 1 ? Go && timeout(T)\n  #end\n"
+			 "#end\n"
+			 "#digital In:1 in\n"
+			 "#Cnt a Go = 1\n#Cnt b T.period = 300\n"
+			 "b.Go = In\n"),
+    {ok, M} = candyspeak_varp:model(F, [{reach, "a.N == 2 && b.N == 1"}]),
+    T = lists:flatten(maps:get(text, M)),
+    expect("objects: a member per instance, a State each, names kept",
+	   string:find(T, "state a_State:") =/= nomatch andalso
+	   string:find(T, "next(a_Go) == 1") =/= nomatch andalso
+	   string:find(T, "u_el_b_T + u_dt >= 300") =/= nomatch andalso
+	   maps:get("a_N", maps:get(names, M)) =:= "a.N", T),
+    Ask = fun(K) ->
+		  candyspeak_varp:bmc(maps:get(text, M),
+				      "--timeout 30 bmc --property "
+				      "csp_varp_obj_reach --k-max " ++
+					  integer_to_list(K), Sh)
+	  end,
+    R2 = Ask(2),
+    R6 = Ask(6),
+    expect("objects: a and b count apart",
+	   element(1, R2) =:= none andalso element(1, R6) =:= found, {R2, R6}),
+    D = "demo/dl1200_deb_lib.csp",
+    {ok, Md} = candyspeak_varp:model(D, [{reach, "EnDb.Out"}, {params, fixed}]),
+    AskD = fun(K) ->
+		   candyspeak_varp:bmc(maps:get(text, Md),
+				       "--timeout 30 bmc --property "
+				       "dl1200_deb_lib_reach --k-max " ++
+					   integer_to_list(K), Sh)
+	   end,
+    R7 = AskD(7),
+    R8 = AskD(8),
+    expect("dl1200_deb_lib: lib/debounce settles in five ticks",
+	   element(1, R7) =:= none andalso element(1, R8) =:= found andalso
+	   element(2, R8) =:= 8, {R7, element(1, R8)}).
+
+%% dl1200_shift.csp: five equal samples, two bits each, before Enable is
+%% believed -- so EnDeb cannot be on within five steps, and is at six.
+shift_check(Sh) ->
+    F = "demo/dl1200_shift.csp",
+    case filelib:is_regular(F) of
+	false -> io:format("skip  dl1200_shift (no ~s)~n", [F]);
+	true ->
+	    {ok, M} = candyspeak_varp:model(F, [{reach, "EnDeb"},
+						 {params, fixed}]),
+	    Ask = fun(K) ->
+			  candyspeak_varp:bmc(
+			    maps:get(text, M), "--timeout 30 bmc --property "
+			    "dl1200_shift_reach --k-max " ++ integer_to_list(K),
+			    Sh)
+		  end,
+	    expect("dl1200: the replay sends CanFrame on 0x30 (CANID)",
+		   maps:get(frames, M) =:= [{"CanFrame", 48, 8}],
+		   maps:get(frames, M)),
+	    expect("dl1200: no rule sees a frame in INIT",
+		   string:find(lists:flatten(maps:get(text, M)),
+			       "(St == INIT ? 0 : CanFrame_rx)") =/= nomatch,
+		   nomatch),
+	    R5 = Ask(5),
+	    R10 = Ask(10),
+	    expect("shift register: EnDeb needs five samples",
+		   element(1, R5) =:= none andalso
+		   element(1, R10) =:= found andalso element(2, R10) =:= 6,
+		   {R5, element(2, R10)})
+    end.
 
 last_fired(Acc) ->
     receive
@@ -855,7 +1074,7 @@ varp_gen_check() ->
 	    %% line of the file being translated.
 	    ok = file:write_file("/tmp/csp_varp_split/rules.csp",
 				 "#digital A in 2\n#digital B out 8\n"
-				 "B = 1 ? A == 1 && elapsed(T) > 3\n"),
+				 "B = 1 ? A == 1 && progress(T) > 3\n"),
 	    ok = file:write_file("/tmp/csp_varp_split/top.csp",
 				 "#timer T 100\n#import \"rules.csp\"\n"),
 	    {ok, IoR} = candyspeak_varp:translate("/tmp/csp_varp_split/top.csp"),
