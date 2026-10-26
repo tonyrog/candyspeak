@@ -224,9 +224,68 @@ NOINLINE static csp_instr_t* alloc_instr_ptr(csp_rt_t* st,int* pos,opcode_t op)
     return ip;
 }
 
+#if defined(CSP_HAVE_FIRED)
+// See csp_rule_src in csp.h. Indexed by instruction; a file is kept as a
+// small number into src_names, each name copied once -- the reader's buffer
+// for it does not outlive the file.
+const char* csp_src_file = NULL;
+static struct { uint16_t line; uint8_t file; } *rule_src;
+static int rule_src_cap;
+static char* src_names[255];
+static int src_nnames;
+
+static int src_name(const char* f)
+{
+    int i;
+    if (f == NULL)
+	return 0;
+    for (i = 0; i < src_nnames; i++)
+	if (strcmp(src_names[i], f) == 0)
+	    return i + 1;
+    if ((src_nnames >= 255) || ((src_names[src_nnames] = strdup(f)) == NULL))
+	return 0;
+    return ++src_nnames;
+}
+
+static void rule_src_note(csp_rt_t* st, int i)
+{
+    if ((i < 0) || (i >= MAX_INSTRS))
+	return;                     // an immediate `> expr`: no slot
+    if (i >= rule_src_cap) {
+	int ncap = i + 256;
+	void* p = realloc(rule_src, (size_t)ncap * sizeof(*rule_src));
+	if (p == NULL)
+	    return;
+	rule_src = p;
+	memset(&rule_src[rule_src_cap], 0,
+	       (size_t)(ncap - rule_src_cap) * sizeof(*rule_src));
+	rule_src_cap = ncap;
+    }
+    rule_src[i].line = (uint16_t)st->ps.line;
+    rule_src[i].file = (uint8_t)src_name(csp_src_file);
+}
+
+int csp_rule_src(index_t ip, const char** file)
+{
+    if (((int)ip >= rule_src_cap) || (rule_src[ip].line == 0)) {
+	*file = "";
+	return 0;
+    }
+    *file = rule_src[ip].file ? src_names[rule_src[ip].file - 1] : "";
+    return rule_src[ip].line;
+}
+#endif
+
 NOINLINE bool_t asm_RULE(csp_rt_t* st, int* pos, reg_t cnd, int nxt)
 {
-    csp_instr_t* ip = alloc_instr_ptr(st, pos, OP_RULE);
+    int i = -1;
+    csp_instr_t* ip = alloc_instr_ptr(st, &i, OP_RULE);
+    if (pos != NULL)
+	*pos = i;
+#if defined(CSP_HAVE_FIRED)
+    if (ip != NULL)
+	rule_src_note(st, i);
+#endif
     if (ip != NULL) {
 	csp_instr_set_r_cnd(ip, cnd);
 	csp_instr_set_r_nxt(ip, nxt);

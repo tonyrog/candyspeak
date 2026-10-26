@@ -286,6 +286,75 @@ and in `examples/`), **run** / **pause** / **step**, and the **tick** (10, 25,
 paused, values from widgets are held, and one **step** commits all of them in
 the same cycle.
 
+After those come what is shown:
+
+* **trace:** hide or show.
+* **code:** hide, ladder or code.
+* **theme:** dark or light.
+
+Both views start hidden. The choices are kept when you pick another program.
+Light mode is the dark panel inverted and turned back to its own hues, on a
+pale blue page. One filter on the root reaches every inline colour, the
+canvases included.
+
+The devices are on the left, the code view to their right, and the trace under
+both. A long rung scrolls inside the code view's column.
+
+## The code view
+
+To the right of the devices are the program's rules, in two renderings that
+you pick with **ladder** or **code** in the bar:
+
+* **ladder** draws each guard Sternol style. An AND runs horizontally, as
+  contacts in series. An OR stacks its branches vertically between two rails.
+  The assignments form the coil at the end of the rung. An unguarded
+  `X = <condition>` is drawn as a classic ladder line, with the condition as
+  contacts and `X` alone as the coil.
+* **code** is candyspeak, printed back from the parse tree. Comments and the
+  original layout are therefore gone.
+
+What the colours mean:
+
+* **Green contact:** the condition holds in the current state. Setting an
+  input lights what it enables at once, before the step that acts on it.
+* **Dashed contact:** the panel cannot know the value from the dump. This
+  covers `elapsed()`, `timeout()`, buffer bytes and calls.
+* **Filled coil:** csp reports that the rule fired in the last cycle. For an
+  `X = <condition>` rung, it means that `X` is on.
+* **Outlined coil:** the rule fires on the next step.
+* **Faded row:** the row sits in a block that is not active. A rule outside
+  every block counts as `#in INIT NORMAL`, as in csp.
+
+Click a contact that names a one-bit signal to flip that signal, just as its
+switch would.
+
+How it works:
+
+* **Fired rules come from csp.** csp started with `--fired` prints
+  `{fired,Cycle,[{Object,File,Line},...]}.` after the state dump, whenever the
+  set of rules that fired changes. `Object` is `""` for the program itself and
+  the instance name for a module's rule, which is one piece of code run once
+  per object. The rule is named by where it is written, because instance lines
+  add binding rules of their own that no source line spells out. A coil stays
+  lit for 600 ms after it last fired, so a one-cycle `timeout` rule can be
+  seen.
+* **Contacts are worked out in the panel** by `candyspeak_eval`, over the
+  dumped values. A `#local` is evaluated from its formula. A `#param` is taken
+  at its declared value, so a param patched at run time is not seen.
+
+Each view starts with the values that have no widget of their own: the
+variables, and the `#local`s (in italics, worked out by the panel).
+
+A program with `#module` gets **tabs**: `main`, then one tab per object. An
+object's tab shows its bindings (`#Add a1 Cin=a0.Cout ...`), its values, and
+its module's rules, evaluated over that object's values (`a1.A` is read as
+`A`). The coils light per object, from the `Object` that `--fired`
+reports.
+
+A declaration inside a `#module` becomes one widget per object, named as csp
+dumps it. The Pixel module in `cpx_m.csp` gives ten pixels, `p0.P` to `p9.P`.
+Before this change it gave a single pixel `P` that nothing ever wrote.
+
 ## Notes and known gaps
 
 * **The look is one map per widget.** Every key in the tables above is read

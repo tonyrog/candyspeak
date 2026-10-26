@@ -137,11 +137,22 @@ render(Ws, Where, File) ->
 %% The whole derivation. A declaration's direction gives the widget, and an
 %% `#annotate panel <target> kind=...' overrides it -- presentation is not in the
 %% language and must not be, so it is said next to the declaration instead.
+%%
+%% A declaration inside a #module is a widget PER OBJECT, named as csp dumps it:
+%% cpx_m.csp's `#analog P out 9:0' in Pixel is ten pixels p0.P .. p9.P. Taken
+%% from the template it was one pixel called P that nothing ever wrote.
 widgets(Ast) ->
     Ann = annotations(Ast),
-    Bufs = buffers(Ast),
-    [apply_ann(W, Ann)
-     || W <- lists:foldr(fun(D, Acc) -> collect(D, Acc, Bufs) end, [], Ast)].
+    {Main, Mods} = csp_code:split(Ast),
+    Decls = fun(Ds) ->
+		    Bufs = buffers(Ds),
+		    lists:foldr(fun(D, Acc) -> collect(D, Acc, Bufs) end, [], Ds)
+	    end,
+    Objs = [{K, O ++ "." ++ N, W}
+	    || {object, _, {'WORD', _, M}, {'WORD', _, O}, _} <- Main,
+	       {ok, Body} <- [maps:find(M, Mods)],
+	       {K, N, W} <- Decls(Body)],
+    [apply_ann(W, Ann) || W <- Decls(Main) ++ Objs].
 
 %% Which buffer each #field looks into, and what that buffer is: its direction,
 %% and whether anything is wired to it. A field cannot be read from its own
@@ -721,6 +732,14 @@ build(Ws, Where, Root, File, [], Ast) ->
     wait_for_pick(Ws, Where);
 build(Ws, Where, Root, File, Widgets0, Ast) ->
     {SelId, _Sel, Run} = chooser(Ws, Root, File),
+    %% The devices on the left, the code view to their right, the trace under
+    %% both -- so the rule that lights and the lamp it drives are side by side.
+    %% A long rung scrolls inside its column rather than pushing the column
+    %% under the devices.
+    Main = box(Ws, Root, "display:flex;gap:48px;align-items:flex-start"),
+    Left = box(Ws, Main, "flex:none"),
+    Right = box(Ws, Main, "flex:1;min-width:0;overflow-x:auto"),
+    TraceBox = box(Ws, Root, ""),
     Ann = annotations(Ast),
     Rng = ranges(Ast),
     Looks = looks(Widgets0, Ann, Rng),
@@ -734,11 +753,11 @@ build(Ws, Where, Root, File, Widgets0, Ast) ->
     {Pixels, Rest0} = lists:partition(fun({K, _, _}) -> K =:= pixel end,
 				      Widgets),
     {Plots, Rest} = lists:partition(fun is_plot/1, Rest0),
-    RestNodes = [{Name, row(Ws, Root, W, maps:get(Name, Looks))}
+    RestNodes = [{Name, row(Ws, Left, W, maps:get(Name, Looks))}
 		 || W = {_, Name, _} <- Rest],
-    PixNodes = strip(Ws, Root, [{N, maps:get(N, Looks)}
+    PixNodes = strip(Ws, Left, [{N, maps:get(N, Looks)}
 				|| {_, N, _} <- Pixels]),
-    {Groups, PlotNodes} = plot_panels(Ws, Root,
+    {Groups, PlotNodes} = plot_panels(Ws, Left,
 				      plot_groups(Plots, Ann, Rng)),
     %% A plot channel still gets a TIME trace below. The XY picture says where
     %% the beam is and nothing about when it got there -- which of the two you
@@ -748,10 +767,15 @@ build(Ws, Where, Root, File, Widgets0, Ast) ->
     %% for a logic analyser underneath it.
     Ordered = [T || T = {_, N, _} <- Rest ++ Pixels ++ Plots,
 		    maps:get(trace, maps:get(N, Looks))],
-    {Ctx, Paint} = canvas(Ws, Root, [maps:get(N, Looks)
-				     || {_, N, _} <- Ordered]),
+    {Ctx, Paint} = canvas(Ws, TraceBox, [maps:get(N, Looks)
+					 || {_, N, _} <- Ordered]),
+    {ok, Src} = candyspeak:parse(File, [sources]),
+    Code = csp_code:new(Ws, Right, {Src, File}),
     {ok, Link} = csp_link:open(csp_exe(), [File]),
     erlang:send_after(period(), self(), tick),
+    S0 = #{trace_box => TraceBox, code => Code, run => Run},
+    S1 = lists:foldl(fun({K, V}, Si) -> view(Ws, Si, K, V) end, S0,
+		     maps:to_list(views())),
     loop(Ws, Link, #{nodes  => maps:from_list(RestNodes ++ PixNodes ++
 						  PlotNodes),
 		     traces => [{N, K, maps:get(N, Looks)} || {K, N, _} <- Ordered],
@@ -764,7 +788,62 @@ build(Ws, Where, Root, File, Widgets0, Ast) ->
 		     sel_id => SelId,
 		     run    => Run,
 		     mode   => run,
+		     code   => maps:get(code, S1),
+		     trace_box => TraceBox,
 		     where  => Where}).
+
+box(Ws, Parent, Style) ->
+    D = wse:createElement(Ws, "div"),
+    wse:setStyle(Ws, D, Style),
+    wse:appendChild(Ws, Parent, D),
+    D.
+
+%%% What is shown: the trace (hide | show), the code view (hide | ladder |
+%%% code) and the theme (dark | light). Both views start hidden. Kept per
+%%% browser session in the process dictionary, so picking another program
+%%% keeps them -- render/3 starts the page over, and the choice is the
+%%% person's, not the program's.
+-define(VIEWS, #{"trace" => "hide", "code" => "hide", "theme" => "dark"}).
+
+views() ->
+    case get(csp_panel_views) of
+	undefined -> ?VIEWS;
+	V         -> V
+    end.
+
+view(Ws, S, "trace", V) ->
+    style(Ws, maps:get(trace_box, S),
+	  case V of "show" -> "display:block"; _ -> "display:none" end),
+    view_done(Ws, S, "trace", V);
+view(Ws, S, "code", V) ->
+    S1 = S#{code := csp_code:control(Ws, maps:get(code, S), V)},
+    view_done(Ws, S1, "code", V);
+view(Ws, S, "theme", V) ->
+    theme(Ws, V),
+    view_done(Ws, S, "theme", V);
+view(_Ws, S, _K, _V) ->
+    S.
+
+view_done(Ws, S, K, V) ->
+    put(csp_panel_views, maps:put(K, V, views())),
+    [style(Ws, B, btn_style(Val =:= V))
+     || {{K1, Val}, B} <- maps:to_list(maps:get(views, maps:get(run, S))),
+	K1 =:= K],
+    S.
+
+%% LIGHT is the dark panel inverted and turned back to its own hues, on a pale
+%% blue page: every colour in the panel is written inline, and one filter on
+%% the root is the change that reaches all of them, the canvases included. A
+%% lamp stays red; a glow becomes a shade instead, which reads fine on white.
+theme(Ws, T) ->
+    {Bg, Filter} = case T of
+		       "light" -> {"#dce6f2", "invert(0.92) hue-rotate(180deg) saturate(1.8)"};
+		       _       -> {"#121212", "none"}
+		   end,
+    F = wse:newf(Ws, "bg,f",
+		 "{ document.body.style.background = bg;"
+		 "  document.getElementById('panel').style.filter = f; }"),
+    wse:cast(Ws, F, "call", [null, Bg, Filter]).
 
 %% Lists every .csp under demo/ and the tree's examples/, so another program is
 %% a pick rather than an edit of the page.
@@ -827,8 +906,21 @@ runstep(Ws, Bar) ->
     %% bar's events from a widget's by the id, and tags its payloads, so this
     %% needs no second wire. `period=25' lands in control/4 beside `mode=run'.
     tick_select(Ws, Wrap, Id),
+    %% What is shown, on the same event: `trace=show' and the like.
+    Group = fun(Label, Key, Vals) ->
+		    L = wse:createElement(Ws, "span"),
+		    wse:setStyle(Ws, L, "margin:0 6px 0 16px;color:#888;"
+				 "font:12px monospace"),
+		    wse:appendChild(Ws, L, wse:createTextNode(Ws, Label)),
+		    wse:appendChild(Ws, Wrap, L),
+		    [{{Key, V}, Mk(V, Key ++ "=" ++ V)} || V <- Vals]
+	    end,
+    Views = Group("trace", "trace", ["hide", "show"]) ++
+	Group("code", "code", ["hide", "ladder", "code"]) ++
+	Group("", "theme", ["dark", "light"]),
     wse:appendChild(Ws, Bar, Wrap),
-    #{event => Id, run => RunB, pause => PauseB, one => OneB}.
+    #{event => Id, run => RunB, pause => PauseB, one => OneB,
+      views => maps:from_list(Views)}.
 
 tick_select(Ws, Wrap, Id) ->
     Lbl = wse:createElement(Ws, "span"),
@@ -1446,6 +1538,10 @@ loop(Ws, Link, S) ->
     %% events apart from a widget's without reading the payload.
     RunId = maps:get(event, maps:get(run, S, #{event => undefined}),
 		     undefined),
+    CodeId = case maps:get(code, S, undefined) of
+		 undefined -> undefined;
+		 #{event := Ce} -> Ce
+	     end,
     receive
 	%% Another program was picked: drop this csp and rebuild from that file.
 	{notify, SelId, _Local, File} ->
@@ -1458,6 +1554,11 @@ loop(Ws, Link, S) ->
 	%% could not be mistaken for the button.
 	{notify, RunId, _Local, Tag} ->
 	    loop(Ws, Link, control(Ws, Link, S, Tag));
+
+	%% ladder / code, from the code view's own bar.
+	{notify, CodeId, _Local, Tag} ->
+	    loop(Ws, Link,
+		 S#{code := csp_code:control(Ws, maps:get(code, S), Tag)});
 
 	%% A switch was clicked. We do not track its state ourselves -- we
 	%% toggle against what csp last told us, so the button can never
@@ -1478,6 +1579,10 @@ loop(Ws, Link, S) ->
 	{csp_state, _N, Vals} ->
 	    loop(Ws, Link, update(Ws, S, Vals));
 
+	{csp_fired, _N, Rules} ->
+	    loop(Ws, Link,
+		 S#{code := csp_code:fired(Ws, maps:get(code, S), Rules)});
+
 	%% Draw on the TICK, not on the dump. csp only dumps what changed, so a
 	%% trace driven by dumps stops moving as soon as the program settles --
 	%% which is exactly when you are staring at it wondering why. Drawing
@@ -1486,7 +1591,7 @@ loop(Ws, Link, S) ->
 	%% program. Drawing still happens, so a held value stays visible as a
 	%% flat line rather than the trace freezing mid-air.
 	tick ->
-	    S1 = draw(Ws, S),
+	    S1 = (draw(Ws, S))#{code := csp_code:tick(Ws, maps:get(code, S))},
 	    case maps:get(mode, S, run) of
 		run  -> csp_link:tick(Link);
 		step -> ok
@@ -1521,6 +1626,9 @@ control(_Ws, Link, S, "step=1") ->
     S;
 %% A new tick takes effect on the NEXT one: the timer already in flight is left
 %% to arrive, so changing the rate cannot drop a tick or run two at once.
+control(Ws, _Link, S, "trace=" ++ V) -> view(Ws, S, "trace", V);
+control(Ws, _Link, S, "code=" ++ V)  -> view(Ws, S, "code", V);
+control(Ws, _Link, S, "theme=" ++ V) -> view(Ws, S, "theme", V);
 control(_Ws, _Link, S, "period=" ++ Ms) ->
     case string:to_integer(Ms) of
 	{N, _} when is_integer(N), N >= 5, N =< 10000 -> S#{period := N};
@@ -1543,6 +1651,7 @@ light_mode(Ws, S) ->
 flush() ->
     receive
 	{csp_state, _, _} -> flush();
+	{csp_fired, _, _} -> flush();
 	{csp_exit, _}     -> flush();
 	tick              -> flush()
     after 0 -> ok
@@ -1560,7 +1669,9 @@ update(Ws, S, Vals) ->
     Last = maps:get(last, S),
     paint(Ws, S, [{N, V} || {N, V} <- Vals,
 			    maps:get(N, Last, undefined) =/= V]),
-    S#{last := maps:merge(Last, maps:from_list(Vals))}.
+    Last1 = maps:merge(Last, maps:from_list(Vals)),
+    S#{last := Last1,
+       code := csp_code:refresh(Ws, maps:get(code, S, undefined), Last1)}.
 
 paint(Ws, S, Vals) ->
     Nodes = maps:get(nodes, S),

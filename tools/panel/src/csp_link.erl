@@ -1,7 +1,8 @@
 %%% Drives one csp process as an Erlang port.
 %%%
 %%% The owner receives {csp_state, Cycle, [{Name,Value}]} for every state dump
-%%% csp prints. Note that csp dumps ON CHANGE, not every cycle, so a trace must
+%%% csp prints, and {csp_fired, Cycle, [{Object, File, Line}]} whenever the set
+%%% of rules that fired changes (--fired; the code view lights them). Note that csp dumps ON CHANGE, not every cycle, so a trace must
 %%% hold its last value between dumps rather than expect one per tick.
 %%%
 %%% Ticking is ours to drive: /commit runs exactly one cycle and prints nothing
@@ -58,6 +59,7 @@ init(Owner, Exe, Files) ->
     %% back when that combination works.
     Port = open_port({spawn_executable, Exe},
 		     [{args, ["-i", "--no-eeprom", "-Q", "-Lerlang", "--delta",
+			      "--fired",
 			      "--can=vcan0", "--exit-on-eof" | Files]},
 		      exit_status, use_stdio, stderr_to_stdout,
 		      {line, 4096}]),
@@ -125,8 +127,12 @@ fmt(V) when is_list(V)    -> V.
 
 feed(Owner, [], Line) ->
     case string:find(Line, "{state,") of
-	nomatch -> [];
-	Rest    -> hold(Owner, [Rest])
+	nomatch ->
+	    case string:find(Line, "{fired,") of
+		nomatch -> [];
+		F       -> emit(Owner, F), []
+	    end;
+	Rest -> hold(Owner, [Rest])
     end;
 feed(Owner, Buf, Line) ->
     hold(Owner, [strip(Line) | Buf]).
@@ -145,6 +151,7 @@ emit(Owner, Text) ->
 	{ok, Toks, _} ->
 	    case erl_parse:parse_term(Toks) of
 		{ok, {state, N, Vals}} -> Owner ! {csp_state, N, flat(Vals)};
+		{ok, {fired, N, Rs}}   -> Owner ! {csp_fired, N, Rs};
 		_                      -> ok
 	    end;
 	_ -> ok

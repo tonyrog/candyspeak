@@ -48,6 +48,9 @@ typedef struct {
 extern void    csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta);
 extern void    csp_dump_tokens(FILE* f,token_t* tv, int n);
 extern void    csp_dump_state(FILE* f, csp_rt_t* st,csp_lang_t lang);
+#if defined(CSP_HAVE_FIRED)
+extern void    csp_dump_fired(FILE* f, csp_rt_t* st);
+#endif
 extern int     csp_dump_delta;   // --delta: dump only what changed since the last
 extern void    csp_dump_result(FILE* f,csp_rt_t* st,index_t x,csp_lang_t lang);
 

@@ -610,6 +610,61 @@ int csp_dump_object(FILE* out,csp_rt_t* st,int m,int fo,csp_lang_t lang)
     return 1;
 }
 
+#if defined(CSP_HAVE_FIRED)
+// --fired: the rules whose guard held in the cycle just run, and only when the
+// set differs from the last one printed -- the same delta the state dump keeps.
+// A rule in an #in block that was skipped did not fire; neither did a disabled
+// one. Each as {Object, File, Line}, the object "" for the program itself:
+//
+//   {fired,12,[{"","dl1200.csp",59},{"p0","cpx_m.csp",33}]}.
+//
+// By WHERE it was written rather than by number, because a module's rule is one
+// rule in the numbering and fires once per instance, and an instance line adds
+// rules of its own (its bindings) that no source line spells out as one.
+void csp_dump_fired(FILE* f, csp_rt_t* st)
+{
+    static char*  last;
+    static size_t last_len;
+    char*  buf = NULL;
+    size_t len = 0;
+    FILE*  m;
+    index_t i;
+    int q, first = 1;
+
+    if (st->fired_ip == NULL)
+	return;
+    if ((m = open_memstream(&buf, &len)) == NULL)
+	return;
+    for (q = 0; q <= (int)st->fired_nq; q++) {
+	for (i = 0; i < st->ps.nn; i = instr_next(st, i)) {
+	    const char* file;
+	    int line;
+	    if (!bitset_tst(st->fired_ip, (index_t)(q * st->ps.nn + i)) ||
+		!csp_is_rule(st, i))
+		continue;
+	    line = csp_rule_src(i, &file);
+	    if (q == 0)
+		fprintf(m, "%s{\"\",", first ? "" : ",");
+	    else {
+		index_t obj = csp_object_decl(st, q);
+		fprintf(m, "%s{\"%.*s\",", first ? "" : ",", DNAME(st, obj));
+	    }
+	    fprintf(m, "\"%s\",%d}", file, line);
+	    first = 0;
+	}
+    }
+    fclose(m);
+    if ((last == NULL) || (len != last_len) || memcmp(buf, last, len)) {
+	fprintf(f, "{fired,%d,[%s]}.\n", (int)st->cycle, buf);
+	free(last);
+	last = buf;
+	last_len = len;
+    }
+    else
+	free(buf);
+}
+#endif
+
 void csp_dump_state(FILE* f, csp_rt_t* st, csp_lang_t lang)
 {
     int i, q;

@@ -249,6 +249,9 @@ static tick_t time_tick(void)
 // clock is a deterministic counter advanced by the main loop (>=1 tick/cycle,
 // jumping wait_ms when waiting for a timer) instead of the wall clock.
 int      virtual_time = 0;
+#if defined(CSP_HAVE_FIRED)
+static int fired = 0;    // --fired
+#endif
 // --settle: the virtual clock does not jump while the program is still
 // changing, as the real one does not sleep then. Off by default: a program
 // that never settles (a free-running counter) would never reach its timers.
@@ -1115,6 +1118,9 @@ int parse_file(csp_rt_t* st, const char* name, FILE* fin)
 #if defined(CSP_HAVE_IMPORT)
     imp_cur_file = name;           // csp_import_run puts the importer's back
 #endif
+#if defined(CSP_HAVE_FIRED)
+    csp_src_file = name;           // ...and this, for --fired
+#endif
     st->ps.line = 1;
     while(fgets(buf, (int)sizeof(buf), fin)) {
 	size_t n = strlen(buf);
@@ -1414,6 +1420,9 @@ int csp_import_run(csp_rt_t* st)
     }
     st->ps.line  = line;
     imp_cur_file = outer;
+#if defined(CSP_HAVE_FIRED)
+    csp_src_file = outer;
+#endif
     return r;
 }
 #endif
@@ -1509,6 +1518,9 @@ static struct option long_options[] = {
     {"root",         required_argument, 0,  1016},
     {"deps",         required_argument, 0,  1017},
     {"delta",        no_argument,       0,  1018},
+#if defined(CSP_HAVE_FIRED)
+    {"fired",        no_argument,       0,  1019},
+#endif
     {0,              0,                 0,  0 }
 };
 
@@ -1564,6 +1576,9 @@ void usage(const char* prog)
     fprintf(stderr, "                       beside csp); CSP_ROOTS\n");
     fprintf(stderr, "                       holds more as name=dir:name=dir\n");
     fprintf(stderr, "      --delta          -Q dumps only what changed since the last dump\n");
+#if defined(CSP_HAVE_FIRED)
+    fprintf(stderr, "      --fired          -Lerlang -Q also prints {fired,Cycle,[Rule...]}.\n");
+#endif
     fprintf(stderr, "      --deps=FILE      Write every file loaded, imports included, as a\n");
     fprintf(stderr, "                       make rule for -O's file, each after what it imports\n");
     fprintf(stderr, "      --virtual-time   Jump the clock to the next timer instead of sleeping\n");
@@ -2189,6 +2204,11 @@ int main(int argc, char** argv)
 	case 1018:   // --delta: -Q dumps only what changed, see csp_dump_delta
 	    csp_dump_delta = 1;
 	    break;
+#if defined(CSP_HAVE_FIRED)
+	case 1019:   // --fired: -Q also says which rules fired, see csp_dump_fired
+	    fired = 1;
+	    break;
+#endif
 	case 1010:   // --flash=FILE: back the simulated flash with a file
 	    csp_flash_host_file(optarg);
 	    break;
@@ -2408,6 +2428,9 @@ int main(int argc, char** argv)
 #endif
 
     csp_rt_init(&state, reactive, CSP_CSTATE);
+#if defined(CSP_HAVE_FIRED)
+    state.fired_on = (uint8_t)fired;
+#endif
     // -m shrinks the usable code-memory budget to exercise the out-of-memory
     // path. Clamp to what csp_mem_init left for the pool, NOT to mem_size: the
     // line buffer sits in the gap between the two, and raising mem_limit back to
@@ -2824,6 +2847,10 @@ loop:
 	if (debug_trace)
 	    csp_dump_state(state_file, &state, lang);
     }
+#if defined(CSP_HAVE_FIRED)
+    if (debug_trace && (lang == ERLANG))
+	csp_dump_fired(state_file, &state);
+#endif
 
     // Advance time. Virtual: jump the clock (>=1 tick/cycle, wait_ms when a
     // timer is pending) instead of sleeping. Real: sleep until the next timer.

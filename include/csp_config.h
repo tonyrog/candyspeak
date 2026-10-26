@@ -117,6 +117,13 @@ typedef uint16_t csp_gate_mask_t;
 #define MAX_IN_STATES 8   // max states in one `#in A B C ...` OR-list
 #endif
 
+// Which rules fired this cycle, for a tool watching the program -- the panel's
+// code view. Host only: a bit per instruction and a test in every OP_RULE.
+#if !defined(CSP_HAVE_FIRED) && !defined(CSP_BOARD) && !defined(ARDUINO) && \
+    !defined(CSP_EXEC_ONLY)
+#define CSP_HAVE_FIRED 1
+#endif
+
 #ifndef REACTIVE_DEFAULT
 #define REACTIVE_DEFAULT 0
 #endif

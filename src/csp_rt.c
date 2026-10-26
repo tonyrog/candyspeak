@@ -1722,8 +1722,13 @@ NOINLINE int eval_op(csp_rt_t* st, int n, const csp_instr_t* ci, int* leave)
 	// false-guard body is exactly the skip a disabled rule needs, so
 	// disabling costs nothing but the test.
 	if (((st->dis_ip == NULL) || !bitset_tst(st->dis_ip, n)) &&
-	    st->es.reg[csp_instr_get_r_cnd(ci)].i)
+	    st->es.reg[csp_instr_get_r_cnd(ci)].i) {
+#if defined(CSP_HAVE_FIRED)
+	    if ((st->fired_ip != NULL) && (st->cur <= st->fired_nq))
+		bitset_set(st->fired_ip, (index_t)(st->cur * st->ps.nn + n));
+#endif
 	    break;
+	}
 	return n+csp_instr_get_r_nxt(ci);
     // nxt == 0 IS AN UNCLOSED BLOCK. The distance is patched at `#end`, and at
     // the REPL the block is open for as long as it takes to type the rules --
@@ -2190,6 +2195,12 @@ index_t csp_cycle(csp_rt_t* st)
     // the driver reports it.
     if (!st->started)
 	return BAD_INDEX;
+#if defined(CSP_HAVE_FIRED)
+    if (st->fired_ip != NULL)
+	memset(st->fired_ip, 0,
+	       (size_t)BITSET_GROUPS(st->ps.nn * (st->fired_nq + 1)) *
+	       sizeof(set_group_t));
+#endif
 
     // Refresh rate, over a one-second window. Here rather than in a driver so
     // the host and the board measure the same thing the same way. csp_time_ms is
@@ -5833,6 +5844,20 @@ int csp_rebuild(csp_rt_t* st)
     // than a complete one nobody uses.
     if (build_dis_ip(st) < 0)
 	r = -1;
+#if defined(CSP_HAVE_FIRED)
+    st->fired_ip = NULL;
+    st->fired_nq = st->ps.nq;
+    if (st->fired_on && (st->ps.nn > 0)) {
+	size_t sz = (size_t)BITSET_GROUPS(st->ps.nn * (st->ps.nq + 1)) *
+	    sizeof(set_group_t);
+	if ((st->fired_ip = (set_group_t*)csp_mid_alloc(st, sz)) == NULL) {
+	    csp_set_error(st, ERR_OUT_OF_MEMORY);
+	    r = -1;
+	}
+	else
+	    memset(st->fired_ip, 0, sz);
+    }
+#endif
     // Everything emitted so far is now covered: clear both staleness signals.
     st->graph_rules = st->n_rule_emit;
     st->edited = 0;

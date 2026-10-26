@@ -2626,6 +2626,15 @@ typedef struct _csp_rt_t
     // test in the hot loop.
     bitset_decl(dis_rule, MAX_DIS_RULES);
     set_group_t* dis_ip;       // ps.nn bits, or NULL when nothing is disabled
+#if defined(CSP_HAVE_FIRED)
+    // The OP_RULE ips whose guard held this cycle, PER OBJECT: bit
+    // cur * ps.nn + ip, so a module's rules -- one copy of code, run once per
+    // instance -- say which instance fired them. Only while fired_on
+    // (--fired): allocated by csp_rebuild, cleared by csp_cycle.
+    set_group_t* fired_ip;
+    index_t  fired_nq;           // objects the table was sized for
+    uint8_t  fired_on;
+#endif
     index_t  n_rule_no;        // rules seen by the last numbering walk
     uint32_t cycle;
     // Refresh rate, measured not estimated: cycles completed per second over the
@@ -3230,6 +3239,14 @@ extern int  csp_str_eq_ro(csp_rt_t* st, sindex_t pos, rostring_t s, int n);
 // OP_RULE count. Walks the stream, so it is always current -- st->n_rule_no is
 // only as fresh as the last csp_rebuild.
 extern index_t csp_n_rules(csp_rt_t* st);
+#if defined(CSP_HAVE_FIRED)
+// Where the rule whose OP_RULE sits at ip was written: its line, 0 when not
+// known (a rule from a ROM image, or typed at the prompt), and the file.
+// Recorded by the compiler from csp_src_file, which the host's file reader
+// sets. Host only, beside the program rather than in it.
+extern const char* csp_src_file;
+extern int csp_rule_src(index_t ip, const char** file);
+#endif
 // An OP_RULE that is a rule, not a #local's formula or an instance's binding:
 // what #disable and the listing number.
 extern int csp_is_rule(csp_rt_t* st, index_t i);

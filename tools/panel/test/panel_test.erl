@@ -107,6 +107,7 @@ run() ->
     varp_gen_check(),
     varp_model_check(),
     varp_prop_check(),
+    code_view_check(),
 
     %% 6g. #annotate picks the widget where the declaration cannot. Nothing in
     %%     `#digital NightButton in 6' says momentary or latching, and it should
@@ -687,6 +688,95 @@ varp_prop_check() ->
     expect("one reach at most",
 	   E4 =:= {error, {varp_annotate, "11", "reach", more_than_one}}, E4).
 
+%% The code view: rules numbered as csp numbers them, conditions evaluated
+%% from the dump, and csp's own word on which rules fired.
+code_view_check() ->
+    %% A #timer with a #param period compiles to a rule at its declaration,
+    %% so cpx_rotate's eleven written rules are thirteen (csp -P agrees).
+    {ok, Rot} = candyspeak:parse("../../examples/cpx_rotate.csp"),
+    Nos = [N || #{no := N} <- csp_code:rules(Rot)],
+    expect("rules numbered as csp numbers them", Nos =:= lists:seq(1, 13), Nos),
+    {ok, Add} = candyspeak:parse("../../examples/adder3.csp"),
+    Tabs = csp_code:tabs(Add),
+    expect("a tab per object, after main, each with its module's rules",
+	   [maps:get(name, T) || T <- Tabs] =:= ["main", "a0", "a1", "a2"] andalso
+	   length(maps:get(rules, lists:nth(2, Tabs))) =:= 2 andalso
+	   length([R || R = #{} <- maps:get(rules, hd(Tabs))]) =:= 3, Tabs),
+    %% A module's analog is a widget per object, named as csp dumps it.
+    {ok, Cpx} = candyspeak:parse("../../examples/cpx_m.csp"),
+    Pix = [N || {pixel, N, _} <- csp_panel:widgets(Cpx)],
+    expect("a pixel declared in a module is one per object",
+	   Pix =:= ["p" ++ integer_to_list(I) ++ ".P" || I <- lists:seq(0, 9)],
+	   Pix),
+
+    Src = "#digital Go in 4\n#variable Phase:2 unsigned = 0\n"
+	"#variable Red:1 = 0\n#variable S:8 = 0\n#timer T 100\n"
+	"#local Odd:1 = Phase == 1\n"
+	"Phase = (Phase + 1) % 3 ? Go\n"
+	"Red = Phase == 0\n"
+	"Red = 0 ? Odd\n",
+    F = "/tmp/csp_code_check.csp",
+    ok = file:write_file(F, Src),
+    {ok, A} = candyspeak:parse(F),
+    E = candyspeak_eval:env(A),
+    Ev = fun(Txt, Vals) ->
+		 {ok, [{define, _, _, X}]} = candyspeak_parse:parse(
+					       element(2, candyspeak_scan:string(
+							    "#define P_ " ++ Txt ++ "\n"))),
+		 candyspeak_eval:eval(X, Vals, E)
+	 end,
+    expect("a local is its formula over the dump",
+	   Ev("Odd", #{"Phase" => 1}) =:= 1 andalso
+	   Ev("Odd", #{"Phase" => 2}) =:= 0, nomatch),
+    expect("a signed variable reads sign-extended",
+	   Ev("S < 0", #{"S" => 16#FF}) =:= 1, Ev("S < 0", #{"S" => 16#FF})),
+    expect("false && unknown is false, true && unknown unknown",
+	   Ev("!Go && elapsed(T) > 5", #{"Go" => 1}) =:= 0 andalso
+	   Ev("Go && elapsed(T) > 5", #{"Go" => 1}) =:= unknown, nomatch),
+
+    %% --fired, through csp_link. Paused with Go set: the first step brings Go
+    %% in (measured: rules see a pin set at the prompt one step later), the
+    %% second fires Phase's rule (line 7) and `Red = Phase == 0' (8);
+    %% `Red = 0 ? Odd' (9) does not, Phase was 0.
+    flush(),
+    {ok, L} = csp_link:open(csp_exe(), [F]), track(L),
+    timer:sleep(200),
+    csp_link:pause(L),
+    timer:sleep(100),
+    csp_link:set(L, "Go", 1),
+    timer:sleep(100),
+    flush(),
+    csp_link:step(L),
+    timer:sleep(200),
+    csp_link:step(L),
+    timer:sleep(300),
+    Fired = last_fired(undefined),
+    csp_link:close(L),
+    timer:sleep(250),
+    expect("csp says which rules fired, by file and line",
+	   Fired =:= [{"", F, 7}, {"", F, 8}], Fired),
+
+    %% A module's rule fires once per instance, and says which.
+    flush(),
+    {ok, L2} = csp_link:open(csp_exe(), ["../../examples/adder3.csp"]),
+    track(L2),
+    timer:sleep(300),
+    csp_link:tick(L2),
+    timer:sleep(300),
+    Fired2 = last_fired([]),
+    csp_link:close(L2),
+    timer:sleep(250),
+    expect("a module's rule is reported per object",
+	   lists:member({"a1", "../../examples/adder3.csp", 8}, Fired2) andalso
+	   lists:member({"", "../../examples/adder3.csp", 23}, Fired2), Fired2).
+
+last_fired(Acc) ->
+    receive
+	{csp_fired, _, Rs} -> last_fired(Rs);
+	{csp_state, _, _}  -> last_fired(Acc)
+    after 0 -> Acc
+    end.
+
 varp_gen_check() ->
     F = "demo/home.csp",
     case filelib:is_regular(F) of
@@ -938,6 +1028,7 @@ merge_all(Acc) ->
 flush() ->
     receive
 	{csp_state, _, _} -> flush();
+	{csp_fired, _, _} -> flush();
 	{csp_exit, _}     -> flush()
     after 0 -> ok
     end.
