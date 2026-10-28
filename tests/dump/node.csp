@@ -1,0 +1,15 @@
+// /dump check: a module with two objects, a timer, a negative and an
+// unsigned value -- what a host has to read back out of a node.
+#module Cnt
+  #variable N:8 unsigned = 0
+  #variable Step = 1
+  N = N + Step
+#end
+
+#timer    T 100 = 1
+#variable Neg = -5
+#variable Big:32 unsigned = 0xFFFFFFF0
+#variable K:4 = 3
+#Cnt a
+#Cnt b Step = 2
+K = K + 1 ? timeout(T)

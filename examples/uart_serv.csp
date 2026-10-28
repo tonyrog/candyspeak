@@ -1,0 +1,7 @@
+// The console on a second serial line. On a host:
+//     csp --uart=pty examples/uart_serv.csp      (prints uart 0: /dev/pts/N)
+// then minicom -D /dev/pts/N or the panel's target field.
+#buffer Ser:160 inout uart 0
+#buffer Rp:160 inout repl
+#route Ser Rp
+#route Rp Ser
