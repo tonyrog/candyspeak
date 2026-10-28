@@ -513,6 +513,8 @@ extern rochar s_cmd_onewire[8] RODATA;
 #define ros_cmd_onewire ((rostring_t) s_cmd_onewire)
 extern rochar s_cmd_images[7] RODATA;
 #define ros_cmd_images ((rostring_t) s_cmd_images)
+extern rochar s_cmd_dump[5] RODATA;
+#define ros_cmd_dump ((rostring_t) s_cmd_dump)
 extern rochar s_cmd_pause[6] RODATA;
 #define ros_cmd_pause ((rostring_t) s_cmd_pause)
 extern rochar s_cmd_step[5] RODATA;
@@ -559,6 +561,8 @@ extern rochar s_h_onewire[57] RODATA;
 #define ros_h_onewire ((rostring_t) s_h_onewire)
 extern rochar s_h_images[42] RODATA;
 #define ros_h_images ((rostring_t) s_h_images)
+extern rochar s_h_dump[64] RODATA;
+#define ros_h_dump ((rostring_t) s_h_dump)
 extern rochar s_h_upgrade[69] RODATA;
 #define ros_h_upgrade ((rostring_t) s_h_upgrade)
 extern rochar s_h_pause[30] RODATA;

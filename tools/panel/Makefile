@@ -1,13 +1,15 @@
 # The panel needs three trees on the code path: candyspeak's own ebin/ (the
 # parser and candyspeak_varp, built by utils/Makefile), wse (the remote DOM)
-# and this. WSE defaults to ~/erlang/wse.
+# and this. WSE defaults to ~/erlang/wse. uart is for a node on a serial line,
+# and only then.
 
 WSE   ?= $(HOME)/erlang/wse
+UART  ?= $(HOME)/erlang/uart
 ROOT   = ../..
 
 ERLC   = erlc
 EBIN   = ebin
-PA     = -pa $(EBIN) -pa $(ROOT)/ebin -pa $(WSE)/ebin
+PA     = -pa $(EBIN) -pa $(ROOT)/ebin -pa $(WSE)/ebin -pa $(UART)/ebin
 
 SRC    = $(wildcard src/*.erl)
 BEAM   = $(SRC:src/%.erl=$(EBIN)/%.beam)

@@ -286,6 +286,46 @@ and in `examples/`), **run** / **pause** / **step**, and the **tick** (10, 25,
 paused, values from widgets are held, and one **step** commits all of them and
 runs one cycle that sees them (csp_link sends `/commit` before `/step`).
 
+Between them is the **target**: what the panel is connected to. It is read
+when you press Enter, and the widgets and the code view stay as they are.
+
+| Target | Means |
+|---|---|
+| empty, `local` | a csp of the panel's own, running the chosen file, on `vcan0` |
+| `can0` | the same, on that CAN interface |
+| `host:port` | a node's console on tcp |
+| `/dev/ttyUSB0[@baud]` | a node's console on a serial line, 115200 if unsaid; a pattern such as `/dev/serial/by-id/usb-*` works if it matches one device |
+| `can0 to=0x601 from=0x581` | a node's console on CAN: the panel sends on `to`, the node answers on `from`. The interface is one the can application has (`panel.config`) |
+
+Flags follow, separated by spaces:
+
+* `rom`, `patch`, `eeprom`: the program without a patch, with the one running
+  (`/dump patch`), or with the one stored (`/dump eeprom`). A node is read
+  with `patch` unless told otherwise. A csp of the panel's own compiles its
+  file either way, and with `eeprom` it also loads the store.
+* `image=A`: read a node's program from that flash slot, not from the image it
+  runs.
+* `frame=N` (CAN): bytes in each frame the panel sends, 1 to 8, default 4.
+  `gap=MS` (CAN): the pause between them, default 20. There is no ack and no
+  resend. A node relays one frame a cycle, has no receive queue, and a relay
+  written as rules (`examples/relay`) moves 4 bytes per assignment.
+
+The node end of CAN is the relay in `examples/relay/node.csp` with `can`
+buffers in place of `udp`: `#buffer Rx:4 in can 0x601` and
+`#buffer Tx:4 out can 0x581`. It moves 4 bytes per cycle. On the host, at
+about ten cycles a second, that is 40 bytes a second: a `/dump rom` of 760
+bytes takes 20 s, a state 2 s. The console ring (`CSP_CONSOLE_BYTES`, 256 on
+the host) has to hold a whole reply, or what does not fit is lost.
+
+A node has no dump stream. The panel reads its program once (`/dump rom`, then
+the patch), and on every tick it asks `/dump state` and names the values from
+that program. Run, pause, step and the widgets send the same commands as they
+do to a csp of the panel's own. Connecting does not pause a node, even when
+`panel.config` says `{mode, pause}`. Closing lets go of a node; it is never
+sent `/quit`. A node does not say which rules fired, so the code view's
+`fired` colour stays dark. The status box beside the clock says what is
+connected, or why not.
+
 After those come what is shown:
 
 * **trace:** hide or show.

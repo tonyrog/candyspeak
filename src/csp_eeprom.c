@@ -150,8 +150,11 @@ int csp_eeprom_clear(csp_rt_t* st)
     return 0;
 }
 
-// Save state to eeprom (binary format)
-int csp_eeprom_save(csp_rt_t* st)
+// The store, written to `put': the header, the settings, the RAM patch's
+// declarations and instructions, and the #disable set. /save sends it to the
+// eeprom; /dump patch to the console, so a host sees what a node RUNS before it
+// is saved -- the same bytes /save would write.
+int csp_eeprom_emit(csp_rt_t* st, int (*put)(const void* buf, size_t len))
 {
     eeprom_header_t hdr;
     // The RAM base, read once -- see csp_eeprom_load. Every use below was a
@@ -162,9 +165,6 @@ int csp_eeprom_save(csp_rt_t* st)
     uint16_t ram_nn   = st->ps.nn   - base_nn;
     uint16_t ram_strp = 0;   // no separate string area any more
     // (No state block: states are declarations and are saved with them.)
-
-    if (csp_eeprom_open_write() < 0)
-	goto error;
 
     // memset first so any incidental struct padding is a fixed value the crc_hdr
     // fold (and the load-side re-fold) agree on.
@@ -181,15 +181,14 @@ int csp_eeprom_save(csp_rt_t* st)
     hdr.crc_dis = csp_crc16(0xFFFF, st->dis_rule, DIS_BYTES(hdr.n_dis), 0);
     hdr.crc_hdr = csp_crc16(0xFFFF, &hdr, sizeof(hdr) - sizeof(uint16_t), 0);
 
-    if (csp_eeprom_write(&hdr, sizeof(hdr)) < 0)
-	goto error;
+    if (put(&hdr, sizeof(hdr)) < 0)
+	return -1;
     // The settings payload FIRST, at a fixed offset immediately behind the
     // header. Reaching it never involves parsing anything of variable length, so
     // a patch that is corrupt, half-written or built by a firmware that is no
     // longer flashed does not stand between you and the calibration.
-    if (st->set_used &&
-	csp_eeprom_write(st->settings, st->set_used) < 0)
-	goto error;
+    if (st->set_used && put(st->settings, st->set_used) < 0)
+	return -1;
     // Only the RAM patch area (ram_*[0..delta)); ROM stays in flash.
     // (No string block. The names went out with the INSTRUCTIONS, as OP_SEGMENT
     // runs -- one block write instead of a second area to keep in step.)
@@ -200,33 +199,38 @@ int csp_eeprom_save(csp_rt_t* st)
     {
 	uint16_t i;
 	for (i = 0; i < ram_nd; i++)
-	    if (csp_eeprom_write(ram_decl_at(st, base_nd + i),
-				 sizeof(csp_decl_t)) < 0)
-		goto error;
+	    if (put(ram_decl_at(st, base_nd + i), sizeof(csp_decl_t)) < 0)
+		return -1;
     }
-    if (csp_eeprom_write(st->ram_instr + (base_nn - st->rom_nn), sizeof(csp_instr_t) * ram_nn) < 0)
-	goto error;
+    if (put(st->ram_instr + (base_nn - st->rom_nn),
+	    sizeof(csp_instr_t) * ram_nn) < 0)
+	return -1;
     // (No state block -- ram_ns is 0. States went out with the declarations.)
     // The #disable set, last: one bitset over rule numbers covering ROM and RAM
     // alike (numbers run 1..r_rom through the ROM rules and on into the RAM
     // ones), so there is nothing to split by segment.
-    if (hdr.n_dis &&
-	csp_eeprom_write(st->dis_rule, DIS_BYTES(hdr.n_dis)) < 0)
-	goto error;
+    if (hdr.n_dis && put(st->dis_rule, DIS_BYTES(hdr.n_dis)) < 0)
+	return -1;
+    return 0;
+}
 
+// Save state to eeprom (binary format)
+int csp_eeprom_save(csp_rt_t* st)
+{
+    if ((csp_eeprom_open_write() < 0) ||
+	(csp_eeprom_emit(st, csp_eeprom_write) < 0)) {
+	csp_eeprom_close();
+	csp_set_error(st, ERR_CANNOT_SAVE);
+	return -1;
+    }
     csp_eeprom_close();
     // Everything in the RAM patch is now also in eeprom -- /list tags it E from
     // here on. Set only after the last write succeeded: a save that failed
     // half-way must not claim coverage it does not have.
-    st->ee_nd = ram_nd;
-    st->ee_nn = ram_nn;
+    st->ee_nd = st->ps.nd - CSP_BASE_ND(st);
+    st->ee_nn = st->ps.nn - CSP_BASE_NN(st);
     st->set_dirty = 0;
     return 0;
-
-error:
-    csp_eeprom_close();
-    csp_set_error(st, ERR_CANNOT_SAVE);
-    return -1;
 }
 
 // The SETTINGS only, read before anything else exists.
@@ -518,6 +522,28 @@ error:
 }
 
 // Get save size in bytes (RAM patch area only)
+// How many bytes the store holds, from its own header: what /dump eeprom
+// reads out. Only the header is checked -- magic and crc_hdr, so the counts
+// can be believed -- and not the version: an old store is exactly the kind a
+// host may want to look at.
+int csp_eeprom_stored(void)
+{
+    eeprom_header_t hdr;
+    int n = -1;
+
+    if (csp_eeprom_open_read() < 0)
+	return -1;
+    if ((csp_eeprom_read(&hdr, sizeof(hdr)) == 0) &&
+	(ro_memcmp(hdr.magic, EEPROM_MAGIC, 4) == 0) &&
+	(csp_crc16(0xFFFF, &hdr, sizeof(hdr) - sizeof(uint16_t), 0) == hdr.crc_hdr))
+	n = (int)(sizeof(hdr) + hdr.set_bytes +
+		  sizeof(csp_decl_t) * hdr.ram.n_decl +
+		  sizeof(csp_instr_t) * hdr.ram.n_instr +
+		  (hdr.n_dis ? DIS_BYTES(hdr.n_dis) : 0));
+    csp_eeprom_close();
+    return n;
+}
+
 int csp_eeprom_size(csp_rt_t* st)
 {
     index_t nr = csp_n_rules(st);

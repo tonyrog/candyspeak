@@ -3707,6 +3707,9 @@ extern int csp_eeprom_load(csp_rt_t* st);
 // no preference and csp_eeprom_load reports the real problem later.
 extern int csp_eeprom_peek(csp_rt_t* st);
 extern int csp_eeprom_size(csp_rt_t* st);   // bytes THIS program needs to save
+extern int csp_eeprom_emit(csp_rt_t* st,
+			   int (*put)(const void* buf, size_t len));
+extern int csp_eeprom_stored(void);         // bytes the store holds now, or -1
 extern int csp_eeprom_clear(csp_rt_t* st);
 
 // stack check/debug

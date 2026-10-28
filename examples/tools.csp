@@ -1,7 +1,7 @@
 
 #digital Button1 in pulldown 1
 #annotate panel Button1   kind=push
-#annotate panel Button1   x=1 y=2 text="Deep"
+#annotate panel Button1   ext="Deep"  // x=1 y=2 
 #annotate varp  Button1   hidden=1
 #annotate description Button1 en="Press this button when depressed"
 

@@ -265,6 +265,7 @@ cmd_state state
 cmd_memory memory
 cmd_onewire onewire
 cmd_images images
+cmd_dump dump
 cmd_pause pause
 cmd_step step
 cmd_clock clock
@@ -288,6 +289,7 @@ h_state Show current values
 h_memory Show code/RAM usage
 h_onewire <port>:<pin> -- list 1-Wire ROM ids, as > lines to paste
 h_images List the images linked into this firmware
+h_dump rom [slot] | eeprom | patch | state -- as hex lines, for a host
 h_upgrade Receive a CandySpeak image into a flash region (hex lines, . to end)
 h_pause Stop execution (inspect/edit)
 h_step Run N cycles (default 1) and pause again

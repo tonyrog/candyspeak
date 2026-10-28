@@ -54,7 +54,8 @@
 %%%     once per instance as `s1.X', its own State, the instance line's
 %%%     bindings as the runtime makes them.
 %%%
-%%%     Part writes (`T.period = X' in a rule), arrays, `/', shifts and the
+%%%     Part writes (`T.period = X' in a rule), arrays, `/', a shift by a
+%%%     variable or of a value that may be negative, and the
 %%%     arithmetic functions are not translated. A variable written by any such rule is emitted as `input'
 %%%     instead of `state': FREE. That is deliberately conservative -- the model
 %%%     then has MORE behaviour than the program, so a proof still holds, while a
@@ -891,6 +892,19 @@ rng({'%', _, L, R}, C) ->
     end;
 %% Bitwise on 32 bit two's complement, as the runtime computes it. vbits/5
 %% makes a possibly negative operand unsigned first, which needs it in range.
+%% A shift by a constant, of a value that cannot be negative, into 31 bits:
+%% there `<<' is `*' and `>>' is the same logical or arithmetic, so varp's own
+%% shifts say what the runtime does. Anything else is not translated.
+rng({Op, _, L, R}, C) when Op =:= '<<'; Op =:= '>>' ->
+    case {rng(L, C), rng(R, C)} of
+	{{ok, {A, B}}, {ok, {K, K}}} when A >= 0, K >= 0, K =< 31 ->
+	    case Op of
+		'<<' when (B bsl K) < 1 bsl 31 -> {ok, {A bsl K, B bsl K}};
+		'<<' -> error;
+		'>>' -> {ok, {A bsr K, B bsr K}}
+	    end;
+	_ -> error
+    end;
 rng({Op, _, L, R}, C) when ?IS_BITS(Op) ->
     case {rng(L, C), rng(R, C)} of
 	{{ok, {A, B} = RL}, {ok, {X, Y} = RR}}
@@ -1557,6 +1571,9 @@ vnum({call, _, {'WORD', _, "elapsed"}, [{field, _, {'WORD', _, T}}]}, _C) ->
 vnum({'-', _, M}, C) -> ["-", paren(vexpr(M, C, num))];
 vnum({Op, _, L, R}, C) when ?IS_BITS(Op) ->
     vbits(Op, L, R, C);
+vnum({Op, _, L, R}, C) when Op =:= '<<'; Op =:= '>>' ->  % see rng/2
+    {ok, {K, K}} = rng(R, C),
+    paren([paren(vexpr(L, C, num)), op(Op), integer_to_list(K)]);
 vnum({Op, _, L, R}, C) ->
     [paren(vexpr(L, C, num)), op(Op), paren(vexpr(R, C, num))].
 

@@ -7,7 +7,7 @@
 
 -module(csp_disasm).
 
--export([file/1]).
+-export([file/1, image/1, patch/2]).
 
 file(Filename) ->
     case filename:extension(Filename) of
@@ -59,6 +59,50 @@ disasm(<<$J,$A,$M,$\n, _/binary>>) ->
     {error, bad_file_truncated};
 disasm(_) ->
     {error, bad_magic}.
+
+%% An image already in hand -- read off a node with /dump rom, say.
+image(Bin) ->
+    disasm(Bin).
+
+%% A RAM patch as the EEPROM store holds it (/dump eeprom), on top of the
+%% image it was saved against: one program, as the node runs it.
+%%
+%% The store is a header of its own (eeprom_header_t in csp_eeprom.c, no
+%% padding: every field is 16 bits or a packed csp_image_header_t), the
+%% settings, the patch's declarations and instructions -- the same records an
+%% image holds -- and the #disable bitmap. Its names continue the ROM's
+%% numbering, its declarations follow the ROM's. rom_fp is the crc_hdr of the
+%% image the patch belongs to; another image's names would be the wrong ones.
+patch(Rom = <<_:4/binary, _:?HEADER_DATA_LEN/binary, RomCrc:16/little, _/binary>>,
+      <<"CSP",0, _Version:16/little, _SetVer:16/little, SetBytes:16/little,
+	_CrcSet:16/little, RomFp:16/little, _Nq:16/little,
+	_RamMagic:4/binary, RamHeader:?HEADER_DATA_LEN/binary, _RamCrc:16/little,
+	_NDis:16/little, _CrcDis:16/little, _Crc:16/little, Rest/binary>>) ->
+    case disasm(Rom) of
+	{ok, {Header, Strings, Decls, Code}} when RomFp =:= RomCrc ->
+	    Ram = decode_header(RamHeader),
+	    ND = maps:get(n_decl, Ram),
+	    NI = maps:get(n_instr, Ram),
+	    <<_Settings:SetBytes/binary, DeclBin:(8*ND)/binary,
+	      InstrBin:(4*NI)/binary, _Dis/binary>> = Rest,
+	    {Code1, Strings1} = disasm_code(InstrBin, maps:get(n_instr, Header),
+					    maps:size(Strings), Strings, []),
+	    %% The image's trailing `end' is dropped when it is loaded
+	    %% (csp_load_image), and the patch's first declaration takes its
+	    %% index.
+	    ND0 = maps:get(n_decl, Header),
+	    Decls0 = case lists:last(Decls) of
+			 {decl, I, 'end'} when I =:= ND0 - 1 -> lists:droplast(Decls);
+			 _ -> Decls
+		     end,
+	    Base = case Decls0 =:= Decls of true -> ND0; false -> ND0 - 1 end,
+	    Decls1 = disasm_decl(DeclBin, Base, Strings1, []),
+	    {ok, {Header, Strings1, Decls0 ++ Decls1, Code ++ Code1}};
+	{ok, _} -> {error, {other_rom, RomFp, RomCrc}};
+	Error -> Error
+    end;
+patch(_Rom, _Eeprom) ->
+    {error, bad_eeprom}.
 
 decode_header(
   <<Size:32/little,    %% total bytes of the image object
@@ -835,6 +879,14 @@ disasm_array(Data = <<Decl:64/little, Data1/binary>>,
 	    {_,Params} = disasm_elem(DType,ILocal,IDir,Pos,Decl,Strings),
 	    disasm_array(Data1,I+1,Size+1,D,Strings,[Params|Elems],Acc);
        ICont =:= 0 ->
+	    array_end(Data, I, Size, D, Strings, Elems, Acc)
+    end;
+%% The end of the data with no end mark after it: a patch from the EEPROM
+%% store is just its records.
+disasm_array(<<>>, I, Size, D, Strings, Elems, Acc) ->
+    array_end(<<>>, I, Size, D, Strings, Elems, Acc).
+
+array_end(Data, I, Size, D, Strings, Elems, Acc) ->
 	    D1 = if Size > 1 ->
 			 {Params0,Es} = make_elems(lists:reverse(Elems)),
 			 %% identical elements: len says it all
@@ -847,8 +899,7 @@ disasm_array(Data = <<Decl:64/little, Data1/binary>>,
 		    %% a scalar: its one element's parameters are its own
 		    true -> add_params(D, hd(Elems))
 		 end,
-	    disasm_decl(Data, I+1, Strings, [D1|Acc])
-    end.
+	    disasm_decl(Data, I+1, Strings, [D1|Acc]).
 	    
 %% The declaration type an element is STORED as. A #param head is shown as
 %% `param` and a #local as `local`, but in the image both are the plain type

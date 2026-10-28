@@ -138,6 +138,7 @@ static int cmd_load(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_images(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_pause(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_step(csp_rt_t* st, int argc, char* argv[]);
+static int cmd_dump(csp_rt_t* st, int argc, char* argv[]);
 #if defined(CSP_HAVE_FIRED)
 static int cmd_clock(csp_rt_t* st, int argc, char* argv[]);
 #endif
@@ -163,6 +164,7 @@ static const csp_cmd_t builtin_cmds[] = {
     { ros_cmd_state,  ros_h_state,   cmd_state },
     { ros_cmd_memory, ros_h_memory,  cmd_memory },
     { ros_cmd_images, ros_h_images,  cmd_images },
+    { ros_cmd_dump,   ros_h_dump,    cmd_dump },
     { ros_cmd_pause,  ros_h_pause,   cmd_pause },
     { ros_cmd_step,   ros_h_step,    cmd_step },
 #if defined(CSP_HAVE_FIRED)
@@ -2166,6 +2168,285 @@ static int cmd_reset(csp_rt_t* st, int argc, char* argv[])
 	    iptr->i = optr->i = STATE_INIT;
     }
     csp_print_line("Reset");
+    return CSP_CMD_OK;
+}
+
+// /dump rom [slot] | eeprom | state -- the bytes, for a host to read.
+//
+// The node does not interpret what it sends: an image is the image, the store
+// is the store, and the host (utils/, in Erlang) knows what they mean and
+// merges a patch onto its ROM. All three look the same on the wire, the
+// format /upgrade reads:
+//
+//     dump rom 428
+//     4A414D0A AC010000 ...          32 bytes a line, hex
+//     .
+//
+// STATE is (key, value) pairs, varints, so a small value costs a byte and the
+// pairs say what they are without the host replaying the /state walk: key is
+// decl << 1 for a global, (decl << 1) | 1 followed by the object for a member.
+// The value is zigzagged: its signed reading, so -1 is one byte too. A TIMER
+// is three varints instead of one value, read here so the host needs neither
+// the bit layout nor t0: flags (1 val, 2 fired, 4 running), the period, and
+// what elapsed(T) says now. A buffer is not in it yet.
+static uint8_t dump_n;          // bytes on the current line
+
+static void dump_begin(const char* what, uint32_t n)
+{
+    csp_print_lit("dump ");
+    csp_print_str(what);
+    csp_print_char(' ');
+    csp_print_uint(n);
+    csp_println();
+    dump_n = 0;
+}
+
+static void dump_byte(uint8_t b)
+{
+    csp_print_hex2(b);
+    if (++dump_n == 32) {
+	csp_println();
+	dump_n = 0;
+    }
+}
+
+static void dump_end(void)
+{
+    if (dump_n)
+	csp_println();
+    csp_print_line(".");
+}
+
+static void dump_varint(uint32_t v)
+{
+    while (v >= 0x80) {
+	dump_byte((uint8_t)(v | 0x80));
+	v >>= 7;
+    }
+    dump_byte((uint8_t)v);
+}
+
+static void dump_key(index_t di, int m)
+{
+    dump_varint(((uint32_t)di << 1) | (m ? 1 : 0));
+    if (m)
+	dump_varint((uint32_t)m);
+}
+
+static void dump_pair(index_t di, int m, uint32_t v)
+{
+    dump_key(di, m);
+    dump_varint((v << 1) ^ (uint32_t)(-(int32_t)(v >> 31)));   // zigzag
+}
+
+// fn_elapsed's reading: since the start while running, else the period.
+static void dump_timer(csp_rt_t* st, index_t ix, index_t di, int m)
+{
+    value_t* v = csp_dio_slot(st, ix, DIN);
+    uint32_t period = value_get_t_period(v);
+    uint32_t el = period;
+
+    if (value_get_t_running(v))
+	el = csp_time_ms() - csp_dio_slot(st, ix + 1, DIN)->u;  // t0, next slot
+    dump_key(di, m);
+    dump_varint((uint32_t)(value_get_t_val(v) |
+			   (value_get_t_fired(v) << 1) |
+			   (value_get_t_running(v) << 2)));
+    dump_varint(period);
+    dump_varint(el);
+}
+
+// Sinks for csp_eeprom_emit: one counts, for the head line; one prints.
+static uint32_t dump_size;
+
+static int dump_count(const void* buf, size_t len)
+{
+    (void)buf;
+    dump_size += (uint32_t)len;
+    return 0;
+}
+
+static int dump_put(const void* buf, size_t len)
+{
+    const uint8_t* p = (const uint8_t*)buf;
+    while (len--)
+	dump_byte(*p++);
+    return 0;
+}
+
+static int dump_wanted(csp_rt_t* st, int i)
+{
+    decl_t t = decl(st, i, type);
+    return (t != DECL_BUFFER) && state_want(st, i, F_ALL, NULL, 0);
+}
+
+// One declaration's pair, or a timer's three.
+static void dump_decl(csp_rt_t* st, index_t ix, index_t di, int m)
+{
+    if (decl(st, di, type) == DECL_TIMER)
+	dump_timer(st, ix, di, m);
+    else
+	dump_pair(di, m, csp_value(st, ix).u);
+}
+
+static void dump_state(csp_rt_t* st)
+{
+    int i, n = 0, in_module = 0;
+
+    // Counted first, so the header says how many pairs follow.
+    for (i = 0; i < st->ps.nd; i++) {
+	decl_t t = decl(st, i, type);
+	if (t == DECL_MODULE) { in_module = 1; continue; }
+	if (t == DECL_END)    { in_module = 0; continue; }
+	if (!in_module && dump_wanted(st, i))
+	    n++;
+    }
+    for (i = 0; i < st->ps.nd; i++) {
+	int dn, base, j;
+	index_t mx;
+	if (decl(st, i, type) != DECL_OBJECT)
+	    continue;
+	mx = decl(st, i, mq_mx);
+	dn = decl(st, INDEX(mx), md_n);
+	base = INDEX(mx) + 1;
+	for (j = 0; j < dn; j++) {
+	    if (dump_wanted(st, base + j))
+		n++;
+	    if (decl(st, base + j, type) == DECL_TIMER)
+		j++;
+	}
+    }
+    csp_print_lit("dump state ");
+    csp_print_uint(n);
+    csp_print_char(' ');
+    csp_print_uint(st->cycle);
+    csp_print_char(' ');
+    csp_print_uint(csp_time_ms());
+    csp_println();
+    dump_n = 0;
+    in_module = 0;
+    for (i = 0; i < st->ps.nd; i++) {
+	decl_t t = decl(st, i, type);
+	if (t == DECL_MODULE) { in_module = 1; continue; }
+	if (t == DECL_END)    { in_module = 0; continue; }
+	if (!in_module && dump_wanted(st, i))
+	    dump_decl(st, MAKE_INDEX(0, i), (index_t)i, 0);
+    }
+    for (i = 0; i < st->ps.nd; i++) {
+	int dn, base, j, m;
+	index_t mx;
+	if (decl(st, i, type) != DECL_OBJECT)
+	    continue;
+	mx = decl(st, i, mq_mx);
+	m  = decl(st, i, mq_m);
+	dn = decl(st, INDEX(mx), md_n);
+	base = INDEX(mx) + 1;
+	csp_ctx_set(st, m);          // a member resolves in its object, see /state
+	for (j = 0; j < dn; j++) {
+	    int dj = base + j;
+	    if (dump_wanted(st, dj))
+		dump_decl(st, MAKE_INDEX(CURRENT, dj), (index_t)dj, i);
+	    if (decl(st, dj, type) == DECL_TIMER)
+		j++;
+	}
+	csp_ctx_reset(st);
+    }
+    dump_end();
+}
+
+static int cmd_dump(csp_rt_t* st, int argc, char* argv[])
+{
+    uint32_t k;
+
+    if ((argc >= 1) && (strcmp(argv[0], "rom") == 0)) {
+	if (argc >= 2) {
+#if defined(CSP_HAVE_FLASH)
+	    // A slot, read as flash: it need not be the image running, or an
+	    // image at all -- a half-arrived one is worth seeing too.
+	    const csp_device_t* d = csp_device();
+	    const csp_region_t* r = d ? csp_region_find(d, argv[1],
+							 (int)strlen(argv[1]))
+				      : NULL;
+	    csp_image_header_t h;
+	    uint32_t off;
+	    if (r == NULL) {
+		csp_print_line("ERR no such region");
+		return CSP_CMD_OK;
+	    }
+	    off = csp_region_offset(d, r);
+	    if ((csp_flash_read(off, &h, sizeof(h)) != CSP_FLASH_OK) ||
+		(h.magic[0] != CSP_IMAGE_MAGIC0) ||
+		(h.size > csp_region_size(d, r))) {
+		csp_print_line("ERR no image there");
+		return CSP_CMD_OK;
+	    }
+	    dump_begin("rom", h.size);
+	    for (k = 0; k < h.size; k++) {
+		uint8_t b;
+		if (csp_flash_read(off + k, &b, 1) != CSP_FLASH_OK)
+		    break;
+		dump_byte(b);
+	    }
+	    dump_end();
+#else
+	    csp_print_line("ERR no flash on this build");
+#endif
+	    return CSP_CMD_OK;
+	}
+	{
+	    // The image running: the linked one, or the slot it was booted from.
+	    const uint8_t* base = (st->image_no >= 0) ?
+		csp_image_at(st->image_no) : NULL;
+	    csp_image_header_t h;
+	    if (base == NULL) {
+		csp_print_line("ERR no image");
+		return CSP_CMD_OK;
+	    }
+	    h = ro_header((const csp_image_header_t*)base);
+	    dump_begin("rom", h.size);
+	    for (k = 0; k < h.size; k++)
+		dump_byte(ro_byte(base + k));
+	    dump_end();
+	}
+	return CSP_CMD_OK;
+    }
+    if ((argc >= 1) && (strcmp(argv[0], "eeprom") == 0)) {
+	int n = csp_eeprom_stored();
+	uint8_t b;
+	if (n < 0) {
+	    csp_print_line("ERR nothing stored");
+	    return CSP_CMD_OK;
+	}
+	dump_begin("eeprom", (uint32_t)n);
+	if (csp_eeprom_open_read() == 0) {
+	    for (k = 0; k < (uint32_t)n; k++) {
+		if (csp_eeprom_read(&b, 1) < 0)
+		    break;
+		dump_byte(b);
+	    }
+	    csp_eeprom_close();
+	}
+	dump_end();
+	return CSP_CMD_OK;
+    }
+    if ((argc >= 1) && (strcmp(argv[0], "patch") == 0)) {
+	// What runs on top of the ROM now, saved or not: what /save would write.
+	dump_size = 0;
+	csp_eeprom_emit(st, dump_count);
+	dump_begin("patch", dump_size);
+	csp_eeprom_emit(st, dump_put);
+	dump_end();
+	return CSP_CMD_OK;
+    }
+    if ((argc >= 1) && (strcmp(argv[0], "state") == 0)) {
+	if (!st->started) {
+	    csp_print_line("not started -- /resume to allocate and run");
+	    return CSP_CMD_OK;
+	}
+	dump_state(st);
+	return CSP_CMD_OK;
+    }
+    csp_print_line("ERR usage: /dump rom [slot] | eeprom | patch | state");
     return CSP_CMD_OK;
 }
 

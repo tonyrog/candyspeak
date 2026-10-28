@@ -2229,6 +2229,7 @@ Start interactive mode with `-i`:
 | `/clear` | Drop RAM patches, keep the ROM program |
 | `/pause` | Freeze execution; the prompt stays live |
 | `/step [N]` | Run N cycles (default 1) and pause again |
+| `/dump rom [slot]`, `/dump eeprom`, `/dump patch`, `/dump state` | The image, the stored patch, the running patch, or the values, as hex lines for a host |
 | `/clock [N]` | Hold the clock and move it N ms forward, until `/resume` (host only) |
 | `/resume` | Continue (rebuilds first if the program was edited) |
 | `/live` | Freeze the *rules* but keep I/O running |
@@ -2431,6 +2432,36 @@ not the time you took to type — so a timer runs out at the step you say:
 
 `/resume` lets the clock go again, from where it was held. Only the host build
 (`csp` on Linux) has it; the panel's replay is what it is for.
+
+### Dumps for a host
+
+`/dump` sends bytes and leaves the meaning to the host. Every reply has the
+same shape, the hex lines `/upgrade` reads, closed by a dot:
+
+```
+/dump rom
+dump rom 428
+4a414d0aac010000150000000000...   (32 bytes a line)
+.
+```
+
+* `/dump rom` is the image the node runs, `/dump rom A` the image in slot A
+  (or whatever is there, if it is half-written).
+* `/dump eeprom` is the stored patch, as `/save` wrote it.
+* `/dump patch` is the patch running now, saved or not, in the same format:
+  what `/save` would write. Code typed or loaded since the last `/save` is in
+  it, and not in `/dump eeprom`.
+* `/dump state` is every value `/state` shows, globals and object members, as
+  (key, value) varints: `dump state <pairs> <cycle> <ms>`. A timer is three
+  varints instead of one value, worked out on the node: flags (1 started,
+  2 fired, 4 running), the period, and what `elapsed(T)` says. Buffers are not
+  in it yet.
+
+On the host, `utils/csp_node.erl` reads them: `csp_node:dumps/1` splits the
+console text, `csp_node:program/1` gives the program (the image, and the patch
+laid over it by `csp_disasm:patch/2`), and `csp_node:state/2` names the values,
+`a.N` for a member and `T`, `T.fired`, `T.running`, `T.period`, `T.elapsed` for
+a timer.
 
 `/live` freezes only the **rules**. Input is still sampled and output is still
 written, so the hardware stays connected while the program stands still — which

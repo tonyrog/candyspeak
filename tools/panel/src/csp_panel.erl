@@ -747,6 +747,7 @@ build(Ws, Where, Root, File, Widgets0, Ast) ->
 		 "flex-wrap:wrap;margin-bottom:6px"),
     StateBox = status_box(Ws, Status, "csp_st"),
     Clock = status_box(Ws, Status, "csp_clock"),
+    LinkBox = status_box(Ws, Status, "csp_link"),
     Main = box(Ws, Root, "flex:1;min-height:0;display:flex;gap:32px"),
     Left = box(Ws, Main, "flex:none;overflow:auto;padding-right:8px"),
     Right = box(Ws, Main, "flex:1;min-width:0;overflow:auto"),
@@ -783,7 +784,7 @@ build(Ws, Where, Root, File, Widgets0, Ast) ->
     {ok, Src} = candyspeak:parse(File, [sources]),
     Code = csp_code:new(Ws, #{code => Right, status => Status, top => Top},
 			{Src, File}, colours()),
-    {ok, Link} = csp_link:open(csp_exe(), [File]),
+    {ok, Link} = csp_link:open(target(), csp_exe(), [File]),
     erlang:send_after(period(), self(), tick),
     S0 = #{trace_box => TraceBox, code => Code, run => Run},
     S1 = lists:foldl(fun({K, V}, Si) -> view(Ws, Si, K, V) end, S0,
@@ -805,13 +806,54 @@ build(Ws, Where, Root, File, Widgets0, Ast) ->
 		     trace_box => TraceBox,
 		     state_box => StateBox,
 		     clock_box => Clock,
+		     link_box => LinkBox,
+		     file   => File,
 		     where  => Where},
-    %% {mode, pause} in panel.config: start stopped, ready to step.
-    S3 = case config(mode) of
-	     pause -> control(Ws, Link, S2, "mode=step");
-	     _     -> light_mode(Ws, S2), S2
-	 end,
-    loop(Ws, Link, S3).
+    loop(Ws, Link, start_mode(Ws, Link, S2)).
+
+%% {mode, pause} in panel.config: start stopped, ready to step. Not a node: it
+%% was running before we looked, and connecting is not a reason to stop it.
+start_mode(Ws, Link, S) ->
+    case {config(mode), target()} of
+	{pause, {{local, _}, _}} -> control(Ws, Link, S, "mode=step");
+	_ -> light_mode(Ws, S#{mode := run}), S#{mode := run}
+    end.
+
+%% What the panel is connected to, csp_link:target/1's reading of the field.
+%% Kept across a change of file, which rebuilds everything else.
+target() ->
+    case get(csp_panel_target) of
+	undefined -> {ok, T} = csp_link:target(""), T;
+	T -> T
+    end.
+
+target_text() ->
+    case get(csp_panel_target_text) of
+	undefined -> "";
+	T -> T
+    end.
+
+%% A new target from the field: let go of this one and connect to that, the
+%% widgets and the code view as they are. A field that does not read stays
+%% connected where it was, and says why.
+retarget(Ws, Link, S, Text) ->
+    case csp_link:target(Text) of
+	{ok, T} ->
+	    csp_link:close(Link),
+	    flush(),
+	    put(csp_panel_target, T),
+	    put(csp_panel_target_text, Text),
+	    {ok, Link1} = csp_link:open(T, csp_exe(), [maps:get(file, S)]),
+	    {Link1, start_mode(Ws, Link1, S#{last := #{}})};
+	{error, Why} ->
+	    show_link(Ws, S, Why),
+	    {Link, S}
+    end.
+
+show_link(Ws, #{link_box := {B, F}}, Text) ->
+    wse:cast(Ws, F, "call", [null, B, lists:flatten(Text)]);
+show_link(_Ws, _S, _Text) ->
+    ok.
 
 status_box(Ws, Row, Id) ->
     B = wse:createElement(Ws, "span"),
@@ -970,6 +1012,7 @@ runstep(Ws, Bar) ->
 		 wse:appendChild(Ws, Wrap, B),
 		 B
 	 end,
+    target_field(Ws, Wrap, Id),
     RunB  = Mk("run",   "mode=run"),
     PauseB = Mk("pause", "mode=step"),
     OneB  = Mk("step",  "step=1"),
@@ -999,6 +1042,29 @@ clock_text(Cycle, Prog) ->
 
 secs(undefined) -> "-";
 secs(Ms)        -> io_lib:format("~.1f s", [Ms / 1000]).
+
+%% Where the program runs: a csp of our own, or a node. Read by
+%% csp_link:target/1, sent on Enter.
+target_field(Ws, Wrap, Id) ->
+    In = wse:createElement(Ws, "input"),
+    wse:set(Ws, In, "type", "text"),
+    wse:set(Ws, In, "value", target_text()),
+    wse:set(Ws, In, "placeholder",
+	    "local | can0 | host:port | /dev/ttyUSB0@115200  [rom|eeprom] "
+	    "[image=A]"),
+    wse:set(Ws, In, "title",
+	    "local, or a can interface: a csp of our own on that bus\n"
+	    "host:port or /dev/tty...[@baud]: a node's console\n"
+	    "rom | eeprom: without or with the EEPROM patch\n"
+	    "image=SLOT: read a node's program from that flash slot"),
+    wse:setStyle(Ws, In, "width:24em;margin-right:12px;font:12px monospace;"
+		 "background:#222;color:#eee;border:1px solid #555;"
+		 "padding:3px"),
+    F = wse:newf(Ws, "", "{ Wse.notify(" ++ integer_to_list(Id) ++
+		     ", 'target=' + this.value); }"),
+    wse:set(Ws, In, "onchange", F),
+    wse:appendChild(Ws, Wrap, In),
+    In.
 
 tick_select(Ws, Wrap, Id) ->
     Lbl = wse:createElement(Ws, "span"),
@@ -1633,6 +1699,9 @@ loop(Ws, Link, S) ->
 	%% run / pause / step. Sent by the bar, and told apart from a widget by
 	%% the event id rather than by the payload, so a signal called "step"
 	%% could not be mistaken for the button.
+	{notify, RunId, _Local, "target=" ++ Text} ->
+	    {Link1, S1} = retarget(Ws, Link, S, Text),
+	    loop(Ws, Link1, S1);
 	{notify, RunId, _Local, Tag} ->
 	    loop(Ws, Link, control(Ws, Link, S, Tag));
 
@@ -1689,7 +1758,14 @@ loop(Ws, Link, S) ->
 	    erlang:send_after(maps:get(period, S, ?PERIOD), self(), tick),
 	    loop(Ws, Link, S1);
 
-	{csp_exit, _Status} -> ok;
+	{csp_link, Text} ->
+	    show_link(Ws, S, Text),
+	    loop(Ws, Link, S);
+
+	%% csp ended, or the node went away. The panel stays: another target
+	%% can be typed in.
+	{csp_exit, _Status} ->
+	    loop(Ws, Link, S);
 	{closed, _}         -> csp_link:close(Link);
 	stop                -> csp_link:close(Link)
     end.
@@ -1780,6 +1856,7 @@ flush() ->
 	{csp_clock, _, _} -> flush();
 	{csp_model, _}    -> flush();
 	{csp_exit, _}     -> flush();
+	{csp_link, _}     -> flush();
 	tick              -> flush()
     after 0 -> ok
     end.

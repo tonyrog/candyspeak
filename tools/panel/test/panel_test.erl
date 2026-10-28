@@ -73,6 +73,7 @@ run() ->
     %% 6. analog: the width comes from the declaration, and port 9 is the CPX
     %%    pixel strip rather than a magnitude.
     analog_checks(),
+    node_checks(),
 
     %% 6b. the lamp colour comes from the name, and an unlabelled one is red
     Hues = [{N, element(1, csp_panel:hue(N))}
@@ -838,6 +839,7 @@ model_check() ->
 	    expect("...but not within one step", element(1, R1) =:= none, R1),
 	    shift_check(Sh),
 	    timer_check(Sh),
+	    shift_ops_check(Sh),
 	    object_check(Sh)
     end,
 
@@ -913,6 +915,24 @@ timer_check(Sh) ->
     RE = Ask("E", 4),
     expect("timer: elapsed() is read, not guessed",
 	   element(1, RE) =:= found andalso element(2, RE) =:= 1, RE).
+
+%% A shift by a constant of a value that cannot be negative is varp's own
+%% shift; by a variable, it is not translated.
+shift_ops_check(Sh) ->
+    F = "/tmp/csp_varp_shl.csp",
+    ok = file:write_file(F, "#analog In:4 unsigned 0\n"
+			 "#variable Y:8 unsigned = 0\n#variable Z:8 unsigned = 0\n"
+			 "#variable B:1 unsigned = 0\n#variable N:8 unsigned = 0\n"
+			 "Y = (In << 3) + 1\nZ = Y >> 2\nB = (Y >> 3) & 1\n"
+			 "N = Y << In\n"),
+    {ok, M} = candyspeak_varp:model(F, [{reach, "Z == 30 && B"}]),
+    T = lists:flatten(maps:get(text, M)),
+    R = candyspeak_varp:bmc(maps:get(text, M), "--timeout 30 bmc --property "
+			    "csp_varp_shl_reach --k-max 4", Sh),
+    expect("shifts by a constant are modelled, by a variable not",
+	   string:find(T, "((In) << 3)") =/= nomatch andalso
+	   maps:get(free, M) =:= ["N"] andalso
+	   element(1, R) =:= found andalso element(2, R) =:= 2, {R, T}).
 
 %% Objects are flattened: every member once per instance as `a.N', its own
 %% State, a static binding written in the instance's INIT, a timer's period
@@ -1250,6 +1270,89 @@ flush() ->
 	{csp_fired, _, _} -> flush();
 	{csp_exit, _}     -> flush()
     after 0 -> ok
+    end.
+
+%% A node's console on tcp: a csp behind a relay stands in for one. The link
+%% reads its program with /dump rom (nothing stored, so no patch) and its
+%% values with /dump state, named as the panel names them.
+node_checks() ->
+    expect("the target field reads",
+	   [element(1, T) || S <- ["", "can0", "/dev/ttyACM0@9600 rom",
+				   "h:2323 image=A", "local image=A", "h:x"],
+			     T <- [csp_link:target(S)]] =:=
+	       [ok, ok, ok, ok, error, error], nomatch),
+    {ok, LS} = gen_tcp:listen(0, [list, {packet, line}, {active, false},
+				  {reuseaddr, true}]),
+    {ok, Port} = inet:port(LS),
+    spawn(fun() -> relay(LS) end),
+    flush(),
+    {ok, T} = csp_link:target("localhost:" ++ integer_to_list(Port)),
+    {ok, L} = csp_link:open(T, csp_exe(), []), track(L),
+    Said = link_said(nomatch),
+    expect("a node's program is read from its dumps",
+	   string:find(Said, "declarations") =/= nomatch, Said),
+    csp_link:tick(L),
+    V1 = node_state(),
+    expect("a node's state reads by name, objects and signs right",
+	   maps:get("a.N", V1, x) =/= x andalso maps:get("b.N", V1, x) =/= x
+	   andalso maps:get("Neg", V1) =:= -5
+	   andalso maps:get("Big", V1) =:= 16#FFFFFFF0, V1),
+    csp_link:pause(L),
+    csp_link:tick(L),
+    {C1, P1} = node_cycle(),
+    csp_link:step(L, 3),
+    {C2, P2} = node_cycle(),
+    expect("stepping a node runs that many cycles and reads them",
+	   C2 =:= C1 + 3 andalso
+	   maps:get("b.N", P2) =:= (maps:get("b.N", P1) + 6) band 255,
+	   {C1, C2, P1, P2}),
+    csp_link:close(L).
+
+relay(LS) ->
+    {ok, S} = gen_tcp:accept(LS),
+    inet:setopts(S, [{active, true}]),
+    P = open_port({spawn_executable, csp_exe()},
+		  [{args, ["-i", "--no-eeprom", "-e", "/tmp/csp_panel_none.db",
+			   "../../tests/dump/node.csp"]},
+		   use_stdio, stderr_to_stdout, {line, 4096}, exit_status]),
+    relay(S, P).
+
+relay(S, P) ->
+    receive
+	{tcp, S, Line} -> port_command(P, Line), relay(S, P);
+	{P, {data, {_, Line}}} -> gen_tcp:send(S, [Line, "\n"]), relay(S, P);
+	{tcp_closed, S} -> port_command(P, "/quit\n");
+	{P, {exit_status, _}} -> gen_tcp:close(S)
+    end.
+
+link_said(Last) ->
+    receive
+	{csp_link, Text} ->
+	    T = lists:flatten(Text),
+	    case string:find(T, "reading") of
+		nomatch -> T;
+		_ -> link_said(T)
+	    end
+    after 3000 -> Last
+    end.
+
+node_state() ->
+    receive
+	{csp_state, _, Vals} -> maps:from_list(Vals)
+    after 3000 -> #{}
+    end.
+
+%% The last state, once they stop coming: a step is asked about until done.
+node_cycle() ->
+    receive
+	{csp_state, C, Vals} -> node_cycle({C, maps:from_list(Vals)})
+    after 3000 -> {none, #{}}
+    end.
+
+node_cycle(Last) ->
+    receive
+	{csp_state, C, Vals} -> node_cycle({C, maps:from_list(Vals)})
+    after 300 -> Last
     end.
 
 analog_checks() ->
