@@ -72,6 +72,7 @@
 start() -> start(1234, 8080).
 
 start(WsPort, HttpPort) ->
+    application:ensure_all_started(csp_panel),
     ok = ensure_inets(),
     {ok, _} = inets:start(httpd,
 			  [{port, HttpPort},

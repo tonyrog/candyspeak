@@ -1,0 +1,9 @@
+{application, csp_panel,
+ [{description, "candyspeak panel"},
+  {vsn, git},
+  {modules, ["@@MODULES@@"]},
+%%  {mod, {App_app, []}},
+%%  {registered, [App_srv]},
+  {applications,[kernel,stdlib,inets,wse,rester,uart,ellm]},
+  {env, []}
+  ]}.
