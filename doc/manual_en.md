@@ -907,6 +907,11 @@ talking".
 
 On the host, `--uart=[<unit>:]<device>` gives it a port — a real tty, or a pty
 from `socat` — which is what makes the transport testable without hardware.
+`--uart=pty` makes the pty pair itself and names the far end, on stderr at start
+(`uart 0: /dev/pts/7`) and as a line in `/state`. With
+`examples/uart_serv.csp` that is a node's console: `minicom -D /dev/pts/7`, or
+the panel's target field. Output nobody reads is dropped once the pty's queue
+is full, so whoever opens it gets fresh answers.
 
 #### SMS
 
@@ -1040,7 +1045,7 @@ output printed faster than the rules carry it away: the ring is finite, and when
 it fills the bytes are dropped and **counted**, because a hole in a relayed
 listing reads as valid output. `/state` prints `console lost N`.
 
-> **Off by default.** The rings cost `CSP_CONSOLE_BYTES` (256 on the host, 0
+> **Off by default.** The rings cost `CSP_CONSOLE_BYTES` (4096 on the host, 0
 > everywhere else) — a part with 2K of RAM should not carry them for a transport
 > it never names. At 0 the declarations still compile and run and simply never
 > deliver, like any other bus the target does not have.
@@ -1071,6 +1076,21 @@ Routes run **last** in the cycle, after every rule — so a rule that also wrote
 the sink has already had its turn. They also run **while `/pause` is in effect**,
 because `/upgrade` pauses the node and a node being upgraded over a route must
 not go deaf on the link the image is arriving on.
+
+**A shell over tcp.** `examples/tcp_serv.csp` puts the interpreter on a port:
+
+    #buffer Net:160 inout tcp 15555
+    #buffer Rp:160  inout repl
+    #route  Net Rp
+    #route  Rp  Net
+
+`telnet host 15555` then gets the prompt's answers. The buffer has no address,
+so it answers whoever called in; with nobody on the line the output is dropped,
+not kept for the next caller. `/quit` from there **hangs up the session, not the
+node**: the connection closes once the answer is out and the port listens for
+the next caller. `examples/uart_serv.csp` is the same on a second serial line
+(on the host, `--uart=pty`); a wire has no session, so `/quit` there does
+nothing.
 
 **Nothing blocks.** A push the link will not take leaves the chunk in the sink
 with `.tx` set, and the ordinary output pass retries it next cycle.
@@ -2239,7 +2259,7 @@ Start interactive mode with `-i`:
 | `/settings` | Show stored settings — see [Settings](#settings) |
 | `/save` | Save state to storage (EEPROM file) |
 | `/load` | Load state from storage (EEPROM file) |
-| `/quit` (or `/exit`) | Exit |
+| `/quit` (or `/exit`) | Exit; over a route (telnet), hang up that session |
 
 `/state` opens with a status line showing where you are:
 
@@ -2461,7 +2481,17 @@ On the host, `utils/csp_node.erl` reads them: `csp_node:dumps/1` splits the
 console text, `csp_node:program/1` gives the program (the image, and the patch
 laid over it by `csp_disasm:patch/2`), and `csp_node:state/2` names the values,
 `a.N` for a member and `T`, `T.fired`, `T.running`, `T.period`, `T.elapsed` for
-a timer.
+a timer. `utils/csp_list.erl` turns the image and the patch back into source:
+`csp_list:patch(Rom, Eeprom)` (or `csp_list:image(Rom)`) is what `/list`
+prints on the node, line for line and tag for tag -- `make test` holds the two
+to the same text over every example.
+
+An image's header says how its values read, in the `flags` byte beside
+`role`: bit 0 set means floats are IEEE binary32, clear means Q16.16 fixpoint;
+bit 1 set means its fields are big-endian. The byte sits at the same offset
+either way round, so a host reads it first and then the rest in that order. A
+node reads only its own and refuses any other image (`ROM rejected: image
+flags`), and a patch saved by a build with the other float format the same way.
 
 `/live` freezes only the **rules**. Input is still sampled and output is still
 written, so the hardware stays connected while the program stands still — which
@@ -2579,6 +2609,8 @@ The latch controls whether outputs are written to hardware. Like an electronic l
 - `/latch off` - Release the latch. Outputs flow through to hardware normally.
 
 **Interactive mode starts with latch ON** (outputs frozen). This is a safety feature - you can experiment without affecting hardware. Use `/latch off` when ready to activate outputs.
+
+Routes (`#route`) are not outputs: they run latched or not, and while paused, so a console over telnet or a serial line is there from the start.
 
 For programmatic control in running code, use the `latch()` function:
 

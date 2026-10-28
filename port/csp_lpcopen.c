@@ -595,6 +595,7 @@ void csp_output(csp_rt_t* st)
 	csp_can_output(st);
 	csp_buf_output(st);  // i2c/spi starts and datagrams
     }
+    csp_route_run(st);   // routes are wires: latched or not, last
     csp_output_timer(st);
 }
 
@@ -1191,9 +1192,16 @@ static void csp_lpc_loop(void)
     // and touch nothing the pause protects. /upgrade pauses the node for the
     // flash write, so without this a node being upgraded OVER a route stops
     // reading the link the image is arriving on.
+    // /step N runs N cycles from here and stands still again (see csp_linux.c).
     if (state.paused) {
-	csp_route_run(&state);
-	return;
+	if (state.step_left > 0) {
+	    state.step_left--;
+	    state.cycle++;
+	}
+	else {
+	    csp_route_run(&state);
+	    return;
+	}
     }
 
     DIAG_MARK('i');

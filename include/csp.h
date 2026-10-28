@@ -337,7 +337,11 @@ static inline void* rdvp(const void* p, int rom)
 //       NEW image in an old firmware is the direction that breaks, because
 //       nothing there arms the interrupt and `? Drdy.fired` reads a bit no
 //       sweep ever sets -- a rule that silently never runs.
-#define ROM_FORMAT_VERSION 21
+//  v22: the header says how its VALUES read -- `role` is a byte and the byte
+//       beside it is `flags` (CSP_IMG_F_*). A float constant is a Q16.16 word
+//       on a fixpoint build and IEEE binary32 on a float one (ESP32), and the
+//       two read each other as garbage with nothing objecting.
+#define ROM_FORMAT_VERSION 22
 
 // Format version of the SETTINGS store, which is NOT ROM_FORMAT_VERSION and not
 // EEPROM_VERSION either. It needs its own because it is the one part of the
@@ -391,6 +395,23 @@ static inline void* rdvp(const void* p, int rom)
 #define CSP_ROLE_ROM      0   // the program
 #define CSP_ROLE_FAILSAFE 1   // the one that runs when the program cannot
 
+// How an image's values read, so a reader KNOWS instead of assuming. The format
+// version cannot say this: a fixpoint and a float build write the same format,
+// and only the meaning of a float constant differs. The loader refuses an image
+// whose flags are not its own (rom_flags_ok), and a host tool reads them to
+// decode it.
+#define CSP_IMG_F_FLOAT   0x01  // floats are IEEE binary32; clear: Q16.16
+#define CSP_IMG_F_BIG     0x02  // fields are big-endian; clear: little-endian
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+#define CSP_IMG_F_ORDER   CSP_IMG_F_BIG
+#else
+#define CSP_IMG_F_ORDER   0
+#endif
+// This build's flags. FVALUE_IS_FIXPOINT is defined further down; a macro is
+// expanded where it is used, so the order does not matter.
+#define CSP_IMG_FLAGS \
+    ((FVALUE_IS_FIXPOINT ? 0 : CSP_IMG_F_FLOAT) | CSP_IMG_F_ORDER)
+
 // Section tags: four ASCII characters, IFF/BEAM style. Four bytes cost nothing
 // here (the prologue was carrying 16 unused bits either way) and buy two things:
 // a tag is findable in a hex dump or with grep over the binary, and a scan can
@@ -434,7 +455,8 @@ typedef struct PACKED {
     uint8_t  magic[4];   // JAM\n -- start of an image
     uint32_t size;       // total bytes of the image object
     uint16_t version;    // ROM_FORMAT_VERSION at generation
-    uint16_t role;       // CSP_ROLE_*: what this image is for
+    uint8_t  role;       // CSP_ROLE_*: what this image is for
+    uint8_t  flags;      // CSP_IMG_F_*: how its values are to be read
     uint16_t generation; // higher is newer; orders A against B
     uint16_t n_str;      // str bytes (excl. sentinel + trailer)
     uint16_t n_decl;     // decl entries (excl. DECL_END_MARK)
@@ -3485,11 +3507,16 @@ extern int csp_udp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
 //   send, which is the same thing a quiet bus looks like.
 //
 // csp_tcp_recv: 1 = bytes were read, 0 = nothing pending, -1 = no endpoint.
-// csp_tcp_send: 0 = written, -1 = no connection yet.
+// csp_tcp_send: 0 = written, -1 = no connection yet. With addr 0 it answers
+// whoever called in, and with nobody on the line the bytes go nowhere and that
+// is a 0 too: there is no one to keep them for, and holding them would hand
+// stale output to the next caller.
+// csp_tcp_close: hang up the port's connection; a listening port listens on.
 extern int csp_tcp_recv(csp_rt_t* st, uint16_t port, uint32_t accept,
 			uint8_t* data, uint16_t* len);
 extern int csp_tcp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
 			const uint8_t* data, uint16_t len);
+extern void csp_tcp_close(csp_rt_t* st, uint16_t port);
 
 // UART: a STREAM like TCP, and the same two promises -- take what has arrived,
 // keep what will not fit. What it does NOT have is a connection: a wire is
@@ -3503,6 +3530,9 @@ extern int csp_uart_recv(csp_rt_t* st, uint32_t xref, uint8_t* data,
 			 uint16_t* len);
 extern int csp_uart_send(csp_rt_t* st, uint32_t xref, const uint8_t* data,
 			 uint16_t len);
+// /state: a line per serial port the host was given, `uart 0 /dev/pts/7`.
+// Nothing on a board.
+extern void csp_uart_show(void);
 
 // SMS (TR_SMS). The runtime side, in csp_transport.c: the sender check against
 // the #param named by `xref`, a message in as one line, bytes out gathered into
@@ -3607,6 +3637,13 @@ extern int  csp_con_space(void);
 extern uint16_t csp_con_room(csp_rt_t* st, int which);
 extern int  csp_con_space(void);
 extern int  csp_con_diverted(void);
+// Did the line being run come in over a route (telnet, a CAN relay) rather
+// than from the port's own console? /quit from there hangs up instead of
+// ending the node: csp_con_hangup asks, and csp_con_hangup_due says when the
+// output ring has drained and the route's connection may be closed.
+extern int  csp_con_remote(void);
+extern void csp_con_hangup(void);
+extern int  csp_con_hangup_due(void);
 // Bytes the tap could not keep, because the ring was full while nothing was
 // draining it. Reported rather than papered over: a listing with a silent hole
 // in it is worse than one that says how big the hole was.

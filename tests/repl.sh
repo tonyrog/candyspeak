@@ -2865,6 +2865,50 @@ else
     echo "  SKIP csp-image did not build an image"
 fi
 
+# A TELNET SHELL: `#route Net Rp` + `#route Rp Net` on one `inout tcp` port
+# with no address. Three things were wrong, all on the way back out:
+#   - csp_tcp_send refused addr 0, so the answers never left -- input worked,
+#     the replies went nowhere
+#   - the route SOURCE went dirty on receiving, and the output pass sent each
+#     typed line straight back: every command showed twice
+#   - /quit ended the node; from a route it now hangs up the session only, and
+#     the port listens for the next caller
+#   - routes ran only with latch off, and -i starts latched: no socket, no
+#     shell. Routes are wires now and run latched -- hence no /latch off here
+echo "telnet shell:"
+cat > "$D/tsh.csp" <<'CSPEOF'
+#buffer Net:160 inout tcp 55951
+#buffer Rp:160 inout repl
+#route Net Rp
+#route Rp Net
+CSPEOF
+( sleep 4; printf '/state\n/quit\n' ) |
+    ./csp -i --no-eeprom -e "$D/tsh.db" "$D/tsh.csp" > "$D/tsh.out" 2>&1 &
+tpid=$!
+sleep 0.5
+tsh_session() {
+    exec 3<>/dev/tcp/127.0.0.1/55951 || return
+    printf '%s\n/quit\n' "$1" >&3
+    timeout 2 cat <&3
+    echo "end $?"
+    exec 3<&-
+}
+got=$(tsh_session '#variable X = 7' | tr -d '\r')
+ck "a telnet session gets its answers, once each, and /quit hangs up" \
+'#variable X = 7
+OK
+> /quit
+end 0' "$got"
+got=$(tsh_session 'X' | tr -d '\r')
+ck "and the next caller is served by the same node" \
+'X
+7
+> /quit
+end 0' "$got"
+wait $tpid 2>/dev/null
+ck "the node itself ran on until its own /quit" "1" \
+   "$(grep -c '^X  *= 7$' "$D/tsh.out")"
+
 echo "settings:"
 
 # A setting is a value for something the firmware ALREADY declares, kept in its

@@ -828,6 +828,7 @@ void csp_output(csp_rt_t* st)
 	csp_can_output(st);
 	csp_buf_output(st);
     }
+    csp_route_run(st);   // routes are wires: latched or not, last
     csp_output_timer(st);
 }
 

@@ -291,6 +291,71 @@ static uint32_t raw_free()
 static uint32_t raw_free() { return 0; }
 #endif
 
+// SAMD's USB CDC LOSES output. The core's send() waits for the previous packet
+// by its transfer-complete flag, and the USB interrupt acks every pending flag
+// on every endpoint it looks at (epAckPendingInterrupts) -- that one too. When
+// it gets there first, send() waits for a flag that is gone, gives up after
+// 70 ms and zeroes the packet. A /dump rom of 1300 bytes came back one hex
+// digit short, somewhere new every time, paused or not.
+//
+// So we wait for the BANK instead: BK1RDY is cleared by the hardware when the
+// packet has gone, and nothing else touches it. With the bank free, send() does
+// not wait on the flag at all. The endpoint is the one bulk IN there is -- the
+// core keeps its number to itself.
+//
+// And the bytes are gathered into lines: one USB packet per byte is slow, and
+// every packet is another chance at the race. csp_flush sends the rest, and
+// loop() calls it, because the prompt has no newline.
+#if defined(ARDUINO_ARCH_SAMD)
+static uint8_t obuf[64];
+static uint8_t obuf_n;
+
+static void usb_tx_wait(void)
+{
+    static uint8_t ep;           // 0: not found yet (ep 0 is control)
+    static uint8_t stuck;        // nobody reading: do not wait 70 ms a line
+    uint32_t t0;
+    int i;
+
+    if (ep == 0) {
+	for (i = 1; i < 8; i++)
+	    if (USB->DEVICE.DeviceEndpoint[i].EPCFG.bit.EPTYPE1 == 3) {
+		ep = (uint8_t)i;
+		break;
+	    }
+	if (ep == 0)
+	    return;              // not enumerated yet
+    }
+    t0 = millis();
+    while (USB->DEVICE.DeviceEndpoint[ep].EPSTATUS.bit.BK1RDY) {
+	if (stuck || ((millis() - t0) > 70)) {
+	    stuck = 1;
+	    return;
+	}
+    }
+    stuck = 0;
+}
+
+static void serial_flush(void)
+{
+    if (obuf_n) {
+	usb_tx_wait();
+	Serial.write(obuf, obuf_n);
+	obuf_n = 0;
+    }
+}
+
+static void serial_put(char c)
+{
+    obuf[obuf_n++] = (uint8_t)c;
+    if ((c == '\n') || (obuf_n == sizeof(obuf)))
+	serial_flush();
+}
+#else
+#define serial_put(c)    Serial.write(c)
+#define serial_flush()   do { } while (0)
+#endif
+
 EXTERN_C_BEGIN
 
 
@@ -390,8 +455,8 @@ int csp_print_char(char c)
     csp_repl_tap(c);
     if (serial_output) {
 	if (c == '\n')
-	    Serial.write('\r');
-	Serial.write(c);
+	    serial_put('\r');
+	serial_put(c);
     }
     return 1;
 }
@@ -427,6 +492,7 @@ int csp_print_rostr(rostring_t s)
 
 void csp_flush(void)
 {
+    serial_flush();
 }
 
 EXTERN_C_END
@@ -1860,6 +1926,7 @@ void csp_output(csp_rt_t* st)
 	csp_buf_output(st);  // i2c/spi starts and datagrams
 	csp_board_stop_output(st);
     }
+    csp_route_run(st);   // routes are wires: latched or not, last
     csp_output_timer(st);
 }
 
@@ -2415,6 +2482,7 @@ void loop()
 
     // If setup could not build a pool, do nothing but let USB/Serial live, so the
     // FATAL message above is readable instead of being buried by a crash loop.
+    csp_flush();                    // what the last pass printed, prompt too
     if (state.mem == NULL || state.mem_limit == 0)
 	return;
 
@@ -2475,9 +2543,16 @@ void loop()
     // and touch nothing the pause protects. /upgrade pauses the node for the
     // flash write, so without this a node being upgraded OVER a route stops
     // reading the link the image is arriving on.
+    // /step N runs N cycles from here and stands still again (see csp_linux.c).
     if (state.paused) {
-	csp_route_run(&state);
-	return;
+	if (state.step_left > 0) {
+	    state.step_left--;
+	    state.cycle++;
+	}
+	else {
+	    csp_route_run(&state);
+	    return;
+	}
     }
 
     // run evaluation cycle. /live freezes the rules (skip csp_cycle) but keeps I/O
@@ -2497,6 +2572,7 @@ void loop()
 	uint32_t remaining = (state.es.wait_ms != NOTIMEOUT) ? state.es.wait_ms : SAMPLE_MS;
 	if (remaining > SAMPLE_MS)
 	    remaining = SAMPLE_MS;   // cap: sample rate wins over timer wait
+	csp_flush();                  // nothing left behind while we idle
 	while ((remaining > 0) && !state.line.ready) {   /* line_ready: always 0 exec-only */
 	    uint32_t chunk = min(remaining, (uint32_t)10);
 	    delay(chunk);

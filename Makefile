@@ -30,8 +30,10 @@ INCS    = -Iinclude -Igen -Isrc
 OBJDIR = obj
 # CSP_CONSOLE_BYTES: the two console rings. Off by default everywhere (a 2K
 # part should not carry them for a transport it never names); on here, because
-# the host is where the console transports are TESTED.
-CFLAGS=-MMD -MP -MF $(@:.o=.d) $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC -DCSP_HAVE_FLASH -DCSP_CONSOLE_BYTES=256
+# the host is where the console transports are TESTED. 4096, not a board-sized
+# 256: /dump rom is ~800 bytes printed in one go, and a routed console (telnet,
+# a second uart) dropped everything past the ring.
+CFLAGS=-MMD -MP -MF $(@:.o=.d) $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC -DCSP_HAVE_FLASH -DCSP_CONSOLE_BYTES=4096
 # rom_empty.o, NOT rom.o. `rom.c` is the DEMO image -- CandySpeak/rom.c is a
 # symlink to it, so it is what a board flashes, and it changes every time you
 # run `csp -C -O rom.c prog.csp`. ./csp is the compiler, the REPL and what the
@@ -172,7 +174,7 @@ EXEC_SRC = $(CORE_SRC) gen/rom.c
 # NOT $(CFLAGS): that carries -MF $(@:.o=.d), which for a link target spells
 # the output file itself and writes a dependency list over the binary.
 BC_FLAGS = $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC \
-	   -DCSP_HAVE_FLASH -DCSP_CONSOLE_BYTES=256 -w -g $(SAN)
+	   -DCSP_HAVE_FLASH -DCSP_CONSOLE_BYTES=4096 -w -g $(SAN)
 
 csp-bc: $(CORE_SRC) gen/rom_empty.c gen/csp_words_bc.h gen/csp_words_c.h \
 	 gen/csp_words.h gen/csp_layout.h gen/csp_strings.h include/csp_mcsp.h
@@ -401,7 +403,7 @@ clean:
 # image loads back into the firmware that links it. Run `make test` before a
 # commit; this is for the loop in between.
 test:	csp line_edit_check syntax_check strings_check tables_check \
-	patterns_check sketch_check disasm_check dump_check
+	patterns_check sketch_check disasm_check dump_check list_check
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
 
@@ -438,6 +440,12 @@ disasm_check: csp
 	@tools/csp-image -q -o tmp/disasm_arrays tests/disasm/arrays.csp
 	@escript tests/disasm/check.escript tmp/disasm_arrays.img
 
+# utils/csp_list: an image listed in Erlang reads exactly as /list lists the
+# source it came from -- the examples and the unit programs, every one of them.
+list_check: csp
+	@$(MAKE) --no-print-directory -s -C utils
+	@tests/list/check.sh examples/*.csp tests/unit/*.csp
+
 # /dump on a node simulated with a flash file: the image written to slot A and
 # the store /save wrote come back byte for byte, and the state reads as /state.
 dump_check: csp
@@ -448,7 +456,7 @@ dump_check: csp
 	@{ echo /save; echo /pause; echo "/step 2"; sleep 0.3; \
 	   echo "/dump rom A"; echo "/dump rom"; echo "/dump eeprom"; \
 	   echo "/dump patch"; \
-	   echo "/dump state"; echo /state; echo /quit; } | \
+	   echo "/dump state"; echo /state; echo /list; echo /quit; } | \
 	  ./csp -i --no-eeprom -e tmp/dump_ee.db --flash=tmp/dump_flash.bin \
 	    --part=ab tests/dump/node.csp >tmp/dump_out.txt 2>&1
 	@escript tests/dump/check.escript tmp/dump_out.txt tmp/dump_node.img \
@@ -845,7 +853,7 @@ $(OBJDIR)/%.o: %.c | gen/csp_strings.h
 
 -include $(OBJS:.o=.d)
 
-.PHONY: disasm_check dump_check clib_host webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
+.PHONY: disasm_check dump_check list_check clib_host webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

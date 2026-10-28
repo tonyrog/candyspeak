@@ -65,6 +65,18 @@ static uint8_t wired = 0;
 // usable prompt.
 static uint8_t diverted = 0;
 
+// WHO IS TYPING. Set by the last byte to reach the line editor: 1 when a route
+// fed it (csp_con_feed), 0 when the port's own console did. It is what makes
+// /quit from a telnet session hang up that session instead of ending the node
+// -- the shell quits, the program does not. A line half typed at each end at
+// once belongs to whichever spoke last, which is as good as it gets with one
+// editor.
+static uint8_t remote = 0;
+// A remote /quit, waiting for its answer to leave: the hangup happens once the
+// interpreter's output ring is empty, so what was printed before it still goes
+// out on the connection being closed and not to the next caller.
+static uint8_t hangup = 0;
+
 static int ring_put(con_ring_t* r, uint8_t c)
 {
     uint16_t nxt = (uint16_t)((r->tail + 1) % CSP_CONSOLE_BYTES);
@@ -156,8 +168,10 @@ static int csp_con_key(csp_rt_t* st, char c)
 	    csp_print_line("[local]");
 	return 1;
     }
-    if (!diverted)
+    if (!diverted) {
+	remote = 0;
 	return 0;                      // the line editor's, as always
+    }
     (void)ring_put(&ring[CON_KEYS], (uint8_t)c);
     return 1;
 }
@@ -201,6 +215,18 @@ int csp_con_space(void)
 
 int csp_con_diverted(void) { return diverted; }
 
+int csp_con_remote(void) { return remote; }
+
+void csp_con_hangup(void) { hangup = 1; }
+
+int csp_con_hangup_due(void)
+{
+    if (!hangup || (ring[CON_OUT].head != ring[CON_OUT].tail))
+	return 0;
+    hangup = 0;
+    return 1;
+}
+
 uint32_t csp_con_lost(void) { return ring[CON_KEYS].lost + ring[CON_OUT].lost; }
 
 int csp_con_take(int which, uint8_t* data, uint16_t* len)
@@ -232,6 +258,8 @@ void csp_con_show(const uint8_t* data, uint16_t len)
 void csp_con_feed(csp_rt_t* st, const uint8_t* data, uint16_t len)
 {
     uint16_t i;
+    if (len > 0)
+	remote = 1;
     for (i = 0; i < len; i++) {
 	if (!csp_line_space(&st->line))
 	    break;                     // back-pressure: the rest waits a cycle
@@ -278,6 +306,9 @@ void csp_con_wire(uint8_t mask) { (void)mask; }
 void csp_repl_tap(char c) { (void)c; }
 int csp_con_space(void) { return 1; }
 int csp_con_diverted(void) { return 0; }
+int csp_con_remote(void) { return 0; }
+void csp_con_hangup(void) { }
+int csp_con_hangup_due(void) { return 0; }
 uint32_t csp_con_lost(void) { return 0; }
 int csp_con_take(int which, uint8_t* data, uint16_t* len)
 {

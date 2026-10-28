@@ -14,6 +14,10 @@
 -define(SETTLE, 600).
 
 run() ->
+    %% No chat: the stub numbers events in the order they are made, and the
+    %% checks below know the panel's by number. chat_checks/0 has its own.
+    _ = application:load(csp_panel),
+    application:set_env(csp_panel, chat, off),
     register(wse_log, spawn(?MODULE, logger, [[]])),
     File = filename:join([code:lib_dir(), "..", "demo", "gate.csp"]),
     Demo = case filelib:is_regular(File) of
@@ -74,6 +78,8 @@ run() ->
     %%    pixel strip rather than a magnitude.
     analog_checks(),
     node_checks(),
+    uart_checks(),
+    chat_checks(),
 
     %% 6b. the lamp colour comes from the name, and an unlabelled one is red
     Hues = [{N, element(1, csp_panel:hue(N))}
@@ -1291,6 +1297,10 @@ node_checks() ->
     Said = link_said(nomatch),
     expect("a node's program is read from its dumps",
 	   string:find(Said, "declarations") =/= nomatch, Said),
+    Listed = receive {csp_program, Text} -> Text after 3000 -> "" end,
+    expect("and comes back as source, listed off its image",
+	   string:find(Listed, "#Cnt a") =/= nomatch andalso
+	   string:find(Listed, "K=K+1 ? timeout(T)") =/= nomatch, Listed),
     csp_link:tick(L),
     V1 = node_state(),
     expect("a node's state reads by name, objects and signs right",
@@ -1308,6 +1318,52 @@ node_checks() ->
 	   {C1, C2, P1, P2}),
     csp_link:close(L).
 
+%% The chat's own parts, without a model: its tools are well formed, the
+%% manual answers, `check' says what csp says, and the panel's half keeps a
+%% node out of the chat's hands unless panel.config lets it in.
+chat_checks() ->
+    Tools = csp_chat:tools(),
+    expect("chat: every tool has a name, a description and an object schema",
+	   lists:all(fun(#{name := N, description := D,
+			   schema := #{type := <<"object">>}}) ->
+			     is_binary(N) andalso is_binary(D);
+			(_) -> false
+		     end, Tools), length(Tools)),
+    Man = lists:flatten(io_lib:format("~ts", [csp_chat:manual("../..", <<"timer period">>)])),
+    expect("chat: the manual answers a query", string:find(Man, "#timer") =/= nomatch,
+	   string:slice(Man, 0, 80)),
+    Info = #{exe => csp_exe()},
+    Good = csp_chat:check(Info, <<"#digital Led out 0:13\nLed = 1\n">>),
+    {error, Bad} = csp_chat:check(Info, <<"#variable X = 0\nX = X +\nY = 1\n">>),
+    BadS = lists:flatten(io_lib:format("~ts", [Bad])),
+    expect("chat: check says ok, or the line csp complains about",
+	   Good =:= ok andalso string:find(BadS, "program:2") =/= nomatch, BadS),
+    Node = #{last => #{"X" => 1}, clock => {7, 0}, mode => run, local => false,
+	     link => none},
+    expect("chat: a node is not driven unless panel.config says so",
+	   element(1, csp_chat:panel_tool(<<"set">>, #{<<"name">> => <<"X">>,
+						       <<"value">> => 2}, Node))
+	   =:= error, nomatch),
+    {ok, St} = csp_chat:panel_tool(<<"state">>, #{}, Node),
+    expect("chat: the state reads with its cycle",
+	   string:find(lists:flatten(io_lib:format("~s", [St])), "cycle 7") =/= nomatch,
+	   St),
+    Ctx = #{chat => self(), panel => self(), made => [],
+	    info => #{file => "demo/gate.csp", root => "../..",
+		      exe => csp_exe(), demo_dir => "demo"}},
+    Turn = csp_chat:converse([#{role => user, content => <<"hej">>}], Ctx,
+			     #{backend => fake_llm}),
+    Last = case Turn of
+	       {ok, All} -> maps:get(content, lists:last(All));
+	       Other -> Other
+	   end,
+    expect("chat: a turn runs the tools and comes back with the answer",
+	   Last =:= <<"check said: ok">>, Last),
+    expect("chat: stepping a running program asks to pause first",
+	   element(1, csp_chat:panel_tool(<<"step">>, #{},
+					  Node#{local := true})) =:= error,
+	   nomatch).
+
 relay(LS) ->
     {ok, S} = gen_tcp:accept(LS),
     inet:setopts(S, [{active, true}]),
@@ -1324,6 +1380,45 @@ relay(S, P) ->
 	{tcp_closed, S} -> port_command(P, "/quit\n");
 	{P, {exit_status, _}} -> gen_tcp:close(S)
     end.
+
+%% A node on a serial line: csp --uart=pty makes the pair and names the far
+%% end, its console is routed to that uart (examples/uart_serv.csp), and the
+%% link opens the far end. What a board's second uart would be, with nothing
+%% plugged in. Skipped where the uart application is not on the code path.
+uart_checks() ->
+    case code:which(uart) of
+	non_existing -> io:format("SKIP  uart: no uart application~n");
+	_ -> uart_checks1()
+    end.
+
+uart_checks1() ->
+    flush(),
+    Node = open_port({spawn_executable, csp_exe()},
+		     [{args, ["-i", "--no-eeprom", "-e", "/tmp/csp_panel_none.db",
+			      "--uart=pty", "../../tests/dump/node.csp",
+			      "../../examples/uart_serv.csp"]},
+		      use_stdio, stderr_to_stdout, {line, 256}, exit_status]),
+    Far = receive {Node, {data, {eol, "uart 0: " ++ P}}} -> P
+	  after 3000 -> none
+	  end,
+    expect("csp --uart=pty names the far end", Far =/= none, Far),
+    {ok, T} = csp_link:target(Far),
+    {ok, L} = csp_link:open(T, csp_exe(), []), track(L),
+    Said = link_said(nomatch),
+    expect("a node on a serial line: its program is read",
+	   string:find(Said, "+ the patch running") =/= nomatch, Said),
+    csp_link:pause(L),
+    csp_link:tick(L),
+    {C1, P1} = node_cycle(),
+    csp_link:step(L, 3),
+    {C2, P2} = node_cycle(),
+    expect("and it steps and reads over the line",
+	   C1 =/= none andalso C2 =:= C1 + 3 andalso
+	   maps:get("b.N", P2) =:= (maps:get("b.N", P1) + 6) band 255,
+	   {C1, C2, P1, P2}),
+    csp_link:close(L),
+    port_command(Node, "/quit\n"),
+    receive {Node, {exit_status, _}} -> ok after 2000 -> ok end.
 
 link_said(Last) ->
     receive

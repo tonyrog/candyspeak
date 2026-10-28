@@ -3511,6 +3511,16 @@ NOINLINE int csp_load_image(csp_rt_t* st, const uint8_t* base)
 	csp_print_line(" -- regenerate the image");
 	return -1;
     }
+    // Same format, other numbers: a float constant written by a fixpoint build
+    // reads as garbage on a float one, and the other way round.
+    if (h.flags != CSP_IMG_FLAGS) {
+	csp_print_lit(LOADTXT(16, "ROM rejected: image flags "));
+	csp_print_uint(h.flags);
+	csp_print_lit(", firmware expects ");
+	csp_print_uint(CSP_IMG_FLAGS);
+	csp_print_line(" -- regenerate the image");
+	return -1;
+    }
     if ((bad = rom_verify(&p, &h)) != NULL) {
 	// Recover ONLY when the header itself (crc_hdr) is the casualty: then its
 	// counts, CRCs and offsets are all suspect, but the sections may be whole.
@@ -4974,6 +4984,12 @@ NOINLINE static int route_push(csp_rt_t* st, csp_buf_t* bp,
 //   payload copy landed and the far end read the first typed character as a
 //   command.
 //
+// Run by every port's csp_output whatever the latch says: the latch freezes
+// what the RULES drive, and a route is a wire between transports -- a console
+// over telnet or a serial line that went dead under `latch on` was a trap
+// (Tony walked into it at once). The pause leaves them running for the same
+// reason.
+//
 // LAST in the output pass, so a rule that also wrote the sink this cycle has
 // already had its turn and the route's bytes are the ones that go (Tony,
 // 2026-09-09). The data still LANDS in both buffers, so /state, a #field view
@@ -5049,6 +5065,17 @@ void csp_route_run(csp_rt_t* st)
 	    }
 	}
     }
+    // A /quit that came over a route, now that its answer has gone: hang up
+    // what feeds the interpreter. Only TCP has a connection to close; a wire
+    // or a bus just stops being talked to.
+    if (csp_con_hangup_due()) {
+	for (r = 0; r < st->nroute; r++) {
+	    csp_buf_t* src = &st->buf[st->route[r].src];
+	    if ((csp_buf_get_transport(&st->buf[st->route[r].dst]) == TR_REPL) &&
+		(csp_buf_get_transport(src) == TR_TCP))
+		csp_tcp_close(st, csp_buf_get_port(src));
+	}
+    }
     // Recomputed every pass, like the console wire mask: it follows a /undo
     // that drops the route as well as a line that adds one.
     csp_con_sms_wire(sms_out);
@@ -5092,6 +5119,15 @@ void csp_buf_output(csp_rt_t* st)
 	    //
 	    // dlc, like CAN and UDP: a stream carries what a rule put there, and
 	    // the rest of the buffer is last cycle's bytes.
+	    //
+	    // A ROUTE SOURCE IS DIRTY BECAUSE IT RECEIVED -- the same trap as
+	    // TR_REPL below. An `inout tcp` read by `#route Net Rp` sent every
+	    // typed line straight back, so telnet showed each command twice. Its
+	    // route moves its bytes; only a retry is this pass's business.
+	    if ((fs & BUF_F_ROUTED) && !(fs & BUF_F_TX)) {
+		csp_buf_set_flags(bp, fs & ~BUF_F_DIRTY);
+		break;
+	    }
 	    if (dir & DIR_OUT) {
 		if (csp_tcp_send(st, csp_buf_get_xref(bp), csp_buf_get_port(bp),
 				 buf_heap_din_ptr(st, bp),
@@ -5106,7 +5142,12 @@ void csp_buf_output(csp_rt_t* st)
 	    if (!(fs & (BUF_F_DIRTY|BUF_F_TX)))
 		continue;
 	    // Like TCP: the flags survive a send that did not go, so a port
-	    // whose FIFO is full keeps the bytes rather than dropping them.
+	    // whose FIFO is full keeps the bytes rather than dropping them --
+	    // and a route source is not sent back what it received.
+	    if ((fs & BUF_F_ROUTED) && !(fs & BUF_F_TX)) {
+		csp_buf_set_flags(bp, fs & ~BUF_F_DIRTY);
+		break;
+	    }
 	    if (dir & DIR_OUT) {
 		if (((tr == TR_UART)
 		     ? csp_uart_send(st, csp_buf_get_xref(bp),
@@ -5182,9 +5223,6 @@ void csp_buf_output(csp_rt_t* st)
 	    break;
 	}
     }
-    // LAST: the routes move their bytes after every rule has had its say, so a
-    // rule that also wrote a sink this cycle does not overwrite them.
-    csp_route_run(st);
 }
 
 // bump-allocate heap bytes, return the offset (or 0xffff on overrun)

@@ -70,6 +70,11 @@ CSP_WEAK int csp_tcp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
     return -1;
 }
 
+CSP_WEAK void csp_tcp_close(csp_rt_t* st, uint16_t port)
+{
+    (void)st; (void)port;
+}
+
 // --- UART -------------------------------------------------------------------
 
 CSP_WEAK int csp_uart_open(csp_rt_t* st, uint32_t xref)
@@ -90,6 +95,10 @@ CSP_WEAK int csp_uart_send(csp_rt_t* st, uint32_t xref, const uint8_t* data,
 {
     (void)st; (void)xref; (void)data; (void)len;
     return -1;
+}
+
+CSP_WEAK void csp_uart_show(void)
+{
 }
 
 // --- I2C --------------------------------------------------------------------

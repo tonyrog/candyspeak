@@ -34,15 +34,39 @@ hex_to_bin(Bin) ->
 
 -define(HEADER_DATA_LEN, (11*2 + 7*4)).  %% size of fields
 
-disasm(<<$J,$A,$M,$\n, HeaderData:?HEADER_DATA_LEN/binary, Crc:16/little,
+%% How the image reads, from its header's flags byte -- at the same offset in
+%% either byte order. Handed to everything that decodes a field or a value.
+ctx(<<_:7/binary, Flags, _/binary>>) ->
+    #{endian => case Flags band 2 of 0 -> little; 2 -> big end,
+      float => case Flags band 1 of 0 -> fixpoint; 1 -> ieee end}.
+
+%% A field of the image, in the image's byte order.
+word(#{endian := big}, Bin) ->
+    N = bit_size(Bin),
+    <<V:N/big>> = Bin,
+    V;
+word(#{endian := little}, Bin) ->
+    N = bit_size(Bin),
+    <<V:N/little>> = Bin,
+    V.
+
+u16(F, Bin) -> word(F, Bin).
+u32(F, Bin) -> word(F, Bin).
+
+%% The FLAGS byte first: it sits at the same offset in either byte order
+%% (size 4, version 2, role 1), and it says which order every other field is
+%% in. A node only ever reads its own; a host reads both.
+disasm(<<$J,$A,$M,$\n, HeaderData:?HEADER_DATA_LEN/binary, CrcBin:2/binary,
 	 Body/binary>>) ->
+    F = ctx(HeaderData),
+    Crc = u16(F, CrcBin),
     Crc1 = crc16(<<$J,$A,$M,$\n, HeaderData:?HEADER_DATA_LEN/binary>>),
     io:format("Header Crc=~p, expected=~p\n", [Crc1, Crc]),
     if Crc1 =/= Crc ->
 	    {error, bad_crc};
        true  ->
-	    Header = decode_header(HeaderData),
-	    Sections = decode_sections(Header, Body),
+	    Header = decode_header(F, HeaderData),
+	    Sections = decode_sections(F, Header, Body),
 	    _STRS_Ok = check_section_crc("STRS", n_str, crc_str, 
 					 Header, Sections),
 	    DECLS_OK = check_section_crc("DECL", n_decl, crc_decl, 
@@ -51,8 +75,8 @@ disasm(<<$J,$A,$M,$\n, HeaderData:?HEADER_DATA_LEN/binary, Crc:16/little,
 					Header, Sections),
 	    _GRAPH_OK = check_grapg_crc(Header, Sections),
 	    %% FIXME: check graph
-	    {Code,Strings} = disasm_code(CODE_OK, Sections),
-	    Decl = disasm_decl(DECLS_OK, Strings, Sections),
+	    {Code,Strings} = disasm_code(F, CODE_OK, Sections),
+	    Decl = disasm_decl(F, DECLS_OK, Strings, Sections),
 	    {ok, {Header, Strings, Decl, Code}}
     end;
 disasm(<<$J,$A,$M,$\n, _/binary>>) ->
@@ -73,19 +97,27 @@ image(Bin) ->
 %% image holds -- and the #disable bitmap. Its names continue the ROM's
 %% numbering, its declarations follow the ROM's. rom_fp is the crc_hdr of the
 %% image the patch belongs to; another image's names would be the wrong ones.
-patch(Rom = <<_:4/binary, _:?HEADER_DATA_LEN/binary, RomCrc:16/little, _/binary>>,
-      <<"CSP",0, _Version:16/little, _SetVer:16/little, SetBytes:16/little,
-	_CrcSet:16/little, RomFp:16/little, _Nq:16/little,
-	_RamMagic:4/binary, RamHeader:?HEADER_DATA_LEN/binary, _RamCrc:16/little,
-	_NDis:16/little, _CrcDis:16/little, _Crc:16/little, Rest/binary>>) ->
-    case disasm(Rom) of
+%% The store is the node's, so it is in the byte order of the node's image --
+%% which disasm(Rom) has just read from the image's flags.
+patch(Rom = <<_:4/binary, _:?HEADER_DATA_LEN/binary, RomCrcBin:2/binary, _/binary>>,
+      <<"CSP",0, _Version:2/binary, _SetVer:2/binary, SetBytesBin:2/binary,
+	_CrcSet:2/binary, RomFpBin:2/binary, _Nq:2/binary,
+	_RamMagic:4/binary, RamHeader:?HEADER_DATA_LEN/binary, _RamCrc:2/binary,
+	_NDis:2/binary, _CrcDis:2/binary, _Crc:2/binary, Rest/binary>>) ->
+    <<_:4/binary, RomHeader:?HEADER_DATA_LEN/binary, _/binary>> = Rom,
+    F = ctx(RomHeader),
+    Disasm = disasm(Rom),
+    RomCrc = u16(F, RomCrcBin),
+    RomFp = u16(F, RomFpBin),
+    SetBytes = u16(F, SetBytesBin),
+    case Disasm of
 	{ok, {Header, Strings, Decls, Code}} when RomFp =:= RomCrc ->
-	    Ram = decode_header(RamHeader),
+	    Ram = decode_header(F, RamHeader),
 	    ND = maps:get(n_decl, Ram),
 	    NI = maps:get(n_instr, Ram),
 	    <<_Settings:SetBytes/binary, DeclBin:(8*ND)/binary,
 	      InstrBin:(4*NI)/binary, _Dis/binary>> = Rest,
-	    {Code1, Strings1} = disasm_code(InstrBin, maps:get(n_instr, Header),
+	    {Code1, Strings1} = disasm_code(F, InstrBin, maps:get(n_instr, Header),
 					    maps:size(Strings), Strings, []),
 	    %% The image's trailing `end' is dropped when it is loaded
 	    %% (csp_load_image), and the patch's first declaration takes its
@@ -96,7 +128,7 @@ patch(Rom = <<_:4/binary, _:?HEADER_DATA_LEN/binary, RomCrc:16/little, _/binary>
 			 _ -> Decls
 		     end,
 	    Base = case Decls0 =:= Decls of true -> ND0; false -> ND0 - 1 end,
-	    Decls1 = disasm_decl(DeclBin, Base, Strings1, []),
+	    Decls1 = disasm_decl(F, DeclBin, Base, Strings1, []),
 	    {ok, {Header, Strings1, Decls0 ++ Decls1, Code ++ Code1}};
 	{ok, _} -> {error, {other_rom, RomFp, RomCrc}};
 	Error -> Error
@@ -104,10 +136,14 @@ patch(Rom = <<_:4/binary, _:?HEADER_DATA_LEN/binary, RomCrc:16/little, _/binary>
 patch(_Rom, _Eeprom) ->
     {error, bad_eeprom}.
 
-decode_header(
+decode_header(F, Bin) ->
+    decode_header_(maps:get(endian, F), Bin).
+
+decode_header_(little,
   <<Size:32/little,    %% total bytes of the image object
     Version:16/little, %% ROM_FORMAT_VERSION at generation
-    Role:16/little,       %% CSP_ROLE_*: what this image is for
+    Role:8,               %% CSP_ROLE_*: what this image is for
+    Flags:8,              %% CSP_IMG_F_*: how its values read
     Generation:16/little, %% higher is newer; orders A against B
     N_str:16/little,      %% str bytes (excl. sentinel + trailer)
     N_decl:16/little,     %% decl entries (excl. DECL_END_MARK)
@@ -125,18 +161,50 @@ decode_header(
     Ofs_edg:32/little>>) ->
   #{
     size => Size, version => Version, role => Role, generation => Generation,
+    flags => Flags, float => case Flags band 1 of 0 -> fixpoint; 1 -> ieee end,
+    endian => case Flags band 2 of 0 -> little; 2 -> big end,
+    n_str => N_str, crc_str => Crc_str, ofs_str => Ofs_str,
+    n_decl => N_decl, crc_decl => Crc_decl, ofs_decl => Ofs_decl,
+    n_instr => N_instr, crc_instr => Crc_instr, ofs_instr => Ofs_instr,
+    n_edg => N_edg,  crc_graph => Crc_graph, 
+    ofs_idg => Ofs_idg, ofs_ofs => Ofs_ofs, ofs_edg => Ofs_edg };
+
+decode_header_(big,
+  <<Size:32/big,    %% total bytes of the image object
+    Version:16/big, %% ROM_FORMAT_VERSION at generation
+    Role:8,               %% CSP_ROLE_*: what this image is for
+    Flags:8,              %% CSP_IMG_F_*: how its values read
+    Generation:16/big, %% higher is newer; orders A against B
+    N_str:16/big,      %% str bytes (excl. sentinel + trailer)
+    N_decl:16/big,     %% decl entries (excl. DECL_END_MARK)
+    N_instr:16/big,    %% instr entries (excl. OP_END_MARK)
+    N_edg:16/big,      %% edg entries (0 = no reactive graph)
+    Crc_str:16/big,    %% CRC-16/CCITT per section
+    Crc_decl:16/big,
+    Crc_instr:16/big,
+    Crc_graph:16/big,  %% over idg + ofs + edg (0 when n_edg == 0)
+    Ofs_str:32/big,   %% section DATA starts, bytes from the image base
+    Ofs_decl:32/big, %% (each section's prologue sits just before its data)
+    Ofs_instr:32/big,
+    Ofs_idg:32/big,
+    Ofs_ofs:32/big,
+    Ofs_edg:32/big>>) ->
+  #{
+    size => Size, version => Version, role => Role, generation => Generation,
+    flags => Flags, float => case Flags band 1 of 0 -> fixpoint; 1 -> ieee end,
+    endian => case Flags band 2 of 0 -> little; 2 -> big end,
     n_str => N_str, crc_str => Crc_str, ofs_str => Ofs_str,
     n_decl => N_decl, crc_decl => Crc_decl, ofs_decl => Ofs_decl,
     n_instr => N_instr, crc_instr => Crc_instr, ofs_instr => Ofs_instr,
     n_edg => N_edg,  crc_graph => Crc_graph, 
     ofs_idg => Ofs_idg, ofs_ofs => Ofs_ofs, ofs_edg => Ofs_edg }.
 
-decode_sections(Header,
-		<<S,E,C,T,Len:32/little,SectionData:Len/binary,
-		  Sections/binary>>) ->
+decode_sections(F, Header, <<S,E,C,T,LenBin:4/binary,Rest/binary>>) ->
+    Len = u32(F, LenBin),
+    <<SectionData:Len/binary, Sections/binary>> = Rest,
     Tag = [S,E,C,T],
-    [{Tag, SectionData} | decode_sections(Header,Sections)];
-decode_sections(_Header, <<>>) ->
+    [{Tag, SectionData} | decode_sections(F, Header,Sections)];
+decode_sections(F, _Header, <<>>) ->
     [].
 
 -define(MASK(Len), ((1 bsl (Len))-1)).
@@ -170,7 +238,7 @@ reg(I) ->
     maps:get(I band ?REG_MASK, reg()).
 reg() ->
     #{ 0 => r0, 1 => r1, 2 => r2, 3 => r3,
-       4 => r4, 5 => r5, 6 => r6, 7 => r4,
+       4 => r4, 5 => r5, 6 => r6, 7 => r7,
        8 => r8, 9 => r9, 10 => r10, 11 => r11,
        12 => r12, 13 => r13, 14 => r14, 15 => r15 }.
 
@@ -311,7 +379,7 @@ decl() ->
   ?DECL_FIELD => field,
   ?DECL_BUFFER => buffer,
   ?DECL_VIEW => view,
-  ?DECL_ROUTE => rout,
+  ?DECL_ROUTE => route,
   ?DECL_END_MARK => end_mark
  }.
 decl(T) ->
@@ -447,7 +515,7 @@ opcodes() ->
        ?OP_ST    => {'ST', mem},
        ?OP_STP   => {'STP', mem},
        ?OP_STIMP => {'STIMP', mem},
-       ?OP_CHG   => {'CHG', alu},
+       ?OP_CHG   => {'CHG', mem},
        ?OP_LI    => {'LI', imm},
        ?OP_LIU   => {'LIU', imm},
        ?OP_LIH   => {'LIH', imm},
@@ -461,11 +529,12 @@ opcodes() ->
        ?OP_END_MARK => {'END', 'end'}
      }.
 
-disasm_code(ok, Sections) ->
+disasm_code(F, ok, Sections) ->
     {_, Code} = lists:keyfind("CODE", 1, Sections),
-    disasm_code(Code, 0, 1, #{ 0 => ""}, []).
+    disasm_code(F, Code, 0, 1, #{ 0 => ""}, []).
 
-disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
+disasm_code(F, <<InstrBin:4/binary, Data/binary>>, Addr, Si, Strings, Acc) ->
+    Instr = word(F, InstrBin),
     {Pos0, [{opcode,Op}]} = decode_bits(Instr, 0, [{opcode,uint,?OPCODE_BITS}]),
     case maps:get(Op, opcodes()) of
 	{_OpCode, 'end'} ->
@@ -480,7 +549,7 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 	    <<StringData:(4*Num)/binary, Data1/binary>> = Data,
 	    I = {instr,Addr,OpCode,[{slots,Num},{used,Used},{data,StringData}]},
 	    {Si1, Strings1} = add_strings(Used, StringData, Si, Strings),
-	    add_instr(Data1, Addr, 1+Num, I, Si1, Strings1, Acc);
+	    add_instr(F, Data1, Addr, 1+Num, I, Si1, Strings1, Acc);
 	{OpCode, instate} ->
 	    {_Pos,[{x,X},{imm,Imm},{nxt,Nxt},{implicit,Imp}]} =
 		decode_bits(Instr, Pos0,
@@ -490,7 +559,7 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 			     {implicit, uint, 1}]),
 	    Implicit = if Imp =:= 1 -> [implicit]; true -> [] end,
 	    I = {instr, Addr, OpCode, [reg(X),Imm,{nxt,Nxt}|Implicit]},
-	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
+	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, rule} ->
 	    {_Pos,[{cnd,Cnd},{nxt,Nxt},{implicit,Imp}]} =
 		decode_bits(Instr, Pos0,
@@ -500,33 +569,34 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 			     {implicit, uint, 1}]),
 	    Implicit = if Imp =:= 1 -> [implicit]; true -> [] end,
 	    I = {instr, Addr, OpCode, [reg(Cnd),Nxt|Implicit]},
-	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
+	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, enter} ->
 	    {_Pos,[{num,Num},{mx,Mx}]} =
 		decode_bits(Instr, Pos0,
 			    [{num, uint, ?BODY_BITS},
 			     {mx,  uint, ?INDEX_BITS}]),
 	    I = {instr,Addr,OpCode,[{mem,Mx},{n,Num}]},
-	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
+	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, leave} ->
 	    {_Pos,[{num,Num},{mx,Mx}]} =
 		decode_bits(Instr, Pos0,
 			    [{num, uint, ?BODY_BITS},
 			     {mx,  uint, ?INDEX_BITS}]),
 	    I = {instr,Addr,OpCode,[{mem,Mx},{n,Num}]},
-	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
+	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, next} ->
 	    {_Pos,[{x,X}]} =
 		decode_bits(Instr, Pos0,
 			    [{x, uint, ?REG_BITS}]),
 	    I = {instr,Addr,OpCode,[reg(X)]},
-	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
+	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, new} ->
 	    {_Pos,[{obj,Obj}]} =
 		decode_bits(Instr, Pos0,
-			    [{obj, uint, ?INDEX_BITS}]),
+			    [{'_', 2},
+			     {obj, uint, ?INDEX_BITS}]),
 	    I = {instr,Addr,OpCode,[{obj,Obj}]},
-	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
+	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, call} ->
 	    {_Pos,[{x,X},{idx,Idx},{usr,Usr},{avt,Avt}]} =
 		decode_bits(Instr, Pos0,
@@ -535,8 +605,8 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 			     {usr, uint, 1},
 			     {avt, uint, 16}]),
 	    Sig = avt(Avt),
-	    I = {inst,Addr,OpCode,[reg(X),{idx,Idx},{usr,Usr},{avt,Sig}]},
-	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
+	    I = {instr,Addr,OpCode,[reg(X),{idx,Idx},{usr,Usr},{avt,Sig}]},
+	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, alu, 1} ->
 	    {_Pos,[{x,X},{y,Y},{u,U},{swap,_Swap}]} =
 		decode_bits(Instr, Pos0,
@@ -545,26 +615,21 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 			     {'_', ?REG_BITS},
 			     {u, uint, 1},
 			     {swap, uint, 1}]),
-	    I = if U =:= 0 ->
-			{instr, Addr, OpCode, [reg(X),reg(Y)]};
-		   U =:= 1 ->
-			{instr, Addr, OpCode, [reg(X),reg(Y),unsigned]}
-		end,
-	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
+	    I = {instr, Addr, OpCode, [reg(X),reg(Y)] ++ [unsigned || U =:= 1]},
+	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, alu, 2} ->
-	    {_Pos,[{x,X},{y,Y},{z,Z},{u,U},{swap,_Swap}]} =
+	    %% swap: `a > b' was emitted as `b < a', operands exchanged -- the
+	    %% listing needs it to put the source back.
+	    {_Pos,[{x,X},{y,Y},{z,Z},{u,U},{swap,Swap}]} =
 		decode_bits(Instr, Pos0,
 			    [{x, uint, ?REG_BITS},
 			     {y, uint, ?REG_BITS},
 			     {z, uint, ?REG_BITS},
 			     {u, uint, 1},
 			     {swap, uint, 1}]),
-	    I = if U =:= 0 ->
-			{instr, Addr, OpCode, [reg(X),reg(Y),reg(Z)]};
-		   U =:= 1 ->
-			{instr, Addr, OpCode, [reg(X),reg(Y),reg(Z),unsigned]}
-		end,
-	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
+	    I = {instr, Addr, OpCode, [reg(X),reg(Y),reg(Z)] ++
+		     [unsigned || U =:= 1] ++ [swap || Swap =:= 1]},
+	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, mem} ->
 	    {_Pos,[{x,X},{y,Y},{mem,Mem}]} =
 		decode_bits(Instr, Pos0,
@@ -579,7 +644,7 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 		    'STP' -> {instr, Addr, OpCode, [reg(X),{mem,Mem},part(Y)]};
 		    _ -> {instr, Addr, OpCode, [reg(X), {mem,Mem}]}
 		end,
-	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
+	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, imm} ->
 	    {_Pos,[{x,X},{imm,Imm}]} =
 		decode_bits(Instr, Pos0,
@@ -596,7 +661,7 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 		    _ ->
 			{instr, Addr, OpCode, [reg(X), {imm,Imm}]}
 		end,
-	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
+	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, memi} ->
 	    {_Pos,[{x,X},{imm,Imm},{mem,Mem}]} =
 		decode_bits(Instr, Pos0,
@@ -604,13 +669,14 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 			     {imm, int, ?TINY_BITS},
 			     {mem, uint, ?INDEX_BITS}]),
 	    I = {instr, Addr, OpCode, [reg(X), {imm,Imm}, {mem,Mem}]},
-	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
+	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, seto} ->
 	    {_Pos,[{obj,Obj}]} = 
 		decode_bits(Instr, Pos0,
-			    [{obj, uint, 16}]),
+			    [{'_', 2},
+			     {obj, uint, 16}]),
 	    I = {instr,Addr,OpCode,[{obj,Obj}]},
-	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
+	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, setox} ->
 	    %% bits = 1: stride is in BITS and moves the next buffer view
 	    %% (`Frame[BytePos]`), else declarations per array element
@@ -623,15 +689,15 @@ disasm_code(<<Instr:32/little, Data/binary>>, Addr, Si, Strings, Acc) ->
 			     {stride, uint, 6}]),
 	    I = {instr,Addr,OpCode,[reg(X),{len,Len},{stride,Stride}] ++
 		     [bits || Bits =:= 1]},
-	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);	    
+	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);	    
 	{OpCode, nop} ->
 	    I = {instr,Addr,OpCode},
-	    add_instr(Data, Addr, 1, I, Si, Strings, Acc);
+	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
 	{OpCode, Format} ->
 	    I = {instr,Addr,OpCode,Format},
-	    add_instr(Data, Addr, 1, I, Si, Strings, Acc)
+	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc)
     end;
-disasm_code(<<>>, _, _Si,Strings, Acc) ->
+disasm_code(F, <<>>, _, _Si,Strings, Acc) ->
     {lists:reverse(Acc), Strings}.
 
 add_strings(0, _, Si, Strings) ->
@@ -639,13 +705,13 @@ add_strings(0, _, Si, Strings) ->
 add_strings(Used, <<N,String:N/binary, StringData/binary>>, Si, Strings) ->
     add_strings(Used - (N+1), StringData, Si+1, Strings#{ Si => String }).
 
-add_instr(Data, Addr, Size, I, Si, String, Acc) ->
+add_instr(F, Data, Addr, Size, I, Si, String, Acc) ->
     io:format("~w: ~p\n", [Addr, I]),
-    disasm_code(Data, Addr+Size, Si, String, [I|Acc]).
+    disasm_code(F, Data, Addr+Size, Si, String, [I|Acc]).
 
-disasm_decl(ok, Strings, Sections) ->
+disasm_decl(F, ok, Strings, Sections) ->
     {_, Decl} = lists:keyfind("DECL", 1, Sections),
-    disasm_decl(Decl, 0, Strings, []).  %% arrays()
+    disasm_decl(F, Decl, 0, Strings, []).  %% arrays()
 
 %% An array is one entry, the way the source declares it: `#analog P[10]:16 out
 %% unsigned 9:0..9` is {decl,I,analog,"P",[{len,10},...,{elems,[...]}]}. What
@@ -701,8 +767,9 @@ with_opts(D, Opts) ->
 -endif.
 
 
-disasm_decl(<<Decl:64/little, Data/binary>>, 
+disasm_decl(F, <<DeclBin:8/binary, Data/binary>>, 
 	    I, Strings, Acc) ->
+    Decl = word(F, DeclBin),
     {Pos, [{_, IDeclType}, {_, _ICont}, {_, ILocal}, {_, IDir}, {_, IName}]} =
 	 decode_bits(Decl, [{type,uint,?DECL_TYPE_BITS},
 			    {cont,uint,1},{local,uint,1},{dir,uint,?DIR_BITS},
@@ -713,7 +780,7 @@ disasm_decl(<<Decl:64/little, Data/binary>>,
 	    lists:reverse(Acc);
 	'end' ->
 	    D = {decl,I,'end'},
-	    add_decl(Data, I, 1, D, Strings, Acc);	    
+	    add_decl(F, Data, I, 1, D, Strings, Acc);	    
 	states ->
 	    {_Pos,[{_,Name2},{_,Name3},{_,Name4},{_,Name5},{_,Name6}]} =
 		decode_bits(Decl, Pos, 
@@ -727,7 +794,7 @@ disasm_decl(<<Decl:64/little, Data/binary>>,
 				     {name4,maps:get(Name4, Strings)},
 				     {name5,maps:get(Name5, Strings)},
 				     {name6,maps:get(Name6, Strings)}]},
-	    add_decl(Data, I, 1, D, Strings, Acc);
+	    add_decl(F, Data, I, 1, D, Strings, Acc);
 	module ->
 	    {32, _THeader} = decode_type_header(Decl, Pos),
 	    {_Pos2, [{n,N},{ent,Ent}]} = 
@@ -735,7 +802,7 @@ disasm_decl(<<Decl:64/little, Data/binary>>,
 			    [{n, uint, ?INDEX_BITS},
 			     {ent, uint, ?INDEX_BITS}]),
 	    D = {decl,I,module,Name,[{n,N},{ent,Ent}]},
-	    add_decl(Data, I, 1, D, Strings, Acc);
+	    add_decl(F, Data, I, 1, D, Strings, Acc);
 	object ->
 	    {32, _THeader} = decode_type_header(Decl, Pos),
 	    {_Pos2, [{mx,Mx},{m,M}]} = 
@@ -745,23 +812,23 @@ disasm_decl(<<Decl:64/little, Data/binary>>,
 	    ModuleDecl = find_decl(Mx, Acc),
 	    ModuleName = element(4, ModuleDecl),
 	    D = {decl,I,object,ModuleName,Name,[{mx,Mx},{m,M}]},
-	    add_decl(Data, I, 1, D, Strings, Acc);
+	    add_decl(F, Data, I, 1, D, Strings, Acc);
 	variable ->
-	    {LType, Params} = disasm_elem(variable,ILocal,IDir,Pos,Decl,Strings),
+	    {LType, Params} = disasm_elem(F, variable,ILocal,IDir,Pos,Decl,Strings),
 	    D = {decl,I,LType,Name,[]},
-	    disasm_array(Data, I, 1, D, Strings, [Params], Acc);
+	    disasm_array(F, Data, I, 1, D, Strings, [Params], Acc);
 	constant ->
-	    {LType, Params} = disasm_elem(constant,ILocal,IDir,Pos,Decl,Strings),
+	    {LType, Params} = disasm_elem(F, constant,ILocal,IDir,Pos,Decl,Strings),
 	    D = {decl,I,LType,Name,[]},
-	    disasm_array(Data, I, 1, D, Strings, [Params], Acc);
+	    disasm_array(F, Data, I, 1, D, Strings, [Params], Acc);
 	digital ->
-	    {digital, Params} = disasm_elem(digital,ILocal,IDir,Pos,Decl,Strings),
+	    {digital, Params} = disasm_elem(F, digital,ILocal,IDir,Pos,Decl,Strings),
 	    D = {decl,I,digital,Name,[]},
-	    disasm_array(Data, I, 1, D, Strings, [Params], Acc);
+	    disasm_array(F, Data, I, 1, D, Strings, [Params], Acc);
 	analog ->
-	    {analog, Params} = disasm_elem(analog,ILocal,IDir,Pos,Decl,Strings),
+	    {analog, Params} = disasm_elem(F, analog,ILocal,IDir,Pos,Decl,Strings),
 	    D = {decl,I,analog,Name,[]},
-	    disasm_array(Data, I, 1, D, Strings, [Params], Acc);
+	    disasm_array(F, Data, I, 1, D, Strings, [Params], Acc);
 	timer ->
 	    {32, [{res,Res},{is_mapped,_},
 		  {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
@@ -769,27 +836,54 @@ disasm_decl(<<Decl:64/little, Data/binary>>,
 	    Type = type(Vt),
 	    
 	    [{period,Period},{fired,_},{running,_},{value,Init}] = 
-		decode_value(Decl, 32, timer, Strings),
+		decode_value(F, Decl, 32, timer, Strings),
 	    D =  {decl,I,timer,Name,[{size,Res+1},
 				     {type,Type},
 				     {period,Period},
 				     {init,Init}
 				    ]},
-	    drop_empty_decl(Data, I, 1, D, Strings, Acc);
+	    drop_empty_decl(F, Data, I, 1, D, Strings, Acc);
 
+	%% A window into a #buffer: a #field has a name, the view a slice like
+	%% `Buf[2..3]' makes has none. bit is a BIT position, len the width.
+	Window when Window =:= field; Window =:= view ->
+	    {32, [{res,_},{is_mapped,_},{bound,_},{nx,_},{vt,Vt},{reg,_}]} =
+		decode_type_header(Decl, Pos),
+	    D = {decl,I,Window,Name,[{dir,dir(IDir)},{type,type(Vt)}|ca(Decl)]},
+	    add_decl(F, Data, I, 1, D, Strings, Acc);
+	%% id names the constant holding the transport endpoint (and id+1, for
+	%% the ones that need two).
+	buffer ->
+	    {_, [{nbytes,N},{transport,Tr},{id,Id}]} =
+		decode_bits(Decl, 32, [{nbytes,uint,10},{transport,uint,4},
+				       {'_',2},{id,uint,16}]),
+	    D = {decl,I,buffer,Name,[{dir,dir(IDir)},{nbytes,N},
+				     {transport,transport(Tr)},{id,Id}]},
+	    add_decl(F, Data, I, 1, D, Strings, Acc);
+	%% Two #buffer declarations.
+	route ->
+	    {_, [{src,Src},{dst,Dst}]} =
+		decode_bits(Decl, 32, [{src,uint,16},{dst,uint,16}]),
+	    D = {decl,I,route,Name,[{src,Src},{dst,Dst}]},
+	    add_decl(F, Data, I, 1, D, Strings, Acc);
 	DeclType ->
 	    D = {decl,I,DeclType,Name,[{dir,dir(IDir)},{local,ILocal}]},
-	    add_decl(Data, I, 1, D, Strings, Acc)
+	    add_decl(F, Data, I, 1, D, Strings, Acc)
     end;
-disasm_decl(<<>>, _I, _Strings, Acc) ->
+disasm_decl(F, <<>>, _I, _Strings, Acc) ->
     lists:reverse(Acc).
 
-disasm_elem(variable,ILocal,IDir,Pos,Decl,Strings) ->
+disasm_elem(F, variable,ILocal,IDir,Pos,Decl,Strings) ->
     {32, [{res,Res},{is_mapped,_},
-	  {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
+	  {bound,Bound},{nx,_},{vt,Vt},{reg,_}]} = 
 	decode_type_header(Decl, Pos),
     Type = type(Vt),
-    Init = decode_value(Decl, 32, Type, Strings),
+    %% `bind Buf[lo..hi]': a bit-field view, so the arm is the window and
+    %% there is no init value.
+    Init = case Bound of
+	       1 -> {bind, ca(Decl)};
+	       0 -> decode_value(F, Decl, 32, Type, Strings)
+	   end,
     case ILocal of
 	0 -> {variable,[{size,Res+1},
 			{dir,dir(IDir)},
@@ -800,12 +894,12 @@ disasm_elem(variable,ILocal,IDir,Pos,Decl,Strings) ->
 		     {type,Type},
 		     {init,Init}]}
     end;
-disasm_elem(constant,ILocal,_IDir,Pos,Decl,Strings) ->    
+disasm_elem(F, constant,ILocal,_IDir,Pos,Decl,Strings) ->    
     {32, [{res,Res},{is_mapped,_},
 	  {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
 	decode_type_header(Decl, Pos),
     Type = type(Vt),
-    Init = decode_value(Decl, 32, Type, Strings),
+    Init = decode_value(F, Decl, 32, Type, Strings),
     case ILocal of
 	0 -> {constant,[{size,Res+1},
 			{type,Type},
@@ -816,13 +910,13 @@ disasm_elem(constant,ILocal,_IDir,Pos,Decl,Strings) ->
 		     {init,Init}
 		    ]}
     end;
-disasm_elem(digital,_ILocal,IDir,Pos,Decl,Strings) ->        
+disasm_elem(F, digital,_ILocal,IDir,Pos,Decl,Strings) ->        
     {32, [{res,Res},{is_mapped,_},
 	  {bound,_},{nx,_},{vt,_Vt},{reg,_}]} = 
 	decode_type_header(Decl, Pos),
     %% Type = type(Vt),
     [{soft,Soft},{pin,Pin},{port,Port},{irq,Irq},{pullup,Pu},{pulldown,Pd}] = 
-	decode_value(Decl, 32, digital, Strings),
+	decode_value(F, Decl, 32, digital, Strings),
     {digital,[{size,Res+1},
 	      {dir, dir(IDir)},
 	      {pin,Pin},
@@ -832,14 +926,14 @@ disasm_elem(digital,_ILocal,IDir,Pos,Decl,Strings) ->
 	      {pullup,Pu},
 	      {pulldown,Pd}
 	     ]};
-disasm_elem(analog,_ILocal,IDir,Pos,Decl,Strings) ->
+disasm_elem(F, analog,_ILocal,IDir,Pos,Decl,Strings) ->
     {32, [{res,Res},{is_mapped,_},
 	  {bound,_},{nx,_},{vt,Vt},{reg,_}]} = 
 	decode_type_header(Decl, Pos),
     Type = type(Vt),
     [{soft,Soft},{pin,Pin},{port,Port},{irq,Irq},
      {pwm,Pwm},{endian,Endian}] =
-	decode_value(Decl, 32, analog, Strings),
+	decode_value(F, Decl, 32, analog, Strings),
     {analog,[{size,Res+1},
 	     {type,Type},
 	     {dir,dir(IDir)},
@@ -851,23 +945,37 @@ disasm_elem(analog,_ILocal,IDir,Pos,Decl,Strings) ->
 	     {endian,endian(Endian)}
 	    ]}.
 
+%% The window arm of a #field, a buffer view and a bound variable.
+ca(Decl) ->
+    {_, [{id,Id},{endian,E},{bit,Bit},{len,Len}]} =
+	decode_bits(Decl, 32, [{id,uint,16},{endian,uint,2},{bit,uint,9},
+			       {len,uint,5}]),
+    [{id,Id},{endian,endian(E)},{bit,Bit},{len,Len+1}].
+
+%% transport_t in csp.h.
+transport(T) ->
+    element(T+1, {none, pin, can, i2c, spi, udp, console, repl, tcp, uart,
+		  sms, onewire, T, T, T, T}).
+
 find_decl(Mx, Ds) ->
     lists:keyfind(Mx, 2, Ds).
 
-add_decl(Data, I, Size, D, Strings, Acc) ->
-    disasm_decl(Data, I+Size, Strings, [D|Acc]).
+add_decl(F, Data, I, Size, D, Strings, Acc) ->
+    disasm_decl(F, Data, I+Size, Strings, [D|Acc]).
 
 %% Drop decl if next name = 0 (crash otherwise)
-drop_empty_decl(<<Decl:64/little, Data/binary>>, I, Size, D, Strings, Acc) ->
+drop_empty_decl(F, <<DeclBin:8/binary, Data/binary>>, I, Size, D, Strings, Acc) ->
+    Decl = word(F, DeclBin),
     {_Pos, [{_, _IDeclType}, {_, _ICont}, {_, _ILocal}, {_, _IDir}, {_, 0}]} =
 	decode_bits(Decl, [{type,uint,?DECL_TYPE_BITS},
 			   {cont,uint,1},{local,uint,1},{dir,uint,?DIR_BITS},
 			   {name,uint,?NAMEID_BITS}]),
     D1 = add_params(D, [{slots, 2}]),
-    disasm_decl(Data, I+Size+1, Strings, [D1|Acc]).
+    disasm_decl(F, Data, I+Size+1, Strings, [D1|Acc]).
 
-disasm_array(Data = <<Decl:64/little, Data1/binary>>,
+disasm_array(F, Data = <<DeclBin:8/binary, Data1/binary>>,
 	      I, Size, D, Strings, Elems, Acc) ->
+    Decl = word(F, DeclBin),
     {Pos, [{_, IDeclType}, {_, ICont}, {_, ILocal}, {_, IDir}, {_, IName}]} =
 	decode_bits(Decl, [{type,uint,?DECL_TYPE_BITS},
 			   {cont,uint,1},{local,uint,1},{dir,uint,?DIR_BITS},
@@ -876,17 +984,17 @@ disasm_array(Data = <<Decl:64/little, Data1/binary>>,
     HType = stored_type(element(3, D)),
     if DType =:= HType, ICont =:= 1, IName =:= 0 ->
 	    %% yes this slot is collected, part of array
-	    {_,Params} = disasm_elem(DType,ILocal,IDir,Pos,Decl,Strings),
-	    disasm_array(Data1,I+1,Size+1,D,Strings,[Params|Elems],Acc);
+	    {_,Params} = disasm_elem(F, DType,ILocal,IDir,Pos,Decl,Strings),
+	    disasm_array(F, Data1,I+1,Size+1,D,Strings,[Params|Elems],Acc);
        ICont =:= 0 ->
-	    array_end(Data, I, Size, D, Strings, Elems, Acc)
+	    array_end(F, Data, I, Size, D, Strings, Elems, Acc)
     end;
 %% The end of the data with no end mark after it: a patch from the EEPROM
 %% store is just its records.
-disasm_array(<<>>, I, Size, D, Strings, Elems, Acc) ->
-    array_end(<<>>, I, Size, D, Strings, Elems, Acc).
+disasm_array(F, <<>>, I, Size, D, Strings, Elems, Acc) ->
+    array_end(F, <<>>, I, Size, D, Strings, Elems, Acc).
 
-array_end(Data, I, Size, D, Strings, Elems, Acc) ->
+array_end(F, Data, I, Size, D, Strings, Elems, Acc) ->
 	    D1 = if Size > 1 ->
 			 {Params0,Es} = make_elems(lists:reverse(Elems)),
 			 %% identical elements: len says it all
@@ -899,7 +1007,7 @@ array_end(Data, I, Size, D, Strings, Elems, Acc) ->
 		    %% a scalar: its one element's parameters are its own
 		    true -> add_params(D, hd(Elems))
 		 end,
-	    disasm_decl(Data, I+1, Strings, [D1|Acc]).
+	    disasm_decl(F, Data, I+1, Strings, [D1|Acc]).
 	    
 %% The declaration type an element is STORED as. A #param head is shown as
 %% `param` and a #local as `local`, but in the image both are the plain type
@@ -929,26 +1037,30 @@ decode_type_header(Decl, Pos) ->
 		 {vt, uint, ?TYPE_BITS},
 		 {reg, uint, ?REG_BITS}]).
 
-decode_value(Decl, Pos, integer, _Strings) ->
+decode_value(F, Decl, Pos, integer, _Strings) ->
     {_Pos1, [{ivalue,Value}]} = decode_bits(Decl, Pos, [{ivalue,int,32}]),
     Value;
-decode_value(Decl, Pos, unsigned, _Strings) ->
+decode_value(F, Decl, Pos, unsigned, _Strings) ->
     {_Pos1, [{uvalue,Value}]} = decode_bits(Decl, Pos, [{uvalue,uint,32}]),
     Value;
-decode_value(Decl, Pos, float, _Strings) ->
-    {_Pos1, [{fvalue,Value}]} = decode_bits(Decl, Pos, [{fvalue,float,32}]),
-    Value;
-decode_value(Decl, Pos, string, Strings) ->
+decode_value(F, Decl, Pos, float, _Strings) ->
+    %% Q16.16 or IEEE binary32, as the header's flags say.
+    {_Pos1, [{fvalue,Bits}]} = decode_bits(Decl, Pos, [{fvalue,int,32}]),
+    case maps:get(float, F) of
+	ieee -> <<V:32/float-little>> = <<Bits:32/little>>, V;
+	fixpoint -> Bits / 65536
+    end;
+decode_value(F, Decl, Pos, string, Strings) ->
     {_Pos1, [{sindex,Index}]} = decode_bits(Decl, Pos, [{sindex,int,32}]),
     maps:get(Index, Strings);
-decode_value(Decl, Pos, timer, _Strings) ->
+decode_value(F, Decl, Pos, timer, _Strings) ->
     {_Pos1, Init} = decode_bits(Decl, Pos, [{period,uint,28},
 					    {'_', 1},  %% not used
 					    {fired,uint,1},
 					    {running,uint,1},
 					    {value,uint,1}]),
     Init;
-decode_value(Decl, Pos, digital, _Strings) ->
+decode_value(F, Decl, Pos, digital, _Strings) ->
     {_Pos1, Init} = decode_bits(Decl, Pos, [{soft,uint,1},
 					    {pin,uint,?PIN_BITS},
 					    {port,uint,?PORT_BITS},
@@ -956,7 +1068,7 @@ decode_value(Decl, Pos, digital, _Strings) ->
 					    {pullup,uint,1},
 					    {pulldown,uint,1}]),
     Init;
-decode_value(Decl, Pos, analog, _Strings) ->
+decode_value(F, Decl, Pos, analog, _Strings) ->
     {_Pos1, Init} = decode_bits(Decl, Pos, [{soft,uint,1},
 					    {pin,uint,?PIN_BITS},
 					    {port,uint,?PORT_BITS},

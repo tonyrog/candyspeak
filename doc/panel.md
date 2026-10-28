@@ -314,12 +314,21 @@ The node end of CAN is the relay in `examples/relay/node.csp` with `can`
 buffers in place of `udp`: `#buffer Rx:4 in can 0x601` and
 `#buffer Tx:4 out can 0x581`. It moves 4 bytes per cycle. On the host, at
 about ten cycles a second, that is 40 bytes a second: a `/dump rom` of 760
-bytes takes 20 s, a state 2 s. The console ring (`CSP_CONSOLE_BYTES`, 256 on
+bytes takes 20 s, a state 2 s. The console ring (`CSP_CONSOLE_BYTES`, 4096 on
 the host) has to hold a whole reply, or what does not fit is lost.
+
+A board's own console port needs nothing on the node: its USB serial is the
+console. A csp on the host stands in for a serial node with
+`csp --uart=pty examples/uart_serv.csp`: it prints `uart 0: /dev/pts/N`, and
+that goes in the target field. `make test` in tools/panel does exactly that.
 
 A node has no dump stream. The panel reads its program once (`/dump rom`, then
 the patch), and on every tick it asks `/dump state` and names the values from
-that program. Run, pause, step and the widgets send the same commands as they
+that program. The program comes back as source too (`csp_list`), and the panel
+rebuilds itself from it -- code view and widgets are what the node RUNS, not
+the file that was open. It is kept as `$TMPDIR/csp_node/<target>.csp`, which is
+what the file chooser then shows. To run a file again, type `local` in the
+target field and pick it. Run, pause, step and the widgets send the same commands as they
 do to a csp of the panel's own. Connecting does not pause a node, even when
 `panel.config` says `{mode, pause}`. Closing lets go of a node; it is never
 sent `/quit`. A node does not say which rules fired, so the code view's
@@ -499,6 +508,33 @@ reports.
 A declaration inside a `#module` becomes one widget per object, named as csp
 dumps it. The Pixel module in `cpx_m.csp` gives ten pixels, `p0.P` to `p9.P`.
 Before this change it gave a single pixel `P` that nothing ever wrote.
+
+## The chat
+
+With ellm (and the rester it talks through) on the code path, the bar has a
+`chat` button. It opens a pane on the right where a language model helps write,
+read and debug the program -- with the same things at hand as you: the
+program shown (the node's own, listed off its image, when the panel runs a
+node), the values right now, the manual, the tree's `.csp` files, the
+compiler, varp, and the run, pause and step buttons.
+
+What it may do. It reads freely. It writes only new files of its own, in
+`demo/` unless `{chat, [{dir, Dir}]}` says otherwise, and only a file it made
+in this session may be written again -- `dl1200.csp` and friends are safe.
+`load` checks a program with csp first and then runs it in the panel, so it
+needs a local target. Against a NODE it drives nothing (no set, pause, step)
+unless `{chat, [{node_control, true}]}` is in `panel.config`: a node may be
+wired to something that moves.
+
+It works on source text with line numbers and gets the compiler's errors back
+as `program:LINE`; a change to a long program is an `edit` (old text, new
+text) rather than the whole file. A varp answer is BOUNDED -- "no run breaks
+the invariants within k steps" -- and names what the model left free, where a
+counterexample may be one the program cannot take.
+
+Configuration is ellm's own `{ellm, [...]}` in `panel.config` (backend, model,
+key -- the key as `"$ANTHROPIC_API_KEY"` or `".authinfo"`, not in the file),
+and `{csp_panel, [{chat, off}]}` takes the button away.
 
 ## Notes and known gaps
 

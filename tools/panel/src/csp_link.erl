@@ -11,7 +11,9 @@
 %%% (target/1). It has no -Q stream, so a tick asks: /dump state, read against
 %%% the program /dump rom and /dump eeprom said it runs. The same messages come
 %%% back, without csp_fired, and the node is never sent /quit -- closing just
-%%% lets go of it. The owner also gets {csp_link, Text}, what is connected.
+%%% lets go of it. The owner also gets {csp_link, Text}, what is connected,
+%%% and {csp_program, Text}: the node's program as source, listed off its image
+%%% and patch by csp_list -- what it runs, whatever file the panel had open.
 %%%
 %%% Ticking is ours to drive: /commit runs exactly one cycle and prints nothing
 %%% but the dump. /state would also step, but adds a page of human text to parse
@@ -301,8 +303,11 @@ connect({can, If, To, From}) ->
     catch
 	error:undef -> {error, "no can application on the code path"}
     end;
+%% Raw bytes, split into lines here as CAN's are: in {packet, line} the
+%% driver hands over one line per read and leaves the rest of a burst in its
+%% buffer until more bytes arrive, so a dump stalled half way.
 connect({uart, Dev, Baud}) ->
-    try uart:open1(Dev, [{baud, Baud}, {mode, list}, {packet, line},
+    try uart:open1(Dev, [{baud, Baud}, {mode, binary}, {packet, 0},
 			 {active, true}]) of
 	{ok, U} -> {ok, {uart, U}};
 	E -> E
@@ -335,7 +340,7 @@ hangup({can, _, _, _, _}) -> can_router:detach().
 remote(Io, Owner, St) ->
     receive
 	{tcp, _, Line}  -> remote(Io, Owner, line(Io, Owner, Line, St));
-	{uart, _, Line} -> remote(Io, Owner, line(Io, Owner, Line, St));
+	{uart, _, Data} -> remote(Io, Owner, bytes(Io, Owner, Data, St));
 	%% #can_frame{id, len, data, intf, ts}: bytes, not lines. Ours only,
 	%% on the interface we named.
 	{can_frame, From, _, Data, Id, _} when element(1, Io) =:= can,
@@ -380,7 +385,11 @@ remote(Io, Owner, St) ->
 	    remote(Io, Owner, St)
     end.
 
-bytes(Io, Owner, Data, St = #{part := P}) ->
+%% XOFF/XON are flow control, never text: a node holds the line around every
+%% command it parses (serial_hold), on USB too, and "\^Sdump rom 1300" is not a
+%% dump head.
+bytes(Io, Owner, Data0, St = #{part := P}) ->
+    Data = binary:replace(Data0, [<<16#13>>, <<16#11>>], <<>>, [global]),
     case binary:split(<<P/binary, Data/binary>>, <<"\n">>, [global]) of
 	[Rest] -> St#{part := Rest};
 	Ls ->
@@ -468,12 +477,21 @@ program(Owner, Ds, St = #{target := T}) ->
 	    Owner ! {csp_link, io_lib:format("node ~s, ~w declarations~s",
 					     [where(T), length(Decls),
 					      patched(Ds)])},
+	    case listing(Ds) of
+		{ok, Text} -> Owner ! {csp_program, Text};
+		Error ->
+		    Owner ! {csp_link, io_lib:format("node ~s: not listed: ~P",
+						     [where(T), Error, 8])}
+	    end,
 	    St#{decls := Decls, want := state};
 	Other ->
 	    Owner ! {csp_link, io_lib:format("node ~s: program not read: ~P",
 					     [where(T), Other, 8])},
 	    St#{want := none}
     end.
+
+listing([{rom, Rom}]) -> csp_list:image(Rom);
+listing([{rom, Rom}, {_, Patch}]) -> csp_list:patch(Rom, Patch).
 
 patched([_, {patch, _}])  -> " + the patch running";
 patched([_, {eeprom, _}]) -> " + the patch stored";

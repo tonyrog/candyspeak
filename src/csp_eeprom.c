@@ -88,6 +88,7 @@ static void ram_image(csp_rt_t* st, csp_image_header_t* im,
     index_t base_nd = CSP_BASE_ND(st);
 
     im->version = ROM_FORMAT_VERSION;
+    im->flags = CSP_IMG_FLAGS;
     im->n_str = n_str; im->n_decl = n_decl; im->n_instr = n_instr;
     im->n_edg = 0;
 
@@ -333,6 +334,12 @@ int csp_eeprom_load(csp_rt_t* st)
 	csp_print_lit(LOADTXT(2, ", firmware is "));
 	csp_print_uint(ROM_FORMAT_VERSION);
 	csp_print_line(LOADTXT(3, " -- clear it and re-enter"));
+	goto error;
+    }
+    // A patch saved by a float build holds IEEE constants; a fixpoint one
+    // would read them as Q16.16. Same format, so the version passes it.
+    if (hdr.ram.flags != CSP_IMG_FLAGS) {
+	csp_print_line(LOADTXT(17, "eeprom rejected: other float format -- clear it and re-enter"));
 	goto error;
     }
 

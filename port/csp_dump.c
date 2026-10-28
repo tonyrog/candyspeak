@@ -1306,7 +1306,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    // decl section. Same aliasing that let `State = c` corrupt a name.
 	    csp_load_decl(st, di, &d);
 	    if (csp_decl_get_type(&d) != DECL_STATES) {
-		csp_decl_set_is_mapped(&d, 0); csp_decl_set_bound(&d, 0); csp_decl_set_reg(&d, 0);
+		csp_decl_set_is_mapped(&d, 0); csp_decl_set_reg(&d, 0);
 	    }
 	    if (csp_decl_get_type(&d) == DECL_TIMER) { csp_decl_set_tm_fired(&d, 0); csp_decl_set_tm_running(&d, 0); /* csp_decl_set_tm__res(&d, 0); */ }
 
@@ -1346,10 +1346,14 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	//
 	// NOT on a states block: is_mapped/bound/reg are bits 26..31, which that
 	// arm uses as the low six of name3.
+	//
+	// `bound` is NOT scratch: it is what makes `#variable X bind Buf[..]` a
+	// window instead of a variable, and nothing at run time sets it. Cleared
+	// here, a ROM listed the bind as `= <the window's bits>` and set the
+	// variable up as a plain one (found by utils/csp_list against /list).
 	csp_load_decl(st, i, &dv);
 	if (csp_decl_get_type(dp) != DECL_STATES) {
 	    csp_decl_set_is_mapped(dp, 0);
-	    csp_decl_set_bound(dp, 0);
 	    csp_decl_set_reg(dp, 0);
 	}
 	if (csp_decl_get_type(dp) == DECL_TIMER) {
@@ -1696,6 +1700,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	h.magic[2] = CSP_IMAGE_MAGIC2; h.magic[3] = CSP_IMAGE_MAGIC3;
 	h.size = img_size;
 	h.role = (meta && meta->role) ? meta->role : CSP_ROLE_ROM;
+	h.flags = CSP_IMG_FLAGS;
 	h.generation = (meta) ? meta->generation : 0;
 	h.ofs_str = o_str;   h.ofs_decl = o_decl; h.ofs_instr = o_instr;
 	h.ofs_idg = o_idg;   h.ofs_ofs = o_ofs;   h.ofs_edg = o_edg;
@@ -1708,7 +1713,8 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	fprintf(f, "  .hdr = {\n"
 		   "    .magic = { CSP_IMAGE_MAGIC0, CSP_IMAGE_MAGIC1,"
 		   " CSP_IMAGE_MAGIC2, CSP_IMAGE_MAGIC3 },\n"
-		   "    .size=%u, .version=%u, .role=%u, .generation=%u,\n"
+		   "    .size=%u, .version=%u, .role=%u, .flags=%u,"
+		   " .generation=%u,\n"
 		   "    .n_str=%u, .n_decl=%u, .n_instr=%u, .n_edg=%u,\n"
 		   "    .crc_str=%u, .crc_decl=%u, .crc_instr=%u,"
 		   " .crc_graph=%u,\n"
@@ -1716,7 +1722,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 		   " .ofs_idg=%u,\n"
 		   "    .ofs_ofs=%u, .ofs_edg=%u,\n"
 		   "    .crc_hdr=%u }\n};\n",
-		h.size, h.version, h.role, h.generation,
+		h.size, h.version, h.role, h.flags, h.generation,
 		h.n_str, h.n_decl, h.n_instr, h.n_edg,
 		h.crc_str, h.crc_decl, h.crc_instr, h.crc_graph,
 		h.ofs_str, h.ofs_decl, h.ofs_instr, h.ofs_idg,

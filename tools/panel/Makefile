@@ -1,15 +1,19 @@
 # The panel needs three trees on the code path: candyspeak's own ebin/ (the
 # parser and candyspeak_varp, built by utils/Makefile), wse (the remote DOM)
 # and this. WSE defaults to ~/erlang/wse. uart is for a node on a serial line,
-# and only then.
+# and only then. ellm (and the rester it talks through) is for the chat, and
+# only then: without it on the path there is no chat button.
 
 WSE   ?= $(HOME)/erlang/wse
 UART  ?= $(HOME)/erlang/uart
+ELLM  ?= $(HOME)/erlang/ellm
+RESTER ?= $(HOME)/erlang/rester
 ROOT   = ../..
 
 ERLC   = erlc
 EBIN   = ebin
-PA     = -pa $(EBIN) -pa $(ROOT)/ebin -pa $(WSE)/ebin -pa $(UART)/ebin
+PA     = -pa $(EBIN) -pa $(ROOT)/ebin -pa $(WSE)/ebin -pa $(UART)/ebin \
+	 -pa $(ELLM)/ebin -pa $(RESTER)/ebin
 
 SRC    = $(wildcard src/*.erl)
 BEAM   = $(SRC:src/%.erl=$(EBIN)/%.beam)
@@ -44,7 +48,7 @@ run: all
 # given wins -- test/ebin goes at the end, not the front.
 test: all
 	mkdir -p test/ebin
-	$(ERLC) -o test/ebin test/wse.erl test/panel_test.erl
+	$(ERLC) -o test/ebin test/wse.erl test/panel_test.erl test/fake_llm.erl
 	CSP_EXE=$(abspath $(ROOT)/csp) \
 	  erl -noshell $(PA) -pa test/ebin -s panel_test run
 

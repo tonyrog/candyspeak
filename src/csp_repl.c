@@ -2034,6 +2034,7 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 	csp_print_uint(csp_con_lost());
     }
     csp_println();
+    csp_uart_show();
     csp_println();
 
     // Two passes so object INSTANCES actually appear: the globals, then each
@@ -2394,9 +2395,11 @@ static int cmd_dump(csp_rt_t* st, int argc, char* argv[])
 	    return CSP_CMD_OK;
 	}
 	{
-	    // The image running: the linked one, or the slot it was booted from.
+	    // The image running: the slot it was booted from, or -- image_no -1,
+	    // which is every board without the registry (AVR, play) -- the
+	    // firmware's own rom_image, which is what csp_load_rom fell back to.
 	    const uint8_t* base = (st->image_no >= 0) ?
-		csp_image_at(st->image_no) : NULL;
+		csp_image_at(st->image_no) : ro_ref(&rom_image).base;
 	    csp_image_header_t h;
 	    if (base == NULL) {
 		csp_print_line("ERR no image");
@@ -3229,9 +3232,15 @@ static int cmd_commit(csp_rt_t* st, int argc, char* argv[])
     return CSP_CMD_OK;
 }
 
+// From a route -- a telnet session on `#route Net Rp` -- /quit ends the
+// session, not the node: the connection is closed once the answer is out.
 static int cmd_quit(csp_rt_t* st, int argc, char* argv[])
 {
     (void)st; (void)argv;
+    if (csp_con_remote()) {
+	csp_con_hangup();
+	return CSP_CMD_OK;
+    }
     return CSP_CMD_QUIT;
 }
 

@@ -690,17 +690,61 @@ static int inj_pop(uint32_t* id, uint8_t* data, uint8_t* len)
 // from socat, or anything else that reads and writes bytes. Unit 0 unless the
 // option says otherwise (`--uart=2:/dev/ttyUSB0`).
 //
+// `--uart=pty` makes the pair itself and says where the other end is, on
+// stderr and in /state: `minicom -D /dev/pts/7` and you are on the node.
+//
 // The BAUD in the declaration is applied when the device is a real tty and
 // ignored when it is not -- a pty has no baud, and refusing to run on one would
 // make the transport untestable without hardware.
 #include <termios.h>
+#include <sys/ioctl.h>
 
 #ifndef CSP_UART_MAXPORT
 #define CSP_UART_MAXPORT 2
 #endif
 
-static struct { int unit; const char* dev; int fd; } uart_port[CSP_UART_MAXPORT];
+static struct {
+    int unit;
+    const char* dev;
+    int fd;
+    int keep;                      // a pty: our own hold on the far end
+    char pts[24];                  // a pty: the far end's name
+} uart_port[CSP_UART_MAXPORT];
 static int uart_nport = 0;
+
+// A PTY PAIR, the Linux way: /dev/ptmx, unlock, ask the number. No grantpt or
+// ptsname, which want feature-test macros this file does not define, and devpts
+// sets the owner itself.
+//
+// THE FAR END IS HELD OPEN BY US. With nobody on it a master reads EIO and
+// polls as hung up, for ever -- the loop would spin. Holding it means the
+// output queues there instead, until minicom comes along; csp_uart_send drops
+// it when the queue is full, as tcp does with nobody on the line.
+static int uart_pty(int i)
+{
+    struct termios tio;
+    unsigned n;
+    int fd, lock = 0;
+
+    if ((fd = open("/dev/ptmx", O_RDWR | O_NOCTTY | O_NONBLOCK)) < 0)
+	return -1;
+    if ((ioctl(fd, TIOCSPTLCK, &lock) < 0) || (ioctl(fd, TIOCGPTN, &n) < 0)) {
+	close(fd);
+	return -1;
+    }
+    snprintf(uart_port[i].pts, sizeof(uart_port[i].pts), "/dev/pts/%u", n);
+    // RAW, for the same reason a real tty is made raw below. Whoever opens
+    // the far end sets its own modes; this is what it finds.
+    if (tcgetattr(fd, &tio) == 0) {
+	cfmakeraw(&tio);
+	tcsetattr(fd, TCSANOW, &tio);
+    }
+    uart_port[i].keep = open(uart_port[i].pts, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    uart_port[i].fd = fd;
+    uart_port[i].dev = uart_port[i].pts;
+    fprintf(stderr, "uart %d: %s\n", uart_port[i].unit, uart_port[i].pts);
+    return 0;
+}
 
 // --uart=[<unit>:]<device>
 static void uart_add(const char* spec)
@@ -719,6 +763,11 @@ static void uart_add(const char* spec)
     uart_port[uart_nport].unit = unit;
     uart_port[uart_nport].dev  = spec;
     uart_port[uart_nport].fd   = -1;
+    uart_port[uart_nport].keep = -1;
+    if ((strcmp(spec, "pty") == 0) && (uart_pty(uart_nport) < 0)) {
+	fprintf(stderr, "uart: no pty -- %s\n", strerror(errno));
+	return;
+    }
     uart_nport++;
 }
 
@@ -803,9 +852,30 @@ int csp_uart_send(csp_rt_t* st, uint32_t xref, const uint8_t* data, uint16_t len
     i = uart_find(xref);
     if ((i < 0) || (uart_port[i].fd < 0))
 	return -1;
-    if (write(uart_port[i].fd, data, len) != (ssize_t)len)
+    if (write(uart_port[i].fd, data, len) != (ssize_t)len) {
+	// A pty's queue full is nobody reading: drop what waits there, so the
+	// one who opens it next gets the node's answers, not old ones.
+	if ((uart_port[i].keep >= 0) && (errno == EAGAIN)) {
+	    tcflush(uart_port[i].keep, TCIFLUSH);
+	    return 0;
+	}
 	return -1;                     // the caller keeps it and retries
+    }
     return 0;
+}
+
+// /state's line per serial port: where it is, so a pty can be found again.
+void csp_uart_show(void)
+{
+    int i;
+
+    for (i = 0; i < uart_nport; i++) {
+	csp_print_lit("uart ");
+	csp_print_uint((unsigned)uart_port[i].unit);
+	csp_print_lit(" ");
+	csp_print_str(uart_port[i].dev);
+	csp_println();
+    }
 }
 
 // For the loop to wait on, like the other two.
@@ -964,11 +1034,15 @@ int csp_tcp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
     ssize_t n;
     (void)st;
 
-    if ((s == NULL) || (addr == 0))
-	return -1;                     // an out buffer with no destination
+    if (s == NULL)
+	return -1;
     if (s->cfd < 0) {
 	struct sockaddr_in a;
 	int fd;
+	// No address and nobody called in: an answer with no one to hear it.
+	// Gone, not kept -- the next caller wants its own replies, not these.
+	if (addr == 0)
+	    return 0;
 	s->outbound = 1;
 	if ((fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0)) < 0)
 	    return -1;
@@ -1003,6 +1077,15 @@ int csp_tcp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
 // The connections, for the loop to wait on -- csp_udp_pollfd's counterpart.
 // Both ends are here: a listening socket becomes readable when someone calls,
 // and a connection when bytes arrive.
+void csp_tcp_close(csp_rt_t* st, uint16_t port)
+{
+    tcp_sock_t* s = tcp_find(port, 0);
+    (void)st;
+
+    if (s != NULL)
+	tcp_drop(s);
+}
+
 int csp_tcp_pollfd(int slot)
 {
     int i, k = 0;
@@ -1110,6 +1193,7 @@ void csp_output(csp_rt_t* st)
 	csp_can_output(st);
 	csp_buf_output(st);  // i2c/spi starts and datagrams
     }
+    csp_route_run(st);   // routes are wires: latched or not, last
     csp_output_timer(st);
 }
 

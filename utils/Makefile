@@ -9,7 +9,7 @@ YRL_SRC=$(wildcard *.yrl)
 XRL_SRC=$(wildcard *.xrl)
 YRL_XRL_GENERATES=$(YRL_SRC:%.yrl=%.erl) $(XRL_SRC:%.xrl=%.erl)
 MODULES=$(YRL_XRL_GENERATES:%.erl=%) candyspeak candyspeak_varp candyspeak_c \
-	csp_to_c csp_disasm csp_node csp_to_candyspeak candyspeak_eval
+	csp_to_c csp_disasm csp_list csp_node csp_to_candyspeak candyspeak_eval
 ALL_OBJECTS=$(MODULES:%=$(EBIN)/%.beam)
 
 empty=

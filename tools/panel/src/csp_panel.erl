@@ -117,18 +117,22 @@ run(Ws, Where) ->
     run(Ws, Where, default_file()).
 
 run(Ws, Where, File) ->
-    render(Ws, Where, File).
+    %% The chat, when ellm is there: its own process, so it lives through
+    %% every rebuild below.
+    Chat = csp_chat:start(Ws, #{root => root(), exe => csp_exe(),
+				demo_dir => demo_dir()}),
+    render(Ws, Where, File, Chat).
 
 %% Also the restart path: picking another file in the chooser comes back here,
 %% so the whole panel is rebuilt from that file's declarations.
-render(Ws, Where, File) ->
+render(Ws, Where, File, Chat) ->
     Root = wse:id(Where),
     wse:set(Ws, Root, "innerHTML", ""),
     case candyspeak:parse(File) of
 	{ok, Ast} ->
-	    build(Ws, Where, Root, File, widgets(Ast), Ast);
+	    build(Ws, Where, Root, File, widgets(Ast), Ast, Chat);
 	Error ->
-	    chooser(Ws, Root, File),
+	    chooser(Ws, Root, File, Chat),
 	    text(Ws, Root, io_lib:format("~n~p cannot be parsed: ~p",
 					 [File, Error]))
     end.
@@ -720,19 +724,19 @@ eng(V, #{scale := S, unit := U}) ->
 
 %%% ---------------------------------------------------------------- rendering
 
-build(Ws, Where, Root, File, [], Ast) ->
+build(Ws, Where, Root, File, [], Ast, Chat) ->
     %% Parsed fine, but nothing in it is a widget yet. Say which declarations
     %% it does have -- an empty panel otherwise looks like a failure.
-    {_SelId, _Sel, _Run} = chooser(Ws, Root, File),
+    {_SelId, _Sel, _Run} = chooser(Ws, Root, File, Chat),
     text(Ws, Root, io_lib:format(
 		     "nothing to show in ~s.~n~n"
 		     "it declares: ~s~n~n"
 		     "widgets come from #digital, #analog and #field; variables "
 		     "and rules are not shown yet.",
 		     [shorten(File), kinds(Ast)])),
-    wait_for_pick(Ws, Where);
-build(Ws, Where, Root, File, Widgets0, Ast) ->
-    {SelId, _Sel, Run} = chooser(Ws, Root, File),
+    wait_for_pick(Ws, Where, Chat);
+build(Ws, Where, Root, File, Widgets0, Ast, Chat) ->
+    {SelId, _Sel, Run} = chooser(Ws, Root, File, Chat),
     %% Everything in one window. The TOP frame is where the program is: State,
     %% cycle and clock, the goal and solve, varp's answer, the values. Under
     %% it the devices on the left and the code view on the right, each
@@ -808,7 +812,9 @@ build(Ws, Where, Root, File, Widgets0, Ast) ->
 		     clock_box => Clock,
 		     link_box => LinkBox,
 		     file   => File,
+		     chat   => Chat,
 		     where  => Where},
+    csp_chat:attach(Chat, chat_info(File)),
     loop(Ws, Link, start_mode(Ws, Link, S2)).
 
 %% {mode, pause} in panel.config: start stopped, ready to step. Not a node: it
@@ -849,6 +855,24 @@ retarget(Ws, Link, S, Text) ->
 	    show_link(Ws, S, Why),
 	    {Link, S}
     end.
+
+%% What the chat is told after every rebuild: what is shown, and where it runs.
+chat_info(File) ->
+    #{file => File, target => target_text(), local => is_local()}.
+
+is_local() ->
+    case target() of
+	{{local, _}, _} -> true;
+	_ -> false
+    end.
+
+%% Where a node's listing is kept: named after the target, so the chooser
+%% says which node the program came from.
+node_file(Target) ->
+    Name = [case C of $/ -> $_; $\s -> $_; _ -> C end
+	    || C <- string:trim(hd(string:lexemes(Target ++ " ", " ")), leading,
+				"/")],
+    filename:join([os:getenv("TMPDIR", "/tmp"), "csp_node", Name ++ ".csp"]).
 
 show_link(Ws, #{link_box := {B, F}}, Text) ->
     wse:cast(Ws, F, "call", [null, B, lists:flatten(Text)]);
@@ -960,7 +984,7 @@ theme(Ws, T) ->
 
 %% Lists every .csp under demo/ and the tree's examples/, so another program is
 %% a pick rather than an edit of the page.
-chooser(Ws, Root, Current) ->
+chooser(Ws, Root, Current, Chat) ->
     Bar = wse:createElement(Ws, "div"),
     wse:setStyle(Ws, Bar, "font:14px monospace;color:#888;margin-bottom:12px"),
     Sel = wse:createElement(Ws, "select"),
@@ -984,7 +1008,7 @@ chooser(Ws, Root, Current) ->
 			", this.value); }"),
     wse:set(Ws, Sel, "onchange", Func),
     wse:appendChild(Ws, Bar, Sel),
-    Run = runstep(Ws, Bar),
+    Run = runstep(Ws, Bar, Chat),
     wse:appendChild(Ws, Root, Bar),
     {Id, Sel, Run}.
 
@@ -998,7 +1022,7 @@ chooser(Ws, Root, Current) ->
 %% committed together -- the way a board commits every DIN at the top of a cycle.
 %% That is also what a replayed model trace needs, since a trace step carries
 %% several inputs belonging to the same instant.
-runstep(Ws, Bar) ->
+runstep(Ws, Bar, Chat) ->
     Wrap = wse:createElement(Ws, "span"),
     wse:setStyle(Ws, Wrap, "margin-left:16px"),
     {ok, Id} = wse:create_event(Ws),
@@ -1031,6 +1055,14 @@ runstep(Ws, Bar) ->
 	    end,
     Views = lists:append([Group(case K of "theme" -> ""; _ -> K end, K, Vals)
 			  || {K, Vals} <- ?VIEWS]),
+    %% Only when there is a chat to open: ellm on the path, not switched off.
+    Chat =/= undefined andalso
+	begin
+	    L = wse:createElement(Ws, "span"),
+	    wse:setStyle(Ws, L, "margin-left:16px"),
+	    wse:appendChild(Ws, Wrap, L),
+	    Mk("chat", "chat=toggle")
+	end,
     wse:appendChild(Ws, Bar, Wrap),
     #{event => Id, run => RunB, pause => PauseB, one => OneB,
       views => maps:from_list(Views)}.
@@ -1659,9 +1691,9 @@ painter(Ws) ->
 	     ", 3); } }").
 
 %% Nothing to drive, so there is no csp and no tick -- just the chooser.
-wait_for_pick(Ws, Where) ->
+wait_for_pick(Ws, Where, Chat) ->
     receive
-	{notify, _Id, _Local, File} -> render(Ws, Where, File);
+	{notify, _Id, _Local, File} -> render(Ws, Where, File, Chat);
 	{closed, _}                 -> ok;
 	stop                        -> ok
     end.
@@ -1694,14 +1726,38 @@ loop(Ws, Link, S) ->
 	{notify, SelId, _Local, File} ->
 	    csp_link:close(Link),
 	    flush(),
-	    render(Ws, maps:get(where, S), File);
+	    render(Ws, maps:get(where, S), File, maps:get(chat, S));
 
 	%% run / pause / step. Sent by the bar, and told apart from a widget by
 	%% the event id rather than by the payload, so a signal called "step"
 	%% could not be mistaken for the button.
 	{notify, RunId, _Local, "target=" ++ Text} ->
 	    {Link1, S1} = retarget(Ws, Link, S, Text),
+	    csp_chat:attach(maps:get(chat, S1), chat_info(maps:get(file, S1))),
 	    loop(Ws, Link1, S1);
+	{notify, RunId, _Local, "chat=toggle"} ->
+	    csp_chat:toggle(maps:get(chat, S)),
+	    loop(Ws, Link, S);
+
+	%% The chat asks what only the panel knows, or to act as a button or
+	%% the chooser would -- so the bar shows what happened.
+	{chat_tool, From, Ref, Name, Args} ->
+	    Info = #{last => maps:get(last, S), clock => maps:get(clock, S),
+		     mode => maps:get(mode, S, run), local => is_local(),
+		     link => Link},
+	    case csp_chat:panel_tool(Name, Args, Info) of
+		{load, File, Reply} ->
+		    From ! {Ref, Reply},
+		    csp_link:close(Link),
+		    flush(),
+		    render(Ws, maps:get(where, S), File, maps:get(chat, S));
+		{control, Tag, Reply} ->
+		    From ! {Ref, Reply},
+		    loop(Ws, Link, control(Ws, Link, S, Tag));
+		Reply ->
+		    From ! {Ref, Reply},
+		    loop(Ws, Link, S)
+	    end;
 	{notify, RunId, _Local, Tag} ->
 	    loop(Ws, Link, control(Ws, Link, S, Tag));
 
@@ -1761,6 +1817,24 @@ loop(Ws, Link, S) ->
 	{csp_link, Text} ->
 	    show_link(Ws, S, Text),
 	    loop(Ws, Link, S);
+
+	%% A node's program, listed off its image: the panel is rebuilt from it,
+	%% so the code and the widgets are what RUNS there and not whatever
+	%% file happened to be open. Once it shows that program this is a no-op,
+	%% which is what keeps the reconnect after the rebuild from looping.
+	{csp_program, Text} ->
+	    File = node_file(target_text()),
+	    Bin = unicode:characters_to_binary(Text),
+	    case file:read_file(maps:get(file, S)) of
+		{ok, Bin} ->
+		    loop(Ws, Link, S);
+		_ ->
+		    ok = filelib:ensure_dir(File),
+		    ok = file:write_file(File, Bin),
+		    csp_link:close(Link),
+		    flush(),
+		    render(Ws, maps:get(where, S), File, maps:get(chat, S))
+	    end;
 
 	%% csp ended, or the node went away. The panel stays: another target
 	%% can be typed in.
@@ -1857,6 +1931,7 @@ flush() ->
 	{csp_model, _}    -> flush();
 	{csp_exit, _}     -> flush();
 	{csp_link, _}     -> flush();
+	{csp_program, _}  -> flush();
 	tick              -> flush()
     after 0 -> ok
     end.
