@@ -72,7 +72,6 @@
 start() -> start(1234, 8080).
 
 start(WsPort, HttpPort) ->
-    application:ensure_all_started(csp_panel),
     ok = ensure_inets(),
     {ok, _} = inets:start(httpd,
 			  [{port, HttpPort},
@@ -84,6 +83,9 @@ start(WsPort, HttpPort) ->
 			   {mime_types, [{"html","text/html"},
 					 {"js","application/javascript"},
 					 {"css","text/css"}]}]),
+    application:ensure_all_started(rester),
+    application:load(wse),
+    application:start(ellm),
     {ok, _} = wse_server:start(WsPort),
     io:format("panel:  http://localhost:~w/panel.html~n", [HttpPort]),
     io:format("wse:    ws://localhost:~w/websession~n", [WsPort]),

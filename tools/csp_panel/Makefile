@@ -15,34 +15,16 @@ EBIN   = ebin
 PA     = -pa $(EBIN) -pa $(ROOT)/ebin -pa $(WSE)/ebin -pa $(UART)/ebin \
 	 -pa $(ELLM)/ebin -pa $(RESTER)/ebin
 
-SRC    = $(wildcard src/*.erl)
-BEAM   = $(SRC:src/%.erl=$(EBIN)/%.beam)
-
-all: candyspeak $(BEAM) $(EBIN)/csp_panel.app
+all: candyspeak
+	@if [ -d "src" -a -f "src/Makefile" ]; then (cd src && $(MAKE) all); fi
 
 # utils/Makefile knows what is stale; asking it every time costs nothing and
 # keeps one set of rules for the tree's beams.
 candyspeak:
 	@$(MAKE) --no-print-directory -s -C $(ROOT)/utils
 
-$(EBIN):
-	mkdir -p $@
-
-$(EBIN)/%.beam: src/%.erl | $(EBIN)
-	$(ERLC) -o $(EBIN) $<
-
-# Only so that `-config panel.config' reaches the panel: the environment of an
-# application nobody loaded is not kept. See csp_panel:views/0.
-$(EBIN)/csp_panel.app: Makefile | $(EBIN)
-	@printf '{application,csp_panel,\n [{description,"candyspeak panel"},\n  {vsn,"1"},\n  {modules,[%s]},\n  {registered,[]},\n  {applications,[kernel,stdlib]},\n  {env,[]}]}.\n' \
-	  "$(subst $(space),$(comma),$(strip $(SRC:src/%.erl=%)))" > $@
-
-empty =
-space = $(empty) $(empty)
-comma = ,
-
 run: all
-	erl -s can $(PA) -eval 'csp_panel:start().'  -config panel.config
+	erl -s can $(PA) -s csp_panel -config panel.config
 
 # The stub wse must shadow the real one. Each -pa prepends, so the LAST one
 # given wins -- test/ebin goes at the end, not the front.
