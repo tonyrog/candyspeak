@@ -423,8 +423,26 @@ Marks are kept across tabs. To flip an input, use its widget.
 goal within the bound (`k ≤ 10` by default; 1, 2, 5, 10, 20 or 50 steps). The
 program is translated by `candyspeak_varp` with the goal as its `reach`, and
 `varp bmc` searches (bounded model checking: try 0 steps, then 1, and so on up
-to the bound). The answer is either "not reachable within k steps", or the
-trace: a column per step, `State` by name. A `-` means any value does. A row
+to the bound). When no run gets there, varp tries to prove that none ever
+does, by k-induction (`varp bmc --induction`): it shows that no run of k+1
+steps can end in the goal unless it already was there before. The answer is
+one of
+
+- "never: ... no step can lead into it" -- 0-induction, the rules alone rule
+  the goal out, whatever state came before. `Yellow && Green` in a program
+  where green means all three buttons and yellow exactly one is this kind:
+  the same contradiction `varp sat` finds in the plain formula.
+- "never: ... no run reaches it (proved by N-induction)" -- states where the
+  goal holds exist, but it takes N steps of history to see no run gets there.
+- "not reachable within k steps, and not proved for ever" -- neither; a
+  longer bound may find a run, or a proof.
+- the trace: a column per step, `State` by name.
+
+A model with no transitions at all has no trace and proves anything, so the
+model is first asked for a run of two steps; without one the answer says so
+instead.
+
+In the trace a `-` means any value does. A row
 `L26?` is a guard the model cannot read (a call, a part), left as a free
 choice of whether the rule on line 26 may fire. A trace that uses such a
 choice may not be a run the real program can make.
@@ -528,9 +546,10 @@ wired to something that moves.
 
 It works on source text with line numbers and gets the compiler's errors back
 as `program:LINE`; a change to a long program is an `edit` (old text, new
-text) rather than the whole file. A varp answer is BOUNDED -- "no run breaks
-the invariants within k steps" -- and names what the model left free, where a
-counterexample may be one the program cannot take.
+text) rather than the whole file. `prove` answers as solve does: a trace,
+"never" or "always hold" with the k-induction that proved it, or "not within
+k steps" when neither was found -- and names what the model left free, where
+a counterexample may be one the program cannot take.
 
 Configuration is ellm's own `{ellm, [...]}` in `panel.config` (backend, model,
 key -- the key as `"$ANTHROPIC_API_KEY"` or `".authinfo"`, not in the file),

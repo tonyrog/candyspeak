@@ -82,7 +82,7 @@
 
 -export([file/1, file/2]).
 -export([translate/1, translate/2]).
--export([model/2, bmc/3, trace/1]).
+-export([model/2, bmc/3, prove/5, trace/1]).
 -export([collect/1, collect/2, check/2]).         % for tests
 
 -define(FAILSAFE, 2).
@@ -328,6 +328,9 @@ system_name(In) -> varp_name(filename:basename(filename:rootname(In))).
 %%%
 %%%     {found, K, Rows}    a trace to bound K; Rows = [[{Name, Value}]] from
 %%%                         step 0, Value an integer or '-' (any value does)
+%%%     {proved, N}         --induction: no trace at any bound, proved by
+%%%                         N-induction (N = 0: no step leads out of the
+%%%                         property, whatever came before it)
 %%%     {none, Out}         no trace up to --k-max (% 0), or varp said UNKNOWN
 %%%     {error, Out}        anything else, varp's last lines as text
 
@@ -340,6 +343,26 @@ bmc(Text, Args, VarpSh) ->
     file:delete(Tmp),
     trace(Out).
 
+%% The question to model M -- Prop is "" for the invariants or
+%% "--property <name>_reach" -- as bmc/3 answers it, a trace by the
+%% program's names, or a proof. The model is asked first whether it runs at
+%% all: one with no transitions has no trace, and induction proves anything
+%% about it. That is `no_transitions'.
+prove(M = #{text := Text}, Prop, K, Timeout, VarpSh) ->
+    T = " --timeout " ++ integer_to_list(Timeout) ++ " bmc ",
+    case bmc(Text, T ++ "--runs --k-min 2 --k-max 2 --trace false", VarpSh) of
+	{found, _, _} ->
+	    named(bmc(Text, T ++ "--induction " ++ Prop ++ " --k-max " ++
+			  integer_to_list(K), VarpSh), M);
+	{none, _} -> no_transitions;
+	Error -> Error
+    end.
+
+%% A trace's columns by the program's names: varp writes s1.X as s1_X.
+named({found, K, Rows}, #{names := Ns}) ->
+    {found, K, [[{maps:get(C, Ns, C), V} || {C, V} <- R] || R <- Rows]};
+named(R, _M) -> R.
+
 tmp_dir() ->
     case os:getenv("TMPDIR") of
 	false -> "/tmp";
@@ -347,11 +370,14 @@ tmp_dir() ->
     end.
 
 %% varp's printed trace: `bmc: counterexample at k=5' (or `run at'), a header
-%% of names, one row per step, `% 1'.
+%% of names, one row per step, `% 1'. Or `bmc: proved by 2-induction'.
 trace(Out) ->
     Lines = string:split(Out, "\n", all),
     case lists:dropwhile(fun(L) -> string:find(L, "bmc: ") =:= nomatch end,
 			 Lines) of
+	["bmc: proved by " ++ N | _] ->
+	    {I, _} = string:to_integer(N),
+	    {proved, I};
 	[Verdict, Head | Rest] ->
 	    case string:split(Verdict, "k=") of
 		[_, KText] ->
