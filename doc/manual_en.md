@@ -79,28 +79,23 @@ The width is in **bits, 1..32** (32 when omitted); anything else is refused, as
 is a literal that does not fit the type — a wrong width is far more expensive to
 find later than at the declaration.
 
-> **A width without a type is SIGNED — except one bit.** `#variable c:4` is a
-> 4-bit *signed* value, so it counts `-8..7` and `c = 15` reads back as `-1`.
-> That follows the rule that a typeless leaf is `integer`, and it applies to
-> `#local`, `#param`, `#constant`, `#field` and `bind` alike. When you want the
-> plain `0..2^N-1` range — flags, bit quantities, raw signals — say so:
->
-> ```
-> #variable c:4 unsigned = 15      // 15, not -1
-> ```
->
-> **`:1` is unsigned.** A one-bit signed integer holds exactly `0` and `-1`, and
-> nobody means that: `#variable Flag:1 = 1` would store `-1`, so `Flag == 1`
-> would be false and the flag silently dead. One bit is therefore `unsigned`
-> unless the declaration says `integer`, and that holds for every kind of leaf.
-> Two bits and up keep the signed default, because `{-2,-1,0,1}` is a real
-> range.
+> **A width without a type is UNSIGNED.** A declared width says the leaf is
+> that many bits, so `#variable c:4` counts `0..15`, the way a register, a
+> frame and varp read it. A leaf with **no width** is a plain 32-bit signed
+> integer. The rule applies to `#local`, `#param`, `#constant`, `#field` and
+> `bind` alike; a `#field` always has a width, its window, so it is unsigned
+> unless it says `integer`. When you want a signed value of a given width,
+> say so:
 >
 > ```
 > #variable Flag:1 = 1             // 1        (unsigned by default)
-> #variable Odd:1 integer = 1      // -1       (you asked for it)
-> #variable c:2 = 3                // -1       (signed, as before)
+> #variable c:3 = 7                // 7        (unsigned by default)
+> #variable d:3 integer = 7        // -1       (you asked for it: -4..3)
+> #variable n = -7                 // -7       (no width: signed 32)
 > ```
+>
+> Until 2026-11 every width but `:1` was signed, and a counter `Pos:3` that
+> was to reach 4 wrapped to -4 instead, with nothing to say so.
 
 ### Constants
 
@@ -485,6 +480,11 @@ Examples:
 #digital Status inout C:4
 ```
 
+A `pullup` input is **1 at rest**: a button wired to ground reads `0` while it
+is pressed, so `!Button` is the press. It starts at 1, before the first input
+sweep -- on the host, where no pin is ever read, until something sets it --
+and the panel's button for it sends 0 while held.
+
 ### Analog I/O
 
 ```
@@ -500,7 +500,7 @@ Examples:
 #analog HighRes:12 in A:1
 ```
 
-> **A reading is UNSIGNED unless you say otherwise** — unlike a `#variable`.
+> **A reading is UNSIGNED unless you say otherwise**, as every leaf with a width is.
 > A converter delivers counts, `0` to `2^res - 1`, and a light sensor, a
 > current or a battery voltage reads naturally that way.
 >
@@ -2913,7 +2913,7 @@ pandoc doc/manual_en.md -o doc/manual_en.pdf \
 
 ## Declarations
 ```
-#variable <name>[:<bits>] [type] [= value]              // bits 1..32, typeless = signed
+#variable <name>[:<bits>] [type] [= value]              // bits 1..32; a width = unsigned, none = signed 32
 #variable <name>:<bits> [big|little] bind <buffer>[<a>..<b>]   // bit-field view
 #local <name>[:<bits>] [type] = <expr>   // a named FORMULA, same-cycle, no assign
 #local <name>[:<bits>] [type] in [= c]  // in a module: the instance binds it

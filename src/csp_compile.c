@@ -3305,12 +3305,18 @@ NOINLINE index_t def_lookup_local(csp_rt_t* st, const tstr_t* name)
 
 #endif /* CSP_DEFINE_BYTES */
 
-NOINLINE static vtype_t default_vt(ivalue_t res)
+// A leaf that names no type. A declared WIDTH says it is that many bits --
+// `#variable N:3` is 0..7, the way varp and a register read it -- so it is
+// unsigned; with none at all it is a plain signed 32 bit integer. (Until
+// 2026-11 every width but :1 was signed, and `Pos:3` counting to 4 wrapped
+// to -4 with nothing to say so.) An explicit `integer`/`unsigned` still wins.
+NOINLINE static vtype_t default_vt(int sized)
 {
-    return (res == 1) ? V_UNSIGNED : V_INTEGER;
+    return sized ? V_UNSIGNED : V_INTEGER;
 }
 
-// The declared width, read straight out of the tokens before pmatch runs.
+// Whether the declaration says its width, read straight out of the tokens
+// before pmatch runs.
 //
 // It has to be done by hand, and early. Every one of these patterns matches its
 // initialiser as `{const, opts, init}` -- pmatch reads opts.vt to know what kind
@@ -3319,20 +3325,17 @@ NOINLINE static vtype_t default_vt(ivalue_t res)
 // simply does not match, the surrounding P_OPT succeeds anyway, and the
 // declaration comes out silently zero-initialised.
 //
-// Stops at '=' so a value cannot be mistaken for a width, and takes the LAST
-// `: <int>` before it, which is the width even when an array size came first
-// (`#variable A[3]:1 = 0`). An explicit `integer`/`unsigned` still wins: pmatch
-// overwrites opts.vt from the declaration itself.
-NOINLINE static ivalue_t peek_res(const token_t* tv, int ti, size_t n)
+// Stops at '=' so a value cannot be mistaken for a width; `: <int>' after an
+// array size is the width too (`#variable A[3]:4 = 0`).
+NOINLINE static int peek_sized(const token_t* tv, int ti, size_t n)
 {
-    ivalue_t res = 8*sizeof(ivalue_t);
     int j;
 
     for (j = ti; (j + 1 < (int)n) && (tv[j].t != EQ); j++) {
 	if ((tv[j].t == COLON) && (tv[j+1].t == INT))
-	    res = tv[j+1].v.val.i;
+	    return 1;
     }
-    return res;
+    return 0;
 }
 
 
@@ -3751,7 +3754,7 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
 
     // set default values
     d.r.res = 8*sizeof(ivalue_t);
-    d.opts.vt = default_vt(peek_res(tv, ti, n));
+    d.opts.vt = default_vt(peek_sized(tv, ti, n));
 
     if (array_splice(st, tv, ti, &n, &alen) < 0)
 	return -1;
@@ -3912,7 +3915,7 @@ NOINLINE static int local_in(csp_rt_t* st, token_t* tv, int ti, size_t n,
 
     init.u = 0;
     d.r.res = 8*sizeof(ivalue_t);
-    d.opts.vt = default_vt(peek_res(tv, ti, n));
+    d.opts.vt = default_vt(peek_sized(tv, ti, n));
     if ((pmatch(st, tv, ti, n, pat_variable, &d, sizeof(d)) < 0) ||
 	(d.opts.dir != DIR_IN)) {
 	csp_set_error(st, ERR_SYNTAX);      // no `=` and no `in`: nothing
@@ -3964,7 +3967,7 @@ NOINLINE int csp_parse_local(csp_rt_t* st, token_t* tv, int ti, size_t n)
     int i, r, eq = -1, j;
 
     d.r.res = 8*sizeof(ivalue_t);
-    d.opts.vt = default_vt(peek_res(tv, ti, n));
+    d.opts.vt = default_vt(peek_sized(tv, ti, n));
 
     // Find the '=' and let pmatch see only the declaration head. The tail is an
     // EXPRESSION, which P_CONST_S would refuse -- and refusing is right for a
@@ -4131,7 +4134,7 @@ NOINLINE static int parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n,
     // So the width is found first, by hand, and only to answer the same
     // question default_vt answers. An explicit `integer`/`unsigned` in the
     // declaration wins -- pmatch overwrites this from opts.
-    d.opts.vt = default_vt(peek_res(tv, ti, n));
+    d.opts.vt = default_vt(peek_sized(tv, ti, n));
     d.r.res = 8*sizeof(ivalue_t);
 
     if (array_splice(st, tv, ti, &n, &alen) < 0)
@@ -4492,10 +4495,11 @@ NOINLINE int csp_parse_field(csp_rt_t* st, token_t* tv, int ti, size_t n)
     }
     // No type named. Nothing set one at all before this, so the field came out
     // V_VOID and every read of it printed `???` -- `#field Flag:1 F[9]`, the
-    // most ordinary field there is, was simply unusable. Same rule as every
-    // other leaf: one bit is unsigned, wider is signed unless it says otherwise.
+    // most ordinary field there is, was simply unusable. A field always has a
+    // width, its window, so by the rule of every other leaf it is unsigned
+    // unless it says `integer`.
     if (d.opts.vt == V_VOID) {
-	d.opts.vt = default_vt(len);
+	d.opts.vt = default_vt(1);
     }
     // ca.bit is 9 bits and ca.len 5, so a wider field or a higher start bit
     // wrapped instead of being refused. setup_field then checks the range

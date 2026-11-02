@@ -1,0 +1,8 @@
+{application, csp_tools,
+ [{description, "candyspeak tools: parser, varp, C backend, disassembler, listing"},
+  {vsn, git},
+  {modules, ["@@MODULES@@"]},
+  {registered, []},
+  {applications, [kernel, stdlib]},
+  {env, []}
+  ]}.

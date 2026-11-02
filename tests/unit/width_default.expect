@@ -1,0 +1,13 @@
+{modes, [seq]}.
+{cycles, 3}.
+{checks, [
+  {final_var, "Flag", 1},
+  {final_var, "Odd", -1},
+  {final_var, "Two", 3},
+  {final_var, "Signed", -1},
+  {final_var, "Plain", -7},
+  {final_var, "FromPar", 3},
+  {final_var, "FromCon", 3},
+  {final_var, "Kept", 1},
+  {final_var, "KeptWide", 7}
+]}.

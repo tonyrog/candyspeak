@@ -1,0 +1,12 @@
+// A pulled-up input is 1 at rest -- a button to ground reads 0 only while it is
+// pressed. On the host nothing ever reads a pin, so the 1 has to be there from
+// the start, or every such button reads pressed and no press is ever an edge.
+#digital Up   in pullup 2
+#digital Down in pulldown 3
+#digital Bare in 4
+#variable SeenUp:1 = 0
+#variable SeenDown:1 = 1
+#variable SeenBare:1 = 1
+SeenUp = Up
+SeenDown = Down
+SeenBare = Bare

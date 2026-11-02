@@ -1,7 +1,7 @@
-// A typeless :8 is signed, so 0xF0 reads -16 and widens with its sign; the
-// same bits declared unsigned read 240.
-#variable A:8 = 0x0F
-#variable B:8 = 0xF0
+// An :8 declared integer is signed, so 0xF0 reads -16 and widens with its
+// sign; the same bits unsigned -- the default for a width -- read 240.
+#variable A:8 integer = 0x0F
+#variable B:8 integer = 0xF0
 #variable And = 0
 #variable Or = 0
 #variable Xor = 0

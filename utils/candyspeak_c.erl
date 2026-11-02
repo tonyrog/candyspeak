@@ -931,10 +931,10 @@ analog_opts(Opts) ->
         false -> [{type, unsigned} | Opts]
     end.
 
-%% A typeless declaration is signed -- except `:1`, which holds 0 and 1 rather
-%% than 0 and -1, or every `Flag == 1` would be false.
+%% A typeless declaration with a width is that many bits, unsigned; with no
+%% width it is a signed 32 bit integer.
 ctype(Res, Opts, Ln) ->
-    Dflt = case Res of {'INT', _, "1"} -> unsigned; _ -> integer end,
+    Dflt = case Res of {'INT', _, _} -> unsigned; _ -> integer end,
     case proplists:get_value(type, Opts, Dflt) of
         integer -> "int32_t";
         unsigned -> "uint32_t";
@@ -1512,14 +1512,17 @@ tcast(Env) ->
 
 is_unsigned_decl({digital, _, _, _, _, _, _}) -> true;
 is_unsigned_decl(D) when is_tuple(D) ->
-    Opts = case D of
-               {variable, _, _, _, _, O, _} -> O;
-               {analog, _, _, _, _, O, _} -> analog_opts(O);
-               {param, _, _, _, O, _} -> O;
-               {local, _, _, _, O, _} -> O;
-               _ -> []
-           end,
-    proplists:get_value(type, Opts) =:= unsigned;
+    {Res, Opts} = case D of
+		      {variable, _, _, _, R, O, _} -> {R, O};
+		      {analog, _, _, _, R, O, _} -> {R, analog_opts(O)};
+		      {param, _, _, R, O, _} -> {R, O};
+		      {local, _, _, R, O, _} -> {R, O};
+		      _ -> {default, []}
+		  end,
+    case proplists:get_value(type, Opts) of
+	T when T =:= float; T =:= string -> false;
+	_ -> ctype(Res, Opts, 0) =:= "uint32_t"
+    end;
 is_unsigned_decl(_) -> false.
 
 %% The usual arithmetic conversions, which are also the runtime's: one unsigned

@@ -675,14 +675,17 @@ width_of(digital, _)              -> 1;
 width_of(_, {'INT', _, S})        -> list_to_integer(S);
 width_of(_, _)                    -> 32.
 
-%% Signed as the runtime has it: `unsigned' or `integer' when written, else a
-%% one bit leaf and the pins are unsigned and every other width is an integer.
+%% Signed as the runtime has it: `unsigned' or `integer' when written, else
+%% the pins, the fields and a leaf with a width are unsigned -- bits -- and
+%% only a leaf with no width at all is a signed 32 bit integer.
 signed_of(_Kind, _Res, [{type, unsigned} | _]) -> false;
 signed_of(_Kind, _Res, [{type, integer} | _])  -> true;
 signed_of(Kind, Res, [_ | Opts])               -> signed_of(Kind, Res, Opts);
 signed_of(digital, _Res, [])                   -> false;
 signed_of(analog, _Res, [])                    -> false;
-signed_of(Kind, Res, [])                       -> width_of(Kind, Res) > 1.
+signed_of(field, _Res, [])                     -> false;
+signed_of(_Kind, {'INT', _, _}, [])            -> false;
+signed_of(_Kind, _Res, [])                     -> true.
 
 %%% After the walk: work out which signals are WRITTEN, and which of those can
 %%% be modelled at all.

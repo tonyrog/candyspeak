@@ -4387,6 +4387,11 @@ static void NOINLINE setup_digital_values(value_t* ptr, const csp_decl_t* d)
     value_set_d_port(&v, csp_decl_get_di_port(d));
     value_set_d_pullup(&v, csp_decl_get_di_pullup(d));
     value_set_d_pulldown(&v, csp_decl_get_di_pulldown(d));
+    // A pulled-up input reads 1 until something pulls it down. On a board the
+    // first input sweep says so anyway; on the host nothing ever reads a pin,
+    // and every button to ground read pressed from the start -- no edge came.
+    if ((csp_decl_get_dir(d) == DIR_IN) && csp_decl_get_di_pullup(d))
+	value_set_d_val(&v, 1);
     // csp_setup applies this configuration itself, so nothing is pending. Left
     // set, it would spend a pinMode on the first cycle saying what setup just
     // said -- and on a slot that was never zeroed it would be whatever was

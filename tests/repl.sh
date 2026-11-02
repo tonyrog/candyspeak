@@ -1404,7 +1404,7 @@ EOF
 
 got=$(printf '/list\n/quit\n' | repl ./csp "$D/p1.db" "$D/param.csp")
 ck "a param lists back as #param, and its rule does not fold it" \
-   '#param Kp:16 integer = 5  // R
+   '#param Kp:16 unsigned = 5  // R
 #variable Out:32 integer = 0  // R
 Out=Kp*2 ? 1  // 1 R' "$got"
 
@@ -1457,7 +1457,7 @@ if build_rom "$D/param.csp" "$D/param_fw"; then
     got=$(printf '#param Kp:16 = 9\n/list\n/quit\n' | repl "$D/param_fw" "$D/pr1b.db")
     ck "an overridden param lists once, tagged P" 'OK
 #variable Out:32 integer = 0  // F
-#param Kp:16 integer = 9  // P
+#param Kp:16 unsigned = 9  // P
 Out=Kp*2 ? 1  // 1 F' "$got"
 
     # /state is the mirror: the override has a slot of its own that nothing
@@ -1483,7 +1483,7 @@ got=$(printf '#param Kq:16 = 3\n#param Kq:16 = 8\n/list\n> Kq\n/quit\n' |
 	  repl ./csp "$D/pr3.db")
 ck "a RAM param is re-declared in place" 'OK
 OK
-#param Kq:16 integer = 8  // R
+#param Kq:16 unsigned = 8  // R
 8' "$got"
 
 # The width and type are what any compiled rule was built against.
@@ -2151,7 +2151,7 @@ ck "a float is still a float" "1.250000" "$got"
 
 got=$(printf '#buffer Q:4\n#field Y:16 Q[0..15]\n/list\n/quit\n' |
 	  repl ./csp "$D/ip7.db" | grep '^#field')
-ck "a bit range is still a range" '#field Y:16 integer Q[0..15]  // R' "$got"
+ck "a bit range is still a range" '#field Y:16 unsigned Q[0..15]  // R' "$got"
 
 # --- transports: udp sender filter -------------------------------------------
 # The address on an `in` buffer is an ACCEPT TEST, not a destination: 0.0.0.0 --
@@ -2981,7 +2981,7 @@ T.period = 900
     # so -- otherwise it prints a pin the unit is not running.
     got=$(printf '/list\n/quit\n' | repl "$D/set_fw1" "$D/s2.db" |
 	      grep -v '^Restored' | sed -n '/^#digital Led/p;/^#param Kp/p')
-    ck "an overridden declaration lists tagged S" '#param Kp:16 integer = 5  // S
+    ck "an overridden declaration lists tagged S" '#param Kp:16 unsigned = 5  // S
 #digital Led out 0:13  // S' "$got"
 
     # ...and /state has the live value, which is the number that matters.
@@ -3005,7 +3005,7 @@ Kp = 9   // not applied: width or type moved' "$got"
     got=$(printf '/list\n/quit\n' | repl "$D/set_fw4" "$D/s2.db" |
 	      grep -v '^Restored' | sed -n '/^#param Kp/p')
     ck "a refused setting does not tag the declaration" \
-       '#param Kp:32 integer = 5  // F' "$got"
+       '#param Kp:32 unsigned = 5  // F' "$got"
 
     # A value equal to the declaration is not a setting. Storing it would fill
     # the store with no-ops and shadow the default the day it changes.

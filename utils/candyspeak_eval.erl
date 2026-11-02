@@ -57,9 +57,9 @@ const(N, X, E) ->
 	unknown              -> E
     end.
 
-%% Width and sign as the runtime has them (and candyspeak_varp): a pin is
-%% unsigned, `:1' is unsigned, any other width without a type is signed, and
-%% no width is 32.
+%% Width and sign as the runtime has them (and candyspeak_varp): a pin, a
+%% field and a declared width without a type are unsigned; no width is a
+%% signed 32.
 sig(Kind, Res, Opts) ->
     W = case {Kind, Res} of
 	    {digital, _}         -> 1;
@@ -69,7 +69,9 @@ sig(Kind, Res, Opts) ->
     Signed = case proplists:get_value(type, Opts) of
 		 unsigned -> false;
 		 integer  -> true;
-		 _ -> (Kind =/= digital) andalso (Kind =/= analog) andalso W > 1
+		 _ -> (Kind =/= digital) andalso (Kind =/= analog) andalso
+			  (Kind =/= field) andalso
+			  not (is_tuple(Res) andalso element(1, Res) =:= 'INT')
 	     end,
     {W, Signed}.
 
