@@ -205,9 +205,9 @@ board_dir(Dir, Start) ->
 	    end
     end.
 
-%% The top of the tree: this module is ebin/candyspeak.beam.
+%% Where lib/ is: the tree, or what of it came along in a packaged system.
 tree_dir() ->
-    filename:dirname(filename:dirname(filename:absname(code:which(?MODULE)))).
+    csp_tools:dir().
 
 %% An absolute path with . and .. taken out, so one file reached by two
 %% spellings is seen once.

@@ -39,6 +39,17 @@ static int udp_tx_fd = -1;
 static uint16_t udp_dead[CSP_UDP_MAXSOCK];
 static int udp_ndead = 0;
 
+// A datagram socket that does not block. SOCK_NONBLOCK in socket() is
+// Linux's; a Mac has only the fcntl.
+static int udp_socket(void)
+{
+    int fd;
+
+    if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) >= 0)
+	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+    return fd;
+}
+
 // A BUS ADDRESS, and it is the one thing that can never be a SENDER: no
 // datagram arrives from a broadcast address. So the address on an `in` buffer
 // carries two disjoint meanings and needs no keyword to tell them apart --
@@ -94,7 +105,7 @@ int csp_udp_open_bus(csp_rt_t* st, uint16_t port, int bus)
 	return -1;                     // said why once; not saying it again
     if (udp_nsock >= CSP_UDP_MAXSOCK)
 	return -1;
-    if ((fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0)) < 0)
+    if ((fd = udp_socket()) < 0)
 	return -1;
     // SO_REUSEADDR ONLY ON A BUS, and the difference is the whole point.
     //
@@ -229,7 +240,7 @@ int csp_udp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
 
     if (udp_tx_fd < 0) {
 	int on = 1;
-	if ((udp_tx_fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0)) < 0)
+	if ((udp_tx_fd = udp_socket()) < 0)
 	    return -1;
 	setsockopt(udp_tx_fd, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on));
     }

@@ -2086,13 +2086,29 @@ typedef struct {
 #if defined(CSP_NO_IMAGE_REGISTRY)
 #define CSP_REGISTER_IMAGE(base_sym) extern int base_sym##_no_registry
 #else
+// Mach-O (macOS) names a section by segment AND section, and has no
+// __start_/__stop_ symbols: its linker gives the bounds under names of its
+// own, which the asm labels below bind to the ones the runtime reads. The
+// pointers need relocating, so the segment is __DATA, read-only or not.
+#if defined(__APPLE__)
+#define CSP_IMAGES_SECTION "__DATA,csp_images"
+#else
+#define CSP_IMAGES_SECTION "csp_images"
+#endif
 #define CSP_REGISTER_IMAGE(base_sym)                                    \
     static const uint8_t* const base_sym##_reg                          \
-	__attribute__((section("csp_images"), used)) =                  \
+	__attribute__((section(CSP_IMAGES_SECTION), used)) =            \
 	    (const uint8_t*)&base_sym
 
+#if defined(__APPLE__)
+extern const uint8_t* const __start_csp_images[]
+    __asm("section$start$__DATA$csp_images");
+extern const uint8_t* const __stop_csp_images[]
+    __asm("section$end$__DATA$csp_images");
+#else
 extern const uint8_t* const __start_csp_images[];
 extern const uint8_t* const __stop_csp_images[];
+#endif
 #endif
 
 // A fixed-type handle on an image whose struct type the runtime cannot name --

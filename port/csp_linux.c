@@ -712,17 +712,20 @@ static struct {
 } uart_port[CSP_UART_MAXPORT];
 static int uart_nport = 0;
 
-// A PTY PAIR, the Linux way: /dev/ptmx, unlock, ask the number. No grantpt or
-// ptsname, which want feature-test macros this file does not define, and devpts
-// sets the owner itself.
+// A PTY PAIR. Linux: /dev/ptmx, unlock, ask the number -- no grantpt or
+// ptsname, which want feature-test macros this file does not define, and
+// devpts sets the owner itself. Elsewhere (macOS) the POSIX calls, which are
+// declared there without asking, with the far end's name from TIOCPTYGNAME
+// on a Mac; and if posix_openpt will not, the old BSD /dev/pty[p-w][0-9a-f]
+// -- both as the uart application does it (uart_unix.c).
 //
 // THE FAR END IS HELD OPEN BY US. With nobody on it a master reads EIO and
 // polls as hung up, for ever -- the loop would spin. Holding it means the
 // output queues there instead, until minicom comes along; csp_uart_send drops
 // it when the queue is full, as tcp does with nobody on the line.
-static int uart_pty(int i)
+#if defined(__linux__)
+static int pty_master(char* name, size_t len)
 {
-    struct termios tio;
     unsigned n;
     int fd, lock = 0;
 
@@ -732,7 +735,68 @@ static int uart_pty(int i)
 	close(fd);
 	return -1;
     }
-    snprintf(uart_port[i].pts, sizeof(uart_port[i].pts), "/dev/pts/%u", n);
+    snprintf(name, len, "/dev/pts/%u", n);
+    return fd;
+}
+#else
+static int pty_bsd(char* name, size_t len)
+{
+    const char* a = "pqrstuvw";
+    const char* b = "0123456789abcdef";
+    int i, j, fd;
+
+    for (i = 0; a[i]; i++) {
+	for (j = 0; b[j]; j++) {
+	    snprintf(name, len, "/dev/pty%c%c", a[i], b[j]);
+	    if ((fd = open(name, O_RDWR | O_NOCTTY)) >= 0) {
+		name[5] = 't';                 // /dev/ptyXY -> /dev/ttyXY
+		return fd;
+	    }
+	}
+    }
+    errno = ENOENT;
+    return -1;
+}
+
+static int pty_master(char* name, size_t len)
+{
+    int fd;
+
+    if ((fd = posix_openpt(O_RDWR | O_NOCTTY)) < 0) {
+	if ((fd = pty_bsd(name, len)) < 0)
+	    return -1;
+    }
+    else {
+#if defined(TIOCPTYGNAME)
+	char dev[128];
+	if ((grantpt(fd) < 0) || (unlockpt(fd) < 0) ||
+	    (ioctl(fd, TIOCPTYGNAME, dev) < 0)) {
+	    close(fd);
+	    return -1;
+	}
+	snprintf(name, len, "%s", dev);
+#else
+	const char* dev;
+	if ((grantpt(fd) < 0) || (unlockpt(fd) < 0) ||
+	    ((dev = ptsname(fd)) == NULL)) {
+	    close(fd);
+	    return -1;
+	}
+	snprintf(name, len, "%s", dev);
+#endif
+    }
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+    return fd;
+}
+#endif
+
+static int uart_pty(int i)
+{
+    struct termios tio;
+    int fd;
+
+    if ((fd = pty_master(uart_port[i].pts, sizeof(uart_port[i].pts))) < 0)
+	return -1;
     // RAW, for the same reason a real tty is made raw below. Whoever opens
     // the far end sets its own modes; this is what it finds.
     if (tcgetattr(fd, &tio) == 0) {
@@ -953,6 +1017,23 @@ static void tcp_drop(tcp_sock_t* s)
 // The listening side. SO_REUSEADDR belongs here and not on UDP: on TCP it means
 // "reuse a port still in TIME_WAIT", which is the ordinary restart case, and it
 // does NOT let a second process steal the traffic the way it does on UDP.
+// A socket that does not block, and does not raise SIGPIPE when its peer has
+// gone. SOCK_NONBLOCK and MSG_NOSIGNAL are Linux's; this is the portable way,
+// and SO_NOSIGPIPE is the Mac's word for the second.
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
+static int nonblocking(int fd)
+{
+#if defined(SO_NOSIGPIPE)
+    int on = 1;
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
+#endif
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+    return fd;
+}
+
 static int tcp_listen(tcp_sock_t* s)
 {
     struct sockaddr_in a;
@@ -960,8 +1041,9 @@ static int tcp_listen(tcp_sock_t* s)
 
     if (s->lfd >= 0)
 	return 0;
-    if ((s->lfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0)) < 0)
+    if ((s->lfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
 	return -1;
+    nonblocking(s->lfd);
     setsockopt(s->lfd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
     memset(&a, 0, sizeof(a));
     a.sin_family = AF_INET;
@@ -1002,7 +1084,7 @@ int csp_tcp_recv(csp_rt_t* st, uint16_t port, uint32_t accept_ip,
 	// no feature-test macros -- one fcntl is cheaper than that dependency.
 	if ((fd = accept(s->lfd, (struct sockaddr*)&a, &alen)) < 0)
 	    return 0;                  // nobody calling yet
-	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+	nonblocking(fd);
 	// THE SAME FILTER UDP HAS, and the same reason it is here rather than in
 	// the core: a peer we will not talk to must not get a connection at all,
 	// let alone have its bytes read into the buffer's shadow.
@@ -1044,8 +1126,9 @@ int csp_tcp_send(csp_rt_t* st, uint32_t addr, uint16_t port,
 	if (addr == 0)
 	    return 0;
 	s->outbound = 1;
-	if ((fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0)) < 0)
+	if ((fd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
 	    return -1;
+	nonblocking(fd);
 	memset(&a, 0, sizeof(a));
 	a.sin_family = AF_INET;
 	a.sin_addr.s_addr = htonl(addr);

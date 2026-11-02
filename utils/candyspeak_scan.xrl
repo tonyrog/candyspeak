@@ -16,69 +16,68 @@ Rules.
 
 %% keywords
 
-module             : {token,{'D_MODULE',TokenLine}}.
-end                : {token,{'D_END',TokenLine}}.
-states             : {token,{'D_STATES',TokenLine}}.
-%% in                 : {token,{'D_IN',TokenLine}}.
-when               : {token,{'D_WHEN',TokenLine}}.
-digital		   : {token,{'D_DIGITAL',TokenLine}}.
-analog		   : {token,{'D_ANALOG',TokenLine}}.
-variable	   : {token,{'D_VARIABLE',TokenLine}}.
-local	           : {token,{'D_LOCAL',TokenLine}}.
-param              : {token,{'D_PARAM',TokenLine}}.
-constant	   : {token,{'D_CONSTANT',TokenLine}}.
-timer              : {token,{'D_TIMER',TokenLine}}.
-field              : {token,{'D_FIELD',TokenLine}}.
-buffer             : {token,{'D_BUFFER',TokenLine}}.
-define             : {token,{'D_DEFINE',TokenLine}}.
-annotate           : {token,{'D_ANNOTATE',TokenLine}}.
-import             : {token,{'D_IMPORT',TokenLine}}.
-disable            : {token,{'D_DISABLE',TokenLine}}.
-enable             : {token,{'D_ENABLE',TokenLine}}.
-integer            : {token,{'T_INTEGER',TokenLine}}.
-unsigned           : {token,{'T_UNSIGNED',TokenLine}}.
-string             : {token,{'T_STRING',TokenLine}}.
-float              : {token,{'T_FLOAT',TokenLine}}.
-in		   : {token,{'T_IN',TokenLine}}.
-out		   : {token,{'T_OUT',TokenLine}}.
-inout      	   : {token,{'T_INOUT',TokenLine}}.
-little	           : {token,{'T_LITTLE',TokenLine}}.
-big		   : {token,{'T_BIG',TokenLine}}.
-native     	   : {token,{'T_NATIVE',TokenLine}}.
-pwm                : {token,{'T_PWM',TokenLine}}.
-bind               : {token,{'T_BIND',TokenLine}}.
-pullup             : {token,{'T_PULLUP',TokenLine}}.
-pulldown           : {token,{'T_PULLDOWN',TokenLine}}.
-low                : {token,{'T_LOW',TokenLine}}.
-high               : {token,{'T_HIGH',TokenLine}}.
-low                : {token,{'T_LOW',TokenLine}}.
-both               : {token,{'T_BOTH',TokenLine}}.
-soft               : {token,{'T_SOFT',TokenLine}}.
-ready              : {token,{'T_READY',TokenLine}}.
-rising             : {token,{'T_RISING',TokenLine}}.
-falling            : {token,{'T_FALLING',TokenLine}}.
-can		   : {token,{'T_CAN',TokenLine}}.
-i2c		   : {token,{'T_I2C',TokenLine}}.
-spi		   : {token,{'T_SPI',TokenLine}}.
-udp		   : {token,{'T_UDP',TokenLine}}.
-tcp		   : {token,{'T_TCP',TokenLine}}.
-uart		   : {token,{'T_UART',TokenLine}}.
-sms		   : {token,{'T_SMS',TokenLine}}.
-onewire		   : {token,{'T_ONEWIRE',TokenLine}}.
-console		   : {token,{'T_CONSOLE',TokenLine}}.
-repl		   : {token,{'T_REPL',TokenLine}}.
+module             : {token,{'module',TokenLine}}.
+end                : {token,{'end',TokenLine}}.
+states             : {token,{'states',TokenLine}}.
+when               : {token,{'when',TokenLine}}.
+digital		   : {token,{'digital',TokenLine}}.
+analog		   : {token,{'analog',TokenLine}}.
+variable	   : {token,{'variable',TokenLine}}.
+local	           : {token,{'local',TokenLine}}.
+param              : {token,{'param',TokenLine}}.
+constant	   : {token,{'constant',TokenLine}}.
+timer              : {token,{'timer',TokenLine}}.
+field              : {token,{'field',TokenLine}}.
+buffer             : {token,{'buffer',TokenLine}}.
+define             : {token,{'define',TokenLine}}.
+annotate           : {token,{'annotate',TokenLine}}.
+import             : {token,{'import',TokenLine}}.
+disable            : {token,{'disable',TokenLine}}.
+enable             : {token,{'enable',TokenLine}}.
+integer            : {token,{'integer',TokenLine}}.
+unsigned           : {token,{'unsigned',TokenLine}}.
+string             : {token,{'string',TokenLine}}.
+float              : {token,{'float',TokenLine}}.
+in		   : {token,{'in',TokenLine}}.
+out		   : {token,{'out',TokenLine}}.
+inout      	   : {token,{'inout',TokenLine}}.
+little	           : {token,{'little',TokenLine}}.
+big		   : {token,{'big',TokenLine}}.
+native     	   : {token,{'native',TokenLine}}.
+pwm                : {token,{'pwm',TokenLine}}.
+bind               : {token,{'bind',TokenLine}}.
+pullup             : {token,{'pullup',TokenLine}}.
+pulldown           : {token,{'pulldown',TokenLine}}.
+low                : {token,{'low',TokenLine}}.
+high               : {token,{'high',TokenLine}}.
+low                : {token,{'low',TokenLine}}.
+both               : {token,{'both',TokenLine}}.
+soft               : {token,{'soft',TokenLine}}.
+ready              : {token,{'ready',TokenLine}}.
+rising             : {token,{'rising',TokenLine}}.
+falling            : {token,{'falling',TokenLine}}.
+can		   : {token,{'can',TokenLine}}.
+i2c		   : {token,{'i2c',TokenLine}}.
+spi		   : {token,{'spi',TokenLine}}.
+udp		   : {token,{'udp',TokenLine}}.
+tcp		   : {token,{'tcp',TokenLine}}.
+uart		   : {token,{'uart',TokenLine}}.
+sms		   : {token,{'sms',TokenLine}}.
+onewire		   : {token,{'onewire',TokenLine}}.
+console		   : {token,{'console',TokenLine}}.
+repl		   : {token,{'repl',TokenLine}}.
 %% parts
-val                : {token,{'T_VAL', TokenLine}}.
-pin                : {token,{'T_PIN', TokenLine}}.
-port               : {token,{'T_PORT', TokenLine}}.
-dir                : {token,{'T_DIR', TokenLine}}.
-endian             : {token,{'T_ENDIAN', TokenLine}}.
-period             : {token,{'T_PERIOD', TokenLine}}.
-fired              : {token,{'T_FIRED', TokenLine}}.
-id                 : {token,{'T_ID', TokenLine}}.
-rx                 : {token,{'T_RX', TokenLine}}.
-tx                 : {token,{'T_TX', TokenLine}}.
-len                : {token,{'T_LEN', TokenLine}}.
+val                : {token,{'val', TokenLine}}.
+pin                : {token,{'pin', TokenLine}}.
+port               : {token,{'port', TokenLine}}.
+dir                : {token,{'dir', TokenLine}}.
+endian             : {token,{'endian', TokenLine}}.
+period             : {token,{'period', TokenLine}}.
+fired              : {token,{'fired', TokenLine}}.
+id                 : {token,{'id', TokenLine}}.
+rx                 : {token,{'rx', TokenLine}}.
+tx                 : {token,{'tx', TokenLine}}.
+len                : {token,{'len', TokenLine}}.
 
 {L}({L}|{D})*	   : {token,{'WORD',TokenLine,TokenChars}}.
 0[xX]{H}+          : {token,{'INT',TokenLine,TokenChars}}.
@@ -87,45 +86,45 @@ len                : {token,{'T_LEN', TokenLine}}.
 {D}+\.{D}+          : {token,{'FLT',TokenLine,TokenChars}}.
 "(\^.|\.|[^\"])*" : S = lists:sublist(TokenChars,2,TokenLen-2),
                     {token,{'STR',TokenLine,S}}.
-==                  : {token,{'EQEQ',TokenLine}}.
-!=                  : {token,{'NEQ',TokenLine}}.
-<-                  : {token,{'RIMP',TokenLine}}.
-<=                  : {token,{'LTEQ',TokenLine}}.
->=                  : {token,{'GTEQ',TokenLine}}.
-<<=		    : {token,{'LTLTEQ',TokenLine}}.
->>=		    : {token,{'GTGTEQ',TokenLine}}.
-<<		    : {token,{'LTLT',TokenLine}}.
->>		    : {token,{'GTGT',TokenLine}}.
-=		    : {token,{'EQ',TokenLine}}.
-<		    : {token,{'LT',TokenLine}}.
->		    : {token,{'GT',TokenLine}}.
-!		    : {token,{'EXCLAMATION',TokenLine}}.
-#		    : {token,{'HASH',TokenLine}}.
--		    : {token,{'MINUS',TokenLine}}.
-\+		    : {token,{'PLUS',TokenLine}}.
-//.*\n              : {token,{'NEWLINE',TokenLine}}.
+==                  : {token,{'==',TokenLine}}.
+!=                  : {token,{'!=',TokenLine}}.
+<-                  : {token,{'<-',TokenLine}}.
+<=                  : {token,{'<=',TokenLine}}.
+>=                  : {token,{'>=',TokenLine}}.
+<<=		    : {token,{'<<=',TokenLine}}.
+>>=		    : {token,{'>>=',TokenLine}}.
+<<		    : {token,{'<<',TokenLine}}.
+>>		    : {token,{'>>',TokenLine}}.
+=		    : {token,{'=',TokenLine}}.
+<		    : {token,{'<',TokenLine}}.
+>		    : {token,{'>',TokenLine}}.
+!		    : {token,{'!',TokenLine}}.
+#		    : {token,{'#',TokenLine}}.
+-		    : {token,{'-',TokenLine}}.
+\+		    : {token,{'+',TokenLine}}.
+//.*\n              : {token,{'end of line',TokenLine}}.
 //.*                : skip_token.
-/		    : {token,{'SLASH',TokenLine}}.
-\%		    : {token,{'PERCENT',TokenLine}}.
-\*		    : {token,{'ASTERISK',TokenLine}}.
-\?		    : {token,{'QUEST',TokenLine}}.
-\|\|		    : {token,{'BARBAR',TokenLine}}.
-\|		    : {token,{'BAR',TokenLine}}.
-\&\&	            : {token,{'AMPAMP',TokenLine}}.
-\&		    : {token,{'AMP',TokenLine}}.
-\^		    : {token,{'CIRC',TokenLine}}.
-\~		    : {token,{'TILDE',TokenLine}}.
-\(		    : {token,{'LP',TokenLine}}.
-\)		    : {token,{'RP',TokenLine}}.
-\[		    : {token,{'LB',TokenLine}}.
-\]		    : {token,{'RB',TokenLine}}.
-\{		    : {token,{'LBRACE',TokenLine}}.
-\}		    : {token,{'RBRACE',TokenLine}}.
-\.\.		    : {token,{'DOTDOT',TokenLine}}.
-\.		    : {token,{'DOT',TokenLine}}.
-\,		    : {token,{'COMMA',TokenLine}}.
-\:		    : {token,{'COLON',TokenLine}}.
-\n                  : {token,{'NEWLINE',TokenLine}}.
+/		    : {token,{'/',TokenLine}}.
+\%		    : {token,{'%',TokenLine}}.
+\*		    : {token,{'*',TokenLine}}.
+\?		    : {token,{'?',TokenLine}}.
+\|\|		    : {token,{'||',TokenLine}}.
+\|		    : {token,{'|',TokenLine}}.
+\&\&	            : {token,{'&&',TokenLine}}.
+\&		    : {token,{'&',TokenLine}}.
+\^		    : {token,{'^',TokenLine}}.
+\~		    : {token,{'~',TokenLine}}.
+\(		    : {token,{'(',TokenLine}}.
+\)		    : {token,{')',TokenLine}}.
+\[		    : {token,{'[',TokenLine}}.
+\]		    : {token,{']',TokenLine}}.
+\{		    : {token,{'{',TokenLine}}.
+\}		    : {token,{'}',TokenLine}}.
+\.\.		    : {token,{'..',TokenLine}}.
+\.		    : {token,{'.',TokenLine}}.
+\,		    : {token,{',',TokenLine}}.
+\:		    : {token,{':',TokenLine}}.
+\n                  : {token,{'end of line',TokenLine}}.
 {WS}+		    : skip_token .
 
 Erlang code.

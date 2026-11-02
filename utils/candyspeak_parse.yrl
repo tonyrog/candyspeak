@@ -1,26 +1,25 @@
 %% -*- erlang -*-
 
 Terminals
-  'D_MODULE' 'D_END' 'D_STATES' 
-   %% D_IN => T_IN
-  'D_WHEN'
-  'D_DIGITAL' 'D_ANALOG' 'D_VARIABLE' 'D_LOCAL' 'D_PARAM' 'D_CONSTANT' 
-  'D_TIMER' 'D_FIELD' 'D_BUFFER' 'D_DEFINE' 'D_DISABLE' 'D_ENABLE'
-  'D_ANNOTATE' 'D_IMPORT'
-  'T_INTEGER' 'T_UNSIGNED' 'T_STRING' 'T_FLOAT' 'T_IN'
-  'T_OUT' 'T_INOUT' 'T_LITTLE' 'T_BIG' 'T_NATIVE' 'T_PWM' 'T_BIND'
-  'T_VAL' 'T_PIN' 'T_PORT' 'T_DIR' 'T_ENDIAN' 'T_PERIOD' 'T_FIRED'
-  'T_ID' 'T_RX' 'T_TX' 'T_DLC' 'T_LEN'
-  'T_PULLUP' 'T_PULLDOWN'
-  'T_CAN' 'T_I2C' 'T_SPI' 'T_UDP' 'T_TCP' 'T_UART' 'T_SMS' 'T_CONSOLE' 'T_REPL' 'T_ONEWIRE'
-  'T_LOW' 'T_HIGH' 'T_BOTH'  'T_SOFT' 'T_READY' 'T_RISING' 'T_FALLING'
+  'module' 'end' 'states' 
+  'when'
+  'digital' 'analog' 'variable' 'local' 'param' 'constant' 
+  'timer' 'field' 'buffer' 'define' 'disable' 'enable'
+  'annotate' 'import'
+  'integer' 'unsigned' 'string' 'float' 'in'
+  'out' 'inout' 'little' 'big' 'native' 'pwm' 'bind'
+  'val' 'pin' 'port' 'dir' 'endian' 'period' 'fired'
+  'id' 'rx' 'tx' 'dlc' 'len'
+  'pullup' 'pulldown'
+  'can' 'i2c' 'spi' 'udp' 'tcp' 'uart' 'sms' 'console' 'repl' 'onewire'
+  'low' 'high' 'both'  'soft' 'ready' 'rising' 'falling'
   'WORD' 'INT' 'FLT' 'STR'
-  'EQEQ' 'NEQ' 'LTEQ' 'GTEQ' 'LTLT' 'GTGT' 'LT' 'GT' 
-  'EQ' 'RIMP' 'LTLTEQ' 'GTGTEQ'
-  'EXCLAMATION' 'HASH' 'MINUS' 'PLUS' 'SLASH' 'PERCENT'
-  'ASTERISK' 'QUEST' 'AMPAMP' 'AMP' 'BARBAR' 'BAR' 'CIRC' 'TILDE'
-  'LP' 'RP' 'LB' 'RB' 'LBRACE' 'RBRACE' 'DOTDOT' 'DOT' 'COMMA' 'COLON'
-  'NEWLINE'
+  '==' '!=' '<=' '>=' '<<' '>>' '<' '>' 
+  '=' '<-' '<<=' '>>='
+  '!' '#' '-' '+' '/' '%'
+  '*' '?' '&&' '&' '||' '|' '^' '~'
+  '(' ')' '[' ']' '{' '}' '..' '.' ',' ':'
+  'end of line'
   .
 
 Nonterminals
@@ -28,10 +27,10 @@ Nonterminals
   file statement declaration rule state_list
   expr array expr_list expr_array buftype pin_list pin_range 
   bit_range rule_list rule_range
-  assignment_list assignment id xid fid part lhs field pfield 
+  assignment_list assignment name xid fid part lhs ref pfield 
   pack_list unpack_list
   res neg obj_params
-  type endian iodir pull trig option options
+  type order iodir pull trig option options
   .
 
 Rootsymbol file.
@@ -39,69 +38,69 @@ Endsymbol '$end'.
 
 Unary 1200 neg. 
 
-Unary 1100 'EXCLAMATION' 'TILDE'.
-Left 1000 'ASTERISK' 'SLASH' 'PERCENT'.
-Left 900  'PLUS' 'MINUS'.
-Left 800  'LTLT' 'GTGT'.
-Left 700  'LT' 'LTEQ' 'GT' 'GTEQ'.
-Left 600  'EQEQ' 'NEQ'.
-Left 500  'AMP'.
-Left 400  'CIRC'.
-Left 300  'BAR'.
-Left 10   'BARBAR'.
-Left 20   'AMPAMP'.
+Unary 1100 '!' '~'.
+Left 1000 '*' '/' '%'.
+Left 900  '+' '-'.
+Left 800  '<<' '>>'.
+Left 700  '<' '<=' '>' '>='.
+Left 600  '==' '!='.
+Left 500  '&'.
+Left 400  '^'.
+Left 300  '|'.
+Left 10   '||'.
+Left 20   '&&'.
 
-file -> statement 'NEWLINE' file : ['$1'|'$3'].
-file -> 'NEWLINE' file : '$2'.
+file -> statement 'end of line' file : ['$1'|'$3'].
+file -> 'end of line' file : '$2'.
 file -> '$empty' : [].
 
-statement -> 'HASH' declaration : '$2'.
-statement -> 'GT' expr : {immediate, '$2'}.
-statement -> 'GT' assignment : {immediate, '$2'}.
+statement -> '#' declaration : '$2'.
+statement -> '>' expr : {immediate, '$2'}.
+statement -> '>' assignment : {immediate, '$2'}.
 statement -> rule : '$1'.
 
-declaration -> 'D_MODULE' id : {module,line('$1'),'$2'}.
+declaration -> 'module' name : {module,line('$1'),'$2'}.
 
-declaration -> 'D_STATES' state_list: {states,line('$1'),'$2'}.
-declaration -> 'T_IN' state_list: {'in',line('$1'),'$2'}.
-declaration -> 'D_WHEN' expr : {'when',line('$1'),'$2'}.
-declaration -> 'D_DIGITAL' xid array res options : 
+declaration -> 'states' state_list: {states,line('$1'),'$2'}.
+declaration -> 'in' state_list: {'in',line('$1'),'$2'}.
+declaration -> 'when' expr : {'when',line('$1'),'$2'}.
+declaration -> 'digital' xid array res options : 
 		   {digital,line('$1'),'$2','$3','$4','$5',[]}.
-declaration -> 'D_DIGITAL' xid array res options pin_list : 
+declaration -> 'digital' xid array res options pin_list : 
 		   {digital,line('$1'),'$2','$3','$4','$5','$6'}.
-declaration -> 'D_ANALOG' xid array res options pin_list :
+declaration -> 'analog' xid array res options pin_list :
 		   {analog,line('$1'),'$2','$3','$4','$5','$6'}.
-declaration -> 'D_ANALOG' xid array res options :
+declaration -> 'analog' xid array res options :
 		   {analog,line('$1'),'$2','$3','$4','$5',[]}.
 
-declaration -> 'D_VARIABLE' xid array res options :
+declaration -> 'variable' xid array res options :
 		   {variable,line('$1'),'$2','$3','$4','$5',undefined}.
-declaration -> 'D_VARIABLE' xid array res options 'EQ' expr :
+declaration -> 'variable' xid array res options '=' expr :
 		   {variable,line('$1'),'$2','$3','$4','$5','$7'}.
 
-declaration -> 'D_CONSTANT' xid array res options 'EQ' expr :
+declaration -> 'constant' xid array res options '=' expr :
 		   {constant,line('$1'),'$2','$3','$4','$5','$7'}.
-declaration -> 'D_CONSTANT' xid array res options 'EQ' expr_array :
+declaration -> 'constant' xid array res options '=' expr_array :
 		   {constant,line('$1'),'$2','$3','$4','$5','$7'}.
 
-declaration -> 'D_LOCAL' xid res options 'EQ' expr :
+declaration -> 'local' xid res options '=' expr :
 		   {local,line('$1'),'$2','$3','$4','$6'}.
 %% `#local X in' -- the instance binds it, with no default. (`#local X in = c'
 %% and `#local X out = e' are the form above: `options' carries in/out.)
-declaration -> 'D_LOCAL' xid res options :
+declaration -> 'local' xid res options :
 		   {local,line('$1'),'$2','$3','$4',undefined}.
-declaration -> 'D_PARAM' xid res options :
+declaration -> 'param' xid res options :
 		   {param,line('$1'),'$2','$3','$4',undefined}.
-declaration -> 'D_PARAM' xid res options 'EQ' expr :
+declaration -> 'param' xid res options '=' expr :
 		   {param,line('$1'),'$2','$3','$4','$6'}.
 
-declaration -> 'D_TIMER' xid expr : {timer,line('$1'),'$2','$3',undefined}.
-declaration -> 'D_TIMER' xid expr 'EQ' expr : {timer,line('$1'),'$2','$3','$5'}.
-declaration -> 'D_FIELD' xid res options id 'LB' bit_range 'RB' :
+declaration -> 'timer' xid expr : {timer,line('$1'),'$2','$3',undefined}.
+declaration -> 'timer' xid expr '=' expr : {timer,line('$1'),'$2','$3','$5'}.
+declaration -> 'field' xid res options name '[' bit_range ']' :
 		   {field,line('$1'),'$2','$3','$4','$5','$7'}.
-declaration -> 'D_BUFFER' xid res options buftype :
+declaration -> 'buffer' xid res options buftype :
 		   {buffer,line('$1'),'$2','$3','$4','$5'}.
-declaration -> 'D_DEFINE' xid expr : {define,line('$1'),'$2','$3'}.
+declaration -> 'define' xid expr : {define,line('$1'),'$2','$3'}.
 
 %% #annotate <tool> <target> [key[=value] ...]
 %% #annotate <tool> <word> "any chars"
@@ -126,87 +125,87 @@ declaration -> 'D_DEFINE' xid expr : {define,line('$1'),'$2','$3'}.
 %% #import <name> | <root> "<path>" | "<path>" -- another source file, loaded
 %% once. The parser only carries the request; candyspeak:parse/1 expands it,
 %% the way csp's port does (port/csp_linux.c, csp_import_run).
-declaration -> 'D_IMPORT' aid : {import,line('$1'),name,element(3,'$2')}.
-declaration -> 'D_IMPORT' aid 'STR' :
+declaration -> 'import' aid : {import,line('$1'),name,element(3,'$2')}.
+declaration -> 'import' aid 'STR' :
 		   {import,line('$1'),{root,element(3,'$2')},element(3,'$3')}.
-declaration -> 'D_IMPORT' 'STR' : {import,line('$1'),quoted,element(3,'$2')}.
+declaration -> 'import' 'STR' : {import,line('$1'),quoted,element(3,'$2')}.
 
-declaration -> 'D_ANNOTATE' id id 'STR' :
+declaration -> 'annotate' name name 'STR' :
 		   {annotate,line('$1'),'$2','$3','$4'}.
 
-declaration -> 'D_ANNOTATE' id id annotate_items :
+declaration -> 'annotate' name name annotate_items :
 		   {annotate,line('$1'),'$2','$3','$4'}.
 %% `*' is the tool itself rather than one signal: `#annotate panel * trace=off'.
 %% What that means is the tool's business, like the keys.
-declaration -> 'D_ANNOTATE' id 'ASTERISK' annotate_items :
+declaration -> 'annotate' name '*' annotate_items :
 		   {annotate,line('$1'),'$2',{'WORD',line('$3'),"*"},'$4'}.
 
 
 %% id in annotate may be any keyword or id
-aid -> id : '$1'.
+aid -> name : '$1'.
     
-aid -> 'D_MODULE'   : make_word('$1').
-aid -> 'D_END'      : make_word('$1').
-aid -> 'D_STATES'   : make_word('$1').
-aid -> 'D_WHEN'     : make_word('$1').
-aid -> 'D_DIGITAL'  : make_word('$1').
-aid -> 'D_ANALOG'   : make_word('$1').
-aid -> 'D_VARIABLE' : make_word('$1').
-aid -> 'D_LOCAL'    : make_word('$1').
-aid -> 'D_PARAM'    : make_word('$1').
-aid -> 'D_CONSTANT' : make_word('$1').
-aid -> 'D_TIMER'    : make_word('$1').
-aid -> 'D_FIELD'    : make_word('$1').
-aid -> 'D_BUFFER'   : make_word('$1').
-aid -> 'D_DEFINE'   : make_word('$1').
-aid -> 'D_DISABLE'  : make_word('$1').
-aid -> 'D_ENABLE'   : make_word('$1').
-aid -> 'D_ANNOTATE' : make_word('$1').
-aid -> 'D_IMPORT'   : make_word('$1').
-aid -> 'T_INTEGER'  : make_word('$1').
-aid -> 'T_UNSIGNED' : make_word('$1').
-aid -> 'T_STRING'   : make_word('$1').
-aid -> 'T_FLOAT'    : make_word('$1').
-aid -> 'T_IN'       : make_word('$1').
-aid -> 'T_OUT'      : make_word('$1').
-aid -> 'T_INOUT'    : make_word('$1').
-aid -> 'T_LITTLE'   : make_word('$1').
-aid -> 'T_BIG'      : make_word('$1').
-aid -> 'T_NATIVE'   : make_word('$1').
-aid -> 'T_PWM'      : make_word('$1').
-aid -> 'T_BIND'     : make_word('$1').
-aid -> 'T_VAL'      : make_word('$1').
-aid -> 'T_PIN'      : make_word('$1').
-aid -> 'T_PORT'     : make_word('$1').
-aid -> 'T_DIR'      : make_word('$1').
-aid -> 'T_ENDIAN'   : make_word('$1').
-aid -> 'T_PERIOD'   : make_word('$1').
-aid -> 'T_FIRED'    : make_word('$1').
-aid -> 'T_ID'       : make_word('$1').
-aid -> 'T_RX'       : make_word('$1').
-aid -> 'T_TX'       : make_word('$1').
-aid -> 'T_DLC'      : make_word('$1').
-aid -> 'T_LEN'      : make_word('$1').
-aid -> 'T_PULLUP'   : make_word('$1').
-aid -> 'T_PULLDOWN' : make_word('$1').
-aid -> 'T_CAN'      : make_word('$1').
-aid -> 'T_I2C'      : make_word('$1').
-aid -> 'T_SPI'      : make_word('$1').
-aid -> 'T_UDP'      : make_word('$1').
-aid -> 'T_TCP'      : make_word('$1').
-aid -> 'T_UART'     : make_word('$1').
-aid -> 'T_LOW'      : make_word('$1').
-aid -> 'T_HIGH'     : make_word('$1').
-aid -> 'T_BOTH'     : make_word('$1').
-aid -> 'T_SOFT'     : make_word('$1').
-aid -> 'T_READY'    : make_word('$1').
-aid -> 'T_RISING'   : make_word('$1').
-aid -> 'T_FALLING'  : make_word('$1').
+aid -> 'module'   : make_word('$1').
+aid -> 'end'      : make_word('$1').
+aid -> 'states'   : make_word('$1').
+aid -> 'when'     : make_word('$1').
+aid -> 'digital'  : make_word('$1').
+aid -> 'analog'   : make_word('$1').
+aid -> 'variable' : make_word('$1').
+aid -> 'local'    : make_word('$1').
+aid -> 'param'    : make_word('$1').
+aid -> 'constant' : make_word('$1').
+aid -> 'timer'    : make_word('$1').
+aid -> 'field'    : make_word('$1').
+aid -> 'buffer'   : make_word('$1').
+aid -> 'define'   : make_word('$1').
+aid -> 'disable'  : make_word('$1').
+aid -> 'enable'   : make_word('$1').
+aid -> 'annotate' : make_word('$1').
+aid -> 'import'   : make_word('$1').
+aid -> 'integer'  : make_word('$1').
+aid -> 'unsigned' : make_word('$1').
+aid -> 'string'   : make_word('$1').
+aid -> 'float'    : make_word('$1').
+aid -> 'in'       : make_word('$1').
+aid -> 'out'      : make_word('$1').
+aid -> 'inout'    : make_word('$1').
+aid -> 'little'   : make_word('$1').
+aid -> 'big'      : make_word('$1').
+aid -> 'native'   : make_word('$1').
+aid -> 'pwm'      : make_word('$1').
+aid -> 'bind'     : make_word('$1').
+aid -> 'val'      : make_word('$1').
+aid -> 'pin'      : make_word('$1').
+aid -> 'port'     : make_word('$1').
+aid -> 'dir'      : make_word('$1').
+aid -> 'endian'   : make_word('$1').
+aid -> 'period'   : make_word('$1').
+aid -> 'fired'    : make_word('$1').
+aid -> 'id'       : make_word('$1').
+aid -> 'rx'       : make_word('$1').
+aid -> 'tx'       : make_word('$1').
+aid -> 'dlc'      : make_word('$1').
+aid -> 'len'      : make_word('$1').
+aid -> 'pullup'   : make_word('$1').
+aid -> 'pulldown' : make_word('$1').
+aid -> 'can'      : make_word('$1').
+aid -> 'i2c'      : make_word('$1').
+aid -> 'spi'      : make_word('$1').
+aid -> 'udp'      : make_word('$1').
+aid -> 'tcp'      : make_word('$1').
+aid -> 'uart'     : make_word('$1').
+aid -> 'low'      : make_word('$1').
+aid -> 'high'     : make_word('$1').
+aid -> 'both'     : make_word('$1').
+aid -> 'soft'     : make_word('$1').
+aid -> 'ready'    : make_word('$1').
+aid -> 'rising'   : make_word('$1').
+aid -> 'falling'  : make_word('$1').
 
 annotate_items -> '$empty' : [].
 annotate_items -> annotate_item annotate_items : ['$1'|'$2'].
 
-annotate_item -> aid 'EQ' annotate_value : {'$1','$3'}.
+annotate_item -> aid '=' annotate_value : {'$1','$3'}.
 annotate_item -> aid : {'$1',true}.
 
 annotate_value -> aid    : '$1'.
@@ -214,97 +213,97 @@ annotate_value -> 'INT' : '$1'.
 annotate_value -> 'FLT' : '$1'.
 annotate_value -> 'STR' : '$1'.
 %% A signed channel's range starts below zero: min=-512
-annotate_value -> 'MINUS' 'INT' : {'INT',line('$2'),"-" ++ element(3,'$2')}.
-annotate_value -> 'MINUS' 'FLT' : {'FLT',line('$2'),"-" ++ element(3,'$2')}.
-declaration -> 'D_END': {'end',line('$1')}.
+annotate_value -> '-' 'INT' : {'INT',line('$2'),"-" ++ element(3,'$2')}.
+annotate_value -> '-' 'FLT' : {'FLT',line('$2'),"-" ++ element(3,'$2')}.
+declaration -> 'end': {'end',line('$1')}.
 
 %% Special Immediates
-declaration -> 'D_DISABLE' rule_list : {disable,line('$1'),'$2'}.
-declaration -> 'D_ENABLE' rule_list : {enable,line('$1'),'$2'}.
+declaration -> 'disable' rule_list : {disable,line('$1'),'$2'}.
+declaration -> 'enable' rule_list : {enable,line('$1'),'$2'}.
 
 %% #<modeule-name> <object-name>  (Field (=|<-) Expr)*
 
-declaration -> id id obj_params :
+declaration -> name name obj_params :
 		   {object,line('$1'),'$1','$2','$3'}.
 
-id -> 'WORD' : '$1'.
+name -> 'WORD' : '$1'.
 
-xid -> id : '$1'.
-xid -> 'T_IN'  : make_word('$1').
-xid -> 'T_OUT' : make_word('$1').
-xid -> 'T_LOW' : make_word('$1').
-xid -> 'T_READY' : make_word('$1').
+xid -> name : '$1'.
+xid -> 'in'  : make_word('$1').
+xid -> 'out' : make_word('$1').
+xid -> 'low' : make_word('$1').
+xid -> 'ready' : make_word('$1').
 
-part -> 'T_VAL' : make_word('$1').
-part -> 'T_PIN' : make_word('$1').
-part -> 'T_PORT' : make_word('$1').
-part -> 'T_DIR' : make_word('$1').
-part -> 'T_PWM' : make_word('$1').
-part -> 'T_ENDIAN' : make_word('$1').
-part -> 'T_PULLUP' : make_word('$1').
-part -> 'T_PULLDOWN' : make_word('$1').
-part -> 'T_PERIOD' : make_word('$1').
-part -> 'T_FIRED' : make_word('$1').
-part -> 'T_ID' : make_word('$1').
-part -> 'T_RX' : make_word('$1').
-part -> 'T_TX' : make_word('$1').
-part -> 'T_DLC' : make_word('$1').
-part -> 'T_LEN' : make_word('$1').
+part -> 'val' : make_word('$1').
+part -> 'pin' : make_word('$1').
+part -> 'port' : make_word('$1').
+part -> 'dir' : make_word('$1').
+part -> 'pwm' : make_word('$1').
+part -> 'endian' : make_word('$1').
+part -> 'pullup' : make_word('$1').
+part -> 'pulldown' : make_word('$1').
+part -> 'period' : make_word('$1').
+part -> 'fired' : make_word('$1').
+part -> 'id' : make_word('$1').
+part -> 'rx' : make_word('$1').
+part -> 'tx' : make_word('$1').
+part -> 'dlc' : make_word('$1').
+part -> 'len' : make_word('$1').
     
 obj_params -> '$empty' : [].
 obj_params -> assignment obj_params : ['$1'|'$2'].
 
-%%res -> 'COLON' 'INT' : '$2'.
-res -> 'COLON' expr : '$2'.
+%%res -> ':' 'INT' : '$2'.
+res -> ':' expr : '$2'.
 res -> '$empty' : default.
 
-array -> 'LB' 'INT' 'RB' : {array_size,line('$1'),'$2'}.
+array -> '[' 'INT' ']' : {array_size,line('$1'),'$2'}.
 array ->  '$empty' : scalar.
 
-bit_range -> 'INT' 'DOTDOT' 'INT' : {range,line('$2'),'$1','$3'}.
+bit_range -> 'INT' '..' 'INT' : {range,line('$2'),'$1','$3'}.
 bit_range -> 'INT' : '$1'.
 
 rule_list -> rule_range : ['$1'].
 rule_list -> rule_range rule_list : ['$1'|'$2'].
 
 rule_range -> 'INT' : '$1'.
-rule_range -> 'INT' 'MINUS' 'INT' : {'$1', '$3'}.
+rule_range -> 'INT' '-' 'INT' : {'$1', '$3'}.
 
 pin_list -> pin_range : ['$1'].
 pin_list -> pin_range pin_list : ['$1'|'$2'].
 
 pin_range -> 'INT' : {pin,line('$1'),'$1'}.
 pin_range -> 'WORD' : {pin,line('$1'),'$1'}.  %% named pin
-pin_range -> 'INT' 'COLON' 'INT' : {port_pin,line('$1'),'$1','$3'}.
-pin_range -> 'INT' 'COLON' 'INT' 'DOTDOT' 'INT' : {port_pin,line('$1'),'$1',
+pin_range -> 'INT' ':' 'INT' : {port_pin,line('$1'),'$1','$3'}.
+pin_range -> 'INT' ':' 'INT' '..' 'INT' : {port_pin,line('$1'),'$1',
 						   {range,line('$4'),'$3','$5'}}.
 %% can <frame-id> 
-buftype -> 'T_CAN' 'INT' : [{can,'$2'}].
+buftype -> 'can' 'INT' : [{can,'$2'}].
 %% i2c <bus> <addr> <reg>
-buftype -> 'T_I2C' 'INT' 'INT' 'INT' : [{i2c,'$2','$3','$4'}].
+buftype -> 'i2c' 'INT' 'INT' 'INT' : [{i2c,'$2','$3','$4'}].
 %% spi <bus> <cs-port> ':' <cs-pin> <cmd>
-buftype -> 'T_SPI' 'INT' 'INT' 'COLON' 'INT' 'INT' :
+buftype -> 'spi' 'INT' 'INT' ':' 'INT' 'INT' :
 	       [{spi,'$2',{'$3','$5'},'$6'}].
 %% udp <port> == udp <port> 0
-buftype -> 'T_UDP' 'INT' : [{udp,'$2',udefined}].
+buftype -> 'udp' 'INT' : [{udp,'$2',udefined}].
 %% udp <port> <ip>
-buftype -> 'T_UDP' 'INT' 'INT' : [{udp,'$2','$3'}].
+buftype -> 'udp' 'INT' 'INT' : [{udp,'$2','$3'}].
 %% tcp <port> == tcp <port> 0
-buftype -> 'T_TCP' 'INT' : [{tcp,'$2',udefined}].
+buftype -> 'tcp' 'INT' : [{tcp,'$2',udefined}].
 %% tcp <port> <ip>
-buftype -> 'T_TCP' 'INT' 'INT' : [{tcp,'$2','$3'}].
+buftype -> 'tcp' 'INT' 'INT' : [{tcp,'$2','$3'}].
 %% uart <unit> [<baud>] (default baud = 9600)
-buftype -> 'T_UART' 'INT' : [{uart,'$2',9600}].
-buftype -> 'T_UART' 'INT' 'INT' : [{uart,'$2','$3'}].
+buftype -> 'uart' 'INT' : [{uart,'$2',9600}].
+buftype -> 'uart' 'INT' 'INT' : [{uart,'$2','$3'}].
 %% the two ends of the console wire
-buftype -> 'T_CONSOLE' : [{console}].
-buftype -> 'T_REPL' : [{repl}].
+buftype -> 'console' : [{console}].
+buftype -> 'repl' : [{repl}].
 %% sms <param>: a modem; the string #param lists the numbers
-buftype -> 'T_SMS' 'WORD' : [{sms,'$2'}].
+buftype -> 'sms' 'WORD' : [{sms,'$2'}].
 %% sms <param> <pin>: ...and the string #param with the SIM's PIN
-buftype -> 'T_SMS' 'WORD' 'WORD' : [{sms,'$2','$3'}].
+buftype -> 'sms' 'WORD' 'WORD' : [{sms,'$2','$3'}].
 %% onewire <port>:<pin> <param>: a 1-Wire device; the string #param holds its id
-buftype -> 'T_ONEWIRE' 'INT' 'COLON' 'INT' 'WORD' :
+buftype -> 'onewire' 'INT' ':' 'INT' 'WORD' :
     [{onewire,{'$2','$4'},'$5'}].
 %% plain byte buffer
 buftype -> '$empty' : [].
@@ -320,123 +319,123 @@ options -> option options : ['$1'|'$2'].
 options -> '$empty'       : [].
 
 option -> iodir  : {dir,'$1'}.
-option -> endian : {endian,'$1'}.
+option -> order : {endian,'$1'}.
 option -> type   : {type, '$1'}.
 option -> pull   : {pull, '$1'}.
 option -> trig   : {trig, '$1'}.
-option -> 'T_PWM' : pwm.
-option -> 'T_BIND' id 'LB' bit_range 'RB':  {bind,{'$2','$4'}}.
+option -> 'pwm' : pwm.
+option -> 'bind' name '[' bit_range ']':  {bind,{'$2','$4'}}.
 
-trig -> 'T_LOW' : low.
-trig -> 'T_HIGH' : high.
-trig -> 'T_BOTH' : both.
-trig -> 'T_SOFT' : soft.
-trig -> 'T_READY' : ready.
-trig -> 'T_RISING' : rising.
-trig -> 'T_FALLING' : falling.
+trig -> 'low' : low.
+trig -> 'high' : high.
+trig -> 'both' : both.
+trig -> 'soft' : soft.
+trig -> 'ready' : ready.
+trig -> 'rising' : rising.
+trig -> 'falling' : falling.
 
-pull -> 'T_PULLUP'   : pullup.
-pull -> 'T_PULLDOWN' : pulldown.
+pull -> 'pullup'   : pullup.
+pull -> 'pulldown' : pulldown.
 
-endian -> 'T_BIG'    : big.
-endian -> 'T_LITTLE' : little.
-endian -> 'T_NATIVE' : native.
+order -> 'big'    : big.
+order -> 'little' : little.
+order -> 'native' : native.
 
-iodir -> 'T_IN'    : in.
-iodir -> 'T_OUT'   : out.
-iodir -> 'T_INOUT' : inout.
+iodir -> 'in'    : in.
+iodir -> 'out'   : out.
+iodir -> 'inout' : inout.
 
-type -> 'T_UNSIGNED' : unsigned.
-type -> 'T_INTEGER'  : integer.
-type -> 'T_FLOAT'    : float.
-type -> 'T_STRING'   : string.
+type -> 'unsigned' : unsigned.
+type -> 'integer'  : integer.
+type -> 'float'    : float.
+type -> 'string'   : string.
 
-state_list -> id : ['$1'].
-state_list -> id state_list : ['$1'|'$2'].
+state_list -> name : ['$1'].
+state_list -> name state_list : ['$1'|'$2'].
      
-rule -> assignment_list 'QUEST' expr : {rule,line('$2'),'$1','$3'}.
+rule -> assignment_list '?' expr : {rule,line('$2'),'$1','$3'}.
 rule -> assignment_list : {rule,line('$1'),'$1',undefined}.
-rule -> lhs 'LTLTEQ' pack_list : {rule, line('$2'), [{pack, '$1', '$3'}], true}.
-rule -> lhs 'GTGTEQ' unpack_list : {rule, line('$2'), [{unpack, '$1', '$3'}], trur}.
-rule -> lhs 'LTLTEQ' pack_list 'QUEST' expr  : {rule, line('$2'),[{pack,'$1','$3'}],'$5'}.
-rule -> lhs 'GTGTEQ' unpack_list 'QUEST' expr :{rule, line('$2'),[{unpack,'$1','$3'}],'$5'}.
+rule -> lhs '<<=' pack_list : {rule, line('$2'), [{pack, '$1', '$3'}], true}.
+rule -> lhs '>>=' unpack_list : {rule, line('$2'), [{unpack, '$1', '$3'}], true}.
+rule -> lhs '<<=' pack_list '?' expr  : {rule, line('$2'),[{pack,'$1','$3'}],'$5'}.
+rule -> lhs '>>=' unpack_list '?' expr :{rule, line('$2'),[{unpack,'$1','$3'}],'$5'}.
 
-assignment -> lhs 'EQ' expr   : {'=', line('$2'), '$1', '$3'}.
-assignment -> lhs 'RIMP' expr : {'<-',line('$2'), '$1', '$3'}.
+assignment -> lhs '=' expr   : {'=', line('$2'), '$1', '$3'}.
+assignment -> lhs '<-' expr : {'<-',line('$2'), '$1', '$3'}.
 assignment -> expr : '$1'.
     
 assignment_list -> assignment : ['$1'].
-assignment_list -> assignment 'COMMA' assignment_list : ['$1'|'$3'].
+assignment_list -> assignment ',' assignment_list : ['$1'|'$3'].
 
 pack_list -> pfield : [{'$1',default}].
-pack_list -> pfield 'COLON' 'INT' : [{'$1','$3'}].
+pack_list -> pfield ':' 'INT' : [{'$1','$3'}].
 pack_list -> pfield pack_list : [{'$1',default}|'$2'].
-pack_list -> 'LP' expr 'RP' 'COLON' 'INT' : [{'$2','$5'}].
-pack_list -> pfield 'COLON' 'INT' pack_list : [{'$1','$3'}|'$4'].
-pack_list -> 'LP' expr 'RP' 'COLON' 'INT' pack_list : [{'$2','$5'}|'$6'].
+pack_list -> '(' expr ')' ':' 'INT' : [{'$2','$5'}].
+pack_list -> pfield ':' 'INT' pack_list : [{'$1','$3'}|'$4'].
+pack_list -> '(' expr ')' ':' 'INT' pack_list : [{'$2','$5'}|'$6'].
 
 pfield -> 'INT' : '$1'.
-pfield -> field : '$1'.
+pfield -> ref : '$1'.
 
-unpack_list -> field : [{'$1',default}].
-unpack_list -> field 'COLON' 'INT' : [{'$1','$3'}].
-unpack_list -> field unpack_list : [{'$1',default}|'$2'].
-unpack_list -> field 'COLON' 'INT' unpack_list : [{'$1','$3'}|'$4'].
+unpack_list -> ref : [{'$1',default}].
+unpack_list -> ref ':' 'INT' : [{'$1','$3'}].
+unpack_list -> ref unpack_list : [{'$1',default}|'$2'].
+unpack_list -> ref ':' 'INT' unpack_list : [{'$1','$3'}|'$4'].
 
-lhs -> field : '$1'.
+lhs -> ref : '$1'.
 
 %% rhs field
 fid -> xid  : '$1'.
-%%fid -> xid 'DOT' xid   : {fld,'$1','$3'}.
+%%fid -> xid '.' xid   : {fld,'$1','$3'}.
     
-field -> fid            : {field,line('$1'),'$1'}.
-field -> fid 'DOT' part : {field,line('$1'),{part,line('$2'),'$1','$3'}}.
-field -> fid 'DOT' xid  : {field,line('$1'),{fld,line('$2'),'$1','$3'}}.
-field -> fid 'DOT' xid 'DOT' part : {field,line('$1'),{part,line('$2'),{fld,line('$4'),'$1','$3'},'$5'}}.
-field -> fid 'LB' expr 'RB' : {field,line('$1'),{index, line('$2'), '$1','$3'}}.
-field -> fid 'LB' 'INT' 'DOTDOT' 'INT' 'RB' : 
+ref -> fid            : {field,line('$1'),'$1'}.
+ref -> fid '.' part : {field,line('$1'),{part,line('$2'),'$1','$3'}}.
+ref -> fid '.' xid  : {field,line('$1'),{fld,line('$2'),'$1','$3'}}.
+ref -> fid '.' xid '.' part : {field,line('$1'),{part,line('$2'),{fld,line('$4'),'$1','$3'},'$5'}}.
+ref -> fid '[' expr ']' : {field,line('$1'),{index, line('$2'), '$1','$3'}}.
+ref -> fid '[' 'INT' '..' 'INT' ']' : 
 	     {field,line('$1'),{index,line('$2'),'$1',
 				{range,line('$4'),'$3','$5'}}}.
 
-neg -> 'MINUS' : '$1'.
+neg -> '-' : '$1'.
 
 expr -> 'INT'         : '$1'.
 expr -> 'FLT'         : '$1'.
 expr -> 'STR'         : '$1'.
-expr -> field         : '$1'.
+expr -> ref         : '$1'.
 expr -> neg expr      : {'-',line('$1'),'$2'}.
-expr -> 'TILDE' expr  : {'~',line('$1'),'$2'}.
-expr -> 'EXCLAMATION' expr :
+expr -> '~' expr  : {'~',line('$1'),'$2'}.
+expr -> '!' expr :
 	    case '$2' of
 		{'!', _Ln, Cond} -> Cond;
 		Cond -> {'!',line('$1'),Cond}
 	    end.
-expr -> expr 'PLUS' expr : {'+',line('$2'),'$1','$3'}.
-expr -> expr 'MINUS' expr : {'-',line('$2'),'$1','$3'}.
-expr -> expr 'ASTERISK' expr : {'*',line('$2'),'$1','$3'}.
-expr -> expr 'SLASH' expr : {'/',line('$2'),'$1','$3'}.
-expr -> expr 'PERCENT' expr : {'%',line('$2'),'$1','$3'}.
-expr -> expr 'AMP' expr : {'&',line('$2'),'$1','$3'}.
-expr -> expr 'BAR' expr : {'|',line('$2'),'$1','$3'}.
-expr -> expr 'CIRC' expr : {'^',line('$2'),'$1','$3'}.
-expr -> expr 'LTLT' expr : {'<<',line('$2'),'$1','$3'}.
-expr -> expr 'GTGT' expr : {'>>',line('$2'),'$1','$3'}.
-expr -> expr 'EQEQ' expr : {'==',line('$2'),'$1','$3'}.
-expr -> expr 'NEQ' expr : {'!=',line('$2'),'$1','$3'}.
-expr -> expr 'LTEQ' expr : {'<=',line('$2'),'$1','$3'}.
-expr -> expr 'LT' expr : {'<',line('$2'),'$1','$3'}.
-expr -> expr 'GT' expr : {'>',line('$2'),'$1','$3'}.
-expr -> expr 'GTEQ' expr : {'>=',line('$2'),'$1','$3'}.
-expr -> expr 'AMPAMP' expr : {'&&',line('$2'),'$1','$3'}.
-expr -> expr 'BARBAR' expr : {'||',line('$2'),'$1','$3'}.
-expr -> 'LP' expr 'RP' : '$2'.
-expr -> id 'LP' 'RP' : {call, line('$2'), '$1', []}.
-expr -> id 'LP' expr_list 'RP' : {call, line('$2'), '$1', '$3'}.
+expr -> expr '+' expr : {'+',line('$2'),'$1','$3'}.
+expr -> expr '-' expr : {'-',line('$2'),'$1','$3'}.
+expr -> expr '*' expr : {'*',line('$2'),'$1','$3'}.
+expr -> expr '/' expr : {'/',line('$2'),'$1','$3'}.
+expr -> expr '%' expr : {'%',line('$2'),'$1','$3'}.
+expr -> expr '&' expr : {'&',line('$2'),'$1','$3'}.
+expr -> expr '|' expr : {'|',line('$2'),'$1','$3'}.
+expr -> expr '^' expr : {'^',line('$2'),'$1','$3'}.
+expr -> expr '<<' expr : {'<<',line('$2'),'$1','$3'}.
+expr -> expr '>>' expr : {'>>',line('$2'),'$1','$3'}.
+expr -> expr '==' expr : {'==',line('$2'),'$1','$3'}.
+expr -> expr '!=' expr : {'!=',line('$2'),'$1','$3'}.
+expr -> expr '<=' expr : {'<=',line('$2'),'$1','$3'}.
+expr -> expr '<' expr : {'<',line('$2'),'$1','$3'}.
+expr -> expr '>' expr : {'>',line('$2'),'$1','$3'}.
+expr -> expr '>=' expr : {'>=',line('$2'),'$1','$3'}.
+expr -> expr '&&' expr : {'&&',line('$2'),'$1','$3'}.
+expr -> expr '||' expr : {'||',line('$2'),'$1','$3'}.
+expr -> '(' expr ')' : '$2'.
+expr -> name '(' ')' : {call, line('$2'), '$1', []}.
+expr -> name '(' expr_list ')' : {call, line('$2'), '$1', '$3'}.
 
 expr_list -> expr : ['$1'].
-expr_list -> expr 'COMMA' expr_list : ['$1'|'$3'].
+expr_list -> expr ',' expr_list : ['$1'|'$3'].
 
-expr_array -> 'LBRACE' expr_list 'RBRACE' : {array,line('$1'),'$2'}.
+expr_array -> '{' expr_list '}' : {array,line('$1'),'$2'}.
      
 
 Erlang code.
@@ -444,9 +443,7 @@ Erlang code.
 line([H|_]) -> line(H);
 line(T) when is_tuple(T) -> element(2, T).
 
+%% A keyword token is named as it is written.
 make_word({Atom,Ln}) when is_atom(Atom), is_integer(Ln) ->
-    case atom_to_list(Atom) of
-	"T_"++Word -> {'WORD', Ln, string:to_lower(Word)};
-	"D_"++Word -> {'WORD', Ln, string:to_lower(Word)}
-    end.
+    {'WORD', Ln, atom_to_list(Atom)}.
 

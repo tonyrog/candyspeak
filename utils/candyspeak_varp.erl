@@ -71,6 +71,12 @@
 %%%
 %%%     The string is parsed by candyspeak's own parser and translated as a
 %%%     guard is, so it reads the committed state with the program's names.
+%%%     One form is varp's own, a COUNT over conditions, as the whole string:
+%%%
+%%%         #annotate varp assume "[LTE 1](!K1, !K2, !K3, !K4)"
+%%%
+%%%     -- at most one key of a keypad down at a time, each argument a
+%%%     candyspeak condition (see prop_expr/4).
 %%%     Every invariant is conjoined with `St != FAILSAFE' into the one
 %%%     invariant item, which is varp's default property; one reach and one
 %%%     eventually at most, picked with `--property <system>_reach'. A name
@@ -82,7 +88,7 @@
 
 -export([file/1, file/2]).
 -export([translate/1, translate/2]).
--export([model/2, bmc/3, prove/5, trace/1]).
+-export([model/2, bmc/3, prove/5, trace/1, varp_cmd/0]).
 -export([collect/1, collect/2, check/2]).         % for tests
 
 -define(FAILSAFE, 2).
@@ -334,6 +340,24 @@ system_name(In) -> varp_name(filename:basename(filename:rootname(In))).
 %%%     {none, Out}         no trace up to --k-max (% 0), or varp said UNKNOWN
 %%%     {error, Out}        anything else, varp's last lines as text
 
+%% How to run varp: VARP_SH when it is set, else varp's own main/1 in an erl
+%% of the running system's -- the same erts, so it works in a checkout and in
+%% a packaged system alike, wherever varp is on the code path. main/1 halts,
+%% which is why it is not called in this node. none: no varp at all.
+varp_cmd() ->
+    case os:getenv("VARP_SH") of
+	false ->
+	    case code:which(varp) of
+		non_existing -> none;
+		Beam ->
+		    Erl = filename:join([code:root_dir(), "bin", "erl"]),
+		    lists:flatten(
+		      [Erl, " -noshell -pa ", filename:dirname(Beam),
+		       " -eval \"varp:main(init:get_plain_arguments())\" -extra"])
+	    end;
+	Sh -> Sh
+    end.
+
 bmc(Text, Args, VarpSh) ->
     Tmp = filename:join(tmp_dir(), "csp_varp_" ++
 			    integer_to_list(erlang:unique_integer([positive])) ++
@@ -561,7 +585,31 @@ item(_Other, C) ->
 %% The string is an expression, so it is handed to the parser as the body of a
 %% #define -- the grammar has one root, and this reuses it. Scanning from Ln
 %% keeps the annotation's line in every error.
+%% A COUNT over conditions is varp's own, written as varp writes it: the
+%% whole string `[LTE 1](!K1, !K2, !K3)' -- at most one of these holds. It is
+%% what says that one hand presses one key of a keypad at a time, as an
+%% assume. Each argument is a candyspeak condition, checked like any other.
+%% The quantifiers are varp's: LTE GTE LT GT EQ NEQ, and ONE NONE ALL ANY
+%% PARITY ODD EVEN without a count.
 prop_expr(Kind, S, Ln, F) ->
+    case re:run(S, "^\\s*\\[\\s*([A-Z]+)\\s*([0-9]*)\\s*\\]\\s*\\((.*)\\)\\s*$",
+		[{capture, all_but_first, list}, dotall]) of
+	{match, [Q, N, Args]} ->
+	    {card, Q, N, [prop_expr1(Kind, A, Ln, F) || A <- args(Args)]};
+	nomatch ->
+	    prop_expr1(Kind, S, Ln, F)
+    end.
+
+%% Split at the commas that are not inside parentheses.
+args(S) -> args(S, 0, [], []).
+
+args([], _D, Cur, Acc) -> lists:reverse([lists:reverse(Cur) | Acc]);
+args([$, | T], 0, Cur, Acc) -> args(T, 0, [], [lists:reverse(Cur) | Acc]);
+args([$( | T], D, Cur, Acc) -> args(T, D + 1, [$( | Cur], Acc);
+args([$) | T], D, Cur, Acc) -> args(T, D - 1, [$) | Cur], Acc);
+args([C | T], D, Cur, Acc) -> args(T, D, [C | Cur], Acc).
+
+prop_expr1(Kind, S, Ln, F) ->
     Bad = fun(Why) -> throw({varp_annotate, loc_text(Ln, F), Kind, Why}) end,
     case candyspeak_scan:string("#define P_ " ++ S ++ "\n", Ln) of
 	{ok, Ts, _} ->
@@ -849,6 +897,11 @@ translatable(E, C) -> rng(E, C) =/= error.
 
 
 rng({abstracted, _N, _G}, _C) -> {ok, {0, 1}};
+rng({card, _Q, _N, Es}, C) ->
+    case lists:all(fun(E) -> rng(E, C) =/= error end, Es) of
+	true  -> {ok, {0, 1}};
+	false -> error
+    end;
 rng({'INT', _, S}, _C) ->
     case num_of(S) of
 	{ok, V} -> {ok, {V, V}};
@@ -1533,6 +1586,7 @@ vexpr(E, C, num) ->
     end.
 
 is_bool({abstracted, _, _}, _C) -> true;
+is_bool({card, _, _, _}, _C) -> true;
 is_bool({'!', _, _}, _C) -> true;
 is_bool({Op, _, _, _}, _C) when ?IS_CMP(Op); ?IS_LOGIC(Op) -> true;
 is_bool({field, _, {'WORD', _, N}}, C) ->
@@ -1546,6 +1600,9 @@ is_bool({call, _, {'WORD', _, "timeout"}, _}, _C) -> true;
 is_bool(_, _C) -> false.
 
 vbool({abstracted, Name, _Orig}, _C) -> [Name, " == 1"];
+vbool({card, Q, N, Es}, C) ->
+    ["[", Q, [[" ", N] || N =/= ""], "](",
+     lists:join(", ", [vexpr(E, C, bool) || E <- Es]), ")"];
 vbool({'!', _, M}, C) -> ["not ", paren(vexpr(M, C, bool))];
 vbool({Op, _, L, R}, C) when ?IS_LOGIC(Op) ->
     [paren(vexpr(L, C, bool)), op(Op), paren(vexpr(R, C, bool))];
