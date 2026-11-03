@@ -1,0 +1,6 @@
+// Kortet testerna och panelen kör på: mega_bares pins.csp, som den är.
+//
+// main.csp importerar `board "pins.csp"`. Utan rot tar csp närmaste katalog
+// ovanför den första filen som har en pins.csp -- den här. Så testerna
+// stimulerar de namn ett riktigt kort deklarerar.
+#import "mega_bare/pins.csp"
