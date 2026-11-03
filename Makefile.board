@@ -21,6 +21,19 @@ GEN   := escript utils/gen_chips.erl
 # which is where it belongs.
 #
 # BUILD_DIR= overrides the whole thing.
+#
+# AN APPLICATION ON A BOARD: APP=lock builds apps/lock/main.csp, and its
+# `#import board "pins.csp"` is apps/lock/<BOARD>/pins.csp -- what that
+# application calls K1 or Lock, on that board. The board directory is still
+# where the terms come from. The output goes beside the pins, so one
+# application on two boards is two builds that cannot be mixed up.
+#
+#   make -f Makefile.board BOARD=mega_bare APP=lock
+APP ?=
+ifneq ($(APP),)
+APPDIR    := apps/$(APP)
+BUILD_DIR ?= $(APPDIR)/$(BOARD)/build
+endif
 BUILD_DIR ?= $(shell $(GEN) --dir-of $(BOARD))/build
 
 # WHAT KIND OF BOARD THIS IS. A bare-metal board names a {chip, ...} and gets a
@@ -152,7 +165,8 @@ COREINC  := -I$(abspath include) -I$(abspath gen) -I$(abspath src)
 # file IS: a board carrying it is not carrying a host image, it is carrying no
 # program.
 BOARDDIR := $(shell $(GEN) --dir-of $(BOARD))
-PROG     ?= $(wildcard $(BOARDDIR)/pins.csp)
+PINDIR   := $(if $(APP),$(APPDIR)/$(BOARD),$(BOARDDIR))
+PROG     ?= $(if $(APP),$(APPDIR)/main.csp,$(wildcard $(BOARDDIR)/pins.csp))
 
 # A DIRECTORY IS A PROGRAM, if it carries a PROG file listing its parts in build
 # order. private/pilot is seven files whose order matters -- pin declarations
@@ -238,7 +252,7 @@ $(B)/csp_board.h: $(TERMS) utils/gen_chips.erl
 # directory, so `#import x' in a program kept elsewhere finds this board's x.
 $(B)/csp_rom.c: $(PROG) $(B)/.cspprog csp
 	@mkdir -p $(B)
-	@./csp -n -C -O $@ --deps=$(B)/csp_rom.cspd --root=board=$(BOARDDIR) $(PROG)
+	@./csp -n -C -O $@ --deps=$(B)/csp_rom.cspd --root=board=$(PINDIR) $(PROG)
 	@sed -n 's|^//   size: *|  rom: |p' $@
 	@{ echo "// The program in this image, in build order."; \
 	   echo "// PROG = $(PROG)"; \
@@ -610,7 +624,8 @@ CORE := src/csp_rt.c src/csp_crc.c src/csp_line.c src/csp_compile.c src/csp_repl
 #   make -f Makefile.board BOARD=bridgezone PROG="boards/bridgezone/pins.csp app.csp"
 #   make -f Makefile.board BOARD=bridgezone PROG=          # the neutral image
 BOARDDIR := $(shell $(GEN) --dir-of $(BOARD))
-PROG     ?= $(wildcard $(BOARDDIR)/pins.csp)
+PINDIR   := $(if $(APP),$(APPDIR)/$(BOARD),$(BOARDDIR))
+PROG     ?= $(if $(APP),$(APPDIR)/main.csp,$(wildcard $(BOARDDIR)/pins.csp))
 
 # A DIRECTORY IS A PROGRAM, if it carries a PROG file listing its parts in build
 # order. private/pilot is seven files whose order matters -- pin declarations
@@ -807,7 +822,7 @@ $(B)/$(BOARD).ld: $(TERMS) utils/gen_chips.erl
 # branch: an #import is a file PROG does not name.
 $(B)/rom.c: $(PROG) $(B)/.cspprog csp $(B)/csp_board.h
 	@mkdir -p $(B)
-	@./csp -n -C -O $@ --deps=$(B)/rom.cspd --root=board=$(BOARDDIR) $(PROG)
+	@./csp -n -C -O $@ --deps=$(B)/rom.cspd --root=board=$(PINDIR) $(PROG)
 	@sed -n 's|^//   size: *|  rom: |p' $@
 	@{ echo "// The program in this image, in build order."; \
 	   echo "// PROG = $(PROG)"; \

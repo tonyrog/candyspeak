@@ -162,8 +162,9 @@ static int pin_read(uint8_t pin)
 // TIMER0 in CTC at 1 kHz, so the tick IS a millisecond and there is no
 // fractional accumulator to carry. The Arduino core runs TIMER0 in overflow
 // mode at 1024 us and corrects with a remainder every 41 ticks, which is more
-// code and exists so the same timer can also do PWM on pins 5 and 6. This port
-// has no PWM, so the timer is free to be exact.
+// code and exists so the same timer can also do PWM on pins 5 and 6. Here
+// TIMER0 is the tick and nothing else, so it is exact -- and its two PWM pins
+// (5 and 6 on a 328P, 4 on a Mega) have no PWM. See PWM below.
 
 static volatile uint32_t ms_ticks = 0;
 
@@ -222,6 +223,124 @@ static uint16_t adc_read(uint8_t ch)
 
 
 // ============================================================
+// PWM
+// ============================================================
+//
+// 8-bit fast PWM at F_CPU/64/256, 976 Hz at 16 MHz -- the Arduino core's rate,
+// so what was tuned against analogWrite looks the same. The 16-bit timers run
+// in mode 5, 8-bit fast PWM, which keeps one duty arithmetic for all of them.
+//
+// A pin is {timer, channel}. TIMER0 is the tick (Time above), so its pins are
+// not here, and a pin that is not here never moves -- driving the wrong duty is
+// harder to notice than a pin that stays put.
+//
+// The registers of a timer are where the datasheet puts them, from TCCRnA: a
+// 16-bit timer's OCRnB and OCRnC are 2 and 4 bytes past OCRnA, TIMER2's OCR2B
+// one past OCR2A, and channel A's COM bit is bit 7, B's 5, C's 3, in all of
+// them.
+
+#define PWM_A 0
+#define PWM_B 1
+#define PWM_C 2
+#define PWM(t, c) ((uint8_t)(((t) << 2) | (c)))
+
+#if defined(CSP_AVR_MEGA)
+static const uint8_t pwm_pin[] PROGMEM = {
+    2, PWM(3, PWM_B),  3, PWM(3, PWM_C),  5, PWM(3, PWM_A),
+    6, PWM(4, PWM_A),  7, PWM(4, PWM_B),  8, PWM(4, PWM_C),
+    9, PWM(2, PWM_B), 10, PWM(2, PWM_A),
+   11, PWM(1, PWM_A), 12, PWM(1, PWM_B), 13, PWM(1, PWM_C),
+   44, PWM(5, PWM_C), 45, PWM(5, PWM_B), 46, PWM(5, PWM_A)
+};
+#else
+static const uint8_t pwm_pin[] PROGMEM = {
+    3, PWM(2, PWM_B),  9, PWM(1, PWM_A), 10, PWM(1, PWM_B), 11, PWM(2, PWM_A)
+};
+#endif
+
+// The pin's {timer, channel}, 0 for a pin with no PWM.
+static uint8_t pwm_of(uint8_t pin)
+{
+    uint8_t i;
+
+    for (i = 0; i < (uint8_t)sizeof(pwm_pin); i += 2)
+	if (pgm_read_byte(&pwm_pin[i]) == pin)
+	    return pgm_read_byte(&pwm_pin[i + 1]);
+    return 0;
+}
+
+static volatile uint8_t* pwm_tccra(uint8_t t)
+{
+    switch (t) {
+    case 1: return &TCCR1A;
+    case 2: return &TCCR2A;
+#if defined(CSP_AVR_MEGA)
+    case 3: return &TCCR3A;
+    case 4: return &TCCR4A;
+    case 5: return &TCCR5A;
+#endif
+    default: return 0;
+    }
+}
+
+static volatile uint8_t* pwm_ocr(uint8_t t, uint8_t c)
+{
+    switch (t) {
+    case 1: return (volatile uint8_t*)&OCR1A + 2 * c;
+    case 2: return &OCR2A + c;
+#if defined(CSP_AVR_MEGA)
+    case 3: return (volatile uint8_t*)&OCR3A + 2 * c;
+    case 4: return (volatile uint8_t*)&OCR4A + 2 * c;
+    case 5: return (volatile uint8_t*)&OCR5A + 2 * c;
+#endif
+    default: return 0;
+    }
+}
+
+// The pin an output, its timer started. Not connected yet: duty 0 is the pin
+// held low, as fast PWM at OCR 0 still gives a spike each period.
+static void pwm_init(uint8_t pin)
+{
+    uint8_t tc = pwm_of(pin);
+    volatile uint8_t* a;
+
+    pin_write(pin, 0);
+    pin_mode_out(pin);
+    if (!tc || !(a = pwm_tccra((uint8_t)(tc >> 2))))
+	return;
+    if ((tc >> 2) == 2) {
+	*a |= (uint8_t)((1 << WGM21) | (1 << WGM20));   // fast PWM, TOP 0xFF
+	TCCR2B = (1 << CS22);                           // TIMER2's /64
+    }
+    else {
+	*a |= (uint8_t)(1 << 0);                        // WGMn0
+	a[1] = (uint8_t)((1 << 3) | (1 << 1) | (1 << 0)); // WGMn2, /64
+    }
+}
+
+// v is sixteen bits, left-justified; the top eight are the duty.
+static void pwm_write(uint8_t pin, uint16_t v)
+{
+    uint8_t tc = pwm_of(pin), c = (uint8_t)(tc & 3), d = (uint8_t)(v >> 8);
+    volatile uint8_t* a;
+    volatile uint8_t* o;
+
+    if (!tc || !(a = pwm_tccra((uint8_t)(tc >> 2))))
+	return;
+    o = pwm_ocr((uint8_t)(tc >> 2), c);
+    if (d == 0) {
+	*a &= (uint8_t)~(1 << (7 - 2 * c));
+	pin_write(pin, 0);
+    }
+    else {
+	if ((tc >> 2) != 2)
+	    o[1] = 0;                                   // high byte first
+	o[0] = d;
+	*a |= (uint8_t)(1 << (7 - 2 * c));
+    }
+}
+
+// ============================================================
 // csp_chip_io.h
 // ============================================================
 
@@ -269,11 +388,17 @@ void csp_chip_dout(uint8_t port, uint8_t pin, int v)
 // 14/A0..A5 on a 328P, 54/A0..A15 on a Mega. A program may name either, so
 // both are accepted. Only a pin needs its pullup off; a channel number has no
 // pin behind it to configure.
+//
+// An output is PWM whether the program says `pwm` or not: the part has no DAC.
 void csp_chip_acfg(uint8_t port, uint8_t pin, uint8_t dir, uint8_t pwm)
 {
     (void)port; (void)pwm;
-    if ((dir & CSP_CHIP_IN) && (pin >= CSP_AVR_A0))
-	pin_mode_in(pin, 0);
+    if (dir & CSP_CHIP_IN) {
+	if (pin >= CSP_AVR_A0)
+	    pin_mode_in(pin, 0);
+    }
+    else if (dir & CSP_CHIP_OUT)
+	pwm_init(pin);
 }
 
 // Ten bits, left-justified to sixteen.
@@ -284,10 +409,8 @@ uint16_t csp_chip_ain(uint8_t port, uint8_t pin)
     return (uint16_t)(adc_read(ch) << 6);
 }
 
-// NO PWM on this part's port yet. Left as a no-op rather than a guess: driving
-// a pin at the wrong duty is harder to notice than a pin that never moves.
-// Adding it means owning TIMER1/TIMER2 per pin, and TIMER0 is the tick.
 void csp_chip_aout(uint8_t port, uint8_t pin, uint16_t v)
 {
-    (void)port; (void)pin; (void)v;
+    (void)port;
+    pwm_write(pin, v);
 }

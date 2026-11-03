@@ -18,10 +18,8 @@
 // it beyond naming its chip.
 //
 // WHAT IS NOT HERE, deliberately:
-//   PWM      -- an #analog out is refused rather than half-driven. The slave
-//               this port exists for reads pins and answers; nothing drives.
-//               Adding it means owning TIMER1/TIMER2 per pin, and doing that
-//               silently wrong is worse than saying no.
+//   PWM on TIMER0's pins -- TIMER0 is the tick. The rest of the PWM pins are
+//               the chip layer's (chips/atmel/drivers/avr, PWM).
 //   CAN      -- there is no controller on the part.
 //   float    -- USE_FIXPOINT is 1 for __AVR__ (csp_config.h), so the arithmetic
 //               is Q16.16 and no float helper should be linked. If one appears

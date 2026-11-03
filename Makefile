@@ -582,6 +582,15 @@ test_boards: csp
 	     escript tests/run_tests.escript "$$t" || exit 1; \
 	 done
 
+# The applications under apps/, each with its own tests/ directory: the logic,
+# on the host, with the names the boards' pins.csp declare.
+test_apps: csp
+	@chmod +x tests/run_tests.escript
+	@for t in apps/*/tests; do \
+	     echo "== $$t"; \
+	     escript tests/run_tests.escript "$$t" || exit 1; \
+	 done
+
 # PROG has to REACH the board. The image is a generated file and make compares
 # timestamps, so pointing PROG at a different program usually leaves the image
 # newer than its new source: nothing rebuilds, the board keeps the program
