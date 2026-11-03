@@ -1,0 +1,10 @@
+% B goes 0,1,0,1: two RISING edges (0 -> 1) and one FALLING edge (1 -> 0).
+%
+% A stimulus row is re-applied every cycle until the next is due.
+{cycles, 10}.
+{modes, [seq]}.
+{stimulus, "tests/unit/edge_fn.dat"}.
+{checks, [
+  {final_var, "Rises", 2},
+  {final_var, "Falls", 1}
+]}.

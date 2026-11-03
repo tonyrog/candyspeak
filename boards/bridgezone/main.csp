@@ -273,33 +273,33 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
 
   // --- what this cycle asks of the outputs ---
   // Formulas, not state: each is its mask (Out, or Ctl) where this cycle's
-  // event asks something, 0 where not. A truth value is -1, all bits, so
-  // `Out & (cond)' is Out or 0. Read by the outputs in the same cycle.
+  // event asks something, 0 where not. A truth value is 1 or 0, so
+  // `Out * (cond)' is Out or 0. Read by the outputs in the same cycle.
 
   // steps: the push encoder, or a key that steps instead of switching. A
   // local input steps by one, never more, so a step is a mask bit: up or
   // down. (The C's v_step can be larger -- from an encoder on another node,
   // which is not ported.)
-  #local StepUp:16 unsigned out = Out & ((Pulse && Pdir) || (Ev && DigEnc && ELvl && !Dec))
-  #local StepDn:16 unsigned out = Out & ((Pulse && !Pdir) || (Ev && DigEnc && ELvl && Dec) || (Ev && DigEnc && !ELvl && !IncDec))
+  #local StepUp:16 unsigned out = Out * ((Pulse && Pdir) || (Ev && DigEnc && ELvl && !Dec))
+  #local StepDn:16 unsigned out = Out * ((Pulse && !Pdir) || (Ev && DigEnc && ELvl && Dec) || (Ev && DigEnc && !ELvl && !IncDec))
 
   // an analog value, and whether it is new
   #local V out = max(min(AnV, AnMax), AnMin)          // v_analog
-  #local AnMask:16 unsigned out = Out & (Live && (Flags & INPUT_ANALOG) != 0 && !A2D && AnNew)
+  #local AnMask:16 unsigned out = Out * (Live && (Flags & INPUT_ANALOG) != 0 && !A2D && AnNew)
 
   // process_input_out
-  #local TogOn:16 unsigned out = Out & (Press && Spring && !OffOnly)    // on if off
-  #local TogOff:16 unsigned out = Out & (Press && Spring && !OnOnly)    // off if on
-  #local OnReq:16 unsigned out = Out & (Press && !Spring && !OffOnly)   // closed
-  #local OffReq:16 unsigned out = Out & (Release && !Spring && !OnOnly) // opened
-  #local RelReq:16 unsigned out = Out & (Release && Spring)             // ends a MOMENT
+  #local TogOn:16 unsigned out = Out * (Press && Spring && !OffOnly)    // on if off
+  #local TogOff:16 unsigned out = Out * (Press && Spring && !OnOnly)    // off if on
+  #local OnReq:16 unsigned out = Out * (Press && !Spring && !OffOnly)   // closed
+  #local OffReq:16 unsigned out = Out * (Release && !Spring && !OnOnly) // opened
+  #local RelReq:16 unsigned out = Out * (Release && Spring)             // ends a MOMENT
 
   // process_input_ctl: a springback key toggles its control contribution, a
   // switch holds it. Ctrl is the state; the masks say when it moves.
   #local CtlOn = Ev && ELvl && !Ctrl && !OffOnly
   #local CtlOff = (Ev && ELvl && Spring && Ctrl && !OnOnly) || (Ev && !ELvl && !Spring && Ctrl && !OnOnly)
-  #local CtlUp:16 unsigned out = Ctl & CtlOn
-  #local CtlDn:16 unsigned out = Ctl & CtlOff
+  #local CtlUp:16 unsigned out = Ctl * CtlOn
+  #local CtlDn:16 unsigned out = Ctl * CtlOff
   Ctrl = 1 ? CtlOn
   Ctrl = 0 ? CtlOff
 #end
@@ -369,23 +369,23 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
   // An analog value. Only in5..in8 have a converter. Two of them sending to
   // the same output in the same cycle: the higher wins (the C: the last).
   #local AnHit = (AnAll >> N & 1) != 0
-  #local AnA = max(((in5.AnMask >> N & 1) != 0) & in5.V, ((in6.AnMask >> N & 1) != 0) & in6.V)
-  #local AnB = max(((in7.AnMask >> N & 1) != 0) & in7.V, ((in8.AnMask >> N & 1) != 0) & in8.V)
+  #local AnA = max(((in5.AnMask >> N & 1) != 0) * in5.V, ((in6.AnMask >> N & 1) != 0) * in6.V)
+  #local AnB = max(((in7.AnMask >> N & 1) != 0) * in7.V, ((in8.AnMask >> N & 1) != 0) * in8.V)
   #local AnV = max(AnA, AnB)
 
   // analog_input: the value picks the step, and for a dimmer IS the level.
   // encoder_input: one step up or down, then wrapped or clamped.
   #local Is255 = StepMax == 255
-  #local StepAn = (Is255 & (AnV >> 8)) | (~Is255 & (((AnV + 1) * StepMax) >> 16))
+  #local StepAn = (Is255 * (AnV >> 8)) | (!Is255 * (((AnV + 1) * StepMax) >> 16))
   #local StepsEv = ((StepUpAll | StepDnAll) >> N & 1) != 0
-  // A comparison is -1 when true, so `- (x != 0)' adds one -- and keeps the
+  // A comparison is 1 when true, so `+ (x != 0)' adds one -- and keeps the
   // unsigned mask out of the arithmetic, which max() would refuse.
-  #local Enc = Step - ((StepUpAll >> N & 1) != 0) + ((StepDnAll >> N & 1) != 0)
+  #local Enc = Step + ((StepUpAll >> N & 1) != 0) - ((StepDnAll >> N & 1) != 0)
   #local M1 = StepMax + 1
-  #local W = (StepMax != 0) & (Wrap != 0)
-  #local StepEnc = (W & (((Enc % M1) + M1) % M1)) | (~W & max(0, min(Enc, StepMax)))
+  #local W = StepMax != 0 && Wrap != 0
+  #local StepEnc = (W * (((Enc % M1) + M1) % M1)) | (!W * max(0, min(Enc, StepMax)))
   #local StepEv = AnHit | StepsEv
-  #local NewStep = min((StepsEv & StepEnc) | (~StepsEv & StepAn), StepMax)
+  #local NewStep = min((StepsEv * StepEnc) | (!StepsEv * StepAn), StepMax)
 
   // get_pwm_high for a dimmer: the analog value if one set it, else the step.
   // The C's (step << 16) / step_max overflows a 16-bit pwm to ZERO at step ==
@@ -397,20 +397,20 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
   #local Big = StepMax > MAX_STEP
   #local HTab = min(((Step + 1) * MAX_PWM) / 20, MAX_PWM)
   #local HLin = min((Step << 16) / max(StepMax, 1), MAX_PWM)
-  #local HStep = (StepMax != 0) & ((~Big & HTab) | (Big & ~Is255 & HLin) | (Is255 & (Step << 8)))
+  #local HStep = (StepMax != 0) * ((!Big * HTab) | ((Big && !Is255) * HLin) | (Is255 * (Step << 8)))
 
   #local ReqA = ((TogOnAll | OnAll) >> N & 1) | ((TogOnAll >> N & 1) << 1) | ((TogOffAll >> N & 1) << 2) | ((OffAll >> N & 1) << 3) | ((RelAll >> N & 1) << 4)
   #local ReqB = ((StepEv & 1) << 5) | ((StepsEv & 1) << 6) | ((StepEv & (NewStep != Step) & 1) << 7) | ((AnHit & 1) << 8)
 
   #local Req:16 unsigned out = ReqA | ReqB                          // RQ_x
-  #local High out = ((AnLevel != 0) & AnLevel) | ((AnLevel == 0) & HStep)  // a dimmer's level
+  #local High out = ((AnLevel != 0) * AnLevel) | ((AnLevel == 0) * HStep)  // a dimmer's level
   #local AnIn out = AnV                       // the analog value, for an EXTERNAL output
   Step = NewStep ? StepEv
-  AnLevel = AnHit & AnV ? StepEv
+  AnLevel = AnHit * AnV ? StepEv
 
   // process_input_ctl: +1 for an input enabling, -1 for one disabling, not
   // below zero. Two inputs in the very same cycle count once.
-  Control = max(0, Control - ((CtlUpAll >> N & 1) != 0) + ((CtlDnAll >> N & 1) != 0)) ? CtlType != CTL_NONE
+  Control = max(0, Control + ((CtlUpAll >> N & 1) != 0) - ((CtlDnAll >> N & 1) != 0)) ? CtlType != CTL_NONE
   #local Allow:1 out = (CtlType == CTL_NONE) || (CtlType == CTL_AND && (Control > Ctlk) != (CtlInv != 0))
 #end
 
@@ -444,8 +444,8 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
 // the C runs process_input before process_output_channel and the input's state
 // is the one that counts.
 //
-// A comparison is -1, all bits, which is what `(c & a) | (~c & b)' -- "a if c
-// else b" -- needs; that is how the C's get_* switches are written here.
+// A comparison is 1 or 0, which is what `(c * a) | (!c * b)' -- "a if c else
+// b" -- needs; that is how the C's get_* switches are written here.
 #module Output
   // Numbers are plain signed 32 bits: min() and max() take no unsigned
   // argument, and every value here fits with room to spare.
@@ -505,16 +505,16 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
   #local HasDown = RampdownTm > 0 && PwmMax > PwmMin
   // get_sustain_state: where a finished rampup lands
   #local Sus = (SustainTm > 0) | Blink
-  #local OnState = (Sus & sustain) | (~Sus & on)
+  #local OnState = (Sus * sustain) | (!Sus * on)
 
   // get_pwm_low, get_pwm_high
-  #local PwmLow = (Type == TYPE_PULSE) & PwmMin
-  #local PwmHigh = (IsDim & High) | (IsInt & MAX_PWM) | (~IsDim & ~IsInt & (Type != TYPE_NONE) & PwmMax)
+  #local PwmLow = (Type == TYPE_PULSE) * PwmMin
+  #local PwmHigh = (IsDim * High) | (IsInt * MAX_PWM) | ((!IsDim && !IsInt && Type != TYPE_NONE) * PwmMax)
 
   // get_wait_time, get_done_type
-  #local WaitT = (IsInt & max(0, min(WaitTm + Step * WaitMult, MAX_TIME_MS))) | (~IsInt & WaitTm)
+  #local WaitT = (IsInt * max(0, min(WaitTm + Step * WaitMult, MAX_TIME_MS))) | (!IsInt * WaitTm)
   #local Stops = (Deact != 0) | (Type == TYPE_MOMENT)
-  #local DoneT = (~Stops & IsInt & PULSE_RESTART) | (~Stops & ~IsInt & DoneFn)
+  #local DoneT = ((!Stops && IsInt) * PULSE_RESTART) | ((!Stops && !IsInt) * DoneFn)
   #local Again = (DoneT == PULSE_REPEAT && Repeat > 0) || DoneT == PULSE_RESTART
 
   // The ramp: a fraction 0..1024 of RampTm, so Span * Frac fits in 32 bits.
@@ -635,9 +635,9 @@ a1.value = Ain1, a2.value = Ain2, a3.value = Ain3, a4.value = Ain4
       Tm.period = WaitT, Tm = 1, Duty = PwmLow, State = wait ? RampOver || DownP <= PwmLow
     #end
 
-    // again: count a repeat down (a comparison is -1), or restart
+    // again: count a repeat down, or restart
     #in wait
-      Repeat = Repeat + (DoneT == PULSE_REPEAT), Deact = 0, Tm.period = DelayTm, Tm = 1, State = delay ? Waited && Again
+      Repeat = Repeat - (DoneT == PULSE_REPEAT), Deact = 0, Tm.period = DelayTm, Tm = 1, State = delay ? Waited && Again
       State = off, Duty = 0, Deact = 0 ? Waited && !Again
     #end
   #end

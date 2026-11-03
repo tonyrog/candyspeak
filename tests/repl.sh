@@ -3091,7 +3091,7 @@ ck "a mirrored comparison computes the same" '"R1",1 "R2",1 "R3",0 "R4",0 ' "$go
 # whatever the default arm left behind.
 got=$(printf '#variable F1 = 0\n#variable F2 = 0\nF1 = 1 ? 7 > 3\nF2 = 1 ? 3 > 7\n/list\n/quit\n' |
 	  repl ./csp "$D/gt2.db" | sed -n '/^F[0-9]=/p')
-ck "a mirrored comparison folds" 'F1=1  // 1 R
+ck "a mirrored comparison folds" 'F1=1 ? 1  // 1 R
 F2=1 ? 0  // 2 R' "$got"
 
 # Through an image: the swap bit rides in the raw instruction word, so a dumper

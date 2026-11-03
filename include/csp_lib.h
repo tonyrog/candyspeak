@@ -8,8 +8,7 @@
 //   csp_chip_io.h   the pins, per chip             chips/<vendor>/drivers/
 //   csp_lib.h       the language's semantics        src/csp_lib.c
 //
-// TRUE IS -1, as in Forth and OpenCL: every bit set, so `&` and `|` on truth
-// values are the logical operators too. A comparison yields -1 or 0.
+// TRUE IS 1, as in C: a comparison yields 1 or 0.
 
 #ifndef __CSP_LIB_H__
 #define __CSP_LIB_H__
@@ -22,12 +21,12 @@
 extern "C" {
 #endif
 
-#define CSP_LIB_TRUE  (-1)
+#define CSP_LIB_TRUE  1
 #define CSP_LIB_FALSE 0
 
-// A C condition as a CandySpeak VALUE: -1 or 0. Only where the truth is used
+// A C condition as a CandySpeak VALUE: 1 or 0. Only where the truth is used
 // as a number -- stored, masked, added. An `if` takes the condition as it is,
-// since -1 and 1 are both nonzero.
+// since any nonzero will do.
 #define CSP_LIB_BOOL(c) ((c) ? (int32_t)CSP_LIB_TRUE : (int32_t)CSP_LIB_FALSE)
 
 // ------------------------------------------------------------

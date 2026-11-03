@@ -2,8 +2,8 @@
 %% looked at six of twenty-one, which is how a missing OP_NEG/OP_BNOT arm in
 %% eval_op stayed invisible.
 %%
-%% Y = 7, Z = 5. Logical true is -1 (BOOL(y) = -(y != 0)), so && and || yield
-%% -1, and !7 is ~BOOL(7) = ~(-1) = 0.
+%% Y = 7, Z = 5. Logical true is 1 (BOOL(y) = (y != 0)), so && and || yield
+%% 1, and !7 is 0.
 {cycles, 22}.
 {checks, [
   {final_var, "Radd",   12},
@@ -16,8 +16,8 @@
   {final_var, "Rband",   5},
   {final_var, "Rbor",    7},
   {final_var, "Rbxor",   2},
-  {final_var, "Rand",   -1},
-  {final_var, "Ror",    -1},
+  {final_var, "Rand",    1},
+  {final_var, "Ror",     1},
   {final_var, "Rneg",   -7},
   {final_var, "Rnot",    0},
   {final_var, "Rbnot",  -8},

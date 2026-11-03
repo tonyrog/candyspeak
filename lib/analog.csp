@@ -70,24 +70,23 @@
   #local lo      = value1 <= min_val
   #local clamped = max(min(value1, max_val), min_val)
 
-  // One value per mode, selected with a mask rather than a branch: a comparison
-  // yields -1 or 0, so one term is zeroed and the other passes through.
-  // -hi turns -1/0 into 1/0.
-  #local value2  = (a2d & -hi) | (~a2d & clamped)
+  // One value per mode, selected without a branch: a comparison yields 1 or
+  // 0, so one term is zeroed and the other passes through.
+  #local value2  = (a2d * hi) | (!a2d * clamped)
 
   // In A2D mode only the extremes are news. In normal mode every sample is.
   #local edge    = !a2d || hi || lo
   
   #local dv = value2 - last_value
 
-  // One flag per reason, then OR them. A comparison yields -1 (all bits), so
-  // `& FLAG` picks the flag out when the test holds and nothing when it does
-  // not -- which is why this reads as "the bit, if the reason".
-  #local above_upper  = (value2 > upper) & ADC_UPPER_LIMIT_EXCEEDED
-  #local below_lower  = (value2 < lower) & ADC_BELOW_LOWER_LIMIT
-  #local moved_enough = (abs(dv) > delta) & ADC_DELTA
-  #local rose_enough  = (dv > 0) & (dv > pdelta) & ADC_POSITIVE_DELTA
-  #local fell_enough  = (dv < 0) & (-dv > ndelta) & ADC_NEGATIVE_DELTA
+  // One flag per reason, then OR them. A comparison yields 1 or 0, so
+  // `* FLAG` is the flag when the test holds and nothing when it does not --
+  // which is why this reads as "the bit, if the reason".
+  #local above_upper  = (value2 > upper) * ADC_UPPER_LIMIT_EXCEEDED
+  #local below_lower  = (value2 < lower) * ADC_BELOW_LOWER_LIMIT
+  #local moved_enough = (abs(dv) > delta) * ADC_DELTA
+  #local rose_enough  = (dv > 0 && dv > pdelta) * ADC_POSITIVE_DELTA
+  #local fell_enough  = (dv < 0 && -dv > ndelta) * ADC_NEGATIVE_DELTA
   #local mask = above_upper | below_lower | moved_enough | rose_enough | fell_enough
   #local mask1 = mask & flags
 

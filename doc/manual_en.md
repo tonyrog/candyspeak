@@ -521,7 +521,9 @@ Examples:
 > survives a chain like `(Index + 1) % 10`. Everything else — `+ - * & | ^ ==
 > !=` — gives the same answer either way.
 >
-> A comparison's RESULT is a truth value and stays signed. And signedness comes
+> A comparison's RESULT is a truth value, 1 or 0 as in C -- and so is what `&&`,
+> `||`, `!`, `rising()` and the like give. `(A > B) * Step` is Step or 0. It stays
+> signed. And signedness comes
 > from the declaration, not from the literal: a bare `0xFFFFFFF7` is a signed
 > integer, exactly as it would be in C. Give it a type if you need otherwise:
 >
@@ -1961,6 +1963,8 @@ storage as its buffer, so it is correct immediately.
 | | `|` | Bitwise OR |
 | | `&&` | Logical AND |
 | Lowest | `||` | Logical OR |
+
+A comparison and the logical operators give 1 when true and 0 when false.
 
 # Linux Tool
 

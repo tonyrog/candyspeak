@@ -636,6 +636,10 @@ add_sig(Name, Kind, Res, Opts, Expr, C) ->
 	    width  => width_of(Kind, Res),
 	    signed => signed_of(Kind, Res, Opts),
 	    dir    => proplists:get_value(dir, Opts, undefined),
+	    rest   => case proplists:get_value(pull, Opts) of
+			  pullup -> 1;
+			  _      -> 0
+		      end,
 	    init   => case const_of(Expr) of {ok, V} -> V; none -> 0 end},
     C#{sigs  := maps:put(Name, Sig, maps:get(sigs, C)),
        order := maps:get(order, C) ++ [Name]}.
@@ -757,6 +761,7 @@ finish(C00) ->
 			    maps:is_key(T, Sigs),
 			    not storable(E, maps:get(T, Sigs), C)]),
     C#{written => Written, free => Bad,
+       edges => edges(Rules, Written, Sigs),
        skipped => [R || R = #{target := T} <- Rules, T =/= "State",
 			not modelled_write(R, Sigs, C)]}.
 
@@ -795,11 +800,42 @@ check_props(C) ->
     [throw({varp_annotate, loc_text(L, F), K, {not_modelled, T, unmodelled(E, C)}})
      || #{kind := K, expr := E, line := L, file := F, text := T} <- Ps,
 	not translatable(E, C)],
+    [throw({varp_annotate, loc_text(L, F), K, {edge, T}})
+     || #{kind := K, expr := E, line := L, file := F, text := T} <- Ps,
+	has_edge(E)],
     [throw({varp_annotate, loc_text(L, F), K, more_than_one})
      || K0 <- ["reach", "eventually"],
 	[_, #{kind := K, line := L, file := F} | _]
 	    <- [[P || P = #{kind := K1} <- Ps, K1 =:= K0]]],
     ok.
+
+%%% An EDGE PIN is a sensor some rule reads with rising() or falling(). The
+%%% runtime keeps two halves of it: what the rules read, last cycle's value,
+%%% and this cycle's sample, committed after the rules. An edge is between the
+%%% two. In the model the half the rules read is `state', the sample is the
+%%% input `<pin>_s', and next(pin) == pin_s. A pin is at rest at INIT: 1 with
+%%% a pullup. (varp's next() takes a state only, and a pin is seen a step
+%%% late either way, so the trace is the same as for any other input.)
+edges(Rules, Written, Sigs) ->
+    lists:usort([N || #{guard := G, expr := E} <- Rules,
+		      N <- edge_args(G) ++ edge_args(E),
+		      not lists:member(N, Written),
+		      maps:is_key(N, Sigs)]).
+
+edge_args({call, _, {'WORD', _, F}, [{field, _, {'WORD', _, N}}]})
+  when F =:= "rising"; F =:= "falling" -> [N];
+edge_args(T) when is_tuple(T) -> edge_args(tuple_to_list(T));
+edge_args(L) when is_list(L) -> lists:append([edge_args(X) || X <- L]);
+edge_args(_) -> [].
+
+sample(N) -> varp_name(N ++ "_s").
+
+%% rising(X) and falling(X) compare two cycles; a property sees one.
+has_edge({call, _, {'WORD', _, F}, _}) when F =:= "rising"; F =:= "falling" ->
+    true;
+has_edge(T) when is_tuple(T) -> has_edge(tuple_to_list(T));
+has_edge(L) when is_list(L) -> lists:any(fun has_edge/1, L);
+has_edge(_) -> false.
 
 %% The names in E the model has nothing for: a timer, a local some rule
 %% writes, a typo.
@@ -934,6 +970,12 @@ rng({call, _, {'WORD', _, "timeout"}, [{field, _, {'WORD', _, T}}]}, C) ->
     both(timer(T, C), {ok, 0}, fun(_, _) -> {0, 1} end);
 rng({call, _, {'WORD', _, "elapsed"}, [{field, _, {'WORD', _, T}}]}, C) ->
     both(timer(T, C), {ok, 0}, fun({P, _}, _) -> {0, P} end);
+rng({call, _, {'WORD', _, F}, [{field, _, {'WORD', _, N}}]}, C)
+  when F =:= "rising"; F =:= "falling" ->
+    case maps:find(N, maps:get(sigs, C)) of
+	{ok, #{kind := digital}} -> {ok, {0, 1}};
+	_ -> error
+    end;
 rng({field, _, {index, _, {'WORD', _, B}, Ix}}, C) ->
     case is_map_key(B, maps:get(bufs, C)) andalso rng(Ix, C) of
 	{ok, _} -> {ok, {0, 255}};
@@ -976,12 +1018,19 @@ rng({'%', _, L, R}, C) ->
 %% makes a possibly negative operand unsigned first, which needs it in range.
 %% A shift by a constant, of a value that cannot be negative, into 31 bits:
 %% there `<<' is `*' and `>>' is the same logical or arithmetic, so varp's own
-%% shifts say what the runtime does. Anything else is not translated.
+%% shifts say what the runtime does. One that goes past them is the runtime's
+%% 32 bit word: the bits that fall off are masked away first (vnum/2), `Code =
+%% (Code << 8) | Key' on a #variable Code:32. Read unsigned when the operand
+%% reaches past 2^31 -- only an unsigned 32 bit one can, and one unsigned
+%% operand makes the operation unsigned -- else signed. Anything else is not
+%% translated.
 rng({Op, _, L, R}, C) when Op =:= '<<'; Op =:= '>>' ->
     case {rng(L, C), rng(R, C)} of
 	{{ok, {A, B}}, {ok, {K, K}}} when A >= 0, K >= 0, K =< 31 ->
 	    case Op of
 		'<<' when (B bsl K) < 1 bsl 31 -> {ok, {A bsl K, B bsl K}};
+		'<<' when B >= 1 bsl 31, B < ?U32 -> {ok, {0, ?U32 - 1}};
+		'<<' when B < ?U32 -> {ok, {-(?U32 div 2), ?U32 div 2 - 1}};
 		'<<' -> error;
 		'>>' -> {ok, {A bsr K, B bsr K}}
 	    end;
@@ -1228,7 +1277,8 @@ decls(C) ->
     Frozen = frozen(C),
     States = [N || N <- maps:get(order, C),
 		   lists:member(N, Written), not lists:member(N, Free)],
-    Inputs = inputs(C),
+    Edges = maps:get(edges, C, []),
+    Inputs = inputs(C) -- Edges,
     Abs = [N || {N, _Ln} <- maps:get(abstract, C, [])],
     ["    state St:", integer_to_list(state_bits(C)), ";\n",
      [["    state ", inst_st(I), ":", integer_to_list(state_bits(C)),
@@ -1240,6 +1290,14 @@ decls(C) ->
 		group("state", Frozen, Sigs)]
      end,
      group("input", Inputs, Sigs),
+     case Edges of
+	 [] -> "";
+	 _  -> ["    // edge pins: what the rules read, and this cycle's sample
+",
+		group("state", Edges, Sigs),
+		"    input ", lists:join(", ", [[sample(N), ":1"] || N <- Edges]),
+		";\n"]
+     end,
      [["    // #buffer ", B, ": any bytes, and a frame or not, in every step\n"
        "    input ",
        lists:join(", ", [[byte_name(B, K), ":8"]
@@ -1374,6 +1432,9 @@ init_item(C) ->
      [[" and ", varp_name(N), " == ",
        integer_to_list(maps:get(init, maps:get(N, Sigs)))]
       || N <- Vs],
+     [[" and ", varp_name(N), " == ",
+       integer_to_list(maps:get(rest, maps:get(N, Sigs)))]
+      || N <- maps:get(edges, C, [])],
      [[" and ", tname("run", T), " == ", run0(On), " and ", tname("el", T),
        " == ", el0(P, On)] || {T, P, On} <- maps:get(timers, C)],
      ";\n"].
@@ -1397,6 +1458,12 @@ transitions(C) ->
      [inst_state_chain(I, C) || I <- maps:get(insts, C)],
      [chain(V, C, Sigs) || V <- Vs],
      [timer_chain(T, C) || T <- maps:get(timers, C)],
+     case maps:get(edges, C, []) of
+	 [] -> "";
+	 Es -> ["    // ---- edge pins: the sample is what the rules read next\n",
+		[["    next  next(", varp_name(N), ") == ", sample(N), ";\n"]
+		 || N <- Es]]
+     end,
      case frozen(C) of
 	 [] -> "";
 	 Ps -> ["    // ---- #param ", lists:duplicate(43, $-), "\n",
@@ -1597,6 +1664,8 @@ is_bool({field, _, {'WORD', _, N}}, C) ->
 is_bool({field, _, {part, _, {'WORD', _, _T}, {'WORD', _, "fired"}}}, _C) ->
     true;
 is_bool({call, _, {'WORD', _, "timeout"}, _}, _C) -> true;
+is_bool({call, _, {'WORD', _, F}, _}, _C) when F =:= "rising"; F =:= "falling" ->
+    true;
 is_bool(_, _C) -> false.
 
 vbool({abstracted, Name, _Orig}, _C) -> [Name, " == 1"];
@@ -1616,7 +1685,18 @@ vbool({field, _, {'WORD', _, N}}, C) ->          % a boolean local, a timer
 vbool({field, _, {part, _, {'WORD', _, T}, {'WORD', _, "fired"}}}, _C) ->
     [tname("fire", T), "()"];
 vbool({call, _, {'WORD', _, "timeout"}, [{field, _, {'WORD', _, T}}]}, _C) ->
-    [tname("fire", T), "()"].
+    [tname("fire", T), "()"];
+%% An edge is between what the rules read, last cycle's value, and this
+%% cycle's sample: see edges/3. Only a rule has the two; check_props/1 keeps
+%% an edge out of a property.
+vbool({call, _, {'WORD', _, F}, [{field, _, {'WORD', _, N}}]}, C) ->
+    {Was, Is} = case F of "rising" -> {"0", "1"}; "falling" -> {"1", "0"} end,
+    X = varp_name(N),
+    New = case lists:member(N, maps:get(edges, C, [])) of
+	      true  -> sample(N);                   % a pin: its sample
+	      false -> ["next(", X, ")"]            % written: its next value
+	  end,
+    ["(", X, " == ", Was, " and ", New, " == ", Is, ")"].
 
 vnum({'INT', _, S}, _C) -> S;
 vnum({field, _, {'WORD', _, N}}, C) ->
@@ -1659,7 +1739,19 @@ vnum({Op, _, L, R}, C) when ?IS_BITS(Op) ->
     vbits(Op, L, R, C);
 vnum({Op, _, L, R}, C) when Op =:= '<<'; Op =:= '>>' ->  % see rng/2
     {ok, {K, K}} = rng(R, C),
-    paren([paren(vexpr(L, C, num)), op(Op), integer_to_list(K)]);
+    {ok, {_, B}} = rng(L, C),
+    case Op =:= '<<' andalso (B bsl K) >= 1 bsl 31 of
+	false -> paren([paren(vexpr(L, C, num)), op(Op), integer_to_list(K)]);
+	true ->
+	    Mask = integer_to_list((1 bsl (32 - K)) - 1),
+	    T = paren([paren([paren(vexpr(L, C, num)), " & ", Mask]), op(Op),
+		       integer_to_list(K)]),
+	    case B >= 1 bsl 31 of
+		true  -> T;
+		false -> ["((", T, ") >= 2147483648 ? (", T, ") - 4294967296 : (",
+			  T, "))"]
+	    end
+    end;
 vnum({Op, _, L, R}, C) ->
     [paren(vexpr(L, C, num)), op(Op), paren(vexpr(R, C, num))].
 

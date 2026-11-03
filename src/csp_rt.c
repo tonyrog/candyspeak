@@ -21,8 +21,8 @@ extern int debug;
 #define CAT_HELPER2(x,y) x ## y
 #define CAT2(x,y) CAT_HELPER2(x,y)
 
-// convert integer to -1 if y != 0  0 otherwise
-#define BOOL(y) (-((y)!=0))
+// an integer as a truth value: 1 if y != 0, 0 otherwise
+#define BOOL(y) ((y)!=0)
 
 // Every type a memory instruction can name has a letter. The table used to
 // stop at DECL_FIELD, so a #buffer or a view read past its end and the dump
@@ -907,6 +907,9 @@ static value_t fn_changed(csp_rt_t* st,uint16_t type,
     return ret;
 }
 
+// An edge between the two halves of the transaction: DIN is what the rules
+// read, last cycle's committed value, and DOUT this cycle's sample (csp_input
+// writes the shadow; csp_commit copies it over after the rules).
 static value_t fn_rising(csp_rt_t* st,uint16_t type,
 			 value_t* args, uint8_t nargs)
 {
@@ -916,7 +919,7 @@ static value_t fn_rising(csp_rt_t* st,uint16_t type,
     value_t* optr;
 
     csp_dio_slots(st, ty, &iptr, &optr);
-    ret.i = !value_get_d_val(optr) && value_get_d_val(iptr);
+    ret.i = !value_get_d_val(iptr) && value_get_d_val(optr);
     return ret;
 }
 
@@ -929,7 +932,7 @@ static value_t fn_falling(csp_rt_t* st,uint16_t type,
     value_t* optr;
 
     csp_dio_slots(st, ty, &iptr, &optr);
-    ret.i = value_get_d_val(optr) && !value_get_d_val(iptr);
+    ret.i = value_get_d_val(iptr) && !value_get_d_val(optr);
     return ret;
 }
 

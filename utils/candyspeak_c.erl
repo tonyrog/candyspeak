@@ -1330,7 +1330,7 @@ member(N, F, MSym, Env, E) ->
 ccond(E, Env) -> cbool(E, Env).
 
 %% An expression where only zero or nonzero matters: a guard, an #when, an
-%% operand of && and ||. No CSP_LIB_BOOL, since TRUE is -1 and any nonzero is
+%% operand of && and ||. No CSP_LIB_BOOL, since any nonzero is
 %% as good to an `if`; and no widening cast on a lone name, since nothing is
 %% computed with it.
 cbool({Op, _, _, _} = E, Env) when Op =:= '&&'; Op =:= '||' ->

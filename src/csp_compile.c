@@ -5032,6 +5032,8 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 	free_reg(st, rcond.reg);
     }
     if (cnd < 0) {
+	// No guard: always. -1 and not CSP_TRUE, so the listing can tell it from
+	// a guard that folded to true (csp_expr.c, csp_list.erl).
 	cnd = alloc_reg(st);
 	if (!asm_LI(st, cnd, -1))
 	    return -1;

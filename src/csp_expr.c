@@ -1234,13 +1234,16 @@ int csp_print_rule(csp_rt_t* st, int i)
 	    exprbuf_expr(st, &buf, Lc); // build but don't print
 	    csp_set_file_output(savef);
 	    st->list_implicit = 0;
+	    // No guard, or the compiler's `-1' for none (see csp_compile.c's
+	    // asm_LI(st, cnd, -1)). A truth value is 1, so no comparison folds to
+	    // it: a guard the folder found always true lists as `? 1'.
 	    switch(buf.strlens[buf.reg[csp_instr_get_r_cnd(ip)]]) {
 	    case 0:
 		break;
 	    case 2:
 		if ((buf.buf[buf.reg[csp_instr_get_r_cnd(ip)]] == '-') &&
 		    (buf.buf[buf.reg[csp_instr_get_r_cnd(ip)]+1] == '1'))
-		    break;		
+		    break;
 	    default:
 		csp_print_lit(" ? ");
 		exprbuf_print(&buf, buf.reg[csp_instr_get_r_cnd(ip)]);

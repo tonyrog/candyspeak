@@ -1,0 +1,10 @@
+// rising(X) and falling(X) in a guard: the edge between the value the rules
+// read (last cycle's, the committed half) and this cycle's sample. A rising
+// edge is 0 -> 1, a falling one 1 -> 0 -- they were the other way round.
+#digital B in 2:7
+
+#variable Rises = 0
+#variable Falls = 0
+
+Rises = Rises + 1 ? rising(B)
+Falls = Falls + 1 ? falling(B)

@@ -431,6 +431,9 @@ expr -> expr '||' expr : {'||',line('$2'),'$1','$3'}.
 expr -> '(' expr ')' : '$2'.
 expr -> name '(' ')' : {call, line('$2'), '$1', []}.
 expr -> name '(' expr_list ')' : {call, line('$2'), '$1', '$3'}.
+%% rising(x) and falling(x) are functions as well as a pin's trigger option.
+expr -> 'rising' '(' expr_list ')' : {call, line('$2'), make_word('$1'), '$3'}.
+expr -> 'falling' '(' expr_list ')' : {call, line('$2'), make_word('$1'), '$3'}.
 
 expr_list -> expr : ['$1'].
 expr_list -> expr ',' expr_list : ['$1'|'$3'].

@@ -842,7 +842,7 @@ typedef uint32_t xindex_t;
 #define MAX_LINE_TOKENS 64
 #endif
 
-#define CSP_TRUE  -1  // all bits set, like openCL/Forth
+#define CSP_TRUE  1   // a comparison is 1 or 0, as in C
 #define CSP_FALSE 0
 
 typedef enum {
@@ -1206,15 +1206,15 @@ typedef float fvalue_t;
 #define op_BAND(y, z)  ((y)&(z))
 #define op_BOR(y, z)   ((y)|(z))
 #define op_BXOR(y, z)  ((y)^(z))
-// logical 1 == -1 (all bits set)
-#define op_AND(y, z)  (-((y)&&(z)))
-#define op_OR(y, z)   (-((y)||(z)))
-#define op_LT(y, z)   (-((y)<(z)))
-#define op_LTE(y, z)  (-((y)<=(z)))
-#define op_GT(y, z)   (-((y)>(z)))
-#define op_GTE(y, z)  (-((y)>=(z)))
-#define op_EQEQ(y, z) (-((y)==(z)))
-#define op_NEQ(y, z)  (-((y)!=(z)))
+// A truth value is 1 or 0, as in C.
+#define op_AND(y, z)  ((y)&&(z))
+#define op_OR(y, z)   ((y)||(z))
+#define op_LT(y, z)   ((y)<(z))
+#define op_LTE(y, z)  ((y)<=(z))
+#define op_GT(y, z)   ((y)>(z))
+#define op_GTE(y, z)  ((y)>=(z))
+#define op_EQEQ(y, z) ((y)==(z))
+#define op_NEQ(y, z)  ((y)!=(z))
 #define op_SLA(y, z)  ((y) << (z))
 #define op_SRA(y, z)  ((y) >> (z))
 #define op_COMMA(y,z) z
@@ -1225,12 +1225,12 @@ typedef float fvalue_t;
 #define op_FSUB(y, z)  FIX_SUB((y), (z))
 #define op_FMUL(y, z)  FIX_MUL((y), (z))
 #define op_FDIV(y, z)  FIX_DIV((y), (z))
-#define op_FLT(y, z)   (-FIX_LT((y), (z)))
-#define op_FLTE(y, z)  (-FIX_LTE((y), (z)))
-#define op_FGT(y, z)   (-FIX_GT((y), (z)))
-#define op_FGTE(y, z)  (-FIX_GTE((y), (z)))
-#define op_FEQEQ(y, z) (-FIX_EQ((y), (z)))
-#define op_FNEQ(y, z)  (-FIX_NEQ((y), (z)))
+#define op_FLT(y, z)   (FIX_LT((y), (z)))
+#define op_FLTE(y, z)  (FIX_LTE((y), (z)))
+#define op_FGT(y, z)   (FIX_GT((y), (z)))
+#define op_FGTE(y, z)  (FIX_GTE((y), (z)))
+#define op_FEQEQ(y, z) (FIX_EQ((y), (z)))
+#define op_FNEQ(y, z)  (FIX_NEQ((y), (z)))
 #define op_FNEG(y)     FIX_NEG(y)
 #define op_FMOV(y)     (y)
 #define op_CVTIF(y)    FIX_FROM_INT(y)
@@ -1240,19 +1240,19 @@ typedef float fvalue_t;
 #define op_FSUB(y, z)  ((y)-(z))
 #define op_FMUL(y, z)  ((y)*(z))
 #define op_FDIV(y, z)  ((y)/(z))
-#define op_FLT(y, z)   (-((y)<(z)))
-#define op_FLTE(y, z)  (-((y)<=(z)))
-#define op_FGT(y, z)   (-((y)>(z)))
-#define op_FGTE(y, z)  (-((y)>=(z)))
-#define op_FEQEQ(y, z) (-((y)==(z)))
-#define op_FNEQ(y, z)  (-((y)!=(z)))
+#define op_FLT(y, z)   ((y)<(z))
+#define op_FLTE(y, z)  ((y)<=(z))
+#define op_FGT(y, z)   ((y)>(z))
+#define op_FGTE(y, z)  ((y)>=(z))
+#define op_FEQEQ(y, z) ((y)==(z))
+#define op_FNEQ(y, z)  ((y)!=(z))
 #define op_FNEG(y)     (-(y))
 #define op_FMOV(y)     (y)
 #define op_CVTIF(y)    ((fvalue_t)(y))
 #define op_CVTFI(y)    ((ivalue_t)(y))
 #endif
 
-#define op_NOT(y)  (~BOOL((y)))
+#define op_NOT(y)  (!(y))
 #define op_NEG(y)  (-(y))
 #define op_MOV(y)  (y)
 #define op_BNOT(y)  (~(y))
