@@ -9,7 +9,7 @@
 
 -export([start/0, start/1]).
 -export([main/1]).
--export([tokens/1, parse/1, parse/2, parse_one/1, build/1]).
+-export([tokens/1, parse/1, parse/2, parse_text/3, parse_one/1, build/1]).
 
 -export([check_unit/0, check_examples/0]).
 -export([build_unit/0, build_examples/0]).
@@ -108,6 +108,21 @@ parse(Filename, Opts) ->
     case expand(Filename, {Roots, Mark}, []) of
 	{ok, Ast, _Seen} -> {ok, Ast};
 	Error            -> Error
+    end.
+
+%% Text that is to be File, not yet saved there or changed since (an editor's
+%% buffer): parsed as parse/2 would parse File, its imports found from where
+%% File is.
+parse_text(Text, Filename, Opts) ->
+    Roots = roots(Filename, Opts),
+    Mark = proplists:get_bool(sources, Opts),
+    case parse_tokens(Filename, candyspeak_scan:string(Text)) of
+	{ok, Ast} ->
+	    case expand(Ast, Filename, {Roots, Mark}, [real(Filename)], []) of
+		{ok, Ast1, _Seen} -> {ok, Ast1};
+		Error             -> Error
+	    end;
+	Error -> Error
     end.
 
 expand(File, Ctx, Seen) ->
@@ -223,6 +238,14 @@ norm([], Acc)               -> filename:join(lists:reverse(Acc)).
 parse_one(Filename) ->
     case tokens(Filename) of
 	{ok,Ts} ->
+	    parse_tokens(Filename, {ok, Ts, 0});
+	Error ->
+	    parse_tokens(Filename, Error)
+    end.
+
+parse_tokens(Filename, Scanned) ->
+    case Scanned of
+	{ok,Ts,_} ->
 	    case candyspeak_parse:parse(Ts) of
 		{error,{Ln,Mod,Message}} ->
 		    io:format("~s:~w: ~s\n", 

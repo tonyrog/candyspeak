@@ -563,6 +563,20 @@ void process_serial_line(csp_rt_t* st, char* line)
 #endif
 }
 
+// A line run at the prompt. One that commits values without running a cycle
+// -- /commit while paused, as a panel stepping the program sends before each
+// /step -- clears the change the next cycle would have dumped them by: a
+// value set and stepped into, with no rule changing anything after it, was
+// never printed. So it is owed, and the next cycle dumps.
+static void serial_line_owing(csp_rt_t* st, int* owed)
+{
+    int was = st->es.anyd;
+
+    process_serial_line(st, st->line.buf);
+    if (was && !st->es.anyd)
+	*owed = 1;
+}
+
 int csp_uconst(csp_rt_t* st, const char* name, int len,
 	       value_t* ret, vtype_t* vt)
 {
@@ -2308,6 +2322,7 @@ int main(int argc, char** argv)
     uint32_t max_time_ms = 0;
     size_t   mem_limit = 0;   // -m: usable code-memory budget (0 = full arena)
     int      pause_start = 0; // -b: start paused (inspect counters, then /resume)
+    int      dump_owed = 0;   // values committed by a line, not yet dumped
     uint32_t start_time;
     int c;
     int reactive = REACTIVE_DEFAULT;
@@ -2325,7 +2340,6 @@ int main(int argc, char** argv)
     nfds_t nfds = 0;    // the FIXED part: stdin and CAN, whose slots never move
     int can_slot = 0;   // index of the CAN socket in pfd (0 = not polled)
     csp_lang_t lang = TEXT;
-    int first_cycle = 1;
     int given = 0;    // was a program handed to us (file or stdin)?
     int anyd;
 
@@ -2894,20 +2908,15 @@ loop:
     if (quit_flag)
 	goto done;
 
-    if (first_cycle) {
-	state.cycle = 1;
-	first_cycle = 0;
-    }
-    else if (!state.paused) {   // frozen while /pause is in effect
-	state.cycle++;
-    }
-    // A /step cycle counts too -- see where step_left is consumed below. It is
-    // NOT counted here: the command is read further down this same turn, so on
-    // the turn /step arrives step_left is still 0 at this point and the first
-    // cycle of the batch would run unnumbered. /step 4 ran four cycles and
-    // reported three.
-    
-    if (max_cycles && state.cycle >= max_cycles) {
+    // The cycle is numbered where it RUNS, below, not here: whether this turn
+    // runs one is only known once its input is read. Numbered here, a /pause
+    // read further down this same turn left a number given out to a cycle
+    // that never ran -- a panel that pauses at start and steps saw 0, 2, 3.
+    // The same held for /step the other way round: read below, after a
+    // number was (not) given here, /step 4 ran four cycles and reported three.
+    // Between turns state.cycle is the last cycle that ran (0: none yet).
+
+    if (max_cycles && state.cycle + 1 >= max_cycles) {
 	fprintf(stderr, "max cycles (%u) reached\n", max_cycles);
 	goto done;
     }
@@ -2944,7 +2953,7 @@ loop:
 	serial_poll(&state, pfd, nfds);
 
 	if (state.line.ready) {
-	    process_serial_line(&state, state.line.buf);
+	    serial_line_owing(&state, &dump_owed);
 	    csp_line_done(&state.line);
 	    if (quit_flag) goto done;
 	}
@@ -2976,7 +2985,7 @@ loop:
     // or not there is a stdin to poll -- and under -F there usually is not,
     // so the branch above never ran and the command sat there unrun.
     else if (state.line.ready) {
-	process_serial_line(&state, state.line.buf);
+	serial_line_owing(&state, &dump_owed);
 	csp_line_done(&state.line);
 	if (quit_flag) goto done;
     }
@@ -2995,16 +3004,15 @@ loop:
 	// what did -- and `paused' stays set, which is the whole point: the
 	// values set while stopped all belong to this one cycle, the way a
 	// board commits every DIN at the top of one.
-	if (state.step_left > 0) {
+	if (state.step_left > 0)
 	    state.step_left--;
-	    state.cycle++;      // a real cycle, and the steps must be tellable apart
-	}
 	else {
 	    csp_route_run(&state);
 	    goto loop;
 	}
     }
 
+    state.cycle++;              // this one runs: see the top of the loop
     csp_input(&state);
     if (input_file) {
 	if (cycle_input(&state, input_file) < 0)
@@ -3031,10 +3039,11 @@ loop:
 
     csp_output(&state);
 
-    if (anyd) {
+    if (anyd || dump_owed) {
 	if (debug_trace)
 	    csp_dump_state(state_file, &state, lang);
     }
+    dump_owed = 0;
 #if defined(CSP_HAVE_FIRED)
     if (debug_trace && (lang == ERLANG)) {
 	csp_dump_fired(state_file, &state);

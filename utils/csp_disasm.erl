@@ -204,7 +204,7 @@ decode_sections(F, Header, <<S,E,C,T,LenBin:4/binary,Rest/binary>>) ->
     <<SectionData:Len/binary, Sections/binary>> = Rest,
     Tag = [S,E,C,T],
     [{Tag, SectionData} | decode_sections(F, Header,Sections)];
-decode_sections(F, _Header, <<>>) ->
+decode_sections(_F, _Header, <<>>) ->
     [].
 
 -define(MASK(Len), ((1 bsl (Len))-1)).
@@ -697,7 +697,7 @@ disasm_code(F, <<InstrBin:4/binary, Data/binary>>, Addr, Si, Strings, Acc) ->
 	    I = {instr,Addr,OpCode,Format},
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc)
     end;
-disasm_code(F, <<>>, _, _Si,Strings, Acc) ->
+disasm_code(_F, <<>>, _, _Si,Strings, Acc) ->
     {lists:reverse(Acc), Strings}.
 
 add_strings(0, _, Si, Strings) ->
@@ -870,7 +870,7 @@ disasm_decl(F, <<DeclBin:8/binary, Data/binary>>,
 	    D = {decl,I,DeclType,Name,[{dir,dir(IDir)},{local,ILocal}]},
 	    add_decl(F, Data, I, 1, D, Strings, Acc)
     end;
-disasm_decl(F, <<>>, _I, _Strings, Acc) ->
+disasm_decl(_F, <<>>, _I, _Strings, Acc) ->
     lists:reverse(Acc).
 
 disasm_elem(F, variable,ILocal,IDir,Pos,Decl,Strings) ->
@@ -1037,10 +1037,10 @@ decode_type_header(Decl, Pos) ->
 		 {vt, uint, ?TYPE_BITS},
 		 {reg, uint, ?REG_BITS}]).
 
-decode_value(F, Decl, Pos, integer, _Strings) ->
+decode_value(_F, Decl, Pos, integer, _Strings) ->
     {_Pos1, [{ivalue,Value}]} = decode_bits(Decl, Pos, [{ivalue,int,32}]),
     Value;
-decode_value(F, Decl, Pos, unsigned, _Strings) ->
+decode_value(_F, Decl, Pos, unsigned, _Strings) ->
     {_Pos1, [{uvalue,Value}]} = decode_bits(Decl, Pos, [{uvalue,uint,32}]),
     Value;
 decode_value(F, Decl, Pos, float, _Strings) ->
@@ -1050,17 +1050,17 @@ decode_value(F, Decl, Pos, float, _Strings) ->
 	ieee -> <<V:32/float-little>> = <<Bits:32/little>>, V;
 	fixpoint -> Bits / 65536
     end;
-decode_value(F, Decl, Pos, string, Strings) ->
+decode_value(_F, Decl, Pos, string, Strings) ->
     {_Pos1, [{sindex,Index}]} = decode_bits(Decl, Pos, [{sindex,int,32}]),
     maps:get(Index, Strings);
-decode_value(F, Decl, Pos, timer, _Strings) ->
+decode_value(_F, Decl, Pos, timer, _Strings) ->
     {_Pos1, Init} = decode_bits(Decl, Pos, [{period,uint,28},
 					    {'_', 1},  %% not used
 					    {fired,uint,1},
 					    {running,uint,1},
 					    {value,uint,1}]),
     Init;
-decode_value(F, Decl, Pos, digital, _Strings) ->
+decode_value(_F, Decl, Pos, digital, _Strings) ->
     {_Pos1, Init} = decode_bits(Decl, Pos, [{soft,uint,1},
 					    {pin,uint,?PIN_BITS},
 					    {port,uint,?PORT_BITS},
@@ -1068,7 +1068,7 @@ decode_value(F, Decl, Pos, digital, _Strings) ->
 					    {pullup,uint,1},
 					    {pulldown,uint,1}]),
     Init;
-decode_value(F, Decl, Pos, analog, _Strings) ->
+decode_value(_F, Decl, Pos, analog, _Strings) ->
     {_Pos1, Init} = decode_bits(Decl, Pos, [{soft,uint,1},
 					    {pin,uint,?PIN_BITS},
 					    {port,uint,?PORT_BITS},
