@@ -31,6 +31,9 @@ main([Out, Img, Store]) ->
 	       [B || {eeprom, B} <- Ds] =:= [StoreBin]},
 	      {"/dump patch after /save is what was stored",
 	       [B || {patch, B} <- Ds] =:= [StoreBin]},
+	      {"the store's #disable set reads back, by rule number",
+	       csp_disasm:disabled(Rom, StoreBin) =:= [4] andalso
+	       csp_disasm:disabled(Rom, hd([B || {patch, B} <- Ds])) =:= [4]},
 	      {"/dump state reads as /state does",
 	       Want =/= [] andalso Got =:= Want},
 	      {"a timer comes as its parts, read on the node",

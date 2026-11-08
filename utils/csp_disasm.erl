@@ -9,6 +9,7 @@
 
 -export([file/1, image/1, patch/2]).
 -export([crc16/1]).                       % csp_node: a dump line's CRC
+-export([disabled/2]).                    % csp_list: the patch's #disable set
 -export([reg/1, part/1, type/1, dir/1, endian/1]).
 -export([decl/1, op_code/1, op_class/1]).
 
@@ -141,6 +142,31 @@ patch(Rom = <<_:4/binary, _:?HEADER_DATA_LEN/binary, RomCrcBin:2/binary, _/binar
     end;
 patch(_Rom, _Eeprom) ->
     {error, bad_eeprom}.
+
+%% The rules the patch has switched off, by number as /list numbers them:
+%% the #disable bitmap after its instructions, n_dis bits in 32-bit words of
+%% the node's byte order (set_group_t, DIS_BYTES in csp_eeprom.c). [] when it
+%% has none, or is not a patch of this image.
+disabled(Rom = <<_:4/binary, RomHeader:?HEADER_DATA_LEN/binary, _/binary>>,
+	 <<"CSP",0, _Version:2/binary, _SetVer:2/binary, SetBytesBin:2/binary,
+	   _CrcSet:2/binary, _RomFpBin:2/binary, _Nq:2/binary,
+	   _RamMagic:4/binary, RamHeader:?HEADER_DATA_LEN/binary, _RamCrc:2/binary,
+	   NDisBin:2/binary, _CrcDis:2/binary, _Crc:2/binary, Rest/binary>>) ->
+    F = ctx(RomHeader),
+    _ = Rom,
+    Ram = decode_header(F, RamHeader),
+    Skip = u16(F, SetBytesBin) + 8 * maps:get(n_decl, Ram) +
+	4 * maps:get(n_instr, Ram),
+    NDis = u16(F, NDisBin),
+    Words = (NDis + 31) div 32,
+    case Rest of
+	<<_:Skip/binary, Bits:(4 * Words)/binary, _/binary>> ->
+	    Ws = [u32(F, W) || <<W:4/binary>> <= Bits],
+	    [I + 1 || I <- lists:seq(0, NDis - 1),
+		      (lists:nth(I div 32 + 1, Ws) bsr (I rem 32)) band 1 =:= 1];
+	_ -> []
+    end;
+disabled(_Rom, _Eeprom) -> [].
 
 decode_header(F, Bin) ->
     decode_header_(maps:get(endian, F), Bin).

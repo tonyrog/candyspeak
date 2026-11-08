@@ -459,7 +459,7 @@ dump_check: csp
 	@tools/csp-image -q -g 1 -o tmp/dump_node tests/dump/node.csp
 	@{ echo "/upgrade A"; cat tmp/dump_node.hex; echo /quit; } | \
 	  ./csp -i --no-eeprom --flash=tmp/dump_flash.bin --part=ab >/dev/null 2>&1
-	@{ echo /save; echo /pause; echo "/step 2"; sleep 0.3; \
+	@{ echo "#disable 4"; echo /save; echo /pause; echo "/step 2"; sleep 0.3; \
 	   echo "/dump rom A"; echo "/dump rom"; echo "/dump eeprom"; \
 	   echo "/dump patch"; \
 	   echo "/dump rom A 0 50"; echo "/dump rom A 0 100"; \

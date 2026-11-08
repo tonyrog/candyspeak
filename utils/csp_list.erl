@@ -27,12 +27,14 @@ image(Bin) ->
     end.
 
 %% The bytes of /dump rom and /dump eeprom: what the node runs. The patch's
-%% lines are tagged E, the image's F.
+%% lines are tagged E, the image's F; a rule it has switched off (#disable)
+%% gets a `!' after its tag, as /list has it.
 patch(Rom, Eeprom) ->
     case quiet(fun() -> csp_disasm:patch(Rom, Eeprom) end) of
 	{ok, P = {H, _, Decls, _}} ->
 	    {ok, program(P, #{rom_nd => rom_nd(H, Decls),
-			      rom_nn => maps:get(n_instr, H)})};
+			      rom_nn => maps:get(n_instr, H),
+			      off => csp_disasm:disabled(Rom, Eeprom)})};
 	Error -> Error
     end.
 
@@ -51,7 +53,8 @@ program(P) ->
 %% The listing, as one string.
 program({Header, Strings, Decls, Code}, Opts) ->
     Env = env(Header, Strings, Decls, Code, Opts),
-    lists:flatten([[Text, eol(Tag), $\n] || {Text, Tag} <- listing(Env)]).
+    Off = maps:get(off, Opts, []),
+    lists:flatten([[Text, eol(Tag, Off), $\n] || {Text, Tag} <- listing(Env)]).
 
 %% csp_disasm prints as it goes; a library caller does not want that.
 quiet(Fun) ->
@@ -73,9 +76,10 @@ null_io() ->
 
 %% The trailing tag comment: rule number and segment, so the line pastes
 %% back as source. See list_eol.
-eol(none)          -> "";
-eol({0, Seg})      -> ["  // ", Seg];
-eol({No, Seg})     -> ["  // ", integer_to_list(No), " ", Seg].
+eol(none, _Off)      -> "";
+eol({0, Seg}, _Off)  -> ["  // ", Seg];
+eol({No, Seg}, Off)  -> ["  // ", integer_to_list(No), " ", Seg,
+			 [$! || lists:member(No, Off)]].
 
 %% ------------------------------------------------------------- environment
 
