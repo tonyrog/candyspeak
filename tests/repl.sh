@@ -791,13 +791,13 @@ if tools/csp-image -q -o "$D/up" examples/arith.csp >/dev/null 2>&1; then
     }
 
     blank "$D/up.bin"
-    got=$({ echo "/upgrade A"; cat "$D/up.hex"; echo "."; echo "/images"; \
+    got=$({ echo "/upgrade A"; cat "$D/up.hex"; echo "/images"; \
 	    echo "/quit"; } \
 	  | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
 	  | sed -n 's|^A: ||p')
     ck "a whole image lands in slot A" "ROM gen=0 size=1324 rules=268" "$got"
 
-    got=$({ echo "/upgrade A"; cat "$D/up.hex"; echo "."; echo "/images"; \
+    got=$({ echo "/upgrade A"; cat "$D/up.hex"; echo "/images"; \
 	    echo "/quit"; } \
 	  | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
 	  | sed -n 's|^B: ||p')
@@ -846,15 +846,13 @@ if tools/csp-image -q -o "$D/up" examples/arith.csp >/dev/null 2>&1; then
 	  | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
 	  | sed -n '/^OK 16384/p')
     ck "and forcing it says so out loud" \
-       "OK 16384 bytes, hex lines then '.' ('!' aborts)" "$got"
+       "OK 16384 bytes, lines: offs hex crc, then '.' ('!' aborts)" "$got"
 
     # More bytes than the region holds. Caught while receiving, not after: the
     # next block would have been written past the slot and into `store`.
     blank "$D/up.bin"
-    got=$({ echo "/upgrade A"; \
-	    for i in $(seq 1 600); do \
-	      echo "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"; \
-	    done; echo "."; echo "/quit"; } \
+    head -c 19200 /dev/zero > "$D/big.bin"
+    got=$({ echo "/upgrade A"; tmp/up.mkimage -x "$D/big.bin"; echo "/quit"; } \
 	  | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
 	  | sed -n '/^ERR full/p')
     ck "more than the region holds is refused" "ERR full" "$got"
@@ -867,6 +865,32 @@ if tools/csp-image -q -o "$D/up" examples/arith.csp >/dev/null 2>&1; then
 	  | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
 	  | sed -n 's|^A: ||p')
     ck "bad hex leaves the slot erased" "erased" "$got"
+
+    # A line torn on the way is refused ONCE, by the offset wanted; the lines
+    # the sender ran ahead with are let by, and when it winds back to that
+    # offset the image lands whole. The way /dump's lines are read again.
+    blank "$D/up.bin"
+    got=$({ echo "/upgrade A"; sed -n 1,2p "$D/up.hex"; \
+	    sed -n 3p "$D/up.hex" | sed 's/ \([0-9A-F]\)/ 0/'; \
+	    sed -n 4,5p "$D/up.hex"; echo "/upgrade ?"; sed -n '3,$p' "$D/up.hex"; \
+	    echo "/images"; echo "/quit"; } \
+	  | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
+	  | sed -n 's#^\(> \)*\(ERR .*\|at .*\|A: .*\)$#\2#p')
+    ck "a torn line is asked for again, and the image lands" \
+"ERR crc 64
+at 64
+A: ROM gen=0 size=1324 rules=268" "$got"
+
+    # `. SIZE CRC' is the whole as the sender counted it. A transfer that
+    # agrees line by line but not on the whole stamps nothing.
+    blank "$D/up.bin"
+    got=$({ echo "/upgrade A"; sed '$d' "$D/up.hex"; echo ". 1324 0000"; \
+	    echo "/images"; echo "/quit"; } \
+	  | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
+	  | sed -n 's#^\(> \)*\(ERR .*\|A: .*\)$#\2#p')
+    ck "a whole that does not add up stamps nothing" \
+"ERR image -- slot is erased
+A: erased" "$got"
 else
     echo "  FAIL csp-image did not produce an image"; fail=$((fail+1))
 fi
@@ -2853,7 +2877,7 @@ CSPEOF
     rfpid=$!
     sleep 1.2
     ( printf '/latch off\n'; sleep 0.8; printf '\035'; sleep 0.5
-      printf '/upgrade A force\n'; cat "$D/rimg.hex"; printf '.\n'
+      printf '/upgrade A force\n'; cat "$D/rimg.hex"
       sleep 12; printf '/images\n'; sleep 3; printf '\035'; sleep 0.3
       printf '/quit\n' ) |
 	./csp -i --no-eeprom "$D/rfmast.csp" >/dev/null 2>&1
@@ -3269,6 +3293,31 @@ OK
 B=1  // 1 R
 Took back 2 lines
 Nothing to take back' "$got"
+
+# #disable/#enable on a running program switch rules off and on and that is
+# all: the program runs on with its values. They used to mark the program
+# edited, and the rebuild that followed re-laid the heap -- every value back to
+# its initial one, the program started over -- without csp_setup, so a board's
+# outputs were left unset until /resume. N counts on; M stops where it was.
+# The sleeps keep each /step ahead of the lines after it.
+got=$({ printf '#variable N = 0\n#variable M = 0\nN = N + 1\nM = M + 1\n/pause\n/step 1\n'
+	sleep 0.3; printf '> N - M\n> N\n#disable 2\n/step 3\n'
+	sleep 0.3; printf '> N\n> M\n#enable 2\n/step 2\n'
+	sleep 0.3; printf '> N - M\n'; } | repl ./csp "$D/dis_live.db")
+a=$(printf '%s\n' "$got" | sed -n 7p)
+ck "#disable and #enable leave a running program running" \
+   "OK
+OK
+OK
+OK
+Paused (execution stopped; edit/inspect, then /resume)
+0
+$a
+OK
+$((a + 3))
+$a
+OK
+3" "$got"
 
 echo "limits that used to be silent:"
 

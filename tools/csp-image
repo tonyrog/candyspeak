@@ -33,8 +33,9 @@ Writes three files:
   NAME.rom.c  the image as C -- what a firmware links, and the evidence when a
               load is rejected ("ROM rejected: CRC mismatch in ...")
   NAME.img    the same image as bytes, for a programmer or a flash tool
-  NAME.hex    hex lines, for pasting into /upgrade. NOT Intel HEX -- a board's
-              firmware.hex is that, this is the format the receiver reads.
+  NAME.hex    lines for /upgrade: offs hex crc, then . size crc -- NOT
+              Intel HEX: a board's firmware.hex is that, this is the format
+              the receiver reads (and /dump sends).
 
 The helper that dumps the bytes is built into the repo's tmp/, not next to the
 output.

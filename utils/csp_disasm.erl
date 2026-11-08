@@ -8,6 +8,12 @@
 -module(csp_disasm).
 
 -export([file/1, image/1, patch/2]).
+-export([crc16/1]).                       % csp_node: a dump line's CRC
+-export([reg/1, part/1, type/1, dir/1, endian/1]).
+-export([decl/1, op_code/1, op_class/1]).
+
+-include("csp_asm.hrl").
+
 
 file(Filename) ->
     case filename:extension(Filename) of
@@ -207,328 +213,34 @@ decode_sections(F, Header, <<S,E,C,T,LenBin:4/binary,Rest/binary>>) ->
 decode_sections(_F, _Header, <<>>) ->
     [].
 
--define(MASK(Len), ((1 bsl (Len))-1)).
+-define(MAP(Key,Val), Val => Key).
 
--define(OPCODE_BITS,      6).
--define(DECL_TYPE_BITS,   4).
--define(BODY_BITS,        10).
--define(REG_BITS,         4).
--define(FUNC_BITS,        5).
--define(PART_BITS,        4).
--define(OBJ_BITS,         1).
--define(DECL_BITS,        15).
--define(INDEX_BITS,       (?OBJ_BITS+?DECL_BITS)).
--define(TINY_BITS,        6).
--define(TYPE_BITS,        4).
--define(PORT_BITS,        4).
--define(PIN_BITS,         7).
--define(DIR_BITS,         2).
--define(NAMEID_BITS,      8).
--define(ENDIAN_BITS,      2).
+reg(I) -> maps:get(I band ?REG_MASK, reg()).
+reg() -> #{ ?REG_MAP }.
 
--define(OPCODE_MASK, ?MASK(?OPCODE_BITS)).
--define(REG_MASK, ?MASK(?REG_BITS)).
--define(PART_MASK, ?MASK(?PART_BITS)).
--define(DIR_MASK, ?MASK(?DIR_BITS)).
--define(ENDIAN_MASK, ?MASK(?ENDIAN_BITS)).
--define(DECL_TYPE_MASK, ?MASK(?DECL_TYPE_BITS)).
--define(TYPE_MASK, ?MASK(?TYPE_BITS)).
+part(P) -> maps:get(P band ?PART_MASK, part()).
+part() -> #{ ?PART_MAP }.
 
-reg(I) ->
-    maps:get(I band ?REG_MASK, reg()).
-reg() ->
-    #{ 0 => r0, 1 => r1, 2 => r2, 3 => r3,
-       4 => r4, 5 => r5, 6 => r6, 7 => r7,
-       8 => r8, 9 => r9, 10 => r10, 11 => r11,
-       12 => r12, 13 => r13, 14 => r14, 15 => r15 }.
+type(T) -> maps:get(T band ?TYPE_MASK, type()).
+type() -> #{ ?TYPE_MAP }.
 
-%% Parts STP/LDP
--define(PART_VAL, 0).
--define(PART_PIN, 1).
--define(PART_PORT, 2).
--define(PART_DIR, 3).
--define(PART_PWM, 4).
--define(PART_ENDIAN, 5).
--define(PART_PULLUP, 6).
--define(PART_PULLDOWN, 7).
--define(PART_PERIOD, 8).
--define(PART_FIRED, 9).
--define(PART_ID, 10).
--define(PART_RX, 11).
--define(PART_TX, 12).
--define(PART_DLC, 13).
--define(PART_LEN, 14).
+dir(D) -> maps:get(D band ?DIR_MASK, dir()).
+dir() -> #{ ?DIR_MAP }.
 
-part() ->
-#{
-  ?PART_VAL => val,
-  ?PART_PIN => pin,
-  ?PART_PORT => port,
-  ?PART_DIR => dir,
-  ?PART_PWM => pwm,
-  ?PART_ENDIAN => endian,
-  ?PART_PULLUP => pullup,
-  ?PART_PULLDOWN => pulldown,
-  ?PART_PERIOD => period,
-  ?PART_FIRED => fired,
-  ?PART_ID => id,
-  ?PART_RX => rx,
-  ?PART_TX => tx,
-  ?PART_DLC => dlc,
-  ?PART_LEN => len
-}.
-part(P) ->
-    maps:get(P band ?PART_MASK, part()).
-
--define(V_VOID,     0).
--define(V_INTEGER,  1).
--define(V_UNSIGNED, 2).
--define(V_FLOAT,    3).
--define(V_STRING,   4).
--define(V_INDEX,    5).
--define(V_NUMBER,   6).
--define(V_ANY,      7).
--define(V_TIMER,    8).
--define(V_DIGITAL,  9).
--define(V_ANALOG,   10).
--define(V_FIELD,   11).   
-
--define(DECL_NONE, 0).
--define(DECL_VARIABLE, 1).
--define(DECL_CONSTANT, 2).
--define(DECL_MODULE,   3).
--define(DECL_END,      4).
--define(DECL_OBJECT,   5).
--define(DECL_STATES,   6).
--define(DECL_IN,       7).
--define(DECL_TIMER, ?V_TIMER).
--define(DECL_DIGITAL, ?V_DIGITAL).
--define(DECL_ANALOG, ?V_ANALOG).
--define(DECL_FIELD, ?V_FIELD).
--define(DECL_BUFFER, 12).
--define(DECL_VIEW, 13).
--define(DECL_ROUTE, 14).
--define(DECL_END_MARK, 15).
-
-type() ->
-#{
-  ?V_VOID => void,
-  ?V_INTEGER => integer,
-  ?V_UNSIGNED => unsigned,
-  ?V_FLOAT => float,
-  ?V_STRING => string,
-  ?V_INDEX => index,
-  ?V_NUMBER => number,
-  ?V_ANY => any,
-  ?V_TIMER => timer,
-  ?V_DIGITAL => digital,
-  ?V_ANALOG => analog,
-  ?V_FIELD => field
-}.  
-type(Vt) ->
-    maps:get(Vt band ?TYPE_MASK, type()).
-
--define(DIR_NONE,  16#00).
--define(DIR_IN,    16#01).
--define(DIR_OUT,   16#02).
--define(DIR_INOUT, 16#03).
-
-dir() ->
-#{
-  ?DIR_NONE  => none,
-  ?DIR_IN    => in,
-  ?DIR_OUT   => out,
-  ?DIR_INOUT => inout
-}.
-dir(D) ->
-    maps:get(D band ?DIR_MASK, dir()).
-
--define(E_NATIVE,    16#00). 
--define(E_LITTLE,   16#01).
--define(E_BIG,      16#02).
--define(E_UNDEFINED, 16#03).
-
-endian() ->
-#{
-  ?E_NATIVE => native,
-  ?E_LITTLE => little,
-  ?E_BIG    => big,
-  ?E_UNDEFINED => undefined
-}.
-endian(E) ->
-    maps:get(E band ?ENDIAN_MASK, endian()).
-
+endian(E) -> maps:get(E band ?ENDIAN_MASK, endian()).
+endian() -> #{ ?ENDIAN_MAP }.
 
 avt(0) -> [];
 avt(Avt) -> [type(Avt) | avt(Avt bsr 4)].
     
+decl(T) -> maps:get(T band ?DECL_TYPE_MASK, decl()).
+decl() -> #{ ?DECL_MAP }.
 
-decl() ->
-#{
-  ?DECL_NONE => none,
-  ?DECL_VARIABLE => variable,
-  ?DECL_CONSTANT => constant,
-  ?DECL_MODULE   => module,
-  ?DECL_END => 'end',
-  ?DECL_OBJECT => object,
-  ?DECL_STATES => states,
-  ?DECL_IN     => 'in',
-  ?DECL_TIMER  => timer,
-  ?DECL_DIGITAL => digital,
-  ?DECL_ANALOG => analog,
-  ?DECL_FIELD => field,
-  ?DECL_BUFFER => buffer,
-  ?DECL_VIEW => view,
-  ?DECL_ROUTE => route,
-  ?DECL_END_MARK => end_mark
- }.
-decl(T) ->
-    maps:get(T band ?DECL_TYPE_MASK, decl()).
+op_class(OpCode) -> maps:get(OpCode, ?OPCLASS_MAP).
 
-
-%% Opcodes
--define(OP_NOP, 0).  %% nothing
--define(OP_NOT, 1).     %% "!"  x=-y == x=0-y
--define(OP_BNOT, 2).    %% "~"  x=~y =  x=1^y        
--define(OP_NEG , 3).     %% "-"  x=-y == x=0-y
--define(OP_MOV , 4).     %% "mov" x=y == x=y
--define(OP_CVTIF, 5).   %% trunc float => integer
--define(OP_CVTFI, 6).   %% cast int to float
-    %% node - binary operator
--define(OP_ADD  , 7).     %% "+"
--define(OP_SUB  , 8).     %% "-"
--define(OP_MUL  , 9).     %% "*"
--define(OP_DIV  , 10).     %% "/"
--define(OP_REM  , 11).     %% "%"
--define(OP_SLA  , 12).     %% "<<"
--define(OP_SRA  , 13).     %% ">>"    
--define(OP_LT  , 14).      %% "<"
--define(OP_LTE  , 15).     %% "<="
-    %% `>` and `>=` used to be 16 and 17; the compiler mirrors them into
-    %% OP_LT/OP_LTE with the operands swapped (see mirror_op / asm_alu), so the
-    %% numbers came free. 16 is spent again below; 17 is still free.
--define(OP_TMO  , 16).     %% timeout(T): x = the timer's `fired` bit
-    %% 17 -- FREE
--define(OP_EQEQ, 18).    %% "=="
--define(OP_NEQ, 19).     %% "!="
--define(OP_BAND, 20).    %% "&"
--define(OP_BOR, 21).     %% "|"
--define(OP_BXOR, 22).    %% "^"
--define(OP_AND, 23).     %% "&&"
--define(OP_OR, 24).      %% "||"
-
--define(OP_FNEG, 25).     %% "-"  x=-y == x=0-y
--define(OP_FMOV, 26).     %% "mov"  x=y
--define(OP_FADD, 27).     %% "+"
--define(OP_FSUB, 28).     %% "-"
--define(OP_FMUL, 29).     %% "*"
--define(OP_FDIV, 30).     %% "/"
-
--define(OP_FLT, 31).      %% "<"
--define(OP_FLTE, 32).      %% "<="
-    %% 33, 34 -- FREE, for the same reason as 16 and 17 above.
--define(OP_FEQEQ, 35).     %% "=="
--define(OP_FNEQ, 36).     %% "!="    
+op_code() -> #{ ?OPCODE_MAP }.
+op_code(Op) -> maps:get(Op, op_code()).
     
--define(OP_EQ, 37).     %% "="
--define(OP_RIMP, 38).     %% "<-"    
-
--define(OP_RULE, 39).    %% "?"
--define(OP_NEXT, 40).    %% "next"
-
--define(OP_ENTER, 41).   %% enter object
--define(OP_LEAVE, 42).   %% leave object
--define(OP_NEW, 43).     %% #<module> <instance-name>
--define(OP_LD, 44).      %% load register from memory
--define(OP_LDP, 45).     %% load register from memory part
--define(OP_ST, 46).      %% store register to memory
--define(OP_STP, 47).     %% store register to memory part
--define(OP_STIMP, 48).  %% store for <- (reactive assign), same as ST but marks rimp
--define(OP_CHG, 49).     %% r |= dset[ix], check if variable changed
--define(OP_LI, 50).      %% load signed 16-bit constant
--define(OP_LIU, 51).     %% load unsigned 16-bit constant (zero extend)
--define(OP_LIH, 52).    %% load high 16-bit (OR into high bits)
--define(OP_ARG, 53).    %% load argument from register
--define(OP_CALL, 54).   %% function call:
--define(OP_STI, 55).    %% store immediate value to memory (mirror of EQI)
-    %% A run of identifier text living in the INSTRUCTION pool: this header, then
-    %% num slots of characters. Executing it JUMPS the payload, which is what
-    %% makes a segment transparent -- it lands mid-stream because a name is
-    %% created while code is being generated, and there is no moving it
-    %% afterwards without renumbering every jump.
-    %%
-    %% 17 is a hole (where `>` used to be, before it was mirrored to LT+swap),
-    %% taken ahead of 60..62 as the note at OP_AVAIL asks.
--define(OP_SEGMENT,17).
-
--define(OP_INSTATE,56). %% #in <state> block gate: if reg != state, skip block(nxt)
--define(OP_NINSTATE,57). %% #in A B C OR-chain gate: if reg == state, jump INTO block (nxt)
--define(OP_SETO, 58).    %% point CURRENT at a NAMED object for the next memory access
--define(OP_SETOX, 59).   %% same, but the object number comes from a register (arrays)
--define(OP_END_MARK, 16#3f).
-
-opcodes() ->
-    #{ ?OP_NOP => {'NOP', nop},
-       ?OP_NOT => {'NOT', alu, 1},
-       ?OP_BNOT => {'BNOT', alu, 1},
-       ?OP_NEG => {'NEG', alu, 1},
-       ?OP_MOV => {'MOV', alu, 1},
-       ?OP_CVTIF => {'CVTIF', alu, 1},
-       ?OP_CVTFI => {'CVTFI', alu, 1},
-       ?OP_ADD   => {'ADD', alu, 2},
-       ?OP_SUB   => {'SUB', alu, 2},
-       ?OP_MUL   => {'MUL', alu, 2},
-       ?OP_DIV   => {'DIV', alu, 2},
-       ?OP_REM   => {'REM', alu, 2},
-       ?OP_SLA   => {'SLA', alu, 2},
-       ?OP_SRA   => {'SRA', alu, 2},
-       ?OP_LT    => {'LT',   alu, 2},
-       ?OP_LTE   => {'LTE', alu, 2},
-       ?OP_TMO   => {'TMO', mem},
-       ?OP_SEGMENT => {'SEGMENT', seg},
-       ?OP_EQEQ  => {'EQEQ', alu, 2},
-       ?OP_NEQ   => {'NEQ',  alu, 2},
-       ?OP_BAND  => {'BAND', alu, 2},
-       ?OP_BOR   => {'BOR',  alu, 2},
-       ?OP_BXOR  => {'BXOR', alu, 2},
-       ?OP_AND   => {'AND',  alu, 2},
-       ?OP_OR    => {'OR',   alu, 2},
-       ?OP_FNEG  => {'FNEG', alu, 1},
-       ?OP_FMOV  => {'FMOV', alu, 1},
-       ?OP_FADD  => {'FADD', alu, 2},
-       ?OP_FSUB  => {'FSUB', alu, 2},
-       ?OP_FMUL  => {'FMUL', alu, 2},
-       ?OP_FDIV  => {'FDIV', alu, 2},
-       ?OP_FLT   => {'FLT',  alu, 2},
-       ?OP_FLTE  => {'FLTE', alu, 2},
-       ?OP_FEQEQ => {'FEQEQ', alu, 2},
-       ?OP_FNEQ  => {'FNEQ', alu, 2},
-       ?OP_EQ    => {'EQ', alu ,2},
-       ?OP_RIMP  => {'RIMP', alu, 2},
-       ?OP_RULE  => {'RULE', rule},
-       ?OP_NEXT  => {'NEXT', next},
-       ?OP_ENTER => {'ENTER', enter},
-       ?OP_LEAVE => {'LEAVE', leave},
-       ?OP_NEW   => {'NEW', new},
-       ?OP_LD    => {'LD', mem},
-       ?OP_LDP   => {'LDP', mem},
-       ?OP_ST    => {'ST', mem},
-       ?OP_STP   => {'STP', mem},
-       ?OP_STIMP => {'STIMP', mem},
-       ?OP_CHG   => {'CHG', mem},
-       ?OP_LI    => {'LI', imm},
-       ?OP_LIU   => {'LIU', imm},
-       ?OP_LIH   => {'LIH', imm},
-       ?OP_ARG   => {'ARG', imm},
-       ?OP_CALL  => {'CALL', call},
-       ?OP_STI   => {'STI', memi},
-       ?OP_INSTATE => {'INSTATE', instate},
-       ?OP_NINSTATE => {'NINSTATE', instate},
-       ?OP_SETO => {'SETO', seto},
-       ?OP_SETOX => {'SETOX', setox},
-       ?OP_END_MARK => {'END', 'end'}
-     }.
-
 disasm_code(F, ok, Sections) ->
     {_, Code} = lists:keyfind("CODE", 1, Sections),
     disasm_code(F, Code, 0, 1, #{ 0 => ""}, []).
@@ -536,10 +248,12 @@ disasm_code(F, ok, Sections) ->
 disasm_code(F, <<InstrBin:4/binary, Data/binary>>, Addr, Si, Strings, Acc) ->
     Instr = word(F, InstrBin),
     {Pos0, [{opcode,Op}]} = decode_bits(Instr, 0, [{opcode,uint,?OPCODE_BITS}]),
-    case maps:get(Op, opcodes()) of
-	{_OpCode, 'end'} ->
+    OpCode = maps:get(Op, op_code()),
+    OpClass = op_class(OpCode),
+    case OpClass of
+	'end' ->
 	    {lists:reverse(Acc), Strings};
-	{OpCode, seg} ->
+	seg ->
 	    {_Pos, [{num,Num},{used,Used}]} = 
 		decode_bits(Instr, Pos0,
 			    [{'_',2},
@@ -550,7 +264,7 @@ disasm_code(F, <<InstrBin:4/binary, Data/binary>>, Addr, Si, Strings, Acc) ->
 	    I = {instr,Addr,OpCode,[{slots,Num},{used,Used},{data,StringData}]},
 	    {Si1, Strings1} = add_strings(Used, StringData, Si, Strings),
 	    add_instr(F, Data1, Addr, 1+Num, I, Si1, Strings1, Acc);
-	{OpCode, instate} ->
+	instate ->
 	    {_Pos,[{x,X},{imm,Imm},{nxt,Nxt},{implicit,Imp}]} =
 		decode_bits(Instr, Pos0,
 			    [{x, uint, ?REG_BITS},
@@ -560,7 +274,7 @@ disasm_code(F, <<InstrBin:4/binary, Data/binary>>, Addr, Si, Strings, Acc) ->
 	    Implicit = if Imp =:= 1 -> [implicit]; true -> [] end,
 	    I = {instr, Addr, OpCode, [reg(X),Imm,{nxt,Nxt}|Implicit]},
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
-	{OpCode, rule} ->
+	rule ->
 	    {_Pos,[{cnd,Cnd},{nxt,Nxt},{implicit,Imp}]} =
 		decode_bits(Instr, Pos0,
 			    [{cnd, uint, ?REG_BITS},
@@ -570,34 +284,34 @@ disasm_code(F, <<InstrBin:4/binary, Data/binary>>, Addr, Si, Strings, Acc) ->
 	    Implicit = if Imp =:= 1 -> [implicit]; true -> [] end,
 	    I = {instr, Addr, OpCode, [reg(Cnd),Nxt|Implicit]},
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
-	{OpCode, enter} ->
+	enter ->
 	    {_Pos,[{num,Num},{mx,Mx}]} =
 		decode_bits(Instr, Pos0,
 			    [{num, uint, ?BODY_BITS},
 			     {mx,  uint, ?INDEX_BITS}]),
 	    I = {instr,Addr,OpCode,[{mem,Mx},{n,Num}]},
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
-	{OpCode, leave} ->
+	leave ->
 	    {_Pos,[{num,Num},{mx,Mx}]} =
 		decode_bits(Instr, Pos0,
 			    [{num, uint, ?BODY_BITS},
 			     {mx,  uint, ?INDEX_BITS}]),
 	    I = {instr,Addr,OpCode,[{mem,Mx},{n,Num}]},
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
-	{OpCode, next} ->
+	next ->
 	    {_Pos,[{x,X}]} =
 		decode_bits(Instr, Pos0,
 			    [{x, uint, ?REG_BITS}]),
 	    I = {instr,Addr,OpCode,[reg(X)]},
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
-	{OpCode, new} ->
+	new ->
 	    {_Pos,[{obj,Obj}]} =
 		decode_bits(Instr, Pos0,
 			    [{'_', 2},
 			     {obj, uint, ?INDEX_BITS}]),
 	    I = {instr,Addr,OpCode,[{obj,Obj}]},
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
-	{OpCode, call} ->
+	call ->
 	    {_Pos,[{x,X},{idx,Idx},{usr,Usr},{avt,Avt}]} =
 		decode_bits(Instr, Pos0,
 			    [{x, uint, ?REG_BITS},
@@ -607,7 +321,7 @@ disasm_code(F, <<InstrBin:4/binary, Data/binary>>, Addr, Si, Strings, Acc) ->
 	    Sig = avt(Avt),
 	    I = {instr,Addr,OpCode,[reg(X),{idx,Idx},{usr,Usr},{avt,Sig}]},
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
-	{OpCode, alu, 1} ->
+	alu1 ->
 	    {_Pos,[{x,X},{y,Y},{u,U},{swap,_Swap}]} =
 		decode_bits(Instr, Pos0,
 			    [{x, uint, ?REG_BITS},
@@ -617,7 +331,7 @@ disasm_code(F, <<InstrBin:4/binary, Data/binary>>, Addr, Si, Strings, Acc) ->
 			     {swap, uint, 1}]),
 	    I = {instr, Addr, OpCode, [reg(X),reg(Y)] ++ [unsigned || U =:= 1]},
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
-	{OpCode, alu, 2} ->
+	alu2 ->
 	    %% swap: `a > b' was emitted as `b < a', operands exchanged -- the
 	    %% listing needs it to put the source back.
 	    {_Pos,[{x,X},{y,Y},{z,Z},{u,U},{swap,Swap}]} =
@@ -630,7 +344,7 @@ disasm_code(F, <<InstrBin:4/binary, Data/binary>>, Addr, Si, Strings, Acc) ->
 	    I = {instr, Addr, OpCode, [reg(X),reg(Y),reg(Z)] ++
 		     [unsigned || U =:= 1] ++ [swap || Swap =:= 1]},
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
-	{OpCode, mem} ->
+	mem ->
 	    {_Pos,[{x,X},{y,Y},{mem,Mem}]} =
 		decode_bits(Instr, Pos0,
 			    [{x, uint, ?REG_BITS},
@@ -645,7 +359,7 @@ disasm_code(F, <<InstrBin:4/binary, Data/binary>>, Addr, Si, Strings, Acc) ->
 		    _ -> {instr, Addr, OpCode, [reg(X), {mem,Mem}]}
 		end,
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
-	{OpCode, imm} ->
+	imm ->
 	    {_Pos,[{x,X},{imm,Imm}]} =
 		decode_bits(Instr, Pos0,
 			    [{x, uint, ?REG_BITS},
@@ -662,7 +376,7 @@ disasm_code(F, <<InstrBin:4/binary, Data/binary>>, Addr, Si, Strings, Acc) ->
 			{instr, Addr, OpCode, [reg(X), {imm,Imm}]}
 		end,
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
-	{OpCode, memi} ->
+	memi ->
 	    {_Pos,[{x,X},{imm,Imm},{mem,Mem}]} =
 		decode_bits(Instr, Pos0,
 			    [{x, uint, ?REG_BITS},
@@ -670,14 +384,14 @@ disasm_code(F, <<InstrBin:4/binary, Data/binary>>, Addr, Si, Strings, Acc) ->
 			     {mem, uint, ?INDEX_BITS}]),
 	    I = {instr, Addr, OpCode, [reg(X), {imm,Imm}, {mem,Mem}]},
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
-	{OpCode, seto} ->
+	seto ->
 	    {_Pos,[{obj,Obj}]} = 
 		decode_bits(Instr, Pos0,
 			    [{'_', 2},
 			     {obj, uint, 16}]),
 	    I = {instr,Addr,OpCode,[{obj,Obj}]},
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
-	{OpCode, setox} ->
+	setox ->
 	    %% bits = 1: stride is in BITS and moves the next buffer view
 	    %% (`Frame[BytePos]`), else declarations per array element
 	    {_Pos,[{bits,Bits},{len,Len},{x,X},{stride,Stride}]} =
@@ -690,11 +404,11 @@ disasm_code(F, <<InstrBin:4/binary, Data/binary>>, Addr, Si, Strings, Acc) ->
 	    I = {instr,Addr,OpCode,[reg(X),{len,Len},{stride,Stride}] ++
 		     [bits || Bits =:= 1]},
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);	    
-	{OpCode, nop} ->
+	nop ->
 	    I = {instr,Addr,OpCode},
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
-	{OpCode, Format} ->
-	    I = {instr,Addr,OpCode,Format},
+	undefined -> %% krash!?
+	    I = {instr,Addr,OpCode,undefined},
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc)
     end;
 disasm_code(_F, <<>>, _, _Si,Strings, Acc) ->

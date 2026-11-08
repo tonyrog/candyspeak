@@ -2172,16 +2172,23 @@ static int cmd_reset(csp_rt_t* st, int argc, char* argv[])
     return CSP_CMD_OK;
 }
 
-// /dump rom [slot] | eeprom | state -- the bytes, for a host to read.
+// /dump rom [slot] [offs [len]] | eeprom [offs [len]] | patch [offs [len]]
+// | state -- the bytes, for a host to read.
 //
 // The node does not interpret what it sends: an image is the image, the store
 // is the store, and the host (utils/, in Erlang) knows what they mean and
-// merges a patch onto its ROM. All three look the same on the wire, the
-// format /upgrade reads:
+// merges a patch onto its ROM. All of them look the same on the wire:
 //
-//     dump rom 428
-//     4A414D0A AC010000 ...          32 bytes a line, hex
+//     dump rom 428 64 32             what, its whole size, offs, bytes sent
+//     64 4A414D0AAC010000... 3F1C    offs, up to 32 bytes hex, CRC-16
 //     .
+//
+// THE ONE ASKING SETS THE PACE. offs and len pick a window, so a host reads
+// an image in pieces as its link allows, and a line that came back wrong --
+// its CRC, over the offset (4 bytes, little endian) and the data, does not
+// match -- is asked for again by its offset alone. The header is the first
+// 50 bytes: one line says whether the image on the node is the one the host
+// already has. A slot name is letters, so a number in its place is offs.
 //
 // STATE is (key, value) pairs, varints, so a small value costs a byte and the
 // pairs say what they are without the host replaying the /state walk: key is
@@ -2190,32 +2197,100 @@ static int cmd_reset(csp_rt_t* st, int argc, char* argv[])
 // is three varints instead of one value, read here so the host needs neither
 // the bit layout nor t0: flags (1 val, 2 fired, 4 running), the period, and
 // what elapsed(T) says now. A buffer is not in it yet.
-static uint8_t dump_n;          // bytes on the current line
+static struct {
+    uint32_t pos;               // offset of the next byte offered
+    uint32_t from, to;          // the window sent
+    uint16_t crc;               // of the current line
+    uint8_t  n;                 // bytes on the current line
+} dl;
 
-static void dump_begin(const char* what, uint32_t n)
+// The bytes [from, to) of a `total' long dump. The head says what is sent.
+static void dump_window(uint32_t total, uint32_t from, uint32_t len)
 {
+    dl.pos = 0;
+    dl.n = 0;
+    dl.from = (from < total) ? from : total;
+    dl.to = (len < total - dl.from) ? dl.from + len : total;
+}
+
+static void dump_begin(const char* what, uint32_t total, uint32_t from,
+		       uint32_t len)
+{
+    dump_window(total, from, len);
     csp_print_lit("dump ");
     csp_print_str(what);
     csp_print_char(' ');
-    csp_print_uint(n);
+    csp_print_uint(total);
+    csp_print_char(' ');
+    csp_print_uint(dl.from);
+    csp_print_char(' ');
+    csp_print_uint(dl.to - dl.from);
     csp_println();
-    dump_n = 0;
+}
+
+static void dump_eol(void)
+{
+    csp_print_char(' ');
+    csp_print_hex2((uint8_t)(dl.crc >> 8));
+    csp_print_hex2((uint8_t)dl.crc);
+    csp_println();
+    dl.n = 0;
 }
 
 static void dump_byte(uint8_t b)
 {
-    csp_print_hex2(b);
-    if (++dump_n == 32) {
-	csp_println();
-	dump_n = 0;
+    uint32_t at = dl.pos++;
+
+    if ((at < dl.from) || (at >= dl.to))
+	return;
+    if (dl.n == 0) {
+	uint8_t le[4];
+	le[0] = (uint8_t)at;
+	le[1] = (uint8_t)(at >> 8);
+	le[2] = (uint8_t)(at >> 16);
+	le[3] = (uint8_t)(at >> 24);
+	dl.crc = csp_crc16(0xFFFF, le, 4, 0);
+	csp_print_uint(at);
+	csp_print_char(' ');
     }
+    csp_print_hex2(b);
+    dl.crc = csp_crc16(dl.crc, &b, 1, 0);
+    if (++dl.n == 32)
+	dump_eol();
 }
 
 static void dump_end(void)
 {
-    if (dump_n)
-	csp_println();
+    if (dl.n)
+	dump_eol();
     csp_print_line(".");
+}
+
+// offs and len, the window's: argv[0..] past what was named. A bad number
+// is a typo, not a request for everything.
+static int dump_args(int argc, char* argv[], uint32_t* from, uint32_t* len)
+{
+    int i;
+
+    *from = 0;
+    *len = 0xFFFFFFFFUL;
+    for (i = 0; (i < argc) && (i < 2); i++) {
+	const char* p = argv[i];
+	uint32_t v = 0;
+	if (*p == '\0')
+	    return -1;
+	while ((*p >= '0') && (*p <= '9'))
+	    v = v * 10 + (uint32_t)(*p++ - '0');
+	if (*p != '\0')
+	    return -1;
+	if (i == 0) *from = v; else *len = v;
+    }
+    return (argc > 2) ? -1 : 0;
+}
+
+static int is_number(const char* p)
+{
+    return (*p >= '0') && (*p <= '9');
 }
 
 static void dump_varint(uint32_t v)
@@ -2275,10 +2350,18 @@ static int dump_put(const void* buf, size_t len)
     return 0;
 }
 
+// An array element after the first is a continuation with no name of its
+// own, so /state's test (which wants a name) would leave it out: it goes with
+// its head. Left out, a node's ring of pixels came to the host as P[0] alone.
 static int dump_wanted(csp_rt_t* st, int i)
 {
-    decl_t t = decl(st, i, type);
-    return (t != DECL_BUFFER) && state_want(st, i, F_ALL, NULL, 0);
+    int h = i;
+    decl_t t;
+
+    while ((h > 0) && decl(st, h, cont))
+	h--;
+    t = decl(st, h, type);
+    return (t != DECL_BUFFER) && state_want(st, h, F_ALL, NULL, 0);
 }
 
 // One declaration's pair, or a timer's three.
@@ -2324,7 +2407,7 @@ static void dump_state(csp_rt_t* st)
     csp_print_char(' ');
     csp_print_uint(csp_time_ms());
     csp_println();
-    dump_n = 0;
+    dump_window(0xFFFFFFFFUL, 0, 0xFFFFFFFFUL);
     in_module = 0;
     for (i = 0; i < st->ps.nd; i++) {
 	decl_t t = decl(st, i, type);
@@ -2357,10 +2440,10 @@ static void dump_state(csp_rt_t* st)
 
 static int cmd_dump(csp_rt_t* st, int argc, char* argv[])
 {
-    uint32_t k;
+    uint32_t k, from, len;
 
     if ((argc >= 1) && (strcmp(argv[0], "rom") == 0)) {
-	if (argc >= 2) {
+	if ((argc >= 2) && !is_number(argv[1])) {
 #if defined(CSP_HAVE_FLASH)
 	    // A slot, read as flash: it need not be the image running, or an
 	    // image at all -- a half-arrived one is worth seeing too.
@@ -2370,6 +2453,8 @@ static int cmd_dump(csp_rt_t* st, int argc, char* argv[])
 				      : NULL;
 	    csp_image_header_t h;
 	    uint32_t off;
+	    if (dump_args(argc - 2, argv + 2, &from, &len) < 0)
+		goto usage;
 	    if (r == NULL) {
 		csp_print_line("ERR no such region");
 		return CSP_CMD_OK;
@@ -2381,10 +2466,11 @@ static int cmd_dump(csp_rt_t* st, int argc, char* argv[])
 		csp_print_line("ERR no image there");
 		return CSP_CMD_OK;
 	    }
-	    dump_begin("rom", h.size);
-	    for (k = 0; k < h.size; k++) {
-		uint8_t b;
-		if (csp_flash_read(off + k, &b, 1) != CSP_FLASH_OK)
+	    dump_begin("rom", h.size, from, len);
+	    for (k = 0; k < dl.to; k++) {
+		uint8_t b = 0;
+		if ((k >= dl.from) &&
+		    (csp_flash_read(off + k, &b, 1) != CSP_FLASH_OK))
 		    break;
 		dump_byte(b);
 	    }
@@ -2401,14 +2487,16 @@ static int cmd_dump(csp_rt_t* st, int argc, char* argv[])
 	    const uint8_t* base = (st->image_no >= 0) ?
 		csp_image_at(st->image_no) : ro_ref(&rom_image).base;
 	    csp_image_header_t h;
+	    if (dump_args(argc - 1, argv + 1, &from, &len) < 0)
+		goto usage;
 	    if (base == NULL) {
 		csp_print_line("ERR no image");
 		return CSP_CMD_OK;
 	    }
 	    h = ro_header((const csp_image_header_t*)base);
-	    dump_begin("rom", h.size);
-	    for (k = 0; k < h.size; k++)
-		dump_byte(ro_byte(base + k));
+	    dump_begin("rom", h.size, from, len);
+	    for (k = 0; k < dl.to; k++)
+		dump_byte((k >= dl.from) ? ro_byte(base + k) : 0);
 	    dump_end();
 	}
 	return CSP_CMD_OK;
@@ -2416,13 +2504,15 @@ static int cmd_dump(csp_rt_t* st, int argc, char* argv[])
     if ((argc >= 1) && (strcmp(argv[0], "eeprom") == 0)) {
 	int n = csp_eeprom_stored();
 	uint8_t b;
+	if (dump_args(argc - 1, argv + 1, &from, &len) < 0)
+	    goto usage;
 	if (n < 0) {
 	    csp_print_line("ERR nothing stored");
 	    return CSP_CMD_OK;
 	}
-	dump_begin("eeprom", (uint32_t)n);
+	dump_begin("eeprom", (uint32_t)n, from, len);
 	if (csp_eeprom_open_read() == 0) {
-	    for (k = 0; k < (uint32_t)n; k++) {
+	    for (k = 0; k < dl.to; k++) {
 		if (csp_eeprom_read(&b, 1) < 0)
 		    break;
 		dump_byte(b);
@@ -2434,14 +2524,16 @@ static int cmd_dump(csp_rt_t* st, int argc, char* argv[])
     }
     if ((argc >= 1) && (strcmp(argv[0], "patch") == 0)) {
 	// What runs on top of the ROM now, saved or not: what /save would write.
+	if (dump_args(argc - 1, argv + 1, &from, &len) < 0)
+	    goto usage;
 	dump_size = 0;
 	csp_eeprom_emit(st, dump_count);
-	dump_begin("patch", dump_size);
+	dump_begin("patch", dump_size, from, len);
 	csp_eeprom_emit(st, dump_put);
 	dump_end();
 	return CSP_CMD_OK;
     }
-    if ((argc >= 1) && (strcmp(argv[0], "state") == 0)) {
+    if ((argc == 1) && (strcmp(argv[0], "state") == 0)) {
 	if (!st->started) {
 	    csp_print_line("not started -- /resume to allocate and run");
 	    return CSP_CMD_OK;
@@ -2449,7 +2541,9 @@ static int cmd_dump(csp_rt_t* st, int argc, char* argv[])
 	dump_state(st);
 	return CSP_CMD_OK;
     }
-    csp_print_line("ERR usage: /dump rom [slot] | eeprom | patch | state");
+usage:
+    csp_print_line("ERR usage: /dump rom [slot] [offs [len]] | eeprom [offs [len]]"
+		   " | patch [offs [len]] | state");
     return CSP_CMD_OK;
 }
 
@@ -2459,9 +2553,25 @@ static int cmd_dump(csp_rt_t* st, int argc, char* argv[])
 #if defined(CSP_HAVE_FLASH)
 // --- firmware upgrade mode ---------------------------------------------------
 //
-// One region, hex on lines, `.` to finish. Nothing fancy on purpose: this runs
-// with execution stopped, over the same UART the prompt uses, on a board whose
-// storage is being rewritten underneath it.
+// One region, lines as /dump sends them, `.` to finish. Nothing fancy on
+// purpose: this runs with execution stopped, over the same UART the prompt
+// uses, on a board whose storage is being rewritten underneath it.
+//
+//     /upgrade A                         OK 16384 bytes, ...
+//     0 4A414D0A... 3F1C                 OK 32
+//     32 ... 81A2  (torn on the way)     ERR crc 32
+//     64 ...                             (nothing: 32 is wanted)
+//     32 ... 81A2                        OK 64
+//     . 428 C1D2                         OK 428 crc C1D2
+//
+// A line is its offset, its bytes in hex and a CRC-16 over the offset (4
+// bytes, little endian) and the bytes. Only the NEXT offset is taken, so the
+// sender may run ahead and the receiver needs no more than its one block: a
+// line gone wrong is said once, and everything is let by until that offset
+// comes again -- the sender winds back to it. `. SIZE CRC' checks the whole
+// before the header is stamped; a bare `.' is taken too, as from a hand.
+// `/upgrade ?' says where the transfer is, for a sender that lost the line
+// and came back.
 //
 // WHY HEX AND NOT BINARY. The line reader is what receives this, and a binary
 // stream cannot be told apart from a stuck link or a half-typed command. Hex
@@ -2494,6 +2604,7 @@ static struct {
     uint16_t            crc;          // over everything received
     uint32_t            total;
     uint8_t             failed;
+    uint8_t             nak;          // a line was refused: quiet until it comes
     uint8_t             have_first;   // block 0 is in `first`, not in flash
     uint8_t             buf[UP_BLOCK];
     uint8_t             first[UP_BLOCK];
@@ -2569,19 +2680,94 @@ static int hexval(char c)
     return -1;
 }
 
+// A decimal number at *pp, the pointer moved past it; -1 if there is none.
+static int up_number(char** pp, uint32_t* v)
+{
+    char* p = *pp;
+
+    if ((*p < '0') || (*p > '9'))
+	return -1;
+    *v = 0;
+    while ((*p >= '0') && (*p <= '9'))
+	*v = *v * 10 + (uint32_t)(*p++ - '0');
+    *pp = p;
+    return 0;
+}
+
+// Hex at *pp into out (at most max bytes), up to a space or the end.
+static int up_hex(char** pp, uint8_t* out, int max)
+{
+    char* p = *pp;
+    int n = 0, hi, lo;
+
+    while ((*p != ' ') && (*p != '\0')) {
+	hi = hexval(p[0]);
+	lo = (hi < 0) ? -1 : hexval(p[1]);
+	if ((lo < 0) || (n >= max))
+	    return -1;
+	out[n++] = (uint8_t)((hi << 4) | lo);
+	p += 2;
+    }
+    *pp = p;
+    return n;
+}
+
+// Refused, and said ONCE: the sender may be lines ahead, and each of those
+// answered would bury the one offset it has to go back to.
+static void up_refuse(const char* why)
+{
+    if (up.nak)
+	return;
+    up.nak = 1;
+    csp_print_lit("ERR ");
+    csp_print_str(why);
+    csp_print_char(' ');
+    csp_print_uint(up.total);
+    csp_println();
+}
+
+static void up_print_crc(uint16_t c)
+{
+    csp_print_hex2((uint8_t)(c >> 8));
+    csp_print_hex2((uint8_t)c);
+}
+
+#define UP_LINE_MAX 64
+
 // A line while the mode is active. Returns 1 if it was consumed.
 static int csp_upgrade_line(csp_rt_t* st, char* line)
 {
-    int hi, lo;
+    uint8_t data[UP_LINE_MAX], le[4];
+    uint32_t offs, crc, size;
+    char* p = line;
+    int n, k;
 
     if (!st->up_active)
 	return 0;
 
-    if ((line[0] == '.') && (line[1] == '\0')) {
+    if ((strcmp(line, "/upgrade ?") == 0) || (strcmp(line, "?") == 0)) {
+	csp_print_lit("at ");
+	csp_print_uint(up.total);
+	csp_println();
+	return 1;
+    }
+    if (line[0] == '.') {
 	st->up_active = 0;
 	if (up.failed) {
 	    csp_print_line("ERR data");             // overflow or a write failed
 	    return 1;
+	}
+	// `. SIZE CRC': the whole, as the sender counted it
+	p = line + 1;
+	while (*p == ' ')
+	    p++;
+	if (*p != '\0') {
+	    if ((up_number(&p, &size) < 0) || (*p++ != ' ') ||
+		(up_hex(&p, le, 2) != 2) || (size != up.total) ||
+		((uint16_t)((le[0] << 8) | le[1]) != up.crc)) {
+		csp_print_line("ERR image -- slot is erased");
+		return 1;
+	    }
 	}
 	if (up_flush(st) != CSP_FLASH_OK) {
 	    csp_print_line("ERR write");
@@ -2594,7 +2780,7 @@ static int csp_upgrade_line(csp_rt_t* st, char* line)
 	csp_print_lit("OK ");
 	csp_print_uint(up.total);
 	csp_print_lit(" crc ");
-	csp_print_uint(up.crc);
+	up_print_crc(up.crc);
 	csp_println();
 	return 1;
     }
@@ -2605,27 +2791,42 @@ static int csp_upgrade_line(csp_rt_t* st, char* line)
 	csp_print_line("ERR aborted -- slot is erased");
 	return 1;
     }
-    // Once it has gone wrong, say so ONCE. The rest of the transfer is still
-    // coming -- kilobytes of it -- and a line of error per line of hex buries
-    // the one that named the cause.
+    // Once it has gone wrong for good, say so ONCE. The rest of the transfer
+    // is still coming -- kilobytes of it -- and a line of error per line of
+    // hex buries the one that named the cause.
     if (up.failed)
 	return 1;
-    while (*line) {
-	if ((*line == ' ') || (*line == '\t')) { line++; continue; }
-	hi = hexval(line[0]);
-	lo = hi < 0 ? -1 : hexval(line[1]);
-	if (lo < 0) {
+    if ((up_number(&p, &offs) < 0) || (*p++ != ' ') ||
+	((n = up_hex(&p, data, UP_LINE_MAX)) <= 0) || (*p++ != ' ') ||
+	(up_hex(&p, le, 2) != 2) || (*p != '\0')) {
+	up_refuse("line");
+	return 1;
+    }
+    if (offs != up.total) {
+	up_refuse("offs");
+	return 1;
+    }
+    crc = (uint32_t)((le[0] << 8) | le[1]);
+    le[0] = (uint8_t)offs;
+    le[1] = (uint8_t)(offs >> 8);
+    le[2] = (uint8_t)(offs >> 16);
+    le[3] = (uint8_t)(offs >> 24);
+    if (csp_crc16(csp_crc16(0xFFFF, le, 4, 0), data, (size_t)n, 0) !=
+	(uint16_t)crc) {
+	up_refuse("crc");
+	return 1;
+    }
+    up.nak = 0;
+    for (k = 0; k < n; k++) {
+	if (up_byte(st, data[k]) < 0) {
 	    up.failed = 1;
-	    csp_print_line("ERR hex");
-	    return 1;
-	}
-	if (up_byte(st, (uint8_t)((hi << 4) | lo)) < 0) {
 	    csp_print_line("ERR full");
 	    return 1;
 	}
-	line += 2;
     }
-    csp_print_line("OK");
+    csp_print_lit("OK ");
+    csp_print_uint(up.total);
+    csp_println();
     return 1;
 }
 
@@ -2636,7 +2837,11 @@ static int cmd_upgrade(csp_rt_t* st, int argc, char* argv[])
     int guard;
 
     if (argc < 1) {
-	csp_print_line("ERR usage: /upgrade <region>");
+	csp_print_line("ERR usage: /upgrade <region> [force] | ?");
+	return CSP_CMD_OK;
+    }
+    if (strcmp(argv[0], "?") == 0) {           // asked while not upgrading
+	csp_print_line("ERR not upgrading");
 	return CSP_CMD_OK;
     }
     if (d == NULL) {
@@ -2706,7 +2911,7 @@ static int cmd_upgrade(csp_rt_t* st, int argc, char* argv[])
 
     csp_print_lit("OK ");
     csp_print_uint(up.room);
-    csp_print_line(" bytes, hex lines then '.' ('!' aborts)");
+    csp_print_line(" bytes, lines: offs hex crc, then '.' ('!' aborts)");
     return CSP_CMD_OK;
 }
 #endif // CSP_HAVE_FLASH
@@ -3369,6 +3574,7 @@ static int csp_process_persistent(csp_rt_t* st, char* line)
 {
     csp_pmark_t pm;
     index_t nd0 = st->ps.nd;
+    index_t nn0 = st->ps.nn;
 
     csp_pstate_save(st, &pm);
     if (csp_parse(st, line) < 0) {
@@ -3433,7 +3639,11 @@ static int csp_process_persistent(csp_rt_t* st, char* line)
 	// and let the rebuild happen where it is safe: /resume, or the top of
 	// the next cycle. A rule-only add used to skip this entirely, which left
 	// the new rule without graph edges: reactively it never fired.
-	st->edited = 1;
+	// A line that emitted nothing -- #disable, #enable -- leaves the
+	// program as it was, and a rebuild would start it over: that one says
+	// for itself what it needs (csp_parse_disable).
+	if (st->ps.nn != nn0)
+	    st->edited = 1;
     }
     csp_print_line("OK");
     return 0;

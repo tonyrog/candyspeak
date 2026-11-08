@@ -10,12 +10,15 @@
 // the generated image and runs it. Reach for that.
 //
 //   tools/csp-image prog.csp      # tmp/prog.rom.c, .img and .hex
-//   tools/csp-image -p prog.csp   # hex on stdout, straight into /upgrade
+//   tools/csp-image -p prog.csp   # lines on stdout, straight into /upgrade
 //
-// Hex on stdout is the default because that is the format the receiver takes:
-// `{ echo /upgrade A; mkimage; echo .; } | ./csp -i --flash=f.bin` is the whole
-// upgrade path, host-side, with no board and no serial port. `-b FILE` writes
-// the raw bytes instead.
+// Lines on stdout are the default because that is the format the receiver
+// takes -- and /dump sends: `offs hex crc', 32 bytes a line, the CRC-16 over
+// the offset (4 bytes, little endian) and the bytes, and `. SIZE CRC' last,
+// the whole as counted here. `{ echo /upgrade A; mkimage; } | ./csp -i
+// --flash=f.bin` is the whole upgrade path, host-side, with no board and no
+// serial port. `-b FILE` writes the raw bytes instead, and `-x FILE` the lines
+// of any FILE, image or not.
 
 #include <stdio.h>
 #include <string.h>
@@ -26,13 +29,53 @@ extern const csp_image_ref_t rom_image;
 
 #define PER_LINE 32
 
+static void lines(const uint8_t* p, uint32_t size)
+{
+    uint32_t i, k, n;
+    uint16_t crc, all = 0xFFFF;
+    uint8_t le[4];
+
+    for (i = 0; i < size; i += n) {
+	n = (size - i < PER_LINE) ? size - i : PER_LINE;
+	le[0] = (uint8_t)i;
+	le[1] = (uint8_t)(i >> 8);
+	le[2] = (uint8_t)(i >> 16);
+	le[3] = (uint8_t)(i >> 24);
+	crc = csp_crc16(csp_crc16(0xFFFF, le, 4, 0), p + i, n, 0);
+	all = csp_crc16(all, p + i, n, 0);
+	printf("%u ", (unsigned)i);
+	for (k = 0; k < n; k++)
+	    printf("%02X", p[i + k]);
+	printf(" %04X\n", crc);
+    }
+    printf(". %u %04X\n", (unsigned)size, all);
+}
+
+// -x FILE: its bytes, whatever they are.
+static int file_lines(const char* name)
+{
+    static uint8_t buf[1 << 20];
+    FILE* f = fopen(name, "rb");
+    size_t n;
+
+    if (f == NULL) {
+	fprintf(stderr, "mkimage: cannot read %s\n", name);
+	return 1;
+    }
+    n = fread(buf, 1, sizeof(buf), f);
+    fclose(f);
+    lines(buf, (uint32_t)n);
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     const uint8_t* p = rom_image.base;
     csp_image_header_t h;
-    uint32_t i;
     FILE* f;
 
+    if ((argc >= 3) && (strcmp(argv[1], "-x") == 0))
+	return file_lines(argv[2]);
     memcpy(&h, p, sizeof(h));
     if ((h.magic[0] != CSP_IMAGE_MAGIC0) || (h.magic[1] != CSP_IMAGE_MAGIC1) ||
 	(h.magic[2] != CSP_IMAGE_MAGIC2) || (h.magic[3] != CSP_IMAGE_MAGIC3)) {
@@ -59,13 +102,7 @@ int main(int argc, char* argv[])
 	// be silent.
 	return 0;
     }
-    // Hex, and nothing else on stdout: the receiver reads this as data.
-    for (i = 0; i < h.size; i++) {
-	printf("%02X", p[i]);
-	if (((i + 1) % PER_LINE) == 0)
-	    printf("\n");
-    }
-    if ((h.size % PER_LINE) != 0)
-	printf("\n");
+    // Lines, and nothing else on stdout: the receiver reads this as data.
+    lines(p, h.size);
     return 0;
 }

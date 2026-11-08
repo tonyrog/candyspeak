@@ -2431,6 +2431,8 @@ typedef struct _csp_rt_t
 				 // poke outputs (> Led=1 drives the pin) and watch
 				 // inputs while the program logic stands still
     unsigned edited:1;           // 1 = program changed while paused; /resume rebuilds
+    unsigned dis_stale:1;        // 1 = #disable/#enable since dis_ip was marked: the
+				 // next cycle re-marks it in place, no rebuild
     unsigned started:1;          // 1 once csp_rt_start has allocated+set up leaves;
 				 // 0 with -b before /resume (value ops not ready)
 

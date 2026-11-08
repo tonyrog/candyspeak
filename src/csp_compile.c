@@ -5720,7 +5720,16 @@ NOINLINE static int csp_parse_disable(csp_rt_t* st, token_t* tv, int ti,
 	    else     bitset_clr(st->dis_rule, k-1);
 	}
     }
-    st->edited = 1;      // csp_cycle rebuilds, which re-derives dis_ip
+    // Which rules are off is not the program: nothing was emitted, so the
+    // layout stands and the next cycle only re-marks dis_ip. A rebuild here
+    // re-laid the heap -- every value back to its initial one, the program
+    // started over on a running node -- and without csp_setup, so a board's
+    // outputs were left unset until /resume. Before the first layout, or with
+    // an add still waiting for its rebuild, that rebuild re-derives it anyway.
+    if (st->started && !st->edited)
+	st->dis_stale = 1;
+    else
+	st->edited = 1;
     return 0;
 }
 

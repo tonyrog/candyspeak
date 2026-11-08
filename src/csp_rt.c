@@ -2181,6 +2181,8 @@ static void states_advance(csp_rt_t* st)
     st->cbase = save_cbase;
 }
 
+static int build_dis_ip(csp_rt_t* st, set_group_t* keep);
+
 index_t csp_cycle(csp_rt_t* st)
 {
     // Pick up anything added since the last rebuild. Two signals: `edited` is
@@ -2191,6 +2193,16 @@ index_t csp_cycle(csp_rt_t* st)
     if (st->started && (st->edited || st->mid_stale ||
 			(st->n_rule_emit != st->graph_rules)))
 	csp_rebuild(st);
+    // A #disable/#enable: the same rules at the same addresses, so the rules
+    // that are off are marked again where the last rebuild put the table --
+    // the program runs on with its values. Only a table not there yet comes
+    // out of the arena; when that does not fit, the full rebuild does it.
+    else if (st->started && st->dis_stale) {
+	if (build_dis_ip(st, st->dis_ip) < 0) {
+	    csp_clr_error(st);
+	    csp_rebuild(st);
+	}
+    }
     // A rebuild that ran out of arena left every derived table NULL and cleared
     // `started`. Evaluating anyway read a null heap slot -- a segfault two
     // frames into states_advance, with nothing on screen to say the program had
@@ -5836,13 +5848,19 @@ int csp_is_rule(csp_rt_t* st, index_t i)
     return (csp_iop(st, i) == OP_RULE) && !csp_rule_binds(st, i);
 }
 
-NOINLINE static int build_dis_ip(csp_rt_t* st)
+// `keep`: the table the last rebuild laid out, to mark again in place (a
+// #disable while running, csp_cycle); NULL after csp_mid_reset, which has
+// already taken it back.
+NOINLINE static int build_dis_ip(csp_rt_t* st, set_group_t* keep)
 {
     index_t i;
     int no = 0;
     int any = 0;
 
-    st->dis_ip = NULL;
+    if (keep != NULL)
+	memset(keep, 0, (size_t)BITSET_GROUPS(st->ps.nn) * sizeof(set_group_t));
+    st->dis_ip = keep;
+    st->dis_stale = 0;
     st->n_rule_no = 0;
     if (st->ps.nn == 0)
 	return 0;
@@ -5888,7 +5906,7 @@ int csp_rebuild(csp_rt_t* st)
     // rule numbers -> start ips, after mid_reset. Still run when the graph
     // failed: n_rule_no is read by the listing, and a half-built table is worse
     // than a complete one nobody uses.
-    if (build_dis_ip(st) < 0)
+    if (build_dis_ip(st, NULL) < 0)
 	r = -1;
 #if defined(CSP_HAVE_FIRED)
     st->fired_ip = NULL;
@@ -7099,8 +7117,11 @@ void csp_output_timer(csp_rt_t* st)
 
 	    value_set_t_running(iptr, 1);  // running
 	    value_set_t_running(optr, 1);
-	    value_set_t_fired(iptr, 0);    // not fired	    
-	    value_set_t_fired(optr, 0);
+	    // `fired' is NOT cleared here: csp_input_timer clears it before the
+	    // next cycle's rules, and until then it says that timeout(T) held in
+	    // the cycle just run -- which is what /dump state tells a host. A
+	    // timer restarted on its own timeout (`T = 1 ? timeout(T)') used to
+	    // come out of the cycle that fired it as not fired.
 
 	    csp_dio_slots(st, tx, &iptr, &optr);
 	    iptr->u = optr->u = now_ms;

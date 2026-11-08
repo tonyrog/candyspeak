@@ -561,7 +561,7 @@ extern rochar s_h_onewire[57] RODATA;
 #define ros_h_onewire ((rostring_t) s_h_onewire)
 extern rochar s_h_images[42] RODATA;
 #define ros_h_images ((rostring_t) s_h_images)
-extern rochar s_h_dump[64] RODATA;
+extern rochar s_h_dump[66] RODATA;
 #define ros_h_dump ((rostring_t) s_h_dump)
 extern rochar s_h_upgrade[69] RODATA;
 #define ros_h_upgrade ((rostring_t) s_h_upgrade)
