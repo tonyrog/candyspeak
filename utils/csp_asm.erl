@@ -54,6 +54,23 @@ list([]) ->
 
 %% instruktions from consult or similar do not have address yet
 single(I) -> single(I, little).
+
+single({decl, Addr, Type, Name, Args}, Endian) when is_integer(Addr) ->
+    single({decl, Type, Name, Args}, Endian);
+single({decl, Addr, Type, Mod, Obj, Args}, Endian) when is_integer(Addr) ->
+    single({decl, Type, Mod, Obj, Args}, Endian);
+single({decl, Addr, 'end'}, Endian) when is_integer(Addr) ->
+    single({decl, 'end'}, Endian);
+
+single({decl, 'end'}, _Endian) ->
+    <<>>;
+single({decl, _OpCode, _Name, _Args}, _Endian) ->
+    <<0:32>>;
+single({decl, _OpCode, _Mod, _Obj, _Args}, _Endian) ->
+    <<0:32>>;
+
+single({instr, _Addr, OpCode, Args}, Endian) ->
+    single({instr, OpCode, Args}, Endian);
 single({instr, OpCode, Args}, Endian) ->
     Op = op_code(OpCode),
     OpClass = op_class(OpCode),
@@ -65,10 +82,16 @@ single({instr, OpCode, Args}, Endian) ->
 	    encode_bits([Op],
 			[{opcode,uint,?OPCODE_BITS}], Endian);
 	seg ->
-	    error(fixme);
-
+	    [{slots,Num}, {used,Used}, {data, Data}] = Args,
+	    Seg = encode_bits([Op,Num,Used],
+			      [{opcode,uint,?OPCODE_BITS},
+			       {'_',2},
+			       {slots,uint,?BODY_BITS},
+			       {'_', 6},
+			       {used,uint,8}], Endian),
+	    <<Seg/binary, Data/binary>>;
 	instate ->
-	    [{x,Rx},{imm,Imm},{nxt,Nxt}|Args1] = Args,
+	    [Rx,{imm,Imm},{nxt,Nxt}|Args1] = Args,
 	    X = reg(Rx),
 	    Implicit = get_bool(lists:member(implicit, Args1)),
 	    encode_bits([Op, X, Imm, Nxt, Implicit],
@@ -78,15 +101,14 @@ single({instr, OpCode, Args}, Endian) ->
 			 {nxt, int, 13},
 			 {implicit, uint, 1}], Endian);
 	rule ->	
-	    [{cnd,Cnd},{nxt,Nxt}|Args1] = Args,
+	    [Cnd,Nxt|Args1] = Args,
 	    C = reg(Cnd),
 	    Implicit = get_bool(lists:member(implicit, Args1)),
 	    encode_bits([Op, C, Nxt, Implicit],
 			[{opcode,uint,?OPCODE_BITS},
 			 {'_', 6},
 			 {cnd, uint, ?REG_BITS},
-			 {imm, int, 8},
-			 {nxt, int, 13},
+			 {nxt, int, 15},
 			 {implicit, uint, 1}], Endian);
 	enter ->
 	    [{num,Num},{mx,Mx}] = Args,
@@ -102,7 +124,7 @@ single({instr, OpCode, Args}, Endian) ->
 			 {mx,  uint, ?INDEX_BITS}], Endian);
 
 	next ->
-	    [{x,Rx}] = Args,
+	    [Rx] = Args,
 	    X = reg(Rx),
 	    encode_bits([Op, X],
 			[{opcode,uint,?OPCODE_BITS},
@@ -115,7 +137,7 @@ single({instr, OpCode, Args}, Endian) ->
 			 {obj, uint, ?INDEX_BITS}], Endian);
 
 	call ->
-	    [{x,Rx},{idx,Idx},{usr,Usr},{avt,Ts}] = Args,
+	    [Rx,{idx,Idx},{usr,Usr},{avt,Ts}] = Args,
 	    X = reg(Rx),
 	    Avt = avt(Ts),
 	    encode_bits([Op,X, Idx, Usr, Avt],
@@ -152,14 +174,42 @@ single({instr, OpCode, Args}, Endian) ->
 			 {u, uint, 1},
 			 {swap, uint, 1}], Endian);
 	mem ->
-	    [Rx,Ry,Mem|_Args1] = Args,
+	    case Args of
+		[Rx,Ry,{mem,Mem}] ->
+		    X = reg(Rx),
+		    Y = reg(Ry),
+		    encode_bits([Op,X,Y,Mem],
+				[{opcode,uint,?OPCODE_BITS},
+				 {x, uint, ?REG_BITS},
+				 {y, uint, ?REG_BITS},
+				 {'_', 2},
+				 {mem, uint, ?INDEX_BITS}], Endian);
+		[Rx,{mem,Mem}] ->
+		    X = reg(Rx),
+		    Y = 0,
+		    encode_bits([Op,X,Y,Mem],
+				[{opcode,uint,?OPCODE_BITS},
+				 {x, uint, ?REG_BITS},
+				 {y, uint, ?REG_BITS},
+				 {'_', 2},
+				 {mem, uint, ?INDEX_BITS}], Endian)
+	    end;
+		    
+	imm ->
+	    [Rx,{imm,Imm}] = Args,
 	    X = reg(Rx),
-	    Y = reg(Ry),
-	    encode_bits([Op,X,Y,Mem],
+	    encode_bits([Op,X,Imm],
 			[{opcode,uint,?OPCODE_BITS},
 			 {x, uint, ?REG_BITS},
-			 {y, uint, ?REG_BITS},
-			 {'_', 2},
+			 {'_',6},
+			 {imm, int, 16}], Endian);
+	memi ->
+	    [Rx,{imm,Imm},{mem,Mem}] = Args,
+	    X = reg(Rx),	    
+	    encode_bits([Op,X,Imm,Mem],
+			[{opcode,uint,?OPCODE_BITS},
+			 {x, uint, ?REG_BITS},
+			 {imm, int, ?TINY_BITS},
 			 {mem, uint, ?INDEX_BITS}], Endian)
     end.
 
@@ -177,14 +227,15 @@ avt([T|Ts]) -> type(T) bor (avt(Ts) bsr 4).
 	?set_uint(Val, Start, Len, Acc)).
 
 encode_bits(Values, Fields, Endian) ->
-    encode_bits(Values, 0, Fields, 0, Endian).
+    {_Pos, Bin} = encode_bits(Values, 0, Fields, 0, Endian),
+    Bin.
 
 encode_bits(Values, Pos, Fields, Acc, Endian) ->
-    {Pos, Word} = encode_bits_(Values, Pos, Fields, Acc),
+    {Pos1, Word} = encode_bits_(Values, Pos, Fields, Acc),
     case Endian of
-	little -> {Pos, <<Word:32/little>>};
-	big    -> {Pos, <<Word:32/big>>};
-	native -> {Pos, <<Word:32/native>>}
+	little -> {Pos1, <<Word:32/little>>};
+	big    -> {Pos1, <<Word:32/big>>};
+	native -> {Pos1, <<Word:32/native>>}
     end.
 
 encode_bits_(Values, Pos, [{'_',Len}|Fields], Acc) -> %% pad
