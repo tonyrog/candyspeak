@@ -25,5 +25,9 @@
   %% and the
   %% console rings that route messages through the interpreter (0 on every
   %% target by default -- a part with 2K of RAM should not carry them).
+  %% The pool is malloc'ed at boot from all free RAM less this; what is left
+  %% is the stack AND every later malloc -- MKRNB's modem strings among them.
+  %% 2048 (the default) is the firmware that hung after the 2026-10-12 flash;
+  %% 4096 is what went on the node 2026-11-11.
   {define, ['CSP_HAS_I2C', 'CSP_HAS_ONEWIRE', 'CSP_HAS_SMS',
-            {'CSP_CONSOLE_BYTES', 256}]}]}.
+            {'CSP_CONSOLE_BYTES', 256}, {'CSP_STACK_RESERVE', 4096}]}]}.

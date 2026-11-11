@@ -3319,6 +3319,17 @@ $a
 OK
 3" "$got"
 
+# A constant past 16 bits is two instructions, LIU and LIH, and /list printed
+# them as `0x0149.0x9700' -- which csp reads back as 0x0149, the rest gone. A
+# node's listing typed back in had Repeat = 329 where its program said
+# 21600000. The listing has to read back as the value it lists.
+line=$(printf '#variable R:32 = 0\nR = 21600000\n/list\n' |
+	   repl ./csp "$D/bigk1.db" | sed -n 's|^\(R=[^ ]*\)  // 1 R$|\1|p')
+got=$(printf '#variable R:32 = 0\n%s\n/step 1\n> R\n' "$line" |
+	  repl ./csp "$D/bigk2.db" | tail -1)
+ck "a 32-bit constant lists as its value and reads back as it" \
+   "R=21600000 21600000" "$line $got"
+
 echo "limits that used to be silent:"
 
 # Eight parts is the most a rule holds (MAX_BODY_PARTS). A ninth wrote past the

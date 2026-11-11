@@ -353,6 +353,15 @@ static void exprbuf_uint16(csp_exprbuf_t* bp, uint16_t v)
     while (n > 0) exprbuf_char(bp, tmp[--n]);
 }
 
+static void exprbuf_uint32(csp_exprbuf_t* bp, uint32_t v)
+{
+    char tmp[10];
+    int n = 0;
+    if (v == 0) { exprbuf_char(bp, '0'); return; }
+    while (v > 0) { tmp[n++] = (char)((v % 10) + '0'); v /= 10; }
+    while (n > 0) exprbuf_char(bp, tmp[--n]);
+}
+
 static void exprbuf_int16(csp_exprbuf_t* bp, int16_t v)
 {
     if (v < 0) {
@@ -409,16 +418,6 @@ static void exprbuf_xuint16(csp_exprbuf_t* bp, uint16_t v)
     __xuint16(bp, v);
 }
 
-static void exprbuf_xint16(csp_exprbuf_t* bp, int16_t v)
-{
-    if (v < 0) {
-	exprbuf_char(bp, '-');
-	v = -v;
-    }
-    exprbuf_char(bp, '0');
-    exprbuf_char(bp, 'x');	
-    __xuint16(bp, v);
-}
 
 
 static void exprbuf_alu(csp_exprbuf_t* bp,
@@ -986,17 +985,23 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	}
 	    */
         case OP_LIH: {
+	    // The high half of the constant the LIU before it started: the
+	    // listing says the whole 32-bit value, as it would be written.
+	    // `0x0149.0x9700' was printed here once -- csp reads that as 0x0149
+	    // and the rest is lost, so a listing typed back in had Repeat = 329
+	    // where the program said 21600000.
             uint8_t *start = exprbuf_ptr(bp);
-	    uint8_t ih;
-	    
-            exprbuf_xint16(bp, csp_instr_get_i_imm(ip));
-	    ih = exprbuf_intern(bp,start,exprbuf_len(bp, start));
+	    uint32_t v = ((uint32_t)(uint16_t)csp_instr_get_i_imm(ip) << 16) |
+		bp->regi[csp_instr_get_i_x(ip)];   // from LIU
 
-            start = exprbuf_ptr(bp);
-	    exprbuf_strref(bp, ih);
-	    exprbuf_char(bp, '.');	    
-	    exprbuf_strref(bp, bp->reg[csp_instr_get_i_x(ip)]);  // from LIU
-	    
+	    if (v <= 0x7fffffff)
+		exprbuf_uint32(bp, v);
+	    else {
+		exprbuf_char(bp, '0');
+		exprbuf_char(bp, 'x');
+		__xuint16(bp, (uint16_t)(v >> 16));
+		__xuint16(bp, (uint16_t)v);
+	    }
 	    bp->reg[csp_instr_get_i_x(ip)] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
             bp->prio[csp_instr_get_i_x(ip)] = 110;
             break;

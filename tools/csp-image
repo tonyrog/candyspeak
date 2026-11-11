@@ -12,8 +12,13 @@
 # how a Makefile becomes unreadable.
 set -e
 
-here=$(dirname "$0")
+rdir=$(readlink -f "$0")
+here=$(dirname "$rdir")
 root=$(cd "$here/.." && pwd)
+
+echo "rdir="$rdir
+echo "here="$here
+echo "root="$root
 
 usage() {
     cat >&2 <<EOF

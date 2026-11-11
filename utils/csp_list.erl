@@ -886,13 +886,17 @@ op(Env, I, 'LDP', [X, {mem, M}, Part], B) ->
 op(Env, I, 'LIU', [X, {imm, V0}], B) ->
     {V, B1} = new(B, ["0x", hex4(V0)], 110, V0),
     next(Env, I, setreg(B1, X, V));
+%% The high half of the constant the LIU before it started: the whole 32-bit
+%% value, as it would be written -- decimal, or eight hex digits when it does
+%% not fit a positive int32. (`0x0149.0x9700' reads back as 0x0149.)
 op(Env, I, 'LIH', [X, {imm, V0}], B) ->
-    S = signed16(V0),
-    Hi = case S < 0 of
-	     true -> ["-0x", hex4(-S)];
-	     false -> ["0x", hex4(S)]
-	 end,
-    {V, B1} = new(B, [Hi, ".", text(B, X)], 110, 0),
+    Lo = regi(B, X),                    % the LIU's, kept as C keeps it
+    W = ((V0 band 16#ffff) bsl 16) bor (Lo band 16#ffff),
+    T = case W =< 16#7fffffff of
+	    true -> integer_to_list(W);
+	    false -> ["0x", hex4(W bsr 16), hex4(W band 16#ffff)]
+	end,
+    {V, B1} = new(B, T, 110, Lo),
     next(Env, I, setreg(B1, X, V));
 op(Env, I, 'LI', [X, {imm, V0}], B) ->
     {V, B1} = new(B, integer_to_list(V0), 110, V0 band 16#ffff),
@@ -974,8 +978,6 @@ mirror(Op)   -> Op.
 
 hex4(V) -> string:right(string:lowercase(integer_to_list(V band 16#ffff, 16)), 4, $0).
 
-signed16(V) when V >= 16#8000 -> V - 16#10000;
-signed16(V) -> V.
 
 pindir(D) -> element((D band 3) + 1, {"none", "in", "out", "inout"}).
 

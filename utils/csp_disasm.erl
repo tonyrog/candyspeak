@@ -7,14 +7,15 @@
 
 -module(csp_disasm).
 
--export([file/1, image/1, patch/2]).
+-export([file/1, file/2, image/1, patch/2]).
 -export([crc16/1]).                       % csp_node: a dump line's CRC
 -export([disabled/2]).                    % csp_list: the patch's #disable set
 -export([reg/1, part/1, type/1, dir/1, endian/1]).
 -export([decl/1, op_code/1, op_class/1]).
 
 -include("csp_asm.hrl").
-
+%%-define(dbg(F,A), io:format((F),(A))).
+-define(dbg(F,A), ok).
 
 file(Filename) ->
     case filename:extension(Filename) of
@@ -34,6 +35,31 @@ file(Filename) ->
 	_ ->
 	    {error, unknown_file_type}
     end.
+
+file(Filename, AsmFilename) ->
+    case file(Filename) of
+	{ok,{Header,Strings,Instr,Code}} ->
+	    case AsmFilename =:= user of
+		true ->
+		    write(user, Header, Strings, Instr, Code);
+		false ->
+		    {ok, Fd} = file:open(AsmFilename, [write]),
+		    try write(Fd, Header, Strings, Instr, Code) of
+			Res -> Res
+		    after
+			file:close(Fd)
+		    end
+	    end;
+	Error ->
+	    Error
+    end.
+
+write(Fd, Header, Strings, Decl, Code) ->
+    io:format(Fd, "~p.\n", [{header,Header}]),
+    io:format(Fd, "~p.\n", [{strings,Strings}]),
+    lists:foreach(fun(D) -> io:format(Fd, "~p.\n", [D]) end, Decl),
+    lists:foreach(fun(I) -> io:format(Fd, "~p.\n", [I]) end, Code),
+    ok.
 
 hex_to_bin(Bin) ->
     HexData = iolist_to_binary(binary:split(Bin, <<"\n">>, [global,trim])),
@@ -68,7 +94,7 @@ disasm(<<$J,$A,$M,$\n, HeaderData:?HEADER_DATA_LEN/binary, CrcBin:2/binary,
     F = ctx(HeaderData),
     Crc = u16(F, CrcBin),
     Crc1 = crc16(<<$J,$A,$M,$\n, HeaderData:?HEADER_DATA_LEN/binary>>),
-    io:format("Header Crc=~p, expected=~p\n", [Crc1, Crc]),
+    ?dbg("Header Crc=~p, expected=~p\n", [Crc1, Crc]),
     if Crc1 =/= Crc ->
 	    {error, bad_crc};
        true  ->
@@ -432,9 +458,6 @@ disasm_code(F, <<InstrBin:4/binary, Data/binary>>, Addr, Si, Strings, Acc) ->
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);	    
 	nop ->
 	    I = {instr,Addr,OpCode},
-	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
-	undefined -> %% krash!?
-	    I = {instr,Addr,OpCode,undefined},
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc)
     end;
 disasm_code(_F, <<>>, _, _Si,Strings, Acc) ->
@@ -446,7 +469,7 @@ add_strings(Used, <<N,String:N/binary, StringData/binary>>, Si, Strings) ->
     add_strings(Used - (N+1), StringData, Si+1, Strings#{ Si => String }).
 
 add_instr(F, Data, Addr, Size, I, Si, String, Acc) ->
-    io:format("~w: ~p\n", [Addr, I]),
+    ?dbg("~w: ~p\n", [Addr, I]),
     disasm_code(F, Data, Addr+Size, Si, String, [I|Acc]).
 
 disasm_decl(F, ok, Strings, Sections) ->
@@ -770,7 +793,7 @@ intersect_elems([], I) -> I.
 
 decode_type_header(Decl, Pos) ->
     decode_bits(Decl, Pos,
-		[{res, uint, 5},
+		[{res, uint, ?RES_BITS},
 		 {is_mapped, uint, 1},
 		 {bound, uint, 1},
 		 {nx, uint, 1},
@@ -862,17 +885,17 @@ check_section_crc(Tag, LenKey, CrcKey, Header, Sections) ->
 		0 ->
 		    case maps:get(LenKey, Header) of
 			0 ->
-			    io:format("~s: Crc=~p, expected=~p\n", 
-				      [Tag, 0, 0]),
+			    ?dbg("~s: Crc=~p, expected=~p\n", 
+				 [Tag, 0, 0]),
 			    ok;
 			_Len -> 
-			    io:format("~s: Crc=~p, expected=~p\n", 
-				      [Tag, 0, ComputedCrc]),
+			    ?dbg("~s: Crc=~p, expected=~p\n", 
+				 [Tag, 0, ComputedCrc]),
 			    badcrc
 		    end;
 		Crc ->
-		    io:format("~s: Crc=~p, expected=~p\n", 
-			      [Tag, Crc, ComputedCrc]),
+		    ?dbg("~s: Crc=~p, expected=~p\n", 
+			 [Tag, Crc, ComputedCrc]),
 		    if Crc =:= ComputedCrc -> ok;
 		       true -> badcrc
 		    end

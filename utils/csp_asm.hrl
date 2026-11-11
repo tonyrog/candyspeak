@@ -19,6 +19,7 @@
 -define(DIR_BITS,         2).
 -define(NAMEID_BITS,      8).
 -define(ENDIAN_BITS,      2).
+-define(RES_BITS,         5).
 
 -define(OPCODE_MASK, ?MASK(?OPCODE_BITS)).
 -define(REG_MASK, ?MASK(?REG_BITS)).
