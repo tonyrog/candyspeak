@@ -481,7 +481,3 @@ encode_bits([Val|Values], [{_Name,fixpoint,32}|Fields], {Pos,Word}) ->
     encode_bits(Values, Fields, {Pos+32,?set_int(X, Pos, 32, Word)});
 encode_bits([], [], Bits) ->
     Bits.
-			 
-	    
-
-    
