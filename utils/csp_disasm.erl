@@ -684,7 +684,8 @@ disasm_elem(F, digital,_ILocal,IDir,Pos,Decl,Strings) ->
 	  {bound,_},{nx,_},{vt,_Vt},{reg,_}]} = 
 	decode_type_header(Decl, Pos),
     %% Type = type(Vt),
-    [{soft,Soft},{pin,Pin},{port,Port},{irq,Irq},{pullup,Pu},{pulldown,Pd}] = 
+    [{soft,Soft},{pin,Pin},{port,Port},{irq,Irq},{pullup,Pu},{pulldown,Pd},
+     {invert,Inv}] =
 	decode_value(F, Decl, 32, digital, Strings),
     {digital,[{size,Res+1},
 	      {dir, dir(IDir)},
@@ -693,7 +694,8 @@ disasm_elem(F, digital,_ILocal,IDir,Pos,Decl,Strings) ->
 	      {soft,Soft},
 	      {irq,Irq},
 	      {pullup,Pu},
-	      {pulldown,Pd}
+	      {pulldown,Pd},
+	      {invert,Inv}
 	     ]};
 disasm_elem(F, analog,_ILocal,IDir,Pos,Decl,Strings) ->
     {32, [{res,Res},{is_mapped,_},
@@ -835,7 +837,8 @@ decode_value(_F, Decl, Pos, digital, _Strings) ->
 					    {port,uint,?PORT_BITS},
 					    {irq,uint,3},
 					    {pullup,uint,1},
-					    {pulldown,uint,1}]),
+					    {pulldown,uint,1},
+					    {invert,uint,1}]),
     Init;
 decode_value(_F, Decl, Pos, analog, _Strings) ->
     {_Pos1, Init} = decode_bits(Decl, Pos, [{soft,uint,1},

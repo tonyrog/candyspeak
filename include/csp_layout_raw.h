@@ -276,6 +276,7 @@ typedef struct PACKED  {
     unsigned irq:3;      // trigger_t; IRQ_NONE = not an interrupt source    
     unsigned pullup:1;
     unsigned pulldown:1;
+    unsigned invert:1;   // the pin's level is !value
 } csp_digital_t;
 typedef struct PACKED {
     DECL_COMMON;

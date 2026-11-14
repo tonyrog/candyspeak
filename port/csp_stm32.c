@@ -166,7 +166,7 @@ void csp_board_digital_input(csp_rt_t* st, index_t ix, value_t* vptr)
 {
     uint8_t port = value_get_d_port(vptr);
     uint8_t pin = value_get_d_pin(vptr);    
-    csp_set_ivalue(st, ix, stm_pin_read(port, pin));
+    csp_set_ivalue(st, ix, CSP_D_VALUE(vptr, stm_pin_read(port, pin)));
 }
 
 // An inout pin is borrowed for the length of one write and handed straight back
@@ -179,11 +179,11 @@ void csp_board_digital_output(csp_rt_t* st, value_t* vptr)
     uint8_t dir = value_get_d_dir(vptr);
     if (dir & DIR_IN) {
 	stm_pin_mode(port, pin, CSP_MODE_OUT, 0);
-	stm_pin_write(port, pin, value_get_d_val(vptr));
+	stm_pin_write(port, pin, CSP_D_LEVEL(vptr));
 	stm_pin_mode(port, pin, CSP_MODE_IN, 0);
     }
     else {
-	stm_pin_write(port, pin, value_get_d_val(vptr));
+	stm_pin_write(port, pin, CSP_D_LEVEL(vptr));
     }
 }
 
@@ -204,6 +204,9 @@ void csp_board_digital_config(value_t* vptr)
 		     value_get_d_pullup(vptr), value_get_d_pulldown(vptr));
     }
     else if (dir & DIR_OUT) {
+	// BSRR first: the mode switch drives what ODR holds, and an inverted
+	// pin (an active-low relay) would be on until the first output pass.
+	stm_pin_write(port, pin, CSP_D_LEVEL(vptr));
 	stm_pin_mode(port, pin, CSP_MODE_OUT, 0);
     }
 }

@@ -1,0 +1,13 @@
+// The image the patch test lays its patch over: a module and an object, a
+// timer, a param a setting can override, a few rules.
+#module Cnt
+  #variable N:8 unsigned = 0
+  #variable Step = 1
+  N = N + Step
+#end
+#param    Kp = 5
+#timer    T 100 = 1
+#variable K:4 = 3
+#Cnt a
+K = K + 1 ? timeout(T)
+T = 1 ? timeout(T)

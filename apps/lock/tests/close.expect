@@ -1,0 +1,8 @@
+% Öppet, 2, sedan # stänger och nollar Code.
+{modes, [seq]}.
+{stimulus, "apps/lock/tests/close.dat"}.
+{cycles, 34}.
+{checks, [
+  {final_var, "Lock", 0},
+  {final_var, "Code", 0}
+]}.

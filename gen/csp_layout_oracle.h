@@ -362,6 +362,14 @@
     csp_decl_set_di_pulldown((csp_decl_t*)&(REC), 1); \
     if ((long)(REC).di.pulldown != 1L) \
 	FAIL("di.pulldown set", (long)(REC).di.pulldown, 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).di.invert = 1; \
+    if ((long)csp_decl_get_di_invert((const csp_decl_t*)&(REC)) != 1L) \
+	FAIL("di.invert", (long)csp_decl_get_di_invert((const csp_decl_t*)&(REC)), 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_decl_set_di_invert((csp_decl_t*)&(REC), 1); \
+    if ((long)(REC).di.invert != 1L) \
+	FAIL("di.invert set", (long)(REC).di.invert, 1L); \
     } while (0)
 
 #define CSP_ORACLE_DECL_COMMON_AN(REC, FAIL) do { \
@@ -1056,6 +1064,14 @@
     value_set_d_fired((value_t*)&(REC), 1); \
     if ((long)(REC).d.fired != 1L) \
 	FAIL("d.fired set", (long)(REC).d.fired, 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    (REC).d.invert = 1; \
+    if ((long)value_get_d_invert((const value_t*)&(REC)) != 1L) \
+	FAIL("d.invert", (long)value_get_d_invert((const value_t*)&(REC)), 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    value_set_d_invert((value_t*)&(REC), 1); \
+    if ((long)(REC).d.invert != 1L) \
+	FAIL("d.invert set", (long)(REC).d.invert, 1L); \
     } while (0)
 
 #define CSP_ORACLE_VALUE_COMMON_A(REC, FAIL) do { \

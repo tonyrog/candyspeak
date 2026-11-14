@@ -1,0 +1,15 @@
+# Wokwi: the code lock demo on a Mega -- the mega_bare firmware (full build,
+# REPL included) with a lock's buttons, lamps and relay around it.
+#
+#   make -f Makefile.board BOARD=mega_bare
+#   code boards/mega_bare/lock      <- THIS directory: the extension does not
+#   F1 -> "Wokwi: Start Simulator"     search up the tree for wokwi.toml
+#
+# The program is not in the firmware: it is typed at the prompt, or loaded by
+# candid with the target localhost:4000 -- the simulated serial port, offered
+# over TCP below (RFC 2217, a telnet with serial port control in it).
+[wokwi]
+version = 1
+firmware = "../build/default/firmware.hex"
+elf      = "../build/default/firmware.elf"
+rfc2217ServerPort = 4000

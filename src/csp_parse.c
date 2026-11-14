@@ -223,7 +223,13 @@ NOINLINE decl_opts_t parse_opts(csp_rt_t* st, const token_t* tv,
 	// buys. A word that is not a trigger ends the option run, exactly as
 	// any other word does -- so a name here is still a name.
 	case WORD: {
-	    trigger_t t = trig_from_tstr(&tv[i].v.str);
+	    trigger_t t;
+	    if ((tv[i].v.str.len == 6) &&
+		(ro_memcmp(tv[i].v.str.ptr, s_invert, 6) == 0)) {
+		opts.invert = 1; DBG("INVERT,");
+		break;
+	    }
+	    t = trig_from_tstr(&tv[i].v.str);
 	    if (t == IRQ_NONE) goto done;
 	    // `soft` is not a trigger -- it is what the pin will settle for.
 	    // Sharing the lookup keeps one table of words that are names.

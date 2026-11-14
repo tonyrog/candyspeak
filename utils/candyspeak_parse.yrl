@@ -12,7 +12,7 @@ Terminals
   'id' 'rx' 'tx' 'dlc' 'len'
   'pullup' 'pulldown'
   'can' 'i2c' 'spi' 'udp' 'tcp' 'uart' 'sms' 'console' 'repl' 'onewire'
-  'low' 'high' 'both'  'soft' 'ready' 'rising' 'falling'
+  'low' 'high' 'both'  'soft' 'ready' 'rising' 'falling' 'invert'
   'WORD' 'INT' 'FLT' 'STR'
   '==' '!=' '<=' '>=' '<<' '>>' '<' '>' 
   '=' '<-' '<<=' '>>='
@@ -198,6 +198,7 @@ aid -> 'low'      : make_word('$1').
 aid -> 'high'     : make_word('$1').
 aid -> 'both'     : make_word('$1').
 aid -> 'soft'     : make_word('$1').
+aid -> 'invert'   : make_word('$1').
 aid -> 'ready'    : make_word('$1').
 aid -> 'rising'   : make_word('$1').
 aid -> 'falling'  : make_word('$1').
@@ -324,6 +325,8 @@ option -> type   : {type, '$1'}.
 option -> pull   : {pull, '$1'}.
 option -> trig   : {trig, '$1'}.
 option -> 'pwm' : pwm.
+%% the pin's level is the opposite of the value; nothing above the pin sees it
+option -> 'invert' : invert.
 option -> 'bind' name '[' bit_range ']':  {bind,{'$2','$4'}}.
 
 trig -> 'low' : low.

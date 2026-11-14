@@ -178,6 +178,7 @@ both both
 high high
 low low
 ready ready
+invert invert
 min min
 max max
 abs abs

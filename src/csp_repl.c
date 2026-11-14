@@ -1368,6 +1368,10 @@ match:
 		csp_print_blank();
 		csp_print_rostr(ros_pulldown);
 	    }
+	    if (csp_decl_get_di_invert(&d)) {
+		csp_print_blank();
+		csp_print_rostr(ros_invert);
+	    }
 	    // The interrupt trigger, with the other options and in the order
 	    // they are read back in. Dropped from the listing, a program copied
 	    // out of a board comes home with its interrupts gone -- the same

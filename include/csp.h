@@ -915,7 +915,15 @@ typedef struct PACKED {
     // is ever read (csp_part.h gives PART_VAL the PLC_1 row), so the fifteen
     // above it were free and shift-in still has fourteen left.
     uint8_t fired:1;
+    // `invert`: the pin is driven and read as val ^ invert. The program sees
+    // the value; only the board layer sees the level.
+    uint8_t invert:1;
 } dvalue_t;
+
+// A digital slot's value as the PIN has it, and a pin's level as the value:
+// the same xor both ways. The board layer uses these and nothing else.
+#define CSP_D_LEVEL(vptr)      (value_get_d_val(vptr) ^ value_get_d_invert(vptr))
+#define CSP_D_VALUE(vptr, lvl) ((lvl) ^ value_get_d_invert(vptr))
 
 // No endian here, unlike csp_analog_t further down. The declaration keeps it and
 // .endian answers from there; the copy that used to sit in this slot was written

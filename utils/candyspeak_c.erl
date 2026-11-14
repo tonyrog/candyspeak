@@ -1038,15 +1038,18 @@ io1(What, {digital, Ln, {'WORD', _, N}, _, _, Opts, Pins}) ->
                pulldown -> "CSP_CHIP_PULLDOWN";
                _ -> "0"
            end,
+    Inv = case proplists:get_bool(invert, Opts) of true -> " ^ 1"; false -> "" end,
     case {What, Dir} of
         {_, inout} -> throw({unsupported, "#digital inout", Ln});
         {"config", _} ->
             [?IND, "csp_chip_dcfg(", Port, ", ", Pin, ", ", cdir(Dir), ", ",
              Pull, ");\n"];
         {"input", in} ->
-            [?IND, "s->", N, " = csp_chip_din(", Port, ", ", Pin, ");\n"];
+            [?IND, "s->", N, " = csp_chip_din(", Port, ", ", Pin, ")", Inv,
+             ";\n"];
         {"output", out} ->
-            [?IND, "csp_chip_dout(", Port, ", ", Pin, ", s->", N, ");\n"];
+            [?IND, "csp_chip_dout(", Port, ", ", Pin, ", s->", N, Inv,
+             ");\n"];
         _ -> []
     end;
 io1(What, {analog, Ln, {'WORD', _, N}, _, Res, Opts, Pins}) ->

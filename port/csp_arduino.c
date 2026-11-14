@@ -704,7 +704,7 @@ void csp_board_analog_output(csp_rt_t* st, int di, value_t* vptr)
 void csp_board_digital_input(csp_rt_t* st, index_t ix, value_t* vptr)
 {
     int value = digitalRead(value_get_d_pin(vptr));
-    csp_set_ivalue(st, ix, value);    
+    csp_set_ivalue(st, ix, CSP_D_VALUE(vptr, value));    
 }
 
 void csp_board_digital_output(csp_rt_t* st, value_t* vptr)
@@ -713,7 +713,7 @@ void csp_board_digital_output(csp_rt_t* st, value_t* vptr)
     uint8_t dir = value_get_d_dir(vptr);    
     if (dir & DIR_IN) {  // in & out
 	pinMode(pin, OUTPUT);
-	digitalWrite(pin, value_get_d_val(vptr));
+	digitalWrite(pin, CSP_D_LEVEL(vptr));
 	// prepare for next input
 	if (value_get_d_pullup(vptr))
 	    pinMode(pin, INPUT_PULLUP);
@@ -721,7 +721,7 @@ void csp_board_digital_output(csp_rt_t* st, value_t* vptr)
 	    pinMode(pin, INPUT);
     }
     else { // plain out
-	digitalWrite(pin, value_get_d_val(vptr));
+	digitalWrite(pin, CSP_D_LEVEL(vptr));
     }
 }
 
@@ -747,8 +747,12 @@ void csp_board_digital_config(value_t* vptr)
 	else
 	    pinMode(pin, INPUT);
     }
-    else if (dir & DIR_OUT)
+    else if (dir & DIR_OUT) {
+	// The level first: OUTPUT drives what the latch holds, and an inverted
+	// pin (an active-low relay) would be on until the first output pass.
+	digitalWrite(pin, CSP_D_LEVEL(vptr));
 	pinMode(pin, OUTPUT);
+    }
 }
 
 // The analog counterpart. Only a PWM output owns its pin in a way that has to be

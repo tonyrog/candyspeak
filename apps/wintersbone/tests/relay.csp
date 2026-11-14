@@ -1,4 +1,4 @@
-// A command sets R2On; the active-low module sees its pin go low. The others
-// stay off (high).
+// A command sets R2On and Rel2 goes on; the others stay off. The level is the
+// board's (`invert` on the MKR's active-low module), not the program's.
 #import "../main.csp"
 > R2On = 1

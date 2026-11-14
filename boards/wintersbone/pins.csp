@@ -6,12 +6,12 @@
 // The I2C buffers go through Wire (CSP_HAS_I2C in wintersbone.terms). On the
 // host they are what the stimulus writes.
 
-// Four relays, D1..D4, on an opto-isolated module. Most such modules are
-// ACTIVE LOW -- see main.csp, which writes !R1On.
-#digital Rel1 out 1
-#digital Rel2 out 2
-#digital Rel3 out 3
-#digital Rel4 out 4
+// Four relays, D1..D4, on an opto-isolated module, ACTIVE LOW: `invert`, so
+// main.csp writes 1 for on whatever the module wants.
+#digital Rel1 out invert 1
+#digital Rel2 out invert 2
+#digital Rel3 out invert 3
+#digital Rel4 out invert 4
 
 // The LiPo, through the board's own divider: 4.3 V full scale. ADC_BATTERY is
 // pin 32 in the MKR variants -- check against variant.h before trusting it.

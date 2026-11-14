@@ -1392,9 +1392,10 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	    // is a field baked as zero AND a crc_decl that no longer matches, the
 	    // trap the buffer's nbytes and the view's ca both fell into.
 	    emit_rec(f, dp, 8, ".di={%s,.pin=%u,.port=%u,.pullup=%u,.pulldown=%u"
-		     ",.irq=%u,.soft=%u}",
+		     ",.irq=%u,.soft=%u,.invert=%u}",
 		    cmn, csp_decl_get_di_pin(dp), csp_decl_get_di_port(dp), csp_decl_get_di_pullup(dp), csp_decl_get_di_pulldown(dp),
-		    csp_decl_get_di_irq(dp), csp_decl_get_di_soft(dp));
+		    csp_decl_get_di_irq(dp), csp_decl_get_di_soft(dp),
+		    csp_decl_get_di_invert(dp));
 	    break;
 	case DECL_ANALOG:
 	    emit_rec(f, dp, 8, ".an={%s,.pin=%u,.port=%u,.pwm=%u,.endian=%u"

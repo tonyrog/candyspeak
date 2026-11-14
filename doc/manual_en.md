@@ -467,7 +467,7 @@ suggesting a handle that does not exist.
 ### Digital I/O
 
 ```
-#digital <name> [in|out|inout] [pullup|pulldown] [<port>:]<pin>
+#digital <name> [in|out|inout] [pullup|pulldown] [invert] [<port>:]<pin>
 ```
 
 Port is optional (for microcontrollers with multiple I/O ports).
@@ -484,6 +484,18 @@ A `pullup` input is **1 at rest**: a button wired to ground reads `0` while it
 is pressed, so `!Button` is the press. It starts at 1, before the first input
 sweep -- on the host, where no pin is ever read, until something sets it --
 and the panel's button for it sends 0 while held.
+
+`invert` turns the pin's level round: the value is 1 when the pin is low.
+An active-low relay module is then on at 1 like any other relay, and the
+program reads the same on every board -- which level means "on" is said once,
+in the board's pins. Only the board layer sees the level; `/state`, the
+panel and the tests see the value. An output is set to its resting level
+before it is made an output, so an inverted relay does not click at boot.
+
+```
+#digital Relay out invert 7       // active low: Relay = 1 pulls pin 7 low
+#digital Door in pullup invert 3  // a contact to ground: Door = 1 when closed
+```
 
 ### Analog I/O
 
@@ -2924,7 +2936,7 @@ pandoc doc/manual_en.md -o doc/manual_en.pdf \
 #local <name>[:<bits>] [type] out = <e>  // in a module: readable as obj.name
 #local <name>[:<bits>] [type] in [= c]  // in a module: the instance binds it
 #local <name>[:<bits>] [type] out = <e>  // in a module: readable as obj.name
-#digital <name> [in|out|inout] [pullup|pulldown] [<port>:]<pin>
+#digital <name> [in|out|inout] [pullup|pulldown] [invert] [<port>:]<pin>
 #analog <name>[:<resolution>] [in|out] [pwm] [integer|unsigned] [<port>:]<pin>   // unsigned, or integer = centred
 #timer <name> <period_ms|param> [= 1]
 #constant <name> = <value>

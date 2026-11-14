@@ -1,0 +1,8 @@
+% 1 5 8 # öppnar, och nästa tangent (2) låser inte igen.
+{modes, [seq]}.
+{stimulus, "apps/lock/tests/open.dat"}.
+{cycles, 30}.
+{checks, [
+  {final_var, "Lock", 128},
+  {final_var, "Code", 16#32}
+]}.

@@ -24,6 +24,8 @@ typedef union {
 	// program asked, and /state says so; with it, software is the answer
 	// that was wanted.
 	unsigned soft:1;
+	// `invert`: the pin's level is the opposite of the value.
+	unsigned invert:1;
     };
 } decl_opts_t;
 

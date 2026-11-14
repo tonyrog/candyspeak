@@ -136,7 +136,8 @@
   {port,     4},
   {irq,      3},     %% trigger_t; IRQ_NONE = not an interrupt source    
   {pullup,   1},
-  {pulldown, 1}
+  {pulldown, 1},
+  {invert,   1}      %% the pin's level is !value -- see setup_digital_values
  ]}.
 
 %% #analog: the same pin/port, then pwm and the sample options.
@@ -422,7 +423,10 @@
   %% taken from the TOP of val rather than from a new word: only bit 0 of val
   %% is ever read (csp_part.h gives PART_VAL the PLC_1 row), so the fifteen
   %% above it were free and shift-in still has fourteen left.
-  {fired, 1}
+  {fired, 1},
+  %% The declaration's `invert`, copied at setup as pullup is: the board layer
+  %% has only the slot, and drives and reads the pin as val ^ invert.
+  {invert, 1}
  ]}.
 
 {record, a, value_common, 4,

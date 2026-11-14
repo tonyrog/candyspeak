@@ -340,6 +340,7 @@ decl_text(Env, I, #{type := digital, name := Name, props := Ps}) ->
 	 {_, 1} -> " pulldown";
 	 _ -> ""
      end,
+     case proplists:get_value(invert, Ps) of 1 -> " invert"; _ -> "" end,
      trigger(Ps), " ", pin_spec(Env, I)];
 decl_text(Env, I, #{type := analog, name := Name, props := Ps}) ->
     ["#analog ", str(Name), alen(Env, I), ":",

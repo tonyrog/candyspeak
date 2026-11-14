@@ -339,6 +339,8 @@ extern rochar s_low[4] RODATA;
 #define ros_low ((rostring_t) s_low)
 extern rochar s_ready[6] RODATA;
 #define ros_ready ((rostring_t) s_ready)
+extern rochar s_invert[7] RODATA;
+#define ros_invert ((rostring_t) s_invert)
 extern rochar s_min[4] RODATA;
 #define ros_min ((rostring_t) s_min)
 extern rochar s_max[4] RODATA;

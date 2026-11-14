@@ -1,0 +1,16 @@
+// `invert`: the pin's level is the opposite of the value. The program sees
+// the value -- an active-low relay is on at 1 like any other -- and only the
+// board layer drives and reads the level. On the host there is no pin, so the
+// value is all there is; what this holds is that the option is read, kept and
+// listed, and that an inverted pulled-up input rests at 0 (its level high).
+#digital Rel  out invert 11
+#digital Btn  in pullup invert 4
+#digital Plain in pullup 5
+#variable On:1 = 1
+#variable SeenBtn:1 = 1
+#variable SeenPlain:1 = 0
+#variable SeenRel:1 = 0
+Rel = On
+SeenBtn = Btn
+SeenPlain = Plain
+SeenRel = Rel

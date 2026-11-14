@@ -2,6 +2,12 @@
 
 Relayx4: (10A)
 https://www.electrokit.com/en/4x-relashield-med-strommatning-for-arduino-uno
+AZ9371T relä
 
+Ha en sådan?
 Relax+Relax+Relax+Relax (30A)
 https://docs.electrokit.com/en/modules/EKM009/index.html
+
+Level shifter:  DE239
+
+BSS138 FET:ar med 10K pullups

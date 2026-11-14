@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "author": "CandySpeak",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "wokwi-arduino-mega", "id": "mega", "top": 0, "left": 0, "attrs": {} },
+
+    { "type": "wokwi-pushbutton", "id": "k1", "top": -150, "left": 40,
+      "attrs": { "color": "blue", "label": "1" } },
+    { "type": "wokwi-pushbutton", "id": "k2", "top": -150, "left": 120,
+      "attrs": { "color": "blue", "label": "2" } },
+    { "type": "wokwi-pushbutton", "id": "k3", "top": -150, "left": 200,
+      "attrs": { "color": "blue", "label": "3" } },
+    { "type": "wokwi-pushbutton", "id": "k4", "top": -150, "left": 280,
+      "attrs": { "color": "blue", "label": "4" } },
+
+    { "type": "wokwi-led", "id": "green", "top": -160, "left": 400,
+      "attrs": { "color": "green", "label": "open" } },
+    { "type": "wokwi-resistor", "id": "rg", "top": -90, "left": 400,
+      "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "red", "top": -160, "left": 460,
+      "attrs": { "color": "red", "label": "blocked" } },
+    { "type": "wokwi-resistor", "id": "rr", "top": -70, "left": 460,
+      "attrs": { "value": "220" } },
+
+    { "type": "wokwi-relay-module", "id": "relay", "top": -160, "left": 560, "attrs": {} },
+    { "type": "wokwi-led", "id": "lock", "top": -250, "left": 700,
+      "attrs": { "color": "yellow", "label": "lock" } },
+    { "type": "wokwi-resistor", "id": "rl", "top": -180, "left": 700,
+      "attrs": { "value": "220" } }
+  ],
+  "connections": [
+    [ "k1:1.l", "mega:2", "blue", [] ],
+    [ "k1:2.l", "mega:GND.2", "black", [] ],
+    [ "k2:1.l", "mega:3", "blue", [] ],
+    [ "k2:2.l", "mega:GND.2", "black", [] ],
+    [ "k3:1.l", "mega:4", "blue", [] ],
+    [ "k3:2.l", "mega:GND.2", "black", [] ],
+    [ "k4:1.l", "mega:5", "blue", [] ],
+    [ "k4:2.l", "mega:GND.2", "black", [] ],
+
+    [ "mega:8", "rg:1", "green", [] ],
+    [ "rg:2", "green:A", "green", [] ],
+    [ "green:C", "mega:GND.1", "black", [] ],
+    [ "mega:9", "rr:1", "red", [] ],
+    [ "rr:2", "red:A", "red", [] ],
+    [ "red:C", "mega:GND.1", "black", [] ],
+
+    [ "mega:10", "relay:IN", "orange", [] ],
+    [ "mega:5V", "relay:VCC", "red", [] ],
+    [ "mega:GND.3", "relay:GND", "black", [] ],
+    [ "mega:5V", "relay:COM", "red", [] ],
+    [ "relay:NO", "rl:1", "yellow", [] ],
+    [ "rl:2", "lock:A", "yellow", [] ],
+    [ "lock:C", "mega:GND.3", "black", [] ]
+  ],
+  "serialMonitor": { "display": "always", "newline": "lf" }
+}

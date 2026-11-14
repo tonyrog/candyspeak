@@ -14,7 +14,9 @@
 // DECLARATIONS AND ONE INIT BLOCK, no loose rules: a rule outside an #in runs
 // in INIT and NORMAL only.
 
-// Four relays, active low like the MKR's module.
+// Four relays: Electrokit's 4x relay shield (EKM028, Uno form, relays on its
+// D8..D11), ACTIVE HIGH -- a transistor per coil, the LED lit when the contact
+// is closed. Wired here to GPIO 11..14 through the 3.3/5 V level shifter.
 #digital Rel1 out 11
 #digital Rel2 out 12
 #digital Rel3 out 13

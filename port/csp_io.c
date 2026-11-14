@@ -50,6 +50,11 @@ static uint16_t io_aout(csp_rt_t* st, int di, uint16_t val)
 
 static void io_dcfg(value_t* vptr)
 {
+    // The level before the direction, so an inverted output does not pulse
+    // active between the two (see csp_board_digital_config).
+    if (value_get_d_dir(vptr) == DIR_OUT)
+	csp_chip_dout(value_get_d_port(vptr), value_get_d_pin(vptr),
+		      CSP_D_LEVEL(vptr));
     csp_chip_dcfg(value_get_d_port(vptr), value_get_d_pin(vptr),
 		  value_get_d_dir(vptr),
 		  (uint8_t)((value_get_d_pullup(vptr) ? CSP_CHIP_PULLUP : 0) |
@@ -96,11 +101,11 @@ static void io_dout(value_t* vptr)
 
     if (value_get_d_dir(vptr) & DIR_IN) {
 	csp_chip_dcfg(port, pin, DIR_OUT, 0);
-	csp_chip_dout(port, pin, value_get_d_val(vptr));
+	csp_chip_dout(port, pin, CSP_D_LEVEL(vptr));
 	io_dcfg(vptr);
     }
     else
-	csp_chip_dout(port, pin, value_get_d_val(vptr));
+	csp_chip_dout(port, pin, CSP_D_LEVEL(vptr));
 }
 
 // want is CSP_IO_CONFIG, DIR_IN or DIR_OUT. The configuration request is
@@ -128,8 +133,9 @@ void csp_io_sweep(csp_rt_t* st, uint8_t want)
 		break;
 	    if (want & DIR_IN)
 		csp_set_ivalue(st, ix,
-			       csp_chip_din(value_get_d_port(vptr),
-					    value_get_d_pin(vptr)));
+			       CSP_D_VALUE(vptr,
+					   csp_chip_din(value_get_d_port(vptr),
+							value_get_d_pin(vptr))));
 	    else
 		io_dout(vptr);
 	    break;

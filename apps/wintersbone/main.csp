@@ -65,13 +65,14 @@
 #param FrostDelay = 600000
 #param PressDelay = 60000
 
-// The active-low relay module. On battery the coils have no supply (they run
-// off the USB 5 V), so the relays drop out by themselves and come back in the
-// commanded state when the mains returns.
-Rel1 = !R1On
-Rel2 = !R2On
-Rel3 = !R3On
-Rel4 = !R4On
+// The relays, 1 = on. Which level that is belongs to the board: its pins.csp
+// says `invert` for an active-low module. On battery the coils have no supply
+// (they run off the USB 5 V), so the relays drop out by themselves and come
+// back in the commanded state when the mains returns.
+Rel1 = R1On
+Rel2 = R2On
+Rel3 = R3On
+Rel4 = R4On
 
 // Measurements.
 #variable TinC   = 0        // 0.1 °C

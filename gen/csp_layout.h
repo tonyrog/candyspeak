@@ -619,7 +619,7 @@ static inline void csp_decl_set_cn_init_u(csp_decl_t* p, uint32_t v_)
     csp_decl_set_cn_init(p, t_);
 }
 
-// decl_common_di: ends at bit 49 of 8 bytes
+// decl_common_di: ends at bit 50 of 8 bytes
 static inline uint8_t csp_decl_get_di_soft(const csp_decl_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
@@ -709,6 +709,21 @@ static inline void csp_decl_set_di_pulldown(csp_decl_t* p, uint8_t v_)
 {
     uint8_t* b_ = (uint8_t*)p;
     b_[6] = (uint8_t)((b_[6] & (uint8_t)0xFEU) | (uint8_t)(v_ & 0x1U));
+}
+static inline uint8_t csp_decl_get_di_invert(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[6] >> 1)) & 0x1U);
+}
+static inline uint8_t csp_decl_get_di_invert_ro(const csp_decl_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[6]) >> 1)) & 0x1U);
+}
+static inline void csp_decl_set_di_invert(csp_decl_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[6] = (uint8_t)((b_[6] & (uint8_t)0xFDU) | (uint8_t)((v_ << 1) & 0x2U));
 }
 
 // decl_common_an: ends at bit 50 of 8 bytes
@@ -1878,7 +1893,7 @@ static inline void value_set_t_val(value_t* p, uint8_t v_)
     b_[3] = (uint8_t)((b_[3] & (uint8_t)0x7FU) | (uint8_t)((v_ << 7) & 0x80U));
 }
 
-// value_common_d: ends at bit 18 of 4 bytes
+// value_common_d: ends at bit 19 of 4 bytes
 static inline uint8_t value_get_d_cfg(const value_t* p)
 {
     const uint8_t* b_ = (const uint8_t*)p;
@@ -1998,6 +2013,21 @@ static inline void value_set_d_fired(value_t* p, uint8_t v_)
 {
     uint8_t* b_ = (uint8_t*)p;
     b_[2] = (uint8_t)((b_[2] & (uint8_t)0xFDU) | (uint8_t)((v_ << 1) & 0x2U));
+}
+static inline uint8_t value_get_d_invert(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((b_[2] >> 2)) & 0x1U);
+}
+static inline uint8_t value_get_d_invert_ro(const value_t* p)
+{
+    const uint8_t* b_ = (const uint8_t*)p;
+    return (uint8_t)(((ro_byte(&b_[2]) >> 2)) & 0x1U);
+}
+static inline void value_set_d_invert(value_t* p, uint8_t v_)
+{
+    uint8_t* b_ = (uint8_t*)p;
+    b_[2] = (uint8_t)((b_[2] & (uint8_t)0xFBU) | (uint8_t)((v_ << 2) & 0x4U));
 }
 
 // value_common_a: ends at bit 32 of 4 bytes
@@ -2229,6 +2259,7 @@ typedef enum {
     MFD_DI_IRQ = 21,
     MFD_DI_PULLUP = 22,
     MFD_DI_PULLDOWN = 23,
+    MFD_DI_INVERT = 26,
     MFD_AN_SOFT = 15,
     MFD_AN_PIN = 18,
     MFD_AN_PORT = 19,
@@ -2237,22 +2268,22 @@ typedef enum {
     MFD_AN_ENDIAN = 24,
     MFD_CA_ID = 17,
     MFD_CA_ENDIAN = 24,
-    MFD_CA_BIT = 26,
-    MFD_CA_LEN = 28,
+    MFD_CA_BIT = 27,
+    MFD_CA_LEN = 29,
     MFD_BF_NBYTES = 16,
     MFD_BF_TRANSPORT = 20,
     MFD_BF_ID = 25,
     MFD_RT_SRC = 17,
     MFD_RT_DST = 25,
     MFD_TM_PERIOD = 0,
-    MFD_TM_FIRED = 29,
-    MFD_TM_RUNNING = 30,
-    MFD_TM_INIT = 31,
+    MFD_TM_FIRED = 30,
+    MFD_TM_RUNNING = 31,
+    MFD_TM_INIT = 32,
     MFD_SN_NAMES = 8,
-    MFD_SN_NX = 27,
+    MFD_SN_NX = 28,
     MFD_EM_CRC = 17,
     MFD_NDOUBLE = 4,
-    MFD_NFIELD = 32
+    MFD_NFIELD = 33
 } mf_decl_all_t;
 
 #define MFD_TYPE_POS 0
@@ -2301,6 +2332,8 @@ typedef enum {
 #define MFD_DI_PULLUP_BITS 1
 #define MFD_DI_PULLDOWN_POS 48
 #define MFD_DI_PULLDOWN_BITS 1
+#define MFD_DI_INVERT_POS 49
+#define MFD_DI_INVERT_BITS 1
 #define MFD_AN_SOFT_POS 32
 #define MFD_AN_SOFT_BITS 1
 #define MFD_AN_PIN_POS 33
@@ -2346,7 +2379,7 @@ typedef enum {
 #define MFD_EM_CRC_POS 32
 #define MFD_EM_CRC_BITS 16
 
-// 45 names over 32 slots, of which the first 4 are the
+// 46 names over 33 slots, of which the first 4 are the
 // halves of fields wider than a cell.
 #define CSP_DECL_ALL_FIELDS { \
     { 4, 0, 16 } /* tm_period lo */, \
@@ -2375,6 +2408,7 @@ typedef enum {
     { 6, 0, 1 } /* di_pulldown */, \
     { 6, 0, 2 } /* an_endian ca_endian */, \
     { 6, 0, 16 } /* md_ent mq_m bf_id rt_dst */, \
+    { 6, 1, 1 } /* di_invert */, \
     { 6, 2, 9 } /* ca_bit */, \
     { 7, 0, 8 } /* sn_nx */, \
     { 7, 3, 5 } /* ca_len */, \
@@ -2469,6 +2503,10 @@ typedef enum {
 	(long)((uint32_t)csp_decl_get_di_pulldown((const csp_decl_t*)&(REC)) & 0x1UL)) \
 	FAIL("di_pulldown", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_DI_PULLDOWN]), \
 	     (long)((uint32_t)csp_decl_get_di_pulldown((const csp_decl_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_DI_INVERT]) != \
+	(long)((uint32_t)csp_decl_get_di_invert((const csp_decl_t*)&(REC)) & 0x1UL)) \
+	FAIL("di_invert", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_DI_INVERT]), \
+	     (long)((uint32_t)csp_decl_get_di_invert((const csp_decl_t*)&(REC)) & 0x1UL)); \
     if ((long)mc_field_get(&(REC), &mc_decl_fields[MFD_AN_SOFT]) != \
 	(long)((uint32_t)csp_decl_get_an_soft((const csp_decl_t*)&(REC)) & 0x1UL)) \
 	FAIL("an_soft", (long)mc_field_get(&(REC), &mc_decl_fields[MFD_AN_SOFT]), \
@@ -2878,10 +2916,10 @@ typedef enum {
     MFV_F_VAL = 2,
     MFV_S_VAL = 2,
     MFV_T_PERIOD = 0,
-    MFV_T_REQ = 13,
-    MFV_T_FIRED = 14,
-    MFV_T_RUNNING = 15,
-    MFV_T_VAL = 16,
+    MFV_T_REQ = 14,
+    MFV_T_FIRED = 15,
+    MFV_T_RUNNING = 16,
+    MFV_T_VAL = 17,
     MFV_D_CFG = 4,
     MFV_D_PIN = 5,
     MFV_D_PORT = 6,
@@ -2890,6 +2928,7 @@ typedef enum {
     MFV_D_PULLDOWN = 9,
     MFV_D_VAL = 10,
     MFV_D_FIRED = 12,
+    MFV_D_INVERT = 13,
     MFV_A_CFG = 4,
     MFV_A_PIN = 5,
     MFV_A_PORT = 6,
@@ -2898,7 +2937,7 @@ typedef enum {
     MFV_A_FIRED = 9,
     MFV_A_VAL = 11,
     MFV_NDOUBLE = 4,
-    MFV_NFIELD = 17
+    MFV_NFIELD = 18
 } mf_value_all_t;
 
 #define MFV_I_VAL_POS 0
@@ -2935,6 +2974,8 @@ typedef enum {
 #define MFV_D_VAL_BITS 1
 #define MFV_D_FIRED_POS 17
 #define MFV_D_FIRED_BITS 1
+#define MFV_D_INVERT_POS 18
+#define MFV_D_INVERT_BITS 1
 #define MFV_A_CFG_POS 0
 #define MFV_A_CFG_BITS 1
 #define MFV_A_PIN_POS 1
@@ -2950,7 +2991,7 @@ typedef enum {
 #define MFV_A_VAL_POS 16
 #define MFV_A_VAL_BITS 16
 
-// 24 names over 17 slots, of which the first 4 are the
+// 25 names over 18 slots, of which the first 4 are the
 // halves of fields wider than a cell.
 #define CSP_VALUE_ALL_FIELDS { \
     { 0, 0, 16 } /* t_period lo */, \
@@ -2966,6 +3007,7 @@ typedef enum {
     { 2, 0, 1 } /* d_val */, \
     { 2, 0, 16 } /* a_val */, \
     { 2, 1, 1 } /* d_fired */, \
+    { 2, 2, 1 } /* d_invert */, \
     { 3, 4, 1 } /* t_req */, \
     { 3, 5, 1 } /* t_fired */, \
     { 3, 6, 1 } /* t_running */, \
@@ -3050,6 +3092,10 @@ typedef enum {
 	(long)((uint32_t)value_get_d_fired((const value_t*)&(REC)) & 0x1UL)) \
 	FAIL("d_fired", (long)mc_field_get(&(REC), &mc_value_fields[MFV_D_FIRED]), \
 	     (long)((uint32_t)value_get_d_fired((const value_t*)&(REC)) & 0x1UL)); \
+    if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_D_INVERT]) != \
+	(long)((uint32_t)value_get_d_invert((const value_t*)&(REC)) & 0x1UL)) \
+	FAIL("d_invert", (long)mc_field_get(&(REC), &mc_value_fields[MFV_D_INVERT]), \
+	     (long)((uint32_t)value_get_d_invert((const value_t*)&(REC)) & 0x1UL)); \
     if ((long)mc_field_get(&(REC), &mc_value_fields[MFV_A_CFG]) != \
 	(long)((uint32_t)value_get_a_cfg((const value_t*)&(REC)) & 0x1UL)) \
 	FAIL("a_cfg", (long)mc_field_get(&(REC), &mc_value_fields[MFV_A_CFG]), \
@@ -3151,6 +3197,6 @@ typedef enum {
 
 // Fingerprint of every field name, position and width above, in order.
 // An image built against a different layout must be refused, not read.
-#define CSP_LAYOUT_FINGERPRINT 0xC2492E74UL
+#define CSP_LAYOUT_FINGERPRINT 0xFDAD1878UL
 
 #endif

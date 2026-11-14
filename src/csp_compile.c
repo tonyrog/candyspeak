@@ -4315,6 +4315,7 @@ NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	    csp_decl_set_dir(dp_, d.opts.dir);
 	    csp_decl_set_di_pullup(dp_, d.opts.pullup);
 	    csp_decl_set_di_pulldown(dp_, d.opts.pulldown);
+	    csp_decl_set_di_invert(dp_, d.opts.invert);
     }
     // An interrupt is a property of the pin, like the pull. `#digital Drdy in
     // falling 2:13` is the whole of it: the trigger arms the source and the

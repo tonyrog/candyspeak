@@ -409,6 +409,12 @@
   {ready,   'IRQ_READY'}]}.
 
 
+%% Option WORDS that are not triggers: names like the ones above, looked up by
+%% parse_opts and stopping it on anything else.  `invert`: the pin's level is
+%% the opposite of the value -- an active-low relay is on at 1 like any other.
+{option_words, [invert]}.
+
+
 %% ===========================================================================
 %% Built-in functions
 %%

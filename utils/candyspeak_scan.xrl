@@ -53,6 +53,7 @@ high               : {token,{'high',TokenLine}}.
 low                : {token,{'low',TokenLine}}.
 both               : {token,{'both',TokenLine}}.
 soft               : {token,{'soft',TokenLine}}.
+invert             : {token,{'invert',TokenLine}}.
 ready              : {token,{'ready',TokenLine}}.
 rising             : {token,{'rising',TokenLine}}.
 falling            : {token,{'falling',TokenLine}}.

@@ -1,0 +1,2 @@
+// 1 5 8 # öppnar, och nästa tangent (2) låser inte igen.
+#import "../main.csp"

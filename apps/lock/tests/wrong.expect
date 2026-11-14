@@ -1,0 +1,8 @@
+% 1 5 9 # är fel kod: låset står stängt.
+{modes, [seq]}.
+{stimulus, "apps/lock/tests/wrong.dat"}.
+{cycles, 26}.
+{checks, [
+  {final_var, "Lock", 0},
+  {final_var, "Code", 16#31353923}
+]}.

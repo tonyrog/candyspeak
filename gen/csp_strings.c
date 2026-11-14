@@ -169,6 +169,7 @@ rochar s_both[] RODATA = "both";
 rochar s_high[] RODATA = "high";
 rochar s_low[] RODATA = "low";
 rochar s_ready[] RODATA = "ready";
+rochar s_invert[] RODATA = "invert";
 rochar s_min[] RODATA = "min";
 rochar s_max[] RODATA = "max";
 rochar s_abs[] RODATA = "abs";

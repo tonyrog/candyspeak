@@ -503,6 +503,9 @@ pin(Opts) ->
     [integer_to_list(proplists:get_value(port, Opts, 0)), ", ",
      integer_to_list(proplists:get_value(pin, Opts))].
 
+%% `invert': the pin's level is !value, both ways.
+inv(Opts) -> case proplists:get_value(invert, Opts, 0) of 1 -> " ^ 1"; _ -> "" end.
+
 cdir(in) -> "CSP_CHIP_IN";
 cdir(out) -> "CSP_CHIP_OUT";
 cdir(inout) -> "CSP_CHIP_IN | CSP_CHIP_OUT";
@@ -527,7 +530,8 @@ asgn(Opts) -> case proplists:get_value(type, Opts) of unsigned -> "0"; _ -> "1" 
 pin_in(I, M) ->
     N = fname(I, M),
     case decl(I, M) of
-        {digital, _, Opts} -> [?IND, "s->", N, " = csp_chip_din(", pin(Opts), ");\n"];
+        {digital, _, Opts} -> [?IND, "s->", N, " = csp_chip_din(", pin(Opts), ")",
+                               inv(Opts), ";\n"];
         {analog, _, Opts} ->
             [?IND, "s->", N, " = csp_lib_ain(csp_chip_ain(", pin(Opts), "), ",
              integer_to_list(proplists:get_value(size, Opts, 10)), ", ", asgn(Opts), ");\n"]
@@ -536,7 +540,8 @@ pin_in(I, M) ->
 pin_out(I, M) ->
     N = fname(I, M),
     case decl(I, M) of
-        {digital, _, Opts} -> [?IND, "csp_chip_dout(", pin(Opts), ", s->", N, ");\n"];
+        {digital, _, Opts} -> [?IND, "csp_chip_dout(", pin(Opts), ", s->", N,
+                               inv(Opts), ");\n"];
         {analog, _, Opts} ->
             [?IND, "csp_chip_aout(", pin(Opts), ", csp_lib_aout(s->", N, ", ",
              integer_to_list(proplists:get_value(size, Opts, 10)), ", ", asgn(Opts), "));\n"]

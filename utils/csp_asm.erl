@@ -263,7 +263,8 @@ elem(F, Type, Name, Ps, Cont) ->
 	digital ->
 	    pack(F, decl, di, maps:merge(C#{vt => ?V_INTEGER},
 					 maps:with([soft, pin, port, irq, pullup,
-						    pulldown], maps:from_list(Ps))));
+						    pulldown, invert],
+						   maps:from_list(Ps))));
 	analog ->
 	    pack(F, decl, an,
 		 maps:merge(C#{vt => vt(Ps),
