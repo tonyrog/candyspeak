@@ -1,0 +1,23 @@
+// lock på en Arduino Mega 2560 utan Arduino-kärnan (boards/mega_bare).
+//
+// Knapparna på pin 22..37, i knappsatsens ordning rad för rad, mot GND med
+// intern pullup. Lock är PWM på pin 10 (TIMER2, OC2A), 976 Hz.
+// apps/lock/mega_bare/diagram.json är samma koppling i Wokwi.
+
+#digital K1 in pullup 22
+#digital K2 in pullup 23
+#digital K3 in pullup 24
+#digital KA in pullup 25
+#digital K4 in pullup 26
+#digital K5 in pullup 27
+#digital K6 in pullup 28
+#digital KB in pullup 29
+#digital K7 in pullup 30
+#digital K8 in pullup 31
+#digital K9 in pullup 32
+#digital KC in pullup 33
+#digital KS in pullup 34
+#digital K0 in pullup 35
+#digital KH in pullup 36
+#digital KD in pullup 37
+#analog  Lock:8 out pwm 10            // 128 = 50 %

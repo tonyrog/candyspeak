@@ -1,0 +1,16 @@
+# Wokwi: lock on a Mega 2560 without the Arduino core (boards/mega_bare), its
+# program in ROM.
+#
+#   make -f Makefile.board BOARD=mega_bare APP=lock
+#   code apps/lock/mega_bare       <- THIS directory: the extension does not
+#   F1 -> "Wokwi: Start Simulator"     search up the tree for wokwi.toml
+#
+# In the browser (wokwi.com): a Mega project, diagram.json pasted in, and
+# build/default/firmware.hex uploaded. The console is 38400.
+#
+# `rfc2217ServerPort = 4000` would offer the serial port over TCP, for candid
+# as localhost:4000 -- but only in VS Code on the desktop, not in the browser.
+[wokwi]
+version = 1
+firmware = "build/default/firmware.hex"
+elf      = "build/default/firmware.elf"

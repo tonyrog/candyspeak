@@ -1,0 +1,409 @@
+{
+  "version": 1,
+  "author": "CandySpeak",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "wokwi-arduino-mega",
+      "id": "mega",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "k1",
+      "top": -380,
+      "left": 60,
+      "attrs": {
+        "color": "blue",
+        "label": "1"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "k2",
+      "top": -380,
+      "left": 150,
+      "attrs": {
+        "color": "blue",
+        "label": "2"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "k3",
+      "top": -380,
+      "left": 240,
+      "attrs": {
+        "color": "blue",
+        "label": "3"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "ka",
+      "top": -380,
+      "left": 330,
+      "attrs": {
+        "color": "red",
+        "label": "A"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "k4",
+      "top": -295,
+      "left": 60,
+      "attrs": {
+        "color": "blue",
+        "label": "4"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "k5",
+      "top": -295,
+      "left": 150,
+      "attrs": {
+        "color": "blue",
+        "label": "5"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "k6",
+      "top": -295,
+      "left": 240,
+      "attrs": {
+        "color": "blue",
+        "label": "6"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "kb",
+      "top": -295,
+      "left": 330,
+      "attrs": {
+        "color": "red",
+        "label": "B"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "k7",
+      "top": -210,
+      "left": 60,
+      "attrs": {
+        "color": "blue",
+        "label": "7"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "k8",
+      "top": -210,
+      "left": 150,
+      "attrs": {
+        "color": "blue",
+        "label": "8"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "k9",
+      "top": -210,
+      "left": 240,
+      "attrs": {
+        "color": "blue",
+        "label": "9"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "kc",
+      "top": -210,
+      "left": 330,
+      "attrs": {
+        "color": "red",
+        "label": "C"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "ks",
+      "top": -125,
+      "left": 60,
+      "attrs": {
+        "color": "yellow",
+        "label": "*"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "k0",
+      "top": -125,
+      "left": 150,
+      "attrs": {
+        "color": "blue",
+        "label": "0"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "kh",
+      "top": -125,
+      "left": 240,
+      "attrs": {
+        "color": "yellow",
+        "label": "#"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "kd",
+      "top": -125,
+      "left": 330,
+      "attrs": {
+        "color": "red",
+        "label": "D"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "lock",
+      "top": -330,
+      "left": 470,
+      "attrs": {
+        "color": "yellow",
+        "label": "lås (pwm 10)"
+      }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "rl",
+      "top": -250,
+      "left": 470,
+      "attrs": {
+        "value": "220"
+      }
+    }
+  ],
+  "connections": [
+    [
+      "k1:1.l",
+      "mega:22",
+      "blue",
+      []
+    ],
+    [
+      "k1:2.r",
+      "k2:2.l",
+      "black",
+      []
+    ],
+    [
+      "k2:1.l",
+      "mega:23",
+      "blue",
+      []
+    ],
+    [
+      "k2:2.r",
+      "k3:2.l",
+      "black",
+      []
+    ],
+    [
+      "k3:1.l",
+      "mega:24",
+      "blue",
+      []
+    ],
+    [
+      "k3:2.r",
+      "ka:2.l",
+      "black",
+      []
+    ],
+    [
+      "ka:1.l",
+      "mega:25",
+      "blue",
+      []
+    ],
+    [
+      "ka:2.r",
+      "k4:2.l",
+      "black",
+      []
+    ],
+    [
+      "k4:1.l",
+      "mega:26",
+      "blue",
+      []
+    ],
+    [
+      "k4:2.r",
+      "k5:2.l",
+      "black",
+      []
+    ],
+    [
+      "k5:1.l",
+      "mega:27",
+      "blue",
+      []
+    ],
+    [
+      "k5:2.r",
+      "k6:2.l",
+      "black",
+      []
+    ],
+    [
+      "k6:1.l",
+      "mega:28",
+      "blue",
+      []
+    ],
+    [
+      "k6:2.r",
+      "kb:2.l",
+      "black",
+      []
+    ],
+    [
+      "kb:1.l",
+      "mega:29",
+      "blue",
+      []
+    ],
+    [
+      "kb:2.r",
+      "k7:2.l",
+      "black",
+      []
+    ],
+    [
+      "k7:1.l",
+      "mega:30",
+      "blue",
+      []
+    ],
+    [
+      "k7:2.r",
+      "k8:2.l",
+      "black",
+      []
+    ],
+    [
+      "k8:1.l",
+      "mega:31",
+      "blue",
+      []
+    ],
+    [
+      "k8:2.r",
+      "k9:2.l",
+      "black",
+      []
+    ],
+    [
+      "k9:1.l",
+      "mega:32",
+      "blue",
+      []
+    ],
+    [
+      "k9:2.r",
+      "kc:2.l",
+      "black",
+      []
+    ],
+    [
+      "kc:1.l",
+      "mega:33",
+      "blue",
+      []
+    ],
+    [
+      "kc:2.r",
+      "ks:2.l",
+      "black",
+      []
+    ],
+    [
+      "ks:1.l",
+      "mega:34",
+      "blue",
+      []
+    ],
+    [
+      "ks:2.r",
+      "k0:2.l",
+      "black",
+      []
+    ],
+    [
+      "k0:1.l",
+      "mega:35",
+      "blue",
+      []
+    ],
+    [
+      "k0:2.r",
+      "kh:2.l",
+      "black",
+      []
+    ],
+    [
+      "kh:1.l",
+      "mega:36",
+      "blue",
+      []
+    ],
+    [
+      "kh:2.r",
+      "kd:2.l",
+      "black",
+      []
+    ],
+    [
+      "kd:1.l",
+      "mega:37",
+      "blue",
+      []
+    ],
+    [
+      "kd:2.r",
+      "mega:GND.3",
+      "black",
+      []
+    ],
+    [
+      "mega:10",
+      "rl:1",
+      "orange",
+      []
+    ],
+    [
+      "rl:2",
+      "lock:A",
+      "orange",
+      []
+    ],
+    [
+      "lock:C",
+      "mega:GND.1",
+      "black",
+      []
+    ]
+  ],
+  "serialMonitor": {
+    "display": "always",
+    "newline": "lf"
+  }
+}
