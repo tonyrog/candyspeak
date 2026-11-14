@@ -1015,7 +1015,12 @@ var(Env, B = #{seto := Seto, setox := Setox}, Ix) ->
 		   end
 	   end,
     Sub = case {Setox, Elem} of
-	      {none, 0} -> "";
+	      {none, 0} ->
+		  %% A[0] of an array as A[0]: `Yellow' alone reads as all of it
+		  case d(Env, Head + 1) of
+		      #{head := Head, elem := 1} -> "[0]";
+		      _ -> ""
+		  end;
 	      {none, K} -> ["[", integer_to_list(K), "]"];
 	      {T, _} -> ["[", T, "]"]
 	  end,

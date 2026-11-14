@@ -30,32 +30,49 @@
 %% whose CRC was wrong, or that never came; merge/2 puts pieces together. A
 %% state is a moment and is not asked for again: one that came wrong is left
 %% out. A state's pairs are read by state/2: which of them is a timer, and so
-%% three varints rather than one, takes the declarations to say.
+%% three varints rather than one, takes the declarations to say. A reply
+%% not understood is {unknown, Head}.
 dumps(Text) ->
     Lines = [string:trim(L) || L <- string:split(Text, "\n", all)],
     dumps(Lines, []).
 
 dumps(["dump " ++ Head | T], Acc) ->
     {Ls, T1} = lists:splitwith(fun(L) -> L =/= "." end, T),
-    Good = lists:append([good(L) || L <- Ls]),
-    D = case string:lexemes(Head, " ") of
-	    ["state", N, Cycle, Ms] ->
-		case whole(#{total => none, have => Good}) of
-		    {ok, Bin} -> {state, list_to_integer(Cycle),
-				  list_to_integer(Ms), list_to_integer(N), Bin};
-		    _ -> none
-		end;
-	    [Kind, Total, From, Len] ->
-		K = list_to_atom(Kind),
-		F = list_to_integer(From),
-		P = #{total => list_to_integer(Total), have => Good,
-		      want => []},
-		merge(#{total => list_to_integer(Total), have => [],
-			want => [{F, list_to_integer(Len)}]}, {part, K, P})
+    D = try dump(string:lexemes(Head, " "), Ls)
+	catch error:_ -> {unknown, Head}
 	end,
     dumps(tl_or_nil(T1), [D || D =/= none] ++ Acc);
 dumps([_ | T], Acc) -> dumps(T, Acc);
 dumps([], Acc) -> lists:reverse(Acc).
+
+%% A reply by its head. A node from before 2026-11-08 says `dump rom 1300'
+%% and sends bare hex lines, no offsets and no CRC: taken whole when the
+%% size is right, as it cannot be asked for again. A head not known is
+%% {unknown, Head}, for the one asking to say.
+dump(["state", N, Cycle, Ms], Ls) ->
+    case whole(#{total => none, have => lists:append([good(L) || L <- Ls])}) of
+	{ok, Bin} -> {state, list_to_integer(Cycle), list_to_integer(Ms),
+		      list_to_integer(N), Bin};
+	_ -> none
+    end;
+dump([Kind, Total, From, Len], Ls) ->
+    K = kind(Kind),
+    P = #{total => list_to_integer(Total),
+	  have => lists:append([good(L) || L <- Ls]), want => []},
+    merge(#{total => list_to_integer(Total), have => [],
+	    want => [{list_to_integer(From), list_to_integer(Len)}]},
+	  {part, K, P});
+dump([Kind, Total], Ls) ->
+    K = kind(Kind),
+    Bin = << <<(list_to_integer(H, 16))>> || L <- Ls, H <- pairs(L) >>,
+    case byte_size(Bin) =:= list_to_integer(Total) of
+	true -> {K, Bin};
+	false -> {unknown, Kind ++ " " ++ Total ++ " (old form, came short)"}
+    end.
+
+kind("rom") -> rom;
+kind("eeprom") -> eeprom;
+kind("patch") -> patch.
 
 %% A line, if it is one and its CRC says it came as sent: [{Offs, Bin}].
 good(L) ->

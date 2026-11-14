@@ -161,8 +161,10 @@ patch(Rom = <<_:4/binary, _:?HEADER_DATA_LEN/binary, RomCrcBin:2/binary, _/binar
 			 _ -> Decls
 		     end,
 	    Base = case Decls0 =:= Decls of true -> ND0; false -> ND0 - 1 end,
-	    Decls1 = disasm_decl(F, DeclBin, Base, Strings1, []),
-	    {ok, {Header, Strings1, Decls0 ++ Decls1, Code ++ Code1}};
+	    %% The image's declarations go in ahead, so an object of a module
+	    %% the image declares (`#Cnt b' typed at the prompt) finds it.
+	    Decls01 = disasm_decl(F, DeclBin, Base, Strings1, lists:reverse(Decls0)),
+	    {ok, {Header, Strings1, Decls01, Code ++ Code1}};
 	{ok, _} -> {error, {other_rom, RomFp, RomCrc}};
 	Error -> Error
     end;
@@ -609,10 +611,11 @@ disasm_decl(F, <<DeclBin:8/binary, Data/binary>>,
 
 	%% A window into a #buffer: a #field has a name, the view a slice like
 	%% `Buf[2..3]' makes has none. bit is a BIT position, len the width.
+	%% size is the width DECLARED (`#field F:8 ...'), 1 when none was.
 	Window when Window =:= field; Window =:= view ->
-	    {32, [{res,_},{is_mapped,_},{bound,_},{nx,_},{vt,Vt},{reg,_}]} =
+	    {32, [{res,Res},{is_mapped,_},{bound,_},{nx,_},{vt,Vt},{reg,_}]} =
 		decode_type_header(Decl, Pos),
-	    D = {decl,I,Window,Name,[{dir,dir(IDir)},{type,type(Vt)}|ca(Decl)]},
+	    D = {decl,I,Window,Name,[{size,Res+1},{dir,dir(IDir)},{type,type(Vt)}|ca(Decl)]},
 	    add_decl(F, Data, I, 1, D, Strings, Acc);
 	%% id names the constant holding the transport endpoint (and id+1, for
 	%% the ones that need two).
@@ -638,7 +641,7 @@ disasm_decl(_F, <<>>, _I, _Strings, Acc) ->
 
 disasm_elem(F, variable,ILocal,IDir,Pos,Decl,Strings) ->
     {32, [{res,Res},{is_mapped,_},
-	  {bound,Bound},{nx,_},{vt,Vt},{reg,_}]} = 
+	  {bound,Bound},{nx,_},{vt,Vt},{reg,Reg}]} = 
 	decode_type_header(Decl, Pos),
     Type = type(Vt),
     %% `bind Buf[lo..hi]': a bit-field view, so the arm is the window and
@@ -647,15 +650,18 @@ disasm_elem(F, variable,ILocal,IDir,Pos,Decl,Strings) ->
 	       1 -> {bind, ca(Decl)};
 	       0 -> decode_value(F, Decl, 32, Type, Strings)
 	   end,
+    %% reg: a register the compiler cached the variable in. Scratch, and an
+    %% image clears it, but a patch keeps what RAM held -- said when it is set,
+    %% so csp_asm can put a store back as it was.
     case ILocal of
 	0 -> {variable,[{size,Res+1},
 			{dir,dir(IDir)},
 			{type,Type},
-			{init,Init}]};
+			{init,Init}] ++ [{reg,Reg} || Reg =/= 0]};
 	1 -> {local,[{size,Res+1},
 		     {dir,dir(IDir)},
 		     {type,Type},
-		     {init,Init}]}
+		     {init,Init}] ++ [{reg,Reg} || Reg =/= 0]}
     end;
 disasm_elem(F, constant,ILocal,_IDir,Pos,Decl,Strings) ->    
     {32, [{res,Res},{is_mapped,_},

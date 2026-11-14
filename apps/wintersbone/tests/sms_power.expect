@@ -4,5 +4,6 @@
 {checks, [
   {output_has, "sms> +46701111111: POWER OFF, battery 4203 mV"},
   {output_has, "sms> +46702222222: POWER OFF, battery 4203 mV"},
+  {output_has, "\n#0 up 0"},
   {output_count, "sms> ", 2}
 ]}.

@@ -180,6 +180,15 @@ csp-bc: $(CORE_SRC) gen/rom_empty.c gen/csp_words_bc.h gen/csp_words_c.h \
 	 gen/csp_words.h gen/csp_layout.h gen/csp_strings.h include/csp_mcsp.h
 	@$(CC) $(BC_FLAGS) -DCSP_WORDS_BC $(CORE_SRC) gen/rom_empty.c $(LIBS) -o $@
 
+# ./csp with IEEE binary32 floats (USE_FIXPOINT=0), for the IMAGES of a firmware
+# that has them. An image says in its flags which floats it holds (v22), and a
+# node refuses one that does not match its own build -- so an ESP32, whose core
+# runs IEEE (csp_config.h), cannot boot what ./csp (Q16.16) writes: it fell back
+# to an empty ROM and ran nothing. Makefile.board picks this one by the board's
+# fqbn.
+csp-ieee: $(CORE_SRC) gen/rom_empty.c gen/csp_strings.h
+	@$(CC) $(BC_FLAGS) -DUSE_FIXPOINT=0 $(CORE_SRC) gen/rom_empty.c $(LIBS) -o $@
+
 # --no-eeprom because the EEPROM file is state SHARED between runs, and a
 # check that compares two binaries must not depend on what the previous run
 # left there. -T because the script has live rules: a reactive program that
@@ -403,7 +412,7 @@ clean:
 # image loads back into the firmware that links it. Run `make test` before a
 # commit; this is for the loop in between.
 test:	csp line_edit_check syntax_check strings_check tables_check \
-	patterns_check sketch_check disasm_check dump_check list_check eval_check
+	patterns_check sketch_check disasm_check dump_check list_check asm_check eval_check
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
 
@@ -445,6 +454,14 @@ disasm_check: csp
 list_check: csp
 	@$(MAKE) --no-print-directory -s -C utils
 	@tests/list/check.sh examples/*.csp tests/unit/*.csp
+
+# utils/csp_asm against csp_disasm: an image taken apart and put together again
+# is the same image, byte for byte -- and so is a node's saved patch, and a
+# patch csp_asm builds is one the node loads.
+asm_check: csp
+	@$(MAKE) --no-print-directory -s -C utils
+	@tests/asm/check.sh examples/*.csp tests/unit/*.csp apps/*/tests/*.csp
+	@tests/asm/patch.sh
 
 # utils/candyspeak_eval:cycle/3 against csp, cycle by cycle: every value it
 # works out is the one csp dumps, and the rules it says fired are csp's.
@@ -870,7 +887,7 @@ $(OBJDIR)/%.o: %.c | gen/csp_strings.h
 
 -include $(OBJS:.o=.d)
 
-.PHONY: disasm_check dump_check list_check eval_check clib_host webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
+.PHONY: disasm_check dump_check list_check asm_check eval_check clib_host webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

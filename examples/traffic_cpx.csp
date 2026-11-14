@@ -3,7 +3,8 @@
 #define GREEN 0x07E0     // r=0  g=63 b=0
 #define BLUE  0x001F     // r=0  g=0  b=31
 #define RED   0xF800     // r=31 g=0  b=0
-#define AMBER 0xFD20
+#define AMBER 0xFD20     // r=31 g=41 b=0
+#define YELLOW 0xFFE0    // r=31 g=63 b=0
 #define WHITE 0xFFFF
 
 #digital BtnA   in pulldown 0:4      // button A (pressed = 1)
@@ -35,10 +36,10 @@
     State = redyellow, Phase.period = RedPeriod ? timeout(Phase)
 #end
 #in redyellow
-    Red[0]=RED, Yellow[0]=AMBER, Green[0]=BLACK
-    Red[1]=RED, Yellow[1]=AMBER, Green[1]=BLACK
-    Red[2]=RED, Yellow[2]=AMBER, Green[2]=BLACK
-                Yellow[3]=AMBER
+    Red[0]=RED, Yellow[0]=YELLOW, Green[0]=BLACK
+    Red[1]=RED, Yellow[1]=YELLOW, Green[1]=BLACK
+    Red[2]=RED, Yellow[2]=YELLOW, Green[2]=BLACK
+                Yellow[3]=YELLOW
     State = green, Phase.period = GreenPeriod ? timeout(Phase)
 #end
 #in green
@@ -49,10 +50,10 @@
     State = yellow, Phase.period = YelloPeriod ? timeout(Phase)
 #end
 #in yellow
-    Red[0]=BLACK, Yellow[0]=AMBER, Green[0]=BLACK
-    Red[1]=BLACK, Yellow[1]=AMBER, Green[1]=BLACK
-    Red[2]=BLACK, Yellow[2]=AMBER, Green[2]=BLACK
-                  Yellow[3]=AMBER
+    Red[0]=BLACK, Yellow[0]=YELLOW, Green[0]=BLACK
+    Red[1]=BLACK, Yellow[1]=YELLOW, Green[1]=BLACK
+    Red[2]=BLACK, Yellow[2]=YELLOW, Green[2]=BLACK
+                  Yellow[3]=YELLOW
     State = red, Phase.period = RedPeriod ? timeout(Phase)
 #end
 #in red redyellow green yellow

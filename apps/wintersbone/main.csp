@@ -120,7 +120,8 @@ frost.In = TinC < FrostLim
 // How many messages have gone out -- what a test checks, and what a person
 // asks for when the bill looks wrong.
 #variable Sent = 0
-Sent = Sent + 1 ? pwr.Send || pwr.Clear || batt.Send || press.Send || press.Clear || frost.Send || frost.Clear
+#local Tell:1 = pwr.Send || pwr.Clear || batt.Send || press.Send || press.Clear || frost.Send || frost.Clear
+Sent = Sent + 1 ? Tell
 
 println("POWER OFF, battery ", BattmV, " mV") ? pwr.Send
 println("Power back")                       ? pwr.Clear
@@ -129,6 +130,11 @@ println("PRESSURE DROP ", Pmbar, " mbar")    ? press.Send
 println("Pressure back ", Pmbar, " mbar")    ? press.Clear
 println("FROST inside ", TinC)               ? frost.Send
 println("Frost over ", TinC)                 ? frost.Clear
+// The last line of every alarm: its number since the node started (0-63)
+// and the minutes since then. Nine alarms that all say `#0 up 1` are a node
+// starting over nine times; the same number twice is the network sending it
+// twice; numbers counting up are the node meaning it every time.
+println("#", Sent % 64, " up ", tick() / 60000) ? Tell
 
 // The status report, on request: `> Status = 1`.
 #variable Status:1 unsigned in = 0   // `in`: an SMS may set it

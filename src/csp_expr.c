@@ -322,7 +322,10 @@ static uint8_t exprbuf_var(csp_rt_t* st, csp_exprbuf_t* bp, uint16_t ix)
 	exprbuf_strref(bp, bp->setox);
 	exprbuf_char(bp, ']');
     }
-    else if (elem) {                   // A[<const>]
+    // A[<const>], and A[0] too when A is an array: `Yellow` alone reads as
+    // the whole of it, which it is not.
+    else if (elem || ((INDEX(ix) + 1 < st->ps.nd) &&
+		      decl(st, INDEX(ix) + 1, cont))) {
 	exprbuf_char(bp, '[');
 	exprbuf_uint16(bp, elem);
 	exprbuf_char(bp, ']');

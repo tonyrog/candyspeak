@@ -58,6 +58,10 @@ ARCH_VARIANT ?=
 AVAR := $(shell $(GEN) --variant-of $(BOARD) $(ARCH_VARIANT))
 
 FQBN := $(shell $(GEN) --fqbn-of $(BOARD))
+# The compiler that writes the image reads floats the way the firmware will:
+# an image's flags say Q16.16 or IEEE, and a node refuses the other kind. Every
+# ESP32 core is IEEE (csp_config.h); everything else here is Q16.16.
+CSPC := $(if $(filter esp32:%,$(FQBN)),csp-ieee,csp)
 DEV  := $(shell $(GEN) --port-of $(BOARD))
 # The variant's own binutils when it has one: an arm-none-eabi-nm on a RISC-V
 # elf says "File format not recognized", which reads as a broken build.
@@ -250,9 +254,9 @@ $(B)/csp_board.h: $(TERMS) utils/gen_chips.erl
 # each file comes after what it imports, is what rom.csp is made of -- PROG
 # alone would leave out everything imported. board is pinned to this board's
 # directory, so `#import x' in a program kept elsewhere finds this board's x.
-$(B)/csp_rom.c: $(PROG) $(B)/.cspprog csp
+$(B)/csp_rom.c: $(PROG) $(B)/.cspprog $(CSPC)
 	@mkdir -p $(B)
-	@./csp -n -C -O $@ --deps=$(B)/csp_rom.cspd --root=board=$(PINDIR) $(PROG)
+	@./$(CSPC) -n -C -O $@ --deps=$(B)/csp_rom.cspd --root=board=$(PINDIR) $(PROG)
 	@sed -n 's|^//   size: *|  rom: |p' $@
 	@{ echo "// The program in this image, in build order."; \
 	   echo "// PROG = $(PROG)"; \
@@ -284,6 +288,9 @@ FORCE:
 # here, so this runs only when the binary is missing.
 csp:
 	@$(MAKE) --no-print-directory -f Makefile csp
+
+csp-ieee:
+	@$(MAKE) --no-print-directory -f Makefile csp-ieee
 
 # ONE sketch.yaml with a profile per board -- every board shares the sketch, so
 # it cannot be per-board. It pins the core and library VERSIONS, which is the
