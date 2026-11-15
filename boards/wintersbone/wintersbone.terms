@@ -11,6 +11,10 @@
   {chip, samd21g18a},
   {fqbn, "arduino:samd:mkrnb1500"},
   {port, "/dev/ttyACM0"},
+  %% What it is on USB: the sketch, and the bootloader (1200-baud touch or a
+  %% double-tap of reset), which is where an upload has to find it.
+  {usb, ["2341:8055"]},
+  {usb_boot, ["2341:0055"]},
   {nm, "arm-none-eabi-nm"},
   {optimize, "-Os"},
   {platform, "arduino:samd", "1.8.14"},

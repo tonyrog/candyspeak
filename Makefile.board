@@ -1054,3 +1054,13 @@ clean:
 .PHONY: all clean maps watch FORCE
 
 endif
+
+# `make -f Makefile.board BOARD=... print-B` -- what a variable came to, for
+# ./cs, which asks rather than works the paths out again.
+print-%:
+	@echo '$($*)'
+
+# `... CSVARS="CLIB SKETCH" all cs-vars`: the same, in the run that builds, one
+# line each, for ./cs to pick out of the output.
+cs-vars:
+	@$(foreach v,$(CSVARS),echo 'cs-var $(v)=$($(v))';)

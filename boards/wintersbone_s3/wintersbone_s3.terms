@@ -15,6 +15,8 @@
   %% and the octal PSRAM the board has; 3 MB for the sketch.
   {fqbn, "esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,CDCOnBoot=cdc,USBMode=hwcdc,PartitionScheme=app3M_fat9M_16MB"},
   {port, "/dev/ttyACM0"},
+  %% The S3's own USB-Serial/JTAG, in the sketch and in the ROM loader alike.
+  {usb, ["303a:1001"]},
   {nm, "xtensa-esp32s3-elf-nm"},
   {optimize, "-Os"},
   {platform, "esp32:esp32", "3.3.11"},

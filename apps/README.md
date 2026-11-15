@@ -7,17 +7,26 @@ kept apart from the boards it runs on. Each has
     pins.csp      the host's pins, for its tests
     tests/        X.csp + X.dat + X.expect, run on the host
 
-and is built for a board by `apps/Makefile`:
+and `app.terms`, which says which board it is for and how it gets its pins.
+Built, loaded and tested with `./cs` at the top of the tree:
 
-    make -C apps                          the applications and their boards
-    make -C apps wintersbone              build it for its own board
-    make -C apps wintersbone BOARD=wintersbone_s3
-    make -C apps wintersbone-upload       build, then load it
-    make -C apps wintersbone-test         its tests, on the host
+    ./cs                          the applications, the boards, what is plugged in
+    ./cs wintersbone              build it for its own board
+    ./cs wintersbone s3           ...for another (a board may be named short)
+    ./cs upload wintersbone s3    load it, built first if it is not up to date
+    ./cs upload                   the one last built, again
+    ./cs test wintersbone         its tests, on the host
+    ./cs info wintersbone s3      the board, the make line, how to flash by hand
+    ./cs -n ...                   print what would run, run nothing
 
-Anything else on the line goes on to `Makefile.board` unchanged:
-`WATCH=1` (measure the stack), `MAP=...`, `DEV=/dev/ttyACM1`,
-`EXTRA="-DCSP_STACK_RESERVE=4096"`.
+`cs` prints every command before it runs it, so anything it does can be done
+by hand. `-D /dev/ttyACM1` picks the port when the board's USB id does not,
+`-b 460800` the upload speed. NAME=VALUE on the line goes on to
+`Makefile.board` unchanged: `WATCH=1` (measure the stack), `MAP=...`.
+
+An upload whose build is newer than everything it was made from (the
+program's files, the runtime's sources, the board directory, the same
+NAME=VALUEs) runs the loader straight away, without make.
 
 ## Where the pins come from
 
@@ -31,12 +40,13 @@ Two arrangements, both in use:
   with `PROG=apps/wintersbone/main.csp`; the output goes to the board's
   `build/`.
 
-`apps/Makefile` knows which one each application uses (`<app>_HOW`) and which
-board it is for unless told otherwise (`<app>_BOARD`). A new application is
-those two lines and its name in `APPS`.
+`app.terms` says which (`{pins, app}` or `{pins, board}`), the board it is
+for unless told otherwise (`{board, ...}`), and for `{pins, board}` the
+boards it runs on (`{boards, [...]}`). A new application is its directory
+and that file.
 
 ## Why not `make -f Makefile.board BOARD=wintersbone`
 
 Without `PROG` or `APP` that builds the board's `pins.csp` ALONE -- a node
 with its pins declared and no program -- and says nothing about it. It is
-the trap the Makefile here is for.
+the trap `./cs` is for: it always says which program.
