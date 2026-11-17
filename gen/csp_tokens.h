@@ -94,6 +94,7 @@ typedef enum {
     D_BUFFER,
     D_ROUTE,
     D_WHEN,
+    D_ELSE,
     D_ANNOTATE,
     D_UART,
     D_SOCKET,
@@ -189,6 +190,7 @@ typedef enum {
     DECL_ENT(D_BUFFER,DECL_BUFFER,s_buffer), \
     DECL_ENT(D_ROUTE,DECL_ROUTE,s_route), \
     DECL_ENT(D_WHEN,DECL_NONE,s_when), \
+    DECL_ENT(D_ELSE,DECL_NONE,s_else), \
     DECL_ENT(D_ANNOTATE,DECL_NONE,s_annotate), \
     DECL_ENT(D_IMPORT,DECL_NONE,s_import), \
     DECL_ENT(D_LAST,DECL_NONE,s_null),

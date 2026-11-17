@@ -431,6 +431,7 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_RESERVED_NAME] =          ros_err_reserved_name,
     [ERR_OPTS_AFTER_PIN] =         ros_err_opts_after_pin,
     [ERR_BLOCK_OPEN] =             ros_err_block_open,
+    [ERR_BLOCK_DEPTH] =            ros_err_block_depth,
     [ERR_TOO_MANY_EVENTS] =        ros_err_many_events,
     [ERR_TOO_MANY_PARTS] =         ros_err_many_parts,
     [ERR_MODULE_TOO_LONG] =        ros_err_module_long,

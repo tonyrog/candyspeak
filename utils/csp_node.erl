@@ -18,7 +18,7 @@
 %%% @end
 -module(csp_node).
 
--export([dumps/1, program/1, state/2, line_crc/2, merge/2]).
+-export([dumps/1, program/1, state/2, line_crc/2, merge/2, info/1]).
 
 %% Every reply in a stretch of console text, in order, whatever else is there:
 %% {rom, Bin} | {eeprom, Bin} | {patch, Bin} | {state, Cycle, Ms, N, Bin} when
@@ -72,7 +72,8 @@ dump([Kind, Total], Ls) ->
 
 kind("rom") -> rom;
 kind("eeprom") -> eeprom;
-kind("patch") -> patch.
+kind("patch") -> patch;
+kind("info") -> info.
 
 %% A line, if it is one and its CRC says it came as sent: [{Offs, Bin}].
 good(L) ->
@@ -170,6 +171,87 @@ varint(<<1:1, X:7, T/binary>>) ->
     {V, T1} = varint(T),
     {X bor (V bsl 7), T1};
 varint(<<0:1, X:7, T/binary>>) -> {X, T}.
+
+%% What /dump info says of a node, from its bytes (src/csp_repl.c info_emit):
+%% records of a tag, a length and varints and strings. A tag not known here
+%% is passed over by its length -- a newer node is still read.
+%%
+%%   #{fw, rom, float => fixpoint | ieee, endian => little | big, features,
+%%     device, ram => #{total, free}, limits => #{instr, decl, string, names,
+%%     funcs}, use => #{instr, decl, string, names, rom_decl, rom_instr},
+%%     flash => #{base, sectors => [Size]}, regions => [#{name, kind, first,
+%%     last, slot, image}], images => [#{index, role, gen, size, booted}],
+%%     eeprom => #{capacity, stored}}
+info(Bin) -> info(Bin, #{regions => [], images => []}).
+
+info(<<Tag, Len, Rec:Len/binary, T/binary>>, I) -> info(T, record(Tag, Rec, I));
+info(<<>>, I = #{regions := Rs, images := Is}) ->
+    I#{regions := lists:reverse(Rs), images := lists:reverse(Is)}.
+
+record(1, R, I) -> {Fw, _} = vstr(R), I#{fw => Fw};
+record(2, R, I) ->
+    [Rom, Flags, Feat] = vints(R, 3),
+    I#{rom => Rom,
+       float => case Flags band 1 of 0 -> fixpoint; 1 -> ieee end,
+       endian => case Flags band 2 of 0 -> little; 2 -> big end,
+       features => [F || {B, F} <- [{1, compiler}, {2, flash}, {4, eeprom}],
+			 Feat band B =/= 0]};
+record(3, R, I) -> {D, _} = vstr(R), I#{device => D};
+record(4, R, I) -> [Tot, Free] = vints(R, 2), I#{ram => #{total => Tot, free => Free}};
+record(5, R, I) ->
+    I#{limits => maps:from_list(lists:zip([instr, decl, string, names, funcs],
+					  vints(R, 5)))};
+record(6, R, I) ->
+    I#{use => maps:from_list(lists:zip([instr, decl, string, names, rom_decl,
+					rom_instr], vints(R, 6)))};
+record(7, R, I) ->
+    {Base, T} = varint(R),
+    I#{flash => #{base => Base, sectors => runs(T)}};
+record(8, R, I = #{regions := Rs}) ->
+    {[Kind, First, Last, Slot], T} = vints_t(R, 4),
+    {Img, T1} = case Slot of
+		    1 -> {[Role, Gen, Size], Tr} = vints_t(T, 3),
+			 {#{role => role(Role), gen => Gen, size => Size}, Tr};
+		    _ -> {none, T}
+		end,
+    {Name, _} = vstr(T1),
+    Reg = #{name => Name, first => First, last => Last, image => Img,
+	    kind => case Kind of 0 -> runtime; 1 -> app; 2 -> patch; 3 -> store;
+			 K -> K end,
+	    slot => case Slot of 0 -> erased; 1 -> image; 2 -> foreign;
+			 3 -> bad_crc; 4 -> unread; 5 -> none end},
+    I#{regions := [Reg | Rs]};
+record(9, R, I = #{images := Is}) ->
+    [Ix, Role, Gen, Size, Booted] = vints(R, 5),
+    I#{images := [#{index => Ix, role => role(Role), gen => Gen, size => Size,
+		    booted => Booted =:= 1} | Is]};
+record(10, R, I) ->
+    [Cap, Stored] = vints(R, 2),
+    I#{eeprom => #{capacity => case Cap of 0 -> none; 16#ffffffff -> unbounded;
+				   C -> C end,
+		   stored => Stored}};
+record(_, _, I) -> I.
+
+role(1) -> failsafe;
+role(_) -> rom.
+
+vints(B, N) -> element(1, vints_t(B, N)).
+
+vints_t(B, 0) -> {[], B};
+vints_t(B, N) ->
+    {V, T} = varint(B),
+    {Vs, T1} = vints_t(T, N - 1),
+    {[V | Vs], T1}.
+
+vstr(B) ->
+    {L, T} = varint(B),
+    <<S:L/binary, T1/binary>> = T,
+    {binary_to_list(S), T1}.
+
+runs(<<>>) -> [];
+runs(B) ->
+    {[Count, Size], T} = vints_t(B, 2),
+    lists:duplicate(Count, Size) ++ runs(T).
 
 %% The signed reading the node took: -1 came as 1.
 unzig(Z) -> (Z bsr 1) bxor -(Z band 1).

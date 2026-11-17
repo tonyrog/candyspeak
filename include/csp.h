@@ -1109,7 +1109,7 @@ typedef enum {
 // How deep blocks may nest. ONE limit for `#in` and `#when` together, because
 // they share one stack -- `#end` closes whichever opened last, and it cannot do
 // that from two separate counters.
-#define CSP_MAX_BLOCK 4
+#define CSP_MAX_BLOCK 8
 
 // How many interrupt sources one program may have. The pending set is a
 // uint32_t an ISR ORs into, which is what fixes the number: a wider set is not
@@ -1744,6 +1744,9 @@ typedef enum {
     // which is the only useful place to point, because everything after it was
     // quietly swallowed into a block that never closed.
     ERR_BLOCK_OPEN,
+    // One #in/#when/#module more than CSP_MAX_BLOCK deep. It used to say "end
+    // mismatch", about an #end nobody had written yet.
+    ERR_BLOCK_DEPTH,
     // More interrupt sources than the pending word has bits. Not a syntax
     // error: it is raised while arming, where the count is first known.
     ERR_TOO_MANY_EVENTS,
@@ -1843,7 +1846,7 @@ typedef struct
 // struct rather than beside it.
 // One open block. `#in` and `#when` share the stack, so this carries which kind
 // it is and everything its `#end` has to put back.
-typedef enum { BLK_IN = 0, BLK_WHEN = 1, BLK_MODULE = 2 } blk_kind_t;
+typedef enum { BLK_IN = 0, BLK_WHEN = 1, BLK_MODULE = 2, BLK_ELSE = 3 } blk_kind_t;
 
 typedef struct {
     index_t mark;                // the gate instruction, patched at #end

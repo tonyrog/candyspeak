@@ -537,13 +537,13 @@ walk(Env, _I, To, Ind, _Top, S, Acc) ->
     {lists:reverse(Acc) ++ Ends, maps:get(no, S)}.
 
 %% `#end' for every block that ends here -- they nest, so a while.
-close_blocks(Env, I, Ind, S = #{blk := {End, _Shown}}, Acc) when I >= End ->
+close_blocks(Env, I, Ind, S = #{blk := {End, _Shown, _Kind}}, Acc) when I >= End ->
     Line = {[indent(Ind + depth(S)), "#end "], {0, iseg(Env, I)}},
     close_blocks(Env, I, Ind, pop(S), [Line | Acc]);
 close_blocks(_Env, _I, _Ind, S, Acc) ->
     {S, lists:reverse(Acc)}.
 
-final_ends(Env, To, Ind, S = #{blk := {_, _}}, Acc) ->
+final_ends(Env, To, Ind, S = #{blk := {_, _, _}}, Acc) ->
     Line = {[indent(Ind + depth(S)), "#end "], {0, iseg(Env, To - 1)}},
     final_ends(Env, To, Ind, pop(S), Acc ++ [Line]);
 final_ends(_Env, _To, _Ind, _S, Acc) ->
@@ -565,7 +565,7 @@ step(Env, I, To, Ind, Top, S, Acc) ->
 	'NINSTATE' ->
 	    case args(Env, I) of
 		[_, 0, {nxt, Nxt} | _] ->
-		    S1 = push(S, {I + Nxt, true}),
+		    S1 = push(S, {I + Nxt, true, 'when'}),
 		    Line = {[indent(Ind + depth(S1)), "#when ",
 			     when_text(Env, maps:get(rule, S), I)],
 			    {0, iseg(Env, I)}},
@@ -574,11 +574,24 @@ step(Env, I, To, Ind, Top, S, Acc) ->
 		_ ->
 		    walk(Env, I + 1, To, Ind, Top, S, Acc)
 	    end;
+	%% A #when's #else: `LI t,1 ; INSTATE t,0' last in the then-part, the
+	%% jump past the else-part; the #when's block ends right behind it, and
+	%% goes on to where the INSTATE jumps. Nothing else makes that pair.
+	'LI' when element(3, map_get(blk, S)) =:= 'when',
+		  I + 2 =:= element(1, map_get(blk, S)) ->
+	    case {iop(Env, I + 1), args(Env, I + 1)} of
+		{'INSTATE', [_, 0, {nxt, Nxt} | _]} ->
+		    S1 = S#{blk := {I + 1 + Nxt, true, 'else'}},
+		    Line = {[indent(Ind + depth(S1)), "#else"], {0, iseg(Env, I)}},
+		    walk(Env, I + 2, To, Ind, Top, S1#{rule := I + 2}, [Line | Acc]);
+		_ ->
+		    walk(Env, I + 1, To, Ind, Top, S, Acc)
+	    end;
 	'LD' ->
 	    case in_gate(Env, I, To) of
 		{true, J, States} ->
 		    [_, _, {nxt, Nxt} | _] = args(Env, J),
-		    S1 = push(S, {J + Nxt, true}),
+		    S1 = push(S, {J + Nxt, true, in}),
 		    Line = {[indent(Ind + depth(S1)), "#in",
 			     [[" ", state_name(Env, N)] || N <- States]],
 			    {0, iseg(Env, I)}},

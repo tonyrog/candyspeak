@@ -1699,6 +1699,7 @@ vbool({call, _, {'WORD', _, F}, [{field, _, {'WORD', _, N}}]}, C) ->
     ["(", X, " == ", Was, " and ", New, " == ", Is, ")"].
 
 vnum({'INT', _, S}, _C) -> S;
+vnum({field, _, {'WORD', _, "State"}}, _C) -> "St";   % main's; s1.State is s1_State
 vnum({field, _, {'WORD', _, N}}, C) ->
     case is_map_key(N, maps:get(locals, C)) of
 	true -> [varp_name(N), "()"];           % a macro, see local_defs/1

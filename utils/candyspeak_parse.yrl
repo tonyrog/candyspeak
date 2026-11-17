@@ -2,7 +2,7 @@
 
 Terminals
   'module' 'end' 'states' 
-  'when'
+  'when' 'else'
   'digital' 'analog' 'variable' 'local' 'param' 'constant' 
   'timer' 'field' 'buffer' 'define' 'disable' 'enable'
   'annotate' 'import'
@@ -64,6 +64,8 @@ declaration -> 'module' name : {module,line('$1'),'$2'}.
 declaration -> 'states' state_list: {states,line('$1'),'$2'}.
 declaration -> 'in' state_list: {'in',line('$1'),'$2'}.
 declaration -> 'when' expr : {'when',line('$1'),'$2'}.
+%% the other half of a #when; candyspeak:parse turns it into #end + #when !C
+declaration -> 'else' : {'else',line('$1')}.
 declaration -> 'digital' xid array res options : 
 		   {digital,line('$1'),'$2','$3','$4','$5',[]}.
 declaration -> 'digital' xid array res options pin_list : 
@@ -148,6 +150,7 @@ aid -> 'module'   : make_word('$1').
 aid -> 'end'      : make_word('$1').
 aid -> 'states'   : make_word('$1').
 aid -> 'when'     : make_word('$1').
+aid -> 'else'     : make_word('$1').
 aid -> 'digital'  : make_word('$1').
 aid -> 'analog'   : make_word('$1').
 aid -> 'variable' : make_word('$1').
@@ -396,7 +399,9 @@ ref -> fid '.' part : {field,line('$1'),{part,line('$2'),'$1','$3'}}.
 ref -> fid '.' xid  : {field,line('$1'),{fld,line('$2'),'$1','$3'}}.
 ref -> fid '.' xid '.' part : {field,line('$1'),{part,line('$2'),{fld,line('$4'),'$1','$3'},'$5'}}.
 ref -> fid '[' expr ']' : {field,line('$1'),{index, line('$2'), '$1','$3'}}.
-ref -> fid '[' 'INT' '..' 'INT' ']' : 
+%% Both ends of a byte range are constants, and a #define or a #constant
+%% names one as well as a number does: `Frame[LO..HI]'.
+ref -> fid '[' expr '..' expr ']' :
 	     {field,line('$1'),{index,line('$2'),'$1',
 				{range,line('$4'),'$3','$5'}}}.
 

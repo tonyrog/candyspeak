@@ -253,7 +253,13 @@ parse_tokens(Filename, Scanned) ->
 			       apply(Mod,format_error,[Message])]),
 		    {error, syntax};
 		{ok,M0} ->
-		    {ok, M0}
+		    case else_blocks(M0, []) of
+			{ok, M1} -> {ok, M1};
+			{error, Ln} ->
+			    io:format("~s:~w: #else outside a #when, or a second "
+				      "one\n", [Filename, Ln]),
+			    {error, syntax}
+		    end
 	    end;
 	{error,{Ln,Mod,Message},_Ln} ->
 	    io:format("~s:~w: ~s\n", 
@@ -264,6 +270,33 @@ parse_tokens(Filename, Scanned) ->
 	    io:format("error: ~p\n", [Error]),
 	    Error
     end.
+
+%% #when C ... #else ... #end is #when C ... #end #when !C ... #end to every
+%% tool that reads the tree: eval, varp, the C backend, the panel. That is
+%% what the runtime does, with C taken once, before the block (see
+%% csp_parse_else) -- and here C is read from the cycle's values, which a rule
+%% in the first half does not change. Per file: a block does not span one.
+else_blocks([D = {'when', _, X} | T], Stk) ->
+    cons(D, else_blocks(T, [{'when', X} | Stk]));
+else_blocks([{'else', Ln} | T], [{'when', X} | Stk]) ->
+    Not = case X of
+	      {'!', _, C} -> C;
+	      _ -> {'!', Ln, X}
+	  end,
+    cons({'end', Ln}, cons({'when', Ln, Not}, else_blocks(T, ['else' | Stk])));
+else_blocks([{'else', Ln} | _], _Stk) ->
+    {error, Ln};
+else_blocks([D | T], Stk) when element(1, D) =:= in; element(1, D) =:= module ->
+    cons(D, else_blocks(T, [element(1, D) | Stk]));
+else_blocks([D = {'end', _} | T], [_ | Stk]) ->
+    cons(D, else_blocks(T, Stk));
+else_blocks([D | T], Stk) ->
+    cons(D, else_blocks(T, Stk));
+else_blocks([], _Stk) ->
+    {ok, []}.
+
+cons(D, {ok, T}) -> {ok, [D | T]};
+cons(_D, Error) -> Error.
 
 tokens(Filename) ->
     case file:read_file(Filename) of

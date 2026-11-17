@@ -39,6 +39,36 @@
 static int cmd_help(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_list(csp_rt_t* st, int argc, char* arg[]);
 static int cmd_state(csp_rt_t* st, int argc, char* argv[]);
+#if defined(CSP_HAVE_FLASH)
+// What an application slot holds. /images says it in words, /dump info as
+// the number.
+#define SLOT_ERASED     0
+#define SLOT_IMAGE      1
+#define SLOT_FOREIGN    2   // something, not an image: a write that did not finish
+#define SLOT_BAD_CRC    3
+#define SLOT_UNREADABLE 4
+#define SLOT_NONE       5   // not an application slot: runtime, store, patch
+
+static int region_image(const csp_device_t* d, const csp_region_t* r,
+			csp_image_header_t* fh)
+{
+    uint32_t off = csp_region_offset(d, r);
+
+    if ((csp_region_size(d, r) < sizeof(*fh)) ||
+	(csp_flash_read(off, fh, sizeof(*fh)) != CSP_FLASH_OK))
+	return SLOT_UNREADABLE;
+    if ((fh->magic[0] == 0xFF) && (fh->magic[1] == 0xFF) &&
+	(fh->magic[2] == 0xFF) && (fh->magic[3] == 0xFF))
+	return SLOT_ERASED;
+    if ((fh->magic[0] != CSP_IMAGE_MAGIC0) || (fh->magic[1] != CSP_IMAGE_MAGIC1) ||
+	(fh->magic[2] != CSP_IMAGE_MAGIC2) || (fh->magic[3] != CSP_IMAGE_MAGIC3))
+	return SLOT_FOREIGN;
+    if (csp_crc16(0xFFFF, fh, sizeof(*fh) - sizeof(uint16_t), 0) != fh->crc_hdr)
+	return SLOT_BAD_CRC;
+    return SLOT_IMAGE;
+}
+#endif
+
 // /images -- what this firmware linked in. The registry answers that; it does
 // NOT answer what is on the chip (a FAILSAFE flashed on its own, an A/B slot
 // updated in the field), which needs a flash scan.
@@ -86,29 +116,15 @@ static int cmd_images(csp_rt_t* st, int argc, char* argv[])
 
 	    if (r->kind != CSP_REG_APP)
 		continue;
+	    (void)off;
 	    csp_print_str(r->name);
 	    csp_print_lit(": ");
-	    if ((csp_region_size(d, r) < sizeof(fh)) ||
-		(csp_flash_read(off, &fh, sizeof(fh)) != CSP_FLASH_OK)) {
-		csp_print_line("unreadable");
-		continue;
-	    }
-	    if ((fh.magic[0] == 0xFF) && (fh.magic[1] == 0xFF) &&
-		(fh.magic[2] == 0xFF) && (fh.magic[3] == 0xFF)) {
-		csp_print_line("erased");
-		continue;
-	    }
-	    if ((fh.magic[0] != CSP_IMAGE_MAGIC0) ||
-		(fh.magic[1] != CSP_IMAGE_MAGIC1) ||
-		(fh.magic[2] != CSP_IMAGE_MAGIC2) ||
-		(fh.magic[3] != CSP_IMAGE_MAGIC3)) {
-		csp_print_line("not an image");
-		continue;
-	    }
-	    if (csp_crc16(0xFFFF, &fh, sizeof(fh) - sizeof(uint16_t), 0)
-		!= fh.crc_hdr) {
-		csp_print_line("header CRC BAD");
-		continue;
+	    switch (region_image(d, r, &fh)) {
+	    case SLOT_UNREADABLE: csp_print_line("unreadable"); continue;
+	    case SLOT_ERASED:     csp_print_line("erased"); continue;
+	    case SLOT_FOREIGN:    csp_print_line("not an image"); continue;
+	    case SLOT_BAD_CRC:    csp_print_line("header CRC BAD"); continue;
+	    default: break;
 	    }
 	    csp_print_rostr((fh.role == CSP_ROLE_FAILSAFE)
 			    ? ros_FAILSAFE : ros_ROM);
@@ -139,6 +155,7 @@ static int cmd_images(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_pause(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_step(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_dump(csp_rt_t* st, int argc, char* argv[]);
+static uint32_t ram_free(csp_rt_t* st);
 #if defined(CSP_HAVE_FIRED)
 static int cmd_clock(csp_rt_t* st, int argc, char* argv[]);
 #endif
@@ -655,6 +672,27 @@ static int list_rules(csp_rt_t* st, list_ctx_t* c, int from, int to,
 		block_shown = 0;
 	    }
 	    st->list_nstate = 0;
+	}
+	// A #when's #else: the then-part ends in `LI t,1 ; INSTATE t,0', the
+	// jump past the else-part, and the #when's gate skips to just after it
+	// (csp_parse_else). Nothing else makes that pair, so where a #when's
+	// block ends right behind one, it is the #else -- and the block goes on
+	// to where the INSTATE jumps.
+	if ((block_when >= 0) && (i + 2 == block_end) &&
+	    (csp_iop(st, i) == OP_LI) && (csp_iop(st, i+1) == OP_INSTATE) &&
+	    (instr(st, i+1, in_imm) == 0)) {
+	    if (block_shown) {
+		list_column(0, instr_seg(st, i), 0);
+		list_indent(indent + depth);
+		csp_print_char('#');
+		csp_print_rostr(ros_else);
+		list_eol();
+	    }
+	    block_end = i + 1 + instr(st, i+1, in_nxt);
+	    block_gate = i + 1;
+	    i += 2;
+	    rule = i;
+	    continue;
 	}
 	// A #when gate: the condition, then ONE OP_NINSTATE against zero whose
 	// nxt skips the block. Told apart from an #in chain by coming FIRST --
@@ -2442,6 +2480,197 @@ static void dump_state(csp_rt_t* st)
     dump_end();
 }
 
+// --- /dump info -------------------------------------------------------------
+//
+// What a host has to know of a node before it can drive it, or build and send
+// it an image: its firmware, the format its images are in (floats, byte
+// order), its limits and what it uses of them, and its flash -- the sectors,
+// the regions over them and what each slot holds. Compact, in the dump's own
+// frame (hex+crc lines, windows): RECORDS, each a tag byte, a length byte and
+// that many bytes of varints and strings (a varint length and the bytes). A
+// reader skips a tag it does not know by its length, so records can be added.
+// utils/csp_node.erl info/1 reads it.
+//
+//   1 fw    version
+//   2 fmt   ROM format version, image flags (CSP_IMG_F_*), features
+//   3 dev   the part's name                                      (flash builds)
+//   4 ram   capacity, free
+//   5 lim   instr, decl, string, names caps, built-in functions
+//   6 use   instr, decl, string, names used; ROM decl, ROM instr
+//   7 sec   flash base, then (count, size) runs of sectors        (flash builds)
+//   8 reg   kind, first, last, state [role, generation, size], name -- one per
+//           region                                              (flash builds)
+//   9 img   index, role, generation, size, booted -- one per linked image
+//  10 eep   capacity (0 none, 0xFFFFFFFF unbounded), bytes stored
+//
+// Two passes: one counts, so the head can say the total, one sends.
+
+#define INFO_FW  1
+#define INFO_FMT 2
+#define INFO_DEV 3
+#define INFO_RAM 4
+#define INFO_LIM 5
+#define INFO_USE 6
+#define INFO_SEC 7
+#define INFO_REG 8
+#define INFO_IMG 9
+#define INFO_EEP 10
+
+#define INFO_F_COMPILER 0x01
+#define INFO_F_FLASH    0x02
+#define INFO_F_EEPROM   0x04
+
+// The bare builds name it (Makefile.board); a build that does not says so.
+#ifndef CSP_VERSION
+#define CSP_VERSION "unknown"
+#endif
+static const char info_fw[] RODATA = CSP_VERSION;
+
+typedef struct {
+    uint8_t n;
+    uint8_t b[48];
+} info_rec_t;
+
+static uint8_t info_counting;
+
+static void info_out(uint8_t b)
+{
+    if (info_counting)
+	dump_size++;
+    else
+	dump_byte(b);
+}
+
+static void rec_varint(info_rec_t* r, uint32_t v)
+{
+    while ((v >= 0x80) && (r->n < sizeof(r->b))) {
+	r->b[r->n++] = (uint8_t)(v | 0x80);
+	v >>= 7;
+    }
+    if (r->n < sizeof(r->b))
+	r->b[r->n++] = (uint8_t)v;
+}
+
+// A string in RAM, or (ro) in flash; cut where the record is full.
+static void rec_str(info_rec_t* r, const char* s, int ro)
+{
+    uint8_t len = 0;
+    while ((ro ? ro_byte((const uint8_t*)s + len) : (uint8_t)s[len]) &&
+	   (len < 24))
+	len++;
+    rec_varint(r, len);
+    while (len-- && (r->n < sizeof(r->b)))
+	r->b[r->n++] = ro ? ro_byte((const uint8_t*)s++) : (uint8_t)*s++;
+}
+
+static void rec_send(uint8_t tag, info_rec_t* r)
+{
+    uint8_t i;
+    info_out(tag);
+    info_out(r->n);
+    for (i = 0; i < r->n; i++)
+	info_out(r->b[i]);
+    r->n = 0;
+}
+
+static void info_emit(csp_rt_t* st)
+{
+    info_rec_t r;
+    int i, n;
+    uint32_t cap;
+
+    r.n = 0;
+    rec_str(&r, info_fw, 1);
+    rec_send(INFO_FW, &r);
+
+    rec_varint(&r, ROM_FORMAT_VERSION);
+    rec_varint(&r, CSP_IMG_FLAGS);
+    cap = csp_eeprom_capacity();
+    rec_varint(&r, INFO_F_COMPILER
+#if defined(CSP_HAVE_FLASH)
+	       | INFO_F_FLASH
+#endif
+	       | ((cap != CSP_EEPROM_NONE) ? INFO_F_EEPROM : 0));
+    rec_send(INFO_FMT, &r);
+
+    rec_varint(&r, csp_system_ram_capacity());
+    rec_varint(&r, ram_free(st));
+    rec_send(INFO_RAM, &r);
+
+    rec_varint(&r, MAX_INSTRS);
+    rec_varint(&r, MAX_DECLS);
+    rec_varint(&r, MAX_STR_BUF);
+    rec_varint(&r, MAX_NAMEIDS);
+    rec_varint(&r, ro_byte(&csp_num_builtin_funcs));
+    rec_send(INFO_LIM, &r);
+
+    rec_varint(&r, st->ps.nn);
+    rec_varint(&r, st->ps.nd);
+    rec_varint(&r, st->ps.strp);
+    rec_varint(&r, st->ps.nstr);
+    rec_varint(&r, st->rom_nd);
+    rec_varint(&r, st->rom_nn);
+    rec_send(INFO_USE, &r);
+
+#if defined(CSP_HAVE_FLASH)
+    {
+	const csp_device_t* d = csp_device();
+	uint8_t k;
+	if (d != NULL) {
+	    rec_str(&r, d->name, 0);
+	    rec_send(INFO_DEV, &r);
+	    // the sectors as runs of one size: a part has few distinct sizes
+	    rec_varint(&r, d->flash.base);
+	    for (k = 0; k < d->flash.n; ) {
+		uint8_t j = k;
+		while ((j < d->flash.n) && (d->flash.size[j] == d->flash.size[k]))
+		    j++;
+		rec_varint(&r, (uint32_t)(j - k));
+		rec_varint(&r, d->flash.size[k]);
+		k = j;
+	    }
+	    rec_send(INFO_SEC, &r);
+	    for (k = 0; k < d->nregion; k++) {
+		const csp_region_t* rg = &d->region[k];
+		csp_image_header_t fh;
+		int sl = (rg->kind == CSP_REG_APP) ? region_image(d, rg, &fh)
+						   : SLOT_NONE;
+		rec_varint(&r, rg->kind);
+		rec_varint(&r, rg->first);
+		rec_varint(&r, rg->last);
+		rec_varint(&r, (uint32_t)sl);
+		if (sl == SLOT_IMAGE) {
+		    rec_varint(&r, fh.role);
+		    rec_varint(&r, fh.generation);
+		    rec_varint(&r, fh.size);
+		}
+		rec_str(&r, rg->name, 0);
+		rec_send(INFO_REG, &r);
+	    }
+	}
+    }
+#endif
+
+    n = csp_image_count();
+    for (i = 0; i < n; i++) {
+	csp_image_header_t h = ro_header((const csp_image_header_t*)csp_image_at(i));
+	rec_varint(&r, (uint32_t)i);
+	rec_varint(&r, h.role);
+	rec_varint(&r, h.generation);
+	rec_varint(&r, h.size);
+	rec_varint(&r, (i == st->image_no) ? 1 : 0);
+	rec_send(INFO_IMG, &r);
+    }
+
+    {
+	int stored = csp_eeprom_stored();
+	rec_varint(&r, (cap == CSP_EEPROM_NONE) ? 0 :
+		   (cap == CSP_EEPROM_UNBOUNDED) ? 0xFFFFFFFFUL : cap);
+	rec_varint(&r, (stored < 0) ? 0 : (uint32_t)stored);
+	rec_send(INFO_EEP, &r);
+    }
+}
+
 static int cmd_dump(csp_rt_t* st, int argc, char* argv[])
 {
     uint32_t k, from, len;
@@ -2537,6 +2766,18 @@ static int cmd_dump(csp_rt_t* st, int argc, char* argv[])
 	dump_end();
 	return CSP_CMD_OK;
     }
+    if ((argc >= 1) && (strcmp(argv[0], "info") == 0)) {
+	if (dump_args(argc - 1, argv + 1, &from, &len) < 0)
+	    goto usage;
+	dump_size = 0;
+	info_counting = 1;
+	info_emit(st);
+	info_counting = 0;
+	dump_begin("info", dump_size, from, len);
+	info_emit(st);
+	dump_end();
+	return CSP_CMD_OK;
+    }
     if ((argc == 1) && (strcmp(argv[0], "state") == 0)) {
 	if (!st->started) {
 	    csp_print_line("not started -- /resume to allocate and run");
@@ -2547,7 +2788,7 @@ static int cmd_dump(csp_rt_t* st, int argc, char* argv[])
     }
 usage:
     csp_print_line("ERR usage: /dump rom [slot] [offs [len]] | eeprom [offs [len]]"
-		   " | patch [offs [len]] | state");
+		   " | patch [offs [len]] | state | info [offs [len]]");
     return CSP_CMD_OK;
 }
 
@@ -3322,11 +3563,25 @@ NOINLINE static uint32_t csp_derived_bytes(csp_rt_t* st)
 // The category table below is counts, not bytes: decl/instr/string live in the
 // RAM arrays (ROM stays in flash) so those show the RAM-patch usage; the rest are
 // rebuilt whole into RAM arrays, so their counts include any ROM content.
+// RAM nothing has yet: the system's, the model's, the derived tables', the
+// line, the stack reserve and the RAM code all taken off the capacity.
+static uint32_t code_bytes(csp_rt_t* st)
+{
+    return (uint32_t)((st->ps.nn - st->rom_nn) * sizeof(csp_instr_t) +
+		      (st->ps.nd - st->rom_nd) * sizeof(csp_decl_t));
+}
+
+static uint32_t ram_free(csp_rt_t* st)
+{
+    uint32_t cap = csp_system_ram_capacity();
+    uint32_t acc = csp_system_ram_used() + model_state() + csp_derived_bytes(st)
+	+ st->line.buf_size + CSP_STACK_RESERVE + code_bytes(st);
+    return (cap > acc) ? (cap - acc) : 0;
+}
+
 static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 {
-    size_t ib = (size_t)(st->ps.nn - st->rom_nn) * sizeof(csp_instr_t);
-    size_t db = (size_t)(st->ps.nd - st->rom_nd) * sizeof(csp_decl_t);
-    size_t used = ib + db;
+    uint32_t used = code_bytes(st);
     (void)argc; (void)argv;
 
     // Where the board's RAM went. Since CandySpeak claims all free RAM, a
@@ -3345,10 +3600,7 @@ static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 	uint32_t cap     = csp_system_ram_capacity();
 	uint32_t sys     = csp_system_ram_used();
 	uint32_t buffers = csp_derived_bytes(st);
-	uint32_t acc     = sys + model_state() + buffers
-	                 + st->line.buf_size
-			 + CSP_STACK_RESERVE + (uint32_t)used;
-	uint32_t freeram = (cap > acc) ? (cap - acc) : 0;
+	uint32_t freeram = ram_free(st);
 	csp_print_lit("RAM ");
 	csp_print_uint((uvalue_t)cap);
 	csp_print_line(" total:");

@@ -2,6 +2,63 @@
 
 Avklarade punkter, flyttade hit från TODO.md. Nyast överst.
 
+## else for when
+
+   #when A < 10
+   	 action_1
+   #end
+   #when !(A < 10)
+   	 action_2
+   #end
+
+should be able to write
+
+   #when A < 10
+   	 action_1
+   #else
+   	 action_2
+   #end
+
+## Panel tool
+
+Is named candid
+
+## binary form for terms set in Q mode -bin
+
+Binary format in -Q mode to be used by port length mode,
+(must keep quite) these terms may then be sent all the
+way up to the web browser.
+
+### ellm connection
+
+- Connect to LLM via ellm, allow for a text window where
+a dialog can be used to create candyspeak code from a prompt
+or update existing code from prompt. Same window can be
+used to do varp queries and prove stauff.
+- Start from scratch blank slate? gradually add code and
+annotations to the candyspeak code.
+
+### connect live system via uart / tcp  (canbus)
+
+Extract code from live node. (no annotations)
+we may store a source version / checksum to match
+a locally stored source version with annoation if needed!
+
+- Allow live update of patches after varp analysis and bug fixes
+- Allow live state (snap shots) view from real executing node
+- Send virtual events to node?
+- Console mini window
+
+
+
+## TRANSLATE TO C
+
+Write a simple candyspeak to C translator, this wil of course remove
+most/all of the candyspeak features, but could be use in case when
+the device is really tiny and you just want the job done.
+
+
+
 ## Villkor droppas TYST vid parse-fel i guarden.
   `Q = 1 ? undefinedname` och `Q = 2 ? A &&` svarar båda "OK" och lagras som
   OVILLKORLIGA regler (`Q=1`, `Q=2` i /list). En stavfel i en guard gör alltså

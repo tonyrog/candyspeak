@@ -1,0 +1,12 @@
+{modes, [seq]}.
+{cycles, 10}.
+%% Nine NORMAL cycles read A = 0..8 (a write shows the cycle after): 0..3 go
+%% to Lo, 4..8 to Hi -- 4, 6, 8 even, 5, 7 odd. Both lags Hi + Lo by one.
+{checks, [
+  {final_var, "A", 9},
+  {final_var, "Lo", 4},
+  {final_var, "Hi", 5},
+  {final_var, "Even", 3},
+  {final_var, "Odd", 2},
+  {final_var, "Both", 8}
+]}.

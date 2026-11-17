@@ -1,43 +1,51 @@
 # TODO - Klart-markerat flyttas till DONE.md, inte hit.
 
+# reference compiler in Erlang!
 
-## Panel tool
+Lets build a reference compiler for candyspeak
+in Erlang, so that we may compile code (using csp_asm)
+into an image that can be sent to a target node.
 
-### ellm connection
+For this to work in runtime we may have to pickup
+things like endian and floating point format from the node
+before compilation or (better) we patch endian/floating point
+format after we have queryied the node about image areas,
+patch area, sizes, and also endian and floating point format.
 
-- Connect to LLM via ellm, allow for a text window where
-a dialog can be used to create candyspeak code from a prompt
-or update existing code from prompt. Same window can be
-used to do varp queries and prove stauff.
-- Start from scratch blank slate? gradually add code and
-annotations to the candyspeak code.
+Then the candid tool may be rewritten using no csp tools in C
+at all. The host target (simulator) csp is of course useful
+for speed, compared to a Erlang based simulator.
 
-### connect live system via uart / tcp  (canbus)
 
-Extract code from live node. (no annotations)
-we may store a source version / checksum to match
-a locally stored source version with annoation if needed!
+# cond
 
-- Allow live update of patches after varp analysis and bug fixes
-- Allow live state (snap shots) view from real executing node
-- Send virtual events to node?
-- Console mini window
+  #when A>100
+    #when B<10
+      action_1
+    #end :B
+  #orelse :A A>200
+    action_2
+  #else :A
+    action_3
+  #end :A
+
+# select
+
+  // integer selection with 12, 13 and #else
+  #select A        ||  #when A == 12
+  #case 12         ||  
+    action_12      ||    action_12
+  #case 13         ||  #orelse A == 13
+    action_13      ||    action_13
+  #default         ||  #else
+    action_n       ||    action_n
+  #end             ||  #end
 
 
 ## init of object arrays
 
   #Input in[i=0..3] Dig <- Din[i]
   #Input in[i=4..7] An <- a[i-4].output << 6 AnMark <- a[i-4].inhibit_mark
-
-
-## binary form for terms set in Q mode -bin
-
-Binary format in -Q mode to be used by port length mode,
-(must keep quite) these terms may then be sent all the
-way up to the web browser.
-
-## Improve the varp translation
-
 
 # SAVE/COPY IMAGE
 
@@ -1586,12 +1594,3 @@ Inte buggar -- saker som byggts men inte setts fungera på järn.
   FAST layout och konsolen ar en STROM. Antagandet "fast layout tills vidare"
   bar hela vagen for tangenttryckningar, och det ar drain-takten -- inte
   formatet -- som avgor om det bar for utskrifter ocksa.
-
-
-## TRANSLATE TO C
-
-Write a simple candyspeak to C translator, this wil of course remove
-most/all of the candyspeak features, but could be use in case when
-the device is really tiny and you just want the job done.
-
-

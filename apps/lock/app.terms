@@ -1,0 +1,9 @@
+%% lock -- the code lock. Read by ./cs.
+%%
+%% Its pins are its own, per board: apps/lock/<board>/pins.csp. Every board
+%% with such a directory is one it can be built for.
+{app, lock,
+ [{main,   "apps/lock/main.csp"},
+  {pins,   app},
+  {board,  mega_bare},
+  {tests,  "apps/lock/tests"}]}.

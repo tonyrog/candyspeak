@@ -279,6 +279,13 @@
 %% QUOTED: `when` is a reserved word in Erlang, and this file is read with
 %% file:consult/1.  The atom is the same either way.
 {decl, 'D_WHEN',     'when',    'when',     'DECL_NONE',     hand_written}.
+%% #when <expr> ... #else ... #end -- the other half: the rules after #else
+%% run when the condition did not hold. The condition is NOT evaluated again
+%% (elapsed(T) reads the clock and would answer differently): the then-part
+%% ends in a jump past the else-part, `LI r,1 ; INSTATE r,0', and the #when's
+%% gate skips into the else-part -- see csp_parse_else. Quoted as `when' is:
+%% `else' is reserved in Erlang.
+{decl, 'D_ELSE',     'else',    'else',     'DECL_NONE',     hand_written}.
 
 %% #annotate <tool> <target> [key[=value] ...] -- metadata for TOOLS, inert here.
 %%

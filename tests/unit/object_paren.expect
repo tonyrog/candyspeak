@@ -1,0 +1,7 @@
+{modes, [seq]}.
+{cycles, 4}.
+{checks, [
+  {final_object_var, "M.m", "m.A", 3},
+  {final_object_var, "M.m", "m.C", 2},
+  {final_object_var, "M.m", "m.Out", 5}
+]}.

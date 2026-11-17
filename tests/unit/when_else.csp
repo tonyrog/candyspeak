@@ -1,0 +1,22 @@
+// #when C ... #else ... #end: the rules after #else run when C did not hold,
+// and the two halves never both run in a cycle -- every cycle counts once,
+// in Hi or in Lo. The condition is evaluated ONCE: the then-part jumps past
+// the else-part. Nested, an inner #when's #else is the inner block's own.
+#variable A = 0
+#variable Hi = 0
+#variable Lo = 0
+#variable Even = 0
+#variable Odd = 0
+#variable Both = 0
+A = A + 1
+#when A > 3
+  Hi = Hi + 1
+  #when A % 2 == 0
+    Even = Even + 1
+  #else
+    Odd = Odd + 1
+  #end
+#else
+  Lo = Lo + 1
+#end
+Both = Hi + Lo

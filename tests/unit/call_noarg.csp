@@ -1,0 +1,8 @@
+// A call with no arguments is not a constant: cycle() > 3 has to be read
+// every cycle. It came back as an immediate 0, so the comparison folded to
+// false and Late never went on -- and `tick() > 1000` the same. N keeps the
+// program running: one that changes nothing stops after its first cycles.
+#variable N = 0
+#variable Late = 0
+N = N + 1
+Late = 1 ? cycle() > 3

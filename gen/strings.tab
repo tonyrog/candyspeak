@@ -82,6 +82,7 @@ err_sms_owners `sms` names a string #param listing the allowed numbers: #param O
 err_onewire_rom `onewire` names a string #param holding the ROM id: #param TinRom string = "28ff641f0716a3c2"
 err_opts_after_pin option '%s' comes BEFORE the pin -- '#digital D in pullup 2:1', not after
 err_block_open #%s opened on line %d was never closed
+err_block_depth blocks nest at most %d deep -- #in, #when and #module together
 err_index_not_const a buffer byte range is fixed when the program is built -- %s is not a constant
 LP (
 RP )
@@ -157,6 +158,7 @@ field field
 buffer buffer
 route route
 when when
+else else
 annotate annotate
 import import
 value value
@@ -290,7 +292,7 @@ h_state Show current values
 h_memory Show code/RAM usage
 h_onewire <port>:<pin> -- list 1-Wire ROM ids, as > lines to paste
 h_images List the images linked into this firmware
-h_dump rom [slot] [offs [len]] | eeprom | patch | state -- hex+crc lines
+h_dump rom [slot] [offs [len]] | eeprom | patch | state | info -- hex+crc lines
 h_upgrade Receive a CandySpeak image into a flash region (hex lines, . to end)
 h_pause Stop execution (inspect/edit)
 h_step Run N cycles (default 1) and pause again

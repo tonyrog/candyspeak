@@ -349,14 +349,24 @@ NOINLINE static void close_in_block(csp_rt_t* st);
 // states again when it closes, and a `#when` in between must not lose them.
 // It is a SCOPE too: a #local declared inside ends at its #end (see
 // def_add_local). Returns 0 when the stack is full.
+// The first error wins, so the caller's own (ERR_END_MISMATCH) after this one
+// is not what is reported.
+NOINLINE static void block_too_deep(csp_rt_t* st)
+{
+    if (csp_set_error(st, ERR_BLOCK_DEPTH))
+	csp_set_err_arg_int(st, 0, CSP_MAX_BLOCK);
+}
+
 NOINLINE static int blk_push(csp_rt_t* st, index_t mark, uint8_t kind,
 			     uint16_t line)
 {
     csp_cstate_t* cs = st->cs;
     csp_block_t* b;
 
-    if (cs->blk_depth >= CSP_MAX_BLOCK)
+    if (cs->blk_depth >= CSP_MAX_BLOCK) {
+	block_too_deep(st);
 	return 0;
+    }
     b = &cs->blk[cs->blk_depth++];
     b->mark   = mark;
     b->line   = line;
@@ -2484,12 +2494,18 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
     // optimise to remove extra instructions in the future
     // we may have to do a "dryrun" to check if function is pure
     // or we have special functions
-    imm = (argimm == ((1 << arity)-1));
     // Fold when all args are immediate AND either the function is pure, or we
     // are in eval mode (st->cs->ev, i.e. an immediate `> expr` at the prompt) where
     // even an impure call like latch()/print() must run now for its side effect
     // -- otherwise the emitted OP_CALL is never executed and the call no-ops.
-    if (imm && (func_pure(func,0,from) || st->cs->ev)) {
+    //
+    // And the result is an immediate ONLY when it was folded. It used to be
+    // whenever every argument was -- which a call with none always is -- so
+    // tick() and cycle() came back as immediate 0, and `tick() > 1000` folded
+    // to a constant false (csp_cc's compile_check found it, 2026-11-17).
+    imm = (argimm == ((1 << arity)-1)) &&
+	(func_pure(func,0,from) || st->cs->ev);
+    if (imm) {
 	value_t arg[MAX_ARGS];
 	csp_func_fn fn = NULL;
 
@@ -2767,7 +2783,11 @@ next:
 	}
 	tok = RP;
 	ptok = INT;
-	break;
+	// A closed group is an operand like any other: a primary right after it
+	// starts the NEXT thing. It went on reading instead, so on an object
+	// line `A=(X >> 1) B=2` was one expression, failed, and every binding
+	// was lost -- examples/adder3.csp's a1 and a2 had no A and no B.
+	goto after_primary;
     case INT:
 	if ((ep = push_imm(st, rstack, ep, V_INTEGER, tval.val)) < 0)
 	    return 0;
@@ -3415,6 +3435,7 @@ NOINLINE int csp_check_blocks_closed(csp_rt_t* st)
     b = &st->cs->blk[st->cs->blk_depth - 1];
     what = (b->kind == BLK_MODULE) ? ros_module
 	 : (b->kind == BLK_WHEN)   ? ros_when
+	 : (b->kind == BLK_ELSE)   ? ros_else
 				   : ros_in;
     if (csp_set_error(st, ERR_BLOCK_OPEN)) {
 	csp_set_err_arg_rostr(st, 0, what);
@@ -5832,7 +5853,7 @@ NOINLINE int csp_parse_when(csp_rt_t* st, token_t* tv, int ti, size_t n)
     // Blocks NEST -- a condition refining another one is the ordinary case -- and
     // #in and #when share the stack, so the only limit is its depth.
     if (st->cs->blk_depth >= CSP_MAX_BLOCK) {
-	csp_set_error(st, ERR_END_MISMATCH);
+	block_too_deep(st);
 	return -1;
     }
     num = n - (size_t)ti;
@@ -5849,6 +5870,59 @@ NOINLINE int csp_parse_when(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	csp_set_error(st, ERR_END_MISMATCH);
 	return -1;
     }
+    st->cs->in_marker = (index_t)mk;
+    return 0;
+}
+
+// '#' 'else'  -- inside a #when, the rules that run when its condition did not
+// hold, up to the #end.
+//
+// The condition is NOT evaluated again. elapsed(T) and progress(T) read the
+// clock, so a second evaluation can answer differently from the first and run
+// both halves, or neither. Instead the then-part ends in a jump past the
+// else-part, and the #when's gate is moved to skip into it:
+//
+//     <the condition>
+//     NINSTATE r, 0, ->else     false: into the else-part
+//     <the then-rules>
+//     LI       t, 1             true, at the end of them: past the else-part,
+//     INSTATE  t, 0, ->end      1 != 0 always skips
+//   else:
+//     <the else-rules>
+//   end:
+//
+// NO NEW OPCODE and no ROM format change, as for #when. `LI ; INSTATE 0' is
+// made by nothing else (an #in gate is `LD State ; ...INSTATE'), which is how
+// the listings tell the #else back. The block stays open; #end closes it by
+// patching the INSTATE, as it would the gate. #locals of the then-part end
+// here, as they would at an #end.
+NOINLINE int csp_parse_else(csp_rt_t* st, token_t* tv, int ti, size_t n)
+{
+    csp_block_t* b;
+    reg_t t;
+    int mk = 0;
+
+    if ((ti < (int)n) && (tv[ti].t != NEWLINE)) {
+	csp_set_error(st, ERR_SYNTAX);     // `#else when ...' is not (yet) a thing
+	return -1;
+    }
+    if ((st->cs->blk_depth == 0) ||
+	((b = &st->cs->blk[st->cs->blk_depth - 1])->kind != BLK_WHEN)) {
+	csp_set_error(st, ERR_END_MISMATCH);   // no #when to be the other half of
+	return -1;
+    }
+    t = alloc_reg(st);
+    if (!asm_LI(st, t, 1) || !asm_INSTATE(st, &mk, t, 0, 0)) {
+	csp_set_error(st, ERR_SYNTAX);
+	return -1;
+    }
+    free_reg(st, t);
+    csp_instr_set_in_nxt(ram_instr_at(st, b->mark), st->ps.nn - b->mark);
+    b->mark = (index_t)mk;
+    b->kind = BLK_ELSE;
+#if CSP_DEFINE_BYTES > 0
+    st->def_used = b->def_mark;
+#endif
     st->cs->in_marker = (index_t)mk;
     return 0;
 }
@@ -5919,7 +5993,7 @@ NOINLINE int csp_parse_in(csp_rt_t* st, token_t* tv, int ti, size_t n)
     if (tv[ti].t != WORD) return -1;
 
     if (st->cs->blk_depth >= CSP_MAX_BLOCK) {
-	csp_set_error(st, ERR_END_MISMATCH);
+	block_too_deep(st);
 	return -1;
     }
     for (i = ti; (i < (int)n) && (tv[i].t == WORD); i++) {
@@ -6049,6 +6123,8 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 		// condition and gates the block on it. Nothing for the switch.
 		else if (i == D_WHEN)
 		    r = csp_parse_when(st, tv, 2, num);
+		else if (i == D_ELSE)
+		    r = csp_parse_else(st, tv, 2, num);
 		// #annotate is metadata for TOOLS that read the source -- a
 		// widget kind, a tuning range, a property in prose. Skipped
 		// ENTIRELY: not a declaration, never in a ROM, nothing on a

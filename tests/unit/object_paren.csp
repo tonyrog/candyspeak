@@ -1,0 +1,11 @@
+// A binding whose value ends in ')' and another binding after it: the group
+// is an operand, and what follows it is the next binding. It used to read on,
+// `(X >> 1) C=2` was one expression that failed, and m lost both bindings.
+#module M
+#variable A:8 in = 0
+#variable C:8 in = 0
+#variable Out:8 out = 0
+Out = A + C
+#end
+#variable X:8 = 6
+#M m A=(X >> 1) C=2

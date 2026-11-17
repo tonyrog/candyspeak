@@ -1,0 +1,12 @@
+%% wintersbone -- the SMS alarm node. Read by ./cs.
+%%
+%% pins: whose pins.csp the program imports through the `board` root.
+%%   board  the board directory's own (boards/<board>/pins.csp): the boards
+%%          below exist for this application and already use its names
+%%   app    the application's, per board (apps/<app>/<board>/pins.csp)
+{app, wintersbone,
+ [{main,   "apps/wintersbone/main.csp"},
+  {pins,   board},
+  {board,  wintersbone},                  % unless told another
+  {boards, [wintersbone, wintersbone_s3]},
+  {tests,  "apps/wintersbone/tests"}]}.

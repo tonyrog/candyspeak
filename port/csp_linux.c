@@ -2941,6 +2941,11 @@ loop:
 	// timer branch too -- a declared timer put wait_ms back in and undid it.
 	if (state.line.ready)
 	    timeout_ms = 0;
+	// Paused, nothing runs and time stands still, so a timer's wait_ms
+	// stays where the pause found it -- 0 or 1 ms for one that was due, and
+	// the loop spun at 100 % CPU until /resume. Wait for input or a route.
+	else if (state.paused && (state.step_left == 0))
+	    timeout_ms = 100;
 	else {
 	    timeout_ms = interactive ? 100 : 0;
 	    // Wait for timer if needed (non-interactive mode)
@@ -3008,6 +3013,8 @@ loop:
 	    state.step_left--;
 	else {
 	    csp_route_run(&state);
+	    if (nfds == 0)            // nothing to poll above: do not spin
+		poll(NULL, 0, 100);
 	    goto loop;
 	}
     }

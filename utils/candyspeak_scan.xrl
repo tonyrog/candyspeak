@@ -20,6 +20,7 @@ module             : {token,{'module',TokenLine}}.
 end                : {token,{'end',TokenLine}}.
 states             : {token,{'states',TokenLine}}.
 when               : {token,{'when',TokenLine}}.
+else               : {token,{'else',TokenLine}}.
 digital		   : {token,{'digital',TokenLine}}.
 analog		   : {token,{'analog',TokenLine}}.
 variable	   : {token,{'variable',TokenLine}}.

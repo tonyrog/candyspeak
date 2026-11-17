@@ -1807,11 +1807,27 @@ Rules that share a condition can share it once:
 a cycle where the condition holds, exactly as if each carried it as its own `?`
 clause. The condition is evaluated **once per cycle** rather than once per rule.
 
+`#else` gives the other half: the rules after it run in a cycle where the
+condition did **not** hold, and the two halves never both run.
+
+```
+#when Level > Limit
+  Pump = 1
+#else
+  Pump = 0
+#end
+```
+
+The condition is still evaluated once. The first half ends in a jump past the
+second, so a condition that reads the clock — `elapsed(T) < 100` — cannot come
+out true for one half and false for the other. An `#else` belongs to the
+`#when` it is in; it has none of its own, and a second one is an error.
+
 `#in <state>...` is the same shape for the state machine, and the two are kept
 as separate words on purpose — `#in Idle` reads as "in this state", and one word
 with two senses makes both harder to read.
 
-Blocks nest, up to four deep, and `#in`, `#when` and `#module` share one stack —
+Blocks nest, up to eight deep, and `#in`, `#when` and `#module` share one stack —
 so `#end` always closes whichever opened last:
 
 ```

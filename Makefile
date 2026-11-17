@@ -412,7 +412,8 @@ clean:
 # image loads back into the firmware that links it. Run `make test` before a
 # commit; this is for the loop in between.
 test:	csp line_edit_check syntax_check strings_check tables_check \
-	patterns_check sketch_check disasm_check dump_check list_check asm_check eval_check
+	patterns_check sketch_check disasm_check dump_check list_check asm_check eval_check \
+	compile_check
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
 
@@ -463,6 +464,13 @@ asm_check: csp
 	@tests/asm/check.sh examples/*.csp tests/unit/*.csp apps/*/tests/*.csp
 	@tests/asm/patch.sh
 
+# utils/csp_cc, the compiler in Erlang, against the C compiler: the same terms
+# for every program, names, declarations and code. What it cannot compile is
+# counted by what stopped it; a program that compiles DIFFERENTLY fails.
+compile_check: csp
+	@$(MAKE) --no-print-directory -s -C utils
+	@tests/compile/check.sh examples/*.csp tests/unit/*.csp apps/*/tests/*.csp
+
 # utils/candyspeak_eval:cycle/3 against csp, cycle by cycle: every value it
 # works out is the one csp dumps, and the rules it says fired are csp's.
 eval_check: csp
@@ -481,7 +489,8 @@ dump_check: csp
 	   echo "/dump patch"; \
 	   echo "/dump rom A 0 50"; echo "/dump rom A 0 100"; \
 	   echo "/dump rom A 100"; echo "/dump rom A 32 32"; \
-	   echo "/dump state"; echo /state; echo /list; echo /quit; } | \
+	   echo "/dump state"; echo "/dump info"; echo /state; echo /list; \
+	   echo /quit; } | \
 	  ./csp -i --no-eeprom -e tmp/dump_ee.db --flash=tmp/dump_flash.bin \
 	    --part=ab tests/dump/node.csp >tmp/dump_out.txt 2>&1
 	@escript tests/dump/check.escript tmp/dump_out.txt tmp/dump_node.img \
@@ -887,7 +896,7 @@ $(OBJDIR)/%.o: %.c | gen/csp_strings.h
 
 -include $(OBJS:.o=.d)
 
-.PHONY: disasm_check dump_check list_check asm_check eval_check clib_host webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
+.PHONY: compile_check disasm_check dump_check list_check asm_check eval_check clib_host webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

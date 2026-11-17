@@ -147,6 +147,8 @@ extern rochar s_err_opts_after_pin[74] RODATA;
 #define ros_err_opts_after_pin ((rostring_t) s_err_opts_after_pin)
 extern rochar s_err_block_open[39] RODATA;
 #define ros_err_block_open ((rostring_t) s_err_block_open)
+extern rochar s_err_block_depth[63] RODATA;
+#define ros_err_block_depth ((rostring_t) s_err_block_depth)
 extern rochar s_err_index_not_const[79] RODATA;
 #define ros_err_index_not_const ((rostring_t) s_err_index_not_const)
 extern rochar s_LP[2] RODATA;
@@ -297,6 +299,8 @@ extern rochar s_route[6] RODATA;
 #define ros_route ((rostring_t) s_route)
 extern rochar s_when[5] RODATA;
 #define ros_when ((rostring_t) s_when)
+extern rochar s_else[5] RODATA;
+#define ros_else ((rostring_t) s_else)
 extern rochar s_annotate[9] RODATA;
 #define ros_annotate ((rostring_t) s_annotate)
 extern rochar s_import[7] RODATA;
@@ -563,7 +567,7 @@ extern rochar s_h_onewire[57] RODATA;
 #define ros_h_onewire ((rostring_t) s_h_onewire)
 extern rochar s_h_images[42] RODATA;
 #define ros_h_images ((rostring_t) s_h_images)
-extern rochar s_h_dump[66] RODATA;
+extern rochar s_h_dump[73] RODATA;
 #define ros_h_dump ((rostring_t) s_h_dump)
 extern rochar s_h_upgrade[69] RODATA;
 #define ros_h_upgrade ((rostring_t) s_h_upgrade)
