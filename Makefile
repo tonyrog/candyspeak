@@ -413,7 +413,7 @@ clean:
 # commit; this is for the loop in between.
 test:	csp line_edit_check syntax_check strings_check tables_check \
 	patterns_check sketch_check disasm_check dump_check list_check asm_check eval_check \
-	compile_check
+	compile_check fconv_check neutral_check
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
 
@@ -463,6 +463,19 @@ asm_check: csp
 	@$(MAKE) --no-print-directory -s -C utils
 	@tests/asm/check.sh examples/*.csp tests/unit/*.csp apps/*/tests/*.csp
 	@tests/asm/patch.sh
+
+# The float conversions every node compiles and loads with (src/csp_fixpoint.c)
+# against the host's floats.
+fconv_check:
+	@mkdir -p tmp
+	@$(CC) $(INCS) -O2 -o tmp/fconv tests/fconv.c src/csp_fixpoint.c -lm
+	@tmp/fconv | sed 's/^/fconv: /'
+
+# One image for every node (ROM format 23): a float constant is IEEE bits
+# wherever it was compiled, so the Q16.16 compiler and the IEEE one make the
+# same image of every program.
+neutral_check: csp csp-ieee
+	@tests/neutral.sh examples/*.csp tests/unit/*.csp
 
 # utils/csp_cc, the compiler in Erlang, against the C compiler: the same terms
 # for every program, names, declarations and code. What it cannot compile is
@@ -896,7 +909,7 @@ $(OBJDIR)/%.o: %.c | gen/csp_strings.h
 
 -include $(OBJS:.o=.d)
 
-.PHONY: compile_check disasm_check dump_check list_check asm_check eval_check clib_host webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
+.PHONY: compile_check fconv_check neutral_check disasm_check dump_check list_check asm_check eval_check clib_host webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

@@ -1,20 +1,5 @@
 # TODO - Klart-markerat flyttas till DONE.md, inte hit.
 
-# reference compiler in Erlang!
-
-Lets build a reference compiler for candyspeak
-in Erlang, so that we may compile code (using csp_asm)
-into an image that can be sent to a target node.
-
-For this to work in runtime we may have to pickup
-things like endian and floating point format from the node
-before compilation or (better) we patch endian/floating point
-format after we have queryied the node about image areas,
-patch area, sizes, and also endian and floating point format.
-
-Then the candid tool may be rewritten using no csp tools in C
-at all. The host target (simulator) csp is of course useful
-for speed, compared to a Erlang based simulator.
 
 
 # cond

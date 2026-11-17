@@ -71,7 +71,8 @@ typedef struct PACKED {
 typedef struct PACKED {
     INSTR_COMMON;
     unsigned x:REG_BITS;
-    unsigned _pad:6;            // aligns imm to a byte
+    unsigned lz:1;              // OP_LIFH: the low half is 0
+    unsigned _pad:5;            // aligns imm to a byte
     signed imm:16;
 } csp_instr_imm_t;
 

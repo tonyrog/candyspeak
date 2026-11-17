@@ -208,6 +208,7 @@
 -define(OP_LI, 50).      %% load signed 16-bit constant
 -define(OP_LIU, 51).     %% load unsigned 16-bit constant (zero extend)
 -define(OP_LIH, 52).    %% load high 16-bit (OR into high bits)
+-define(OP_LIFH, 33).   %% high 16 of an IEEE float, made the node's float (lz: low 0)
 -define(OP_ARG, 53).    %% load argument from register
 -define(OP_CALL, 54).   %% function call:
 -define(OP_STI, 55).    %% store immediate value to memory (mirror of EQI)
@@ -279,6 +280,7 @@
        ?MAP('LI', ?OP_LI   ),
        ?MAP('LIU', ?OP_LIU  ),
        ?MAP('LIH', ?OP_LIH  ),
+       ?MAP('LIFH', ?OP_LIFH ),
        ?MAP('ARG', ?OP_ARG  ),
        ?MAP('CALL', ?OP_CALL ),
        ?MAP('STI', ?OP_STI  ),
@@ -341,6 +343,7 @@
        'LI' =>  imm,
        'LIU' =>  imm,
        'LIH' =>  imm,
+       'LIFH' => imm,
        'ARG' =>  imm,
        'CALL' =>  call,
        'STI' =>  memi,

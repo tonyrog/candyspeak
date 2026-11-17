@@ -451,6 +451,8 @@ extern rochar s_LIU[4] RODATA;
 #define ros_LIU ((rostring_t) s_LIU)
 extern rochar s_LIH[4] RODATA;
 #define ros_LIH ((rostring_t) s_LIH)
+extern rochar s_LIFH[5] RODATA;
+#define ros_LIFH ((rostring_t) s_LIFH)
 extern rochar s_ARG[4] RODATA;
 #define ros_ARG ((rostring_t) s_ARG)
 extern rochar s_ST[3] RODATA;

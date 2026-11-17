@@ -32,7 +32,7 @@ main([Out, Img, Store]) ->
 	       maps:get(image, SlotA) =:= #{role => rom, gen => 1,
 					    size => byte_size(ImgBin)}},
 	      {"/dump info: the image format, the limits and what is used",
-	       RomV =:= 22 andalso Fl =:= fixpoint andalso UsedI > 0 andalso
+	       RomV =:= 23 andalso Fl =:= fixpoint andalso UsedI > 0 andalso
 	       MaxI >= UsedI},
 	      {"/dump rom A is the image /upgrade wrote", RomA =:= ImgBin},
 	      {"the ROM and the store list as /list does",

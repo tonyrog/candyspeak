@@ -2,24 +2,24 @@
 //   source:  examples/cpx_rotate.csp
 // modified:  Thu Oct 15 14:35:34 2026
 //   loaded:  examples/cpx_rotate.csp                  (command line)
-//   version: unknown
-//   built:   Oct 28 2026 13:51:09
+//   version: 1.0-145-g6e5c768-dirty
+//   built:   Nov 17 2026 20:22:13
 //   size:    210 instr, 53 decl, 216 str, 3 states
 
 #include "csp.h"
-#if ROM_FORMAT_VERSION != 22
-#error "rom.c is stale: generated for ROM format 22, csp.h is newer -- regenerate with 'csp -C'"
+#if ROM_FORMAT_VERSION != 23
+#error "rom.c is stale: generated for ROM format 23, csp.h is newer -- regenerate with 'csp -C'"
 #endif
 
-CSP_IMAGE_TYPE(rom_image_t, 3,54,211,1,1,1);
-CSP_IMAGE_CHECK(rom_image_t, 64,76,516,1368,1380,1392,1396);
+CSP_IMAGE_TYPE(rom_image_t, 3,5,54,8,211,12,1,6,1,6,1,2);
+CSP_IMAGE_CHECK(rom_image_t, 64,80,528,1392,1408,1424,1428);
 
 static const rom_image_t rom_image_data RODATA = {
-  .s_str = { { CSP_SECT_STR }, 4 },
+  .s_str = { { CSP_SECT_STR }, 8 },
   .str = {
 
 (char)0xff,255,255,},
-  .s_decl = { { CSP_SECT_DECL }, 432 },
+  .s_decl = { { CSP_SECT_DECL }, 440 },
   .decl = {
   {0x01,0x01,0x1f,0x01,0x00,0x00,0x00,0x00},  /* .va={.type=DECL_VARIABLE,.cont=0,.local=0,.dir=0,.name=1,.vt=V_INTEGER,.res=31,.init={.u=0}} */
   {0x06,0x02,0x03,0x04,0x00,0x00,0x00,0x00},  /* .sn={.type=DECL_STATES,.cont=0,.local=0,.dir=0,.name=2,.name2=3,.name3=4,.name4=0,.name5=0,.name6=0} */
@@ -31,10 +31,10 @@ static const rom_image_t rom_image_data RODATA = {
   {0x22,0x0a,0x1f,0x02,0xff,0x00,0x00,0x00},  /* .cn={.type=DECL_CONSTANT,.cont=0,.local=1,.dir=0,.name=10,.vt=V_UNSIGNED,.res=31,.init={.u=255}} */
   {0x04,0x00,0x1f,0x01,0x00,0x00,0x00,0x00},  /* .type=DECL_END,.cont=0,.local=0,.dir=0,.name=0,.vt=V_INTEGER,.res=31 */
   {0x05,0x0b,0x1f,0x01,0x02,0x00,0x01,0x00},  /* .mq={.type=DECL_OBJECT,.cont=0,.local=0,.dir=0,.name=11,.vt=V_INTEGER,.res=31,.mx=2,.m=1} */
-  {0x49,0x0c,0x00,0x01,0x08,0x00,0x01,0x00},  /* .di={.type=DECL_DIGITAL,.cont=0,.local=0,.dir=1,.name=12,.vt=V_INTEGER,.res=0,.pin=4,.port=0,.pullup=0,.pulldown=1,.irq=0,.soft=0} */
-  {0x49,0x0d,0x00,0x01,0x0a,0x00,0x01,0x00},  /* .di={.type=DECL_DIGITAL,.cont=0,.local=0,.dir=1,.name=13,.vt=V_INTEGER,.res=0,.pin=5,.port=0,.pullup=0,.pulldown=1,.irq=0,.soft=0} */
-  {0x49,0x0e,0x00,0x01,0x0e,0x80,0x00,0x00},  /* .di={.type=DECL_DIGITAL,.cont=0,.local=0,.dir=1,.name=14,.vt=V_INTEGER,.res=0,.pin=7,.port=0,.pullup=1,.pulldown=0,.irq=0,.soft=0} */
-  {0x89,0x0f,0x00,0x01,0x1a,0x00,0x00,0x00},  /* .di={.type=DECL_DIGITAL,.cont=0,.local=0,.dir=2,.name=15,.vt=V_INTEGER,.res=0,.pin=13,.port=0,.pullup=0,.pulldown=0,.irq=0,.soft=0} */
+  {0x49,0x0c,0x00,0x01,0x08,0x00,0x01,0x00},  /* .di={.type=DECL_DIGITAL,.cont=0,.local=0,.dir=1,.name=12,.vt=V_INTEGER,.res=0,.pin=4,.port=0,.pullup=0,.pulldown=1,.irq=0,.soft=0,.invert=0} */
+  {0x49,0x0d,0x00,0x01,0x0a,0x00,0x01,0x00},  /* .di={.type=DECL_DIGITAL,.cont=0,.local=0,.dir=1,.name=13,.vt=V_INTEGER,.res=0,.pin=5,.port=0,.pullup=0,.pulldown=1,.irq=0,.soft=0,.invert=0} */
+  {0x49,0x0e,0x00,0x01,0x0e,0x80,0x00,0x00},  /* .di={.type=DECL_DIGITAL,.cont=0,.local=0,.dir=1,.name=14,.vt=V_INTEGER,.res=0,.pin=7,.port=0,.pullup=1,.pulldown=0,.irq=0,.soft=0,.invert=0} */
+  {0x89,0x0f,0x00,0x01,0x1a,0x00,0x00,0x00},  /* .di={.type=DECL_DIGITAL,.cont=0,.local=0,.dir=2,.name=15,.vt=V_INTEGER,.res=0,.pin=13,.port=0,.pullup=0,.pulldown=0,.irq=0,.soft=0,.invert=0} */
   {0x4a,0x10,0x09,0x02,0x10,0x00,0x00,0x00},  /* .an={.type=DECL_ANALOG,.cont=0,.local=0,.dir=1,.name=16,.vt=V_UNSIGNED,.res=9,.pin=8,.port=0,.pwm=0,.endian=0,.irq=0,.soft=0} */
   {0x4a,0x11,0x09,0x02,0x12,0x00,0x00,0x00},  /* .an={.type=DECL_ANALOG,.cont=0,.local=0,.dir=1,.name=17,.vt=V_UNSIGNED,.res=9,.pin=9,.port=0,.pwm=0,.endian=0,.irq=0,.soft=0} */
   {0x4a,0x12,0x09,0x01,0x00,0x08,0x00,0x00},  /* .an={.type=DECL_ANALOG,.cont=0,.local=0,.dir=1,.name=18,.vt=V_INTEGER,.res=9,.pin=0,.port=8,.pwm=0,.endian=0,.irq=0,.soft=0} */
@@ -70,13 +70,13 @@ static const rom_image_t rom_image_data RODATA = {
   {0x12,0x00,0x1f,0x01,0x1f,0x00,0x00,0x00},  /* .cn={.type=DECL_CONSTANT,.cont=1,.local=0,.dir=0,.name=0,.vt=V_INTEGER,.res=31,.init={.u=31}} */
   {0x12,0x00,0x1f,0x01,0x20,0xfd,0x00,0x00},  /* .cn={.type=DECL_CONSTANT,.cont=1,.local=0,.dir=0,.name=0,.vt=V_INTEGER,.res=31,.init={.u=64800}} */
   {0x12,0x00,0x1f,0x01,0xff,0xff,0x00,0x00},  /* .cn={.type=DECL_CONSTANT,.cont=1,.local=0,.dir=0,.name=0,.vt=V_INTEGER,.res=31,.init={.u=65535}} */
-  {0x01,0x24,0x0f,0x01,0xff,0xff,0x00,0x00},  /* .va={.type=DECL_VARIABLE,.cont=0,.local=0,.dir=0,.name=36,.vt=V_INTEGER,.res=15,.init={.u=65535}} */
+  {0x01,0x24,0x0f,0x02,0xff,0xff,0x00,0x00},  /* .va={.type=DECL_VARIABLE,.cont=0,.local=0,.dir=0,.name=36,.vt=V_UNSIGNED,.res=15,.init={.u=65535}} */
   {0x01,0x25,0x1f,0x01,0x00,0x00,0x00,0x00},  /* .va={.type=DECL_VARIABLE,.cont=0,.local=0,.dir=0,.name=37,.vt=V_INTEGER,.res=31,.init={.u=0}} */
   {0x01,0x26,0x1f,0x01,0x00,0x00,0x00,0x00},  /* .va={.type=DECL_VARIABLE,.cont=0,.local=0,.dir=0,.name=38,.vt=V_INTEGER,.res=31,.init={.u=0}} */
   {0x04,0x00,0x1f,0x01,0x00,0x00,0x00,0x00},  /* .type=DECL_END,.cont=0,.local=0,.dir=0,.name=0,.vt=V_INTEGER,.res=31 */
-  {0x0f,0x00,0x00,0x00,0xcc,0x68,0x00,0x00},  /* .em={.type=DECL_END_MARK,.crc=26828,._res=0} */
+  {0x0f,0x00,0x00,0x00,0x30,0x64,0x00,0x00},  /* .em={.type=DECL_END_MARK,.crc=25648,._res=0} */
   },
-  .s_instr = { { CSP_SECT_INSTR }, 844 },
+  .s_instr = { { CSP_SECT_INSTR }, 856 },
   .instr = {
   {0x11,0x20,0x00,0x79},  /* .sg={.op=OP_SEGMENT,.num=32,.used=121} */
   {0x05,'S','t','a'},  /* segment payload */
@@ -290,20 +290,20 @@ static const rom_image_t rom_image_data RODATA = {
   {0x28,0x00,0x00,0x00},  /* .x={.op=OP_NEXT,.x=0} */
   {0x3f,0x00,0x63,0x29},  /* .em={.op=OP_END_MARK,.crc=10595,._res=0} */
   },
-  .s_idg = { { CSP_SECT_IDG }, 4 },
+  .s_idg = { { CSP_SECT_IDG }, 8 },
   .idg = {0},
-  .s_ofs = { { CSP_SECT_OFS }, 4 },
+  .s_ofs = { { CSP_SECT_OFS }, 8 },
   .ofs = {0},
   .s_edg = { { CSP_SECT_EDG }, 4 },
   .edg = {0},
   .hdr = {
     .magic = { CSP_IMAGE_MAGIC0, CSP_IMAGE_MAGIC1, CSP_IMAGE_MAGIC2, CSP_IMAGE_MAGIC3 },
-    .size=1396, .version=22, .role=0, .flags=0, .generation=0,
+    .size=1428, .version=23, .role=0, .flags=0, .generation=0,
     .n_str=0, .n_decl=53, .n_instr=210, .n_edg=0,
-    .crc_str=65535, .crc_decl=31643, .crc_instr=16538, .crc_graph=0,
-    .ofs_str=64, .ofs_decl=76, .ofs_instr=516, .ofs_idg=1368,
-    .ofs_ofs=1380, .ofs_edg=1392,
-    .crc_hdr=37667 }
+    .crc_str=65535, .crc_decl=31376, .crc_instr=16538, .crc_graph=0,
+    .ofs_str=64, .ofs_decl=80, .ofs_instr=528, .ofs_idg=1392,
+    .ofs_ofs=1408, .ofs_edg=1424,
+    .crc_hdr=44034 }
 };
 const csp_image_ref_t rom_image RODATA = { (const uint8_t*)&rom_image_data };
 CSP_REGISTER_IMAGE(rom_image_data);

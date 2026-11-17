@@ -155,6 +155,7 @@ const op_info_t op_info[] RODATA = {
     [OP_LI]    = {ros_LI,3,V_VOID,MAKE_TYPE0()},
     [OP_LIU]   = {ros_LIU,3,V_VOID,MAKE_TYPE0()},
     [OP_LIH]   = {ros_LIH,3,V_VOID,MAKE_TYPE0()},
+    [OP_LIFH]  = {ros_LIFH,3,V_VOID,MAKE_TYPE0()},
     [OP_ARG]   = {ros_ARG,3,V_VOID,MAKE_TYPE0()},
     [OP_ST]    = {ros_ST,3,V_VOID,MAKE_TYPE0()},
     [OP_STP]   = {ros_STP,3,V_VOID,MAKE_TYPE0()},
@@ -610,6 +611,19 @@ NOINLINE static bool_t asm_LIH(csp_rt_t* st, reg_t x, uint16_t imm)
     return asm_imm(st, OP_LIH, x, (int16_t)imm);
 }
 
+// The high half of an IEEE float; lz: the low half is 0 and this is all of it.
+NOINLINE static bool_t asm_LIFH(csp_rt_t* st, reg_t x, uint16_t imm, int lz)
+{
+    csp_instr_t* ip = alloc_instr_ptr(st, NULL, OP_LIFH);
+    if (ip != NULL) {
+	csp_instr_set_i_x(ip, x);
+	csp_instr_set_i_lz(ip, lz ? 1 : 0);
+	csp_instr_set_i_imm(ip, (int16_t)imm);
+	return 1;
+    }
+    return 0;
+}
+
 
 // Smart load: choose LI, LIU, or LIU+LIH based on value
 NOINLINE static bool_t csp_load_int(csp_rt_t* st, reg_t x, ivalue_t val)
@@ -645,21 +659,18 @@ NOINLINE static bool_t csp_load_uint(csp_rt_t* st, reg_t x, uvalue_t val)
     }
 }
 
-NOINLINE static bool_t csp_load_float(csp_rt_t* st, reg_t x, fvalue_t val)
+// A float constant: its IEEE bits (what every compile-time float is), loaded
+// the same on every node -- OP_LIFH makes the node's own float of them. 0.0 is
+// the same word in both formats and an LI.
+NOINLINE static bool_t csp_load_float(csp_rt_t* st, reg_t x, uint32_t bits)
 {
-#if FVALUE_IS_FIXPOINT
-    // Fixpoint is just an int32_t, load as signed
-    return csp_load_int(st, x, (ivalue_t)val);
-#else
-    union { float f; uint32_t u; } v;
-    v.f = val;
-    if (v.u == 0) {
-	return asm_LI(st, x, 0);  // 0.0
-    }
-    if (!asm_LIU(st, x, (uint16_t)(v.u & 0xFFFF)))
+    if (bits == 0)
+	return asm_LI(st, x, 0);
+    if ((bits & 0xFFFF) == 0)
+	return asm_LIFH(st, x, (uint16_t)(bits >> 16), 1);
+    if (!asm_LIU(st, x, (uint16_t)(bits & 0xFFFF)))
 	return 0;
-    return asm_LIH(st, x, (uint16_t)(v.u >> 16));
-#endif
+    return asm_LIFH(st, x, (uint16_t)(bits >> 16), 0);
 }
 
 static int asm_ARG(csp_rt_t* st, reg_t x, int16_t i)
@@ -980,7 +991,7 @@ NOINLINE static int hex(int c)
 	goto done;	 \
     } while(0)
 #define TOK_INT(y) do { tok = INT; val.val.i = (y); goto done; } while(0)
-#define TOK_FLT(y) do { tok = FLT; val.val.f = (y); goto done; } while(0)
+#define TOK_FLT(y) do { tok = FLT; val.val.u = (y); goto done; } while(0)
 
 // One octet of a dotted quad: at most three digits, value 0..255, -1 if it is
 // neither. The digit CAP is what keeps a silly literal from wrapping into a
@@ -1248,28 +1259,20 @@ next:
 				       (numer << 16) |
 				       ((uint32_t)q3 << 8) | (uint32_t)q4));
 		}
+		// A float literal is its IEEE bits, correctly rounded, on every
+		// node: what an image carries (ROM format 23), so a program means
+		// the same wherever it was compiled. A Q16.16 node cannot hold an
+		// integer part past 32767, and says so rather than wrap.
 #if FVALUE_IS_FIXPOINT
-		{
-		    // Parse as Q16.16 fixpoint.
-		    fvalue_t result;
-		    fvalue_t frac;
-		    // A number literal is always non-negative here -- a leading
-		    // '-' is a separate unary-minus token (runtime NEG), never
-		    // folded in. Q16.16 thus tops out at an integer part of
-		    // 32767; a larger magnitude cannot be represented, so reject
-		    // rather than silently wrap (FIX_FROM_INT would overflow
-		    // int32).
-		    if (uv > 32767) {
-			csp_set_error(st, ERR_NUMBER_RANGE);
-			return -1;
-		    }
-		    frac = (int32_t)(((uint64_t)numer<<FIX_SHIFT) / denom);
-		    result = FIX_FROM_INT((ivalue_t)uv) + frac;
-		    TOK_FLT(result);
+		if (uv > 32767) {
+		    csp_set_error(st, ERR_NUMBER_RANGE);
+		    return -1;
 		}
-#else
-		TOK_FLT((((float)uv + ((float)numer / (float)denom)) * sign));
 #endif
+		{
+		    uint32_t b = fix_ieee_decimal((uint32_t)uv, numer, denom);
+		    TOK_FLT(sign < 0 ? (b ^ 0x80000000UL) : b);
+		}
 	    }
 	    // Integer literal: must fit int32 (a leading '-' is a separate token,
 	    // so the literal itself is non-negative). Reject anything larger than
@@ -1430,7 +1433,7 @@ NOINLINE static bool_t csp_load_value(csp_rt_t* st, reg_t x, vtype_t vt, value_t
     case V_UNSIGNED:
 	return csp_load_uint(st, x, val.u);
     case V_FLOAT:
-	return csp_load_float(st, x, val.f);
+	return csp_load_float(st, x, val.u);
     case V_STRING:
 	return asm_LI(st, x, val.s);  // load string index
     default:
@@ -1598,6 +1601,8 @@ NOINLINE static int push_var(csp_rt_t* st, rentry_t* rstack, int ep,
 	    index_t rx = ctx_enter(st, ix, &sv);
 	    I = 1;
 	    val = csp_value(st, rx);
+	    if (CSP_MASK(vt, TYPE_BITS) == V_FLOAT)   // a literal float is IEEE bits
+		val.u = fv_to_ieee(val.f);
 	    ctx_leave(st, &sv);
 	}
     }
@@ -1669,13 +1674,19 @@ NOINLINE static bool_t coerce_to_float(csp_rt_t* st, rentry_t* e)
 	    return 0;
     }
 
-    if (ent.I && !ent.X) {  // pure immediate, not variable
-	ent.val.f = op_CVTIF(ent.val.i);
+    // A literal is converted here when the float is the same on every node
+    // -- or when no image is being made -- and at run time when it is not.
+    if (ent.I && !ent.X && (!st->cs->ap || st->cs->ev ||
+			    ((ent.val.i >= -32768) && (ent.val.i <= 32767)))) {
+	ent.val.u = fv_to_ieee(op_CVTIF(ent.val.i));
 	ent.I = 1;
 	ent.L = 0;
     }
-    else if (ent.L && st->cs->ap) {
-	reg_t r = alloc_reg(st);
+    else if (st->cs->ap) {
+	reg_t r;
+	if (!ent.L && (csp_load(st, &ent) < 0))     // a literal, for run time
+	    return 0;
+	r = alloc_reg(st);
 	if (!asm_CVTIF(st, r, ent.reg))
 	    return 0;
 	free_reg(st, ent.reg);
@@ -1702,13 +1713,19 @@ NOINLINE static bool_t coerce_to_int(csp_rt_t* st, rentry_t* e)
 	    return 0;
     }
 
-    if (ent.I && !ent.X) {  // pure immediate, not variable
-	ent.val.i = op_CVTFI(ent.val.f);
+    // A literal's integer is taken here when every node takes the same --
+    // the float is exact in both formats -- or when no image is being made.
+    if (ent.I && !ent.X && (!st->cs->ap || st->cs->ev ||
+			    fix_ieee_exact(ent.val.u))) {
+	ent.val.i = op_CVTFI(fv_from_ieee(ent.val.u));
 	ent.I = 1;
 	ent.L = 0;
     }
-    else if (ent.L && st->cs->ap) {
-	reg_t r = alloc_reg(st);
+    else if (st->cs->ap) {
+	reg_t r;
+	if (!ent.L && (csp_load(st, &ent) < 0))     // a literal, for run time
+	    return 0;
+	r = alloc_reg(st);
 	if (!asm_CVTFI(st, r, ent.reg))
 	    return 0;
 	free_reg(st, ent.reg);
@@ -1825,7 +1842,10 @@ NOINLINE static int process_assign(csp_rt_t* st, opcode_t op, rentry_t* rstack, 
 	}
 	if (rhs.I) {
 	    ctx_save_t sv;
-	    index_t lx = ctx_enter(st, lhs.ix, &sv);
+	    index_t lx;
+	    if (rhs.vt == V_FLOAT)                  // IEEE bits to the node's own
+		rhs.val.f = fv_from_ieee(rhs.val.u);
+	    lx = ctx_enter(st, lhs.ix, &sv);
 	    if (lhs.part != PART_VAL) {  // <var> '.' <part> = imm  (config write)
 		csp_dio_set_part(st, lx, rhs.val, lhs.part, DOUT);
 		bitset_set(st->dset, st_index(st, lx)); // must commit
@@ -1971,6 +1991,94 @@ NOINLINE value_t eval2(csp_rt_t* st, opcode_t op, value_t y, value_t z, int uns)
 }
 
 
+// A float operation on two literals, folded only when the answer is the same
+// on every node: both operands exact in Q16.16 and so is the result -- which
+// then is exact in IEEE too, as IEEE rounds correctly. Worked in Q16.16, with
+// integers: the compiler needs no float on any node. 0: leave it to run time.
+NOINLINE static int fold_float(opcode_t op, uint32_t a, uint32_t b, value_t* r)
+{
+    int64_t qa, qb, q;
+    uint32_t bits;
+
+    if (!fix_ieee_exact(a) || !fix_ieee_exact(b))
+	return 0;
+    qa = fix_from_ieee(a);
+    qb = fix_from_ieee(b);
+    switch (op) {
+    case OP_FADD: q = qa + qb; break;
+    case OP_FSUB: q = qa - qb; break;
+    case OP_FMUL:
+	q = qa * qb;
+	if (q & 0xFFFF)
+	    return 0;
+	q /= 65536;
+	break;
+    case OP_FDIV:
+	if ((qb == 0) || ((qa * 65536) % qb))
+	    return 0;
+	q = (qa * 65536) / qb;
+	break;
+    case OP_FLT:   r->i = (qa < qb);  return 1;
+    case OP_FLTE:  r->i = (qa <= qb); return 1;
+    case OP_FEQEQ: r->i = (qa == qb); return 1;
+    case OP_FNEQ:  r->i = (qa != qb); return 1;
+    case OP_AND:   r->i = (qa && qb); return 1;
+    case OP_OR:    r->i = (qa || qb); return 1;
+    default: return 0;
+    }
+    if ((q < INT32_MIN) || (q > INT32_MAX))
+	return 0;
+    bits = fix_to_ieee((int32_t)q);
+    if (!fix_ieee_exact(bits) || (fix_from_ieee(bits) != (int32_t)q))
+	return 0;
+    r->u = bits;
+    return 1;
+}
+
+// Two literals folded: integers as the runtime computes them; floats (their
+// IEEE bits) in the node's own arithmetic when no image is being made, else
+// by fold_float.
+NOINLINE static int fold2(csp_rt_t* st, opcode_t op, rentry_t* a, rentry_t* b,
+			  int uns, vtype_t rt, value_t* r)
+{
+    value_t na, nb;
+    if (a->vt != V_FLOAT) {
+	*r = eval2(st, op, a->val, b->val, uns);
+	return 1;
+    }
+    if (st->cs->ap && !st->cs->ev)
+	return fold_float(op, a->val.u, b->val.u, r);
+    na.f = fv_from_ieee(a->val.u);
+    nb.f = fv_from_ieee(b->val.u);
+    *r = eval2(st, op, na, nb, uns);
+    if (rt == V_FLOAT)
+	r->u = fv_to_ieee(r->f);
+    return 1;
+}
+
+NOINLINE static int fold1(csp_rt_t* st, opcode_t op, rentry_t* a, vtype_t rt,
+			  value_t* r)
+{
+    value_t na;
+    if (a->vt != V_FLOAT) {
+	*r = eval1(st, op, a->val);
+	return 1;
+    }
+    if (st->cs->ap && !st->cs->ev) {
+	switch (op) {
+	case OP_FNEG: r->u = a->val.u ^ 0x80000000UL; return 1;
+	case OP_FMOV: r->u = a->val.u; return 1;
+	case OP_NOT:  r->i = ((a->val.u & 0x7FFFFFFFUL) == 0); return 1;
+	default: return 0;
+	}
+    }
+    na.f = fv_from_ieee(a->val.u);
+    *r = eval1(st, op, na);
+    if (rt == V_FLOAT)
+	r->u = fv_to_ieee(r->f);
+    return 1;
+}
+
 NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep)
 {
     int dst;
@@ -1981,6 +2089,7 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
     int iop;                     // op before the enum narrowing -- op_table_code
 				 // may hand back OP_GT, which is not an opcode_t
     int arity = op_table_arity(tok);
+    value_t result;
 
     // An operator with nothing under it. Reached whenever the constant folder is
     // handed a position that is not an expression at all -- a pattern probing an
@@ -2062,9 +2171,9 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 	    }
 #endif
 	    if ((!st->cs->ap || ( !a->X && !b->X ))
-		&& a->I && b->I && (csp_opcode_arity(op) == 2)) {
+		&& a->I && b->I && (csp_opcode_arity(op) == 2) &&
+		fold2(st, op, a, b, uns, rt, &result)) {
 		// constant fold
-		value_t result = eval2(st, op, a->val, b->val, uns);
 		if (a->L) free_reg(st, a->reg);
 		if (b->L && (a->reg != b->reg)) free_reg(st, b->reg);
 		a->X = a->L = 0;
@@ -2125,8 +2234,8 @@ NOINLINE static int process_op(csp_rt_t* st, tok_t tok, rentry_t* rstack, int ep
 	printf("\n");
 	}
 #endif
-	if (!a->X && a->I && (csp_opcode_arity(op) == 1)) { // constant fold
-	    value_t result = eval1(st, op, a->val);
+	if (!a->X && a->I && (csp_opcode_arity(op) == 1) &&
+	    fold1(st, op, a, rt, &result)) { // constant fold
 	    if (a->L) free_reg(st, a->reg);
 	    a->val = result;
 	    a->X = a->L = 0;
@@ -2505,6 +2614,11 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
     // to a constant false (csp_cc's compile_check found it, 2026-11-17).
     imm = (argimm == ((1 << arity)-1)) &&
 	(func_pure(func,0,from) || st->cs->ev);
+    // A float argument is IEEE bits here. Making an image, a call folds only
+    // on floats exact in both formats: then every node gets the same answer.
+    for (j = 0; imm && (j < arity) && st->cs->ap && !st->cs->ev; j++)
+	if ((((argcode >> 4*j) & 0xf) == V_FLOAT) && !fix_ieee_exact(rarg[j].val.u))
+	    imm = 0;
     if (imm) {
 	value_t arg[MAX_ARGS];
 	csp_func_fn fn = NULL;
@@ -2513,9 +2627,14 @@ NOINLINE static int process_fcall(csp_rt_t* st, const token_t* word,
 	    fn = func_fn(st->ufuncs, func_idx, st->ufuncs_rom);
 	else
 	    fn = func_fn(csp_builtin_funcs, func_idx, BUILTIN_ROM);
-	for (j = 0; j < arity; j++)
+	for (j = 0; j < arity; j++) {
 	    arg[j] = rarg[j].val;
+	    if (((argcode >> 4*j) & 0xf) == V_FLOAT)
+		arg[j].f = fv_from_ieee(arg[j].u);
+	}
 	dval = fn(st, argcode, arg, arity);
+	if (call_rtype(func_rtype(func, 0, from), argcode, arity) == V_FLOAT)
+	    dval.u = fv_to_ieee(dval.f);
     }
 
     // pop rstack
@@ -3958,7 +4077,7 @@ NOINLINE static int local_in(csp_rt_t* st, token_t* tv, int ti, size_t n,
 	}
 	init = rc.val;
 	if ((d.opts.vt == V_FLOAT) && (rc.vt == V_INTEGER))
-	    init.f = op_CVTIF(rc.val.i);
+	    init.u = fv_to_ieee(op_CVTIF(rc.val.i));
     }
     if (def_lookup_local(st, &d.name) != BAD_INDEX) {
 	if (csp_set_error(st, ERR_ALREADY_DEFINED)) {

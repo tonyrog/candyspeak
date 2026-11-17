@@ -341,7 +341,7 @@ static inline void* rdvp(const void* p, int rom)
 //       beside it is `flags` (CSP_IMG_F_*). A float constant is a Q16.16 word
 //       on a fixpoint build and IEEE binary32 on a float one (ESP32), and the
 //       two read each other as garbage with nothing objecting.
-#define ROM_FORMAT_VERSION 22
+#define ROM_FORMAT_VERSION 23
 
 // Format version of the SETTINGS store, which is NOT ROM_FORMAT_VERSION and not
 // EEPROM_VERSION either. It needs its own because it is the one part of the
@@ -395,22 +395,19 @@ static inline void* rdvp(const void* p, int rom)
 #define CSP_ROLE_ROM      0   // the program
 #define CSP_ROLE_FAILSAFE 1   // the one that runs when the program cannot
 
-// How an image's values read, so a reader KNOWS instead of assuming. The format
-// version cannot say this: a fixpoint and a float build write the same format,
-// and only the meaning of a float constant differs. The loader refuses an image
-// whose flags are not its own (rom_flags_ok), and a host tool reads them to
-// decode it.
-#define CSP_IMG_F_FLOAT   0x01  // floats are IEEE binary32; clear: Q16.16
+// How an image's values read, so a reader KNOWS instead of assuming. Since
+// format 23 a float constant is IEEE binary32 in every image and a Q16.16 node
+// converts it, so only the byte order is left to say; bit 0 (it said IEEE) is
+// not used. The loader refuses an image whose flags are not its own
+// (rom_flags_ok), and a host tool reads them to decode it.
 #define CSP_IMG_F_BIG     0x02  // fields are big-endian; clear: little-endian
 #if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
 #define CSP_IMG_F_ORDER   CSP_IMG_F_BIG
 #else
 #define CSP_IMG_F_ORDER   0
 #endif
-// This build's flags. FVALUE_IS_FIXPOINT is defined further down; a macro is
-// expanded where it is used, so the order does not matter.
-#define CSP_IMG_FLAGS \
-    ((FVALUE_IS_FIXPOINT ? 0 : CSP_IMG_F_FLOAT) | CSP_IMG_F_ORDER)
+// This build's flags.
+#define CSP_IMG_FLAGS     CSP_IMG_F_ORDER
 
 // Section tags: four ASCII characters, IFF/BEAM style. Four bytes cost nothing
 // here (the prologue was carrying 16 unused bits either way) and buy two things:
@@ -498,6 +495,13 @@ typedef struct PACKED {
 // Cortex-M0). The packed decl/instr types claim alignment 1 and would otherwise
 // be placed at any odd offset, costing byte-wise access for nothing.
 #define CSP_PAD4(n)  ((4 - ((n) & 3)) & 3)
+
+// Bytes after a section whose data ends at image offset `o', so the NEXT
+// section's data -- after its 8-byte prologue -- starts on a multiple of 16
+// (ROM format 23): every section at a natural offset, a record at the start of
+// a hex dump's line, and two images compared or converted word for word. The
+// padding is part of the section's `len', so a walk by len steps over it.
+#define CSP_PAD16(o) ((16 - (((o) + 8) & 15)) & 15)
 #define CSP_MASK(n, bn) ((n) & ((1 << (bn))-1))
 
 typedef const char rochar;                // PROGMEM string character type
@@ -1206,6 +1210,31 @@ typedef float fvalue_t;
 #define FVALUE_IS_FIXPOINT 0
 #endif
 
+// Float constants travel as IEEE binary32 bits (ROM format 23), on every
+// node; these turn them into the node's own floats and back. Integers only
+// (src/csp_fixpoint.c), so the compiler needs no float arithmetic on any part.
+extern int32_t  fix_from_ieee(uint32_t b);
+extern int      fix_ieee_exact(uint32_t b);
+extern uint32_t fix_to_ieee(int32_t q);
+extern uint32_t fix_ieee_decimal(uint32_t whole, uint32_t numer, uint32_t denom);
+#if FVALUE_IS_FIXPOINT
+#define fv_from_ieee(b) ((fvalue_t)fix_from_ieee(b))
+#define fv_to_ieee(f)   fix_to_ieee((int32_t)(f))
+#else
+static inline fvalue_t fv_from_ieee(uint32_t b)
+{
+    union { uint32_t u; float f; } v;
+    v.u = b;
+    return v.f;
+}
+static inline uint32_t fv_to_ieee(fvalue_t f)
+{
+    union { uint32_t u; float f; } v;
+    v.f = f;
+    return v.u;
+}
+#endif
+
 #define op_ADD(y, z)  ((y)+(z))
 #define op_SUB(y, z)  ((y)-(z))
 #define op_MUL(y, z)  ((y)*(z))
@@ -1352,6 +1381,7 @@ typedef enum {
     OP_FLT   = 31,      // "<"
     OP_FLTE  = 32,      // "<="
     // 33, 34 -- FREE, for the same reason as 16 and 17 above.
+    OP_LIFH = 33,    // load high 16 of an IEEE float, to the node's float (lz: low = 0)
     OP_FEQEQ = 35,     // "=="
     OP_FNEQ  = 36,     // "!="    
     
@@ -2022,25 +2052,29 @@ typedef struct {
 // aligned(4) on the object matters: the header is PACKED, so without it the
 // struct's own alignment would come from index_t (2) and every section start
 // could land on a 2-boundary.
-#define CSP_IMAGE_TYPE(tname,NSTR,NDECL,NINSTR,NIDG,NOFS,NEDG)          \
+// The P* are the padding the generator worked out (CSP_PAD16 at each
+// section's end, CSP_PAD4 after the last).
+#define CSP_IMAGE_TYPE(tname,NSTR,PSTR,NDECL,PDECL,NINSTR,PINSTR,NIDG,PIDG,NOFS,POFS,NEDG,PEDG) \
     typedef struct {                                                    \
         csp_image_header_t hdr;                                         \
         csp_sect_t  s_str;                                              \
         char        str[NSTR];                                          \
-        uint8_t     _pad_str[CSP_PAD4(NSTR)];                           \
+        uint8_t     _pad_str[PSTR];                                     \
         csp_sect_t  s_decl;                                             \
         csp_decl_t  decl[NDECL];                                        \
+        uint8_t     _pad_decl[PDECL];                                   \
         csp_sect_t  s_instr;                                            \
         csp_instr_t instr[NINSTR];                                      \
+        uint8_t     _pad_instr[PINSTR];                                 \
         csp_sect_t  s_idg;                                              \
         index_t     idg[NIDG];                                          \
-        uint8_t     _pad_idg[CSP_PAD4(2*(NIDG))];                       \
+        uint8_t     _pad_idg[PIDG];                                     \
         csp_sect_t  s_ofs;                                              \
         index_t     ofs[NOFS];                                          \
-        uint8_t     _pad_ofs[CSP_PAD4(2*(NOFS))];                       \
+        uint8_t     _pad_ofs[POFS];                                     \
         csp_sect_t  s_edg;                                              \
         index_t     edg[NEDG];                                          \
-        uint8_t     _pad_edg[CSP_PAD4(2*(NEDG))];                       \
+        uint8_t     _pad_edg[PEDG];                                     \
     } __attribute__((aligned(4))) tname
 
 // The generator computes the offsets ITSELF -- it must, because crc_hdr covers
@@ -2785,6 +2819,7 @@ static inline csp_sect_t ro_sect(const csp_sect_t* p)
 // of these reduce to plain ram_* access. NOINLINE (defined in csp_rt.c) so the
 // flash-copy is not expanded at every decl()/instr() site (code size on AVR).
 extern void csp_load_decl(csp_rt_t* st, index_t i, csp_decl_t* dst);
+extern value_t decl_init(const csp_decl_t* d, value_t v);  // a float's: IEEE bits
 // Same read, but by POINTER into RAM: a RAM decl in place, a ROM decl unpacked
 // into st->dcache. The pointer is valid until CSP_DCACHE_N further DISTINCT ROM
 // decls are referenced -- fine for reading a field out of an expression, never

@@ -1,0 +1,26 @@
+// Float constants are IEEE bits in the image (ROM format 23) and LIFH makes
+// the node's own float of them: 0.5 is one LIFH (its low half is 0), 3.14 an
+// LIU and an LIFH. A float expression is folded only when every node would get
+// the same: 2.0 * 3.0 - 0.5 is, 1.0 / 3.0 is not and is worked here, in Q16.16.
+// Probed as integers: P = 1000 * the value, truncated.
+#variable A float = 0.0
+#variable B float = 0.0
+#variable C float = 0.0
+#variable D float = 0.0
+#variable E float = 0.25
+#variable PA = 0
+#variable PB = 0
+#variable PC = 0
+#variable PD = 0
+#variable PE = 0
+#variable Neg = 0
+A = 0.5
+B = 3.14
+C = 1.0 / 3.0
+D = 2.0 * 3.0 - 0.5
+PA = trunc(A * 1000.0)
+PB = trunc(B * 1000.0)
+PC = trunc(C * 10000.0)
+PD = trunc(D * 1000.0)
+PE = trunc(E * 1000.0)
+Neg = trunc(-B * 100.0)

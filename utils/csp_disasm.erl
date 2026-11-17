@@ -7,7 +7,7 @@
 
 -module(csp_disasm).
 
--export([file/1, file/2, image/1, patch/2]).
+-export([file/1, file/2, image/1, patch/2, disasm/1]).
 -export([crc16/1]).                       % csp_node: a dump line's CRC
 -export([disabled/2]).                    % csp_list: the patch's #disable set
 -export([reg/1, part/1, type/1, dir/1, endian/1]).
@@ -71,7 +71,7 @@ hex_to_bin(Bin) ->
 %% either byte order. Handed to everything that decodes a field or a value.
 ctx(<<_:7/binary, Flags, _/binary>>) ->
     #{endian => case Flags band 2 of 0 -> little; 2 -> big end,
-      float => case Flags band 1 of 0 -> fixpoint; 1 -> ieee end}.
+      float => ieee}.
 
 %% A field of the image, in the image's byte order.
 word(#{endian := big}, Bin) ->
@@ -221,7 +221,7 @@ decode_header_(little,
     Ofs_edg:32/little>>) ->
   #{
     size => Size, version => Version, role => Role, generation => Generation,
-    flags => Flags, float => case Flags band 1 of 0 -> fixpoint; 1 -> ieee end,
+    flags => Flags, float => ieee,
     endian => case Flags band 2 of 0 -> little; 2 -> big end,
     n_str => N_str, crc_str => Crc_str, ofs_str => Ofs_str,
     n_decl => N_decl, crc_decl => Crc_decl, ofs_decl => Ofs_decl,
@@ -251,7 +251,7 @@ decode_header_(big,
     Ofs_edg:32/big>>) ->
   #{
     size => Size, version => Version, role => Role, generation => Generation,
-    flags => Flags, float => case Flags band 1 of 0 -> fixpoint; 1 -> ieee end,
+    flags => Flags, float => ieee,
     endian => case Flags band 2 of 0 -> little; 2 -> big end,
     n_str => N_str, crc_str => Crc_str, ofs_str => Ofs_str,
     n_decl => N_decl, crc_decl => Crc_decl, ofs_decl => Ofs_decl,
@@ -414,12 +414,16 @@ disasm_code(F, <<InstrBin:4/binary, Data/binary>>, Addr, Si, Strings, Acc) ->
 		end,
 	    add_instr(F, Data, Addr, 1, I, Si, Strings, Acc);
 	imm ->
-	    {_Pos,[{x,X},{imm,Imm}]} =
+	    {_Pos,[{x,X},{lz,Lz},{imm,Imm}]} =
 		decode_bits(Instr, Pos0,
 			    [{x, uint, ?REG_BITS},
-			     {'_',6},
+			     {lz, uint, 1},
+			     {'_',5},
 			     {imm, int, 16}]),
 	    I = case OpCode of
+		    'LIFH' ->
+			UImm = Imm band ((1 bsl 16)-1),
+			{instr, Addr, OpCode, [reg(X), {imm,UImm} | [lz || Lz =:= 1]]};
 		    'LIU' ->
 			UImm = Imm band ((1 bsl 16)-1),
 			{instr, Addr, OpCode, [reg(X), {imm,UImm}]};

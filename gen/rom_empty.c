@@ -2,24 +2,24 @@
 //   source:  examples/empty.csp
 // modified:  Wed Jul 22 21:40:41 2026
 //   loaded:  examples/empty.csp                       (command line)
-//   version: unknown
-//   built:   Oct 28 2026 13:51:09
+//   version: 1.0-145-g6e5c768-dirty
+//   built:   Nov 17 2026 20:22:13
 //   size:    33 instr, 11 decl, 61 str, 3 states
 
 #include "csp.h"
-#if ROM_FORMAT_VERSION != 22
-#error "rom.c is stale: generated for ROM format 22, csp.h is newer -- regenerate with 'csp -C'"
+#if ROM_FORMAT_VERSION != 23
+#error "rom.c is stale: generated for ROM format 23, csp.h is newer -- regenerate with 'csp -C'"
 #endif
 
-CSP_IMAGE_TYPE(rom_image_t, 3,12,34,1,1,1);
-CSP_IMAGE_CHECK(rom_image_t, 64,76,180,324,336,348,352);
+CSP_IMAGE_TYPE(rom_image_t, 3,5,12,8,34,0,1,6,1,6,1,2);
+CSP_IMAGE_CHECK(rom_image_t, 64,80,192,336,352,368,372);
 
 static const rom_image_t rom_image_data RODATA = {
-  .s_str = { { CSP_SECT_STR }, 4 },
+  .s_str = { { CSP_SECT_STR }, 8 },
   .str = {
 
 (char)0xff,255,255,},
-  .s_decl = { { CSP_SECT_DECL }, 96 },
+  .s_decl = { { CSP_SECT_DECL }, 104 },
   .decl = {
   {0x01,0x01,0x1f,0x01,0x00,0x00,0x00,0x00},  /* .va={.type=DECL_VARIABLE,.cont=0,.local=0,.dir=0,.name=1,.vt=V_INTEGER,.res=31,.init={.u=0}} */
   {0x06,0x02,0x03,0x04,0x00,0x00,0x00,0x00},  /* .sn={.type=DECL_STATES,.cont=0,.local=0,.dir=0,.name=2,.name2=3,.name3=4,.name4=0,.name5=0,.name6=0} */
@@ -71,20 +71,20 @@ static const rom_image_t rom_image_data RODATA = {
   {0x00,0x00,0x00,0x00},  /* segment payload */
   {0x3f,0x00,0x31,0xf6},  /* .em={.op=OP_END_MARK,.crc=63025,._res=0} */
   },
-  .s_idg = { { CSP_SECT_IDG }, 4 },
+  .s_idg = { { CSP_SECT_IDG }, 8 },
   .idg = {0},
-  .s_ofs = { { CSP_SECT_OFS }, 4 },
+  .s_ofs = { { CSP_SECT_OFS }, 8 },
   .ofs = {0},
   .s_edg = { { CSP_SECT_EDG }, 4 },
   .edg = {0},
   .hdr = {
     .magic = { CSP_IMAGE_MAGIC0, CSP_IMAGE_MAGIC1, CSP_IMAGE_MAGIC2, CSP_IMAGE_MAGIC3 },
-    .size=352, .version=22, .role=0, .flags=0, .generation=0,
+    .size=372, .version=23, .role=0, .flags=0, .generation=0,
     .n_str=0, .n_decl=11, .n_instr=33, .n_edg=0,
     .crc_str=65535, .crc_decl=4984, .crc_instr=44882, .crc_graph=0,
-    .ofs_str=64, .ofs_decl=76, .ofs_instr=180, .ofs_idg=324,
-    .ofs_ofs=336, .ofs_edg=348,
-    .crc_hdr=53044 }
+    .ofs_str=64, .ofs_decl=80, .ofs_instr=192, .ofs_idg=336,
+    .ofs_ofs=352, .ofs_edg=368,
+    .crc_hdr=29874 }
 };
 const csp_image_ref_t rom_image RODATA = { (const uint8_t*)&rom_image_data };
 CSP_REGISTER_IMAGE(rom_image_data);

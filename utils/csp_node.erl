@@ -192,9 +192,11 @@ record(1, R, I) -> {Fw, _} = vstr(R), I#{fw => Fw};
 record(2, R, I) ->
     [Rom, Flags, Feat] = vints(R, 3),
     I#{rom => Rom,
-       float => case Flags band 1 of 0 -> fixpoint; 1 -> ieee end,
+       %% the node's own floats: an image's are IEEE everywhere (format 23)
+       float => case Feat band 8 of 0 -> fixpoint; 8 -> ieee end,
        endian => case Flags band 2 of 0 -> little; 2 -> big end,
-       features => [F || {B, F} <- [{1, compiler}, {2, flash}, {4, eeprom}],
+       features => [F || {B, F} <- [{1, compiler}, {2, flash}, {4, eeprom},
+				     {8, ieee}],
 			 Feat band B =/= 0]};
 record(3, R, I) -> {D, _} = vstr(R), I#{device => D};
 record(4, R, I) -> [Tot, Free] = vints(R, 2), I#{ram => #{total => Tot, free => Free}};

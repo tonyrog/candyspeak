@@ -96,7 +96,9 @@ env(Header, Strings, Decls, Code, Opts) ->
       states => states(Decls),
       objects => maps:from_list([{proplists:get_value(m, Ps), Name}
 				 || {decl, _, object, _, Name, Ps} <- Decls]),
-      float => maps:get(float, Header, fixpoint),
+      %% how the node lists a float: an image's are IEEE (format 23), the
+      %% node prints its own -- the host's Q16.16 unless told
+      float => maps:get(float, Opts, fixpoint),
       rom_nd => maps:get(rom_nd, Opts, maps:get(n_decl, Header)),
       rom_nn => maps:get(rom_nn, Opts, maps:get(n_instr, Header))}.
 
@@ -470,9 +472,14 @@ value(Env, float, V) -> float_text(maps:get(float, Env), V);
 value(_Env, timer, V) -> integer_to_list(V);
 value(_Env, _, _) -> "???".
 
-%% csp_print_fixpoint: Q16.16, the fraction truncated to six decimals.
+%% csp_print_fixpoint: Q16.16, the fraction truncated to six decimals. V is
+%% the IEEE value the image holds; the node rounds it into Q16.16 first
+%% (fix_from_ieee: nearest, halves away from zero).
 float_text(fixpoint, V) ->
-    Fix = round(V * 65536),
+    Fix = case V < 0 of
+	      true -> -round(-V * 65536);
+	      false -> round(V * 65536)
+	  end,
     Abs = abs(Fix),
     Frac = ((Abs band 16#ffff) * 1000000) bsr 16,
     [case Fix < 0 of true -> "-"; false -> "" end,
@@ -744,6 +751,12 @@ const_store(Env, I, R, Got) ->
 	{'LIH', _} -> const_store(Env, I + 1,
 				  (R band 16#ffff) bor (imm(args(Env, I)) bsl 16),
 				  Got);
+	{'LIFH', _} ->
+	    Lo = case lists:member(lz, args(Env, I)) of
+		     true -> 0;
+		     false -> R band 16#ffff
+		 end,
+	    const_store(Env, I + 1, Lo bor (imm(args(Env, I)) bsl 16), Got);
 	{'ST', none} -> const_store(Env, I + 1, R, {mem(args(Env, I)) band 16#7fff, R});
 	{'STI', none} -> const_store(Env, I + 1, R, {mem(args(Env, I)) band 16#7fff,
 						     imm(args(Env, I))});
@@ -911,6 +924,15 @@ op(Env, I, 'LIH', [X, {imm, V0}], B) ->
 	    false -> ["0x", hex4(W bsr 16), hex4(W band 16#ffff)]
 	end,
     {V, B1} = new(B, T, 110, Lo),
+    next(Env, I, setreg(B1, X, V));
+%% A float constant: its IEEE bits, the low half the LIU's unless lz.
+op(Env, I, 'LIFH', [X, {imm, V0} | Fl], B) ->
+    Lo = case lists:member(lz, Fl) of
+	     true -> 0;
+	     false -> regi(B, X) band 16#ffff
+	 end,
+    <<F:32/float>> = <<(((V0 band 16#ffff) bsl 16) bor Lo):32>>,
+    {V, B1} = new(B, float_text(maps:get(float, Env), F), 110, Lo),
     next(Env, I, setreg(B1, X, V));
 op(Env, I, 'LI', [X, {imm, V0}], B) ->
     {V, B1} = new(B, integer_to_list(V0), 110, V0 band 16#ffff),
@@ -1092,7 +1114,7 @@ consumed(Env, J, R) ->
 		    hd(Regs) =:= R orelse consumed(Env, J + 1, R);
 		'ARG' -> hd(Regs) =:= R orelse consumed(Env, J + 1, R);
 		_ when Op =:= 'LD'; Op =:= 'LDP'; Op =:= 'LI'; Op =:= 'LIU';
-		       Op =:= 'LIH'; Op =:= 'CALL' ->
+		       Op =:= 'LIH'; Op =:= 'LIFH'; Op =:= 'CALL' ->
 		    hd(Regs) =/= R andalso consumed(Env, J + 1, R);
 		_ when Op =:= 'MOV'; Op =:= 'CVTIF'; Op =:= 'CVTFI' ->
 		    [X, Y | _] = Regs,

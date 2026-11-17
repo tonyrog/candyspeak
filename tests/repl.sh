@@ -552,7 +552,7 @@ if fw "$D/fw_a" "$D/fpa.csp" && fw "$D/fw_b" "$D/fpb.csp"; then
 	got=$(printf '/images\n/quit\n' | "$D/fw2a" -i --no-eeprom 2>&1 |
 	      grep -E '^[01]: ' | tr '\n' ' ')
 	ck "the higher generation is the one that runs" \
-	   "0: ROM gen=0 size=376 rules=37 1: ROM gen=5 size=400 rules=41 " "$got"
+	   "0: ROM gen=0 size=388 rules=37 1: ROM gen=5 size=420 rules=41 " "$got"
 
 	: > "$D/two.db"
 	printf '#variable Z : 16 = 5\nZ = Y + 1\n/save\n/quit\n' |
@@ -795,7 +795,7 @@ if tools/csp-image -q -o "$D/up" examples/arith.csp >/dev/null 2>&1; then
 	    echo "/quit"; } \
 	  | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
 	  | sed -n 's|^A: ||p')
-    ck "a whole image lands in slot A" "ROM gen=0 size=1324 rules=268" "$got"
+    ck "a whole image lands in slot A" "ROM gen=0 size=1348 rules=268" "$got"
 
     got=$({ echo "/upgrade A"; cat "$D/up.hex"; echo "/images"; \
 	    echo "/quit"; } \
@@ -879,12 +879,12 @@ if tools/csp-image -q -o "$D/up" examples/arith.csp >/dev/null 2>&1; then
     ck "a torn line is asked for again, and the image lands" \
 "ERR crc 64
 at 64
-A: ROM gen=0 size=1324 rules=268" "$got"
+A: ROM gen=0 size=1348 rules=268" "$got"
 
     # `. SIZE CRC' is the whole as the sender counted it. A transfer that
     # agrees line by line but not on the whole stamps nothing.
     blank "$D/up.bin"
-    got=$({ echo "/upgrade A"; sed '$d' "$D/up.hex"; echo ". 1324 0000"; \
+    got=$({ echo "/upgrade A"; sed '$d' "$D/up.hex"; echo ". 1348 0000"; \
 	    echo "/images"; echo "/quit"; } \
 	  | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
 	  | sed -n 's#^\(> \)*\(ERR .*\|A: .*\)$#\2#p')
@@ -2883,7 +2883,7 @@ CSPEOF
 	./csp -i --no-eeprom "$D/rfmast.csp" >/dev/null 2>&1
     wait $rfpid 2>/dev/null
     ck "an image reaches a node's flash over a route" \
-       "A: ROM gen=0 size=1324 rules=268" \
+       "A: ROM gen=0 size=1348 rules=268" \
        "$(grep -E '^A: ' "$D/rfnode.out" | tail -1)"
 else
     echo "  SKIP csp-image did not build an image"

@@ -1,0 +1,9 @@
+
+#variable pi float = 3.14
+#variable babe unsigned = 0xFEEDBABE
+#variable ba:16 unsigned = 0xFEED
+#variable b:8 unsigned = 0xFE
+#variable a
+
+a = babe + 0x01010101 + ba + 0x0202 + b
+

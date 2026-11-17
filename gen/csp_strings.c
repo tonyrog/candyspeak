@@ -225,6 +225,7 @@ rochar s_NEW[] RODATA = "NEW";
 rochar s_LI[] RODATA = "LI";
 rochar s_LIU[] RODATA = "LIU";
 rochar s_LIH[] RODATA = "LIH";
+rochar s_LIFH[] RODATA = "LIFH";
 rochar s_ARG[] RODATA = "ARG";
 rochar s_ST[] RODATA = "ST";
 rochar s_STP[] RODATA = "STP";

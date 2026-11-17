@@ -50,11 +50,22 @@ and a CRC cannot be taken over values only the C compiler knows. `CSP_IMAGE_CHEC
 then makes the compiler confirm every one with a static assert, so the *build*
 fails if the two ever diverge.
 
-**Alignment.** Element types are 8, 4 and 2 bytes, so a 4-aligned section start
-serves all of them — and `index_t` genuinely needs 2 (an unaligned 16-bit load
-faults on Cortex-M0). `CSP_PAD4` pads each section, and `aligned(4)` on the type
-is required because the header is PACKED: without it the struct's own alignment
-would come from `index_t` and every section could land on a 2-boundary.
+**Alignment.** Since format 23 every section's data starts on a multiple of 16
+(`CSP_PAD16` after each section, `CSP_PAD4` after the last; the padding counts in
+the section's `len`, so a walk by `len` steps over it). The 56-byte header and
+the first 8-byte prologue put STRS at 64 already; DECL, CODE and the graph follow
+at 16-byte offsets. That serves every element type (8, 4 and 2 bytes; `index_t`
+needs 2 on Cortex-M0), puts a record at the start of a hex dump's line, and lets
+two images be compared or byte-swapped record by record. `aligned(4)` on the type
+is still required because the header is PACKED.
+
+**Floats.** A float constant is IEEE binary32 bits in every image, whatever the
+node: `LIU lo` + `LIFH hi` (or one `LIFH` with `lz` when the low half is 0), and
+a declaration's float start value the same. A Q16.16 node turns them into its
+own (`fix_from_ieee`); an IEEE node takes them as they are. A float expression
+is folded at compile time only when the answer is exact in both formats, so one
+image means the same on every node -- `make neutral_check` holds `./csp` and
+`./csp-ieee` to the same image of every program.
 
 **The runtime never names an image's struct type.** Each image has its own (the
 counts differ). `csp_load_image(st, base)` takes the first byte and works in

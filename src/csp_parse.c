@@ -361,15 +361,15 @@ static int pmatch_const_s(pmatch_st_t* pst, const token_t* tv, int ti,
     case V_INTEGER:
 	if (result.vt == V_INTEGER) break;
 	if (result.vt == V_UNSIGNED) break;
-	if (result.vt == V_FLOAT) {
-	    result.val.i = op_CVTFI(result.val.f);
+	if (result.vt == V_FLOAT) {          // a float is its IEEE bits here
+	    result.val.i = op_CVTFI(fv_from_ieee(result.val.u));
 	    break;
 	}
 	return -1;
     case V_FLOAT:
 	if (result.vt == V_FLOAT) break;
 	if (result.vt == V_INTEGER) {
-	    result.val.f = op_CVTIF(result.val.i);
+	    result.val.u = fv_to_ieee(op_CVTIF(result.val.i));
 	    break;
 	}
 	return -1;

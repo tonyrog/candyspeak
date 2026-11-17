@@ -985,8 +985,11 @@ static void list_formula(csp_rt_t* st, index_t di)
     }
 }
 
+// A declaration's start value. A float's is IEEE bits.
 static void list_value(csp_rt_t* st, vtype_t vt, value_t val)
 {
+    if (CSP_MASK(vt, TYPE_BITS) == V_FLOAT)
+	val.f = fv_from_ieee(val.u);
     if (vt == V_STRING) {
 	csp_print_char('"');
 	if (val.s > 0)
@@ -2492,7 +2495,9 @@ static void dump_state(csp_rt_t* st)
 // utils/csp_node.erl info/1 reads it.
 //
 //   1 fw    version
-//   2 fmt   ROM format version, image flags (CSP_IMG_F_*), features
+//   2 fmt   ROM format version, image flags (CSP_IMG_F_*: byte order),
+//           features (compiler, flash, eeprom, IEEE floats -- an image's
+//           floats are IEEE on every node, the node's own need not be)
 //   3 dev   the part's name                                      (flash builds)
 //   4 ram   capacity, free
 //   5 lim   instr, decl, string, names caps, built-in functions
@@ -2519,6 +2524,7 @@ static void dump_state(csp_rt_t* st)
 #define INFO_F_COMPILER 0x01
 #define INFO_F_FLASH    0x02
 #define INFO_F_EEPROM   0x04
+#define INFO_F_IEEE     0x08    // the node's floats are IEEE; clear: Q16.16
 
 // The bare builds name it (Makefile.board); a build that does not says so.
 #ifndef CSP_VERSION
@@ -2590,7 +2596,8 @@ static void info_emit(csp_rt_t* st)
 #if defined(CSP_HAVE_FLASH)
 	       | INFO_F_FLASH
 #endif
-	       | ((cap != CSP_EEPROM_NONE) ? INFO_F_EEPROM : 0));
+	       | ((cap != CSP_EEPROM_NONE) ? INFO_F_EEPROM : 0)
+	       | (FVALUE_IS_FIXPOINT ? 0 : INFO_F_IEEE));
     rec_send(INFO_FMT, &r);
 
     rec_varint(&r, csp_system_ram_capacity());

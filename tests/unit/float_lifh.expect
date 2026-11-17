@@ -1,0 +1,12 @@
+{modes, [seq]}.
+{cycles, 4}.
+%% On the host's Q16.16: 3.14 is 205783/65536 = 3.1399993..., 1/3 is
+%% 21845/65536 = 0.333328...; an IEEE node would get 3140 and 3333.
+{checks, [
+  {final_var, "PA", 500},
+  {final_var, "PB", 3139},
+  {final_var, "PC", 3333},
+  {final_var, "PD", 5500},
+  {final_var, "PE", 250},
+  {final_var, "Neg", -313}
+]}.

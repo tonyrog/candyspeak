@@ -88,6 +88,7 @@ const uint8_t op_tok[] RODATA = {
     [OP_LI]    = NONE,
     [OP_LIU]   = NONE,
     [OP_LIH]   = NONE,
+    [OP_LIFH]  = NONE,
     [OP_ARG]   = NONE,
     [OP_ST]    = NONE,
     [OP_STP]   = NONE,
@@ -363,6 +364,32 @@ static void exprbuf_uint32(csp_exprbuf_t* bp, uint32_t v)
     if (v == 0) { exprbuf_char(bp, '0'); return; }
     while (v > 0) { tmp[n++] = (char)((v % 10) + '0'); v /= 10; }
     while (n > 0) exprbuf_char(bp, tmp[--n]);
+}
+
+// A float constant, from its IEEE bits, as the node holds it: six decimals,
+// the way a declaration's float lists.
+static void exprbuf_float(csp_exprbuf_t* bp, uint32_t bits)
+{
+    fvalue_t v = fv_from_ieee(bits & 0x7FFFFFFFUL);
+    uint32_t ip, fp, d;
+
+    if (bits >> 31)
+	exprbuf_char(bp, '-');
+#if FVALUE_IS_FIXPOINT
+    ip = (uint32_t)v >> 16;
+    fp = (uint32_t)(((uint64_t)((uint32_t)v & 0xFFFF) * 1000000) >> 16);
+#else
+    ip = (uint32_t)v;
+    fp = (uint32_t)((v - (fvalue_t)ip) * (fvalue_t)1000000 + (fvalue_t)0.5);
+    if (fp >= 1000000) {
+	fp -= 1000000;
+	ip++;
+    }
+#endif
+    exprbuf_uint32(bp, ip);
+    exprbuf_char(bp, '.');
+    for (d = 100000; d > 0; d /= 10)
+	exprbuf_char(bp, (char)('0' + (fp / d) % 10));
 }
 
 static void exprbuf_int16(csp_exprbuf_t* bp, int16_t v)
@@ -809,6 +836,7 @@ static int reg_consumed(csp_rt_t* st, int i, int reg)
 	case OP_LI:
 	case OP_LIU:
 	case OP_LIH:
+	case OP_LIFH:
 	    if (csp_instr_get_i_x(ip) == reg) return 0;  // redefined
 	    break;
 	case OP_CALL:
@@ -987,6 +1015,17 @@ static int exprbuf_expr(csp_rt_t* st, csp_exprbuf_t* bp, int i)
 	    break;
 	}
 	    */
+        case OP_LIFH: {
+	    // A float constant: its IEEE bits, the low half from the LIU before
+	    // it unless lz says there is none.
+            uint8_t *start = exprbuf_ptr(bp);
+	    uint32_t b = ((uint32_t)(uint16_t)csp_instr_get_i_imm(ip) << 16) |
+		(csp_instr_get_i_lz(ip) ? 0 : bp->regi[csp_instr_get_i_x(ip)]);
+	    exprbuf_float(bp, b);
+	    bp->reg[csp_instr_get_i_x(ip)] = exprbuf_intern(bp,start,exprbuf_len(bp, start));
+            bp->prio[csp_instr_get_i_x(ip)] = 110;
+            break;
+	}
         case OP_LIH: {
 	    // The high half of the constant the LIU before it started: the
 	    // listing says the whole 32-bit value, as it would be written.
@@ -1178,6 +1217,10 @@ int csp_rule_const_store(csp_rt_t* st, int ri, index_t* member, value_t* v)
 	    break;
 	case OP_LIH:
 	    r.u |= ((uvalue_t)(uint16_t)instr(st, i, i_imm)) << 16;
+	    break;
+	case OP_LIFH:   // the IEEE bits, as a declaration's start value has them
+	    r.u = (instr(st, i, i_lz) ? 0 : (r.u & 0xFFFF)) |
+		(((uvalue_t)(uint16_t)instr(st, i, i_imm)) << 16);
 	    break;
 	case OP_ST:
 	    *member = INDEX(instr(st, i, m_mem));

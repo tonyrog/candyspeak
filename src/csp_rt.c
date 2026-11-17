@@ -291,6 +291,15 @@ NOINLINE const csp_decl_t* csp_decl_ref(csp_rt_t* st, index_t i)
 // LOAD, not "get by value". A record comes back through a caller's buffer so
 // the copy is one the caller can see and, later, elide -- a by-value return
 // leaves that to whatever the compiler felt like doing that day.
+// A declaration's start value as the node holds it: a float's is IEEE bits in
+// the declaration (ROM format 23), whatever this node's float is.
+value_t decl_init(const csp_decl_t* d, value_t v)
+{
+    if (CSP_MASK(csp_decl_get_vt(d), TYPE_BITS) == V_FLOAT)
+	v.f = fv_from_ieee(v.u);
+    return v;
+}
+
 NOINLINE void csp_load_decl(csp_rt_t* st, index_t i, csp_decl_t* dst)
 {
     if (i < st->rom_nd)
@@ -1704,6 +1713,13 @@ NOINLINE int eval_op(csp_rt_t* st, int n, const csp_instr_t* ci, int* leave)
     case OP_LIH:
 	st->es.reg[ix_].u |= ((uint32_t)(uint16_t)imm) << 16;
 	break;
+    case OP_LIFH: {   // the high half of IEEE bits, made the node's own float
+	uint32_t b = ((uint32_t)(uint16_t)imm) << 16;
+	if (!csp_instr_get_i_lz(ci))
+	    b |= st->es.reg[ix_].u & 0xFFFF;
+	st->es.reg[ix_].f = fv_from_ieee(b);
+	break;
+    }
     case OP_ARG:
 	st->es.arg[imm] = st->es.reg[ix_];
 	break;
@@ -5559,7 +5575,7 @@ NOINLINE int setup_variable(csp_rt_t* st, index_t ix)
     {
 	// Read once. va_init is 32 bits, so the accessor is four byte loads and
 	// a shift each -- and the two slots get the same value by definition.
-	value_t init = csp_decl_get_va_init(&d);
+	value_t init = decl_init(&d, csp_decl_get_va_init(&d));
 
 	csp_heap_set(st, vw, DIN,  init);
 	csp_heap_set(st, vw, DOUT, init);
@@ -5621,7 +5637,7 @@ NOINLINE int setup_constant(csp_rt_t* st, index_t ix)
 	return -1;
     csp_load_decl(st, INDEX(ix), &d);
     csp_dio_slots(st, ix, &iptr, &optr);
-    *iptr = *optr = csp_decl_get_cn_init(&d);
+    *iptr = *optr = decl_init(&d, csp_decl_get_cn_init(&d));
     return 0;
 }
 
@@ -6086,7 +6102,7 @@ NOINLINE static void apply_param_overrides(csp_rt_t* st)
 	    csp_decl_t d_;
 
 	    csp_load_decl(st, i, &d_);
-	    *iptr = *optr = csp_decl_get_cn_init(&d_);
+	    *iptr = *optr = decl_init(&d_, csp_decl_get_cn_init(&d_));
 	}
     }
 }
@@ -6186,7 +6202,7 @@ static int set_declared(csp_rt_t* st, xindex_t ix, csp_part_t part, value_t* vp)
     if (part == PART_VAL) {
 	if ((csp_decl_get_type(&d) != DECL_CONSTANT) || !csp_decl_get_local(&d))
 	    return 0;               // only a #param has a settable value
-	*vp = csp_decl_get_cn_init(&d);
+	*vp = decl_init(&d, csp_decl_get_cn_init(&d));
 	return 1;
     }
     ref.u = 0;

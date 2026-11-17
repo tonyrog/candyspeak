@@ -9,6 +9,14 @@
 #include "csp_compile.h"
 #include "csp_dump.h"
 #include "csp_print.h"
+
+// A declaration's start value as the node holds it: a float's is IEEE bits.
+static value_t decl_init_v(vtype_t vt, value_t v)
+{
+    if (CSP_MASK(vt, TYPE_BITS) == V_FLOAT)
+	v.f = fv_from_ieee(v.u);
+    return v;
+}
 #include "csp_expr.h"
 
 // NOT tier-gated. This whole file takes FILE* and prints with fprintf, and it is
@@ -271,6 +279,14 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		i,
 		instr(st, i, i_x),
 		(uint16_t)instr(st, i, i_imm),
+		eot);
+	break;
+    case OP_LIFH:
+	fprintf(f, "{instr,%d,'LIFH',[r%d,16#%04x%s]}%s\n",
+		i,
+		instr(st, i, i_x),
+		(uint16_t)instr(st, i, i_imm),
+		instr(st, i, i_lz) ? ",lz" : "",
 		eot);
 	break;
     case OP_STI:  // store immediate to memory (no result register)
@@ -836,7 +852,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		ro_maybe_ptr(csp_fmt_pindir(decl(st,i,dir))),
 		ro_maybe_ptr(csp_fmt_vtype(vt)),
 		decl(st,i,cont) ? ",{cont,1}" : "");
-	csp_fprint_value(f, st, vt, decl(st, i, va_init));
+	csp_fprint_value(f, st, vt, decl_init_v(vt, decl(st, i, va_init)));
 	fprintf(f, "},{value,");
 	csp_fprint_value(f, st, vt, csp_value(st, ix));
 	fprintf(f, "}]}%s\n", eot);
@@ -848,7 +864,7 @@ index_t csp_dump_decl(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 		DNAME(st, ix),
 		GET_RES(decl(st,i,res)),
 		ro_maybe_ptr(csp_fmt_vtype(vt)));
-	csp_fprint_value(f, st, vt, decl(st, i, cn_init));
+	csp_fprint_value(f, st, vt, decl_init_v(vt, decl(st, i, cn_init)));
 	fprintf(f, "},{value,");
 	csp_fprint_value(f, st, vt, csp_value(st, ix));
 	fprintf(f, "}]}%s\n", eot);	
@@ -1186,6 +1202,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     index_t  n_decl_real;
     unsigned n_idg = 1, n_ofs = 1, n_edg = 1;    // stubs unless -r bakes a graph
     uint32_t SP, o_str, o_decl, o_instr, o_idg, o_ofs, o_edg, img_size;
+    uint32_t p_str, p_decl, p_instr, p_idg, p_ofs, p_edg;
 
     // Provenance banner: what this ROM is, where it came from, how big. The
     // counts are what actually goes into flash, so a glance at the top of rom.c
@@ -1253,16 +1270,24 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     }
 #endif
     SP       = (uint32_t)sizeof(csp_sect_t);
+    // Every section's data on a multiple of 16 (format 23): CSP_PAD16.
     o_str    = (uint32_t)sizeof(csp_image_header_t) + SP;
-    o_decl   = o_str   + n_str_b   + CSP_PAD4(n_str_b)   + SP;
-    o_instr  = o_decl  + n_decl_b  * 8                   + SP;
-    o_idg    = o_instr + n_instr_b * 4                   + SP;
-    o_ofs    = o_idg   + n_idg*2   + CSP_PAD4(2*n_idg)   + SP;
-    o_edg    = o_ofs   + n_ofs*2   + CSP_PAD4(2*n_ofs)   + SP;
-    img_size = o_edg   + n_edg*2   + CSP_PAD4(2*n_edg);
+    p_str    = CSP_PAD16(o_str + n_str_b);
+    o_decl   = o_str   + n_str_b     + p_str   + SP;
+    p_decl   = CSP_PAD16(o_decl + n_decl_b * 8);
+    o_instr  = o_decl  + n_decl_b*8  + p_decl  + SP;
+    p_instr  = CSP_PAD16(o_instr + n_instr_b * 4);
+    o_idg    = o_instr + n_instr_b*4 + p_instr + SP;
+    p_idg    = CSP_PAD16(o_idg + n_idg * 2);
+    o_ofs    = o_idg   + n_idg*2     + p_idg   + SP;
+    p_ofs    = CSP_PAD16(o_ofs + n_ofs * 2);
+    o_edg    = o_ofs   + n_ofs*2     + p_ofs   + SP;
+    p_edg    = CSP_PAD4(2*n_edg);
+    img_size = o_edg   + n_edg*2     + p_edg;
 
-    fprintf(f, "\nCSP_IMAGE_TYPE(%s_image_t, %u,%u,%u,%u,%u,%u);\n",
-	    px, n_str_b, n_decl_b, n_instr_b, n_idg, n_ofs, n_edg);
+    fprintf(f, "\nCSP_IMAGE_TYPE(%s_image_t, %u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u);\n",
+	    px, n_str_b, p_str, n_decl_b, p_decl, n_instr_b, p_instr,
+	    n_idg, p_idg, n_ofs, p_ofs, n_edg, p_edg);
     fprintf(f, "CSP_IMAGE_CHECK(%s_image_t, %u,%u,%u,%u,%u,%u,%u);\n\n",
 	    px, o_str, o_decl, o_instr, o_idg, o_ofs, o_edg, img_size);
     fprintf(f, "static const %s_image_t %s_image_data RODATA = {\n", px, px);
@@ -1284,7 +1309,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     // marks the section end for header-free recovery) + the 2-byte CRC. See
     // rom_scan_str.
     fprintf(f, "  .s_str = { { CSP_SECT_STR }, %u },\n  .str = {\n",
-	    n_str_b + CSP_PAD4(n_str_b));
+	    n_str_b + p_str);
     fprintf(f, "\n(char)0xff,%u,%u,", crc_str_data & 0xff, (crc_str_data >> 8) & 0xff);
     fprintf(f, "},\n");
 
@@ -1323,7 +1348,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 
     // now dump declarations -- one extra entry: the DECL_END_MARK terminator.
     fprintf(f, "  .s_decl = { { CSP_SECT_DECL }, %u },\n  .decl = {\n",
-	    n_decl_b * 8);
+	    n_decl_b * 8 + p_decl);
     for (i = 0; i < st->ps.nd; i++) {
 	// A string SEGMENT never reaches an image. Its bytes are already in the
 	// flat .str section above, and a ROM has no segments at all -- so both
@@ -1475,7 +1500,7 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 
     // and then dump instructions -- one extra entry: the OP_END_MARK terminator.
     fprintf(f, "  .s_instr = { { CSP_SECT_INSTR }, %u },\n  .instr = {\n",
-	    n_instr_b * 4);
+	    n_instr_b * 4 + p_instr);
     for (i = 0; i < st->ps.nn; i++) {
 	// csp_instr_t is a UNION whose every arm begins with INSTR_COMMON (op),
 	// so .op MUST be written inside the same arm designator -- a leading
@@ -1533,6 +1558,10 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	case OP_LIH:
 	case OP_ARG:
 	    emit_rec(f, ip, 4, ".i={%s,.x=%u,.imm=%d}", op, csp_instr_get_i_x(ip), csp_instr_get_i_imm(ip));
+	    break;
+	case OP_LIFH:
+	    emit_rec(f, ip, 4, ".i={%s,.x=%u,.lz=%u,.imm=%d}", op, csp_instr_get_i_x(ip),
+		     csp_instr_get_i_lz(ip), csp_instr_get_i_imm(ip));
 	    break;
 	case OP_ST:
 	case OP_STIMP:
@@ -1626,15 +1655,15 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
 	int nd = st->ps.nd;
 	int nedg = st->es.ofs[nd];
 	fprintf(f, "  .s_idg = { { CSP_SECT_IDG }, %u },\n  .idg = {",
-		n_idg*2 + CSP_PAD4(2*n_idg));
+		n_idg*2 + p_idg);
 	for (i = 0; i < nd; i++) fprintf(f, "%u,", st->es.idg[i]);
 	fprintf(f, "},\n");
 	fprintf(f, "  .s_ofs = { { CSP_SECT_OFS }, %u },\n  .ofs = {",
-		n_ofs*2 + CSP_PAD4(2*n_ofs));
+		n_ofs*2 + p_ofs);
 	for (i = 0; i <= nd; i++) fprintf(f, "%u,", st->es.ofs[i]);
 	fprintf(f, "},\n");
 	fprintf(f, "  .s_edg = { { CSP_SECT_EDG }, %u },\n  .edg = {",
-		n_edg*2 + CSP_PAD4(2*n_edg));
+		n_edg*2 + p_edg);
 	for (i = 0; i < nedg; i++) fprintf(f, "%u,", st->es.edg[i]);
 	if (!nedg) fprintf(f, "0");   // avoid a zero-length array
 	fprintf(f, "},\n");
@@ -1644,11 +1673,11 @@ void csp_dump_code(FILE* f, csp_rt_t* st, const csp_rom_meta_t* meta)
     {
 	// No graph: stub sections (all reads gated by n_edg == 0).
 	fprintf(f, "  .s_idg = { { CSP_SECT_IDG }, %u },\n  .idg = {0},\n",
-		n_idg*2 + CSP_PAD4(2*n_idg));
+		n_idg*2 + p_idg);
 	fprintf(f, "  .s_ofs = { { CSP_SECT_OFS }, %u },\n  .ofs = {0},\n",
-		n_ofs*2 + CSP_PAD4(2*n_ofs));
+		n_ofs*2 + p_ofs);
 	fprintf(f, "  .s_edg = { { CSP_SECT_EDG }, %u },\n  .edg = {0},\n",
-		n_edg*2 + CSP_PAD4(2*n_edg));
+		n_edg*2 + p_edg);
     }
 
     // (No state section as of v10: a state is a DECL_STATES declaration and went

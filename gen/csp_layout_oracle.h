@@ -670,6 +670,14 @@
     if ((long)(REC).i.x != 15L) \
 	FAIL("i.x set", (long)(REC).i.x, 15L); \
     memset(&(REC), 0, sizeof(REC)); \
+    (REC).i.lz = 1; \
+    if ((long)csp_instr_get_i_lz((const csp_instr_t*)&(REC)) != 1L) \
+	FAIL("i.lz", (long)csp_instr_get_i_lz((const csp_instr_t*)&(REC)), 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
+    csp_instr_set_i_lz((csp_instr_t*)&(REC), 1); \
+    if ((long)(REC).i.lz != 1L) \
+	FAIL("i.lz set", (long)(REC).i.lz, 1L); \
+    memset(&(REC), 0, sizeof(REC)); \
     (REC).i.imm = -32768; \
     if ((long)csp_instr_get_i_imm((const csp_instr_t*)&(REC)) != -32768L) \
 	FAIL("i.imm", (long)csp_instr_get_i_imm((const csp_instr_t*)&(REC)), -32768L); \

@@ -38,7 +38,7 @@
 
 -define(HEADER_BYTES, 56).
 -define(SECT_BYTES, 8).
--define(ROM_FORMAT_VERSION, 22).
+-define(ROM_FORMAT_VERSION, 23).
 
 %%% ------------------------------------------------------------------ entry
 
@@ -103,7 +103,7 @@ asm_(Terms) ->
 
 ctx(H, Strings) ->
     #{endian => maps:get(endian, H, little),
-      float  => maps:get(float, H, fixpoint),
+      float  => ieee,                     % every image's, since format 23
       names  => names(Strings),
       layout => layout()}.
 
@@ -142,17 +142,24 @@ image(F, H, Decls, Code) ->
     CodeEm = pack(F, instr, em, #{op => ?OP_END_MARK,
 				  crc => crc16(CrcCode, word(F, 32, CodeMark))}),
     Stub = <<0:16, 0:16>>,                           % one index_t, padded
-    Sects = [{"STRS", pad4(StrData)},
+    Sects = [{"STRS", StrData},
 	     {"DECL", <<DeclBin/binary, (word(F, 64, DeclEm))/binary>>},
 	     {"CODE", <<CodeBin/binary, (word(F, 32, CodeEm))/binary>>},
 	     {"GIDG", Stub}, {"GOFS", Stub}, {"GEDG", Stub}],
+    %% Every section's data on a multiple of 16 (format 23): the padding is in
+    %% the section's length; after the last, to 4.
     {Body, Ofs, _} =
-	lists:foldl(fun({Tag, Data}, {Acc, Os, At}) ->
+	lists:foldl(fun({Tag, Data0}, {Acc, Os, At}) ->
+			    DataAt = At + ?SECT_BYTES,
+			    Data = case Tag of
+				       "GEDG" -> pad4(Data0);
+				       _ -> pad16(Data0, DataAt)
+				   end,
 			    P = <<(list_to_binary(Tag))/binary,
 				  (word(F, 32, byte_size(Data)))/binary>>,
 			    {<<Acc/binary, P/binary, Data/binary>>,
-			     Os ++ [At + ?SECT_BYTES],
-			     At + ?SECT_BYTES + byte_size(Data)}
+			     Os ++ [DataAt],
+			     DataAt + byte_size(Data)}
 		    end, {<<>>, [], ?HEADER_BYTES}, Sects),
     Size = ?HEADER_BYTES + byte_size(Body),
     [OStr, ODecl, OCode, OIdg, OOfs, OEdg] = Ofs,
@@ -166,11 +173,20 @@ image(F, H, Decls, Code) ->
     Hdr = <<"JAM\n", << <<(word(F, B, V))/binary>> || {B, V} <- Fields >>/binary>>,
     <<Hdr/binary, (word(F, 16, crc16(Hdr)))/binary, Body/binary>>.
 
-%% CSP_IMG_F_FLOAT 1, CSP_IMG_F_BIG 2: the header's own say, else the context.
+%% CSP_IMG_F_BIG 2: what the image IS, from the context it is written in. A
+%% header's own `flags' (csp_disasm's, of the image it was read from) keeps
+%% only any other bits: taken whole, an image read little and written big said
+%% little of itself, and read back as one with a bad CRC. Bit 0 said IEEE
+%% before format 23, which keeps every float constant IEEE.
 flags(F, H) ->
-    maps:get(flags, H,
-	     (case maps:get(float, F) of ieee -> 1; fixpoint -> 0 end) bor
-		 (case maps:get(endian, F) of big -> 2; little -> 0 end)).
+    (maps:get(flags, H, 0) band bnot 3) bor
+	(case maps:get(endian, F) of big -> 2; little -> 0 end).
+
+%% Data starting at At, padded so the next section's data (after its 8-byte
+%% prologue) starts on a multiple of 16: CSP_PAD16.
+pad16(B, At) ->
+    N = (16 - ((At + byte_size(B) + ?SECT_BYTES) band 15)) band 15,
+    <<B/binary, 0:N/unit:8>>.
 
 pad4(B) when byte_size(B) rem 4 =:= 0 -> B;
 pad4(B) -> pad4(<<B/binary, 0>>).
@@ -414,8 +430,9 @@ instr(F, {instr, _Addr, Op, Args}) ->
 	    [X, {imm, I}, {mem, M}] = Args,
 	    [pack(F, instr, mi, #{op => O, x => reg(X), imm => I, mem => M})];
 	imm ->
-	    [X, {imm, I}] = Args,
-	    [pack(F, instr, i, #{op => O, x => reg(X), imm => I})];
+	    [X, {imm, I} | Fl] = Args,
+	    [pack(F, instr, i, #{op => O, x => reg(X), imm => I,
+				 lz => flag(lz, Fl)})];
 	rule ->
 	    [C, Nxt | Fl] = Args,
 	    [pack(F, instr, r, #{op => O, cnd => reg(C), nxt => Nxt,

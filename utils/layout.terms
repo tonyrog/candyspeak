@@ -249,13 +249,16 @@
   {mem, 16}]}.
 
 %% Load immediate.  Sixteen bits and SIGNED: this is where a literal -1 lives.
+%% `lz' is OP_LIFH's: the low half is zero, and the one instruction is the
+%% whole float -- 0.5, 1.0, 100.0 are.
 {record, i, instr_common, 4,
  [{x,   4},
+  {lz,  1},
     %% PAD so the wide field lands on a byte. A 16-bit field at an odd bit
   %% position makes the accessor do a 32-BIT load: 42 bytes against 8 for
   %% the aligned form, at every read site. The spare bits were already
   %% here; they only had to sit in front.
-  {pad,  6},
+  {pad,  5},
   {imm, 16, signed}]}.
 
 %% A rule body: the condition register and the SIGNED offset to the next rule.

@@ -2519,11 +2519,12 @@ prints on the node, line for line and tag for tag -- `make test` holds the two
 to the same text over every example.
 
 An image's header says how its values read, in the `flags` byte beside
-`role`: bit 0 set means floats are IEEE binary32, clear means Q16.16 fixpoint;
-bit 1 set means its fields are big-endian. The byte sits at the same offset
-either way round, so a host reads it first and then the rest in that order. A
-node reads only its own and refuses any other image (`ROM rejected: image
-flags`), and a patch saved by a build with the other float format the same way.
+`role`: bit 1 set means its fields are big-endian. Float constants are IEEE
+binary32 in every image (format 23) and a Q16.16 node converts them as it loads
+them, so the same image runs on both kinds; which kind a node is, `/dump info`
+says. The byte sits at the same offset either way round, so a host reads it
+first and then the rest in that order. A node reads only its own byte order and
+refuses any other image (`ROM rejected: image flags`).
 
 `/live` freezes only the **rules**. Input is still sampled and output is still
 written, so the hardware stays connected while the program stands still — which

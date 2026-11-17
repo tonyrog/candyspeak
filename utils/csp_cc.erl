@@ -33,10 +33,19 @@
 -module(csp_cc).
 
 -export([file/1, compile/1]).
+-export([t/2]).                         % the tests: a conversion by name
+
+t(F, A) when F =:= fltbits; F =:= fix_from_ieee; F =:= fix_ieee_exact;
+	     F =:= fix_to_ieee -> apply(fun_of(F), A).
+
+fun_of(fltbits) -> fun fltbits/1;
+fun_of(fix_from_ieee) -> fun fix_from_ieee/1;
+fun_of(fix_ieee_exact) -> fun fix_ieee_exact/1;
+fun_of(fix_to_ieee) -> fun fix_to_ieee/1.
 
 -define(SEG_SLOTS, 32).
 -define(SEG_BYTES, (?SEG_SLOTS * 4)).
--define(VERSION, 22).
+-define(VERSION, 23).
 -define(CURRENT, 16#8000).                % an index relative to the object
 
 file(F) ->
@@ -79,7 +88,7 @@ terms(S = #{decls := Ds, names := Ns}) ->
     Strings = maps:from_list([{0, []} |
 			      lists:zip(lists:seq(1, length(Ns)),
 					lists:reverse(Ns))]),
-    [{header, #{version => ?VERSION, generation => 0, role => 0, flags => 0,
+    [{header, #{version => ?VERSION, generation => 0, role => 0,
 		endian => little, float => fixpoint}},
      {strings, Strings} | lists:reverse(Ds) ++ lists:sort(Code)].
 
@@ -243,7 +252,10 @@ item(D, S0) when element(4, D) =/= scalar, element(1, D) =/= param,
     S1 = decl(Kind, N, Opts, S0),
     S2 = case Kind of
 	     constant ->
-		 Vs = [element(2, lists:keyfind(init, 1, O)) || O <- Optss],
+		 Vs = [case element(2, lists:keyfind(init, 1, O)) of
+			   F when is_float(F) -> {f, float_bits(F)};
+			   V -> V
+		       end || O <- Optss],
 		 S1#{consts := (maps:get(consts, S1))#{N => Vs}};
 	     _ -> S1
 	 end,
@@ -322,7 +334,7 @@ item({constant, _, {'WORD', _, N}, scalar, Res, Opts, X}, S0) ->
     {V, S = #{consts := Cs}} = init_value(X, Type, S0),
     decl(constant, N, [{size, Size}, {type, Type}, {init, V}],
 	 S#{consts := Cs#{N => case Type of
-				   float -> round(V * 65536);   % Q16.16 bits
+				   float -> {f, float_bits(V)};
 				   string -> element(1, intern(binary_to_list(V), S));
 				   _ -> V
 			       end}});
@@ -503,10 +515,15 @@ init_value(X, Type, S) -> {init(X, Type, S), S}.
 
 init(undefined, float, _S) -> 0.0;
 init(undefined, _T, _S) -> 0;
-init(X, float, S) -> float(fold(X, S));
+init(X, float, S) ->
+    case fold(X, S) of
+	{f, B} -> bits_float(B);
+	I when is_integer(I) -> bits_float(fix_to_ieee(s32(I bsl 16)))
+    end;
 init(X, _T, S) ->
     case fold(X, S) of
 	V when is_integer(V) -> V;
+	{f, B} -> fix_trunc(fix_from_ieee(B));
 	V -> unsupported({init, V})
     end.
 
@@ -955,7 +972,7 @@ patch_nxt(J, S = #{code := C, pc := Pc}) ->
 
 expr({'INT', _, T}, S) -> {{imm, integer, s32(int(T))}, S};
 expr({view, Vx}, S) -> {{var, Vx, unsigned}, S};
-expr({'FLT', _, T}, S) -> {{imm, float, fltbits(T)}, S};
+expr({'FLT', _, T}, S) -> {{imm, float, fltbits(T)}, S};   % its IEEE bits
 expr({field, _, {'WORD', _, N}}, S) -> {leaf(N, S), S};
 expr({field, _, {index, _, {'WORD', _, B}, Ix}}, S) ->
     case find(B, S) of
@@ -991,7 +1008,9 @@ expr({call, _, {'WORD', _, F}, Args}, S0) ->
     {Avt, Vals} = lists:unzip(lists:reverse(Args0)),
     %% all literals and nothing done: worked out here -- the CALL stays, its
     %% register holding what is now also a literal
-    Folded = Pure andalso lists:all(fun is_imm/1, Es),
+    Folded = Pure andalso lists:all(fun is_imm/1, Es) andalso
+	lists:all(fun({float, V}) -> fix_ieee_exact(V); (_) -> true end,
+		  lists:zip(Avt, Vals)),
     Rt = case Rt0 of
 	     number -> case lists:member(float, Avt) of
 			   true -> float;
@@ -1019,9 +1038,10 @@ expr(X, _S) -> unsupported({expr, element(1, X)}).
 array_elem(A, Ix, S) ->
     {ok, {Base, K, Vt}} = find(A, S),
     Len = maps:get(A, maps:get(arrays, S), 1),
-    case catch fold(Ix, S) of
+    Folded = try fold(Ix, S) catch throw:{unsupported, _} -> runtime end,
+    case Folded of
 	I when is_integer(I), I >= 0, I < Len, K =:= constant ->
-	    {{const, Base + I, Vt, lists:nth(I + 1, maps:get(A, maps:get(consts, S)))}, S};
+	    {{const, Base + I, Vt, cval(lists:nth(I + 1, maps:get(A, maps:get(consts, S))))}, S};
 	I when is_integer(I), I >= 0, I < Len -> {{var, Base + I, Vt}, S};
 	I when is_integer(I) -> unsupported(index_range);
 	_ ->
@@ -1089,14 +1109,22 @@ imm_value(_) -> none.
 
 %% The pure built-ins on literals, as src/csp_rt.c computes them; a float is
 %% its Q16.16 bits, which order as integers do.
+%% Floats are exact here (only those fold) and worked as Q16.16, which orders
+%% as the values do; the answer is IEEE bits again.
+call_fold(F, float, Vs) when F =/= "trunc", F =/= "round", F =/= "sign" ->
+    fix_to_ieee(call_fold(F, integer, [fix_from_ieee(V) || V <- Vs]));
+call_fold("sign", float, [A]) -> call_fold("sign", integer, [fix_from_ieee(A)]);
 call_fold("min", _, [A, B]) -> min(A, B);
 call_fold("max", _, [A, B]) -> max(A, B);
 call_fold("abs", _, [A]) -> s32(abs(A));
 call_fold("sign", _, [A]) -> if A > 0 -> 1; A < 0 -> -1; true -> 0 end;
 call_fold("clip", _, [X, Lo, Hi]) -> if X < Lo -> Lo; X > Hi -> Hi; true -> X end;
-call_fold("trunc", float, [A]) -> eval1('CVTFI', A);
-call_fold("round", float, [A]) when A < 0 -> -(((-A) + 32768) bsr 16);
-call_fold("round", float, [A]) -> (A + 32768) bsr 16;
+call_fold("trunc", float, [A]) -> fix_trunc(fix_from_ieee(A));
+call_fold("round", float, [A]) ->
+    case fix_from_ieee(A) of
+	Q when Q < 0 -> -(((-Q) + 32768) bsr 16);
+	Q -> (Q + 32768) bsr 16
+    end;
 call_fold(F, _, [A]) when F =:= "trunc"; F =:= "round" -> A;
 call_fold(F, _, _) -> unsupported({fold_call, F}).
 
@@ -1146,7 +1174,7 @@ part(P) ->
 
 leaf(N, S) ->
     case find(N, S) of
-	{ok, {Ix, constant, Vt}} -> {const, Ix, Vt, maps:get(N, maps:get(consts, S))};
+	{ok, {Ix, constant, Vt}} -> {const, Ix, Vt, cval(maps:get(N, maps:get(consts, S)))};
 	{ok, {Ix, K, Vt}} when K =:= variable; K =:= param; K =:= digital;
 			       K =:= analog; K =:= timer; K =:= field; K =:= local;
 			       K =:= buffer ->
@@ -1155,7 +1183,7 @@ leaf(N, S) ->
 	error ->
 	    case {state_no(N, S), maps:find(N, maps:get(defs, S))} of
 		{none, {ok, V}} when is_integer(V) -> {imm, integer, V};
-		{none, {ok, V}} -> {imm, float, round(V * 65536)};
+		{none, {ok, {f, B}}} -> {imm, float, B};
 		{none, error} -> {imm, integer, keyword(N)};
 		{No, _} -> {imm, integer, No}
 	    end
@@ -1213,17 +1241,58 @@ binop(Op0, A0, B0, S) ->
     binop_(Op, A, B, Uns, Swap, Rt, S0).
 
 binop_(Op, A, B, Uns, Swap, Rt, S) ->
-    case is_imm(A) andalso is_imm(B) of
-	true ->
+    Fold = case is_imm(A) andalso is_imm(B) of
+	       false -> no;
+	       true ->
+		   case vt_of(A) =:= float orelse vt_of(B) =:= float of
+		       true -> fold_float(Op, imm_value(A), imm_value(B));
+		       false -> {ok, eval2(Op, imm_value(A), imm_value(B), Uns)}
+		   end
+	   end,
+    case Fold of
+	{ok, V} ->
 	    %% a call's register goes back, its value folded in
 	    S1 = free_regi(A, S),
 	    S2 = case {A, B} of
 		     {{regi, R, _, _}, {regi, R, _, _}} -> S1;
 		     _ -> free_regi(B, S1)
 		 end,
-	    {{imm, Rt, eval2(Op, imm_value(A), imm_value(B), Uns)}, S2};
-	false -> binop_r(Op, A, B, Uns, Swap, Rt, S)
+	    {{imm, Rt, V}, S2};
+	no -> binop_r(Op, A, B, Uns, Swap, Rt, S)
     end.
+
+%% A float operation on two literals (IEEE bits), folded only when the answer
+%% is the same on every node -- both exact in Q16.16 and the result too, which
+%% is then exact in IEEE: src/csp_compile.c fold_float. `no': run time.
+fold_float(Op, A, B) ->
+    case fix_ieee_exact(A) andalso fix_ieee_exact(B) of
+	false -> no;
+	true ->
+	    Qa = fix_from_ieee(A),
+	    Qb = fix_from_ieee(B),
+	    T = fun(true) -> 1; (false) -> 0 end,
+	    case Op of
+		'FLT' -> {ok, T(Qa < Qb)};
+		'FLTE' -> {ok, T(Qa =< Qb)};
+		'FEQEQ' -> {ok, T(Qa =:= Qb)};
+		'FNEQ' -> {ok, T(Qa =/= Qb)};
+		'AND' -> {ok, T(Qa =/= 0 andalso Qb =/= 0)};
+		'OR' -> {ok, T(Qa =/= 0 orelse Qb =/= 0)};
+		'FADD' -> exact_q(Qa + Qb);
+		'FSUB' -> exact_q(Qa - Qb);
+		'FMUL' when (Qa * Qb) band 16#ffff =:= 0 -> exact_q((Qa * Qb) div 65536);
+		'FDIV' when Qb =/= 0, (Qa * 65536) rem Qb =:= 0 -> exact_q((Qa * 65536) div Qb);
+		_ -> no
+	    end
+    end.
+
+exact_q(Q) when Q >= -16#80000000, Q =< 16#7fffffff ->
+    B = fix_to_ieee(Q),
+    case fix_ieee_exact(B) andalso fix_from_ieee(B) =:= Q of
+	true -> {ok, B};
+	false -> no
+    end;
+exact_q(_) -> no.
 
 free_regi({regi, R, _, _}, S) -> free(R, S);
 free_regi(_, S) -> S.
@@ -1251,9 +1320,18 @@ unop(Op0, X, S0) ->
 	     _ -> Op0
 	 end,
     Rt = rtype(Op, vt_of(A) =:= unsigned),
-    case A of
-	{imm, _, V} -> {{imm, Rt, eval1(Op, V)}, S};
-	{regi, R0, _, V} -> {{imm, Rt, eval1(Op, V)}, free(R0, S)};
+    Fold = case {is_imm(A), vt_of(A), Op} of
+	       {false, _, _} -> no;
+	       {true, float, 'FNEG'} -> {ok, imm_value(A) bxor 16#80000000};
+	       {true, float, 'FMOV'} -> {ok, imm_value(A)};
+	       {true, float, 'NOT'} -> {ok, case imm_value(A) band 16#7fffffff of
+						0 -> 1; _ -> 0 end};
+	       {true, float, _} -> no;
+	       {true, _, _} -> {ok, eval1(Op, imm_value(A))}
+	   end,
+    case {Fold, A} of
+	{{ok, V}, {regi, R0, _, _}} -> {{imm, Rt, V}, free(R0, S)};
+	{{ok, V}, _} -> {{imm, Rt, V}, S};
 	_ ->
 	    {Ra, S1} = load(A, S),
 	    {Dst, S2} = alloc(S1),
@@ -1289,10 +1367,23 @@ to_float(E, S) ->
 
 to_int(E, S) -> convert('CVTFI', integer, E, S).
 
-convert(Op, Vt, {imm, _, V}, S) -> {{imm, Vt, eval1(Op, V)}, S};
-%% as C: the value converted, its register left as it is
-convert(Op, Vt, {regi, _, _, V}, S) -> {{imm, Vt, eval1(Op, V)}, S};
-convert(Op, Vt, E, S) ->
+%% A literal converted here when every node converts it the same -- an
+%% integer Q16.16 holds, a float exact in it -- and at run time when not. A
+%% call's folded register is left as it is, as C leaves it.
+convert('CVTIF', Vt, E, S) when element(1, E) =:= imm; element(1, E) =:= regi ->
+    case imm_value(E) of
+	I when I >= -32768, I =< 32767 -> {{imm, Vt, fix_to_ieee(I bsl 16)}, S};
+	_ -> convert_rt('CVTIF', Vt, E, S)
+    end;
+convert('CVTFI', Vt, E, S) when element(1, E) =:= imm; element(1, E) =:= regi ->
+    B = imm_value(E),
+    case fix_ieee_exact(B) of
+	true -> {{imm, Vt, fix_trunc(fix_from_ieee(B))}, S};
+	false -> convert_rt('CVTFI', Vt, E, S)
+    end;
+convert(Op, Vt, E, S) -> convert_rt(Op, Vt, E, S).
+
+convert_rt(Op, Vt, E, S) ->
     {R, S1} = load(E, S),
     {D, S2} = alloc(S1),
     {_, S3} = emit(Op, [D, R], S2),
@@ -1351,6 +1442,16 @@ map_reg(Ix, S = #{rmap := Rm}, Load) ->
 	    Load(R, S1#{rmap := (maps:get(rmap, S1))#{R => Ix}})
     end.
 
+%% A float is its IEEE bits, the same on every node: LIFH makes the node's
+%% own of them. 0.0 is the same word in both formats.
+load_value(R, float, 0, S) -> load_int(R, 0, S);
+load_value(R, float, B, S) when B band 16#ffff =:= 0 ->
+    {_, S1} = emit('LIFH', [R, {imm, B bsr 16}, lz], S),
+    {R, S1};
+load_value(R, float, B, S) ->
+    {_, S1} = emit('LIU', [R, {imm, B band 16#ffff}], S),
+    {_, S2} = emit('LIFH', [R, {imm, B bsr 16}], S1),
+    {R, S2};
 load_value(R, unsigned, V, S) -> load_uint(R, V band 16#ffffffff, S);
 load_value(R, _, V, S) -> load_int(R, V, S).
 
@@ -1449,16 +1550,42 @@ s32(X) ->
 %%% -------------------------------------------------------- constant folds
 
 fold({'INT', _, T}, _S) -> int(T);
-fold({'FLT', _, T}, _S) -> flt(T);
-fold({'-', _, X}, S) -> -fold(X, S);
+fold({'FLT', _, T}, _S) -> {f, fltbits(T)};
+fold({'-', _, X}, S) ->
+    case fold(X, S) of
+	{f, B} -> {f, fix_to_ieee(s32(-fix_from_ieee(B)))};
+	V -> -V
+    end;
 fold({field, _, {'WORD', _, N}}, #{consts := Cs, defs := Ds}) ->
     case {maps:find(N, Cs), maps:find(N, Ds)} of
 	{{ok, V}, _} -> V;
 	{_, {ok, V}} -> V;
 	_ -> unsupported({not_constant, N})
     end;
-fold({Op, _, A, B}, S) -> arith(Op, fold(A, S), fold(B, S));
+fold({Op, _, A, B}, S) ->
+    case {fold(A, S), fold(B, S)} of
+	{{f, _} = Fa, Fb} -> farith(Op, q16(Fa), q16(Fb));
+	{Fa, {f, _} = Fb} -> farith(Op, q16(Fa), q16(Fb));
+	{Fa, Fb} -> arith(Op, Fa, Fb)
+    end;
 fold(X, _S) -> unsupported({fold, X}).
+
+%% A float in a constant -- a declaration's value, a #define -- is worked as
+%% the host compiler works it when no image is being made: in Q16.16, back to
+%% IEEE bits after each step.
+q16({f, B}) -> fix_from_ieee(B);
+q16(I) -> s32(I bsl 16).
+
+farith(Op, A, B) ->
+    Q = case Op of
+	    '+' -> s32(A + B);
+	    '-' -> s32(A - B);
+	    '*' -> s32((A * B) bsr 16);
+	    '/' when B =:= 0 -> 0;
+	    '/' -> s32((A bsl 16) div B);
+	    _ -> unsupported({fold, Op})
+	end,
+    {f, fix_to_ieee(Q)}.
 
 arith('+', A, B) -> A + B;
 arith('-', A, B) -> A - B;
@@ -1478,19 +1605,112 @@ int("0b" ++ B) -> list_to_integer(B, 2);
 int("0B" ++ B) -> list_to_integer(B, 2);
 int(T) -> list_to_integer(T).
 
-%% A float literal as Q16.16 holds it, the way the C scanner reads it: the
-%% whole part shifted, the fraction's digits scaled and cut, in integers.
-flt(T) -> fltbits(T) / 65536.
+%%% ------------------------------------------- IEEE bits <-> Q16.16 (C's)
+%%%
+%%% A float in an image is IEEE binary32 bits (format 23); these are
+%%% src/csp_fixpoint.c's, in integers, so csp_cc folds what the host compiler
+%%% folds and gets the same bits.
 
+%% A literal's bits: whole + fraction, correctly rounded (to nearest, ties to
+%% even), by long division -- fix_ieee_decimal.
 fltbits(T) ->
     case string:split(T, ".") of
 	[U, F] when F =/= [] ->
 	    lists:all(fun(C) -> C >= $0 andalso C =< $9 end, U ++ F)
 		orelse unsupported({float_literal, T}),
-	    Frac = (list_to_integer(F) bsl 16) div pow10(length(F)),
-	    (list_to_integer(U) bsl 16) + Frac;
+	    W = list_to_integer(U),
+	    W > 32767 andalso unsupported(float_range),    % the host is Q16.16
+	    ieee_decimal(W * pow10(length(F)) + list_to_integer(F), pow10(length(F)));
 	_ -> unsupported({float_literal, T})
     end.
+
+%% N / D as IEEE bits, rounded to nearest even.
+ieee_decimal(0, _D) -> 0;
+ieee_decimal(N, D) ->
+    %% the exponent: 2^E =< N/D < 2^(E+1)
+    E = exp2(N, D, 0),
+    %% 24 bits of mantissa and what is left
+    {M0, Rest} = case E >= 23 of
+		     true -> {N div (D bsl (E - 23)), N rem (D bsl (E - 23))};
+		     false -> {(N bsl (23 - E)) div D, (N bsl (23 - E)) rem D}
+		 end,
+    Den = case E >= 23 of true -> D bsl (E - 23); false -> D end,
+    M1 = case 2 * Rest of
+	     X when X > Den -> M0 + 1;
+	     X when X =:= Den, M0 band 1 =:= 1 -> M0 + 1;
+	     _ -> M0
+	 end,
+    {M, E1} = case M1 of
+		  16#1000000 -> {M1 bsr 1, E + 1};
+		  _ -> {M1, E}
+	      end,
+    ((E1 + 127) bsl 23) bor (M band 16#7fffff).
+
+exp2(N, D, E) when N >= 2 * D -> exp2(N, 2 * D, E + 1);
+exp2(N, D, E) when N < D -> exp2(2 * N, D, E - 1);
+exp2(_N, _D, E) -> E.
+
+%% IEEE bits as Q16.16: nearest, halves away from zero; saturating.
+fix_from_ieee(B) ->
+    E = (B bsr 23) band 16#ff,
+    M = (B band 16#7fffff) bor 16#800000,
+    Sh = E - 134,
+    Q = if E =:= 0 -> 0;
+	   E =:= 16#ff; Sh > 7 -> 16#7fffffff;
+	   Sh >= 0 -> M bsl Sh;
+	   Sh < -24 -> 0;
+	   true -> (M + (1 bsl (-Sh - 1))) bsr -Sh
+	end,
+    case B bsr 31 of 1 -> -Q; 0 -> Q end.
+
+fix_ieee_exact(B) when B band 16#7fffffff =:= 0 -> true;
+fix_ieee_exact(B) ->
+    E = (B bsr 23) band 16#ff,
+    M = (B band 16#7fffff) bor 16#800000,
+    Sh = E - 134,
+    if E =:= 0; E =:= 16#ff; Sh > 7 -> false;
+       Sh >= 0 -> true;
+       Sh < -24 -> false;
+       true -> M band ((1 bsl -Sh) - 1) =:= 0
+    end.
+
+%% Q16.16 as IEEE bits, to nearest even past 24 bits.
+fix_to_ieee(0) -> 0;
+fix_to_ieee(Q) ->
+    Sign = case Q < 0 of true -> 16#80000000; false -> 0 end,
+    A = abs(Q),
+    P = msb(A, 31),
+    {M, P1} = case P > 23 of
+		  false -> {A bsl (23 - P), P};
+		  true ->
+		      D = P - 23,
+		      Half = 1 bsl (D - 1),
+		      Rest = A band ((1 bsl D) - 1),
+		      M0 = A bsr D,
+		      M1 = case Rest > Half orelse (Rest =:= Half andalso M0 band 1 =:= 1) of
+			       true -> M0 + 1;
+			       false -> M0
+			   end,
+		      case M1 of
+			  16#1000000 -> {M1 bsr 1, P + 1};
+			  _ -> {M1, P}
+		      end
+	      end,
+    Sign bor ((P1 - 16 + 127) bsl 23) bor (M band 16#7fffff).
+
+msb(A, P) when A band (1 bsl P) =/= 0 -> P;
+msb(A, P) -> msb(A, P - 1).
+
+%% Toward zero (fix_trunc).
+fix_trunc(Q) when Q < 0 -> -((-Q) bsr 16);
+fix_trunc(Q) -> Q bsr 16.
+
+float_bits(F) -> <<B:32>> = <<F:32/float>>, B.
+bits_float(B) -> <<F:32/float>> = <<B:32>>, F.
+
+%% A constant's value in code: a float is its bits.
+cval({f, B}) -> B;
+cval(V) -> V.
 
 pow10(0) -> 1;
 pow10(N) -> 10 * pow10(N - 1).
