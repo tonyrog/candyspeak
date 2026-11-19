@@ -1142,7 +1142,7 @@ static void stm_setup(void)
 
     csp_board_init();
 
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
     // The clock is reported from what sysinit COMPUTED, and the PLL is checked
     // against what it actually selected -- so a crystal that never started
     // shows up here as a number instead of as a mystery further along.
@@ -1170,7 +1170,7 @@ static void stm_setup(void)
 
 #if !defined(CSP_NO_EEPROM)
     if (csp_eeprom_load(&state) == 0) {
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
 	csp_print_line("Loaded from store");
 #endif
     }
@@ -1178,7 +1178,7 @@ static void stm_setup(void)
 	// "no saved state" is the normal case at boot, not an error to carry
 	// forward into the first cycle.
 	csp_clr_error(&state);
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
 	csp_print_line("No saved state, running ROM");
 #endif
     }
@@ -1202,7 +1202,7 @@ static void stm_loop(void)
     if (state.mem == NULL || state.mem_limit == 0)
 	return;
 
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
     if (!state.line.ready)
 	csp_line_prompt(&state.line);
     while (stm_uart_available() && csp_line_space(&state.line) &&
@@ -1258,7 +1258,7 @@ static void stm_loop(void)
 	    uint32_t chunk = (remaining < 10) ? remaining : 10;
 	    csp_delay_ms(chunk);
 	    remaining -= chunk;
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
 	    while (stm_uart_available() && csp_line_space(&state.line))
 		csp_con_input(&state, (char)stm_uart_read());
 #endif

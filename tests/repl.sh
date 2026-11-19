@@ -3294,6 +3294,31 @@ B=1  // 1 R
 Took back 2 lines
 Nothing to take back' "$got"
 
+# /undo begin .. /undo end: a host's patch is ONE mark however many lines,
+# past what the ring holds, and a line that fails inside it takes back the
+# whole of it. An empty group leaves no mark.
+got=$(printf '#digital A out 1:22\nA=1\n/undo begin\n#variable P = 0\nP = 1\nP = 2\nP = 3\nP = 4\nP = 5\nP = 6\nP = 7\nP = 8\nP = 9\n/undo end\n/undo\n/undo begin\n/undo end\n/undo begin\nA = 0\nA = (\n/undo\n/list\n' |
+	  repl ./csp "$D/undo6.db")
+ck "a group of lines is taken back as one" \
+   'OK
+OK
+OK
+OK
+OK
+OK
+OK
+OK
+OK
+OK
+OK
+OK
+Took back 1 line
+OK
+Error: syntax error
+Took back 1 line
+#digital A out 1:22  // R
+A=1  // 1 R' "$got"
+
 # #disable/#enable on a running program switch rules off and on and that is
 # all: the program runs on with its values. They used to mark the program
 # edited, and the rebuild that followed re-laid the heap -- every value back to

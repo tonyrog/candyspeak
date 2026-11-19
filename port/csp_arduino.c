@@ -2329,7 +2329,7 @@ void setup()
     // prompt: nothing on it reads a command, so nothing on it reads a banner
     // either. The FAILURE lines below stay in every build -- those are what a
     // UART is still worth attaching for.
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
     csp_print_lit("boot: RAM "); csp_print_uint(csp_system_ram_capacity());
     csp_print_lit(", free ");    csp_print_uint(csp_system_ram_avail());
     csp_print_lit(", struct ");  csp_print_uint((uint32_t)sizeof(csp_rt_t));
@@ -2381,7 +2381,7 @@ void setup()
 	return;   // leave loop() a no-op rather than crash
     }
     boot_mark(3);
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
     // Pool, and what is STILL free after claiming it. The second number is the
     // one CSP_RAM_RESERVE buys: everything that allocates after us -- a USB
     // buffer on first use, a library that inits lazily -- comes out of it, and
@@ -2410,14 +2410,14 @@ void setup()
 
     // Overlay any saved RAM patches on top of the ROM. Returns 0 on success.
     if (csp_eeprom_load(&state) == 0) {
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
         csp_print_line("Loaded from EEPROM");
 #endif
     }
     else {
 	csp_clr_error(&state);   // "no saved state" is the normal case at boot,
 				 // not an error to carry into the first command
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
         csp_print_line("No saved state, running ROM");
 #endif
     }
@@ -2436,7 +2436,7 @@ void setup()
     csp_setup(&state);
     boot_mark(7);
 
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
     csp_print_line("CandySpeak ready");
 #endif
 #if defined(CSP_WATCHDOG)
@@ -2518,7 +2518,7 @@ void loop()
     // still coming in has somewhere to go besides the driver's FIFO. That FIFO
     // is 64 bytes on a mega and drops silently when it fills, so every byte of
     // slack ahead of it counts.
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
     // The prompt for the NEXT line. csp_line_input prints one when a line starts
     // arriving, which covers a paste, but an idle board has nothing coming --
     // so without this the prompt only appeared once you began typing, and the
@@ -2597,7 +2597,7 @@ void loop()
 	    uint32_t chunk = min(remaining, (uint32_t)10);
 	    delay(chunk);
 	    remaining -= chunk;
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
 	    // Same rule as the drain at the top of loop(): take everything the
 	    // port has for as long as there is room to put it.
 	    while (Serial.available() && csp_line_space(&state.line) &&

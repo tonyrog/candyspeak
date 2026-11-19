@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "csp.h"
+#include "csp_reply.h"   // CSP_NV_*: how a value travels by name
 #include "csp_words.h"
 #include "csp_strings.h"   // shared RODATA strings (generated from strings.tab)
 #include "csp_parse.h"
@@ -451,6 +452,7 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_LOCAL_IN_WHERE] =         ros_err_local_in_where,
     [ERR_SMS_OWNERS] =             ros_err_sms_owners,
     [ERR_ONEWIRE_ROM] =            ros_err_onewire_rom,
+    [ERR_EP_PARAM] =               ros_err_ep_param,
     [ERR_INDEX_NOT_CONST] =        ros_err_index_not_const,
 };
 
@@ -3746,6 +3748,14 @@ const uint8_t* csp_find_image_skip(unsigned role, int* nop, uint32_t skip)
 
 NOINLINE static void csp_load_rom_sys(csp_rt_t* st);
 
+#if defined(CSP_IMAGE_OVERRIDE)
+// The host only (--image=FILE): an image read from a file runs as the ROM, ahead
+// of everything below -- a node's, so a patch compiled here is the one the node
+// would have made of the same lines (./cs node patch for a node without a
+// compiler). Its header is the node's, so is the fingerprint a patch carries.
+const uint8_t* csp_image_override = NULL;
+#endif
+
 // The firmware's own image, by the name every backend already calls.
 NOINLINE void csp_load_rom(csp_rt_t* st)
 {
@@ -3766,6 +3776,13 @@ NOINLINE void csp_load_rom(csp_rt_t* st)
     // NOT an error and NOT fatal: it falls through to the automatic choice
     // below. That is the whole point of the two fields being separate -- the
     // node comes up on something, and sys.Boot != sys.Image says what happened.
+#if defined(CSP_IMAGE_OVERRIDE)
+    if (csp_image_override != NULL) {
+	base = csp_image_override;
+	no   = -1;
+    }
+    else
+#endif
     if (st->boot_want != CSP_BOOT_AUTO) {
 	const uint8_t* want = csp_image_at((int)st->boot_want);
 	if (want != NULL) {
@@ -6087,6 +6104,37 @@ index_t csp_param_target(csp_rt_t* st, index_t di)
 // It is NOT about surviving a reflash. csp_eeprom_load rejects the whole save
 // when rom_header.crc_hdr moves, so a patch never crosses a changed program in
 // the first place -- see the note there.
+// `can Id', `tcp Port': an endpoint that names a #param takes its value NOW --
+// after the patch overrides and the settings, before any transport opens (a
+// transport opens on the first cycle that sends or receives). setup_buffer
+// left the reference where the value goes.
+NOINLINE static void ep_bind(csp_rt_t* st)
+{
+    index_t b;
+
+    for (b = 0; b < st->nbuf; b++) {
+	csp_buf_t* bp = &st->buf[b];
+	uint8_t tr = csp_buf_get_transport(bp);
+	index_t ox = csp_buf_get_owner(bp);
+	csp_decl_t d;
+	uint32_t ep;
+	if (((tr != TR_CAN) && (tr != TR_UDP) && (tr != TR_TCP)) ||
+	    (ox == BAD_INDEX))
+	    continue;
+	csp_load_decl(st, INDEX(ox), &d);
+	// CAN: the one constant. UDP, TCP: the port, the second of the pair.
+	csp_load_decl(st, INDEX(csp_decl_get_bf_id(&d)) + (tr != TR_CAN), &d);
+	ep = (uint32_t)csp_decl_get_cn_init(&d).u;
+	if (!CSP_EP_IS_PARAM(ep))
+	    continue;
+	ep = csp_value(st, MAKE_INDEX(0, CSP_EP_DECL(ep))).u;
+	if (tr == TR_CAN)
+	    csp_buf_set_xref(bp, ep);
+	else
+	    csp_buf_set_port(bp, (uint16_t)ep);
+    }
+}
+
 NOINLINE static void apply_param_overrides(csp_rt_t* st)
 {
     index_t i;
@@ -6339,45 +6387,153 @@ int csp_settings_get(csp_rt_t* st, int n, csp_setting_t* sp)
 int csp_settings_resolve(csp_rt_t* st, const csp_setting_t* sp,
 			 xindex_t* ixp, index_t* objp)
 {
+    return csp_name_resolve(st, sp->path, sp->plen, ixp, objp);
+}
+
+// The instance is found by name over object[] rather than looked up as a
+// declaration: object numbers are what the context needs, and this table is
+// the one that has them. An array element is its head's k-th continuation.
+int csp_name_resolve(csp_rt_t* st, const char* p, uint8_t len,
+		     xindex_t* ixp, index_t* objp)
+{
     tstr_t nm;
-    index_t ix;
-    int dot = -1;
-    int i;
+    index_t ix, base = 0, end = st->ps.nd, obj = 0;
+    int dot = -1, br = -1, i;
+    uint32_t k = 0;
 
-    for (i = 0; i < (int)sp->plen; i++)
-	if (sp->path[i] == '.') { dot = i; break; }
-
-    if (dot < 0) {
-	nm.ptr = (char*)sp->path;
-	nm.len = sp->plen;
-	if ((ix = lookup_decl_in(st, &nm, 0, st->ps.nd)) == BAD_INDEX)
-	    return 0;
-	*ixp = MAKE_XINDEX(XOBJ_GLOBAL, INDEX(ix));
-	*objp = 0;
-	return 1;
+    for (i = 0; i < (int)len; i++) {
+	if (p[i] == '[') { br = i; break; }
+	if ((p[i] == '.') && (dot < 0)) dot = i;
     }
-
-    // The instance, by name. Walked over object[] rather than looked up as a
-    // declaration: object numbers are what the context needs, and this table is
-    // the one that has them.
-    nm.ptr = (char*)sp->path;
-    nm.len = dot;
-    for (i = 1; i <= (int)st->ps.nq; i++) {
-	index_t ox = st->object[i];
-	index_t mx, base;
-	ivalue_t dn;
-	if (!csp_str_eq(st, decl(st, INDEX(ox), name), nm.ptr, nm.len))
-	    continue;
-	mx   = get_mq_m(st, ox);
-	base = (index_t)(INDEX(mx) + 1);
-	dn   = get_md_n(st, mx);
-	nm.ptr = (char*)sp->path + dot + 1;
-	nm.len = sp->plen - dot - 1;
-	if ((ix = lookup_decl_in(st, &nm, base, base + dn)) == BAD_INDEX)
+    if (br >= 0) {                              // `[digits]' and the end
+	for (i = br + 1; (i < (int)len) && (p[i] >= '0') && (p[i] <= '9'); i++)
+	    k = k * 10 + (uint32_t)(p[i] - '0');
+	if ((i == br + 1) || (i != (int)len - 1) || (p[i] != ']'))
 	    return 0;
-	*ixp = MAKE_XINDEX(i, INDEX(ix));
-	*objp = (index_t)i;
-	return 1;
+	len = (uint8_t)br;
+    }
+    if (dot >= 0) {
+	index_t mx;
+	for (obj = 1; obj <= st->ps.nq; obj++)
+	    if (csp_str_eq(st, decl(st, INDEX(st->object[obj]), name), p, dot))
+		break;
+	if (obj > st->ps.nq)
+	    return 0;
+	mx   = get_mq_m(st, st->object[obj]);
+	base = (index_t)(INDEX(mx) + 1);
+	end  = (index_t)(base + get_md_n(st, mx));
+	p   += dot + 1;
+	len  = (uint8_t)(len - dot - 1);
+    }
+    nm.ptr = (char*)p;
+    nm.len = len;
+    if ((ix = lookup_decl_in(st, &nm, base, end)) == BAD_INDEX)
+	return 0;
+    ix = INDEX(ix);
+    for (; k > 0; k--)
+	if ((++ix >= end) || !decl(st, ix, cont))
+	    return 0;
+    *ixp = MAKE_XINDEX(obj, ix);
+    *objp = obj;
+    return 1;
+}
+
+// What a name may be set and read as: what /state shows, buffers aside. The
+// type is the head's -- an array element continues it. Its vtype, or -1. An
+// array named whole is not one value: `Red', where `Red[1]' is.
+NOINLINE static int name_value_vt(csp_rt_t* st, const char* name,
+				  uint8_t nlen, index_t di)
+{
+    index_t h = di;
+    decl_t t;
+
+    if (!memchr(name, '[', nlen) && (di + 1 < st->ps.nd) &&
+	decl(st, di + 1, cont))
+	return -1;
+
+    while ((h > 0) && decl(st, h, cont))
+	h--;
+    t = decl(st, h, type);
+    if ((t != DECL_VARIABLE) && (t != DECL_DIGITAL) && (t != DECL_ANALOG) &&
+	(t != DECL_TIMER) && (t != DECL_FIELD) &&
+	!((t == DECL_CONSTANT) && decl(st, h, local)))
+	return -1;
+    return (t == DECL_TIMER) ? V_TIMER : CSP_MASK(decl(st, h, vt), TYPE_BITS);
+}
+
+int csp_name_set(csp_rt_t* st, const char* name, uint8_t nlen, uint8_t kind,
+		 uint32_t u, const char* str, uint8_t slen, int apply)
+{
+    xindex_t ix;
+    index_t obj, di;
+    value_t v;
+    int vt, pos, cur_save;
+    index_t cbase_save;
+
+    if (!csp_name_resolve(st, name, nlen, &ix, &obj))
+	return -1;
+    di = XIDX(ix);
+    if ((vt = name_value_vt(st, name, nlen, di)) < 0)
+	return -2;
+    if ((vt == V_STRING) != (kind == CSP_NV_STRING))
+	return -2;
+    if (vt == V_FLOAT)
+	v.f = (kind == CSP_NV_FLOAT) ? fv_from_ieee(u) : op_CVTIF((ivalue_t)u);
+    else if (kind == CSP_NV_FLOAT)
+	return -2;
+    else
+	v.u = u;
+    if (!apply)
+	return 0;
+    if (vt == V_STRING) {
+	// lookup first: the same characters set twice are one string
+	if ((pos = lookup_string(st, (char*)str, slen)) < 0)
+	    pos = new_string(st, (char*)str, slen);
+	if (pos < 0)
+	    return -3;
+	v.s = (sindex_t)pos;
+    }
+    cur_save = st->cur;
+    cbase_save = st->cbase;
+    if (obj != 0)
+	csp_ctx_set(st, obj);
+    csp_set_value(st, MAKE_INDEX(obj ? CURRENT : GLOBAL, di), v);
+    st->cur = cur_save;
+    st->cbase = cbase_save;
+    csp_settings_record(st, ix, PART_VAL, v);
+    return 0;
+}
+
+int csp_name_get(csp_rt_t* st, const char* name, uint8_t nlen,
+		 uint8_t* kind, uint32_t* u)
+{
+    xindex_t ix;
+    index_t obj, di, lx;
+    value_t v;
+    int vt, cur_save;
+    index_t cbase_save;
+
+    if (!csp_name_resolve(st, name, nlen, &ix, &obj))
+	return -1;
+    di = XIDX(ix);
+    if ((vt = name_value_vt(st, name, nlen, di)) < 0)
+	return -2;
+    cur_save = st->cur;
+    cbase_save = st->cbase;
+    if (obj != 0)
+	csp_ctx_set(st, obj);
+    lx = MAKE_INDEX(obj ? CURRENT : GLOBAL, di);
+    if (vt == V_TIMER)                          // 1 started, 0 stopped
+	v.u = value_get_t_val(csp_dio_slot(st, lx, DIN));
+    else
+	v = csp_value(st, lx);
+    st->cur = cur_save;
+    st->cbase = cbase_save;
+    switch (vt) {
+    case V_FLOAT:    *kind = CSP_NV_FLOAT;    *u = fv_to_ieee(v.f); break;
+    case V_STRING:   *kind = CSP_NV_STRING;   *u = (uint32_t)v.s;   break;
+    case V_UNSIGNED: *kind = CSP_NV_UNSIGNED; *u = v.u;             break;
+    default:         *kind = CSP_NV_INT;      *u = v.u;             break;
     }
     return 0;
 }
@@ -6833,6 +6989,7 @@ int csp_rt_start(csp_rt_t* st)
     // it is the last one. Before csp_setup, which the platform main calls next:
     // a re-pinned output must never be configured on the pin the source named.
     csp_settings_apply(st);
+    ep_bind(st);
     sys_publish(st);
     st->cur   = 0;     // back to global before anything executes
     st->cbase = 0;

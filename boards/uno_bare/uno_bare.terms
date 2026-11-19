@@ -12,7 +12,9 @@
 %% hold the compiler, so this node carries a program in ROM and a small command
 %% loop, and the master that talks to it does the compiling. Hence
 %% {define, ['CSP_EXEC_ONLY']} below -- that is a property of the board, not of
-%% how it happened to be built today.
+%% how it happened to be built today. And CSP_REXEC + CSP_REXEC_SLIM: the
+%% loop is /dump and /patch, refusals by number -- a host reads it and
+%% patches it (./cs node), values and /save included.
 {board, uno_bare,
  [{chip, atmega328p},
 
@@ -71,7 +73,7 @@
   %% array of exactly CSP_CODE_BUDGET bytes, which is a number the map file
   %% shows and the link enforces -- on a part with 2K, a pool whose size is only
   %% known at run time is a pool that is discovered to be too big by hanging.
-  {define, ['CSP_EXEC_ONLY']},
+  {define, ['CSP_EXEC_ONLY', 'CSP_REXEC', 'CSP_REXEC_SLIM']},
 
   %% NOT the toolchain -- this board is {toolchain, bare} and links with
   %% avr-gcc. These two are for `make upload`: the bootloader on the part is

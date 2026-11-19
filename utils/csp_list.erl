@@ -463,6 +463,10 @@ pin_runs([], _Port, Start, Last, Acc) ->
 range(Start, Start) -> "";
 range(_Start, Last) -> ["..", integer_to_list(Last)].
 
+%% A can id or a port as written: a #param by its name (CSP_EP_PARAM).
+ep(Env, V, _Num) when V band 16#C0000000 =:= 16#40000000 -> name(Env, V band 16#ffff);
+ep(_Env, V, Num) -> Num(V).
+
 %% The endpoint lives in a constant (two, for UDP and TCP).
 transport(Env, Tr, Id) ->
     Ep = case dprop(Env, Id, init, 0) of
@@ -470,14 +474,16 @@ transport(Env, Tr, Id) ->
 	     _ -> 0
 	 end,
     case Tr of
-	can -> [" can ", hex(Ep)];
+	can -> [" can ", ep(Env, Ep, fun hex/1)];
 	i2c -> [" i2c ", integer_to_list((Ep bsr 16) band 16#ff), " ",
 		hex((Ep bsr 8) band 16#ff), " ", hex(Ep band 16#ff)];
 	spi -> [" spi ", integer_to_list((Ep bsr 24) band 16#f), " ",
 		integer_to_list((Ep bsr 20) band 16#f), ":",
 		integer_to_list((Ep bsr 16) band 16#1f), " ", hex(Ep band 16#ffff)];
 	T when T =:= tcp; T =:= udp ->
-	    [" ", atom_to_list(T), " ", integer_to_list(dprop(Env, Id + 1, init, 0)),
+	    [" ", atom_to_list(T), " ",
+	     ep(Env, dprop(Env, Id + 1, init, 0) band 16#ffffffff,
+		fun integer_to_list/1),
 	     case Ep of
 		 0 -> "";
 		 _ -> [" ", lists:join(".", [integer_to_list((Ep bsr S) band 255)

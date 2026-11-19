@@ -1,0 +1,3 @@
+// ./cs node info FILE (tests/cmd/check.sh): a program held against a node
+#buffer F:8 in can 0x120
+#variable Y = 0

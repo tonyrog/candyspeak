@@ -1,55 +1,30 @@
 #!/usr/bin/env escript
 %% -*- erlang -*-
 %%
-%% cs -- one way in to building, loading and testing what is in this tree.
+%% cs -- build, load and test what is in this tree.     More: doc/cs.md
 %%
-%%     ./cs                              what there is, and what is plugged in
-%%     ./cs info  <app|board> [board]    the board, and how it is built and flashed
-%%     ./cs build <app> [board]          build the application for a board
-%%     ./cs upload [<app> [board]]       load it, built first if it is not up to
-%%                                       date; no app: the one last built
-%%     ./cs test  <app>                  its tests, on the host
-%%     ./cs ports                        the serial ports and what they are
-%%     ./cs node <command>               a running node, by its console:
-%%         info [file]                   what it is: board, part, firmware,
-%%                                       number format, RAM, flash slots,
-%%                                       images, the transports it has;
-%%                                       -use: the ones its program uses
-%%                                       (file: that program's, .csp .img
-%%                                       .hex) and those it runs as the null
-%%                                       device, -detail: every endpoint
-%%         list                          the program it runs, as source
-%%         state [name ...]              its values; a name picks it and
-%%                                       what is under it (P[i], T.fired)
-%%         get <name>                    one value, bare
-%%         watch [name ...]              the values as they change, until ^C
-%%         pause | go | reset            stop, run, back to INIT
-%%         live                          rules frozen, I/O running: a set
-%%                                       is on the pin at once (go: run)
-%%         step [N]                      N cycles (1), paused
-%%         set <name> <value> ...        values, as `> name = value'; on a
-%%                                       #param or a pin part, a setting
-%%         latch on | off                device output
-%%         settings                      what is set by hand, saved or not
-%%         save | load                   patch and settings to storage, back
-%%         send <line>                   a console line; what it said back
+%%   ./cs                             apps, boards, what is plugged in
+%%   ./cs info   <app|board> [board]  a board and how it is built
+%%   ./cs build  <app> [board]        build for a board
+%%   ./cs upload [<app> [board]]      build if needed, then load
+%%   ./cs test   <app>                its tests, on the host
+%%   ./cs ports                       serial ports
+%%   ./cs node   <command>            a running node:
+%%       info [file]                  what it is
+%%       list | state [name ...]      its program | its values
+%%       get <name ...>               values, bare
+%%       set <name> <value> ...       values, by name
+%%       watch [name ...]             values as they change
+%%       pause | go | reset | step [N]
+%%       live | latch on|off          rules frozen | device output
+%%       settings | save | load       stored settings and patch
+%%       patch <file>                 add to the program
+%%       disable | enable <rule ...>  rules off, on (3 5 2-6)
+%%       undo [N]                     take back the last patch
+%%       send <line>                  a raw console line
 %%
-%%     -D <device>    the port (else the one plugged in with the board's USB id,
-%%                    else the one in its terms); for node, also HOST:PORT
-%%     -b <baud>      the upload speed, where the loader has one; for node,
-%%                    the console's (115200)
-%%     -n             say what would run, run nothing
-%%     -use, -detail  node info: the transports the program uses, and where
-%%
-%% A board may be named short: `./cs wintersbone s3` is wintersbone_s3. NAME=VALUE
-%% anywhere on the line goes on to Makefile.board as it is (WATCH=1, MAP=...).
-%%
-%% THE TERMS ARE THE TRUTH and make does the building. An application is
-%% apps/<app>/app.terms, a board boards/<board>/<board>.terms; where make put
-%% things it says itself (`cs-vars`), in the run that builds. The upload is
-%% the loader run directly, with the files make left: a build that is newer
-%% than everything it was made from is not built again. Every command is
-%% printed before it runs, so what this did can always be done by hand.
+%%   -D <dev|host:port>  -b <baud>  -n (dry run)
+%%   -use -detail (node info)  -hex (node patch)   NAME=VALUE goes to make
 -mode(compile).
 
 %% What a build leaves behind that an upload and `info` need.
@@ -72,6 +47,7 @@ main(Args0) ->
 options(["-n" | T], O, Acc) -> options(T, O#{dry => true}, Acc);
 options(["-use" | T], O, Acc) -> options(T, O#{use => true}, Acc);
 options(["-detail" | T], O, Acc) -> options(T, O#{detail => true}, Acc);
+options(["-hex" | T], O, Acc) -> options(T, O#{hex => true}, Acc);
 options(["-D", D | T], O, Acc) -> options(T, O#{dev => D}, Acc);
 options(["-b", B | T], O, Acc) -> options(T, O#{baud => B}, Acc);
 options([F], _O, _Acc) when F =:= "-D"; F =:= "-b" ->
@@ -617,6 +593,7 @@ node(Args, O) ->
 	    try
 		case Args of
 		    ["info" | _] -> node_info_cmd(Args, C, O);
+		    ["patch", File] -> node_patch(File, C, O);
 		    _ -> node_cmd(Args, C)
 		end
 	    after csp_cmd:close(C)
@@ -655,16 +632,18 @@ node_cmd(["state" | Names], C) ->
     io:format("cycle ~w, ~w ms~n", [Cycle, Ms]),
     [io:format("  ~-16s ~s~n", [N, node_val(V)]) || {N, V} <- Vals],
     ok;
-node_cmd(["get", Name], C) ->
-    {Decls, C1} = node_decls(C),
-    {_, _, Vals, _} = node_state(C1, Decls, []),
-    case lists:keyfind(Name, 1, Vals) of
-	{_, V} -> io:format("~s~n", [node_val(V)]);
-	false ->
-	    case [N || {N, _} <- Vals, node_under(N, Name)] of
-		[] -> err("no ~s on the node", [Name]);
-		Ns -> err("~s is not one value: ~s", [Name, string:join(Ns, " ")])
-	    end
+node_cmd(["get" | Names = [_ | _]], C) ->
+    case node_ok(csp_cmd:get(C, Names)) of
+	{[{_, none}], _} -> err("no ~s on the node", Names);
+	{[{_, not_one}], _} -> err("~s is not one value: name an element, ~s[0]",
+				   Names ++ Names);
+	{[{_, V}], _} -> io:format("~s~n", [node_val(V)]);
+	{Vs, _} -> [io:format("~s ~s~n", [N, case V of
+						    none -> "?";
+						    not_one -> "?";
+						    _ -> node_val(V)
+						end]) || {N, V} <- Vs],
+		   ok
     end;
 node_cmd(["watch" | Names], C) ->
     {Decls, C1} = node_decls(C),
@@ -673,7 +652,12 @@ node_cmd(["live"], C) -> node_said(csp_cmd:live(C));
 node_cmd(["latch", "on"], C) -> node_said(csp_cmd:latch(C, true));
 node_cmd(["latch", "off"], C) -> node_said(csp_cmd:latch(C, false));
 node_cmd(["settings"], C) -> node_said(csp_cmd:settings(C));
-node_cmd(["save"], C) -> node_said(csp_cmd:save(C));
+node_cmd(["save"], C) ->
+    {I, C1} = node_ok(csp_cmd:info(C)),
+    case lists:member(compiler, maps:get(features, I, [])) of
+	true -> node_said(csp_cmd:save(C1));
+	false -> node_put([], [save], C1)
+    end;
 node_cmd(["load"], C) -> node_said(csp_cmd:load(C));
 node_cmd(["pause"], C) -> node_said(csp_cmd:pause(C));
 node_cmd(["go"], C) -> node_said(csp_cmd:resume(C));
@@ -686,6 +670,27 @@ node_cmd(["step", N], C) ->
     end;
 node_cmd(["set" | NVs = [_, _ | _]], C) when length(NVs) rem 2 =:= 0 ->
     node_set(NVs, C);
+node_cmd([Tg | Rules = [_ | _]], C) when Tg =:= "disable"; Tg =:= "enable" ->
+    %% A node with no compiler cannot read `#enable 3' either: the bitmap
+    %% goes over as a patch made here.
+    {I, C1} = node_ok(csp_cmd:info(C)),
+    R = case lists:member(compiler, maps:get(features, I, [])) of
+	    true -> csp_cmd:toggle(C1, Tg =:= "enable", Rules);
+	    false -> csp_cmd:patch_hex(C1, lists:flatten(["#", Tg, " " | lists:join(" ", Rules)]),
+				       host_csp(I))
+	end,
+    case R of
+	{ok, _} -> ok;
+	{ok, _, _} -> ok;
+	{error, {line, _, _, Said}, _} -> err("~s", [Said]);
+	{error, Why, _} -> err("~s", [node_why(Why)])
+    end;
+node_cmd(["undo"], C) -> node_said(csp_cmd:undo(C, 1));
+node_cmd(["undo", N], C) ->
+    case string:to_integer(N) of
+	{K, ""} when K > 0 -> node_said(csp_cmd:undo(C, K));
+	_ -> err("node undo ~s: a count", [N])
+    end;
 node_cmd(["send" | Ws = [_ | _]], C) ->
     node_said(csp_cmd:cmd(C, string:join(Ws, " "), 500));
 node_cmd(Args, _C) ->
@@ -720,11 +725,19 @@ node_target(O) ->
 	    end
     end.
 
-node_set([N, V | T], C) ->
-    {Ls, C1} = csp_cmd:set(C, N, V),
-    node_said({Ls, C1}),
-    node_set(T, C1);
-node_set([], _C) -> ok.
+%% Values by name, all of them at once or none (csp_cmd:put/3): the node
+%% finds the names itself, compiler or not.
+node_set(NVs, C) -> node_put(pairs(NVs), [], C).
+
+pairs([N, V | T]) -> [{N, V} | pairs(T)];
+pairs([]) -> [].
+
+node_put(NVs, Ops, C) ->
+    case csp_cmd:put(C, NVs, Ops) of
+	{ok, _, _} when NVs =:= [] -> io:format("saved~n");
+	{ok, Said, _} -> io:format("~s~n", [Said]);
+	{error, Why, _} -> err("~s", [node_why(Why)])
+    end.
 
 %% The declarations a state is read by: the program the node runs.
 node_decls(C) ->
@@ -768,6 +781,48 @@ node_ok({error, Why, _}) -> err("~s", [node_why(Why)]).
 node_why(timeout) -> "no answer";
 node_why(S = [C | _]) when is_integer(C) -> S;
 node_why(Why) -> io_lib:format("~0p", [Why]).
+
+%% A patch file onto a running node. A node with a compiler takes the lines
+%% as typed; one without (or -hex) gets them compiled here, by the host's
+%% csp running its image, and only what they add sent (csp_patch).
+node_patch(File, C, O) ->
+    Text = case file:read_file(File) of
+	       {ok, B} -> binary_to_list(B);
+	       {error, Rd} -> err("~s: ~s", [File, file:format_error(Rd)])
+	   end,
+    {I, C1} = node_ok(csp_cmd:info(C)),
+    Hex = maps:get(hex, O, false) orelse
+	not lists:member(compiler, maps:get(features, I, [])),
+    R = case Hex of
+	    false -> csp_cmd:patch(C1, Text);
+	    true -> csp_cmd:patch_hex(C1, Text, host_csp(I))
+	end,
+    case R of
+	{ok, #{lines := N, toggles := T}, _} ->
+	    io:format("patched: ~w line~s, ~w #disable/#enable -- not saved "
+		      "(node undo takes it back, node save keeps it)~n",
+		      [N, [$s || N =/= 1], T]);
+	{ok, Said, _} ->
+	    io:format("patched, compiled here: ~s~n", [Said]);
+	{error, {line, N, L, Said}, _} ->
+	    err("~s:~w: ~s~n  ~s~nnothing of the patch is left on the node",
+		[File, N, L, Said]);
+	{error, Why, _} ->
+	    err("~s~nnothing of the patch is left on the node", [node_why(Why)])
+    end.
+
+%% The host's csp that reads numbers as the node does.
+host_csp(I) ->
+    Root = filename:dirname(escript:script_name()),
+    big =/= maps:get(endian, I, little) orelse
+	err("no host compiler for a big-endian node", []),
+    Exe = filename:join(Root, case maps:get(float, I, fixpoint) of
+				  fixpoint -> "csp";
+				  ieee -> "csp-ieee"
+			      end),
+    filelib:is_regular(Exe) orelse err("~s: not built (make ~s)",
+				       [Exe, filename:basename(Exe)]),
+    Exe.
 
 %% What the node said back, its echo left out.
 node_said({Ls, _}) -> [io:format("~s~n", [L]) || L <- Ls], ok.

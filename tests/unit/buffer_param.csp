@@ -1,0 +1,8 @@
+// A can id and a port by name: a global #param, whose value is read when the
+// node starts (after its settings) -- one image, many ids and ports.
+#param Id = 0x123
+#param Port = 15599
+#buffer C1:8 in can Id
+#buffer U1:8 in udp Port
+#variable Y = 0
+Y = Id + Port ? 1

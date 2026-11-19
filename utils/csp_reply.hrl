@@ -1,0 +1,30 @@
+%% Generated from include/csp_reply.h -- do not edit.
+reply_text(1) -> "usage: /dump rom|eeprom|patch|info [offs [len]] | rom <slot> | state";
+reply_text(2) -> "no such region";
+reply_text(3) -> "no image there";
+reply_text(4) -> "no flash on this build";
+reply_text(5) -> "nothing stored";
+reply_text(6) -> "not started -- /resume to allocate and run";
+reply_text(7) -> "not a patch";
+reply_text(8) -> "other float format or byte order";
+reply_text(9) -> "made for another image";
+reply_text(10) -> "made for another patch -- the program changed";
+reply_text(11) -> "full -- nothing changed";
+reply_text(12) -> "line not understood, at";
+reply_text(13) -> "line out of order, at";
+reply_text(14) -> "line crc wrong, at";
+reply_text(15) -> "more than the head said -- nothing changed";
+reply_text(16) -> "a change names a record that is not there -- nothing changed";
+reply_text(17) -> "it does not fit when laid out -- nothing changed; runtime error";
+reply_text(18) -> "aborted -- nothing changed";
+reply_text(19) -> "refused earlier -- nothing changed";
+reply_text(20) -> "size or crc of the whole wrong -- nothing changed";
+reply_text(21) -> "incomplete -- nothing changed";
+reply_text(22) -> "not receiving";
+reply_text(23) -> "its #disable set is for another rule count -- dropped";
+reply_text(24) -> "no such value -- nothing changed, at";
+reply_text(25) -> "could not save";
+reply_text(26) -> "no such command";
+reply_text(27) -> "no compiler here -- patch from the host";
+reply_text(28) -> "a value of the wrong kind for it -- nothing changed, at";
+reply_text(_) -> none.

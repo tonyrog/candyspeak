@@ -1,0 +1,4 @@
+// added to the running node
+#variable Y = 0
+Y = X ? 1
+#disable 1

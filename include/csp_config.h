@@ -61,6 +61,41 @@
 #define CSP_NO_IMAGE_REGISTRY 1
 #endif
 
+// THE TIERS.
+//
+//   full     a compiler and a console: source at the prompt.
+//   rexec    CSP_EXEC_ONLY + CSP_REXEC: no compiler, but a console -- /dump,
+//            /patch, /upgrade, /save, /pause ... -- and no /list or /state:
+//            the host words those from /dump. A program reaches it
+//            as an image or a hex patch made on the host (./cs node patch),
+//            never as source.
+//   slim     rexec + CSP_REXEC_SLIM: /dump and /patch, nothing else, and they
+//            refuse by number. Values are set and saved through /patch too
+//            (CSPV); everything else a host does from what /dump says.
+//   exec     CSP_EXEC_ONLY: no console at all; it runs its linked image.
+//
+// CSP_HAVE_CONSOLE is the command layer (csp_repl.c), CSP_HAVE_COMPILER the
+// parser behind it. Both are spelled out on the command line, not derived from
+// each other here, so a file that tests one before including this still sees
+// the tier.
+#if defined(CSP_REXEC) && !defined(CSP_EXEC_ONLY)
+#error "CSP_REXEC is a variant of CSP_EXEC_ONLY: define both"
+#endif
+#if defined(CSP_REXEC_SLIM) && !defined(CSP_REXEC)
+#error "CSP_REXEC_SLIM is a variant of CSP_REXEC: define both"
+#endif
+#if !defined(CSP_EXEC_ONLY)
+#define CSP_HAVE_COMPILER 1
+#endif
+#if !defined(CSP_EXEC_ONLY) || defined(CSP_REXEC)
+#define CSP_HAVE_CONSOLE 1
+#endif
+// /list and /state: the program and its values in words. A rexec node leaves
+// that to the host, which reads both out of /dump (csp_list, csp_node).
+#if !defined(CSP_REXEC)
+#define CSP_HAVE_LISTING 1
+#endif
+
 // LINE INPUT OR A LINE EDITOR.
 //
 // The editor is cursor keys, history, insert-in-the-middle and the escape

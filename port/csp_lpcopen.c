@@ -972,7 +972,7 @@ static void csp_lpc_setup(void)
 
     serial_output = 1;
 
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
     // The CLOCK first, and it is read back from the registers rather than
     // taken from what the board asked for -- so a PLL that did not connect
     // shows up as 12000000 here instead of looking like a UART problem.
@@ -992,7 +992,7 @@ static void csp_lpc_setup(void)
     }
     boot_mark(3);
 
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
     csp_print_lit("pool "); csp_print_uint((uint32_t)state.mem_limit);
     // THE REAL GAP, not csp_system_ram_avail(). That one adds sizeof(csp_rt_t)
     // back on because csp_mem_init subtracts it again -- correct for sizing the
@@ -1021,14 +1021,14 @@ static void csp_lpc_setup(void)
     boot_mark(4);
 
     if (csp_eeprom_load(&state) == 0) {
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
 	csp_print_line("Loaded from EEPROM");
 #endif
     }
     else {
 	csp_clr_error(&state);         // "no saved state" is the normal case at
 				       // boot, not an error to carry forward
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
 	csp_print_line("No saved state, running ROM");
 #endif
     }
@@ -1046,7 +1046,7 @@ static void csp_lpc_setup(void)
     csp_setup(&state);
     boot_mark(7);
 
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
     csp_print_line("CandySpeak ready");
 #endif
 }
@@ -1154,7 +1154,7 @@ static void csp_lpc_loop(void)
     if (state.mem == NULL || state.mem_limit == 0)
 	return;
 
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
     // Serial FIRST, unconditionally, so the prompt stays alive even when the
     // program below cannot run -- otherwise a boot where csp_rebuild failed
     // faults the board into an unresponsive state right after saying so, and
@@ -1230,7 +1230,7 @@ static void csp_lpc_loop(void)
 	    uint32_t chunk = (remaining < 10) ? remaining : 10;
 	    csp_delay_ms(chunk);
 	    remaining -= chunk;
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
 	    while (csp_lpc_uart_available() && csp_line_space(&state.line) &&
 		   csp_con_space())
 		csp_con_input(&state, (char)csp_lpc_uart_read());

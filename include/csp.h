@@ -1135,6 +1135,15 @@ typedef enum {
 //            program names a UNIT, the way `i2c 3` and `spi 1` do -- so one
 //            constant carries the whole endpoint and there is no pair to keep
 //            adjacent. Baud 0 means "leave the board's own setting alone".
+// A #param in place of the number -- `can Id`, `tcp Port` -- and the endpoint
+// constant holds CSP_EP_PARAM | the #param's declaration instead. Its VALUE is
+// read when the node starts, after the settings (csp_rt_start), so one image
+// serves many ids and ports and `cs node set Port` + save moves a node. Bit 30:
+// no frame id (29 bits) and no port (16) reaches it.
+#define CSP_EP_PARAM        0x40000000UL
+#define CSP_EP_IS_PARAM(v)  (((uint32_t)(v) & 0xC0000000UL) == CSP_EP_PARAM)
+#define CSP_EP_DECL(v)      ((index_t)((uint32_t)(v) & 0xFFFF))
+
 #define TR_I2C_XREF(bus,addr,reg)  (((uint32_t)(bus) << 16) | \
 				    ((uint32_t)(addr) << 8) | (uint32_t)(reg))
 #define TR_I2C_BUS(x)   (((x) >> 16) & 0xff)
@@ -1789,6 +1798,7 @@ typedef enum {
     ERR_LOCAL_IN_WHERE,
     ERR_SMS_OWNERS,
     ERR_ONEWIRE_ROM,
+    ERR_EP_PARAM,
     // `Buf[Lo..Hi]` with an end that is not a constant. One byte can be chosen
     // at run time (`Buf[Pos]`, OP_SETOX in bits mode), but a range's WIDTH is
     // the view's, and a view is built at compile time.
@@ -2245,8 +2255,13 @@ typedef struct {
 // back. The ring was 66 bytes of a part that has 2048, for a command that
 // could not be reached -- csp_repl.c compiles the whole feature out, but .bss
 // is not garbage-collected per field and the struct carried it anyway.
+//
+// A rexec node takes no lines either, but it takes PATCHES, and each is a mark:
+// a few, for taking back the last patches before /save.
 #ifndef CSP_UNDO_DEPTH
-#if defined(CSP_EXEC_ONLY)
+#if defined(CSP_REXEC) && !defined(CSP_REXEC_SLIM)
+#define CSP_UNDO_DEPTH 4
+#elif defined(CSP_EXEC_ONLY)
 #define CSP_UNDO_DEPTH 0
 #else
 #define CSP_UNDO_DEPTH 8
@@ -2380,6 +2395,7 @@ typedef struct _csp_rt_t
     csp_undo_t undo[CSP_UNDO_DEPTH];
     uint8_t  undo_n;         // valid entries, 0..CSP_UNDO_DEPTH
     uint8_t  undo_head;      // next slot to write (ring)
+    uint8_t  undo_group;     // /undo begin..end open: its lines are one mark
 #endif
 
     // All leaf values live in the buffer heap (see doc/DESCRIPTORS.md). Each of
@@ -2430,6 +2446,9 @@ typedef struct _csp_rt_t
     // controller is not expecting, and there is nothing for the program to do
     // while its own storage is being rewritten.
     uint8_t up_active;
+    // /patch receiving: every line is hex for it (csp_patch_line), and
+    // execution waits until the last one has come.
+    uint8_t pt_active;
     // check if any node has been set: anyx|anyd == CSP_TRUE
     int8_t  anyd;  // CSP_TRUE|CSP_FALSE
     
@@ -3410,6 +3429,21 @@ extern void csp_boot_pick(csp_rt_t* st);
 // kept and not applied -- the next firmware may reintroduce the name.
 extern int  csp_settings_resolve(csp_rt_t* st, const csp_setting_t* sp,
 				 xindex_t* ixp, index_t* objp);
+// A value by the name /state gives it -- X, s1.X, X[2], s1.X[2] -- to its
+// declaration, object-qualified, and its object (0: global). 1 if found.
+extern int  csp_name_resolve(csp_rt_t* st, const char* p, uint8_t len,
+			     xindex_t* ixp, index_t* objp);
+// Set it, as `> Name = value' would, a #param recorded as a setting. kind is
+// CSP_NV_* (csp_reply.h), u the bits, str/slen a string's characters. With
+// apply 0 only checked. 0, or -1 no such value, -2 the wrong kind or not a
+// value, -3 no room for the string.
+extern int  csp_name_set(csp_rt_t* st, const char* name, uint8_t nlen,
+			 uint8_t kind, uint32_t u, const char* str,
+			 uint8_t slen, int apply);
+// Read it now: its kind and bits (a float as IEEE bits, a string's handle).
+// 0, or -1 no such value, -2 not a value.
+extern int  csp_name_get(csp_rt_t* st, const char* name, uint8_t nlen,
+			 uint8_t* kind, uint32_t* u);
 extern void csp_settings_clear(csp_rt_t* st);
 #define CSP_SET_ORPHAN  0   // the path names nothing in this firmware
 #define CSP_SET_REFUSED 1   // it does, but the width or type moved
@@ -3911,6 +3945,9 @@ extern int csp_cmd_dispatch(csp_rt_t* st, char* cmd);
 extern void csp_cmd_help(void);
 // /undo: mark where the bump cursors stand, and keep the mark if the line that
 // followed actually appended something. See cmd_undo in csp_repl.c.
+#if defined(CSP_IMAGE_OVERRIDE)
+extern const uint8_t* csp_image_override;   // host: --image=FILE, the ROM
+#endif
 extern void csp_undo_mark(csp_rt_t* st, csp_undo_t* s);
 extern void csp_undo_push(csp_rt_t* st, const csp_undo_t* s);
 // Bytes the csp_rt_t struct itself takes -- /memory reports it as `struct`.

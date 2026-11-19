@@ -283,6 +283,8 @@ pin_range -> 'INT' ':' 'INT' '..' 'INT' : {port_pin,line('$1'),'$1',
 						   {range,line('$4'),'$3','$5'}}.
 %% can <frame-id> 
 buftype -> 'can' 'INT' : [{can,'$2'}].
+%% can <name>: a #define or #constant folds, a #param is read at start
+buftype -> 'can' 'WORD' : [{can,{field,line('$2'),'$2'}}].
 %% i2c <bus> <addr> <reg>
 buftype -> 'i2c' 'INT' 'INT' 'INT' : [{i2c,'$2','$3','$4'}].
 %% spi <bus> <cs-port> ':' <cs-pin> <cmd>
@@ -292,10 +294,15 @@ buftype -> 'spi' 'INT' 'INT' ':' 'INT' 'INT' :
 buftype -> 'udp' 'INT' : [{udp,'$2',udefined}].
 %% udp <port> <ip>
 buftype -> 'udp' 'INT' 'INT' : [{udp,'$2','$3'}].
+%% the port by name, as for can
+buftype -> 'udp' 'WORD' : [{udp,{field,line('$2'),'$2'},udefined}].
+buftype -> 'udp' 'WORD' 'INT' : [{udp,{field,line('$2'),'$2'},'$3'}].
 %% tcp <port> == tcp <port> 0
 buftype -> 'tcp' 'INT' : [{tcp,'$2',udefined}].
 %% tcp <port> <ip>
 buftype -> 'tcp' 'INT' 'INT' : [{tcp,'$2','$3'}].
+buftype -> 'tcp' 'WORD' : [{tcp,{field,line('$2'),'$2'},udefined}].
+buftype -> 'tcp' 'WORD' 'INT' : [{tcp,{field,line('$2'),'$2'},'$3'}].
 %% uart <unit> [<baud>] (default baud = 9600)
 buftype -> 'uart' 'INT' : [{uart,'$2',9600}].
 buftype -> 'uart' 'INT' 'INT' : [{uart,'$2','$3'}].

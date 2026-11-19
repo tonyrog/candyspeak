@@ -654,7 +654,7 @@ obj_init(Statics, Tgt = {No, Env}, S0) ->
 %% A transport and what its constants hold: {Transport, Values, Fresh} --
 %% fresh when they come as a pair, which never reuses one already there.
 transport([], _S) -> {none, [], false};
-transport([{can, X}], S) -> {can, [fold(X, S)], false};
+transport([{can, X}], S) -> {can, [ep(X, S)], false};
 transport([{repl}], _S) -> {repl, [0], false};
 transport([{console}], _S) -> {console, [0], false};
 transport([{uart, U, 9600}], S) -> {uart, [fold(U, S) bsl 28], false};
@@ -671,12 +671,24 @@ transport([{sms, {'WORD', _, O}, {'WORD', _, P}}], S) ->
     {ok, {Ox, _, _}} = find(O, S),
     {ok, {Px, _, _}} = find(P, S),
     {sms, [Ox bor ((Px + 1) bsl 16)], false};
-transport([{udp, P, udefined}], S) -> {udp, [0, fold(P, S)], true};
-transport([{tcp, P, udefined}], S) -> {tcp, [0, fold(P, S)], true};
+transport([{udp, P, udefined}], S) -> {udp, [0, ep(P, S)], true};
+transport([{tcp, P, udefined}], S) -> {tcp, [0, ep(P, S)], true};
 transport([{onewire, {Po, Pi}, {'WORD', _, R}}], S) ->
     {ok, {Rx, _, _}} = find(R, S),
     {onewire, [(fold(Po, S) bsl 8) bor fold(Pi, S), Rx], true};
 transport(T, _S) -> unsupported({transport, element(1, hd(T))}).
+
+%% A can id or a port: a number, a #define or #constant folded, or a global
+%% integer #param by name -- CSP_EP_PARAM bor its declaration (csp.h), the
+%% value read when the node starts.
+ep({field, _, {'WORD', _, N}} = X, S = #{menv := Me}) ->
+    case maps:find(N, maps:get(env, S)) of
+	{ok, {Ix, param, Vt}} when Me =:= none, Vt =/= string, Vt =/= float ->
+	    16#40000000 bor Ix;
+	{ok, {_, param, _}} -> unsupported({endpoint_param, N});
+	_ -> fold(X, S)
+    end;
+ep(X, S) -> fold(X, S).
 
 %% An integer constant with this value, named or not: its index, or none.
 lookup_const(V, #{decls := Ds}) ->

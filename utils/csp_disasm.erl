@@ -9,7 +9,7 @@
 
 -export([file/1, file/2, image/1, patch/2, disasm/1]).
 -export([crc16/1]).                       % csp_node: a dump line's CRC
--export([disabled/2]).                    % csp_list: the patch's #disable set
+-export([disabled/2, store/2]).                    % csp_list: the patch's #disable set
 -export([reg/1, part/1, type/1, dir/1, endian/1, transport/1]).
 -export([decl/1, op_code/1, op_class/1]).
 
@@ -195,6 +195,31 @@ disabled(Rom = <<_:4/binary, RomHeader:?HEADER_DATA_LEN/binary, _/binary>>,
 	_ -> []
     end;
 disabled(_Rom, _Eeprom) -> [].
+
+%% A store's parts, as the node wrote them (/dump patch, /save): the counts
+%% of its RAM patch and the records themselves, in the node's order.
+%% {ok, #{rom_fp, nq, n_decl, n_instr, n_dis, settings, decls, instrs, dis}}.
+store(<<_:4/binary, RomHeader:?HEADER_DATA_LEN/binary, _/binary>>,
+      <<"CSP",0, _Version:2/binary, _SetVer:2/binary, SetBytesBin:2/binary,
+	_CrcSet:2/binary, RomFpBin:2/binary, NqBin:2/binary,
+	_RamMagic:4/binary, RamHeader:?HEADER_DATA_LEN/binary, _RamCrc:2/binary,
+	NDisBin:2/binary, _CrcDis:2/binary, _Crc:2/binary, Rest/binary>>) ->
+    F = ctx(RomHeader),
+    Ram = decode_header(F, RamHeader),
+    SetBytes = u16(F, SetBytesBin),
+    ND = maps:get(n_decl, Ram),
+    NI = maps:get(n_instr, Ram),
+    NDis = u16(F, NDisBin),
+    DisBytes = 4 * ((min(NDis, 128) + 31) div 32),
+    case Rest of
+	<<Set:SetBytes/binary, Ds:(8 * ND)/binary, Is:(4 * NI)/binary,
+	  Dis:DisBytes/binary, _/binary>> ->
+	    {ok, #{rom_fp => u16(F, RomFpBin), nq => u16(F, NqBin),
+		   n_decl => ND, n_instr => NI, n_dis => NDis, settings => Set,
+		   decls => Ds, instrs => Is, dis => Dis}};
+	_ -> {error, short_store}
+    end;
+store(_Rom, _Store) -> {error, bad_store}.
 
 decode_header(F, Bin) ->
     decode_header_(maps:get(endian, F), Bin).

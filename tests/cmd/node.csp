@@ -1,0 +1,13 @@
+// A node with its console on tcp, for ./cs node (tests/cmd/check.sh)
+#buffer Net:160 inout tcp 55971
+#buffer Rp:160 inout repl
+#route Net Rp
+#route Rp Net
+// an i2c part the host does not have: the null device
+#buffer Imu:2 in i2c 1 0x68 0x3B
+#variable X = 7
+#variable Red[3]:8
+#param P = 3
+#param Name string = "n1"
+#variable F float = 1.5
+X = X + 1

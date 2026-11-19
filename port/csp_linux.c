@@ -35,6 +35,7 @@
 #include "csp_compile.h"
 #define CSP_CSTATE csp_cstate()
 #endif
+#include "csp_reply.h"    // CSP_NV_*: --set
 #include "csp_boards.h"   // generated: make boards
 
 #include <sys/time.h>
@@ -111,19 +112,6 @@ static const char* object_name = NULL;       // -O's argument, the deps target
 #define MAX_PENDING_IMM 4096
 static char pending_imm[MAX_PENDING_IMM];
 static size_t pending_imm_used = 0;
-
-// Queue one, from anywhere. --id and --name use this: an override IS an
-// immediate, and going through the same path means it behaves like one --
-// applied on every rebuild, visible in /settings, and UNSAVED until /save.
-// That is exactly "override, do not store": nothing here touches eeprom.db.
-static void queue_immediate(const char* line)
-{
-    size_t len = strlen(line);
-    if (pending_imm_used + len + 1 <= MAX_PENDING_IMM) {
-	memcpy(&pending_imm[pending_imm_used], line, len + 1);
-	pending_imm_used += len + 1;
-    }
-}
 
 // Run everything held, oldest first, then forget it.
 static void run_pending_immediates(csp_rt_t* st)
@@ -551,7 +539,7 @@ static void serial_poll(csp_rt_t* st, struct pollfd* fds, nfds_t nfds)
 
 void process_serial_line(csp_rt_t* st, char* line)
 {
-#if defined(CSP_EXEC_ONLY)
+#if !defined(CSP_HAVE_CONSOLE)
     // No command layer in this build (csp_repl.c compiles to nothing), so a
     // line has nowhere to go. The reader above still runs -- it is what notices
     // Ctrl-D -- it just has nothing to hand the line to.
@@ -1735,14 +1723,91 @@ static struct option long_options[] = {
     {"exit-on-eof",  no_argument,       0,  1015},
     {"id",           required_argument, 0,  1012},
     {"name",         required_argument, 0,  1013},
+    {"set",          required_argument, 0,  1021},
     {"root",         required_argument, 0,  1016},
     {"deps",         required_argument, 0,  1017},
     {"delta",        no_argument,       0,  1018},
 #if defined(CSP_HAVE_FIRED)
     {"fired",        no_argument,       0,  1019},
 #endif
+    {"image",        required_argument, 0,  1020},
     {0,              0,                 0,  0 }
 };
+
+// --set NAME=VALUE, kept until the program is up.
+#define MAX_SETS 16
+static char* sets[MAX_SETS];
+static int nsets = 0;
+
+static void set_add(const char* a, const char* b, const char* c)
+{
+    size_t n = strlen(a) + strlen(b) + strlen(c) + 1;
+    char* s;
+
+    if ((nsets >= MAX_SETS) || ((s = malloc(n)) == NULL)) {
+	fprintf(stderr, "too many --set\n");
+	exit(1);
+    }
+    snprintf(s, n, "%s%s%s", a, b, c);
+    sets[nsets++] = s;
+}
+
+// Each by name, as the host's put does (csp_cmd): "text" a string, a number
+// with a '.' or an exponent a float, else an integer. 0, or -1 said.
+static int sets_apply(csp_rt_t* st)
+{
+    int i;
+
+    for (i = 0; i < nsets; i++) {
+	char* eq = strchr(sets[i], '=');
+	char* v;
+	char* end;
+	uint8_t kind = CSP_NV_INT;
+	uint32_t u = 0;
+	const char* str = NULL;
+	size_t slen = 0;
+	int r;
+	if ((eq == NULL) || (eq == sets[i])) {
+	    fprintf(stderr, "--set %s: NAME=VALUE\n", sets[i]);
+	    return -1;
+	}
+	v = eq + 1;
+	if ((*v == '"') && (strlen(v) >= 2) && (v[strlen(v) - 1] == '"')) {
+	    kind = CSP_NV_STRING;
+	    str = v + 1;
+	    slen = strlen(v) - 2;
+	}
+	else if (strpbrk(v, ".eE") && (strncmp(v, "0x", 2) != 0)) {
+	    union { float f; uint32_t u; } b;
+	    b.f = strtof(v, &end);
+	    kind = CSP_NV_FLOAT;
+	    u = b.u;
+	    if ((*v == '\0') || (*end != '\0'))
+		goto bad;
+	}
+	else {
+	    u = (uint32_t)strtoll(v, &end, 0);
+	    if ((*v == '\0') || (*end != '\0'))
+		goto bad;
+	}
+	if (slen > 255)
+	    goto bad;
+	r = csp_name_set(st, sets[i], (uint8_t)(eq - sets[i]), kind, u, str,
+			 (uint8_t)slen, 1);
+	if (r < 0) {
+	    fprintf(stderr, "--set %s: %s\n", sets[i],
+		    (r == -1) ? "no such value" :
+		    (r == -2) ? "a value of the wrong kind for it" :
+		    "no room for the string");
+	    return -1;
+	}
+	continue;
+    bad:
+	fprintf(stderr, "--set %s: not a value\n", sets[i]);
+	return -1;
+    }
+    return 0;
+}
 
 void usage(const char* prog)
 {
@@ -1753,9 +1818,18 @@ void usage(const char* prog)
     // uninitialised parser.
     fprintf(stderr, "Usage: %s [options]\n", prog);
     fprintf(stderr, "Runs the ROM image linked into this binary, plus any\n");
+#if defined(CSP_REXEC)
+    fprintf(stderr, "EEPROM patch. Commands but no compiler: a program comes as\n");
+    fprintf(stderr, "an image or a host-made patch (/patch), never as source.\n");
+#else
     fprintf(stderr, "EEPROM patch. No compiler, no prompt: use ./csp for those.\n");
+#endif
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "  -h, --help           Show this help\n");
+#if defined(CSP_REXEC)
+    fprintf(stderr, "  -i, --interactive    Take commands on stdin\n");
+    fprintf(stderr, "  -b                   Start paused (implies -i)\n");
+#endif
     fprintf(stderr, "  -r, --reactive       Enable reactive mode\n");
     fprintf(stderr, "  -c, --cycles=N       Max cycles (0=unlimited)\n");
     fprintf(stderr, "  -T, --timeout=MS     Max runtime in ms (0=unlimited)\n");
@@ -1774,6 +1848,8 @@ void usage(const char* prog)
     fprintf(stderr, "  -U, --ram-used=N[k]  RAM the system/linked libraries take\n");
     fprintf(stderr, "  -m, --memory=N[k]    Usable code memory budget in bytes (or Nk KiB)\n");
     fprintf(stderr, "  -E, --eeprom-size=N[k] Simulated EEPROM capacity (0=unbounded)\n");
+    fprintf(stderr, "      --set NAME=VALUE a value by name once up: 42, 0x2a, 1.5, \"text\"\n");
+    fprintf(stderr, "      --id=N, --name=TEXT  --set sys.Id=N, sys.Name=\"TEXT\"\n");
     fprintf(stderr, "  -L[erlang|erl|text|txt]  Trace output language\n");
 #else
     fprintf(stderr, "Usage: %s [options] [file...]\n", prog);
@@ -1809,6 +1885,8 @@ void usage(const char* prog)
     fprintf(stderr, "      --flash=FILE     Back the simulated flash with FILE, so /upgrade and\n");
     fprintf(stderr, "                       the region guards run without hardware\n");
     fprintf(stderr, "      --part=NAME      Flash layout to simulate: ab, apps, full\n");
+    fprintf(stderr, "      --image=FILE     Run that image (.img, a node's /dump rom) as the ROM:\n");
+    fprintf(stderr, "                       its patch, compiled here, is the node's own\n");
     fprintf(stderr, "  -P, --debug-parse    Enable parser debugging\n");
     fprintf(stderr, "  -S, --debug-scan     Enable tokenizer debugging\n");
     fprintf(stderr, "  -Q, --debug-trace    Enable variable tracing\n");
@@ -1817,8 +1895,10 @@ void usage(const char* prog)
     fprintf(stderr, "  -p, --parse-file=F   Parsed structure file\n");
     fprintf(stderr, "  -e, --eeprom=F       EEPROM file for save/load (default: eeprom.db)\n");
     fprintf(stderr, "      --no-eeprom      Do not overlay the saved EEPROM patches at boot\n");
-    fprintf(stderr, "      --id=N           sys.Id for this run (recorded, NOT saved)\n");
-    fprintf(stderr, "      --name=TEXT      sys.Name likewise -- both survive /save only if you ask\n");
+    fprintf(stderr, "      --set NAME=VALUE a value by name once up: 42, 0x2a, 1.5, \"text\";\n");
+    fprintf(stderr, "                       a #param is a setting (/save keeps it)\n");
+    fprintf(stderr, "      --id=N           --set sys.Id=N\n");
+    fprintf(stderr, "      --name=TEXT      --set sys.Name=\"TEXT\"\n");
     fprintf(stderr, "  -I, --input-file=F   Data input file\n");
     fprintf(stderr, "      --board=NAME     Simulate a board: mega, mkrzero (measured;\n");
     fprintf(stderr, "                       sets --ram/--ram-used/--eeprom-size)\n");
@@ -2383,7 +2463,14 @@ int main(int argc, char** argv)
 	// Accepted-and-ignored is the worst answer: -C would print nothing, -i
 	// would give a prompt with no commands behind it, and a source file used
 	// to reach an uninitialised parser and segfault. Say what is missing.
+	// A rexec build HAS the commands -- just not the compiler.
+#if defined(CSP_REXEC)
+	case 'i': interactive = 1; break;
+	case 'b': pause_start = 1; interactive = 1; break;  // pause needs the REPL
+	case 'n': case 'C': case 'P': case 'S':
+#else
 	case 'i': case 'b': case 'n': case 'C': case 'P': case 'S':
+#endif
 	case 'p': case 'O': case 1003: case 1004: case 1005:
 	    fprintf(stderr, "%s: that option needs the compiler; "
 		    "this build has none (use ./csp)\n", argv[0]);
@@ -2430,6 +2517,23 @@ int main(int argc, char** argv)
 	    fired = 1;
 	    break;
 #endif
+#if defined(CSP_IMAGE_OVERRIDE)
+	case 1020: { // --image=FILE: that image is the ROM, see csp_image_override
+	    FILE* f = fopen(optarg, "rb");
+	    long n;
+	    uint8_t* b;
+	    if ((f == NULL) || (fseek(f, 0, SEEK_END) != 0) ||
+		((n = ftell(f)) <= 0) || (fseek(f, 0, SEEK_SET) != 0) ||
+		((b = malloc((size_t)n)) == NULL) ||
+		(fread(b, 1, (size_t)n, f) != (size_t)n)) {
+		fprintf(stderr, "--image: cannot read %s\n", optarg);
+		exit(1);
+	    }
+	    fclose(f);
+	    csp_image_override = b;
+	    break;
+	}
+#endif
 	case 1010:   // --flash=FILE: back the simulated flash with a file
 	    csp_flash_host_file(optarg);
 	    break;
@@ -2443,26 +2547,15 @@ int main(int argc, char** argv)
 	    break;
 	}
 #if !defined(CSP_EXEC_ONLY)
-	case 1012: { // --id=N: sys.Id for this run, not written to the store
-	    char line[64];
-	    // The '>' is the IMMEDIATE marker, not decoration: line_is_rule
-	    // sees a lone '=' and would otherwise file this as a rule -- and a
-	    // rule may not assign to a #param.
-	    snprintf(line, sizeof(line), "> sys.Id = %s", optarg);
-	    queue_immediate(line);
-	    break;
-	}
-	case 1013: { // --name=TEXT: likewise sys.Name
-	    char line[CSP_SETTINGS_MAX_STR + 16];
-	    // Quoted, because sys.Name is a string param and the immediate is
-	    // parsed as ordinary source. A name with a quote in it is refused by
-	    // the parser rather than smuggled through, which is the right answer
-	    // for something that ends up in a settings store.
-	    snprintf(line, sizeof(line), "> sys.Name = \"%s\"", optarg);
-	    queue_immediate(line);
-	    break;
-	}
 #endif
+	// --set NAME=VALUE, and --id / --name as two of them: set once the
+	// program is up, as `> NAME = VALUE' would be, by name -- no compiler
+	// needed, so every tier takes them. A #param among them is recorded as
+	// a setting: an endpoint by name (`tcp Port') is bound to it, and /save
+	// keeps it.
+	case 1021: set_add(optarg, "", ""); break;
+	case 1012: set_add("sys.Id=", optarg, ""); break;
+	case 1013: set_add("sys.Name=\"", optarg, "\""); break;
 	case 1002: no_eeprom = 1; break;
 	case 'r': reactive = 1; break;   // -r: enable reactive mode (no argument)
 	case 'c': max_cycles = atoi(optarg); break;
@@ -2775,6 +2868,10 @@ int main(int argc, char** argv)
     // show the estimate first; edited makes /resume run csr + rt_start + setup.
     // Otherwise build the graph and set up now (reporting a setup failure -- e.g.
     // the buffer table or heap ran out -- instead of running a corrupt state).
+    if (pause_start && (nsets > 0)) {
+	fprintf(stderr, "--set needs the program up: not with -b\n");
+	exit(1);
+    }
     if (pause_start) {
 	state.paused = 1;
 	state.edited = 1;
@@ -2796,6 +2893,18 @@ int main(int argc, char** argv)
 	// do what it says. In source order, which is what a reader expects.
 	run_pending_immediates(&state);
 #endif
+	// --set: the values, then laid out again, so what is read when the node
+	// starts -- an endpoint by name -- reads them. No cycle has run yet.
+	if (nsets > 0) {
+	    if (sets_apply(&state) < 0)
+		exit(1);
+	    if (csp_rebuild(&state) < 0) {
+		fprintf(stderr, "setup failed: ");
+		print_error(&state);
+		exit(1);
+	    }
+	    csp_setup(&state);
+	}
     }
 
 #if defined(CSP_HAVE_IMPORT)

@@ -18,6 +18,7 @@ cmd_resume resume
 cmd_reset reset
 cmd_clear clear
 cmd_undo undo
+cmd_patch patch
 cmd_latch latch
 cmd_commit commit
 cmd_settings settings
@@ -41,7 +42,8 @@ h_live Freeze rules, keep I/O (poke hardware)
 h_resume Resume execution (rebuild if edited)
 h_reset Reset to initial values
 h_clear Drop RAM patches (keep ROM)
-h_undo Take back the last typed line, or the last N
+h_patch Receive a patch made on a host (hex lines, . to end): ./cs node patch
+h_undo Take back the last typed line, or the last N; begin..end: lines as one
 h_latch on or off, device output
 h_commit Commit pending values
 h_settings Show stored settings (params and pin config)
@@ -90,3 +92,13 @@ line line
 # /latch argument, and the value it prints back in /state
 on on
 off off
+
+# /undo begin ... /undo end: the lines between taken back as one
+begin begin
+
+# /dump's kinds, and /patch's `where'
+dump_rom rom
+dump_eeprom eeprom
+dump_info info
+patch_where /patch ?
+dump_get get

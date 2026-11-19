@@ -143,6 +143,8 @@ extern rochar s_err_sms_owners[91] RODATA;
 #define ros_err_sms_owners ((rostring_t) s_err_sms_owners)
 extern rochar s_err_onewire_rom[94] RODATA;
 #define ros_err_onewire_rom ((rostring_t) s_err_onewire_rom)
+extern rochar s_err_ep_param[75] RODATA;
+#define ros_err_ep_param ((rostring_t) s_err_ep_param)
 extern rochar s_err_opts_after_pin[74] RODATA;
 #define ros_err_opts_after_pin ((rostring_t) s_err_opts_after_pin)
 extern rochar s_err_block_open[39] RODATA;
@@ -541,6 +543,8 @@ extern rochar s_cmd_clear[6] RODATA;
 #define ros_cmd_clear ((rostring_t) s_cmd_clear)
 extern rochar s_cmd_undo[5] RODATA;
 #define ros_cmd_undo ((rostring_t) s_cmd_undo)
+extern rochar s_cmd_patch[6] RODATA;
+#define ros_cmd_patch ((rostring_t) s_cmd_patch)
 extern rochar s_cmd_latch[6] RODATA;
 #define ros_cmd_latch ((rostring_t) s_cmd_latch)
 extern rochar s_cmd_commit[7] RODATA;
@@ -587,7 +591,9 @@ extern rochar s_h_reset[24] RODATA;
 #define ros_h_reset ((rostring_t) s_h_reset)
 extern rochar s_h_clear[28] RODATA;
 #define ros_h_clear ((rostring_t) s_h_clear)
-extern rochar s_h_undo[45] RODATA;
+extern rochar s_h_patch[70] RODATA;
+#define ros_h_patch ((rostring_t) s_h_patch)
+extern rochar s_h_undo[71] RODATA;
 #define ros_h_undo ((rostring_t) s_h_undo)
 extern rochar s_h_latch[25] RODATA;
 #define ros_h_latch ((rostring_t) s_h_latch)
@@ -663,5 +669,17 @@ extern rochar s_on[3] RODATA;
 #define ros_on ((rostring_t) s_on)
 extern rochar s_off[4] RODATA;
 #define ros_off ((rostring_t) s_off)
+extern rochar s_begin[6] RODATA;
+#define ros_begin ((rostring_t) s_begin)
+extern rochar s_dump_rom[4] RODATA;
+#define ros_dump_rom ((rostring_t) s_dump_rom)
+extern rochar s_dump_eeprom[7] RODATA;
+#define ros_dump_eeprom ((rostring_t) s_dump_eeprom)
+extern rochar s_dump_info[5] RODATA;
+#define ros_dump_info ((rostring_t) s_dump_info)
+extern rochar s_patch_where[9] RODATA;
+#define ros_patch_where ((rostring_t) s_patch_where)
+extern rochar s_dump_get[4] RODATA;
+#define ros_dump_get ((rostring_t) s_dump_get)
 
 #endif

@@ -18,7 +18,7 @@
 %%% @end
 -module(csp_node).
 
--export([dumps/1, program/1, state/2, line_crc/2, merge/2, info/1]).
+-export([dumps/1, program/1, state/2, values/2, line_crc/2, merge/2, info/1]).
 
 %% Every reply in a stretch of console text, in order, whatever else is there:
 %% {rom, Bin} | {eeprom, Bin} | {patch, Bin} | {state, Cycle, Ms, N, Bin} when
@@ -73,7 +73,8 @@ dump([Kind, Total], Ls) ->
 kind("rom") -> rom;
 kind("eeprom") -> eeprom;
 kind("patch") -> patch;
-kind("info") -> info.
+kind("info") -> info;
+kind("get") -> get.
 
 %% A line, if it is one and its CRC says it came as sent: [{Offs, Bin}].
 good(L) ->
@@ -290,6 +291,23 @@ state(Decls, {state, _Cycle, _Ms, N, Bin}) ->
     length(Ps) =:= N orelse error({short_state, N, length(Ps)}),
     lists:append([named(name(Dj, Obj, ByIx), maps:get(Dj, ByIx, none), V)
 		  || {Dj, Obj, V} <- Ps]).
+
+%% /dump get's answer for Names, in order: {Name, Value} -- an integer, a
+%% float, a string -- or {Name, none} for one not there, {Name, not_one} for
+%% one that is not one value (an array named whole).
+values(Names, Bin) -> values(Names, Bin, []).
+
+values([N | Ns], <<16#FF, R/binary>>, Acc) -> values(Ns, R, [{N, none} | Acc]);
+values([N | Ns], <<16#FE, R/binary>>, Acc) -> values(Ns, R, [{N, not_one} | Acc]);
+values([N | Ns], <<3, L, S:L/binary, R/binary>>, Acc) ->
+    values(Ns, R, [{N, binary_to_list(S)} | Acc]);
+values([N | Ns], <<2, F:32/float-little, R/binary>>, Acc) ->
+    values(Ns, R, [{N, F} | Acc]);
+values([N | Ns], <<1, V:32/little-unsigned, R/binary>>, Acc) ->
+    values(Ns, R, [{N, V} | Acc]);
+values([N | Ns], <<0, V:32/little-signed, R/binary>>, Acc) ->
+    values(Ns, R, [{N, V} | Acc]);
+values([], <<>>, Acc) -> lists:reverse(Acc).
 
 named(T, _D, {F, P, E}) ->
     [{T, F band 1}, {T ++ ".fired", (F bsr 1) band 1},

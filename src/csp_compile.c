@@ -4749,6 +4749,26 @@ NOINLINE int csp_parse_route(csp_rt_t* st, token_t* tv, int ti, size_t n)
     return 0;
 }
 
+// `can Id', `tcp Port': the endpoint by name. A global integer #param, and
+// what the constant holds is a reference to it (CSP_EP_PARAM).
+static int ep_param(csp_rt_t* st, tstr_t* name, uint32_t* ep)
+{
+    index_t px = csp_lookup_decl(st, name);
+
+    // Global: the value is read once for the node, not per instance, so a
+    // buffer inside a #module cannot take one.
+    if ((px == BAD_INDEX) || (st->cs->mdef != BAD_INDEX) ||
+	(decl(st, INDEX(px), type) != DECL_CONSTANT) ||
+	!decl(st, INDEX(px), local) ||
+	(CSP_MASK(decl(st, INDEX(px), vt), TYPE_BITS) == V_STRING) ||
+	(CSP_MASK(decl(st, INDEX(px), vt), TYPE_BITS) == V_FLOAT)) {
+	csp_set_error(st, ERR_EP_PARAM);
+	return -1;
+    }
+    *ep = CSP_EP_PARAM | INDEX(px);
+    return 0;
+}
+
 NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 {
     buffer_param_t d = {0};
@@ -4757,6 +4777,7 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     uint32_t xref;
     uint8_t transport;
     index_t ow_rom_ix = BAD_INDEX;   // onewire: the #param with the ROM id
+    uint32_t port = 0;               // udp, tcp: the port, or CSP_EP_PARAM | it
     int i, r;
 
     d.r.res = 8;                 // default 8 bytes (a full classic CAN frame;
@@ -4789,6 +4810,10 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     // has taken twice already (an option written after a pin, and this).
     if (check_tail(st, tv, r, n, ERR_TRAILING_WORDS) < 0)
 	return -1;
+    if (d.can_ref.len > 0)
+	d.frameid = 0;           // by name: the clause is there all the same
+    if (d.port_ref.len > 0)
+	d.net_port = 0;
     d.is_can = (d.frameid >= 0);
 
     // WHICH TRANSPORT, and at most one. The four optional blocks in the grammar
@@ -4837,6 +4862,8 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     switch (transport) {
     case TR_CAN:
 	xref = (uint32_t)d.frameid;
+	if ((d.can_ref.len > 0) && (ep_param(st, &d.can_ref, &xref) < 0))
+	    return -1;
 	break;
     case TR_I2C:
 	// 7-bit addressing. The 10-bit mode exists and nothing here speaks it,
@@ -4862,6 +4889,9 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	    csp_set_error(st, ERR_SYNTAX);
 	    return -1;
 	}
+	port = (uint32_t)d.net_port;
+	if ((d.port_ref.len > 0) && (ep_param(st, &d.port_ref, &port) < 0))
+	    return -1;
 	// No address given is `udp <port>` / `tcp <port>`: take that port, any
 	// peer. That is the only form an `in` buffer needs; an `out` without a
 	// destination is caught at setup, where the direction is known.
@@ -4974,7 +5004,7 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	index_t ca, cp;
 	if ((ca = new_signed_const(st, (ivalue_t)xref)) == BAD_INDEX)
 	    return -1;
-	if ((cp = new_signed_const(st, (ivalue_t)d.net_port)) == BAD_INDEX)
+	if ((cp = new_signed_const(st, (ivalue_t)port)) == BAD_INDEX)
 	    return -1;
 	if (cp != (index_t)(ca + 1)) {
 	    csp_set_error(st, ERR_TOO_MANY_DECLARATIONS);

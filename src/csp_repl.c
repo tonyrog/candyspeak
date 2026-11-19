@@ -3,8 +3,10 @@
 // Split out of csp_rt.c because it is the one part with almost no ties back
 // into it: the whole block referenced exactly ONE static from the runtime
 // (model_state), everything else it needs is already public in csp.h. That
-// makes the boundary real rather than a comment, and it is the same boundary
-// CSP_EXEC_ONLY draws -- a node that only runs its ROM has no commands.
+// makes the boundary real rather than a comment. CSP_HAVE_CONSOLE draws it: a
+// plain exec node (CSP_EXEC_ONLY) has no commands; a rexec node (CSP_REXEC as
+// well) has them all but the compiler -- what it runs comes as an image or as a
+// patch the host compiled against it (/patch), never as source.
 //
 // The file is guarded as a whole rather than per-function: the Arduino build
 // compiles every .c in the sketch directory, so leaving an empty translation
@@ -20,6 +22,7 @@
 #include "csp_compile.h"
 #include "csp_print.h"
 #include "csp_expr.h"
+#include "csp_reply.h"   // /dump and /patch refuse by number
 // Firmware upgrade mode. Guarded, not unconditional: csp_flash.c is linked
 // everywhere but a flash BACKEND (erase/write/read) is not -- only a part with
 // a driver has one. Without the guard /upgrade would be an undefined reference
@@ -28,7 +31,7 @@
 #include "csp_flash.h"
 #endif
 
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
 
 // ============================================================
 // Interactive command handling
@@ -36,9 +39,13 @@
 
 #define MAX_ARGV 32
 
+#if !defined(CSP_REXEC_SLIM)
 static int cmd_help(csp_rt_t* st, int argc, char* argv[]);
+#if defined(CSP_HAVE_LISTING)
 static int cmd_list(csp_rt_t* st, int argc, char* arg[]);
 static int cmd_state(csp_rt_t* st, int argc, char* argv[]);
+#endif /* CSP_HAVE_LISTING */
+#endif /* !CSP_REXEC_SLIM */
 #if defined(CSP_HAVE_FLASH)
 // What an application slot holds. /images says it in words, /dump info as
 // the number.
@@ -69,6 +76,7 @@ static int region_image(const csp_device_t* d, const csp_region_t* r,
 }
 #endif
 
+#if !defined(CSP_REXEC_SLIM)
 // /images -- what this firmware linked in. The registry answers that; it does
 // NOT answer what is on the chip (a FAILSAFE flashed on its own, an A/B slot
 // updated in the field), which needs a flash scan.
@@ -144,6 +152,9 @@ static int cmd_images(csp_rt_t* st, int argc, char* argv[])
 static int cmd_reset(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_clear(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_undo(csp_rt_t* st, int argc, char* argv[]);
+#endif /* !CSP_REXEC_SLIM */
+static int cmd_patch(csp_rt_t* st, int argc, char* argv[]);
+#if !defined(CSP_REXEC_SLIM)
 static int cmd_memory(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_commit(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_quit(csp_rt_t* st, int argc, char* argv[]);
@@ -154,19 +165,28 @@ static int cmd_load(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_images(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_pause(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_step(csp_rt_t* st, int argc, char* argv[]);
+#endif /* !CSP_REXEC_SLIM */
 static int cmd_dump(csp_rt_t* st, int argc, char* argv[]);
 static uint32_t ram_free(csp_rt_t* st);
 #if defined(CSP_HAVE_FIRED)
+#if !defined(CSP_REXEC_SLIM)
 static int cmd_clock(csp_rt_t* st, int argc, char* argv[]);
+#endif /* !CSP_REXEC_SLIM */
 #endif
 #if defined(CSP_HAVE_FLASH)
+#if !defined(CSP_REXEC_SLIM)
 static int cmd_upgrade(csp_rt_t* st, int argc, char* argv[]);
+#endif /* !CSP_REXEC_SLIM */
 #endif
+#if !defined(CSP_REXEC_SLIM)
 static int cmd_live(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_resume(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_onewire(csp_rt_t* st, int argc, char* argv[]);
+#endif /* !CSP_REXEC_SLIM */
 #if defined(CSP_WATCHDOG)
+#if !defined(CSP_REXEC_SLIM)
 static int cmd_hang(csp_rt_t* st, int argc, char* argv[]);
+#endif /* !CSP_REXEC_SLIM */
 #endif
 
 // name and help point into FLASH (strings.tab); the table itself stays in RAM.
@@ -174,37 +194,53 @@ static int cmd_hang(csp_rt_t* st, int argc, char* argv[]);
 // ro_ptr is a 16-bit pgm_read_word -- on a mega2560 (256K flash) a function
 // pointer does not fit in 16 bits. That is the same trap as the packed
 // csp_func_t that HardFaulted this project once. So: text out, pointers stay.
+// A rexec node lists its commands without the words: the host knows them.
+// And the slim one has two, the protocol a host speaks: /dump and /patch.
+#if defined(CSP_REXEC)
+#define H(h) ros_null
+#else
+#define H(h) h
+#endif
+
 static const csp_cmd_t builtin_cmds[] = {
-    { ros_cmd_help,   ros_h_help,    cmd_help },
+#if defined(CSP_REXEC_SLIM)
+    { ros_cmd_dump,   ros_null,      cmd_dump },
+    { ros_cmd_patch,  ros_null,      cmd_patch },
+#else
+    { ros_cmd_help,   H(ros_h_help),    cmd_help },
     { ros_cmd_query,  NULL,        cmd_help },
-    { ros_cmd_list,   ros_h_list,    cmd_list },
-    { ros_cmd_state,  ros_h_state,   cmd_state },
-    { ros_cmd_memory, ros_h_memory,  cmd_memory },
-    { ros_cmd_images, ros_h_images,  cmd_images },
-    { ros_cmd_dump,   ros_h_dump,    cmd_dump },
-    { ros_cmd_pause,  ros_h_pause,   cmd_pause },
-    { ros_cmd_step,   ros_h_step,    cmd_step },
+#if defined(CSP_HAVE_LISTING)
+    { ros_cmd_list,   H(ros_h_list),    cmd_list },
+    { ros_cmd_state,  H(ros_h_state),   cmd_state },
+#endif /* CSP_HAVE_LISTING */
+    { ros_cmd_memory, H(ros_h_memory),  cmd_memory },
+    { ros_cmd_images, H(ros_h_images),  cmd_images },
+    { ros_cmd_dump,   H(ros_h_dump),    cmd_dump },
+    { ros_cmd_pause,  H(ros_h_pause),   cmd_pause },
+    { ros_cmd_step,   H(ros_h_step),    cmd_step },
 #if defined(CSP_HAVE_FIRED)
-    { ros_cmd_clock,  ros_h_clock,   cmd_clock },
+    { ros_cmd_clock,  H(ros_h_clock),   cmd_clock },
 #endif
 #if defined(CSP_HAVE_FLASH)
-    { ros_cmd_upgrade, ros_h_upgrade, cmd_upgrade },
+    { ros_cmd_upgrade, H(ros_h_upgrade), cmd_upgrade },
 #endif
-    { ros_cmd_live,   ros_h_live,    cmd_live },
-    { ros_cmd_resume, ros_h_resume,  cmd_resume },
-    { ros_cmd_onewire, ros_h_onewire, cmd_onewire },
-    { ros_cmd_reset,  ros_h_reset,   cmd_reset },
-    { ros_cmd_clear,  ros_h_clear,   cmd_clear },
-    { ros_cmd_undo,   ros_h_undo,    cmd_undo },
-    { ros_cmd_latch,  ros_h_latch,   cmd_latch },
-    { ros_cmd_commit, ros_h_commit,  cmd_commit },
-    { ros_cmd_settings, ros_h_settings, cmd_settings },
-    { ros_cmd_save,   ros_h_save,    cmd_save },
-    { ros_cmd_load,   ros_h_load,    cmd_load },
-    { ros_cmd_quit,   ros_h_quit,    cmd_quit },
+    { ros_cmd_live,   H(ros_h_live),    cmd_live },
+    { ros_cmd_resume, H(ros_h_resume),  cmd_resume },
+    { ros_cmd_onewire, H(ros_h_onewire), cmd_onewire },
+    { ros_cmd_reset,  H(ros_h_reset),   cmd_reset },
+    { ros_cmd_clear,  H(ros_h_clear),   cmd_clear },
+    { ros_cmd_undo,   H(ros_h_undo),    cmd_undo },
+    { ros_cmd_patch,  H(ros_h_patch),   cmd_patch },
+    { ros_cmd_latch,  H(ros_h_latch),   cmd_latch },
+    { ros_cmd_commit, H(ros_h_commit),  cmd_commit },
+    { ros_cmd_settings, H(ros_h_settings), cmd_settings },
+    { ros_cmd_save,   H(ros_h_save),    cmd_save },
+    { ros_cmd_load,   H(ros_h_load),    cmd_load },
+    { ros_cmd_quit,   H(ros_h_quit),    cmd_quit },
     { ros_cmd_exit,   NULL,        cmd_quit },
 #if defined(CSP_WATCHDOG)
     { ros_cmd_hang,   NULL,        cmd_hang },    // not in /help: a test
+#endif
 #endif
     { NULL, NULL, NULL }
 };
@@ -223,6 +259,7 @@ static int cmd_hang(csp_rt_t* st, int argc, char* argv[])
 }
 #endif
 
+#if !defined(CSP_REXEC_SLIM)
 static int cmd_help(csp_rt_t* st, int argc, char* argv[])
 {
     (void)st; (void)argv;
@@ -233,9 +270,11 @@ static int cmd_help(csp_rt_t* st, int argc, char* argv[])
 	    csp_print_blank();
 	    csp_print_char('/');
 	    csp_print_rostr(c->name);       // name/help are in flash
-	    len = ro_strlen(c->name);
-	    while (len++ < 10) csp_print_blank();
-	    csp_print_rostr(c->help);
+	    if (ro_byte((const uint8_t*)c->help)) {   // rexec: names only
+		len = ro_strlen(c->name);
+		while (len++ < 10) csp_print_blank();
+		csp_print_rostr(c->help);
+	    }
 	    csp_println();
 	}
     }
@@ -290,6 +329,7 @@ static int cmd_onewire(csp_rt_t* st, int argc, char* argv[])
     return CSP_CMD_OK;
 }
 
+#if defined(CSP_HAVE_LISTING)
 //
 // /list [filter]
 //
@@ -1020,6 +1060,18 @@ static void mod_flush(csp_rt_t* st, void* arg)
     list_eol();
 }
 
+// An endpoint number as written: a #param by its name (`tcp Port'), else
+// the number, in hex for a CAN id.
+static void list_ep(csp_rt_t* st, uint32_t ep, int hex)
+{
+    if (CSP_EP_IS_PARAM(ep))
+	csp_print_str_at(st, decl_name_pos(st, CSP_EP_DECL(ep)));
+    else if (hex)
+	csp_print_hex(ep);
+    else
+	csp_print_uint(ep);
+}
+
 static int cmd_list(csp_rt_t* st, int argc, char* argv[])
 {
     mod_pending_t mp = { 0, 0, 0 };
@@ -1479,7 +1531,7 @@ match:
 		switch (decl(st, i, bf_transport)) {
 		case TR_CAN:
 		    csp_print_lit(" can ");  // csp_print_hex emits the 0x itself
-		    csp_print_hex(ep);
+		    list_ep(st, ep, 1);
 		    break;
 		case TR_I2C:
 		    csp_print_lit(" i2c ");
@@ -1517,7 +1569,8 @@ match:
 			csp_print_lit(" tcp ");
 		    else
 			csp_print_lit(" udp ");
-		    csp_print_uint((uvalue_t)decl(st, csp_decl_get_bf_id(&d) + 1, cn_init).i);
+		    list_ep(st, (uint32_t)decl(st, csp_decl_get_bf_id(&d) + 1,
+					       cn_init).u, 0);
 		    if (ep != 0) {
 			csp_print_blank();
 			csp_print_ipv4(ep);
@@ -1909,6 +1962,9 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di, int elem)
     list_eol();
 }
 
+#endif /* CSP_HAVE_LISTING */
+#endif /* !CSP_REXEC_SLIM */
+
 typedef enum {
     F_NONE     = 0x0000,
     F_IN       = DIR_IN,  // 0x01
@@ -1923,6 +1979,9 @@ typedef enum {
     F_ANY_CAT  = 0x8000,
     F_ALL      = 0xffff,
 } filter_flag_t;
+
+#if !defined(CSP_REXEC_SLIM)
+#if defined(CSP_HAVE_LISTING)
 
 typedef struct {
     rostring_t key;
@@ -1963,6 +2022,8 @@ static void state_rows(csp_rt_t* st, index_t obj, int di)
 	state_row(st, MAKE_INDEX(obj, di + k), di + k, (int)k);
 }
 
+#endif /* CSP_HAVE_LISTING */
+#endif /* !CSP_REXEC_SLIM */
 // Does declaration `di` pass the /state filters? Shared by the global and the
 // per-object pass. A named filter matches on the DECLARATION, so `/state State`
 // shows the global State and every object's State alike.
@@ -2019,6 +2080,8 @@ static int state_want(csp_rt_t* st, int i,
     return 1;
 }
 
+#if !defined(CSP_REXEC_SLIM)
+#if defined(CSP_HAVE_LISTING)
 static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 {
     int i, a;
@@ -2159,6 +2222,7 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
     }
     return CSP_CMD_OK;
 }
+#endif /* CSP_HAVE_LISTING */
 
 // /settings -- what the unit is configured to, as opposed to what the source
 // says. One row per stored entry.
@@ -2243,6 +2307,7 @@ static int cmd_reset(csp_rt_t* st, int argc, char* argv[])
     return CSP_CMD_OK;
 }
 
+#endif /* !CSP_REXEC_SLIM */
 // /dump rom [slot] [offs [len]] | eeprom [offs [len]] | patch [offs [len]]
 // | state -- the bytes, for a host to read.
 //
@@ -2284,12 +2349,13 @@ static void dump_window(uint32_t total, uint32_t from, uint32_t len)
     dl.to = (len < total - dl.from) ? dl.from + len : total;
 }
 
-static void dump_begin(const char* what, uint32_t total, uint32_t from,
+// `what' in flash: on AVR a literal passed as a pointer would sit in RAM.
+static void dump_begin(rostring_t what, uint32_t total, uint32_t from,
 		       uint32_t len)
 {
     dump_window(total, from, len);
     csp_print_lit("dump ");
-    csp_print_str(what);
+    csp_print_rostr(what);
     csp_print_char(' ');
     csp_print_uint(total);
     csp_print_char(' ');
@@ -2661,7 +2727,12 @@ static void info_emit(csp_rt_t* st)
     rec_varint(&r, ROM_FORMAT_VERSION);
     rec_varint(&r, CSP_IMG_FLAGS);
     cap = csp_eeprom_capacity();
-    rec_varint(&r, INFO_F_COMPILER
+    rec_varint(&r,
+#if defined(CSP_HAVE_COMPILER)
+	       INFO_F_COMPILER
+#else
+	       0
+#endif
 #if defined(CSP_HAVE_FLASH)
 	       | INFO_F_FLASH
 #endif
@@ -2757,11 +2828,59 @@ static void info_emit(csp_rt_t* st)
     }
 }
 
+// /dump get's answer: per name a kind (csp_reply.h), then 4 bytes little
+// endian, or a string's length and characters; CSP_NV_NONE alone for a name
+// not there, CSP_NV_NOT_ONE for one that is not one value.
+static void get_emit(csp_rt_t* st, int argc, char* argv[],
+		     int (*sink)(const void*, size_t))
+{
+    uint8_t b[5];
+    uint32_t u;
+    int i, k;
+
+    for (i = 0; i < argc; i++) {
+	int r = csp_name_get(st, argv[i], (uint8_t)strlen(argv[i]), &b[0], &u);
+	if (r < 0) {
+	    b[0] = (r == -1) ? CSP_NV_NONE : CSP_NV_NOT_ONE;
+	    sink(b, 1);
+	    continue;
+	}
+	if (b[0] == CSP_NV_STRING) {
+	    b[1] = csp_str_len(st, (sindex_t)u);
+	    sink(b, 2);
+	    for (k = 0; k < b[1]; k++) {
+		uint8_t c = csp_str_char(st, (sindex_t)u, k);
+		sink(&c, 1);
+	    }
+	    continue;
+	}
+	b[1] = (uint8_t)u;
+	b[2] = (uint8_t)(u >> 8);
+	b[3] = (uint8_t)(u >> 16);
+	b[4] = (uint8_t)(u >> 24);
+	sink(b, 5);
+    }
+}
+
+// A refusal from /dump or /patch: `ERR code', the words on the host (see
+// csp_reply.h). re_say_n adds a number: where in a stream, which error.
+static void re_say_n(uint8_t code, uint32_t n, int with_n)
+{
+    csp_print_lit("ERR ");
+    csp_print_uint(code);
+    if (with_n) {
+	csp_print_char(' ');
+	csp_print_uint(n);
+    }
+    csp_println();
+}
+#define re_say(code) re_say_n((code), 0, 0)
+
 static int cmd_dump(csp_rt_t* st, int argc, char* argv[])
 {
     uint32_t k, from, len;
 
-    if ((argc >= 1) && (strcmp(argv[0], "rom") == 0)) {
+    if ((argc >= 1) && (ro_strcmp(argv[0], ros_dump_rom) == 0)) {
 	if ((argc >= 2) && !is_number(argv[1])) {
 #if defined(CSP_HAVE_FLASH)
 	    // A slot, read as flash: it need not be the image running, or an
@@ -2775,17 +2894,17 @@ static int cmd_dump(csp_rt_t* st, int argc, char* argv[])
 	    if (dump_args(argc - 2, argv + 2, &from, &len) < 0)
 		goto usage;
 	    if (r == NULL) {
-		csp_print_line("ERR no such region");
+		re_say(RE_NO_REGION);
 		return CSP_CMD_OK;
 	    }
 	    off = csp_region_offset(d, r);
 	    if ((csp_flash_read(off, &h, sizeof(h)) != CSP_FLASH_OK) ||
 		(h.magic[0] != CSP_IMAGE_MAGIC0) ||
 		(h.size > csp_region_size(d, r))) {
-		csp_print_line("ERR no image there");
+		re_say(RE_NO_IMAGE);
 		return CSP_CMD_OK;
 	    }
-	    dump_begin("rom", h.size, from, len);
+	    dump_begin(ros_dump_rom, h.size, from, len);
 	    for (k = 0; k < dl.to; k++) {
 		uint8_t b = 0;
 		if ((k >= dl.from) &&
@@ -2795,7 +2914,7 @@ static int cmd_dump(csp_rt_t* st, int argc, char* argv[])
 	    }
 	    dump_end();
 #else
-	    csp_print_line("ERR no flash on this build");
+	    re_say(RE_NO_FLASH);
 #endif
 	    return CSP_CMD_OK;
 	}
@@ -2809,27 +2928,27 @@ static int cmd_dump(csp_rt_t* st, int argc, char* argv[])
 	    if (dump_args(argc - 1, argv + 1, &from, &len) < 0)
 		goto usage;
 	    if (base == NULL) {
-		csp_print_line("ERR no image");
+		re_say(RE_NO_IMAGE);
 		return CSP_CMD_OK;
 	    }
 	    h = ro_header((const csp_image_header_t*)base);
-	    dump_begin("rom", h.size, from, len);
+	    dump_begin(ros_dump_rom, h.size, from, len);
 	    for (k = 0; k < dl.to; k++)
 		dump_byte((k >= dl.from) ? ro_byte(base + k) : 0);
 	    dump_end();
 	}
 	return CSP_CMD_OK;
     }
-    if ((argc >= 1) && (strcmp(argv[0], "eeprom") == 0)) {
+    if ((argc >= 1) && (ro_strcmp(argv[0], ros_dump_eeprom) == 0)) {
 	int n = csp_eeprom_stored();
 	uint8_t b;
 	if (dump_args(argc - 1, argv + 1, &from, &len) < 0)
 	    goto usage;
 	if (n < 0) {
-	    csp_print_line("ERR nothing stored");
+	    re_say(RE_NOTHING_STORED);
 	    return CSP_CMD_OK;
 	}
-	dump_begin("eeprom", (uint32_t)n, from, len);
+	dump_begin(ros_dump_eeprom, (uint32_t)n, from, len);
 	if (csp_eeprom_open_read() == 0) {
 	    for (k = 0; k < dl.to; k++) {
 		if (csp_eeprom_read(&b, 1) < 0)
@@ -2841,46 +2960,98 @@ static int cmd_dump(csp_rt_t* st, int argc, char* argv[])
 	dump_end();
 	return CSP_CMD_OK;
     }
-    if ((argc >= 1) && (strcmp(argv[0], "patch") == 0)) {
+    if ((argc >= 1) && (ro_strcmp(argv[0], ros_cmd_patch) == 0)) {
 	// What runs on top of the ROM now, saved or not: what /save would write.
 	if (dump_args(argc - 1, argv + 1, &from, &len) < 0)
 	    goto usage;
 	dump_size = 0;
 	csp_eeprom_emit(st, dump_count);
-	dump_begin("patch", dump_size, from, len);
+	dump_begin(ros_cmd_patch, dump_size, from, len);
 	csp_eeprom_emit(st, dump_put);
 	dump_end();
 	return CSP_CMD_OK;
     }
-    if ((argc >= 1) && (strcmp(argv[0], "info") == 0)) {
+    if ((argc >= 1) && (ro_strcmp(argv[0], ros_dump_info) == 0)) {
 	if (dump_args(argc - 1, argv + 1, &from, &len) < 0)
 	    goto usage;
 	dump_size = 0;
 	info_counting = 1;
 	info_emit(st);
 	info_counting = 0;
-	dump_begin("info", dump_size, from, len);
+	dump_begin(ros_dump_info, dump_size, from, len);
 	info_emit(st);
 	dump_end();
 	return CSP_CMD_OK;
     }
-    if ((argc == 1) && (strcmp(argv[0], "state") == 0)) {
+    if ((argc >= 2) && (ro_strcmp(argv[0], ros_dump_get) == 0)) {
+	// Values by name, now: a kind and the bits each (get_emit).
 	if (!st->started) {
-	    csp_print_line("not started -- /resume to allocate and run");
+	    re_say(RE_NOT_STARTED);
+	    return CSP_CMD_OK;
+	}
+	dump_size = 0;
+	get_emit(st, argc - 1, argv + 1, dump_count);
+	dump_begin(ros_dump_get, dump_size, 0, 0xFFFFFFFFUL);
+	get_emit(st, argc - 1, argv + 1, dump_put);
+	dump_end();
+	return CSP_CMD_OK;
+    }
+    if ((argc == 1) && (ro_strcmp(argv[0], ros_cmd_state) == 0)) {
+	if (!st->started) {
+	    re_say(RE_NOT_STARTED);
 	    return CSP_CMD_OK;
 	}
 	dump_state(st);
 	return CSP_CMD_OK;
     }
 usage:
-    csp_print_line("ERR usage: /dump rom [slot] [offs [len]] | eeprom [offs [len]]"
-		   " | patch [offs [len]] | state | info [offs [len]]");
+    re_say(RE_USAGE);
     return CSP_CMD_OK;
 }
 
-// /pause -- freeze execution. The driver runs no cycle while paused, so you can
-// inspect (/state, /list, /memory) and add rules/declarations. Edits are staged
-// and integrated by /resume, keeping the running values until then.
+// The hex lines' pieces, for /upgrade and /patch alike.
+#define UP_LINE_MAX 64
+
+static int hexval(char c)
+{
+    if ((c >= '0') && (c <= '9')) return c - '0';
+    if ((c >= 'a') && (c <= 'f')) return c - 'a' + 10;
+    if ((c >= 'A') && (c <= 'F')) return c - 'A' + 10;
+    return -1;
+}
+
+// A decimal number at *pp, the pointer moved past it; -1 if there is none.
+static int up_number(char** pp, uint32_t* v)
+{
+    char* p = *pp;
+
+    if ((*p < '0') || (*p > '9'))
+	return -1;
+    *v = 0;
+    while ((*p >= '0') && (*p <= '9'))
+	*v = *v * 10 + (uint32_t)(*p++ - '0');
+    *pp = p;
+    return 0;
+}
+
+// Hex at *pp into out (at most max bytes), up to a space or the end.
+static int up_hex(char** pp, uint8_t* out, int max)
+{
+    char* p = *pp;
+    int n = 0, hi, lo;
+
+    while ((*p != ' ') && (*p != '\0')) {
+	hi = hexval(p[0]);
+	lo = (hi < 0) ? -1 : hexval(p[1]);
+	if ((lo < 0) || (n >= max))
+	    return -1;
+	out[n++] = (uint8_t)((hi << 4) | lo);
+	p += 2;
+    }
+    *pp = p;
+    return n;
+}
+
 #if defined(CSP_HAVE_FLASH)
 // --- firmware upgrade mode ---------------------------------------------------
 //
@@ -3003,46 +3174,6 @@ static int up_byte(csp_rt_t* st, uint8_t b)
     return 0;
 }
 
-static int hexval(char c)
-{
-    if ((c >= '0') && (c <= '9')) return c - '0';
-    if ((c >= 'a') && (c <= 'f')) return c - 'a' + 10;
-    if ((c >= 'A') && (c <= 'F')) return c - 'A' + 10;
-    return -1;
-}
-
-// A decimal number at *pp, the pointer moved past it; -1 if there is none.
-static int up_number(char** pp, uint32_t* v)
-{
-    char* p = *pp;
-
-    if ((*p < '0') || (*p > '9'))
-	return -1;
-    *v = 0;
-    while ((*p >= '0') && (*p <= '9'))
-	*v = *v * 10 + (uint32_t)(*p++ - '0');
-    *pp = p;
-    return 0;
-}
-
-// Hex at *pp into out (at most max bytes), up to a space or the end.
-static int up_hex(char** pp, uint8_t* out, int max)
-{
-    char* p = *pp;
-    int n = 0, hi, lo;
-
-    while ((*p != ' ') && (*p != '\0')) {
-	hi = hexval(p[0]);
-	lo = (hi < 0) ? -1 : hexval(p[1]);
-	if ((lo < 0) || (n >= max))
-	    return -1;
-	out[n++] = (uint8_t)((hi << 4) | lo);
-	p += 2;
-    }
-    *pp = p;
-    return n;
-}
-
 // Refused, and said ONCE: the sender may be lines ahead, and each of those
 // answered would bury the one offset it has to go back to.
 static void up_refuse(const char* why)
@@ -3062,8 +3193,6 @@ static void up_print_crc(uint16_t c)
     csp_print_hex2((uint8_t)(c >> 8));
     csp_print_hex2((uint8_t)c);
 }
-
-#define UP_LINE_MAX 64
 
 // A line while the mode is active. Returns 1 if it was consumed.
 static int csp_upgrade_line(csp_rt_t* st, char* line)
@@ -3247,6 +3376,428 @@ static int cmd_upgrade(csp_rt_t* st, int argc, char* argv[])
 }
 #endif // CSP_HAVE_FLASH
 
+// --- patch receive mode ------------------------------------------------------
+//
+// /patch: what a host sends to change this node -- for a node with no compiler
+// of its own (CSP_EXEC_ONLY), or any other. ./cs node makes it. The lines are
+// /upgrade's (offs hex crc, `. SIZE CRC' to end, `!' aborts, `?' where), and
+// a refusal is a number (csp_reply.h). Two kinds of stream, by the head:
+//
+// "CSPD", program lines compiled on the host: its csp runs this node's image
+// (--image) with its patch, takes the lines as typed, and sends what that
+// added. A head of 24 bytes, little endian,
+//
+//     "CSPD"  version 1  CSP_IMG_FLAGS  rom_fp:2  have_nd:2 have_nn:2
+//     n_decl:2  n_instr:2  nq:2  n_dis:2  ch_decl:2  ch_instr:2
+//
+// -- the declarations and instructions the patch RUNNING here has (have_*,
+// what the host built on), how many it adds, the object count after, the rule
+// count of the #disable set, how many of the patch's own records it changes --
+// then, in this node's order (/dump patch's records):
+//
+//     n_decl declarations          to their places, below the ones there
+//     ch_decl  x (index:2, decl)   a declaration of the patch, changed
+//     ch_instr x (index:2, instr)  an instruction of the patch, changed
+//     n_instr instructions
+//     the #disable bitmap
+//
+// A typed line changes a little of what is there as well as adding: a name
+// goes into the string segment that has room, a variable read by a new rule
+// is marked. Those are the patch's own records, never the image's.
+//
+// "CSPN", values by name -- what /dump get reads, the other way -- and what
+// to do after:
+//
+//     "CSPN"  version 1  ops  size:2
+//
+// then `size' bytes of records: the name's length and the name, as /state
+// writes it (X, s1.X, X[2]), then a kind (csp_reply.h: CSP_NV_*) and four
+// bytes little endian, or for a string its length and characters. A float is
+// IEEE bits, an integer set on a float converted. Every name is checked
+// before any is set; each is set as `> Name = value' would, committed at once
+// so the next /dump reads it, a #param recorded as a setting. ops PN_SAVE:
+// /save after. No records and PN_SAVE is a save.
+//
+// Nothing the program runs is written before the last line has come and been
+// checked: what comes waits in free pool below the declarations (a new
+// declaration goes to its place there), and at `.' it is laid in -- and for a
+// program, the derived tables are rebuilt as after a typed line. A transfer
+// that stops leaves the program as it was. Execution waits meanwhile.
+#define PT_HEAD 24
+#define PN_HEAD 8
+#define PN_SAVE 0x01
+#define PT_CHD  (2 + sizeof(csp_decl_t))     // a changed declaration
+#define PT_CHI  (2 + sizeof(csp_instr_t))    // a changed instruction
+
+static struct {
+    uint8_t  head[PT_HEAD];
+    uint8_t  hlen;                 // PT_HEAD, or PN_HEAD once it says CSPN
+    uint8_t  rec[sizeof(csp_decl_t)];
+    uint16_t n_decl, n_instr, nq, n_dis, ch_decl, ch_instr;
+    uint32_t total, need;          // bytes received, bytes the stream holds
+    uint16_t crc;
+    uint8_t  nak, failed, was_paused;
+    size_t   stage;                // pool offset the rest waits at
+    set_group_t dis[BITSET_GROUPS(MAX_DIS_RULES)];
+    set_group_t old_dis[BITSET_GROUPS(MAX_DIS_RULES)];
+} pt;
+
+#define PT_DIS_BYTES(n) \
+    ((size_t)BITSET_GROUPS((n) > MAX_DIS_RULES ? MAX_DIS_RULES : (n)) \
+     * sizeof(set_group_t))
+#define PT_VALUES (pt.head[3] == 'N')
+
+static uint16_t pt_u16(int at)
+{
+    return (uint16_t)(pt.head[at] | (pt.head[at + 1] << 8));
+}
+
+// RAM declarations, in bytes: they end the pool, and what waits goes below.
+static size_t pt_decl_bytes(csp_rt_t* st, uint16_t more)
+{
+    return (size_t)(st->ps.nd - st->rom_nd + more) * sizeof(csp_decl_t);
+}
+
+// Where the transfer stands now, from the head: what it is for, and room.
+static int pt_check_head(csp_rt_t* st)
+{
+    size_t db, wait;
+
+    if ((pt.head[0] != 'C') || (pt.head[1] != 'S') || (pt.head[2] != 'P') ||
+	((pt.head[3] != 'D') && (pt.head[3] != 'N')) || (pt.head[4] != 1))
+	return RE_NOT_PATCH;
+    if (PT_VALUES) {                // names: for whatever the node runs
+	wait = pt_u16(6);
+	if (wait && !st->started)
+	    return RE_NOT_STARTED;
+	pt.need = PN_HEAD + (uint32_t)wait;
+	db = pt_decl_bytes(st, 0);
+    }
+    else {
+	if (pt_u16(6) != st->rom_fp)
+	    return RE_OTHER_IMAGE;
+	if (pt.head[5] != CSP_IMG_FLAGS)
+	    return RE_FORMAT;
+	if ((pt_u16(8) != (uint16_t)(st->ps.nd - CSP_BASE_ND(st))) ||
+	    (pt_u16(10) != (uint16_t)(st->ps.nn - CSP_BASE_NN(st))))
+	    return RE_OTHER_PATCH;
+	pt.n_decl  = pt_u16(12);
+	pt.n_instr = pt_u16(14);
+	pt.nq      = pt_u16(16);
+	pt.n_dis   = pt_u16(18);
+	pt.ch_decl = pt_u16(20);
+	pt.ch_instr = pt_u16(22);
+	wait = (size_t)pt.ch_decl * PT_CHD + (size_t)pt.ch_instr * PT_CHI +
+	    (size_t)pt.n_instr * sizeof(csp_instr_t);
+	pt.need = PT_HEAD + (uint32_t)pt.n_decl * sizeof(csp_decl_t) +
+	    (uint32_t)wait + PT_DIS_BYTES(pt.n_dis);
+	db = pt_decl_bytes(st, pt.n_decl);
+	if (((st->ps.nd - st->rom_nd) + pt.n_decl > MAX_DECLS) ||
+	    ((st->ps.nn - st->rom_nn) + pt.n_instr > MAX_INSTRS) ||
+	    !mem_fits(st, (size_t)pt.n_decl * sizeof(csp_decl_t) +
+		      (size_t)pt.n_instr * sizeof(csp_instr_t)))
+	    return RE_FULL;
+    }
+    // The rest waits right below the declarations; the derived tables end at
+    // mid, and must stay clear of both.
+    if (st->mem_limit < db + CSP_A8(wait) + CSP_SCRATCH + st->mid)
+	return RE_FULL;
+    pt.stage = st->mem_limit - db - CSP_A8(wait);
+    return 0;
+}
+
+// A line refused, and said ONCE (see up_refuse): where the stream stands.
+static void pt_refuse(uint8_t why)
+{
+    if (pt.nak)
+	return;
+    pt.nak = 1;
+    re_say_n(why, pt.total, 1);
+}
+
+// One byte of the stream, to where it goes.
+static int pt_byte(csp_rt_t* st, uint8_t b)
+{
+    uint32_t at = pt.total;
+    uint32_t d0 = PT_HEAD;
+    uint32_t w0 = d0 + (uint32_t)pt.n_decl * sizeof(csp_decl_t);
+    uint32_t b0 = w0 + (uint32_t)pt.ch_decl * PT_CHD +
+	(uint32_t)pt.ch_instr * PT_CHI +
+	(uint32_t)pt.n_instr * sizeof(csp_instr_t);
+    if ((at >= pt.hlen) && (at >= pt.need))
+	return RE_LONG;                             // more than the head said
+    pt.crc = csp_crc16(pt.crc, &b, 1, 0);
+    pt.total++;
+    if (at == 3)
+	pt.hlen = (b == 'N') ? PN_HEAD : PT_HEAD;
+    if (at < pt.hlen) {
+	pt.head[at] = b;
+	return (at == (uint32_t)pt.hlen - 1) ? pt_check_head(st) : 0;
+    }
+    if (PT_VALUES)
+	((uint8_t*)st->mem)[pt.stage + (at - PN_HEAD)] = b;
+    else if (at < w0) {                             // a new declaration
+	uint32_t k = (at - d0) % sizeof(csp_decl_t);
+	pt.rec[k] = b;
+	if (k == sizeof(csp_decl_t) - 1)
+	    memcpy(ram_decl_at(st, st->ps.nd + (at - d0) / sizeof(csp_decl_t)),
+		   pt.rec, sizeof(csp_decl_t));
+    }
+    else if (at < b0)                               // the rest, waiting
+	((uint8_t*)st->mem)[pt.stage + (at - w0)] = b;
+    else
+	((uint8_t*)pt.dis)[at - b0] = b;
+    return 0;
+}
+
+// Everything is here and checked: it joins the program.
+static int pt_commit(csp_rt_t* st)
+{
+    index_t nd0 = st->ps.nd, nn0 = st->ps.nn, nq0 = st->ps.nq;
+    csp_undo_t u;
+    const uint8_t* w;
+    uint16_t k;
+
+    if (pt.stage < st->mid + CSP_SCRATCH)          // the tables grew into it
+	return RE_FULL;
+    // Every change names a record of the patch running here: checked before
+    // any is laid in, so a bad one leaves nothing half done.
+    w = st->mem + pt.stage;
+    for (k = 0; k < pt.ch_decl; k++)
+	if ((uint16_t)(w[k * PT_CHD] | (w[k * PT_CHD + 1] << 8)) >=
+	    (uint16_t)(nd0 - CSP_BASE_ND(st)))
+	    return RE_BAD_CHANGE;
+    w += (size_t)pt.ch_decl * PT_CHD;
+    for (k = 0; k < pt.ch_instr; k++)
+	if ((uint16_t)(w[k * PT_CHI] | (w[k * PT_CHI + 1] << 8)) >=
+	    (uint16_t)(nn0 - CSP_BASE_NN(st)))
+	    return RE_BAD_CHANGE;
+    csp_undo_mark(st, &u);
+    memcpy(pt.old_dis, st->dis_rule, sizeof(pt.old_dis));
+    w = st->mem + pt.stage;
+    for (k = 0; k < pt.ch_decl; k++, w += PT_CHD)
+	memcpy(ram_decl_at(st, CSP_BASE_ND(st) + (w[0] | (w[1] << 8))), w + 2,
+	       sizeof(csp_decl_t));
+    for (k = 0; k < pt.ch_instr; k++, w += PT_CHI)
+	memcpy(st->ram_instr + (CSP_BASE_NN(st) - st->rom_nn) + (w[0] | (w[1] << 8)),
+	       w + 2, sizeof(csp_instr_t));
+    memmove(st->ram_instr + (st->ps.nn - st->rom_nn), w,
+	    (size_t)pt.n_instr * sizeof(csp_instr_t));
+    st->ps.nd = (index_t)(st->ps.nd + pt.n_decl);
+    st->ps.nn = (index_t)(st->ps.nn + pt.n_instr);
+    st->ps.nq = pt.nq;
+    csp_str_resize(st);
+    csp_str_recount(st);
+    memset(st->dis_rule, 0, sizeof(pt.old_dis));
+    if (pt.n_dis) {
+	if (pt.n_dis == (uint16_t)csp_n_rules(st))
+	    memcpy(st->dis_rule, pt.dis, PT_DIS_BYTES(pt.n_dis));
+	else
+	    re_say(RE_DIS_DROPPED);
+    }
+    st->mid_stale = 1;
+    if (csp_rebuild(st) < 0) {
+	re_say_n(RE_LAYOUT, st->ps.err, 1);
+	csp_clr_error(st);
+	st->ps.nd = nd0;
+	st->ps.nn = nn0;
+	st->ps.nq = nq0;
+	csp_str_resize(st);
+	csp_str_recount(st);
+	memcpy(st->dis_rule, pt.old_dis, sizeof(pt.old_dis));
+	csp_rebuild(st);
+	csp_setup(st);
+	return -1;                                  // said
+    }
+    csp_setup(st);
+    csp_undo_push(st, &u);
+    return 0;
+}
+
+// The records, checked (apply 0) or set (apply 1): how many, or -1 with the
+// refusal said -- which record, counting from 0.
+static int pn_walk(csp_rt_t* st, int apply)
+{
+    const uint8_t* p = st->mem + pt.stage;
+    const uint8_t* end = p + (pt.need - PN_HEAD);
+    const char* name;
+    const char* str;
+    uint8_t nlen, kind, slen;
+    uint32_t u;
+    int n = 0, r;
+
+    while (p < end) {
+	nlen = *p++;
+	name = (const char*)p;
+	p += nlen;
+	if (p >= end)
+	    goto bad;
+	kind = *p++;
+	u = 0;
+	str = NULL;
+	slen = 0;
+	if (kind == CSP_NV_STRING) {
+	    if (p >= end)
+		goto bad;
+	    slen = *p++;
+	    str = (const char*)p;
+	    p += slen;
+	}
+	else {
+	    if (p + 4 > end)
+		goto bad;
+	    u = (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+		((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+	    p += 4;
+	}
+	if (p > end)
+	    goto bad;
+	r = csp_name_set(st, name, nlen, kind, u, str, slen, apply);
+	if (r < 0) {
+	    re_say_n((r == -1) ? RE_NO_KEY : (r == -2) ? RE_KIND : RE_FULL,
+		     (uint32_t)n, 1);
+	    return -1;
+	}
+	n++;
+    }
+    return n;
+bad:
+    re_say(RE_LINE);
+    return -1;
+}
+
+static int pn_commit(csp_rt_t* st)
+{
+    int n;
+
+    if (pn_walk(st, 0) < 0)
+	return -1;                                  // said
+    if ((n = pn_walk(st, 1)) < 0)
+	return -1;
+    if (n > 0)
+	csp_commit_values(st);
+    if ((pt.head[5] & PN_SAVE) && (csp_eeprom_save(st) < 0)) {
+	csp_clr_error(st);
+	return RE_SAVE;
+    }
+    csp_print_lit("OK ");
+    csp_print_uint((uint32_t)n);
+    csp_println();
+    return 0;
+}
+
+static void pt_end(csp_rt_t* st)
+{
+    st->pt_active = 0;
+    st->paused = pt.was_paused;
+}
+
+// A line while the mode is active. Returns 1 if it was consumed.
+static int csp_patch_line(csp_rt_t* st, char* line)
+{
+    uint8_t data[UP_LINE_MAX], le[4];
+    uint32_t offs, crc, size;
+    char* p = line;
+    int n, k, r;
+
+    if (!st->pt_active)
+	return 0;
+    if ((ro_strcmp(line, ros_patch_where) == 0) ||
+	((line[0] == '?') && (line[1] == '\0'))) {
+	csp_print_lit("at ");
+	csp_print_uint(pt.total);
+	csp_println();
+	return 1;
+    }
+    if ((line[0] == '!') && (line[1] == '\0')) {
+	pt_end(st);
+	re_say(RE_ABORTED);
+	return 1;
+    }
+    if (line[0] == '.') {
+	pt_end(st);
+	p = line + 1;
+	while (*p == ' ')
+	    p++;
+	if (pt.failed)
+	    r = RE_FAILED;
+	else if ((*p != '\0') &&
+		 ((up_number(&p, &size) < 0) || (*p++ != ' ') ||
+		  (up_hex(&p, le, 2) != 2) || (size != pt.total) ||
+		  ((uint16_t)((le[0] << 8) | le[1]) != pt.crc)))
+	    r = RE_BAD_END;
+	else if ((pt.total < pt.hlen) || (pt.total != pt.need))
+	    r = RE_INCOMPLETE;
+	else if (PT_VALUES)
+	    r = pn_commit(st);
+	else if ((r = pt_commit(st)) == 0) {
+	    csp_print_lit("OK ");
+	    csp_print_uint(pt.n_decl);
+	    csp_print_char(' ');
+	    csp_print_uint(pt.n_instr);
+	    csp_println();
+	}
+	if (r > 0)
+	    re_say((uint8_t)r);
+	return 1;
+    }
+    if (pt.failed)
+	return 1;
+    if ((up_number(&p, &offs) < 0) || (*p++ != ' ') ||
+	((n = up_hex(&p, data, UP_LINE_MAX)) <= 0) || (*p++ != ' ') ||
+	(up_hex(&p, le, 2) != 2) || (*p != '\0')) {
+	pt_refuse(RE_LINE);
+	return 1;
+    }
+    if (offs != pt.total) {
+	pt_refuse(RE_OFFS);
+	return 1;
+    }
+    crc = (uint32_t)((le[0] << 8) | le[1]);
+    le[0] = (uint8_t)offs;
+    le[1] = (uint8_t)(offs >> 8);
+    le[2] = (uint8_t)(offs >> 16);
+    le[3] = (uint8_t)(offs >> 24);
+    if (csp_crc16(csp_crc16(0xFFFF, le, 4, 0), data, (size_t)n, 0) !=
+	(uint16_t)crc) {
+	pt_refuse(RE_CRC);
+	return 1;
+    }
+    pt.nak = 0;
+    for (k = 0; k < n; k++) {
+	if ((r = pt_byte(st, data[k])) != 0) {
+	    pt.failed = 1;
+	    re_say((uint8_t)r);
+	    return 1;
+	}
+    }
+    csp_print_lit("OK ");
+    csp_print_uint(pt.total);
+    csp_println();
+    return 1;
+}
+
+static int cmd_patch(csp_rt_t* st, int argc, char* argv[])
+{
+    (void)argv;
+    if (argc > 0) {                          // `/patch ?' while not receiving
+	re_say(RE_NOT_RECEIVING);
+	return CSP_CMD_OK;
+    }
+    memset(&pt, 0, sizeof(pt));
+    pt.crc = 0xFFFF;
+    pt.hlen = PT_HEAD;
+    pt.was_paused = st->paused;
+    st->paused = 1;
+    st->pt_active = 1;
+    csp_print_line("OK");
+    return CSP_CMD_OK;
+}
+
+#if !defined(CSP_REXEC_SLIM)
+// /pause -- freeze execution. The driver runs no cycle while paused, so you can
+// inspect (/state, /list, /memory) and add rules/declarations. Edits are staged
+// and integrated by /resume, keeping the running values until then.
 static int cmd_pause(csp_rt_t* st, int argc, char* argv[])
 {
     (void)argc; (void)argv;
@@ -3397,7 +3948,7 @@ static int cmd_clear(csp_rt_t* st, int argc, char* argv[])
     // Every line /undo could have taken back is gone. Marks left behind would
     // point above the cursors and the next /undo would push them back UP into
     // a pool that no longer holds what they described.
-    st->undo_n = st->undo_head = 0;
+    st->undo_n = st->undo_head = st->undo_group = 0;
     csp_rebuild(st);
     csp_setup(st);
     csp_print_lit("Cleared RAM patches -- ROM restored");
@@ -3422,6 +3973,8 @@ static int cmd_clear(csp_rt_t* st, int argc, char* argv[])
 // The floor still cannot go below the ROM baseline: those lines are in flash
 // and were never ours to take back. The ring simply runs out first.
 
+#endif /* !CSP_REXEC_SLIM */
+
 // Where the cursors stand right now.
 void csp_undo_mark(csp_rt_t* st, csp_undo_t* s)
 {
@@ -3437,20 +3990,64 @@ void csp_undo_mark(csp_rt_t* st, csp_undo_t* s)
 // edit in place and move no cursor. Pushing for those would make the next
 // /undo withdraw some older line the user had stopped thinking about -- an
 // undo that takes back a thing you did not just do is worse than none.
-void csp_undo_push(csp_rt_t* st, const csp_undo_t* s)
-{
 #if CSP_UNDO_DEPTH > 0
-    if ((st->ps.nn == s->nn) && (st->ps.nd == s->nd) &&
-	(st->ps.strp == s->strp) && (st->ps.nq == s->nq))
-	return;
+static void undo_put(csp_rt_t* st, const csp_undo_t* s)
+{
     st->undo[st->undo_head] = *s;
     st->undo_head = (uint8_t)((st->undo_head + 1) % CSP_UNDO_DEPTH);
     if (st->undo_n < CSP_UNDO_DEPTH)
 	st->undo_n++;
+}
+#endif
+
+// Inside /undo begin..end the group's own mark stands for every line.
+void csp_undo_push(csp_rt_t* st, const csp_undo_t* s)
+{
+#if CSP_UNDO_DEPTH > 0
+    if (st->undo_group)
+	return;
+    if ((st->ps.nn == s->nn) && (st->ps.nd == s->nd) &&
+	(st->ps.strp == s->strp) && (st->ps.nq == s->nq))
+	return;
+    undo_put(st, s);
 #else
     (void)st; (void)s;
 #endif
 }
+
+#if !defined(CSP_REXEC_SLIM)
+
+#if CSP_UNDO_DEPTH > 0
+// /undo begin: where the cursors stand now is ONE mark for the lines that
+// follow, however many -- a patch sent from a host goes or stays whole.
+// /undo end closes it; a group that appended nothing leaves no mark, so the
+// next /undo does not take back an empty patch in place of a real line.
+static int undo_group(csp_rt_t* st, int begin)
+{
+    if (begin) {
+	csp_undo_t s;
+	if (st->undo_group)
+	    return CSP_CMD_ERROR;        // one group at a time
+	csp_undo_mark(st, &s);
+	undo_put(st, &s);
+	st->undo_group = 1;
+    }
+    else {
+	const csp_undo_t* s;
+	if (!st->undo_group)
+	    return CSP_CMD_ERROR;
+	st->undo_group = 0;
+	s = &st->undo[(st->undo_head + CSP_UNDO_DEPTH - 1) % CSP_UNDO_DEPTH];
+	if ((st->ps.nn == s->nn) && (st->ps.nd == s->nd) &&
+	    (st->ps.strp == s->strp) && (st->ps.nq == s->nq)) {
+	    st->undo_head = (uint8_t)((st->undo_head + CSP_UNDO_DEPTH - 1) %
+				      CSP_UNDO_DEPTH);
+	    st->undo_n--;
+	}
+    }
+    return CSP_CMD_OK;
+}
+#endif
 
 static int cmd_undo(csp_rt_t* st, int argc, char* argv[])
 {
@@ -3460,6 +4057,12 @@ static int cmd_undo(csp_rt_t* st, int argc, char* argv[])
     int n = 1;
     int i;
 
+    if ((argc == 1) && (ro_strcmp(argv[0], ros_begin) == 0))
+	return undo_group(st, 1);
+    if ((argc == 1) && (ro_strcmp(argv[0], ros_end) == 0))
+	return undo_group(st, 0);
+    // /undo inside a group takes the whole group back and closes it
+    st->undo_group = 0;
     if (argc >= 1) {
 	const char* p = argv[0];
 	n = 0;
@@ -3589,7 +4192,7 @@ static int cmd_load(csp_rt_t* st, int argc, char* argv[])
     }
     // A load replaces the whole RAM patch, so the marks describe a pool that no
     // longer exists. Same reasoning as /clear.
-    st->undo_n = st->undo_head = 0;
+    st->undo_n = st->undo_head = st->undo_group = 0;
     csp_setup(st);
     csp_print_lit("Loaded from ");
     csp_print_str(csp_eeprom_name());
@@ -3632,6 +4235,8 @@ static void mem_val(rostring_t name, uint32_t v)
     csp_println();
 }
 
+#endif /* !CSP_REXEC_SLIM */
+
 NOINLINE static uint32_t csp_derived_bytes(csp_rt_t* st)
 {
     return (uint32_t)(st->mid - st->mid_base);
@@ -3665,6 +4270,7 @@ static uint32_t ram_free(csp_rt_t* st)
     return (cap > acc) ? (cap - acc) : 0;
 }
 
+#if !defined(CSP_REXEC_SLIM)
 static int cmd_memory(csp_rt_t* st, int argc, char* argv[])
 {
     uint32_t used = code_bytes(st);
@@ -3809,6 +4415,8 @@ static int cmd_latch(csp_rt_t* st, int argc, char* argv[])
     return CSP_CMD_OK;
 }
 
+#endif /* !CSP_REXEC_SLIM */
+
 // dispatch cmd, note that cmd is written to!
 int csp_cmd_dispatch(csp_rt_t* st, char* cmd)
 {
@@ -3842,6 +4450,7 @@ int csp_cmd_dispatch(csp_rt_t* st, char* cmd)
     return CSP_CMD_NOTFOUND;
 }
 
+#if defined(CSP_HAVE_COMPILER)
 // Process immediate expression (> expr or > var = expr)
 static int csp_process_immediate(csp_rt_t* st, char* line)
 {
@@ -4056,6 +4665,9 @@ static int in_open_block(csp_rt_t* st)
 	   (st->cs->blk_depth > 0);          /* #in/#when */
 }
 
+#endif /* CSP_HAVE_COMPILER */
+
+#if !defined(CSP_REXEC_SLIM)
 // A LINE THAT CAME IN A TEXT MESSAGE may read, and may set a #param -- the
 // knobs a program has chosen to expose, which /save keeps -- and nothing else.
 // No command (`/clear` from a stolen phone), no declaration, no rule: the
@@ -4172,12 +4784,16 @@ static int process_sms_line(csp_rt_t* st, char* line)
     return r;
 }
 
+#endif /* !CSP_REXEC_SLIM */
+
 int csp_process_line(csp_rt_t* st, char* line)
 {
     int len;
 
+#if !defined(CSP_REXEC_SLIM)
     if (st->line.from_sms && (line == st->line.buf))
 	return process_sms_line(st, line);
+#endif
 
     // NO ERROR SURVIVES INTO THE NEXT LINE.
     //
@@ -4210,6 +4826,8 @@ int csp_process_line(csp_rt_t* st, char* line)
     if (csp_upgrade_line(st, line))
 	return CSP_CMD_OK;
 #endif
+    if (csp_patch_line(st, line))
+	return CSP_CMD_OK;
 
     // A comment line is source, not a command -- `//` matched the '/' test below
     // and every header line of a pasted .csp file came back as "Unknown command:
@@ -4223,12 +4841,22 @@ int csp_process_line(csp_rt_t* st, char* line)
 	// Command
 	int r = csp_cmd_dispatch(st, line + 1);
 	if (r == CSP_CMD_NOTFOUND) {
+#if defined(CSP_REXEC_SLIM)
+	    re_say(RE_UNKNOWN);
+#else
 	    csp_print_lit("Unknown command: ");
 	    csp_print_str(line);
 	    csp_print_line(" (try /help)");
+#endif
 	}
 	return r;
     }
+#if !defined(CSP_HAVE_COMPILER)
+    // A rexec node: commands only. Its program comes as an image or as a
+    // patch the host compiled against it (./cs node patch) -- never as source.
+    re_say(RE_NO_COMPILER);
+    return CSP_CMD_OK;
+#else
     else if (*line == '#') {
 	// Persistent definition. Marked for /undo -- csp_undo_push keeps the
 	// mark only if the line actually appended, so `#disable 4` (which edits
@@ -4271,10 +4899,11 @@ int csp_process_line(csp_rt_t* st, char* line)
 	mid_settle(st);
 	return CSP_CMD_OK;
     }
+#endif
 }
 
 // ============================================================
 // Line input handling (shared between platforms)
 // ============================================================
 
-#endif /* !CSP_EXEC_ONLY */
+#endif /* CSP_HAVE_CONSOLE */

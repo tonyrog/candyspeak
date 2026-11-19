@@ -33,7 +33,7 @@ OBJDIR = obj
 # the host is where the console transports are TESTED. 4096, not a board-sized
 # 256: /dump rom is ~800 bytes printed in one go, and a routed console (telnet,
 # a second uart) dropped everything past the ring.
-CFLAGS=-MMD -MP -MF $(@:.o=.d) $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC -DCSP_HAVE_FLASH -DCSP_CONSOLE_BYTES=4096
+CFLAGS=-MMD -MP -MF $(@:.o=.d) $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC -DCSP_HAVE_FLASH -DCSP_CONSOLE_BYTES=4096 -DCSP_IMAGE_OVERRIDE
 # rom_empty.o, NOT rom.o. `rom.c` is the DEMO image -- CandySpeak/rom.c is a
 # symlink to it, so it is what a board flashes, and it changes every time you
 # run `csp -C -O rom.c prog.csp`. ./csp is the compiler, the REPL and what the
@@ -173,7 +173,7 @@ EXEC_SRC = $(CORE_SRC) gen/rom.c
 # csp_local_number, so a diff here is a word that did not survive the crossing.
 # NOT $(CFLAGS): that carries -MF $(@:.o=.d), which for a link target spells
 # the output file itself and writes a dependency list over the binary.
-BC_FLAGS = $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC \
+BC_FLAGS = $(INCS) -DCSP_VERSION='"$(CSP_VERSION)"' -DCSP_ARENA_MALLOC -DCSP_IMAGE_OVERRIDE \
 	   -DCSP_HAVE_FLASH -DCSP_CONSOLE_BYTES=4096 -w -g $(SAN)
 
 csp-bc: $(CORE_SRC) gen/rom_empty.c gen/csp_words_bc.h gen/csp_words_c.h \
@@ -219,6 +219,26 @@ min:	gen/csp_strings.h
 	$(CC) $(EXEC_FLAGS) -DCSP_EXEC_ONLY -DCSP_NO_EEPROM $(EXEC_SRC) $(LIBS) -o csp-min
 	@size csp-min 2>/dev/null | tail -1 || true
 
+# rexec: exec-only with a console -- commands, /dump and /patch, no source.
+# With the console rings: a rexec node is reached through a route (tcp, uart,
+# sms) to its repl, and without the rings that route has nowhere to deliver.
+rexec:	gen/csp_strings.h
+	$(CC) $(EXEC_FLAGS) -DCSP_EXEC_ONLY -DCSP_REXEC -DCSP_CONSOLE_BYTES=4096 $(EXEC_SRC) $(LIBS) -o csp-rexec
+	@size csp-rexec 2>/dev/null | tail -1 || true
+
+# slim: rexec with /dump and /patch only, refusals by number (uno_bare's tier).
+slim:	gen/csp_strings.h
+	$(CC) $(EXEC_FLAGS) -DCSP_EXEC_ONLY -DCSP_REXEC -DCSP_REXEC_SLIM -DCSP_CONSOLE_BYTES=4096 $(EXEC_SRC) $(LIBS) -o csp-slim
+	@size csp-slim 2>/dev/null | tail -1 || true
+
+# rexec-tcp: a rexec node with examples/tcp_serv.csp as its ROM -- an empty
+# network node to patch from the host. Its port is the #param Port (15555),
+# so several run side by side: ./csp-rexec-tcp --set Port=15561 --id=1
+rexec-tcp: csp gen/csp_strings.h
+	@$(MAKE) --no-print-directory rom PROG=examples/tcp_serv.csp TIER=rexec OUT=tmp/rexec-tcp
+	cp tmp/rexec-tcp csp-rexec-tcp
+	@size csp-rexec-tcp 2>/dev/null | tail -1 || true
+
 # --- a host binary carrying a PROGRAM as its firmware ROM image --------------
 #
 # ./csp deliberately carries none (rom_empty.c is the neutral image, see the OBJS
@@ -257,16 +277,20 @@ ifeq ($(TIER),exec)
 ROM_TIER = -DCSP_EXEC_ONLY
 else ifeq ($(TIER),min)
 ROM_TIER = -DCSP_EXEC_ONLY -DCSP_NO_EEPROM
+else ifeq ($(TIER),rexec)
+ROM_TIER = -DCSP_EXEC_ONLY -DCSP_REXEC -DCSP_CONSOLE_BYTES=4096
+else ifeq ($(TIER),slim)
+ROM_TIER = -DCSP_EXEC_ONLY -DCSP_REXEC -DCSP_REXEC_SLIM -DCSP_CONSOLE_BYTES=4096
 else ifeq ($(TIER),)
 ROM_TIER =
 else
-$(error TIER must be exec, min, or empty for the full build)
+$(error TIER must be exec, min, rexec, slim, or empty for the full build)
 endif
 
 # `csp` first: it is the compiler that produces the image.
 rom:	csp gen/csp_strings.h
 	@test -n "$(PROG)" || { \
-	    echo "usage: make rom PROG='a.csp [b.csp ...]' [OUT=name] [TIER=exec|min]"; \
+	    echo "usage: make rom PROG='a.csp [b.csp ...]' [OUT=name] [TIER=exec|min|rexec|slim]"; \
 	    exit 1; }
 	@mkdir -p tmp
 	@out='$(OUT)'; \
@@ -492,9 +516,17 @@ eval_check: csp
 
 # /dump on a node simulated with a flash file: the image written to slot A and
 # the store /save wrote come back byte for byte, and the state reads as /state.
-# ./cs node, csp_cmd under it, against a node of our own on tcp
+# ./cs node, csp_cmd under it, against a node of our own on tcp -- a full one,
+# then a rexec and a slim one (the same program as their linked image, no
+# compiler).
 cmd_check: csp
 	@$(MAKE) --no-print-directory -s -C utils
+	@$(MAKE) --no-print-directory -s rom PROG=tests/cmd/node.csp TIER=rexec \
+	    OUT=tmp/cmd_check/rexec > /dev/null
+	@$(MAKE) --no-print-directory -s rom PROG=tests/cmd/node.csp TIER=slim \
+	    OUT=tmp/cmd_check/slim > /dev/null
+	@$(MAKE) --no-print-directory -s rom PROG=examples/tcp_serv.csp TIER=rexec \
+	    OUT=tmp/cmd_check/serv > /dev/null
 	@sh tests/cmd/check.sh
 
 dump_check: csp
@@ -914,7 +946,7 @@ $(OBJDIR)/%.o: %.c | gen/csp_strings.h
 
 -include $(OBJS:.o=.d)
 
-.PHONY: cmd_check compile_check fconv_check neutral_check disasm_check dump_check list_check asm_check eval_check clib_host webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
+.PHONY: cmd_check compile_check fconv_check neutral_check disasm_check dump_check list_check asm_check eval_check clib_host webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rexec slim rexec-tcp rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

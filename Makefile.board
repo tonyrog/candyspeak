@@ -355,6 +355,11 @@ min:
 	@$(MAKE) --no-print-directory -f Makefile.board BOARD=$(BOARD) compile \
 	    EXTRA="-DCSP_EXEC_ONLY -DCSP_NO_EEPROM $(EXTRA)"
 
+# exec-only with a console: commands, /dump and /patch, no compiler.
+rexec:
+	@$(MAKE) --no-print-directory -f Makefile.board BOARD=$(BOARD) compile \
+	    EXTRA="-DCSP_EXEC_ONLY -DCSP_REXEC $(EXTRA)"
+
 upload: compile
 	arduino-cli upload -p $(DEV) -m $(PROFILE) $(if $(ISP),-P $(ISP),) --input-dir $(abspath $(CLIB)) $(UPOPTS) $(SKETCH)
 
@@ -443,7 +448,7 @@ variants:
 	     else echo "  $$x"; fi; \
 	 done
 
-.PHONY: all compile exec min upload size clean maps variants watch whichfn FORCE
+.PHONY: all compile exec min rexec upload size clean maps variants watch whichfn FORCE
 
 else
 

@@ -28,8 +28,9 @@
 -export([open/1, close/1, send/2, recv/2, msg/2, lines/1]).
 -export([dump/2, dump/3, cmd/3]).
 -export([info/1, program/1, program/2, state/2, pause/1, resume/1, step/2,
-	 set/3, reset/1, live/1, latch/2, settings/1, save/1, load/1]).
--export([info_text/1]).
+	 reset/1, live/1, latch/2, settings/1, save/1, load/1]).
+-export([info_text/1, reply/1]).
+-export([patch/2, patch_hex/3, toggle/3, undo/2, put/3, get/2]).
 
 -define(XON,  16#11).
 -define(XOFF, 16#13).
@@ -289,10 +290,25 @@ lines(C) -> lines(C, 300, []).
 lines(C, Quiet, Acc) ->
     case recv(C, Quiet) of
 	{ok, "", C1} -> lines(C1, Quiet, Acc);
-	{ok, L, C1} -> lines(C1, Quiet, [L | Acc]);
+	{ok, L, C1} -> lines(C1, Quiet, [reply(L) | Acc]);
 	{timeout, C1} -> {lists:reverse(Acc), C1};
 	{closed, _} -> {lists:reverse(Acc), C}
     end.
+
+%% `ERR <code> [n]' -- /dump's and /patch's refusals carry a number, the
+%% words are here (include/csp_reply.h) -- in words. Anything else as it came.
+reply("ERR " ++ R = L) ->
+    case string:to_integer(R) of
+	{N, Rest} when is_integer(N) ->
+	    case reply_text(N) of
+		none -> L;
+		T -> "ERR " ++ T ++ Rest
+	    end;
+	_ -> L
+    end;
+reply(L) -> L.
+
+-include("csp_reply.hrl").
 
 %%% ---------------------------------------------------------- the commands
 
@@ -326,7 +342,7 @@ head(C, Kind) ->
 		[Kind | _] -> {ok, L, C1};
 		_ -> head(C1, Kind)
 	    end;
-	{ok, L = "ERR " ++ _, C1} -> {error, L, C1};
+	{ok, L = "ERR " ++ _, C1} -> {error, reply(L), C1};
 	{ok, _, C1} -> head(C1, Kind);
 	{timeout, C1} -> {error, timeout, C1};
 	{closed, Why} -> {error, {closed, Why}, C}
@@ -428,8 +444,6 @@ step(C, N) ->
     {L1, C1} = cmd(C, "/commit", 100),
     {L2, C2} = cmd(C1, "/step " ++ integer_to_list(N), 300),
     {[L || L <- L1, L =/= "Committed"] ++ L2, C2}.
-set(C, Name, V) when is_integer(V) -> set(C, Name, integer_to_list(V));
-set(C, Name, V) -> cmd(C, ["> ", Name, " = ", V], 300).
 %% Rules frozen, I/O running: a value set is on the pin at once. /resume
 %% (resume/1) runs the rules again.
 live(C)      -> cmd(C, "/live", 300).
@@ -443,6 +457,204 @@ settings(C)  -> cmd(C, "/settings", 300).
 %% flash: once, when it is meant, never in a loop.
 save(C)      -> cmd(C, "/save", 1000).
 load(C)      -> cmd(C, "/load", 1000).
+
+%%% ------------------------------------------------------------ patching
+
+%% A patch onto a running node: declarations and rules added after what it
+%% runs, and #disable/#enable -- nothing else (a line that is a command, `/'
+%% or `> ', is refused before anything is sent). It goes whole or not at all:
+%% the lines inside /undo begin .. /undo end, one mark however many, and on
+%% the first line the node refuses, /undo takes them back and every rule a
+%% #disable/#enable switched is put back as it was. Not saved: /undo still
+%% takes it back, /save keeps it.
+%% -> {ok, #{lines, toggles}, C} | {error, Why, C}, Why {line, N, Line, Said}.
+patch(C, Text) ->
+    Ls0 = string:split(Text, "\n", all),
+    Ls = [{N, string:trim(L)}
+	  || {N, L} <- lists:zip(lists:seq(1, length(Ls0)), Ls0),
+	     string:trim(hd(string:split(L, "//"))) =/= ""],
+    case [{N, L} || {N, L} <- Ls, lists:prefix("/", L) orelse lists:prefix(">", L)] of
+	[{N, L} | _] ->
+	    {error, {line, N, L, "a patch is declarations, rules and "
+		     "#disable/#enable -- not a command"}, C};
+	[] ->
+	    {Tgs, Code} = lists:partition(fun({_, L}) -> is_toggle(L) end, Ls),
+	    case off(C) of
+		{ok, Off, C1} -> patch(C1, Code, Tgs, Off);
+		E -> E
+	    end
+    end.
+
+%% The same lines for a node that compiles nothing (or any other): compiled
+%% on the host by Exe -- the host's csp of the node's number format --
+%% running the node's image and patch, and only what they add sent as
+%% /patch's hex lines (csp_patch). All or nothing: the node takes the whole
+%% or none of it. -> {ok, Said, C} | {error, Why, C}.
+patch_hex(C, Text, Exe) ->
+    Ls0 = string:split(Text, "\n", all),
+    Ls = [{N, string:trim(L)}
+	  || {N, L} <- lists:zip(lists:seq(1, length(Ls0)), Ls0),
+	     string:trim(hd(string:split(L, "//"))) =/= ""],
+    case [{N, L} || {N, L} <- Ls, lists:prefix("/", L) orelse lists:prefix(">", L)] of
+	[{N, L} | _] ->
+	    {error, {line, N, L, "a patch is declarations, rules and "
+		     "#disable/#enable -- not a command"}, C};
+	[] ->
+	    case program(C) of
+		{ok, Dumps, C1} ->
+		    Rom = proplists:get_value(rom, Dumps),
+		    Store = case [B || {K, B} <- Dumps, K =/= rom] of
+				[B] -> B;
+				[] -> none
+			    end,
+		    case csp_patch:compile(Rom, Store, Ls, Exe) of
+			{ok, New} ->
+			    case csp_patch:delta(Rom, Store, New) of
+				{ok, Bin} -> csp_patch:send(C1, Bin);
+				{error, Why} -> {error, Why, C1}
+			    end;
+			{error, Why} -> {error, Why, C1}
+		    end;
+		E -> E
+	    end
+    end.
+
+patch(C, Code, Tgs, Off) ->
+    {Said, C1} = cmd(C, "/undo begin", 300),
+    case [L || L <- Said, string:find(L, "without /undo") =/= nomatch orelse
+			     lists:prefix("Error", L)] of
+	[] ->
+	    case lines_in(C1, Code) of
+		{ok, C2} ->
+		    {_, C3} = cmd(C2, "/undo end", 300),
+		    case toggles(C3, Tgs, []) of
+			{ok, C4} ->
+			    {ok, #{lines => length(Code), toggles => length(Tgs)}, C4};
+			{error, Why, Done, C4} ->
+			    {_, C5} = cmd(restore(C4, Done, Off), "/undo", 300),
+			    {error, Why, C5}
+		    end;
+		{error, Why, C2} ->
+		    {_, C3} = cmd(C2, "/undo", 300),
+		    {error, Why, C3}
+	    end;
+	No ->
+	    {error, lists:flatten(["the node takes no source patch: " | No]), C1}
+    end.
+
+lines_in(C, []) -> {ok, C};
+lines_in(C, [{N, L} | Ls]) ->
+    case refused(cmd(C, L, 300)) of
+	{ok, C1} -> lines_in(C1, Ls);
+	{error, Said, C1} -> {error, {line, N, L, Said}, C1}
+    end.
+
+toggles(C, [], _Done) -> {ok, C};
+toggles(C, [{N, L} | Ls], Done) ->
+    Ns = rule_numbers(L),
+    case refused(cmd(C, L, 300)) of
+	{ok, C1} -> toggles(C1, Ls, Ns ++ Done);
+	{error, Said, C1} -> {error, {line, N, L, Said}, Ns ++ Done, C1}
+    end.
+
+%% Each rule a toggle touched, back as it was before the patch.
+restore(C, Done, Off) ->
+    lists:foldl(fun(R, Ci) ->
+			W = case lists:member(R, Off) of
+				true -> "#disable ";
+				false -> "#enable "
+			    end,
+			{_, Ci1} = cmd(Ci, W ++ integer_to_list(R), 300),
+			Ci1
+		end, C, lists:usort(Done)).
+
+%% Values by name onto a node, and a save after when Ops has `save' -- as
+%% /patch's names (CSPN), on any node, compiler or not. A value as typed:
+%% 42, -1, 0x1f, 1.5, "text". {ok, Said, C} | {error, Why, C}.
+put(C, NVs, Ops) ->
+    try [{N, typed(V)} || {N, V} <- NVs] of
+	Vs ->
+	    case csp_patch:send(C, csp_patch:names(Vs, Ops)) of
+		{error, E, C1} -> {error, which(E, NVs), C1};
+		R -> R
+	    end
+    catch throw:Why -> {error, Why, C}
+    end.
+
+%% `..., at K' -- the K:th value of the patch -- by its name.
+which(E, NVs) when is_list(E) ->
+    case string:split(E, ", at ", trailing) of
+	[Why, K] ->
+	    try lists:nth(list_to_integer(string:trim(K)) + 1, NVs) of
+		{N, _} -> Why ++ ": " ++ N
+	    catch _:_ -> E
+	    end;
+	_ -> E
+    end;
+which(E, _) -> E.
+
+%% Values by name, now -- /dump get: {ok, [{Name, Value}], C}, a value an
+%% integer, a float, a string, or none (not there), not_one (an array named
+%% whole).
+get(C, Names) ->
+    case dump(C, "get", Names) of
+	{ok, {get, Bin}, C1} -> {ok, csp_node:values(Names, Bin), C1};
+	{ok, Other, C1} -> {error, {not_get, Other}, C1};
+	E -> E
+    end.
+
+typed(V) when is_integer(V) -> {int, V};
+typed(V) when is_float(V) -> {float, V};
+typed([$" | R] = V) ->
+    case lists:reverse(R) of
+	[$" | S] -> {string, lists:reverse(S)};
+	_ -> throw("not a value: " ++ V)
+    end;
+typed("0x" ++ H = V) ->
+    try {int, list_to_integer(H, 16)} catch _:_ -> throw("not a value: " ++ V) end;
+typed(V) ->
+    try {int, list_to_integer(V)}
+    catch _:_ ->
+	    try {float, list_to_float(V)}
+	    catch _:_ -> throw("not a value: " ++ V)
+	    end
+    end.
+
+%% #disable / #enable on their own, by rule number (as /list numbers them).
+toggle(C, On, Rules) ->
+    refused(cmd(C, [case On of true -> "#enable "; false -> "#disable " end,
+		    lists:join(" ", Rules)], 300)).
+
+%% /undo [N]: the last line, or N; a patch is one.
+undo(C, N) ->
+    cmd(C, ["/undo" | [[" ", integer_to_list(N)] || N =/= 1]], 300).
+
+is_toggle(L) ->
+    lists:prefix("#disable", L) orelse lists:prefix("#enable", L).
+
+%% `#disable 3 5 2-6' -> [3, 5, 2, 3, 4, 5, 6].
+rule_numbers(L) ->
+    lists:append([try case string:split(W, "-") of
+			  [A, B] -> lists:seq(list_to_integer(A), list_to_integer(B));
+			  [A] -> [list_to_integer(A)]
+		      end
+		  catch error:_ -> []                % the node will say
+		  end || W <- tl(string:lexemes(L, " \t"))]).
+
+%% What the node said to a line: an Error is a refusal.
+refused({Said, C}) ->
+    case [L || L <- Said, lists:prefix("Error", L)] of
+	[] -> {ok, C};
+	Es -> {error, lists:flatten(lists:join(" ", Es)), C}
+    end.
+
+%% The rules switched off now.
+off(C) ->
+    case program(C) of
+	{ok, [{rom, Rom}, {_, Patch}], C1} -> {ok, csp_disasm:disabled(Rom, Patch), C1};
+	{ok, _, C1} -> {ok, [], C1};
+	E -> E
+    end.
 
 %%% ------------------------------------------------------------ in words
 

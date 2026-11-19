@@ -743,6 +743,9 @@
   {r,       {pat, res}},
   {opts,    opts},
   {frameid, int},
+  %% A #param in place of the number: its value, read when the node starts
+  %% (after its settings), so one image serves many ids and ports.
+  {can_ref, str},
   {is_can,  {plain, "uint8_t"}},
   {i2c_bus,  int},
   {i2c_addr, int},
@@ -754,6 +757,7 @@
   %% WHICH keyword matched, which is the only thing that differs.
   {net_ip,   int},
   {net_port, int},
+  {port_ref, str},
   {net_kind, tok},
   {uart_unit, int},
   {uart_baud, int},
@@ -774,7 +778,9 @@
  [{str, name},
   {pat, res, r},
   {opts, opts},
-  {opt, [{tok, can}, {int, frameid}]},
+  %% A number first: `int` folds a #define or #constant. A #param is not
+  %% folded -- it can change -- and is taken by name instead.
+  {opt, [{tok, can}, {choice, [[{int, frameid}], [{str, can_ref}]]}]},
   {opt, [{tok, i2c}, {int, i2c_bus}, {int, i2c_addr}, {int, i2c_reg}]},
   {opt, [{tok, spi}, {int, spi_bus}, {pat, port_pin, spi_cs}, {int, spi_cmd}]},
   %% The optional address is LAST, so `udp <port>` cannot be misread. See the
@@ -785,7 +791,8 @@
   %% the first. A choice can only fire once.
   {opt, [{choice, [[{tok, net_kind, udp}],
                    [{tok, net_kind, tcp}]]},
-         {int, net_port}, {opt, [{int, net_ip}]}]},
+         {choice, [[{int, net_port}], [{str, port_ref}]]},
+         {opt, [{int, net_ip}]}]},
   %% A second serial port. The baud is optional -- without it the board's own
   %% setting stands, which is what a program that only wants the WIRE means.
   {opt, [{tok, uart}, {int, uart_unit}, {opt, [{int, uart_baud}]}]},

@@ -1,5 +1,8 @@
-// Start an empty csp server 
-#buffer Net:160 inout tcp 15555
+// Start an empty csp server. The port is a #param, 15555 unless the node
+// says otherwise: `--set Port=15556` on the command line, or
+// `./cs node set Port 15556` and `./cs node save` -- read when it starts.
+#param Port = 15555
+#buffer Net:160 inout tcp Port
 #buffer Rp:160 inout repl
 #route Net Rp
 #route Rp Net

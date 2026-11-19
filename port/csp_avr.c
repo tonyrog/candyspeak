@@ -488,7 +488,7 @@ int main(void) __attribute__((no_instrument_function));
 int main(void)
 {
     index_t x;
-#if !defined(CSP_EXEC_ONLY)    
+#if defined(CSP_HAVE_CONSOLE)
     uint8_t why;
 #endif
 
@@ -521,7 +521,7 @@ int main(void)
     // be cleared, so a part that once reset on the watchdog keeps doing it.
     // Optiboot clears this before it jumps, but a part flashed by ISP or run in
     // a simulator has no Optiboot in front of it.
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
     why = MCUSR;
 #endif
     MCUSR = 0;
@@ -624,9 +624,9 @@ int main(void)
     // Free RAM as well as the sizes, because the first suspect for a fault in
     // the parser is the stack: it grows down from RAMEND toward .bss, and what
     // is between them is this number.
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
     csp_print_lit("\nCandySpeak ");
-    csp_print_str(CSP_BOARD_NAME);
+    csp_print_lit(CSP_BOARD_NAME);   // a literal: flash, not .data
     csp_print_lit(" -- RAM ");
     csp_print_uint(csp_system_ram_capacity());
     csp_print_lit(", free ");
@@ -687,7 +687,7 @@ int main(void)
 #endif
 
     for (;;) {
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
 	// THE PROMPT FIRST, and unconditionally: a board whose program cannot
 	// run still has to be typeable at, or there is no way to /clear out of
 	// whatever stopped it.
@@ -705,7 +705,7 @@ int main(void)
 	while (uart_available() && csp_line_space(&state.line) && csp_con_space())
 	    csp_con_input(&state, (char)uart_read());
 #endif
-#if !defined(CSP_EXEC_ONLY)
+#if defined(CSP_HAVE_CONSOLE)
 	// AND THEN RUN IT. Without this the console echoes and nothing else
 	// happens: the line is assembled, marked ready, and never looked at --
 	// which also means --gc-sections drops the whole compiler, so the image
