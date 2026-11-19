@@ -9,6 +9,11 @@
 BOARD ?= dl1200
 GEN   := escript utils/gen_chips.erl
 
+# The runtime's version, as the host Makefile has it, for /dump info. In a
+# header written only when it changes ($(B)/csp_version.h), not a -D: a -D is in
+# the arduino-cli flags key below, and a commit would mean a clean build.
+CSP_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo unknown)
+
 # WHERE THE OUTPUT GOES: next to the board's own terms file, not into one shared
 # build/ tree.
 #
@@ -282,6 +287,11 @@ $(B)/.cspprog: FORCE
 	@mkdir -p $(B)
 	@printf '%s\n' '$(PROG)' | cmp -s - $@ 2>/dev/null || printf '%s\n' '$(PROG)' > $@
 
+$(B)/csp_version.h: FORCE
+	@mkdir -p $(B)
+	@printf '#define CSP_VERSION "%s"\n' '$(CSP_VERSION)' | cmp -s - $@ 2>/dev/null || \
+	 printf '#define CSP_VERSION "%s"\n' '$(CSP_VERSION)' > $@
+
 FORCE:
 
 # ./csp is the compiler above. Built by the top-level Makefile; no prerequisites
@@ -328,7 +338,7 @@ $(SKETCH)/sketch.yaml: $(TERMS) utils/gen_chips.erl
 FLAGS_KEY = $(CSPFLAGS) PROG=$(PROG)
 
 # -m $(BOARD), not --fqbn: the profile carries the fqbn AND the pinned versions.
-compile: $(B)/csp_board.h $(ROMSRC) $(SKETCH)/sketch.yaml
+compile: $(B)/csp_board.h $(B)/csp_version.h $(ROMSRC) $(SKETCH)/sketch.yaml
 	@if [ "$$(cat $(B)/.cspflags 2>/dev/null)" = '$(FLAGS_KEY)' ]; then \
 	    arduino-cli compile -e -m $(PROFILE) $(OPTS) --build-path $(abspath $(CLIB)) $(SKETCH); \
 	else \
@@ -735,7 +745,7 @@ WATCH_SKIP := -finstrument-functions-exclude-function-list=csp_print_char,csp_pr
 
 CFLAGS := $(CPU) -Os -ffunction-sections -fdata-sections -Wall -Wshift-overflow=2 -MMD -MP \
           -Iinclude -Igen -Isrc -I$(B) $(CHIPINC) $(CHIPDEF) \
-          -DCSP_BOARD=csp_board.h -DCSP_VERSION='"$(BOARD)"' \
+          -DCSP_BOARD=csp_board.h \
           $(if $(DIAG),-DCSP_BITBANG_DIAG) \
           $(if $(WATCH),-DCSP_STACK_WATCH -finstrument-functions $(WATCH_SKIP)) \
           $(XCFLAGS)
@@ -844,6 +854,11 @@ $(B)/.cspprog: FORCE
 	@mkdir -p $(B)
 	@printf '%s\n' '$(PROG)' | cmp -s - $@ 2>/dev/null || printf '%s\n' '$(PROG)' > $@
 
+$(B)/csp_version.h: FORCE
+	@mkdir -p $(B)
+	@printf '#define CSP_VERSION "%s"\n' '$(CSP_VERSION)' | cmp -s - $@ 2>/dev/null || \
+	 printf '#define CSP_VERSION "%s"\n' '$(CSP_VERSION)' > $@
+
 FORCE:
 
 $(B)/rom.o: $(B)/rom.c
@@ -871,6 +886,8 @@ csp:
 $(B)/%.o: %.c $(B)/csp_board.h
 	@mkdir -p $(B)
 	@$(CC) $(CFLAGS) -c -o $@ $<
+
+$(B)/csp_repl.o: $(B)/csp_version.h
 
 $(B)/%.o: %.S $(B)/csp_board.h
 	@mkdir -p $(B)

@@ -399,6 +399,9 @@ ref -> fid '.' part : {field,line('$1'),{part,line('$2'),'$1','$3'}}.
 ref -> fid '.' xid  : {field,line('$1'),{fld,line('$2'),'$1','$3'}}.
 ref -> fid '.' xid '.' part : {field,line('$1'),{part,line('$2'),{fld,line('$4'),'$1','$3'},'$5'}}.
 ref -> fid '[' expr ']' : {field,line('$1'),{index, line('$2'), '$1','$3'}}.
+%% A named object's array element, `a.V[1]'.
+ref -> fid '.' xid '[' expr ']' :
+	     {field,line('$1'),{index,line('$4'),{fld,line('$2'),'$1','$3'},'$5'}}.
 %% Both ends of a byte range are constants, and a #define or a #constant
 %% names one as well as a number does: `Frame[LO..HI]'.
 ref -> fid '[' expr '..' expr ']' :

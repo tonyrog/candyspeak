@@ -11,6 +11,7 @@
 -module(csp_list).
 
 -export([file/1, image/1, patch/2, program/1, program/2]).
+-export([uses/1, null/2]).
 
 %% A file csp_disasm reads (.img, .hex).
 file(Filename) ->
@@ -55,6 +56,44 @@ program({Header, Strings, Decls, Code}, Opts) ->
     Env = env(Header, Strings, Decls, Code, Opts),
     Off = maps:get(off, Opts, []),
     lists:flatten([[Text, eol(Tag, Off), $\n] || {Text, Tag} <- listing(Env)]).
+
+%% The transports a program uses: a #buffer each that has one, as
+%% #{name, dir, transport, unit, text, addr} -- unit the i2c/spi bus or uart
+%% unit (0 for the rest), text the endpoint as /list writes it, `can 0x120',
+%% addr the same without the names in it (sms Owners SimPin is `sms').
+%% P is what csp_disasm gives.
+uses({Header, Strings, Decls, Code}) ->
+    Env = env(Header, Strings, Decls, Code, #{}),
+    [#{name => str(Name), dir => proplists:get_value(dir, Ps),
+       transport => Tr, unit => unit(Env, Tr, Id),
+       text => string:trim(lists:flatten(transport(Env, Tr, Id))),
+       addr => string:trim(lists:flatten(addr(Env, Tr, Id)))}
+     || {_I, #{type := buffer, name := Name, props := Ps}}
+	    <- lists:sort(maps:to_list(maps:get(decl, Env))),
+	Name =/= <<>>,
+	Tr <- [proplists:get_value(transport, Ps)],
+	Tr =/= none, Tr =/= pin,
+	Id <- [proplists:get_value(id, Ps)]].
+
+unit(Env, Tr, Id) ->
+    Ep = case dprop(Env, Id, init, 0) of
+	     V when is_integer(V) -> V band 16#ffffffff;
+	     _ -> 0
+	 end,
+    case Tr of
+	i2c -> (Ep bsr 16) band 16#ff;
+	spi -> (Ep bsr 24) band 16#f;
+	uart -> (Ep bsr 28) band 16#f;
+	_ -> 0
+    end.
+
+%% What of Uses a node runs as the null device -- takes it, never delivers:
+%% the transports its /dump info (`transports', csp_node:info/1) has no unit
+%% of. A node too old to say is taken at its word: nothing is null.
+null(Uses, #{transports := Have}) ->
+    [U || U = #{transport := Tr, unit := N} <- Uses,
+	  maps:get(Tr, Have, 0) band (1 bsl N) =:= 0];
+null(_Uses, _Info) -> [].
 
 %% csp_disasm prints as it goes; a library caller does not want that.
 quiet(Fun) ->
@@ -461,6 +500,14 @@ transport(Env, Tr, Id) ->
 		    name(Env, dprop(Env, Id + 1, init, 0))];
 	_ -> ""
     end.
+
+%% The endpoint without the names the program gave its parts.
+addr(_Env, sms, _Id) -> "sms";
+addr(Env, onewire, Id) ->
+    Ep = case dprop(Env, Id, init, 0) of V when is_integer(V) -> V; _ -> 0 end,
+    ["onewire ", integer_to_list((Ep bsr 8) band 16#f), ":",
+     integer_to_list(Ep band 16#ff)];
+addr(Env, Tr, Id) -> transport(Env, Tr, Id).
 
 hex(V) -> ["0x", string:lowercase(integer_to_list(V, 16))].
 

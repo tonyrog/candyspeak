@@ -402,6 +402,7 @@ index_t csp_dump_instr(FILE* f, int lev, csp_rt_t* st, int i, char* eot)
 // so it is printed as its head's name and subscript, `P[3]`. It used to come
 // out as "", which only meant something next to the elements before it -- and
 // a --delta dump leaves those out, so the panel put every change on P[0..].
+// The head is P[0]: every element indexed, as /list and /state name them.
 void csp_dump_var_name(FILE* f, csp_rt_t* st, int m, index_t di)
 {
     index_t hd = di;
@@ -413,7 +414,7 @@ void csp_dump_var_name(FILE* f, csp_rt_t* st, int m, index_t di)
 	fprintf(f, "%.*s.", DNAME(st, obj));
     }
     fprintf(f, "%.*s", DNAME(st, hd));
-    if (hd != di)
+    if ((hd != di) || (csp_array_len(st, hd) > 1))
 	fprintf(f, "[%d]", (int)(di - hd));
 }
 

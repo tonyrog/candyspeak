@@ -413,7 +413,7 @@ clean:
 # commit; this is for the loop in between.
 test:	csp line_edit_check syntax_check strings_check tables_check \
 	patterns_check sketch_check disasm_check dump_check list_check asm_check eval_check \
-	compile_check fconv_check neutral_check
+	compile_check fconv_check neutral_check cmd_check
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
 
@@ -492,6 +492,11 @@ eval_check: csp
 
 # /dump on a node simulated with a flash file: the image written to slot A and
 # the store /save wrote come back byte for byte, and the state reads as /state.
+# ./cs node, csp_cmd under it, against a node of our own on tcp
+cmd_check: csp
+	@$(MAKE) --no-print-directory -s -C utils
+	@sh tests/cmd/check.sh
+
 dump_check: csp
 	@$(MAKE) --no-print-directory -s -C utils
 	@tools/csp-image -q -g 1 -o tmp/dump_node tests/dump/node.csp
@@ -909,7 +914,7 @@ $(OBJDIR)/%.o: %.c | gen/csp_strings.h
 
 -include $(OBJS:.o=.d)
 
-.PHONY: compile_check fconv_check neutral_check disasm_check dump_check list_check asm_check eval_check clib_host webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
+.PHONY: cmd_check compile_check fconv_check neutral_check disasm_check dump_check list_check asm_check eval_check clib_host webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

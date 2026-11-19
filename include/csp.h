@@ -3624,6 +3624,26 @@ extern void csp_sms_modem_poll(void);
 extern uint32_t csp_sms_refused(void);
 extern uint32_t csp_sms_capped(void);
 
+// WHAT THE NODE HAS of each transport, for /dump info: a bit per unit it can
+// really drive -- bit b for i2c/spi bus b, uart unit b -- and bit 0 alone for
+// a transport without units (can, udp, tcp, sms, onewire). 0 is the NULL
+// DEVICE: the weak defaults in csp_transport.c, which take a program naming
+// the transport and never deliver -- .rx stays false, inputs stay 0, what is
+// sent goes nowhere.
+//
+// Weak 0 in csp_transport.c; the file that implements a transport for real
+// defines its own beside it, inside the same #if, so the answer is what is
+// LINKED and not what a table says. Called from another translation unit
+// than the defaults (csp_repl.c) for the reason csp_transport.c gives.
+extern uint32_t csp_have_can(void);
+extern uint32_t csp_have_udp(void);
+extern uint32_t csp_have_tcp(void);
+extern uint32_t csp_have_uart(void);
+extern uint32_t csp_have_i2c(void);
+extern uint32_t csp_have_spi(void);
+extern uint32_t csp_have_onewire(void);
+extern uint32_t csp_have_sms(void);
+
 // NOT A HOOK: a port that can WAIT on its transport says so its own way. The
 // host has csp_can_pollfd() and csp_udp_pollfd(slot) in port/csp_linux.c, used
 // by the loop in that same file and declared nowhere -- a board has no fds and

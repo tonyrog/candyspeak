@@ -1,6 +1,16 @@
 # TODO - Klart-markerat flyttas till DONE.md, inte hit.
 
+#programming
 
+
+cs command "cs node upload patch-file"
+cs command "cs node enable <list>"
+cs command "cs node disable <list>"
+
+we may have to combine upload and disable/enable in same command?
+
+the command to upload/patch (also hex version) must be presented as a tool
+to the AI chat so the AI can send patches and fix code.
 
 # cond
 
@@ -419,83 +429,6 @@ Inte buggar -- saker som byggts men inte setts fungera på järn.
    Acc1 <- Acc1 + A1 ? Index==1
    Acc2 <- Acc2 + A2 ? Index==2
    Index <- (Index + 1) ? timeout(Td)
-
-## Interrupt
-  BYGGT: trigger som OPTION på pin-deklarationen, se doc/EVENTS.md.
-
-  #digital Drdy in falling 2:13
-  #digital Btn  in pullup rising 2:7
-  Sample = Imu ? Drdy.fired
-
-  Ett avbrott är en egenskap hos hur pinnen är konfigurerad -- samma sorts sak
-  som `pullup`, och det finns ingen `#pullup`-deklaration av samma skäl. Det
-  fanns en `#event`-deklaration först; den kostade ett nyckelord, tva monster,
-  tva felkoder och en extra listningsrad for att saga vad ett optionsord sager.
-
-  Backends: host (samplad -- testbar med -F) och STM32 EXTI. Ovriga portar
-  lankar de svaga defaultarna, sa programmet kompilerar och kor; kallan armas
-  aldrig och /state satter `!` efter triggern sa tystnaden syns.
-
-  KVAR:
-  - LPC2000 EINT (EXTINT/EXTMODE/EXTPOLAR + VIC-kanal 14). bridgezone P0.16 ar
-    motivet -- AVR:en vacker LPC:n ur power-down. Medvetet inte byggt: att
-    vacka en nedslackt LPC ar errata-territorium och vill lasas pa forst.
-  - Arduino attachInterrupt. Litet; inget arduino-kort har en kalla an.
-  - `ready` som nagot annat an ett nej. Finns i grammatiken, ingen backend.
-    Pa en #buffer ar samma sak redan `.rx`.
-
-## #when <condition> ... #end
-  BYGGT. Se doc/EVENTS.md.
-
-  #when Drdy.fired && A < 100
-    X = f1
-    Y = f2
-  #end
-
-  `#when`, INTE `#in` -- `#in <state>+` ar statemaskinens syntax och lases
-  battre om den far behalla ordet (Tony 2026-09-07). Kompilerar till villkoret
-  plus EN OP_NINSTATE mot noll: samma opcode som `#in`, annat immediate, nxt
-  patchad forbi blocket vid `#end`. Ingen ny opcode, ingen ROM-formatandring.
-
-  MATT vinst pa fyra regler:
-    ? Drdy.fired              1 instruktion per regel
-    ? timeout(T)              1 instruktion per regel
-    ? Drdy.fired && A < 100   5 per regel -- 81 utskrivet, 67 som block, och
-                              villkoret utvarderas EN gang per cykel i stallet
-                              for fyra
-  Alltsa: blocket lonar sig pa sammansatta villkor och knappt alls pa en enkel
-  del. Vart att veta innan man tar till ett.
-
-  FIXAT PA VAGEN: ett oavslutat block snurrade. Skip-distansen patchas vid
-  `#end`, och i REPL:en star blocket oppet medan man skriver -- med cykeln
-  igang. Distans 0 ar ett hopp till gaten sjalv. Bada gate-opcodes behandlar nu
-  nxt == 0 som "slutet pa strommen". Gallde `#in` lika mycket.
-
-  NASTLING: `#in`, `#when` och `#module` delar EN stack, fyra djup, sa `#end`
-  stanger den som oppnades sist. Varje post bar ocksa state-kontexten -- `#in`
-  satter den for reglerna inuti, och blocket runt behover sin egen tillbaka.
-
-  Tva tysta fel fixade pa vagen:
-  - Ett block som lamnades oppet i slutet av en fil accepterades tyst. Nu:
-    "prog.csp:5 #when opened on line 3 was never closed" -- innerst forst, och
-    pa raden det OPPNADES. Inte i REPL:en, dar ett block ar oppet medan man
-    skriver.
-  - Ett bart uttryck inuti ett oppet block kordes som immediate i stallet for
-    att bli en regel i blocket. Nastlingen avgor nu, inte texten.
-
-## UART
-  Skicka strängar och tecken på ett UART-objekt:
-
-  #uart Tx 0:5
-  Tx.send = 'X'
-  Tx.send = "Hello"
-
-## UDP/SOCKET
-  Skicka meddelanden över UDP/IP:
-
-  #buffer Udp:128 inout udp 192.168.2.1  // interface address
-  Udp = "Hello world\n"
-  Udp.tx = 1
 
 ## PRIORITET (Tony 2026-09-08): interaktiv reaktiv BASIC pa hardvara
   Text-flytten ur instruktionsstrommen, strommade instruktioner, tcp/uart och

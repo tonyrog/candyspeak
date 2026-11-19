@@ -19,6 +19,9 @@ extern const uint32_t csp_stm_pclk2;
 
 #define SPI_SPIN 100000u
 
+// SPI1..SPI3: spi_of's buses.
+uint32_t csp_have_spi(void) { return 0x0E; }
+
 static SPI_TypeDef* spi_of(uint8_t bus)
 {
     switch (bus) {

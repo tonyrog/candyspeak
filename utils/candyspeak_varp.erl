@@ -71,6 +71,20 @@
 %%%
 %%%     The string is parsed by candyspeak's own parser and translated as a
 %%%     guard is, so it reads the committed state with the program's names.
+%%%
+%%%     A REACH is a question about ONE CYCLE, the one that would see it --
+%%%     what the panel's goal asks. In it a name is what that cycle reads: a
+%%%     state the value before the cycle, an input its sample in the cycle.
+%%%     X' (or after(X)) is what the cycle leaves X at, and rising(I),
+%%%     falling(I) are between the last sample and this one:
+%%%
+%%%         State == Night && HallMotion && !HallLight'
+%%%
+%%%     -- motion at night, and the cycle does not light the hall. In varp a
+%%%     cycle is the step t-1 -> t (an input in `next' is the step after's),
+%%%     so the model keeps a shadow u_p_X of every state the question reads,
+%%%     next(u_p_X) == X, and u_q_I of an input's last sample; u_seen says a
+%%%     cycle has run at all. A reach found at step t is reached in cycle t.
 %%%     One form is varp's own, a COUNT over conditions, as the whole string:
 %%%
 %%%         #annotate varp assume "[LTE 1](!K1, !K2, !K3, !K4)"
@@ -475,8 +489,17 @@ collect(Ast, Top, Opts) ->
 	  consts => #{}, locals => #{}, lorder => [], bufs => #{}, props => [],
 	  timers => [], top => Top, file => Top, scope => "", insts => [],
 	  params => proplists:get_value(params, Opts, free)},
-    finish(question(proplists:get_value(reach, Opts),
-		    lists:foldl(fun item/2, C, Ast))).
+    finish(cycle_assumes(proplists:get_value(cycle_assumes, Opts, []),
+			 question(proplists:get_value(reach, Opts),
+				  lists:foldl(fun item/2, C, Ast)))).
+
+%% What is asked to hold in every cycle, beside the question: the solver's
+%% `assume' lines and the invariants it has proved. Cycles as a reach reads
+%% them (see the top), so `HallMotion => HallLight'' is one.
+cycle_assumes(Ss, C) ->
+    C#{props := maps:get(props, C) ++
+	   [#{kind => "cycle", text => S, line => 0, file => "assume",
+	      expr => prop_expr("reach", S, 0, "assume")} || S <- Ss]}.
 
 %% A reach asked from outside the source wins over the one written in it.
 question(undefined, C) -> C;
@@ -609,8 +632,9 @@ args([$( | T], D, Cur, Acc) -> args(T, D + 1, [$( | Cur], Acc);
 args([$) | T], D, Cur, Acc) -> args(T, D - 1, [$) | Cur], Acc);
 args([C | T], D, Cur, Acc) -> args(T, D, [C | Cur], Acc).
 
-prop_expr1(Kind, S, Ln, F) ->
+prop_expr1(Kind, S0, Ln, F) ->
     Bad = fun(Why) -> throw({varp_annotate, loc_text(Ln, F), Kind, Why}) end,
+    S = implies(primes(S0)),
     case candyspeak_scan:string("#define P_ " ++ S ++ "\n", Ln) of
 	{ok, Ts, _} ->
 	    case candyspeak_parse:parse(Ts) of
@@ -624,6 +648,63 @@ prop_expr1(Kind, S, Ln, F) ->
     end.
 
 loc_text(Ln, F) -> lists:flatten(loc(Ln, F)).
+
+%% A => B is !(A) || (B), the loosest of all, to the right: A => B => C is
+%% A => (B => C). The language has no implication; a question needs one.
+implies(S0) ->
+    S = groups(S0, []),
+    case split_top(S, 0, []) of
+	none -> S;
+	{A, B} -> "!(" ++ A ++ ") || (" ++ implies(B) ++ ")"
+    end.
+
+%% Every (...) with its inside rewritten first.
+groups([$( | T], Acc) ->
+    {In, Rest} = inside(T, 0, []),
+    groups(Rest, lists:reverse("(" ++ implies(In) ++ ")", Acc));
+groups([C | T], Acc) -> groups(T, [C | Acc]);
+groups([], Acc) -> lists:reverse(Acc).
+
+inside([$) | T], 0, Acc) -> {lists:reverse(Acc), T};
+inside([$) | T], D, Acc) -> inside(T, D - 1, [$) | Acc]);
+inside([$( | T], D, Acc) -> inside(T, D + 1, [$( | Acc]);
+inside([C | T], D, Acc) -> inside(T, D, [C | Acc]);
+inside([], _D, Acc) -> {lists:reverse(Acc), []}.
+
+split_top("=>" ++ T, 0, Acc) -> {lists:reverse(Acc), T};
+split_top([C | T], D, Acc) when C =:= $(; C =:= $[ -> split_top(T, D + 1, [C | Acc]);
+split_top([C | T], D, Acc) when C =:= $); C =:= $] -> split_top(T, D - 1, [C | Acc]);
+split_top([C | T], D, Acc) -> split_top(T, D, [C | Acc]);
+split_top([], _D, _Acc) -> none.
+
+%% X' is after(X): a name, s1.X, A[i], or a parenthesised expression, primed.
+%% The language has no ', so it is the question's own, and written out here.
+primes(S) ->
+    case re:run(S, "'", [{capture, first, index}]) of
+	nomatch -> S;
+	{match, [{P, 1}]} ->
+	    {Before, [$' | After]} = lists:split(P, S),
+	    {Pre, Operand} = primed(lists:reverse(Before)),
+	    primes(lists:reverse(Pre) ++ "after(" ++ Operand ++ ")" ++ After)
+    end.
+
+%% The operand before a ', from its end: {what is before it, it}.
+primed(R = [$) | _]) -> close(R, 0, []);
+primed(R = [$] | _]) ->
+    {R1, Ix} = close(R, 0, []),
+    {R2, Name} = word(R1, []),
+    {R2, Name ++ Ix};
+primed(R) -> word(R, []).
+
+close([C | T], D, Acc) when C =:= $); C =:= $] -> close(T, D + 1, [C | Acc]);
+close([C | T], 1, Acc) when C =:= $(; C =:= $[ -> {T, [C | Acc]};
+close([C | T], D, Acc) when C =:= $(; C =:= $[ -> close(T, D - 1, [C | Acc]);
+close([C | T], D, Acc) -> close(T, D, [C | Acc]);
+close([], _D, Acc) -> {[], Acc}.
+
+word([C | T], Acc) when C >= $a, C =< $z; C >= $A, C =< $Z; C >= $0, C =< $9;
+			C =:= $_; C =:= $. -> word(T, [C | Acc]);
+word(R, Acc) -> {R, Acc}.
 
 add_const(Name, Expr, C) ->
     case const_of(Expr) of
@@ -802,7 +883,7 @@ check_props(C) ->
 	not translatable(E, C)],
     [throw({varp_annotate, loc_text(L, F), K, {edge, T}})
      || #{kind := K, expr := E, line := L, file := F, text := T} <- Ps,
-	has_edge(E)],
+	K =/= "reach", K =/= "cycle", has_edge(E) orelse has_after(E)],
     [throw({varp_annotate, loc_text(L, F), K, more_than_one})
      || K0 <- ["reach", "eventually"],
 	[_, #{kind := K, line := L, file := F} | _]
@@ -830,7 +911,14 @@ edge_args(_) -> [].
 
 sample(N) -> varp_name(N ++ "_s").
 
-%% rising(X) and falling(X) compare two cycles; a property sees one.
+%% after(X) is what a cycle leaves; only a reach is about a cycle.
+has_after({call, _, {'WORD', _, "after"}, _}) -> true;
+has_after(T) when is_tuple(T) -> has_after(tuple_to_list(T));
+has_after(L) when is_list(L) -> lists:any(fun has_after/1, L);
+has_after(_) -> false.
+
+%% rising(X) and falling(X) compare two cycles; a property sees one, a reach
+%% the cycle between them.
 has_edge({call, _, {'WORD', _, F}, _}) when F =:= "rising"; F =:= "falling" ->
     true;
 has_edge(T) when is_tuple(T) -> has_edge(tuple_to_list(T));
@@ -970,6 +1058,7 @@ rng({call, _, {'WORD', _, "timeout"}, [{field, _, {'WORD', _, T}}]}, C) ->
     both(timer(T, C), {ok, 0}, fun(_, _) -> {0, 1} end);
 rng({call, _, {'WORD', _, "elapsed"}, [{field, _, {'WORD', _, T}}]}, C) ->
     both(timer(T, C), {ok, 0}, fun({P, _}, _) -> {0, P} end);
+rng({call, _, {'WORD', _, "after"}, [E]}, C) -> rng(E, C);
 rng({call, _, {'WORD', _, F}, [{field, _, {'WORD', _, N}}]}, C)
   when F =:= "rising"; F =:= "falling" ->
     case maps:find(N, maps:get(sigs, C)) of
@@ -1135,17 +1224,36 @@ emit(In, C, _Opts) ->
 
 %% The invariant first: varp's default property is the first one. Each
 %% annotation's source line follows it, so a counterexample can be read back.
+%% A reach is about a cycle (see the top), and brings what it needs to say
+%% one: the shadows its text names.
 properties(C) ->
     Ps = maps:get(props, C),
+    Cy = C#{cycle => true},
+    Reach = fun(E) -> lists:flatten(["u_seen == 1 and ",
+				     paren(vexpr(E, Cy, bool))])
+	    end,
+    Every = fun(E) -> lists:flatten(["u_seen == 0 or ",
+				     paren(vexpr(E, Cy, bool))])
+	    end,
     Note = fun(#{file := "goal", text := T}) ->     % asked, see model/2
 		   ["// goal: ", T, "\n"];
+	      (#{file := "assume", text := T}) ->   % asked to hold in every cycle
+		   ["// every cycle: ", T, "\n"];
 	      (#{line := L, file := F, text := T}) ->
 		   ["// line ", loc(L, F), ": ", T, "\n"]
 	   end,
-    Prop = fun(K, P = #{expr := E}) ->
+    Prop = fun("reach", P = #{expr := E}) ->
+		   ["    reach     ", Reach(E), ";   ", Note(P)];
+	      ("cycle", P = #{expr := E}) ->
+		   ["    assume    ", Every(E), ";   ", Note(P)];
+	      (K, P = #{expr := E}) ->
 		   ["    ", K, lists:duplicate(10 - length(K), $\s),
 		    vexpr(E, C, bool), ";   ", Note(P)]
 	   end,
+    Shadows = cycle_defs(lists:append([Reach(E) || #{kind := K, expr := E} <- Ps,
+						    K =:= "reach" orelse
+							K =:= "cycle"]),
+			 C),
     ["    // FAILSAFE is absorbing in the runtime (csp.h: no rule may leave\n"
      "    // it, only a reset), so reaching it once is reaching it for ever --\n"
      "    // this is a safety property in the strict sense.\n"
@@ -1158,8 +1266,145 @@ properties(C) ->
 		";\n",
 		[["    ", Note(P)] || P <- Is]]
      end,
-     [Prop(K, P) || K <- ["assume", "reach", "eventually"],
-		    P = #{kind := K1} <- Ps, K1 =:= K]].
+     lemmas(C),
+     [Prop(K, P) || K <- ["assume", "cycle", "reach", "eventually"],
+		    P = #{kind := K1} <- Ps, K1 =:= K],
+     Shadows].
+
+%%% LEMMAS: what the rules alone say a state can hold. A state every rule
+%%% writes a constant to holds one of those or its first value, in every
+%%% step that can be reached -- true by induction over the rules, so it is
+%%% an `assume' that removes nothing a run can do. What it removes is the
+%%% states no run reaches, and k-induction starts from any state: without
+%%% it `State == Night && KitchenLight' (no rule lights the kitchen) began in
+%%% a made-up Home with the light on and never closed.
+lemmas(C) ->
+    Rules = maps:get(rules, C),
+    Vals = fun(T) -> [lemma_val(T, E, C) || #{target := T1, expr := E} <- Rules,
+					    T1 =:= T]
+	   end,
+    Sigs = maps:get(sigs, C),
+    Vs = [{varp_name(N), [maps:get(init, maps:get(N, Sigs)) | Vals(N)]}
+	  || N <- maps:get(order, C), lists:member(N, maps:get(written, C)),
+	     not lists:member(N, maps:get(free, C))],
+    %% a State starts in INIT and falls through to NORMAL
+    Ss = [{"St", [0, 1 | Vals("State")]} |
+	  [{inst_st(I), [0, 1 | Vals(I ++ ".State")]} || I <- maps:get(insts, C)]],
+    %% one that allows every value of its width says nothing
+    Sb = state_bits(C),
+    Width = maps:from_list([{varp_name(N), maps:get(width, S)}
+			    || {N, S} <- maps:to_list(Sigs)]),
+    Ls = [{V, U} || {V, Xs} <- Ss ++ Vs, not lists:member(none, Xs),
+		    U <- [lists:usort(Xs)],
+		    length(U) < 1 bsl maps:get(V, Width, Sb)],
+    case Ls of
+	[] -> "";
+	_ -> ["    // lemmas: a state the rules write only constants to holds one\n",
+	      [["    assume ", lists:join(" or ", [[V, " == ", integer_to_list(X)]
+						|| X <- Xs]), ";\n"]
+	       || {V, Xs} <- Ls]]
+    end.
+
+%% The constant a rule writes, a state's number for a State, or none.
+lemma_val(T, {field, _, {'WORD', _, N}}, C) when T =:= "State";
+						 T =/= "State" ->
+    case {lists:suffix("State", T), is_builtin_state(N),
+	  lists:keyfind(N, 1, number_states(C))} of
+	{true, true, _} -> length(lists:takewhile(fun(B) -> B =/= N end,
+						  ["INIT", "NORMAL", "FAILSAFE"]));
+	{true, _, {N, V}} -> V;
+	_ -> lemma_const({field, 0, {'WORD', 0, N}}, C)
+    end;
+lemma_val(_T, E, C) -> lemma_const(E, C).
+
+lemma_const(E, C) ->
+    case rng(E, C) of
+	{ok, {V, V}} -> V;
+	_ -> none
+    end.
+
+%% What a reach's text names of the cycle before it: u_p_X, X before the
+%% cycle, and u_q_I, the input's last sample, which takes a mirror u_m_I of
+%% the sample as a state -- in `next' an input is the step after's.
+cycle_defs("", _C) -> "";
+cycle_defs(Text, C) ->
+    Got = fun(Pre) ->
+		  lists:usort([N || [N] <- case re:run(Text, Pre ++ "([A-Za-z0-9_]+)",
+						       [global, {capture,
+								 all_but_first, list}]) of
+					      {match, Ms} -> Ms;
+					      nomatch -> []
+					  end])
+	  end,
+    Types = cycle_types(C),
+    Ty = fun(N) -> maps:get(N, Types) end,
+    Ps = Got("u_p_"),
+    Qs = Got("u_q_"),
+    Rest = maps:from_list([{varp_name(N), maps:get(rest, S)}
+			   || {N, S} <- maps:to_list(maps:get(sigs, C))]),
+    ["\n    // the cycle a reach is about: a cycle has run, and what it read\n"
+     "    state u_seen:1;\n"
+     "    init  u_seen == 0;\n"
+     "    next  next(u_seen) == 1;\n",
+     [["    state u_p_", N, ":", Ty(N), ";\n"
+       "    next  next(u_p_", N, ") == ", N, ";\n"] || N <- Ps],
+     %% the sample before the first cycle is the pin at rest
+     [["    state u_m_", N, ":", Ty(N), ", u_q_", N, ":", Ty(N), ";\n"
+       "    init  u_m_", N, " == ", integer_to_list(maps:get(N, Rest, 0)), ";\n"
+       "    assume u_m_", N, " == ", N, ";\n"
+       "    next  next(u_q_", N, ") == u_m_", N, ";\n"] || N <- Qs]].
+
+%% The varp names a shadow can be of, and their types.
+cycle_types(C) ->
+    Sigs = maps:get(sigs, C),
+    Sb = integer_to_list(state_bits(C)),
+    maps:from_list(
+      [{"St", Sb}] ++
+      [{inst_st(I), Sb} || I <- maps:get(insts, C)] ++
+      [{varp_name(N), decl_type(S)} || {N, S} <- maps:to_list(Sigs)] ++
+      lists:append([[{tname("run", T), "1"},
+		     {tname("el", T), integer_to_list(bits(P))}]
+		    || {T, P, _} <- maps:get(timers, C)])).
+
+%% A name as a cycle reads it: a state's value before the cycle, an input's
+%% sample. Outside a reach, the name.
+cyc("St", C) ->                         % a name of ours, no varp_name
+    case maps:get(cycle, C, false) of
+	true  -> "u_p_St";
+	false -> "St"
+    end;
+cyc(N, C) ->
+    case maps:get(cycle, C, false) andalso is_cycle_state(N, C) of
+	true  -> "u_p_" ++ varp_name(N);
+	false -> varp_name(N)
+    end.
+
+%% What the model keeps from step to step: what rules write (and can be
+%% modelled), an edge pin's read half, a State. A #param frozen in the run
+%% is the same before and after.
+is_cycle_state("St", _C) -> true;
+is_cycle_state(N, C) ->
+    (lists:member(N, maps:get(written, C)) andalso
+     not lists:member(N, maps:get(free, C)))
+	orelse lists:member(N, maps:get(edges, C, []))
+	orelse is_inst_st(N, C).
+
+%% A timer's macro, or in a reach its text over the state before the cycle.
+tmac(Kind, T, C) ->
+    case maps:get(cycle, C, false) of
+	false -> [tname(Kind, T), "()"];
+	true ->
+	    {ok, {P0, _}} = timer(T, C),
+	    P = integer_to_list(P0),
+	    Run = "u_p_" ++ tname("run", T),
+	    Sum = ["u_p_", tname("el", T), " + u_dt"],
+	    Fire = ["((", Run, " == 1) and (", Sum, " >= ", P, "))"],
+	    case Kind of
+		"fire" -> Fire;
+		"on" -> ["((", Run, " == 1) and not ", Fire, ")"];
+		"elapsed" -> ["((", Sum, " >= ", P, ") ? ", P, " : (", Sum, "))"]
+	    end
+    end.
 
 %% varp keywords are not available as a system name, and examples/state.csp is
 %% exactly that case -- `system state {' does not parse.
@@ -1664,6 +1909,7 @@ is_bool({field, _, {'WORD', _, N}}, C) ->
 is_bool({field, _, {part, _, {'WORD', _, _T}, {'WORD', _, "fired"}}}, _C) ->
     true;
 is_bool({call, _, {'WORD', _, "timeout"}, _}, _C) -> true;
+is_bool({call, _, {'WORD', _, "after"}, [E]}, C) -> is_bool(E, C);
 is_bool({call, _, {'WORD', _, F}, _}, _C) when F =:= "rising"; F =:= "falling" ->
     true;
 is_bool(_, _C) -> false.
@@ -1678,14 +1924,28 @@ vbool({Op, _, L, R}, C) when ?IS_LOGIC(Op) ->
 vbool({Op, _, L, R}, C) when ?IS_CMP(Op) ->
     [paren(vexpr(L, C, num)), op(Op), paren(vexpr(R, C, num))];
 vbool({field, _, {'WORD', _, N}}, C) ->          % a boolean local, a timer
-    case timer(N, C) of
-	{ok, _} -> [tname("on", N), "()"];
-	error   -> [varp_name(N), "()"]
+    case {timer(N, C), maps:get(cycle, C, false)} of
+	{{ok, _}, _} -> tmac("on", N, C);
+	{error, false} -> [varp_name(N), "()"];
+	{error, true} ->                       % a reach: the formula, inlined
+	    vbool(maps:get(expr, maps:get(N, maps:get(locals, C))), C)
     end;
-vbool({field, _, {part, _, {'WORD', _, T}, {'WORD', _, "fired"}}}, _C) ->
-    [tname("fire", T), "()"];
-vbool({call, _, {'WORD', _, "timeout"}, [{field, _, {'WORD', _, T}}]}, _C) ->
-    [tname("fire", T), "()"];
+vbool({field, _, {part, _, {'WORD', _, T}, {'WORD', _, "fired"}}}, C) ->
+    tmac("fire", T, C);
+vbool({call, _, {'WORD', _, "timeout"}, [{field, _, {'WORD', _, T}}]}, C) ->
+    tmac("fire", T, C);
+vbool({call, _, {'WORD', _, "after"}, [E]}, C) ->
+    vbool(E, C#{cycle => false});
+%% In a reach an edge is in the cycle: the value before it against the one
+%% after (a state), or the last sample against this one (an input).
+vbool({call, _, {'WORD', _, F}, [{field, _, {'WORD', _, N}}]}, C = #{cycle := true}) ->
+    {Was, Is} = case F of "rising" -> {"0", "1"}; "falling" -> {"1", "0"} end,
+    X = varp_name(N),
+    Before = case is_cycle_state(N, C) of
+		 true  -> "u_p_" ++ X;
+		 false -> "u_q_" ++ X
+	     end,
+    ["(", Before, " == ", Was, " and ", X, " == ", Is, ")"];
 %% An edge is between what the rules read, last cycle's value, and this
 %% cycle's sample: see edges/3. Only a rule has the two; check_props/1 keeps
 %% an edge out of a property.
@@ -1699,17 +1959,22 @@ vbool({call, _, {'WORD', _, F}, [{field, _, {'WORD', _, N}}]}, C) ->
     ["(", X, " == ", Was, " and ", New, " == ", Is, ")"].
 
 vnum({'INT', _, S}, _C) -> S;
-vnum({field, _, {'WORD', _, "State"}}, _C) -> "St";   % main's; s1.State is s1_State
+vnum({field, _, {'WORD', _, "State"}}, C) -> cyc("St", C);   % s1.State: s1_State
 vnum({field, _, {'WORD', _, N}}, C) ->
-    case is_map_key(N, maps:get(locals, C)) of
-	true -> [varp_name(N), "()"];           % a macro, see local_defs/1
-	false ->
+    case {is_map_key(N, maps:get(locals, C)), maps:get(cycle, C, false)} of
+	{true, false} -> [varp_name(N), "()"];  % a macro, see local_defs/1
+	{true, true} ->                         % a reach: the formula, inlined
+	    L = maps:get(N, maps:get(locals, C)),
+	    paren(stored(maps:get(expr, L), L, C));
+	{false, _} ->
 	    case is_builtin_state(N) orelse
 		lists:keymember(N, 1, number_states(C)) of
 		true  -> state_text(N, C);
-		false -> varp_name(N)         % a signal or a define
+		false -> cyc(N, C)            % a signal or a define
 	    end
     end;
+vnum({call, _, {'WORD', _, "after"}, [E]}, C) ->
+    vnum(E, C#{cycle => false});
 %% A byte at a constant index is a name; at a variable one, a choice among the
 %% bytes it can reach. Out of range reads byte 0, as the runtime does.
 vnum({field, _, {index, _, {'WORD', _, B}, Ix}}, C) ->
@@ -1728,13 +1993,13 @@ vnum({field, _, {index, _, {'WORD', _, B}, Ix}}, C) ->
     end;
 %% A frame is seen the cycle after it is taken in, and INIT is the first
 %% cycle: no rule there ever sees one.
-vnum({field, _, {part, _, {'WORD', _, B}, {'WORD', _, "rx"}}}, _C) ->
-    ["(St == INIT ? 0 : ", varp_name(B ++ "_rx"), ")"];
+vnum({field, _, {part, _, {'WORD', _, B}, {'WORD', _, "rx"}}}, C) ->
+    ["(", cyc("St", C), " == INIT ? 0 : ", varp_name(B ++ "_rx"), ")"];
 vnum({field, _, {part, _, {'WORD', _, T}, {'WORD', _, "period"}}}, C) ->
     {ok, {P, _}} = timer(T, C),
     integer_to_list(P);
-vnum({call, _, {'WORD', _, "elapsed"}, [{field, _, {'WORD', _, T}}]}, _C) ->
-    [tname("elapsed", T), "()"];
+vnum({call, _, {'WORD', _, "elapsed"}, [{field, _, {'WORD', _, T}}]}, C) ->
+    tmac("elapsed", T, C);
 vnum({'-', _, M}, C) -> ["-", paren(vexpr(M, C, num))];
 vnum({Op, _, L, R}, C) when ?IS_BITS(Op) ->
     vbits(Op, L, R, C);

@@ -1,0 +1,15 @@
+// A named object's array element, from outside: `a.V[k]` read and written.
+// A constant k folds to the element's own declaration, as `V[k]` does; a
+// runtime k is refused (it would need OP_SETO and OP_SETOX on one access).
+
+#module M
+#variable V[3]:16 in
+#end
+#M a
+#variable Y:16 = 0
+#variable W:16 = 0
+
+a.V[1] = 4 ? 1
+a.V[2] = 7 ? 1
+Y = a.V[1] ? 1
+W = a.V[2] ? 1

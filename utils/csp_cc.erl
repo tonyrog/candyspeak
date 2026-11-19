@@ -889,6 +889,10 @@ target({field, L, {fld, _, {'WORD', _, O}, {'WORD', _, F}}}, S) ->
 target({field, _, {part, _, Of, {'WORD', _, P}}}, S) ->
     {Obj, Ix} = part_of(Of, S),
     {{Obj, Ix, {part, part(P)}, integer}, S};
+target({field, _, {index, _, {fld, _, {'WORD', _, O}, {'WORD', _, F}}, Ix}}, S) ->
+    {No, El, K, Vt} = obj_elem(O, F, Ix, S),
+    K =/= constant orelse unsupported({target, F}),
+    {{No, El, K, Vt}, S};
 target({field, _, {index, _, {'WORD', _, B}, Ix}}, S) ->
     case find(B, S) of
 	{ok, {_, constant, _}} -> unsupported({target, B});
@@ -974,6 +978,11 @@ expr({'INT', _, T}, S) -> {{imm, integer, s32(int(T))}, S};
 expr({view, Vx}, S) -> {{var, Vx, unsigned}, S};
 expr({'FLT', _, T}, S) -> {{imm, float, fltbits(T)}, S};   % its IEEE bits
 expr({field, _, {'WORD', _, N}}, S) -> {leaf(N, S), S};
+expr({field, _, {index, _, {fld, _, {'WORD', _, O}, {'WORD', _, F}}, Ix}}, S) ->
+    case obj_elem(O, F, Ix, S) of
+	{No, El, K, Vt} when K =/= constant -> {{ovar, No, El, Vt}, S};
+	{_, _, K, _} -> unsupported({member_kind, K})
+    end;
 expr({field, _, {index, _, {'WORD', _, B}, Ix}}, S) ->
     case find(B, S) of
 	{ok, {_, buffer, _}} -> buf_ref(B, Ix, S);
@@ -1067,6 +1076,18 @@ buf_ref(B, Ix, S) ->
 	{Vx, S1} -> {{var, Vx, unsigned}, S1}
     catch
 	throw:{unsupported, _} -> buf_elem(B, Ix, S)
+    end.
+
+%% A named object's array element, a.V[k]: k a constant, folded to the
+%% element's own declaration. A runtime k would want SETO and SETOX on one
+%% access, which the runtime does not do either.
+obj_elem(O, F, Ix, S) ->
+    {No, {Base, K, Vt}} = member(O, F, S),
+    Len = maps:get(F, maps:get(arrays, S), 1),
+    case try fold(Ix, S) catch throw:{unsupported, _} -> runtime end of
+	I when is_integer(I), I >= 0, I < Len -> {No, Base + I, K, Vt};
+	I when is_integer(I) -> unsupported(index_range);
+	_ -> unsupported({object_index, O})
     end.
 
 member_expr(O, F, S) ->

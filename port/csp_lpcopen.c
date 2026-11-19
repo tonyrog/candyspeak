@@ -619,6 +619,8 @@ void csp_output(csp_rt_t* st)
 // program translated to C and this runtime drive the same code.
 #if defined(CSP_CAN_BITRATE) && defined(CSP_CAN_PORT)
 
+uint32_t csp_have_can(void) { return 1; }
+
 int csp_can_init(csp_rt_t* st)
 {
     (void)st;

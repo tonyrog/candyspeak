@@ -87,9 +87,12 @@ extern int new_string(csp_rt_t* st, char* name, int len);
 // so it can never look like a marker.
 #define FUNC_MARKER_BASE (T_LAST + 1)
 #define ARR_MARKER_BASE  (T_LAST + 2)
+#define OBJ_MARKER_BASE  (T_LAST + 3)   // an array marker of a NAMED object's
 #define IS_MARKER(op)      ((op) >= FUNC_MARKER_BASE)
 #define IS_FUNC_MARKER(op) (((op) & 0xff) == FUNC_MARKER_BASE)
-#define IS_ARR_MARKER(op)  (((op) & 0xff) == ARR_MARKER_BASE)
+#define IS_ARR_MARKER(op)  ((((op) & 0xff) == ARR_MARKER_BASE) || \
+			    (((op) & 0xff) == OBJ_MARKER_BASE))
+#define IS_OBJ_MARKER(op)  (((op) & 0xff) == OBJ_MARKER_BASE)
 extern uint8_t func_flags(const csp_func_t* fn, int i, int rom);
 #define func_pure(fn,i,rom)   (func_flags((fn),(i),(rom)) & FUNC_PURE)
 
@@ -101,13 +104,17 @@ extern uint8_t func_flags(const csp_func_t* fn, int i, int rom);
 // An array marker carries the array itself, so no side stack is needed: bits
 // 16..30 are the declaration index (DECL_BITS is 15) and bit 31 is the
 // CURRENT/global selector. The LENGTH is not stored -- csp_array_len recovers it
-// at `]` for the price of a compile-time scan.
+// at `]` for the price of a compile-time scan. A named object's array (`a.V[1]`)
+// has no room left for the object: its marker is the OBJ_MARKER_BASE kind, and
+// the object number sits in the operator stack slot under it.
 #define ARR_MARKER_EP(op)   (((op) >> 8) & 0x0ff)
 #define ARR_MARKER_IX(op)   (((op) >> 16) & 0x7fff)
 #define ARR_MARKER_CUR(op)  (((op) >> 31) & 1)
 #define MAKE_ARR_MARKER(cur, ix, pp0) ((ARR_MARKER_BASE) +	\
 				       ((uint32_t)(cur)<<31) +		\
 				       ((uint32_t)(ix)<<16) + ((pp0)<<8))
+#define MAKE_OBJ_MARKER(ix, pp0) ((OBJ_MARKER_BASE) +			\
+				  ((uint32_t)(ix)<<16) + ((pp0)<<8))
 
 #ifdef __cplusplus
 EXTERN_C_END

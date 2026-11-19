@@ -176,12 +176,16 @@ varint(<<0:1, X:7, T/binary>>) -> {X, T}.
 %% records of a tag, a length and varints and strings. A tag not known here
 %% is passed over by its length -- a newer node is still read.
 %%
-%%   #{fw, rom, float => fixpoint | ieee, endian => little | big, features,
-%%     device, ram => #{total, free}, limits => #{instr, decl, string, names,
-%%     funcs}, use => #{instr, decl, string, names, rom_decl, rom_instr},
+%%   #{fw, board, rom, float => fixpoint | ieee, endian => little | big,
+%%     features, device, ram => #{total, free}, limits => #{instr, decl,
+%%     string, names, funcs}, use => #{instr, decl, string (in RAM, what the
+%%     limits bound), names, rom_decl, rom_instr, rom_string},
 %%     flash => #{base, sectors => [Size]}, regions => [#{name, kind, first,
 %%     last, slot, image}], images => [#{index, role, gen, size, booted}],
-%%     eeprom => #{capacity, stored}}
+%%     eeprom => #{capacity, stored}, transports => #{can => Units, ...}}
+%%
+%% Units is a bit per unit the node really drives (bit b for i2c bus b, uart
+%% unit b; bit 0 for a transport without units), 0 the null device.
 info(Bin) -> info(Bin, #{regions => [], images => []}).
 
 info(<<Tag, Len, Rec:Len/binary, T/binary>>, I) -> info(T, record(Tag, Rec, I));
@@ -205,7 +209,7 @@ record(5, R, I) ->
 					  vints(R, 5)))};
 record(6, R, I) ->
     I#{use => maps:from_list(lists:zip([instr, decl, string, names, rom_decl,
-					rom_instr], vints(R, 6)))};
+					rom_instr, rom_string], vints(R, 7)))};
 record(7, R, I) ->
     {Base, T} = varint(R),
     I#{flash => #{base => Base, sectors => runs(T)}};
@@ -232,7 +236,15 @@ record(10, R, I) ->
     I#{eeprom => #{capacity => case Cap of 0 -> none; 16#ffffffff -> unbounded;
 				   C -> C end,
 		   stored => Stored}};
+record(11, R, I) ->
+    I#{transports => maps:from_list(have(R))};
+record(12, R, I) -> {B, _} = vstr(R), I#{board => B};
 record(_, _, I) -> I.
+
+have(<<>>) -> [];
+have(B) ->
+    {[Tr, Units], T} = vints_t(B, 2),
+    [{csp_disasm:transport(Tr), Units} | have(T)].
 
 role(1) -> failsafe;
 role(_) -> rom.
@@ -299,7 +311,8 @@ decl_name(_, Dj) -> "$" ++ integer_to_list(Dj).
 
 %% An array element after the first is no declaration of its own here --
 %% csp_disasm folds an array into its head, {len, N} -- so it is named after
-%% the head whose elements reach it, P[3], as csp's own dump calls it.
+%% the head whose elements reach it, P[3]. The head is P[0], as csp_list
+%% writes it: an array's elements are indexed, every one.
 elem_name(Dj, ByIx) ->
     case maps:get(Dj, ByIx, none) of
 	none ->
@@ -309,6 +322,11 @@ elem_name(Dj, ByIx) ->
 		[{H, D} | _] ->
 		    decl_name(D, H) ++ "[" ++ integer_to_list(Dj - H) ++ "]";
 		[] -> decl_name(none, Dj)
+	    end;
+	D = {decl, _, _, _, Opts} when is_list(Opts) ->
+	    case proplists:get_value(len, Opts, 1) of
+		1 -> decl_name(D, Dj);
+		_ -> decl_name(D, Dj) ++ "[0]"
 	    end;
 	D -> decl_name(D, Dj)
     end.

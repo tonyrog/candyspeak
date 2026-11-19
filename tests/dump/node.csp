@@ -1,5 +1,6 @@
 // /dump check: a module with two objects, a timer, a negative and an
-// unsigned value, an array -- what a host has to read back out of a node.
+// unsigned value, an array, a buffer on a bus the host lacks -- what a host
+// has to read back out of a node.
 #module Cnt
   #variable N:8 unsigned = 0
   #variable Step = 1
@@ -13,6 +14,8 @@
 #Cnt a
 #Cnt b Step = 2
 #variable Arr[3]:8 unsigned = 0
+// an i2c part the host does not have: candid says it is the null device
+#buffer Imu:2 in i2c 1 0x68 0x3B
 K = K + 1 ? timeout(T)
 T = 1 ? timeout(T)       // restarted on its own timeout, as cpx_rotate's
 Arr[1] = 5

@@ -942,6 +942,18 @@ int csp_uart_send(csp_rt_t* st, uint32_t xref, const uint8_t* data, uint16_t len
     return 0;
 }
 
+// The units --uart named; one that could not be opened is gone (unit -1).
+uint32_t csp_have_uart(void)
+{
+    uint32_t m = 0;
+    int i;
+
+    for (i = 0; i < uart_nport; i++)
+	if (uart_port[i].unit >= 0)
+	    m |= 1UL << uart_port[i].unit;
+    return m;
+}
+
 // /state's line per serial port: where it is, so a pty can be found again.
 void csp_uart_show(void)
 {
@@ -1210,6 +1222,13 @@ int csp_can_init(csp_rt_t* st)
 }
 
 int csp_can_pollfd(void) { return csp_socketcan_fd(); }
+
+// A bus, or -F's stimulus queue standing in for one.
+uint32_t csp_have_can(void) { return 1; }
+
+// Sockets, and -F's `sms' standing in for a modem.
+uint32_t csp_have_tcp(void) { return 1; }
+uint32_t csp_have_sms(void) { return 1; }
 
 int csp_can_recv(csp_rt_t* st, uint32_t* id, uint8_t* data, uint8_t* len)
 {

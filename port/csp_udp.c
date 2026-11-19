@@ -88,6 +88,8 @@ static void udp_give_up(uint16_t port)
 	udp_dead[udp_ndead++] = port;
 }
 
+uint32_t csp_have_udp(void) { return 1; }
+
 int csp_udp_open(csp_rt_t* st, uint16_t port)
 {
     return csp_udp_open_bus(st, port, 0);

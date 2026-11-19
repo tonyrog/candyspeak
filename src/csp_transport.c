@@ -201,3 +201,16 @@ CSP_WEAK int csp_sms_modem_send(const char* to, const char* text)
 CSP_WEAK void csp_sms_modem_poll(void)
 {
 }
+
+// --- what is linked -----------------------------------------------------------
+//
+// Nothing, by default: every transport above is the null device. See
+// csp_have_can in csp.h.
+CSP_WEAK uint32_t csp_have_can(void)     { return 0; }
+CSP_WEAK uint32_t csp_have_udp(void)     { return 0; }
+CSP_WEAK uint32_t csp_have_tcp(void)     { return 0; }
+CSP_WEAK uint32_t csp_have_uart(void)    { return 0; }
+CSP_WEAK uint32_t csp_have_i2c(void)     { return 0; }
+CSP_WEAK uint32_t csp_have_spi(void)     { return 0; }
+CSP_WEAK uint32_t csp_have_onewire(void) { return 0; }
+CSP_WEAK uint32_t csp_have_sms(void)     { return 0; }

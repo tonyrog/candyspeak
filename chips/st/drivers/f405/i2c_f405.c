@@ -39,6 +39,9 @@ extern const uint32_t csp_stm_pclk1;
 	}                                        \
     } while (0)
 
+// I2C1..I2C3: i2c_of's buses.
+uint32_t csp_have_i2c(void) { return 0x0E; }
+
 static I2C_TypeDef* i2c_of(uint8_t bus)
 {
     switch (bus) {

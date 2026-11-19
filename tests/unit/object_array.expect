@@ -1,0 +1,5 @@
+{cycles, 4}.
+{checks, [
+  {final_var, "Y", 4},
+  {final_var, "W", 7}
+]}.

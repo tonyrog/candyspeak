@@ -1658,8 +1658,10 @@ static int state_udigits(uvalue_t v)
 }
 
 // Object-qualified name, as the state dump writes it: "p0.State", or the bare
-// name for a global.
-static void state_name(csp_rt_t* st, index_t ix)
+// name for a global. An array's element is its head's name and subscript,
+// head included -- Red[0], Red[1] -- as /list and /dump state name them; elem
+// is the subscript, -1 for a declaration that is no array.
+static void state_name(csp_rt_t* st, index_t ix, int elem)
 {
     // OBJ(ix) is a one-bit selector; the object number comes from the context
     // the caller bound (csp_ctx_set), exactly as it does at runtime.
@@ -1671,8 +1673,16 @@ static void state_name(csp_rt_t* st, index_t ix)
 	csp_print_char('.');
 	n = decl_name_len(st, ox) + 1;
     }
+    if (elem > 0)
+	ix -= (index_t)elem;    // the head's name; the selector rides along
     csp_print_str_at(st, decl_name_pos(st, ix));
-    state_pad(n + decl_name_len(st, ix), STATE_W_NAME);
+    n += decl_name_len(st, ix);
+    if (elem >= 0) {
+	csp_print_char('[');
+	n += 2 + csp_print_uint((uvalue_t)elem);
+	csp_print_char(']');
+    }
+    state_pad(n, STATE_W_NAME);
 }
 
 // Print the declared state numbered `v`; 0 if no state has that number.
@@ -1691,7 +1701,7 @@ static int state_print_state(csp_rt_t* st, ivalue_t v)
 // listing an intermediate result. csp.h's DECL_HEADER note has always said a
 // local "never reaches /state"; until now it did, under a name nothing outside
 // the module is even allowed to use.
-NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
+NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di, int elem)
 {
     decl_t t = decl(st, di, type);
     int is_state;
@@ -1699,7 +1709,7 @@ NOINLINE static void state_row(csp_rt_t* st, index_t ix, int di)
     if (csp_is_local(st, MAKE_INDEX(0, di)))
 	return;
 
-    state_name(st, ix);
+    state_name(st, ix, elem);
 
     if (t == DECL_TIMER) {
 	value_t* v = csp_dio_slot(st, ix, DIN);
@@ -1937,6 +1947,22 @@ const filt_entry_t filt_table[] RODATA = {
     { ros_undefined, 0 }
 };
 
+// A declaration's rows: one, or one per element of an array headed by it.
+// The elements after the head have no name of their own (cont), so the
+// filters never pass them; they come with their head.
+static void state_rows(csp_rt_t* st, index_t obj, int di)
+{
+    uint16_t alen = csp_array_len(st, di);
+    uint16_t k;
+
+    if (alen <= 1) {
+	state_row(st, MAKE_INDEX(obj, di), di, -1);
+	return;
+    }
+    for (k = 0; k < alen; k++)
+	state_row(st, MAKE_INDEX(obj, di + k), di + k, (int)k);
+}
+
 // Does declaration `di` pass the /state filters? Shared by the global and the
 // per-object pass. A named filter matches on the DECLARATION, so `/state State`
 // shows the global State and every object's State alike.
@@ -2094,7 +2120,7 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 	if (in_module)        continue;   // template fields belong to the objects
 	if (!state_want(st, i, f_flags, named, nnamed))
 	    continue;
-	state_row(st, MAKE_INDEX(0, i), i);
+	state_rows(st, 0, i);
     }
 
     for (i = 0; i < st->ps.nd; i++) {
@@ -2124,7 +2150,7 @@ static int cmd_state(csp_rt_t* st, int argc, char* argv[])
 		    csp_println();
 		    shown = 1;
 		}
-		state_row(st, MAKE_INDEX(CURRENT, dj), dj);
+		state_rows(st, CURRENT, dj);
 	    }
 	    if (t == DECL_TIMER)   // a timer owns the next slot too (its t0)
 		j++;
@@ -2501,12 +2527,16 @@ static void dump_state(csp_rt_t* st)
 //   3 dev   the part's name                                      (flash builds)
 //   4 ram   capacity, free
 //   5 lim   instr, decl, string, names caps, built-in functions
-//   6 use   instr, decl, string, names used; ROM decl, ROM instr
+//   6 use   instr, decl, string used in RAM (what the caps bound, as /mem
+//           shows it), names in all; ROM decl, ROM instr, ROM string
 //   7 sec   flash base, then (count, size) runs of sectors        (flash builds)
 //   8 reg   kind, first, last, state [role, generation, size], name -- one per
 //           region                                              (flash builds)
 //   9 img   index, role, generation, size, booted -- one per linked image
 //  10 eep   capacity (0 none, 0xFFFFFFFF unbounded), bytes stored
+//  11 tr    (transport, units) for every transport an image can name: a bit
+//           per unit really there, 0 the null device (csp_have_can in csp.h)
+//  12 brd   the board, boards/<name> (CSP_BOARD_NAME)            (board builds)
 //
 // Two passes: one counts, so the head can say the total, one sends.
 
@@ -2520,17 +2550,31 @@ static void dump_state(csp_rt_t* st)
 #define INFO_REG 8
 #define INFO_IMG 9
 #define INFO_EEP 10
+#define INFO_TR  11
+#define INFO_BRD 12
 
 #define INFO_F_COMPILER 0x01
 #define INFO_F_FLASH    0x02
 #define INFO_F_EEPROM   0x04
 #define INFO_F_IEEE     0x08    // the node's floats are IEEE; clear: Q16.16
 
-// The bare builds name it (Makefile.board); a build that does not says so.
+// The runtime's version: the host Makefile says it with -D, Makefile.board in
+// a header of its own (a -D would make arduino-cli rebuild everything on
+// every commit); a build that does neither says so.
+#if !defined(CSP_VERSION) && defined(__has_include)
+#if __has_include("csp_version.h")
+#include "csp_version.h"
+#endif
+#endif
 #ifndef CSP_VERSION
 #define CSP_VERSION "unknown"
 #endif
 static const char info_fw[] RODATA = CSP_VERSION;
+
+// A board build's name (boards/<name>, csp_board.h); the host has none.
+#ifdef CSP_BOARD_NAME
+static const char info_brd[] RODATA = CSP_BOARD_NAME;
+#endif
 
 typedef struct {
     uint8_t n;
@@ -2579,6 +2623,26 @@ static void rec_send(uint8_t tag, info_rec_t* r)
     r->n = 0;
 }
 
+// What the node has of a transport_t. Here and not in csp_transport.c: that
+// file holds the weak defaults, and a caller beside them could have them
+// folded in at compile time.
+static uint32_t info_have(uint8_t tr)
+{
+    switch (tr) {
+    case TR_CAN:     return csp_have_can();
+    case TR_I2C:     return csp_have_i2c();
+    case TR_SPI:     return csp_have_spi();
+    case TR_UDP:     return csp_have_udp();
+    case TR_TCP:     return csp_have_tcp();
+    case TR_UART:    return csp_have_uart();
+    case TR_SMS:     return csp_have_sms();
+    case TR_ONEWIRE: return csp_have_onewire();
+    case TR_CONSOLE:
+    case TR_REPL:    return (CSP_CONSOLE_BYTES > 0) ? 1 : 0;
+    default:         return 0;
+    }
+}
+
 static void info_emit(csp_rt_t* st)
 {
     info_rec_t r;
@@ -2588,6 +2652,11 @@ static void info_emit(csp_rt_t* st)
     r.n = 0;
     rec_str(&r, info_fw, 1);
     rec_send(INFO_FW, &r);
+
+#ifdef CSP_BOARD_NAME
+    rec_str(&r, info_brd, 1);
+    rec_send(INFO_BRD, &r);
+#endif
 
     rec_varint(&r, ROM_FORMAT_VERSION);
     rec_varint(&r, CSP_IMG_FLAGS);
@@ -2611,12 +2680,13 @@ static void info_emit(csp_rt_t* st)
     rec_varint(&r, ro_byte(&csp_num_builtin_funcs));
     rec_send(INFO_LIM, &r);
 
-    rec_varint(&r, st->ps.nn);
-    rec_varint(&r, st->ps.nd);
-    rec_varint(&r, st->ps.strp);
+    rec_varint(&r, st->ps.nn - st->rom_nn);
+    rec_varint(&r, st->ps.nd - st->rom_nd);
+    rec_varint(&r, st->ps.strp - st->rom_strp);
     rec_varint(&r, st->ps.nstr);
     rec_varint(&r, st->rom_nd);
     rec_varint(&r, st->rom_nn);
+    rec_varint(&r, st->rom_strp);
     rec_send(INFO_USE, &r);
 
 #if defined(CSP_HAVE_FLASH)
@@ -2675,6 +2745,15 @@ static void info_emit(csp_rt_t* st)
 		   (cap == CSP_EEPROM_UNBOUNDED) ? 0xFFFFFFFFUL : cap);
 	rec_varint(&r, (stored < 0) ? 0 : (uint32_t)stored);
 	rec_send(INFO_EEP, &r);
+    }
+
+    {
+	uint8_t tr;
+	for (tr = TR_CAN; tr <= TR_ONEWIRE; tr++) {
+	    rec_varint(&r, tr);
+	    rec_varint(&r, info_have(tr));
+	}
+	rec_send(INFO_TR, &r);
     }
 }
 

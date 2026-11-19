@@ -137,6 +137,9 @@ eval({field, _, {fld, _, {'WORD', _, O}, {'WORD', _, N}}}, Vals, E) ->
     name(O ++ "." ++ N, Vals, E);                   % an object's member
 eval({field, _, {part, _, {'WORD', _, B}, {'WORD', _, P}}}, Vals, _E) ->
     maps:get({part, B, P}, Vals, unknown);
+eval({field, L, {index, L1, {fld, _, {'WORD', _, O}, {'WORD', L2, N}}, Ix}},
+     Vals, E) ->                                      % a.V[k]: an object's
+    eval({field, L, {index, L1, {'WORD', L2, O ++ "." ++ N}, Ix}}, Vals, E);
 eval({field, _, {index, _, {'WORD', _, A}, Ix}}, Vals, E) ->
     case eval(Ix, Vals, E) of
 	K when is_integer(K), K >= 0 ->
@@ -743,6 +746,8 @@ trigger(As, Seed, #{dirty := D}) ->
 
 names({field, _, {'WORD', _, N}}) -> [N];
 names({field, _, {fld, _, {'WORD', _, O}, {'WORD', _, N}}}) -> [O ++ "." ++ N];
+names({field, _, {index, _, {fld, _, {'WORD', _, O}, {'WORD', _, N}}, Ix}}) ->
+    [O ++ "." ++ N | names(Ix)];
 names({field, _, {index, _, {'WORD', _, A}, Ix}}) -> [A | names(Ix)];
 names(T) when is_tuple(T) -> lists:append([names(X) || X <- tuple_to_list(T)]);
 names(L) when is_list(L)  -> lists:append([names(X) || X <- L]);
@@ -767,6 +772,9 @@ assign(_, _T, _Vals, C, _E) -> C.                   % pack: into a buffer
 target({field, _, {'WORD', _, N}}, _Vals, _E) -> {one, N};
 target({field, _, {fld, _, {'WORD', _, O}, {'WORD', _, N}}}, _Vals, _E) ->
     {one, O ++ "." ++ N};
+target({field, L, {index, L1, {fld, _, {'WORD', _, O}, {'WORD', L2, N}}, Ix}},
+       Vals, E) ->
+    target({field, L, {index, L1, {'WORD', L2, O ++ "." ++ N}, Ix}}, Vals, E);
 target({field, _, {index, _, {'WORD', _, A}, Ix}}, Vals, E) ->
     case eval(Ix, Vals, E) of
 	K when is_integer(K), K >= 0 -> {one, elem(A, K)};

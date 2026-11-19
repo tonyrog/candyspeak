@@ -10,7 +10,7 @@
 -export([file/1, file/2, image/1, patch/2, disasm/1]).
 -export([crc16/1]).                       % csp_node: a dump line's CRC
 -export([disabled/2]).                    % csp_list: the patch's #disable set
--export([reg/1, part/1, type/1, dir/1, endian/1]).
+-export([reg/1, part/1, type/1, dir/1, endian/1, transport/1]).
 -export([decl/1, op_code/1, op_class/1]).
 
 -include("csp_asm.hrl").

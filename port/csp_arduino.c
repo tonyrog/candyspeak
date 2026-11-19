@@ -1034,6 +1034,16 @@ int csp_i2c_done(csp_rt_t* st, uint32_t xref, uint16_t* len)
     return 1;                       // _start did the whole transfer
 }
 
+// Wire, and Wire1 where the core has it: i2c_of's buses.
+uint32_t csp_have_i2c(void)
+{
+#if defined(WIRE_INTERFACES_COUNT) && (WIRE_INTERFACES_COUNT > 1)
+    return 3;
+#else
+    return 1;
+#endif
+}
+
 #endif
 
 // ============================================================
@@ -1063,6 +1073,8 @@ int csp_i2c_done(csp_rt_t* st, uint32_t xref, uint16_t* len)
 #endif
 
 static OneWire  ow_bus[CSP_OW_BUSES];
+
+uint32_t csp_have_onewire(void) { return 1; }
 static uint8_t  ow_pin[CSP_OW_BUSES];
 static uint8_t  ow_n;
 static uint8_t  ow_conv[CSP_OW_BUSES];        // a conversion is running
@@ -1191,6 +1203,8 @@ static uint32_t sms_tx_at;             // not before this: the next send
 static uint8_t  sms_tries;             // prompts the head message has missed
 static int      sms_del = -1;          // a message to delete next
 static char     sms_txq_to[SMS_TXQ][24];
+
+uint32_t csp_have_sms(void) { return 1; }
 static char     sms_txq_text[SMS_TXQ][161];
 static uint8_t  sms_txq_head, sms_txq_n;
 
@@ -1803,6 +1817,8 @@ static Adafruit_MCP2515 csp_mcp2515(CSP_CAN_CS, &CSP_CAN_SPI);
 #else
 #define CSP_CANDEV CAN
 #endif
+
+uint32_t csp_have_can(void) { return 1; }
 
 int csp_can_init(csp_rt_t* st)
 {

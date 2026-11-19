@@ -2791,8 +2791,11 @@ next:
 	}
 	marker = ostack[--pp];
 	ep0 = ARR_MARKER_EP(marker);
-	aix = MAKE_XINDEX(ARR_MARKER_CUR(marker) ? XOBJ_CURRENT : XOBJ_GLOBAL,
-			  ARR_MARKER_IX(marker));
+	if (IS_OBJ_MARKER(marker))
+	    aix = MAKE_XINDEX(ostack[--pp], ARR_MARKER_IX(marker));
+	else
+	    aix = MAKE_XINDEX(ARR_MARKER_CUR(marker) ? XOBJ_CURRENT : XOBJ_GLOBAL,
+			      ARR_MARKER_IX(marker));
 	// Exactly one value between the brackets: `A[]` leaves none, `A[i,j]`
 	// leaves two. Both are the user's mistake, not something to guess at.
 	if (ep != ep0 + 1) {
@@ -2831,6 +2834,14 @@ next:
 		return 0;
 	    ptok = WORD;
 	    goto after_primary;
+	}
+	// A named object's element at a runtime index: see where `[' opened.
+	{
+	    unsigned mo = XOBJ(aix);
+	    if ((mo != XOBJ_GLOBAL) && (mo != XOBJ_CURRENT)) {
+		csp_set_error(st, ERR_SYNTAX);
+		return 0;
+	    }
 	}
 	// A runtime subscript becomes a SETOX in front of the access. With
 	// codegen OFF nothing is emitted here either: pmatch validates an
@@ -3105,11 +3116,22 @@ next:
 	    if ((i < n) && (tv[i].t == LB) &&
 		is_subscriptable(decl(st,INDEX(ix),type))) {
 		unsigned mo = XOBJ(ix);
-		// `safe.A[i]` would need OP_SETO and OP_SETOX at the same time,
-		// and both are one-shots consumed by the same access. Refusing
-		// beats emitting a pair where one silently wins.
-		if (((mo != XOBJ_GLOBAL) && (mo != XOBJ_CURRENT)) ||
-		    (pp >= MAX_PARSE_STACK_DEPTH)) {
+		// A named object's array, `safe.A[k]`: the object goes under
+		// the marker, and `]` takes it back. Only a constant k gets
+		// through there -- a runtime one would need OP_SETO and OP_SETOX
+		// at the same time, both one-shots consumed by the same access.
+		if ((mo != XOBJ_GLOBAL) && (mo != XOBJ_CURRENT)) {
+		    if (pp + 1 >= MAX_PARSE_STACK_DEPTH) {
+			csp_set_error(st, ERR_SYNTAX);
+			return 0;
+		    }
+		    ostack[pp++] = mo;
+		    ostack[pp++] = MAKE_OBJ_MARKER(XIDX(ix), ep);
+		    i++;
+		    ptok = LP;
+		    goto next;
+		}
+		if (pp >= MAX_PARSE_STACK_DEPTH) {
 		    csp_set_error(st, ERR_SYNTAX);
 		    return 0;
 		}
@@ -4982,14 +5004,14 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 // FIXME: add part 
 //      <var> '.' <part>   part = 'port'|'pin'|'period'...
 //
+NOINLINE static xindex_t lookup_field(csp_rt_t* st, index_t oix,
+				      const tstr_t* name);
+
 NOINLINE xindex_t lookup_lhs(csp_rt_t* st, const token_t* tv,
 			     index_t oix, const pexpr_t* lhs)
 {
     xindex_t ix;
     const tstr_t* name;
-    index_t mx;
-    ivalue_t dn;
-    index_t jx;
 
     if (oix == BAD_INDEX) {
 	if (lhs->len == 1) {  // global | module local
@@ -5069,8 +5091,18 @@ NOINLINE xindex_t lookup_lhs(csp_rt_t* st, const token_t* tv,
     }
     return ix;
 field:
-    mx = decl(st, INDEX(oix), mq_mx);  // module def
-    dn = decl(st, INDEX(mx), md_n);  // number of elements	    
+    return lookup_field(st, oix, name);
+}
+
+// A named object's member: the object oix (its declaration) and the member's
+// name -> the member as that object's xindex.
+NOINLINE static xindex_t lookup_field(csp_rt_t* st, index_t oix,
+				      const tstr_t* name)
+{
+    index_t mx = decl(st, INDEX(oix), mq_mx);  // module def
+    ivalue_t dn = decl(st, INDEX(mx), md_n);    // number of elements
+    index_t jx;
+
     if ((jx = lookup_decl_in(st, name,
 			     INDEX(mx)+1,INDEX(mx)+1+dn))==BAD_INDEX) {
 	if (csp_set_error(st, ERR_FIELD_NOT_FOUND)) {
@@ -5078,8 +5110,7 @@ field:
 	}
 	return BAD_INDEX;
     }
-    ix = MAKE_XINDEX(decl(st, INDEX(oix), mq_m), XIDX(jx));  // named object
-    return ix;
+    return MAKE_XINDEX(decl(st, INDEX(oix), mq_m), XIDX(jx));  // named object
 }
 
 
@@ -5234,6 +5265,31 @@ NOINLINE int asm_rule(csp_rt_t* st, const token_t* tv, size_t n,
 		index_t bx = csp_lookup_decl(st, &part[k].obj);
 		ivalue_t lo, hi;
 		decl_t bt = (bx==BAD_INDEX)?DECL_NONE:decl(st,INDEX(bx),type);
+
+		// `a.V[k] = rhs`: an array of the named object a. Its element
+		// is a.V's declaration + k, folded like `V[k]` below; a runtime
+		// k would need OP_SETO and OP_SETOX on one access.
+		if ((bt == DECL_OBJECT) && (part[k].fld.len > 0) &&
+		    (part[k].pfld.len == 0) && !part[k].idx_bits &&
+		    !part[k].has_range) {
+		    xindex_t fx = lookup_field(st, bx, &part[k].fld);
+		    if (fx == BAD_INDEX)
+			return -1;
+		    if (!is_subscriptable(decl(st, XIDX(fx), type)) ||
+			(part[k].idxe.len > 0)) {
+			csp_set_error(st, ERR_SYNTAX);
+			return -1;
+		    }
+		    if ((part[k].idx0 < 0) ||
+			(part[k].idx0 >= (ivalue_t)csp_array_len(st, XIDX(fx)))) {
+			csp_set_error(st, ERR_INDEX_RANGE);
+			return -1;
+		    }
+		    ix = MAKE_XINDEX(XOBJ(fx), XIDX(fx) + (index_t)part[k].idx0);
+		    if (!coerce_assign(st, ix, &rbody))
+			return -1;
+		    goto have_lhs;
+		}
 
 		// `A[k] = rhs` on an ARRAY. The LEFT side of a rule body is
 		// matched by pat_body, not by the expression parser, so a

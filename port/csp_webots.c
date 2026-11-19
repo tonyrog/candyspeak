@@ -290,6 +290,7 @@ void csp_flush(void)
 // frame 0x20 with the command in byte 0, and takes the same path a radio packet
 // would. The program cannot tell, and tests/command.dat drives the identical
 // path from a file.
+
 //
 //     g   CMD_GO      arm and fly to TARGET
 //     l   CMD_LAND    descend and disarm
@@ -348,6 +349,9 @@ int csp_can_recv(csp_rt_t* st, uint32_t* id, uint8_t* data, uint8_t* len)
     csp_flush();
     return 1;
 }
+
+// The keyboard above, and a real bus beside it.
+uint32_t csp_have_can(void) { return 1; }
 
 int csp_can_send(csp_rt_t* st, uint32_t id, const uint8_t* data, uint8_t len)
 {

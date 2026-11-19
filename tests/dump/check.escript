@@ -20,20 +20,35 @@ main([Out, Img, Store]) ->
 	       end),
     [St] = [S || S = {state, _, _, _, _} <- Ds],
     Named = csp_node:state(Decls, St),
-    Got = lists:sort([{N, V} || {N, V} <- Named, shown(N),
-				not lists:member($[, N)]),
+    %% every element of an array, the head A[0], in both
+    Got = lists:sort([{N, V} || {N, V} <- Named, shown(N)]),
     Want = lists:sort(state_rows(Text)),
     {ok, Listed} = csp_list:patch(Rom, StoreBin),
     [Info] = [csp_node:info(B) || {info, B} <- Ds],
-    #{regions := Regs, rom := RomV, float := Fl, limits := #{instr := MaxI},
-      use := #{instr := UsedI}} = Info,
+    #{regions := Regs, rom := RomV, float := Fl,
+      limits := #{instr := MaxI, string := MaxS},
+      use := #{instr := UsedI0, rom_instr := RomI, string := UsedS,
+	       rom_string := RomS}} = Info,
+    UsedI = UsedI0 + RomI,
     [SlotA] = [R || R = #{name := "A"} <- Regs],
     Checks = [{"/dump info: slot A holds the image, its generation and size",
 	       maps:get(image, SlotA) =:= #{role => rom, gen => 1,
 					    size => byte_size(ImgBin)}},
 	      {"/dump info: the image format, the limits and what is used",
 	       RomV =:= 23 andalso Fl =:= fixpoint andalso UsedI > 0 andalso
-	       MaxI >= UsedI},
+	       MaxI >= UsedI0},
+	      {"/dump info: strings in RAM against their cap, the ROM's apart",
+	       UsedS =< MaxS andalso RomS > 0},
+	      {"/dump info: the runtime's version; no board on the host",
+	       not maps:is_key(board, Info) andalso
+	       maps:get(fw, Info, "unknown") =/= "unknown"},
+	      {"/dump info: every transport an image can name, the null ones 0",
+	       case Info of
+		   #{transports := #{can := 1, tcp := 1, udp := 1, i2c := 0,
+				     spi := 0, onewire := 0} = Ts} ->
+		       maps:size(Ts) =:= 10;
+		   _ -> false
+	       end},
 	      {"/dump rom A is the image /upgrade wrote", RomA =:= ImgBin},
 	      {"the ROM and the store list as /list does",
 	       lines(Listed) =:= lines(Text)},

@@ -10,11 +10,36 @@
 %%                                       date; no app: the one last built
 %%     ./cs test  <app>                  its tests, on the host
 %%     ./cs ports                        the serial ports and what they are
+%%     ./cs node <command>               a running node, by its console:
+%%         info [file]                   what it is: board, part, firmware,
+%%                                       number format, RAM, flash slots,
+%%                                       images, the transports it has;
+%%                                       -use: the ones its program uses
+%%                                       (file: that program's, .csp .img
+%%                                       .hex) and those it runs as the null
+%%                                       device, -detail: every endpoint
+%%         list                          the program it runs, as source
+%%         state [name ...]              its values; a name picks it and
+%%                                       what is under it (P[i], T.fired)
+%%         get <name>                    one value, bare
+%%         watch [name ...]              the values as they change, until ^C
+%%         pause | go | reset            stop, run, back to INIT
+%%         live                          rules frozen, I/O running: a set
+%%                                       is on the pin at once (go: run)
+%%         step [N]                      N cycles (1), paused
+%%         set <name> <value> ...        values, as `> name = value'; on a
+%%                                       #param or a pin part, a setting
+%%         latch on | off                device output
+%%         settings                      what is set by hand, saved or not
+%%         save | load                   patch and settings to storage, back
+%%         send <line>                   a console line; what it said back
 %%
 %%     -D <device>    the port (else the one plugged in with the board's USB id,
-%%                    else the one in its terms)
-%%     -b <baud>      the upload speed, where the loader has one
+%%                    else the one in its terms); for node, also HOST:PORT
+%%     -b <baud>      the upload speed, where the loader has one; for node,
+%%                    the console's (115200)
 %%     -n             say what would run, run nothing
+%%     -use, -detail  node info: the transports the program uses, and where
 %%
 %% A board may be named short: `./cs wintersbone s3` is wintersbone_s3. NAME=VALUE
 %% anywhere on the line goes on to Makefile.board as it is (WATCH=1, MAP=...).
@@ -28,6 +53,9 @@
 -mode(compile).
 
 %% What a build leaves behind that an upload and `info` need.
+%% node info: where the values start, after the label.
+-define(LABEL, 12).
+
 -define(VARS, ["ACHIP", "CLIB", "SKETCH", "BOSSAC19", "FQBN", "B", "UPFQBN",
 	       "UPPORT", "DEV", "BOARDDIR"]).
 
@@ -42,6 +70,8 @@ main(Args0) ->
     end.
 
 options(["-n" | T], O, Acc) -> options(T, O#{dry => true}, Acc);
+options(["-use" | T], O, Acc) -> options(T, O#{use => true}, Acc);
+options(["-detail" | T], O, Acc) -> options(T, O#{detail => true}, Acc);
 options(["-D", D | T], O, Acc) -> options(T, O#{dev => D}, Acc);
 options(["-b", B | T], O, Acc) -> options(T, O#{baud => B}, Acc);
 options([F], _O, _Acc) when F =:= "-D"; F =:= "-b" ->
@@ -73,6 +103,7 @@ cmd(["build" | Rest], Vars, _O) -> build(target(Rest), Vars);
 cmd(["upload"], Vars, O) -> upload(last(), Vars, O);
 cmd(["upload" | Rest], Vars, O) -> upload(target(Rest), Vars, O);
 cmd(["test", App | _], _Vars, _O) -> test(app(App));
+cmd(["node" | Rest], _Vars, O) -> node(Rest, O);
 %% `./cs wintersbone s3' -- an application on its own asks for a build
 cmd([Name | Rest], Vars, _O) ->
     case app_file(Name) of
@@ -571,6 +602,303 @@ consult(F) ->
 
 prop(K, P) -> prop(K, P, undefined).
 prop(K, P, D) -> proplists:get_value(K, P, D).
+
+%% ---------------------------------------------------------------------------
+%% A running node, by its console: csp_cmd (utils/), the connection and the
+%% commands; here only which node and how it is said.
+%% ---------------------------------------------------------------------------
+
+node([], _O) -> err("node what? (./cs help)", []);
+node(Args, O) ->
+    node_path(),
+    T = node_target(O),
+    case csp_cmd:open(T) of
+	{ok, C} ->
+	    try
+		case Args of
+		    ["info" | _] -> node_info_cmd(Args, C, O);
+		    _ -> node_cmd(Args, C)
+		end
+	    after csp_cmd:close(C)
+	    end;
+	{error, Why} -> err("~s: ~s", [T, node_why(Why)])
+    end.
+
+%% What the node is, from /dump info alone; with -use, also what its program
+%% uses of it (the program read), -detail every endpoint. FILE: what that
+%% program would use, held against this node.
+node_info_cmd(["info"], C, O) ->
+    {I, C1} = node_ok(csp_cmd:info(C)),
+    node_info(I),
+    case maps:get(use, O, false) of
+	true ->
+	    {Ds, _} = node_ok(csp_cmd:program(C1)),
+	    node_uses(silent(fun() -> csp_node:program(Ds) end), I, O);
+	false -> ok
+    end;
+node_info_cmd(["info", File], C, O) ->
+    {I, _} = node_ok(csp_cmd:info(C)),
+    node_info(I),
+    node_uses(node_image(File), I, O);
+node_info_cmd(Args, _C, _O) ->
+    err("node ~s: info [file]", [join(Args, " ")]).
+
+node_cmd(["list"], C) ->
+    {Ds, _} = node_ok(csp_cmd:program(C)),
+    case silent(fun() -> node_listing(Ds) end) of
+	{ok, Text} -> io:format("~s", [Text]);
+	E -> err("not listed: ~P", [E, 8])
+    end;
+node_cmd(["state" | Names], C) ->
+    {Decls, C1} = node_decls(C),
+    {Cycle, Ms, Vals, _} = node_state(C1, Decls, Names),
+    io:format("cycle ~w, ~w ms~n", [Cycle, Ms]),
+    [io:format("  ~-16s ~s~n", [N, node_val(V)]) || {N, V} <- Vals],
+    ok;
+node_cmd(["get", Name], C) ->
+    {Decls, C1} = node_decls(C),
+    {_, _, Vals, _} = node_state(C1, Decls, []),
+    case lists:keyfind(Name, 1, Vals) of
+	{_, V} -> io:format("~s~n", [node_val(V)]);
+	false ->
+	    case [N || {N, _} <- Vals, node_under(N, Name)] of
+		[] -> err("no ~s on the node", [Name]);
+		Ns -> err("~s is not one value: ~s", [Name, string:join(Ns, " ")])
+	    end
+    end;
+node_cmd(["watch" | Names], C) ->
+    {Decls, C1} = node_decls(C),
+    node_watch(C1, Decls, Names, #{});
+node_cmd(["live"], C) -> node_said(csp_cmd:live(C));
+node_cmd(["latch", "on"], C) -> node_said(csp_cmd:latch(C, true));
+node_cmd(["latch", "off"], C) -> node_said(csp_cmd:latch(C, false));
+node_cmd(["settings"], C) -> node_said(csp_cmd:settings(C));
+node_cmd(["save"], C) -> node_said(csp_cmd:save(C));
+node_cmd(["load"], C) -> node_said(csp_cmd:load(C));
+node_cmd(["pause"], C) -> node_said(csp_cmd:pause(C));
+node_cmd(["go"], C) -> node_said(csp_cmd:resume(C));
+node_cmd(["reset"], C) -> node_said(csp_cmd:reset(C));
+node_cmd(["step"], C) -> node_said(csp_cmd:step(C, 1));
+node_cmd(["step", N], C) ->
+    case string:to_integer(N) of
+	{K, ""} when K > 0 -> node_said(csp_cmd:step(C, K));
+	_ -> err("step: not a number: ~s", [N])
+    end;
+node_cmd(["set" | NVs = [_, _ | _]], C) when length(NVs) rem 2 =:= 0 ->
+    node_set(NVs, C);
+node_cmd(["send" | Ws = [_ | _]], C) ->
+    node_said(csp_cmd:cmd(C, string:join(Ws, " "), 500));
+node_cmd(Args, _C) ->
+    err("node: no command '~s' (./cs help)", [string:join(Args, " ")]).
+
+%% csp_cmd and csp_node are this tree's; uart is ~/erlang/uart unless the
+%% code path (ERL_LIBS) has one.
+node_path() ->
+    code:add_patha(filename:join(filename:dirname(escript:script_name()),
+				 "ebin")),
+    case code:which(uart) of
+	non_existing ->
+	    code:add_pathz(filename:join(os:getenv("HOME"), "erlang/uart/ebin"));
+	_ -> ok
+    end.
+
+%% -D, as csp_cmd:target/1 reads it (a port, HOST:PORT), with -b on a port;
+%% else the one plugged in -- the one a board, if there are more.
+node_target(O) ->
+    Baud = maps:get(baud, O, "115200"),
+    case maps:find(dev, O) of
+	{ok, D = "/" ++ _} -> D ++ "@" ++ Baud;
+	{ok, D} -> D;
+	error ->
+	    Ps = ports(),
+	    case {Ps, [D || {D, Id, _} <- Ps, board_of_usb(Id) =/= []]} of
+		{[{D, _, _}], _} -> D ++ "@" ++ Baud;
+		{_, [D]} -> D ++ "@" ++ Baud;
+		{[], _} -> err("no node plugged in -- say where with -D", []);
+		_ -> err("~s: which node? -D says",
+			 [string:join([D || {D, _, _} <- Ps], ", ")])
+	    end
+    end.
+
+node_set([N, V | T], C) ->
+    {Ls, C1} = csp_cmd:set(C, N, V),
+    node_said({Ls, C1}),
+    node_set(T, C1);
+node_set([], _C) -> ok.
+
+%% The declarations a state is read by: the program the node runs.
+node_decls(C) ->
+    {Ds, C1} = node_ok(csp_cmd:program(C)),
+    {ok, {_, _, Decls, _}} = silent(fun() -> csp_node:program(Ds) end),
+    {Decls, C1}.
+
+%% The values; Names (none: all) picks them -- a name, and what is under it:
+%% an array's elements, an object's or a timer's members.
+node_state(C, Decls, Names) ->
+    case csp_cmd:state(C, Decls) of
+	{ok, Cycle, Ms, Vals, C1} ->
+	    {Cycle, Ms, [NV || NV = {N, _} <- Vals,
+			       Names =:= [] orelse
+				   lists:any(fun(W) -> node_under(N, W) end, Names)],
+	     C1};
+	{error, Why, _} -> err("~s", [node_why(Why)])
+    end.
+
+node_under(N, N) -> true;
+node_under(N, W) ->
+    lists:prefix(W ++ "[", N) orelse lists:prefix(W ++ ".", N).
+
+%% The values as they change, until ^C: all of them first, then a line for
+%% each state that differs, what differs on it.
+node_watch(C, Decls, Names, Last) ->
+    {Cycle, Ms, Vals, C1} = node_state(C, Decls, Names),
+    case [NV || NV = {N, V} <- Vals, maps:get(N, Last, none) =/= V] of
+	[] -> ok;
+	New ->
+	    io:format("~w ~w ms ~s~n",
+		      [Cycle, Ms, string:join([[N, "=", node_val(V)] || {N, V} <- New],
+					      " ")])
+    end,
+    timer:sleep(200),
+    node_watch(C1, Decls, Names, maps:from_list(Vals)).
+
+node_ok({ok, V, C}) -> {V, C};
+node_ok({error, Why, _}) -> err("~s", [node_why(Why)]).
+
+node_why(timeout) -> "no answer";
+node_why(S = [C | _]) when is_integer(C) -> S;
+node_why(Why) -> io_lib:format("~0p", [Why]).
+
+%% What the node said back, its echo left out.
+node_said({Ls, _}) -> [io:format("~s~n", [L]) || L <- Ls], ok.
+
+node_listing([{rom, Rom}]) -> csp_list:image(Rom);
+node_listing([{rom, Rom}, {_, Patch}]) -> csp_list:patch(Rom, Patch).
+
+%% What the program uses, and what of it the node does not have: it runs,
+%% and that buffer never delivers. No names: `node list' has them.
+node_uses({ok, P}, I, O) ->
+    Us = csp_list:uses(P),
+    Say = case maps:get(detail, O, false) of
+	      true -> fun(#{addr := A}) -> A end;
+	      false -> fun(#{transport := Tr, unit := N}) -> tr_unit(Tr, N) end
+	  end,
+    Once = fun(Xs) -> lists:reverse(lists:foldl(fun(X, Acc) ->
+							case lists:member(X, Acc) of
+							    true -> Acc;
+							    false -> [X | Acc]
+							end
+						end, [], Xs))
+	   end,
+    node_line("transp-use", case Us of
+				[] -> ["none"];
+				_ -> Once([Say(U) || U <- Us])
+			    end),
+    case csp_list:null(Us, I) of
+	[] -> ok;
+	Ns -> node_line("transp-null", Once([Say(U) || U <- Ns]),
+			" -- the null device here, never delivers")
+    end,
+    ok;
+node_uses(E, _I, _O) -> err("the program not read: ~P", [E, 8]).
+
+%% A transport and its unit, where it has units: i2c0, uart1, can.
+tr_unit(Tr, N) ->
+    case units(Tr) of
+	true -> to_list(Tr) ++ integer_to_list(N);
+	false -> to_list(Tr)
+    end.
+
+%% A label and its items, the items wrapped at a comma under the first.
+node_line(Label, Items) -> node_line(Label, Items, "").
+
+node_line(Label, Items, Tail) ->
+    Ind = ?LABEL,
+    Ls = lists:foldl(fun(X, [Cur | Done]) when length(Cur) + length(X) > 76 ->
+			     [lists:duplicate(Ind, $\s) ++ X, Cur ++ "," | Done];
+			(X, [Cur | Done]) when length(Cur) =< Ind -> [Cur ++ X | Done];
+			(X, [Cur | Done]) -> [Cur ++ ", " ++ X | Done]
+		     end, [lists:flatten(string:pad(Label, Ind))], Items),
+    [Last | Before] = Ls,
+    [io:format("~s~n", [L]) || L <- lists:reverse(Before) ++ [Last ++ Tail]],
+    ok.
+
+%% A program to hold against the node: an image as it is, a source compiled.
+node_image(File) ->
+    case filename:extension(File) of
+	".csp" ->
+	    Out = "tmp/cs_node_info",
+	    filelib:ensure_dir(Out),
+	    Said = string:split(string:trim(
+				  os:cmd("tools/csp-image -q -o " ++ Out ++ " " ++
+					 File ++ " 2>&1; echo $?")), "\n", all),
+	    case lists:last(Said) of
+		"0" -> silent(fun() -> csp_disasm:file(Out ++ ".img") end);
+		_ -> err("~s: ~s", [File, lists:join("\n", lists:droplast(Said))])
+	    end;
+	_ -> silent(fun() -> csp_disasm:file(File) end)
+    end.
+
+node_val(V) when is_integer(V) -> integer_to_list(V);
+node_val(V) when is_float(V) -> float_to_list(V, [{decimals, 4}, compact]);
+node_val(V) -> io_lib:format("~0p", [V]).
+
+node_info(I) ->
+    G = fun(K) -> maps:get(K, I, undefined) end,
+    L = fun(Label, Fmt, As) ->
+		io:format("~s" ++ Fmt ++ "~n", [string:pad(Label, ?LABEL) | As])
+	end,
+    L("node", "~s", [csp_cmd:info_text(I)]),
+    [L("rom", "format ~w", [R]) || R <- [G(rom)], R =/= undefined],
+    [L("features", "~s", [join(F, " ")]) || F <- [G(features)], F =/= undefined],
+    case G(eeprom) of
+	#{stored := St, capacity := Cap} ->
+	    L("eeprom", "~w B stored, capacity ~w", [St, Cap]);
+	_ -> ok
+    end,
+    [L("image", "~w: ~s gen ~w, ~w B~s",
+       [maps:get(index, Im, 0), to_list(maps:get(role, Im, '?')),
+	maps:get(gen, Im, 0), maps:get(size, Im, 0),
+	case maps:get(booted, Im, false) of true -> ", booted"; _ -> "" end])
+     || Im <- maps:get(images, I, [])],
+    [L("region", "~-8s ~s sectors ~w-~w~s",
+       [maps:get(name, R, "?"), to_list(maps:get(kind, R, '?')),
+	maps:get(first, R, 0), maps:get(last, R, 0),
+	case maps:get(slot, R, none) of
+	    none -> "";
+	    image -> ", an image";
+	    Sl -> ", " ++ to_list(Sl)
+	end])
+     || R <- maps:get(regions, I, [])],
+    case G(use) of
+	U when is_map(U) ->
+	    Lim = maps:get(limits, I, #{}),
+	    L("use", "~s",
+	      [join([io_lib:format("~s ~w/~w", [K, maps:get(K, U), maps:get(K, Lim)])
+		     || K <- [instr, decl, string, names],
+			maps:is_key(K, U), maps:is_key(K, Lim)], ", ")]);
+	_ -> ok
+    end,
+    %% only what is there: the rest is the null device
+    case G(transports) of
+	Ts when is_map(Ts) ->
+	    node_line("transp",
+		      [tr_unit(Tr, B) || {Tr, M} <- lists:keysort(1, maps:to_list(Ts)),
+					 B <- lists:seq(0, 31),
+					 M band (1 bsl B) =/= 0,
+					 units(Tr) orelse B =:= 0]);
+	_ -> ok
+    end,
+    ok.
+
+units(Tr) -> lists:member(Tr, [i2c, spi, uart]).
+
+%% The disassembler prints as it goes.
+silent(F) ->
+    {ok, Null} = file:open("/dev/null", [write]),
+    Old = group_leader(),
+    group_leader(Null, self()),
+    try F() after group_leader(Old, self()), file:close(Null) end.
 
 %% ---------------------------------------------------------------------------
 %% The serial ports, by what is behind them: [{Dev, "vid:pid", Product}]
