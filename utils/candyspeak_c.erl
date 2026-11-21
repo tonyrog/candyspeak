@@ -1374,6 +1374,7 @@ lrd(Env) -> maps:get(lrd, Env, "out->").
 
 cexpr({'INT', _, I}, _) -> I;
 cexpr({'FLT', Ln, _}, _) -> throw({unsupported, "float", Ln});
+cexpr({hole, Ln}, _) -> throw({unsupported, "a hole (_)", Ln});
 cexpr({'STR', Ln, _}, _) -> throw({unsupported, "string in an expression", Ln});
 cexpr({field, Ln, F}, Env) -> ref(F, Ln, Env);
 cexpr({call, Ln, {'WORD', _, F}, Args}, Env) -> call(F, Args, Ln, Env);

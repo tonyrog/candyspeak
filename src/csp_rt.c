@@ -453,6 +453,8 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_SMS_OWNERS] =             ros_err_sms_owners,
     [ERR_ONEWIRE_ROM] =            ros_err_onewire_rom,
     [ERR_EP_PARAM] =               ros_err_ep_param,
+    [ERR_HOLE] =                   ros_err_hole,
+    [ERR_BAD_CHAR] =               ros_err_bad_char,
     [ERR_INDEX_NOT_CONST] =        ros_err_index_not_const,
 };
 
@@ -514,6 +516,9 @@ NOINLINE void csp_print_error(csp_rt_t* st)
 	}
 	case 'd':
 	    csp_print_int((ivalue_t)((ai < 3) ? st->ps.err_args[ai++] : 0));
+	    break;
+	case 'c':
+	    csp_print_char((char)((ai < 3) ? st->ps.err_args[ai++] : '?'));
 	    break;
 	case '%':
 	    csp_print_char('%');

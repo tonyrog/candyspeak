@@ -1179,6 +1179,12 @@ next:
 		SYM(op_table_tok(i), name, len);
 	    SYM(WORD, name, len);
 	}
+	// A bare `_' is a hole: a half-written program saved as it is (caned).
+	// It parses on the host, and nothing compiles it.
+	else if ((c == '_') && !ISALPHA(*str) && !ISDIGIT(*str) && (*str != '_'))
+	    csp_set_error(st, ERR_HOLE);
+	else if (csp_set_error(st, ERR_BAD_CHAR))
+	    csp_set_err_arg_int(st, 0, c);
 	return -1;
     number:
 	if ((c == '0') && (*str == 'x')) {

@@ -413,10 +413,8 @@ item({module, _, {'WORD', _, M}}, S0 = #{nd := Mx, menv := none}) ->
 	      S1#{menv := #{}}),
     {J, S3} = emit('ENTER', [{mem, Mx}, {n, 0}], S2),
     push_block({module, J, Mx, M}, S3);
-%% `#route Src Dst' reads as an object line to the parser; it is a
-%% declaration, with an empty name of its own.
-item({object, _, {'WORD', _, "route"}, {'WORD', _, Src}, [{field, _, {'WORD', _, Dst}}]},
-     S0 = #{nd := N}) ->
+%% `#route Src Dst': a declaration with an empty name of its own.
+item({route, _, {'WORD', _, Src}, {'WORD', _, Dst}}, S0 = #{nd := N}) ->
     {ok, {Sx, buffer, _}} = find(Src, S0),
     {ok, {Dx, buffer, _}} = find(Dst, S0),
     S1 = name("", S0),
@@ -671,8 +669,8 @@ transport([{sms, {'WORD', _, O}, {'WORD', _, P}}], S) ->
     {ok, {Ox, _, _}} = find(O, S),
     {ok, {Px, _, _}} = find(P, S),
     {sms, [Ox bor ((Px + 1) bsl 16)], false};
-transport([{udp, P, udefined}], S) -> {udp, [0, ep(P, S)], true};
-transport([{tcp, P, udefined}], S) -> {tcp, [0, ep(P, S)], true};
+transport([{udp, P, undefined}], S) -> {udp, [0, ep(P, S)], true};
+transport([{tcp, P, undefined}], S) -> {tcp, [0, ep(P, S)], true};
 transport([{onewire, {Po, Pi}, {'WORD', _, R}}], S) ->
     {ok, {Rx, _, _}} = find(R, S),
     {onewire, [(fold(Po, S) bsl 8) bor fold(Pi, S), Rx], true};
@@ -989,6 +987,12 @@ patch_nxt(J, S = #{code := C, pc := Pc}) ->
 expr({'INT', _, T}, S) -> {{imm, integer, s32(int(T))}, S};
 expr({view, Vx}, S) -> {{var, Vx, unsigned}, S};
 expr({'FLT', _, T}, S) -> {{imm, float, fltbits(T)}, S};   % its IEEE bits
+%% A hole compiles to a HOLE, which csp_asm refuses: the program is not
+%% finished, and an image of it would run whatever stood in for the hole.
+expr({hole, L}, S) ->
+    {R, S1} = alloc(S),
+    {_, S2} = emit('HOLE', [R, {line, L}], S1),
+    {{reg, R, integer}, S2};
 expr({field, _, {'WORD', _, N}}, S) -> {leaf(N, S), S};
 expr({field, _, {index, _, {fld, _, {'WORD', _, O}, {'WORD', _, F}}, Ix}}, S) ->
     case obj_elem(O, F, Ix, S) of

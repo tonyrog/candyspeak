@@ -5,7 +5,7 @@ Terminals
   'when' 'else'
   'digital' 'analog' 'variable' 'local' 'param' 'constant' 
   'timer' 'field' 'buffer' 'define' 'disable' 'enable'
-  'annotate' 'import'
+  'annotate' 'import' 'hole'
   'integer' 'unsigned' 'string' 'float' 'in'
   'out' 'inout' 'little' 'big' 'native' 'pwm' 'bind'
   'val' 'pin' 'port' 'dir' 'endian' 'period' 'fired'
@@ -226,9 +226,13 @@ declaration -> 'disable' rule_list : {disable,line('$1'),'$2'}.
 declaration -> 'enable' rule_list : {enable,line('$1'),'$2'}.
 
 %% #<modeule-name> <object-name>  (Field (=|<-) Expr)*
+%%
+%% #route <src> <dst> -- bytes arriving at one buffer go out another, no rule
+%% between (syntax.terms D_ROUTE). `route' is no reserved word, as it is not
+%% in C either: a declaration word is a NAME looked up after the '#'. So the
+%% line reads as an object line, and is told apart here.
 
-declaration -> name name obj_params :
-		   {object,line('$1'),'$1','$2','$3'}.
+declaration -> name name obj_params : object('$1','$2','$3').
 
 name -> 'WORD' : '$1'.
 
@@ -291,17 +295,17 @@ buftype -> 'i2c' 'INT' 'INT' 'INT' : [{i2c,'$2','$3','$4'}].
 buftype -> 'spi' 'INT' 'INT' ':' 'INT' 'INT' :
 	       [{spi,'$2',{'$3','$5'},'$6'}].
 %% udp <port> == udp <port> 0
-buftype -> 'udp' 'INT' : [{udp,'$2',udefined}].
+buftype -> 'udp' 'INT' : [{udp,'$2',undefined}].
 %% udp <port> <ip>
 buftype -> 'udp' 'INT' 'INT' : [{udp,'$2','$3'}].
 %% the port by name, as for can
-buftype -> 'udp' 'WORD' : [{udp,{field,line('$2'),'$2'},udefined}].
+buftype -> 'udp' 'WORD' : [{udp,{field,line('$2'),'$2'},undefined}].
 buftype -> 'udp' 'WORD' 'INT' : [{udp,{field,line('$2'),'$2'},'$3'}].
 %% tcp <port> == tcp <port> 0
-buftype -> 'tcp' 'INT' : [{tcp,'$2',udefined}].
+buftype -> 'tcp' 'INT' : [{tcp,'$2',undefined}].
 %% tcp <port> <ip>
 buftype -> 'tcp' 'INT' 'INT' : [{tcp,'$2','$3'}].
-buftype -> 'tcp' 'WORD' : [{tcp,{field,line('$2'),'$2'},udefined}].
+buftype -> 'tcp' 'WORD' : [{tcp,{field,line('$2'),'$2'},undefined}].
 buftype -> 'tcp' 'WORD' 'INT' : [{tcp,{field,line('$2'),'$2'},'$3'}].
 %% uart <unit> [<baud>] (default baud = 9600)
 buftype -> 'uart' 'INT' : [{uart,'$2',9600}].
@@ -420,6 +424,8 @@ neg -> '-' : '$1'.
 expr -> 'INT'         : '$1'.
 expr -> 'FLT'         : '$1'.
 expr -> 'STR'         : '$1'.
+%% A hole: parses, evaluates as unknown, never assembles.
+expr -> 'hole'        : {hole,line('$1')}.
 expr -> ref         : '$1'.
 expr -> neg expr      : {'-',line('$1'),'$2'}.
 expr -> '~' expr  : {'~',line('$1'),'$2'}.
@@ -460,6 +466,11 @@ expr_array -> '{' expr_list '}' : {array,line('$1'),'$2'}.
      
 
 Erlang code.
+
+object({'WORD',L,"route"}, Src={'WORD',_,_}, [{field,_,Dst={'WORD',_,_}}]) ->
+    {route,L,Src,Dst};
+object(M, O, Ps) ->
+    {object,line(M),M,O,Ps}.
 
 line([H|_]) -> line(H);
 line(T) when is_tuple(T) -> element(2, T).

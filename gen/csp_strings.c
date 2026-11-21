@@ -72,6 +72,8 @@ rochar s_err_local_in_where[] RODATA = "#local ... in/out belongs in a #module";
 rochar s_err_sms_owners[] RODATA = "`sms` names a string #param listing the allowed numbers: #param Owners string = \"+4670...\"";
 rochar s_err_onewire_rom[] RODATA = "`onewire` names a string #param holding the ROM id: #param TinRom string = \"28ff641f0716a3c2\"";
 rochar s_err_ep_param[] RODATA = "a can id or a port by name is a global integer #param: #param Port = 15555";
+rochar s_err_hole[] RODATA = "a hole (_) -- the program is not finished";
+rochar s_err_bad_char[] RODATA = "no token starts with '%c'";
 rochar s_err_opts_after_pin[] RODATA = "option '%s' comes BEFORE the pin -- '#digital D in pullup 2:1', not after";
 rochar s_err_block_open[] RODATA = "#%s opened on line %d was never closed";
 rochar s_err_block_depth[] RODATA = "blocks nest at most %d deep -- #in, #when and #module together";

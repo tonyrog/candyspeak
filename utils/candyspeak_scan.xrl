@@ -6,8 +6,10 @@ Definitions.
 
 B	= [0-1]
 D	= [0-9]
-L       = [a-zA-Z_\$]
-A       = ({L}|{U})
+%% A name as the C scanner reads one (csp_compile.c): a letter, then
+%% letters, digits and `_'. A bare `_' is a hole, `_x' is no token at all.
+L       = [a-zA-Z]
+N       = [a-zA-Z0-9_]
 H	= [a-fA-F0-9]
 E	= [Ee][+-]?{D}+
 WS      = [\t\s\r]
@@ -81,7 +83,10 @@ rx                 : {token,{'rx', TokenLine}}.
 tx                 : {token,{'tx', TokenLine}}.
 len                : {token,{'len', TokenLine}}.
 
-{L}({L}|{D})*	   : {token,{'WORD',TokenLine,TokenChars}}.
+%% A hole: the bare `_', a part not written yet (caned).
+_{N}+		   : {error,"no token starts with '_'"}.
+_		   : {token,{'hole',TokenLine}}.
+{L}{N}*		   : {token,{'WORD',TokenLine,TokenChars}}.
 0[xX]{H}+          : {token,{'INT',TokenLine,TokenChars}}.
 {D}+               : {token,{'INT',TokenLine,TokenChars}}.
 {D}+\.{D}+\.{D}+\.{D}+ : {token,{'INT',TokenLine,TokenChars}}.

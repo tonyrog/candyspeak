@@ -396,7 +396,7 @@ build([D={timer,_Ln,{'WORD',_,Name},_Period,_Expr}|Lines],
       Stack, [Ds|Acc], [B|Bound]) ->
     build(Lines, Stack, [[D|Ds]|Acc], 
 	  [B#{ Name => D }|Bound]);
-build([D={buffer,_Ln,{'WORD',_,Name},_Period,_Expr}|Lines],
+build([D={buffer,_Ln,{'WORD',_,Name},_Res,_Options,_Transport}|Lines],
       Stack, [Ds|Acc], [B|Bound]) ->
     build(Lines, Stack, [[D|Ds]|Acc], 
 	  [B#{ Name => D }|Bound]);

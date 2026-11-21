@@ -1799,6 +1799,8 @@ typedef enum {
     ERR_SMS_OWNERS,
     ERR_ONEWIRE_ROM,
     ERR_EP_PARAM,
+    ERR_HOLE,         // `_': a part not written yet (caned) -- never compiled
+    ERR_BAD_CHAR,     // a character no token starts with
     // `Buf[Lo..Hi]` with an end that is not a constant. One byte can be chosen
     // at run time (`Buf[Pos]`, OP_SETOX in bits mode), but a range's WIDTH is
     // the view's, and a view is built at compile time.

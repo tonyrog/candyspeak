@@ -145,6 +145,10 @@ extern rochar s_err_onewire_rom[94] RODATA;
 #define ros_err_onewire_rom ((rostring_t) s_err_onewire_rom)
 extern rochar s_err_ep_param[75] RODATA;
 #define ros_err_ep_param ((rostring_t) s_err_ep_param)
+extern rochar s_err_hole[42] RODATA;
+#define ros_err_hole ((rostring_t) s_err_hole)
+extern rochar s_err_bad_char[26] RODATA;
+#define ros_err_bad_char ((rostring_t) s_err_bad_char)
 extern rochar s_err_opts_after_pin[74] RODATA;
 #define ros_err_opts_after_pin ((rostring_t) s_err_opts_after_pin)
 extern rochar s_err_block_open[39] RODATA;

@@ -1784,6 +1784,18 @@ ck "a block left open at end of file is refused" '5 #when opened on line 3 was n
 3 #module opened on line 1 was never closed
 5 #in opened on line 3 was never closed' "$got"
 
+# A HOLE (`_') is a part not written yet: a half-finished program is saved
+# with it (caned) and the host parses it, but nothing compiles it -- an image
+# would run whatever stood in for the hole. `_x' is not a hole. A character
+# no token starts with said "ok" and failed; it says which now.
+printf '#variable X\n#variable Y\nY = X > 1 && _\n' > "$D/hole1.csp"
+printf '#variable X\n#variable Y\nY = 1 ? X > _\n' > "$D/hole2.csp"
+printf '#variable X\nX = 3 @ 2\n' > "$D/hole3.csp"
+got=$(for f in hole1 hole2 hole3; do ./csp -n "$D/$f.csp" 2>&1 | sed 's;.*csp:;;'; done)
+ck "a hole is refused by the compiler, a stray character by name" '3 a hole (_) -- the program is not finished
+3 a hole (_) -- the program is not finished
+2 no token starts with '"'@'"'' "$got"
+
 # ...but NOT at the prompt, where a block is legitimately open while its rules
 # are being typed.
 got=$(printf '#variable X=1\n#when X\n/quit\n' | repl ./csp "$D/wm2.db" |

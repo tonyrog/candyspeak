@@ -91,6 +91,19 @@
 %%%
 %%%     -- at most one key of a keypad down at a time, each argument a
 %%%     candyspeak condition (see prop_expr/4).
+%%%
+%%%     INPUTS says how a set of inputs can move, as the hardware behind them
+%%%     lets them -- a keypad that reports one key, pressed or let go, at a
+%%%     time:
+%%%
+%%%         #annotate varp inputs "K1 K2 K3 K4 : low, down <= 1, events <= 1"
+%%%
+%%%     The names, then what is counted over them in every cycle: `down' the
+%%%     ones held, `events' the ones pressed or let go since the last sample,
+%%%     `presses' and `releases' each alone; <= < == >= > and a number.
+%%%     `low': held is 0 (active low), so a press is a falling edge. Each count
+%%%     is a [LTE n](...) assumed in every cycle, as the solver's own are, so
+%%%     the edges are allowed.
 %%%     Every invariant is conjoined with `St != FAILSAFE' into the one
 %%%     invariant item, which is varp's default property; one reach and one
 %%%     eventually at most, picked with `--property <system>_reach'. A name
@@ -594,6 +607,11 @@ item({rule, Ln, Assigns, Guard}, C) ->
 
 %% A property, see the top. Only parsed here: whether it translates depends on
 %% declarations that may come later, so finish/1 checks it.
+item({annotate, Ln, {'WORD', _, "varp"}, {'WORD', _, "inputs"}, {'STR', _, S}}, C) ->
+    F = imported(C),
+    C#{props := maps:get(props, C) ++
+           [#{kind => "cycle", text => T, line => Ln, file => F,
+              expr => prop_expr("reach", T, Ln, F)} || T <- inputs(S, Ln, F)]};
 item({annotate, Ln, {'WORD', _, "varp"}, {'WORD', _, Kind}, {'STR', _, S}}, C) ->
     F = imported(C),
     lists:member(Kind, ["invariant", "assume", "reach", "eventually"]) orelse
@@ -622,6 +640,33 @@ prop_expr(Kind, S, Ln, F) ->
 	nomatch ->
 	    prop_expr1(Kind, S, Ln, F)
     end.
+
+%% `inputs': the names, then the counts over them -- each a count in varp's
+%% form, its arguments candyspeak, to be assumed in every cycle.
+inputs(S, Ln, F) ->
+    Bad = fun(Why) -> throw({varp_annotate, loc_text(Ln, F), "inputs", Why}) end,
+    {Names, Cs} = case string:split(S, ":") of
+                      [A, B] -> {string:lexemes(A, " ,\t"),
+                                 [string:trim(X) || X <- string:lexemes(B, ",")]};
+                      _ -> Bad({syntax, "names : counts"})
+                  end,
+    Names =/= [] orelse Bad({syntax, "no names"}),
+    Low = lists:member("low", Cs),
+    Held = fun(X) when Low -> "!" ++ X; (X) -> X end,
+    Press = fun(X) when Low -> "falling(" ++ X ++ ")"; (X) -> "rising(" ++ X ++ ")" end,
+    Release = fun(X) when Low -> "rising(" ++ X ++ ")"; (X) -> "falling(" ++ X ++ ")" end,
+    Of = #{"down" => Held,
+           "events" => fun(X) -> "rising(" ++ X ++ ") || falling(" ++ X ++ ")" end,
+           "presses" => Press, "releases" => Release},
+    Qs = #{"<=" => "LTE", "<" => "LT", "==" => "EQ", ">=" => "GTE", ">" => "GT"},
+    [case re:run(Cnt, "^(down|events|presses|releases)\\s*(<=|<|==|>=|>)\\s*([0-9]+)$",
+                 [{capture, all_but_first, list}]) of
+         {match, [What, Op, N]} ->
+             Arg = maps:get(What, Of),
+             lists:flatten(["[", maps:get(Op, Qs), " ", N, "](",
+                            lists:join(", ", [Arg(X) || X <- Names]), ")"]);
+         nomatch -> Bad({syntax, Cnt})
+     end || Cnt <- Cs, Cnt =/= "low"].
 
 %% Split at the commas that are not inside parentheses.
 args(S) -> args(S, 0, [], []).
@@ -944,7 +989,7 @@ storable(E, Sig, C) ->
 	error   -> false
     end.
 
-%%% Replace what we cannot translate in a guard -- timeout(), a part, a call --
+%%% Replace what we cannot translate in a guard -- timeout(), a part, a call, a hole --
 %%% with a fresh free input. The transition then becomes POSSIBLE rather than
 %%% determined, which is the standard abstraction and keeps a proof sound: the
 %%% model can do everything the program can, and more.
@@ -1446,7 +1491,7 @@ free_note(C) ->
 	[] -> "";
 	Fs -> ["// FREE (input, not state): ", lists:join(", ", Fs), "\n"
 	       "// Each is written by a rule this translator cannot model --\n"
-	       "// a part, a call, an array. Left free the model has MORE\n"
+	       "// a part, a call, an array, a hole (_). Left free the model has MORE\n"
 	       "// behaviour than the program, so a PROOF still holds while a\n"
 	       "// counterexample may be spurious. Read one against the source.\n"]
     end.
@@ -2080,7 +2125,7 @@ footer(C) ->
     case maps:get(skipped, C) of
 	[] -> "";
 	Rs -> ["\n// NOT TRANSLATED (", integer_to_list(length(Rs)),
-	       " rules), because of a part, a call or an array:\n",
+	       " rules), because of a part, a call, an array or a hole (_):\n",
 	       [["//   line ", loc(maps:get(line, R), maps:get(file, R)), "\n"]
 		|| R <- Rs]]
     end.

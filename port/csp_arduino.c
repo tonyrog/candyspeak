@@ -351,9 +351,41 @@ static void serial_put(char c)
     if ((c == '\n') || (obuf_n == sizeof(obuf)))
 	serial_flush();
 }
+#elif defined(ESP32) && (ARDUINO_USB_MODE == 1) && (ARDUINO_USB_CDC_ON_BOOT == 1)
+// The ESP32's own USB (HWCDC) BLOCKS when the port is open on the host side
+// but nobody reads it -- a panel that went away. The cable is in, so the
+// core still says connected, and a write waits 20 x its tx timeout for room
+// in the ring: two seconds a byte, and the 8 s CSP_WATCHDOG resets the node.
+//
+// So: a short timeout (serial_init), and once a write has given up, nothing
+// more is written until the host has made room again. Output while no one
+// reads is lost, as on a closed port. A host that reads never stalls 20 x
+// 10 ms, so nothing is lost while one does.
+static uint8_t stuck;
+
+static void serial_init(void)
+{
+    Serial.setTxBufferSize(1024);
+    Serial.setTxTimeoutMs(10);
+}
+
+static void serial_put(char c)
+{
+    if (stuck) {
+	if (Serial.availableForWrite() == 0)
+	    return;
+	stuck = 0;
+    }
+    if (Serial.write((uint8_t)c) != 1)
+	stuck = 1;
+}
+#define serial_flush()   do { } while (0)
 #else
 #define serial_put(c)    Serial.write(c)
 #define serial_flush()   do { } while (0)
+#endif
+#if !(defined(ESP32) && (ARDUINO_USB_MODE == 1) && (ARDUINO_USB_CDC_ON_BOOT == 1))
+#define serial_init()    do { } while (0)
 #endif
 
 EXTERN_C_BEGIN
@@ -2311,6 +2343,7 @@ void setup()
     uint32_t t0;
 
     boot_mark(1);
+    serial_init();
     Serial.begin(115200);
     // Bounded wait: never hang forever if the USB port is never opened.
     t0 = millis();

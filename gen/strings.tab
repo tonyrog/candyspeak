@@ -81,6 +81,8 @@ err_local_in_where #local ... in/out belongs in a #module
 err_sms_owners `sms` names a string #param listing the allowed numbers: #param Owners string = "+4670..."
 err_onewire_rom `onewire` names a string #param holding the ROM id: #param TinRom string = "28ff641f0716a3c2"
 err_ep_param a can id or a port by name is a global integer #param: #param Port = 15555
+err_hole a hole (_) -- the program is not finished
+err_bad_char no token starts with '%c'
 err_opts_after_pin option '%s' comes BEFORE the pin -- '#digital D in pullup 2:1', not after
 err_block_open #%s opened on line %d was never closed
 err_block_depth blocks nest at most %d deep -- #in, #when and #module together

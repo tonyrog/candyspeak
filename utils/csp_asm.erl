@@ -396,6 +396,9 @@ bin(T) when is_list(T) -> unicode:characters_to_binary(T).
 
 %% An instruction term, as csp_disasm writes it: the words it stands for --
 %% one, or a segment's header and its payload.
+%% A hole (csp_cc's HOLE): the program is not finished. No opcode is one.
+instr(_F, {instr, _Addr, 'HOLE', [_, {line, L}]}) ->
+    throw({hole, L});
 instr(F, {instr, _Addr, Op}) ->
     [pack(F, instr, none, #{op => op(Op)})];
 instr(F, {instr, _Addr, Op, Args}) ->

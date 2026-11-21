@@ -132,6 +132,7 @@ sig(Kind, Res, Opts) ->
 %% The value, or `unknown'. Vals maps a name to the dumped value.
 eval({'INT', _, S}, _Vals, _E) -> int(S);
 eval({'FLT', _, S}, _Vals, E) -> snap(flt(S), E);
+eval({hole, _}, _Vals, _E) -> unknown;                % not written yet
 eval({field, _, {'WORD', _, N}}, Vals, E) -> name(N, Vals, E);
 eval({field, _, {fld, _, {'WORD', _, O}, {'WORD', _, N}}}, Vals, E) ->
     name(O ++ "." ++ N, Vals, E);                   % an object's member
@@ -865,6 +866,7 @@ text(X) -> lists:flatten(text(X, 0)).
 
 text({'INT', _, S}, _P) -> S;
 text({'FLT', _, S}, _P) -> S;
+text({hole, _}, _P) -> "_";
 text({'STR', _, S}, _P) -> [$", S, $"];
 text({field, _, F}, _P) -> fld(F);
 text({'!', _, X}, _P)   -> ["!", text(X, 11)];
@@ -884,8 +886,8 @@ text(_, _P) -> "?".
 fld({'WORD', _, N})                    -> N;
 fld({part, _, B, {'WORD', _, P}})      -> [fld(B), ".", P];
 fld({fld, _, B, {'WORD', _, P}})       -> [fld(B), ".", P];
-fld({index, _, B, {range, _, {'INT', _, A}, {'INT', _, Z}}}) ->
-    [fld(B), "[", A, "..", Z, "]"];
+fld({index, _, B, {range, _, A, Z}}) ->         % its ends named or not
+    [fld(B), "[", text(A, 0), "..", text(Z, 0), "]"];
 fld({index, _, B, Ix})                 -> [fld(B), "[", text(Ix, 0), "]"];
 fld(_)                                 -> "?".
 
