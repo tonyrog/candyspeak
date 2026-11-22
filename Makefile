@@ -65,7 +65,7 @@ OBJS = $(addprefix $(OBJDIR)/, \
 	csp_strings.o csp_transport.o csp_sms.o csp_console.o csp_states.o \
 	csp_flash.o csp_devices.o csp_flash_host.o csp_socketcan.o csp_udp.o rom_empty.o)
 
-LIBS =
+LIBS = ./port/click/libclicker.a -lasound -lm
 
 # -Wshift-overflow=2 is NOT in -Wall, and it is the one that matters on a target
 # where `int` is 16 bits: `1 << 15` is INT_MIN there, not 32768. That is what
@@ -97,6 +97,9 @@ all:	csp
 
 debug: CFLAGS += -DDEBUG
 debug: all
+
+click: CFLAGS += -DCSP_USE_CLICK
+click: all
 
 # Sanitizer build (host): catches misaligned access -- the Cortex-M0 HardFault
 # class that x86 tolerates silently -- plus out-of-bounds and other UB. Forces a

@@ -19,6 +19,11 @@
 #define CSP_HAS_SOCKETCAN 1
 #endif
 
+#if defined(__linux__) && !defined(CSP_CLICK)
+#define CSP_HAS_CLICK 1
+#include "click/clicker.h"
+#endif
+
 #include "csp.h"
 #include "csp_compile.h"
 #include "csp_print.h"
@@ -1731,6 +1736,10 @@ static struct option long_options[] = {
     {"fired",        no_argument,       0,  1019},
 #endif
     {"image",        required_argument, 0,  1020},
+#if defined(CSP_HAS_CLICK) && CSP_HAS_CLICK
+    {"audio",        required_argument, 0,  'a'},
+    {"click",        no_argument,       0,  1023},
+#endif
     {0,              0,                 0,  0 }
 };
 
@@ -2441,6 +2450,14 @@ int main(int argc, char** argv)
     csp_lang_t lang = TEXT;
     int given = 0;    // was a program handed to us (file or stdin)?
     int anyd;
+#if defined(CSP_HAS_CLICK) && CSP_HAS_CLICK
+    int click = 0;  // pass in candid, toggle in interface on/off
+    uint32_t click_cycle;
+    clicker_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.volume = 0.5;
+    cfg.freq = 440.0;
+#endif
 
 #if defined(CSP_RO_POISON)
     // FIRST, before anything reads a string from the core's RODATA.
@@ -2450,7 +2467,7 @@ int main(int argc, char** argv)
 
     while (1) {
 	int option_index = 0;
-	c = getopt_long(argc, argv, "hindPQRSCc:T:s:p:rtO:e:L:I:F:m:M:E:U:b",
+	c = getopt_long(argc, argv, "hindPQRSCc:T:s:p:rtO:e:L:I:F:m:M:E:U:b:a",
 			long_options, &option_index);
 	if (c == -1)
 	    break;
@@ -2476,6 +2493,11 @@ int main(int argc, char** argv)
 		    "this build has none (use ./csp)\n", argv[0]);
 	    exit(1);
 #else
+
+#if defined(__linux__) && !defined(CSP_CLICK)
+	case 'a': cfg.device = optarg; break;
+	case 1023: click = 1; break;
+#endif
 	case 'i': interactive = 1; break;
 	case 'b': pause_start = 1; interactive = 1; break;  // pause needs the REPL
 	case 'n': execute = 0; break;
@@ -3032,7 +3054,24 @@ int main(int argc, char** argv)
     if (nfds > 0)
 	poll(pfd, poll_set(pfd, nfds, pfd_max), 0);
 
+#if defined(CSP_HAS_CLICK) && CSP_HAS_CLICK
+    if (click) {
+	if (clicker_start(&cfg) < 0) {
+	    sound_device_print_last_error(stderr);	    
+	    // exit(1);
+	}
+	click_cycle = 0xffffffff;
+    }
+#endif
+
 loop:
+#if defined(CSP_HAS_CLICK) && CSP_HAS_CLICK
+    if (click && (state.cycle != click_cycle)) {
+	clicker_click();
+	click_cycle = state.cycle;
+    }
+#endif
+    
     if (quit_flag)
 	goto done;
 
@@ -3255,6 +3294,11 @@ loop:
 #endif
 
 done:
+#if defined(CSP_HAS_CLICK) && CSP_HAS_CLICK
+    if (click) {
+	clicker_stop();
+    }
+#endif    
     if (debug_result)
 	csp_dump_result(state_file, &state, x, lang);
     
