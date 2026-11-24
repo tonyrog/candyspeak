@@ -13,6 +13,9 @@
 #include "csp_print.h"
 #include "csp_bits.h"
 #include "csp_part.h"    // .part bit layout inside a value slot (see tests/part_layout.c)
+#if defined(CSP_HAVE_FLASH)
+#include "csp_flash.h"   // the application slots, for an image to boot from
+#endif
 #ifdef DEBUG
 #include "csp_dump.h"
 #include <stdio.h>
@@ -3670,21 +3673,89 @@ NOINLINE int csp_load_image(csp_rt_t* st, const uint8_t* base)
 #if defined(CSP_NO_IMAGE_REGISTRY)
 // No section, so nothing to enumerate. csp_load_rom does not come through here
 // -- it takes rom_image directly -- so the firmware still runs its own image.
-int csp_image_count(void) { return 0; }
-const uint8_t* csp_image_at(int i) { (void)i; return NULL; }
+static int linked_count(void) { return 0; }
+static const uint8_t* linked_at(int i) { (void)i; return NULL; }
 #else
-int csp_image_count(void)
+static int linked_count(void)
 {
     return (int)(__stop_csp_images - __start_csp_images);
 }
 
-const uint8_t* csp_image_at(int i)
+static const uint8_t* linked_at(int i)
 {
-    if ((i < 0) || (i >= csp_image_count()))
+    if ((i < 0) || (i >= linked_count()))
 	return NULL;
     return __start_csp_images[i];
 }
 #endif
+
+// THE IMAGES ARE NUMBERED the linked ones first, then the application slots
+// in the order the part's map lists them -- what /images prints, sys.Image
+// reports and sys.Boot asks for. A slot is a number whether it holds an image
+// or not, so writing one does not renumber the others; whoever reads it checks
+// the magic (csp_find_image_skip does). A slot that holds a LINKED image --
+// a part whose firmware places its program on slot A -- is that image and is
+// not counted twice.
+#if defined(CSP_HAVE_FLASH)
+// The kth slot that is not a linked image, as memory; NULL past the last.
+static const uint8_t* slot_at(int k, int* nslots)
+{
+    const csp_device_t* d = csp_device();
+    int n = 0;
+    uint8_t i;
+
+    for (i = 0; (d != NULL) && (i < d->nregion); i++) {
+	const csp_region_t* r = &d->region[i];
+	const uint8_t* p;
+	int j, linked = 0;
+	if (r->kind != CSP_REG_APP)
+	    continue;
+	if ((p = csp_flash_map(csp_region_offset(d, r))) == NULL)
+	    continue;
+	for (j = 0; j < linked_count(); j++)
+	    if (linked_at(j) == p)
+		linked = 1;
+	if (linked)
+	    continue;
+	if (n++ == k)
+	    return p;
+    }
+    if (nslots != NULL)
+	*nslots = n;
+    return NULL;
+}
+#endif
+
+int csp_image_count(void)
+{
+    int n = 0;
+#if defined(CSP_HAVE_FLASH)
+    (void)slot_at(-1, &n);
+#endif
+    return linked_count() + n;
+}
+
+// Does an image start here: the magic, nothing more (an empty slot reads 0xff).
+int csp_image_is(const uint8_t* base)
+{
+    csp_image_header_t h;
+    if (base == NULL)
+	return 0;
+    h = ro_header((const csp_image_header_t*)base);
+    return (h.magic[0] == CSP_IMAGE_MAGIC0) && (h.magic[1] == CSP_IMAGE_MAGIC1) &&
+	(h.magic[2] == CSP_IMAGE_MAGIC2) && (h.magic[3] == CSP_IMAGE_MAGIC3);
+}
+
+const uint8_t* csp_image_at(int i)
+{
+    if (i < linked_count())
+	return linked_at(i);
+#if defined(CSP_HAVE_FLASH)
+    return slot_at(i - linked_count(), NULL);
+#else
+    return NULL;
+#endif
+}
 
 // Pick the best linked image for a role: the highest generation whose header
 // verifies. Header only -- the section CRCs are csp_load_image's business, and

@@ -3289,6 +3289,10 @@ extern const csp_image_ref_t rom_image;
 // How many images this firmware linked in, and the base of the i:th one.
 extern int            csp_image_count(void);
 extern const uint8_t* csp_image_at(int i);
+extern int            csp_image_is(const uint8_t* base);
+// The board restarted from software, for /reboot; the port's, where
+// CSP_HAVE_REBOOT says there is one (csp_config.h).
+extern void           csp_port_reboot(void);
 extern const uint8_t* csp_find_image_no(unsigned role, int* nop);
 // The same, ignoring registry indices whose bit is set in `skip` (0..31).
 extern const uint8_t* csp_find_image_skip(unsigned role, int* nop,

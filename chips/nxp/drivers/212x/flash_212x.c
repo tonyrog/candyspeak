@@ -151,3 +151,10 @@ int csp_flash_read(uint32_t off, void* data, uint32_t len)
     memcpy(data, (const void*)(uintptr_t)(d->flash.base + off), len);
     return CSP_FLASH_OK;
 }
+
+// Memory mapped: an image in a slot is run from where it lies.
+const uint8_t* csp_flash_map(uint32_t off)
+{
+    const csp_device_t* d = csp_device();
+    return (d == NULL) ? NULL : (const uint8_t*)(uintptr_t)(d->flash.base + off);
+}

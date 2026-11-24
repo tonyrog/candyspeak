@@ -29,7 +29,9 @@
   %% for the temperatures, the console rings the SMS route uses, and the
   %% SIM7080G on its UART: RX 4 and TX 5 on the ESP32's side, PWRKEY 41.
   %% A watchdog: eight seconds without a loop() and the board resets.
-  {define, ['CSP_HAS_I2C', 'CSP_HAS_ONEWIRE',
+  %% Flash slots A and B for /upgrade, in the scheme's FAT partition (see
+  %% port/csp_arduino.c); /reboot to come up on them.
+  {define, ['CSP_HAS_I2C', 'CSP_HAS_ONEWIRE', 'CSP_HAVE_FLASH',
             {'CSP_I2C_SDA', 15}, {'CSP_I2C_SCL', 7},
             {'CSP_CONSOLE_BYTES', 256},
             'CSP_HAS_SMS', 'CSP_SMS_SIM7080',

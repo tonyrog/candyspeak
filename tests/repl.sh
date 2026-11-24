@@ -891,6 +891,31 @@ A: ROM gen=0 size=1348 rules=268" "$got"
     ck "a whole that does not add up stamps nothing" \
 "ERR image -- slot is erased
 A: erased" "$got"
+
+    # BOOTING FROM A SLOT. The slots are numbered after the linked images, and
+    # the highest generation runs: the program upgraded into slot A is the one
+    # that comes up at the next start, on the same flash.
+    if tools/csp-image -q -g 5 -o "$D/up5" examples/arith.csp >/dev/null 2>&1; then
+	blank "$D/up.bin"
+	{ echo "/upgrade A"; cat "$D/up5.hex"; echo "/quit"; } \
+	    | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab >/dev/null 2>&1
+	got=$(printf 'sys.Image\n/list\n/quit\n' \
+	      | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
+	      | sed -n 's#^\(> \)*\([0-9]*\|X=Y+Z.*\)$#\2#p' | sed '/^$/d' | tr '\n' ' ')
+	ck "the next start runs the program in slot A, numbered after the linked" \
+	   "1 X=Y+Z,S=1 ? S==0  // 1 F " "$got"
+
+	# A damaged section is found when the slot's image is loaded, and the
+	# loader goes on to the next best: the linked image, not an empty node.
+	printf '\000\000\000\000' | dd of="$D/up.bin" bs=1 seek=$((4096 + 700)) \
+	    conv=notrunc status=none
+	got=$(printf 'sys.Image\n/quit\n' \
+	      | ./csp -i --no-eeprom --flash="$D/up.bin" --part=ab 2>&1 \
+	      | sed -n 's#^\(> \)*\([0-9][0-9]*\)$#\2#p')
+	ck "a damaged slot is passed over for the linked image" "0" "$got"
+    else
+	echo "  FAIL csp-image -g 5 did not produce an image"; fail=$((fail+1))
+    fi
 else
     echo "  FAIL csp-image did not produce an image"; fail=$((fail+1))
 fi

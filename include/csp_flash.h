@@ -28,6 +28,11 @@
 
 #include "csp.h"
 
+// C linkage from a C++ port too (the ESP32's, in the Arduino sketch).
+#ifdef __cplusplus
+EXTERN_C_BEGIN
+#endif
+
 // A part's flash: where it starts and how its sectors are sized. `size` has
 // `n` entries, one per sector, in address order.
 typedef struct {
@@ -163,6 +168,20 @@ extern int csp_flash_write(uint32_t off, const void* data, uint32_t len);
 // about, but a host file is not, so it goes through a call like the rest.
 extern int csp_flash_read(uint32_t off, void* data, uint32_t len);
 
+// Byte `off` of the flash as memory the runtime can read an image from in
+// place, or NULL when it cannot be had. The backend's, beside erase/write/
+// read: flash.base + off where the flash is in the address space (the LPC
+// and STM32 drivers), a mapping where it is not (an ESP32's SPI flash behind
+// the MMU, the host's file). What it returns stays valid for as long as the
+// program runs: a booted image is executed from it.
+extern const uint8_t* csp_flash_map(uint32_t off);
+
+// Does this region hold that pointer? The same question as csp_region_holds,
+// asked of a pointer an image is run from (csp_flash_map's), which is not an
+// address in the part's own space on every part.
+extern int csp_region_holds_ptr(const csp_device_t* d, const csp_region_t* r,
+				const uint8_t* p);
+
 // Erase the region and write `data` into it. The one operation the rest of the
 // system wants: "put this image in slot B".
 extern int csp_flash_put(const csp_device_t* d, const csp_region_t* r,
@@ -196,5 +215,9 @@ extern void csp_flash_host_file(const char* path);
 extern void csp_device_set(const csp_device_t* d);
 // One of the host layouts by name: "ab", "apps", "full".
 extern const csp_device_t* csp_device_by_name(const char* name);
+
+#ifdef __cplusplus
+EXTERN_C_END
+#endif
 
 #endif

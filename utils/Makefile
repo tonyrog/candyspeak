@@ -11,7 +11,7 @@ XRL_SRC=$(wildcard *.xrl)
 YRL_XRL_GENERATES=$(YRL_SRC:%.yrl=%.erl) $(XRL_SRC:%.xrl=%.erl)
 MODULES=$(YRL_XRL_GENERATES:%.erl=%) candyspeak candyspeak_varp candyspeak_c \
 	csp_to_c csp_disasm csp_asm csp_list csp_node csp_patch csp_to_candyspeak \
-	candyspeak_eval csp_tools csp_cc csp_img csp_cmd
+	candyspeak_eval csp_tools csp_cc csp_img csp_cmd csp_ports
 ALL_OBJECTS=$(MODULES:%=$(EBIN)/%.beam)
 
 empty=

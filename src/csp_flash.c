@@ -158,6 +158,20 @@ int csp_region_holds(const csp_device_t* d, const csp_region_t* r, uint32_t addr
     return (addr >= off) && (addr < (off + len));
 }
 
+int csp_region_holds_ptr(const csp_device_t* d, const csp_region_t* r,
+			 const uint8_t* p)
+{
+    const uint8_t* b;
+    uint32_t len;
+
+    if ((d == NULL) || (r == NULL) || (p == NULL))
+	return 0;
+    len = csp_region_size(d, r);
+    if ((len == 0) || ((b = csp_flash_map(csp_region_offset(d, r))) == NULL))
+	return 0;
+    return (p >= b) && (p < (b + len));
+}
+
 int csp_flash_writable(const csp_device_t* d, const csp_region_t* r)
 {
     csp_image_header_t h;

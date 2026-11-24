@@ -27,14 +27,16 @@ cmd_load load
 cmd_quit quit
 cmd_exit exit
 cmd_hang hang
+cmd_reboot reboot
 h_help Show this help
 h_list List rules (F=flash E=eeprom-backed R=ram P=patches a #param S=setting)
 h_state Show current values
 h_memory Show code/RAM usage
 h_onewire <port>:<pin> -- list 1-Wire ROM ids, as > lines to paste
-h_images List the images linked into this firmware
+h_images List the images: the linked ones, then the flash slots
 h_dump rom [slot] [offs [len]] | eeprom | patch | state | info -- hex+crc lines
 h_upgrade Receive a CandySpeak image into a flash region (hex lines, . to end)
+h_reboot Restart the board: it comes up on the best image, an upgraded slot's
 h_pause Stop execution (inspect/edit)
 h_step Run N cycles (default 1) and pause again
 h_clock Hold the clock, N ms forward (until /resume)

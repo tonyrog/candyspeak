@@ -106,3 +106,27 @@ int csp_flash_read(uint32_t off, void* data, uint32_t len)
     fclose(f);
     return CSP_FLASH_OK;
 }
+
+// The flash as memory, for an image to boot from a slot: the file read into a
+// buffer once, at the first ask -- which is the boot, before anything has
+// been written. It is never freed or read again: an image is run from it, and
+// a /upgrade during the run changes the file for the NEXT start, as it
+// changes a part's flash for the next reset.
+const uint8_t* csp_flash_map(uint32_t off)
+{
+    static uint8_t* mem = NULL;
+    static uint32_t n = 0;
+
+    if (mem == NULL) {
+	FILE* f;
+	n = flash_bytes();
+	if ((mem = (uint8_t*)malloc(n)) == NULL)
+	    return NULL;
+	memset(mem, 0xff, n);
+	if ((f = fopen(flash_file, "rb")) != NULL) {
+	    (void)fread(mem, 1, n, f);
+	    fclose(f);
+	}
+    }
+    return (off < n) ? mem + off : NULL;
+}

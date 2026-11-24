@@ -423,6 +423,12 @@ int csp_flash_read(uint32_t a, void* b, uint32_t n)
     return -1;
 }
 
+const uint8_t* csp_flash_map(uint32_t a)
+{
+    (void)a;
+    return NULL;
+}
+
 int csp_flash_write(uint32_t a, const void* b, uint32_t n)
 {
     (void)a; (void)b; (void)n;

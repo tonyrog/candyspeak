@@ -88,9 +88,14 @@ static int cmd_images(csp_rt_t* st, int argc, char* argv[])
 
     for (i = 0; i < n; i++) {
 	const uint8_t* base = csp_image_at(i);
-	csp_image_header_t h = ro_header((const csp_image_header_t*)base);
-	int ok = (csp_crc16(0xFFFF, &h, sizeof(h) - sizeof(uint16_t), 0)
-		  == h.crc_hdr);
+	csp_image_header_t h;
+	int ok;
+	// A slot is numbered whether it holds an image or not; an empty one is
+	// said below, by its name.
+	if (!csp_image_is(base))
+	    continue;
+	h = ro_header((const csp_image_header_t*)base);
+	ok = (csp_crc16(0xFFFF, &h, sizeof(h) - sizeof(uint16_t), 0) == h.crc_hdr);
 	csp_print_uint(i);
 	csp_print_lit(": ");
 	csp_print_rostr((h.role == CSP_ROLE_FAILSAFE) ? ros_FAILSAFE : ros_ROM);
@@ -183,6 +188,9 @@ static int cmd_live(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_resume(csp_rt_t* st, int argc, char* argv[]);
 static int cmd_onewire(csp_rt_t* st, int argc, char* argv[]);
 #endif /* !CSP_REXEC_SLIM */
+#if defined(CSP_HAVE_REBOOT)
+static int cmd_reboot(csp_rt_t* st, int argc, char* argv[]);
+#endif
 #if defined(CSP_WATCHDOG)
 #if !defined(CSP_REXEC_SLIM)
 static int cmd_hang(csp_rt_t* st, int argc, char* argv[]);
@@ -242,8 +250,29 @@ static const csp_cmd_t builtin_cmds[] = {
     { ros_cmd_hang,   NULL,        cmd_hang },    // not in /help: a test
 #endif
 #endif
+#if defined(CSP_HAVE_REBOOT)
+    { ros_cmd_reboot, H(ros_h_reboot), cmd_reboot },
+#endif
     { NULL, NULL, NULL }
 };
+
+#if defined(CSP_HAVE_REBOOT)
+// Unsaved work is lost, as with /upgrade: refused unless `force' says the
+// RAM program is expendable.
+static int cmd_reboot(csp_rt_t* st, int argc, char* argv[])
+{
+    (void)argv;
+    if ((argc < 1) &&
+	(((uvalue_t)(st->ps.nd - st->rom_nd) != (uvalue_t)st->ee_nd) ||
+	 ((uvalue_t)(st->ps.nn - st->rom_nn) != (uvalue_t)st->ee_nn))) {
+	csp_print_line("ERR unsaved -- /save first, or add: force");
+	return CSP_CMD_OK;
+    }
+    csp_print_line("rebooting");
+    csp_port_reboot();
+    return CSP_CMD_OK;
+}
+#endif
 
 #if defined(CSP_WATCHDOG)
 // Stop the loop on purpose, so the watchdog's reset can be seen to happen --
@@ -2801,7 +2830,10 @@ static void info_emit(csp_rt_t* st)
 
     n = csp_image_count();
     for (i = 0; i < n; i++) {
-	csp_image_header_t h = ro_header((const csp_image_header_t*)csp_image_at(i));
+	csp_image_header_t h;
+	if (!csp_image_is(csp_image_at(i)))
+	    continue;                    // an empty slot
+	h = ro_header((const csp_image_header_t*)csp_image_at(i));
 	rec_varint(&r, (uint32_t)i);
 	rec_varint(&r, h.role);
 	rec_varint(&r, h.generation);
@@ -3349,7 +3381,7 @@ static int cmd_upgrade(csp_rt_t* st, int argc, char* argv[])
     // this part and the program executes IN PLACE, so erasing its slot pulls
     // the program out from under the interpreter mid-command.
     if ((st->image_no >= 0) &&
-	csp_region_holds(d, r, (uint32_t)(uintptr_t)csp_image_at(st->image_no))) {
+	csp_region_holds_ptr(d, r, csp_image_at(st->image_no))) {
 	csp_print_line("ERR running -- that slot holds the image now executing");
 	return CSP_CMD_OK;
     }

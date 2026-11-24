@@ -161,9 +161,9 @@ int clicker_start(const clicker_config_t* cfg)
     for (i = 0; i < click_len; i++) {
 	float x = (float) i;
 	float a = fmodf(2.0f*(float)M_PI*c.freq*x/rate, 2.0f*M_PI);
-	// click_wave[i] = sinf(a) * expf(-x/tau);
+	click_wave[i] = sinf(a) * expf(-x/tau);
 	// click_wave[i] = (a > M_PI) ? 1.0 : -1.0;
-	click_wave[i] =(i == 0) ? 1 : -1;
+	// click_wave[i] =(i == 0) ? 1 : -1;
     }
 
     // forget clicks issued before start

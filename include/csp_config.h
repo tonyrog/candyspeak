@@ -61,6 +61,12 @@
 #define CSP_NO_IMAGE_REGISTRY 1
 #endif
 
+// /reboot: the board restarted from software, so a node far away comes up on
+// what /upgrade put in a slot. The port supplies csp_port_reboot (csp.h).
+#if defined(ESP32) && !defined(CSP_HAVE_REBOOT)
+#define CSP_HAVE_REBOOT 1
+#endif
+
 // THE TIERS.
 //
 //   full     a compiler and a console: source at the prompt.

@@ -19,8 +19,10 @@
 #define CSP_HAS_SOCKETCAN 1
 #endif
 
-#if defined(__linux__) && !defined(CSP_CLICK)
-#define CSP_HAS_CLICK 1
+// The clicker (port/click, a tick per cycle on the sound card): only in a
+// build that asks for it with -DCSP_HAS_CLICK and links libclicker -- the
+// `make click` does. Any other host build leaves it out.
+#if defined(CSP_HAS_CLICK)
 #include "click/clicker.h"
 #endif
 
@@ -2494,7 +2496,7 @@ int main(int argc, char** argv)
 	    exit(1);
 #else
 
-#if defined(__linux__) && !defined(CSP_CLICK)
+#if defined(CSP_HAS_CLICK)
 	case 'a': cfg.device = optarg; break;
 	case 1023: click = 1; break;
 #endif

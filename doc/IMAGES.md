@@ -431,10 +431,41 @@ cases that matter there are the failures: a short image, a refused region, bad
 hex, an overflow, and a `runtime` region proved untouched **on the file** — a
 guard that prints and erases anyway passes every test that only reads stdout.
 
+### Booting from a slot
+
+The images are NUMBERED the linked ones first, then the application slots in
+the order the part's map lists them -- what `/images` prints, `sys.Image`
+reports and `sys.Boot` asks for. A slot is a number whether it holds an image
+or not, so writing one does not renumber the others. A slot that holds a
+linked image (a part whose firmware places its program on slot A) is that
+image and is not counted twice.
+
+`csp_load_rom` ranks them all alike: the highest generation runs, unless
+`sys.Boot` asks for another. So the program `/upgrade` put in a slot, with a
+higher generation than what runs (`tools/csp-image -g N`), is the one that
+comes up at the next start -- and if its sections turn out damaged when it is
+loaded, the loader goes on to the next best, the linked image.
+
+The slot is read IN PLACE, through `csp_flash_map` (csp_flash.h): the
+backend's, beside erase/write/read -- `flash.base + off` on the LPC and STM32
+drivers, a mapping on an ESP32 (its SPI flash is behind the MMU) and the file
+read into memory on the host.
+
+`/reboot` (where the port has one: ESP32 today) restarts the board from
+software, so a node far away comes up on what was just written. Like
+`/upgrade` it refuses unsaved work unless told `force`.
+
+On an ESP32 the flash is one data partition (`CSP_FLASH_PARTITION`, `ffat` by
+default -- the FAT partition of the app3M_fat9M_16MB scheme, which nothing here
+mounts), slots A and B of `CSP_FLASH_SLOT_KB` (64) at its start.
+
 ### What is not built
 
-Nothing boots from a slot yet: `csp_load_rom` still loads the image the firmware
-linked, so flashing slot A stores a program that nothing runs.
+A trial start. A new program that hangs the board is restarted by the
+watchdog into the same program, again. Wanted: the boot counts its attempts
+at an image not yet confirmed (in the store, before the program starts),
+passes it over after N, and `/confirm` -- or a while running without a
+restart -- confirms it.
 
 The EEPROM patch is already ready for it. A patch addresses ROM declarations by
 INDEX, so against another program those indices mean something else — and the

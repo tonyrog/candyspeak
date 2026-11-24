@@ -565,6 +565,8 @@ extern rochar s_cmd_exit[5] RODATA;
 #define ros_cmd_exit ((rostring_t) s_cmd_exit)
 extern rochar s_cmd_hang[5] RODATA;
 #define ros_cmd_hang ((rostring_t) s_cmd_hang)
+extern rochar s_cmd_reboot[7] RODATA;
+#define ros_cmd_reboot ((rostring_t) s_cmd_reboot)
 extern rochar s_h_help[15] RODATA;
 #define ros_h_help ((rostring_t) s_h_help)
 extern rochar s_h_list[72] RODATA;
@@ -575,12 +577,14 @@ extern rochar s_h_memory[20] RODATA;
 #define ros_h_memory ((rostring_t) s_h_memory)
 extern rochar s_h_onewire[57] RODATA;
 #define ros_h_onewire ((rostring_t) s_h_onewire)
-extern rochar s_h_images[42] RODATA;
+extern rochar s_h_images[55] RODATA;
 #define ros_h_images ((rostring_t) s_h_images)
 extern rochar s_h_dump[73] RODATA;
 #define ros_h_dump ((rostring_t) s_h_dump)
 extern rochar s_h_upgrade[69] RODATA;
 #define ros_h_upgrade ((rostring_t) s_h_upgrade)
+extern rochar s_h_reboot[69] RODATA;
+#define ros_h_reboot ((rostring_t) s_h_reboot)
 extern rochar s_h_pause[30] RODATA;
 #define ros_h_pause ((rostring_t) s_h_pause)
 extern rochar s_h_step[41] RODATA;
