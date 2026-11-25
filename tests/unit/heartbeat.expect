@@ -1,0 +1,22 @@
+%% examples/safety/heartbeat.csp: CiA 301 heartbeat consumer.
+{modes, [seq]}.
+{lib, ["examples/safety/heartbeat.csp"]}.
+{stimulus, "tests/unit/heartbeat.dat"}.
+{time, 1250}.
+{settle, true}.
+{checks, [
+  %% Two beats are not believed yet...
+  {var, 7, "Good", 2},
+  {var, 7, "Enable", 0},
+  %% ...the third is.
+  {var, 9, "Lost", 0},
+  {var, 10, "Enable", 1},
+  %% Silent from 400: lost one consumer time later, and disabled.
+  {var, 15, "Lost", 1},
+  {var, 16, "Enable", 0},
+  %% Back, one and two beats: still lost.
+  {var, 21, "Good", 2},
+  {var, 21, "Enable", 0},
+  {final_var, "Lost", 0},
+  {final_var, "Enable", 1}
+]}.
