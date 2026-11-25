@@ -119,6 +119,13 @@
 
 #define CSP_EMBEDDED 1
 #include "csp.h"
+// Up here, not beside the flash slots below: arduino-cli puts a prototype of
+// every function in a sketch ahead of the first one, and csp_device's names
+// csp_device_t.
+#if defined(ESP32) && defined(CSP_HAVE_FLASH)
+#include <esp_partition.h>
+#include "csp_flash.h"
+#endif
 #include "csp_lib.h"
 #include "csp_print.h"
 
@@ -2315,6 +2322,150 @@ static void boot_mark(int n)
 // the end of setup(), so a slow boot is not mistaken for a hang; /hang stops
 // the loop on purpose, to see it work.
 //
+// ============================================================
+// Flash slots on an ESP32 (CSP_HAVE_FLASH)
+// ============================================================
+//
+// The SPI flash is not in the address space the way an LPC's or an STM32's
+// is: the IDF owns it through its partition table, and the MMU maps a window
+// of it in. So the flash csp_flash.h talks about is ONE DATA PARTITION, its
+// offsets from the partition's start, and the map is made here and not read
+// from a .terms file -- the partition's size is only known on the part.
+//
+// CSP_FLASH_PARTITION names it: `ffat' by default, the FAT partition of the
+// app3M_fat9M_16MB scheme wintersbone uses, which nothing here mounts. The
+// slots are its first sectors, A and B of CSP_FLASH_SLOT_KB each; the rest of
+// the partition is left alone. A board that does mount FFat must name another
+// partition.
+//
+// An image in a slot is run IN PLACE, like on the parts with mapped flash:
+// csp_flash_map maps the slots into the data window once, at the first ask
+// (the boot), and the mapping is kept. Writes go through esp_partition_write,
+// which keeps the cache coherent with them.
+#if defined(ESP32) && defined(CSP_HAVE_FLASH)
+#ifndef CSP_FLASH_PARTITION
+#define CSP_FLASH_PARTITION "ffat"
+#endif
+#ifndef CSP_FLASH_SLOT_KB
+#define CSP_FLASH_SLOT_KB 64
+#endif
+#define FL_SECTOR 4096u
+#define FL_SLOT   ((CSP_FLASH_SLOT_KB * 1024u) / FL_SECTOR)   // sectors a slot
+CSP_STATIC_ASSERT(2 * FL_SLOT <= 255, "two slots must fit csp_sectors_t's 8-bit count");
+
+static const esp_partition_t* fl_part = NULL;
+static uint32_t fl_sect[2 * FL_SLOT];
+static const csp_region_t fl_regions[] = {
+    { "A", 0,       FL_SLOT - 1,     CSP_REG_APP },
+    { "B", FL_SLOT, 2 * FL_SLOT - 1, CSP_REG_APP }
+};
+static csp_device_t fl_dev;
+
+// The partition, or NULL when the table has none of that name or it is too
+// small for the two slots -- then there is no flash to speak of, and /upgrade
+// and /images say so rather than write somewhere else.
+static const esp_partition_t* fl_partition(void)
+{
+    if (fl_part == NULL) {
+	const esp_partition_t* p =
+	    esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY,
+				     CSP_FLASH_PARTITION);
+	if ((p != NULL) && (p->size >= 2 * FL_SLOT * FL_SECTOR))
+	    fl_part = p;
+    }
+    return fl_part;
+}
+
+extern "C" const csp_device_t* csp_device(void)
+{
+    static int made = 0;
+    uint32_t i;
+
+    if (fl_partition() == NULL)
+	return NULL;
+    if (!made) {
+	for (i = 0; i < 2 * FL_SLOT; i++)
+	    fl_sect[i] = FL_SECTOR;
+	fl_dev.name = "esp32";
+	fl_dev.flash.base = 0;
+	fl_dev.flash.size = fl_sect;
+	fl_dev.flash.n = (uint8_t)(2 * FL_SLOT);
+	fl_dev.region = fl_regions;
+	fl_dev.nregion = (uint8_t)(sizeof(fl_regions) / sizeof(fl_regions[0]));
+	made = 1;
+    }
+    return &fl_dev;
+}
+
+// Sector by sector, the task watchdog fed between them: an erase of a slot is
+// a second or so, and the loop is not running meanwhile.
+extern "C" int csp_flash_erase(uint8_t first, uint8_t last)
+{
+    const esp_partition_t* p = fl_partition();
+    uint32_t s;
+
+    if ((p == NULL) || (first > last) || (last >= 2 * FL_SLOT))
+	return CSP_FLASH_ERR;
+    for (s = first; s <= last; s++) {
+	if (esp_partition_erase_range(p, s * FL_SECTOR, FL_SECTOR) != ESP_OK)
+	    return CSP_FLASH_ERR;
+	yield();
+    }
+    return CSP_FLASH_OK;
+}
+
+extern "C" int csp_flash_write(uint32_t off, const void* data, uint32_t len)
+{
+    const esp_partition_t* p = fl_partition();
+
+    if (p == NULL)
+	return CSP_FLASH_ERR;
+    if ((off + len) > 2 * FL_SLOT * FL_SECTOR)
+	return CSP_FLASH_TOOBIG;
+    return (esp_partition_write(p, off, data, len) == ESP_OK) ? CSP_FLASH_OK
+	: CSP_FLASH_ERR;
+}
+
+extern "C" int csp_flash_read(uint32_t off, void* data, uint32_t len)
+{
+    const esp_partition_t* p = fl_partition();
+
+    if (p == NULL)
+	return CSP_FLASH_ERR;
+    if ((off + len) > 2 * FL_SLOT * FL_SECTOR)
+	return CSP_FLASH_TOOBIG;
+    return (esp_partition_read(p, off, data, len) == ESP_OK) ? CSP_FLASH_OK
+	: CSP_FLASH_ERR;
+}
+
+extern "C" const uint8_t* csp_flash_map(uint32_t off)
+{
+    static const void* base = NULL;
+    static esp_partition_mmap_handle_t h;
+    const esp_partition_t* p = fl_partition();
+
+    if ((p == NULL) || (off >= 2 * FL_SLOT * FL_SECTOR))
+	return NULL;
+    if ((base == NULL) &&
+	(esp_partition_mmap(p, 0, 2 * FL_SLOT * FL_SECTOR, ESP_PARTITION_MMAP_DATA,
+			    &base, &h) != ESP_OK)) {
+	base = NULL;
+	return NULL;
+    }
+    return (const uint8_t*)base + off;
+}
+#endif
+
+#if defined(CSP_HAVE_REBOOT)
+// /reboot: what was said gets out before the board goes.
+extern "C" void csp_port_reboot(void)
+{
+    Serial.flush();
+    delay(100);
+    esp_restart();
+}
+#endif
+
 // ESP32 only so far: the one board here to try it on. Anywhere else asking for
 // it is a build error rather than a watchdog that silently is not there.
 #if defined(CSP_WATCHDOG)
