@@ -1,0 +1,28 @@
+%% examples/safety/reversing.csp: IEC 60204-1 interlocked reversing starter.
+%% States: stopped = 3, fwd = 4, rev = 5.
+{modes, [seq]}.
+{lib, ["examples/safety/reversing.csp"]}.
+{stimulus, "tests/unit/reversing.dat"}.
+{time, 3500}.
+{settle, true}.
+{checks, [
+  {var, 4, "State", 4},
+  {var, 4, "KFwd", 1},
+  %% Reverse from forward: forward opens, and the dead time runs...
+  {var, 9, "State", 3},
+  {var, 9, "KFwd", 0},
+  {var, 9, "Wait", 1},
+  %% ...over, still not closed in the cycle it ends...
+  {var, 12, "Wait", 0},
+  {var, 12, "KRev", 0},
+  %% ...and then reverse.
+  {var, 13, "State", 5},
+  {var, 13, "KRev", 1},
+  {var, 20, "KRev", 0},
+  %% Both buttons at once: neither.
+  {var, 26, "BtnFwd", 1},
+  {var, 26, "BtnRev", 1},
+  {final_var, "KFwd", 0},
+  {final_var, "KRev", 0},
+  {final_var, "State", 3}
+]}.

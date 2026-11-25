@@ -1,0 +1,9 @@
+# Sensor1 + Sensor2 = 5000 is a believable pair.
+0   Sensor1=2500 Sensor2=2500
+# One glitch: a fault counted, throttle 0 for a sample, then back.
+5   Sensor2=3000
+6   Sensor2=2500
+# Pedal down.
+10  Sensor1=4500 Sensor2=500
+# Sensor 2 falls off (broken wire): out of range for good.
+20  Sensor2=0

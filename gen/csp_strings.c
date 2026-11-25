@@ -78,6 +78,7 @@ rochar s_err_opts_after_pin[] RODATA = "option '%s' comes BEFORE the pin -- '#di
 rochar s_err_block_open[] RODATA = "#%s opened on line %d was never closed";
 rochar s_err_block_depth[] RODATA = "blocks nest at most %d deep -- #in, #when and #module together";
 rochar s_err_index_not_const[] RODATA = "a buffer byte range is fixed when the program is built -- %s is not a constant";
+rochar s_err_expr_depth[] RODATA = "an expression nests at most %d deep -- operands, parentheses and arguments together";
 rochar s_LP[] RODATA = "(";
 rochar s_RP[] RODATA = ")";
 rochar s_COLON[] RODATA = ":";

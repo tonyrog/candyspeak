@@ -1,0 +1,2 @@
+// Program under test: examples/safety/reversing.csp, loaded by {lib, ...} in the
+// .expect. The inputs come from reversing.dat; this file is empty on purpose.

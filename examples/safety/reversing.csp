@@ -1,0 +1,50 @@
+// Reversing motor starter, after IEC 60204-1 (electrical equipment of
+// machines): the forward and reverse contactors are interlocked, so both
+// can never be closed -- that is a short across two phases -- and a change
+// of direction goes through stop, with a dead time for the arc in the
+// opening contactor to clear before the other one closes.
+//
+// The standard wants the interlock in the wiring as well (auxiliary NC
+// contacts, often a mechanical one); this is the control side of it.
+//
+// Pins are the board's business.
+
+#digital  BtnFwd in 1
+#digital  BtnRev in 2
+#digital  BtnStop in 3
+#digital  KFwd out 4                // forward contactor
+#digital  KRev out 5                // reverse contactor
+#timer    Dead 200                  // ms between one opening, the other closing
+#variable Wait:1 = 0                // the dead time is running
+
+#states stopped fwd rev
+
+#annotate varp invariant "!(KFwd && KRev)"
+#annotate varp invariant "!(State == stopped && (KFwd || KRev))"
+// Each contactor is closed only in its own state -- the two above follow,
+// and these are what make them provable by induction:
+#annotate varp invariant "!KFwd || State == fwd"
+#annotate varp invariant "!KRev || State == rev"
+#annotate varp reach "State == stopped && State' == rev"
+// Goals never reached, for the solver:
+//     Wait && State' != stopped               the dead time is waited out
+//     State == fwd && State' == rev           no direct reversal
+//     State == rev && State' == fwd
+
+#in INIT
+    State = stopped
+#end
+
+#in stopped
+    State = fwd, KFwd = 1 ? !Wait && BtnFwd && !BtnRev && !BtnStop
+    State = rev, KRev = 1 ? !Wait && BtnRev && !BtnFwd && !BtnStop
+    Wait = 0 ? timeout(Dead)
+#end
+
+// Stop, or the other direction asked for: open, and wait out the dead time.
+#in fwd
+    State = stopped, KFwd = 0, Dead = 1, Wait = 1 ? BtnStop || BtnRev
+#end
+#in rev
+    State = stopped, KRev = 0, Dead = 1, Wait = 1 ? BtnStop || BtnFwd
+#end

@@ -1,0 +1,26 @@
+%% examples/safety/lift_door.csp: EN 81-20 doors and the safety chain.
+%% States: idle = 3, up = 4, down = 5, opening = 6.
+{modes, [seq]}.
+{lib, ["examples/safety/lift_door.csp"]}.
+{stimulus, "tests/unit/lift_door.dat"}.
+{time, 5500}.
+{settle, true}.
+{checks, [
+  {var, 2, "State", 4},
+  {var, 2, "Up", 1},
+  %% The door forced under way: stopped at once, and stays stopped open.
+  {var, 9, "State", 3},
+  {var, 9, "Up", 0},
+  %% Closed: on its way again.
+  {var, 14, "Up", 1},
+  %% At the floor but not level: no doors.
+  {var, 16, "Floor", 2},
+  {var, 16, "Open", 0},
+  %% Level: stopped, doors open...
+  {var, 21, "State", 6},
+  {var, 21, "Up", 0},
+  {var, 21, "Open", 1},
+  %% ...and closed after the dwell.
+  {final_var, "Open", 0},
+  {final_var, "State", 3}
+]}.

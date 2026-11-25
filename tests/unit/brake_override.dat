@@ -1,0 +1,9 @@
+# Driving at 40 %.
+0   Pedal=40 Brake=0
+# Brake with the pedal still down (a trapped pedal): 0 %.
+3   Brake=1
+# Brake lifted, pedal STILL down: no surge, still 0 %.
+6   Brake=0
+# Pedal released, and pressed again: driving.
+9   Pedal=0
+12  Pedal=30

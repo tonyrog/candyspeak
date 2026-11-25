@@ -1805,6 +1805,10 @@ typedef enum {
     // at run time (`Buf[Pos]`, OP_SETOX in bits mode), but a range's WIDTH is
     // the view's, and a view is built at compile time.
     ERR_INDEX_NOT_CONST,
+    // More pending operands or operators than MAX_PARSE_STACK_DEPTH: a call
+    // with a dozen arguments, parentheses a dozen deep. It used to overrun
+    // the parser's stack arrays.
+    ERR_EXPR_DEPTH,
 } csp_err_t;
 
 // parser state, save state before parse

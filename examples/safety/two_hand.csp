@@ -1,0 +1,34 @@
+// Two-hand control for a press, after ISO 13851 (was EN 574), type III:
+//
+//   - both buttons, pressed within 0.5 s of each other (synchronous);
+//   - the stroke runs only while both are held, a release of either stops it;
+//   - both must be released before the next stroke (no re-initiation by
+//     holding one and tapping the other).
+//
+// A button held too long alone is a fault until both are released: taping
+// one down and working the press with a free hand is the misuse the
+// standard is about.
+//
+// Pins are the board's business.
+
+#digital  Left in 1
+#digital  Right in 2
+#digital  Run out 3                 // the press stroke
+#timer    Sync 500                  // the 0.5 s window
+#variable Armed:1 = 1               // both released since the last stroke
+#variable Late:1 = 0                // one button alone too long
+
+#annotate varp reach "Run'"
+// Goals never reached, for the solver:
+//     Run' && !(Left && Right)        a release always stops the stroke
+//     !Run && Run' && !Armed          no stroke without both released first
+//     !Run && Run' && Late            no stroke after a late second hand
+
+// The first hand starts the window, the second stops it in time. A name
+// reads the value the last cycle left, rising() this cycle's sample.
+Sync = 1 ? Armed && !Late && ((rising(Left) && !Right) || (rising(Right) && !Left))
+Late = 1 ? timeout(Sync) && !(Left && Right)
+
+Run = 1, Armed = 0, Sync = 0 ? Left && Right && Armed && !Late && !timeout(Sync)
+Run = 0 ? !Left || !Right
+Armed = 1, Late = 0 ? !Left && !Right

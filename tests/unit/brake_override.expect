@@ -1,0 +1,18 @@
+%% examples/safety/brake_override.csp. An input sampled in cycle N is acted
+%% on in N+1.
+{modes, [seq]}.
+{lib, ["examples/safety/brake_override.csp"]}.
+{stimulus, "tests/unit/brake_override.dat"}.
+{cycles, 30}.
+{checks, [
+  {var, 2, "Throttle", 40},
+  %% The brake with the pedal still down: the override takes, 0 %.
+  {var, 4, "Bto", 1},
+  {var, 4, "Throttle", 0},
+  %% The brake lifted, the pedal still down: no surge.
+  {var, 5, "Brake", 0},
+  {var, 5, "Throttle", 0},
+  %% Released, the override lets go; pressed again, driving.
+  {var, 8, "Bto", 0},
+  {final_var, "Throttle", 30}
+]}.

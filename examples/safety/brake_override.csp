@@ -1,0 +1,26 @@
+// Brake throttle override (BTO): the brake beats the accelerator. After the
+// idea in NHTSA's proposal to amend FMVSS No. 124 (2012), written after
+// unintended acceleration cases where a stuck or trapped pedal held the
+// throttle open while the driver braked.
+//
+// Brake down: throttle to 0, whatever the pedal says. And once the override
+// has taken, it holds until the accelerator is released -- lifting the brake
+// with the pedal still down must not surge the car forward.
+//
+// A cycle is a sample. Pins are the board's business.
+
+#analog   Pedal:8 unsigned in 0     // accelerator, %
+#digital  Brake in 1
+#variable Bto:1 = 0                 // the override has taken
+#variable Throttle:8 unsigned = 0   // requested throttle, %
+
+#annotate varp reach "Throttle' == 100"
+// Goals never reached, for the solver:
+//     Brake && Throttle' != 0                 the brake always wins
+//     Bto && Pedal > 0 && Throttle' != 0      no surge when the brake lifts
+
+Bto = 1 ? Brake && Pedal > 0
+Bto = 0 ? !Brake && Pedal == 0
+
+Throttle = Pedal ? !Brake && !Bto
+Throttle = 0 ? Brake || Bto

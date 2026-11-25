@@ -1,0 +1,2 @@
+// Program under test: examples/safety/brake_override.csp, loaded by {lib, ...} in the
+// .expect. The inputs come from brake_override.dat; this file is empty on purpose.

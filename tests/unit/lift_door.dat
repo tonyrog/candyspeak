@@ -1,0 +1,15 @@
+# At floor 0, doors closed, called to floor 2.
+0     DoorClosed=1 InZone=1 Floor=0 Req=2
+100   InZone=0
+# Passing floor 1, someone forces the door: the chain opens, it stops.
+500   Floor=1 InZone=1
+600   DoorClosed=0
+700   DoorClosed=0
+# Closed again: on its way.
+1000  DoorClosed=1 InZone=0
+# At floor 2, not yet level: no doors.
+1500  Floor=2
+1600  Floor=2
+# Level: stop and open.
+1700  InZone=1
+1800  InZone=1

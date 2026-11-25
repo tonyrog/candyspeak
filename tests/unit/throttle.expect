@@ -1,0 +1,26 @@
+%% examples/safety/throttle.csp, after examples/throttle_26262.c. An input sampled
+%% in cycle N is acted on in N+1, so each step shows a cycle late.
+{modes, [seq]}.
+{lib, ["examples/safety/throttle.csp"]}.
+{stimulus, "tests/unit/throttle.dat"}.
+{cycles, 30}.
+{checks, [
+  %% A believable pair at half pedal: 50 %.
+  {var, 2, "Throttle", 50},
+  %% One glitch counts a fault and gives 0 % for that sample -- and is
+  %% forgiven at once: the next good one counts it down to 0, full again.
+  {var, 4, "Faults", 1},
+  {var, 4, "Throttle", 0},
+  {var, 5, "Faults", 0},
+  {var, 5, "Throttle", 50},
+  %% Pedal down.
+  {var, 7, "Throttle", 100},
+  %% Sensor 2 off: three faults in a row is still normal, at 0 %...
+  {var, 11, "Faults", 3},
+  {var, 11, "State", 3},
+  {var, 11, "Throttle", 0},
+  %% ...the fourth is limp home, 10 %, and it stays.
+  {var, 12, "State", 4},
+  {final_var, "Throttle", 10},
+  {final_var, "State", 4}
+]}.

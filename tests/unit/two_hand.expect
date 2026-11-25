@@ -1,0 +1,20 @@
+%% examples/safety/two_hand.csp: ISO 13851 type III two-hand control.
+{modes, [seq]}.
+{lib, ["examples/safety/two_hand.csp"]}.
+{stimulus, "tests/unit/two_hand.dat"}.
+{time, 4500}.
+{settle, true}.
+{checks, [
+  %% Right 200 ms after left: in time, the stroke runs.
+  {var, 6, "Run", 1},
+  %% Left lets go: it stops.
+  {var, 9, "Run", 0},
+  %% Left again, right never released: no new stroke.
+  {var, 11, "Left", 1},
+  {var, 11, "Right", 1},
+  {var, 11, "Run", 0},
+  %% Left alone for 0.5 s: late, and right 700 ms after does nothing.
+  {var, 18, "Late", 1},
+  {final_var, "Right", 1},
+  {final_var, "Run", 0}
+]}.

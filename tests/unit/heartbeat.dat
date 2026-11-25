@@ -1,0 +1,18 @@
+# The peer beats every 100 ms, three beats and it is believed.
+0     Beat=0
+100   Beat=1
+101   Beat=0
+200   Beat=1
+201   Beat=0
+300   Beat=1
+301   Beat=0
+400   Beat=1
+401   Beat=0
+# Silence: lost 300 ms after the last beat, at 700.
+# Back: it takes three beats again.
+1000  Beat=1
+1001  Beat=0
+1100  Beat=1
+1101  Beat=0
+1200  Beat=1
+1201  Beat=0

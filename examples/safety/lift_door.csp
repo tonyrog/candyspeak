@@ -1,0 +1,53 @@
+// Lift doors and the safety chain, after EN 81-20: the car moves only with
+// the doors closed and locked, a door opened under way stops it at once,
+// and the doors open only with the car level at a landing, in the door zone.
+//
+// DoorClosed is the end of the door contact chain, landing and car doors in
+// series; InZone the door zone sensor; Floor and Req the floor the car is at
+// and the one called. Pins are the board's business.
+
+#digital  DoorClosed in 1
+#digital  InZone in 2
+#analog   Floor:4 unsigned in 3
+#analog   Req:4 unsigned in 4
+#digital  Up out 5
+#digital  Down out 6
+#digital  Open out 7                // door operator
+#timer    Dwell 3000                // doors open at a landing
+
+#states idle up down opening
+
+#annotate varp invariant "!(Up && Down)"
+#annotate varp invariant "!(Open && (Up || Down))"
+// Each output is on only in its own state -- the two above follow, and
+// these are what make them, and the goals below, provable by induction:
+#annotate varp invariant "!Up || State == up"
+#annotate varp invariant "!Down || State == down"
+#annotate varp invariant "!Open || State == opening"
+#annotate varp reach "State == up && State' == opening"
+// Goals never reached, for the solver:
+//     !DoorClosed && (Up' || Down')       never moves with a door open
+//     !Open && Open' && !InZone           opens only in the door zone
+
+#in INIT
+    State = idle
+#end
+
+#in idle
+    State = up, Up = 1 ? DoorClosed && Req > Floor
+    State = down, Down = 1 ? DoorClosed && Req < Floor
+#end
+
+#in up
+    State = opening, Up = 0, Open = 1, Dwell = 1 ? DoorClosed && Floor >= Req && InZone
+    State = idle, Up = 0 ? !DoorClosed       // last: the chain opened, stop
+#end
+
+#in down
+    State = opening, Down = 0, Open = 1, Dwell = 1 ? DoorClosed && Floor <= Req && InZone
+    State = idle, Down = 0 ? !DoorClosed
+#end
+
+#in opening
+    State = idle, Open = 0 ? timeout(Dwell)
+#end

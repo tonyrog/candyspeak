@@ -157,6 +157,8 @@ extern rochar s_err_block_depth[63] RODATA;
 #define ros_err_block_depth ((rostring_t) s_err_block_depth)
 extern rochar s_err_index_not_const[79] RODATA;
 #define ros_err_index_not_const ((rostring_t) s_err_index_not_const)
+extern rochar s_err_expr_depth[84] RODATA;
+#define ros_err_expr_depth ((rostring_t) s_err_expr_depth)
 extern rochar s_LP[2] RODATA;
 #define ros_LP ((rostring_t) s_LP)
 extern rochar s_RP[2] RODATA;

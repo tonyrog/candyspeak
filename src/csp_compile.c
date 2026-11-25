@@ -2670,6 +2670,14 @@ type_mismatch:
     return -1;
 }
 
+// More pending than the parser's stacks hold. Returns 0, the parse's error.
+NOINLINE static int expr_too_deep(csp_rt_t* st)
+{
+    if (csp_set_error(st, ERR_EXPR_DEPTH))
+	csp_set_err_arg_int(st, 0, MAX_PARSE_STACK_DEPTH);
+    return 0;
+}
+
 void print_stack_used()
 {
     // stack debug
@@ -2756,6 +2764,8 @@ NOINLINE int csp_parse_expr(csp_rt_t* st, const token_t* tv, size_t* num_toks,
 next:
     if ((i >= n) || (tv[i].t==NEWLINE) || (tv[i].t==NONE))  // end-of-list
 	goto out;
+    if (ep >= MAX_PARSE_STACK_DEPTH)    // a token pushes one operand at most
+	return expr_too_deep(st);
     tok  = tv[i].t;
     tval = tv[i].v;
     i++;
@@ -2772,6 +2782,8 @@ next:
 	    tok = MINUS1;
 	goto operator;
     case LP:
+	if (pp >= MAX_PARSE_STACK_DEPTH)
+	    return expr_too_deep(st);
 	ostack[pp++] = LP; ptok = LP; break;
     case RB: {
 	// Close an array subscript: reduce the index expression, take the
@@ -3189,7 +3201,7 @@ operator:
 	int p1;
 	if ((p1 = op_table_prec(tok)) == -1)
 	    return 0;
-	if (pp == 0) {
+	if (pp == 0) {      // MAX_PARSE_STACK_DEPTH > 0: room for one
 	    if (tok == RIMP) { st->cs->rimp = 1; }
 	    ostack[pp++] = tok;
 	}
@@ -3198,6 +3210,8 @@ operator:
 	    int p2;
 	    // Either marker acts like LP - don't process operators past it
 	    if (IS_MARKER(tok2) || tok2 == LP) {
+		if (pp >= MAX_PARSE_STACK_DEPTH)
+		    return expr_too_deep(st);
 		if (tok == RIMP) { st->cs->rimp = 1;  }
 		ostack[pp++] = tok;
 		ptok = tok;
@@ -3215,6 +3229,8 @@ operator:
 		if (IS_MARKER(tok2) || (tok2 == LP)) break;
 		p2 = op_table_prec(tok2);
 	    }
+	    if (pp >= MAX_PARSE_STACK_DEPTH)
+		return expr_too_deep(st);
 	    if (tok == RIMP) { st->cs->rimp = 1; }
 	    ostack[pp++] = tok;
 	}

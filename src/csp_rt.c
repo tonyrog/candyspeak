@@ -459,6 +459,7 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_HOLE] =                   ros_err_hole,
     [ERR_BAD_CHAR] =               ros_err_bad_char,
     [ERR_INDEX_NOT_CONST] =        ros_err_index_not_const,
+    [ERR_EXPR_DEPTH] =             ros_err_expr_depth,
 };
 
 // err_tab is a designated-initialiser array, so ANY code without a row in it

@@ -1,0 +1,32 @@
+// Heartbeat supervision, after the heartbeat consumer of CANopen (CiA 301)
+// and the watchdog / program sequence monitoring of IEC 61508-7: a peer that
+// stops beating is lost, and what depends on it goes to its safe state.
+//
+// Beat is high for a sample each time the peer's heartbeat arrives -- a
+// frame on a bus, a toggling line; how is the board's business. Missing
+// one consumer time is lost; it takes three beats in a row to be believed
+// again, so a peer that flickers back to life does not chatter the output.
+// (The three is this example's, not CiA 301's.)
+
+#define   CONSUMER_MS 300
+#define   BELIEVE 3
+
+#digital  Beat in 1
+#digital  Enable out 2              // what the peer's being alive allows
+#timer    Watch CONSUMER_MS = 1     // the consumer time, from the start
+#variable Lost:1 = 1                // lost until it has been seen
+#variable Good:2 unsigned = 0       // beats in a row
+
+#annotate varp invariant "Good <= BELIEVE"
+#annotate varp reach "Enable'"
+// Goals never reached, for the solver:
+//     Lost && Enable'                     lost is never enabled
+//     timeout(Watch) && !Lost'            a missed beat is always lost
+
+Watch = 1 ? rising(Beat)
+Good = Good + 1 ? rising(Beat) && Good < BELIEVE
+Lost = 0 ? rising(Beat) && Good >= BELIEVE - 1
+Lost = 1, Good = 0 ? timeout(Watch)      // last: a timeout beats a beat
+
+Enable = 1 ? !Lost
+Enable = 0 ? Lost

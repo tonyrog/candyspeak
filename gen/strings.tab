@@ -87,6 +87,7 @@ err_opts_after_pin option '%s' comes BEFORE the pin -- '#digital D in pullup 2:1
 err_block_open #%s opened on line %d was never closed
 err_block_depth blocks nest at most %d deep -- #in, #when and #module together
 err_index_not_const a buffer byte range is fixed when the program is built -- %s is not a constant
+err_expr_depth an expression nests at most %d deep -- operands, parentheses and arguments together
 LP (
 RP )
 COLON :

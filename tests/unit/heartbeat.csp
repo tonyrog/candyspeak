@@ -1,0 +1,2 @@
+// Program under test: examples/safety/heartbeat.csp, loaded by {lib, ...} in the
+// .expect. The inputs come from heartbeat.dat; this file is empty on purpose.

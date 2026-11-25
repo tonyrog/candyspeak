@@ -1850,6 +1850,18 @@ ck "#when blocks nest" '#when X
   #end
 #end' "$got"
 
+# AN EXPRESSION TOO DEEP is an error, not a crash: println with twelve
+# arguments overran the parser's operand stack (stack smashing), eleven
+# parentheses its operator stack. Ten still go.
+printf '#variable A = 1\nprintln(A, A, A, A, A, A, A, A, A, A, A, A)\n' > "$D/deep1.csp"
+printf '#variable A = 1\n#variable B = (((((((((((A)))))))))))\n' > "$D/deep2.csp"
+printf '#variable A = 1\n#variable B = ((((((((((A))))))))))\n' > "$D/deep3.csp"
+got=$( { ./csp -c 1 "$D/deep1.csp"; ./csp -c 1 "$D/deep2.csp"; ./csp -c 1 "$D/deep3.csp"; } 2>&1 |
+	  sed 's;^.*/deep;deep;')
+ck "an expression too deep is refused" 'deep1.csp:2 an expression nests at most 10 deep -- operands, parentheses and arguments together
+deep2.csp:2 an expression nests at most 10 deep -- operands, parentheses and arguments together
+max cycles (1) reached' "$got"
+
 # --- 26b. interrupt triggers -------------------------------------------------
 # A trigger is an OPTION on the pin, like the pull -- an interrupt is a property
 # of how the pin is configured, and there is no #pullup declaration for the same

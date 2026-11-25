@@ -1,0 +1,16 @@
+# Forward.
+0     BtnFwd=0 BtnRev=0 BtnStop=0
+100   BtnFwd=1
+200   BtnFwd=0
+# Reverse straight from forward: it stops first, and waits out the dead time
+# with the button held -- reverse closes only after 200 ms.
+1000  BtnRev=1
+1100  BtnRev=1
+1300  BtnRev=1
+1400  BtnRev=0
+# Stop.
+2000  BtnStop=1
+2100  BtnStop=0
+# Both pressed at once: neither.
+3000  BtnFwd=1 BtnRev=1
+3100  BtnFwd=0 BtnRev=0

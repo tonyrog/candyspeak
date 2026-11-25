@@ -1,0 +1,64 @@
+// Throttle pedal monitor, after examples/throttle_26262.c (an ISO 26262
+// style ASIL D example).
+//
+//   ./csp -c 60 examples/safety/throttle.csp
+//
+// Two redundant pedal sensors, wired so their sum is always 5.0 V. A pair is
+// believed when both are in 0.5..4.5 V and the sum is 5.0 V +- 150 mV. A
+// pair not believed counts a fault; MaxFaults in a row and the pedal is
+// limp home for good: 10 % throttle, enough to reach a workshop. A good
+// pair counts a fault back down, and full throttle needs the count at 0.
+//
+// A cycle is a sample: the C is called every 10 ms, so run the program
+// at that rate. The sensors are in mV here; scaling ADC counts to mV is the board's
+// business, as are the pins.
+//
+// The C's STATE_SAFE_STOP is never entered, so it is not ported. Its NULL
+// check has nothing to port: there is no pointer.
+
+#define SENSOR_MIN  500        // 0.5 V
+#define SENSOR_MAX  4500       // 4.5 V
+#define SUM_MV      5000       // Sensor1 + Sensor2
+#define TOLERANCE   150        // plausibility band
+#define MAX_FAULTS  3          // debounce: bad samples before limp home
+
+#analog   Sensor1:16 unsigned in 0
+#analog   Sensor2:16 unsigned in 1
+#variable Faults:8 unsigned = 0
+#variable Throttle:8 unsigned = 0   // requested throttle, %
+
+#states normal limp
+
+// What varp proves (candyspeak_varp:file("examples/safety/throttle.csp")):
+#annotate varp invariant "Faults <= MAX_FAULTS"
+#annotate varp invariant "State != FAILSAFE"
+#annotate varp reach "State' == limp"
+// And as goals that are never reached: limp home is for good, and is only
+// reached through MAX_FAULTS faults counted:
+//     State == limp && State' != limp
+//     State == normal && State' == limp && Faults < MAX_FAULTS
+
+#in INIT
+    State = normal
+#end
+
+// Loose rules run in INIT and NORMAL only, so the monitor is one block for
+// both of its states, and a rule for one of them asks State.
+#in normal limp
+    #local Sum:16 unsigned = Sensor1 + Sensor2
+    #local In1:1 = Sensor1 >= SENSOR_MIN && Sensor1 <= SENSOR_MAX
+    #local In2:1 = Sensor2 >= SENSOR_MIN && Sensor2 <= SENSOR_MAX
+    #local Plausible:1 = Sum >= SUM_MV - TOLERANCE && Sum <= SUM_MV + TOLERANCE
+    #local Ok:1 = In1 && In2 && Plausible
+    // The C counts down first and then asks for 0, so a count of 1 that is
+    // counted down this sample already gives full throttle.
+    #local Full:1 = Ok && Faults <= 1
+
+    Faults = Faults - 1 ? Ok && Faults > 0
+    Faults = Faults + 1 ? !Ok && Faults < MAX_FAULTS
+    State = limp ? State == normal && !Ok && Faults >= MAX_FAULTS
+
+    Throttle = (Sensor1 - SENSOR_MIN) * 100 / (SENSOR_MAX - SENSOR_MIN) ? State == normal && Full
+    Throttle = 0 ? State == normal && !Full
+    Throttle = 10 ? State == limp      // limp home is for good: only a reset leaves it
+#end
