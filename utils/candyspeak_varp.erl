@@ -115,7 +115,7 @@
 
 -export([file/1, file/2]).
 -export([translate/1, translate/2]).
--export([model/2, bmc/3, prove/5, trace/1, varp_cmd/0]).
+-export([model/2, bmc/3, bmc/4, prove/5, prove/6, trace/1, varp_cmd/0]).
 -export([collect/1, collect/2, check/2]).         % for tests
 
 -define(FAILSAFE, 2).
@@ -385,26 +385,99 @@ varp_cmd() ->
 	Sh -> Sh
     end.
 
-bmc(Text, Args, VarpSh) ->
+bmc(Text, Args, VarpSh) -> bmc(Text, Args, VarpSh, fun(_) -> ok end).
+
+%% As bmc/3, and Tell(#{k, vars, bound, clauses}) how far varp has got,
+%% from its log, a few times a second. A `cancel' message to the process
+%% running it ends varp and the process with it (exit cancelled): the
+%% solver's pane stops a run so, the lines and the answers so far kept.
+bmc(Text, Args, VarpSh, Tell) ->
     Tmp = filename:join(tmp_dir(), "csp_varp_" ++
 			    integer_to_list(erlang:unique_integer([positive])) ++
 			    ".varp"),
     ok = file:write_file(Tmp, Text),
-    Out = os:cmd(VarpSh ++ " " ++ Args ++ " " ++ Tmp ++ " 2>&1"),
-    file:delete(Tmp),
-    trace(Out).
+    Port = open_port({spawn, VarpSh ++ " --log info " ++ Args ++ " " ++ Tmp},
+		     [{line, 4096}, exit_status, stderr_to_stdout, hide]),
+    R = try read_varp(Port, Tell, #{}, erlang:monotonic_time(millisecond) - 1000, [], [])
+	after file:delete(Tmp)
+	end,
+    case R of
+	cancelled -> exit(cancelled);
+	Out -> trace(Out)
+    end.
+
+%% varp's output with its log taken out -- what bmc/3 has always read --
+%% the log told as progress on the way.
+read_varp(Port, Tell, P, Last, Line, Acc) ->
+    receive
+	{Port, {data, {noeol, T}}} -> read_varp(Port, Tell, P, Last, Line ++ T, Acc);
+	{Port, {data, {eol, T}}} ->
+	    L = Line ++ T,
+	    case progress(L, P) of
+		{log, P1} ->
+		    Now = erlang:monotonic_time(millisecond),
+		    case P1 =/= P andalso Now - Last >= 200 of
+			true -> Tell(P1), read_varp(Port, Tell, P1, Now, [], Acc);
+			false -> read_varp(Port, Tell, P1, Last, [], Acc)
+		    end;
+		out -> read_varp(Port, Tell, P, Last, [], [L | Acc])
+	    end;
+	{Port, {exit_status, _}} ->
+	    lists:flatten(lists:join("\n", lists:reverse(Acc)));
+	cancel ->
+	    kill_port(Port),
+	    cancelled
+    end.
+
+kill_port(Port) ->
+    case erlang:port_info(Port, os_pid) of
+	{os_pid, Pid} -> os:cmd("kill -9 " ++ integer_to_list(Pid));
+	undefined -> ok
+    end,
+    try port_close(Port) catch _:_ -> ok end.
+
+%% A line of varp's --log info: {log, Progress} -- `#clauses:N', `bound: B
+%% [b/V]', `bmc: k=K ...' (k K done) -- or out, what the answer is read
+%% from.
+progress("pass " ++ _, P) -> {log, P};
+progress(" |" ++ _, P) -> {log, P};
+progress("    |" ++ L, P) ->
+    case string:trim(L) of
+	"#clauses:" ++ R -> {log, P#{clauses => int(R)}};
+	"bound: " ++ R ->
+	    case string:lexemes(R, " [/]") of
+		[_, B, V | _] -> {log, P#{bound => int(B), vars => int(V)}};
+		_ -> {log, P}
+	    end;
+	_ -> {log, P}
+    end;
+progress("bmc: k=" ++ R, P) -> {log, P#{k => int(R) + 1}};
+progress("bmc: k-induction" ++ _, P) -> {log, P#{k => 0}};
+progress("bmc: incremental" ++ _, P) -> {log, P};
+progress("bmc: no initial state" ++ _, P) -> {log, P};
+progress(_, _P) -> out.
+
+int(T) ->
+    case string:to_integer(T) of
+	{I, _} when is_integer(I) -> I;
+	_ -> 0
+    end.
 
 %% The question to model M -- Prop is "" for the invariants or
 %% "--property <name>_reach" -- as bmc/3 answers it, a trace by the
 %% program's names, or a proof. The model is asked first whether it runs at
 %% all: one with no transitions has no trace, and induction proves anything
 %% about it. That is `no_transitions'.
-prove(M = #{text := Text}, Prop, K, Timeout, VarpSh) ->
+prove(M, Prop, K, Timeout, VarpSh) ->
+    prove(M, Prop, K, Timeout, VarpSh, fun(_) -> ok end).
+
+%% Tell: as bmc/4.
+prove(M = #{text := Text}, Prop, K, Timeout, VarpSh, Tell) ->
     T = " --timeout " ++ integer_to_list(Timeout) ++ " bmc ",
-    case bmc(Text, T ++ "--runs --k-min 2 --k-max 2 --trace false", VarpSh) of
+    case bmc(Text, T ++ "--runs --k-min 2 --k-max 2 --trace false", VarpSh, Tell) of
 	{found, _, _} ->
 	    named(bmc(Text, T ++ "--induction " ++ Prop ++ " --k-max " ++
-			  integer_to_list(K), VarpSh), M);
+			  integer_to_list(K), VarpSh, Tell), M);
 	{none, _} -> no_transitions;
 	Error -> Error
     end.
