@@ -10,7 +10,7 @@
 %%% @end
 -module(csp_list).
 
--export([file/1, image/1, patch/2, program/1, program/2]).
+-export([file/1, image/1, image/2, patch/2, patch/3, program/1, program/2]).
 -export([uses/1, null/2]).
 
 %% A file csp_disasm reads (.img, .hex).
@@ -21,21 +21,27 @@ file(Filename) ->
     end.
 
 %% The bytes of /dump rom.
-image(Bin) ->
+image(Bin) -> image(Bin, #{}).
+
+%% Opts: source => true for a program to read rather than /list's text --
+%% no tag comments, the rules switched off a #disable line at the end.
+image(Bin, Opts) ->
     case quiet(fun() -> csp_disasm:image(Bin) end) of
-	{ok, P}  -> {ok, program(P)};
+	{ok, P}  -> {ok, program(P, Opts)};
 	Error -> Error
     end.
 
 %% The bytes of /dump rom and /dump eeprom: what the node runs. The patch's
 %% lines are tagged E, the image's F; a rule it has switched off (#disable)
 %% gets a `!' after its tag, as /list has it.
-patch(Rom, Eeprom) ->
+patch(Rom, Eeprom) -> patch(Rom, Eeprom, #{}).
+
+patch(Rom, Eeprom, Opts) ->
     case quiet(fun() -> csp_disasm:patch(Rom, Eeprom) end) of
 	{ok, P = {H, _, Decls, _}} ->
-	    {ok, program(P, #{rom_nd => rom_nd(H, Decls),
-			      rom_nn => maps:get(n_instr, H),
-			      off => csp_disasm:disabled(Rom, Eeprom)})};
+	    {ok, program(P, Opts#{rom_nd => rom_nd(H, Decls),
+				  rom_nn => maps:get(n_instr, H),
+				  off => csp_disasm:disabled(Rom, Eeprom)})};
 	Error -> Error
     end.
 
@@ -55,7 +61,14 @@ program(P) ->
 program({Header, Strings, Decls, Code}, Opts) ->
     Env = env(Header, Strings, Decls, Code, Opts),
     Off = maps:get(off, Opts, []),
-    lists:flatten([[Text, eol(Tag, Off), $\n] || {Text, Tag} <- listing(Env)]).
+    case maps:get(source, Opts, false) of
+	false ->
+	    lists:flatten([[Text, eol(Tag, Off), $\n] || {Text, Tag} <- listing(Env)]);
+	true ->
+	    lists:flatten([[Text, $\n] || {Text, _} <- listing(Env)] ++
+			      [["#disable ", lists:join(" ", [integer_to_list(N) || N <- Off]), $\n]
+			       || Off =/= []])
+    end.
 
 %% The transports a program uses: a #buffer each that has one, as
 %% #{name, dir, transport, unit, text, addr} -- unit the i2c/spi bus or uart
