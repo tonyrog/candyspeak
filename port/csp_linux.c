@@ -1650,12 +1650,6 @@ void print_defines()
     printf("OP_AVAIL=%d\n", OP_AVAIL);  // next available = #opcodes
     printf("DECL_AVAIL=%d\n", DECL_AVAIL);  // next available = #decls
     printf("T_LAST=%d\n", T_LAST);        // #tokens
-#if !defined(CSP_EXEC_ONLY)
-    // Headroom in the SHARED stop-token table. OVERFLOW must be 0: a dropped
-    // token silently shortens a stop set, and the parser then fails in places
-    // that have nothing to do with whatever pattern outgrew it.
-    printf("STOP_TOKENS=%d/%d\n", csp_stop_tokens_used(), MAX_STOP_TOKENS);
-#endif
     printf("D_LAST=%d\n", D_LAST);        // #dtok
     printf("PART_LAST=%d\n", PART_LAST);  // <= 16 (4-bit max)
     printf("MAX_NAME_LEN=%d\n", MAX_NAME_LEN);

@@ -431,7 +431,6 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_CANNOT_LOAD] =            ros_err_cannot_load,
     [ERR_NUMBER_RANGE] =           ros_err_num_range,
     [ERR_BAD_IPV4] =               ros_err_bad_ipv4,
-    [ERR_TRAILING_WORDS] =         ros_err_trailing,
     [ERR_OUT_OF_MEMORY] =          ros_err_out_of_memory,
     [ERR_INDEX_RANGE] =            ros_err_index_range,
     [ERR_ASSIGN_TO_LOCAL] =        ros_err_assign_local,
@@ -442,7 +441,6 @@ static rostring_t  const err_tab[] RODATA = {
     [ERR_NO_DEFINES] =             ros_err_no_defines,
     [ERR_LOCAL_SCOPE] =            ros_err_local_scope,
     [ERR_RESERVED_NAME] =          ros_err_reserved_name,
-    [ERR_OPTS_AFTER_PIN] =         ros_err_opts_after_pin,
     [ERR_BLOCK_OPEN] =             ros_err_block_open,
     [ERR_BLOCK_DEPTH] =            ros_err_block_depth,
     [ERR_TOO_MANY_EVENTS] =        ros_err_many_events,
@@ -4343,10 +4341,6 @@ int csp_rt_init(csp_rt_t* st, int reactive, csp_cstate_t* cs)
     // The compiler's own tables, initialised on its side of the line. Dropping
     // this call is what lets --gc-sections take the whole compiler with it: the
     
-#ifdef DEBUG
-    if (debug) // or precompile!
-	dump_stop_sets();       // debugging
-#endif
     // ONLY the fields whose initial value is not zero. The memset above cleared
     // the whole struct, so nbuf, ps.nn/nd/nq/ns/line, ps.err (ERR_OK == 0),
     // ps.err_args, nt, nio, nm, cur, cs.nvar/rimp/n_sdef/rule_implicit,

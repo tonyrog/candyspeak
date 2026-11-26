@@ -41,61 +41,70 @@ typedef struct {
     uint8_t len;
 } pexpr_t;
 
-// Pattern commands
-enum {
-    P_END = 0,      // end of pattern
-    P_OPT_END,      // end of pattern optional 
-    P_ALT_END,      // end of alternative
-    P_CHOICE_END,   // end of all alternatives
-    P_REP_END,      // end of repetition
-    
-    P_TOK,        // match token: P_TOK, <tok>
-    P_TOK_W,      // match token: P_TOK, <tok>, <offset>
-    P_STR,        // capture string from WORD: P_STR, <offset>
-    
-    P_INTEGER_S,  // parse int expr, store: P_INTEGER, <offset> <set>
-    P_FLOAT_S,    // parse float expr, store: P_FLOAT, <offset> <set>
-    P_CONST_S,    // parse num expr / string, store: P_CONST_S,<opt-offset>,<offset> <set>
-    P_EXPR_S,     // capture expr with stop-set: P_EXPR_S, <offset>, <set>
-    P_OPTS,       // parse options: P_OPTS, <offset>
-    P_OPT,        // optional: P_OPT, <len>, ...pattern...
-    P_CHOICE,     // alternatives: P_CHOICNE, <n>, P_ALT,<len1> P_ALT_END, ...alt1..., <len2>, ...alt2...    P_CHOICE_END,
-    P_ALT,        // alternatives: P_ALT, <n>, <len1>, ...alt1..., <len2>, ...alt2...
-    P_REP,        // repeat: P_REP, <len>, ...pattern...
-    P_ARRAY,      // setup array: P_ARRAY, <base_offset>, <element_size>, <count>, <first>
-    P_PAT,        // sub pattern: P_PAT, pat_id, <offset>
-};
+// One assignment of a rule, an object line or a pack, as asm_rule compiles
+// it: `<obj>[.<fld>[.<pfld>]][<index>] (=|<-) <rhs>', or a bare <rhs>.
+typedef struct {
+    tstr_t obj;
+    tstr_t fld;
+    tstr_t pfld;
+    ivalue_t assign;          // EQ, RIMP, 0 for no target
+    ivalue_t has_idx;         // a `[...]' on the target
+    ivalue_t has_range;       // `[i0..i1]'
+    int idx_bits;             // idx0/idx1 are already bit positions (pack)
+    int is_unpack;            // <var> = src_view (unpack)
+    index_t src_view;
+    ivalue_t idx0;
+    ivalue_t idx1;
+    pexpr_t idxe;             // an index known at run time
+    pexpr_t rhs;
+} rule_body_part_t;
 
-// Match pattern against tokens
-// Returns: number of tokens consumed, or -1 on mismatch
-int pmatch(csp_rt_t* st, const token_t* tv, int ti, size_t n,
-	   const uint8_t* pat, void* data, size_t data_size);
+#define MAX_BODY_PARTS 8      // <body> (',' <body>)* in one rule
+#define MAX_INITS 8           // (<field> (=|<-) <expr>)* on one instance
+#define MAX_PACK MAX_BODY_PARTS
 
-// Budget for ALL stop sets together, not per set. The sets are generated
-// (csp_stop_sets.h) and the generator fails the build when they outgrow this,
-// so a set can no longer come out short at boot -- which used to happen
-// silently and showed up as a couple of dozen unrelated parse failures nowhere
-// near the pattern that had outgrown the table. Keep this in step with
-// MAX_STOP_TOKENS in utils/gen_patterns.erl.
-#define MAX_STOP_TOKENS 192
-extern int csp_stop_tokens_used(void);
+// A line as utils/candyspeak.y has it: the statement's action and the token
+// interval of each symbol it was made of, (a << 8) | b for tv[a] .. tv[b-1].
+#include "csp_lr.h"
+#include "csp_lr_act.h"
 
-// The STOP_* enum, generated from utils/syntax.terms together with the patterns
-// that use it. Ids are ALLOCATED, one per capture site -- the rule that an id
-// may be built only once cannot be broken by hand any more, because no id is
-// written by hand.
-#include "csp_pattern_ids.h"
-#include "csp_stop_sets.h"
+#define STMT_SYMS 8
+#define STMT_PARTS 8
+#define STMT_NO_OP 0xff
+typedef struct {
+    uint8_t act;              // A_digital ..., A_COUNT for none
+    uint8_t n;                // symbols in v
+    uint8_t at;               // the token a syntax error stopped at
+    uint8_t np;               // assignments in part
+    lr_val_t v[STMT_SYMS];
+    // the assignments of a rule, an object line or an immediate, in order:
+    // `ref = expr', `ref <- expr' or `expr', and where its operator is
+    struct {
+	lr_val_t iv;
+	uint8_t op;           // the `=' or `<-', STMT_NO_OP for none
+    } part[STMT_PARTS];
+} csp_stmt_t;
 
-// mark a token as a set pos (resurse)
-#define TOK_SET      0x80
-#define TOK_SET_MASK 0x7f
-#define STOP_SET(x) (TOK_SET | (x))
+#define IV(a, b) ((lr_val_t) (((a) << 8) | (b)))
+#define IV_A(v) ((int) ((v) >> 8))
+#define IV_B(v) ((int) ((v) & 0xff))
+// symbol k of the statement: where it starts and ends, and if it is empty
+#define SM_A(sm, k) IV_A((sm)->v[(k)])
+#define SM_B(sm, k) IV_B((sm)->v[(k)])
+#define SM_EMPTY(sm, k) (SM_A(sm, k) == SM_B(sm, k))
 
-// Check if token is in stop-set
-int stop_set_has(int set_idx, uint8_t tok);
+// 0 and the statement in *sm if csp.y has the line, n tokens of tv; an LR_
+// code (csp_lr.h) if not.
+int csp_lr_line(const token_t* tv, size_t n, csp_stmt_t* sm);
 
-void dump_stop_sets();
+// The constant tv[a] .. tv[b-1] as type vt (V_INTEGER ...), in *vp: 0, or
+// -1 if it is not one.
+int csp_const_val(csp_rt_t* st, const token_t* tv, int a, int b,
+		  uint8_t vt, value_t* vp);
 
+// An initialiser, tv[a] .. tv[b-1]: 1 and its value if it is a constant of
+// type vt, 0 if it is an expression that is not, -1 if it is neither.
+int csp_init_val(csp_rt_t* st, const token_t* tv, int a, int b,
+		 uint8_t vt, value_t* vp);
 
 #endif // CSP_PARSE_H

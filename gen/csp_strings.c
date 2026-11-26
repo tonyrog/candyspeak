@@ -47,7 +47,6 @@ rochar s_err_rule_range[] RODATA = "bad rule range, rules are numbered 1..%d";
 rochar s_err_no_rule[] RODATA = "no rule %d, the program has %d";
 rochar s_err_num_range[] RODATA = "number out of range";
 rochar s_err_bad_ipv4[] RODATA = "an ipv4 literal is four parts of 0..255";
-rochar s_err_trailing[] RODATA = "nothing may follow the declaration -- %s is left over";
 rochar s_err_unknown[] RODATA = "unknown error";
 rochar s_err_cannot_save[] RODATA = "cannot save eeprom";
 rochar s_err_cannot_load[] RODATA = "cannot load from eeprom";
@@ -74,7 +73,6 @@ rochar s_err_onewire_rom[] RODATA = "`onewire` names a string #param holding the
 rochar s_err_ep_param[] RODATA = "a can id or a port by name is a global integer #param: #param Port = 15555";
 rochar s_err_hole[] RODATA = "a hole (_) -- the program is not finished";
 rochar s_err_bad_char[] RODATA = "no token starts with '%c'";
-rochar s_err_opts_after_pin[] RODATA = "option '%s' comes BEFORE the pin -- '#digital D in pullup 2:1', not after";
 rochar s_err_block_open[] RODATA = "#%s opened on line %d was never closed";
 rochar s_err_block_depth[] RODATA = "blocks nest at most %d deep -- #in, #when and #module together";
 rochar s_err_index_not_const[] RODATA = "a buffer byte range is fixed when the program is built -- %s is not a constant";

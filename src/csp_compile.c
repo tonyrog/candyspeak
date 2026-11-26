@@ -22,12 +22,7 @@
 #include "csp_print.h"
 #include "csp_compile.h"
 #include "csp_tok.h"
-// Capture structs and the pat_* names, generated from utils/syntax.terms. The
-// bytes themselves live in csp_parse.c, in one array these index into; the
-// parse functions below stay here. What moved out is the data they match with,
-// whose byte lengths and stop-set ids are exactly what nobody can verify by
-// reading.
-#include "csp_patterns.h"
+#include "csp_parse.h"
 
 // An exec-only build has no compiler: a ROM image is produced on the host and
 // an EEPROM patch is stored already compiled, so nothing on the target turns
@@ -3498,42 +3493,16 @@ NOINLINE static vtype_t default_vt(int sized)
     return sized ? V_UNSIGNED : V_INTEGER;
 }
 
-// Whether the declaration says its width, read straight out of the tokens
-// before pmatch runs.
-//
-// It has to be done by hand, and early. Every one of these patterns matches its
-// initialiser as `{const, opts, init}` -- pmatch reads opts.vt to know what kind
-// of constant to accept -- so the type must already be settled when pmatch
-// starts. Leaving it unset does not fail loudly either: the const alternative
-// simply does not match, the surrounding P_OPT succeeds anyway, and the
-// declaration comes out silently zero-initialised.
-//
-// Stops at '=' so a value cannot be mistaken for a width; `: <int>' after an
-// array size is the width too (`#variable A[3]:4 = 0`).
-NOINLINE static int peek_sized(const token_t* tv, int ti, size_t n)
-{
-    int j;
-
-    for (j = ti; (j + 1 < (int)n) && (tv[j].t != EQ); j++) {
-	if ((tv[j].t == COLON) && (tv[j+1].t == INT))
-	    return 1;
-    }
-    return 0;
-}
-
-
 // '#' 'module' <name>
-NOINLINE int csp_parse_module(csp_rt_t* st, token_t* tv, int ti, size_t n)
+NOINLINE int csp_parse_module(csp_rt_t* st, const token_t* tv,
+			      const csp_stmt_t* sm)
 {
-    module_param_t d;
+    struct { tstr_t name; } d;
     index_t ix;
     int jx;
     int i;
 
-    if (pmatch(st, tv, ti, n, pat_module, &d, sizeof(d)) < 0) {
-	csp_set_error(st, ERR_SYNTAX);
-	return -1;
-    }
+    d.name = tv[SM_A(sm, 1)].v.str;
     // Mark before anything is emitted: this is where an aborted module rewinds to.
     csp_pstate_save(st, &st->cs->mod_mark);
     if ((ix = csp_new_udecl(st,&d.name,DECL_MODULE)) == BAD_INDEX)
@@ -3608,16 +3577,10 @@ NOINLINE int csp_check_blocks_closed(csp_rt_t* st)
 }
 
 // '#' 'end' [....]
-NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
+NOINLINE int csp_parse_end(csp_rt_t* st)
 {
-    end_param_t d;
     index_t mx, ex;
     int lx;
-    
-    if (pmatch(st, tv, ti, n, pat_end, &d, sizeof(d)) < 0) {
-	csp_set_error(st, ERR_SYNTAX);
-	return -1;
-    }
 
     // THE INNERMOST BLOCK, whichever kind it is. One stack, so `#end` cannot
     // close the wrong group -- with a flag per kind, `#when X / #in Idle / ... /
@@ -3666,35 +3629,203 @@ NOINLINE int csp_parse_end(csp_rt_t* st, token_t* tv, int ti, size_t n)
     return 0;
 }
 
-// `<name>[N]` in a DECLARATION: read the length and splice the `[N]` out of the
-// token vector, so the rest of that declaration's grammar (':res', options,
-// '= init', 'bind', a port:pin) is matched exactly as it was. An array differs
-// only in how MANY declarations it makes, never in what they say -- which is
-// what lets one helper serve #variable, #constant and (next) the device types
-// instead of four copies of the same splice.
-//
-// alen is left alone when there is no subscript, so the caller initialises it
-// to 1 and a plain declaration flows through untouched.
-NOINLINE static int array_splice(csp_rt_t* st, token_t* tv, int ti,
-				 size_t* np, ivalue_t* alen)
-{
-    size_t n = *np;
+// ---------------------------------------------- the statement csp.y parsed
+// csp_stmt_t: the statement's symbols as token intervals. These read the
+// parts the declarations share; the grammar has already checked the shape.
 
-    if (!((ti+3 < (int)n) && (tv[ti+1].t == LB) && (tv[ti+2].t == INT) &&
-	  (tv[ti+3].t == RB)))
+// a constant integer, tv[a] .. tv[b-1]
+NOINLINE static int stmt_int(csp_rt_t* st, const token_t* tv, int a, int b,
+			     ivalue_t* ip)
+{
+    value_t v;
+
+    if (csp_const_val(st, tv, a, b, V_INTEGER, &v) < 0) {
+	csp_set_error(st, ERR_SYNTAX);
+	return -1;
+    }
+    *ip = v.i;
+    return 0;
+}
+
+// `[n]': the length, 1 without it. The upper bound is the SETOX len field,
+// not a taste limit -- an array longer than it can express would be
+// emitted with a wrapped bounds check, i.e. an unchecked one.
+NOINLINE static int stmt_array(csp_rt_t* st, const token_t* tv,
+			       const csp_stmt_t* sm, int k, ivalue_t* alen)
+{
+    if (SM_EMPTY(sm, k))
 	return 0;
-    *alen = tv[ti+2].v.val.i;
-    // The upper bound is the SETOX len field, not a taste limit -- an array
-    // longer than it can express would be emitted with a wrapped bounds check,
-    // i.e. an unchecked one.
+    *alen = tv[SM_A(sm, k) + 1].v.val.i;
     if ((*alen < 1) || (*alen > 0xffff) ||
 	(st->ps.nd + *alen > MAX_DECLS)) {
 	csp_set_error(st, ERR_NUMBER_RANGE);
 	return -1;
     }
-    memmove(&tv[ti+1], &tv[ti+4], (n - (ti+4))*sizeof(token_t));
-    *np = n - 3;
     return 0;
+}
+
+// `: <bits>', *res as it was without it
+NOINLINE static int stmt_res(csp_rt_t* st, const token_t* tv,
+			     const csp_stmt_t* sm, int k, ivalue_t* res)
+{
+    if (SM_EMPTY(sm, k))
+	return 0;
+    return stmt_int(st, tv, SM_A(sm, k) + 1, SM_B(sm, k), res);
+}
+
+// the options, on top of *opts. `bind <buffer>[<bits>]' is one of them to
+// the grammar; where the declaration takes one, *bind is its token (the
+// `bind'), -1 if there is none.
+NOINLINE static int stmt_opts_bind(csp_rt_t* st, const token_t* tv,
+				   const csp_stmt_t* sm, int k,
+				   decl_opts_t* opts, int* bind)
+{
+    int i = SM_A(sm, k);
+    int b = SM_B(sm, k);
+
+    for (;;) {
+	*opts = parse_opts(st, tv, &i, b, *opts);
+	if (i == b)
+	    return 0;
+	// a bind: `bind' Name '[' ... ']'
+	if (!bind || (*bind >= 0)) {
+	    csp_set_error(st, ERR_SYNTAX);
+	    return -1;
+	}
+	*bind = i;
+	while (tv[i].t != RB)
+	    i++;
+	i++;
+    }
+}
+
+NOINLINE static int stmt_opts(csp_rt_t* st, const token_t* tv,
+			      const csp_stmt_t* sm, int k, decl_opts_t* opts)
+{
+    return stmt_opts_bind(st, tv, sm, k, opts, NULL);
+}
+
+// The parts of a declaration that all of #variable, #local, #param and
+// #constant have: name, width, options, in this order of symbols. The type
+// is the default for the width (default_vt) unless an option names one.
+typedef struct {
+    tstr_t name;
+    ivalue_t res;
+    decl_opts_t opts;
+    ivalue_t alen;
+    int bind;
+} stmt_decl_t;
+
+NOINLINE static int stmt_decl(csp_rt_t* st, const token_t* tv,
+			      const csp_stmt_t* sm, int ka, int kr, int ko,
+			      stmt_decl_t* d)
+{
+    d->name = tv[SM_A(sm, 1)].v.str;
+    d->res = 8*sizeof(ivalue_t);
+    d->opts.bits = 0;
+    d->opts.vt = default_vt(!SM_EMPTY(sm, kr));
+    d->alen = 1;
+    d->bind = -1;
+    if ((ka >= 0) && (stmt_array(st, tv, sm, ka, &d->alen) < 0))
+	return -1;
+    if ((stmt_res(st, tv, sm, kr, &d->res) < 0) ||
+	(stmt_opts_bind(st, tv, sm, ko, &d->opts, &d->bind) < 0))
+	return -1;
+    return check_res(st, d->res);
+}
+
+// Assignment k of the statement as a rule body part. The target, if there
+// is one, is read off its tokens: `obj[.fld[.pfld]]' and then `[i]',
+// `[i..j]' (constants) or `[<expr>]'. asm_rule finds a plain target again
+// where it stands before the operator.
+NOINLINE static int stmt_part(csp_rt_t* st, const token_t* tv,
+			      const csp_stmt_t* sm, int k, rule_body_part_t* p)
+{
+    int a = IV_A(sm->part[k].iv);
+    int b = IV_B(sm->part[k].iv);
+    int op = sm->part[k].op;
+    int j = a;
+
+    memset(p, 0, sizeof(*p));
+    if (op == STMT_NO_OP) {
+	p->rhs.pos = a;
+	p->rhs.len = b - a;
+	return 0;
+    }
+    p->assign = tv[op].t;           // EQ or RIMP
+    p->rhs.pos = op + 1;
+    p->rhs.len = b - (op + 1);
+    p->obj = tv[j++].v.str;
+    if ((j < op) && (tv[j].t == DOT)) {
+	p->fld = tv[j + 1].v.str;
+	j += 2;
+	if ((j < op) && (tv[j].t == DOT)) {
+	    p->pfld = tv[j + 1].v.str;
+	    j += 2;
+	}
+    }
+    if ((j < op) && (tv[j].t == LB)) {
+	int i0 = j + 1, i1 = op - 1;  // inside the brackets
+	int i, dd = -1, depth = 0;
+	value_t v;
+
+	for (i = i0; i < i1; i++) {
+	    if ((tv[i].t == LP) || (tv[i].t == LB)) depth++;
+	    else if ((tv[i].t == RP) || (tv[i].t == RB)) depth--;
+	    else if ((tv[i].t == DOTDOT) && (depth == 0)) dd = i;
+	}
+	p->has_idx = LB;
+	if (dd >= 0) {                  // a range: both ends constants
+	    p->has_range = DOTDOT;
+	    if ((stmt_int(st, tv, i0, dd, &p->idx0) < 0) ||
+		(stmt_int(st, tv, dd + 1, i1, &p->idx1) < 0))
+		return -1;
+	}
+	else if (csp_const_val(st, tv, i0, i1, V_INTEGER, &v) == 0)
+	    p->idx0 = v.i;
+	else {                          // an index known at run time
+	    p->idxe.pos = i0;
+	    p->idxe.len = i1 - i0;
+	}
+    }
+    return 0;
+}
+
+// An expression read through once before it is compiled, as the patterns
+// read every one they captured: it checks the names, and a string in it is
+// made here, in front of what the rule compiles to.
+NOINLINE static int stmt_expr(csp_rt_t* st, const token_t* tv,
+			      const pexpr_t* e)
+{
+    size_t num = e->len;
+    rentry_t r;
+
+    if ((e->len == 0) || !csp_parse_const_expr(st, &tv[e->pos], &num, &r) ||
+	(num != e->len)) {
+	csp_set_error(st, ERR_SYNTAX);
+	return -1;
+    }
+    return 0;
+}
+
+// all the assignments, at most max
+NOINLINE static int stmt_parts(csp_rt_t* st, const token_t* tv,
+			       const csp_stmt_t* sm, rule_body_part_t* p,
+			       int max)
+{
+    int k;
+
+    if (sm->np > max) {
+	if (csp_set_error(st, ERR_TOO_MANY_PARTS))
+	    csp_set_err_arg_int(st, 0, max);
+	return -1;
+    }
+    for (k = 0; k < sm->np; k++)
+	if ((stmt_part(st, tv, sm, k, &p[k]) < 0) ||
+	    ((p[k].idxe.len > 0) && (stmt_expr(st, tv, &p[k].idxe) < 0)) ||
+	    (stmt_expr(st, tv, &p[k].rhs) < 0))
+	    return -1;
+    return sm->np;
 }
 
 // The elements after the head: copies of the FULLY BUILT head, so they inherit
@@ -3752,57 +3883,64 @@ NOINLINE static int set_elem_pin(csp_rt_t* st, int di, decl_t type,
     return 0;
 }
 
-// The pins for elements 1..alen-1 of a device array, from whatever follows the
-// `port:pin` the declaration already matched:
+// The pins of a device and each element of a device array, symbol k:
 //
+//   2:13                one pin
 //   9:0..9              a range   -- element k gets pin 0+k
 //   0:1,4,7             a list    -- element k gets the k-th pin
 //   0:1..5,7,9          both, in any order
 //   1:1..3,2:1,3,5      SEVERAL PORTS -- a port names the ones after it
 //   9:,7..9             a port on its own, pins after the comma
 //
-// Every item is matched by pat_pin_item; this only walks the items and turns
-// them into elements, so the grammar lives in one place and the port is just
-// another thing an item may carry. `port`/`last` are where an unqualified pin
-// and a continuing range pick up from.
+// An item is `p:lo..hi', any part of it there or not, a comma after it or
+// not (csp.y pin_list). `..hi' alone continues from the last pin named.
 //
 // A count that does not match the declared length is an ERROR -- ten elements
 // over four pins is a typo, and padding or truncating it silently would leave
 // elements pointing at pin 0, which is a real pin.
-NOINLINE static int array_pins(csp_rt_t* st, const token_t* tv, int j, size_t n,
-			       int head, decl_t type, ivalue_t alen,
-			       ivalue_t port0, ivalue_t pin0)
+NOINLINE static int stmt_pins(csp_rt_t* st, const token_t* tv,
+			      const csp_stmt_t* sm, int sk,
+			      int head, decl_t type, ivalue_t alen)
 {
-    ivalue_t port = port0;
-    ivalue_t last = pin0;
-    int k = 1;
+    int j = SM_A(sm, sk);
+    int b = SM_B(sm, sk);
+    ivalue_t port = 0;
+    ivalue_t last = -1;
+    int k = 0;
 
-    while (j < (int)n) {
-	pin_item_t it;
-	ivalue_t lo;
-	int r;
+    while (j < b) {
+	ivalue_t lo = -1, hi = -1, x;
 
-	it.num = it.lo = it.hi = -1;
-	it.colon = it.sep = 0;
-	if ((r = pmatch(st, tv, j, n, pat_pin_item, &it, sizeof(it))) <= j)
-	    break;                      // not part of the pin spec
-	j = r;
-	// `num` is the port when a ':' followed it, and the first pin when not.
-	if (it.colon == COLON) {
-	    port = it.num;
-	    lo = it.lo;
+	if (tv[j].t != DOTDOT) {
+	    if (stmt_int(st, tv, j, j + 1, &x) < 0)
+		return -1;
+	    j++;
+	    if ((j < b) && (tv[j].t == COLON)) {
+		port = x;
+		j++;
+		if ((j < b) && (tv[j].t != COMMA)) {
+		    if (stmt_int(st, tv, j, j + 1, &lo) < 0)
+			return -1;
+		    j++;
+		}
+	    }
+	    else
+		lo = x;
 	}
-	else
-	    lo = it.num;
-	if ((lo >= 0) || (it.hi >= 0)) {
-	    // `..hi` alone continues from the last pin named; `lo` alone is the
-	    // one-pin range lo..lo.
-	    ivalue_t hi;
+	if ((j < b) && (tv[j].t == DOTDOT)) {
+	    if (stmt_int(st, tv, j + 1, j + 2, &hi) < 0)
+		return -1;
+	    j += 2;
+	}
+	if ((j < b) && (tv[j].t == COMMA))
+	    j++;
+	if ((lo >= 0) || (hi >= 0)) {
 	    ivalue_t p;
 
 	    if (lo < 0)
 		lo = last + 1;
-	    hi = (it.hi >= 0) ? it.hi : lo;
+	    if (hi < 0)
+		hi = lo;
 	    if (hi < lo) {              // `9:5..2` -- descending is a typo
 		csp_set_error(st, ERR_NUMBER_RANGE);
 		return -1;
@@ -3928,37 +4066,32 @@ NOINLINE static int asm_decl_init(csp_rt_t* st, const token_t* tv, size_t n,
     return r;
 }
 
-//
-NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
+// '#' 'variable' <name> [<array>] [':' <bits>] <opts> ['=' <init>]
+NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, size_t n,
+				const csp_stmt_t* sm)
 {
-    variable_param_t d = {0};
+    stmt_decl_t d;
+    value_t init;
     index_t ix;
-    int i, r;
-    ivalue_t alen = 1;
+    int i;
+    int ini = 0;              // the initialiser is an expression
 
-    // set default values
-    d.r.res = 8*sizeof(ivalue_t);
-    d.opts.vt = default_vt(peek_sized(tv, ti, n));
-
-    if (array_splice(st, tv, ti, &n, &alen) < 0)
+    init.u = 0;
+    if (stmt_decl(st, tv, sm, 2, 3, 4, &d) < 0)
 	return -1;
-
-    if ((r = pmatch(st, tv, ti, n, pat_variable, &d, sizeof(d))) < 0) {
-	csp_set_error(st, ERR_SYNTAX);
-	return -1;
+    if (sm->act == A_variable_init) {
+	// `= <const>' folds into the declaration; anything else is a
+	// #param's value, an INIT-time assignment (asm_decl_init)
+	if ((ini = csp_init_val(st, tv, SM_A(sm, 6), SM_B(sm, 6), d.opts.vt,
+				&init)) < 0) {
+	    csp_set_error(st, ERR_SYNTAX);
+	    return -1;
+	}
+	ini = !ini;
     }
-    // Both initialiser alternatives sit inside one P_OPT, so a bad name in
-    // `= <expr>` fails the whole optional and the declaration used to come out
-    // silently zero-initialised -- `#variable Q = Zork` was accepted. The
-    // failing alternative already set the specific error; honour it. (Same
-    // reasoning as the dropped-guard check in csp_parse_rule.)
-    if (st->ps.err != ERR_OK)
-	return -1;
-    if (check_res(st, d.r.res) < 0)
-	return -1;
     // An array's elements all get the same declaration (array_replicate), so
     // there is no one place for a per-element INIT assignment to land.
-    if ((d.ini.len > 0) && (alen != 1)) {
+    if (ini && (d.alen != 1)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -3968,40 +4101,25 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
     {
     	csp_decl_t* dp_ = ram_decl_at(st,i);
 	    csp_decl_set_vt(dp_, d.opts.vt);
-	    csp_decl_set_res(dp_, MAKE_RES(d.r.res));
+	    csp_decl_set_res(dp_, MAKE_RES(d.res));
 	    csp_decl_set_dir(dp_, d.opts.dir);
-	    csp_decl_set_va_init(dp_, d.init);
+	    csp_decl_set_va_init(dp_, init);
     }
 
-    // optional:  bind <buffer> '[' <bit0> ['..' <bit1>] ']'
+    // bind <buffer> '[' <bit0> ['..' <bit1>] ']'
     // a bound variable is a bit-field view into a buffer (bits, not bytes)
-    if ((r < (int)n) && (tv[r].t == WORD) && (tv[r].v.str.len == 4) &&
-	(ro_memcmp(ros_bind, tv[r].v.str.ptr, 4) == 0)) {
+    if (d.bind >= 0) {
 	index_t bx;
 	ivalue_t b0, b1;
-	int j = r + 1;
-	if ((j >= (int)n) || (tv[j].t != WORD) ||
-	    ((bx = csp_lookup_decl(st, &tv[j].v.str)) == BAD_INDEX) ||
+	int j = d.bind + 1;
+
+	if (((bx = csp_lookup_decl(st, &tv[j].v.str)) == BAD_INDEX) ||
 	    (decl(st,INDEX(bx),type) != DECL_BUFFER)) {
 	    csp_set_error(st, ERR_SYNTAX); return -1;
 	}
-	j++;
-	if ((j >= (int)n) || (tv[j].t != LB) ||
-	    (j+1 >= (int)n) || (tv[j+1].t != INT)) {
-	    csp_set_error(st, ERR_SYNTAX); return -1;
-	}
-	j += 2;
-	b0 = b1 = tv[j-1].v.val.i;
-	if ((j < (int)n) && (tv[j].t == DOTDOT)) {
-	    j++;
-	    if ((j >= (int)n) || (tv[j].t != INT)) {
-		csp_set_error(st, ERR_SYNTAX); return -1;
-	    }
-	    b1 = tv[j].v.val.i; j++;
-	}
-	if ((j >= (int)n) || (tv[j].t != RB)) {
-	    csp_set_error(st, ERR_SYNTAX); return -1;
-	}
+	b0 = b1 = tv[j+2].v.val.i;
+	if (tv[j+3].t == DOTDOT)
+	    b1 = tv[j+4].v.val.i;
 	// The range is in BITS and nothing downstream re-checks it: ca.bit/ca.len
 	// would wrap, and the heap access trusts the view -- a bind past the end
 	// of the buffer wrote outside it. The buffer is the bound.
@@ -4021,33 +4139,36 @@ NOINLINE int csp_parse_variable(csp_rt_t* st, token_t* tv, int ti, size_t n)
     }
 
     // Made LAST so the copies inherit everything decided above.
-    if (array_replicate(st, i, DECL_VARIABLE, alen) < 0)
+    if (array_replicate(st, i, DECL_VARIABLE, d.alen) < 0)
 	return -1;
 
     // `= <expr>` rather than `= <const>`: a #param initialiser, compiled to an
     // INIT-time assignment (see asm_decl_init). The declared init carries the
     // param's current value, so the one cycle before INIT runs -- and the
     // listing -- show what the variable is going to be rather than a zero.
-    if (d.ini.len > 0) {
+    if (ini) {
 	rule_body_part_t b = {0};
 	value_t seed;
 
-	if (param_seed(st, tv, &d.ini, &seed))
+	memset(&b, 0, sizeof(b));
+	b.rhs.pos = SM_A(sm, 6);
+	b.rhs.len = SM_B(sm, 6) - SM_A(sm, 6);
+	if (param_seed(st, tv, &b.rhs, &seed))
 	    csp_decl_set_va_init(ram_decl_at(st,i), seed);
 	// asm_rule reads a plain `<var> = <rhs>` lvalue back out of the token
 	// vector at rhs.pos-2, and what sits there is DECLARATION syntax
-	// (`:32`, an option). Move the name down against the '=', the way
-	// csp_parse_local does; those tokens are already consumed.
-	tv[d.ini.pos - 2] = tv[ti];
+	// (`:32`, an option). Move the name down against the '='; those
+	// tokens are already read.
+	tv[b.rhs.pos - 2] = tv[SM_A(sm, 1)];
 	b.obj    = d.name;
 	b.assign = EQ;
-	b.rhs    = d.ini;
 	return asm_decl_init(st, tv, n, &b);
     }
     return 0;
 }
 
-NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, int ti, size_t n);
+NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, size_t n,
+			    const csp_stmt_t* sm);
 NOINLINE int csp_parse_import(csp_rt_t* st, token_t* tv, int ti, size_t n);
 
 // '#' 'local' <name>[':' <size>] [<opt>+] '=' <expr>
@@ -4089,19 +4210,17 @@ NOINLINE int csp_parse_import(csp_rt_t* st, token_t* tv, int ti, size_t n);
 // own". There is no spare bit in a declaration, and a local is never both an
 // input and an output in the pin sense, so the two-bit dir field has the room.
 // is_local_in tests DIR_IN as a bit, which both satisfy.
-NOINLINE static int local_in(csp_rt_t* st, token_t* tv, int ti, size_t n,
-			     int dflt, size_t ndflt)
+// `#local X in [= <default>]': the instance binds it. The default, tv[dflt]
+// .. tv[dend-1], if dend > dflt.
+NOINLINE static int local_in(csp_rt_t* st, const token_t* tv,
+			     const stmt_decl_t* d, int dflt, int dend)
 {
-    variable_param_t d = {0};
     index_t ix;
     int i;
     value_t init;
 
     init.u = 0;
-    d.r.res = 8*sizeof(ivalue_t);
-    d.opts.vt = default_vt(peek_sized(tv, ti, n));
-    if ((pmatch(st, tv, ti, n, pat_variable, &d, sizeof(d)) < 0) ||
-	(d.opts.dir != DIR_IN)) {
+    if (d->opts.dir != DIR_IN) {
 	csp_set_error(st, ERR_SYNTAX);      // no `=` and no `in`: nothing
 	return -1;
     }
@@ -4109,70 +4228,58 @@ NOINLINE static int local_in(csp_rt_t* st, token_t* tv, int ti, size_t n,
 	csp_set_error(st, ERR_LOCAL_IN_WHERE);
 	return -1;
     }
-    if (check_res(st, d.r.res) < 0)
-	return -1;
-    if (ndflt > 0) {
+    if (dend > dflt) {
 	rentry_t rc;
-	size_t num = ndflt;
+	size_t num = dend - dflt;
 	if (!csp_parse_const_expr(st, &tv[dflt], &num, &rc) || !rc.I ||
-	    (num != ndflt)) {
+	    ((int) num != dend - dflt)) {
 	    csp_set_error(st, ERR_SYNTAX);  // a default is a constant
 	    return -1;
 	}
 	init = rc.val;
-	if ((d.opts.vt == V_FLOAT) && (rc.vt == V_INTEGER))
+	if ((d->opts.vt == V_FLOAT) && (rc.vt == V_INTEGER))
 	    init.u = fv_to_ieee(op_CVTIF(rc.val.i));
     }
-    if (def_lookup_local(st, &d.name) != BAD_INDEX) {
+    if (def_lookup_local(st, &d->name) != BAD_INDEX) {
 	if (csp_set_error(st, ERR_ALREADY_DEFINED)) {
 	    csp_set_err_arg_rostr(st, 0, ros_local);
-	    csp_set_err_arg_tstr(st, 1, &d.name);
+	    csp_set_err_arg_tstr(st, 1, &d->name);
 	}
 	return -1;
     }
-    if ((ix = csp_new_udecl(st, &d.name, DECL_VARIABLE)) == BAD_INDEX)
+    if ((ix = csp_new_udecl(st, &d->name, DECL_VARIABLE)) == BAD_INDEX)
 	return -1;
     i = INDEX(ix);
     {
     	csp_decl_t* dp_ = ram_decl_at(st,i);
-	    csp_decl_set_vt(dp_, d.opts.vt);
-	    csp_decl_set_res(dp_, MAKE_RES(d.r.res));
-	    csp_decl_set_dir(dp_, (ndflt > 0) ? DIR_INOUT : DIR_IN);
+	    csp_decl_set_vt(dp_, d->opts.vt);
+	    csp_decl_set_res(dp_, MAKE_RES(d->res));
+	    csp_decl_set_dir(dp_, (dend > dflt) ? DIR_INOUT : DIR_IN);
 	    csp_decl_set_local(dp_, 1);
 	    csp_decl_set_va_init(dp_, init);
     }
     return 0;
 }
 
-NOINLINE int csp_parse_local(csp_rt_t* st, token_t* tv, int ti, size_t n)
+// '#' 'local' <name> [':' <bits>] <opts> ['=' <formula>]
+NOINLINE int csp_parse_local(csp_rt_t* st, token_t* tv, size_t n,
+			     const csp_stmt_t* sm)
 {
-    variable_param_t d = {0};
+    stmt_decl_t d;
     index_t ix;
-    int i, r, eq = -1, j;
+    int i, r, eq;
 
-    d.r.res = 8*sizeof(ivalue_t);
-    d.opts.vt = default_vt(peek_sized(tv, ti, n));
-
-    // Find the '=' and let pmatch see only the declaration head. The tail is an
-    // EXPRESSION, which P_CONST_S would refuse -- and refusing is right for a
-    // #variable, whose initialiser has to be a constant.
-    for (j = ti; j < (int)n; j++) {
-	if (tv[j].t == EQ) { eq = j; break; }
-    }
-    if (eq < 0)                            // `#local X in`: see local_in
-	return local_in(st, tv, ti, n, 0, 0);
-    if (eq + 1 >= (int)n) {
-	csp_set_error(st, ERR_SYNTAX);      // a local with no formula is nothing
+    if (stmt_decl(st, tv, sm, -1, 2, 3, &d) < 0)
 	return -1;
-    }
-    if ((r = pmatch(st, tv, ti, eq, pat_variable, &d, sizeof(d))) < 0) {
+    if (d.bind >= 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
+    if (sm->act == A_local)                // `#local X in`
+	return local_in(st, tv, &d, 0, 0);
+    eq = SM_A(sm, 4);
     if (d.opts.dir == DIR_IN)              // `#local X in = <default>`
-	return local_in(st, tv, ti, eq, eq + 1, n - (size_t)(eq + 1));
-    if (check_res(st, d.r.res) < 0)
-	return -1;
+	return local_in(st, tv, &d, SM_A(sm, 5), SM_B(sm, 5));
     // A LOCAL'S NAME DOES NOT GO IN ram_str.
     //
     // It is needed only while this module is parsed: nothing outside may read a
@@ -4222,7 +4329,7 @@ NOINLINE int csp_parse_local(csp_rt_t* st, token_t* tv, int ti, size_t n)
     {
     	csp_decl_t* dp_ = ram_decl_at(st,i);
 	    csp_decl_set_vt(dp_, d.opts.vt);
-	    csp_decl_set_res(dp_, MAKE_RES(d.r.res));
+	    csp_decl_set_res(dp_, MAKE_RES(d.res));
 	    csp_decl_set_dir(dp_, d.opts.dir);
 	    csp_decl_set_local(dp_, 1);
 	    csp_decl_set_va_init(dp_, (value_t){ .i = 0 });
@@ -4234,52 +4341,54 @@ NOINLINE int csp_parse_local(csp_rt_t* st, token_t* tv, int ti, size_t n)
     // '=' and parse from there; the head tokens have already been consumed by
     // the pmatch above, so overwriting one costs nothing. When there is no
     // ':res' the name is already in place and this is a self-assignment.
-    tv[eq-1] = tv[ti];
+    tv[eq-1] = tv[SM_A(sm, 1)];
     // The name is already declared, so a #local whose formula mentions ITSELF
     // resolves -- and reads its own previous value, which is defined (if odd)
     // rather than an error: it is the accumulator a plain variable can express.
     st->cs->local_def = (index_t)(i + 1);   // allow the one assignment that defines it
-    r = csp_parse_rule(st, tv, eq-1, n);
+    {
+	csp_stmt_t f;                       // the rule `<name> = <formula>'
+
+	f.act = A_rule;
+	f.np = 1;
+	f.part[0].iv = IV(eq - 1, SM_B(sm, 5));
+	f.part[0].op = (uint8_t) eq;
+	r = csp_parse_rule(st, tv, n, &f);
+    }
     st->cs->local_def = 0;
     return r;
 }
 
-// Walk `v0, v1, ... }` from `j`, calling nothing per element unless `head` is
-// given: with head < 0 it only COUNTS, which is what lets the length be known
-// before the declarations that hold the values exist. Parsing twice costs a
-// second constant-fold per element and buys an arbitrary list length with no
-// temporary array -- the alternative was a fixed cap on how many elements a
-// list may have, sized for a stack this also runs on.
-NOINLINE static int init_list(csp_rt_t* st, const token_t* tv, int j, size_t n,
-			      decl_opts_t opts, int head, int* np)
+// The elements of `{ v0, v1, ... }', tv[a] .. tv[b-1] with the braces, each
+// a constant of type vt; written to head + k unless head < 0, which only
+// COUNTS -- that is what lets the length be known before the declarations
+// that hold the values exist. A comma inside parentheses is an argument's.
+NOINLINE static int init_list(csp_rt_t* st, const token_t* tv, int a, int b,
+			      uint8_t vt, int head, int* np)
 {
     int nv = 0;
+    int j = a + 1;
 
-    for (;;) {
-	initval_param_t e;
-	int r;
+    while (j < b - 1) {
+	int e = j, depth = 0;
+	value_t v;
 
-	e.opts = opts;
-	e.sep  = 0;
-	e.init.i = 0;
-	if ((r = pmatch(st, tv, j, n, pat_initval, &e, sizeof(e))) < 0) {
+	while ((e < b - 1) && ((depth > 0) || (tv[e].t != COMMA))) {
+	    if (tv[e].t == LP) depth++;
+	    else if (tv[e].t == RP) depth--;
+	    e++;
+	}
+	if (csp_const_val(st, tv, j, e, vt, &v) < 0) {
 	    csp_set_error(st, ERR_SYNTAX);
 	    return -1;
 	}
-	j = r;
 	if (head >= 0)
-	    csp_decl_set_cn_init(ram_decl_at(st, head + nv), e.init);
+	    csp_decl_set_cn_init(ram_decl_at(st, head + nv), v);
 	nv++;
-	if (e.sep == RBRACE)
-	    break;
-	// A trailing `,` with nothing after it, or a runaway list.
-	if (j >= (int)n) {
-	    csp_set_error(st, ERR_SYNTAX);
-	    return -1;
-	}
+	j = e + 1;
     }
     *np = nv;
-    return j;
+    return 0;
 }
 
 // Write a param's live value as well as its declaration. Before csp_rt_start
@@ -4302,48 +4411,44 @@ NOINLINE static void set_param_value(csp_rt_t* st, index_t di, value_t v)
 
 // `#param` and `#constant` share this. A param is the same declaration with the
 // `local` bit set -- rules may not assign to it, and it is not folded.
-NOINLINE static int parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n,
-				   int is_param)
+//
+//   '#' 'constant' <name> [<array>] [':' <bits>] <opts> '=' (<const> | '{' ...)
+//   '#' 'param' <name> [':' <bits>] <opts> '=' <const>
+NOINLINE static int parse_constant(csp_rt_t* st, const token_t* tv,
+				   const csp_stmt_t* sm, int is_param)
 {
-    constant_param_t d = {0};
+    stmt_decl_t d;
+    value_t init;
     index_t ix;
-    int i, r, nv = 0;
-    ivalue_t alen = 1;
+    int i, nv = 0;
+    int k = is_param ? 5 : 6;         // the initialiser's symbol
+    int list;
 
-    // Unlike a #variable, the type has to be settled BEFORE pmatch: the pattern
-    // matches the initialiser as `{const, opts, init}`, i.e. it reads opts.vt to
-    // know what kind of constant to accept. V_VOID there matches nothing and
-    // every #constant and #param in the file becomes a syntax error.
-    //
-    // So the width is found first, by hand, and only to answer the same
-    // question default_vt answers. An explicit `integer`/`unsigned` in the
-    // declaration wins -- pmatch overwrites this from opts.
-    d.opts.vt = default_vt(peek_sized(tv, ti, n));
-    d.r.res = 8*sizeof(ivalue_t);
-
-    if (array_splice(st, tv, ti, &n, &alen) < 0)
-	return -1;
-
-    if ((r = pmatch(st, tv, ti, n, pat_constant, &d, sizeof(d))) < 0) {
-	csp_set_error(st, ERR_SYNTAX);
-	return -1;
-    }
-    if (check_res(st, d.r.res) < 0)
-	return -1;
+    init.u = 0;
+    if ((is_param && (sm->act != A_param_init)) ||
+	(stmt_decl(st, tv, sm, is_param ? -1 : 2, is_param ? 2 : 3,
+		   is_param ? 3 : 4, &d) < 0))
+	goto syntax;
+    if (d.bind >= 0)
+	goto syntax;
+    list = (tv[SM_A(sm, k)].t == LBRACE);
 
     // `= { v0, v1, ... }`. Counted first, so a length that disagrees with the
     // list is caught before any declaration is made -- a mistake, not something
     // to pad or truncate silently.
-    if (d.list == LBRACE) {
-	if (init_list(st, tv, r, n, d.opts, -1, &nv) < 0)
+    if (list) {
+	if (init_list(st, tv, SM_A(sm, k), SM_B(sm, k), d.opts.vt, -1, &nv) < 0)
 	    return -1;
-	if ((alen > 1) && (nv != alen)) {
+	if ((d.alen > 1) && (nv != d.alen)) {
 	    csp_set_error(st, ERR_NUMBER_RANGE);
 	    return -1;
 	}
-	if (alen == 1)
-	    alen = nv;              // `#constant A = {..}` -- the list sets it
+	if (d.alen == 1)
+	    d.alen = nv;              // `#constant A = {..}` -- the list sets it
     }
+    else if (csp_const_val(st, tv, SM_A(sm, k), SM_B(sm, k), d.opts.vt,
+			   &init) < 0)
+	goto syntax;
 
     // A #param may be re-declared, and that is the whole mechanism for SETTING
     // one: a config file, or a line at the prompt, carries `#param Kp = 9` and
@@ -4359,22 +4464,22 @@ NOINLINE static int parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n,
     //
     // Anything else -- the name taken by something that is not a param -- is
     // still ERR_ALREADY_DEFINED, which csp_new_udecl reports below.
-    if (is_param && (alen == 1) && (d.list != LBRACE)) {
+    if (is_param) {
 	index_t px = csp_lookup_decl_local(st, &d.name);
 	if ((px != BAD_INDEX) &&
 	    (decl(st, INDEX(px), type) == DECL_CONSTANT) &&
 	    decl(st, INDEX(px), local)) {
 	    // The width and type are what any already-compiled rule was built
 	    // against, so a re-declaration may not change them.
-	    if ((GET_RES(decl(st, INDEX(px), res)) != d.r.res) ||
+	    if ((GET_RES(decl(st, INDEX(px), res)) != d.res) ||
 		(decl(st, INDEX(px), vt) != d.opts.vt)) {
 		if (csp_set_error(st, ERR_PARAM_SHAPE))
 		    csp_set_err_arg_tstr(st, 0, &d.name);
 		return -1;
 	    }
 	    if (INDEX(px) >= st->rom_nd) {          // RAM: write it in place
-		csp_decl_set_cn_init(ram_decl_at(st, INDEX(px)), d.init);
-		set_param_value(st, INDEX(px), d.init);
+		csp_decl_set_cn_init(ram_decl_at(st, INDEX(px)), init);
+		set_param_value(st, INDEX(px), init);
 		return 0;
 	    }
 	    // ROM: fall through and declare the shadow.
@@ -4384,11 +4489,11 @@ NOINLINE static int parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n,
 	    {
 	    	csp_decl_t* dp_ = ram_decl_at(st,i);
 		    csp_decl_set_vt(dp_, d.opts.vt);
-		    csp_decl_set_res(dp_, MAKE_RES(d.r.res));
+		    csp_decl_set_res(dp_, MAKE_RES(d.res));
 		    csp_decl_set_local(dp_, 1);
-		    csp_decl_set_cn_init(dp_, d.init);
+		    csp_decl_set_cn_init(dp_, init);
 	    }
-	    set_param_value(st, INDEX(px), d.init);
+	    set_param_value(st, INDEX(px), init);
 	    return 0;
 	}
     }
@@ -4399,22 +4504,26 @@ NOINLINE static int parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n,
     {
     	csp_decl_t* dp_ = ram_decl_at(st,i);
 	    csp_decl_set_vt(dp_, d.opts.vt);
-	    csp_decl_set_res(dp_, MAKE_RES(d.r.res));
+	    csp_decl_set_res(dp_, MAKE_RES(d.res));
 	    csp_decl_set_local(dp_, is_param ? 1 : 0);
-	    csp_decl_set_cn_init(dp_, d.init);
+	    csp_decl_set_cn_init(dp_, init);
     }
 
-    if (array_replicate(st, i, DECL_CONSTANT, alen) < 0)
+    if (array_replicate(st, i, DECL_CONSTANT, d.alen) < 0)
 	return -1;
     // Second pass: this one writes. The head is element 0 like any other.
-    if (d.list == LBRACE)
-	return (init_list(st, tv, r, n, d.opts, i, &nv) < 0) ? -1 : 0;
+    if (list)
+	return init_list(st, tv, SM_A(sm, k), SM_B(sm, k), d.opts.vt, i, &nv);
     return 0;
+syntax:
+    csp_set_error(st, ERR_SYNTAX);
+    return -1;
 }
 
-NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n)
+NOINLINE int csp_parse_constant(csp_rt_t* st, const token_t* tv,
+				const csp_stmt_t* sm)
 {
-    return parse_constant(st, tv, ti, n, 0);
+    return parse_constant(st, tv, sm, 0);
 }
 
 // '#' 'param' <name>[':' <size>] [<opt>*] '=' <const>
@@ -4423,170 +4532,132 @@ NOINLINE int csp_parse_constant(csp_rt_t* st, token_t* tv, int ti, size_t n)
 // an immediate `> Kp = 7`, a config channel -- never by a rule. The value is
 // therefore not foldable, which is the whole difference from #constant at the
 // point of use (see push_var).
-NOINLINE int csp_parse_param(csp_rt_t* st, token_t* tv, int ti, size_t n)
+NOINLINE int csp_parse_param(csp_rt_t* st, const token_t* tv,
+			     const csp_stmt_t* sm)
 {
-    return parse_constant(st, tv, ti, n, 1);
+    return parse_constant(st, tv, sm, 1);
 }
 
 
-// A WORD LEFT OVER AFTER THE PIN SPEC.
-//
-// The options come before the pin, so pmatch never looks past it -- and
-// anything written there was accepted and thrown away. `#digital D in 2:1
-// pullup` was a pin with no pull, silently; a trigger in that place is a pin
-// with no interrupt, which is the same failure with a longer fuse.
-//
-// Only for the non-array forms: an array's tail IS the rest of the pin spec,
-// and array_pins reads it.
-// Same question, two messages: ERR_OPTS_AFTER_PIN names the pin, which is the
-// helpful thing on a #digital and a falsehood on a #buffer.
-NOINLINE static int check_tail(csp_rt_t* st, token_t* tv, int r, size_t n,
-			       csp_err_t err)
-{
-    if ((r < (int)n) && (tv[r].t != NEWLINE)) {
-	if (csp_set_error(st, err)) {
-	    if (tv[r].t == WORD)
-		csp_set_err_arg_tstr(st, 0, &tv[r].v.str);
-	    else
-		csp_set_err_arg_rostr(st,
-		    0, (rostring_t)ro_ptr(&tok_table[tv[r].t].name));
-	}
-	return -1;
-    }
-    return 0;
-}
 
-NOINLINE static int check_pin_tail(csp_rt_t* st, token_t* tv, int r, size_t n)
+// '#' 'digital' <name> [<array>] <opts> <pins>
+NOINLINE int csp_parse_digital(csp_rt_t* st, const token_t* tv,
+			       const csp_stmt_t* sm)
 {
-    if ((r < (int)n) && (tv[r].t != NEWLINE)) {
-	if (csp_set_error(st, ERR_OPTS_AFTER_PIN)) {
-	    if (tv[r].t == WORD)
-		csp_set_err_arg_tstr(st, 0, &tv[r].v.str);
-	    else
-		csp_set_err_arg_rostr(st,
-		    0, (rostring_t)ro_ptr(&tok_table[tv[r].t].name));
-	}
-	return -1;
-    }
-    return 0;
-}
-
-// '#' 'digital' <name> [<iodir>|<pull>] [<port>':']<pin>
-NOINLINE int csp_parse_digital(csp_rt_t* st, token_t* tv, int ti, size_t n)
-{
-    digital_param_t d = {0};
+    decl_opts_t opts;
     index_t ix;
-    int i, r;
+    int i;
     ivalue_t alen = 1;
 
-    if (array_splice(st, tv, ti, &n, &alen) < 0)
-	return -1;
-
-    if ((r = pmatch(st, tv, ti, n, pat_digital, &d, sizeof(d))) < 0) {
+    opts.bits = 0;
+    // `#digital X:1': no width on a pin, and no pin is no device
+    if ((sm->act != A_digital_pins) || !SM_EMPTY(sm, 3)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    if (d.opts.dir == 0) d.opts.dir = DIR_IN;
+    if ((stmt_array(st, tv, sm, 2, &alen) < 0) ||
+	(stmt_opts(st, tv, sm, 4, &opts) < 0))
+	return -1;
+    if (opts.dir == 0) opts.dir = DIR_IN;
 
-    if ((ix = csp_new_udecl(st, &d.name,DECL_DIGITAL)) == BAD_INDEX)
+    if ((ix = csp_new_udecl(st, &tv[SM_A(sm, 1)].v.str, DECL_DIGITAL)) ==
+	BAD_INDEX)
 	return -1;
     i = INDEX(ix);
     {
     	csp_decl_t* dp_ = ram_decl_at(st,i);
 	    csp_decl_set_res(dp_, MAKE_RES(1));
-	    csp_decl_set_di_pin(dp_, d.port_pin.pin);
-	    csp_decl_set_di_port(dp_, d.port_pin.port);
-	    csp_decl_set_dir(dp_, d.opts.dir);
-	    csp_decl_set_di_pullup(dp_, d.opts.pullup);
-	    csp_decl_set_di_pulldown(dp_, d.opts.pulldown);
-	    csp_decl_set_di_invert(dp_, d.opts.invert);
+	    csp_decl_set_dir(dp_, opts.dir);
+	    csp_decl_set_di_pullup(dp_, opts.pullup);
+	    csp_decl_set_di_pulldown(dp_, opts.pulldown);
+	    csp_decl_set_di_invert(dp_, opts.invert);
+	    // An interrupt is a property of the pin, like the pull. `#digital
+	    // Drdy in falling 2:13` is the whole of it: the trigger arms the
+	    // source and the guard is Drdy.fired. See doc/EVENTS.md.
+	    csp_decl_set_di_irq(dp_, opts.trig);
+	    csp_decl_set_di_soft(dp_, opts.soft);
     }
-    // An interrupt is a property of the pin, like the pull. `#digital Drdy in
-    // falling 2:13` is the whole of it: the trigger arms the source and the
-    // guard is Drdy.fired. See doc/EVENTS.md.
-    {
-    	csp_decl_t* dp_ = ram_decl_at(st,i);
-	    csp_decl_set_di_irq(dp_, d.opts.trig);
-	    csp_decl_set_di_soft(dp_, d.opts.soft);
-    }
-
     if (array_replicate(st, i, DECL_DIGITAL, alen) < 0)
 	return -1;
-    // The copies inherited element 0's pin; give each its own. `r` is where
-    // pmatch stopped, which is the first token of the pin spec's tail.
-    if (alen > 1)
-	return array_pins(st, tv, r, n, i, DECL_DIGITAL, alen,
-			  d.port_pin.port, d.port_pin.pin);
-    return check_pin_tail(st, tv, r, n);
+    return stmt_pins(st, tv, sm, 5, i, DECL_DIGITAL, alen);
 }
 
 
 
-//'#' 'analog' <name> [':'<size>] [<opt>*]  [<port>':'] <pin>
+//'#' 'analog' <name> [<array>] [':'<size>] [<opt>*] <pins>
 //   <opt> := 'in' | 'out' | 'inout' | 'pwm' | 'float' | 'signed' | 'unsigned'
-NOINLINE int csp_parse_analog(csp_rt_t* st, token_t* tv, int ti, size_t n)
+NOINLINE int csp_parse_analog(csp_rt_t* st, const token_t* tv,
+			      const csp_stmt_t* sm)
 {
-    analog_param_t d = {0};
+    decl_opts_t opts;
     index_t ix;
-    int i, r;
+    int i;
     ivalue_t alen = 1;
+    ivalue_t res = 10;
 
-    d.r.res = 10;
+    opts.bits = 0;
     // UNSIGNED by default, unlike a #variable: a converter delivers counts,
     // 0..2^res-1. `integer` is the opt-in for a reading about a rest point,
     // and means centred -- csp_lib_ain puts half scale at 0.
-    d.opts.vt = V_UNSIGNED;
-
-    if (array_splice(st, tv, ti, &n, &alen) < 0)
-	return -1;
-
-    if ((r = pmatch(st, tv, ti, n, pat_analog, &d, sizeof(d))) < 0) {
+    opts.vt = V_UNSIGNED;
+    if (sm->act != A_analog_pins) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    if (d.opts.dir == 0) d.opts.dir = DIR_IN;
-    if (check_res(st, d.r.res) < 0)
+    if ((stmt_array(st, tv, sm, 2, &alen) < 0) ||
+	(stmt_res(st, tv, sm, 3, &res) < 0) ||
+	(stmt_opts(st, tv, sm, 4, &opts) < 0))
 	return -1;
-    if ((ix = csp_new_udecl(st,&d.name,DECL_ANALOG)) == BAD_INDEX)
+    if (opts.dir == 0) opts.dir = DIR_IN;
+    if (check_res(st, res) < 0)
+	return -1;
+    if ((ix = csp_new_udecl(st, &tv[SM_A(sm, 1)].v.str, DECL_ANALOG)) ==
+	BAD_INDEX)
 	return -1;
     i = INDEX(ix);
     {
     	csp_decl_t* dp_ = ram_decl_at(st,i);
-	    csp_decl_set_vt(dp_, d.opts.vt);
-	    csp_decl_set_res(dp_, MAKE_RES(d.r.res));
-	    csp_decl_set_an_pin(dp_, d.port_pin.pin);
-	    csp_decl_set_an_port(dp_, d.port_pin.port);
-	    csp_decl_set_dir(dp_, d.opts.dir);
-	    csp_decl_set_an_pwm(dp_, d.opts.pwm);
-	    csp_decl_set_an_endian(dp_, d.opts.endian);
-	    csp_decl_set_an_irq(dp_, d.opts.trig);
-	    csp_decl_set_an_soft(dp_, d.opts.soft);
+	    csp_decl_set_vt(dp_, opts.vt);
+	    csp_decl_set_res(dp_, MAKE_RES(res));
+	    csp_decl_set_dir(dp_, opts.dir);
+	    csp_decl_set_an_pwm(dp_, opts.pwm);
+	    csp_decl_set_an_endian(dp_, opts.endian);
+	    csp_decl_set_an_irq(dp_, opts.trig);
+	    csp_decl_set_an_soft(dp_, opts.soft);
     }
-
     if (array_replicate(st, i, DECL_ANALOG, alen) < 0)
 	return -1;
-    if (alen > 1)
-	return array_pins(st, tv, r, n, i, DECL_ANALOG, alen,
-			  d.port_pin.port, d.port_pin.pin);
-    return check_pin_tail(st, tv, r, n);
+    return stmt_pins(st, tv, sm, 5, i, DECL_ANALOG, alen);
 }
 
 
 
-NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, int ti, size_t n)
+// '#' 'timer' <name> (<period-ms> | <expr>) ['=' <running>]
+NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, size_t n,
+			     const csp_stmt_t* sm)
 {
-    timer_param_t d = {0};
+    tstr_t name = tv[SM_A(sm, 1)].v.str;
+    value_t period, init;
     index_t tm, tx;
-    int i;
+    int i, is_const;
 
-    d.init = 0;
-    if (pmatch(st, tv, ti, n, pat_timer, &d, sizeof(d)) < 0) {
+    init.i = 0;
+    period.u = 0;
+    // a constant period folds; a #param's is assigned in INIT
+    if ((is_const = csp_init_val(st, tv, SM_A(sm, 2), SM_B(sm, 2), V_INTEGER,
+				 &period)) < 0) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    if (st->ps.err != ERR_OK)     // a bad name inside the period alternative
+    if ((sm->act == A_timer_init) &&
+	(csp_const_val(st, tv, SM_A(sm, 4), SM_B(sm, 4), V_INTEGER,
+		       &init) < 0)) {
+	csp_set_error(st, ERR_SYNTAX);
 	return -1;
-    if ((tm = csp_new_udecl(st,&d.name,DECL_TIMER)) == BAD_INDEX)
+    }
+    if (st->ps.err != ERR_OK)     // a bad name inside the period
+	return -1;
+    if ((tm = csp_new_udecl(st,&name,DECL_TIMER)) == BAD_INDEX)
 	return -1;
     tx = csp_new_decl(st, NULL, DECL_VARIABLE,0);
     if (tx != tm+1) {
@@ -4606,8 +4677,8 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     	csp_decl_t* dp_ = ram_decl_at(st,i);
 	    csp_decl_set_vt(dp_, V_TIMER);
 	    csp_decl_set_tm_fired(dp_, 0);
-	    csp_decl_set_tm_init(dp_, d.init);
-	    csp_decl_set_tm_period(dp_, d.timeout);
+	    csp_decl_set_tm_init(dp_, init.i);
+	    csp_decl_set_tm_period(dp_, period.u);
     }
 
     // `#timer Tick Period = 1` with Period a #param: the period is not a
@@ -4615,17 +4686,18 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     // program with a tunable period had to write by hand. The declaration keeps
     // the param's CURRENT value so cycle 0 (which runs before INIT's rule) has a
     // real period to count against; the rule then puts the live one in.
-    if (d.period.len > 0) {
-	RO_TSTR(period, ros_period);
+    if (!is_const) {
+	RO_TSTR(pname, ros_period);
 	rule_body_part_t b = {0};
 	value_t seed;
 
-	if (param_seed(st, tv, &d.period, &seed))
+	b.rhs.pos = SM_A(sm, 2);
+	b.rhs.len = SM_B(sm, 2) - SM_A(sm, 2);
+	if (param_seed(st, tv, &b.rhs, &seed))
 	    csp_decl_set_tm_period(ram_decl_at(st,i), seed.u);
-	b.obj    = d.name;
-	b.fld    = period;         // -> PART_PERIOD, via part_from_tstr
+	b.obj    = name;
+	b.fld    = pname;          // -> PART_PERIOD, via part_from_tstr
 	b.assign = EQ;
-	b.rhs    = d.period;
 	return asm_decl_init(st, tv, n, &b);
     }
     return 0;
@@ -4638,18 +4710,27 @@ NOINLINE int csp_parse_timer(csp_rt_t* st, token_t* tv, int ti, size_t n)
 //  <frame-id> '[' <bit-pos> ']'
 //  <frame-id> '[' <bit-pos> '..' <bit-pos> ']'
 //
-NOINLINE int csp_parse_field(csp_rt_t* st, token_t* tv, int ti, size_t n)
+NOINLINE int csp_parse_field(csp_rt_t* st, const token_t* tv,
+			     const csp_stmt_t* sm)
 {
-    field_param_t d = {0};
+    struct {
+	tstr_t name, frame;
+	ivalue_t res, bit0, bit1;
+	decl_opts_t opts;
+    } d;
     index_t ix, idx;
     int i, len;
+    int k = SM_A(sm, 6);          // the bit range
 
-    d.bit0 = d.bit1 = -1;
-    d.r.res = 1;  // single bit is default ok?
-    if (pmatch(st, tv, ti, n, pat_field_decl, &d, sizeof(d)) < 0) {
-	csp_set_error(st, ERR_SYNTAX);
+    d.name = tv[SM_A(sm, 1)].v.str;
+    d.frame = tv[SM_A(sm, 4)].v.str;
+    d.opts.bits = 0;
+    d.res = 1;  // single bit is default ok?
+    d.bit0 = tv[k].v.val.i;
+    d.bit1 = (tv[k + 1].t == DOTDOT) ? tv[k + 2].v.val.i : -1;
+    if ((stmt_res(st, tv, sm, 2, &d.res) < 0) ||
+	(stmt_opts(st, tv, sm, 3, &d.opts) < 0))
 	return -1;
-    }
     // The frame must already be declared: a field is a view into it, and the
     // buffer carries the id, the size and the direction.
     if ((idx = csp_lookup_decl(st, &d.frame)) == BAD_INDEX) {
@@ -4672,8 +4753,8 @@ NOINLINE int csp_parse_field(csp_rt_t* st, token_t* tv, int ti, size_t n)
 	return -1;
     if ((d.bit0 >= 0) && (d.bit1 >= d.bit0))
 	len = (d.bit1 - d.bit0)+1;
-    else if ((d.r.res > 0) && (d.bit0 >= 0))
-	len = d.r.res;
+    else if ((d.res > 0) && (d.bit0 >= 0))
+	len = d.res;
     else {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
@@ -4697,7 +4778,7 @@ NOINLINE int csp_parse_field(csp_rt_t* st, token_t* tv, int ti, size_t n)
     i = INDEX(ix);
     {
     	csp_decl_t* dp_ = ram_decl_at(st,i);
-	    csp_decl_set_res(dp_, MAKE_RES(d.r.res)); // same as len?
+	    csp_decl_set_res(dp_, MAKE_RES(d.res)); // same as len?
 	    csp_decl_set_vt(dp_, d.opts.vt);
 	    csp_decl_set_dir(dp_, d.opts.dir);
 	    csp_decl_set_ca_id(dp_, INDEX(idx));   // the #buffer decl
@@ -4728,19 +4809,24 @@ NOINLINE int csp_parse_field(csp_rt_t* st, token_t* tv, int ti, size_t n)
 // Both buffers must already be declared: a route joins two things, it does not
 // create either. Naming one that is not a buffer is the mistake worth catching
 // -- `#route Keys Led` reads fine and would otherwise pair a stream with a pin.
-NOINLINE int csp_parse_route(csp_rt_t* st, token_t* tv, int ti, size_t n)
+NOINLINE int csp_parse_route(csp_rt_t* st, const token_t* tv,
+			     const csp_stmt_t* sm)
 {
-    route_param_t d = {0};
+    struct { tstr_t src, dst; } d;
     xindex_t sx, dx;
     index_t ix;
-    int i, r;
+    int i;
 
-    if ((r = pmatch(st, tv, ti, n, pat_route, &d, sizeof(d))) < 0) {
+    // to the grammar an object line, `route' an instance of nothing: its
+    // two names, and nothing after them
+    if ((sm->np != 1) || (sm->part[0].op != STMT_NO_OP) ||
+	(IV_B(sm->part[0].iv) - IV_A(sm->part[0].iv) != 1) ||
+	(tv[IV_A(sm->part[0].iv)].t != WORD)) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    if (check_tail(st, tv, r, n, ERR_TRAILING_WORDS) < 0)
-	return -1;
+    d.src = tv[SM_A(sm, 1)].v.str;
+    d.dst = tv[IV_A(sm->part[0].iv)].v.str;
     if (((sx = csp_lookup_decl(st, &d.src)) == BAD_INDEX) ||
 	(decl(st, INDEX(sx), type) != DECL_BUFFER)) {
 	if (csp_set_error(st, ERR_NOT_A_BUFFER))
@@ -4791,25 +4877,59 @@ static int ep_param(csp_rt_t* st, tstr_t* name, uint32_t* ep)
     return 0;
 }
 
-NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
+// a number, or a name that folds to one (a #define, a #constant); with ref,
+// a name that does not (a #param) is taken by name instead
+NOINLINE static int buf_num(csp_rt_t* st, const token_t* tv, int j,
+			    ivalue_t* v, tstr_t* ref)
 {
-    buffer_param_t d = {0};
+    value_t x;
+
+    if (ref && (tv[j].t == WORD) &&
+	(csp_const_val(st, tv, j, j + 1, V_INTEGER, &x) < 0)) {
+	*ref = tv[j].v.str;
+	*v = 0;
+	return 0;
+    }
+    return stmt_int(st, tv, j, j + 1, v);
+}
+
+// '#' 'buffer' <name> [':' <bytes>] <opts> [<transport>]
+NOINLINE int csp_parse_buffer(csp_rt_t* st, const token_t* tv,
+			      const csp_stmt_t* sm)
+{
+    struct {
+	tstr_t name;
+	ivalue_t res;
+	decl_opts_t opts;
+	ivalue_t frameid;
+	tstr_t can_ref;
+	ivalue_t i2c_bus, i2c_addr, i2c_reg;
+	ivalue_t spi_bus, spi_cmd;
+	struct { ivalue_t port, pin; } spi_cs, ow_pin;
+	ivalue_t net_ip, net_port;
+	tstr_t port_ref;
+	ivalue_t net_kind;
+	ivalue_t uart_unit, uart_baud;
+	ivalue_t con_kind, sms_kind;
+	tstr_t sms_owner, sms_pin;
+	ivalue_t ow_kind;
+	tstr_t ow_rom;
+    } d;
     index_t ix;
     uint32_t nbytes;
     uint32_t xref;
     uint8_t transport;
     index_t ow_rom_ix = BAD_INDEX;   // onewire: the #param with the ROM id
     uint32_t port = 0;               // udp, tcp: the port, or CSP_EP_PARAM | it
-    int i, r;
+    int i;
+    int j = SM_A(sm, 4);             // the transport, if there is one
 
-    d.r.res = 8;                 // default 8 bytes (a full classic CAN frame;
+    memset(&d, 0, sizeof(d));
+    d.name = tv[SM_A(sm, 1)].v.str;
+    d.res = 8;                   // default 8 bytes (a full classic CAN frame;
 				 // plain buffers default the same, for uniformity)
     // -1 is "this clause did not appear", for each transport. NOT 0: a bus
-    // number of 0 is legal, and the defaults in utils/syntax.terms are a
-    // description of these lines rather than the source of them -- the struct
-    // is zeroed above, so a transport left at 0 reads as "present" and every
-    // #buffer becomes a syntax error, including the ones that name no
-    // transport at all.
+    // number of 0 is legal.
     d.frameid = -1;              // no 'can' clause seen
     d.i2c_bus = -1;              // no 'i2c'
     d.spi_bus = -1;              // no 'spi'
@@ -4820,35 +4940,73 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     d.sms_kind = -1;             // no 'sms'
     d.ow_kind = -1;              // no 'onewire'
     d.opts.vt = V_UNSIGNED;      // raw bits -> unsigned by default
-    if ((r = pmatch(st, tv, ti, n, pat_buffer, &d, sizeof(d))) < 0) {
-	csp_set_error(st, ERR_SYNTAX);
+    if ((stmt_res(st, tv, sm, 2, &d.res) < 0) ||
+	(stmt_opts(st, tv, sm, 3, &d.opts) < 0))
 	return -1;
-    }
-    // NOTHING MAY BE LEFT OVER. The transport blocks are tried in a fixed
-    // order, so a line naming two of them out of that order -- `udp 2 tcp 1` --
-    // matches the first and leaves the second as words the pattern never saw.
-    // The count below cannot notice that: it sees one transport, because one is
-    // all that matched. Silently dropping half a declaration is the shape this
-    // has taken twice already (an option written after a pin, and this).
-    if (check_tail(st, tv, r, n, ERR_TRAILING_WORDS) < 0)
-	return -1;
-    if (d.can_ref.len > 0)
-	d.frameid = 0;           // by name: the clause is there all the same
-    if (d.port_ref.len > 0)
-	d.net_port = 0;
-    d.is_can = (d.frameid >= 0);
+    // the transport, csp.y buftype: one of them, its operands in place
+    if (!SM_EMPTY(sm, 4)) {
+	int nt = SM_B(sm, 4) - j;     // its tokens, the keyword too
+	int r = 0;
 
-    // WHICH TRANSPORT, and at most one. The four optional blocks in the grammar
-    // each back off cleanly, so a line naming two of them matches both and the
-    // count is the only place that can notice.
-    {
-	int ntr = (d.frameid >= 0) + (d.i2c_bus >= 0) +
-		  (d.spi_bus >= 0) + (d.net_port >= 0) + (d.uart_unit >= 0) +
-		  (d.con_kind >= 0) + (d.sms_kind >= 0) + (d.ow_kind >= 0);
-	if (ntr > 1) {
+	switch (tv[j].t) {
+	case T_CAN:
+	    r = buf_num(st, tv, j + 1, &d.frameid, &d.can_ref);
+	    if (d.can_ref.len > 0)
+		d.frameid = 0;   // by name: the clause is there all the same
+	    break;
+	case T_I2C:
+	    r = ((buf_num(st, tv, j + 1, &d.i2c_bus, NULL) < 0) ||
+		 (buf_num(st, tv, j + 2, &d.i2c_addr, NULL) < 0) ||
+		 (buf_num(st, tv, j + 3, &d.i2c_reg, NULL) < 0)) ? -1 : 0;
+	    break;
+	case T_SPI:
+	    r = ((buf_num(st, tv, j + 1, &d.spi_bus, NULL) < 0) ||
+		 (buf_num(st, tv, j + 2, &d.spi_cs.port, NULL) < 0) ||
+		 (buf_num(st, tv, j + 4, &d.spi_cs.pin, NULL) < 0) ||
+		 (buf_num(st, tv, j + 5, &d.spi_cmd, NULL) < 0)) ? -1 : 0;
+	    break;
+	case T_UDP:
+	case T_TCP:
+	    d.net_kind = tv[j].t;
+	    r = buf_num(st, tv, j + 1, &d.net_port, &d.port_ref);
+	    if (d.port_ref.len > 0)
+		d.net_port = 0;
+	    if ((r == 0) && (nt == 3))     // the address, by number or name
+		r = buf_num(st, tv, j + 2, &d.net_ip, NULL);
+	    break;
+	case T_UART:
+	    r = buf_num(st, tv, j + 1, &d.uart_unit, NULL);
+	    if ((r == 0) && (nt == 3))
+		r = buf_num(st, tv, j + 2, &d.uart_baud, NULL);
+	    break;
+	case T_CONSOLE:
+	case T_REPL:
+	    d.con_kind = tv[j].t;
+	    break;
+	case T_SMS:
+	    d.sms_kind = T_SMS;
+	    d.sms_owner = tv[j + 1].v.str;
+	    if (nt == 3)
+		d.sms_pin = tv[j + 2].v.str;
+	    break;
+	case T_ONEWIRE:
+	    d.ow_kind = T_ONEWIRE;
+	    r = ((buf_num(st, tv, j + 1, &d.ow_pin.port, NULL) < 0) ||
+		 (buf_num(st, tv, j + 3, &d.ow_pin.pin, NULL) < 0)) ? -1 : 0;
+	    d.ow_rom = tv[j + 4].v.str;
+	    break;
+	default:
+	    r = -1;
+	    break;
+	}
+	if (r < 0) {
 	    csp_set_error(st, ERR_SYNTAX);
 	    return -1;
 	}
+    }
+
+    // which transport: the clause that appeared
+    {
 	if (d.frameid >= 0)        transport = TR_CAN;
 	else if (d.i2c_bus >= 0)   transport = TR_I2C;
 	else if (d.spi_bus >= 0)   transport = TR_SPI;
@@ -4871,9 +5029,9 @@ NOINLINE int csp_parse_buffer(csp_rt_t* st, token_t* tv, int ti, size_t n)
     // #buffer size is BYTES, always -- one rule for every transport. bf.nbytes
     // (the internal storage width) is that byte count. Cap at 1023 bytes (10
     // bits); a CAN FD frame is 64, which is the cap for that transport.
-    nbytes = (uint32_t)d.r.res;
-    if ((d.r.res == 0) || (d.r.res > 1023) ||
-	((transport == TR_CAN) && (d.r.res > 64))) {
+    nbytes = (uint32_t)d.res;
+    if ((d.res == 0) || (d.res > 1023) ||
+	((transport == TR_CAN) && (d.res > 64))) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
@@ -5570,17 +5728,30 @@ static index_t local_in_member(csp_rt_t* st, index_t mx, const tstr_t* name)
     return INDEX(jx);
 }
 
-NOINLINE int csp_parse_object(csp_rt_t* st, token_t* tv, int ti, size_t n)
+// '#' <ModName> <ObjName> (<field> ('='|'<-') <expr>)*
+//
+// A '<-' init becomes a standing rule; '=' and '.part =' inits run once,
+// gated on the object's State == INIT.
+NOINLINE int csp_parse_object(csp_rt_t* st, const token_t* tv, size_t n,
+			      const csp_stmt_t* sm)
 {
-    object_param_t d = {0};
+    struct {
+	tstr_t mod_name, obj_name;
+	rule_body_part_t inits[MAX_INITS + 1];   // and an empty one to end
+    } d;
     index_t mx, ix;
-    int m, k;
-    
-    // Parse: # ModName ObjName (Field (=|<-) Expr)*
-    if (pmatch(st, tv, ti, n, pat_object, &d, sizeof(d)) < 0) {
-	csp_set_error(st, ERR_SYNTAX);
+    int m, k, ni;
+
+    d.mod_name = tv[SM_A(sm, 0)].v.str;
+    d.obj_name = tv[SM_A(sm, 1)].v.str;
+    if ((ni = stmt_parts(st, tv, sm, d.inits, MAX_INITS)) < 0)
 	return -1;
-    }
+    memset(&d.inits[ni], 0, sizeof(d.inits[ni]));
+    for (k = 0; k < ni; k++)
+	if (d.inits[k].assign == 0) {  // an init names what it sets
+	    csp_set_error(st, ERR_SYNTAX);
+	    return -1;
+	}
 
     // Lookup module (global)
     if ((mx = lookup_decl_in(st, &d.mod_name, 0, st->ps.nd)) == BAD_INDEX) {
@@ -5750,33 +5921,26 @@ NOINLINE static int wrap_normal_plus(csp_cstate_t* cs)
     return 1;
 }
 
-NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, int ti, size_t n)
+NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, size_t n,
+			    const csp_stmt_t* sm)
 {
-    rule_param_t d = {0};
-    int np = 0;
+    struct {
+	pexpr_t cond;
+	rule_body_part_t body[MAX_BODY_PARTS];
+    } d;
+    int np;
     int wrap;
 
-    if (pmatch(st, tv, ti, n, pat_rule, &d, sizeof(d)) < 0) {
-	csp_set_error(st, ERR_SYNTAX);
+    d.cond.pos = d.cond.len = 0;
+    if ((np = stmt_parts(st, tv, sm, d.body, MAX_BODY_PARTS)) < 0)
 	return -1;
+    if (sm->act == A_rule_guarded) {
+	d.cond.pos = SM_A(sm, 2);
+	d.cond.len = SM_B(sm, 2) - SM_A(sm, 2);
+	if (stmt_expr(st, tv, &d.cond) < 0)
+	    return -1;
     }
-    // A bad guard (after `?`) makes P_EXPR_S fail INSIDE the optional `? <cond>`
-    // block; P_OPT then backs off and drops the guard -- silently storing an
-    // always-on rule from a typo. Reject it two ways: an undefined name already
-    // set a (specific) error, so honour it; a malformed expr (`A &&`) may not, so
-    // if a `?` is present but no condition was captured, that is a dropped guard.
-    if (st->ps.err != ERR_OK)
-	return -1;
-    if (d.cond.len == 0) {
-	int q;
-	for (q = ti; q < (int)n; q++)
-	    if (tv[q].t == QUEST) {
-		csp_set_error(st, ERR_SYNTAX);
-		return -1;
-	    }
-    }
-    while ((np < MAX_BODY_PARTS) && (d.body[np].rhs.len > 0))
-	np++;
+
     wrap = wrap_normal_plus(st->cs);
     if (asm_rule(st, tv, n, BAD_INDEX, d.body, np, &d.cond) < 0)
 	return -1;
@@ -5792,32 +5956,80 @@ NOINLINE int csp_parse_rule(csp_rt_t* st, const token_t* tv, int ti, size_t n)
 //   <field> := <expr> [':' <bits>]   blank separated
 // Fields are laid out at ascending bit offsets, each masked to its width.
 // Sugar for a sequence of bit-field stores: <buf>[off..off+w-1] = <expr>.
-NOINLINE int csp_parse_pack(csp_rt_t* st, token_t* tv, size_t n)
+struct pack_field { pexpr_t val; ivalue_t bits; };
+
+NOINLINE int csp_parse_pack(csp_rt_t* st, const token_t* tv, size_t n,
+			    const csp_stmt_t* sm)
 {
-    pack_param_t d = {0};
+    struct {
+	tstr_t buffer;
+	pexpr_t cond;
+	struct pack_field field[MAX_PACK + 1];
+    } d;
     rule_body_part_t part[MAX_PACK];
     index_t bx;
     int np = 0, off = 0;
     decl_t bt;
     int unpack;
-    
-    if (pmatch(st, tv, 0, n, pat_pack, &d, sizeof(d)) < 0) {
+    int j = SM_A(sm, 2), e = SM_B(sm, 2);
+
+    memset(&d, 0, sizeof(d));
+    // the buffer is a name
+    if (SM_B(sm, 0) - SM_A(sm, 0) != 1) {
 	csp_set_error(st, ERR_SYNTAX);
 	return -1;
     }
-    // Same dropped-guard trap as csp_parse_rule: a bad `? <cond>` fails inside
-    // the optional block and is silently discarded. Reject it.
-    if (st->ps.err != ERR_OK)
-	return -1;
-    if (d.cond.len == 0) {
-	size_t q;
-	for (q = 0; q < n; q++)
-	    if (tv[q].t == QUEST) {
-		csp_set_error(st, ERR_SYNTAX);
-		return -1;
+    d.buffer = tv[SM_A(sm, 0)].v.str;
+    // the fields, csp.y pack_list: `<int>', `<ref>' or `(<expr>)', each
+    // with `:<bits>' or not
+    while (j < e) {
+	int f = j, depth = 0;
+
+	if (np >= MAX_PACK) {
+	    if (csp_set_error(st, ERR_TOO_MANY_PARTS))
+		csp_set_err_arg_int(st, 0, MAX_PACK);
+	    return -1;
+	}
+	if (tv[j].t == INT)
+	    j++;
+	else if (tv[j].t == LP) {
+	    do {
+		if (tv[j].t == LP) depth++;
+		else if (tv[j].t == RP) depth--;
+		j++;
+	    } while (depth > 0);
+	}
+	else {                          // a ref: name(.name)*, [ ... ]
+	    j++;
+	    while ((j < e) && (tv[j].t == DOT))
+		j += 2;
+	    if ((j < e) && (tv[j].t == LB)) {
+		do {
+		    if (tv[j].t == LB) depth++;
+		    else if (tv[j].t == RB) depth--;
+		    j++;
+		} while (depth > 0);
 	    }
+	}
+	d.field[np].val.pos = f;
+	d.field[np].val.len = j - f;
+	if (stmt_expr(st, tv, &d.field[np].val) < 0)
+	    return -1;
+	if ((j < e) && (tv[j].t == COLON)) {
+	    d.field[np].bits = tv[j + 1].v.val.i;
+	    j += 2;
+	}
+	np++;
     }
-    unpack = (d.op == GTGT);
+    np = 0;
+    if ((sm->act == A_pack_guarded) || (sm->act == A_unpack_guarded)) {
+	d.cond.pos = SM_A(sm, 4);
+	d.cond.len = SM_B(sm, 4) - SM_A(sm, 4);
+	if (stmt_expr(st, tv, &d.cond) < 0)
+	    return -1;
+    }
+    unpack = ((sm->act == A_unpack) || (sm->act == A_unpack_guarded));
+
     bx = csp_lookup_decl(st, &d.buffer);
     bt = (bx == BAD_INDEX) ? DECL_NONE : decl(st,INDEX(bx),type);
     if ((bt != DECL_BUFFER) && (bt != DECL_VARIABLE)) {
@@ -5825,7 +6037,7 @@ NOINLINE int csp_parse_pack(csp_rt_t* st, token_t* tv, size_t n)
 	return -1;
     }
     while ((np < MAX_PACK) && (d.field[np].val.len > 0)) {
-	pack_field_t* f = &d.field[np];
+	struct pack_field* f = &d.field[np];
 	int w = f->bits;
 	index_t fx = BAD_INDEX;            // the field's variable, if a single name
 	if ((f->val.len == 1) && (tv[f->val.pos].t == WORD))
@@ -6268,6 +6480,7 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
     token_t tv[MAX_LINE_TOKENS];
     size_t num = MAX_LINE_TOKENS;
     reg_allocator_t alloc;
+    csp_stmt_t sm;
     int n;
 
     st->cs->ap = &alloc;
@@ -6295,6 +6508,36 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 
 	if (tv[0].t == NEWLINE)
 	    r = 0;
+	// The grammar first, utils/candyspeak.y: what it does not have is a syntax
+	// error, before anything is declared. The parse functions rewrite tv,
+	// so it cannot come after them.
+	else if (csp_lr_line(tv, num, &sm) != 0) {
+	    csp_set_error(st, ERR_SYNTAX);
+	    r = -1;
+	}
+	// converted to the grammar's statement
+	else if ((sm.act == A_digital) || (sm.act == A_digital_pins))
+	    r = csp_parse_digital(st, tv, &sm);
+	else if ((sm.act == A_analog) || (sm.act == A_analog_pins))
+	    r = csp_parse_analog(st, tv, &sm);
+	else if ((sm.act == A_variable) || (sm.act == A_variable_init))
+	    r = csp_parse_variable(st, tv, num, &sm);
+	else if ((sm.act == A_local) || (sm.act == A_local_init))
+	    r = csp_parse_local(st, tv, num, &sm);
+	else if (sm.act == A_constant)
+	    r = csp_parse_constant(st, tv, &sm);
+	else if ((sm.act == A_param) || (sm.act == A_param_init))
+	    r = csp_parse_param(st, tv, &sm);
+	else if ((sm.act == A_timer) || (sm.act == A_timer_init))
+	    r = csp_parse_timer(st, tv, num, &sm);
+	else if (sm.act == A_field)
+	    r = csp_parse_field(st, tv, &sm);
+	else if (sm.act == A_buffer)
+	    r = csp_parse_buffer(st, tv, &sm);
+	else if (sm.act == A_module)
+	    r = csp_parse_module(st, tv, &sm);
+	else if (sm.act == A_end)
+	    r = csp_parse_end(st);
 	else if ((tv[0].t == HASH) && (tv[1].t == T_IN)) {
 	    r = csp_parse_in(st, tv, 2, num);
 	}
@@ -6336,19 +6579,9 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 		return -1;
 	    }
 	    if (i >= 0) {
-		// decl_table is indexed BY the keyword token, so `i` IS the
-		// dtok. #local maps to DECL_VARIABLE exactly as #variable does
-		// -- they differ by a bit, not a type -- so it has to be told
-		// apart here rather than in the switch below.
-		if (i == D_LOCAL)
-		    r = csp_parse_local(st, tv, 2, num);
-		// Same reason: #param maps to DECL_CONSTANT exactly as
-		// #constant does, so the two are told apart here too.
-		else if (i == D_PARAM)
-		    r = csp_parse_param(st, tv, 2, num);
 		// #when declares no type: it makes a hidden #local for the
 		// condition and gates the block on it. Nothing for the switch.
-		else if (i == D_WHEN)
+		if (i == D_WHEN)
 		    r = csp_parse_when(st, tv, 2, num);
 		else if (i == D_ELSE)
 		    r = csp_parse_else(st, tv, 2, num);
@@ -6365,38 +6598,11 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 		    r = csp_parse_import(st, tv, 2, num);
 		else
 		switch(decl_table_code(i)) {
-		case DECL_MODULE:
-		    r = csp_parse_module(st, tv, 2, num);
-		    break;
 		case DECL_STATES:  // '#' 'states' WORD ... WORD
 		    r = csp_parse_states(st, tv, 2, num);
 		    break;
-		case DECL_END:
-		    r = csp_parse_end(st, tv, 2, num);
-		    break;
-		case DECL_VARIABLE:
-		    r = csp_parse_variable(st, tv, 2, num);
-		    break;
-		case DECL_CONSTANT:
-		    r = csp_parse_constant(st, tv, 2, num);
-		    break;
-		case DECL_DIGITAL:
-		    r = csp_parse_digital(st, tv, 2, num);
-		    break;
-		case DECL_ANALOG:
-		    r = csp_parse_analog(st, tv, 2, num);
-		    break;
-		case DECL_TIMER:
-		    r = csp_parse_timer(st, tv, 2, num);
-		    break;
-		case DECL_FIELD:
-		    r = csp_parse_field(st, tv, 2, num);
-		    break;
-		case DECL_BUFFER:
-		    r = csp_parse_buffer(st, tv, 2, num);
-		    break;
 		case DECL_ROUTE:
-		    r = csp_parse_route(st, tv, 2, num);
+		    r = csp_parse_route(st, tv, &sm);
 		    break;
 		default:
 		    r = -1;
@@ -6405,18 +6611,17 @@ NOINLINE int csp_parse(csp_rt_t* st, char* str)
 		}
 	    }
 	    else {
-		r = csp_parse_object(st, tv, 1, num);
+		r = csp_parse_object(st, tv, num, &sm);
 	    }
 	}
 	else if (tv[0].t == GT) {
 	    r = csp_parse_immediate(st, tv, 1, num);
 	}
-	else if ((num >= 3) && (tv[0].t == WORD) && (tv[2].t == EQ) &&
-		 ((tv[1].t == LTLT) || (tv[1].t == GTGT))) {
-	    r = csp_parse_pack(st, tv, num);        // <buf> <<=/>>= <fields>
-	}
+	else if ((sm.act == A_pack) || (sm.act == A_unpack) ||
+		 (sm.act == A_pack_guarded) || (sm.act == A_unpack_guarded))
+	    r = csp_parse_pack(st, tv, num, &sm);   // <buf> <<=/>>= <fields>
 	else {
-	    r = csp_parse_rule(st, tv, 0, num);
+	    r = csp_parse_rule(st, tv, num, &sm);
 	}
 	if (r < 0)
 	    return -1;

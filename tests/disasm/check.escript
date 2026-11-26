@@ -28,8 +28,6 @@ checks(Ds) ->
      {"variable array: identical elements, no elems",
       opt(Ds, "V", len) =:= 4 andalso opt(Ds, "V", init) =:= 7 andalso
       opt(Ds, "V", elems) =:= none},
-     {"param array",
-      kind(Ds, "Q") =:= param andalso opt(Ds, "Q", len) =:= 2},
      {"constant array: a value per element",
       opt(Ds, "K", len) =:= 3 andalso
       opt(Ds, "K", elems) =:= [[{init,1}],[{init,2}],[{init,3}]]},

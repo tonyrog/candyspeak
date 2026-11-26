@@ -56,7 +56,6 @@ err_rule_range bad rule range, rules are numbered 1..%d
 err_no_rule no rule %d, the program has %d
 err_num_range number out of range
 err_bad_ipv4 an ipv4 literal is four parts of 0..255
-err_trailing nothing may follow the declaration -- %s is left over
 err_unknown unknown error
 err_cannot_save cannot save eeprom
 err_cannot_load cannot load from eeprom
@@ -83,7 +82,6 @@ err_onewire_rom `onewire` names a string #param holding the ROM id: #param TinRo
 err_ep_param a can id or a port by name is a global integer #param: #param Port = 15555
 err_hole a hole (_) -- the program is not finished
 err_bad_char no token starts with '%c'
-err_opts_after_pin option '%s' comes BEFORE the pin -- '#digital D in pullup 2:1', not after
 err_block_open #%s opened on line %d was never closed
 err_block_depth blocks nest at most %d deep -- #in, #when and #module together
 err_index_not_const a buffer byte range is fixed when the program is built -- %s is not a constant

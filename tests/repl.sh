@@ -1940,12 +1940,11 @@ got=$(printf '#digital Plain in 2:2\n/list\n/quit\n' |
 	  repl ./csp "$D/ev9.db" | grep '^#digital')
 ck "a pin with no interrupt lists unchanged" '#digital Plain in 2:2  // R' "$got"
 
-# AN OPTION AFTER THE PIN WAS SILENTLY DROPPED. pmatch reads the options before
-# the pin and never looks past it, so `#digital D in 2:1 pullup` was a pin with
-# no pull and nothing said so. A trigger written there is the same failure with
-# a longer fuse -- a pin that never interrupts, on a program that looks right.
+# AN OPTION AFTER THE PIN WAS SILENTLY DROPPED: `#digital D in 2:1 pullup` was
+# a pin with no pull and nothing said so. The grammar has the options before
+# the pin, so it is a syntax error now.
 got=$(printf '#digital D in 2:1 falling\n#digital E in 2:2 pullup\n/quit\n' |
-	  repl ./csp "$D/eva.db" | grep -c 'comes BEFORE the pin')
+	  repl ./csp "$D/eva.db" | grep -c 'syntax error')
 ck "an option written after the pin is refused" "2" "$got"
 
 # ...and the array form still reads its own tail, which is a pin spec and not
@@ -2881,12 +2880,9 @@ ck "uart lists its unit, and its baud when given" \
 '#buffer A:8 inout uart 1  // R
 #buffer B:8 inout uart 2 115200  // R' "$got"
 
-# The tail check, with a message that is true for a #buffer. ERR_OPTS_AFTER_PIN
-# says "comes BEFORE the pin", which is helpful on a #digital and a falsehood
-# here -- and a wrong message is how a real fault gets read as a typo.
+# One transport to a buffer: a second is not in the grammar.
 got=$(printf '#buffer C:8 inout uart 1 tcp 2\n/quit\n' | repl ./csp "$D/ub.db")
-ck "and a second transport after it is refused, in its own words" \
-   "Error: nothing may follow the declaration -- tcp is left over" "$got"
+ck "and a second transport after it is refused" "Error: syntax error" "$got"
 
 # --- a firmware image, flashed to a node over a route ------------------------
 # The whole thing at once: a node with NO rules and no serial connection, driven

@@ -61,11 +61,9 @@ main(Dirs) ->
 build_erl(Eb) ->
     {ok, _} = leex:file("utils/candyspeak_scan.xrl",
                         [{scannerfile, filename:join(Eb, "candyspeak_scan.erl")}]),
-    {ok, _} = yecc:file("utils/candyspeak_parse.yrl",
-                        [{parserfile, filename:join(Eb, "candyspeak_parse.erl")},
-                         {report, false}]),
     Srcs = [filename:join(Eb, "candyspeak_scan.erl"),
-            filename:join(Eb, "candyspeak_parse.erl"),
+            "utils/candyspeak_parse.erl", "utils/candyspeak_parse_act.erl",
+            "utils/candyspeak_parse_tab.erl",
             "utils/candyspeak.erl", "utils/candyspeak_c.erl", "utils/csp_to_c.erl"],
     lists:foreach(fun(S) -> {ok, _} = compile:file(S, [{outdir, Eb}, report_errors]) end,
                   Srcs),

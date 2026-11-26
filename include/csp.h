@@ -1752,11 +1752,6 @@ typedef enum {
     // the thing that is wrong -- the SHAPE is, and "number out of range" would
     // send the reader looking at the wrong end of it.
     ERR_BAD_IPV4,
-    // Words the pattern never consumed. ERR_OPTS_AFTER_PIN says the same thing
-    // for a pin declaration and names the pin in its text, which is a lie on a
-    // #buffer or a #route -- and a wrong message is how a real fault gets read
-    // as a typo somewhere else.
-    ERR_TRAILING_WORDS,
     // The arena could not hold the program's derived tables (view, heap, buffer
     // table, reactive graph). Distinct from ERR_TOO_MANY_DECLARATIONS, which is
     // about a COUNT hitting an encoding limit: this one is about bytes, and it
@@ -1773,11 +1768,6 @@ typedef enum {
     ERR_ASSIGN_TO_LOCAL,
     ERR_ASSIGN_TO_PARAM,
     ERR_PARAM_SHAPE,
-    // A word left over after the pin spec on a #digital/#analog. pmatch reads
-    // the options BEFORE the pin, so anything after it was silently dropped --
-    // which is how `#digital D in 2:1 pullup` became a pin with no pull, and
-    // `... 2:13 falling` a pin with no interrupt.
-    ERR_OPTS_AFTER_PIN,
     // A #module/#in/#when that reached the end of the file with no `#end`.
     // Raised where the FILE ends, and names the line the block opened on --
     // which is the only useful place to point, because everything after it was

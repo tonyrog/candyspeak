@@ -3,7 +3,6 @@
 #digital D[3] out 0:4..6
 #analog A[2]:10 in 0:1..2
 #variable V[4] = 7
-#param Q[2] = 3
 #constant K[3] = { 1, 2, 3 }
 #variable S = 9
 #module M

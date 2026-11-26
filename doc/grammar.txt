@@ -1,20 +1,15 @@
 CandySpeak grammar
 ==================
 
-The language as the parser actually accepts it, in prose.  Its machine-readable
-form is utils/syntax.terms, and that file is now the SOURCE: three generators
-read it and emit the string table's keyword rows, the token and declaration
-tables, and the pmatch patterns with their capture structs, PAT_* ids and stop
-sets.  This document and the terms file describe the same language; edit the
-terms, run `make strings tables patterns`.
+The language as the parser actually accepts it, in prose.  The grammar itself
+is utils/candyspeak.y, the one source both parsers are made from: the C
+compiler's (gen/csp_lr_*) and the Erlang tools' (candyspeak_parse); see
+doc/PARSER.md.  utils/syntax.terms still gives the keyword rows of the string
+table and the token and declaration tables (`make strings tables`).
 
 Where the implementation and this document disagree, the implementation is the
-bug: everything below was checked against the code, and the places that are NOT
-grammar (hand-written scanners, table lookups) are called out in section 10 so
-the generator's scope is honest.
-
-Two older descriptions exist and are both behind: the BNF in CANDYSPEAK.md and
-utils/candy_speak_gram.yrl.  They are documentation, not input.
+bug.  Section 10 was written for the pattern matcher (pmatch) that the LR
+parser replaced, and is behind.
 
 
 1. Notation

@@ -15,7 +15,7 @@ CSP_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo 
 #   src/      the core -- portable, no platform in it. CandySpeak/src links here.
 #   port/     one file per platform (linux, arduino, lpcopen) + their backends
 #   gen/      GENERATED. Never edit anything here; `make strings`/`tables`/
-#             `patterns` rewrite it, and make quick holds it against its source.
+#             `lr` rewrite it, and make quick holds it against its source.
 #
 # VPATH plus -I means no #include line had to change when these moved: a source
 # still says "csp.h" and the compiler finds it.
@@ -393,12 +393,28 @@ strings:
 tables:
 	@escript utils/gen_tables.erl emit
 
-# csp_pattern_ids.h (the PAT_*/STOP_* enums) and csp_patterns.h (the capture
-# structs and the pattern byte arrays). This is the one that earns its keep:
-# every P_OPT/P_ALT/P_REP length is computed, and stop-set ids are allocated one
-# per site instead of written by hand.
-patterns:
-	@escript utils/gen_patterns.erl emit
+# The parser's tables from utils/candyspeak.y, the one grammar: gen/csp_lr_*
+# for the C compiler, utils/candyspeak_parse_tab.erl for the Erlang one
+# (bison and python3). Checked in, same policy: regenerating is a developer
+# action. After a grammar change, make lr_check.
+lr:
+	@mkdir -p tmp
+	@bison -Wnone --xml=tmp/candyspeak.xml -o /dev/null utils/candyspeak.y
+	@python3 utils/lrgen_c.py utils/candyspeak.y tmp/candyspeak.xml gen
+	@python3 utils/lrgen.py utils/candyspeak.y tmp/candyspeak.xml \
+	    utils/candyspeak_parse_tab.erl
+
+# The C engine against the Erlang one, every program whole and cut short:
+# the same reductions or the same error line.
+LR_FILES = $(wildcard examples/*.csp examples/*/*.csp boards/*/*.csp \
+	apps/*/*.csp apps/*/tests/*.csp tests/unit/*.csp lib/*.csp tests/lr/*.csp)
+lr_check: tmp/lrtest
+	@$(MAKE) --no-print-directory -s -C utils
+	@escript tests/lr/check.escript tmp/lrtest $(LR_FILES)
+
+tmp/lrtest: tests/lr/lrtest.c src/csp_lr.c include/csp_lr.h gen/csp_lr_tab.h
+	@mkdir -p tmp
+	@$(CC) -Os -Wall -DLR_VAL=uint32_t -Iinclude -Igen -o $@ tests/lr/lrtest.c src/csp_lr.c
 
 # Record layout -- the accessors, the micro-csp field table and the layout
 # fingerprint, all computed from utils/layout.terms rather than restated.
@@ -440,9 +456,9 @@ clean:
 # persistence level -- segment tags, /clear, /undo, and whether a generated ROM
 # image loads back into the firmware that links it. Run `make test` before a
 # commit; this is for the loop in between.
-test:	csp line_edit_check syntax_check strings_check tables_check \
-	patterns_check sketch_check disasm_check dump_check list_check asm_check eval_check \
-	compile_check fconv_check neutral_check cmd_check
+test:	csp line_edit_check strings_check tables_check \
+	sketch_check disasm_check dump_check list_check asm_check eval_check \
+	compile_check fconv_check neutral_check cmd_check lr_check
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
 
@@ -556,17 +572,9 @@ line_edit_check:
 	@$(CC) $(INCS) -O2 -o tmp/line_edit tests/line_edit.c src/csp_line.c
 	@tmp/line_edit | tail -1
 
-test_before_commit:	csp test_repl syntax_check strings_check tables_check patterns_check sketch_check ro_check width_check layout_guard layout_check part_check mcsp_check words_check words_bc_check
+test_before_commit:	csp test_repl strings_check tables_check sketch_check ro_check width_check layout_guard layout_check part_check mcsp_check words_check words_bc_check
 	@chmod +x tests/run_tests.escript
 	@cd $(CURDIR) && escript tests/run_tests.escript tests/unit
-
-# utils/syntax.terms is the SOURCE the three generators read. This resolves its
-# cross-references before any of them run: every capture against its struct,
-# every sub-pattern and array element type, every literal against the token
-# table. First, because a term file that does not hold together produces
-# generated C that fails somewhere far from the mistake.
-syntax_check:
-	@escript utils/syntax_check.erl utils/syntax.terms
 
 # strings.tab must be what strings/*.tab.src produce. Catches a hand edit to the
 # generated file, and a grammar edit that never made it into the string table.
@@ -580,8 +588,6 @@ strings_check:
 tables_check:
 	@escript utils/gen_tables.erl check
 
-patterns_check:
-	@escript utils/gen_patterns.erl check
 
 # Two checks, and they are not the same one. The first says the checked-in
 # header is what the terms file generates. The second says the generated
@@ -951,7 +957,7 @@ $(OBJDIR)/%.o: %.c | gen/csp_strings.h
 
 -include $(OBJS:.o=.d)
 
-.PHONY: cmd_check compile_check fconv_check neutral_check disasm_check dump_check list_check asm_check eval_check clib_host webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check syntax_check strings strings_check tables tables_check patterns patterns_check sketch_check prog_check bare_all debug ubsan san exec min rexec slim rexec-tcp rom rom-image
+.PHONY: cmd_check compile_check fconv_check neutral_check disasm_check dump_check list_check asm_check eval_check clib_host webots webots_extern webots_check layout layout_guard layout_check part_check words words_check mcsp_check words_bc_check ro_check width_check ro_poison chips board-list info check-boards board ld chip all clean quick test test_boards test-examples test_repl test_crc_destroyer line_edit_check strings strings_check tables tables_check lr lr_check sketch_check prog_check bare_all debug ubsan san exec min rexec slim rexec-tcp rom rom-image
 
 # Regenerate csp_boards.h from the firmware builds, so --board on the host uses
 # MEASURED numbers instead of hand-fed ones. Needs both boards built first

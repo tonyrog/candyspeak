@@ -25,7 +25,7 @@ Terminals
 Nonterminals
   annotate_items annotate_item annotate_value aid
   file statement declaration rule state_list
-  expr array expr_list expr_array buftype pin_list pin_range 
+  expr array expr_list expr_array buftype pin_list pin_item pin_range 
   bit_range rule_list rule_range
   assignment_list assignment name xid fid part lhs ref pfield 
   pack_list unpack_list
@@ -241,6 +241,13 @@ xid -> 'in'  : make_word('$1').
 xid -> 'out' : make_word('$1').
 xid -> 'low' : make_word('$1').
 xid -> 'ready' : make_word('$1').
+%% the other trigger words, and invert, are names as low and ready are
+xid -> 'high' : make_word('$1').
+xid -> 'both' : make_word('$1').
+xid -> 'soft' : make_word('$1').
+xid -> 'rising' : make_word('$1').
+xid -> 'falling' : make_word('$1').
+xid -> 'invert' : make_word('$1').
 
 part -> 'val' : make_word('$1').
 part -> 'pin' : make_word('$1').
@@ -277,14 +284,22 @@ rule_list -> rule_range rule_list : ['$1'|'$2'].
 rule_range -> 'INT' : '$1'.
 rule_range -> 'INT' '-' 'INT' : {'$1', '$3'}.
 
-pin_list -> pin_range : ['$1'].
-pin_list -> pin_range pin_list : ['$1'|'$2'].
+%% a comma between the pins or not; `9:,' is a port on its own
+pin_list -> pin_item : ['$1'].
+pin_list -> pin_item pin_list : ['$1'|'$2'].
+
+pin_item -> pin_range : '$1'.
+pin_item -> pin_range ',' : '$1'.
+pin_item -> 'INT' ':' ',' : {port,line('$1'),'$1'}.
 
 pin_range -> 'INT' : {pin,line('$1'),'$1'}.
 pin_range -> 'WORD' : {pin,line('$1'),'$1'}.  %% named pin
 pin_range -> 'INT' ':' 'INT' : {port_pin,line('$1'),'$1','$3'}.
 pin_range -> 'INT' ':' 'INT' '..' 'INT' : {port_pin,line('$1'),'$1',
 						   {range,line('$4'),'$3','$5'}}.
+%% pins on the port before; from the pin after the last one named
+pin_range -> 'INT' '..' 'INT' : {pin,line('$1'),{range,line('$2'),'$1','$3'}}.
+pin_range -> '..' 'INT' : {pin,line('$1'),{range_to,line('$1'),'$2'}}.
 %% can <frame-id> 
 buftype -> 'can' 'INT' : [{can,'$2'}].
 %% can <name>: a #define or #constant folds, a #param is read at start
@@ -301,12 +316,17 @@ buftype -> 'udp' 'INT' 'INT' : [{udp,'$2','$3'}].
 %% the port by name, as for can
 buftype -> 'udp' 'WORD' : [{udp,{field,line('$2'),'$2'},undefined}].
 buftype -> 'udp' 'WORD' 'INT' : [{udp,{field,line('$2'),'$2'},'$3'}].
+%% the address by name too
+buftype -> 'udp' 'INT' 'WORD' : [{udp,'$2',{field,line('$3'),'$3'}}].
+buftype -> 'udp' 'WORD' 'WORD' : [{udp,{field,line('$2'),'$2'},{field,line('$3'),'$3'}}].
 %% tcp <port> == tcp <port> 0
 buftype -> 'tcp' 'INT' : [{tcp,'$2',undefined}].
 %% tcp <port> <ip>
 buftype -> 'tcp' 'INT' 'INT' : [{tcp,'$2','$3'}].
 buftype -> 'tcp' 'WORD' : [{tcp,{field,line('$2'),'$2'},undefined}].
 buftype -> 'tcp' 'WORD' 'INT' : [{tcp,{field,line('$2'),'$2'},'$3'}].
+buftype -> 'tcp' 'INT' 'WORD' : [{tcp,'$2',{field,line('$3'),'$3'}}].
+buftype -> 'tcp' 'WORD' 'WORD' : [{tcp,{field,line('$2'),'$2'},{field,line('$3'),'$3'}}].
 %% uart <unit> [<baud>] (default baud = 9600)
 buftype -> 'uart' 'INT' : [{uart,'$2',9600}].
 buftype -> 'uart' 'INT' 'INT' : [{uart,'$2','$3'}].
