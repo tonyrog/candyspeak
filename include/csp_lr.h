@@ -30,6 +30,8 @@ typedef lr_val_t (*lr_reduce_t)(void* ctx, uint8_t act, lr_val_t* v, uint8_t n);
 // 0 and the program's value in *result, or why not.
 int lr_parse(lr_next_t next, lr_reduce_t reduce, void* ctx, lr_val_t* result);
 
-extern int lr_peak;     // the deepest the stack got
+#ifdef LR_PEAK
+extern int lr_peak;     // the deepest the stack got (tests/lr/lrtest)
+#endif
 
 #endif

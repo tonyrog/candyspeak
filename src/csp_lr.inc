@@ -1,8 +1,9 @@
 // The LR engine, a value beside each state. stk[i] is
 // the state below symbol i, val[i] its value; s the state on top.
 //
-// Stands alone (tests/lr/lrtest) or inside the compiler, which includes
-// it from csp_parse.c with RO, RB and RW defined as its own ROM access.
+// Not a file of its own: included by csp_parse.c, with RO, RB and RW defined
+// as the compiler's ROM access, and by tests/lr/lrtest.c. A .c here would be
+// compiled once more by the Arduino sketch, which takes every .c in src/.
 #include <stdint.h>
 #include "csp_lr.h"
 
@@ -21,7 +22,12 @@
 
 #include "csp_lr_tab.h"
 
+#ifdef LR_PEAK
 int lr_peak;
+#define PEAK(sp) do { if ((sp) > lr_peak) lr_peak = (sp); } while (0)
+#else
+#define PEAK(sp)
+#endif
 
 // search one row and its parents; the entry or 0
 static const uint8_t* row_find(const uint8_t* r, uint8_t tok)
@@ -61,8 +67,7 @@ static uint16_t lr_goto(uint8_t s, uint8_t nt)
 	    return LR_DEEP;			\
 	stk[sp] = (x);				\
 	val[sp++] = (v);			\
-	if (sp > lr_peak)			\
-	    lr_peak = sp;			\
+	PEAK(sp);				\
     } while (0)
 
 int lr_parse(lr_next_t next, lr_reduce_t reduce, void* ctx, lr_val_t* result)
@@ -78,7 +83,9 @@ int lr_parse(lr_next_t next, lr_reduce_t reduce, void* ctx, lr_val_t* result)
     const uint8_t* r;
     const uint8_t* e;
 
+#ifdef LR_PEAK
     lr_peak = 0;
+#endif
     if ((tok = next(ctx, &tv)) < 0)
 	return LR_LEX;
     for (;;) {

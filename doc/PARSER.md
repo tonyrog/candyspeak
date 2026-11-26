@@ -13,7 +13,7 @@ tabellerna skriver vi själva ur `bison --xml`.
 | `utils/candyspeak_parse_act.erl` | Erlang-sidans actions: `act(Namn, Värden)` bygger AST:t |
 | `utils/candyspeak_parse.erl`     | Erlang-motorn: `parse/1`, `parse/2`, `format_error/1` |
 | `utils/candyspeak_parse_tab.erl` | Erlang-tabellerna (genererad, `lrgen.py`)            |
-| `src/csp_lr.c`, `include/csp_lr.h` | C-motorn                                           |
+| `src/csp_lr.inc`, `include/csp_lr.h` | C-motorn                                           |
 | `gen/csp_lr_*`                   | C-tabellerna, actions och tokenkoder (genererade, `lrgen_c.py`) |
 | `utils/lrgen.py`, `lrgen_c.py`, `lrpack.py` | generatorerna; `lrpack.py` komprimerar C-tabellerna |
 | `tests/lr/`                      | C mot Erlang: `lrtest.c`, `check.escript`, extra program |

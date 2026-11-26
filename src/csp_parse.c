@@ -164,13 +164,13 @@ NOINLINE int csp_init_val(csp_rt_t* st, const token_t* tv, int a, int b,
 
 /* ------------------------------------------------------------ the LR parser
  * utils/candyspeak.y, the grammar the Erlang parser has too. The engine is
- * csp_lr.c, its tables gen/csp_lr_tab.h. A line is parsed as a program of
+ * csp_lr.inc, its tables gen/csp_lr_tab.h. A line is parsed as a program of
  * one statement; a value is the interval of tokens a symbol covers.
  */
 #define RO RODATA
 #define RB(p) ro_byte(p)
 #define RW(p) ro_word(p)
-#include "csp_lr.c"
+#include "csp_lr.inc"
 
 enum {
     L_NONE,

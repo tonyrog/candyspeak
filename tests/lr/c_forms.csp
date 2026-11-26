@@ -1,0 +1,12 @@
+// forms C has had that the Erlang grammar lacked
+#digital D[5] in 0:1..3,7,9
+#digital E[4] in 0:2,1:5,2:6,3:7
+#analog C[3]:16 out 0:1,4,7
+#analog F[9]:16 out 1:1..3,2:1,3,5,9:,7..9
+#define GROUND 0x0a000001
+#buffer Tlm:16 out udp 5000 GROUND
+#buffer Tc:16 out tcp 5001 GROUND
+#variable high = 8
+#variable soft = 5
+#variable rising = 1
+High = high + soft + rising(D)

@@ -412,9 +412,9 @@ lr_check: tmp/lrtest
 	@$(MAKE) --no-print-directory -s -C utils
 	@escript tests/lr/check.escript tmp/lrtest $(LR_FILES)
 
-tmp/lrtest: tests/lr/lrtest.c src/csp_lr.c include/csp_lr.h gen/csp_lr_tab.h
+tmp/lrtest: tests/lr/lrtest.c src/csp_lr.inc include/csp_lr.h gen/csp_lr_tab.h
 	@mkdir -p tmp
-	@$(CC) -Os -Wall -DLR_VAL=uint32_t -Iinclude -Igen -o $@ tests/lr/lrtest.c src/csp_lr.c
+	@$(CC) -Os -Wall -DLR_VAL=uint32_t -Iinclude -Igen -Isrc -o $@ tests/lr/lrtest.c
 
 # Record layout -- the accessors, the micro-csp field table and the layout
 # fingerprint, all computed from utils/layout.terms rather than restated.
