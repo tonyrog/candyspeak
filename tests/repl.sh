@@ -2623,6 +2623,16 @@ got=$(( printf '/pause\n'; sleep 0.3; printf '/step 1\n'; sleep 1.0;
 	  grep -E '^State' | tr -s ' ' | sed 's/.*= //')
 ck "and the rules run in a step" "Home" "$got"
 
+# /reset while paused says where it went at once: cycle 0, its values, the
+# clock at 0 (and what fired, when that changed). The panel is paused and
+# gives the next step itself, so without this it showed the cycle and values
+# from before the reset until then.
+got=$( ( printf '/pause\n/step 2\n'; sleep 0.5; printf '/reset\n'; sleep 0.5 ) |
+	./csp -i --no-eeprom -Q -Lerlang --delta --fired --exit-on-eof \
+	      "$D/step.csp" 2>&1 | sed -n '/^Reset$/,$p' | grep -oE '^\{(state|clock),[0-9]+' )
+ck "/reset, paused, dumps cycle 0 at once" "{state,0
+{clock,0" "$got"
+
 # --- /clock -----------------------------------------------------------------
 #
 # /clock N holds the clock and moves it N ms; a step then sees exactly the

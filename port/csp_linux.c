@@ -563,13 +563,37 @@ void process_serial_line(csp_rt_t* st, char* line)
 // /step -- clears the change the next cycle would have dumped them by: a
 // value set and stepped into, with no rule changing anything after it, was
 // never printed. So it is owed, and the next cycle dumps.
-static void serial_line_owing(csp_rt_t* st, int* owed)
+// 1 when the line took the program back to cycle 0 (/reset): what it is now
+// is to be said at once, paused or not -- the next step is the panel's to
+// give, and until then it showed the cycle and values from before the reset.
+static int serial_line_owing(csp_rt_t* st, int* owed)
 {
     int was = st->es.anyd;
+    uint32_t cycle = st->cycle;
 
     process_serial_line(st, st->line.buf);
     if (was && !st->es.anyd)
 	*owed = 1;
+    return (cycle > 0) && (st->cycle == 0);
+}
+
+// After a /reset: the values as they are at cycle 0, nothing fired, and the
+// clock from 0 again.
+static void reset_dump(FILE* f, csp_rt_t* st, csp_lang_t lang,
+		       uint32_t* start_time, int* owed)
+{
+    *start_time = csp_time_ms();
+    *owed = 0;
+    if (!debug_trace)
+	return;
+    csp_dump_state(f, st, lang);
+#if defined(CSP_HAVE_FIRED)
+    if (lang == ERLANG) {
+	csp_dump_fired(f, st);
+	if (fired)
+	    fprintf(f, "{clock,0,0}.\n");
+    }
+#endif
 }
 
 int csp_uconst(csp_rt_t* st, const char* name, int len,
@@ -3121,7 +3145,8 @@ loop:
 	serial_poll(&state, pfd, nfds);
 
 	if (state.line.ready) {
-	    serial_line_owing(&state, &dump_owed);
+	    if (serial_line_owing(&state, &dump_owed))
+		reset_dump(state_file, &state, lang, &start_time, &dump_owed);
 	    csp_line_done(&state.line);
 	    if (quit_flag) goto done;
 	}
@@ -3153,7 +3178,8 @@ loop:
     // or not there is a stdin to poll -- and under -F there usually is not,
     // so the branch above never ran and the command sat there unrun.
     else if (state.line.ready) {
-	serial_line_owing(&state, &dump_owed);
+	if (serial_line_owing(&state, &dump_owed))
+	    reset_dump(state_file, &state, lang, &start_time, &dump_owed);
 	csp_line_done(&state.line);
 	if (quit_flag) goto done;
     }
